@@ -2515,6 +2515,27 @@ later, per app:
   (`BROKEN KEY`, two renders agreeing) passed only because both renders
   happened inside the same second.
 
+  **Build 29 fixed the same fixed-seconds assumption #480 shipped, this time
+  against `LIVE_HLS_SEGMENT_SECONDS` moving from 2 s to 4 s the same day
+  (#495).** `WatchQuality.swift` wrote `configuredTimeOffsetFromLive` as a
+  literal 6 s — three target durations at 2 s segments, one and a half at
+  4 s, close enough to the tip that the Android sibling player (same
+  constants, same day, `MediaItem.LiveConfiguration`) stalled once a
+  segment; see `docs/ANDROID.md`, "A hardcoded live offset held the playhead
+  on the tip", for the mechanism, which applies here too even though the
+  exact failure mode iOS hits differs slightly from Media3's band. Fixed by
+  leaving it unset: `AVPlayerItem.recommendedTimeOffsetFromLive` is Apple's
+  own reading of the actual playlist (RFC 8216 6.3.3 target duration, or
+  LL-HLS HOLD-BACK), so `AVPlayerItem` resolves the same three-target-
+  duration join on its own, correct at any segment length. `WatchLiveEdge`'s
+  own rejoin, jump-to-live and tip-starve math took the same segment length,
+  learned from that same property once available
+  (`WatchLiveEdge.learnSegmentSeconds`), rather than the fixed 6 s / 4 s / 2 s
+  it had assumed since it was written. `preferredForwardBufferDuration` has
+  no AVFoundation equivalent to lean on, so it stayed a constant, re-tuned to
+  today's 4 s (12 s, three target durations) rather than left at the 2 s
+  figure.
+
   Inline the picture is an `AVPlayerLayer` with our cinema chrome
   (`WatchOverlay`). Fullscreen is a real `AVPlayerViewController` presented
   `.fullScreen` (`WatchTheater.swift`), the iOS equivalent of the web's

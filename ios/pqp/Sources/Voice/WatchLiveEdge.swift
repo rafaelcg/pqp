@@ -12,17 +12,21 @@ import Foundation
  should be tuned against it.
 
  What this file is for is narrower and still real. The egress writes a live
- playlist holding exactly FIVE two second segments (measured against
- production, both rungs, repeatedly). Ten seconds, total, sliding forward as
- the broadcast runs. `AVPlayer` joins a live playlist three target durations
- from the end (RFC 8216, 6.3.3), so it starts with roughly four seconds of
- runway in front of it and the back edge of the window about five seconds
- behind. Ten seconds is a thin window by any standard, and the consequence of
- a thin window is specific: a player that stops for longer than the window,
- for ANY reason, has the playlist slide past the position it stopped at. The
- playhead then names a time the playlist no longer contains, `play()` cannot
- help because there is nothing there to play, and only a seek back into the
- window is.
+ playlist holding exactly FIVE segments (measured against production, both
+ rungs, repeatedly), of whatever length `LIVE_HLS_SEGMENT_SECONDS` currently
+ is — 2 s when this file was first written, 4 s since. That segment length is
+ an operator knob (`docs/WATCH_PARTY.md`), moves without a client release,
+ and every number below is a multiple of it rather than a literal count of
+ seconds, which is the difference between this file adapting to that move and
+ repeating the day it silently did not (see `segmentSeconds`). `AVPlayer`
+ joins a live playlist three target durations from the end (RFC 8216, 6.3.3),
+ so on a five-segment playlist it starts with roughly two segments of runway
+ in front of it and two behind. A five-segment window is thin by any
+ standard, and the consequence of a thin window is specific: a player that
+ stops for longer than the window, for ANY reason, has the playlist slide
+ past the position it stopped at. The playhead then names a time the playlist
+ no longer contains, `play()` cannot help because there is nothing there to
+ play, and only a seek back into the window is.
 
  That is what "I need to press play, and it does not necessarily work" is made
  of, whatever caused the original stop. So this is a recovery path, not a
@@ -94,23 +98,74 @@ struct WatchLiveEdge: Equatable {
     /// and no test noticed.
     static let starvedAfter: TimeInterval = 12
 
-    /// How far back from the LIVE EDGE to land, in seconds.
+    /// The segment length nothing here should ever hardcode again.
     ///
-    /// Three two-second segments (6 s). Four segments (8 s) on a ten second
-    /// playlist is two seconds from the back: the segment the next playlist
-    /// update expires. That is the stall the web player just left
-    /// (`HLS_LIVE_SYNC_DURATION_COUNT = 3`). `target(in:)` still honours
-    /// `minRunway` so a short window cannot land on the last two seconds.
-    static let liveTargetOffset: Double = 6
+    /// `LIVE_HLS_SEGMENT_SECONDS` is an operator knob (`docs/WATCH_PARTY.md`)
+    /// and moved from 2 s to 4 s in production without a client release. A
+    /// build that assumed 2 s put `liveTargetOffset` two segments from the
+    /// tip instead of three, and RFC 8216 6.3.3 is explicit that three is
+    /// the number a client is supposed to join on. Every offset below is a
+    /// multiple of a segment length, not a literal number of seconds, and
+    /// that segment length is learned per session rather than assumed.
+    static let fallbackSegmentSeconds: Double = 2
+
+    /// Where a join lands, in target durations (RFC 8216 6.3.3).
+    static let targetDurationMultiplier: Double = 3
+
+    /// The floor: never land closer to the tip than this many target
+    /// durations, because that is waiting for a segment not yet written.
+    static let minDurationMultiplier: Double = 2
+
+    /// The session's real segment length, once known.
+    ///
+    /// `AVPlayerItem.recommendedTimeOffsetFromLive` is Apple's own reading of
+    /// the ACTUAL playlist this session is playing: three target durations,
+    /// or the LL-HLS `HOLD-BACK`, computed from the manifest rather than
+    /// guessed at build time. Dividing by `targetDurationMultiplier` recovers
+    /// the segment length without this file ever parsing a playlist itself.
+    /// Invalid, non-finite, non-positive, or simply not offered yet (the
+    /// manifest has not loaded) all fall back to `fallbackSegmentSeconds`,
+    /// which is also what every test below exercises by never passing one.
+    private(set) var segmentSeconds: Double = fallbackSegmentSeconds
+
+    /// Learn the session's real segment length. Safe to call every tick:
+    /// idempotent once the manifest is known, and a momentarily-unavailable
+    /// reading (unlike `segmentSeconds(recommendedOffset:)`, this does NOT
+    /// fall back to `fallbackSegmentSeconds`) just leaves the previous value
+    /// in place rather than resetting a learned one back down.
+    mutating func learnSegmentSeconds(recommendedOffset: Double?) {
+        guard let recommendedOffset, recommendedOffset.isFinite, recommendedOffset > 0 else { return }
+        segmentSeconds = recommendedOffset / Self.targetDurationMultiplier
+    }
+
+    static func segmentSeconds(recommendedOffset: Double?) -> Double {
+        guard let recommendedOffset, recommendedOffset.isFinite, recommendedOffset > 0 else {
+            return fallbackSegmentSeconds
+        }
+        return recommendedOffset / targetDurationMultiplier
+    }
+
+    /// How far back from the LIVE EDGE to land. Three target durations: the
+    /// position RFC 8216 6.3.3 has a client join a live playlist at in the
+    /// first place. `target(in:)` still honours `minRunway` so a short
+    /// window cannot land on the last segment or two.
+    static func liveTargetOffset(segmentSeconds: Double = fallbackSegmentSeconds) -> Double {
+        targetDurationMultiplier * segmentSeconds
+    }
 
     /// Jump-to-live and stall recovery, matching web `jumpToLiveTime`:
-    /// one 2 s segment behind the edge, not onto it.
-    static let jumpOffset: Double = 2
+    /// one segment behind the edge, not onto it.
+    static func jumpOffset(segmentSeconds: Double = fallbackSegmentSeconds) -> Double {
+        segmentSeconds
+    }
 
-    /// Never land closer to the back of the window than this, in seconds.
-    /// Two segments. Combined with `liveTargetOffset` a ten second window
-    /// lands six seconds from the edge (four from the back), not eight.
-    static let minRunway: Double = 4
+    /// Never land closer to the back of the window than this. Two target
+    /// durations. Combined with `liveTargetOffset` on a five-segment
+    /// playlist this lands three target durations from the edge and two
+    /// from the back, not one.
+    static func minRunway(segmentSeconds: Double = fallbackSegmentSeconds) -> Double {
+        minDurationMultiplier * segmentSeconds
+    }
 
     /// The drift a viewer is not asked about.
     ///
@@ -122,13 +177,16 @@ struct WatchLiveEdge: Equatable {
     /// sentence is jarring and should be rare.
     static let catchUpAfter: Double = 45
 
-    /// Sitting closer than this, in seconds, is sitting on the tip. A player
-    /// waiting here is waiting for a segment that has not been written yet.
-    /// Only applied when the window is wide enough that a seek to
-    /// `liveTargetOffset` still leaves `minRunway` behind the playhead.
-    /// On a ten second window the seek would land near the back and this
-    /// clock would fire again: one frame, then dead. That was build 25.
-    static let tipBehind: Double = 4
+    /// Sitting closer than this is sitting on the tip. A player waiting here
+    /// is waiting for a segment that has not been written yet. Two target
+    /// durations, same as `minRunway`. Only applied when the window is wide
+    /// enough that a seek to `liveTargetOffset` still leaves `minRunway`
+    /// behind the playhead. On a short window the seek would land near the
+    /// back and this clock would fire again: one frame, then dead. That was
+    /// build 25.
+    static func tipBehind(segmentSeconds: Double = fallbackSegmentSeconds) -> Double {
+        minDurationMultiplier * segmentSeconds
+    }
     static let tipStarveAfter: TimeInterval = 2.5
 
     /// A rejoin may not be answered again this soon. A seek is not instant and
@@ -196,9 +254,10 @@ struct WatchLiveEdge: Equatable {
         // playlist. So the short allowance only runs when a seek to
         // `liveTargetOffset` still leaves `minRunway` of media behind it.
         let behind = Self.secondsBehindLive(position: position, window: window)
-        let tipSensitive = window.span >= Self.liveTargetOffset + Self.minRunway
+        let tipSensitive = window.span >= Self.liveTargetOffset(segmentSeconds: segmentSeconds)
+            + Self.minRunway(segmentSeconds: segmentSeconds)
         let allowance =
-            tipSensitive && behind < Self.tipBehind
+            tipSensitive && behind < Self.tipBehind(segmentSeconds: segmentSeconds)
             ? Self.tipStarveAfter : Self.starvedAfter
         guard now.timeIntervalSince(since) >= allowance else { return .none }
         return rejoin(window, now: now)
@@ -207,28 +266,40 @@ struct WatchLiveEdge: Equatable {
     private mutating func rejoin(_ window: WatchLiveWindow, now: Date) -> WatchLiveRemedy {
         waitingSince = nil
         rejoinedAt = now
-        return .rejoin(Self.target(in: window))
+        return .rejoin(Self.target(in: window, segmentSeconds: segmentSeconds))
     }
 
-    /// Back from the live edge, but never onto the last two seconds of a
+    /// Back from the live edge, but never onto the last segment or two of a
     /// short playlist. A window shorter than `minRunway` has no such
     /// position and lands at the start of everything that exists.
-    static func target(in window: WatchLiveWindow) -> Double {
-        land(in: window, offset: liveTargetOffset)
+    ///
+    /// `segmentSeconds` defaults to `fallbackSegmentSeconds`: every existing
+    /// caller that has not learned the session's real segment length yet
+    /// (including every test below) gets exactly the numbers this file
+    /// always ran, and a caller that has learned it — `WatchStageView`,
+    /// once `AVPlayerItem.recommendedTimeOffsetFromLive` is available —
+    /// gets the real ones instead.
+    static func target(
+        in window: WatchLiveWindow, segmentSeconds: Double = fallbackSegmentSeconds
+    ) -> Double {
+        land(in: window, offset: liveTargetOffset(segmentSeconds: segmentSeconds), segmentSeconds: segmentSeconds)
     }
 
     /// Where the Jump to live control (and a stall recover) should land.
     /// One segment behind the edge, matching the web, still honouring
     /// `minRunway` on a short playlist.
-    static func jumpTarget(in window: WatchLiveWindow) -> Double {
-        land(in: window, offset: jumpOffset)
+    static func jumpTarget(
+        in window: WatchLiveWindow, segmentSeconds: Double = fallbackSegmentSeconds
+    ) -> Double {
+        land(in: window, offset: jumpOffset(segmentSeconds: segmentSeconds), segmentSeconds: segmentSeconds)
     }
 
-    private static func land(in window: WatchLiveWindow, offset: Double) -> Double {
-        if window.span <= minRunway {
+    private static func land(in window: WatchLiveWindow, offset: Double, segmentSeconds: Double) -> Double {
+        let runway = minRunway(segmentSeconds: segmentSeconds)
+        if window.span <= runway {
             return window.start
         }
-        return max(window.start + minRunway, window.end - offset)
+        return max(window.start + runway, window.end - offset)
     }
 
     /// How far behind the playlist's newest segment the picture is. Never

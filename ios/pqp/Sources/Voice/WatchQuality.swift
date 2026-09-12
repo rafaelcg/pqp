@@ -237,23 +237,40 @@ enum WatchQualityRetune {
 
  Port of `hlsLivePlayerConfig()` in `client/src/lib/hls-live-edge.ts`.
  `AVPlayer` will happily wait for a 30 s buffer a live playlist of five
- 2 s segments cannot grow, which is "plays for a few seconds, then
- stops" with `timeControlStatus == .waitingToPlayAtSpecifiedRate` and
- no error. The web already refused to ask hls.js for more than the
- window; this is the same numbers on the item.
+ segments cannot grow, which is "plays for a few seconds, then stops" with
+ `timeControlStatus == .waitingToPlayAtSpecifiedRate` and no error. The web
+ already refused to ask hls.js for more than the window; this is the same
+ idea on the item.
+
+ `LIVE_HLS_SEGMENT_SECONDS` moved from 2 s to 4 s in production without a
+ client release (`docs/WATCH_PARTY.md`), and this enum used to hardcode both
+ numbers below at the 2 s figure — a build that shipped that day sat on a
+ segment two target durations from the tip instead of three, and asked for
+ half the forward buffer three target durations actually need. Fixed two
+ different ways because AVFoundation offers two different amounts of help:
+ there is no API for "the buffer three target durations need" so
+ `forwardBuffer` is a floor re-tuned to today's number, but there IS one for
+ the live offset, so `timeOffsetFromLive` is gone — see `apply` below.
  */
 enum WatchPlayerItemTuning {
-    /// Sit in the middle of the five-segment window, not on the segment
-    /// that expires next. Same 6 s as `WatchLiveEdge.liveTargetOffset`.
-    static let forwardBuffer: TimeInterval = 6
-    /// Three 2 s segments behind live. Eight sat on the last listed segment.
-    static let timeOffsetFromLive: TimeInterval = 6
+    /// Three target durations at today's `LIVE_HLS_SEGMENT_SECONDS` (4 s).
+    /// A floor, not a ceiling: this file cannot read the operator's actual
+    /// segment length before `prepare()`, only `apply()`'s pre-play
+    /// ordering (see below) matters for it, so if that knob moves again this
+    /// needs moving with it — `WatchLiveEdgeTests` pins the arithmetic, not
+    /// the knob.
+    static let forwardBuffer: TimeInterval = 12
 
     static func apply(_ item: AVPlayerItem) {
         item.preferredForwardBufferDuration = forwardBuffer
-        item.configuredTimeOffsetFromLive = CMTime(
-            seconds: timeOffsetFromLive, preferredTimescale: 600
-        )
+        // Deliberately NOT set. `configuredTimeOffsetFromLive` defaults to
+        // `kCMTimeInvalid`, which tells `AVPlayerItem` to use
+        // `recommendedTimeOffsetFromLive` — Apple's own reading of the
+        // playlist this session is ACTUALLY running (RFC 8216 6.3.3 target
+        // duration, or LL-HLS HOLD-BACK), rather than a number this file
+        // guessed at build time. That is exactly what broke when the
+        // operator's segment length changed under a hardcoded constant, and
+        // there is no equivalent escape for `forwardBuffer` above.
         item.automaticallyPreservesTimeOffsetFromLive = true
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
     }
