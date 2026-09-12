@@ -20,8 +20,9 @@ import SwiftUI
  `WatchOverlay` is the cinema chrome on top of it. There is no system
  transport bar and no scrubber, because a live window that offers to seek
  is a control that lies. Tap the film to see the bars, tap again to put
- them away. Fullscreen is a real `AVPlayerViewController` (native AVKit),
- not a SwiftUI cover over the transcript.
+ them away. Fullscreen is a full-screen controller of our own, holding the
+ same layer and the same chrome, not a SwiftUI cover over the transcript and
+ not AVKit's player (see `WatchTheater`).
  */
 struct WatchStageView: View {
     @Environment(SessionStore.self) private var session
@@ -64,6 +65,10 @@ struct WatchStageView: View {
     @State private var seekingUntil = Date.distantPast
     @State private var chrome = WatchChromeClock()
     @State private var pip = WatchPictureInPicture()
+    /// THE ONE LAYER. Not owned by either rectangle that draws it, because
+    /// fullscreen MOVES it from the strip into the theater rather than
+    /// building a second one. See `WatchPicture`.
+    @State private var picturePlane = WatchPicture()
     @State private var chromeInsets = EdgeInsets()
 
     /// The pinned rung, in lines. Zero is Auto.
@@ -297,9 +302,14 @@ struct WatchStageView: View {
     /// of collapsing it: listen to the film and read the chat.
     ///
     /// Fullscreen keeps the 16:9 hole so the transcript does not jump the
-    /// moment the theater opens. The picture itself is an `AVPlayerViewController`
-    /// presented from `WatchTheaterPresenter`, which is the native film:
-    /// chat is not in that layout at all.
+    /// moment the theater opens. The film itself is the SAME pane, presented
+    /// full screen by `WatchTheaterPresenter`: the same layer, moved, and the
+    /// same chrome. Chat is not in that layout at all.
+    ///
+    /// ONLY ONE OF THE TWO IS EVER MOUNTED. The strip draws a black hole while
+    /// the theater is up, and it has to: both branches draw the same
+    /// `WatchPicture`, and two rectangles asking for one layer would take it
+    /// from each other on every tick.
     private var picture: some View {
         VStack(spacing: 0) {
             if !isMinimised {
@@ -321,10 +331,7 @@ struct WatchStageView: View {
         .background {
             WatchTheaterPresenter(
                 presented: isFullscreen,
-                player: player,
-                overlay: overlay(isTheater: true)
-                    .contentShape(Rectangle())
-                    .onTapGesture { chrome.tap(at: Date()) },
+                content: pane(isTheater: true).ignoresSafeArea(),
                 onDismiss: {
                     isFullscreen = false
                     WatchOrientation.leaveTheater()
@@ -337,11 +344,9 @@ struct WatchStageView: View {
     private func pane(isTheater: Bool) -> some View {
         ZStack {
             Color.black
-            if let player {
-                WatchVideoSurface(player: player, pip: pip) { pixels in
-                    surfacePixels = pixels
-                }
-                .onTapGesture { chrome.tap(at: Date()) }
+            if player != nil {
+                WatchVideoSurface(picture: picturePlane)
+                    .onTapGesture { chrome.tap(at: Date()) }
                 overlay(isTheater: isTheater)
             } else {
                 connecting
@@ -603,6 +608,7 @@ struct WatchStageView: View {
         // stops that wait from being "a 30 s buffer this playlist cannot
         // grow".
         next.automaticallyWaitsToMinimizeStalling = true
+        picturePlane.onSurfacePixels = { pixels in surfacePixels = pixels }
         attached = AttachedStream(startedAt: stream.startedAt, attachedAt: Date())
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
@@ -626,6 +632,10 @@ struct WatchStageView: View {
             guard attached?.startedAt == stream.startedAt else { return }
             ladder = published
             player = next
+            // The layer takes the player here and keeps it for the whole
+            // broadcast. Never in `makeUIView`: that is once per rectangle,
+            // and fullscreen is a second rectangle.
+            picturePlane.show(next, pip: pip)
             applyQuality(trigger: .variants)
             next.play()
             isPlaying = true
@@ -840,6 +850,7 @@ struct WatchStageView: View {
         seekingUntil = .distantPast
         chrome = WatchChromeClock()
         chromeInsets = .init()
+        picturePlane.show(nil, pip: pip)
         pip.attach(nil)
         WatchNowPlaying.end()
         WatchAudioSession.deactivate()

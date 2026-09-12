@@ -12,92 +12,110 @@ import SwiftUI
 
  AirPlay is an `AVRoutePickerView` on the overlay. Picture in Picture is
  `AVPictureInPictureController` pointed at this layer. Fullscreen is the same
- overlay in a cover, not a second system player.
+ layer and the same overlay, moved into a full-screen controller of our own.
 
  IT STILL REPORTS ITS OWN SIZE IN PIXELS. `WatchLadder.resolutionCap` turns
  that into a ceiling, so Auto holds 720p in the strip and allows 1080p the
  moment the viewer opens the theater, without either number being hard coded.
  */
 struct WatchVideoSurface: UIViewRepresentable {
-    let player: AVPlayer
-    let pip: WatchPictureInPicture
+    let picture: WatchPicture
+
+    func makeUIView(context: Context) -> UIView {
+        let holder = UIView()
+        holder.backgroundColor = .black
+        picture.mount(in: holder)
+        return holder
+    }
+
+    func updateUIView(_ holder: UIView, context: Context) {
+        picture.mount(in: holder)
+    }
+
+    /// Empty the rectangle that is going away, and NEVER touch the player.
+    ///
+    /// The layer is not this view's to destroy; it belongs to `WatchPicture`
+    /// and it is on its way to the theater (or back from it). Whichever of
+    /// mount and dismantle SwiftUI runs first, the result is the same layer in
+    /// a new box, still holding the same `AVPlayer`, still decoding.
+    static func dismantleUIView(_ holder: UIView, coordinator: ()) {
+        for sub in holder.subviews where sub is WatchPlayerCanvas {
+            sub.removeFromSuperview()
+        }
+    }
+}
+
+/**
+ ONE `AVPlayer`, ONE LAYER, FOR THE WHOLE BROADCAST.
+
+ THE BUG THIS TYPE EXISTS FOR. Build 30's theater made a SECOND render target
+ (AVKit's playback controller has an `AVPlayerLayer` of its own) and handed it
+ the same `AVPlayer` while the inline layer still held it. An `AVPlayer` drives
+ one layer at a time. The loser keeps its last frame forever, and the player
+ goes on reporting `timeControlStatus == .playing` throughout, because that is
+ a property of the PLAYER and not of any layer. So every measurement the app
+ takes said the film was playing: `isPlaying` was true, the overlay drew a
+ pause button, the delay badge counted, the stall watchdog saw a moving
+ playhead and had nothing to report. The only thing that was wrong was the one
+ thing nothing measures, which is whether the frames are reaching the screen.
+
+ So the layer stops being owned by a SwiftUI view at all. It is created once
+ per broadcast, it is handed the player once, and going fullscreen MOVES it
+ (`addSubview` re-parents) rather than building a second one. There is never a
+ moment with two layers, so there is never a moment where one of them loses.
+ */
+@MainActor
+final class WatchPicture {
+    let canvas = WatchPlayerCanvas()
+    private var pipController: AVPictureInPictureController?
+    private var lastReported: CGSize = .zero
+
     /// The video rectangle in DEVICE PIXELS, whenever it changes. Pixels
     /// rather than points because a rendition is measured in pixels and a
     /// ceiling in points would mean three different things on three phones.
-    let onSurfacePixels: (CGSize) -> Void
+    var onSurfacePixels: ((CGSize) -> Void)?
 
-    func makeUIView(context: Context) -> WatchPlayerCanvas {
-        let canvas = WatchPlayerCanvas()
-        canvas.player = player
+    init() {
         canvas.playerLayer.videoGravity = .resizeAspect
-        canvas.onLayout = { [weak coordinator = context.coordinator] pixels in
-            coordinator?.report(pixels)
-        }
-        context.coordinator.onSurfacePixels = onSurfacePixels
-        context.coordinator.bind(layer: canvas.playerLayer, pip: pip)
-        return canvas
+        canvas.backgroundColor = .black
+        canvas.onLayout = { [weak self] pixels in self?.report(pixels) }
     }
 
-    func updateUIView(_ canvas: WatchPlayerCanvas, context: Context) {
-        if canvas.player !== player {
-            canvas.player = player
-            context.coordinator.bind(layer: canvas.playerLayer, pip: pip)
-        }
-        context.coordinator.onSurfacePixels = onSurfacePixels
-        canvas.onLayout = { [weak coordinator = context.coordinator] pixels in
-            coordinator?.report(pixels)
-        }
-    }
-
-    /// ONE `AVPlayer`, ONE LAYER.
-    ///
-    /// Fullscreen hands the SAME player to the AVKit controller in
-    /// `WatchTheater`, which has a layer of its own, while this one is being
-    /// removed (`picture` draws a black hole instead). An `AVPlayer`
-    /// renders into one layer at a time, so leaving this one holding it until
-    /// SwiftUI gets round to releasing the view is how the theater opened on a
-    /// still frame. Removal releases it here, on the spot.
-    static func dismantleUIView(_ canvas: WatchPlayerCanvas, coordinator: Coordinator) {
-        canvas.onLayout = nil
-        canvas.player = nil
-        coordinator.release()
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    @MainActor
-    final class Coordinator {
-        var onSurfacePixels: ((CGSize) -> Void)?
-        private var lastReported: CGSize = .zero
-        private var pipController: AVPictureInPictureController?
-
-        func bind(layer: AVPlayerLayer, pip: WatchPictureInPicture) {
-            guard AVPictureInPictureController.isPictureInPictureSupported() else {
-                pip.attach(nil)
-                return
-            }
-            let controller = AVPictureInPictureController(playerLayer: layer)
-            controller?.canStartPictureInPictureAutomaticallyFromInline = false
-            pipController = controller
-            pip.attach(controller)
-        }
-
-        /// PiP belongs to the layer. When the layer goes, so does it.
-        func release() {
+    /// Hand the layer its player. Called once per broadcast by the view that
+    /// owns the player, and never by whichever rectangle is showing it.
+    func show(_ player: AVPlayer?, pip: WatchPictureInPicture) {
+        guard canvas.player !== player else { return }
+        canvas.player = player
+        lastReported = .zero
+        guard player != nil, AVPictureInPictureController.isPictureInPictureSupported() else {
             pipController = nil
-            onSurfacePixels = nil
+            pip.attach(nil)
+            return
         }
+        let controller = AVPictureInPictureController(playerLayer: canvas.playerLayer)
+        controller?.canStartPictureInPictureAutomaticallyFromInline = false
+        pipController = controller
+        pip.attach(controller)
+    }
 
-        func report(_ pixels: CGSize) {
-            guard pixels.width > 0, pixels.height > 0 else { return }
-            guard abs(pixels.height - lastReported.height) > 1
-                || abs(pixels.width - lastReported.width) > 1
-            else { return }
-            lastReported = pixels
-            onSurfacePixels?(pixels)
-        }
+    /// Put the picture in this rectangle. Idempotent, and a move rather than a
+    /// copy: `addSubview` takes the canvas out of whatever held it before.
+    /// Autoresizing rather than constraints precisely because it is a move —
+    /// constraints tying it to the old box die with the old box.
+    func mount(in holder: UIView) {
+        guard canvas.superview !== holder else { return }
+        canvas.frame = holder.bounds
+        canvas.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        holder.addSubview(canvas)
+    }
+
+    private func report(_ pixels: CGSize) {
+        guard pixels.width > 0, pixels.height > 0 else { return }
+        guard abs(pixels.height - lastReported.height) > 1
+            || abs(pixels.width - lastReported.width) > 1
+        else { return }
+        lastReported = pixels
+        onSurfacePixels?(pixels)
     }
 }
 
@@ -123,8 +141,8 @@ final class WatchPlayerCanvas: UIView {
 
 /**
  The PiP controller lives on the layer, but the button that starts it lives
- on the overlay. This is the handshake: the surface attaches whatever
- controller the current layer can offer, and a tap asks this object to start.
+ on the overlay. This is the handshake: the picture attaches whatever
+ controller its layer can offer, and a tap asks this object to start.
  */
 @MainActor
 @Observable

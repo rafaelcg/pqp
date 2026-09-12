@@ -5,26 +5,53 @@ import UIKit
 /**
  Native watch-party fullscreen.
 
- A SwiftUI `.fullScreenCover` presented from `ChatView`'s top inset is not
- a film: the cover is a child of the transcript, the chat still owns the
- layout, and landscape is a request the inset cannot honour. This presents
- an `AVPlayerViewController` with `.fullScreen` from a hidden anchor, which
- is the iOS equivalent of the web's `webkitEnterFullscreen` path
- (`client/src/components/voice/watch-fullscreen.ts`). Our cinema chrome is a
- `UIHostingController` on the controller's own view; the system transport
- bar is off. See `makeTheater` for why it is not `contentOverlayView`.
+ A SwiftUI `.fullScreenCover` presented from `ChatView`'s top inset is not a
+ film: the cover is a child of the transcript, the chat still owns the layout,
+ and landscape is a request the inset cannot honour. So fullscreen is a real
+ view controller presented `.fullScreen` from a hidden anchor, which is the
+ iOS equivalent of the web's `webkitEnterFullscreen` path
+ (`client/src/components/voice/watch-fullscreen.ts`).
+
+ IT IS NOT AN `AVPlayerViewController`, AND THAT IS THE WHOLE POINT.
+
+ Builds 28 and 30 presented one, with `showsPlaybackControls = false`, and hung
+ our chrome inside it. Dumping the hierarchy of a presented, laid-out
+ controller shows what that buys even with the system bar off: its content view
+ carries FIFTEEN gesture recognisers, among them `AVTouchGestureRecognizer`,
+ `AVCenterTapGestureRecognizer`, `AVUserInteractionObserverGestureRecognizer`
+ and, by name, `AVExternalGestureRecognizerPreventer`. AVKit owns interaction
+ in that controller and is built to outrank anything a caller adds. Hit testing
+ was never the problem — a tap DOES land on our hosting view — the recognisers
+ above it simply never let the tap become a tap. Which is exactly the shape of
+ the report: pinch-to-zoom (AVKit's own) kept working while the X, the play
+ button and the quality chip did nothing at all, on a phone the viewer then had
+ to force-quit.
+
+ So the theater is a plain `UIHostingController` holding the same SwiftUI
+ picture the strip holds. No AVKit, no second player, no second layer: the
+ `AVPlayerLayer` is re-parented into it by `WatchPicture`.
  */
 @MainActor
 protocol WatchTheaterAnchorDelegate: AnyObject {
     func theaterDidDismiss()
 }
 
+/// The full-screen film. Landscape is allowed here and nowhere else, and the
+/// status bar and home indicator are out of the way of a film.
+final class WatchTheaterController: UIHostingController<AnyView> {
+    override var prefersStatusBarHidden: Bool { true }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        .allButUpsideDown
+    }
+}
+
 final class WatchTheaterAnchor: UIViewController {
-    private var theater: AVPlayerViewController?
-    /// The cinema chrome, and the only way out of the theater. Readable so a
-    /// test can assert it is actually IN a hierarchy: build 28 built it and
-    /// dropped it on the floor. See `makeTheater`.
-    private(set) var overlayHost: UIHostingController<AnyView>?
+    /// The presented film, and the only way out of it. Readable so a test can
+    /// walk what is actually on screen: build 28 built chrome and added it to
+    /// nothing, build 30 added it under a gesture stack that swallowed it, and
+    /// both were green against a source-text assertion.
+    private(set) var theater: WatchTheaterController?
     weak var delegate: WatchTheaterAnchorDelegate?
 
     override func loadView() {
@@ -35,84 +62,29 @@ final class WatchTheaterAnchor: UIViewController {
         view.backgroundColor = .clear
     }
 
-    func presentIfNeeded<Overlay: View>(player: AVPlayer, overlay: Overlay) {
+    func presentIfNeeded<Content: View>(content: Content) {
         if let theater {
-            theater.player = player
-            updateOverlay(overlay)
+            // Every SwiftUI tick refreshes the film so play/pause, the delay
+            // and the audience count stay in step inside the theater.
+            theater.rootView = AnyView(content)
             return
         }
-        let controller = makeTheater(player: player, overlay: overlay)
+        let controller = makeTheater(content: content)
         theater = controller
         WatchOrientation.enterTheater()
         let presenter = view.window != nil ? self : Self.topMost()
         presenter?.present(controller, animated: true)
     }
 
-    /**
-     BUILD A THEATER WITH ITS CHROME ALREADY ON IT.
-
-     Separated from the presentation because the mounting is the half that
-     trapped a viewer in build 28 and the presentation is the half that needs
-     a window: this can be tested, and is.
-
-     WHAT WENT WRONG. `contentOverlayView` is nil until the controller's view
-     is loaded, and nothing above it loads a view — `player`, `videoGravity`
-     and the modal properties are all plain stores. So the `if let` fell
-     through on a freshly allocated controller, the host was assigned to
-     `overlayHost` without ever being added to anything, and with
-     `showsPlaybackControls = false` the theater had NO controls at all. Not
-     the play button, not the quality menu, and not the X that leaves. The
-     one thing that still answered was AVKit's own pinch-to-zoom, which sits
-     on the controller's view and never needed us. Fullscreen was a one-way
-     door: a still frame you could pinch, and no way back.
-
-     The chrome goes on `controller.view`, not on `contentOverlayView`.
-     `contentOverlayView` is for content drawn between the video and the
-     system transport bar; ours IS the transport bar, it has buttons, and it
-     has to be the topmost thing in the controller and hit-testable. The
-     system bar is off, so there is nothing above it to fight with.
-     */
-    func makeTheater<Overlay: View>(
-        player: AVPlayer, overlay: Overlay
-    ) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.player = player
-        controller.showsPlaybackControls = false
-        // OFF, and not an oversight. `WatchVideoSurface` already owns an
-        // `AVPictureInPictureController` on the inline layer, and the theater
-        // overlay hides the PiP button anyway (`pipAvailable: isTheater ?
-        // false`). Two PiP controllers on one `AVPlayer` is two owners of one
-        // media session.
-        controller.allowsPictureInPicturePlayback = false
-        controller.videoGravity = .resizeAspect
+    /// Separated from the presentation so what the theater IS can be tested
+    /// without a window.
+    func makeTheater<Content: View>(content: Content) -> WatchTheaterController {
+        let controller = WatchTheaterController(rootView: AnyView(content))
+        controller.view.backgroundColor = .black
+        controller.view.isUserInteractionEnabled = true
         controller.modalPresentationStyle = .fullScreen
         controller.modalPresentationCapturesStatusBarAppearance = true
-        controller.delegate = self
-        // THE VIEW HAS TO EXIST BEFORE ANYTHING IS ADDED TO IT.
-        controller.loadViewIfNeeded()
-
-        let host = UIHostingController(rootView: AnyView(overlay))
-        host.view.backgroundColor = .clear
-        host.view.isUserInteractionEnabled = true
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        let canvas: UIView = controller.view
-        canvas.isUserInteractionEnabled = true
-        host.willMove(toParent: controller)
-        controller.addChild(host)
-        canvas.addSubview(host.view)
-        NSLayoutConstraint.activate([
-            host.view.leadingAnchor.constraint(equalTo: canvas.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: canvas.trailingAnchor),
-            host.view.topAnchor.constraint(equalTo: canvas.topAnchor),
-            host.view.bottomAnchor.constraint(equalTo: canvas.bottomAnchor),
-        ])
-        host.didMove(toParent: controller)
-        overlayHost = host
         return controller
-    }
-
-    func updateOverlay<Overlay: View>(_ overlay: Overlay) {
-        overlayHost?.rootView = AnyView(overlay)
     }
 
     func dismissIfNeeded() {
@@ -124,19 +96,8 @@ final class WatchTheaterAnchor: UIViewController {
         self.theater = nil
         WatchOrientation.leaveTheater()
         theater.dismiss(animated: true) { [weak self] in
-            self?.tearDown(theater)
+            self?.delegate?.theaterDidDismiss()
         }
-    }
-
-    fileprivate func tearDown(_ controller: AVPlayerViewController? = nil) {
-        overlayHost?.willMove(toParent: nil)
-        overlayHost?.view.removeFromSuperview()
-        overlayHost?.removeFromParent()
-        overlayHost = nil
-        // The player goes back to the inline layer, which is the only other
-        // thing that may hold it. One `AVPlayer` renders into one layer.
-        (controller ?? theater)?.player = nil
-        theater = nil
     }
 
     private static func topMost() -> UIViewController? {
@@ -153,35 +114,12 @@ final class WatchTheaterAnchor: UIViewController {
     }
 }
 
-extension WatchTheaterAnchor: @preconcurrency AVPlayerViewControllerDelegate {
-    func playerViewController(
-        _ playerViewController: AVPlayerViewController,
-        willBeginFullScreenPresentationWithAnimationCoordinator coordinator:
-            UIViewControllerTransitionCoordinator
-    ) {
-        WatchOrientation.enterTheater()
-    }
-
-    func playerViewController(
-        _ playerViewController: AVPlayerViewController,
-        willEndFullScreenPresentationWithAnimationCoordinator coordinator:
-            UIViewControllerTransitionCoordinator
-    ) {
-        WatchOrientation.leaveTheater()
-        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
-            self?.tearDown()
-            self?.delegate?.theaterDidDismiss()
-        }
-    }
-}
-
 /// Hidden UIKit presenter sitting next to the SwiftUI picture. `presented`
 /// is the only input: true presents, false dismisses, and every SwiftUI
-/// tick refreshes the overlay so play/pause/live stay in step.
-struct WatchTheaterPresenter<Overlay: View>: UIViewControllerRepresentable {
+/// tick refreshes the film so play/pause/live stay in step.
+struct WatchTheaterPresenter<Content: View>: UIViewControllerRepresentable {
     var presented: Bool
-    var player: AVPlayer?
-    var overlay: Overlay
+    var content: Content
     var onDismiss: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -197,9 +135,9 @@ struct WatchTheaterPresenter<Overlay: View>: UIViewControllerRepresentable {
     func updateUIViewController(_ anchor: WatchTheaterAnchor, context: Context) {
         context.coordinator.onDismiss = onDismiss
         anchor.delegate = context.coordinator
-        if presented, let player {
-            anchor.presentIfNeeded(player: player, overlay: overlay)
-        } else if !presented {
+        if presented {
+            anchor.presentIfNeeded(content: content)
+        } else {
             anchor.dismissIfNeeded()
         }
     }
