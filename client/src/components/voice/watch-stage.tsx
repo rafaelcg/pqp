@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Phone } from "lucide-react";
+import { Maximize2, Phone, X } from "lucide-react";
 import { liveStateFromStream } from "@pqp/shared";
 import type { ChannelLive, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
@@ -8,6 +8,7 @@ import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
+import { WATCH_DOCK_BOX } from "@/components/voice/watch-dock";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
 
 /**
@@ -39,6 +40,9 @@ export function WatchStage({
   communityName,
   coverUrl,
   className,
+  docked = false,
+  onReturn,
+  onDismiss,
 }: {
   /** Playable playlist URL; null while nothing is live. */
   hlsUrl: string | null;
@@ -79,9 +83,44 @@ export function WatchStage({
   communityName?: string | null;
   coverUrl?: string | null;
   className?: string;
+  /**
+   * The mini player, carried into another channel. Same component, same
+   * `HlsWatchPlayer` at the same place in the tree, so switching between the
+   * two is a prop change and NOT a remount: the `<video>` and the hls.js
+   * instance behind it survive. See `watch-dock.tsx`.
+   */
+  docked?: boolean;
+  /** Back to the channel the stream belongs to. Docked only. */
+  onReturn?: () => void;
+  /** Stop watching without leaving whatever channel is open. Docked only. */
+  onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
   const live = hlsUrl !== null;
+  const miniActions = docked ? (
+    <>
+      <button
+        type="button"
+        data-testid="watch-mini-return"
+        aria-label={t("voice.watch.mini.return")}
+        title={t("voice.watch.mini.return")}
+        className="flex h-7 w-7 items-center justify-center rounded-full bg-black/70 text-paper hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+        onClick={onReturn}
+      >
+        <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        data-testid="watch-mini-close"
+        aria-label={t("voice.watch.mini.close")}
+        title={t("voice.watch.mini.close")}
+        className="flex h-7 w-7 items-center justify-center rounded-full bg-black/70 text-paper hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+        onClick={onDismiss}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+    </>
+  ) : null;
   const overlayActions = (
     <>
       {onLeaveParty ? (
@@ -130,23 +169,23 @@ export function WatchStage({
           communityName={communityName}
           coverUrl={coverUrl}
           className="h-full w-full"
-          layout="cinema"
-          onDoubleClick={fullscreen?.toggle}
+          layout={docked ? "mini" : "cinema"}
+          onDoubleClick={docked ? onReturn : fullscreen?.toggle}
           fullscreen={
-            fullscreen
+            !docked && fullscreen
               ? { active: fullscreen.active, toggle: fullscreen.toggle }
               : undefined
           }
           chatOverlay={
-            fullscreen?.active && fullscreen.toggleChatOverlay
+            !docked && fullscreen?.active && fullscreen.toggleChatOverlay
               ? {
                   active: Boolean(fullscreen.chatOverlay),
                   toggle: fullscreen.toggleChatOverlay,
                 }
               : undefined
           }
-          meta={audienceMeta}
-          actions={overlayActions}
+          meta={docked ? null : audienceMeta}
+          actions={docked ? miniActions : overlayActions}
         />
       ) : (
         <EndedWatchStage
@@ -155,6 +194,21 @@ export function WatchStage({
           actions={overlayActions}
         />
       )}
+      {docked && live ? (
+        /* The picture IS the way back, which is what a person tries first.
+           Hidden from the accessibility tree because the button above says
+           the same thing with a name on it: this is the pointer shortcut, not
+           a second control. z-20 keeps it under the mini chrome, so mute and
+           close still take their own clicks. */
+        <button
+          type="button"
+          aria-hidden="true"
+          tabIndex={-1}
+          data-testid="watch-mini-picture"
+          className="absolute inset-0 z-20 cursor-pointer"
+          onClick={onReturn}
+        />
+      ) : null}
     </div>
   );
 }
@@ -241,6 +295,9 @@ export function WatchChannelStage({
   onSeedChannelLive,
   fill = false,
   onShapeChange,
+  docked = false,
+  onReturn,
+  onDismiss,
 }: {
   channelId: string;
   channelName: string;
@@ -260,6 +317,15 @@ export function WatchChannelStage({
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
   onShapeChange?: (shape: CallStageShape) => void;
+  /**
+   * Drawn as the corner mini player instead of the channel stage, because the
+   * person is reading another channel. The mount is the same one either way:
+   * `watch-dock.tsx` moves the DOM rather than remounting it, which is what
+   * keeps the stream from rebuffering on every click in the sidebar.
+   */
+  docked?: boolean;
+  onReturn?: () => void;
+  onDismiss?: () => void;
 }) {
   const inThisCall =
     voiceState.voiceChannelId === channelId && voiceState.status !== "idle";
@@ -321,7 +387,9 @@ export function WatchChannelStage({
   }, [channelId, hasStream, inThisCall]);
   const ended = endedFor === channelId && !hasStream && !inThisCall;
 
-  const visible = !inThisCall && (hasStream || ended);
+  // The ended card belongs to the channel, not to the corner: a mini player
+  // whose stream stopped goes away rather than sitting there saying so.
+  const visible = !inThisCall && (hasStream || (ended && !docked));
   const stageRef = useRef<HTMLDivElement>(null);
   const fullscreen = useWatchFullscreen(stageRef);
   // A stage that goes away must not leave the pane pinned to the window: the
@@ -329,10 +397,10 @@ export function WatchChannelStage({
   // cleans up its own attribute on unmount; this is the case where the mount
   // survives and only the picture goes.
   useEffect(() => {
-    if (!visible && fullscreen.active) {
+    if ((!visible || docked) && fullscreen.active) {
       fullscreen.exit();
     }
-  }, [visible, fullscreen]);
+  }, [visible, docked, fullscreen]);
   // Only ever speaks about its own stage. `CallStage` owns the shape while
   // the person is in the call, and this mount stays alive (rendering
   // nothing) through that, so an unconditional "none" here would fight it.
@@ -340,8 +408,11 @@ export function WatchChannelStage({
   const stageShape: CallStageShape = fullscreen.active
     ? "fullscreen"
     : "expanded";
+  // A docked player is not in the pane at all, so the split must hear "none"
+  // about it: leaving the shape at `expanded` would reserve a band of empty
+  // stage above the transcript of whatever channel the person walked into.
   useEffect(() => {
-    if (visible) {
+    if (visible && !docked) {
       wasVisibleRef.current = true;
       onShapeChange?.(stageShape);
       return;
@@ -350,7 +421,7 @@ export function WatchChannelStage({
       wasVisibleRef.current = false;
       onShapeChange?.("none");
     }
-  }, [visible, stageShape, onShapeChange]);
+  }, [visible, docked, stageShape, onShapeChange]);
   useEffect(() => {
     return () => {
       if (wasVisibleRef.current) {
@@ -369,12 +440,20 @@ export function WatchChannelStage({
       ref={stageRef}
       data-testid="watch-channel-stage"
       className={cn(
-        "relative shrink-0 overflow-hidden bg-black",
-        // Cinema fullscreen fills whatever box it is in: native fullscreen
-        // makes that box the screen, expand pins the pane to the window.
-        // `fill` is the divider owning the height in the ordinary split.
-        fill || fullscreen.active ? "h-full min-h-0" : "h-[68svh] min-h-[280px]",
+        docked
+          ? WATCH_DOCK_BOX
+          : cn(
+              "relative shrink-0 overflow-hidden bg-black",
+              // Cinema fullscreen fills whatever box it is in: native
+              // fullscreen makes that box the screen, expand pins the pane to
+              // the window. `fill` is the divider owning the height in the
+              // ordinary split.
+              fill || fullscreen.active
+                ? "h-full min-h-0"
+                : "h-[68svh] min-h-[280px]",
+            ),
       )}
+      data-docked={docked ? "" : undefined}
     >
       <WatchStage
         hlsUrl={stream?.hlsUrl ?? null}
@@ -384,14 +463,21 @@ export function WatchChannelStage({
           voiceState.occupancy[channelId],
         )}
         ended={ended}
-        onJoin={onJoin}
-        onLeaveParty={onLeaveParty}
-        fullscreen={{
-          active: fullscreen.active,
-          toggle: fullscreen.toggle,
-          chatOverlay: fullscreen.chatOverlay,
-          toggleChatOverlay: fullscreen.toggleChatOverlay,
-        }}
+        onJoin={docked ? undefined : onJoin}
+        onLeaveParty={docked ? undefined : onLeaveParty}
+        docked={docked}
+        onReturn={onReturn}
+        onDismiss={onDismiss}
+        fullscreen={
+          docked
+            ? undefined
+            : {
+                active: fullscreen.active,
+                toggle: fullscreen.toggle,
+                chatOverlay: fullscreen.chatOverlay,
+                toggleChatOverlay: fullscreen.toggleChatOverlay,
+              }
+        }
         mediaTitle={channelName}
         communityName={serverName}
         coverUrl={serverIconUrl}
