@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chooseWatchFullscreenPath } from "./watch-fullscreen";
 import { detectFullscreenMode } from "./capabilities";
+import { videoCanEnterFullscreen } from "@/lib/fullscreen";
 
 describe("chooseWatchFullscreenPath", () => {
   it("takes native element fullscreen on desktop, Android and iPad", () => {
@@ -68,6 +69,31 @@ describe("iPhone capability probe feeds the video path, not expand", () => {
       chooseWatchFullscreenPath({
         elementFullscreen: element === "element",
         videoNativeFullscreen: true,
+      }),
+    ).toBe("video");
+  });
+
+  it("an iOS 17.1+ iPhone (hls.js / ManagedMediaSource) still reaches the video path", () => {
+    // The regression this fixes: the film plays through hls.js over
+    // ManagedMediaSource and WebKit reports `webkitSupportsFullscreen ===
+    // false` for it, so the strict `videoSupportsNativeFullscreen` probe used
+    // to say `false` and the chooser fell to `expand` — a dead button under
+    // Safari's chrome. The looser `videoCanEnterFullscreen` gates on the
+    // method alone, so the iPhone reaches the native player.
+    const mmsFilm = {
+      webkitEnterFullscreen: () => {},
+      webkitSupportsFullscreen: false,
+    } as unknown as HTMLVideoElement;
+    const element = detectFullscreenMode({
+      documentFullscreenEnabled: undefined,
+      requestFullscreen: undefined,
+      webkitRequestFullscreen: undefined,
+    });
+    expect(element).toBe("expand");
+    expect(
+      chooseWatchFullscreenPath({
+        elementFullscreen: element === "element",
+        videoNativeFullscreen: videoCanEnterFullscreen(mmsFilm),
       }),
     ).toBe("video");
   });

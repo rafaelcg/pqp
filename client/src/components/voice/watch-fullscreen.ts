@@ -11,7 +11,8 @@ import {
 import {
   enterNativeVideoFullscreen,
   exitNativeVideoFullscreen,
-  videoSupportsNativeFullscreen,
+  videoCanEnterFullscreen,
+  type NativeFullscreenVideo,
 } from "@/lib/fullscreen";
 import {
   isWatchCinemaMode,
@@ -227,17 +228,42 @@ export function useWatchFullscreen(
     }
     const film = filmOf();
     const doc = fullscreenDocument();
+    const elementFullscreen =
+      detectFullscreenMode({
+        documentFullscreenEnabled:
+          doc.fullscreenEnabled ?? doc.webkitFullscreenEnabled,
+        requestFullscreen: pane.requestFullscreen,
+        webkitRequestFullscreen: (pane as WebkitFullscreenElement)
+          .webkitRequestFullscreen,
+      }) === "element";
     const path = chooseWatchFullscreenPath({
-      elementFullscreen:
-        detectFullscreenMode({
-          documentFullscreenEnabled:
-            doc.fullscreenEnabled ?? doc.webkitFullscreenEnabled,
-          requestFullscreen: pane.requestFullscreen,
-          webkitRequestFullscreen: (pane as WebkitFullscreenElement)
-            .webkitRequestFullscreen,
-        }) === "element",
-      videoNativeFullscreen: videoSupportsNativeFullscreen(film),
+      elementFullscreen,
+      // The looser probe on purpose: a watch party is HLS, and on iOS 17.1+
+      // (hls.js over ManagedMediaSource) `webkitSupportsFullscreen` reads
+      // `false` while the film plays, so the strict probe would strand every
+      // iPhone on the in-page `expand` — a dead button under Safari's chrome.
+      // `videoCanEnterFullscreen` explains why; the `try/catch` below still
+      // falls back to `expand` on a genuine refusal.
+      videoNativeFullscreen: videoCanEnterFullscreen(film),
       elementPreviouslyRefused: refusedRef.current,
+    });
+    // The one measurement that makes the next iPhone report diagnosable
+    // (pitfall 16's lesson: an unexplained path costs an afternoon). Attach
+    // Safari Web Inspector to the phone and this says which branch it took
+    // and why — no fullscreen surfaces to the server, so this log is all
+    // there is. Cheap, and only on a deliberate press.
+    const nativeFilm = film as NativeFullscreenVideo | null;
+    // `warn` not `info` only because it is the console method this file's
+    // logging is allowed to use; it is not a problem, just the one press-time
+    // measurement worth keeping.
+    console.warn("[watch] fullscreen path", {
+      path,
+      elementFullscreen,
+      elementPreviouslyRefused: refusedRef.current,
+      hasFilm: film !== null,
+      hasEnter: typeof nativeFilm?.webkitEnterFullscreen === "function",
+      supportsFullscreen: nativeFilm?.webkitSupportsFullscreen,
+      readyState: film?.readyState,
     });
 
     if (path === "video") {
