@@ -85,25 +85,40 @@ listName }` (and `track`, the first, for the first client build):
 | Pasted | What happens |
 |---|---|
 | YouTube video (`watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/`, YouTube Music) | id off the URL; title and thumbnail off YouTube's oEmbed, no key |
-| YouTube playlist (`playlist?list=`, `watch?v=X&list=Y`, YouTube Music) | up to 50 items off the public playlist page (`lockupViewModel` entries), or `playlistItems` with a key. A `watch?v=X&list=Y` starts at X. A mix (`list=RD...`) is generated per viewer and has no page, so it is treated as its single video |
-| Spotify track (`open.spotify.com/track/`, `intl-xx/track/`, `embed/track/`, `spotify:track:`) | title off Spotify's oEmbed, artist off the server-rendered embed page, then one YouTube search; keeps the Spotify URL for "abrir no Spotify" |
-| Spotify album or playlist (same shapes, `album/`, `playlist/`) | the track list off the embed page, then a YouTube search per track, two at a time with one retry, capped at `SPOTIFY_LIST_MAX` (10) |
+| YouTube playlist (`playlist?list=`, `watch?v=X&list=Y`, YouTube Music) | up to 50 items off InnerTube `browse` (or `playlistItems` with a key). A `watch?v=X&list=Y` starts at X, and a video past the first page is resolved on its own and placed first. A mix (`list=RD...`) is generated per viewer and has no list, so it is treated as its single video |
+| Spotify track (`open.spotify.com/track/`, `intl-xx/track/`, `embed/track/`, `spotify:track:`) | title off Spotify's oEmbed, artist off the server-rendered embed page, then one search; keeps the Spotify URL for "abrir no Spotify" |
+| Spotify album or playlist (same shapes, `album/`, `playlist/`) | the track list off the embed page, then one search per track, three at a time with one retry, capped at `SPOTIFY_LIST_MAX` (25) |
 | `spotify.link/...` | followed, then parsed again |
 | Spotify artist, other sites | refused with a message |
-| Anything else | a YouTube search |
+| Anything else | a search |
 
-Search uses the YouTube Data API when `YOUTUBE_API_KEY` is set (100 quota
-units per search on a 10,000/day free key, which is why the key is not the
-default: ten playlists a day would exhaust it) and otherwise reads the first
-result off the public results page. Search answers are cached in memory for
-six hours, so a list pasted twice costs one round of searches. Metadata only,
-either way.
+### Search: InnerTube, the way every music bot does it
 
-**Known limit.** A Spotify list is slow (about two seconds per track, ten
-tracks in twenty seconds) because every track is a YouTube search and a
-burst of them from one address makes YouTube drop connections. The fix is
-progressive loading (resolve the first few, queue the rest as they land),
-not a bigger cap.
+Search and playlist reads go to YouTube's internal JSON API, InnerTube
+(`youtubei/v1/search`, `youtubei/v1/browse`), in `server/src/services/innertube.ts`.
+It is what the YouTube web, TV and mobile apps call and what Lavalink's
+youtube-source, yt-dlp, Invidious and Piped call: no key, no quota, one call
+for twenty results with title, duration and thumbnail. The official Data API
+is not the standard for this because a `search.list` costs 100 of the 10,000
+daily units, which is a hundred searches a day; with `YOUTUBE_API_KEY` set
+it is used anyway, for the few deployments that want an official path.
+
+Unofficial, so the module follows those projects' two rules. **More than one
+client identity**: WEB first, TVHTML5 next; each is rate limited on its own
+and answers in its own shape (`videoRenderer` and `lockupViewModel`), and a
+client that fails hands over to the next. **Parse by walking, not by path**:
+the tree around a result moves with YouTube's experiments, the result
+renderers rarely do, so `collectVideos` finds them wherever they are. When
+every client fails, the public results and playlist pages are scraped as the
+last resort, which is where the feature started. Metadata only: no stream
+URL is ever requested, which is the half of InnerTube that PO tokens guard.
+
+Around it: a per-user limiter (20 burst, then one every two seconds), an
+aggregate limiter (120 burst, two a second across everyone), a six-hour
+search cache, eight-second upstream timeouts, and no query string in an
+error message (the Data API key travels in one). Measured on 2026-09-12:
+a search under a second, a 50-track playlist under a second, a 25-track
+Spotify playlist in four seconds.
 
 ## The client
 

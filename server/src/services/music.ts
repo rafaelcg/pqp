@@ -1,4 +1,5 @@
 import { parseMusicInput, type MusicResolved } from "@pqp/shared";
+import { innertubePlaylist, innertubeSearch } from "./innertube.js";
 
 /**
  * Turn what a person pasted into a YouTube video the room can play.
@@ -129,6 +130,7 @@ interface SearchHit {
   videoId: string;
   title: string;
   thumbnailUrl: string | null;
+  durationMs?: number | null;
 }
 
 async function searchWithDataApi(query: string, key: string): Promise<SearchHit | null> {
@@ -217,7 +219,7 @@ export async function searchYouTube(query: string): Promise<MusicResolved> {
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
     hit = cached.hit;
   } else {
-    hit = key ? await searchWithDataApi(query, key) : await searchByScraping(query);
+    hit = key ? await searchWithDataApi(query, key) : await searchUnofficial(query);
     if (hit) {
       rememberSearch(cacheKey, hit);
     }
@@ -231,19 +233,45 @@ export async function searchYouTube(query: string): Promise<MusicResolved> {
     title: hit.title.trim().slice(0, 200) || hit.videoId,
     sourceUrl: null,
     thumbnailUrl: hit.thumbnailUrl,
-    durationMs: null,
+    durationMs: hit.durationMs ?? null,
   };
+}
+
+/**
+ * InnerTube first (`innertube.ts`, the JSON API every music bot uses, with
+ * a client fallback), the results page as the last resort when every
+ * client fails. Both are unofficial; the page is the more fragile of the two.
+ */
+async function searchUnofficial(query: string): Promise<SearchHit | null> {
+  try {
+    const videos = await innertubeSearch(query, 5);
+    if (videos && videos.length > 0) {
+      const first = videos[0]!;
+      return {
+        videoId: first.videoId,
+        title: first.title,
+        thumbnailUrl: first.thumbnailUrl,
+        durationMs: first.durationMs,
+      };
+    }
+    return null;
+  } catch (error) {
+    console.warn(
+      "[music] innertube search failed, falling back to the results page:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return searchByScraping(query);
+  }
 }
 
 /** How many of a list we take. The room's queue holds 50. */
 export const PLAYLIST_MAX = 50;
 /**
- * Each Spotify track is a YouTube search, two at a time, at a couple of
- * seconds each: ten is about twenty seconds, which is as long as a person
- * will wait for a paste to land. A YouTube playlist is one page read and
- * takes all fifty.
+ * Each Spotify track is one InnerTube search, three at a time, well under a
+ * second each: twenty-five is a few seconds. A YouTube playlist is one call
+ * and takes all fifty.
  */
-export const SPOTIFY_LIST_MAX = 10;
+export const SPOTIFY_LIST_MAX = 25;
 
 /** What a resolve answers: one track for a link or a search, many for a list. */
 export interface MusicResolution {
@@ -323,19 +351,39 @@ export async function resolveYouTubePlaylist(
   startVideoId: string | null,
 ): Promise<MusicResolution> {
   const key = process.env.YOUTUBE_API_KEY?.trim();
-  let items: Array<{ videoId: string; title: string; thumbnailUrl: string | null }>;
+  let items: Array<{
+    videoId: string;
+    title: string;
+    thumbnailUrl: string | null;
+    durationMs?: number | null;
+  }> = [];
   let name: string | null = null;
   if (key) {
     ({ items, name } = await youtubePlaylistWithDataApi(listId, key));
   } else {
-    const html = await fetchText(`https://www.youtube.com/playlist?list=${listId}`, {
-      cookie: "CONSENT=YES+1; SOCS=CAI",
-    });
-    items = playlistFromHtml(html).map((item) => ({
-      ...item,
-      thumbnailUrl: `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
-    }));
-    name = playlistNameFromHtml(html);
+    // InnerTube `browse` first; the playlist page only when every client failed.
+    try {
+      const list = await innertubePlaylist(listId, PLAYLIST_MAX);
+      if (list) {
+        items = list.videos;
+        name = list.name;
+      }
+    } catch (error) {
+      console.warn(
+        "[music] innertube playlist failed, falling back to the page:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    if (items.length === 0) {
+      const html = await fetchText(`https://www.youtube.com/playlist?list=${listId}`, {
+        cookie: "CONSENT=YES+1; SOCS=CAI",
+      });
+      items = playlistFromHtml(html).map((item) => ({
+        ...item,
+        thumbnailUrl: `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
+      }));
+      name = playlistNameFromHtml(html);
+    }
   }
   if (items.length === 0) {
     throw new MusicResolveError("not_found", "That playlist is empty, private, or could not be read");
@@ -364,7 +412,7 @@ export async function resolveYouTubePlaylist(
       title: item.title.trim().slice(0, 200) || item.videoId,
       sourceUrl: `https://www.youtube.com/watch?v=${item.videoId}&list=${listId}`,
       thumbnailUrl: item.thumbnailUrl,
-      durationMs: null,
+      durationMs: item.durationMs ?? null,
     })),
   };
 }
@@ -453,9 +501,9 @@ export async function resolveSpotifyList(
   if (tracks.length === 0) {
     throw new MusicResolveError("not_found", "That Spotify list is empty, private, or could not be read");
   }
-  // Two at a time, one retry: a burst of twenty-five searches from one
-  // address is what makes YouTube drop connections.
-  const resolved = await mapLimit(tracks.slice(0, SPOTIFY_LIST_MAX), 2, async (track) => {
+  // Three at a time, one retry: a burst from one address is what makes
+  // YouTube rate-limit a client, and the fallback list absorbs the rest.
+  const resolved = await mapLimit(tracks.slice(0, SPOTIFY_LIST_MAX), 3, async (track) => {
     const query = `${track.artist} ${track.title}`.trim().slice(0, 200);
     let found: MusicResolved;
     try {
