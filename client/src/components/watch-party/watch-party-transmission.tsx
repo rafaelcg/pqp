@@ -1,10 +1,16 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
 import { useShareUplinkStrain } from "@/hooks/use-share-uplink-strain";
-import { useTranslation } from "@/lib/i18n";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import type { VideoQuality } from "@/lib/video-quality";
+import {
+  WATCH_PARTY_STREAM_QUALITIES,
+  readWatchPartyStreamQuality,
+  writeWatchPartyStreamQuality,
+  type WatchPartyStreamQuality,
+} from "@/lib/watch-party-stream-quality";
 import { cn } from "@/lib/utils";
 
 /**
@@ -234,6 +240,16 @@ export function WatchPartyTransmission({
               {t("watchParty.tx.silentFix")}
             </p>
           )}
+          {/* THE HOST'S ONE ENCODER LEVER, and why it is here rather than on
+              the crowded live bar: it belongs beside the numbers it changes.
+              720p by default because a 1080p share over a lossy path corrupts
+              for everyone (the egress always takes the top published layer);
+              1080p is the opt-in for a host who knows their uplink is fat.
+              Reads and writes its own `localStorage`, applied at the next
+              share start — the running egress binds its source at the start
+              and cannot be re-pointed in place. See
+              `lib/watch-party-stream-quality.ts`. */}
+          <StreamQualityControl />
           {/* One footnote, stated whether or not anything is wrong: the two
               audiences are on two different paths and the seated one is
               strictly richer. A host who never learns that assumes the
@@ -249,6 +265,68 @@ export function WatchPartyTransmission({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+const STREAM_QUALITY_KEYS: Record<WatchPartyStreamQuality, MessageKey> = {
+  "720p": "watchParty.tx.streamQuality720",
+  "1080p": "watchParty.tx.streamQuality1080",
+};
+
+/**
+ * The host's "Qualidade da transmissão" selector.
+ *
+ * SELF-CONTAINED on purpose. The choice is a per-browser preference that
+ * `use-voice.ts` reads straight from `localStorage` the moment a share starts,
+ * so this control needs no prop threaded from the call hook through the panel:
+ * it reads and writes the same key. That also means a change lands on the NEXT
+ * share, not the running one — the HLS egress binds its source when the
+ * session begins and cannot be re-pointed at a different layer in place. The
+ * hint says so.
+ *
+ * Rendered for the host only (the whole panel is), whether or not they are
+ * presenting this instant, so the choice can be made before going live.
+ */
+export function StreamQualityControl() {
+  const { t } = useTranslation();
+  const selectId = useId();
+  const [quality, setQuality] = useState<WatchPartyStreamQuality>(() =>
+    readWatchPartyStreamQuality(),
+  );
+  return (
+    <div
+      data-testid="watch-party-tx-stream-quality"
+      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-0 px-2.5 py-1.5"
+    >
+      <label
+        htmlFor={selectId}
+        className="min-w-0 flex flex-col text-[11px] text-paper-muted"
+      >
+        <span className="font-semibold uppercase tracking-wider text-text-tertiary">
+          {t("watchParty.tx.streamQuality")}
+        </span>
+        <span className="text-text-tertiary">
+          {t("watchParty.tx.streamQualityHint")}
+        </span>
+      </label>
+      <select
+        id={selectId}
+        data-testid="watch-party-tx-stream-quality-select"
+        className="h-[var(--control-sm)] shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+        value={quality}
+        onChange={(event) => {
+          const next = event.target.value as WatchPartyStreamQuality;
+          setQuality(next);
+          writeWatchPartyStreamQuality(next);
+        }}
+      >
+        {WATCH_PARTY_STREAM_QUALITIES.map((value) => (
+          <option key={value} value={value}>
+            {t(STREAM_QUALITY_KEYS[value])}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

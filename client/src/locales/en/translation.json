@@ -3049,6 +3049,10 @@
   "watchParty.tx.silentFix": "Nobody watching from outside can hear anything. Stop sharing and share again with the audio box ticked. In Chrome, pick a tab and tick 'Share tab audio'.",
   "watchParty.tx.carries": "What leaves the room is the shared window and its own audio. Microphones and cameras stay with the people in the room.",
   "watchParty.tx.behind": "People watching from outside are about {seconds}s behind you.",
+  "watchParty.tx.streamQuality": "Stream quality",
+  "watchParty.tx.streamQualityHint": "Applies to your next share (the current one stays as is).",
+  "watchParty.tx.streamQuality720": "720p (recommended)",
+  "watchParty.tx.streamQuality1080": "1080p",
   "watchParty.tx.expand": "Show the details",
   "watchParty.tx.collapse": "Hide the details"
 }

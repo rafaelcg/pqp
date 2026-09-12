@@ -242,6 +242,35 @@ export { LARGE_ROOM_PARTICIPANTS };
 export const LARGE_ROOM_SCREEN_HEIGHT = 720;
 export const LARGE_ROOM_SCREEN_BITRATE = 1_500_000;
 
+/**
+ * The tallest layer a watch-party HLS presenter is allowed to publish, whatever
+ * the measured uplink says.
+ *
+ * WHY THIS EXISTS (2026-09-12). A host on a fast uplink published the share at
+ * 1920x1080 with a top simulcast layer at 1080p@8Mbps. The HLS egress (LiveKit
+ * Track Composite) always subscribes to the TOP published layer and has no way
+ * to be told to take a lower one, so it transcoded from 1080. Over a long,
+ * lossy path (a UK presenter to the São Paulo SFU) the 1080 layer arrived with
+ * packet loss and reordering: the egress logged hundreds of "libav error,
+ * error while decoding MB" per minute and every viewer saw glass-shard
+ * macroblock corruption. Halving to 720 roughly halves the packet rate, and
+ * the layer survives the path. There is no host quality selector in the
+ * watch-party UI (removed on purpose, see `watch-party-options.tsx`), so the
+ * cap must be automatic.
+ *
+ * This is the DEFAULT ceiling, not a hard cap: it is what a share publishes
+ * when nothing set `HlsSourceInput.maxPublishHeight`, so a host who never
+ * touches the control is safe. The host-facing "Qualidade da transmissão"
+ * selector (`watch-party-stream-quality.ts`, shown in the TRANSMISSÃO
+ * readout) lets a host opt into 1080; picking 1080 passes
+ * `maxPublishHeight: 1080` here and the measured-uplink gate
+ * (`canRaiseHlsTop`) then decides 720 vs 1080, so an opt-in on a short uplink
+ * still lands at a clean 720 rather than a starved 1080. Raise THIS constant
+ * to change the default once the egress moves closer to the presenter (a
+ * regional media box) or an OBS/RTMP ingest path exists.
+ */
+export const WATCH_PARTY_MAX_PUBLISH_HEIGHT = 720;
+
 /** One rung of the presenter's simulcast ladder, as `livekit-client` wants it. */
 export interface ScreenLayer {
   width: number;
@@ -368,6 +397,19 @@ export interface HlsSourceInput {
   currentHeight?: number | null;
   /** Applied publish ceiling, in bit/s. Raise is 1.25× this, not 1.25× 4 Mbps. */
   currentCeilingBps?: number | null;
+  /**
+   * The tallest layer the HOST has allowed this watch-party share to publish,
+   * in picture lines. The host-facing "Qualidade da transmissão" selector
+   * sets it (`watch-party-stream-quality.ts`): 720 by default, 1080 when the
+   * host opts in. `undefined` falls back to `WATCH_PARTY_MAX_PUBLISH_HEIGHT`
+   * (720), so a share whose session never set it is still safe.
+   *
+   * At 720 the 720 → 1080 raise below is a no-op whatever the uplink — the
+   * corruption fix (2026-09-12). At 1080 the measured-uplink gate
+   * (`canRaiseHlsTop`) decides 720 vs 1080 exactly as before, so an opt-in
+   * host on a short uplink still gets a clean 720 rather than a starved 1080.
+   */
+  maxPublishHeight?: number | null;
 }
 
 /**
@@ -434,12 +476,22 @@ export function hlsSourceTopHeight(
   if (wanted <= LARGE_ROOM_SCREEN_HEIGHT) {
     return null;
   }
+  // Never publish a watch-party HLS layer taller than the host's chosen
+  // ceiling (`maxPublishHeight`, default WATCH_PARTY_MAX_PUBLISH_HEIGHT = 720).
+  // The egress always transcodes the TOP published layer, and a 1080 layer
+  // over a lossy path corrupts for everyone (2026-09-12), so 720 is the safe
+  // default. A host who opts into 1080 sets `maxPublishHeight: 1080` and the
+  // measured-uplink gate below then decides 720 vs 1080. The `wanted` value
+  // above is left uncapped so a genuine <=720 source still returns null; only
+  // the published height is held.
+  const cap = hls.maxPublishHeight ?? WATCH_PARTY_MAX_PUBLISH_HEIGHT;
+  const publishTop = Math.min(wanted, cap);
   const atTop =
     typeof hls.currentHeight === "number" &&
     hls.currentHeight > LARGE_ROOM_SCREEN_HEIGHT;
 
   if (atTop) {
-    return shouldDropHlsTop(hls) ? LARGE_ROOM_SCREEN_HEIGHT : wanted;
+    return shouldDropHlsTop(hls) ? LARGE_ROOM_SCREEN_HEIGHT : publishTop;
   }
 
   // Return 720 rather than null. Null used to mean "do not raise past the
@@ -447,7 +499,7 @@ export function hlsSourceTopHeight(
   // 1080, the egress still takes that top layer, and a 1.5 Mbit/s uplink
   // produces the starved picture that drifts off the audio. Holding at 720
   // is the same decision in a two-seat watch party as in a hundred-seat one.
-  return canRaiseHlsTop(hls) ? wanted : LARGE_ROOM_SCREEN_HEIGHT;
+  return canRaiseHlsTop(hls) ? publishTop : LARGE_ROOM_SCREEN_HEIGHT;
 }
 
 function shouldDropHlsTop(hls: HlsSourceInput): boolean {

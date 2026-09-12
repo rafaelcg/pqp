@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { LiveHlsStream } from "@pqp/shared";
 import {
   streamAudioState,
+  StreamQualityControl,
   WatchPartyTransmission,
 } from "./watch-party-transmission";
 
@@ -81,5 +82,23 @@ describe("what the host is told the stream is carrying", () => {
     expect(markup({})).not.toContain("watch-party-tx-silent-pill");
     expect(streamAudioState(null)).toBe("unknown");
     expect(markup(null)).not.toContain("watch-party-tx-silent-pill");
+  });
+});
+
+/**
+ * The host's stream-quality selector. The panel hides it behind a click the
+ * static renderer cannot make, so the control is exercised on its own. It
+ * offers exactly the two choices and defaults to 720p (storage is unavailable
+ * in `node`, which is the same safe default).
+ */
+describe("StreamQualityControl", () => {
+  it("renders the label, both choices, and defaults to 720p", () => {
+    const html = renderToStaticMarkup(<StreamQualityControl />);
+    expect(html).toContain("Stream quality");
+    expect(html).toContain("watch-party-tx-stream-quality-select");
+    expect(html).toContain(">720p (recommended)<");
+    expect(html).toContain(">1080p<");
+    // The default is selected, so a host who does nothing publishes 720.
+    expect(html).toMatch(/value="720p"[^>]*selected/);
   });
 });
