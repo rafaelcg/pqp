@@ -1502,6 +1502,24 @@ computer ("Meu mic vai no stream", Opções), on by default, and the live bar
 says which of the four states the mic is in: not in the call, muted, room only,
 or everyone. Option 1 of `docs/plans/WATCH_PARTY_STREAM_AUDIO.md`, built.
 
+**Levels and ducking (2026-09-12).** The two branches were summed at unity
+into that mix, and a film in a tab sits near full scale next to a processed
+mic that does not: the first live test came back "mic works. might need audio
+settings cause mic was low compared to video being streamed." Each branch now
+has its own `GainNode` before a shared `DynamicsCompressorNode` (threshold -6
+dB, ratio 12:1) so the mic can be boosted without clipping the bus: display at
+0.7 (-3 dB), mic at 2.0 (+6 dB) by default, both host preferences stored per
+browser (`client/src/lib/stream-mix-levels.ts`, mic 0.5-4, display 0.25-1). On
+top of that, an `AnalyserNode` on the mic branch ducks the display branch a
+further -6 dB while the host is actually talking (RMS above -40 dBFS, 50ms
+poll) and lets it back up 600ms after they stop, so a talking host is heard
+over the film rather than fighting it. The host gets one control for this,
+"Mic no stream" next to the stream-quality picker in the transmission panel
+(Mais baixo / Normal / Mais alto, 1.4 / 2.0 / 2.8), and unlike the quality
+picker it applies to the RUNNING mix at once — the gain node is already in the
+graph, so there is nothing to rebind and no republish. See
+`client/src/lib/screen-mix.ts`.
+
 The transcode is a **Track Composite** egress, and
 `TrackCompositeEgressRequest` carries one video track sid and one audio track
 sid, singular. So `pickScreenTracks` is not filtering a mix, it is making the

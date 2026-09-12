@@ -173,6 +173,8 @@ export interface WatchPartyPanelProps {
   /** "Meu mic vai no stream", the standing preference, and the switch for it. */
   micInStream?: boolean;
   onMicInStreamChange?: (on: boolean) => void;
+  /** Apply a mic-gain choice to the running mix at once. See `MicGainControl`. */
+  onMicGainChange?: (value: number) => void;
   /** The pill on the bar mutes and unmutes when this is given. */
   onToggleMute?: () => void;
   /** Give the seat back, in the party's words: Sair do palco. */
@@ -1567,6 +1569,7 @@ function LiveSurface(
       roomViewers={props.roomViewers ?? 0}
       transport={props.transport ?? null}
       now={new Date()}
+      onMicGainChange={props.onMicGainChange}
     />
   );
 

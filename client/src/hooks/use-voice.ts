@@ -43,6 +43,7 @@ import {
   type ShareCursor,
 } from "@/lib/screen-capture-cursor";
 import { createScreenMix, type ScreenMix } from "@/lib/screen-mix";
+import { writeStreamMixLevels } from "@/lib/stream-mix-levels";
 import { getMicInStream, saveMicInStream } from "@/lib/mic-in-stream";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
@@ -3782,6 +3783,18 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       leaveCall();
+    },
+
+    /**
+     * "Mic no stream" level, the mic branch's gain in the running mix.
+     * Applied live via `ScreenMix.setMicGain` (a `GainNode.gain.value`
+     * write) — no republish, no interruption to the share. A no-op when
+     * nothing is mixed yet (mic not in the stream, or not sharing): the
+     * next mix reads the stored value itself, see `stream-mix-levels.ts`.
+     */
+    setStreamMicGain(value: number) {
+      writeStreamMixLevels({ micGain: value });
+      screenMix?.setMicGain(value);
     },
 
     /**
