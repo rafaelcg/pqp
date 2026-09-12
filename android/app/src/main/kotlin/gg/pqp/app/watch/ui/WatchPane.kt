@@ -60,7 +60,6 @@ import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.watch.ChannelLive
-import gg.pqp.app.watch.HlsLiveEdge
 import gg.pqp.app.watch.HlsWatchdog
 import gg.pqp.app.watch.LiveStream
 import gg.pqp.app.watch.WatchPhase
@@ -265,17 +264,18 @@ fun WatchPane(
                 // Required. There is no `.m3u8` in the path for Media3 to
                 // sniff, so without this it builds a progressive source.
                 .setMimeType(MimeTypes.APPLICATION_M3U8)
-                // Default live offset is ~three TARGETDURATIONs from the
-                // edge, which on a five-segment playlist is the segment
-                // that expires next. Same 6 s / 8 s window as iOS and web.
-                .setLiveConfiguration(
-                    MediaItem.LiveConfiguration.Builder()
-                        .setTargetOffsetMs(HlsLiveEdge.TARGET_OFFSET_MS)
-                        .setMinOffsetMs(HlsLiveEdge.MIN_OFFSET_MS)
-                        .setMaxOffsetMs(HlsLiveEdge.MAX_OFFSET_MS)
-                        .setMaxPlaybackSpeed(HlsLiveEdge.MAX_PLAYBACK_SPEED)
-                        .build(),
-                )
+                // Deliberately no `setLiveConfiguration`. With none, and no
+                // `#EXT-X-SERVER-CONTROL` in this playlist (there is none),
+                // Media3 resolves the live target offset itself as
+                // `3 * targetDurationUs` read off the manifest it is
+                // actually playing (HlsMediaPeriod's live-offset fallback;
+                // see `HlsLiveEdge.kt`). A prior version of this call hard-
+                // coded that arithmetic at 2 s segments; production moved to
+                // 4 s without a client release and the hardcoded max sat the
+                // playhead on the segment the next playlist update expires,
+                // stalling once per segment. Trusting Media3's own manifest-
+                // driven default is correct for any segment length without
+                // this file ever needing to know which one is live.
                 .build(),
         )
         player.prepare()
