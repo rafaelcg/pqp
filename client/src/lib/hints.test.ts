@@ -19,9 +19,11 @@ function memory(seed: Record<string, string> = {}) {
 
 describe("hints store", () => {
   it("never persists on localhost, so a developer sees every card again", () => {
-    expect(shouldPersistHints("localhost")).toBe(false);
-    expect(shouldPersistHints("127.0.0.1")).toBe(false);
-    expect(shouldPersistHints("pqp.gg")).toBe(true);
+    expect(shouldPersistHints("localhost", memory())).toBe(false);
+    expect(shouldPersistHints("127.0.0.1", memory())).toBe(false);
+    expect(shouldPersistHints("pqp.gg", memory())).toBe(true);
+    // The developer who has seen enough: one key, and localhost remembers.
+    expect(shouldPersistHints("localhost", memory({ "pqp:hints-persist": "1" }))).toBe(true);
     const storage = memory({ "x": "1" });
     expect(isHintSeen("x", storage, false)).toBe(false);
     rememberHint("y", storage, false);

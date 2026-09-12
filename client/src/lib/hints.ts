@@ -13,7 +13,10 @@ import { browserStorage } from "./arrival";
  *
  * THE RULES, ONCE:
  *  - `localhost` / `127.0.0.1` never persist, so a developer sees every card
- *    on every reload without clearing storage;
+ *    on every reload without clearing storage. Unless `HINTS_PERSIST_OVERRIDE_KEY`
+ *    is set in that browser's storage: then localhost remembers dismissals
+ *    like any host, for the developer who has seen the cards enough
+ *    (`localStorage.setItem("pqp:hints-persist", "1")` once, in the console);
  *  - Playwright (`navigator.webdriver`) never sees a card, because a corner
  *    card over the composer or the call stage is what a screenshot suite
  *    would otherwise measure;
@@ -23,12 +26,23 @@ import { browserStorage } from "./arrival";
 
 export type HintStorage = Pick<Storage, "getItem" | "setItem"> | null;
 
+/** Set to "1" in a localhost browser to make every hint remember its dismissal there. */
+export const HINTS_PERSIST_OVERRIDE_KEY = "pqp:hints-persist";
+
 export function shouldPersistHints(
   hostname: string = typeof window === "undefined"
     ? ""
     : window.location.hostname,
+  storage: Pick<Storage, "getItem"> | null = browserStorage(),
 ): boolean {
-  return hostname !== "localhost" && hostname !== "127.0.0.1";
+  if (hostname !== "localhost" && hostname !== "127.0.0.1") {
+    return true;
+  }
+  try {
+    return storage?.getItem(HINTS_PERSIST_OVERRIDE_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 export function isAutomatedBrowser(
