@@ -2,11 +2,13 @@ package gg.pqp.app.watch
 
 import gg.pqp.app.protocol.RepoSources
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The live-window ratios and playback-speed caps, without an ExoPlayer.
+ * The live-window ratios, the window clamp, and the playback-speed caps,
+ * without an ExoPlayer.
  *
  * These used to be fixed millisecond constants applied to the player via an
  * explicit `MediaItem.LiveConfiguration`, all derived assuming 2 s segments.
@@ -18,9 +20,10 @@ import org.junit.Test
  * pauses every now and then" — so `ui/WatchPane.kt` now applies an explicit
  * `LiveConfiguration` again, deeper, but still derived from the manifest's
  * real target duration rather than a millisecond guess. This file pins the
- * RATIOS, which do not move when the operator's segment length does, and a
- * source check that `ui/WatchPane.kt` derives the applied configuration from
- * `HlsLiveEdge.offsetsFor` rather than any other constant.
+ * RATIOS and the [HlsLiveEdge.LIVE_WINDOW_MS] clamp, which do not move when
+ * the operator's segment length does, and a source check that
+ * `ui/WatchPane.kt` derives every applied configuration from
+ * `HlsLiveEdge.offsetsFor` / the shared constants rather than a raw literal.
  */
 class HlsLiveEdgeTest {
 
@@ -65,19 +68,73 @@ class HlsLiveEdgeTest {
     }
 
     @Test
-    fun `load control pre-loads about two segments and refills about two after a stall`() {
-        assertEquals(20_000, HlsLiveEdge.MIN_BUFFER_MS)
-        assertEquals(60_000, HlsLiveEdge.MAX_BUFFER_MS)
-        assertEquals(4_000, HlsLiveEdge.BUFFER_FOR_PLAYBACK_MS)
-        assertEquals(8_000, HlsLiveEdge.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
+    fun `offsets stay ordered and inside the 60s window at 2, 4, 6, 8 and 10s targets`() {
+        // Not every one of these is a realistic `LIVE_HLS_SEGMENT_SECONDS`;
+        // the point is that offsetsFor never hands back an inverted or
+        // out-of-window triple, however far the operator pushes the knob.
+        for (targetDurationMs in longArrayOf(2_000, 4_000, 6_000, 8_000, 10_000)) {
+            val offsets = HlsLiveEdge.offsetsFor(targetDurationMs)
+            assertTrue(
+                "min must sit below target at ${targetDurationMs}ms, got $offsets",
+                offsets.minMs < offsets.targetMs,
+            )
+            assertTrue(
+                "target must sit at or below max at ${targetDurationMs}ms, got $offsets",
+                offsets.targetMs <= offsets.maxMs,
+            )
+            assertTrue(
+                "max must stay inside the 60s window at ${targetDurationMs}ms, got $offsets",
+                offsets.maxMs <= HlsLiveEdge.LIVE_WINDOW_MS,
+            )
+        }
     }
 
     @Test
-    fun `the buffer holds at least as much as the target cushion asks for`() {
-        // Otherwise the player reaches the target offset and immediately
-        // empties the buffer it just arrived with.
-        val offsets = HlsLiveEdge.offsetsFor(targetDurationMs = 4_000)
-        assertTrue(HlsLiveEdge.MIN_BUFFER_MS >= offsets.targetMs)
+    fun `the max-offset window clamp only bites once 10x the target would exceed the window`() {
+        // 10 x 4s = 40_000, well inside the 60s window: unclamped.
+        assertEquals(40_000L, HlsLiveEdge.offsetsFor(4_000).maxMs)
+        // 10 x 6s = 60_000, exactly the window: the clamp (window - 2*target)
+        // already bites here, landing at 48_000 rather than the raw 60_000.
+        assertEquals(48_000L, HlsLiveEdge.offsetsFor(6_000).maxMs)
+        // 10 x 8s / 10 x 10s clamp further still.
+        assertEquals(44_000L, HlsLiveEdge.offsetsFor(8_000).maxMs)
+        assertEquals(40_000L, HlsLiveEdge.offsetsFor(10_000).maxMs)
+    }
+
+    @Test
+    fun `the fixed load control covers the live-edge target only at the assumed segment length`() {
+        // MIN_BUFFER_MS is sized once, off ASSUMED_TARGET_DURATION_MS, and
+        // never re-reads the manifest. It matches offsetsFor's target
+        // exactly at the assumption itself...
+        assertEquals(
+            HlsLiveEdge.MIN_BUFFER_MS.toLong(),
+            HlsLiveEdge.offsetsFor(HlsLiveEdge.ASSUMED_TARGET_DURATION_MS).targetMs,
+        )
+        // ...and stops covering it for any real segment length longer than
+        // the assumption, which is exactly why an operator move of
+        // `LIVE_HLS_SEGMENT_SECONDS` past this needs a client release: a
+        // manifest-driven `LiveConfiguration` correction would then ask for
+        // more cushion than this fixed buffer holds.
+        for (targetDurationMs in longArrayOf(6_000, 8_000, 10_000)) {
+            val offsets = HlsLiveEdge.offsetsFor(targetDurationMs)
+            assertTrue(
+                "MIN_BUFFER_MS should no longer cover the live-edge target at " +
+                    "${targetDurationMs}ms, but ${HlsLiveEdge.MIN_BUFFER_MS} >= ${offsets.targetMs}",
+                HlsLiveEdge.MIN_BUFFER_MS < offsets.targetMs,
+            )
+        }
+        // Shorter than the assumption is always covered too: the ratio only
+        // grows with segment length.
+        assertTrue(HlsLiveEdge.MIN_BUFFER_MS >= HlsLiveEdge.offsetsFor(2_000).targetMs)
+    }
+
+    @Test
+    fun `load control is expressed in assumed-segment multiples, not independent literals`() {
+        val assumed = HlsLiveEdge.ASSUMED_TARGET_DURATION_MS
+        assertEquals(assumed, HlsLiveEdge.BUFFER_FOR_PLAYBACK_MS.toLong())
+        assertEquals(assumed * 2, HlsLiveEdge.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS.toLong())
+        assertEquals(assumed * HlsLiveEdge.TARGET_DURATION_MULTIPLIER, HlsLiveEdge.MIN_BUFFER_MS.toLong())
+        assertEquals(HlsLiveEdge.LIVE_WINDOW_MS, HlsLiveEdge.MAX_BUFFER_MS.toLong())
     }
 
     @Test
@@ -86,8 +143,23 @@ class HlsLiveEdgeTest {
     }
 
     @Test
-    fun `the pane derives its LiveConfiguration from offsetsFor, not a separate constant`() {
+    fun `the pane joins on the assumed target and only corrects it, never with a raw literal`() {
         val pane = RepoSources.androidSources.getValue("WatchPane.kt")
+        assertTrue(
+            "the initial join must carry a real LiveConfiguration derived from the " +
+                "assumed target, not attach bare (Media3's own fallback is too shallow) " +
+                "or with a hardcoded ms guess",
+            pane.contains("liveMediaItem(url, HlsLiveEdge.ASSUMED_TARGET_DURATION_MS)"),
+        )
+        assertTrue(
+            "the correction must compare against the assumed constant, not a raw literal, " +
+                "so it only replaces the item when the manifest actually disagrees",
+            pane.contains("targetDurationMs != HlsLiveEdge.ASSUMED_TARGET_DURATION_MS"),
+        )
+        assertFalse(
+            "the manifest poll must not give up after a fixed number of attempts",
+            pane.contains("repeat("),
+        )
         assertTrue(
             "a hardcoded LiveConfiguration is exactly what desynced from production " +
                 "when the segment length changed (#480); it must come from offsetsFor",

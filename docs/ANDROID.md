@@ -1432,17 +1432,47 @@ cap.
 and never a millisecond guess: `HlsLiveEdge.TARGET_DURATION_MULTIPLIER` moved
 3 → 5 (20 s at 4 s), `MIN_DURATION_MULTIPLIER` 2 → 3 (12 s), and
 `MAX_DURATION_MULTIPLIER` 6 → 10 (40 s, still inside the 60 s playlist
-window). `ui/WatchPane.kt` attaches exactly as before — no `LiveConfiguration`
-on the initial `MediaItem`, because the real `#EXT-X-TARGETDURATION` still
-is not known until the manifest loads — then, in the same `LaunchedEffect`,
-forks a short poll (every 150 ms, up to 4.5 s) for `player.currentManifest as?
-HlsManifest` and corrects the item to these ratios via
-`player.replaceMediaItem(0, …)` the moment a real `targetDurationUs` shows
-up: same index, same URI, so Media3 updates the live-offset configuration on
-the existing period rather than restarting the load. That lands within a
-couple of seconds of attach, before the player has actually buffered
-anywhere near a 12-to-20 s cushion, so there is nothing on screen yet for the
-correction to visibly interrupt. The `1.5f` cap came back too, but lower:
+window). `offsetsFor` also clamps all three against `LIVE_WINDOW_MS` (a
+hand-copy of the proxy's 60 s window) so the multipliers stay sane past a 4 s
+segment: the max offset is floored to `LIVE_WINDOW_MS - 2 * target` once 10x
+the target would otherwise exceed the window (first true at a 6 s segment,
+where 10x is exactly 60 s), and the target itself is capped at half the
+window so there is always room for the max-offset slack in front of it.
+
+Farol's review of that PR (1/5, seven inline MEDIUMs) caught three more
+things worth a second commit before merge:
+
+1. **The join itself, not just the correction, has to start on the real
+   target.** `ui/WatchPane.kt`'s first attempt attached with no
+   `LiveConfiguration` at all, same as the #498 fix, and relied on the poll
+   below to correct it once the manifest loaded. That is wrong on its own
+   terms: `DefaultLivePlaybackSpeedControl` only closes the gap between the
+   *current* offset and the target at `MAX_PLAYBACK_SPEED` (1.05x), so
+   joining on Media3's own 3x fallback (12 s) and correcting the target to
+   20 s only once the manifest loads would spend the first four and a half
+   minutes of every watch drifting the last 8 s open — on the very shallow
+   buffer the "still too close" report was about. Fixed: the initial
+   `MediaItem` now carries a real `LiveConfiguration` too, built from
+   `HlsLiveEdge.ASSUMED_TARGET_DURATION_MS` (4 s, today's
+   `LIVE_HLS_SEGMENT_SECONDS`) run through the same `offsetsFor` ratios. The
+   join lands at the real 20 s target immediately; the poll below only
+   replaces the item if the manifest's real target duration turns out to
+   *differ* from the assumption, which is the ordinary attach's common case
+   and costs nothing extra.
+2. **The manifest poll must not give up.** The first version polled 30 times
+   at 150 ms (4.5 s) and left the assumption uncorrected forever past that.
+   There is no bounded worst case for a first playlist fetch, so the poll is
+   now an unbounded loop, safe because it is cancelled for free the moment
+   its `LaunchedEffect` is — a reattach (`attempt` or `startedAt` changing)
+   or the pane leaving composition both cancel it along with everything else
+   the effect started. It never outlives the attach it belongs to.
+3. **The window clamp needed documented, tested edges**, not just a
+   description of the common case. `HlsLiveEdgeTest` now pins `offsetsFor`'s
+   ordering and window bound at 2/4/6/8/10 s targets, and the exact point
+   the max-offset clamp starts biting (unclamped at 4 s, clamped from 6 s
+   on).
+
+The `1.5f` playback-speed cap came back too, but lower:
 `setMaxPlaybackSpeed(1.05f)` / `setMinPlaybackSpeed(0.97f)`, gentle enough
 that closing a lag is an inaudible nudge over tens of seconds rather than
 pitch-shifted catch-up, which is the right trade once the cushion itself is
@@ -1452,14 +1482,26 @@ The `LiveConfiguration` alone only decides where the playhead sits; whether a
 buffer that *deep* is actually sitting behind it is `DefaultLoadControl`'s
 job, and the ExoPlayer in `ui/WatchPane.kt` did not have one — it ran on
 Media3's own defaults (15 s / 50 s / 2.5 s / 5 s), noticeably shallower than
-the new 20 s target. It now builds with
-`setBufferDurationsMs(minBufferMs = 20_000, maxBufferMs = 60_000,
-bufferForPlaybackMs = 4_000, bufferForPlaybackAfterRebufferMs = 8_000)`:
-roughly two segments before first play, up to 60 s held (still inside the
-proxy's window, never asking for more than it can serve), and about two
-segments refilled before resuming from a stall rather than the default one
-— because resuming into another immediate stall on the very next tick of
+the new 20 s target. It is built once, before any manifest exists to read a
+real target duration off, so it is sized off `ASSUMED_TARGET_DURATION_MS`
+rather than `offsetsFor`: `setBufferDurationsMs(minBufferMs = 20_000,
+maxBufferMs = 60_000, bufferForPlaybackMs = 4_000,
+bufferForPlaybackAfterRebufferMs = 8_000)`, expressed in `HlsLiveEdge` as 1x,
+2x and `TARGET_DURATION_MULTIPLIER`x the assumption plus the window ceiling,
+never as independent literals — roughly two segments before first play, up
+to 60 s held (never asking the proxy for more than it can serve), and about
+two segments refilled before resuming from a stall rather than the default
+one, because resuming into another immediate stall on the very next tick of
 jitter is worse than waiting one extra segment to resume solidly.
+
+Because that load control is fixed for the whole session, it only actually
+*covers* `offsetsFor`'s live-edge target at the assumed 4 s segment length
+itself — `HlsLiveEdgeTest` proves the floor holds exactly there and no
+longer past it (6 s, 8 s, 10 s). An operator move of
+`LIVE_HLS_SEGMENT_SECONDS` beyond `ASSUMED_TARGET_DURATION_MS` needs a
+client release alongside it — a new assumption *and* a rebuilt load control —
+not just a config change, even though `offsetsFor`'s own window clamp keeps
+the live-edge numbers themselves well-formed well past that point.
 
 That last number is exactly `HlsWatchdog`'s `stallMs` from the previous
 section, which is the trap: after a real stall, Media3 will now legitimately
