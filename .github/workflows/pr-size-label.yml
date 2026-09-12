@@ -23,9 +23,14 @@ name: Label (PR size)
 # be labelled. This workflow never checks out the PR branch; it only reads
 # the GitHub API, so running it in the base-repo context is the safe way to
 # label forks. `pull_request` is also listed so this file can label the PR
-# that introduces it, before it exists on main. Same-repo events would
-# otherwise fire twice; concurrency cancels the loser, and fork
-# `pull_request` jobs are skipped.
+# that introduces it, before it exists on main.
+#
+# Each event handles one kind of PR: `pull_request` runs for same-repo
+# branches and `pull_request_target` runs for forks. Letting both run for a
+# same-repo PR and cancelling the loser through `concurrency` looked like a
+# failure: GitHub paints a cancelled job red in the PR's checks list, so
+# every PR carried one red "Apply size label" next to the green one. A
+# skipped job is grey. The concurrency group stays for repeated pushes.
 
 on:
   pull_request:
@@ -39,8 +44,10 @@ on:
         required: true
         type: string
 
+# Per event as well as per PR: the skipped twin of the eligible run must not
+# be able to cancel it. Repeated pushes to one PR still cancel each other.
 concurrency:
-  group: pr-size-label-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: pr-size-label-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 permissions:
@@ -53,7 +60,10 @@ jobs:
     name: Apply size label
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
     steps:
       - name: Label from diff size
         env:
