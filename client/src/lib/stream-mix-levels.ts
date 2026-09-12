@@ -5,7 +5,7 @@
  * WHY IT EXISTS (2026-09-12). `screen-mix.ts` sums the display capture and
  * the host's processed microphone at unity, and a film playing in a tab sits
  * near full scale next to a processed mic that does not: the first live test
- * of #504-era mixing came back "mic works. might need audio settings cause
+ * of PR 504's mixing came back "mic works. might need audio settings cause
  * mic was low compared to video being streamed." The fix is a gain per
  * branch feeding a limiter, and the two gains are host preferences the same
  * way `watch-party-stream-quality.ts` treats the publish ceiling: read once

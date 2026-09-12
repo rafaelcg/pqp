@@ -128,7 +128,9 @@ export function createScreenMix(
 
   const micGainNode = context.createGain();
   micGainNode.gain.value = clamp(initialLevels.micGain, MIC_GAIN_RANGE);
-  micGainNode.connect(compressor);
+  // Wired to the compressor below, either directly or through the analyser
+  // (see the ducking setup) — never left both connected, which would sum
+  // the mic branch onto the bus twice.
 
   const displayAudio = display.getAudioTracks();
   let displaySource: AudioNodeLike | null = null;
@@ -174,7 +176,21 @@ export function createScreenMix(
   let duckInterval: ReturnType<typeof setInterval> | null = null;
   const analyser = context.createAnalyser?.();
   if (analyser) {
+    // IN-LINE, not a side tap. An AudioNode with no path to the
+    // destination has no standing guarantee it gets pulled every render
+    // quantum (the spec's processing model is destination-driven, and an
+    // unreferenced branch is fair game to skip or garbage-collect) — a
+    // `getFloatTimeDomainData` read against a node like that can go stale
+    // silently, which is a bug ducking would never catch since it degrades
+    // to "never ducks" rather than throwing. So the analyser sits directly
+    // in the mic branch's own signal path, passing the audio through
+    // unchanged: `micGain -> analyser -> compressor` instead of
+    // `micGain -> compressor` with the analyser hanging off to one side.
+    // Being upstream of the bus that reaches `destination` is what makes it
+    // "connected" in the spec's sense, and it is a pass-through node, so
+    // this changes nothing about what the audience hears.
     micGainNode.connect(analyser);
+    analyser.connect(compressor);
     const bufferSize = analyser.fftSize > 0 ? analyser.fftSize : 2048;
     const buffer = new Float32Array(bufferSize);
     duckInterval = setInterval(() => {
@@ -206,6 +222,11 @@ export function createScreenMix(
         applyDisplayGain(false);
       }
     }, DUCK_POLL_MS);
+  } else {
+    // No analyser available (a fake context in a test, or a browser that
+    // refused to build one): nothing to insert, so the mic branch goes
+    // straight to the bus as before.
+    micGainNode.connect(compressor);
   }
 
   const stream = new MediaStream([
