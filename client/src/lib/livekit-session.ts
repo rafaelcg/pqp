@@ -1282,6 +1282,8 @@ export async function connectLiveKit({
       degradationPreference: screenShareDegradationPreference(hlsSource),
       screenShareEncoding: {
         maxBitrate: plan.topBitrate,
+        // 30 unless the capture really is 60. A 22–28 tab stat must not
+        // become the encode clock; the 30 Hz lock (or this ceiling) holds it.
         maxFramerate: publishMaxFrameRateFromTrack(track),
         ...(screenShareScaleResolutionDownBy(hlsSource) === 1
           ? { scaleResolutionDownBy: 1 as const }

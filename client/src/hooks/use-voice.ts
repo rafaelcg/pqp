@@ -43,6 +43,10 @@ import {
   type ShareCursor,
 } from "@/lib/screen-capture-cursor";
 import { createScreenMix, type ScreenMix } from "@/lib/screen-mix";
+import {
+  applyScreenFrameLock,
+  type ScreenFrameLock,
+} from "@/lib/screen-frame-lock";
 import { getMicInStream, saveMicInStream } from "@/lib/mic-in-stream";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
@@ -2035,6 +2039,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   let screenMix: ScreenMix | null = null;
   /** The raw display capture behind `screenMix`, stopped with it. */
   let screenCaptureSource: MediaStream | null = null;
+  /** 30 Hz sample-and-hold in front of the published screen video. */
+  let screenFrameLock: ScreenFrameLock | null = null;
   /** The running share was started for a watch party (`intent.watchParty`). */
   let screenCaptureIsWatchParty = false;
 
@@ -2042,6 +2048,15 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (!screenCaptureStream) {
       return;
     }
+    // stop() fires `ended`. Clear it first so we do not re-enter from
+    // watchScreenCapture → stopScreenShareInternal.
+    for (const track of screenCaptureStream.getTracks()) {
+      track.onended = null;
+    }
+    const lock = screenFrameLock;
+    screenFrameLock = null;
+    lock?.stop();
+    lock?.source.stop();
     for (const track of screenCaptureStream.getTracks()) {
       track.stop();
     }
@@ -4078,6 +4093,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.notice = translateMessage("voice.notice.micMixFailed");
         }
       }
+      // 30 Hz grid for a 30-only ladder (staging 720p30). Chrome's tab
+      // capture of a 24 fps film wanders 22–28; constraints do not hold it.
+      // Audio tracks stay on the capture. A 60 fps share is not wrapped.
+      screenFrameLock = applyScreenFrameLock(stream, intent.maxFrameRate);
       watchScreenCapture(stream);
       screenCaptureStream = stream;
       // The red strip is ours and it is now answering a question that has been
@@ -4149,7 +4168,8 @@ export function createVoiceController(transport: RealtimeTransport) {
      * mid-share. It is here so the day one does, a live share follows.
      */
     async applyShareCursor(preference: ShareCursor) {
-      const track = screenCaptureStream?.getVideoTracks()[0];
+      const track =
+        screenFrameLock?.source ?? screenCaptureStream?.getVideoTracks()[0];
       if (!track || !canControlShareCursor()) {
         return;
       }
@@ -4175,7 +4195,8 @@ export function createVoiceController(transport: RealtimeTransport) {
      * delivered fps so a 60 capture is not still published at 30.
      */
     async applyScreenFrameRate(fps: 30 | 60) {
-      const track = screenCaptureStream?.getVideoTracks()[0];
+      const track =
+        screenFrameLock?.source ?? screenCaptureStream?.getVideoTracks()[0];
       if (!track || typeof track.applyConstraints !== "function") {
         return;
       }

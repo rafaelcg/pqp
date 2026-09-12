@@ -73,5 +73,12 @@ describe("publishMaxFrameRateFromTrack", () => {
     ).toBe(30);
     expect(publishMaxFrameRateFromTrack({ getSettings: () => ({}) })).toBe(30);
     expect(publishMaxFrameRateFromTrack({})).toBe(30);
+    // Chrome tab capture of a 24 fps film reports 22–28. Publish 30, not the wander.
+    expect(
+      publishMaxFrameRateFromTrack({ getSettings: () => ({ frameRate: 22 }) }),
+    ).toBe(30);
+    expect(
+      publishMaxFrameRateFromTrack({ getSettings: () => ({ frameRate: 27 }) }),
+    ).toBe(30);
   });
 });
