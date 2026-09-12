@@ -103,7 +103,7 @@ final class WatchTheaterAnchor: UIViewController {
     }
 }
 
-extension WatchTheaterAnchor: AVPlayerViewControllerDelegate {
+extension WatchTheaterAnchor: @preconcurrency AVPlayerViewControllerDelegate {
     func playerViewController(
         _ playerViewController: AVPlayerViewController,
         willBeginFullScreenPresentationWithAnimationCoordinator coordinator:

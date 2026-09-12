@@ -60,6 +60,7 @@ import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.watch.ChannelLive
+import gg.pqp.app.watch.HlsLiveEdge
 import gg.pqp.app.watch.HlsWatchdog
 import gg.pqp.app.watch.LiveStream
 import gg.pqp.app.watch.WatchPhase
@@ -264,6 +265,17 @@ fun WatchPane(
                 // Required. There is no `.m3u8` in the path for Media3 to
                 // sniff, so without this it builds a progressive source.
                 .setMimeType(MimeTypes.APPLICATION_M3U8)
+                // Default live offset is ~three TARGETDURATIONs from the
+                // edge, which on a five-segment playlist is the segment
+                // that expires next. Same 6 s / 8 s window as iOS and web.
+                .setLiveConfiguration(
+                    MediaItem.LiveConfiguration.Builder()
+                        .setTargetOffsetMs(HlsLiveEdge.TARGET_OFFSET_MS)
+                        .setMinOffsetMs(HlsLiveEdge.MIN_OFFSET_MS)
+                        .setMaxOffsetMs(HlsLiveEdge.MAX_OFFSET_MS)
+                        .setMaxPlaybackSpeed(HlsLiveEdge.MAX_PLAYBACK_SPEED)
+                        .build(),
+                )
                 .build(),
         )
         player.prepare()

@@ -41,9 +41,9 @@ final class WatchLivePlayerTests: XCTestCase {
     func testTheTargetLeavesRunwayOnAShortWindow() {
         XCTAssertEqual(WatchLiveEdge.target(in: window), 104)
         XCTAssertNotEqual(WatchLiveEdge.target(in: window), window.end)
-        XCTAssertNotEqual(
-            WatchLiveEdge.target(in: window), window.end - WatchLiveEdge.liveTargetOffset,
-            "end-minus-offset alone sits on the last two seconds of a ten second playlist"
+        XCTAssertEqual(
+            window.end - WatchLiveEdge.target(in: window), 6,
+            "three segments behind live, four seconds of runway from the back"
         )
     }
 
@@ -53,14 +53,14 @@ final class WatchLivePlayerTests: XCTestCase {
     /// measured from the front is a seek back to the opening credits.
     func testTheTargetIsMeasuredFromTheEndSoAGrowingRangeStillLandsNearLive() {
         let union = WatchLiveWindow(start: 0, end: 3600)
-        XCTAssertEqual(WatchLiveEdge.target(in: union), 3592)
+        XCTAssertEqual(WatchLiveEdge.target(in: union), 3594)
     }
 
-    /// Once the playlist holds half a minute, eight seconds from the edge
+    /// Once the playlist holds half a minute, six seconds from the edge
     /// already leaves runway, so the offset wins over the floor.
     func testAWideWindowLandsAtTheOffset() {
         let wide = WatchLiveWindow(start: 100, end: 130)
-        XCTAssertEqual(WatchLiveEdge.target(in: wide), 122)
+        XCTAssertEqual(WatchLiveEdge.target(in: wide), 124)
     }
 
     /// The first seconds of a broadcast are a window shorter than the offset.
@@ -105,7 +105,7 @@ final class WatchLivePlayerTests: XCTestCase {
                 isWaiting: false,
                 now: now
             ),
-            .rejoin(592)
+            .rejoin(594)
         )
     }
 
@@ -248,14 +248,15 @@ final class WatchLivePlayerTests: XCTestCase {
                 position: 129, window: wide, wantsPlayback: true, isWaiting: true,
                 now: now.addingTimeInterval(2.5)
             ),
-            .rejoin(122)
+            .rejoin(124)
         )
     }
 
-    /// Build 25 on a ten second playlist: tip-starve at 2.5 s, seek to
-    /// two seconds from the back, fall out, one frame. The short clock
-    /// must not run on a window that cannot honour the landing place.
-    func testAStarveOnAShortWindowDoesNotTipSeek() {
+    /// Sitting on the newest segment of a ten second playlist used to be
+    /// left alone for 12 s (build 25's tip clock was disabled here because
+    /// an 8 s land left only two seconds of runway). A 6 s land leaves four
+    /// seconds, so the tip clock may recover without falling out the back.
+    func testAStarveOnTheTipOfATenSecondWindowRejoinsInsideIt() {
         var edge = WatchLiveEdge()
         XCTAssertEqual(
             edge.tick(
@@ -269,9 +270,9 @@ final class WatchLivePlayerTests: XCTestCase {
                 position: 109, window: window, wantsPlayback: true, isWaiting: true,
                 now: now.addingTimeInterval(2.5)
             ),
-            .none,
-            "a ten second window is not wide enough for the tip clock"
+            .rejoin(104)
         )
+        XCTAssertGreaterThanOrEqual(104 - window.start, WatchLiveEdge.minRunway)
     }
 
     /// And the allowance itself has to stay in the range the rule was designed
@@ -784,7 +785,7 @@ final class WatchLivePlayerTests: XCTestCase {
     }
 
     func testJumpToLiveStillLeavesRunwayOnAShortWindow() {
-        XCTAssertEqual(WatchLiveEdge.jumpTarget(in: window), 104)
+        XCTAssertEqual(WatchLiveEdge.jumpTarget(in: window), 108)
         XCTAssertGreaterThanOrEqual(
             WatchLiveEdge.jumpTarget(in: window) - window.start,
             WatchLiveEdge.minRunway
@@ -795,13 +796,14 @@ final class WatchLivePlayerTests: XCTestCase {
     /// waits forever after the first few segments. Cap the forward buffer
     /// to the web's `HLS_MAX_BUFFER_LENGTH_SECONDS`.
     func testTheForwardBufferFitsInsideTheLiveWindow() {
-        XCTAssertEqual(WatchPlayerItemTuning.forwardBuffer, 8)
+        XCTAssertEqual(WatchPlayerItemTuning.forwardBuffer, 6)
         XCTAssertLessThanOrEqual(WatchPlayerItemTuning.forwardBuffer, 10)
         XCTAssertEqual(
             WatchPlayerItemTuning.timeOffsetFromLive,
             WatchLiveEdge.liveTargetOffset,
-            "initial join matches the web live-sync, not the live tip"
+            "initial join matches the 6 s live-sync, not the live tip"
         )
+        XCTAssertEqual(WatchPlayerItemTuning.timeOffsetFromLive, 6)
         XCTAssertLessThan(
             WatchPlayerItemTuning.timeOffsetFromLive,
             10,
