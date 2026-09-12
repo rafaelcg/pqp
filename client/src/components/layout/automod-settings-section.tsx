@@ -188,9 +188,26 @@ function describeMinutes(
   minutes: number,
   t: ReturnType<typeof useTranslation>["t"],
 ): string {
-  if (minutes < 60) return t("timeout.minutes", { count: minutes });
-  if (minutes < 60 * 24) return t("timeout.hours", { count: minutes / 60 });
+  // Whole units only: a value saved over the API (90, say) reads as
+  // "90 minutes", never "1.5 hours".
+  if (minutes < 60 || minutes % 60 !== 0) return t("timeout.minutes", { count: minutes });
+  if (minutes < 60 * 24 || minutes % (60 * 24) !== 0) {
+    return t("timeout.hours", { count: minutes / 60 });
+  }
   return t("timeout.days", { count: minutes / (60 * 24) });
+}
+
+/**
+ * The picker's options. The API takes any 1 to 40320 minutes, the same
+ * range a moderator's manual timeout has, while the picker shows Discord's
+ * six presets. A rule saved with another value over the API used to render
+ * a blank select whose first change silently overwrote the value; now the
+ * saved value is an option too, in its place in the list.
+ */
+export function timeoutOptions(current: number): number[] {
+  const presets = AUTOMOD_TIMEOUT_PRESET_MINUTES.filter((m) => m > 0) as number[];
+  if (current <= 0 || presets.includes(current)) return presets;
+  return [...presets, current].sort((a, b) => a - b);
 }
 
 /**
@@ -403,6 +420,15 @@ export function AutomodSettingsSection({
   const [roles, setRoles] = useState<ServerRole[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [editing, setEditing] = useState<AutomodRuleKind | null>(null);
+  /**
+   * Which opening of the editor is on screen, for a save or delete that
+   * resolves after Back was pressed. Save rule A, go back, open B: A's
+   * response used to `setForm` over B. A session number rather than the
+   * rule kind, because going back and reopening A before the save lands is
+   * a new editor too, with its own unsaved edits. A response whose session
+   * has passed updates the rule list and reports its error, nothing else.
+   */
+  const editorSession = useRef(0);
   const [form, setForm] = useState<RuleForm | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -452,12 +478,14 @@ export function AutomodSettingsSection({
   }, [rules, sample]);
 
   function open(kind: AutomodRuleKind) {
+    editorSession.current += 1;
     setForm(formFromRule(ruleFor(kind)));
     setEditing(kind);
     setError(null);
   }
 
   function close() {
+    editorSession.current += 1;
     setEditing(null);
     setForm(null);
     setError(null);
@@ -496,17 +524,23 @@ export function AutomodSettingsSection({
 
   async function save() {
     if (!editing || !form) return;
-    const existing = ruleFor(editing);
+    const kind = editing;
+    const session = editorSession.current;
+    const existing = ruleFor(kind);
     setBusy(true);
     setError(null);
     try {
       const input = formToInput(form);
       const { rule } = existing
         ? await updateAutomodRule(serverId, existing.id, input)
-        : await createAutomodRule(serverId, { kind: editing, ...input });
-      replaceRule(editing, rule);
-      setForm(formFromRule(rule));
+        : await createAutomodRule(serverId, { kind, ...input });
+      replaceRule(kind, rule);
+      if (editorSession.current === session) {
+        setForm(formFromRule(rule));
+      }
     } catch (err) {
+      // Shown wherever the person is now: the list and the editor both
+      // render `error`, so a save that failed after Back is not lost.
       setError(messageOf(err, t("automod.saveFailed")));
     } finally {
       setBusy(false);
@@ -520,12 +554,16 @@ export function AutomodSettingsSection({
       close();
       return;
     }
+    const kind = editing;
+    const session = editorSession.current;
     setBusy(true);
     setError(null);
     try {
       await deleteAutomodRule(serverId, existing.id);
-      replaceRule(editing, null);
-      close();
+      replaceRule(kind, null);
+      if (editorSession.current === session) {
+        close();
+      }
     } catch (err) {
       setError(messageOf(err, t("automod.saveFailed")));
     } finally {
@@ -746,7 +784,7 @@ export function AutomodSettingsSection({
                     className={SELECT}
                     onChange={(event) => patch({ timeoutMinutes: Number(event.target.value) })}
                   >
-                    {AUTOMOD_TIMEOUT_PRESET_MINUTES.filter((m) => m > 0).map((minutes) => (
+                    {timeoutOptions(form.timeoutMinutes).map((minutes) => (
                       <option key={minutes} value={minutes}>
                         {describeMinutes(minutes, t)}
                       </option>
