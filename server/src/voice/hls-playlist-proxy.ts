@@ -82,6 +82,45 @@ function historyFor(key: string): LiveWindowHistory {
 }
 
 /**
+ * The exact presigned URL each segment object was first handed out under,
+ * per rendition, so a segment that is still listed keeps BYTE-IDENTICAL bytes
+ * for its whole life in the window.
+ *
+ * WHY THIS EXISTS, on top of the bucket. `segmentSigningTime` makes every
+ * render INSIDE one bucket sign a given object to the same URL, which is most
+ * of the fix. But a segment routinely survives a bucket boundary: the window
+ * is 30 s and the default bucket is 5 minutes, so roughly once every ten
+ * windows a boundary falls mid-life of every listed segment, and without this
+ * the render after it re-signs ALL of them at once. `AVPlayer` keys fragments
+ * by URI (RFC 8216 6.2.1: a live playlist may append and remove entries, not
+ * restate them), so that single re-sign looks to it like fifteen unfamiliar
+ * segments and none of the ones it has buffered, and it refetches its whole
+ * buffer in one go -- the residual hitch #494's bucket left behind, about
+ * once per bucket rather than once per second.
+ *
+ * So the URL a segment was first signed under is remembered and reused for as
+ * long as that object stays in the window; only a segment appearing for the
+ * first time is signed. The memo is bounded by the window: an object evicted
+ * when it leaves (below), the whole rendition dropped with its history on
+ * session end, and everything cleared by `resetHlsPlaylistCacheForTests`.
+ */
+interface MemoisedSegmentUrl {
+  url: string;
+  /** The instant baked into the URL's `X-Amz-Date`, for the expiry guard. */
+  signedAtMs: number;
+}
+const segmentUrlMemo = new Map<string, Map<string, MemoisedSegmentUrl>>();
+
+function segmentMemoFor(key: string): Map<string, MemoisedSegmentUrl> {
+  let memo = segmentUrlMemo.get(key);
+  if (!memo) {
+    memo = new Map();
+    segmentUrlMemo.set(key, memo);
+  }
+  return memo;
+}
+
+/**
  * How long one session's rendered playlist is reused.
  *
  * WHY THIS EXISTS. Every viewer refetches the playlist every 2 s, and each
@@ -139,6 +178,7 @@ export function resetHlsPlaylistCacheForTests(): void {
   playlistCache.clear();
   rungCache.clear();
   windowHistory.clear();
+  segmentUrlMemo.clear();
 }
 
 /**
@@ -283,9 +323,10 @@ async function renderSignedPlaylist(
     [channelId, objectPrefix],
   );
   if (session.rowCount === 0) {
-    // The session is over: forget its window too, so the map does not keep
-    // one history per session this process ever served.
+    // The session is over: forget its window and its segment-URL memo too, so
+    // neither map keeps one entry per session this process ever served.
     windowHistory.delete(cacheKey(channelId, startedAt, rung));
+    segmentUrlMemo.delete(cacheKey(channelId, startedAt, rung));
     throw new HlsPlaylistNotFound(
       `No live HLS session ${objectPrefix} for channel ${channelId}`,
     );
@@ -320,10 +361,20 @@ async function renderSignedPlaylist(
     await response.text(),
   );
   const ttl = hlsUrlTtlSeconds();
-  // Quantised, never `new Date()`: see `segmentSigningTime` above. This one
-  // argument is the whole fix for the native stall.
+  // Quantised, never `new Date()`: see `segmentSigningTime` above. A segment
+  // appearing for the first time is signed at this instant; one already in
+  // the memo keeps the URL it was first handed out under (see the memo above).
   const signedAt = segmentSigningTime(now, ttl);
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
+
+  const memoKey = cacheKey(channelId, startedAt, rung);
+  const memo = segmentMemoFor(memoKey);
+  const present = new Set<string>();
+  // A memoised URL is reused unless it would expire while still listed, which
+  // only a huge-window + short-TTL operator config can produce: re-signing a
+  // listed segment costs one hitch, serving an expired URL costs a 403.
+  const ttlMs = ttl * 1_000;
+  const reuseGuardMs = Math.min(ttlMs / 3, SEGMENT_URL_BUCKET_MAX_MS);
 
   const rewritten = body
     .split("\n")
@@ -337,7 +388,12 @@ async function renderSignedPlaylist(
       // `filenamePrefix` is a file prefix, not a real directory, but every
       // sibling object it writes shares the playlist's own prefix path).
       const key = trimmed.includes("/") ? trimmed : `${prefixDir}${trimmed}`;
-      return signRequest({
+      present.add(key);
+      const existing = memo.get(key);
+      if (existing && now - existing.signedAtMs < ttlMs - reuseGuardMs) {
+        return existing.url;
+      }
+      const url = signRequest({
         method: "GET",
         key,
         ttlSeconds: ttl,
@@ -345,8 +401,18 @@ async function renderSignedPlaylist(
         config,
         now: signedAt,
       }).url;
+      memo.set(key, { url, signedAtMs: signedAt.getTime() });
+      return url;
     })
     .join("\n");
+
+  // Evict any segment that has left this render's window, so the memo can
+  // never grow past the segments actually listed.
+  for (const key of memo.keys()) {
+    if (!present.has(key)) {
+      memo.delete(key);
+    }
+  }
 
   return rewritten;
 }

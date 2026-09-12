@@ -458,7 +458,11 @@ describe("segment URLs are stable across playlist refreshes", () => {
     expect(seen.size).toBe(2);
   });
 
-  it("a render past the bucket boundary re-signs, and the new URL is live", async () => {
+  it("crossing a bucket boundary keeps a still-listed segment's URL byte-identical", async () => {
+    // The residual churn #494's bucket left behind: the same two segments are
+    // still listed a whole bucket later, so the render past the boundary must
+    // NOT restate them (AVPlayer would refetch its buffer). The memo freezes
+    // the URL each segment was first handed out under.
     const bucket = SEGMENT_URL_BUCKET_MAX_MS;
     const now = Math.floor(1_800_000_000_000 / bucket) * bucket + 1_000;
     const before = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
@@ -468,18 +472,82 @@ describe("segment URLs are stable across playlist refreshes", () => {
       undefined,
       now + bucket,
     );
-    expect(segmentUrls(after)).not.toEqual(segmentUrls(before));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(segmentUrls(after)).toEqual(segmentUrls(before));
 
+    // The frozen URL was signed in the FIRST bucket and is still live when
+    // re-served a whole bucket later.
     const url = new URL(segmentUrls(after)[0]!);
     const signedAt = amzDateMs(url);
     const expires = Number(url.searchParams.get("X-Amz-Expires")) * 1_000;
-    // Signed in the past (the bucket start) but nowhere near expiry: a URL
-    // handed out at the very end of its bucket still has two thirds of its
-    // life left, which is the margin the bucket size is chosen for.
-    const handedOutAt = signedAt + bucket;
-    expect(signedAt).toBeLessThanOrEqual(now + bucket);
-    expect(handedOutAt).toBeLessThan(signedAt + expires);
-    expect(signedAt + expires - handedOutAt).toBeGreaterThanOrEqual(600_000);
+    expect(signedAt).toBe(segmentSigningTime(now, 900).getTime());
+    expect(signedAt + expires).toBeGreaterThan(now + bucket);
+  });
+
+  it("across a bucket boundary, a newly appearing segment is signed afresh and a departed one is dropped", async () => {
+    process.env.LIVE_HLS_WINDOW_SEGMENTS = "3";
+    const bucket = SEGMENT_URL_BUCKET_MAX_MS;
+    const t0 = Math.floor(1_800_000_000_000 / bucket) * bucket + 1_000;
+
+    const seg = (n: number) => `${STARTED_AT}_${String(n).padStart(5, "0")}.ts`;
+    const advancing = (base: number) =>
+      [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        "#EXT-X-TARGETDURATION:2",
+        `#EXT-X-MEDIA-SEQUENCE:${base}`,
+        "#EXTINF:2.0,",
+        seg(base),
+        "#EXTINF:2.0,",
+        seg(base + 1),
+      ].join("\n");
+    const urlFor = (body: string, n: number) =>
+      segmentUrls(body).find((u) => u.includes(seg(n)));
+
+    try {
+      fetchMock.mockResolvedValueOnce(new Response(advancing(0), { status: 200 }));
+      const first = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, t0);
+      // A bucket later, the live window has slid to {1,2,3}: seg 1 stays, 2/3
+      // are new, 0 has left the 3-segment window.
+      fetchMock.mockResolvedValueOnce(new Response(advancing(2), { status: 200 }));
+      const second = await buildSignedPlaylist(
+        CHANNEL,
+        STARTED_AT,
+        undefined,
+        t0 + bucket,
+      );
+
+      // Still listed: identical URL, signed in the first bucket.
+      expect(urlFor(second, 1)).toBe(urlFor(first, 1));
+      expect(amzDateMs(new URL(urlFor(second, 1)!))).toBe(
+        segmentSigningTime(t0, 900).getTime(),
+      );
+      // Newly appearing: signed in the SECOND bucket.
+      expect(amzDateMs(new URL(urlFor(second, 3)!))).toBe(
+        segmentSigningTime(t0 + bucket, 900).getTime(),
+      );
+      // Departed: seg 0's URL is gone from the window entirely.
+      expect(segmentUrls(second).some((u) => u.includes(seg(0)))).toBe(false);
+    } finally {
+      delete process.env.LIVE_HLS_WINDOW_SEGMENTS;
+    }
+  });
+
+  it("resetHlsPlaylistCacheForTests clears the segment URL memo", async () => {
+    const bucket = SEGMENT_URL_BUCKET_MAX_MS;
+    const t0 = Math.floor(1_800_000_000_000 / bucket) * bucket + 1_000;
+    const before = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, t0);
+    resetHlsPlaylistCacheForTests();
+    // Same two segments a bucket later: without the reset the memo would hand
+    // back byte-identical URLs, so the only way these can differ is that the
+    // reset cleared the memo and the segments were signed afresh.
+    const after = await buildSignedPlaylist(
+      CHANNEL,
+      STARTED_AT,
+      undefined,
+      t0 + bucket,
+    );
+    expect(segmentUrls(after)).not.toEqual(segmentUrls(before));
   });
 
   it("the bucket is a third of the TTL, so a short TTL cannot outlive its bucket", () => {
