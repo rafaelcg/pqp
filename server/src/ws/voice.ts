@@ -217,6 +217,8 @@ interface VoicePeer {
    * `Permission.STREAM`: camera and screen share. Independent of SPEAK.
    */
   canStream: boolean;
+  /** `Permission.MANAGE_MUSIC` here; always true in a conversation call. */
+  canManageMusic: boolean;
   /**
    * The seat is in a `watch_party` channel. Resolved from `channel.type` at
    * join, beside `canStream`, and read by exactly one thing: `pickHlsSharer`,
@@ -3513,6 +3515,7 @@ async function welcomeVoicePeer(
     resumeToken: resumeToken ?? undefined,
     canSpeak: peer.canSpeak,
     canStream: peer.canStream,
+    canManageMusic: peer.canManageMusic,
   });
 
   // What the room is watching, to this socket alone and only if there is a
@@ -3706,6 +3709,7 @@ export async function handleVoiceMessage(
     // watch party runs several hundred times in an evening.
     let canSpeak = true;
     let canStream = true;
+    let canManageMusic = true;
     let nickname: string | null = null;
     if (channel.kind === "server" && channel.server_id) {
       const resolved = await resolveMemberChannelPermissions(
@@ -3726,6 +3730,7 @@ export async function handleVoiceMessage(
         channelType: channel.type,
         permissions: resolved.permissions,
       });
+      canManageMusic = hasPermission(resolved.permissions, Permission.MANAGE_MUSIC);
       nickname = resolved.nickname;
     }
     // THE ROOM GATE for the egress, read off the same row as the stage gate
@@ -4329,6 +4334,7 @@ export async function handleVoiceMessage(
       // live path's job (`reevaluateVoiceSpeak`), which ran when it changed.
       resume.peer.canSpeak = canSpeak;
       resume.peer.canStream = canStream;
+      resume.peer.canManageMusic = canManageMusic;
       resume.peer.watchParty = watchParty;
       if (!canSpeak) {
         resume.peer.muted = true;
@@ -4387,6 +4393,7 @@ export async function handleVoiceMessage(
       deafened: adopted?.deafened ?? false,
       canSpeak,
       canStream,
+      canManageMusic,
       watchParty,
       canResume: payload.resume === true,
       // Deliberately not carried across a resume and not in the registry row.
@@ -4781,8 +4788,21 @@ export async function handleVoiceMessage(
       return;
     }
     const before = channelMusicTrack(peer.voiceChannelId)?.videoId ?? null;
-    const write = applyMusicWrite(peer.voiceChannelId, payload.state, user.id);
+    const write = applyMusicWrite(peer.voiceChannelId, payload.state, {
+      userId: user.id,
+      canManage: peer.canManageMusic,
+      canAdd: peer.canSpeak,
+    });
     if (write.kind === "coalesced") {
+      return;
+    }
+    if (write.kind === "refused") {
+      send(socket, {
+        type: "music",
+        channelId: peer.voiceChannelId,
+        state: write.held,
+        forced: true,
+      });
       return;
     }
     if (

@@ -196,6 +196,8 @@ export const welcomeMessageSchema = z.object({
    * screen share. Absent reads as `canSpeak`.
    */
   canStream: z.boolean().optional(),
+  /** `Permission.MANAGE_MUSIC` here. Absent on older servers: treated as true. */
+  canManageMusic: z.boolean().optional(),
 });
 
 export const peerJoinedMessageSchema = z.object({

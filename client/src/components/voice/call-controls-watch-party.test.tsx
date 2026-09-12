@@ -42,6 +42,7 @@ const idle: VoiceState = {
   isDeafened: false,
   canSpeak: true,
   canStream: true,
+  canManageMusic: true,
   isAudienceSeat: false,
   inputMode: "voice-activity",
   isTransmitting: false,

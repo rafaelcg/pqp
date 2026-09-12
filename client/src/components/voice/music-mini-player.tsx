@@ -112,6 +112,7 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
   const current = state?.current ?? null;
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
+  const canManage = voiceState.canManageMusic;
 
   if (!inCall) {
     return null;
@@ -216,12 +217,23 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
             {t("music.tapToPlay")}
           </button>
         ) : (
-          <Tooltip label={playing ? t("music.pause") : t("music.play")}>
+          <Tooltip
+            label={playing ? t("music.pause") : t("music.play")}
+            detail={canManage ? undefined : t("music.noManage")}
+          >
             <button
               type="button"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-paper text-ink transition-transform hover:scale-105"
+              className={cn(
+                "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-paper text-ink transition-transform",
+                canManage ? "hover:scale-105" : "opacity-40",
+              )}
               aria-pressed={playing}
-              onClick={() => setPlaying(!playing)}
+              aria-disabled={!canManage || undefined}
+              onClick={() => {
+                if (canManage) {
+                  setPlaying(!playing);
+                }
+              }}
             >
               {playing ? (
                 <Pause className="h-4 w-4" aria-hidden="true" />
@@ -231,8 +243,17 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
             </button>
           </Tooltip>
         )}
-        <Tooltip label={t("music.skip")}>
-          <button type="button" className={ghostButton} onClick={() => advance()}>
+        <Tooltip label={t("music.skip")} detail={canManage ? undefined : t("music.noManage")}>
+          <button
+            type="button"
+            className={cn(ghostButton, !canManage && "opacity-40")}
+            aria-disabled={!canManage || undefined}
+            onClick={() => {
+              if (canManage) {
+                advance();
+              }
+            }}
+          >
             <SkipForward className="h-4 w-4" aria-hidden="true" />
           </button>
         </Tooltip>
@@ -305,6 +326,7 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
               <QueueList
                 queue={state.queue}
                 selfUserId={voiceState.self?.userId ?? null}
+                canManage={canManage}
               />
             </div>
           )}
@@ -317,13 +339,15 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
             >
               {t("music.dismiss")}
             </button>
-            <button
-              type="button"
-              className="rounded-md px-2 py-1 text-paper-muted hover:bg-danger-soft hover:text-on-danger-soft"
-              onClick={() => stopMusic()}
-            >
-              {t("music.stopAll")}
-            </button>
+            {canManage && (
+              <button
+                type="button"
+                className="rounded-md px-2 py-1 text-paper-muted hover:bg-danger-soft hover:text-on-danger-soft"
+                onClick={() => stopMusic()}
+              >
+                {t("music.stopAll")}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -344,9 +368,12 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
 function QueueList({
   queue,
   selfUserId,
+  canManage,
 }: {
   queue: MusicTrack[];
   selfUserId: string | null;
+  /** Without it: no drag, no reorder, and only your own rows can be removed. */
+  canManage: boolean;
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -386,10 +413,15 @@ function QueueList({
           index={index}
           last={index === queue.length - 1}
           mine={track.addedByUserId === selfUserId}
+          canManage={canManage}
           dragging={dragId === track.id}
           dropBefore={dropIndex === index}
           dropAfter={dropIndex === index + 1 && index === queue.length - 1}
           onDragStart={(event) => {
+            if (!canManage) {
+              event.preventDefault();
+              return;
+            }
             setDragId(track.id);
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", track.id);
@@ -416,6 +448,7 @@ function QueueRow({
   index,
   last,
   mine,
+  canManage,
   dragging,
   dropBefore,
   dropAfter,
@@ -427,6 +460,7 @@ function QueueRow({
   index: number;
   last: boolean;
   mine: boolean;
+  canManage: boolean;
   dragging: boolean;
   dropBefore: boolean;
   dropAfter: boolean;
@@ -437,14 +471,15 @@ function QueueRow({
   const { t } = useTranslation();
   return (
     <li
-      draggable
+      draggable={canManage}
       data-queue-row={track.id}
       data-drop={dropBefore ? "before" : dropAfter ? "after" : undefined}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       className={cn(
-        "group/row relative flex cursor-grab items-center gap-1 rounded-md px-1 py-1 hover:bg-ink-3/50 active:cursor-grabbing",
+        "group/row relative flex items-center gap-1 rounded-md px-1 py-1 hover:bg-ink-3/50",
+        canManage && "cursor-grab active:cursor-grabbing",
         mine && "bg-ink-3/30",
         dragging && "opacity-40",
         // The drop preview: a line where the row would land.
@@ -454,10 +489,12 @@ function QueueRow({
           "after:absolute after:inset-x-1 after:-bottom-[2px] after:h-[2px] after:rounded-full after:bg-signal",
       )}
     >
-      <GripVertical
-        className="h-3 w-3 shrink-0 text-paper-muted/60 opacity-0 group-hover/row:opacity-100"
-        aria-hidden="true"
-      />
+      {canManage && (
+        <GripVertical
+          className="h-3 w-3 shrink-0 text-paper-muted/60 opacity-0 group-hover/row:opacity-100"
+          aria-hidden="true"
+        />
+      )}
       <span className="w-4 shrink-0 text-right tabular-nums text-paper-muted">
         {index + 1}
       </span>
@@ -465,6 +502,8 @@ function QueueRow({
         {track.title}
         <span className="ml-1 text-paper-muted">{track.addedByName}</span>
       </span>
+      {canManage && (
+        <>
       <Tooltip label={t("music.moveUp")}>
         <button
           type="button"
@@ -485,6 +524,9 @@ function QueueRow({
           <ChevronDown className="h-3 w-3" aria-hidden="true" />
         </button>
       </Tooltip>
+        </>
+      )}
+      {(canManage || mine) && (
       <Tooltip label={t("music.remove")}>
         <button
           type="button"
@@ -494,6 +536,7 @@ function QueueRow({
           <X className="h-3 w-3" aria-hidden="true" />
         </button>
       </Tooltip>
+      )}
     </li>
   );
 }
@@ -668,7 +711,13 @@ function MusicPlayer({
       }
       if (isActorRef.current && Date.now() - lastReport >= REPORT_MS) {
         lastReport = Date.now();
-        reportPosition(at);
+        let duration = 0;
+        try {
+          duration = player.getDuration() * 1000;
+        } catch {
+          duration = 0;
+        }
+        reportPosition(at, duration);
       }
     }, 2_000);
     return () => {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  MUSIC_END_GRACE_MS,
   musicStateSchema,
+  musicWriteAllowed,
   musicWriteIsStale,
   musicWriteIsStructural,
   parseMusicInput,
@@ -135,5 +137,53 @@ describe("schema", () => {
     const queue = Array.from({ length: 51 }, (_, i) => track(String(i)));
     expect(musicStateSchema.safeParse(state({ queue })).success).toBe(false);
     expect(musicStateSchema.safeParse(state({ queue: queue.slice(0, 50) })).success).toBe(true);
+  });
+});
+
+describe("musicWriteAllowed", () => {
+  const manager = { userId: "u1", canManage: true, canAdd: true };
+  const member = { userId: "u2", canManage: false, canAdd: true };
+  const mine = (id: string): MusicTrack => ({ ...track(id), addedByUserId: "u2" });
+
+  it("lets a manager do anything, including stopping", () => {
+    expect(musicWriteAllowed(state(), null, manager)).toBe(true);
+    expect(musicWriteAllowed(state(), state({ status: "paused" }), manager)).toBe(true);
+  });
+
+  it("lets a member start music with their own song when nothing is on", () => {
+    expect(musicWriteAllowed(null, state({ current: mine("m") }), member)).toBe(true);
+    expect(musicWriteAllowed(null, state(), member)).toBe(false);
+    expect(musicWriteAllowed(null, state({ current: mine("m") }), { ...member, canAdd: false })).toBe(false);
+  });
+
+  it("lets a member append and remove their own, and nothing else", () => {
+    const held = state({ queue: [track("b"), mine("m")] });
+    expect(musicWriteAllowed(held, state({ queue: [track("b"), mine("m"), mine("n")] }), member)).toBe(true);
+    expect(musicWriteAllowed(held, state({ queue: [track("b"), mine("m"), track("x")] }), member)).toBe(false);
+    expect(musicWriteAllowed(held, state({ queue: [track("b")] }), member)).toBe(true);
+    expect(musicWriteAllowed(held, state({ queue: [mine("m")] }), member)).toBe(false);
+    expect(musicWriteAllowed(held, state({ queue: [mine("m"), track("b")] }), member)).toBe(false);
+    expect(musicWriteAllowed(held, state({ status: "paused", queue: held.queue }), member)).toBe(false);
+    expect(musicWriteAllowed(held, null, member)).toBe(false);
+  });
+
+  it("lets a member sample position and fill the duration", () => {
+    const held = state();
+    expect(musicWriteAllowed(held, state({ positionMs: 9000 }), member)).toBe(true);
+    expect(
+      musicWriteAllowed(held, state({ current: { ...track("a"), durationMs: 200000 } }), member),
+    ).toBe(true);
+  });
+
+  it("lets a member advance only once the track has run out", () => {
+    const current = { ...track("a"), durationMs: 200_000 };
+    const queue = [track("b")];
+    const advanced = state({ current: track("b"), queue: [], positionMs: 0 });
+    expect(musicWriteAllowed(state({ current, queue, positionMs: 100_000 }), advanced, member)).toBe(false);
+    expect(
+      musicWriteAllowed(state({ current, queue, positionMs: 200_000 - MUSIC_END_GRACE_MS }), advanced, member),
+    ).toBe(true);
+    // No duration known yet: not for a member to decide.
+    expect(musicWriteAllowed(state({ current: track("a"), queue, positionMs: 999_999 }), advanced, member)).toBe(false);
   });
 });

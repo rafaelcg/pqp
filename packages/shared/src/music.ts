@@ -66,6 +66,13 @@ export const musicMessageSchema = z.object({
   type: z.literal("music"),
   channelId: z.string().uuid(),
   state: musicStateSchema.nullable(),
+  /**
+   * The server is handing back what it holds because the sender's write
+   * was refused (no MANAGE_MUSIC for what it changed). The client adopts
+   * it whatever its own `rev` says, since its optimistic copy is ahead by
+   * construction and would otherwise call the correction stale.
+   */
+  forced: z.boolean().optional(),
 });
 
 export type MusicMessage = z.infer<typeof musicMessageSchema>;
@@ -142,6 +149,101 @@ export function musicWriteIsStructural(
     return true;
   }
   return held.queue.some((track, index) => track.id !== incoming.queue[index]?.id);
+}
+
+// ------------------------------------------------------------------ rights
+
+/**
+ * A track is "over" for the purpose of a non-manager advancing the queue
+ * when the room's last position sample is within this of its duration. The
+ * sample can be ten seconds old and a player a couple of seconds adrift.
+ */
+export const MUSIC_END_GRACE_MS = 20_000;
+
+export interface MusicRights {
+  userId: string;
+  /** `Permission.MANAGE_MUSIC` in this channel. */
+  canManage: boolean;
+  /** `Permission.SPEAK`: may put songs on. */
+  canAdd: boolean;
+}
+
+function ids(tracks: MusicTrack[]): string[] {
+  return tracks.map((track) => track.id);
+}
+
+function sameIds(a: MusicTrack[], b: MusicTrack[]): boolean {
+  return a.length === b.length && a.every((track, index) => track.id === b[index]?.id);
+}
+
+/**
+ * Whether one `set-music` write is within the sender's rights. The server
+ * decides on this; the client uses it to draw only what will be allowed.
+ *
+ * A manager may do anything. Anybody else may: put on the first song when
+ * nothing is on (and only their own); append their own songs to the end;
+ * remove their own; move the queue along once the current track has run
+ * out (the only advance the server can tell from a skip: the last sample
+ * says the track is within `MUSIC_END_GRACE_MS` of its end); and, as the
+ * room's last writer, sample position and fill in the duration. Pausing,
+ * skipping, reordering, touching other people's songs and ending it for
+ * the room are the manager's.
+ */
+export function musicWriteAllowed(
+  held: MusicState | null,
+  incoming: MusicState | null,
+  rights: MusicRights,
+): boolean {
+  if (rights.canManage) {
+    return true;
+  }
+  if (incoming === null) {
+    return false;
+  }
+  const own = (track: MusicTrack) => track.addedByUserId === rights.userId;
+  if (held === null) {
+    return (
+      rights.canAdd &&
+      incoming.current !== null &&
+      own(incoming.current) &&
+      incoming.queue.every(own)
+    );
+  }
+  const sameCurrent = (held.current?.id ?? null) === (incoming.current?.id ?? null);
+  const sameStatus = held.status === incoming.status;
+  if (sameCurrent && sameStatus) {
+    // Position sample, or the duration being filled in.
+    if (sameIds(held.queue, incoming.queue)) {
+      return true;
+    }
+    // Append own to the end.
+    const heldIds = ids(held.queue);
+    const prefixSame = incoming.queue.length >= held.queue.length &&
+      heldIds.every((id, index) => incoming.queue[index]?.id === id);
+    if (prefixSame) {
+      return rights.canAdd && incoming.queue.slice(held.queue.length).every(own);
+    }
+    // Remove own: the incoming ids are the held ids in order minus some of mine.
+    const incomingIds = new Set(ids(incoming.queue));
+    const kept = held.queue.filter((track) => incomingIds.has(track.id));
+    const removed = held.queue.filter((track) => !incomingIds.has(track.id));
+    return (
+      removed.length > 0 &&
+      removed.every(own) &&
+      sameIds(kept, incoming.queue)
+    );
+  }
+  // The track ran out: the next one comes on, position 0, nothing else moved.
+  const next = held.queue[0] ?? null;
+  const advanced =
+    (incoming.current?.id ?? null) === (next?.id ?? null) &&
+    sameIds(held.queue.slice(1), incoming.queue) &&
+    incoming.positionMs === 0;
+  if (advanced && held.current) {
+    const duration = held.current.durationMs;
+    return duration !== null && held.positionMs >= duration - MUSIC_END_GRACE_MS;
+  }
+  return false;
 }
 
 // ------------------------------------------------------------- link parsing

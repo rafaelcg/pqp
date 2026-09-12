@@ -51,6 +51,32 @@ changes, when the room empties, and on connect for every room with music.
 It exists for the sidebar: a row under the channel's occupants saying what
 is playing is what makes somebody outside the call join.
 
+## Who may do what
+
+`Permission.MANAGE_MUSIC` (bit 24), in the cargo editor and the per-channel
+overwrites beside `MUTE_MEMBERS` and `START_WATCH_PARTY`. The backfill
+(`manage_music_bit_2026_09` in `schema.sql`) gives it to every cargo that
+already holds `MUTE_MEMBERS` and to the seeded Moderator, never to
+@everyone. A conversation call has no cargos, so everyone in it manages.
+
+| | needs |
+|---|---|
+| add a song, or a list, to the end | `SPEAK` |
+| remove a song you added | being in the call |
+| start music when nothing is on | `SPEAK` (your own song) |
+| skip, pause, resume, reorder, remove others' songs, "Parar para todos" | `MANAGE_MUSIC` |
+
+Enforced on the server, not only in the UI. The write is a whole state
+object, so `musicWriteAllowed` (`packages/shared/src/music.ts`) diffs it
+against what the room holds and refuses anything outside the sender's
+rights, handing the held state back on that socket with `forced: true`
+(the sender's optimistic copy is a `rev` ahead and would otherwise call the
+correction stale). The one subtlety is the end of a track: every player
+fires "ended" and tries to advance, and a member's advance looks exactly
+like a skip. The room's last writer samples the track's duration along
+with its position, and a member's advance is accepted only once the last
+sample is within `MUSIC_END_GRACE_MS` of that duration.
+
 ## Resolving a link
 
 `GET /api/music/resolve?q=`, per-user rate limited, answers `{ tracks,

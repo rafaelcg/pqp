@@ -44,12 +44,18 @@ export const Permission = {
    * this bit only speaks in a watch party (`canStartWatchPartyStream`).
    */
   START_WATCH_PARTY: 1n << 23n,
+  /**
+   * Run the music queue in a voice call: skip, pause, reorder, remove what
+   * others added, stop it for the room. Adding a song needs only SPEAK, and
+   * everyone may remove their own. See `musicWriteAllowed` in music.ts.
+   */
+  MANAGE_MUSIC: 1n << 24n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 24n) - 1n;
+export const PERMISSION_ALL = (1n << 25n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -85,7 +91,8 @@ export const PERMISSION_DEFAULT_MODERATOR =
   Permission.MOVE_MEMBERS |
   Permission.MANAGE_MESSAGES |
   Permission.MANAGE_NICKNAMES |
-  Permission.START_WATCH_PARTY;
+  Permission.START_WATCH_PARTY |
+  Permission.MANAGE_MUSIC;
 
 export const ROLE_SYSTEM_KEYS = [
   "everyone",
@@ -232,6 +239,7 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.ADD_REACTIONS, key: "ADD_REACTIONS" },
   { bit: Permission.MANAGE_WEBHOOKS, key: "MANAGE_WEBHOOKS" },
   { bit: Permission.START_WATCH_PARTY, key: "START_WATCH_PARTY" },
+  { bit: Permission.MANAGE_MUSIC, key: "MANAGE_MUSIC" },
 ] as const;
 
 export type PermissionFlagKey = (typeof PERMISSION_FLAGS)[number]["key"];

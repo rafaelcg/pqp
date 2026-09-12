@@ -53,6 +53,7 @@ const PERM_HINTS: Partial<Record<string, MessageKey>> = {
   SPEAK: "roles.permHint.SPEAK",
   STREAM: "roles.permHint.STREAM",
   START_WATCH_PARTY: "roles.permHint.START_WATCH_PARTY",
+  MANAGE_MUSIC: "roles.permHint.MANAGE_MUSIC",
 };
 
 const OVERRIDE_OPTIONS: {

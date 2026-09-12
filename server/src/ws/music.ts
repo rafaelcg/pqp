@@ -1,7 +1,9 @@
 import {
+  musicWriteAllowed,
   musicWriteIsStale,
   musicWriteIsStructural,
   type ChannelMusicTrack,
+  type MusicRights,
   type MusicState,
 } from "@pqp/shared";
 import { logEvent } from "../lib/log.js";
@@ -63,16 +65,23 @@ export function resetMusicForTests(): void {
 export type MusicWrite =
   | { kind: "accepted"; state: MusicState | null }
   | { kind: "coalesced" }
-  | { kind: "stale"; held: MusicState };
+  | { kind: "stale"; held: MusicState }
+  /** Outside the sender's rights. `held` goes back, forced, to undo their optimistic copy. */
+  | { kind: "refused"; held: MusicState | null };
 
 export function applyMusicWrite(
   voiceChannelId: string,
   incoming: MusicState | null,
-  actorUserId: string,
+  rights: MusicRights,
 ): MusicWrite {
+  const actorUserId = rights.userId;
   const held = getMusicState(voiceChannelId);
   if (musicWriteIsStale(held, incoming)) {
     return { kind: "stale", held: held as MusicState };
+  }
+  if (!musicWriteAllowed(held, incoming, rights)) {
+    logEvent("voice.musicRefused", { voiceChannelId, userId: actorUserId });
+    return { kind: "refused", held };
   }
   const structural = musicWriteIsStructural(held, incoming);
   const withinBudget = writeLimiter.take(actorUserId);

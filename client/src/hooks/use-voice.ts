@@ -248,6 +248,8 @@ export interface VoiceState {
    * treated as `canSpeak`.
    */
   canStream: boolean;
+  /** `Permission.MANAGE_MUSIC` in this room, from `welcome`. Older servers: true. */
+  canManageMusic: boolean;
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
@@ -1064,6 +1066,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isDeafened: false,
     canSpeak: true,
     canStream: true,
+    canManageMusic: true,
     isAudienceSeat: false,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
@@ -2655,6 +2658,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isDeafened: false,
       canSpeak: true,
       canStream: true,
+      canManageMusic: true,
       isAudienceSeat: false,
       inputMode: state.inputMode,
       isTransmitting: false,
@@ -2932,6 +2936,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           clearResumeGrace();
           state.peerId = peerId;
           state.voiceChannelId = channelId;
+          state.canManageMusic = message.canManageMusic ?? true;
           state.roomTransport = roomTransport;
           registerMusicSession(peerId, channelId, message.self);
           state.status = "connected";
@@ -2970,6 +2975,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         knownPeerIds.clear();
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
+        state.canManageMusic = message.canManageMusic ?? true;
         state.transportFailure = null;
         registerMusicSession(
           message.peerId,
@@ -3338,7 +3344,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // must not re-render the stage, so it lives in its own store
       // (`lib/music-store.ts`) and only the dock subscribes.
       case "music":
-        receiveMusic(message.channelId, message.state);
+        receiveMusic(message.channelId, message.state, message.forced === true);
         break;
       case "channel-music":
         state.channelMusic = {

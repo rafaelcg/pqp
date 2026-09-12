@@ -93,11 +93,17 @@ export function setListening(listening: boolean): void {
 }
 
 /** A `music` frame from the server (join, echo, another person's write). */
-export function receiveMusic(channelId: string, state: MusicState | null): void {
+export function receiveMusic(
+  channelId: string,
+  state: MusicState | null,
+  forced = false,
+): void {
   if (session && session.channelId !== channelId) {
     return;
   }
-  if (state !== null && musicWriteIsStale(snapshot.state, state)) {
+  // A refusal hands back what the server holds; our optimistic copy is
+  // ahead of it by one `rev` and would otherwise call the correction stale.
+  if (!forced && state !== null && musicWriteIsStale(snapshot.state, state)) {
     return;
   }
   set(state, channelId);
@@ -279,12 +285,18 @@ export function seekTo(positionMs: number): void {
 }
 
 /** Position-only sample while playing, so a late joiner lands close. */
-export function reportPosition(positionMs: number): void {
+export function reportPosition(positionMs: number, durationMs?: number): void {
   const held = snapshot.state;
   if (!held || held.status !== "playing" || !session) {
     return;
   }
-  write({ ...base(), positionMs: Math.max(0, Math.round(positionMs)) });
+  const next = base();
+  // The duration is what lets the server tell "the track ran out" from a
+  // skip, for people without MANAGE_MUSIC. Filled in by whoever samples.
+  if (next.current && next.current.durationMs === null && durationMs && durationMs > 0) {
+    next.current = { ...next.current, durationMs: Math.round(durationMs) };
+  }
+  write({ ...next, positionMs: Math.max(0, Math.round(positionMs)) });
 }
 
 /**
