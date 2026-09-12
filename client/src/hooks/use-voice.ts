@@ -3798,6 +3798,25 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     /**
+     * "Áudio da aba" level, the display branch's gain in the running mix.
+     * Same shape as `setStreamMicGain` above: live, no republish.
+     */
+    setStreamDisplayGain(value: number) {
+      writeStreamMixLevels({ displayGain: value });
+      screenMix?.setDisplayGain(value);
+    },
+
+    /**
+     * The mic branch's live level in the running mix, in dBFS, for the
+     * mixer's meter. Reads `ScreenMix`'s own ducking analyser
+     * (`screen-mix.ts`) rather than standing up a second one. `null` when
+     * nothing is mixed yet, or the mic is not in the mix.
+     */
+    micLevelDb(): number | null {
+      return screenMix?.micLevelDb() ?? null;
+    },
+
+    /**
      * "Meu mic vai no stream". Takes effect on the running share at once
      * (the mic branch is connected or dropped) and is remembered for the
      * next one.

@@ -6164,6 +6164,8 @@ function MainAppContent({
             micInStream={voiceState.micInStream}
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
+            onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
+            micLevelDb={() => voice.micLevelDb()}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={shareMaxFrameRate()}
@@ -6280,6 +6282,8 @@ function MainAppContent({
             micInStream={voiceState.micInStream}
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
+            onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
+            micLevelDb={() => voice.micLevelDb()}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={shareMaxFrameRate()}

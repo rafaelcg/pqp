@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -13,7 +13,11 @@ import {
   type WatchPartyStreamQuality,
 } from "@/lib/watch-party-stream-quality";
 import {
+  DISPLAY_GAIN_RANGE,
+  formatGainDb,
+  MIC_GAIN_RANGE,
   readStreamMixLevels,
+  resetStreamMixLevels,
   writeStreamMixLevels,
 } from "@/lib/stream-mix-levels";
 import { cn } from "@/lib/utils";
@@ -62,6 +66,8 @@ export function WatchPartyTransmission({
   now,
   className,
   onMicGainChange,
+  onDisplayGainChange,
+  micLevelDb,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
   stream: LiveHlsStream | null;
@@ -81,9 +87,17 @@ export function WatchPartyTransmission({
   /**
    * Apply a mic-gain choice to the RUNNING mix at once (`ScreenMix.setMicGain`,
    * a `GainNode.gain.value` write — no republish). Omitted, the control still
-   * persists the choice for the next mix. See `MicGainControl` below.
+   * persists the choice for the next mix. See `StreamMixControl` below.
    */
   onMicGainChange?: (value: number) => void;
+  /** Same as `onMicGainChange`, for the display (tab-audio) branch. */
+  onDisplayGainChange?: (value: number) => void;
+  /**
+   * The mic branch's live level in the running mix, in dBFS, for the
+   * mixer's meter. Polled at 10 Hz while `StreamMixControl` is mounted (this
+   * panel is open) — see `ScreenMix.micLevelDb` / `use-voice.ts`.
+   */
+  micLevelDb?: () => number | null;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -265,13 +279,18 @@ export function WatchPartyTransmission({
               and cannot be re-pointed in place. See
               `lib/watch-party-stream-quality.ts`. */}
           <StreamQualityControl />
-          {/* THE MIC'S LEVEL IN THE STREAM, next to the picture's. Unlike the
-              quality picker above, this one changes the RUNNING mix: the
-              gain node it writes is already in the graph, so there is
-              nothing to rebind and no republish. See `screen-mix.ts` for
-              why unity gain under-served a processed mic next to a film at
-              near-full scale, and `stream-mix-levels.ts` for the range. */}
-          <MicGainControl onChange={onMicGainChange} />
+          {/* THE STREAM'S OWN MIXER, next to the picture's other numbers.
+              Unlike the quality picker above, both sliders change the
+              RUNNING mix: the gain nodes they write are already in the
+              graph, so there is nothing to rebind and no republish. See
+              `screen-mix.ts` for why unity gain under-served a processed
+              mic next to a film at near-full scale, and
+              `stream-mix-levels.ts` for the ranges. */}
+          <StreamMixControl
+            onMicGainChange={onMicGainChange}
+            onDisplayGainChange={onDisplayGainChange}
+            micLevelDb={micLevelDb}
+          />
           {/* One footnote, stated whether or not anything is wrong: the two
               audiences are on two different paths and the seated one is
               strictly richer. A host who never learns that assumes the
@@ -355,80 +374,177 @@ export function StreamQualityControl() {
   );
 }
 
-/** The three mic-gain presets a host can choose between, and their labels. */
-const MIC_GAIN_OPTIONS = [1.4, 2.0, 2.8] as const;
-type MicGainOption = (typeof MIC_GAIN_OPTIONS)[number];
-const MIC_GAIN_KEYS: Record<MicGainOption, MessageKey> = {
-  1.4: "watchParty.tx.micGainLower",
-  2.0: "watchParty.tx.micGainNormal",
-  2.8: "watchParty.tx.micGainHigher",
-};
+/** How often the meter reads `micLevelDb` while the mixer is mounted. */
+const MIC_LEVEL_POLL_MS = 100;
+/** The meter's floor (silence) and the level above which it turns amber. */
+const MIC_LEVEL_FLOOR_DBFS = -60;
+const MIC_LEVEL_WARN_DBFS = -12;
 
-/** The stored gain snapped to the nearest preset, so the `<select>` is never blank. */
-function nearestMicGainOption(gain: number): MicGainOption {
-  return MIC_GAIN_OPTIONS.reduce((closest, option) =>
-    Math.abs(option - gain) < Math.abs(closest - gain) ? option : closest,
+/**
+ * "Mixer do stream": the host's microphone and the display's own audio,
+ * relative to each other, in the mixed audio track the egress carries.
+ * `screen-mix.ts` sums the two into a limiter, and a processed mic sits well
+ * below a film playing in a tab at near-full scale — these are the two
+ * levers back, plus the one number a host has no other way to see: how loud
+ * their own mic is actually landing in that mix.
+ *
+ * BOTH SLIDERS ARE LIVE, unlike `StreamQualityControl` beside them. The gain
+ * nodes they write are already in the running mix's graph
+ * (`ScreenMix.setMicGain` / `setDisplayGain`), so a change takes effect on
+ * the CURRENT share, mid-sentence, with nothing to rebind and no republish.
+ * `onMicGainChange` / `onDisplayGainChange` are how the panel reaches the
+ * running `ScreenMix` — see `use-voice.ts`'s `setStreamMicGain` /
+ * `setStreamDisplayGain`, which are also where each choice is persisted
+ * (`stream-mix-levels.ts`) so it survives the next share.
+ *
+ * THE METER reads `micLevelDb` at 10 Hz for as long as this control is
+ * mounted, which is exactly as long as the host has the panel open — no
+ * separate open/close plumbing needed, the interval's own cleanup handles
+ * it. Green below -12 dBFS; amber at or above it, which is where the mix's
+ * own compressor (threshold -6 dB, see `screen-mix.ts`) starts working.
+ */
+export function StreamMixControl({
+  onMicGainChange,
+  onDisplayGainChange,
+  micLevelDb,
+}: {
+  onMicGainChange?: (value: number) => void;
+  onDisplayGainChange?: (value: number) => void;
+  micLevelDb?: () => number | null;
+}) {
+  const { t } = useTranslation();
+  const micId = useId();
+  const displayId = useId();
+  const [micGain, setMicGain] = useState(
+    () => readStreamMixLevels().micGain,
+  );
+  const [displayGain, setDisplayGain] = useState(
+    () => readStreamMixLevels().displayGain,
+  );
+  const [levelDb, setLevelDb] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!micLevelDb) {
+      return;
+    }
+    const interval = setInterval(() => {
+      setLevelDb(micLevelDb());
+    }, MIC_LEVEL_POLL_MS);
+    return () => clearInterval(interval);
+  }, [micLevelDb]);
+
+  return (
+    <div
+      data-testid="watch-party-tx-mixer"
+      className="flex flex-col gap-2.5 rounded-lg border border-border bg-surface-0 px-2.5 py-2"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+          {t("watchParty.tx.mixer")}
+        </span>
+        <button
+          type="button"
+          data-testid="watch-party-tx-mixer-reset"
+          className="text-[11px] text-signal hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+          onClick={() => {
+            const defaults = resetStreamMixLevels();
+            setMicGain(defaults.micGain);
+            setDisplayGain(defaults.displayGain);
+            onMicGainChange?.(defaults.micGain);
+            onDisplayGainChange?.(defaults.displayGain);
+          }}
+        >
+          {t("watchParty.tx.mixerReset")}
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center justify-between gap-2 text-[11px] text-paper-muted">
+          <label htmlFor={micId}>{t("watchParty.tx.micGain")}</label>
+          <span data-testid="watch-party-tx-mic-gain-db">
+            {formatGainDb(micGain)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            id={micId}
+            type="range"
+            data-testid="watch-party-tx-mic-gain-slider"
+            min={MIC_GAIN_RANGE.min}
+            max={MIC_GAIN_RANGE.max}
+            step={0.1}
+            value={micGain}
+            className="h-1.5 flex-1 cursor-pointer accent-[var(--color-signal)]"
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setMicGain(next);
+              writeStreamMixLevels({ micGain: next });
+              onMicGainChange?.(next);
+            }}
+          />
+          <MicLevelMeterBar db={levelDb} />
+        </div>
+        <span className="text-[11px] text-text-tertiary">
+          {t("watchParty.tx.micGainHint")}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center justify-between gap-2 text-[11px] text-paper-muted">
+          <label htmlFor={displayId}>{t("watchParty.tx.displayGain")}</label>
+          <span data-testid="watch-party-tx-display-gain-db">
+            {formatGainDb(displayGain)}
+          </span>
+        </div>
+        <input
+          id={displayId}
+          type="range"
+          data-testid="watch-party-tx-display-gain-slider"
+          min={DISPLAY_GAIN_RANGE.min}
+          max={DISPLAY_GAIN_RANGE.max}
+          step={0.05}
+          value={displayGain}
+          className="h-1.5 w-full cursor-pointer accent-[var(--color-signal)]"
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            setDisplayGain(next);
+            writeStreamMixLevels({ displayGain: next });
+            onDisplayGainChange?.(next);
+          }}
+        />
+      </div>
+    </div>
   );
 }
 
 /**
- * "Mic no stream": the host's microphone level relative to the display's, in
- * the mixed audio track the egress carries. `screen-mix.ts` sums the two at
- * unity into a limiter, and a processed mic sits well below a film playing
- * in a tab at near-full scale — this is the lever back.
- *
- * LIVE, unlike `StreamQualityControl` beside it. The gain node this writes is
- * already in the running mix's graph (`ScreenMix.setMicGain`), so a change
- * takes effect on the CURRENT share, mid-sentence, with nothing to rebind and
- * no republish. `onChange` is how the panel reaches the running
- * `ScreenMix` — see `use-voice.ts`'s `setStreamMicGain`, which is also where
- * the choice is persisted (`stream-mix-levels.ts`) so it survives the next
- * share.
+ * The mic's live level next to its slider. Green below -12 dBFS (comfortable
+ * headroom under the mix's own compressor, which sits at -6 dB); amber at or
+ * above, so a host sees they are pushing the limiter before the audience
+ * hears it clip. `null` (nothing mixed yet) draws an empty bar, not a
+ * warning.
  */
-export function MicGainControl({
-  onChange,
-}: {
-  onChange?: (value: number) => void;
-}) {
-  const { t } = useTranslation();
-  const selectId = useId();
-  const [gain, setGain] = useState<MicGainOption>(() =>
-    nearestMicGainOption(readStreamMixLevels().micGain),
-  );
+function MicLevelMeterBar({ db }: { db: number | null }) {
+  const pct =
+    db === null || !Number.isFinite(db)
+      ? 0
+      : Math.min(
+          100,
+          Math.max(0, ((db - MIC_LEVEL_FLOOR_DBFS) / -MIC_LEVEL_FLOOR_DBFS) * 100),
+        );
+  const loud = db !== null && db >= MIC_LEVEL_WARN_DBFS;
   return (
     <div
-      data-testid="watch-party-tx-mic-gain"
-      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-0 px-2.5 py-1.5"
+      data-testid="watch-party-tx-mic-level"
+      className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-surface-2"
     >
-      <label
-        htmlFor={selectId}
-        className="min-w-0 flex flex-col text-[11px] text-paper-muted"
-      >
-        <span className="font-semibold uppercase tracking-wider text-text-tertiary">
-          {t("watchParty.tx.micGain")}
-        </span>
-        <span className="text-text-tertiary">
-          {t("watchParty.tx.micGainHint")}
-        </span>
-      </label>
-      <select
-        id={selectId}
-        data-testid="watch-party-tx-mic-gain-select"
-        className="h-[var(--control-sm)] shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
-        value={gain}
-        onChange={(event) => {
-          const next = Number(event.target.value) as MicGainOption;
-          setGain(next);
-          writeStreamMixLevels({ micGain: next });
-          onChange?.(next);
-        }}
-      >
-        {MIC_GAIN_OPTIONS.map((value) => (
-          <option key={value} value={value}>
-            {t(MIC_GAIN_KEYS[value])}
-          </option>
-        ))}
-      </select>
+      <div
+        className={cn(
+          "h-full rounded-full transition-[width]",
+          loud ? "bg-warning" : "bg-success",
+        )}
+        style={{ width: `${pct}%` }}
+      />
     </div>
   );
 }

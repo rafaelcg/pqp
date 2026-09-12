@@ -99,6 +99,12 @@ export interface ScreenMix {
   setMicGain(value: number): void;
   /** The display branch's gain, live on the running mix. Clamped 0.25 - 1. */
   setDisplayGain(value: number): void;
+  /**
+   * The mic branch's live level in dBFS, for the mixer's meter. Reuses the
+   * ducking analyser below rather than standing up a second one; `null`
+   * when there is no analyser (guarded context) or no mic in the mix.
+   */
+  micLevelDb(): number | null;
   close(): void;
 }
 
@@ -160,6 +166,9 @@ export function createScreenMix(
   // the mix still works, it just does not duck.
   let ducked = false;
   let lastLoudAt = 0;
+  // The mixer's level meter reads this rather than re-deriving RMS itself —
+  // one analyser, one poll loop, two consumers.
+  let lastMicDbfs: number | null = null;
   const applyDisplayGain = (immediate: boolean) => {
     const target = ducked ? baseDisplayGain * DUCK_FACTOR : baseDisplayGain;
     if (immediate) {
@@ -195,7 +204,9 @@ export function createScreenMix(
     const buffer = new Float32Array(bufferSize);
     duckInterval = setInterval(() => {
       if (!micSource) {
-        // No mic in the mix right now: nothing to duck for.
+        // No mic in the mix right now: nothing to duck for, and nothing for
+        // the meter to show either.
+        lastMicDbfs = null;
         if (ducked) {
           ducked = false;
           applyDisplayGain(false);
@@ -209,6 +220,7 @@ export function createScreenMix(
       }
       const rms = Math.sqrt(sumSquares / buffer.length);
       const dbfs = rms > 0 ? 20 * Math.log10(rms) : Number.NEGATIVE_INFINITY;
+      lastMicDbfs = dbfs;
       const loud = dbfs > DUCK_THRESHOLD_DBFS;
       const now = Date.now();
       if (loud) {
@@ -245,6 +257,8 @@ export function createScreenMix(
       baseDisplayGain = clamp(value, DISPLAY_GAIN_RANGE);
       applyDisplayGain(true);
     },
+    micLevelDb: () =>
+      lastMicDbfs !== null && Number.isFinite(lastMicDbfs) ? lastMicDbfs : null,
     close: () => {
       if (duckInterval !== null) {
         clearInterval(duckInterval);

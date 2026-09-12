@@ -3058,11 +3058,11 @@
   "watchParty.tx.streamQualityHint": "Vale para a próxima transmissão (a de agora segue como está).",
   "watchParty.tx.streamQuality720": "720p (recomendado)",
   "watchParty.tx.streamQuality1080": "1080p",
-  "watchParty.tx.micGain": "Mic no stream",
+  "watchParty.tx.mixer": "Mixer do stream",
+  "watchParty.tx.mixerReset": "Padrão",
+  "watchParty.tx.micGain": "Meu mic",
   "watchParty.tx.micGainHint": "Vale na hora, sem parar a transmissão.",
-  "watchParty.tx.micGainLower": "Mais baixo",
-  "watchParty.tx.micGainNormal": "Normal",
-  "watchParty.tx.micGainHigher": "Mais alto",
+  "watchParty.tx.displayGain": "Áudio da aba",
   "watchParty.tx.expand": "Ver os detalhes",
   "watchParty.tx.collapse": "Esconder os detalhes"
 }
