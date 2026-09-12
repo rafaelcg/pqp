@@ -192,7 +192,7 @@ export function WatchPartyTransmission({
                 ? t("watchParty.tx.na")
                 : t("watchParty.tx.receivingRung", {
                     height,
-                    seconds: stream?.delaySeconds ?? 10,
+                    seconds: stream?.delaySeconds ?? 20,
                   })}
             </TxTile>
             {/* The audio the AUDIENCE gets, which is a different question from
@@ -245,7 +245,7 @@ export function WatchPartyTransmission({
             {micInStream
               ? t("watchParty.tx.carriesWithMic")
               : t("watchParty.tx.carries")}{" "}
-            {t("watchParty.tx.behind", { seconds: stream?.delaySeconds ?? 10 })}
+            {t("watchParty.tx.behind", { seconds: stream?.delaySeconds ?? 20 })}
           </p>
         </div>
       )}

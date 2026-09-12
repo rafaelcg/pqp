@@ -9,8 +9,11 @@
  *   Non-fatal ones are counted but only matter once they pile up.
  * - `waiting` that lasts longer than `stallMs` (8 s) with no `playing`.
  * - the live playlist not advancing: `EXT-X-MEDIA-SEQUENCE` unchanged for
- *   `sequenceStuckMs` (15 s), which is what a dead egress looks like while
- *   the playlist itself still answers.
+ *   `sequenceStuckMs` (20 s), which is what a dead egress looks like while
+ *   the playlist itself still answers. Segments are 4 s
+ *   (`LIVE_HLS_SEGMENT_SECONDS`) since 2026-09-12, so the media sequence
+ *   legitimately advances only once every 4 s; 20 s is comfortably above
+ *   two segments (8 s) of ordinary jitter, not a hair-trigger on it.
  *
  * Every reconnect refetches the playlist source (a restarted egress has a
  * new URL); after `maxReconnects` inside `windowMs` the stream is declared
@@ -39,7 +42,7 @@ export class HlsStallWatch {
 
   constructor(options: HlsStallOptions = {}) {
     this.stallMs = options.stallMs ?? 8_000;
-    this.sequenceStuckMs = options.sequenceStuckMs ?? 15_000;
+    this.sequenceStuckMs = options.sequenceStuckMs ?? 20_000;
     this.maxReconnects = options.maxReconnects ?? 3;
     this.windowMs = options.windowMs ?? 5 * 60_000;
   }

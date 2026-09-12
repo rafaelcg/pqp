@@ -130,12 +130,15 @@ function VolumeGlyph({ volume, muted }: { volume: number; muted: boolean }) {
  * HLS playlist for a LiveKit egress screen share.
  *
  * Safari plays MPEG-TS natively. Everyone else uses hls.js. The picture is
- * 8–12 s behind the presenter; that is the product, not a bug, and the
- * badge says so.
+ * ~20 s behind the presenter (the player's own cushion on 4 s segments,
+ * `HLS_LIVE_SYNC_DURATION_COUNT` in `hls-live-edge.ts`, on top of whatever
+ * the pipeline itself adds); that is the product, not a bug, and the badge
+ * says so. `delaySeconds` below is only the fallback before the wire value
+ * (`LIVE_HLS_DELAY_SECONDS`, a pipeline figure the server sends) arrives.
  */
 export function HlsWatchPlayer({
   src,
-  delaySeconds = 10,
+  delaySeconds = 20,
   className,
   videoRef,
   onDoubleClick,

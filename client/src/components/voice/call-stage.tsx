@@ -1315,7 +1315,7 @@ function ActiveCall({
       qualityMenuOpen={qualityMenuOpen}
       onQualityMenuOpenChange={setQualityMenuRequested}
       watchingHls={watchingHls}
-      hlsDelaySeconds={voiceState.liveStream?.delaySeconds ?? 10}
+      hlsDelaySeconds={voiceState.liveStream?.delaySeconds ?? 20}
       onStartScreenShare={onStartScreenShare}
       onStopScreenShare={onStopScreenShare}
       onToggleCollapsed={() => onSetCollapsed(!userCollapsed)}

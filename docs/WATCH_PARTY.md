@@ -1849,6 +1849,17 @@ before. Re-measured after the change, same rig, same party: no seeks, no
 `waiting`, no errors; the real player in Chrome held 3.6 to 8.6 s of
 buffer for the whole run with zero dropped frames.
 
+**2026-09-12 update: segments went from 2 s to 4 s.** At 2 s, the egress's
+two synchronous playlist uploads per segment fell behind real time on a
+cross-region bucket; segments went to 4 s and the bucket moved closer at
+the same time. The player was re-tuned for that premise around a
+YouTube-style cushion rather than the old close-to-the-edge numbers: it
+now sits five segments (~20 s) back with twelve (~48 s) of tolerance on
+the proxy's now-60 s window, buffers up to 24 s, and caps the back-buffer
+at 12 s. A watch party is not interactive, so resilience against a slow
+poll or a throttled tab buys more than shaving a few seconds of latency
+does. See `client/src/lib/hls-live-edge.ts`.
+
 The rig is a Playwright page loaded from the staging web origin (CORS)
 driving hls.js 1.7.2 against the proxy with a viewer token minted on the
 API machine (`mintHlsViewerToken` from `/app/server/dist`). It logs
@@ -2414,7 +2425,12 @@ later, per app:
     the two clients call the same drift by the same name) and the player
     insists at forty five, where being left behind has stopped being a
     preference. Nothing buffers more. More buffer is more delay, which is the
-    complaint.
+    complaint. **2026-09-12:** the web threshold moved to thirty seconds
+    (`BEHIND_LIVE_THRESHOLD_SECONDS` in `hls-live-edge.ts`) once the web
+    player itself started sitting ~20 s behind live by design on 4 s
+    segments — ten would have flagged every viewer sitting exactly where the
+    player put them. iOS's own ten-second figure is untouched here; the two
+    clients no longer share the number, only the intent.
   - **The delay readout was a constant.** It printed `delaySeconds` off the
     wire, which is the pipeline and the same figure for everybody, so a viewer
     two minutes behind was shown "~10s". It is now the pipeline plus the
