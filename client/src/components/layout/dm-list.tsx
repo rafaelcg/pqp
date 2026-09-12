@@ -1,6 +1,8 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
 import { Ban, Copy, Phone, Pin, PinOff, Plus, UserRound, Users, X } from "lucide-react";
 import { useRef, type CSSProperties, type ReactNode } from "react";
+import { useHasDraft } from "@/lib/composer-drafts";
+import { DraftMark } from "@/components/layout/channel-list";
 import {
   formatBadgeCount,
   type UnreadState,
@@ -377,6 +379,7 @@ function ConversationRow({
 
   const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0;
+  const hasDraft = useHasDraft(conversation.channelId) && !selected;
   const mentions = selected || muted ? 0 : unread.mentions;
   // A DM is addressed to you, so every unread one earns a count, not just the
   // mentions a server channel would badge. The mention count wins when both
@@ -413,6 +416,7 @@ function ConversationRow({
           >
             {title}
           </span>
+          {hasDraft && <DraftMark />}
           {blocked && <span className="sr-only">{t("chrome.blockedSr")}</span>}
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}

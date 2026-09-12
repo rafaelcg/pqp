@@ -74,6 +74,10 @@ import {
   type AcceptedFile,
   type OutgoingAttachment,
 } from "@/lib/attachments";
+import { readDraft, writeDraft } from "@/lib/composer-drafts";
+
+/** How long typing pauses before the draft is written to storage. */
+const DRAFT_WRITE_DELAY_MS = 300;
 import { createGifAttachment } from "@/lib/api";
 import {
   applyEmojiShortcode,
@@ -336,8 +340,11 @@ export function MessageComposer({
 }: MessageComposerProps) {
   const { t } = useTranslation();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
-  const [body, setBody] = useState("");
-  const [caret, setCaret] = useState(0);
+  // The draft outlives the mount: App remounts this component per channel,
+  // so what was typed here is read back when the channel is reopened and
+  // written on every change. See `composer-drafts.ts`.
+  const [body, setBody] = useState(() => (channelId ? readDraft(channelId) : ""));
+  const [caret, setCaret] = useState(() => (channelId ? readDraft(channelId).length : 0));
   const [composerBox, setComposerBox] = useState({
     height: COMPOSER_CONTROL_PX,
     lineHeight: COMPOSER_CONTROL_PX,
@@ -393,6 +400,26 @@ export function MessageComposer({
   }, [slowModeUntil]);
 
   const slowModeRemaining = remainingWaitSeconds(slowModeUntil, now);
+
+  // Coalesced: a write per keystroke would serialise every draft on the
+  // input hot path. The draft lands a moment after typing pauses, and the
+  // unmount (a channel switch, since App keys this component by channel)
+  // writes whatever is in the box right away.
+  useEffect(() => {
+    if (!channelId) {
+      return;
+    }
+    const id = setTimeout(() => writeDraft(channelId, body), DRAFT_WRITE_DELAY_MS);
+    return () => clearTimeout(id);
+  }, [channelId, body]);
+  useEffect(() => {
+    if (!channelId) {
+      return;
+    }
+    return () => {
+      writeDraft(channelId, bodyRef.current);
+    };
+  }, [channelId]);
 
   useEffect(() => {
     if (isFormatBarOpen) {
