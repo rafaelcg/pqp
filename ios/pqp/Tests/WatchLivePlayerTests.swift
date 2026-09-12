@@ -943,8 +943,8 @@ final class WatchLivePlayerTests: XCTestCase {
             "readyToPlay must not be the thing that skips the Auto ceiling"
         )
         XCTAssertTrue(
-            stage.contains("WatchTheaterPresenter"),
-            "fullscreen has to be a real AVKit presentation, not a cover over chat"
+            stage.contains("WatchOrientation.isLandscape"),
+            "fullscreen is the phone being turned, not a control and not a presentation"
         )
         XCTAssertTrue(
             stage.contains("WatchLiveEdge.jumpTarget("),

@@ -20,9 +20,16 @@ import SwiftUI
  `WatchOverlay` is the cinema chrome on top of it. There is no system
  transport bar and no scrubber, because a live window that offers to seek
  is a control that lies. Tap the film to see the bars, tap again to put
- them away. Fullscreen is a full-screen controller of our own, holding the
- same layer and the same chrome, not a SwiftUI cover over the transcript and
- not AVKit's player (see `WatchTheater`).
+ them away.
+
+ FULLSCREEN IS THE PHONE. Turn it on its side and this stage fills the screen;
+ turn it back and the transcript returns. There is no button and no second
+ screen, because three TestFlight builds of a presented theater (28, 30, 31)
+ each failed differently and the last one failed for a reason no amount of
+ chrome could fix: UIKit takes the presenter out of the window, SwiftUI calls
+ that a disappearance, and the stage tore down the player underneath its own
+ fullscreen. Nothing is presented now. The same view, the same `WatchPicture`
+ layer and the same overlay simply get the whole screen.
  */
 struct WatchStageView: View {
     @Environment(SessionStore.self) private var session
@@ -51,7 +58,9 @@ struct WatchStageView: View {
     /// The video rectangle in device pixels, reported by the surface itself.
     @State private var surfacePixels: CGSize = .zero
     @State private var wasPlayingBeforeInterruption = false
-    @State private var isFullscreen = false
+    /// The phone is on its side and the film has the screen. Driven by the
+    /// device, never by a control.
+    @State private var isLandscape = false
     @State private var isPlaying = false
     /// What the viewer asked for. Distinct from `player.rate`, which drops
     /// to 0 on a pause nobody tapped (a rung switch, an interruption the
@@ -97,12 +106,23 @@ struct WatchStageView: View {
         .task(id: channel.id) { await model.open(channelId: channel.id, session: session) }
         .task { await watchdog() }
         .onDisappear {
+            // NOT WHILE THE FILM IS ON. A view that is off screen because the
+            // stage is filling the screen is not a view somebody navigated
+            // away from. Nothing is presented any more so this should not fire
+            // at all, and the guard stays because tearing the player down
+            // underneath its own fullscreen is exactly what builds 28, 30 and
+            // 31 did.
+            guard !isLandscape else { return }
             tearDown()
             model.close()
+            WatchOrientation.leaveTheater()
         }
         .onChange(of: isSeated, initial: true) { _, seated in
             model.isSeated = seated
-            if seated { tearDown() }
+            if seated {
+                tearDown()
+                WatchOrientation.leaveTheater()
+            }
         }
         // Runs on every `channel-live`, which is twice a minute for the whole
         // party, because the stamped URL is different every time. The swap
@@ -111,11 +131,19 @@ struct WatchStageView: View {
         // the very next frame is the one that gets attached.
         .onChange(of: model.stream, initial: true) { _, _ in reconcile() }
         .onChange(of: model.phase) { _, phase in
-            if phase != .live { tearDown() }
+            if phase != .live {
+                tearDown()
+                WatchOrientation.leaveTheater()
+            } else {
+                // Landscape is unlocked only while there is a film to turn the
+                // phone for. The app is portrait everywhere else and stays so.
+                WatchOrientation.enterTheater()
+                applyOrientation()
+            }
         }
         .onChange(of: pinnedLines) { _, _ in applyQuality(trigger: .pin) }
         .onChange(of: surfacePixels) { _, _ in applyQuality(trigger: .surface) }
-        .onChange(of: isFullscreen) { _, _ in applyQuality(trigger: .fullscreen) }
+        .onChange(of: isLandscape) { _, _ in applyQuality(trigger: .fullscreen) }
         // THE ONE PAUSE NOBODY ASKED FOR. A call, Siri, an alarm or another
         // app taking the session stops `AVPlayer` dead and leaves it stopped;
         // there is no automatic resume and nothing in the app was listening,
@@ -143,6 +171,7 @@ struct WatchStageView: View {
             )
         ) { _ in
             chromeInsets = WatchOrientation.safeInsets
+            applyOrientation()
         }
     }
 
@@ -305,22 +334,22 @@ struct WatchStageView: View {
     /// keeps the `AVPlayer` and therefore the sound, which is the whole point
     /// of collapsing it: listen to the film and read the chat.
     ///
-    /// Fullscreen keeps the 16:9 hole so the transcript does not jump the
-    /// moment the theater opens. The film itself is the SAME pane, presented
-    /// full screen by `WatchTheaterPresenter`: the same layer, moved, and the
-    /// same chrome. Chat is not in that layout at all.
-    ///
-    /// ONLY ONE OF THE TWO IS EVER MOUNTED. The strip draws a black hole while
-    /// the theater is up, and it has to: both branches draw the same
-    /// `WatchPicture`, and two rectangles asking for one layer would take it
-    /// from each other on every tick.
+    /// ONE VIEW, TWO SIZES. Portrait is a 16:9 strip above the transcript.
+    /// Landscape is the same view given the whole screen: this lives in
+    /// `ChatView`'s top safe-area inset, so an inset as tall as the screen IS
+    /// the screen, and the transcript is simply below it. No presentation, no
+    /// second controller, and the same `WatchPicture` layer throughout, which
+    /// is why the film does not blink on the way in or out.
     private var picture: some View {
         VStack(spacing: 0) {
             if !isMinimised {
-                if isFullscreen {
-                    Color.black
-                        .frame(maxWidth: .infinity)
-                        .aspectRatio(16 / 9, contentMode: .fit)
+                if isLandscape {
+                    pane(isTheater: true)
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: WatchOrientation.screenPoints.height,
+                            maxHeight: .infinity
+                        )
                 } else {
                     pane(isTheater: false)
                         .frame(maxWidth: .infinity)
@@ -332,16 +361,8 @@ struct WatchStageView: View {
             }
         }
         .background(Palette.inkDeep)
-        .background {
-            WatchTheaterPresenter(
-                presented: isFullscreen,
-                content: pane(isTheater: true).ignoresSafeArea(),
-                onDismiss: {
-                    isFullscreen = false
-                    WatchOrientation.leaveTheater()
-                }
-            )
-        }
+        .ignoresSafeArea(edges: isLandscape ? .all : [])
+        .statusBarHidden(isLandscape)
     }
 
     @ViewBuilder
@@ -371,7 +392,6 @@ struct WatchStageView: View {
             chromeInsets: isTheater ? chromeInsets : .init(),
             onTogglePlay: togglePlay,
             onJumpToLive: jumpToLive,
-            onToggleFullscreen: toggleFullscreen,
             onStartPip: { pip.start() },
             onCollapse: isTheater ? nil : { isMinimised = true },
             qualityMenu: {
@@ -734,31 +754,6 @@ struct WatchStageView: View {
         player.play()
     }
 
-    private func toggleFullscreen() {
-        if isFullscreen {
-            isFullscreen = false
-        } else {
-            isMinimised = false
-            // THE THEATER'S PIXELS, BEFORE THE THEATER OPENS.
-            //
-            // `surfacePixels` is reported by `WatchVideoSurface`, and the
-            // surface is taken out of the hierarchy for the whole of
-            // fullscreen (`picture` draws a black 16:9 hole instead). So the
-            // last number it ever reported is the inline strip's, and
-            // `applyQuality(trigger: .fullscreen)` is one of only two writes
-            // allowed onto a PLAYING item: entering the theater wrote a
-            // phone-strip ceiling onto a full screen, which is a rendition
-            // switch on a live window, which is the freeze this file keeps
-            // warning about. Written first so the `.surface` change is seen
-            // before the `.fullscreen` one; `.surface` is refused mid-playback
-            // by design, so only the fullscreen write lands, and now it can
-            // only raise the ceiling.
-            let theater = WatchOrientation.screenPixels
-            if theater.width > 0, theater.height > 0 { surfacePixels = theater }
-            isFullscreen = true
-        }
-        chrome.reveal(at: Date())
-    }
 
     private func jumpToLive() {
         guard let item = player?.currentItem,
@@ -836,8 +831,28 @@ struct WatchStageView: View {
         }
     }
 
+    /// The phone decided. A film worth turning the phone for is not worth a
+    /// control, and a collapsed strip is not worth filling the screen with.
+    private func applyOrientation() {
+        let landscape = WatchOrientation.isLandscape && model.phase == .live
+            && !isSeated && !isMinimised
+        guard landscape != isLandscape else { return }
+        if landscape {
+            // The screen's own pixels, before the surface has been laid out at
+            // its new size. `applyQuality(trigger: .fullscreen)` is one of only
+            // two writes allowed onto a PLAYING item, and it reads
+            // `surfacePixels`: without this it would write the STRIP's ceiling
+            // onto a full screen, which is a rendition switch on a live window,
+            // which is the freeze this file keeps warning about.
+            let full = WatchOrientation.screenPixels
+            if full.width > 0, full.height > 0 { surfacePixels = full }
+        }
+        isLandscape = landscape
+        chrome.reveal(at: Date())
+    }
+
     private func tearDown() {
-        isFullscreen = false
+        isLandscape = false
         player?.pause()
         player = nil
         attached = nil

@@ -554,6 +554,27 @@ rather than building a second one. Only one of the two rectangles is ever
 mounted, which is why the strip still draws a black 16:9 hole while the
 theater is up.
 
+**And build 31 still froze, because neither of those was THE bug.** Rotation
+worked, no button responded, the stream paused. The cause is one property:
+UIKit removes the presenting view controller's view from the window when a
+`.fullScreen` presentation finishes. SwiftUI reads that as the whole of
+`ChatView` going away and fires `onDisappear` on the watch stage, whose
+`onDisappear` calls `tearDown()` and `model.close()`. So the film was paused
+and the player dropped by our own code, the watchdog task was cancelled, and
+every chrome button wrote into a `@State` box SwiftUI had stopped rendering,
+the X included. Rotation kept working because rotation is UIKit's, not ours.
+
+**Build 32 has no fullscreen button and presents nothing.** Fullscreen is the
+phone: turn it on its side and the stage fills the screen, turn it back and
+the transcript returns. It is the same view, the same `WatchPicture` layer and
+the same overlay given a bigger frame, which is why the film does not blink on
+the way in or out. `WatchStageView` lives in `ChatView`'s top safe-area inset,
+so an inset as tall as the screen IS the screen. Landscape is unlocked only
+while a party is live and the viewer has no seat (`WatchOrientation`, still
+named enter/leaveTheater); the app is portrait everywhere else. Three presented
+theaters failed in three different ways, and the fourth attempt was to stop
+presenting.
+
 The lesson is the one on the pitfalls list: every source-text assertion about
 the theater was green for both broken builds. The tests that replaced them run
 the code — `testNothingInTheTheaterOutranksTheChromesOwnButtons` walks the

@@ -340,7 +340,10 @@ final class WatchPartyTests: XCTestCase {
             contentsOf: sources.appending(path: "Voice/WatchStageView.swift"), encoding: .utf8
         )
         XCTAssertTrue(source.contains("guard !isSeated else { return }"))
-        XCTAssertTrue(source.contains("if seated { tearDown() }"))
+        XCTAssertTrue(source.contains("model.isSeated = seated"))
+        // A seat tears the player down AND locks the phone back to portrait:
+        // a person in the call is not watching the broadcast sideways.
+        XCTAssertTrue(source.contains("if seated {\n                tearDown()"))
     }
 
     // MARK: - The audio session
@@ -427,36 +430,6 @@ final class WatchPartyTests: XCTestCase {
             stage.contains("automaticallyWaitsToMinimizeStalling = true"),
             "waiting off is the one-frame freeze: decode, sit, never recover"
         )
-        let theater = try String(
-            contentsOf: sources.appending(path: "Voice/WatchTheater.swift"), encoding: .utf8
-        )
-        XCTAssertTrue(
-            theater.contains("WatchOrientation.enterTheater()"),
-            "fullscreen has to unlock landscape; the app is portrait everywhere else"
-        )
-        XCTAssertFalse(
-            theater.contains("AVPlayerViewController("),
-            "AVKit owns interaction in its own controller; see the touch test below"
-        )
-        XCTAssertTrue(
-            stage.contains("chromeInsets: isTheater ? chromeInsets"),
-            "theater chrome has to clear the island, not sit under it"
-        )
-        XCTAssertTrue(
-            stage.contains("WatchTheaterPresenter"),
-            "the cover from the chat inset left the transcript in the layout"
-        )
-        // `testFullscreenAllowsTheTallestRungAgain` has always passed, and
-        // build 28 still wrote a phone-strip ceiling the moment the theater
-        // opened: that test feeds `resolutionCap` a fullscreen rectangle
-        // nothing in the app ever produced, because `WatchVideoSurface` is
-        // removed for the whole of fullscreen and it is the only thing that
-        // reports a size. This is the missing half, that the product supplies
-        // the number the pure rule is tested with.
-        XCTAssertTrue(
-            stage.contains("WatchOrientation.screenPixels"),
-            "the theater has to say how big it is; nothing else measures it"
-        )
         let push = try String(
             contentsOf: sources.appending(path: "Core/PushNotifications.swift"), encoding: .utf8
         )
@@ -468,73 +441,64 @@ final class WatchPartyTests: XCTestCase {
     }
 
     /**
-     THE ONE-WAY DOOR, AND WHY A TEXT TEST COULD NOT SEE IT.
+     FULLSCREEN IS THE PHONE, AND THIS IS WHAT SAYS SO.
 
-     Build 28 reached TestFlight with a fullscreen nobody could leave: a still
-     frame that answered a pinch and nothing else. Every assertion above was
-     green for it, because every one of them reads the source. The defect was
-     one `if let` that fell through at runtime, `contentOverlayView` being nil
-     until the controller's view is loaded, so the cinema chrome, which is the
-     only thing in the theater that can dismiss it (the system transport bar
-     is deliberately off), was built and never added to anything.
-
-     So this one runs the code. No window and no presentation are needed for
-     the half that failed, which is why `makeTheater` is separate from
-     `presentIfNeeded`.
+     Three TestFlight builds shipped a presented theater and all three stranded
+     a viewer in it: 28 mounted no chrome at all, 30 mounted it under AVKit's
+     gesture stack, and 31 had UIKit take the presenter out of the window,
+     which made SwiftUI fire `onDisappear` on the stage and tear the player
+     down underneath its own fullscreen. Nothing is presented any more. The
+     stage fills the screen when the phone is turned, which is one `@State`
+     bool and a frame, and these are the rules around that bool.
      */
-    @MainActor
-    func testNothingInTheTheaterOutranksTheChromesOwnButtons() {
-        let anchor = WatchTheaterAnchor()
-        let theater = anchor.makeTheater(content: Color.clear)
-        theater.view.frame = CGRect(x: 0, y: 0, width: 852, height: 393)
-        theater.view.layoutIfNeeded()
-
-        var foreign: [String] = []
-        walk(theater.view) { view in
-            for recogniser in view.gestureRecognizers ?? [] {
-                let name = String(describing: type(of: recogniser))
-                // `AVRoutePickerView` brings a plain `UITapGestureRecognizer`
-                // of its own and that one is ours by choice. Anything whose
-                // class name is AVKit's is a recogniser we did not ask for.
-                if name.hasPrefix("AV") { foreign.append(name) }
-            }
-        }
-        XCTAssertEqual(
-            foreign, [],
-            "AVKit installs its own gesture stack (AVTouchGestureRecognizer, "
-            + "AVCenterTapGestureRecognizer, AVExternalGestureRecognizerPreventer "
-            + "and more) even with showsPlaybackControls off, and it outranks "
-            + "anything a caller adds. That is why build 30's X did nothing while "
-            + "pinch-to-zoom still worked."
+    func testFullscreenIsAnOrientationAndNotAControl() throws {
+        let stage = try String(
+            contentsOf: sources.appending(path: "Voice/WatchStageView.swift"), encoding: .utf8
+        )
+        let chrome = try String(
+            contentsOf: sources.appending(path: "Voice/WatchChrome.swift"), encoding: .utf8
         )
         XCTAssertFalse(
-            theater.view.subviews.contains { String(describing: type(of: $0)).hasPrefix("AV") },
-            "the film is our layer in our controller"
+            FileManager.default.fileExists(
+                atPath: sources.appending(path: "Voice/WatchTheater.swift").path
+            ),
+            "a presented theater is what builds 28, 30 and 31 could not make work"
         )
-    }
-
-    @MainActor
-    private func walk(_ view: UIView, _ body: (UIView) -> Void) {
-        body(view)
-        for sub in view.subviews { walk(sub, body) }
+        XCTAssertFalse(
+            stage.contains("fullScreenCover") || stage.contains("Presenter("),
+            "the stage resizes itself; it does not present anything"
+        )
+        XCTAssertFalse(
+            chrome.contains("onToggleFullscreen"),
+            "the button is gone: turning the phone is the gesture"
+        )
+        XCTAssertTrue(
+            stage.contains("WatchOrientation.isLandscape"),
+            "the device decides, not a control"
+        )
+        // Landscape is unlocked for a live party and nothing else, so the rest
+        // of the app stays portrait.
+        XCTAssertTrue(stage.contains("WatchOrientation.enterTheater()"))
+        XCTAssertTrue(stage.contains("WatchOrientation.leaveTheater()"))
+        // And the ceiling is still raised BEFORE the surface redraws, or
+        // filling the screen writes the strip's ceiling onto it: a rendition
+        // switch on a live window, which is the freeze.
+        XCTAssertTrue(stage.contains("WatchOrientation.screenPixels"))
     }
 
     /**
-     THE FROZEN PICTURE, WHICH NOTHING IN THE APP COULD SEE.
+     ONE LAYER, WHATEVER SIZE IT IS DRAWN AT.
 
-     Build 30's theater made a second `AVPlayerLayer` and handed it the same
-     `AVPlayer` while the strip still held it. An `AVPlayer` drives one layer
-     at a time; the loser keeps its last frame. Every measurement the app takes
-     is taken from the PLAYER, so `timeControlStatus` said `.playing`, the
-     overlay drew a pause button, the delay badge counted, and the stall
-     watchdog saw a moving playhead and had nothing to report. The only thing
-     that was wrong was whether the frames reached the screen, which is the one
-     thing nothing measures.
-
-     So going fullscreen MOVES the layer. This is that, in three lines.
+     Build 30's fullscreen made a SECOND `AVPlayerLayer` and handed it the same
+     `AVPlayer` the strip's layer already held. An `AVPlayer` drives one layer
+     at a time and the loser keeps its last frame, while every measurement the
+     app takes comes off the PLAYER: `timeControlStatus` said `.playing`, the
+     overlay drew a pause button, and nothing could see the still picture.
+     Rotating cannot hit that, because the same view is simply given a bigger
+     frame, and this is the invariant that keeps it true.
      */
     @MainActor
-    func testGoingFullscreenMovesTheLayerInsteadOfMakingASecondOne() {
+    func testThePictureKeepsItsPlayerWhenItChangesSize() {
         let picture = WatchPicture()
         let player = AVPlayer()
         picture.show(player, pip: WatchPictureInPicture())
@@ -543,13 +507,13 @@ final class WatchPartyTests: XCTestCase {
         picture.mount(in: strip)
         XCTAssertIdentical(picture.canvas.superview, strip)
 
-        let theater = UIView()
-        picture.mount(in: theater)
-        XCTAssertIdentical(picture.canvas.superview, theater)
+        let full = UIView()
+        picture.mount(in: full)
+        XCTAssertIdentical(picture.canvas.superview, full)
         XCTAssertTrue(strip.subviews.isEmpty, "one layer, and it left the strip")
         XCTAssertIdentical(
             picture.canvas.player, player,
-            "the layer must never let go of the player on the way to the theater"
+            "the layer must never let go of the player when the frame changes"
         )
     }
 

@@ -64,8 +64,15 @@ struct WatchAirPlayButton: UIViewRepresentable {
 }
 
 /// The cinema overlay: LIVE (or jump back to it), delay, audience, play,
-/// quality, AirPlay, PiP, fullscreen. No scrubber. A live window that
-/// offers to seek is a control that lies.
+/// quality, AirPlay, PiP. No scrubber, because a live window that offers to
+/// seek is a control that lies, and no fullscreen button either.
+///
+/// FULLSCREEN IS THE PHONE, NOT A BUTTON. Turning it on its side fills the
+/// screen with the film and turning it back restores the transcript, which is
+/// what every video app on the phone already does and what three TestFlight
+/// builds of a presented theater failed to do. `isTheater` is that state: the
+/// stage is filling the screen, so the chrome clears the island and sits
+/// further in.
 struct WatchOverlay<Quality: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -82,7 +89,6 @@ struct WatchOverlay<Quality: View>: View {
     var chromeInsets: EdgeInsets = .init()
     let onTogglePlay: () -> Void
     let onJumpToLive: () -> Void
-    let onToggleFullscreen: () -> Void
     let onStartPip: () -> Void
     let onCollapse: (() -> Void)?
     @ViewBuilder var qualityMenu: () -> Quality
@@ -150,13 +156,6 @@ struct WatchOverlay<Quality: View>: View {
             Spacer(minLength: 4).allowsHitTesting(false)
             if showTransport {
                 audienceChip
-            }
-            if isTheater {
-                WatchGlyphButton(
-                    systemName: "xmark",
-                    label: "Leave fullscreen",
-                    action: onToggleFullscreen
-                )
             }
         }
     }
@@ -267,11 +266,6 @@ struct WatchOverlay<Quality: View>: View {
                     )
                 }
                 if !isTheater {
-                    WatchGlyphButton(
-                        systemName: "arrow.up.left.and.arrow.down.right",
-                        label: "Fullscreen",
-                        action: onToggleFullscreen
-                    )
                     if let onCollapse {
                         WatchGlyphButton(
                             systemName: "chevron.up",
@@ -381,6 +375,30 @@ enum WatchOrientation {
     /// pixels whichever way the phone is held: `resolutionCap` compares one
     /// height against the ladder, and both of this rectangle's sides are
     /// taller than the tallest rung we publish.
+    /// The phone is on its side. Read from the SCENE rather than from
+    /// `UIDevice`, because a device face down or flat on a table reports
+    /// `.faceUp` and no orientation at all, while the interface has one at
+    /// every moment.
+    static var isLandscape: Bool {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first
+        else { return false }
+        return scene.interfaceOrientation.isLandscape
+    }
+
+    /// The screen in POINTS, which is what a SwiftUI frame is measured in.
+    /// `screenPixels` below is the same rectangle for the quality ladder,
+    /// which counts lines of video instead.
+    static var screenPoints: CGSize {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
+        else { return .zero }
+        return window.bounds.size
+    }
+
     static var screenPixels: CGSize {
         guard let screen = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
@@ -389,6 +407,9 @@ enum WatchOrientation {
         return screen.nativeBounds.size
     }
 
+    /// Landscape is allowed while a watch party is on screen, and nowhere
+    /// else in the app. The names are historical: there is no theater any
+    /// more, only a stage that fills the screen when the phone is turned.
     static func enterTheater() {
         theaterOpen = true
         apply()
