@@ -522,6 +522,45 @@ Two smaller ones alongside: the theater no longer takes a second
 and `WatchVideoSurface.dismantleUIView` releases the player on removal so one
 `AVPlayer` is never rendering into two layers during the transition.
 
+**Build 30 fixed the chrome and not the fullscreen.** The owner's build-30
+screenshot shows the cinema chrome drawing correctly in the theater (LIVE,
+the delay badge, the audience count, the X, the quality chip, AirPlay and a
+green pause button) and none of it responding. Pinch-to-zoom still worked.
+Two causes, both of them AVKit's controller, both fixed in build 31 by not
+using it.
+
+*Taps.* Dumping the hierarchy of a presented, laid-out `AVPlayerViewController`
+with `showsPlaybackControls = false` shows its content view carrying **fifteen**
+gesture recognisers, among them `AVTouchGestureRecognizer`,
+`AVCenterTapGestureRecognizer`, `AVUserInteractionObserverGestureRecognizer`
+and, by name, `AVExternalGestureRecognizerPreventer`. Hit testing was never
+the problem: a tap does land on our hosting view, and a `hitTest` in the
+simulator confirms it. AVKit simply outranks anything a caller adds, which is
+why its own pinch kept working while every button of ours was inert. The
+theater is a plain `UIHostingController` now (`WatchTheaterController`), so
+there is no foreign gesture stack in it at all.
+
+*The frozen picture.* Build 30's theater was a second render target: AVKit's
+controller has an `AVPlayerLayer` of its own and it was handed the same
+`AVPlayer` the strip's layer already held. An `AVPlayer` drives one layer at a
+time and the loser keeps its last frame. Every measurement the app takes comes
+off the PLAYER, so `timeControlStatus` said `.playing`, `isPlaying` was true,
+the overlay drew a pause button, the delay badge counted and the stall watchdog
+saw a moving playhead: nothing in the app could see it, because nothing
+measures whether frames reach the screen. So the layer stopped belonging to a
+SwiftUI view. `WatchPicture` owns one `AVPlayerLayer` per broadcast, is handed
+the player once, and going fullscreen **moves** it (`addSubview` re-parents)
+rather than building a second one. Only one of the two rectangles is ever
+mounted, which is why the strip still draws a black 16:9 hole while the
+theater is up.
+
+The lesson is the one on the pitfalls list: every source-text assertion about
+the theater was green for both broken builds. The tests that replaced them run
+the code — `testNothingInTheTheaterOutranksTheChromesOwnButtons` walks the
+presented controller's gesture recognisers, and
+`testGoingFullscreenMovesTheLayerInsteadOfMakingASecondOne` asserts the layer
+never lets go of the player.
+
 ## Screen sharing
 
 Receiving works and is verified. Receiving is the mesh's ordinary video path;

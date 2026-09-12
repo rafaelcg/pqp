@@ -434,13 +434,9 @@ final class WatchPartyTests: XCTestCase {
             theater.contains("WatchOrientation.enterTheater()"),
             "fullscreen has to unlock landscape; the app is portrait everywhere else"
         )
-        XCTAssertTrue(
-            theater.contains("AVPlayerViewController"),
-            "theater is AVKit fullscreen, not a SwiftUI cover over the chat"
-        )
-        XCTAssertTrue(
-            theater.contains("showsPlaybackControls = false"),
-            "the system transport bar is the chrome this replaced"
+        XCTAssertFalse(
+            theater.contains("AVPlayerViewController("),
+            "AVKit owns interaction in its own controller; see the touch test below"
         )
         XCTAssertTrue(
             stage.contains("chromeInsets: isTheater ? chromeInsets"),
@@ -487,26 +483,73 @@ final class WatchPartyTests: XCTestCase {
      `presentIfNeeded`.
      */
     @MainActor
-    func testTheTheaterMountsTheChromeThatIsTheWayBackOut() throws {
+    func testNothingInTheTheaterOutranksTheChromesOwnButtons() {
         let anchor = WatchTheaterAnchor()
-        let controller = anchor.makeTheater(player: AVPlayer(), overlay: Color.clear)
-        let host = try XCTUnwrap(anchor.overlayHost, "the theater built no chrome at all")
-        XCTAssertTrue(
-            host.view.isDescendant(of: controller.view),
-            "chrome that is not in the hierarchy is a fullscreen with no exit"
-        )
-        XCTAssertIdentical(host.parent, controller)
-        XCTAssertTrue(
-            host.view.isUserInteractionEnabled,
-            "the X, play and the quality menu are buttons; they have to take touches"
+        let theater = anchor.makeTheater(content: Color.clear)
+        theater.view.frame = CGRect(x: 0, y: 0, width: 852, height: 393)
+        theater.view.layoutIfNeeded()
+
+        var foreign: [String] = []
+        walk(theater.view) { view in
+            for recogniser in view.gestureRecognizers ?? [] {
+                let name = String(describing: type(of: recogniser))
+                // `AVRoutePickerView` brings a plain `UITapGestureRecognizer`
+                // of its own and that one is ours by choice. Anything whose
+                // class name is AVKit's is a recogniser we did not ask for.
+                if name.hasPrefix("AV") { foreign.append(name) }
+            }
+        }
+        XCTAssertEqual(
+            foreign, [],
+            "AVKit installs its own gesture stack (AVTouchGestureRecognizer, "
+            + "AVCenterTapGestureRecognizer, AVExternalGestureRecognizerPreventer "
+            + "and more) even with showsPlaybackControls off, and it outranks "
+            + "anything a caller adds. That is why build 30's X did nothing while "
+            + "pinch-to-zoom still worked."
         )
         XCTAssertFalse(
-            controller.showsPlaybackControls,
-            "our chrome replaced the system bar, which is why losing it strands somebody"
+            theater.view.subviews.contains { String(describing: type(of: $0)).hasPrefix("AV") },
+            "the film is our layer in our controller"
         )
-        XCTAssertFalse(
-            controller.allowsPictureInPicturePlayback,
-            "PiP lives on the inline layer; two controllers on one player is two owners"
+    }
+
+    @MainActor
+    private func walk(_ view: UIView, _ body: (UIView) -> Void) {
+        body(view)
+        for sub in view.subviews { walk(sub, body) }
+    }
+
+    /**
+     THE FROZEN PICTURE, WHICH NOTHING IN THE APP COULD SEE.
+
+     Build 30's theater made a second `AVPlayerLayer` and handed it the same
+     `AVPlayer` while the strip still held it. An `AVPlayer` drives one layer
+     at a time; the loser keeps its last frame. Every measurement the app takes
+     is taken from the PLAYER, so `timeControlStatus` said `.playing`, the
+     overlay drew a pause button, the delay badge counted, and the stall
+     watchdog saw a moving playhead and had nothing to report. The only thing
+     that was wrong was whether the frames reached the screen, which is the one
+     thing nothing measures.
+
+     So going fullscreen MOVES the layer. This is that, in three lines.
+     */
+    @MainActor
+    func testGoingFullscreenMovesTheLayerInsteadOfMakingASecondOne() {
+        let picture = WatchPicture()
+        let player = AVPlayer()
+        picture.show(player, pip: WatchPictureInPicture())
+
+        let strip = UIView()
+        picture.mount(in: strip)
+        XCTAssertIdentical(picture.canvas.superview, strip)
+
+        let theater = UIView()
+        picture.mount(in: theater)
+        XCTAssertIdentical(picture.canvas.superview, theater)
+        XCTAssertTrue(strip.subviews.isEmpty, "one layer, and it left the strip")
+        XCTAssertIdentical(
+            picture.canvas.player, player,
+            "the layer must never let go of the player on the way to the theater"
         )
     }
 
