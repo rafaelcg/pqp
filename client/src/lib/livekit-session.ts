@@ -179,6 +179,15 @@ export interface LiveKitSession {
    */
   setHlsSource(next: HlsSourceInput | null): Promise<void>;
   /**
+   * The host's "Qualidade da transmissão" ceiling for THIS watch-party share,
+   * in picture lines (720 by default, 1080 on opt-in), or null when the share
+   * is not a watch party. Set before `publishScreen` so the capture is held at
+   * the chosen height from the first frame and the HLS egress, which binds to
+   * the top published layer at session start, never sees a taller one. A
+   * change mid-share applies to the next share, not the running one.
+   */
+  setScreenHlsPublishHeight(height: number | null): void;
+  /**
    * The largest layer this viewer accepts from every remote video publication,
    * applied to what is subscribed now and to whatever arrives later.
    */
@@ -314,6 +323,16 @@ export async function connectLiveKit({
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
   let screenMaxBitrate = DEFAULT_SCREEN_MAX_BITRATE_BPS;
+  /**
+   * The tallest layer a watch-party share may publish, in picture lines, as
+   * the host chose it ("Qualidade da transmissão"). Null for any share that
+   * is not a watch party — the cap does not touch an ordinary call. Set by
+   * `setScreenHlsPublishHeight` before the share is published so the capture
+   * is constrained from the first frame, and folded into the plan's own HLS
+   * ceiling (`maxPublishHeight`) so the declared layers agree. See
+   * `WATCH_PARTY_MAX_PUBLISH_HEIGHT`.
+   */
+  let screenHlsPublishHeight: number | null = null;
   /** The presenter's chosen quality; with the room size it makes the plan. */
   let screenQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
   /**
@@ -1111,6 +1130,38 @@ export async function connectLiveKit({
    * thing set. The cap still binds it.
    */
   function currentScreenPlan(): ScreenSimulcastPlan {
+    return applyScreenPublishCeiling(computeScreenPlan());
+  }
+
+  /**
+   * Hold the plan's top to the host's watch-party ceiling
+   * (`screenHlsPublishHeight`), which matters in the window BEFORE the egress
+   * is up: `hlsSource` is still null then, so `computeScreenPlan` has no HLS
+   * branch to cap it and a small-room Auto share would publish 1080. Capping
+   * here makes `publishScreen` constrain the capture to the chosen height from
+   * the first frame. Once the egress is live the HLS branches already hold the
+   * plan at `maxPublishHeight`, so this is a no-op. Null means "not a watch
+   * party" and leaves every ordinary call untouched.
+   */
+  function applyScreenPublishCeiling(
+    plan: ScreenSimulcastPlan,
+  ): ScreenSimulcastPlan {
+    const cap = screenHlsPublishHeight;
+    if (cap === null || plan.topHeight <= cap) {
+      return plan;
+    }
+    const ceilingBitrate = screenBitrateFor(
+      cap >= 1080 ? "1080p" : cap >= 720 ? "720p" : cap >= 480 ? "480p" : "360p",
+    );
+    return {
+      ...plan,
+      topHeight: cap,
+      topBitrate: Math.min(plan.topBitrate, ceilingBitrate),
+      lowerLayers: plan.lowerLayers.filter((layer) => layer.height < cap),
+    };
+  }
+
+  function computeScreenPlan(): ScreenSimulcastPlan {
     const hls =
       hlsSource === null
         ? null
@@ -1121,6 +1172,10 @@ export async function connectLiveKit({
               publishedScreenPlan?.topHeight ??
               null,
             currentCeilingBps: publishedScreenPlan?.topBitrate ?? null,
+            // The host's chosen ceiling rides on the HLS input so
+            // `hlsSourceTopHeight` holds the raise at it (720 by default,
+            // 1080 on opt-in). `undefined` falls back to the 720 default.
+            maxPublishHeight: screenHlsPublishHeight ?? undefined,
           };
     const plan = screenSimulcastPlan(
       screenQuality,
@@ -1851,6 +1906,9 @@ export async function connectLiveKit({
         // session: somebody who stops and shares a different window gets the
         // plan that window and that room call for.
         screenPlanPinned = false;
+        // A new share re-reads the host's choice; do not let this share's
+        // ceiling cap the next one (which may not be a watch party).
+        screenHlsPublishHeight = null;
         appliedScreenCaptureHeight = null;
         nativeScreenCaptureHeight = null;
         pendingCaptureHeight = null;
@@ -1930,6 +1988,15 @@ export async function connectLiveKit({
       await reconcileScreenPlan();
     },
 
+    setScreenHlsPublishHeight(height: number | null) {
+      // Synchronous and set BEFORE publishScreen: the publish reads
+      // `currentScreenPlan`, whose ceiling this is, and constrains the capture
+      // to it from the first frame. No reconcile here — a live change applies
+      // to the next share, not the running one (the egress binds the source at
+      // session start; see `watch-party-stream-quality.ts`).
+      screenHlsPublishHeight = height;
+    },
+
     async setReceiveQuality(quality: ReceiveQuality) {
       receiveQuality = quality;
       for (const participant of room.remoteParticipants.values()) {
@@ -1975,6 +2042,7 @@ export async function connectLiveKit({
       publishedScreenTrack = null;
       publishedScreenPlan = null;
       screenCaptureConstraints = null;
+      screenHlsPublishHeight = null;
       appliedScreenCaptureHeight = null;
       nativeScreenCaptureHeight = null;
       pendingCaptureHeight = null;

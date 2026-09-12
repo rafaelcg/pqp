@@ -153,6 +153,7 @@ vi.mock("@/lib/livekit-session", () => ({
     setCameraMaxBitrate: async () => {},
     setScreenMaxBitrate: async () => {},
     setScreenQuality: async () => {},
+    setScreenHlsPublishHeight: () => {},
     setReceiveQuality: async () => {},
     setAudioDelivery: (plan: RemoteAudioPlan) => {
       sfuAudioPlans.push(plan);

@@ -1921,6 +1921,31 @@ Two things that change shipped later, on the same facts.
   ceiling. Fibre sitting on 4 Mbps stays quiet; a starving uplink
   speaks.
 
+**Publish is capped at 720 by default, and the host picks (2026-09-12).** A
+live party that day was still corrupting: a host on a fast UK uplink published
+1080 to the São Paulo SFU, the 1080 layer arrived with packet loss and
+reordering, the egress logged hundreds of libav macroblock-decode errors per
+minute, and every viewer saw glass-shard artifacts. The egress always
+transcodes the TOP published layer and cannot be told to take a lower one, so
+the only lever is what the client publishes, and the measured-uplink gate above
+is not enough: the UK link genuinely measured over the bar while still losing
+packets on the long path. So a watch-party HLS share now publishes **720p by
+default**, set by a host-facing **"Qualidade da transmissão"** selector in the
+TRANSMISSÃO readout (`client/src/lib/watch-party-stream-quality.ts`, default
+`WATCH_PARTY_MAX_PUBLISH_HEIGHT = 720`). A host who knows their uplink is fat
+and close to the box can opt into **1080p**; even then the measured-uplink gate
+still applies, so an opt-in on a short uplink lands at a clean 720 rather than a
+starved 1080. The choice persists per browser (`localStorage`) and is read at
+**share start**: the host's ceiling is handed to the session
+(`setScreenHlsPublishHeight`) before `publishScreen`, so the capture is
+constrained to the chosen height from the first frame and the server starts only
+480p/720p rungs (it already refuses a rung taller than the source). Changing the
+selector applies to the **next** share, not the running one — the egress binds
+its source when the session begins and cannot be re-pointed at a different layer
+in place. Raise the `WATCH_PARTY_MAX_PUBLISH_HEIGHT` default once the egress
+moves closer to the presenter (a regional media box) or an OBS/RTMP ingest path
+exists.
+
 ### The restart that should not happen at all: swapping the share in place
 
 Rafael's framing, and it is a better fix than surviving the restart: in a watch

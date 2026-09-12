@@ -3049,6 +3049,10 @@
   "watchParty.tx.silentFix": "Quem assiste de fora não está ouvindo nada. Pare de compartilhar e compartilhe de novo marcando a caixa de áudio. No Chrome, escolha uma guia e marque 'Compartilhar áudio da guia'.",
   "watchParty.tx.carries": "Pra fora da sala vai a janela compartilhada e o áudio dela. Microfone e câmera ficam só com quem está na sala.",
   "watchParty.tx.behind": "Quem assiste de fora está uns {seconds}s atrás de você.",
+  "watchParty.tx.streamQuality": "Qualidade da transmissão",
+  "watchParty.tx.streamQualityHint": "Vale para a próxima transmissão (a de agora segue como está).",
+  "watchParty.tx.streamQuality720": "720p (recomendado)",
+  "watchParty.tx.streamQuality1080": "1080p",
   "watchParty.tx.expand": "Ver os detalhes",
   "watchParty.tx.collapse": "Esconder os detalhes"
 }

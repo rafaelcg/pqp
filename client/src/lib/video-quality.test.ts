@@ -25,6 +25,7 @@ import {
   screenShareDegradationPreference,
   screenShareScaleResolutionDownBy,
   screenShareSimulcastEnabled,
+  WATCH_PARTY_MAX_PUBLISH_HEIGHT,
   VIDEO_QUALITIES,
   type ScreenSimulcastPlan,
 } from "./video-quality";
@@ -424,16 +425,52 @@ describe("screenScaleFactor", () => {
 describe("the presenter as the ladder's source", () => {
   const LIVE = { ladderTopHeight: 1080, uplinkBps: 10_000_000 };
 
-  it("raises the published top past the large-room cap", () => {
-    // Without a watch party this is the case the cap exists for.
+  it("caps a watch-party HLS share at 720 even on a fast uplink", () => {
+    // 2026-09-12: the egress always transcodes the top published layer, and
+    // a 1080 layer over a lossy path corrupts for everyone. The cap holds the
+    // publish at 720 whatever the uplink measures (WATCH_PARTY_MAX_PUBLISH_HEIGHT).
+    expect(WATCH_PARTY_MAX_PUBLISH_HEIGHT).toBe(720);
+    // Without a watch party, the ordinary large-room cap still applies.
     expect(screenSimulcastPlan("auto", 100).topHeight).toBe(720);
-    // With one, the cap is aimed at the wrong problem: the audience is on
-    // the playlist, and a 720p source cannot produce a 1080p rendition.
+    // With one, a 10 Mbit/s uplink no longer buys 1080: it is held at 720.
     const plan = screenSimulcastPlan("auto", 100, LIVE);
-    expect(plan.topHeight).toBe(1080);
-    expect(plan.topBitrate).toBe(8_000_000);
+    expect(plan.topHeight).toBe(720);
+    expect(plan.topBitrate).toBe(HLS_HELD_720_BITRATE);
     expect(plan.capped).toBe(false);
-    expect(plan.heldForHls).toBe(false);
+    expect(plan.heldForHls).toBe(true);
+    // And the published top never exceeds 720, so the ladder built from it
+    // has no 1080 layer.
+    expect(hlsSourceTopHeight("auto", LIVE)).toBeLessThanOrEqual(720);
+    expect(plan.lowerLayers.every((layer) => layer.height < 1080)).toBe(true);
+  });
+
+  it("honours the host's 1080 opt-in, still gated by the measured uplink", () => {
+    // The "Qualidade da transmissão" selector passes maxPublishHeight. At 720
+    // (the default) the publish is held at 720 whatever the uplink; at 1080
+    // the measured-uplink gate decides, so a short uplink still lands at 720
+    // (a clean 720 beats a starved 1080) and a fat one reaches 1080.
+    const at = (maxPublishHeight: number, uplinkBps: number) =>
+      screenSimulcastPlan("auto", 100, {
+        ladderTopHeight: 1080,
+        uplinkBps,
+        maxPublishHeight,
+      }).topHeight;
+    expect(at(720, 50_000_000)).toBe(720);
+    expect(at(1080, 2_000_000)).toBe(720);
+    expect(at(1080, 50_000_000)).toBe(1080);
+    // The gate is the same one as before: unmeasured refuses the raise.
+    expect(
+      hlsSourceTopHeight("auto", {
+        ladderTopHeight: 1080,
+        uplinkBps: null,
+        maxPublishHeight: 1080,
+      }),
+    ).toBe(720);
+    // An undefined ceiling falls back to the 720 default: a share whose
+    // session never set one is still safe.
+    expect(
+      hlsSourceTopHeight("auto", { ladderTopHeight: 1080, uplinkBps: 50_000_000 }),
+    ).toBe(720);
   });
 
   it("declares no sub-layers while HLS is transcoding the top", () => {
@@ -518,53 +555,35 @@ describe("the presenter as the ladder's source", () => {
     ).toBe(720);
   });
 
-  it("still raises on a measured uplink that clears the bar", () => {
+  it("does not raise to 1080 even when the uplink clears the old bar", () => {
+    // The 720 → 1080 step is removed for watch parties (2026-09-12). The
+    // headroom/hold constants are untouched — the gate is dormant behind the
+    // cap, not deleted — but every uplink now lands at 720.
     expect(HLS_SOURCE_UPLINK_HEADROOM).toBe(1.25);
     expect(HLS_HELD_720_BITRATE).toBe(4_000_000);
-    expect(
-      screenSimulcastPlan("auto", 100, {
-        ladderTopHeight: 1080,
-        uplinkBps: 2_000_000,
-      }).topHeight,
-    ).toBe(720);
-    expect(
-      screenSimulcastPlan("auto", 100, {
-        ladderTopHeight: 1080,
-        uplinkBps: 4_000_000,
-      }).topHeight,
-    ).toBe(720);
-    expect(
-      screenSimulcastPlan("auto", 100, {
-        ladderTopHeight: 1080,
-        uplinkBps: 5_000_000,
-      }).topHeight,
-    ).toBe(1080);
+    for (const uplinkBps of [2_000_000, 4_000_000, 5_000_000, 50_000_000]) {
+      expect(
+        screenSimulcastPlan("auto", 100, {
+          ladderTopHeight: 1080,
+          uplinkBps,
+        }).topHeight,
+      ).toBe(720);
+    }
   });
 
-  it("stays at 1080 unless the encoder is honestly starved", () => {
-    expect(
-      hlsSourceTopHeight("auto", {
-        ladderTopHeight: 1080,
-        uplinkBps: 9_000_000,
-        currentHeight: 1080,
-        limitedBy: "setting",
-      }),
-    ).toBe(1080);
-    expect(
-      hlsSourceTopHeight("auto", {
-        ladderTopHeight: 1080,
-        uplinkBps: 9_000_000,
-        currentHeight: 1080,
-        limitedBy: "bandwidth",
-      }),
-    ).toBe(720);
-    expect(
-      hlsSourceTopHeight("auto", {
-        ladderTopHeight: 1080,
-        uplinkBps: null,
-        currentHeight: 1080,
-      }),
-    ).toBe(720);
+  it("holds a 1080 source at 720 whatever the limitation reason", () => {
+    // Previously "setting" (sitting on our own ceiling) stayed at 1080 while
+    // "bandwidth"/unmeasured dropped. With the cap, all three hold at 720.
+    for (const limitedBy of ["setting", "bandwidth", undefined] as const) {
+      expect(
+        hlsSourceTopHeight("auto", {
+          ladderTopHeight: 1080,
+          uplinkBps: limitedBy === undefined ? null : 9_000_000,
+          currentHeight: 1080,
+          limitedBy,
+        }),
+      ).toBe(720);
+    }
   });
 
   it("never overrules the presenter's own smaller pick", () => {
@@ -581,9 +600,26 @@ describe("the presenter as the ladder's source", () => {
     expect(hlsSourceTopHeight("auto", { ladderTopHeight: 720, uplinkBps: null })).toBeNull();
   });
 
-  it("a small room is unchanged either way", () => {
+  it("a small room is 1080 without a party, 720 with one", () => {
+    // No egress: an ordinary small share still publishes 1080.
     expect(screenSimulcastPlan("auto", 3).topHeight).toBe(1080);
-    expect(screenSimulcastPlan("auto", 3, LIVE).topHeight).toBe(1080);
+    // With a live watch party the cap holds even a small-room share at 720.
+    expect(screenSimulcastPlan("auto", 3, LIVE).topHeight).toBe(720);
+  });
+
+  it("a non-watch-party share is unchanged by the cap", () => {
+    // No `hls` and `ladderTopHeight: null` both mean "not a watch party":
+    // the cap must not touch either. `hlsSourceTopHeight` returns null and
+    // the plan keeps the full 1080 ladder.
+    expect(hlsSourceTopHeight("auto", null)).toBeNull();
+    expect(
+      hlsSourceTopHeight("auto", {
+        ladderTopHeight: null,
+        uplinkBps: 10_000_000,
+      }),
+    ).toBeNull();
+    expect(screenSimulcastPlan("auto", 3).topHeight).toBe(1080);
+    expect(screenSimulcastPlan("1080p", 3).topHeight).toBe(1080);
   });
 
   it("holds a small-room watch party at 720 when the uplink cannot carry 1080", () => {
@@ -601,8 +637,10 @@ describe("the presenter as the ladder's source", () => {
   });
 
   it("does not declare 1080 layers over a 480p capture", () => {
+    // The watch-party cap already holds the plan at 720; clamping to the
+    // actual 480p capture brings it the rest of the way down.
     const plan = screenSimulcastPlan("auto", 3, LIVE);
-    expect(plan.topHeight).toBe(1080);
+    expect(plan.topHeight).toBe(720);
     const clamped = clampScreenPlanToCapture(plan, 480);
     expect(clamped.topHeight).toBe(480);
     expect(clamped.topBitrate).toBe(1_500_000);
@@ -625,12 +663,14 @@ describe("the presenter as the ladder's source", () => {
   });
 
   it("keeps a near-1080 window as 1080", () => {
-    const plan = screenSimulcastPlan("auto", 3, LIVE);
+    // A genuine 1080 plan (no watch-party cap in play) within the slack.
+    const plan = screenSimulcastPlan("1080p", 3);
+    expect(plan.topHeight).toBe(1080);
     expect(clampScreenPlanToCapture(plan, 1078).topHeight).toBe(1080);
   });
 
   it("leaves the plan alone when the capture has not reported a size", () => {
-    const plan = screenSimulcastPlan("auto", 3, LIVE);
+    const plan = screenSimulcastPlan("1080p", 3);
     expect(clampScreenPlanToCapture(plan, null).topHeight).toBe(1080);
     expect(clampScreenPlanToCapture(plan, 0).topHeight).toBe(1080);
   });

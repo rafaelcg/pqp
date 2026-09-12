@@ -1154,24 +1154,53 @@ describe("the presenter as a live ladder's source", () => {
     expect(constrained).toEqual([720]);
   });
 
-  it("still lowers the ceiling in place while the layers are held", async () => {
-    // Small room: Auto publishes 1080, pin, then weak uplink drops ceiling
-    // to the HLS 720 hold bitrate without a new sid.
+  it("pins a watch-party share at the 720 hold and keeps it there", async () => {
+    // 2026-09-12: the host's "Qualidade da transmissão" ceiling (720 by
+    // default) is set before the publish, so the CAPTURE is constrained to 720
+    // from the first frame and a 9 Mbit/s uplink pins at the 720 hold bitrate
+    // rather than raising to 1080/8 Mbps. A later weak uplink changes nothing
+    // in place and never mints a new sid.
     const sfu = await session();
+    sfu.setScreenHlsPublishHeight(720);
     await sfu.publishScreen(fakeStream("video", "screen"));
+    // Capture is 720 from the first frame, never 1080: set before the publish.
+    expect(constrained).toEqual([720]);
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
-    const writesBefore = senderWrites.length;
+    const pinned = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(pinned).toBeTruthy();
+    expect(pinned!.maxBitrate).toBe(HLS_HELD_720_BITRATE);
     const publishesBefore = published.length;
 
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
 
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
-    const moved = senderWrites
-      .slice(writesBefore)
-      .filter((write) => write.source === Track.Source.ScreenShare);
-    expect(moved.length).toBeGreaterThan(0);
-    expect(moved[moved.length - 1]!.maxBitrate).toBe(HLS_HELD_720_BITRATE);
+    const last = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(last!.maxBitrate).toBe(HLS_HELD_720_BITRATE);
+  });
+
+  it("lets the host opt into 1080 when the uplink clears the bar", async () => {
+    // The selector's 1080 choice sets the ceiling to 1080 before the publish;
+    // the measured-uplink gate then raises a share that started at 720 once a
+    // fat uplink is measured. A small room, so nothing but the ceiling and the
+    // uplink is in play.
+    const sfu = await session();
+    sfu.setScreenHlsPublishHeight(1080);
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    // A fat uplink, sampled twice so the raise dwell is satisfied.
+    await sfu.setHlsSource({
+      ladderTopHeight: 1080,
+      uplinkBps: 50_000_000,
+    });
+    await sfu.setHlsSource({
+      ladderTopHeight: 1080,
+      uplinkBps: 50_000_000,
+    });
+    expect(constrained[constrained.length - 1]).toBe(1080);
   });
 
   /**

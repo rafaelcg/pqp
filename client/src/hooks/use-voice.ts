@@ -88,6 +88,10 @@ import {
   readPresenterHlsFeed,
 } from "@/lib/hls-source-quality";
 import {
+  readWatchPartyStreamQuality,
+  watchPartyPublishCeilingHeight,
+} from "@/lib/watch-party-stream-quality";
+import {
   createSpeakingTracker,
   createStreamAnalyser,
   parseVadThreshold,
@@ -2038,6 +2042,22 @@ export function createVoiceController(transport: RealtimeTransport) {
   /** The running share was started for a watch party (`intent.watchParty`). */
   let screenCaptureIsWatchParty = false;
 
+  /**
+   * Hand the SFU session the host's watch-party publish ceiling before a share
+   * goes up, or null for an ordinary share. Read from localStorage at share
+   * start (`watch-party-stream-quality.ts`): 720 by default, 1080 on opt-in.
+   * The session constrains the capture to it from the first frame so the HLS
+   * egress, which binds the top published layer at session start, never sees a
+   * taller one. Called right before every `sfu.publishScreen`.
+   */
+  function syncWatchPartyPublishCeiling() {
+    sfu?.setScreenHlsPublishHeight(
+      screenCaptureIsWatchParty
+        ? watchPartyPublishCeilingHeight(readWatchPartyStreamQuality())
+        : null,
+    );
+  }
+
   function releaseScreenCapture() {
     if (!screenCaptureStream) {
       return;
@@ -2450,6 +2470,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // capture itself survives the WS drop (it's a browser-level grant, not
       // tied to the connection), only the publish needs redoing.
       if (screenCaptureStream) {
+        syncWatchPartyPublishCeiling();
         await sfu.publishScreen(screenCaptureStream);
         announceSharing();
       }
@@ -3800,6 +3821,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           void (async () => {
             await manager?.setLocalScreenStream(screenMix!.stream);
             if (sfu) {
+              syncWatchPartyPublishCeiling();
               await sfu.publishScreen(screenMix!.stream);
             }
           })();
@@ -4116,6 +4138,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       try {
         await manager?.setLocalScreenStream(stream);
         if (sfu) {
+          syncWatchPartyPublishCeiling();
           await sfu.publishScreen(stream);
         }
         // After the SFU publish, not before. Live HLS looks up the
