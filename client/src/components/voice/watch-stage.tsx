@@ -298,6 +298,7 @@ export function WatchChannelStage({
   docked = false,
   onReturn,
   onDismiss,
+  isWatchParty = false,
 }: {
   channelId: string;
   channelName: string;
@@ -326,6 +327,19 @@ export function WatchChannelStage({
   docked?: boolean;
   onReturn?: () => void;
   onDismiss?: () => void;
+  /**
+   * A watch party channel already has somewhere to say "nothing is on air":
+   * `WatchPartyPanel`'s surface slot, which `watchPartySurface` puts back to
+   * `empty`/`none` the moment the stream is gone, in the same render the
+   * party's own `state` turns `ended`. This mount's "the stream ended" card
+   * was built for a plain voice channel's bare share, which has no other
+   * surface at all. On a watch party channel the two used to show at once:
+   * the party bar's empty state on top, this card filling the rest of the
+   * pane, chat and the composer pushed out of view. So on a watch party
+   * channel this card stays out of the ended case entirely and leaves the
+   * pane to the panel; the live picture above is unaffected.
+   */
+  isWatchParty?: boolean;
 }) {
   const inThisCall =
     voiceState.voiceChannelId === channelId && voiceState.status !== "idle";
@@ -388,8 +402,11 @@ export function WatchChannelStage({
   const ended = endedFor === channelId && !hasStream && !inThisCall;
 
   // The ended card belongs to the channel, not to the corner: a mini player
-  // whose stream stopped goes away rather than sitting there saying so.
-  const visible = !inThisCall && (hasStream || (ended && !docked));
+  // whose stream stopped goes away rather than sitting there saying so. On a
+  // watch party channel it also does not belong here: `WatchPartyPanel`'s own
+  // surface already owns "nothing is on air" the moment the stream drops
+  // (see `isWatchParty` above), so drawing this too doubled up the pane.
+  const visible = !inThisCall && (hasStream || (ended && !docked && !isWatchParty));
   const stageRef = useRef<HTMLDivElement>(null);
   const fullscreen = useWatchFullscreen(stageRef);
   // A stage that goes away must not leave the pane pinned to the window: the
