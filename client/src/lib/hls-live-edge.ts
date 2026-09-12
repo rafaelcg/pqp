@@ -6,39 +6,43 @@
  */
 
 /**
- * The live window the playlist proxy serves: fifteen 2 s segments = 30 s
+ * The live window the playlist proxy serves: fifteen 4 s segments = 60 s
  * (`server/src/voice/hls-live-window.ts`). The egress itself writes only
- * five, and an API that predates the widening still serves those 10 s.
+ * five, and an API that predates the widening still serves those 20 s.
  *
- * THE NUMBERS BELOW ARE THE FIX FOR "CHOPPY, THEN STALLS". The old pair
- * (`liveSyncDurationCount: 4`, `liveMaxLatencyDurationCount: 5`) put the
- * playhead 8 s behind the edge of a 10 s window: one segment of slack.
- * Measured on a clean link on 2026-09-12, the window slid past the segment
- * the player wanted next eight times in two minutes, each a hole in the
- * buffer, a forced seek, or a stall with the buffer at zero. Sitting 6 s
- * back with 16 s of tolerance leaves ten segments of listed media behind
- * the playhead on the widened window, and still two on the old one.
+ * SEGMENTS WENT FROM 2 S TO 4 S ON 2026-09-12
+ * (`LIVE_HLS_SEGMENT_SECONDS`, `server/src/voice/hls-egress.ts`), because at
+ * 2 s the egress's two synchronous playlist uploads per segment fell behind
+ * real time on a cross-region bucket; the bucket moved closer at the same
+ * time. The numbers below were re-tuned for the 4 s premise on a
+ * not-interactive watch party: sit comfortably behind live (~20 s, five
+ * segments) with a deep forward buffer, because resilience against a slow
+ * poll or a throttled tab matters far more here than shaving latency does.
+ * That is more slack than the old 2 s tuning carried (6 s back, 16 s of
+ * tolerance on a 30 s window) and is the point, not a regression: a
+ * YouTube-style cushion, not a race to the edge.
  */
-export const HLS_LIVE_SEGMENT_SECONDS = 2;
-export const HLS_LIVE_WINDOW_SECONDS = 30;
-/** ~6 s behind live: three segments, the hls.js default for a reason. */
-export const HLS_LIVE_SYNC_DURATION_COUNT = 3;
+export const HLS_LIVE_SEGMENT_SECONDS = 4;
+export const HLS_LIVE_WINDOW_SECONDS = 60;
+/** ~20 s behind live: five segments, comfortably inside the 60 s window. */
+export const HLS_LIVE_SYNC_DURATION_COUNT = 5;
 /**
- * Skip forward only once the playhead is 16 s behind. Must be greater
- * than the sync count and fit the window; against an older API's 10 s
- * window hls.js simply re-syncs when the playlist no longer lists the
- * playhead, which is what it did before and no worse.
+ * Skip forward only once the playhead is 48 s behind (twelve segments),
+ * still inside the 60 s window. Must be greater than the sync count and
+ * fit the window; against an older API's 20 s window hls.js simply
+ * re-syncs when the playlist no longer lists the playhead, which is what
+ * it did before and no worse.
  */
-export const HLS_LIVE_MAX_LATENCY_DURATION_COUNT = 8;
-/** Buffer up to 12 s ahead; never more than 20, well inside the window. */
-export const HLS_MAX_BUFFER_LENGTH_SECONDS = 12;
-export const HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 20;
+export const HLS_LIVE_MAX_LATENCY_DURATION_COUNT = 12;
+/** Buffer up to 24 s ahead; never more than 40, well inside the window. */
+export const HLS_MAX_BUFFER_LENGTH_SECONDS = 24;
+export const HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 40;
 /**
  * hls.js defaults `backBufferLength` to `Infinity`, which keeps every
- * appended segment in the SourceBuffer for the whole party. Ten seconds
+ * appended segment in the SourceBuffer for the whole party. Twelve seconds
  * behind the playhead is all a seek back to live ever needs.
  */
-export const HLS_BACK_BUFFER_LENGTH_SECONDS = 10;
+export const HLS_BACK_BUFFER_LENGTH_SECONDS = 12;
 
 export interface HlsLivePlayerConfig {
   liveSyncDurationCount: number;
@@ -170,12 +174,14 @@ export function secondsBehindLive(
 
 /**
  * The "Ao vivo" badge turns into a "Pular pro ao vivo" button once the
- * playhead drifts more than this far behind hls.js's live edge. 10s is
- * roughly the egress delay itself, so this only fires on top of the delay
- * that is already the product (buffering, a paused tab catching up, a
- * throttled background tab), not on the delay everyone always has.
+ * playhead drifts more than this far behind hls.js's live edge. With the
+ * player itself now sitting ~20 s back by design (`HLS_LIVE_SYNC_DURATION_COUNT`),
+ * a threshold at the old 10 s would flag every viewer sitting exactly where
+ * the player put them. 30 s only fires on top of the delay that is already
+ * the product (buffering, a paused tab catching up, a throttled background
+ * tab), not on the cushion everyone always has.
  */
-export const BEHIND_LIVE_THRESHOLD_SECONDS = 10;
+export const BEHIND_LIVE_THRESHOLD_SECONDS = 30;
 
 export function isBehindLive(
   currentTime: number,

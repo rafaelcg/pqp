@@ -19,10 +19,10 @@ import {
 } from "./hls-live-edge";
 
 describe("hlsLivePlayerConfig", () => {
-  it("sits 6 s behind live with 16 s of tolerance, inside the proxy's 30 s window", () => {
+  it("sits 20 s behind live with 48 s of tolerance, inside the proxy's 60 s window", () => {
     const config = hlsLivePlayerConfig();
-    expect(config.liveSyncDurationCount).toBe(3);
-    expect(config.liveMaxLatencyDurationCount).toBe(8);
+    expect(config.liveSyncDurationCount).toBe(5);
+    expect(config.liveMaxLatencyDurationCount).toBe(12);
     expect(
       config.liveSyncDurationCount * HLS_LIVE_SEGMENT_SECONDS,
     ).toBeLessThan(HLS_LIVE_WINDOW_SECONDS);
@@ -33,13 +33,16 @@ describe("hlsLivePlayerConfig", () => {
     expect(HLS_ABR_DEFAULT_ESTIMATE_BPS).toBeGreaterThanOrEqual(2_500_000);
   });
 
-  it("still leaves two segments of slack on an API that serves the egress's own 10 s window", () => {
-    // An older API lists five segments. Sitting three back leaves two
-    // listed behind the playhead; the old config (four back) left one, which
-    // is the number that turned every slow playlist poll into a hole.
+  it("still lands on the oldest listed segment, not past it, on an API that serves only the egress's native window", () => {
+    // The egress itself always keeps five segments (LiveKit's fixed
+    // `defaultLivePlaylistWindow`), which at 4 s is a 20 s window — the
+    // same 20 s the player now sits behind live by design. An older API
+    // that predates the proxy's 60 s widening still lists exactly enough
+    // to cover the sync point; it is tight (no slack for a slow poll) but
+    // not negative, which is what would force an immediate re-sync.
     const config = hlsLivePlayerConfig();
     const egressWindowSegments = 5;
-    expect(egressWindowSegments - config.liveSyncDurationCount).toBeGreaterThanOrEqual(2);
+    expect(egressWindowSegments - config.liveSyncDurationCount).toBe(0);
   });
 
   it("refuses a sync that would join on the oldest segment of the window", () => {
@@ -130,7 +133,7 @@ describe("liveSeekTarget", () => {
         liveSyncPosition: 8,
         seekableEnd: 48,
       }),
-    ).toBe(46);
+    ).toBe(44);
   });
 
   it("refuses a rewind bigger than the live window when seekable is empty", () => {
@@ -151,14 +154,14 @@ describe("liveSeekTarget", () => {
         liveSyncPosition: 46,
         seekableEnd: 48,
       }),
-    ).toBe(46);
+    ).toBe(44);
   });
 });
 
 describe("isBehindLive", () => {
-  it("is false within the egress delay itself", () => {
-    // The stream is always ~10s behind the presenter; that alone must not
-    // trip the "you fell behind" state.
+  it("is false within the player's own ~20 s cushion", () => {
+    // The player deliberately sits ~20 s behind live; that cushion alone
+    // must not trip the "you fell behind" state.
     expect(isBehindLive(0, BEHIND_LIVE_THRESHOLD_SECONDS)).toBe(false);
   });
 
