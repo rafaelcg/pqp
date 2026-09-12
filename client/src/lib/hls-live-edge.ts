@@ -27,6 +27,64 @@ export const HLS_LIVE_WINDOW_SECONDS = 60;
 /** ~20 s behind live: five segments, comfortably inside the 60 s window. */
 export const HLS_LIVE_SYNC_DURATION_COUNT = 5;
 /**
+ * The window the egress itself writes: five segments, 20 s at 4 s. An API
+ * that predates the proxy's 60 s widening still serves exactly this, and a
+ * 5-segment sync point lands on its OLDEST entry with no slack. See
+ * `effectiveLiveSyncDurationCount`.
+ */
+export const HLS_EGRESS_WINDOW_SEGMENTS = 5;
+/** ~20 s: how far behind the presenter the PLAYER sits, by its own design. */
+export const HLS_PLAYER_CUSHION_SECONDS =
+  HLS_LIVE_SYNC_DURATION_COUNT * HLS_LIVE_SEGMENT_SECONDS;
+
+/**
+ * The live-sync count to actually run, given how many segments the loaded
+ * playlist lists right now.
+ *
+ * WHY THIS EXISTS. `HLS_LIVE_SYNC_DURATION_COUNT` is chosen for the proxy's
+ * 60 s (15-segment) window. Against an API that still serves the egress's
+ * raw five-segment window, a 5-count sync point is the OLDEST listed segment
+ * with zero slack, so a single slow playlist poll or a throttled tab ages it
+ * out of the back of the window and hls.js re-syncs or stalls. Cap the count
+ * so at least one listed segment always sits behind the sync point. On the
+ * production window this returns the configured count unchanged; it only
+ * bites a rolled-back or old API, but the guard is cheap. Applied live on
+ * every `LEVEL_UPDATED`, because only then is the real playlist depth known.
+ */
+export function effectiveLiveSyncDurationCount(
+  segmentsListed: number,
+  configured: number = HLS_LIVE_SYNC_DURATION_COUNT,
+): number {
+  if (!Number.isFinite(segmentsListed) || segmentsListed < 2) {
+    // One segment (a just-started egress) cannot offer slack either way;
+    // keep the configured value and let hls.js clamp to what exists.
+    return configured;
+  }
+  return Math.min(configured, Math.floor(segmentsListed) - 1);
+}
+
+/**
+ * What the "behind live" badge should claim: the pipeline delay the server
+ * reports PLUS the player's own ~20 s cushion, which sits on top of it.
+ *
+ * The wire `delaySeconds` (`LIVE_HLS_DELAY_SECONDS`) is a PIPELINE figure
+ * only (see `hls-watch-player.tsx`); the player then positions itself
+ * `HLS_PLAYER_CUSHION_SECONDS` behind the live edge on purpose, so a badge
+ * that showed the pipeline value alone under-reported how far behind the
+ * viewer actually sits. Absent a wire value, the pipeline portion is unknown
+ * and the cushion alone is the honest floor.
+ */
+export function endToEndDelaySeconds(
+  pipelineDelaySeconds?: number | null,
+  cushionSeconds: number = HLS_PLAYER_CUSHION_SECONDS,
+): number {
+  const pipeline =
+    typeof pipelineDelaySeconds === "number" && pipelineDelaySeconds > 0
+      ? pipelineDelaySeconds
+      : 0;
+  return pipeline + cushionSeconds;
+}
+/**
  * Skip forward only once the playhead is 48 s behind (twelve segments),
  * still inside the 60 s window. Must be greater than the sync count and
  * fit the window; against an older API's 20 s window hls.js simply
@@ -145,9 +203,14 @@ export function liveSeekTarget(input: {
 }
 
 /**
- * True when a live-sync / max-latency pair still sits inside the production
- * window. The attach path must not start so far from the edge that the
+ * True when a live-sync / max-latency pair still sits inside the PRODUCTION
+ * (60 s) window. The attach path must not start so far from the edge that the
  * playhead falls out the back on the next playlist update.
+ *
+ * This validates the configured counts against the widened window only; the
+ * shorter egress/legacy window (`HLS_EGRESS_WINDOW_SEGMENTS`) cannot be known
+ * until a playlist loads, and is handled live by
+ * `effectiveLiveSyncDurationCount` on each `LEVEL_UPDATED`.
  */
 export function hlsLiveSyncFitsWindow(config: HlsLivePlayerConfig): boolean {
   const sync = config.liveSyncDurationCount * HLS_LIVE_SEGMENT_SECONDS;

@@ -41,6 +41,7 @@ import {
 } from "@/lib/hls-playback";
 import {
   buildMediaSessionMetadata,
+  effectiveLiveSyncDurationCount,
   hasSafariPresentationMode,
   HLS_ABR_DEFAULT_ESTIMATE_BPS,
   hlsLivePlayerConfig,
@@ -787,6 +788,15 @@ export function HlsWatchPlayer({
         // the playlist answering but never advancing; this is how the
         // watchdog tells that apart from a slow network.
         watch.onMediaSequence(data.details.startSN, Date.now());
+        // Never sync onto the oldest listed segment: against an API that
+        // still serves the egress's raw five-segment window, a 5-count sync
+        // point is the oldest entry with no slack, so a slow poll ages it
+        // out and hls.js re-syncs or stalls. hls.js reads this live on each
+        // playlist update, so capping it here keeps one segment of slack on
+        // a short window; on the production 15-segment window it is a no-op.
+        player.config.liveSyncDurationCount = effectiveLiveSyncDurationCount(
+          data.details.fragments.length,
+        );
       });
       player.on(Hls.Events.FRAG_LOADED, () => {
         hlsFragmentLoaded = true;
