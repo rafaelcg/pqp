@@ -185,6 +185,7 @@ struct WatchStageView: View {
             isPlaying = status == .playing || player.rate > 0
             chrome.tick(playing: isPlaying, at: now)
 
+            edge.learnSegmentSeconds(recommendedOffset: item.recommendedTimeOffsetFromLive.seconds)
             let seeking = now < seekingUntil
             if !seeking {
                 let remedy = edge.tick(
@@ -231,6 +232,14 @@ struct WatchStageView: View {
         let end = (last.start + last.duration).seconds
         guard start.isFinite, end.isFinite, end > start else { return nil }
         return WatchLiveWindow(start: start, end: end)
+    }
+
+    /// The session's real segment length, from the playlist Apple has
+    /// already parsed for this item. `nil` until the item has one, which
+    /// `WatchLiveEdge.segmentSeconds(recommendedOffset:)` reads the same way
+    /// as "not available yet": the safe, previously-hardcoded fallback.
+    static func segmentSeconds(of item: AVPlayerItem) -> Double {
+        WatchLiveEdge.segmentSeconds(recommendedOffset: item.recommendedTimeOffsetFromLive.seconds)
     }
 
     /**
@@ -660,7 +669,7 @@ struct WatchStageView: View {
         if userWantsPlayback {
             if trigger == .pin || trigger == .fullscreen,
                let window = Self.liveWindow(of: item) {
-                seek(to: WatchLiveEdge.target(in: window))
+                seek(to: WatchLiveEdge.target(in: window, segmentSeconds: Self.segmentSeconds(of: item)))
                 return
             }
             seekingUntil = Date().addingTimeInterval(2)
@@ -704,7 +713,7 @@ struct WatchStageView: View {
             if position.isFinite,
                position < window.start
                 || WatchLiveEdge.isBehindLive(position: position, window: window) {
-                seek(to: WatchLiveEdge.jumpTarget(in: window))
+                seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: Self.segmentSeconds(of: item)))
                 return
             }
         }
@@ -727,7 +736,7 @@ struct WatchStageView: View {
         else { return }
         userWantsPlayback = true
         isPlaying = true
-        seek(to: WatchLiveEdge.jumpTarget(in: window))
+        seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: Self.segmentSeconds(of: item)))
         chrome.reveal(at: Date())
     }
 
@@ -762,7 +771,7 @@ struct WatchStageView: View {
             player?.play()
             return
         }
-        seek(to: WatchLiveEdge.jumpTarget(in: window))
+        seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: Self.segmentSeconds(of: stalled)))
     }
 
     /// Resume after the session came back, and only if we were playing when it

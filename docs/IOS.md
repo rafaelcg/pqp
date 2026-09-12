@@ -476,6 +476,19 @@ strangers and the player refetches its own buffer. That was the whole of the
 `server/src/voice/hls-playlist-proxy.ts`, not anything on the phone. hls.js
 and Media3 key on the media sequence number, which is why only iOS showed it.
 
+If it hitches on a rhythm that matches `LIVE_HLS_SEGMENT_SECONDS` instead
+(every ~4 s when production runs 4 s segments), that is the same shape of
+bug the Android sibling player hit the same day (see `docs/ANDROID.md`,
+"A hardcoded live offset held the playhead on the tip"): `WatchQuality.swift`
+used to write `configuredTimeOffsetFromLive` as a literal 6 s, three target
+durations at the 2 s segments production ran when it was written, which
+became 1.5 target durations — hugging the tip — the day the operator moved
+to 4 s. Fixed by not writing a constant there at all: it is left unset, so
+`AVPlayerItem` uses its own `recommendedTimeOffsetFromLive`, Apple's reading
+of the actual playlist. `WatchLiveEdge.swift`'s own rejoin/jump math
+(`liveTargetOffset`, `minRunway`, `jumpOffset`, `tipBehind`) takes the same
+segment length, learned the same way, rather than a fixed number of seconds.
+
 ## Screen sharing
 
 Receiving works and is verified. Receiving is the mesh's ordinary video path;

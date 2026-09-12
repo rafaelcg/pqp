@@ -123,9 +123,57 @@ final class WatchLivePlayerTests: XCTestCase {
     /// ship.
     func testTheAnswerToDriftIsNotABiggerBuffer() {
         XCTAssertLessThanOrEqual(
-            WatchLiveEdge.liveTargetOffset, 8,
+            WatchLiveEdge.liveTargetOffset(), 8,
             "the recovery point must stay near the live edge, not further from it"
         )
+    }
+
+    /// The same ratio, at production's actual segment length. #480 hardcoded
+    /// this at 2 s and silently halved when the operator moved to 4 s.
+    func testTheOffsetsScaleWithTheRealSegmentLength() {
+        XCTAssertEqual(WatchLiveEdge.liveTargetOffset(segmentSeconds: 4), 12)
+        XCTAssertEqual(WatchLiveEdge.minRunway(segmentSeconds: 4), 8)
+        XCTAssertEqual(WatchLiveEdge.jumpOffset(segmentSeconds: 4), 4)
+        XCTAssertEqual(WatchLiveEdge.tipBehind(segmentSeconds: 4), 8)
+        // The fixture `window` is ten seconds, sized for 2 s segments; a
+        // 4 s target offset (12 s) does not fit it at all, so the floor
+        // (`minRunway`, 8 s at 4 s segments) wins instead of the offset,
+        // same clamp `testTheTargetLeavesRunwayOnAShortWindow` exercises
+        // at the 2 s ratios.
+        XCTAssertEqual(WatchLiveEdge.target(in: window, segmentSeconds: 4), 108)
+    }
+
+    /// `recommendedTimeOffsetFromLive` is three target durations (RFC 8216
+    /// 6.3.3), so dividing by three recovers the segment length. Anything
+    /// that is not a usable number — the manifest has not loaded yet, most
+    /// commonly — is the 2 s fallback every other test in this file relies on
+    /// implicitly.
+    func testSegmentSecondsIsRecoveredFromTheRecommendedOffset() {
+        XCTAssertEqual(WatchLiveEdge.segmentSeconds(recommendedOffset: 12), 4)
+        XCTAssertEqual(WatchLiveEdge.segmentSeconds(recommendedOffset: 6), 2)
+        XCTAssertEqual(
+            WatchLiveEdge.segmentSeconds(recommendedOffset: nil),
+            WatchLiveEdge.fallbackSegmentSeconds
+        )
+        XCTAssertEqual(
+            WatchLiveEdge.segmentSeconds(recommendedOffset: .nan),
+            WatchLiveEdge.fallbackSegmentSeconds
+        )
+        XCTAssertEqual(
+            WatchLiveEdge.segmentSeconds(recommendedOffset: 0),
+            WatchLiveEdge.fallbackSegmentSeconds
+        )
+    }
+
+    /// `learnSegmentSeconds` is what a tick loop calls every second; it must
+    /// not need a valid reading every time to keep the one it already has.
+    func testLearningTheSegmentLengthIsIdempotentAndSticky() {
+        var edge = WatchLiveEdge()
+        XCTAssertEqual(edge.segmentSeconds, WatchLiveEdge.fallbackSegmentSeconds)
+        edge.learnSegmentSeconds(recommendedOffset: 12)
+        XCTAssertEqual(edge.segmentSeconds, 4)
+        edge.learnSegmentSeconds(recommendedOffset: nil)
+        XCTAssertEqual(edge.segmentSeconds, 4, "an unavailable reading must not reset a learned one")
     }
 
     func testHowFarBehindIsMeasuredAndNeverNegative() {
@@ -272,7 +320,7 @@ final class WatchLivePlayerTests: XCTestCase {
             ),
             .rejoin(104)
         )
-        XCTAssertGreaterThanOrEqual(104 - window.start, WatchLiveEdge.minRunway)
+        XCTAssertGreaterThanOrEqual(104 - window.start, WatchLiveEdge.minRunway())
     }
 
     /// And the allowance itself has to stay in the range the rule was designed
@@ -734,7 +782,7 @@ final class WatchLivePlayerTests: XCTestCase {
 
     func testTheTipAllowanceIsInsideOneLateSegmentNotTheWholeWindow() {
         XCTAssertLessThan(WatchLiveEdge.tipStarveAfter, 4)
-        XCTAssertLessThan(WatchLiveEdge.tipBehind, WatchLiveEdge.liveTargetOffset)
+        XCTAssertLessThan(WatchLiveEdge.tipBehind(), WatchLiveEdge.liveTargetOffset())
         XCTAssertLessThan(WatchLiveEdge.tipStarveAfter, WatchLiveEdge.starvedAfter)
     }
 
@@ -779,7 +827,7 @@ final class WatchLivePlayerTests: XCTestCase {
         let wide = WatchLiveWindow(start: 100, end: 130)
         XCTAssertEqual(WatchLiveEdge.jumpTarget(in: wide), 128)
         XCTAssertEqual(
-            WatchLiveEdge.jumpOffset, 2,
+            WatchLiveEdge.jumpOffset(), 2,
             "web `jumpToLiveTime` subtracts one HLS_LIVE_SEGMENT_SECONDS"
         )
     }
@@ -788,26 +836,49 @@ final class WatchLivePlayerTests: XCTestCase {
         XCTAssertEqual(WatchLiveEdge.jumpTarget(in: window), 108)
         XCTAssertGreaterThanOrEqual(
             WatchLiveEdge.jumpTarget(in: window) - window.start,
-            WatchLiveEdge.minRunway
+            WatchLiveEdge.minRunway()
         )
     }
 
-    /// Asking AVPlayer for a 30 s buffer on a 10 s playlist is how it
-    /// waits forever after the first few segments. Cap the forward buffer
-    /// to the web's `HLS_MAX_BUFFER_LENGTH_SECONDS`.
-    func testTheForwardBufferFitsInsideTheLiveWindow() {
-        XCTAssertEqual(WatchPlayerItemTuning.forwardBuffer, 6)
-        XCTAssertLessThanOrEqual(WatchPlayerItemTuning.forwardBuffer, 10)
+    /// Same ratios, production's actual 4 s segments: jump lands one
+    /// segment (4 s) behind the edge.
+    func testJumpToLiveScalesWithTheRealSegmentLength() {
+        let wide = WatchLiveWindow(start: 100, end: 130)
+        XCTAssertEqual(WatchLiveEdge.jumpTarget(in: wide, segmentSeconds: 4), 126)
+    }
+
+    /// Asking AVPlayer for a buffer wider than the live window is how it
+    /// waits forever after the first few segments. `forwardBuffer` is a
+    /// floor sized for what production runs today (`docs/WATCH_PARTY.md`),
+    /// not the segment length this file assumed when it was written.
+    func testTheForwardBufferIsThreeTargetDurationsAtTodaysSegmentLength() {
+        XCTAssertEqual(WatchPlayerItemTuning.forwardBuffer, 12)
         XCTAssertEqual(
-            WatchPlayerItemTuning.timeOffsetFromLive,
-            WatchLiveEdge.liveTargetOffset,
-            "initial join matches the 6 s live-sync, not the live tip"
+            WatchPlayerItemTuning.forwardBuffer,
+            WatchLiveEdge.liveTargetOffset(segmentSeconds: 4),
+            "three target durations at 4 s segments, matching WatchLiveEdge"
         )
-        XCTAssertEqual(WatchPlayerItemTuning.timeOffsetFromLive, 6)
-        XCTAssertLessThan(
-            WatchPlayerItemTuning.timeOffsetFromLive,
-            10,
-            "an offset as wide as the window sits on the last listed segment"
+    }
+
+    /// `WatchQuality.swift` must not reintroduce a fixed `configuredTimeOffsetFromLive`:
+    /// that constant is exactly what desynced from production when the
+    /// operator's segment length moved. Leaving it unset hands the decision
+    /// to `AVPlayerItem.recommendedTimeOffsetFromLive`, which reads the real
+    /// playlist.
+    func testTheItemDoesNotHardcodeATimeOffsetFromLive() throws {
+        let quality = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "Sources/Voice/WatchQuality.swift"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(
+            quality.contains("configuredTimeOffsetFromLive ="),
+            "the live offset must come from the playlist, not a constant"
+        )
+        XCTAssertTrue(
+            quality.contains("automaticallyPreservesTimeOffsetFromLive = true"),
+            "without this a stall still resets the offset AVPlayer just picked"
         )
     }
 
