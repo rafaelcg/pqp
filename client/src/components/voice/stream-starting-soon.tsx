@@ -67,6 +67,12 @@ export function StreamStartingSoon({
           playsInline
           poster={POSTER}
           aria-hidden="true"
+          // Marks this as decorative chrome rather than a media element a
+          // test or a script should count: a real stream's own <video> can
+          // sit right behind this one while it is still buffering, and
+          // "how many videos are on the stage" must answer about the film,
+          // not the wallpaper behind it.
+          data-decorative="true"
         >
           <source src={VIDEO_WEBM} type="video/webm" />
           <source src={VIDEO_MP4} type="video/mp4" />

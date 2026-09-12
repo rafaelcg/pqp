@@ -661,7 +661,12 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     const stage = viewer.getByTestId("watch-channel-stage");
     await expect(stage).toBeVisible({ timeout: 20_000 });
     await expect(viewer.getByTestId("watch-stage-live")).toBeVisible();
-    await expect(stage.locator("video")).toHaveCount(1);
+    // `:not([data-decorative])` excludes the StreamStartingSoon bubble loop,
+    // which can legitimately sit behind the real player's <video> while it
+    // is still buffering: this counts the stream, not the wallpaper.
+    await expect(stage.locator("video:not([data-decorative])")).toHaveCount(
+      1,
+    );
     // Watching still opened no microphone.
     expect(await gumCalls(viewer)).toBe(0);
 
