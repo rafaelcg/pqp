@@ -194,9 +194,10 @@ one chrome overlay and one fullscreen element.
   stage. A corner picker rather than dragging: dragging on a surface that also
   toggles the chrome on tap is a gesture conflict, and four corners is the
   whole of what the ask needs.
-- **Fullscreen hides it.** That is the product instruction as given. It is one
-  boolean (`cameraPipVisible`) and trivially reversible if the owner changes
-  their mind after seeing it.
+- **Fullscreen unmounts it.** That is the product instruction as given, and
+  unmounted rather than hidden so a camera nobody can see never costs a decode
+  for a whole film. It is one boolean (`cameraPipMounted`) and trivially
+  reversible if the owner changes their mind after seeing it.
 - A camera that never produces a frame draws nothing at all. There is no
   spinner, no placeholder and no error: a broken webcam must cost the film
   nothing, not even a rectangle.
