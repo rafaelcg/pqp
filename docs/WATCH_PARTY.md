@@ -2449,11 +2449,55 @@ later, per app:
   `rate` and `timeControlStatus` only, the cap is applied *before* the first
   `play()`, Auto with no surface yet caps to the shortest published rung,
   and the item is tuned like the web player (`preferredForwardBufferDuration`
-  8 s, `configuredTimeOffsetFromLive` 8 s, matching
+  6 s, `configuredTimeOffsetFromLive` 6 s since #480, matching
   `client/src/lib/hls-live-edge.ts`). Jump to live and
   `AVPlayerItemPlaybackStalled` land one 2 s segment behind the edge, same
   as `jumpToLiveTime`. Token TTL is still one hour; "X seconds" was never
   expiry.
+
+  **Build 28 still hitched every ten to fifteen seconds, and none of it was
+  the phone.** Rafael reported it from a live party on 2026-09-12 while a
+  headless hls.js viewer on the same session showed zero stalls and a playlist
+  edge two seconds old. Four things were suspected on the iOS side and all
+  four are ruled out in the code: `WatchStreamSwap.next` keys on `startedAt`,
+  not on the URL, so the restamped `hlsUrl` does not re-attach anything
+  (`ios/pqp/Sources/Voice/LiveStream.swift:131`); `configuredTimeOffsetFromLive`
+  is 6 s, three target durations, on a 30 s window, so the playhead is nowhere
+  near the tip (`WatchQuality.swift:250`); the only periodic work in the app
+  is a one second watchdog that seeks only on an overrun, 45 s of drift or a
+  starve clock (`WatchStageView.swift:164`); and the rendition cap is written
+  before the first `play()` and never again unless a person asks
+  (`WatchQuality.swift:225`).
+
+  It was the PLAYLIST PROXY, and the bug is one line of it.
+  `renderSignedPlaylist` re-signs every segment line with the clock of that
+  render, and it renders once a second, so **the same segment came back under
+  a different presigned URL on every refresh**: `..._00230.ts` was listed
+  three different ways in renders 1.5 s apart, different `X-Amz-Date`,
+  different signature, same object. RFC 8216 6.2.1 allows a live playlist to
+  append and remove entries and nothing else, because the URI is the
+  segment's identity. hls.js keys fragments by media sequence number and
+  Media3 keys chunks the same way, so web and Android never noticed; `AVPlayer`
+  keys on the URI, as the specification says to. Every reload therefore looked
+  to it like fifteen segments it had never seen and none of the ones it had
+  already fetched, so it refetched its own buffer continuously and the picture
+  hitched whenever a refetch lost the race to the playhead.
+
+  The fix is server side and one argument: `segmentSigningTime` quantises the
+  signing instant to a bucket (a third of `LIVE_HLS_URL_TTL_SECONDS`, capped
+  at five minutes), so every render inside a bucket signs a given key to the
+  same bytes, on this process and on any other. A segment keeps one URL for
+  its whole life in the window; at a bucket boundary every URL changes once,
+  which costs a cache miss and not a discontinuity, and a URL handed out at
+  the very end of its bucket still has two thirds of its life left. Pinned by
+  `server/src/voice/hls-playlist-proxy.test.ts` §"segment URLs are stable
+  across playlist refreshes", which asserts on the URL that lands in the body
+  rather than on the helper.
+
+  The lesson is pitfall 16's, again: the failure existed only in the client
+  our tests do not imitate, and the one test that could have caught it
+  (`BROKEN KEY`, two renders agreeing) passed only because both renders
+  happened inside the same second.
 
   Inline the picture is an `AVPlayerLayer` with our cinema chrome
   (`WatchOverlay`). Fullscreen is a real `AVPlayerViewController` presented

@@ -57,6 +57,8 @@ const {
   resolveHlsPlaylistViewer,
   HLS_PLAYLIST_CACHE_TTL_MS,
   resetHlsPlaylistCacheForTests,
+  segmentSigningTime,
+  SEGMENT_URL_BUCKET_MAX_MS,
 } = await import("./hls-playlist-proxy.js");
 const { mintHlsViewerToken } = await import("./hls-viewer-token.js");
 const { playlistLooksLive } = await import("@pqp/shared");
@@ -362,6 +364,139 @@ describe("playlist render cache", () => {
     // Two independent renders of the same session agree, which is the
     // premise that makes sharing one body between viewers correct.
     expect(a).toBe(b);
+  });
+});
+
+/**
+ * A SEGMENT KEEPS ITS URL FOR AS LONG AS IT IS LISTED.
+ *
+ * The native stall of 2026-09-12. RFC 8216 6.2.1 lets a live playlist append
+ * and remove entries and do nothing else to them, because the URI is the
+ * segment's identity. This proxy re-renders once a second and signed every
+ * line with the clock of that render, so one segment arrived under a new
+ * `X-Amz-Date` and a new signature every time: hls.js keys fragments by media
+ * sequence and never saw it, `AVPlayer` keys on the URI and refetched its own
+ * buffer every couple of seconds, which is the ten-to-fifteen second hitch.
+ *
+ * These tests read the URL that lands in the body, not the helper, because
+ * the helper being right is not the property that broke.
+ */
+describe("segment URLs are stable across playlist refreshes", () => {
+  /** `20260912T143650Z` to epoch milliseconds. */
+  function amzDateMs(url: URL): number {
+    const raw = url.searchParams.get("X-Amz-Date")!;
+    const iso =
+      `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}` +
+      `T${raw.slice(9, 11)}:${raw.slice(11, 13)}:${raw.slice(13, 15)}Z`;
+    return Date.parse(iso);
+  }
+
+  function segmentUrls(body: string): string[] {
+    return body.split("\n").filter((line) => line.startsWith("https://"));
+  }
+
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    disableHls();
+    enableHls();
+    resetHlsPlaylistCacheForTests();
+    pool.rowCount = 1;
+    pool.query.mockClear();
+    fetchMock = vi.fn(async () => new Response(PLAYLIST_BODY, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    disableHls();
+    resetHlsPlaylistCacheForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("two renders 1.5 s apart list the same segment under the same URL", async () => {
+    // Well inside one bucket, and past `HLS_PLAYLIST_CACHE_TTL_MS` so this is
+    // genuinely two renders rather than one body served twice: the upstream
+    // fetch count is what proves the render ran again.
+    const now = 1_800_000_000_000;
+    const first = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    const second = await buildSignedPlaylist(
+      CHANNEL,
+      STARTED_AT,
+      undefined,
+      now + 1_500,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(segmentUrls(second)).toEqual(segmentUrls(first));
+    expect(segmentUrls(first)).toHaveLength(2);
+    // And the stamp is the render's own clock, bucketed. Asserted because
+    // the render used to sign with `new Date()` regardless of what it was
+    // told the time was, so the two bodies above agreeing would have proved
+    // nothing but that the test ran fast.
+    expect(amzDateMs(new URL(segmentUrls(first)[0]!))).toBe(
+      segmentSigningTime(now, 900).getTime(),
+    );
+  });
+
+  it("a whole window's worth of refreshes never restates a segment", async () => {
+    const now = 1_800_000_000_000;
+    const seen = new Set<string>();
+    // 15 renders, one per second: a full 30 s window on the production cadence.
+    for (let i = 0; i < 15; i++) {
+      const body = await buildSignedPlaylist(
+        CHANNEL,
+        STARTED_AT,
+        undefined,
+        now + i * 1_100,
+      );
+      for (const url of segmentUrls(body)) {
+        seen.add(url);
+      }
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(15);
+    // Two segments in the fixture, so two URLs in total. Before the fix this
+    // was one per segment per render: thirty.
+    expect(seen.size).toBe(2);
+  });
+
+  it("a render past the bucket boundary re-signs, and the new URL is live", async () => {
+    const bucket = SEGMENT_URL_BUCKET_MAX_MS;
+    const now = Math.floor(1_800_000_000_000 / bucket) * bucket + 1_000;
+    const before = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    const after = await buildSignedPlaylist(
+      CHANNEL,
+      STARTED_AT,
+      undefined,
+      now + bucket,
+    );
+    expect(segmentUrls(after)).not.toEqual(segmentUrls(before));
+
+    const url = new URL(segmentUrls(after)[0]!);
+    const signedAt = amzDateMs(url);
+    const expires = Number(url.searchParams.get("X-Amz-Expires")) * 1_000;
+    // Signed in the past (the bucket start) but nowhere near expiry: a URL
+    // handed out at the very end of its bucket still has two thirds of its
+    // life left, which is the margin the bucket size is chosen for.
+    const handedOutAt = signedAt + bucket;
+    expect(signedAt).toBeLessThanOrEqual(now + bucket);
+    expect(handedOutAt).toBeLessThan(signedAt + expires);
+    expect(signedAt + expires - handedOutAt).toBeGreaterThanOrEqual(600_000);
+  });
+
+  it("the bucket is a third of the TTL, so a short TTL cannot outlive its bucket", () => {
+    // Default: the cap wins, and it is exactly a third of 900 s.
+    expect(segmentSigningTime(1_800_000_123_456, 900).getTime()).toBe(
+      Math.floor(1_800_000_123_456 / SEGMENT_URL_BUCKET_MAX_MS) *
+        SEGMENT_URL_BUCKET_MAX_MS,
+    );
+    // A shorter TTL shortens the bucket rather than minting dead URLs.
+    expect(segmentSigningTime(1_800_000_123_456, 120).getTime()).toBe(
+      Math.floor(1_800_000_123_456 / 40_000) * 40_000,
+    );
+    // Never below a second, so an absurd TTL degrades to the old behaviour
+    // rather than to a divide by zero.
+    expect(segmentSigningTime(1_800_000_123_456, 1).getTime()).toBe(
+      1_800_000_123_000,
+    );
   });
 });
 

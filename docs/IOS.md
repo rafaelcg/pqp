@@ -466,6 +466,16 @@ ABR climbed and the short live window froze. The cap is applied before the
 first `play()` now; see `docs/WATCH_PARTY.md` Native apps and
 `WatchQualityRetune.hasStartedPlayback`.
 
+If instead it plays and hitches on a **rhythm** (every ten to fifteen
+seconds, indefinitely) while web viewers of the same party are clean, look
+at the playlist before the app. `AVPlayer` treats a segment's URI as the
+segment's identity, so a proxy that re-signs the same object into a new
+presigned URL on every refresh makes every reload look like a playlist of
+strangers and the player refetches its own buffer. That was the whole of the
+2026-09-12 report and the fix is `segmentSigningTime` in
+`server/src/voice/hls-playlist-proxy.ts`, not anything on the phone. hls.js
+and Media3 key on the media sequence number, which is why only iOS showed it.
+
 ## Screen sharing
 
 Receiving works and is verified. Receiving is the mesh's ordinary video path;
