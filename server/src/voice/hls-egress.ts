@@ -314,6 +314,33 @@ export function hlsUrlTtlSeconds(): number {
   return positiveIntFromEnv("LIVE_HLS_URL_TTL_SECONDS", DEFAULT_URL_TTL_SECONDS);
 }
 
+const DEFAULT_SEGMENT_SECONDS = 2;
+const MAX_SEGMENT_SECONDS = 10;
+
+/**
+ * Segment length the egress is asked for, `LIVE_HLS_SEGMENT_SECONDS`.
+ *
+ * WHY THIS IS A KNOB. The egress uploads segments in parallel, but after
+ * each one its playlist goroutine uploads the index playlist and the live
+ * playlist one after the other, synchronously, before the segment is listed
+ * (`pkg/pipeline/sink/segments.go` in egress 1.14.1, every segment in the
+ * first hour). Each of those PUTs is a cross-region write to the bucket:
+ * measured 2026-09-12 from the São Paulo box to the WEUR bucket, a 1 KB PUT
+ * took 0.6 to 1.0 s (0.25 s from London). At 2 s segments that is two
+ * seconds of serialised playlist uploads per two seconds of media, and on a
+ * slow afternoon the live party's playlist advanced 19 to 25 segments a
+ * minute instead of 30: every viewer, web and native, caught the edge and
+ * starved every 10 to 15 s while the encoder sat at a third of a core.
+ * Four-second segments halve the playlist PUTs per second of media for the
+ * same bytes; viewers sit about twice as far behind (the client counts
+ * segments, not seconds). Takes effect on the NEXT session: a running egress
+ * keeps the length it started with.
+ */
+export function hlsSegmentSeconds(): number {
+  const raw = positiveIntFromEnv("LIVE_HLS_SEGMENT_SECONDS", DEFAULT_SEGMENT_SECONDS);
+  return Math.min(raw, MAX_SEGMENT_SECONDS);
+}
+
 /**
  * How many parties this process will transcode at once. Three.
  *
@@ -1897,7 +1924,7 @@ function segmentOutput(
     filenamePrefix: prefix,
     playlistName: `${startedAt}-${rung}-index.m3u8`,
     livePlaylistName: `${startedAt}-${rung}.m3u8`,
-    segmentDuration: 2,
+    segmentDuration: hlsSegmentSeconds(),
     output: {
       case: "s3",
       value: new S3Upload({

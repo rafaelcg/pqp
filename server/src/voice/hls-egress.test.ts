@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EgressStatus, TrackSource } from "livekit-server-sdk";
 import {
+  hlsSegmentSeconds,
   type LiveHlsEgressApi,
   HLS_MAX_RESTARTS,
   ORPHAN_STOP_BACKOFF_FIRST_MS,
@@ -1908,4 +1909,28 @@ describe("whether the transcode carries any audio", () => {
   });
 });
 
+});
+
+describe("LIVE_HLS_SEGMENT_SECONDS", () => {
+  afterEach(() => {
+    delete process.env.LIVE_HLS_SEGMENT_SECONDS;
+  });
+
+  it("defaults to 2 s segments", () => {
+    expect(hlsSegmentSeconds()).toBe(2);
+  });
+
+  it("reads the operator's length; 4 halves the playlist PUTs per second of media", () => {
+    process.env.LIVE_HLS_SEGMENT_SECONDS = "4";
+    expect(hlsSegmentSeconds()).toBe(4);
+  });
+
+  it("refuses nonsense and caps the absurd", () => {
+    process.env.LIVE_HLS_SEGMENT_SECONDS = "0";
+    expect(hlsSegmentSeconds()).toBe(2);
+    process.env.LIVE_HLS_SEGMENT_SECONDS = "banana";
+    expect(hlsSegmentSeconds()).toBe(2);
+    process.env.LIVE_HLS_SEGMENT_SECONDS = "60";
+    expect(hlsSegmentSeconds()).toBe(10);
+  });
 });
