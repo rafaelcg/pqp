@@ -5634,7 +5634,7 @@ function MainAppContent({
    */
   const sidebarFooter = (compact = false) => (
     <>
-      {!compact && <MusicMiniPlayer voiceState={voiceState} />}
+      <MusicMiniPlayer voiceState={voiceState} compact={compact} />
       {voiceState.status !== "idle" && (
         <VoiceStatusBar
           channelName={

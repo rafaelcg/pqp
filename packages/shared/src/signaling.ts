@@ -562,6 +562,8 @@ export const voiceSpeakChangedMessageSchema = z.object({
   voiceChannelId: z.string(),
   canSpeak: z.boolean(),
   canStream: z.boolean().optional(),
+  /** `Permission.MANAGE_MUSIC`, re-resolved with the rest. Absent: unchanged. */
+  canManageMusic: z.boolean().optional(),
 });
 
 export type VoiceSpeakChangedMessage = z.infer<

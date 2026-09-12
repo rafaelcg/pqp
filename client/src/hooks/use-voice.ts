@@ -3217,6 +3217,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           message.canStream ?? message.canSpeak,
           "change",
         );
+        if (message.canManageMusic !== undefined) {
+          state.canManageMusic = message.canManageMusic;
+        }
         emit();
         break;
       case "peer-joined": {

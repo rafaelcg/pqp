@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ApiError, resolveMusic } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
-import { addTrack, addTracks } from "@/lib/music-store";
+import { addTrack, addTracks, musicSessionChannelId } from "@/lib/music-store";
 
 /**
  * The add box: a YouTube link, a Spotify track link, or a search. Resolved
@@ -41,8 +41,15 @@ export function MusicAddForm({
     }
     setBusy(true);
     setNotice(null);
+    // The room this was typed for. A resolve can take twenty seconds, and
+    // a person can leave for another call meanwhile; the answer must not
+    // land in that one.
+    const room = musicSessionChannelId();
     try {
       const { track, tracks } = await resolveMusic(text);
+      if (room === null || musicSessionChannelId() !== room) {
+        return;
+      }
       if (tracks && tracks.length > 1) {
         const outcome = addTracks(tracks);
         if (outcome.added === 0) {

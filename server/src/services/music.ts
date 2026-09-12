@@ -38,7 +38,8 @@ async function fetchText(url: string, headers: Record<string, string> = {}): Pro
       },
     });
     if (!res.ok) {
-      throw new MusicResolveError("upstream", `${url} answered ${res.status}`);
+      // Never the query string: the Data API key travels in it.
+      throw new MusicResolveError("upstream", `${url.split("?")[0]} answered ${res.status}`);
     }
     return await res.text();
   } catch (error) {
@@ -394,6 +395,9 @@ export function spotifyTrackListFromHtml(
     }
     if (title) {
       tracks.push({ title, artist });
+      if (tracks.length >= SPOTIFY_LIST_MAX) {
+        break;
+      }
     }
   }
   // The page's own header is the first title/subtitle pair before the list.

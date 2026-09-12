@@ -5780,7 +5780,9 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
       }
       const changed = userPeers.filter(
         (peer) =>
-          peer.canSpeak !== next.canSpeak || peer.canStream !== next.canStream,
+          peer.canSpeak !== next.canSpeak ||
+          peer.canStream !== next.canStream ||
+          peer.canManageMusic !== next.canManageMusic,
       );
       if (changed.length === 0) {
         continue;
@@ -5789,6 +5791,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
       for (const peer of changed) {
         peer.canSpeak = next.canSpeak;
         peer.canStream = next.canStream;
+        peer.canManageMusic = next.canManageMusic;
         if (!next.canSpeak) {
           peer.muted = true;
         }
@@ -5802,6 +5805,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
           voiceChannelId,
           canSpeak: next.canSpeak,
           canStream: next.canStream,
+          canManageMusic: next.canManageMusic,
         });
         writePeerRow(peer);
       }

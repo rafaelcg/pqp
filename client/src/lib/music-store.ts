@@ -73,15 +73,25 @@ export function toggleMusicOpen(): void {
   setMusicOpen(!snapshot.open);
 }
 
+/**
+ * A new seat, or none. Either way the held state is dropped: the server
+ * sends the room's state right after `welcome`, and an optimistic copy
+ * from before a reconnect is a `rev` ahead of the truth and would otherwise
+ * call it stale. Only a reconnect INTO THE SAME ROOM keeps the personal
+ * toggles (listening, open).
+ */
 export function setMusicSession(next: MusicSession | null): void {
+  const sameRoom = next !== null && session?.channelId === next.channelId;
   session = next;
-  if (next === null) {
+  if (!sameRoom) {
     snapshot = { ...snapshot, listening: true, open: false };
-    set(null, null);
-  } else if (snapshot.channelId !== next.channelId) {
-    snapshot = { ...snapshot, listening: true, open: false };
-    set(null, next.channelId);
   }
+  set(null, next?.channelId ?? null);
+}
+
+/** The room this machine may write to right now, or null. */
+export function musicSessionChannelId(): string | null {
+  return session?.channelId ?? null;
 }
 
 export function setListening(listening: boolean): void {
@@ -98,7 +108,9 @@ export function receiveMusic(
   state: MusicState | null,
   forced = false,
 ): void {
-  if (session && session.channelId !== channelId) {
+  // No seat, or a seat elsewhere: not ours. A frame that lands after
+  // leaving must not repopulate a player that has nowhere to play.
+  if (!session || session.channelId !== channelId) {
     return;
   }
   // A refusal hands back what the server holds; our optimistic copy is

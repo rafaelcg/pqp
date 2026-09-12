@@ -172,8 +172,35 @@ function ids(tracks: MusicTrack[]): string[] {
   return tracks.map((track) => track.id);
 }
 
-function sameIds(a: MusicTrack[], b: MusicTrack[]): boolean {
-  return a.length === b.length && a.every((track, index) => track.id === b[index]?.id);
+/**
+ * The same track, field for field. The id alone is not enough: a member
+ * who kept every id and swapped the video ids would be playing whatever
+ * they liked under a manager's name. `durationMs` may go from null to a
+ * value, which is the one field the room's writer fills in after the fact.
+ */
+function sameTrack(a: MusicTrack, b: MusicTrack): boolean {
+  return (
+    a.id === b.id &&
+    a.provider === b.provider &&
+    a.videoId === b.videoId &&
+    a.title === b.title &&
+    a.sourceUrl === b.sourceUrl &&
+    a.thumbnailUrl === b.thumbnailUrl &&
+    a.addedByUserId === b.addedByUserId &&
+    a.addedByName === b.addedByName &&
+    (a.durationMs === b.durationMs || (a.durationMs === null && b.durationMs !== null))
+  );
+}
+
+function sameTracks(a: MusicTrack[], b: MusicTrack[]): boolean {
+  return a.length === b.length && a.every((track, index) => sameTrack(track, b[index] as MusicTrack));
+}
+
+function sameOrNull(a: MusicTrack | null, b: MusicTrack | null): boolean {
+  if (a === null || b === null) {
+    return a === b;
+  }
+  return sameTrack(a, b);
 }
 
 /**
@@ -209,35 +236,34 @@ export function musicWriteAllowed(
       incoming.queue.every(own)
     );
   }
-  const sameCurrent = (held.current?.id ?? null) === (incoming.current?.id ?? null);
+  const sameCurrent = sameOrNull(held.current, incoming.current);
   const sameStatus = held.status === incoming.status;
   if (sameCurrent && sameStatus) {
     // Position sample, or the duration being filled in.
-    if (sameIds(held.queue, incoming.queue)) {
+    if (sameTracks(held.queue, incoming.queue)) {
       return true;
     }
-    // Append own to the end.
-    const heldIds = ids(held.queue);
-    const prefixSame = incoming.queue.length >= held.queue.length &&
-      heldIds.every((id, index) => incoming.queue[index]?.id === id);
+    // Append own to the end, the front untouched.
+    const prefixSame =
+      incoming.queue.length >= held.queue.length &&
+      held.queue.every((track, index) => sameTrack(track, incoming.queue[index] as MusicTrack));
     if (prefixSame) {
       return rights.canAdd && incoming.queue.slice(held.queue.length).every(own);
     }
-    // Remove own: the incoming ids are the held ids in order minus some of mine.
+    // Remove own: the held list in order, minus some of mine, nothing else touched.
     const incomingIds = new Set(ids(incoming.queue));
     const kept = held.queue.filter((track) => incomingIds.has(track.id));
     const removed = held.queue.filter((track) => !incomingIds.has(track.id));
-    return (
-      removed.length > 0 &&
-      removed.every(own) &&
-      sameIds(kept, incoming.queue)
-    );
+    return removed.length > 0 && removed.every(own) && sameTracks(kept, incoming.queue);
   }
-  // The track ran out: the next one comes on, position 0, nothing else moved.
+  // The track ran out while playing: the next one comes on at 0, nothing
+  // else moved. A paused track has not run out, however far along it is.
   const next = held.queue[0] ?? null;
   const advanced =
-    (incoming.current?.id ?? null) === (next?.id ?? null) &&
-    sameIds(held.queue.slice(1), incoming.queue) &&
+    held.status === "playing" &&
+    incoming.status === (next ? "playing" : "paused") &&
+    sameOrNull(next, incoming.current) &&
+    sameTracks(held.queue.slice(1), incoming.queue) &&
     incoming.positionMs === 0;
   if (advanced && held.current) {
     const duration = held.current.durationMs;

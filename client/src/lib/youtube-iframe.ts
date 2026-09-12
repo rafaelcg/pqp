@@ -23,6 +23,7 @@ export interface YTPlayer {
   mute(): void;
   unMute(): void;
   isMuted(): boolean;
+  getVideoData(): { video_id?: string };
   destroy(): void;
 }
 
@@ -75,6 +76,7 @@ export function loadYouTubeIframeApi(): Promise<YTNamespace> {
       if (window.YT) {
         resolve(window.YT);
       } else {
+        loading = null;
         reject(new Error("YouTube IFrame API did not initialise"));
       }
     };

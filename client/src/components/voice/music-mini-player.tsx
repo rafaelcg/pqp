@@ -99,7 +99,14 @@ function readVolume(): number {
 const ghostButton =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper";
 
-export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
+export function MusicMiniPlayer({
+  voiceState,
+  compact = false,
+}: {
+  voiceState: VoiceState;
+  /** The icons-only sidebar: nothing drawn, but the embed stays mounted so the sound does not stop. */
+  compact?: boolean;
+}) {
   const { t } = useTranslation();
   const music = useMusic();
   const [volume, setVolume] = useState(readVolume);
@@ -118,6 +125,20 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
 
   if (!inCall) {
     return null;
+  }
+
+  if (compact) {
+    return current && music.listening ? (
+      <div data-music-mini-player="compact" className="h-0 overflow-hidden">
+        <MusicPlayer
+          music={music}
+          isActor={isActor}
+          volume={muted ? 0 : volume}
+          playerRef={playerRef}
+          onNeedsTap={setNeedsTap}
+        />
+      </div>
+    ) : null;
   }
 
   // Nothing on: one line, the way to put something on.
@@ -629,9 +650,17 @@ function MusicPlayer({
             onStateChange: (event) => {
               const snap = musicRef.current;
               if (event.data === YT_STATE.ENDED) {
-                const ended = snap.state?.current?.id;
-                if (ended) {
-                  advance(ended);
+                // Only the video the room is on. A late "ended" from the
+                // video this player just left must not skip the new one.
+                const current = snap.state?.current;
+                let playing: string | undefined;
+                try {
+                  playing = event.target.getVideoData().video_id;
+                } catch {
+                  playing = undefined;
+                }
+                if (current && (playing === undefined || playing === current.videoId)) {
+                  advance(current.id);
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);
