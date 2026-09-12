@@ -1338,6 +1338,78 @@ Backgrounding pauses and coming back seeks to the live edge, rather than
 resuming ten minutes behind everybody else. This app's foreground-service
 exemption is for a *call*; a film does not get one.
 
+### A hardcoded live offset held the playhead on the tip, and it stalled once a second
+
+**#480 (2026-09-12) sat the player 6 s behind live and stalled it every four
+seconds in production**, hours after shipping, because the numbers assumed
+the wrong segment length. `HlsLiveEdge.kt` set an explicit
+`MediaItem.LiveConfiguration` — `TARGET_OFFSET_MS = 6_000`,
+`MIN_OFFSET_MS = 4_000`, `MAX_OFFSET_MS = 8_000` — applied in
+`ui/WatchPane.kt` right before `player.prepare()`. Those were three, two and
+four **segments** at the 2 s `LIVE_HLS_SEGMENT_SECONDS` production ran that
+day. `LIVE_HLS_SEGMENT_SECONDS` moved to 4 s the same day (#495), and nobody
+touched these millisecond constants, so in real segment terms they silently
+became 1.5, 1 and 2 segments: a band hugging the bleeding tip of the
+playlist instead of sitting comfortably behind it.
+
+**The mechanism, exactly.** Media3's `DefaultLivePlaybackSpeedControl`
+continuously adjusts playback rate (up to `MAX_PLAYBACK_SPEED = 1.5`) to
+hold the actual live offset inside that band. A live playlist only grows one
+segment at a time, once per target duration, so a player pinned to a single
+segment's distance from the edge exhausts that one segment of runway in
+about one target duration (4 s) and then has nothing published left to
+decode — genuinely nothing exists there yet, not a bug in the request path.
+It stalls (`Player.STATE_BUFFERING`), the next segment appears on the next
+playlist refresh, playback resumes (`Player.STATE_READY`) for another ~4 s,
+and the cycle repeats: play a segment, hit the tip, wait for the next one,
+forever. That reads to a viewer as "plays a few seconds, pauses, reloads,
+over and over," and the period is one target duration because the band was
+never wider than one segment to begin with.
+
+This is a **different** failure from `HlsWatchdog`'s reconnect
+(`stallMs = 8_000`, `sequenceStuckMs = 15_000`, both above): each micro-stall
+here is a real, short, genuine rebuffer that Media3 resolves on its own well
+under 8 s, so `watchdog.onPlaying()` keeps resetting the stall clock and a
+full reconnect (a new `MediaItem`, `attempt += 1`) never fires. Nothing was
+"broken" in the sense of an exception or a dead stream; the configured band
+was simply the wrong width for the segment length actually running.
+
+**Fixed** by not fighting the playlist with a guessed constant at all.
+`ui/WatchPane.kt` no longer calls `setLiveConfiguration`. With none set, and
+with no `#EXT-X-SERVER-CONTROL` in this playlist (there is none), Media3
+resolves `targetLiveOffsetUs` itself as `3 * targetDurationUs`, read off the
+manifest it is actually playing (confirmed against the androidx/media
+source, `HlsMediaPeriod`'s live-offset fallback,
+[PR #8764](https://github.com/androidx/media/pull/8764)) — the same ratio
+`HlsLiveEdge.kt` documents, computed from the real segment length instead of
+one baked in at build time. Correct at 2 s segments, correct at 4 s, correct
+at whatever `LIVE_HLS_SEGMENT_SECONDS` is set to next, with no client
+release required to follow it.
+
+**To confirm the mechanism from a live device** (no app rebuild needed,
+since this build has no `AnalyticsListener`/`EventLogger` wired in, so there
+is no per-event Media3 log line to grep for):
+
+```
+adb logcat --pid=$(adb shell pidof -s gg.pqp.app) -v time
+```
+
+Watch the timestamps of the stalls in the UI against this stream while a
+watch party is live. A tight, near-exact ~4 s (one `LIVE_HLS_SEGMENT_SECONDS`)
+period between pauses, each one resolving on its own within a second or two,
+is this mechanism. A period of 8 s or more, coinciding with the picture
+jumping to a new live position rather than continuing forward, is
+`HlsWatchdog`'s reconnect path instead
+(`ui/WatchPane.kt`, the `WatchdogDecision.Reconnect` branch) — a different
+bug with a different fix. Attaching `androidx.media3.exoplayer.util.EventLogger`
+as an `AnalyticsListener` would turn this from a timing inference into a
+`state [... BUFFERING]` log line per transition; it is not wired in today
+and is a reasonable fast follow, not part of this fix.
+
+Pinned by `HlsLiveEdgeTest`, which asserts the ratios rather than a
+millisecond figure, and by a source check that `ui/WatchPane.kt` does not
+reintroduce `setLiveConfiguration`.
+
 ### What it looks like
 
 An `AO VIVO` pill on the channel row, so a person scrolling the list can find
