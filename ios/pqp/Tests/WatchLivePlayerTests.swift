@@ -165,6 +165,32 @@ final class WatchLivePlayerTests: XCTestCase {
         )
     }
 
+    /// `recommendedTimeOffsetFromLive` is three target durations only when the
+    /// playlist has no configured HOLD-BACK; a hold-back (or LL-HLS) makes it
+    /// a different multiple, so /3 can produce a length that is not a segment.
+    /// It is clamped to a plausible band rather than trusted to size the
+    /// runway, tip and seek thresholds.
+    func testSegmentSecondsIsClampedAgainstADistortingHoldBack() {
+        // An overstated offset (e.g. a long server hold-back) clamps to the
+        // ceiling instead of producing an absurd runway.
+        XCTAssertEqual(
+            WatchLiveEdge.segmentSeconds(recommendedOffset: 60),
+            WatchLiveEdge.maxSegmentSeconds
+        )
+        // An understated one floors rather than seeking onto the live tip.
+        XCTAssertEqual(
+            WatchLiveEdge.segmentSeconds(recommendedOffset: 1.5),
+            WatchLiveEdge.minSegmentSeconds
+        )
+        // The in-band production readings are untouched.
+        XCTAssertEqual(WatchLiveEdge.segmentSeconds(recommendedOffset: 12), 4)
+        XCTAssertEqual(WatchLiveEdge.segmentSeconds(recommendedOffset: 6), 2)
+        // learnSegmentSeconds clamps the same way.
+        var edge = WatchLiveEdge()
+        edge.learnSegmentSeconds(recommendedOffset: 60)
+        XCTAssertEqual(edge.segmentSeconds, WatchLiveEdge.maxSegmentSeconds)
+    }
+
     /// `learnSegmentSeconds` is what a tick loop calls every second; it must
     /// not need a valid reading every time to keep the one it already has.
     func testLearningTheSegmentLengthIsIdempotentAndSticky() {
@@ -848,16 +874,31 @@ final class WatchLivePlayerTests: XCTestCase {
     }
 
     /// Asking AVPlayer for a buffer wider than the live window is how it
-    /// waits forever after the first few segments. `forwardBuffer` is a
-    /// floor sized for what production runs today (`docs/WATCH_PARTY.md`),
-    /// not the segment length this file assumed when it was written.
-    func testTheForwardBufferIsThreeTargetDurationsAtTodaysSegmentLength() {
-        XCTAssertEqual(WatchPlayerItemTuning.forwardBuffer, 12)
+    /// waits forever after the first few segments. The forward buffer is now
+    /// three target durations of the LEARNED segment length, floored at two
+    /// and capped at the window, rather than a constant tied to a 4 s
+    /// deployment (`docs/WATCH_PARTY.md`).
+    func testTheForwardBufferScalesWithTheLearnedSegmentLengthAndFitsTheWindow() {
+        // Before the manifest loads: three target durations of the fallback.
         XCTAssertEqual(
-            WatchPlayerItemTuning.forwardBuffer,
-            WatchLiveEdge.liveTargetOffset(segmentSeconds: 4),
-            "three target durations at 4 s segments, matching WatchLiveEdge"
+            WatchPlayerItemTuning.forwardBuffer(),
+            WatchLiveEdge.targetDurationMultiplier * WatchLiveEdge.fallbackSegmentSeconds
         )
+        // Once 4 s is learned: 12 s, matching WatchLiveEdge.
+        XCTAssertEqual(WatchPlayerItemTuning.forwardBuffer(segmentSeconds: 4), 12)
+        XCTAssertEqual(
+            WatchPlayerItemTuning.forwardBuffer(segmentSeconds: 4),
+            WatchLiveEdge.liveTargetOffset(segmentSeconds: 4)
+        )
+        // Never wider than the window: a 2 s deployment's five-segment window
+        // is 10 s, and the buffer for 4 s (12 s) capped to it stays 10 s, so
+        // AVPlayer is never asked for media the playlist cannot hold.
+        XCTAssertEqual(
+            WatchPlayerItemTuning.forwardBuffer(segmentSeconds: 4, windowSpan: 10),
+            10
+        )
+        // At the matching 2 s segment length the window fits without a cap.
+        XCTAssertEqual(WatchPlayerItemTuning.forwardBuffer(segmentSeconds: 2), 6)
     }
 
     /// `WatchQuality.swift` must not reintroduce a fixed `configuredTimeOffsetFromLive`:

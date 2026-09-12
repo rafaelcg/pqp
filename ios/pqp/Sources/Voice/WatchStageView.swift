@@ -186,6 +186,12 @@ struct WatchStageView: View {
             chrome.tick(playing: isPlaying, at: now)
 
             edge.learnSegmentSeconds(recommendedOffset: item.recommendedTimeOffsetFromLive.seconds)
+            // Once the real segment length is known, narrow the forward
+            // buffer to what production serves and never past the window —
+            // `apply()` ran before the manifest loaded and used the fallback.
+            WatchPlayerItemTuning.retune(
+                item, segmentSeconds: edge.segmentSeconds, windowSpan: window?.span
+            )
             let seeking = now < seekingUntil
             if !seeking {
                 let remedy = edge.tick(
@@ -234,13 +240,11 @@ struct WatchStageView: View {
         return WatchLiveWindow(start: start, end: end)
     }
 
-    /// The session's real segment length, from the playlist Apple has
-    /// already parsed for this item. `nil` until the item has one, which
-    /// `WatchLiveEdge.segmentSeconds(recommendedOffset:)` reads the same way
-    /// as "not available yet": the safe, previously-hardcoded fallback.
-    static func segmentSeconds(of item: AVPlayerItem) -> Double {
-        WatchLiveEdge.segmentSeconds(recommendedOffset: item.recommendedTimeOffsetFromLive.seconds)
-    }
+    // The session's real segment length is learned and retained on `edge`
+    // (`WatchLiveEdge.segmentSeconds`), which, unlike reading the item afresh,
+    // does NOT fall back to the 2 s constant on a momentarily-unavailable
+    // reading during a reload. Every seek below reads that retained value, so
+    // a 4 s session never lands 2 s behind live — near the tip — on a blip.
 
     /**
      AN EMPTY WATCH PARTY STILL HAS TO LOOK LIKE ONE.
@@ -669,7 +673,7 @@ struct WatchStageView: View {
         if userWantsPlayback {
             if trigger == .pin || trigger == .fullscreen,
                let window = Self.liveWindow(of: item) {
-                seek(to: WatchLiveEdge.target(in: window, segmentSeconds: Self.segmentSeconds(of: item)))
+                seek(to: WatchLiveEdge.target(in: window, segmentSeconds: edge.segmentSeconds))
                 return
             }
             seekingUntil = Date().addingTimeInterval(2)
@@ -713,7 +717,7 @@ struct WatchStageView: View {
             if position.isFinite,
                position < window.start
                 || WatchLiveEdge.isBehindLive(position: position, window: window) {
-                seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: Self.segmentSeconds(of: item)))
+                seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: edge.segmentSeconds))
                 return
             }
         }
@@ -752,7 +756,7 @@ struct WatchStageView: View {
         else { return }
         userWantsPlayback = true
         isPlaying = true
-        seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: Self.segmentSeconds(of: item)))
+        seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: edge.segmentSeconds))
         chrome.reveal(at: Date())
     }
 
@@ -787,7 +791,7 @@ struct WatchStageView: View {
             player?.play()
             return
         }
-        seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: Self.segmentSeconds(of: stalled)))
+        seek(to: WatchLiveEdge.jumpTarget(in: window, segmentSeconds: edge.segmentSeconds))
     }
 
     /// Resume after the session came back, and only if we were playing when it
