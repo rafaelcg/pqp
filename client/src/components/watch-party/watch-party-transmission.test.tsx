@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LiveHlsStream } from "@pqp/shared";
 import {
+  showsCameraHeldHint,
   streamAudioState,
   WatchPartyTransmission,
 } from "./watch-party-transmission";
@@ -81,5 +82,22 @@ describe("what the host is told the stream is carrying", () => {
     expect(markup({})).not.toContain("watch-party-tx-silent-pill");
     expect(streamAudioState(null)).toBe("unknown");
     expect(markup(null)).not.toContain("watch-party-tx-silent-pill");
+  });
+});
+
+describe("what the host is told about their own camera", () => {
+  it("states the 360p hold exactly while the cap is in force", () => {
+    // The cap lands when this machine's share is what the egress transcodes
+    // (`effectiveCameraQuality`, applied from `use-voice.ts`). Saying it any
+    // earlier reads as a setting somebody changed behind their back.
+    expect(showsCameraHeldHint(true, stream())).toBe(true);
+  });
+
+  it("says nothing while the broadcast is still preparing", () => {
+    expect(showsCameraHeldHint(true, null)).toBe(false);
+  });
+
+  it("says nothing to a host who is not the one presenting", () => {
+    expect(showsCameraHeldHint(false, stream())).toBe(false);
   });
 });

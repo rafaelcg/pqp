@@ -81,6 +81,7 @@ import {
   cameraBitrateFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  effectiveCameraQuality,
   type VideoQuality,
 } from "@/lib/video-quality";
 import {
@@ -908,6 +909,50 @@ export function createVoiceController(transport: RealtimeTransport) {
    * sampler, which is the reading this reuses.
    */
   let hlsSourceTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Hold the camera at 360p while this machine's share is the ladder's source,
+   * and give the chosen quality back the moment it stops being.
+   *
+   * SAFE IN BOTH DIRECTIONS, MID-CALL, which is the same promise
+   * `setVideoQuality` makes and for the same reasons: nothing here re-captures,
+   * so the track on the wire is the same track throughout;
+   * `applyCameraQuality` never rejects (it falls back to the size the camera
+   * already had); `setCameraMaxBitrate` swallows an encoder that refuses its
+   * parameters; and `reconcileCameraLadder` only republishes when the set of
+   * simulcast rungs actually changed. The worst outcome available is a camera
+   * that stayed the size it already was.
+   *
+   * A CLOSED CAMERA STILL MOVES THE FLAG. `toggleCamera` reads
+   * `currentCameraQuality()` when it opens, so a camera switched on later in
+   * the party is captured small rather than captured big and shrunk.
+   */
+  async function applyWatchPartyCameraCap(presenting: boolean): Promise<void> {
+    if (presenting === watchPartyCameraCapped) {
+      return;
+    }
+    const before = currentCameraQuality();
+    watchPartyCameraCapped = presenting;
+    const applied = currentCameraQuality();
+    // A FLAG THAT MOVED IS NOT A PICTURE THAT MOVED. Somebody who already
+    // picked 360p is exactly where the cap wants them, and re-applying it
+    // would re-run `setParameters` and `applyConstraints` on a live camera and
+    // possibly republish the simulcast ladder, which every viewer of that
+    // camera sees as a stutter, for no change at all.
+    if (applied === before) {
+      return;
+    }
+    const maxBitrate = cameraBitrateFor(applied);
+    manager?.setCameraMaxBitrate(maxBitrate);
+    await sfu?.setCameraMaxBitrate(maxBitrate);
+    const track = cameraCaptureStream?.getVideoTracks()[0];
+    if (!track) {
+      return;
+    }
+    await applyCameraQuality(track, applied);
+    // The capture is a different size now and, on the SFU, the simulcast
+    // ladder was solved against the size it used to be.
+    await sfu?.reconcileCameraLadder();
+  }
   async function refreshHlsSource(): Promise<void> {
     const wanted = hlsSourceFor({
       streamTopHeight: state.liveStream?.topHeight,
@@ -915,6 +960,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       usingSfu: state.usingSfu,
       uplinkBps: null,
     });
+    // The same three facts decide the camera cap: a live egress on this
+    // channel, this machine sharing into it, and the SFU. Read from one
+    // function so the two halves can never disagree about who is presenting.
+    await applyWatchPartyCameraCap(wanted !== null);
     if (!wanted) {
       if (hlsSourceTimer !== null) {
         clearInterval(hlsSourceTimer);
@@ -1041,6 +1090,21 @@ export function createVoiceController(transport: RealtimeTransport) {
    * `toggleCamera` will ask the hardware for.
    */
   let videoQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
+  /**
+   * This machine's share is what a live watch party is transcoding from, so
+   * the camera is held at `WATCH_PARTY_PRESENTER_CAMERA_QUALITY`.
+   *
+   * SEPARATE FROM `videoQuality` ON PURPOSE. The chosen quality is a user
+   * preference and this is a ceiling the room imposes on it, exactly the way
+   * `isLargeRoomCapped` is; keeping them apart is what lets the choice come
+   * back untouched when the share ends, without the menu ever having appeared
+   * to move on its own.
+   */
+  let watchPartyCameraCapped = false;
+  /** The camera quality actually in force: the choice, under the cap. */
+  function currentCameraQuality(): VideoQuality {
+    return effectiveCameraQuality(videoQuality, watchPartyCameraCapped);
+  }
   /** Webcam id for the next capture. Empty means the browser default. */
   let cameraDeviceId = "";
   let state: VoiceState = {
@@ -2440,7 +2504,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // reconnect is republished at the chosen quality. Without this a session
       // rebuilt after a WS drop silently reverted both to the defaults, and
       // nothing recomputed them until the user next touched the menu.
-      await sfu.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
+      await sfu.setCameraMaxBitrate(cameraBitrateFor(currentCameraQuality()));
       await sfu.setScreenQuality(videoQuality);
       // The viewer's half: the largest layer this device wants, remembered
       // per device. Applied before anything is subscribed so the first frame
@@ -2504,7 +2568,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     manager = createPeerConnectionManager(peerId, sendRelay, iceServers);
     // Before any track is published, so a camera carried across a reconnect
     // gets the chosen ceiling on its first tune rather than the default one.
-    manager.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
+    manager.setCameraMaxBitrate(cameraBitrateFor(currentCameraQuality()));
     // Same reason, for the screen: a share carried across a reconnect must be
     // rebuilt at the chosen quality, not at the default one.
     manager.setScreenQuality(videoQuality);
@@ -4324,7 +4388,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         // product was capped at 640x480.
         stream = await captureCamera(
           (constraints) => navigator.mediaDevices.getUserMedia(constraints),
-          videoQuality,
+          // The EFFECTIVE quality, not the chosen one: a camera opened in the
+          // middle of a watch party this machine is feeding must be captured
+          // small, not captured at 720p and shrunk a tick later.
+          currentCameraQuality(),
           cameraDeviceId || undefined,
         );
       } catch (err) {
@@ -4406,7 +4473,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       videoQuality = next;
-      const maxBitrate = cameraBitrateFor(next);
+      // The CHOICE is stored above; what goes on the wire is the choice under
+      // the watch-party cap, so picking 1080p mid-party stores 1080p and keeps
+      // publishing 360p until the share ends.
+      const applied = currentCameraQuality();
+      const maxBitrate = cameraBitrateFor(applied);
       manager?.setCameraMaxBitrate(maxBitrate);
       await sfu?.setCameraMaxBitrate(maxBitrate);
       // The screen half, on both transports, and unconditionally: the mesh
@@ -4416,7 +4487,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       await sfu?.setScreenQuality(next);
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
-        await applyCameraQuality(track, next);
+        await applyCameraQuality(track, applied);
         // The capture is a different size now, and on the SFU the simulcast
         // ladder was solved against the size it used to be. This republishes
         // only when the set of rungs actually changed; see the session.

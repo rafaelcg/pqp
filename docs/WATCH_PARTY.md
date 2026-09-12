@@ -1910,6 +1910,47 @@ Two things that change shipped later, on the same facts.
   ceiling. Fibre sitting on 4 Mbps stays quiet; a starving uplink
   speaks.
 
+### The presenter's camera is held at 360p while the party is on air
+
+Measured on staging, 2026-09-12. A presenter turned their webcam on during a
+live party: VP8 720p with three simulcast layers up to 1.5 Mbit/s, beside a
+3.5 Mbit/s H.264 share. The client raised "your upload is not keeping up" and
+**the share collapsed to 640x360 at 17 fps**. The two leave the same machine on
+the same uplink and bid against the same bandwidth estimate, and nothing
+arbitrated that: `cameraProfileFor("auto")` is 720p30 at 1.5 Mbit/s whatever
+else is going on.
+
+So while this client's share is what a live egress is transcoding, the camera
+is held at the **360p profile** — 640x360, 30 fps, 400 kbit/s, roughly a ninth
+of the share's own ceiling. `effectiveCameraQuality` in
+`client/src/lib/video-quality.ts` is the whole decision and it is pure; the
+three facts that make it true are the same three `hlsSourceFor` already reads
+(a live egress on this channel, this machine sharing into it, the SFU), read
+from one place in `use-voice.ts` so the two halves cannot disagree about who is
+presenting.
+
+Three properties worth stating:
+
+- **It is a cap, not a setting.** The chosen quality is stored untouched.
+  Picking 1080p mid-party stores 1080p and publishes 360p; the moment the
+  session ends, 1080p goes up. The menu never appears to move on its own.
+- **It never raises.** A presenter who already picked 360p is left alone
+  entirely — no `setParameters`, no `applyConstraints`, no republish. A
+  no-op republish is a stutter for every viewer of that camera.
+- **Both directions are safe mid-call**, the same promise `setVideoQuality`
+  makes and for the same reasons: nothing re-captures, `applyCameraQuality`
+  never rejects, `setCameraMaxBitrate` swallows an encoder that refuses, and
+  `reconcileCameraLadder` republishes only when the rung set actually
+  changed. A camera opened *after* the party started is captured at 360p in
+  the first place rather than captured big and shrunk a tick later.
+
+The TRANSMISSION panel says it out loud (`watchParty.tx.cameraHeld`), and only
+while a session is live, which is exactly when the cap is in force. Without
+that line the host reads it as a broken camera.
+
+This is client-only. A tab that has not reloaded keeps the old behaviour, the
+same way pitfall 14's publish-source fix did.
+
 ### The restart that should not happen at all: swapping the share in place
 
 Rafael's framing, and it is a better fix than surviving the restart: in a watch

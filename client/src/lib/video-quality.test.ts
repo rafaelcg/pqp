@@ -12,6 +12,8 @@ import {
   CAMERA_SIMULCAST_RUNGS,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  effectiveCameraQuality,
+  WATCH_PARTY_PRESENTER_CAMERA_QUALITY,
   HLS_HELD_720_BITRATE,
   HLS_SOURCE_UPLINK_HEADROOM,
   hlsSourceTopHeight,
@@ -690,5 +692,47 @@ describe("the camera's simulcast rungs", () => {
     for (let at = 1; at < rates.length; at += 1) {
       expect(rates[at]!).toBeGreaterThan(rates[at - 1]!);
     }
+  });
+});
+
+describe("effectiveCameraQuality", () => {
+  it("leaves every choice alone when this machine is not the party's source", () => {
+    for (const quality of VIDEO_QUALITIES) {
+      expect(effectiveCameraQuality(quality, false)).toBe(quality);
+    }
+  });
+
+  it("holds a presenter's camera at 360p whatever they picked", () => {
+    // Auto is 720p30 at 1.5 Mbit/s, and that is the case the bug was reported
+    // on: nothing capped it, so the camera bid against the share every viewer
+    // outside the room was actually watching.
+    expect(effectiveCameraQuality("auto", true)).toBe("360p");
+    expect(effectiveCameraQuality("1080p", true)).toBe("360p");
+    expect(effectiveCameraQuality("720p", true)).toBe("360p");
+    expect(effectiveCameraQuality("480p", true)).toBe("360p");
+  });
+
+  it("never raises somebody who already chose smaller", () => {
+    // A cap that can raise is not a cap. Today 360p is the lowest rung so this
+    // is the identity case; it is asserted because the next rung added below
+    // it must not be silently promoted into a bigger picture mid-party.
+    expect(effectiveCameraQuality("360p", true)).toBe("360p");
+    for (const quality of VIDEO_QUALITIES) {
+      const applied = effectiveCameraQuality(quality, true);
+      expect(cameraProfileFor(applied).height).toBeLessThanOrEqual(
+        cameraProfileFor(quality).height,
+      );
+    }
+  });
+
+  it("costs the uplink a ninth of what auto did", () => {
+    // The number the whole change is for. 400 kbit/s beside a 3.5 Mbit/s
+    // share is not a bid; 1.5 Mbit/s was.
+    expect(cameraBitrateFor(effectiveCameraQuality("auto", true))).toBe(400_000);
+    expect(cameraBitrateFor("auto")).toBe(1_500_000);
+  });
+
+  it("caps to a rung the menu actually offers", () => {
+    expect(VIDEO_QUALITIES).toContain(WATCH_PARTY_PRESENTER_CAMERA_QUALITY);
   });
 });

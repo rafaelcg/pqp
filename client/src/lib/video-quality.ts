@@ -723,6 +723,58 @@ export function cameraBitrateFor(quality: VideoQuality): number {
 }
 
 /**
+ * The rung a watch party's PRESENTER is held to while their share is the
+ * ladder's source.
+ *
+ * WHY THERE HAS TO BE ONE. The screen share and the camera leave the same
+ * machine on the same uplink and bid against the same bandwidth estimate.
+ * Nothing used to arbitrate that: `cameraProfileFor("auto")` asks for 720p30
+ * at 1.5 Mbit/s and `screenSimulcastPlan` asks a watch-party share for up to
+ * 8 Mbit/s, so a presenter who turned their camera on during a party was
+ * bidding roughly 1.5 Mbit/s of talking head against the film every viewer
+ * outside the room is watching. Measured on staging 2026-09-12: the camera
+ * went up VP8 720p with three simulcast layers, the client raised the "your
+ * upload is not keeping up" warning, and the 3.5 Mbit/s H.264 share collapsed
+ * to 640x360 at 17 fps. The audience lost the film so that the seated room
+ * could have a big webcam.
+ *
+ * WHY 360p AND NOT A SMALLER NUMBER. 400 kbit/s is roughly a ninth of the
+ * share's own ceiling, which is small enough that the estimator does not have
+ * to choose between them, and 640x360 is still a perfectly good face in a
+ * corner tile. Going lower buys the share almost nothing and starts to look
+ * like a broken camera.
+ *
+ * WHY IT IS A CAP AND NOT A SETTING. The presenter's chosen quality is left
+ * untouched (`use-voice.ts` keeps it and restores it the moment the share
+ * stops); this is the ceiling in force while the party is on air, the same
+ * shape as `isLargeRoomCapped` and the HLS source gate above it.
+ */
+export const WATCH_PARTY_PRESENTER_CAMERA_QUALITY: VideoQuality = "360p";
+
+/**
+ * The camera quality actually in force, given what the person chose and
+ * whether this machine is the one feeding the watch party's transcode.
+ *
+ * NEVER RAISES. A presenter who already picked 360p keeps 360p rather than
+ * being "capped" up to it, which is why this compares heights instead of
+ * returning the constant. Pure, and the only rule: the caller decides what
+ * "presenting" means (`hlsSourceFor` in `lib/hls-source-quality.ts`), this
+ * decides what it costs.
+ */
+export function effectiveCameraQuality(
+  chosen: VideoQuality,
+  isWatchPartyPresenter: boolean,
+): VideoQuality {
+  if (!isWatchPartyPresenter) {
+    return chosen;
+  }
+  const cap = WATCH_PARTY_PRESENTER_CAMERA_QUALITY;
+  return cameraProfileFor(chosen).height <= cameraProfileFor(cap).height
+    ? chosen
+    : cap;
+}
+
+/**
  * The room size above which 1080p is not offered at all, and the second rule
  * that removes it whatever the size: a live HLS egress.
  *
