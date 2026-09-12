@@ -44,8 +44,10 @@ on:
         required: true
         type: string
 
+# Per event as well as per PR: the skipped twin of the eligible run must not
+# be able to cancel it. Repeated pushes to one PR still cancel each other.
 concurrency:
-  group: pr-size-label-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: pr-size-label-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 permissions:
