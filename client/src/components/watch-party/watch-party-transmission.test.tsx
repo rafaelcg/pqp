@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LiveHlsStream } from "@pqp/shared";
 import {
+  MicGainControl,
   streamAudioState,
   StreamQualityControl,
   WatchPartyTransmission,
@@ -100,5 +101,23 @@ describe("StreamQualityControl", () => {
     expect(html).toContain(">1080p<");
     // The default is selected, so a host who does nothing publishes 720.
     expect(html).toMatch(/value="720p"[^>]*selected/);
+  });
+});
+
+/**
+ * "Mic no stream". Same shape as `StreamQualityControl` above: rendered on
+ * its own since the panel hides it behind a click, and it defaults from
+ * storage that is unavailable in `node`.
+ */
+describe("MicGainControl", () => {
+  it("renders the label and all three choices, defaulting to Normal", () => {
+    const html = renderToStaticMarkup(<MicGainControl />);
+    expect(html).toContain("watch-party-tx-mic-gain-select");
+    expect(html).toContain(">Lower<");
+    expect(html).toContain(">Normal<");
+    expect(html).toContain(">Higher<");
+    // The default (2.0, "Normal") is selected, so a host who does nothing
+    // gets the same mix as before this control existed.
+    expect(html).toMatch(/value="2"[^>]*selected/);
   });
 });
