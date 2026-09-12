@@ -156,6 +156,30 @@ describeDb("channel session scheduling", () => {
     expect(cancelled.status).toBe(403);
   });
 
+  it("refuses to cancel a session once it has gone live, even for MANAGE_CHANNELS", async () => {
+    // 2026-09-12: `authoriseWatchParty`'s own `end`/`cancel` table was
+    // tightened to host/cohost-only, but this generic scheduling route sits
+    // in front of the SAME `channel_sessions` row and used to accept 'live'
+    // too — a MANAGE_CHANNELS holder could still end a live watch party
+    // through it, permission check untouched by that fix. The card that
+    // calls this route already hides Cancelar once a session is live; the
+    // server now agrees regardless of who asks.
+    const startsAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    const created = await call<{ session: { id: string } }>(
+      owner,
+      "POST",
+      `/api/channels/${voiceChannelId}/sessions`,
+      { title: "Filme X", startsAt },
+    );
+    expect(created.status).toBe(200);
+    const sessionId = created.body.session.id;
+
+    expect(await markChannelSessionLive(voiceChannelId)).toBe(sessionId);
+
+    const cancelled = await call(owner, "POST", `/api/sessions/${sessionId}/cancel`);
+    expect(cancelled.status).toBe(404);
+  });
+
   it("lets a manager create a session and a member subscribe to a reminder", async () => {
     const startsAt = new Date(Date.now() + 60 * 60_000).toISOString();
     const created = await call<{ session: { id: string; reminding: boolean } }>(

@@ -175,11 +175,23 @@ describe("who may do what", () => {
     }
   });
 
-  it("lets a manager end and edit a live party but never start one", () => {
-    expect(allow("end", "manager", "live")).toBe(true);
+  it("lets a manager edit a live party but never start, end or cancel one", () => {
+    // 2026-09-12: `end` used to be true here too, and a server admin who was
+    // only watching a live party ended the host's show with it. Ending and
+    // cancelling are now host/cohost-only, same as goLive.
     expect(allow("edit", "manager", "live")).toBe(true);
+    expect(allow("end", "manager", "live")).toBe(false);
+    expect(allow("cancel", "manager", "draft")).toBe(false);
+    expect(allow("cancel", "manager", "scheduled")).toBe(false);
     expect(allow("goLive", "manager", "draft")).toBe(false);
     expect(allow("schedule", "manager", "draft")).toBe(false);
+  });
+
+  it("still lets the host and a co-host end and cancel", () => {
+    expect(allow("end", "host", "live")).toBe(true);
+    expect(allow("end", "cohost", "live")).toBe(true);
+    expect(allow("cancel", "host", "draft")).toBe(true);
+    expect(allow("cancel", "cohost", "scheduled")).toBe(true);
   });
 
   it("lets the host and a co-host rename while the party is live", () => {

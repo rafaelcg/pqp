@@ -122,12 +122,15 @@ export function watchPartyTransitionsFrom(
  * `host` is one person: whoever created the party, until they hand it over
  * or a co-host claims it after they drop. `cohost` is a list the host keeps.
  * `manager` is nobody in particular: it is what MANAGE_CHANNELS buys, and it
- * exists so a moderator can pull down a party that has gone wrong without
- * being handed the party. `viewer` is everyone else.
+ * exists so a moderator can edit a party that has gone wrong (rename it,
+ * close its floor) without being handed the party or the ability to end it
+ * out from under whoever is running it. `viewer` is everyone else.
  *
  * A manager is deliberately NOT allowed to promote themselves to host by
- * accident, only to stop the party. Taking over a live room is a visible act
- * and should stay one.
+ * accident, nor to end or cancel someone else's party — only the host and
+ * co-hosts can stop the show they are running. Taking over a live room, and
+ * ending one, are both visible acts and should stay acts the room's own
+ * people choose.
  */
 export const WATCH_PARTY_ROLES = ["host", "cohost", "manager", "viewer"] as const;
 
@@ -194,11 +197,17 @@ export type WatchPartyAction = (typeof WATCH_PARTY_ACTIONS)[number];
  * is no chain of authority left. Succession runs through `claimHost`, which
  * is gated on the host actually being gone.
  *
- * A MANAGER MAY STOP A PARTY BUT NOT START ONE. MANAGE_CHANNELS ends and
- * edits a live party (that is moderation, and the brief asks for it) and
- * cancels one that has not started. It does not press Ir ao vivo on someone
- * else's draft, and it does not see that draft in the first place. A draft
- * is a person thinking, not channel configuration.
+ * A MANAGER MAY EDIT A PARTY BUT NEITHER START NOR STOP ONE. MANAGE_CHANNELS
+ * edits a live party (that is moderation, and the brief asks for it), but it
+ * does not press Ir ao vivo on someone else's draft, and it does not see that
+ * draft in the first place — a draft is a person thinking, not channel
+ * configuration. It also does not end or cancel someone else's party:
+ * 2026-09-12 showed that with `end`/`cancel` open to any manager, a server
+ * admin who was only watching a live party could — and did — end the host's
+ * show with a single click meant only for the host and co-hosts. Ending and
+ * cancelling are now host/cohost-only, same as goLive; a manager who needs a
+ * party stopped asks the person running it, or removes their permission to
+ * run parties at all.
  */
 const ALLOWED: Readonly<Record<WatchPartyAction, readonly WatchPartyRole[]>> =
   Object.freeze({
@@ -206,8 +215,8 @@ const ALLOWED: Readonly<Record<WatchPartyAction, readonly WatchPartyRole[]>> =
     edit: Object.freeze(["host", "cohost", "manager"] as const),
     schedule: Object.freeze(["host", "cohost"] as const),
     goLive: Object.freeze(["host", "cohost"] as const),
-    end: Object.freeze(["host", "cohost", "manager"] as const),
-    cancel: Object.freeze(["host", "cohost", "manager"] as const),
+    end: Object.freeze(["host", "cohost"] as const),
+    cancel: Object.freeze(["host", "cohost"] as const),
     promoteCohost: Object.freeze(["host"] as const),
     demoteCohost: Object.freeze(["host"] as const),
     transferHost: Object.freeze(["host"] as const),
