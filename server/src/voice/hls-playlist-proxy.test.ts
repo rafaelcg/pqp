@@ -25,6 +25,7 @@ const PLAYLIST_BODY = [
   "#EXTM3U",
   "#EXT-X-VERSION:3",
   "#EXT-X-TARGETDURATION:2",
+  "#EXT-X-MEDIA-SEQUENCE:0",
   "#EXTINF:2.0,",
   `${STARTED_AT}_00000.ts`,
   "#EXTINF:2.0,",
@@ -201,21 +202,22 @@ describe("buildSignedPlaylist", () => {
     expect(lines[0]).toBe("#EXTM3U");
     expect(lines[1]).toBe("#EXT-X-VERSION:3");
     expect(lines[2]).toBe("#EXT-X-TARGETDURATION:2");
-    expect(lines[3]).toBe("#EXTINF:2.0,");
+    expect(lines[3]).toBe("#EXT-X-MEDIA-SEQUENCE:0");
+    expect(lines[4]).toBe("#EXTINF:2.0,");
 
-    const segmentLine = lines[4]!;
+    const segmentLine = lines[5]!;
     expect(segmentLine).toMatch(/^https:\/\/live\.example\.test\//);
     expect(segmentLine).toContain(`${STARTED_AT}_00000.ts`);
     const url = new URL(segmentLine);
     expect(url.searchParams.get("X-Amz-Expires")).toBe("120");
 
-    const secondSegmentLine = lines[6]!;
+    const secondSegmentLine = lines[7]!;
     expect(secondSegmentLine).toContain(`${STARTED_AT}_00001.ts`);
   });
 
   it("defaults the TTL to 900 seconds when LIVE_HLS_URL_TTL_SECONDS is unset", async () => {
     const body = await buildSignedPlaylist(CHANNEL, STARTED_AT);
-    const segmentLine = body.split("\n")[4]!;
+    const segmentLine = body.split("\n")[5]!;
     const url = new URL(segmentLine);
     expect(url.searchParams.get("X-Amz-Expires")).toBe("900");
   });
@@ -338,7 +340,7 @@ describe("playlist render cache", () => {
     expect(second).toBe(first);
     // A cache hit is a complete, playable window, not a stub: same segments,
     // still absolute, still presigned with the configured expiry.
-    const segment = second.split("\n")[4]!;
+    const segment = second.split("\n")[5]!;
     const url = new URL(segment);
     expect(url.searchParams.get("X-Amz-Expires")).toBe("120");
     expect(url.searchParams.get("X-Amz-Signature")).toBeTruthy();

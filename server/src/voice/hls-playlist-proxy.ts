@@ -14,8 +14,25 @@ import {
   type MasterVariant,
 } from "./hls-ladder.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
+import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Per rendition, the segments this process has seen listed, so the window a
+ * viewer gets is wider than the five entries the egress writes. Keyed like
+ * the render cache and dropped with it. See `hls-live-window.ts`.
+ */
+const windowHistory = new Map<string, LiveWindowHistory>();
+
+function historyFor(key: string): LiveWindowHistory {
+  let history = windowHistory.get(key);
+  if (!history) {
+    history = new LiveWindowHistory();
+    windowHistory.set(key, history);
+  }
+  return history;
+}
 
 /**
  * How long one session's rendered playlist is reused.
@@ -74,6 +91,7 @@ function cacheKey(channelId: string, startedAt: number, rung?: string): string {
 export function resetHlsPlaylistCacheForTests(): void {
   playlistCache.clear();
   rungCache.clear();
+  windowHistory.clear();
 }
 
 /**
@@ -217,6 +235,9 @@ async function renderSignedPlaylist(
     [channelId, objectPrefix],
   );
   if (session.rowCount === 0) {
+    // The session is over: forget its window too, so the map does not keep
+    // one history per session this process ever served.
+    windowHistory.delete(cacheKey(channelId, startedAt, rung));
     throw new HlsPlaylistNotFound(
       `No live HLS session ${objectPrefix} for channel ${channelId}`,
     );
@@ -241,7 +262,15 @@ async function renderSignedPlaylist(
       `Storage returned HTTP ${response.status} for the playlist`,
     );
   }
-  const body = await response.text();
+  // The egress lists five segments. Remember them and list more: the
+  // objects are still in the bucket, and a viewer with only two seconds of
+  // listed media behind the playhead stalls on every slow poll. The widened
+  // body still carries the egress's own URI lines, so the rewrite below is
+  // unchanged.
+  const body = widenLivePlaylist(
+    historyFor(cacheKey(channelId, startedAt, rung)),
+    await response.text(),
+  );
   const ttl = hlsUrlTtlSeconds();
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
 

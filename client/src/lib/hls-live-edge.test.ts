@@ -15,9 +15,10 @@ import {
 } from "./hls-live-edge";
 
 describe("hlsLivePlayerConfig", () => {
-  it("sits a little further from the edge than the old 3 segments, still inside the 10 s window", () => {
+  it("sits 6 s behind live with 16 s of tolerance, inside the proxy's 30 s window", () => {
     const config = hlsLivePlayerConfig();
-    expect(config.liveSyncDurationCount).toBeGreaterThan(3);
+    expect(config.liveSyncDurationCount).toBe(3);
+    expect(config.liveMaxLatencyDurationCount).toBe(8);
     expect(
       config.liveSyncDurationCount * HLS_LIVE_SEGMENT_SECONDS,
     ).toBeLessThan(HLS_LIVE_WINDOW_SECONDS);
@@ -26,15 +27,32 @@ describe("hlsLivePlayerConfig", () => {
     expect(HLS_ABR_DEFAULT_ESTIMATE_BPS).toBeGreaterThanOrEqual(2_500_000);
   });
 
+  it("still leaves two segments of slack on an API that serves the egress's own 10 s window", () => {
+    // An older API lists five segments. Sitting three back leaves two
+    // listed behind the playhead; the old config (four back) left one, which
+    // is the number that turned every slow playlist poll into a hole.
+    const config = hlsLivePlayerConfig();
+    const egressWindowSegments = 5;
+    expect(egressWindowSegments - config.liveSyncDurationCount).toBeGreaterThanOrEqual(2);
+  });
+
   it("refuses a sync that would join on the oldest segment of the window", () => {
     expect(
       hlsLiveSyncFitsWindow({
-        liveSyncDurationCount: 5,
-        liveMaxLatencyDurationCount: 6,
+        liveSyncDurationCount: 15,
+        liveMaxLatencyDurationCount: 16,
         maxBufferLength: 8,
         maxMaxBufferLength: 10,
+        backBufferLength: 10,
         startLevel: 0,
       }),
+    ).toBe(false);
+  });
+
+  it("refuses an infinite back-buffer, which kept a whole party in the SourceBuffer", () => {
+    const config = hlsLivePlayerConfig();
+    expect(
+      hlsLiveSyncFitsWindow({ ...config, backBufferLength: Number.POSITIVE_INFINITY }),
     ).toBe(false);
   });
 });
