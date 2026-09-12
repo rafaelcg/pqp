@@ -3105,6 +3105,9 @@ function MainAppContent({
             if (initialChannelId) {
               void openChannel(initialChannelId);
             }
+            // Messages saved before a reload or a quit go out on the first
+            // ready socket; the reconnect path does the same via resubscribe.
+            chat.flushOutbox();
             return;
           }
           // Re-subscribe and re-sync: messages sent while we were offline were

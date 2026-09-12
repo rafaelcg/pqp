@@ -1432,7 +1432,27 @@ export async function postChannelMessage(
     input.chance || input.poll
       ? { chance: input.chance, poll: input.poll }
       : undefined,
+    input.nonce,
   );
+  if (dbMessage?.duplicate) {
+    // The first copy was stored, fanned out and charged. Answer only the
+    // socket that asked again, so its optimistic bubble settles, and nobody
+    // else sees the message twice.
+    if (slowModeSeconds > 0) {
+      await refundSlowMode(input.channelId, input.author.id);
+    }
+    const message = mapMessage(dbMessage);
+    if (input.senderSocket && input.senderSocket.readyState === 1) {
+      input.senderSocket.send(
+        encode({
+          type: "message-broadcast",
+          message,
+          ...(input.nonce ? { nonce: input.nonce } : {}),
+        }),
+      );
+    }
+    return { ok: true, message };
+  }
   if (!dbMessage) {
     // Charged a turn for a message that never landed. Hand it back: the
     // sender posted nothing, so they owe nothing.

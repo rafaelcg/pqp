@@ -7,6 +7,7 @@ import type {
 import { MESSAGE_BULK_DELETE_MAX } from "@pqp/shared";
 import {
   AlertCircle,
+  WifiOff,
   ArrowDown,
   Check,
   Copy,
@@ -1399,6 +1400,39 @@ const FAILED_ACTION_TILE =
  * mounted through a rate-limit / slow-mode wait (disabled, with the remaining
  * seconds). Permanent refusals get Discard only.
  */
+/**
+ * Under a bubble that is waiting for the connection rather than for the
+ * server. Honest copy, next to the reconnecting banner: it will go out on its
+ * own, and Discard is the way to take it back before it does.
+ */
+function QueuedSendFooter({
+  tabIndex,
+  onDiscard,
+}: {
+  tabIndex: number;
+  onDiscard: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-1.5">
+      <p className="flex items-start gap-2 text-xs text-text-muted">
+        <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span>{t("chat.queuedOffline")}</span>
+      </p>
+      <div className="mt-1.5 grid max-w-[8rem] grid-cols-1 gap-2">
+        <button
+          type="button"
+          tabIndex={tabIndex}
+          onClick={onDiscard}
+          className={FAILED_ACTION_TILE}
+        >
+          {t("chat.discard")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function FailedSendFooter({
   message,
   tabIndex,
@@ -1551,7 +1585,9 @@ function buildMessageAriaLabel(
   }
 
   if (message.pending) {
-    parts.push(translateMessage("chat.sending"));
+    parts.push(
+      translateMessage(message.queued ? "chat.queuedOffline" : "chat.sending"),
+    );
   } else if (message.failed) {
     const copy = failedSendCopy(message);
     parts.push(translateMessage(copy.key, copy.vars));
@@ -2438,6 +2474,9 @@ const MessageRow = memo(function MessageRow({
                 onRetry={onRetry}
                 onDiscard={onDiscard}
               />
+            )}
+            {message.pending && message.queued && (
+              <QueuedSendFooter tabIndex={controlTabIndex} onDiscard={onDiscard} />
             )}
 
             {isReal && !stream && (

@@ -2107,6 +2107,7 @@
   "chat.replyDeleted": "Respondendo a uma mensagem excluída",
   "chat.replyTo": "Respondendo a {name}: {excerpt}",
   "chat.sending": "Enviando",
+  "chat.queuedOffline": "Vai enviar quando a conexão voltar",
   "chat.failedSend": "Falha ao enviar",
   "chat.reject.rateLimited": "Você tá mandando rápido demais",
   "chat.reject.noAccess": "Você não pode mandar mensagem neste canal",

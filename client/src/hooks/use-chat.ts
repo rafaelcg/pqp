@@ -26,6 +26,13 @@ import {
 } from "@/lib/api";
 import { revokePreviewUrl, type OutgoingAttachment } from "@/lib/attachments";
 import type { RealtimeTransport } from "@/lib/realtime";
+import {
+  createSendNonce,
+  loadOutbox,
+  MAX_OUTBOX_ENTRIES,
+  saveOutbox,
+  type OutboxEntry,
+} from "@/lib/outbox";
 
 /** A message plus the client-only state an optimistic bubble needs. */
 export interface ChatMessage extends Message {
@@ -33,6 +40,12 @@ export interface ChatMessage extends Message {
   failed?: boolean;
   /** Correlates the optimistic bubble with the server's broadcast. */
   nonce?: string;
+  /**
+   * Pending, and not yet on the wire: the socket was down when it was sent,
+   * so it sits in the outbox until the connection is back. The bubble says
+   * so instead of looking like a slow send.
+   */
+  queued?: boolean;
   /** Set when the server answered `message-create` with `message-rejected`. */
   rejectReason?: MessageRejectReason;
   /** With `automod`: the rule's own copy, when the owner wrote one. */
@@ -240,6 +253,15 @@ const TYPING_TTL_MS = 5_000;
 const TYPING_THROTTLE_MS = 2_500;
 /** A send with no broadcast back within this window is treated as failed. */
 const SEND_TIMEOUT_MS = 10_000;
+/**
+ * A reconnect replays the outbox in paced chunks, the way the transport
+ * drains its own queue: one burst, then a few frames every half second, so
+ * two hundred queued messages do not land on the server's per-connection
+ * budget and the database pool in one go.
+ */
+const OUTBOX_FLUSH_FIRST_BURST = 30;
+const OUTBOX_FLUSH_CHUNK = 8;
+const OUTBOX_FLUSH_INTERVAL_MS = 500;
 
 function applyReactionBroadcast(
   reactions: MessageReaction[],
@@ -316,10 +338,8 @@ function toChatMessage(message: MessageBroadcast["message"]): ChatMessage {
   };
 }
 
-let nonceCounter = 0;
 function createNonce(): string {
-  nonceCounter += 1;
-  return `${Date.now().toString(36)}-${nonceCounter}`;
+  return createSendNonce();
 }
 
 // --- threads ---
@@ -351,6 +371,28 @@ export function createChatController(
 ) {
   let messages: ChatMessage[] = [];
   let presence: PresenceUpdate["users"] = [];
+  /**
+   * The durable copy of every text send until the server answers it. Only
+   * the primary controller keeps one: the thread panel shares the account's
+   * storage key, and two writers would overwrite each other. Thread sends
+   * still ride the transport's in-memory queue while offline, as before.
+   */
+  const ownsOutbox = frames === PRIMARY_CHANNEL_FRAMES;
+  let outbox: OutboxEntry[] = [];
+  /**
+   * The nonces this controller currently holds, so a storage write can merge
+   * around other tabs' rows. A nonce leaves the set on the write that removes
+   * its row, so the set is never larger than the outbox itself.
+   */
+  const ownedNonces = new Set<string>();
+  /**
+   * Which socket a send went out on. Bumped by `resubscribe`, so a send
+   * that was in flight when the socket dropped is told apart from one the
+   * current socket already carries, and replayed rather than skipped.
+   */
+  let socketGeneration = 0;
+  const sentOnGeneration = new Map<string, number>();
+  let outboxFlushTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * The presence sequence this controller has applied up to for its channel.
    *
@@ -440,6 +482,157 @@ export function createChatController(
     }
   }
 
+  function persistOutbox() {
+    if (ownsOutbox && currentUserId) {
+      saveOutbox(currentUserId, outbox, ownedNonces);
+    }
+  }
+
+  function rememberInOutbox(entry: OutboxEntry) {
+    if (!ownsOutbox) {
+      return;
+    }
+    ownedNonces.add(entry.nonce);
+    outbox = [...outbox.filter((item) => item.nonce !== entry.nonce), entry];
+    // The same cap storage applies, enforced here too so a long offline
+    // stretch does not hold every body in memory and replay them all. The
+    // oldest give way, and their bubbles say so rather than waiting forever.
+    let evictedNonces: Set<string> | null = null;
+    if (outbox.length > MAX_OUTBOX_ENTRIES) {
+      const evicted = outbox.slice(0, outbox.length - MAX_OUTBOX_ENTRIES);
+      outbox = outbox.slice(-MAX_OUTBOX_ENTRIES);
+      evictedNonces = new Set(evicted.map((item) => item.nonce));
+      for (const nonce of evictedNonces) {
+        clearSendTimer(nonce);
+        sentOnGeneration.delete(nonce);
+      }
+      messages = messages.map((message) =>
+        message.nonce && evictedNonces!.has(message.nonce) && message.pending
+          ? { ...message, pending: false, queued: false, failed: true }
+          : message,
+      );
+    }
+    persistOutbox();
+    if (evictedNonces) {
+      // Owned through the write above, so their rows left storage too.
+      for (const nonce of evictedNonces) {
+        ownedNonces.delete(nonce);
+      }
+    }
+  }
+
+  function stopOutboxFlush() {
+    if (outboxFlushTimer) {
+      clearTimeout(outboxFlushTimer);
+      outboxFlushTimer = null;
+    }
+  }
+
+  function forgetInOutbox(nonce: string) {
+    if (!ownsOutbox || !outbox.some((item) => item.nonce === nonce)) {
+      return;
+    }
+    outbox = outbox.filter((item) => item.nonce !== nonce);
+    sentOnGeneration.delete(nonce);
+    persistOutbox();
+    ownedNonces.delete(nonce);
+  }
+
+  function setQueued(nonce: string, queued: boolean) {
+    let changed = false;
+    messages = messages.map((message) => {
+      if (
+        message.nonce !== nonce ||
+        !message.pending ||
+        Boolean(message.queued) === queued
+      ) {
+        return message;
+      }
+      changed = true;
+      return { ...message, queued };
+    });
+    if (changed) {
+      emit();
+    }
+  }
+
+  function buildOptimistic(input: {
+    nonce: string;
+    channelId: string;
+    body: string;
+    createdAt: string;
+    replyTo: ChatMessage["replyTo"];
+    attachments: Attachment[];
+    queued: boolean;
+  }): ChatMessage {
+    return {
+      id: `pending:${input.nonce}`,
+      channelId: input.channelId,
+      authorId: currentUserId ?? "",
+      authorName: currentUser?.displayName ?? "You",
+      authorTag: currentUser?.tag ?? null,
+      authorAvatarUrl: currentUser?.avatarUrl ?? null,
+      body: input.body,
+      createdAt: input.createdAt,
+      editedAt: null,
+      reactions: [],
+      attachments: input.attachments,
+      // A message is never born pinned — only ever pinned after the fact by
+      // someone reacting to it once it exists.
+      pinnedAt: null,
+      pinnedBy: null,
+      // Same reasoning as pins: unfurling happens after the message exists,
+      // via the message-update broadcast the server sends once it resolves.
+      embeds: [],
+      // The composer only ever sends as the signed-in user, never as a
+      // webhook — an optimistic bubble is never one.
+      isWebhook: false,
+      isAutomod: false,
+      webhookEmbeds: [],
+      mentionEveryone: false,
+      mentionHere: false,
+      // A message is never born with a thread either.
+      thread: null,
+      chance: null,
+      poll: null,
+      replyTo: input.replyTo,
+      pending: true,
+      queued: input.queued,
+      nonce: input.nonce,
+    };
+  }
+
+  /**
+   * Put the outbox's bubbles for this channel back on screen after a page
+   * replaced the window. A reload, or a channel reopened, must show what is
+   * still waiting to go out; they sit after the page since they are newer
+   * than anything stored.
+   */
+  function restoreOutboxBubbles() {
+    if (!ownsOutbox || !channelId || hasNewer) {
+      return;
+    }
+    const present = new Set(messages.map((message) => message.nonce));
+    const restored = outbox
+      .filter((entry) => entry.channelId === channelId && !present.has(entry.nonce))
+      .map((entry) =>
+        buildOptimistic({
+          nonce: entry.nonce,
+          channelId: entry.channelId,
+          body: entry.body,
+          createdAt: entry.createdAt,
+          // Only the parent's id survives storage; the broadcast that
+          // replaces this bubble carries the full quote.
+          replyTo: null,
+          attachments: [],
+          queued: !transport.isConnected() || !sendTimers.has(entry.nonce),
+        }),
+      );
+    if (restored.length > 0) {
+      messages = [...messages, ...restored];
+    }
+  }
+
   function clearSendTimer(nonce: string) {
     const timer = sendTimers.get(nonce);
     if (timer) {
@@ -518,6 +711,7 @@ export function createChatController(
   ) {
     clearSendTimer(nonce);
     clearRetryUnlock(nonce);
+    forgetInOutbox(nonce);
     let waitMs: number | undefined;
     if (!isPermanentRejectReason(reason)) {
       if (retryAfterMs && retryAfterMs > 0) {
@@ -567,6 +761,9 @@ export function createChatController(
   }
 
   function markFailed(nonce: string) {
+    // The server was reachable and never answered: this is a real failure,
+    // with Retry on the bubble, not something to replay on the next connect.
+    forgetInOutbox(nonce);
     let changed = false;
     messages = messages.map((message) => {
       if (message.nonce !== nonce || !message.pending) {
@@ -589,14 +786,35 @@ export function createChatController(
     interactive?: { chance?: ChanceRequest; poll?: PollRequest },
   ) {
     clearSendTimer(nonce);
+    const durable =
+      ownsOutbox &&
+      attachmentIds.length === 0 &&
+      !interactive?.chance &&
+      !interactive?.poll;
+    if (durable) {
+      const existing = messages.find((message) => message.nonce === nonce);
+      rememberInOutbox({
+        nonce,
+        channelId: targetChannelId,
+        body,
+        replyToId: replyToId ?? null,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+      });
+    }
     // Only start the failure clock once the message is actually on the wire.
     // While offline the transport queues it and delivers it on reconnect, so
     // failing it here would invite a retry that sends the same message twice.
     if (transport.isConnected()) {
+      sentOnGeneration.set(nonce, socketGeneration);
       sendTimers.set(
         nonce,
         setTimeout(() => markFailed(nonce), SEND_TIMEOUT_MS),
       );
+    } else if (durable) {
+      // Held in the outbox, not the transport's queue: `flushOutbox` sends
+      // it once the socket is ready, and storage keeps it across a reload.
+      setQueued(nonce, true);
+      return;
     }
     transport.sendChat({
       type: "message-create",
@@ -695,7 +913,65 @@ export function createChatController(
     hasMore = moreAvailable;
     hasNewer = newerAvailable;
     newestLoadedId = next[next.length - 1]?.id ?? null;
+    restoreOutboxBubbles();
     emit();
+  }
+
+  /**
+   * Send everything the outbox still holds. Runs on every ready socket, so a
+   * message typed offline goes out on reconnect and a message saved before a
+   * reload goes out on the first connect after it. The server answers a nonce
+   * it has already stored with the existing row, so a replay is harmless.
+   */
+  function flushOutbox() {
+    stopOutboxFlush();
+    // No account, no replay: a socket that comes up after a logout must not
+    // carry the previous person's rows under whoever signs in next.
+    if (!ownsOutbox || !currentUserId || !transport.isConnected()) {
+      return;
+    }
+    const due = outbox.filter(
+      (entry) => sentOnGeneration.get(entry.nonce) !== socketGeneration,
+    );
+    if (due.length === 0) {
+      return;
+    }
+    const sendChunk = (limit: number) => {
+      const chunk = due.splice(0, limit);
+      for (const entry of chunk) {
+        // A send still waiting on the old socket is replayed on this one;
+        // the nonce keeps it from posting twice. `transmit` starts the
+        // failure clock afresh, since the socket is connected here.
+        clearSendTimer(entry.nonce);
+        transmit(entry.nonce, entry.body, entry.channelId, entry.replyToId ?? undefined);
+      }
+      const nonces = new Set(chunk.map((entry) => entry.nonce));
+      let changed = false;
+      messages = messages.map((message) => {
+        if (!message.nonce || !nonces.has(message.nonce) || !message.queued) {
+          return message;
+        }
+        changed = true;
+        return { ...message, queued: false };
+      });
+      if (changed) {
+        emit();
+      }
+    };
+    sendChunk(OUTBOX_FLUSH_FIRST_BURST);
+    const tick = () => {
+      outboxFlushTimer = null;
+      if (!currentUserId || !transport.isConnected() || due.length === 0) {
+        return;
+      }
+      sendChunk(OUTBOX_FLUSH_CHUNK);
+      if (due.length > 0) {
+        outboxFlushTimer = setTimeout(tick, OUTBOX_FLUSH_INTERVAL_MS);
+      }
+    };
+    if (due.length > 0) {
+      outboxFlushTimer = setTimeout(tick, OUTBOX_FLUSH_INTERVAL_MS);
+    }
   }
 
   return {
@@ -710,8 +986,21 @@ export function createChatController(
       tag: string | null;
       username?: string | null;
     } | null) {
+      const previousUserId = currentUserId;
       currentUserId = user?.id ?? null;
       currentUsername = user?.username ?? null;
+      if (ownsOutbox && currentUserId !== previousUserId) {
+        // The rows belong to an account, not to the tab. A sign-out drops
+        // them from memory (storage keeps them for that person's next
+        // sign-in) so nothing is replayed under whoever comes next.
+        stopOutboxFlush();
+        sentOnGeneration.clear();
+        ownedNonces.clear();
+        outbox = currentUserId ? loadOutbox(currentUserId) : [];
+        for (const entry of outbox) {
+          ownedNonces.add(entry.nonce);
+        }
+      }
       currentUser = user
         ? {
             displayName: user.displayName,
@@ -929,6 +1218,27 @@ export function createChatController(
       if (channelId) {
         transport.sendChat(frames.join(channelId));
       }
+      // A new socket: anything sent on the old one is due again.
+      socketGeneration += 1;
+      flushOutbox();
+    },
+
+    /** Replay the outbox on a ready socket; see `flushOutbox` above. */
+    flushOutbox() {
+      flushOutbox();
+    },
+
+    /** What is still waiting to go out, for tests and the connection check. */
+    getOutbox(): readonly OutboxEntry[] {
+      return outbox;
+    },
+
+    /** Test seams: the bookkeeping must stay bounded by the outbox. */
+    getOwnedNonceCount(): number {
+      return ownedNonces.size;
+    },
+    getTrackedSendCount(): number {
+      return sentOnGeneration.size;
     },
 
     leaveChannel() {
@@ -972,36 +1282,11 @@ export function createChatController(
         height: item.height,
         url: item.previewUrl,
       }));
-      const optimistic: ChatMessage = {
-        id: `pending:${nonce}`,
+      const optimistic = buildOptimistic({
+        nonce,
         channelId,
-        authorId: currentUserId,
-        authorName: currentUser?.displayName ?? "You",
-        authorTag: currentUser?.tag ?? null,
-        authorAvatarUrl: currentUser?.avatarUrl ?? null,
         body: clamped,
         createdAt: new Date().toISOString(),
-        editedAt: null,
-        reactions: [],
-        attachments: optimisticAttachments,
-        // A message is never born pinned — only ever pinned after the fact by
-        // someone reacting to it once it exists.
-        pinnedAt: null,
-        pinnedBy: null,
-        // Same reasoning as pins: unfurling happens after the message exists,
-        // via the message-update broadcast the server sends once it resolves.
-        embeds: [],
-        // The composer only ever sends as the signed-in user, never as a
-        // webhook — an optimistic bubble is never one.
-        isWebhook: false,
-        isAutomod: false,
-        webhookEmbeds: [],
-        mentionEveryone: false,
-        mentionHere: false,
-        // A message is never born with a thread either.
-        thread: null,
-        chance: null,
-        poll: null,
         // Built with the same helper the server uses, so the bubble does not
         // visibly rewrite itself when the broadcast comes back.
         replyTo: replyTo
@@ -1013,9 +1298,9 @@ export function createChatController(
               deleted: false,
             }
           : null,
-        pending: true,
-        nonce,
-      };
+        attachments: optimisticAttachments,
+        queued: false,
+      });
       messages = [...messages, optimistic];
       if (!bypassSlowMode && slowModeSeconds > 0) {
         startSlowModeHold(nonce, slowModeSeconds * 1000);
@@ -1071,6 +1356,7 @@ export function createChatController(
     discardMessage(nonce: string) {
       clearSendTimer(nonce);
       clearRetryUnlock(nonce);
+      forgetInOutbox(nonce);
       for (const message of messages) {
         if (message.nonce === nonce) {
           revokeLocalPreviews(message);
@@ -1325,6 +1611,12 @@ export function createChatController(
     handleServerMessage(message: ChatServerMessage) {
       switch (message.type) {
         case "message-broadcast": {
+          // Answered, whichever channel is on screen: the outbox is per
+          // account, not per view, and a bubble in another channel must
+          // not be replayed on the next connect.
+          if (message.nonce) {
+            forgetInOutbox(message.nonce);
+          }
           if (message.message.channelId !== channelId) {
             return;
           }
@@ -1488,6 +1780,9 @@ export function createChatController(
         }
 
         case "message-rejected": {
+          if (message.nonce) {
+            forgetInOutbox(message.nonce);
+          }
           if (message.channelId !== channelId || !message.nonce) {
             return;
           }
