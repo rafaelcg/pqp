@@ -546,6 +546,21 @@ export const voiceModerationMessageSchema = z.object({
   movedToChannelId: z.string().uuid().optional(),
   /** The whole sentence, already written — render it verbatim. */
   message: z.string(),
+  /**
+   * `disconnected` only, and only when nobody acted: the server hung the
+   * seat up because its occupant sat alone past the idle limit (see
+   * `voiceIdleWarningMessageSchema`). A client that knows the reason may say
+   * it in the person's own language; one that does not renders `message`.
+   * Optional so every client already shipped keeps parsing the frame.
+   */
+  reason: z.enum(["idle"]).optional(),
+  /**
+   * `reason: "idle"` only: `VOICE_IDLE_ALONE_MINUTES` as configured on this
+   * server, rounded. A client localizing the sentence interpolates this
+   * rather than assuming the shipped default of 10 — a self-host may have
+   * set it to 5. Absent on every other `reason`/action.
+   */
+  aloneMinutes: z.number().int().positive().optional(),
 });
 
 export type VoiceModerationMessage = z.infer<typeof voiceModerationMessageSchema>;
@@ -565,6 +580,28 @@ export const voiceSpeakChangedMessageSchema = z.object({
   /** `Permission.MANAGE_MUSIC`, re-resolved with the rest. Absent: unchanged. */
   canManageMusic: z.boolean().optional(),
 });
+
+/**
+ * Server → one participant's sockets: you have been the only person in this
+ * room for a while, and the seat is about to be released. `disconnectAt` is
+ * the server's clock (epoch ms); the client counts down against its own and
+ * offers one button, which sends `voice-still-here` and starts the clock
+ * over. Somebody else joining cancels it silently.
+ *
+ * Why the server hangs up at all: a seat nobody is behind still keeps a
+ * relay allocation and, on the SFU, a session, and a green "in voice" badge
+ * on someone who fell asleep misleads everybody who can see the channel.
+ * Same shape as Google Meet's "leave empty calls".
+ */
+export const voiceIdleWarningMessageSchema = z.object({
+  type: z.literal("voice-idle-warning"),
+  voiceChannelId: z.string(),
+  disconnectAt: z.number().int().positive(),
+});
+
+export type VoiceIdleWarningMessage = z.infer<
+  typeof voiceIdleWarningMessageSchema
+>;
 
 export type VoiceSpeakChangedMessage = z.infer<
   typeof voiceSpeakChangedMessageSchema
@@ -595,6 +632,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   // --- voice moderation ---
   voiceModerationMessageSchema,
   voiceSpeakChangedMessageSchema,
+  voiceIdleWarningMessageSchema,
   // --- watch party ---
   watchPartyMessageSchema,
   // --- music queue --- see packages/shared/src/music.ts
@@ -775,6 +813,19 @@ export type SetVoiceTrackModeMessage = z.infer<
   typeof setVoiceTrackModeMessageSchema
 >;
 
+/**
+ * Client → server: the answer to `voice-idle-warning`. No payload: it can
+ * only ever be about the sender's own seat, and the server already knows
+ * which room that is. Any other self-initiated frame (mute, share, camera,
+ * hand, reaction) restarts the same clock, so this exists only for the
+ * person who is genuinely sitting alone on purpose.
+ */
+export const voiceStillHereMessageSchema = z.object({
+  type: z.literal("voice-still-here"),
+});
+
+export type VoiceStillHereMessage = z.infer<typeof voiceStillHereMessageSchema>;
+
 export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   joinVoiceRoomMessageSchema,
   leaveVoiceRoomMessageSchema,
@@ -790,6 +841,8 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setVoiceStateMessageSchema,
   // --- raised hands ---
   setRaisedHandMessageSchema,
+  // --- idle seat ---
+  voiceStillHereMessageSchema,
   // --- watch party ---
   setWatchPartyMessageSchema,
   setVoiceTrackModeMessageSchema,
