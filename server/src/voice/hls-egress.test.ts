@@ -3,6 +3,7 @@ import { EgressStatus, TrackSource } from "livekit-server-sdk";
 import {
   type LiveHlsEgressApi,
   HLS_MAX_RESTARTS,
+  ORPHAN_STOP_BACKOFF_FIRST_MS,
   checkLiveHlsHealth,
   internalPlaylistUrl,
   isLiveHlsFailed,
@@ -1450,6 +1451,50 @@ describe("live HLS egress", () => {
 
         expect(stop).not.toHaveBeenCalled();
         expect(liveHlsActivity().orphansStopped).toBe(0);
+      });
+
+      /**
+       * Staging 2026-09-12: a leftover whose handler was already gone
+       * (`StopEgress` → `no response from servers`, 3 s timeout) was retried
+       * every 10 s for seven hours. The leftover never came back. The live
+       * encode sat behind those RPCs, then the playlist check, then another
+       * restart. One failure buys a minute of silence; a later pass after
+       * the wait is allowed to try again.
+       */
+      it("does not retry a leftover StopEgress that just timed out", async () => {
+        enableHls();
+        const lk = fakeLiveKit();
+        const leftover = withLeftover(lk, "EG_DEAD");
+        const stop = vi.fn(async (egressId: string) => {
+          if (egressId === "EG_DEAD") {
+            throw new Error("twirp error unknown: request timed out");
+          }
+          return leftover.stopEgress(egressId);
+        });
+        setLiveHlsTestHooks({
+          egress: { ...leftover, stopEgress: stop },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        // Start-time superseded cleanup already tried once and failed.
+        expect(
+          stop.mock.calls.filter((call) => call[0] === "EG_DEAD"),
+        ).toHaveLength(1);
+
+        await advance(20_000);
+        await checkLiveHlsHealth();
+        await advance(10_000);
+        await checkLiveHlsHealth();
+        expect(
+          stop.mock.calls.filter((call) => call[0] === "EG_DEAD"),
+        ).toHaveLength(1);
+        expect(liveHlsActivity().orphansStopped).toBe(0);
+
+        await advance(ORPHAN_STOP_BACKOFF_FIRST_MS);
+        await checkLiveHlsHealth();
+        expect(
+          stop.mock.calls.filter((call) => call[0] === "EG_DEAD"),
+        ).toHaveLength(2);
       });
     });
 

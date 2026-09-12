@@ -86,6 +86,20 @@ export const HLS_RESTART_WINDOW_MS = 5 * 60 * 1000;
 const FAILED_COOLDOWN_MS = 5 * 60 * 1000;
 const RESTART_BACKOFF_BASE_MS = 2_000;
 const RESTART_BACKOFF_MAX_MS = 15_000;
+/**
+ * First wait after a leftover `StopEgress` fails. Staging 2026-09-12: one
+ * dead handler (`no response from servers`) was retried every monitor tick
+ * for seven hours, each attempt a 3 s LiveKit timeout, in front of the
+ * playlist check. The leftover never came back; the live encode paid for
+ * the RPC. After this, 2 min, 5 min, then 15 min.
+ */
+export const ORPHAN_STOP_BACKOFF_FIRST_MS = 60_000;
+const ORPHAN_STOP_BACKOFF_STEPS_MS = [
+  ORPHAN_STOP_BACKOFF_FIRST_MS,
+  2 * 60_000,
+  5 * 60_000,
+  15 * 60_000,
+] as const;
 
 /**
  * What LiveKit says about one egress, reduced to the three answers the
@@ -197,6 +211,11 @@ const failedUntil = new Map<string, number>();
 const pendingRestarts = new Map<string, ReturnType<typeof setTimeout>>();
 /** Per-channel serialisation of `reconcileLiveHls`: the monitor and the room can race. */
 const reconcileQueue = new Map<string, Promise<unknown>>();
+/** Leftover ids whose last `StopEgress` failed: do not ask again before `until`. */
+const orphanStopBackoff = new Map<
+  string,
+  { failures: number; until: number }
+>();
 /**
  * Leftover transcodes this process has stopped since it started, from
  * `reapForeignEgresses`. Belongs at zero. Anything else is a session that
@@ -784,6 +803,7 @@ export function resetLiveHlsForTests(): void {
   }
   pendingRestarts.clear();
   reconcileQueue.clear();
+  orphanStopBackoff.clear();
   orphansStopped = 0;
   changeListener = null;
   sfuLoadReader = null;
@@ -909,6 +929,28 @@ function notifyChanged(channelId: string, reason: string): void {
 }
 
 /** Timestamps inside the window, oldest first. */
+function orphanStopBackoffMs(failures: number): number {
+  const index = Math.min(
+    Math.max(failures, 1),
+    ORPHAN_STOP_BACKOFF_STEPS_MS.length,
+  );
+  return ORPHAN_STOP_BACKOFF_STEPS_MS[index - 1]!;
+}
+
+function orphanStopHeld(egressId: string, now: number): boolean {
+  return (orphanStopBackoff.get(egressId)?.until ?? 0) > now;
+}
+
+function rememberOrphanStopFailure(
+  egressId: string,
+  now: number,
+): { failures: number; waitMs: number } {
+  const failures = (orphanStopBackoff.get(egressId)?.failures ?? 0) + 1;
+  const waitMs = orphanStopBackoffMs(failures);
+  orphanStopBackoff.set(egressId, { failures, until: now + waitMs });
+  return { failures, waitMs };
+}
+
 function recentRestarts(channelId: string, now: number): number[] {
   const kept = (restartHistory.get(channelId) ?? []).filter(
     (at) => now - at < HLS_RESTART_WINDOW_MS,
@@ -1166,6 +1208,7 @@ async function reapForeignEgresses(
   egress: LiveHlsEgressApi,
   channelId: string,
   room: RoomHls,
+  now: number,
 ): Promise<void> {
   if (!egress.listEgress || !reapOrphansEnabled()) {
     return;
@@ -1197,19 +1240,16 @@ async function reapForeignEgresses(
     if (healthFromListing(info.egressId, listing) !== "alive") {
       continue;
     }
-    try {
-      await egress.stopEgress(info.egressId);
+    if (orphanStopHeld(info.egressId, now)) {
+      continue;
+    }
+    const stopped = await stopEgressById(info.egressId, channelId);
+    if (stopped) {
       orphansStopped += 1;
       logEvent("voice.hlsOrphanStopped", {
         channelId,
         egressId: info.egressId,
         ours: [...ours],
-      });
-    } catch (error) {
-      logEvent("voice.hlsOrphanStopFailed", {
-        channelId,
-        egressId: info.egressId,
-        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -1245,7 +1285,7 @@ export async function checkLiveHlsHealth(
     // BEFORE the health checks, not after: a leftover ladder is what makes the
     // box slow enough for the live one's playlist to stall, which is the
     // stuck-playlist verdict, which schedules a restart, which starts a third.
-    await reapForeignEgresses(egress, channelId, room);
+    await reapForeignEgresses(egress, channelId, room, now);
     if (rooms.get(channelId) !== room) {
       continue;
     }
@@ -1441,19 +1481,27 @@ export async function listActiveEgresses(): Promise<EgressListing[] | null> {
 export async function stopEgressById(
   egressId: string,
   channelId?: string,
+  now = Date.now(),
 ): Promise<boolean> {
   const egress = getEgress();
   if (!egress) {
     return false;
   }
+  if (orphanStopHeld(egressId, now)) {
+    return false;
+  }
   try {
     await egress.stopEgress(egressId);
+    orphanStopBackoff.delete(egressId);
     return true;
   } catch (error) {
+    const { failures, waitMs } = rememberOrphanStopFailure(egressId, now);
     logEvent("voice.hlsStopFailed", {
       channelId: channelId ?? null,
       egressId,
       error: error instanceof Error ? error.message : String(error),
+      failures,
+      backoffMs: waitMs,
     });
     return false;
   }
