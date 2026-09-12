@@ -1,12 +1,57 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   chooseFullscreenStrategy,
+  enterNativeVideoFullscreen,
   isStandaloneDisplayMode,
   lockLandscape,
   nativeVideoFullscreenAllowed,
   NATIVE_VIDEO_FULLSCREEN_KEY,
   unlockOrientation,
+  videoCanEnterFullscreen,
+  videoSupportsNativeFullscreen,
 } from "./fullscreen";
+
+type VideoProbe = Partial<{
+  webkitEnterFullscreen: () => void;
+  webkitSupportsFullscreen: boolean;
+}>;
+
+const video = (shape: VideoProbe): HTMLVideoElement =>
+  shape as unknown as HTMLVideoElement;
+
+describe("videoCanEnterFullscreen (watch party's looser probe)", () => {
+  it("is true whenever the native method exists, method present is the gate", () => {
+    expect(videoCanEnterFullscreen(video({ webkitEnterFullscreen: () => {} }))).toBe(
+      true,
+    );
+  });
+
+  it("stays true for a ManagedMediaSource-backed film on iOS 17.1+", () => {
+    // WebKit reports `webkitSupportsFullscreen === false` for an MMS-backed
+    // <video> even while it plays; the STRICT probe rejects it (and strands
+    // the iPhone on `expand`), the watch probe does not. This contrast is the
+    // whole bug.
+    const mms = video({
+      webkitEnterFullscreen: () => {},
+      webkitSupportsFullscreen: false,
+    });
+    expect(videoSupportsNativeFullscreen(mms)).toBe(false);
+    expect(videoCanEnterFullscreen(mms)).toBe(true);
+  });
+
+  it("is false without the method, and for no video at all", () => {
+    expect(videoCanEnterFullscreen(video({}))).toBe(false);
+    expect(videoCanEnterFullscreen(null)).toBe(false);
+  });
+});
+
+describe("enterNativeVideoFullscreen calls the native player", () => {
+  it("invokes webkitEnterFullscreen on the given element", () => {
+    const webkitEnterFullscreen = vi.fn();
+    enterNativeVideoFullscreen(video({ webkitEnterFullscreen }));
+    expect(webkitEnterFullscreen).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("chooseFullscreenStrategy", () => {
   it("takes element fullscreen wherever it exists (desktop, Android, iPad)", () => {

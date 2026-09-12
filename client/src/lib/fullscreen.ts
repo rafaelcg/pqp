@@ -95,6 +95,38 @@ export function videoSupportsNativeFullscreen(
 }
 
 /**
+ * Looser than `videoSupportsNativeFullscreen`: the native method exists, full
+ * stop — no `webkitSupportsFullscreen` gate. This is the probe a WATCH PARTY
+ * wants, and using it is a real bug fix.
+ *
+ * A watch party's <video> is renderable HLS, not the MediaStream the call
+ * stage hands its camera tiles: a direct `.m3u8` `src` on an older iPhone, and
+ * a `ManagedMediaSource` on iOS 17.1+ where hls.js drives it (see
+ * `chooseHlsEngine` — MSE wins whenever it exists). The `webkitSupportsFullscreen
+ * !== false` guard above is correct for the call stage — it stops an older Mac
+ * blacking out a MediaStream-backed <video> that the method exists on but
+ * cannot actually fullscreen — but it is WRONG here: WebKit reports
+ * `webkitSupportsFullscreen` as `false` for a ManagedMediaSource-backed <video>
+ * even while it is playing, so the strict probe rejects the native player on
+ * every iOS 17.1+ iPhone and drops the watcher onto the in-page `expand`, which
+ * on an iPhone cannot hide Safari's toolbars and reads as a dead button. The
+ * native player CAN fullscreen an MMS source — that is the entire point of MMS
+ * (fullscreen, PiP and AirPlay for MSE playback) — and the watch toggle already
+ * catches a genuine refusal and falls back to `expand`, so the presence of the
+ * method is the right and safe gate.
+ */
+export function videoCanEnterFullscreen(
+  video: HTMLVideoElement | null,
+): boolean {
+  if (!video) {
+    return false;
+  }
+  return (
+    typeof (video as NativeFullscreenVideo).webkitEnterFullscreen === "function"
+  );
+}
+
+/**
  * Hand the focused video to the native player. Throws `InvalidStateError` on
  * a Safari that has the method but no fullscreen for this element (a
  * MediaStream on an older Mac); the caller falls back to `expand`.
