@@ -14,8 +14,25 @@ import {
   type MasterVariant,
 } from "./hls-ladder.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
+import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Per rendition, the segments this process has seen listed, so the window a
+ * viewer gets is wider than the five entries the egress writes. Keyed like
+ * the render cache and dropped with it. See `hls-live-window.ts`.
+ */
+const windowHistory = new Map<string, LiveWindowHistory>();
+
+function historyFor(key: string): LiveWindowHistory {
+  let history = windowHistory.get(key);
+  if (!history) {
+    history = new LiveWindowHistory();
+    windowHistory.set(key, history);
+  }
+  return history;
+}
 
 /**
  * How long one session's rendered playlist is reused.
@@ -74,6 +91,7 @@ function cacheKey(channelId: string, startedAt: number, rung?: string): string {
 export function resetHlsPlaylistCacheForTests(): void {
   playlistCache.clear();
   rungCache.clear();
+  windowHistory.clear();
 }
 
 /**
@@ -217,6 +235,9 @@ async function renderSignedPlaylist(
     [channelId, objectPrefix],
   );
   if (session.rowCount === 0) {
+    // The session is over: forget its window too, so the map does not keep
+    // one history per session this process ever served.
+    windowHistory.delete(cacheKey(channelId, startedAt, rung));
     throw new HlsPlaylistNotFound(
       `No live HLS session ${objectPrefix} for channel ${channelId}`,
     );
@@ -241,7 +262,15 @@ async function renderSignedPlaylist(
       `Storage returned HTTP ${response.status} for the playlist`,
     );
   }
-  const body = await response.text();
+  // The egress lists five segments. Remember them and list more: the
+  // objects are still in the bucket, and a viewer with only two seconds of
+  // listed media behind the playhead stalls on every slow poll. The widened
+  // body still carries the egress's own URI lines, so the rewrite below is
+  // unchanged.
+  const body = widenLivePlaylist(
+    historyFor(cacheKey(channelId, startedAt, rung)),
+    await response.text(),
+  );
   const ttl = hlsUrlTtlSeconds();
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
 
@@ -280,7 +309,10 @@ async function renderSignedPlaylist(
  * viewer's own token and is therefore not shared. Building the string from a
  * cached list costs nothing.
  */
-const rungCache = new Map<string, { rungs: string[]; at: number }>();
+const rungCache = new Map<
+  string,
+  { rungs?: string[]; inflight?: Promise<string[]>; at: number }
+>();
 
 /**
  * The rungs one session is serving right now, lowest bitrate first, read from
@@ -305,24 +337,45 @@ async function sessionRungs(
 ): Promise<string[]> {
   const key = cacheKey(channelId, startedAt, "master");
   const cached = rungCache.get(key);
-  if (cached && now - cached.at < HLS_PLAYLIST_CACHE_TTL_MS) {
-    return cached.rungs;
+  if (cached) {
+    if (cached.rungs !== undefined && now - cached.at < HLS_PLAYLIST_CACHE_TTL_MS) {
+      return cached.rungs;
+    }
+    // COALESCE THE STAMPEDE. A party's audience arrives together, and every
+    // one of them asks for the master first. Measured on staging 2026-09-12:
+    // 500 viewers ramping over 30 s put 500 copies of this query on a pool
+    // of 10 at once, 491 of them timed out at 15 s, and those viewers saw
+    // "Loading the stream" while the media polls beside them answered in
+    // 450 ms. One query per session per second, whoever asks.
+    if (cached.inflight) {
+      return cached.inflight;
+    }
   }
-  const rows = await getPool().query<{ rung: string | null }>(
-    `SELECT rung FROM hls_sessions
-     WHERE channel_id = $1
-       AND object_prefix LIKE $2
-       AND rung IS NOT NULL
-       AND ended_at IS NULL
-       AND cleaned_at IS NULL
-     ORDER BY started_at ASC`,
-    [channelId, sessionPrefixPattern(channelId, startedAt)],
-  );
-  const rungs = rows.rows
-    .map((row) => row.rung)
-    .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
-  rungCache.set(key, { rungs, at: now });
-  return rungs;
+  const inflight = getPool()
+    .query<{ rung: string | null }>(
+      `SELECT rung FROM hls_sessions
+       WHERE channel_id = $1
+         AND object_prefix LIKE $2
+         AND rung IS NOT NULL
+         AND ended_at IS NULL
+         AND cleaned_at IS NULL
+       ORDER BY started_at ASC`,
+      [channelId, sessionPrefixPattern(channelId, startedAt)],
+    )
+    .then((rows) => {
+      const rungs = rows.rows
+        .map((row) => row.rung)
+        .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
+      rungCache.set(key, { rungs, at: now });
+      return rungs;
+    })
+    .catch((error: unknown) => {
+      // Same rule as the playlist cache: a failed read is not remembered.
+      rungCache.delete(key);
+      throw error;
+    });
+  rungCache.set(key, { ...cached, inflight, at: cached?.at ?? 0 });
+  return inflight;
 }
 
 /**

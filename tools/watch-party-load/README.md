@@ -236,3 +236,57 @@ decode within 45 s, p95 1.4 to 1.7 s, 0.000% loss, 880 to 935 Mbit/s at 76%
 CPU p95 on 4 vCPU). Generator sizing that produced clean numbers: 19 to 31
 receivers per Node process, four to five processes per 12 to 16 vCPU box, the
 presenter alone in its own process, one decode sample per process.
+
+## HLS audience (`src/hls-audience.ts`)
+
+A separate, standalone script (own `main`, no shared state with `index.ts`
+above) that drives the *other* half of a watch party: viewers polling the
+HLS playlist proxy (`server/src/voice/hls-playlist-proxy.ts`) the way hls.js
+1.7 actually does it, rather than a LiveKit RTC connection. It measures the
+proxy's Postgres lookup, render cache, and presigned-segment-URL signing
+under many concurrent pollers, independent of the SFU/mesh path.
+
+Each simulated viewer: fetches the master playlist once with its own
+`?t=` token, picks the LAST `#EXT-X-STREAM-INF` variant (same rule hls.js's
+default ABR uses, and the same order `buildMasterPlaylist` writes them in),
+then polls that media playlist on a timer seeded at 2 s and corrected to
+`#EXT-X-TARGETDURATION` once known, timed from the end of the previous load.
+It tracks `nextSeq` like `liveSyncDurationCount: 3` (starts three segments
+behind the live edge, jumps forward with a counted `windowMiss` if the proxy's
+window ever moves past what it was tracking), and fetches every newly listed
+segment's body in order unless `--segments false`. Segment fetches are capped
+at 64 in flight globally (a small semaphore) so the harness box is never the
+bottleneck; playlist polls are never gated by it.
+
+It refuses to run against `pqp.gg`, `api.pqp.gg`, or any `*.pqp.gg` host
+unless `--allow-production` is passed. There is no separate local-loopback
+allowance beyond that check — point it at whatever host you like as long as
+it isn't a production one.
+
+```sh
+cd tools/watch-party-load && pnpm install
+
+pnpm exec tsx src/hls-audience.ts \
+  --url https://pqp-api-staging.fly.dev/api/voice/hls-playlist/<channelId>/<startedAt> \
+  --tokens ./hls-tokens.txt \
+  --viewers 500 --seconds 180 --ramp-seconds 20 \
+  --out /tmp/hls-audience-500.json
+```
+
+`--url` is the master playlist URL **without** a `?t=` token — each viewer
+appends its own from `--tokens` (one per line; `--viewers` is capped at
+however many lines the file has). `--ramp-seconds` spreads viewer start times
+uniformly over that window so the run looks like people trickling into a
+party rather than 500 simultaneous cold starts. Every 10 s it prints a
+progress line to stderr (active viewers, requests/sec by kind, error counts,
+p50/p95/p99 latency for media playlists and segments, total `windowMisses`,
+and segment throughput in Mbit/s); at the end it writes the full JSON summary
+to `--out` (default `./hls-audience-<timestamp>.json`) and also prints it.
+
+Tokens are minted on the API machine itself (this mints 500 short-lived
+viewer tokens for one channel/session and prints one per line — redirect to
+a file for `--tokens`); `crypto` is a Node global, no import needed:
+
+```sh
+fly ssh console -a pqp-api-staging -C "node -e \"import('/app/server/dist/voice/hls-viewer-token.js').then(m=>{for(let i=0;i<500;i++)console.log(m.mintHlsViewerToken({userId:crypto.randomUUID(),channelId:'<channelId>',startedAt:<startedAt>}))})\""
+```

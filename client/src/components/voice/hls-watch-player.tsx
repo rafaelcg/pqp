@@ -701,7 +701,11 @@ export function HlsWatchPlayer({
         ...hlsLivePlayerConfig(),
         enableWorker: true,
         capLevelToPlayerSize: true,
-        maxLiveSyncPlaybackRate: 1.5,
+        // 1 = off. 1.5 sped playback up (and pitched music) whenever the
+        // playhead drifted past the sync point, which on the old 10 s window
+        // was most of the time. The proxy's wider window is what absorbs
+        // drift now; a viewer far behind gets the "jump to live" affordance.
+        maxLiveSyncPlaybackRate: 1,
         startLevel: start.startLevel,
         abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
         // Playlist is written after the first 2 s segment. Retry the

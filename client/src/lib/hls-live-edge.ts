@@ -6,33 +6,46 @@
  */
 
 /**
- * Production live window is about five 2 s segments = 10 s of playlist.
+ * The live window the playlist proxy serves: fifteen 2 s segments = 30 s
+ * (`server/src/voice/hls-live-window.ts`). The egress itself writes only
+ * five, and an API that predates the widening still serves those 10 s.
  *
- * `liveSyncDurationCount: 3` was ~6 s behind the live edge. That is a
- * reasonable place to sit, but it left only ~4 s of already-listed
- * segments in front of the playhead, and a brief stall dropped the
- * playhead out of the window. These numbers keep the start a little
- * further back (more forward buffer) without joining so far from the
- * edge that the next playlist update expires the segment we are on.
+ * THE NUMBERS BELOW ARE THE FIX FOR "CHOPPY, THEN STALLS". The old pair
+ * (`liveSyncDurationCount: 4`, `liveMaxLatencyDurationCount: 5`) put the
+ * playhead 8 s behind the edge of a 10 s window: one segment of slack.
+ * Measured on a clean link on 2026-09-12, the window slid past the segment
+ * the player wanted next eight times in two minutes, each a hole in the
+ * buffer, a forced seek, or a stall with the buffer at zero. Sitting 6 s
+ * back with 16 s of tolerance leaves ten segments of listed media behind
+ * the playhead on the widened window, and still two on the old one.
  */
 export const HLS_LIVE_SEGMENT_SECONDS = 2;
-export const HLS_LIVE_WINDOW_SECONDS = 10;
-/** ~8 s behind live: two more seconds of listed segments than the old 3. */
-export const HLS_LIVE_SYNC_DURATION_COUNT = 4;
+export const HLS_LIVE_WINDOW_SECONDS = 30;
+/** ~6 s behind live: three segments, the hls.js default for a reason. */
+export const HLS_LIVE_SYNC_DURATION_COUNT = 3;
 /**
- * Skip forward once latency reaches the window itself. Must be greater
- * than the sync count; 5 × 2 s = 10 s, which still fits.
+ * Skip forward only once the playhead is 16 s behind. Must be greater
+ * than the sync count and fit the window; against an older API's 10 s
+ * window hls.js simply re-syncs when the playlist no longer lists the
+ * playhead, which is what it did before and no worse.
  */
-export const HLS_LIVE_MAX_LATENCY_DURATION_COUNT = 5;
-/** Fill most of the 10 s window; do not ask hls.js for a 30 s buffer it cannot have. */
-export const HLS_MAX_BUFFER_LENGTH_SECONDS = 8;
-export const HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 10;
+export const HLS_LIVE_MAX_LATENCY_DURATION_COUNT = 8;
+/** Buffer up to 12 s ahead; never more than 20, well inside the window. */
+export const HLS_MAX_BUFFER_LENGTH_SECONDS = 12;
+export const HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 20;
+/**
+ * hls.js defaults `backBufferLength` to `Infinity`, which keeps every
+ * appended segment in the SourceBuffer for the whole party. Ten seconds
+ * behind the playhead is all a seek back to live ever needs.
+ */
+export const HLS_BACK_BUFFER_LENGTH_SECONDS = 10;
 
 export interface HlsLivePlayerConfig {
   liveSyncDurationCount: number;
   liveMaxLatencyDurationCount: number;
   maxBufferLength: number;
   maxMaxBufferLength: number;
+  backBufferLength: number;
   /** Auto: ABR picks from the seed, which is the 720p60@3200 rung. */
   startLevel: number;
 }
@@ -43,6 +56,7 @@ export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
     liveMaxLatencyDurationCount: HLS_LIVE_MAX_LATENCY_DURATION_COUNT,
     maxBufferLength: HLS_MAX_BUFFER_LENGTH_SECONDS,
     maxMaxBufferLength: HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
+    backBufferLength: HLS_BACK_BUFFER_LENGTH_SECONDS,
     startLevel: -1,
   };
 }
@@ -78,7 +92,9 @@ export function hlsLiveSyncFitsWindow(config: HlsLivePlayerConfig): boolean {
     maxLatency <= HLS_LIVE_WINDOW_SECONDS &&
     maxLatency > sync &&
     config.maxBufferLength <= HLS_LIVE_WINDOW_SECONDS &&
-    config.maxMaxBufferLength <= HLS_LIVE_WINDOW_SECONDS
+    config.maxMaxBufferLength <= HLS_LIVE_WINDOW_SECONDS &&
+    Number.isFinite(config.backBufferLength) &&
+    config.backBufferLength <= HLS_LIVE_WINDOW_SECONDS
   );
 }
 

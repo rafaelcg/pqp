@@ -53,6 +53,11 @@ const { resetHlsPlaylistCacheForTests } = await import(
 );
 
 const STARTED_AT = 1_700_000_000_000;
+/** The first segment line of a rendered playlist, wherever the header ends. */
+function firstUri(body: string): string | undefined {
+  return body.split("\n").find((line) => line !== "" && !line.startsWith("#"));
+}
+
 const PLAYLIST_BODY = [
   "#EXTM3U",
   "#EXT-X-TARGETDURATION:2",
@@ -226,7 +231,7 @@ describeDb("hls playlist route", () => {
     const r = await get(`${path(channelId)}?t=${t}`, null);
     expect(r.status).toBe(200);
     expect(r.contentType).toBe("application/vnd.apple.mpegurl");
-    expect(r.text.split("\n")[3]).toMatch(/^https:\/\/live\.example\.test\//);
+    expect(firstUri(r.text)).toMatch(/^https:\/\/live\.example\.test\//);
   });
 
   /**
@@ -419,7 +424,7 @@ describeDb("hls playlist route", () => {
       // A hit is the same playable window, not a stub.
       expect(second.text).toBe(first.text);
       expect(second.text).toContain("#EXTM3U");
-      const segment = second.text.split("\n")[3]!;
+      const segment = firstUri(second.text)!;
       expect(new URL(segment).searchParams.get("X-Amz-Signature")).toBeTruthy();
     });
 
