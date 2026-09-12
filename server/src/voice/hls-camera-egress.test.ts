@@ -368,6 +368,27 @@ describe("the camera and the machinery that stops things", () => {
     expect(liveHlsActivity().cameraSessions).toBe(1);
   });
 
+  it("gives a camera started mid-party its OWN grace period", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    // Half an hour into the film, the host turns their webcam on. The room's
+    // own grace expired long ago; this egress is brand new and its playlist
+    // has not been sampled by anything yet.
+    await advance(30 * 60_000);
+    cameraTrackId = "TR_CAM";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+
+    await advance(5_000);
+    await checkLiveHlsHealth();
+
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+    expect(lk.stop).not.toHaveBeenCalled();
+  });
+
   it("drops a dead camera without taking the film with it", async () => {
     enableHls();
     const lk = fakeLiveKit();

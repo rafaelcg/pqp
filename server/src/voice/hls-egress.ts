@@ -1420,7 +1420,10 @@ export async function checkLiveHlsHealth(
     // above). Checked before the primary so a room the primary is about to
     // tear down does not pay for a probe.
     const camera = room.camera;
-    if (camera) {
+    // Its OWN grace, not the room's. A camera started ten minutes into a party
+    // is brand new on a session that is not, and the room-level grace above
+    // has long since expired for it.
+    if (camera && now - camera.startedAtMs >= HEALTH_GRACE_MS) {
       const cameraHealth = await rungHealth(
         egress,
         channelId,
@@ -1701,16 +1704,18 @@ export function adoptLiveHlsSession(input: {
     topHeight: Math.max(...rungs.map((r) => r.rung.height)),
     topFramerate: Math.max(...rungs.map((r) => r.rung.framerate)),
   };
+  // A camera adopted before its ladder (it should not be — the caller sorts
+  // them last and says why — but the ordering is the caller's and this must
+  // not throw it away) keeps its slot, and keeps the URL that advertises it.
+  const carriedCamera =
+    existing && existing.stream.startedAt === input.startedAt
+      ? existing.camera
+      : null;
   rooms.set(input.channelId, {
     rungs,
-    stream: existing?.camera ? withCameraUrl(stream, input.channelId) : stream,
+    stream: carriedCamera ? withCameraUrl(stream, input.channelId) : stream,
     videoTrackId: input.videoTrackId,
-    // A camera adopted before its ladder (it should not be, but the ordering
-    // is the caller's and this must not throw it away) keeps its slot.
-    camera:
-      existing && existing.stream.startedAt === input.startedAt
-        ? existing.camera
-        : null,
+    camera: carriedCamera,
     startedAtMs: Date.now(),
   });
   logEvent("voice.hlsSessionAdopted", {
