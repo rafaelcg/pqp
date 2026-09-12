@@ -324,6 +324,23 @@ export function moveInQueue(trackId: string, direction: -1 | 1): void {
   write({ ...held, queue });
 }
 
+/** Drop a track at a position in the queue (the drag-and-drop write). */
+export function moveTrackTo(trackId: string, targetIndex: number): void {
+  const held = base();
+  const from = held.queue.findIndex((track) => track.id === trackId);
+  if (from < 0) {
+    return;
+  }
+  const queue = [...held.queue];
+  const [track] = queue.splice(from, 1);
+  const to = Math.max(0, Math.min(queue.length, targetIndex > from ? targetIndex - 1 : targetIndex));
+  if (to === from) {
+    return;
+  }
+  queue.splice(to, 0, track as MusicTrack);
+  write({ ...held, queue });
+}
+
 /** Tear the whole thing down for the room. */
 export function stopMusic(): void {
   if (!session) {

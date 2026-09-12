@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronUp,
+  GripVertical,
   ListMusic,
   Music,
   Pause,
@@ -20,6 +21,7 @@ import {
   advance,
   expectedPositionMs,
   moveInQueue,
+  moveTrackTo,
   removeFromQueue,
   reportPosition,
   setListening,
@@ -71,7 +73,6 @@ const DRIFT_MS = 2_500;
 const REPORT_MS = 10_000;
 const VOLUME_KEY = "pqp:music-volume";
 const VIDEO_KEY = "pqp:music-video";
-const QUEUE_SHOWN = 6;
 
 function readStored(key: string): string | null {
   try {
@@ -301,22 +302,10 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
                 {t("music.queue")}
                 <span className="tabular-nums">{state.queue.length}</span>
               </p>
-              <ol className="space-y-0.5">
-                {state.queue.slice(0, QUEUE_SHOWN).map((track, index) => (
-                  <QueueRow
-                    key={track.id}
-                    track={track}
-                    index={index}
-                    last={index === state.queue.length - 1}
-                    mine={track.addedByUserId === voiceState.self?.userId}
-                  />
-                ))}
-                {state.queue.length > QUEUE_SHOWN && (
-                  <li className="text-[11px] text-paper-muted">
-                    {t("music.more", { count: state.queue.length - QUEUE_SHOWN })}
-                  </li>
-                )}
-              </ol>
+              <QueueList
+                queue={state.queue}
+                selfUserId={voiceState.self?.userId ?? null}
+              />
             </div>
           )}
 
@@ -342,25 +331,133 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
   );
 }
 
+/**
+ * The queue: scrolls past six rows, and reorders by drag.
+ *
+ * Native HTML5 drag, like the sidebar's voice occupants
+ * (`lib/voice-occupant-dnd.ts`). While a row is dragged, the pointer's
+ * position over each row decides whether it would land before or after it,
+ * and a line is drawn there: the "drop preview". The write is one
+ * `moveTrackTo` on drop, so the room sees one reorder and not a scrub.
+ * The up/down buttons stay for the keyboard.
+ */
+function QueueList({
+  queue,
+  selfUserId,
+}: {
+  queue: MusicTrack[];
+  selfUserId: string | null;
+}) {
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+
+  const finish = () => {
+    setDragId(null);
+    setDropIndex(null);
+  };
+
+  return (
+    <ol
+      data-music-queue=""
+      className="max-h-52 space-y-0.5 overflow-y-auto pr-0.5"
+      onDragOver={(event) => {
+        if (dragId) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        if (dragId && dropIndex !== null) {
+          moveTrackTo(dragId, dropIndex);
+        }
+        finish();
+      }}
+      onDragLeave={(event) => {
+        // Leaving the list entirely, not moving between its rows.
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setDropIndex(null);
+        }
+      }}
+    >
+      {queue.map((track, index) => (
+        <QueueRow
+          key={track.id}
+          track={track}
+          index={index}
+          last={index === queue.length - 1}
+          mine={track.addedByUserId === selfUserId}
+          dragging={dragId === track.id}
+          dropBefore={dropIndex === index}
+          dropAfter={dropIndex === index + 1 && index === queue.length - 1}
+          onDragStart={(event) => {
+            setDragId(track.id);
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", track.id);
+          }}
+          onDragEnd={finish}
+          onDragOver={(event) => {
+            if (!dragId) {
+              return;
+            }
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            const rect = event.currentTarget.getBoundingClientRect();
+            const after = event.clientY > rect.top + rect.height / 2;
+            setDropIndex(after ? index + 1 : index);
+          }}
+        />
+      ))}
+    </ol>
+  );
+}
+
 function QueueRow({
   track,
   index,
   last,
   mine,
+  dragging,
+  dropBefore,
+  dropAfter,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
 }: {
   track: MusicTrack;
   index: number;
   last: boolean;
   mine: boolean;
+  dragging: boolean;
+  dropBefore: boolean;
+  dropAfter: boolean;
+  onDragStart: (event: React.DragEvent<HTMLLIElement>) => void;
+  onDragEnd: () => void;
+  onDragOver: (event: React.DragEvent<HTMLLIElement>) => void;
 }) {
   const { t } = useTranslation();
   return (
     <li
+      draggable
+      data-queue-row={track.id}
+      data-drop={dropBefore ? "before" : dropAfter ? "after" : undefined}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
       className={cn(
-        "group/row flex items-center gap-1.5 rounded-md px-1 py-1 hover:bg-ink-3/50",
+        "group/row relative flex cursor-grab items-center gap-1 rounded-md px-1 py-1 hover:bg-ink-3/50 active:cursor-grabbing",
         mine && "bg-ink-3/30",
+        dragging && "opacity-40",
+        // The drop preview: a line where the row would land.
+        dropBefore &&
+          "before:absolute before:inset-x-1 before:-top-[2px] before:h-[2px] before:rounded-full before:bg-signal",
+        dropAfter &&
+          "after:absolute after:inset-x-1 after:-bottom-[2px] after:h-[2px] after:rounded-full after:bg-signal",
       )}
     >
+      <GripVertical
+        className="h-3 w-3 shrink-0 text-paper-muted/60 opacity-0 group-hover/row:opacity-100"
+        aria-hidden="true"
+      />
       <span className="w-4 shrink-0 text-right tabular-nums text-paper-muted">
         {index + 1}
       </span>
