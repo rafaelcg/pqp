@@ -463,6 +463,36 @@ describe("buildMasterPlaylistFor", () => {
     await master(undefined, clock + HLS_PLAYLIST_CACHE_TTL_MS + 1);
     expect(pool.query).toHaveBeenCalledTimes(2);
   });
+
+  it("STAMPEDE: five hundred viewers arriving at once cost one rung query, not five hundred", async () => {
+    // Measured on staging 2026-09-12: 500 viewers ramping over 30 s put 500
+    // copies of the rung query on a pool of 10, and 491 masters timed out.
+    // The reads must coalesce while the first one is still in flight.
+    let release!: (value: { rowCount: number; rows: { rung: string }[] }) => void;
+    pool.query.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const arrivals = Array.from({ length: 500 }, () => master("tok", clock));
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    release({ rowCount: 1, rows: [{ rung: "720p30" }] });
+    const bodies = await Promise.all(arrivals);
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    expect(new Set(bodies).size).toBe(1);
+    expect(bodies[0]).toContain("/720p30?t=tok");
+  });
+
+  it("a rung query that fails is not remembered, so the next viewer retries", async () => {
+    pool.query.mockImplementationOnce(async () => {
+      throw new Error("Connection terminated due to connection timeout");
+    });
+    await expect(master(undefined, clock)).rejects.toThrow("connection timeout");
+    rungRows(["720p30"]);
+    expect(await master(undefined, clock)).toContain("/720p30");
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("buildSignedPlaylist with a rung", () => {

@@ -309,7 +309,10 @@ async function renderSignedPlaylist(
  * viewer's own token and is therefore not shared. Building the string from a
  * cached list costs nothing.
  */
-const rungCache = new Map<string, { rungs: string[]; at: number }>();
+const rungCache = new Map<
+  string,
+  { rungs?: string[]; inflight?: Promise<string[]>; at: number }
+>();
 
 /**
  * The rungs one session is serving right now, lowest bitrate first, read from
@@ -334,24 +337,45 @@ async function sessionRungs(
 ): Promise<string[]> {
   const key = cacheKey(channelId, startedAt, "master");
   const cached = rungCache.get(key);
-  if (cached && now - cached.at < HLS_PLAYLIST_CACHE_TTL_MS) {
-    return cached.rungs;
+  if (cached) {
+    if (cached.rungs !== undefined && now - cached.at < HLS_PLAYLIST_CACHE_TTL_MS) {
+      return cached.rungs;
+    }
+    // COALESCE THE STAMPEDE. A party's audience arrives together, and every
+    // one of them asks for the master first. Measured on staging 2026-09-12:
+    // 500 viewers ramping over 30 s put 500 copies of this query on a pool
+    // of 10 at once, 491 of them timed out at 15 s, and those viewers saw
+    // "Loading the stream" while the media polls beside them answered in
+    // 450 ms. One query per session per second, whoever asks.
+    if (cached.inflight) {
+      return cached.inflight;
+    }
   }
-  const rows = await getPool().query<{ rung: string | null }>(
-    `SELECT rung FROM hls_sessions
-     WHERE channel_id = $1
-       AND object_prefix LIKE $2
-       AND rung IS NOT NULL
-       AND ended_at IS NULL
-       AND cleaned_at IS NULL
-     ORDER BY started_at ASC`,
-    [channelId, sessionPrefixPattern(channelId, startedAt)],
-  );
-  const rungs = rows.rows
-    .map((row) => row.rung)
-    .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
-  rungCache.set(key, { rungs, at: now });
-  return rungs;
+  const inflight = getPool()
+    .query<{ rung: string | null }>(
+      `SELECT rung FROM hls_sessions
+       WHERE channel_id = $1
+         AND object_prefix LIKE $2
+         AND rung IS NOT NULL
+         AND ended_at IS NULL
+         AND cleaned_at IS NULL
+       ORDER BY started_at ASC`,
+      [channelId, sessionPrefixPattern(channelId, startedAt)],
+    )
+    .then((rows) => {
+      const rungs = rows.rows
+        .map((row) => row.rung)
+        .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
+      rungCache.set(key, { rungs, at: now });
+      return rungs;
+    })
+    .catch((error: unknown) => {
+      // Same rule as the playlist cache: a failed read is not remembered.
+      rungCache.delete(key);
+      throw error;
+    });
+  rungCache.set(key, { ...cached, inflight, at: cached?.at ?? 0 });
+  return inflight;
 }
 
 /**
