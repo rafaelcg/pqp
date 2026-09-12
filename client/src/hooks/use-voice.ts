@@ -54,6 +54,13 @@ import {
   sameMicProcessing,
   type MicProcessing,
 } from "@/lib/audio-devices";
+import {
+  ADVANCED_SAMPLE_RATE,
+  advancedNoiseSuppressionSupported,
+  connectMicChain,
+  createRnnoiseNode,
+  loadRnnoiseBinary,
+} from "../lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 import {
   connectLiveKit,
@@ -516,6 +523,12 @@ interface MicPipeline {
   audioContext: AudioContext;
   gainNode: GainNode;
   analyser: AnalyserNode;
+  /**
+   * The RNNoise worklet, when advanced suppression is on and it loaded.
+   * Held only so teardown can free the wasm state it owns on the render
+   * thread; closing the context alone leaves that to the collector.
+   */
+  noiseSuppressor: { destroy(): void } | null;
 }
 
 interface IceServerConfig {
@@ -642,9 +655,37 @@ async function createMicPipeline(
   onDeviceGone?: () => void,
   onFallback?: (label: string | null) => void,
 ): Promise<MicPipeline> {
+  // Resolve the advanced path BEFORE the microphone is opened, because the
+  // answer changes what `getUserMedia` is asked for: advanced mode wants the
+  // browser's own suppressor off, and falling back afterwards would mean
+  // capturing twice on exactly the machines least able to afford it. Probe,
+  // fetch, then one capture.
+  let mode = processing.noiseSuppression;
+  let rnnoiseBinary: ArrayBuffer | null = null;
+  if (mode === "advanced") {
+    if (!advancedNoiseSuppressionSupported()) {
+      console.warn(
+        "[mic] advanced noise suppression unavailable",
+        new Error("AudioWorklet or WebAssembly missing"),
+      );
+      mode = "browser";
+    } else {
+      try {
+        rnnoiseBinary = await loadRnnoiseBinary();
+      } catch (err) {
+        console.warn("[mic] advanced noise suppression unavailable", err);
+        mode = "browser";
+      }
+    }
+  }
+  const effective: MicProcessing =
+    mode === processing.noiseSuppression
+      ? processing
+      : { ...processing, noiseSuppression: mode };
+
   let rawStream: MediaStream;
   try {
-    rawStream = await openMic(deviceId, processing);
+    rawStream = await openMic(deviceId, effective);
   } catch (err) {
     if (err instanceof Error && err.name === "NotAllowedError") {
       throw err;
@@ -679,7 +720,7 @@ async function createMicPipeline(
     let opened: MediaStream | null = null;
     for (const candidate of candidates.slice(0, MIC_FALLBACK_ATTEMPTS + 1)) {
       try {
-        opened = await openMic(candidate, processing);
+        opened = await openMic(candidate, effective);
         break;
       } catch (next) {
         if (next instanceof Error && next.name === "NotAllowedError") {
@@ -697,7 +738,12 @@ async function createMicPipeline(
     onFallback?.(micLabel(rawStream));
   }
 
-  const audioContext = new AudioContext();
+  // The rate is only pinned in advanced mode: RNNoise is a 48 kHz model, and
+  // asking for a rate is asking for a resampler nobody else here needs.
+  const audioContext =
+    mode === "advanced"
+      ? new AudioContext({ sampleRate: ADVANCED_SAMPLE_RATE })
+      : new AudioContext();
   const source = audioContext.createMediaStreamSource(rawStream);
   const gainNode = audioContext.createGain();
   gainNode.gain.value = clampVolume(inputVolume);
@@ -706,7 +752,26 @@ async function createMicPipeline(
   analyser.smoothingTimeConstant = 0.7;
   const destination = audioContext.createMediaStreamDestination();
 
-  source.connect(gainNode);
+  let noiseSuppressor: (AudioNode & { destroy(): void }) | null = null;
+  if (mode === "advanced" && rnnoiseBinary) {
+    try {
+      noiseSuppressor = await createRnnoiseNode(audioContext, rnnoiseBinary);
+    } catch (err) {
+      // The worklet module or the wasm refused this late. Never break the mic
+      // over it: ask the browser to suppress instead (best effort, the track
+      // is already live) and carry on with the plain chain.
+      console.warn("[mic] advanced noise suppression unavailable", err);
+      noiseSuppressor = null;
+      for (const track of rawStream.getAudioTracks()) {
+        void track.applyConstraints({ noiseSuppression: true }).catch(() => {});
+      }
+    }
+  }
+
+  // Suppressor first, then gain, then the meter and the published stream —
+  // which is also the stream the watch-party mix carries, so one insertion
+  // here covers the room and the audience both.
+  connectMicChain({ source, suppressor: noiseSuppressor, gain: gainNode });
   gainNode.connect(analyser);
   gainNode.connect(destination);
 
@@ -716,6 +781,7 @@ async function createMicPipeline(
     audioContext,
     gainNode,
     analyser,
+    noiseSuppressor,
   };
 }
 
@@ -734,6 +800,11 @@ function stopMicTracks(pipeline: MicPipeline | null) {
 function closeMicContext(pipeline: MicPipeline | null) {
   if (!pipeline) {
     return;
+  }
+  try {
+    pipeline.noiseSuppressor?.destroy();
+  } catch {
+    // Already gone with the context; nothing left to free.
   }
   void pipeline.audioContext.close();
 }
