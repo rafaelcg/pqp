@@ -1807,6 +1807,55 @@ spent one of the three restarts in the window. It waits 45 s now, and
 `voice.hlsStarted` reports `playlistWaitMs`, so the next revision of that number
 is measured rather than argued.
 
+### The window the egress writes, and the one the viewer needs
+
+Measured on staging, 2026-09-12, with a headless hls.js viewer on a clean
+London link, four minutes, the player settings that were on `main`: the
+playlist's first entry advanced by two or more between consecutive polls
+**17 times**, three of them into forced seeks, four into `waiting`, one
+into `bufferStalledError` with 0.04 s buffered. The egress was fine (one
+720p30 rung at 0.54 core, 2 s segments on time), the ingest was clean
+(zero loss over 30 s), R2 answered segments in under 200 ms. Nothing in
+the media path was wrong; the contract between the playlist and the
+player was.
+
+LiveKit egress keeps **five** segments in the live playlist
+(`defaultLivePlaylistWindow = 5`, `pkg/pipeline/sink/segments.go` in
+v1.14.1; `SegmentedFileOutput` has no field for it), which at 2 s is a
+10 s window. The web player sat four segments back with a five-segment
+cutoff: one segment of slack, so a playlist poll that lands a second late
+(the proxy caches for one, hls.js reloads every target duration, the
+upload itself takes a moment) finds the segment it wanted next no longer
+listed. hls.js then either seeks forward to the sync point (the visible
+jump), or the buffer runs dry first (the stall). `maxLiveSyncPlaybackRate
+1.5` on top of that sped playback up and pitched the music whenever the
+playhead drifted, which was most of the time.
+
+**The proxy now serves a 30 s window.** A session's objects stay in the
+bucket until it ends (the retention sweep only deletes finished
+sessions), and the proxy already re-renders each rendition once a second,
+so `hls-live-window.ts` remembers the segments it has seen and lists the
+last fifteen, `EXT-X-MEDIA-SEQUENCE` at the first listed entry. Nothing is
+invented: a gap in what this process saw ends the window there, a playlist
+that restarted its numbering starts the history over, `ENDLIST` is kept.
+After an API restart the window is the egress's five and regrows by one
+every 2 s. `LIVE_HLS_WINDOW_SEGMENTS=5` is the rollback.
+
+The client sits three segments back with eight of tolerance
+(`hls-live-edge.ts`), buffers up to 12 s, caps the back-buffer at 10 s,
+and no longer speeds up to catch the edge. Against an API still serving
+the ten-second window it keeps two segments of slack, one more than
+before. Re-measured after the change, same rig, same party: no seeks, no
+`waiting`, no errors; the real player in Chrome held 3.6 to 8.6 s of
+buffer for the whole run with zero dropped frames.
+
+The rig is a Playwright page loaded from the staging web origin (CORS)
+driving hls.js 1.7.2 against the proxy with a viewer token minted on the
+API machine (`mintHlsViewerToken` from `/app/server/dist`). It logs
+`seeking`, `waiting`, hls.js errors, every playlist reload's first and last
+sequence, and `getVideoPlaybackQuality` once a second. Run it before
+touching any of these numbers again.
+
 ### What the presenter publishes, and why 1080p was making it worse
 
 Measured on the live party, 2026-09-09. The presenter published
