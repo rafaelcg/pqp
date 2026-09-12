@@ -121,7 +121,7 @@ import {
   useUpdatePromptShowing,
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
-import { isAutomatedBrowser } from "@/lib/cargos-hint";
+import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
 import {
@@ -1068,6 +1068,12 @@ function MainAppContent({
     featureHintEligible("watchParty"),
   );
   const [wantsMusicHint] = useState(() => featureHintEligible("music"));
+  // The cargos card decides for itself whether it was seen; the corner queue
+  // has to know too, or the corner stays "taken" by a card that never draws
+  // and every attached tip behind it (share, music) waits for good.
+  const [wantsCargosHint] = useState(
+    () => !isAutomatedBrowser() && !isCargosHintSeen(),
+  );
   const [wantsChannelPinHint] = useState(() =>
     featureHintEligible("channelPin"),
   );
@@ -5544,7 +5550,10 @@ function MainAppContent({
     qg: qgHintWanted,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
-    cargos: qgHintReady && Boolean(canManageRoles && selectedServerId),
+    cargos:
+      wantsCargosHint &&
+      qgHintReady &&
+      Boolean(canManageRoles && selectedServerId),
     shortcuts:
       wantsShortcutsHint &&
       shortcutsQuietReady &&
