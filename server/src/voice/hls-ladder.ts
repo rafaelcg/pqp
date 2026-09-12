@@ -66,11 +66,12 @@ const H264_MAIN_L30 = "avc1.4d001e";
  */
 export const LADDER_RUNGS: Readonly<Record<string, LadderRung>> = {
   /**
-   * Default top rung. 60 fps is how a 24 fps film on a 60 Hz display stays
-   * as smooth as the host's screen: capture and HLS match the compositor
-   * instead of recadencing to 30 (3:2 judder). Do not stack it next to
-   * `1080p30` — same height, and the viewer's pin is by height. Costs
-   * roughly 1.6–2× a 1080p30 encode on the media box.
+   * Named 1080p60 option. 60 fps is how a 24 fps film on a 60 Hz display
+   * stays as smooth as the host's screen: capture and HLS match the
+   * compositor instead of recadencing to 30 (3:2 judder). Do not stack it
+   * next to `1080p30` — same height, and the viewer's pin is by height.
+   * Costs roughly 1.6–2× a 1080p30 encode on the media box. Off by default;
+   * an operator who wants it sets `LIVE_HLS_LADDER`.
    */
   "1080p60": {
     name: "1080p60",
@@ -100,8 +101,8 @@ export const LADDER_RUNGS: Readonly<Record<string, LadderRung>> = {
     codecs: `${H264_MAIN_L31},${AAC_LC}`,
   },
   /**
-   * Default mid rung, bitrate overridden to 3200 in `DEFAULT_LADDER` so the
-   * ABR gap under 1080p60 stays ≥2.5×. 60 fps so a viewer whose player
+   * Named 720p60 option. Bitrate overridden to 3200 when stacked under
+   * 1080p60 so the ABR gap stays ≥2.5×. 60 fps so a viewer whose player
    * size or link pins 720 still sees the host's display cadence (a 24 fps
    * film on a 60 Hz screen) instead of 3:2 judder. The named 5500 is what
    * `720p60,480p30` spends when 720 is the top. Do not stack it next to
@@ -137,17 +138,12 @@ export const LADDER_RUNGS: Readonly<Record<string, LadderRung>> = {
 };
 
 /**
- * The default ladder. 1080p60 and 720p60 so whoever is watching — fibre
- * at 1080 or a pane that pins 720 — sees the host's 60 Hz cadence. A 24 fps
- * film on a 60 Hz display is smooth there and juddery if we recadence to
- * 30. The 720 rung is `@3200` so the ABR gap under 1080p60 stays ≥2.5×
- * (the named 720p60 is 5500, which is what a game-only ladder wants).
- * 480p30 because a phone on mobile data cannot hold 3200 kbit/s. Do not
- * stack a 30 and a 60 of the same height. Add `360p30` by configuration
- * for a weaker audience; `720p60,480p30` for a game party that should not
- * spend a 1080p60 encode.
+ * The default ladder. One 720p30 rung: 1080p30 tiled HLS hit RTP gaps and
+ * egress CPU on the media box, so watch party ships at 720p30. Named 1080
+ * and 60 fps rungs stay in `LADDER_RUNGS` for an operator who wants them
+ * (`LIVE_HLS_LADDER=1080p30,720p30`, or `1080p60,720p60@3200,480p30`).
  */
-export const DEFAULT_LADDER = "1080p60,720p60@3200,480p30";
+export const DEFAULT_LADDER = "720p30";
 
 /** Highest fps any of these rungs asks for. 30 when the list is empty. */
 export function ladderMaxFramerate(rungs: readonly LadderRung[]): number {

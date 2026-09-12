@@ -650,23 +650,19 @@ describe("live HLS egress", () => {
       return { stream, heights, start };
     }
 
-    it("defaults to 480p30 + 720p60 + 1080p60, started lowest rung first", async () => {
+    it("defaults to a single 720p30 rung", async () => {
       const { stream, heights } = await startLadder(undefined);
       expect(stream).not.toBeNull();
-      // Lowest first: a viewer is never left with nothing while the
-      // expensive rendition is still spinning up.
-      expect(heights).toEqual(["480", "720", "1080"]);
+      expect(heights).toEqual(["720"]);
       expect(liveHlsRungsFor(CHANNEL).map((rung) => rung.name)).toEqual([
-        "480p30",
-        "720p60",
-        "1080p60",
+        "720p30",
       ]);
     });
 
     it("refuses a 1080 rung when the published source is 720", async () => {
       resetLiveHlsForTests();
       enableHls();
-      delete process.env.LIVE_HLS_LADDER;
+      process.env.LIVE_HLS_LADDER = "1080p60,720p60@3200,480p30";
       const heights: string[] = [];
       setLiveHlsTestHooks({
         egress: {
@@ -685,7 +681,7 @@ describe("live HLS egress", () => {
       // 1080/720 rungs that upscaled. The host's getSettings() is the pixels.
       resetLiveHlsForTests();
       enableHls();
-      delete process.env.LIVE_HLS_LADDER;
+      process.env.LIVE_HLS_LADDER = "1080p60,720p60@3200,480p30";
       const heights: string[] = [];
       setLiveHlsTestHooks({
         egress: {
