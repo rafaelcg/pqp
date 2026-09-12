@@ -513,6 +513,74 @@ final class WatchPartyTests: XCTestCase {
         )
     }
 
+    /**
+     THE ONE THAT TOOK THREE BUILDS, AND THE ONLY TEST THAT WOULD HAVE CAUGHT IT.
+
+     Builds 28, 30 and 31 all shipped a fullscreen nobody could leave, and the
+     first two diagnoses were both real defects that were not THE defect. This
+     is: UIKit removes the presenting view controller's view from the window
+     when a `.fullScreen` presentation finishes. SwiftUI reads that as the whole
+     chat going away and fires `onDisappear` on the watch stage, which calls
+     `tearDown()` and `model.close()`. The film pauses, the watchdog is
+     cancelled, and every chrome button writes into a `@State` box nothing is
+     rendering any more, so the X does nothing. Rotation kept working because
+     rotation is UIKit's.
+
+     Nothing about this is visible in the source of either file. It is a
+     property of the presentation style, so the test presents both and looks at
+     the window.
+     */
+    @MainActor
+    func testTheTheaterDoesNotEvictTheChatThatOwnsThePlayer() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 852, height: 393))
+        let stage = UIViewController()
+        window.rootViewController = stage
+        window.makeKeyAndVisible()
+        XCTAssertNotNil(stage.viewIfLoaded?.window)
+
+        let anchor = WatchTheaterAnchor()
+        stage.addChild(anchor)
+        stage.view.addSubview(anchor.view)
+        anchor.didMove(toParent: stage)
+
+        let theater = anchor.makeTheater(content: Color.black)
+        XCTAssertEqual(
+            theater.modalPresentationStyle, .overFullScreen,
+            "`.fullScreen` takes the stage out of the window, and the stage is "
+            + "what owns the player, the model and every button's state"
+        )
+
+        stage.present(theater, animated: false)
+        for _ in 0..<20 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+
+        XCTAssertNotNil(
+            stage.viewIfLoaded?.window,
+            "the chat has to stay in the window while the theater is up, or "
+            + "SwiftUI tears the watch stage down underneath a running film"
+        )
+        XCTAssertIdentical(stage.presentedViewController, theater)
+    }
+
+    /// And the belt beside it: the stage refuses to tear itself down while the
+    /// theater is up, whatever the presentation does to the hierarchy.
+    func testTheStageRefusesToTearDownUnderARunningTheater() throws {
+        let stage = try String(
+            contentsOf: sources.appending(path: "Voice/WatchStageView.swift"), encoding: .utf8
+        )
+        guard let disappear = stage.range(of: ".onDisappear {") else {
+            return XCTFail("onDisappear is gone")
+        }
+        let body = stage[disappear.upperBound...].prefix(700)
+        guard let end = body.range(of: "\n        }") else {
+            return XCTFail("could not bound onDisappear")
+        }
+        XCTAssertTrue(
+            body[..<end.lowerBound].contains("guard !isFullscreen else { return }"),
+            "a stage that is off screen because the theater covers it is not a "
+            + "stage somebody navigated away from"
+        )
+    }
+
     @MainActor
     private func walk(_ view: UIView, _ body: (UIView) -> Void) {
         body(view)

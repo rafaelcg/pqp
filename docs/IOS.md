@@ -554,6 +554,26 @@ rather than building a second one. Only one of the two rectangles is ever
 mounted, which is why the strip still draws a black 16:9 hole while the
 theater is up.
 
+**And build 31 still froze, because neither of those was THE bug.** Rotation
+worked, no button responded, the stream paused. The cause is one property:
+UIKit removes the presenting view controller's view from the window when a
+`.fullScreen` presentation finishes. SwiftUI reads that as the whole of
+`ChatView` going away and fires `onDisappear` on the watch stage, whose
+`onDisappear` calls `tearDown()` and `model.close()`. So the film was paused
+and the player dropped by our own code, the watchdog task was cancelled, and
+every chrome button wrote into a `@State` box SwiftUI had stopped rendering,
+including the X. Rotation kept working because rotation is UIKit's, not ours.
+Builds 28, 30 and 31 all had it, and it survived taking AVKit out because AVKit
+was never the reason.
+
+Build 32 presents `.overFullScreen`, which covers the screen identically and
+leaves the presenter in the hierarchy, and the stage additionally refuses to
+tear down while `isFullscreen` is true. Nothing about this is visible in the
+source of either file, so
+`testTheTheaterDoesNotEvictTheChatThatOwnsThePlayer` presents a real
+controller in a real window and asserts the presenter is still in it; it fails
+on `.fullScreen` at exactly that assertion.
+
 The lesson is the one on the pitfalls list: every source-text assertion about
 the theater was green for both broken builds. The tests that replaced them run
 the code — `testNothingInTheTheaterOutranksTheChromesOwnButtons` walks the

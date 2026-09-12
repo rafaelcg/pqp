@@ -97,6 +97,14 @@ struct WatchStageView: View {
         .task(id: channel.id) { await model.open(channelId: channel.id, session: session) }
         .task { await watchdog() }
         .onDisappear {
+            // NOT WHILE THE FILM IS ON. A view that is off screen because the
+            // theater is covering it is not a view somebody navigated away
+            // from, and tearing the player down under a running theater is
+            // exactly what left a frozen picture and a dead X on three
+            // TestFlight builds. `WatchTheater` presents `.overFullScreen` so
+            // this should no longer fire at all; the guard is here because the
+            // cost of being wrong about that is the whole feature.
+            guard !isFullscreen else { return }
             tearDown()
             model.close()
         }

@@ -82,7 +82,26 @@ final class WatchTheaterAnchor: UIViewController {
         let controller = WatchTheaterController(rootView: AnyView(content))
         controller.view.backgroundColor = .black
         controller.view.isUserInteractionEnabled = true
-        controller.modalPresentationStyle = .fullScreen
+        // `.overFullScreen`, NOT `.fullScreen`, AND THIS IS THE WHOLE BUG.
+        //
+        // UIKit removes the presenting view controller's view from the window
+        // when a `.fullScreen` presentation finishes. SwiftUI reads that as the
+        // whole of `ChatView` going away and fires `onDisappear` on everything
+        // in it, including the watch stage. The stage's `onDisappear` calls
+        // `tearDown()` and `model.close()`: the player is paused and dropped,
+        // the watchdog task is cancelled, and the `@State` box behind the view
+        // stops driving anything. The theater is still on screen, holding the
+        // last chrome SwiftUI drew for it, so from the sofa the film pauses and
+        // no button does anything — including the X, whose `isFullscreen =
+        // false` now writes into a view nothing is rendering. Rotation kept
+        // working because rotation is UIKit's, not ours. That was builds 28,
+        // 30 and 31, and it survived taking AVKit out because AVKit was never
+        // the reason.
+        //
+        // `.overFullScreen` covers the screen identically and leaves the
+        // presenter in the hierarchy. The theater's own view is opaque black,
+        // so nothing shows through.
+        controller.modalPresentationStyle = .overFullScreen
         controller.modalPresentationCapturesStatusBarAppearance = true
         return controller
     }
