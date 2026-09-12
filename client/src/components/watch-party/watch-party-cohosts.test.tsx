@@ -107,7 +107,8 @@ describe("the co-host list", () => {
      * where that rule is either kept or broken. The moment a co-host can
      * promote, a co-host can demote the host and there is no chain of
      * authority left; succession is `claimHost`, gated on the host being gone.
-     * A manager may end somebody's party and never staff it.
+     * A manager may edit somebody's party (not end it, since 2026-09-12)
+     * and never staff it.
      */
     for (const role of ["cohost", "manager", "viewer"] as const) {
       expect(render({ viewerRole: role }), role).toBe("");

@@ -1407,8 +1407,9 @@ function LiveSurface(
             point of being invited is that they can now talk. `stage.invited`
             is public on the wire (`presentStage`: who is UP is public, who is
             ASKING is not), so this is the party's own answer rather than a
-            guess. A manager is deliberately NOT here: MANAGE_CHANNELS ends
-            and edits somebody else's party, it does not perform in it.
+            guess. A manager is deliberately NOT here: MANAGE_CHANNELS edits
+            somebody else's party, it does not perform in it and, since
+            2026-09-12, it does not end it either.
 
             AND EVERYBODY, ONCE A HOST TURNS VOZ ON. That is the film night,
             and it is the case the blanket removal got wrong: a party whose
