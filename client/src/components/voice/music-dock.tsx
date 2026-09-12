@@ -509,7 +509,6 @@ function MusicPlayer({
             rel: 0,
             playsinline: 1,
             modestbranding: 1,
-            origin: window.location.origin,
           },
           events: {
             onReady: (event) => {
@@ -532,7 +531,14 @@ function MusicPlayer({
                 onNeedsTap(false);
               }
             },
-            onError: () => {
+            onError: (event) => {
+              // 100: removed or private. 101 / 150: the owner disabled
+              // embedding, or it is blocked in THIS viewer's region. That
+              // last case is why nothing here skips for the room: one
+              // person's blocked embed is not everybody's, and a Brazilian
+              // room must not lose a track because one viewer is abroad.
+              // The failure shows on this screen, next to the Skip button.
+              console.warn("[music] player error", event.data);
               setFailed(true);
             },
           },
