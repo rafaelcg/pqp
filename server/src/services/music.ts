@@ -1,6 +1,6 @@
 import { parseMusicInput, type MusicResolved } from "@pqp/shared";
 import { createRateLimiter } from "../lib/rate-limit.js";
-import { innertubePlaylist, innertubeSearch } from "./innertube.js";
+import { innertubePlaylist, innertubeSearch, setInnerTubeGate } from "./innertube.js";
 
 /**
  * Turn what a person pasted into a YouTube video the room can play.
@@ -41,6 +41,8 @@ export function takeUpstreamBudget(): void {
     throw new MusicResolveError("busy", "upstream budget spent");
   }
 }
+// Every InnerTube client attempt is one token, charged inside the attempt.
+setInnerTubeGate(takeUpstreamBudget);
 
 /** Test hook. */
 export function resetUpstreamBudget(): void {
@@ -267,7 +269,6 @@ export async function searchYouTube(query: string): Promise<MusicResolved> {
  */
 async function searchUnofficial(query: string): Promise<SearchHit | null> {
   try {
-    takeUpstreamBudget();
     const videos = await innertubeSearch(query, 5);
     if (videos && videos.length > 0) {
       const first = videos[0]!;
@@ -390,7 +391,6 @@ export async function resolveYouTubePlaylist(
   } else {
     // InnerTube `browse` first; the playlist page only when every client failed.
     try {
-      takeUpstreamBudget();
       const list = await innertubePlaylist(listId, PLAYLIST_MAX);
       if (list) {
         items = list.videos;
@@ -513,7 +513,12 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
       const index = next++;
       try {
         out[index] = await fn(items[index] as T);
-      } catch {
+      } catch (error) {
+        // A spent budget is the room's problem, not this track's: it goes up
+        // as the 429 the route documents, never as a shorter list.
+        if (error instanceof MusicResolveError && error.code === "busy") {
+          throw error;
+        }
         out[index] = null;
       }
     }
@@ -540,7 +545,10 @@ export async function resolveSpotifyList(
     try {
       found = await searchYouTube(query);
     } catch (error) {
-      if (error instanceof MusicResolveError && error.code !== "upstream") {
+      if (error instanceof MusicResolveError && error.code === "busy") {
+        throw error;
+      }
+      if (error instanceof MusicResolveError && error.code === "not_found") {
         return null;
       }
       await new Promise((resolve) => setTimeout(resolve, 800));

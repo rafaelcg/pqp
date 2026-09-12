@@ -48,3 +48,20 @@ describe("spotifyTrackListFromHtml", () => {
     expect(spotifyTrackListFromHtml("<html></html>")).toEqual({ name: null, tracks: [] });
   });
 });
+
+describe("upstream budget", () => {
+  it("is charged per InnerTube attempt and surfaces as busy, never as a shorter list", async () => {
+    const { resetUpstreamBudget, takeUpstreamBudget, MusicResolveError } = await import("./music.js");
+    resetUpstreamBudget();
+    for (let i = 0; i < 300; i++) {
+      takeUpstreamBudget();
+    }
+    expect(() => takeUpstreamBudget()).toThrow(MusicResolveError);
+    try {
+      takeUpstreamBudget();
+    } catch (error) {
+      expect((error as InstanceType<typeof MusicResolveError>).code).toBe("busy");
+    }
+    resetUpstreamBudget();
+  });
+});

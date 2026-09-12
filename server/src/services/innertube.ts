@@ -50,6 +50,17 @@ export interface InnerTubeVideo {
   thumbnailUrl: string | null;
 }
 
+/**
+ * Charged before every request to YouTube, one client attempt at a time,
+ * so a fallback is a second token and not a free retry. `music.ts` sets it
+ * to the shared upstream budget; it throws to refuse.
+ */
+let gate: () => void = () => {};
+
+export function setInnerTubeGate(next: () => void): void {
+  gate = next;
+}
+
 export class InnerTubeError extends Error {
   constructor(
     readonly client: string,
@@ -65,6 +76,7 @@ async function call(
   path: "search" | "browse",
   body: Record<string, unknown>,
 ): Promise<unknown> {
+  gate();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -268,7 +280,12 @@ async function withClients<T>(
         return result;
       }
     } catch (error) {
-      last = error instanceof InnerTubeError ? error : new InnerTubeError(client.name, String(error));
+      if (!(error instanceof InnerTubeError)) {
+        // The gate refusing, or anything else that is not this client's
+        // fault: not a reason to try the next client.
+        throw error;
+      }
+      last = error;
       console.warn(`[music] innertube ${client.name} failed:`, last.message);
     }
   }
