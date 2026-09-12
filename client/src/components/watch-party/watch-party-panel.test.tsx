@@ -238,6 +238,43 @@ describe("the chrome survives a collapsed video", () => {
   });
 });
 
+describe("who may end a live party", () => {
+  /**
+   * 2026-09-12 incident: a server ADMIN who was only watching a live party
+   * clicked Encerrar, ending someone else's show. `canPerformWatchPartyAction`
+   * (shared) still lets a `manager` end a party server-side — that table is a
+   * separate, server-restarting fix — but the control itself must never be
+   * drawn for anyone who is not the host or a co-host. This pins the client
+   * half: Encerrar is offered to host and co-host, and withheld from a
+   * manager and a plain viewer, regardless of what the shared table allows.
+   */
+  const chrome = (role: WatchParty["viewerRole"]) =>
+    render({
+      slot: "chrome",
+      hasStream: true,
+      inCall: true,
+      party: { ...PARTY, viewerRole: role },
+    });
+
+  it("offers Encerrar to the host and to a co-host", () => {
+    for (const role of ["host", "cohost"] as const) {
+      expect([role, chrome(role).includes("watch-party-end")]).toEqual([
+        role,
+        true,
+      ]);
+    }
+  });
+
+  it("withholds Encerrar from a manager and from a plain viewer", () => {
+    for (const role of ["manager", "viewer"] as const) {
+      expect([role, chrome(role).includes("watch-party-end")]).toEqual([
+        role,
+        false,
+      ]);
+    }
+  });
+});
+
 describe("the pane owns the surface's height", () => {
   /**
    * WHAT BROKE. Every pane-filling surface here sized itself `h-[68svh]`, a

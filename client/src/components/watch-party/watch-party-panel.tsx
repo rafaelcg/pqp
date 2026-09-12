@@ -1177,11 +1177,24 @@ function LiveSurface(
   const { party } = props;
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const canEnd = canPerformWatchPartyAction({
-    action: "end",
-    role: party.viewerRole,
-    state: party.state,
-  });
+  // Host and co-hosts only, client-side, REGARDLESS of what the shared role
+  // table still allows a manager to do. An admin/manager watching a live
+  // party is not running it and must never be shown a button that ends
+  // someone else's show — that is exactly the incident this gate exists for
+  // (a server admin clicked Encerrar on a party they were only watching).
+  // `canPerformWatchPartyAction` is left untouched here on purpose: this is
+  // the client-only half of the fix, so it still returns true for a manager
+  // until the shared table itself is changed (a separate, server-restarting
+  // PR). The `&&` below is what actually hides the control for a manager
+  // today, ahead of that change landing.
+  const isHostOrCohost =
+    party.viewerRole === "host" || party.viewerRole === "cohost";
+  const canEnd =
+    canPerformWatchPartyAction({
+      action: "end",
+      role: party.viewerRole,
+      state: party.state,
+    }) && isHostOrCohost;
   const canClaim =
     party.hostDisconnectedAt !== null &&
     canPerformWatchPartyAction({
@@ -1394,8 +1407,9 @@ function LiveSurface(
             point of being invited is that they can now talk. `stage.invited`
             is public on the wire (`presentStage`: who is UP is public, who is
             ASKING is not), so this is the party's own answer rather than a
-            guess. A manager is deliberately NOT here: MANAGE_CHANNELS ends
-            and edits somebody else's party, it does not perform in it.
+            guess. A manager is deliberately NOT here: MANAGE_CHANNELS edits
+            somebody else's party, it does not perform in it and, since
+            2026-09-12, it does not end it either.
 
             AND EVERYBODY, ONCE A HOST TURNS VOZ ON. That is the film night,
             and it is the case the blanket removal got wrong: a party whose
