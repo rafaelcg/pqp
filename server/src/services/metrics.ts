@@ -302,6 +302,13 @@ export interface AdminMetrics {
      * whose only other symptom is the box getting slower.
      */
     orphansStopped: number;
+    /**
+     * Sessions carrying a SECOND, video-only 360p30 transcode of the
+     * presenter's camera, on top of that party's ladder: roughly 0.2 to 0.3 of
+     * a core apiece. What turns "the box feels slow" into "three hosts have
+     * their webcams on". Zero with `LIVE_HLS_CAMERA=false`.
+     */
+    cameraSessions: number;
     /** Sessions past retention that still hold objects. Belongs at zero. */
     uncleaned: number;
     /** Whether this process runs the retention sweep (`WORKER_MODE`). */
@@ -933,6 +940,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       oldestSessionMinutes: hlsActivity.oldestMinutes,
       silentSessions: hlsActivity.silentSessions,
       orphansStopped: hlsActivity.orphansStopped,
+      // Each of these is a second, video-only 360p30 transcode of a
+      // presenter's camera, on top of that party's ladder: roughly 0.2 to 0.3
+      // of a core apiece. What turns "the box feels slow" into "three hosts
+      // have their webcams on". Zero with `LIVE_HLS_CAMERA=false`.
+      cameraSessions: hlsActivity.cameraSessions,
       uncleaned: hlsUncleaned,
       sweepsHere: runsColdJobs(processRole()),
     },

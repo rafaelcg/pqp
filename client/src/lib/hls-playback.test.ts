@@ -6,6 +6,7 @@ import {
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
   resolveHlsUrl,
+  resolveLiveHlsStream,
   sameHlsSession,
   sampleVideoPlaybackQuality,
   shouldAdoptHlsSource,
@@ -233,5 +234,49 @@ describe("sampleVideoPlaybackQuality", () => {
       }),
     ).toEqual({ droppedVideoFrames: 3, totalVideoFrames: 180 });
     expect(sampleVideoPlaybackQuality({})).toBeNull();
+  });
+});
+
+describe("resolveLiveHlsStream", () => {
+  const stream = {
+    hlsUrl: "/api/voice/hls-playlist/c/1?t=tok",
+    startedAt: 1,
+    presenterPeerId: "p1",
+  };
+
+  it("resolves both playlists, not just the film", () => {
+    // THE FOUR DOORS. A stream arrives through `voice-stream`,
+    // `channel-live`, the one-shot `GET /api/channels/:id/live` and the
+    // player's own reconnect. Resolving field by field at each is how one of
+    // them ends up API-relative and unplayable at exactly one door, during
+    // somebody's film.
+    const resolved = resolveLiveHlsStream({
+      ...stream,
+      cameraHlsUrl: "/api/voice/hls-playlist/c/1/cam360p30?t=tok",
+    });
+    expect(resolved.hlsUrl).toBe(resolveHlsUrl(stream.hlsUrl));
+    expect(resolved.cameraHlsUrl).toBe(
+      resolveHlsUrl("/api/voice/hls-playlist/c/1/cam360p30?t=tok"),
+    );
+  });
+
+  it("leaves a stream with no camera exactly as it was", () => {
+    // Optional on the wire: an older server, iOS and Android all send a
+    // stream with no camera at all, and must go on working untouched.
+    const resolved = resolveLiveHlsStream<{
+      hlsUrl: string;
+      cameraHlsUrl?: string;
+    }>(stream);
+    expect(resolved).toEqual({ ...stream, hlsUrl: resolveHlsUrl(stream.hlsUrl) });
+    expect(resolved.cameraHlsUrl).toBeUndefined();
+  });
+
+  it("passes an already absolute URL through untouched", () => {
+    const absolute = {
+      ...stream,
+      hlsUrl: "https://live.example.test/a.m3u8",
+      cameraHlsUrl: "https://live.example.test/cam.m3u8",
+    };
+    expect(resolveLiveHlsStream(absolute)).toEqual(absolute);
   });
 });

@@ -138,6 +138,50 @@ export const LADDER_RUNGS: Readonly<Record<string, LadderRung>> = {
 };
 
 /**
+ * The presenter's CAMERA, and it is deliberately not in `LADDER_RUNGS`.
+ *
+ * A watch party's audience is seatless: they never join the LiveKit room, so a
+ * camera published into it reaches the seated participants over WebRTC and
+ * reaches nobody on the playlist. And `TrackCompositeEgressRequest` carries one
+ * video and one audio track, singular fields, so the running transcode cannot
+ * be asked to also carry a face. The answer is a second, video-only egress
+ * beside the ladder, writing under the same session prefix. See
+ * `docs/plans/WATCH_PARTY_CAMERA_PIP.md`.
+ *
+ * WHY IT IS NOT A RUNG, and each of these would be a bug if it were:
+ *
+ *  - `sessionRungs` builds the master playlist's variants by looking each
+ *    stored rung up in `LADDER_RUNGS`. A camera listed there is a variant a
+ *    viewer's ABR could switch **to**, and they would get a webcam instead of
+ *    the film.
+ *  - `decideLadder` prices renditions OF THE SHARE. The camera is not one, and
+ *    it must never be the thing that costs the audience a rung.
+ *  - `adoptLiveHlsSession` reads the same table, so a camera egress adopted
+ *    across a deploy would quietly become a 720p30 ladder rung.
+ *
+ * `audioKbps: 0` is the video-only request: the field is proto3, so zero is
+ * unset, and `rungEncodingOptions` therefore asks for no audio at all. The
+ * egress is started with no `audioTrackId`, which is the same shape a share
+ * picked without its own audio already produces in production.
+ *
+ * 360p30 at 400 kbit/s is lockstep with `WATCH_PARTY_PRESENTER_CAMERA_QUALITY`
+ * on the client: the egress transcodes from the published track, so a rung
+ * above what the presenter publishes is an upscale that costs a core to invent
+ * pixels.
+ */
+export const CAMERA_RUNG_NAME = "cam360p30";
+
+export const CAMERA_RUNG: LadderRung = {
+  name: CAMERA_RUNG_NAME,
+  width: 640,
+  height: 360,
+  framerate: 30,
+  videoKbps: 400,
+  audioKbps: 0,
+  codecs: `${H264_MAIN_L30}`,
+};
+
+/**
  * The default ladder. One 720p30 rung: 1080p30 tiled HLS hit RTP gaps and
  * egress CPU on the media box, so watch party ships at 720p30. Named 1080
  * and 60 fps rungs stay in `LADDER_RUNGS` for an operator who wants them
@@ -404,6 +448,56 @@ export function decideLadder(input: LadderDecisionInput): RungDecision[] {
     });
   }
   return decisions;
+}
+
+/**
+ * What the camera's rendition costs the media box, in the same Mbit/s currency
+ * as `HLS_RUNG_MBPS`.
+ *
+ * THIRTY PER CENT OF A FULL RENDITION, and that is an estimate stated as one.
+ * `docs/CAPACITY.md` §2 measured a Track Composite egress at **0.51 core** for
+ * `720p30` at 1800 kbit/s and **0.88 core** for `1080p30` at 4500. A `360p30`
+ * rendition at 400 kbit/s is roughly a fifth of the 720p30 pixel rate, so 0.2
+ * to 0.3 of a core is the honest range and the top of it is what is charged.
+ * Nobody has measured this one; when somebody does, this is the line to
+ * change.
+ */
+export const HLS_CAMERA_MBPS = HLS_RUNG_MBPS * 0.3;
+
+export interface CameraEgressDecision {
+  start: boolean;
+  /** Null when it starts. `box-budget` is the only way it does not. */
+  refusal: "box-budget" | null;
+  /** Ladder plus camera plus the WebRTC already on the box, Mbit/s. */
+  boxMbps: number;
+}
+
+/**
+ * Whether the presenter's camera may have a transcode of its own.
+ *
+ * ONE RULE, AND IT IS NEVER THE LADDER'S. The camera is priced against the
+ * WHOLE box (the renditions already running plus what `promotion.ts` says the
+ * WebRTC side costs) and refused when it would push past the promotion budget.
+ * There is deliberately no ladder-budget check: `LIVE_HLS_MAX_LADDER_MBPS`
+ * governs how many renditions of the SHARE a party gets, and a camera must
+ * never be the reason a viewer loses a rung of the film. The trade only ever
+ * goes the other way — a box with no room left gets no camera, and the party
+ * is untouched.
+ *
+ * Pure, so the whole matrix is testable without a media server.
+ */
+export function decideCameraEgress(input: {
+  /** Renditions already running on this box, this session's included. */
+  runningRungs: number;
+  /** What `estimateSfuLoadMbps` says the WebRTC side already costs. */
+  sfuLoadMbps: number;
+  boxBudgetMbps: number;
+}): CameraEgressDecision {
+  const boxMbps =
+    input.runningRungs * HLS_RUNG_MBPS + HLS_CAMERA_MBPS + input.sfuLoadMbps;
+  return boxMbps > input.boxBudgetMbps
+    ? { start: false, refusal: "box-budget", boxMbps }
+    : { start: true, refusal: null, boxMbps };
 }
 
 // -------------------------------------------------------- the master playlist

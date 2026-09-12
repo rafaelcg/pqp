@@ -1477,6 +1477,65 @@ costs the media box nothing, and explicitly NOT a Room Composite egress, which
 LiveKit's own docs price at 2 to 6 CPUs against the 0.51 to 0.88 core this one
 measures.
 
+### The presenter's camera, floating over the film
+
+**Since 2026-09-12, "every camera: no" has one exception: the presenter's.**
+The table above is otherwise unchanged, and the mechanism is not a change to
+the transcode: the running egress still carries exactly two tracks. The camera
+gets a **second, video-only 360p30 Track Composite egress** beside the ladder,
+under the same session prefix (`<startedAt>-cam360p30`), served by the same
+playlist proxy and authorised by the same viewer token. Design, costs and what
+was ruled out: [`docs/plans/WATCH_PARTY_CAMERA_PIP.md`](./plans/WATCH_PARTY_CAMERA_PIP.md).
+
+**It is additive, and that is the load-bearing property.** The camera starts
+and stops inside the running session and never mints a new `startedAt`. A new
+one is a new playlist path, a new token and a new master, so every viewer
+re-attaches and rebuffers; turning a webcam on must not do that to five hundred
+people. The only thing a viewer sees is `cameraHlsUrl` appearing or
+disappearing on a `voice-stream` / `channel-live` frame they were already being
+sent, which is why `pushLiveHls` now compares that field as well.
+
+**It is deliberately not a ladder rung.** `cam360p30` is absent from
+`LADDER_RUNGS`, so `sessionRungs` never lists it as a master-playlist variant a
+viewer's ABR could switch onto and find a webcam instead of the film, and
+`adoptLiveHlsSession` routes it to the room's camera slot rather than letting it
+become a 720p30 rung across a deploy. It is in `reapForeignEgresses`'s `ours`
+set, without which the reaper would stop it every ten seconds and the reconcile
+would start it again forever, with `liveHls.orphansStopped` climbing and the
+party looking perfectly healthy.
+
+**What it costs.** About 0.2 to 0.3 of a core, estimated from the measured
+0.51 (`720p30`) and 0.88 (`1080p30`) in `docs/CAPACITY.md` §2 and charged as
+30 % of a rendition (`HLS_CAMERA_MBPS`). `decideCameraEgress` refuses it when
+the ladder plus the camera plus the WebRTC already on the box would pass the
+promotion budget — and refuses on the **box** budget only, never the ladder's:
+a webcam must never be the reason a viewer loses a rung of the film.
+`LIVE_HLS_CAMERA=false` turns it off in one command with no deploy, and
+`liveHls.cameraSessions` on the operator dashboard says how many are running.
+
+The presenter's uplink cost is capped separately, by the client: see "The
+presenter's camera is held at 360p while the party is on air".
+
+**What the viewer gets.** A second, muted hls.js instance floated in a corner
+of the film. The stage and the corner are boxes rather than players, so
+swapping (click the small picture) re-attaches neither instance and nobody
+rebuffers to look at a webcam; the control bar stays where it is because it
+belongs to the stage. The corner is one of four and is remembered per browser
+with the swap (`pqp:watch-camera-pip`). **Fullscreen unmounts it**, so a camera
+nobody can see costs no decode. A camera that never produces a frame draws
+nothing at all — no spinner, no placeholder, no error.
+
+**Audio stays on the main stream, always**, and the camera playlist has no
+audio track at all. The two egresses start seconds apart, so expect **one to
+three seconds of drift** between the face and the film; both playlists carry
+`EXT-X-PROGRAM-DATE-TIME` and a best-effort alignment on start is all that is
+attempted. Frame-accurate sync would mean either a Room Composite egress (2 to
+6 CPUs, ruled out) or holding the film back to match a webcam, which is a worse
+film.
+
+**iOS and Android are out of scope.** `cameraHlsUrl` is optional on the shared
+schema, so they parse the frame and ignore the field.
+
 ## When a session restarts, and the leftovers it used to leave behind
 
 A stalling stream and a healthy one look identical from the API. Read this

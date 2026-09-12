@@ -11,7 +11,11 @@ import { playlistLooksLive, type LiveHlsStream } from "@pqp/shared";
 import { isLiveKitConfigured } from "./backends.js";
 import { promotionBudgetMbps } from "./promotion.js";
 import {
+  CAMERA_RUNG,
+  CAMERA_RUNG_NAME,
+  decideCameraEgress,
   decideLadder,
+  HLS_CAMERA_MBPS,
   LADDER_RUNGS,
   ladderBudgetMbps,
   parseLadder,
@@ -120,6 +124,16 @@ export interface LiveHlsScreenTracks {
   audioTrackId?: string;
   /** Published capture height, when LiveKit stated it. */
   sourceHeight?: number;
+  /**
+   * The SAME participant's camera, when they have one published.
+   *
+   * Picked in the same pass as the share on purpose. The reconcile already
+   * calls `listParticipants` on every roster event; asking a second time for
+   * the camera would double an RPC on a hot path to learn something the first
+   * answer already contained. Absent means no camera, which is the ordinary
+   * case for a film night.
+   */
+  cameraTrackId?: string;
 }
 
 export interface LiveHlsEgressApi {
@@ -199,6 +213,21 @@ interface RoomHls {
    * stop. So a same-presenter reconcile compares this to what the SFU has.
    */
   videoTrackId: string;
+  /**
+   * The presenter's camera, transcoded beside the ladder, or null.
+   *
+   * ADDITIVE TO THE SESSION, NEVER A NEW ONE. It starts and stops inside the
+   * running `startedAt`: a new one is a new playlist path, a new viewer token
+   * and a new master, so every viewer re-attaches and rebuffers. Turning a
+   * webcam on must not do that to an audience. See
+   * `docs/plans/WATCH_PARTY_CAMERA_PIP.md`.
+   *
+   * A `RunningRung` rather than its own shape, because the health monitor,
+   * `stopRungs` and `reapForeignEgresses` all want to treat it exactly like a
+   * secondary rendition. It carries `CAMERA_RUNG`, which is deliberately not
+   * in `LADDER_RUNGS`.
+   */
+  camera: (RunningRung & { cameraTrackId: string }) | null;
   /** Wall clock when the session was requested. */
   startedAtMs: number;
 }
@@ -223,6 +252,31 @@ const orphanStopBackoff = new Map<
  * leak ever happened, because the leak itself is silent.
  */
 let orphansStopped = 0;
+/**
+ * Channels whose camera transcode died or was refused, and when another may
+ * start.
+ *
+ * WHY THERE HAS TO BE ONE. A dead camera is dropped by the health monitor,
+ * which tells the room, which reconciles, which finds the presenter's camera
+ * still published and starts another. On a healthy box that is the right
+ * behaviour and happens once. On a box that is struggling — which is exactly
+ * when an egress dies — it is a loop: die, restart, die, at roughly the
+ * monitor's cadence plus the grace, forever, on the machine that was already
+ * too busy.
+ *
+ * Two minutes, and deliberately NOT the session's `restartHistory` budget: a
+ * camera failing must never spend the restarts that exist to bring the FILM
+ * back. Cleared the moment the presenter actually closes their camera, so
+ * "turn it off and on again" — which is the first thing anybody does when
+ * something looks broken — works at once.
+ *
+ * It doubles as the refusal's quiet period. `pushLiveHls` runs on every roster
+ * event, so a full box with a camera published would re-price and re-log the
+ * same budget refusal every time anybody joined or left, for the whole party.
+ * Two minutes is also the right cadence at which to ask a busy box again.
+ */
+const cameraCooldownUntil = new Map<string, number>();
+const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
 let changeListener: LiveHlsChangeListener | null = null;
 let sfuLoadReader: LiveHlsSfuLoadReader | null = null;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
@@ -358,6 +412,26 @@ export function reapOrphansEnabled(): boolean {
 }
 
 /**
+ * ON BY DEFAULT, and `LIVE_HLS_CAMERA=false` is the rollback switch.
+ *
+ * The presenter's camera gets a transcode of its own so the seatless audience
+ * can see a face (`docs/plans/WATCH_PARTY_CAMERA_PIP.md`). It costs about
+ * 0.2 to 0.3 of a core, only ever while the host has deliberately turned a
+ * camera on, and `decideCameraEgress` refuses it outright on a box with
+ * nothing left. Turning it off restores exactly the pre-2026-09-12 behaviour:
+ * no second egress, no `cameraHlsUrl` on any frame, and every client's PiP
+ * draws nothing because there is nothing to draw.
+ *
+ * One command and no deploy, the same shape as `TURN_PREFER_STATIC` and
+ * `LIVE_HLS_REAP_ORPHANS`, because this lands on a box that also carries the
+ * SFU and the TURN relay.
+ */
+export function liveHlsCameraEnabled(): boolean {
+  const raw = process.env.LIVE_HLS_CAMERA?.trim().toLowerCase();
+  return raw !== "false" && raw !== "0" && raw !== "off";
+}
+
+/**
  * Default true: a viewer gets a presigned, expiring URL rather than the raw
  * public bucket URL. Set `LIVE_HLS_SIGNED_URLS=false` to fall back to the
  * old public-base-URL behaviour (e.g. a bucket that is deliberately public).
@@ -414,7 +488,25 @@ export function sessionPrefixPattern(
   return `${hlsObjectPrefix(channelId, startedAt)}-%`;
 }
 
-/** One row per rendition: each has its own objects, egress and retention. */
+/**
+ * One row per rendition: each has its own objects, egress and retention.
+ *
+ * `reopen` IS THE CAMERA'S, AND IT IS NOT AN OPTIMISATION.
+ *
+ * A ladder rung never comes back under a prefix it has already used: every
+ * restart mints a new `startedAt`, so `DO NOTHING` there is pure idempotency
+ * and must stay that way. The camera is the one thing that starts and stops
+ * INSIDE a session — that is the whole design, because a new `startedAt` would
+ * rebuffer the audience — so a host switching their webcam off and on again
+ * lands on the same `object_prefix` with the row already stamped `ended_at`.
+ * `DO NOTHING` leaves it ended, and the playlist proxy refuses an ended
+ * session by design (`renderSignedPlaylist`), so the second camera would
+ * transcode perfectly and 404 for every viewer, for as long as the party ran.
+ *
+ * `cleaned_at` is cleared with it: a camera off for longer than
+ * `LIVE_HLS_RETENTION_MINUTES` has had its objects swept, and the fresh egress
+ * writes new ones under the same prefix.
+ */
 async function recordSessionStarted(
   channelId: string,
   startedAt: number,
@@ -422,6 +514,7 @@ async function recordSessionStarted(
   rung: string,
   presenterPeerId: string,
   videoTrackId: string,
+  reopen = false,
 ): Promise<void> {
   try {
     await getPool().query(
@@ -429,7 +522,16 @@ async function recordSessionStarted(
          (channel_id, object_prefix, started_at, egress_id, rung,
           presenter_peer_id, video_track_id)
        VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7)
-       ON CONFLICT (object_prefix) DO NOTHING`,
+       ${
+         reopen
+           ? `ON CONFLICT (object_prefix) DO UPDATE
+                SET egress_id = EXCLUDED.egress_id,
+                    presenter_peer_id = EXCLUDED.presenter_peer_id,
+                    video_track_id = EXCLUDED.video_track_id,
+                    ended_at = NULL,
+                    cleaned_at = NULL`
+           : "ON CONFLICT (object_prefix) DO NOTHING"
+       }`,
       [
         channelId,
         hlsObjectPrefix(channelId, startedAt, rung),
@@ -803,6 +905,7 @@ export function resetLiveHlsForTests(): void {
   pendingRestarts.clear();
   reconcileQueue.clear();
   orphanStopBackoff.clear();
+  cameraCooldownUntil.clear();
   orphansStopped = 0;
   changeListener = null;
   sfuLoadReader = null;
@@ -833,6 +936,32 @@ export function runningRungCount(): number {
     total += room.rungs.length;
   }
   return total;
+}
+
+/** Camera transcodes running across every channel. */
+export function runningCameraCount(): number {
+  let total = 0;
+  for (const room of rooms.values()) {
+    if (room.camera) {
+      total += 1;
+    }
+  }
+  return total;
+}
+
+/**
+ * What the running cameras cost the box, in the Mbit/s the ladder is priced
+ * in.
+ *
+ * Added to the SFU load rather than to `runningRungs`, and the distinction is
+ * deliberate. `runningRungs` counts renditions OF A SHARE and multiplies by a
+ * whole `HLS_RUNG_MBPS`; a camera is 30 % of that and is not a rung. Counting
+ * it as one would refuse a real rendition of somebody's film to pay for a
+ * webcam, which is exactly the trade `decideCameraEgress` refuses to make in
+ * the other direction.
+ */
+export function runningCameraMbps(): number {
+  return runningCameraCount() * HLS_CAMERA_MBPS;
 }
 
 /**
@@ -879,6 +1008,13 @@ export interface LiveHlsActivity {
    * process, so it resets on deploy like every counter here.
    */
   orphansStopped: number;
+  /**
+   * Sessions currently carrying a second, video-only transcode of the
+   * presenter's camera. Each is about 0.2 to 0.3 of a core on top of that
+   * party's ladder, so this is the number that turns "the box feels slow" into
+   * "three hosts have their webcams on". Zero when `LIVE_HLS_CAMERA=false`.
+   */
+  cameraSessions: number;
 }
 
 /**
@@ -909,6 +1045,7 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
     oldestMinutes: oldest === null ? null : Math.floor((now - oldest) / 60_000),
     silentSessions,
     orphansStopped,
+    cameraSessions: runningCameraCount(),
   };
 }
 
@@ -1222,7 +1359,15 @@ async function reapForeignEgresses(
     });
     return;
   }
+  // THE CAMERA IS ONE OF OURS. Leaving it out of this set would have the
+  // reaper stop it on the first monitor tick and the reconcile start it again
+  // on the next push, forever, with `liveHls.orphansStopped` climbing and
+  // nothing wrong: a silent, total failure of the shape this file has already
+  // been bitten by twice.
   const ours = new Set(room.rungs.map((entry) => entry.egressId));
+  if (room.camera) {
+    ours.add(room.camera.egressId);
+  }
   for (const info of listing) {
     if (ours.has(info.egressId)) {
       continue;
@@ -1323,6 +1468,42 @@ export async function checkLiveHlsHealth(
       // pinned to this rung needs a fresh source, not a stalled one.
       notifyChanged(channelId, "rung-ended");
     }
+    // The camera, on exactly the terms a secondary rung gets: if it dies the
+    // film does not, and it is stopped before it is forgotten so a stalled but
+    // still-running transcode cannot become an orphan (the 2026-09-09 lesson,
+    // above). Checked before the primary so a room the primary is about to
+    // tear down does not pay for a probe.
+    const camera = room.camera;
+    // Its OWN grace, not the room's. A camera started ten minutes into a party
+    // is brand new on a session that is not, and the room-level grace above
+    // has long since expired for it.
+    if (camera && now - camera.startedAtMs >= HEALTH_GRACE_MS) {
+      const cameraHealth = await rungHealth(
+        egress,
+        channelId,
+        startedAt,
+        camera,
+        now,
+      );
+      if (cameraHealth.health === "ended" && rooms.get(channelId) === room) {
+        room.camera = null;
+        if (cameraHealth.stillRunning) {
+          await stopRungs(channelId, [camera]);
+        }
+        await recordSessionEnded(channelId, startedAt, CAMERA_RUNG_NAME);
+        room.stream = withoutCameraUrl(room.stream);
+        cameraCooldownUntil.set(channelId, now + CAMERA_COOLDOWN_MS);
+        logEvent("voice.hlsCameraDied", {
+          channelId,
+          egressId: camera.egressId,
+          error: cameraHealth.detail ?? null,
+          cooldownMs: CAMERA_COOLDOWN_MS,
+        });
+        // The viewers are holding a `cameraHlsUrl` that will now 404. Tell
+        // them so the PiP disappears instead of spinning.
+        notifyChanged(channelId, "camera-ended");
+      }
+    }
     if (rooms.get(channelId) !== room) {
       continue;
     }
@@ -1352,7 +1533,13 @@ export async function checkLiveHlsHealth(
     // the two halves apart, so a clean end still costs no pointless RPC.
     await stopRungs(
       channelId,
-      stillRunning ? room.rungs : room.rungs.slice(1),
+      // The camera unconditionally: unlike the primary there is no "LiveKit
+      // already said it ended" about it, and a camera transcode left running
+      // in a room this process has just forgotten is an orphan nothing owns.
+      [
+        ...(stillRunning ? room.rungs : room.rungs.slice(1)),
+        ...(room.camera ? [room.camera] : []),
+      ],
     );
     await recordSessionEnded(channelId, startedAt);
     logEvent("voice.hlsEgressDied", {
@@ -1530,7 +1717,19 @@ export function adoptLiveHlsSession(input: {
   videoTrackId: string;
   /** Which rendition this egress is. Null is a pre-ladder single-rung row. */
   rung: string | null;
-}): LiveHlsStream {
+}): LiveHlsStream | null {
+  // THE CAMERA IS NOT A RUNG, and adopting it as one is the failure this
+  // branch exists to stop: `LADDER_RUNGS[input.rung]` answers undefined for
+  // `cam360p30` and the fallback below would turn a 400 kbit/s webcam into a
+  // 720p30 ladder rung, on the master playlist, for the whole party.
+  //
+  // `reconcileStaleHlsSessions` adopts camera egresses LAST (it sorts them
+  // there, and says why), so by the time one arrives its session's room
+  // exists. A camera whose session did not come back is unadoptable and is
+  // said so: the caller stops it rather than leaving a transcode nothing owns.
+  if (input.rung === CAMERA_RUNG_NAME) {
+    return adoptCameraEgress(input);
+  }
   const rung =
     (input.rung ? LADDER_RUNGS[input.rung] : undefined) ?? LADDER_RUNGS["720p30"]!;
   const entry: RunningRung = {
@@ -1561,10 +1760,18 @@ export function adoptLiveHlsSession(input: {
     topHeight: Math.max(...rungs.map((r) => r.rung.height)),
     topFramerate: Math.max(...rungs.map((r) => r.rung.framerate)),
   };
+  // A camera adopted before its ladder (it should not be — the caller sorts
+  // them last and says why — but the ordering is the caller's and this must
+  // not throw it away) keeps its slot, and keeps the URL that advertises it.
+  const carriedCamera =
+    existing && existing.stream.startedAt === input.startedAt
+      ? existing.camera
+      : null;
   rooms.set(input.channelId, {
     rungs,
-    stream,
+    stream: carriedCamera ? withCameraUrl(stream, input.channelId) : stream,
     videoTrackId: input.videoTrackId,
+    camera: carriedCamera,
     startedAtMs: Date.now(),
   });
   logEvent("voice.hlsSessionAdopted", {
@@ -1575,7 +1782,47 @@ export function adoptLiveHlsSession(input: {
     rung: rung.name,
     rungs: rungs.map((r) => r.rung.name),
   });
-  return stream;
+  return rooms.get(input.channelId)!.stream;
+}
+
+/**
+ * Take a camera transcode back after a restart, onto the session it belongs
+ * to.
+ *
+ * Null when there is no such session in this process: the party it was
+ * filming did not come back, and a camera egress with no room is a core of the
+ * media box spent on a webcam nobody can reach. The caller stops it.
+ */
+function adoptCameraEgress(input: {
+  channelId: string;
+  egressId: string;
+  startedAt: number;
+  videoTrackId: string;
+}): LiveHlsStream | null {
+  const room = rooms.get(input.channelId);
+  if (!room || room.stream.startedAt !== input.startedAt) {
+    logEvent("voice.hlsCameraNotAdoptable", {
+      channelId: input.channelId,
+      egressId: input.egressId,
+      startedAt: input.startedAt,
+      sessionStartedAt: room?.stream.startedAt ?? null,
+    });
+    return null;
+  }
+  room.camera = {
+    rung: CAMERA_RUNG,
+    egressId: input.egressId,
+    startedAtMs: Date.now(),
+    progress: null,
+    cameraTrackId: input.videoTrackId,
+  };
+  room.stream = withCameraUrl(room.stream, input.channelId);
+  logEvent("voice.hlsCameraAdopted", {
+    channelId: input.channelId,
+    egressId: input.egressId,
+    startedAt: input.startedAt,
+  });
+  return room.stream;
 }
 
 function isTrackSource(source: unknown, wanted: TrackSource): boolean {
@@ -1641,6 +1888,7 @@ export function pickScreenTracks(
   let videoTrackId: string | undefined;
   let audioTrackId: string | undefined;
   let sourceHeight: number | undefined;
+  let cameraTrackId: string | undefined;
   for (const track of sharer.tracks ?? []) {
     if (!track.sid) {
       continue;
@@ -1654,12 +1902,21 @@ export function pickScreenTracks(
     if (isTrackSource(track.source, TrackSource.SCREEN_SHARE_AUDIO)) {
       audioTrackId ??= track.sid;
     }
+    // THE SAME PARTICIPANT'S CAMERA, in the same pass. A second
+    // `listParticipants` on the reconcile path would double an RPC that runs
+    // on every roster event to learn something this answer already carried.
+    // The sharer's, never anybody else's: a second person's webcam is a second
+    // transcode, which is the capacity conversation this feature defers.
+    if (isTrackSource(track.source, TrackSource.CAMERA)) {
+      cameraTrackId ??= track.sid;
+    }
   }
   return videoTrackId
     ? {
         videoTrackId,
         audioTrackId,
         ...(sourceHeight ? { sourceHeight } : {}),
+        ...(cameraTrackId ? { cameraTrackId } : {}),
       }
     : null;
 }
@@ -1884,6 +2141,41 @@ function viewerPlaylistUrl(channelId: string, startedAt: number): string {
   return `/api/voice/hls-playlist/${channelId}/${startedAt}`;
 }
 
+/**
+ * The camera's playlist, as a viewer is handed it.
+ *
+ * ALWAYS THE RUNG PATH, never a session path, and never a raw bucket URL.
+ * `viewerPlaylistUrl` has an unsigned branch for `LIVE_HLS_SIGNED_URLS=false`;
+ * this one does not need it, because the rendition path is exactly what the
+ * proxy serves and the same `?t=` token authorises both. A deployment running
+ * unsigned simply gets no camera URL, which is a missing PiP rather than a
+ * broken one.
+ */
+function cameraPlaylistUrl(channelId: string, startedAt: number): string | null {
+  if (!hlsSignedUrlsEnabled()) {
+    return null;
+  }
+  return `/api/voice/hls-playlist/${channelId}/${startedAt}/${CAMERA_RUNG_NAME}`;
+}
+
+/** The same stream, now advertising a camera. */
+function withCameraUrl(stream: LiveHlsStream, channelId: string): LiveHlsStream {
+  const url = cameraPlaylistUrl(channelId, stream.startedAt);
+  if (!url) {
+    return stream;
+  }
+  return { ...stream, cameraHlsUrl: url };
+}
+
+/** The same stream with the camera gone. Deleted, not set to undefined. */
+function withoutCameraUrl(stream: LiveHlsStream): LiveHlsStream {
+  if (stream.cameraHlsUrl === undefined) {
+    return stream;
+  }
+  const { cameraHlsUrl: _dropped, ...rest } = stream;
+  return rest;
+}
+
 function segmentOutput(
   prefix: string,
   startedAt: number,
@@ -1954,15 +2246,23 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
     return;
   }
   rooms.delete(channelId);
+  cameraCooldownUntil.delete(channelId);
   logEvent("voice.hlsStopped", {
     channelId,
     reason,
     presenterPeerId: current.stream.presenterPeerId,
     startedAt: current.stream.startedAt,
     egressIds: current.rungs.map((entry) => entry.egressId),
+    cameraEgressId: current.camera?.egressId ?? null,
   });
   await recordSessionEnded(channelId, current.stream.startedAt);
-  await stopRungs(channelId, current.rungs);
+  // The camera with the rungs, in the same call. `recordSessionEnded` with no
+  // rung already ended its row; an egress whose row says ended and which is
+  // still transcoding is the exact orphan shape this file keeps paying for.
+  await stopRungs(channelId, [
+    ...current.rungs,
+    ...(current.camera ? [current.camera] : []),
+  ]);
 }
 
 /**
@@ -2000,6 +2300,161 @@ async function startRung(
     });
     return null;
   }
+}
+
+/**
+ * The presenter's camera, reconciled against the session already running.
+ *
+ * FOUR CASES, AND THE SESSION IS NEVER RESTARTED FOR ANY OF THEM. A new
+ * `startedAt` is a new playlist path, a new viewer token and a new master, so
+ * every viewer re-attaches and rebuffers; turning a webcam on or off must
+ * cost an audience nothing. So this only ever adds or removes one egress
+ * beside the ladder, and the only thing a viewer sees is `cameraHlsUrl`
+ * appearing or disappearing on a frame they were already being sent.
+ *
+ *  - no camera published, none running: nothing.
+ *  - a camera published, none running: start one, if the box can carry it.
+ *  - no camera published, one running: stop it.
+ *  - a camera published on a DIFFERENT sid (a device switch, a republish, a
+ *    reconnect): stop and start. A Track Composite egress is bound to one sid
+ *    and goes on running against a dead one, writing nothing — the same
+ *    failure `videoTrackId` on the room exists to catch for the share.
+ *
+ * `cameraTrackId` is `null` for "the presenter has no camera" and for "we
+ * could not ask", and the caller is what tells those apart: it passes null
+ * only when it actually looked. A probe that failed returns before reaching
+ * here, so a momentary LiveKit hiccup never tears the camera down.
+ */
+async function reconcileCameraEgress(
+  channelId: string,
+  cameraTrackId: string | null,
+): Promise<void> {
+  const room = rooms.get(channelId);
+  if (!room) {
+    return;
+  }
+  const wanted = liveHlsCameraEnabled() ? cameraTrackId : null;
+  const current = room.camera;
+  if (current && current.cameraTrackId === wanted) {
+    return;
+  }
+  if (current) {
+    room.camera = null;
+    room.stream = withoutCameraUrl(room.stream);
+    await recordSessionEnded(channelId, room.stream.startedAt, CAMERA_RUNG_NAME);
+    await stopRungs(channelId, [current]);
+    logEvent("voice.hlsCameraStopped", {
+      channelId,
+      egressId: current.egressId,
+      reason: wanted ? "track-replaced" : "no-camera",
+    });
+  }
+  if (!wanted) {
+    // A DELIBERATE CLOSE CLEARS THE COOLDOWN. Turning it off and on again is
+    // the first thing anybody does when something looks broken, and holding
+    // them out for two minutes after they did exactly the right thing would
+    // read as the feature being dead.
+    cameraCooldownUntil.delete(channelId);
+    return;
+  }
+  const cooldown = cameraCooldownUntil.get(channelId);
+  if (cooldown !== undefined) {
+    if (cooldown > Date.now()) {
+      return;
+    }
+    cameraCooldownUntil.delete(channelId);
+  }
+  const egress = getEgress();
+  if (!egress) {
+    return;
+  }
+  // Priced against the WHOLE box, and never against the ladder budget: see
+  // `decideCameraEgress`. A refusal costs a face, never a rendition of the
+  // film.
+  const decision = decideCameraEgress({
+    runningRungs: runningRungCount(),
+    sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
+    boxBudgetMbps: promotionBudgetMbps(),
+  });
+  if (!decision.start) {
+    // THE SAME COOLDOWN, and it is what keeps this off the log. `pushLiveHls`
+    // runs on every roster event, so a full box with a camera published would
+    // otherwise re-price and re-log the same refusal every time anybody joined
+    // or left the room, for the whole party. One line, then two minutes of
+    // quiet, then it asks again — which is also the right retry cadence for a
+    // box that may have freed up.
+    cameraCooldownUntil.set(channelId, Date.now() + CAMERA_COOLDOWN_MS);
+    logEvent("voice.hlsCameraRefused", {
+      channelId,
+      refusal: decision.refusal,
+      boxMbps: Math.round(decision.boxMbps),
+      boxBudgetMbps: promotionBudgetMbps(),
+      retryInMs: CAMERA_COOLDOWN_MS,
+    });
+    return;
+  }
+  const startedAt = room.stream.startedAt;
+  let egressId: string | null = null;
+  try {
+    const started = await egress.startTrackCompositeEgress(
+      channelId,
+      segmentOutput(
+        hlsObjectPrefix(channelId, startedAt, CAMERA_RUNG_NAME),
+        startedAt,
+        CAMERA_RUNG_NAME,
+      ),
+      {
+        videoTrackId: wanted,
+        // NO AUDIO TRACK AT ALL. The audience's sound comes off the main
+        // stream, which is the only place it is mixed, and a second audio
+        // channel two seconds out of step with the first is worse than
+        // silence. This is the same request shape a share picked without its
+        // own audio already produces in production.
+        encodingOptions: rungEncodingOptions(CAMERA_RUNG),
+      },
+    );
+    egressId = started.egressId;
+  } catch (error) {
+    logEvent("voice.hlsCameraStartFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  // The room may have been replaced while LiveKit was answering. Starting a
+  // transcode into a session that no longer exists is an orphan, so stop it
+  // rather than filing it under a room that moved on.
+  const after = rooms.get(channelId);
+  if (!after || after !== room || after.stream.startedAt !== startedAt) {
+    await stopEgressById(egressId, channelId);
+    return;
+  }
+  room.camera = {
+    rung: CAMERA_RUNG,
+    egressId,
+    startedAtMs: Date.now(),
+    progress: null,
+    cameraTrackId: wanted,
+  };
+  room.stream = withCameraUrl(room.stream, channelId);
+  await recordSessionStarted(
+    channelId,
+    startedAt,
+    egressId,
+    CAMERA_RUNG_NAME,
+    room.stream.presenterPeerId,
+    wanted,
+    // Reopen: the camera is the one rendition that starts and stops INSIDE a
+    // session, so the second time round it lands on a row it already ended.
+    true,
+  );
+  logEvent("voice.hlsCameraStarted", {
+    channelId,
+    egressId,
+    startedAt,
+    cameraTrackId: wanted,
+    boxMbps: Math.round(decision.boxMbps),
+  });
 }
 
 /**
@@ -2077,7 +2532,9 @@ async function startRoom(
   const decisions = decideLadder({
     rungs: ladder,
     runningRungs: runningRungCount(),
-    sfuLoadMbps: await currentSfuLoadMbps(),
+    // The cameras go in with the WebRTC load rather than into `runningRungs`:
+    // one is 30 % of a rendition, not one of them. See `runningCameraMbps`.
+    sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
     ladderBudgetMbps: ladderBudgetMbps(),
     boxBudgetMbps: promotionBudgetMbps(),
     // The host's getSettings() height, when announced, is the pixels. LiveKit
@@ -2145,6 +2602,10 @@ async function startRoom(
     rungs: running,
     stream,
     videoTrackId: tracks.videoTrackId,
+    // Started below, after the readiness probe: a camera must never be the
+    // reason the film is late, and a session that fails its probe is torn down
+    // anyway.
+    camera: null,
     startedAtMs: startedAt,
   };
   rooms.set(channelId, room);
@@ -2213,7 +2674,11 @@ async function startRoom(
     }
     return null;
   }
-  return stream;
+  // AFTER the film is proven, and additively. The returned stream is read back
+  // off the room rather than the local `stream`, because this is what stamps
+  // `cameraHlsUrl` onto it.
+  await reconcileCameraEgress(channelId, tracks.cameraTrackId ?? null);
+  return rooms.get(channelId)?.stream ?? stream;
 }
 
 /**
@@ -2279,7 +2744,19 @@ async function reconcileLiveHlsNow(
   }
   if (current && current.stream.presenterPeerId === presenterPeerId) {
     const tracks = await probeScreenTracks(channelId, presenterPeerId);
-    if (!tracks || tracks.videoTrackId === current.videoTrackId) {
+    if (!tracks) {
+      // COULD NOT ASK, which is not "no camera". A momentary LiveKit hiccup
+      // must not tear a running camera transcode down and start another one
+      // on the next push.
+      return current.stream;
+    }
+    if (tracks.videoTrackId === current.videoTrackId) {
+      // The film has not moved; the camera may have. This is the ordinary
+      // path: it runs on every roster event and on the `set-camera` frame,
+      // and it is where a webcam being switched on actually starts its
+      // transcode. It reuses the `listParticipants` call above, so it costs
+      // no extra RPC.
+      await reconcileCameraEgress(channelId, tracks.cameraTrackId ?? null);
       return current.stream;
     }
     logEvent("voice.hlsTrackReplaced", {
@@ -2312,6 +2789,10 @@ async function reconcileLiveHlsNow(
         to: presenterPeerId,
         videoTrackId: current.videoTrackId,
       });
+      // The reconnect republished their camera on a fresh sid, so the running
+      // camera egress is bound to a dead track. Same reasoning as the share's
+      // `videoTrackId` comparison directly above.
+      await reconcileCameraEgress(channelId, tracks.cameraTrackId ?? null);
       return current.stream;
     }
     await stopRoom(channelId, "presenter-changed");
