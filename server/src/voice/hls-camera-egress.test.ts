@@ -152,6 +152,7 @@ beforeEach(() => {
   disableHls();
   cameraTrackId = null;
   logEvent.mockClear();
+  query.mockClear();
 });
 
 afterEach(() => {
@@ -194,6 +195,38 @@ describe("the presenter's camera, beside the ladder", () => {
       `${stream!.startedAt}-${CAMERA_RUNG_NAME}.m3u8`,
     );
     expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
+  it("reopens its own session row when the host turns the webcam back on", async () => {
+    // THE ONE THAT WOULD HAVE 404ed FOR A WHOLE PARTY. The camera is the only
+    // rendition that starts and stops INSIDE a session — that is the design,
+    // because a new `startedAt` rebuffers the audience — so the second time it
+    // starts it lands on the very `object_prefix` it already stamped
+    // `ended_at`. `renderSignedPlaylist` refuses an ended session by design,
+    // so with the ladder's `DO NOTHING` the second camera would transcode
+    // perfectly and serve nobody, for as long as the party ran.
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    cameraTrackId = null;
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    cameraTrackId = "TR_CAM";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    const inserts = query.mock.calls
+      .map((call) => String(call[0]))
+      .filter((sql) => sql.includes("INSERT INTO hls_sessions"));
+    const camera = inserts.filter((sql) => sql.includes("DO UPDATE"));
+    const rungs = inserts.filter((sql) => sql.includes("DO NOTHING"));
+    // Both camera starts reopen; the ladder rung never does, because a rung
+    // that restarts always mints a new `startedAt` and `DO NOTHING` there is
+    // pure idempotency.
+    expect(camera).toHaveLength(2);
+    expect(camera[0]).toContain("ended_at = NULL");
+    expect(camera[0]).toContain("cleaned_at = NULL");
+    expect(rungs).toHaveLength(1);
   });
 
   it("is never a ladder rung, so nobody's player can switch to a webcam", () => {

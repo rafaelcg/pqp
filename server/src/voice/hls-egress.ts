@@ -463,7 +463,25 @@ export function sessionPrefixPattern(
   return `${hlsObjectPrefix(channelId, startedAt)}-%`;
 }
 
-/** One row per rendition: each has its own objects, egress and retention. */
+/**
+ * One row per rendition: each has its own objects, egress and retention.
+ *
+ * `reopen` IS THE CAMERA'S, AND IT IS NOT AN OPTIMISATION.
+ *
+ * A ladder rung never comes back under a prefix it has already used: every
+ * restart mints a new `startedAt`, so `DO NOTHING` there is pure idempotency
+ * and must stay that way. The camera is the one thing that starts and stops
+ * INSIDE a session — that is the whole design, because a new `startedAt` would
+ * rebuffer the audience — so a host switching their webcam off and on again
+ * lands on the same `object_prefix` with the row already stamped `ended_at`.
+ * `DO NOTHING` leaves it ended, and the playlist proxy refuses an ended
+ * session by design (`renderSignedPlaylist`), so the second camera would
+ * transcode perfectly and 404 for every viewer, for as long as the party ran.
+ *
+ * `cleaned_at` is cleared with it: a camera off for longer than
+ * `LIVE_HLS_RETENTION_MINUTES` has had its objects swept, and the fresh egress
+ * writes new ones under the same prefix.
+ */
 async function recordSessionStarted(
   channelId: string,
   startedAt: number,
@@ -471,6 +489,7 @@ async function recordSessionStarted(
   rung: string,
   presenterPeerId: string,
   videoTrackId: string,
+  reopen = false,
 ): Promise<void> {
   try {
     await getPool().query(
@@ -478,7 +497,16 @@ async function recordSessionStarted(
          (channel_id, object_prefix, started_at, egress_id, rung,
           presenter_peer_id, video_track_id)
        VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7)
-       ON CONFLICT (object_prefix) DO NOTHING`,
+       ${
+         reopen
+           ? `ON CONFLICT (object_prefix) DO UPDATE
+                SET egress_id = EXCLUDED.egress_id,
+                    presenter_peer_id = EXCLUDED.presenter_peer_id,
+                    video_track_id = EXCLUDED.video_track_id,
+                    ended_at = NULL,
+                    cleaned_at = NULL`
+           : "ON CONFLICT (object_prefix) DO NOTHING"
+       }`,
       [
         channelId,
         hlsObjectPrefix(channelId, startedAt, rung),
@@ -2367,6 +2395,9 @@ async function reconcileCameraEgress(
     CAMERA_RUNG_NAME,
     room.stream.presenterPeerId,
     wanted,
+    // Reopen: the camera is the one rendition that starts and stops INSIDE a
+    // session, so the second time round it lands on a row it already ended.
+    true,
   );
   logEvent("voice.hlsCameraStarted", {
     channelId,
