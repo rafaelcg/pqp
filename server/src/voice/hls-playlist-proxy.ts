@@ -139,6 +139,8 @@ export function resetHlsPlaylistCacheForTests(): void {
   playlistCache.clear();
   rungCache.clear();
   windowHistory.clear();
+  stopAllKeepWarmLoops();
+  keepWarmRenders = 0;
 }
 
 /**
@@ -214,6 +216,25 @@ export async function buildSignedPlaylist(
   rung?: string,
   now = Date.now(),
 ): Promise<string> {
+  // A real viewer asked for this session: keep it warm, and remember that
+  // someone is still watching. Must run before the cache/inflight logic
+  // below so a viewer's very first request both renders AND arms the loop.
+  touchKeepWarmSession(channelId, startedAt, now);
+  return renderCachedPlaylist(channelId, startedAt, rung, now);
+}
+
+/**
+ * The cache/inflight-coalescing logic `buildSignedPlaylist` has always had,
+ * pulled out so the keep-warm loop below can share it without also touching
+ * "a viewer asked for this" bookkeeping -- the loop's own renders must not
+ * look like viewer activity, or the idle timeout below could never fire.
+ */
+async function renderCachedPlaylist(
+  channelId: string,
+  startedAt: number,
+  rung: string | undefined,
+  now: number,
+): Promise<string> {
   const key = cacheKey(channelId, startedAt, rung);
   const cached = playlistCache.get(key);
   if (cached) {
@@ -242,6 +263,145 @@ export async function buildSignedPlaylist(
     });
   playlistCache.set(key, { ...cached, inflight, at: cached?.at ?? 0 });
   return inflight;
+}
+
+/**
+ * KEEP-WARM: a per-session loop that renders every rung of a live session on
+ * the server's own clock, so a rung nobody happens to be watching still has a
+ * full window when someone switches to it.
+ *
+ * WHY THIS EXISTS. `LiveWindowHistory` only grows when a viewer requests that
+ * rendition -- the history is a side effect of `renderSignedPlaylist`, not a
+ * background process. A rung with no audience (a viewer on 1080p while
+ * everyone else is on 720p, say) never gets rendered, so its history sits at
+ * whatever the egress's own five-entry window last happened to hold. Read on
+ * production 2026-09-12 15:41Z: a rung nobody had polled for a while came
+ * back with exactly 5 entries (20 s at 4 s segments, `EGRESS_LIVE_WINDOW_SEGMENTS`)
+ * because the history had a gap and `window()` stops at a gap. A viewer who
+ * switches to that rung -- the whole point of a ladder -- lands in a window a
+ * third the width of a rung someone had been watching the whole time.
+ *
+ * So while a session is live, every rung it has is rendered from the server
+ * side too, on the same cadence a viewer's own poll would use. The render is
+ * `renderCachedPlaylist`, the exact function a viewer's request shares, so a
+ * warm tick costs nothing extra when a viewer's own poll lands in the same
+ * second -- one of them does the work, both get the body.
+ *
+ * ONE LOOP PER SESSION, not per rung: `sessionRungs` is re-read every tick
+ * (itself cached, so this costs nothing beyond what a master request already
+ * costs), so a rung that starts mid-party is picked up on the next tick
+ * without restarting anything.
+ */
+export const HLS_KEEP_WARM_INTERVAL_MS = 2_000;
+
+/** No viewer of ANY rung of this session for this long: stop polling the bucket for it. */
+export const HLS_KEEP_WARM_IDLE_MS = 10 * 60_000;
+
+interface KeepWarmLoop {
+  timer: ReturnType<typeof setInterval>;
+  /** Last time a viewer (not the loop itself) requested any rung of this session. */
+  lastRequestedAt: number;
+  /** Guards against overlapping ticks if a render is slower than the interval. */
+  ticking: boolean;
+}
+
+const keepWarmLoops = new Map<string, KeepWarmLoop>();
+
+/** Warm renders performed by the loop, for metrics. */
+let keepWarmRenders = 0;
+
+function keepWarmSessionKey(channelId: string, startedAt: number): string {
+  return `${channelId}/${startedAt}`;
+}
+
+/** How many sessions currently have a keep-warm loop running. For metrics. */
+export function hlsKeepWarmLoopsActive(): number {
+  return keepWarmLoops.size;
+}
+
+/** How many warm (non-viewer) renders the keep-warm loop(s) have performed. For metrics. */
+export function hlsKeepWarmRenders(): number {
+  return keepWarmRenders;
+}
+
+function touchKeepWarmSession(channelId: string, startedAt: number, now: number): void {
+  const key = keepWarmSessionKey(channelId, startedAt);
+  const loop = keepWarmLoops.get(key);
+  if (loop) {
+    loop.lastRequestedAt = now;
+    return;
+  }
+  const timer = setInterval(() => {
+    void runKeepWarmTick(channelId, startedAt, key);
+  }, HLS_KEEP_WARM_INTERVAL_MS);
+  // Never holds the process open: a keep-warm loop for a session nobody ever
+  // tears down explicitly (a crash, a test that forgets to reset) must not
+  // be why `node` refuses to exit.
+  timer.unref?.();
+  keepWarmLoops.set(key, { timer, lastRequestedAt: now, ticking: false });
+}
+
+async function runKeepWarmTick(
+  channelId: string,
+  startedAt: number,
+  key: string,
+): Promise<void> {
+  const loop = keepWarmLoops.get(key);
+  if (!loop || loop.ticking) {
+    return;
+  }
+  const now = Date.now();
+  if (now - loop.lastRequestedAt >= HLS_KEEP_WARM_IDLE_MS) {
+    // Abandoned: nobody has watched any rung of this session in a while.
+    // Stop polling the bucket for it rather than doing this forever.
+    stopKeepWarmLoop(key);
+    return;
+  }
+  loop.ticking = true;
+  try {
+    let rungs: (string | undefined)[];
+    try {
+      const list = await sessionRungs(channelId, startedAt, now);
+      // A pre-ladder session (no rung rows at all) still has one media
+      // playlist to keep warm: `rung: undefined`.
+      rungs = list.length > 0 ? list : [undefined];
+    } catch {
+      // Could not even list the rungs (DB hiccup): try again next tick.
+      return;
+    }
+    for (const rung of rungs) {
+      try {
+        await renderCachedPlaylist(channelId, startedAt, rung, now);
+        keepWarmRenders += 1;
+      } catch (error) {
+        if (error instanceof HlsPlaylistNotFound) {
+          // The session ended. Nothing left to keep warm.
+          stopKeepWarmLoop(key);
+          return;
+        }
+        // Any other failure (storage unreachable, a slow upstream) is
+        // swallowed: a warm tick is a courtesy, not a request anyone is
+        // waiting on, and the next tick tries again.
+      }
+    }
+  } finally {
+    loop.ticking = false;
+  }
+}
+
+function stopKeepWarmLoop(key: string): void {
+  const loop = keepWarmLoops.get(key);
+  if (!loop) {
+    return;
+  }
+  clearInterval(loop.timer);
+  keepWarmLoops.delete(key);
+}
+
+function stopAllKeepWarmLoops(): void {
+  for (const key of [...keepWarmLoops.keys()]) {
+    stopKeepWarmLoop(key);
+  }
 }
 
 async function renderSignedPlaylist(
