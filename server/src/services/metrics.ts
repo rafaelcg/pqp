@@ -11,6 +11,10 @@ import {
   liveHlsConfig,
 } from "../voice/hls-egress.js";
 import { countDueSessions } from "../voice/hls-cleanup.js";
+import {
+  hlsKeepWarmLoopsActive,
+  hlsKeepWarmRenders,
+} from "../voice/hls-playlist-proxy.js";
 import { processRole, runsColdJobs } from "../lib/process-role.js";
 import { getPresenceFanoutStats } from "../ws/chat.js";
 import {
@@ -306,6 +310,16 @@ export interface AdminMetrics {
     uncleaned: number;
     /** Whether this process runs the retention sweep (`WORKER_MODE`). */
     sweepsHere: boolean;
+    /**
+     * Live sessions this process is polling from the server side so every
+     * rung stays widened, not just the ones a viewer happens to be watching.
+     * See `hls-playlist-proxy.ts`'s keep-warm loop. Should track `sessions`
+     * closely; a persistent gap below it means a rung's window can go stale
+     * between viewers switching to it.
+     */
+    keepWarmLoops: number;
+    /** Warm (non-viewer) renders performed by those loops since boot. */
+    keepWarmRenders: number;
   };
   topServers24h: {
     name: string;
@@ -935,6 +949,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       orphansStopped: hlsActivity.orphansStopped,
       uncleaned: hlsUncleaned,
       sweepsHere: runsColdJobs(processRole()),
+      keepWarmLoops: hlsKeepWarmLoopsActive(),
+      keepWarmRenders: hlsKeepWarmRenders(),
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,
