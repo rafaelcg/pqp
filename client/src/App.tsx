@@ -1359,6 +1359,8 @@ function MainAppContent({
   const [purgeChannel, setPurgeChannel] = useState<{
     id: string;
     name: string;
+    /** Seeded by `/clear <count>`; absent when opened from the channel menu. */
+    initialCount?: number;
   } | null>(null);
   const [pendingLeaveServerId, setPendingLeaveServerId] = useState<
     string | null
@@ -6538,6 +6540,24 @@ function MainAppContent({
           isMuted: voiceState.isMuted,
           sendChance: (request) => chat.sendChance(request),
           sendPoll: (request) => chat.sendPoll(request),
+          // Same gate and same dialog as the channel menu's "clear recent
+          // messages": /clear is a shortcut into it, not a second path.
+          canPurgeMessages: Boolean(
+            selectedChannel &&
+              selectedChannel.kind === "server" &&
+              (selectedChannel.type === "text" ||
+                isWatchPartyChannelType(selectedChannel.type)) &&
+              perms.can(Permission.MANAGE_MESSAGES, selectedChannel.id),
+          ),
+          openPurgeDialog: (count) => {
+            if (selectedChannel) {
+              setPurgeChannel({
+                id: selectedChannel.id,
+                name: selectedChannel.name,
+                initialCount: count,
+              });
+            }
+          },
         }}
         disabled={!selectedChannelId || messagesLoading}
         slowModeUntil={chat.getSlowModeHeldUntil() || null}
@@ -7491,6 +7511,7 @@ function MainAppContent({
       <BulkPurgeDialog
         open={purgeChannel !== null}
         channelName={purgeChannel?.name ?? ""}
+        initialCount={purgeChannel?.initialCount}
         onConfirm={(count) => {
           if (purgeChannel) {
             void handleBulkDeleteRecent(purgeChannel.id, count);

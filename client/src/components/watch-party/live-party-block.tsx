@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Clapperboard, Eye } from "lucide-react";
+import { Clapperboard, Copy, Eraser, Eye } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { LivePill } from "@/components/watch-party/live-pill";
+import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { useTranslation } from "@/lib/i18n";
 import { formatLiveFor } from "@/lib/live-party-card";
 import { cn } from "@/lib/utils";
@@ -54,6 +55,8 @@ export function LivePartyBlock({
   audience,
   onWatch,
   onCreate,
+  canPurge,
+  onPurge,
 }: {
   /** Live parties in this server, newest first. Usually exactly one. */
   parties: readonly WatchParty[];
@@ -71,6 +74,10 @@ export function LivePartyBlock({
   audience?: Readonly<Record<string, number>>;
   onWatch: (channelId: string) => void;
   onCreate?: () => void;
+  /** MANAGE_MESSAGES, server-wide. Gates the "clear recent messages" entry, same as a text channel's row. */
+  canPurge?: boolean;
+  /** Opens the same purge confirm dialog a text channel's context menu opens, on this party's channel. */
+  onPurge?: (channelId: string, name: string) => void;
 }) {
   const { t } = useTranslation();
   // The uptime ticks once a minute while a party is on, and not at all
@@ -148,8 +155,29 @@ export function LivePartyBlock({
           const selected = selectedChannelId === party.channelId;
           const watching = audience?.[party.channelId];
           const liveFor = formatLiveFor(party.wentLiveAt, now);
+          // Same two items a text channel's row offers a moderator: this
+          // card had no context menu at all before, which meant right-click
+          // fell through to the browser's own — the fix is to give it the
+          // real one rather than reinvent it, mirroring `ChannelRow`.
+          const menuItems: ContextMenuItemDef[] = [];
+          if (canPurge && onPurge) {
+            menuItems.push({
+              id: "purge",
+              label: t("chrome.purgeChannel"),
+              icon: Eraser,
+              danger: true,
+              onSelect: () => onPurge(party.channelId, party.name),
+            });
+          }
+          menuItems.push({
+            id: "copy-id",
+            label: t("chrome.copyChannelId"),
+            icon: Copy,
+            onSelect: () => void navigator.clipboard.writeText(party.channelId),
+          });
           return (
             <li key={party.id}>
+              <ContextMenu items={menuItems}>
               <button
                 type="button"
                 data-live-party-row
@@ -213,6 +241,7 @@ export function LivePartyBlock({
                   )}
                 </span>
               </button>
+              </ContextMenu>
             </li>
           );
         })}

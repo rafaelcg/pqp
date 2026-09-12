@@ -60,7 +60,10 @@ interface ThreadPanelProps {
   onMarkUnread?: (message: ChatMessage) => void;
   onMarkRead?: () => void;
   onSent?: () => void;
-  slashContext?: Omit<ComposerSlashContext, "sendChance" | "sendPoll">;
+  slashContext?: Omit<
+    ComposerSlashContext,
+    "sendChance" | "sendPoll" | "canPurgeMessages" | "openPurgeDialog"
+  >;
 }
 
 export function ThreadPanel({
@@ -226,6 +229,12 @@ export function ThreadPanel({
                 ...slashContext,
                 sendChance: (request) => controller.sendChance(request),
                 sendPoll: (request) => controller.sendPoll(request),
+                // Purging is a channel-wide moderation action with its own
+                // confirm dialog on the channel list; there is no "purge this
+                // thread" concept, so /clear stays off in here rather than
+                // quietly acting on the parent channel.
+                canPurgeMessages: false,
+                openPurgeDialog: () => {},
               }
             : undefined
         }

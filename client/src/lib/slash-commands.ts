@@ -2,6 +2,7 @@ import {
   MAX_DICE_COUNT,
   MAX_DRAW_COUNT,
   MAX_CHOOSE_OPTIONS,
+  MESSAGE_BULK_DELETE_MAX,
   parseChooseOptions,
   parseDrawCount,
   parsePollSlashArgs,
@@ -43,6 +44,10 @@ export interface SlashCommandContext {
   sendChance: (request: ChanceRequest) => void;
   sendPoll: (request: PollRequest) => void;
   openPollComposer: () => void;
+  /** MANAGE_MESSAGES on the current channel, same gate as the channel menu's "clear recent messages". */
+  canPurgeMessages: boolean;
+  /** Opens the same confirm dialog the channel menu's purge action opens, on the current channel. */
+  openPurgeDialog: (count?: number) => void;
 }
 
 export type SlashExecuteResult =
@@ -334,13 +339,22 @@ const commands: SlashCommand[] = [
   {
     name: "clear",
     descriptionKey: "slash.clear.description",
-    usage: "/clear",
-    takesArgs: false,
-    execute() {
-      return ok({
-        message: translateMessage("slash.clear.ok"),
-        tone: "info",
-      });
+    usage: "/clear [count]",
+    takesArgs: true,
+    execute({ args, canPurgeMessages, openPurgeDialog }) {
+      if (!canPurgeMessages) {
+        return errKey("slash.clear.noPermission");
+      }
+      const trimmed = args.trim();
+      let count: number | undefined;
+      if (trimmed) {
+        const parsed = Number.parseInt(trimmed, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          count = Math.min(parsed, MESSAGE_BULK_DELETE_MAX);
+        }
+      }
+      openPurgeDialog(count);
+      return ok();
     },
   },
 ];

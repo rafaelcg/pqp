@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
+import type { Channel, Server, VoiceParticipant, WatchParty } from "@pqp/shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ChannelList } from "./channel-list";
 
@@ -72,6 +72,33 @@ function person(
 
 const presenter = person("peer-andre", "Andre", true);
 const viewers = [person("peer-rafa", "Rafa"), person("peer-bia", "Bia")];
+
+const liveParty: WatchParty = {
+  id: "77777777-7777-4777-8777-777777777777",
+  channelId: cinema.id,
+  serverId: server.id,
+  name: "Sessão da tarde",
+  description: null,
+  state: "live",
+  startsAt: null,
+  wentLiveAt: "2026-09-08T12:00:00.000Z",
+  endedAt: null,
+  hostUserId: "88888888-8888-4888-8888-888888888888",
+  hostDisplayName: "Andre",
+  hostAvatarUrl: null,
+  hostDisconnectedAt: null,
+  cohosts: [],
+  options: {
+    voiceEnabled: false,
+    stageMode: "hosts_only",
+    raiseHand: true,
+    slowModeSeconds: 0,
+    reactionsEnabled: true,
+  },
+  viewerRole: "host",
+  reminding: false,
+  stage: { invited: [], hands: [], handRaised: false },
+};
 
 const baseProps = {
   server,
@@ -196,6 +223,63 @@ describe("ChannelList watch party row (flag off)", () => {
     // longer full-joins voice (see the suite above).
     expect(html).toContain(">Andre<");
     expect(html).toContain(">Rafa<");
+    expect(html).toContain('data-channel-type="watch_party"');
+  });
+});
+
+/**
+ * The live party card is not a `ChannelRow`, so it does not inherit
+ * `ChannelRow`'s context menu (or its purge gate) for free — the owner
+ * right-clicking a live show and getting the browser's own menu was exactly
+ * that gap. `onPurgeChannel` narrowed to `Pick<Channel, "id" | "name">` is
+ * what lets the card hand back a purge target built from `WatchParty` fields
+ * alone, with no `Channel` object on hand.
+ */
+describe("purge from the live party card and the flag-off row", () => {
+  it("renders the live party card for a moderator with a purge target wired up, without throwing", () => {
+    const onPurgeChannel = vi.fn();
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        onWatchLiveParty={() => {}}
+        liveParties={[liveParty]}
+        canManageMessages
+        onPurgeChannel={onPurgeChannel}
+      />,
+    );
+    expect(html).toContain("live-party-block");
+    expect(html).toContain(`data-channel-id="${cinema.id}"`);
+  });
+
+  it("still renders the live party card for a viewer with no purge permission", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        onWatchLiveParty={() => {}}
+        liveParties={[liveParty]}
+        canManageMessages={false}
+      />,
+    );
+    expect(html).toContain("live-party-block");
+  });
+
+  it("extends the flag-off row's purge gate to a watch_party channel, same as a text channel", () => {
+    flag.on = false;
+    const onPurgeChannel = vi.fn();
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        channels={[cinema]}
+        canManageMessages
+        onPurgeChannel={onPurgeChannel}
+      />,
+    );
+    // No assertion on the (portal-rendered, closed-by-default) menu content —
+    // this repo's component tests are static-markup smoke tests and Radix's
+    // `Trigger asChild` adds no extra DOM node either way. The behavioural
+    // coverage for the purge gate itself lives in the plain function tests
+    // in `slash-commands.test.ts`; this guards the wiring does not throw for
+    // a watch_party channel the way it already does not for a text one.
     expect(html).toContain('data-channel-type="watch_party"');
   });
 });

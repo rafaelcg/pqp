@@ -20,6 +20,8 @@ function ctx(overrides: Record<string, unknown> = {}) {
     sendChance: vi.fn(),
     sendPoll: vi.fn(),
     openPollComposer: vi.fn(),
+    canPurgeMessages: true,
+    openPurgeDialog: vi.fn(),
     ...overrides,
   };
 }
@@ -142,5 +144,54 @@ describe("chance slash commands", () => {
         options: ["yes", "no"],
       }),
     );
+  });
+});
+
+describe("/clear", () => {
+  it("opens the purge dialog on the current channel when the caller can moderate", async () => {
+    const openPurgeDialog = vi.fn();
+    const result = await executeSlashCommand(
+      "/clear",
+      ctx({ canPurgeMessages: true, openPurgeDialog }),
+    );
+    expect(openPurgeDialog).toHaveBeenCalledWith(undefined);
+    expect(result.kind).toBe("ok");
+  });
+
+  it("passes a count argument through to the dialog", async () => {
+    const openPurgeDialog = vi.fn();
+    await executeSlashCommand(
+      "/clear 50",
+      ctx({ canPurgeMessages: true, openPurgeDialog }),
+    );
+    expect(openPurgeDialog).toHaveBeenCalledWith(50);
+  });
+
+  it("clamps a count above the server's cap instead of passing it through raw", async () => {
+    const openPurgeDialog = vi.fn();
+    await executeSlashCommand(
+      "/clear 99999",
+      ctx({ canPurgeMessages: true, openPurgeDialog }),
+    );
+    expect(openPurgeDialog).toHaveBeenCalledWith(100);
+  });
+
+  it("ignores a nonsense argument rather than passing it through", async () => {
+    const openPurgeDialog = vi.fn();
+    await executeSlashCommand(
+      "/clear all of it",
+      ctx({ canPurgeMessages: true, openPurgeDialog }),
+    );
+    expect(openPurgeDialog).toHaveBeenCalledWith(undefined);
+  });
+
+  it("refuses without Manage Messages, and never opens the dialog", async () => {
+    const openPurgeDialog = vi.fn();
+    const result = await executeSlashCommand(
+      "/clear",
+      ctx({ canPurgeMessages: false, openPurgeDialog }),
+    );
+    expect(openPurgeDialog).not.toHaveBeenCalled();
+    expect(result.kind).toBe("error");
   });
 });

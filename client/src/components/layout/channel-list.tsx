@@ -233,8 +233,12 @@ interface ChannelListProps {
     options?: { forceAdvanced?: boolean },
   ) => void;
   onDeleteChannel: (channelId: string) => void;
-  /** Open the "clear recent messages" dialog for a text channel. */
-  onPurgeChannel?: (channel: Channel) => void;
+  /**
+   * Open the "clear recent messages" dialog for a text or watch_party
+   * channel. `Pick` rather than the full `Channel` because the live party
+   * card only ever has the party's id and name on hand, not a channel row.
+   */
+  onPurgeChannel?: (channel: Pick<Channel, "id" | "name">) => void;
   onMoveChannel: (
     channelId: string,
     parentId: string | null,
@@ -1027,7 +1031,10 @@ export function ChannelList({
           }
           onDelete={() => onDeleteChannel(channel.id)}
           onPurge={
-            channel.type === "text" && canManageMessages && onPurgeChannel
+            (channel.type === "text" ||
+              isWatchPartyChannelType(channel.type)) &&
+            canManageMessages &&
+            onPurgeChannel
               ? () => onPurgeChannel(channel)
               : undefined
           }
@@ -1421,6 +1428,12 @@ export function ChannelList({
                         onCreateWatchParty();
                         onMobileClose?.();
                       }
+                    : undefined
+                }
+                canPurge={canManageMessages}
+                onPurge={
+                  onPurgeChannel
+                    ? (channelId, name) => onPurgeChannel({ id: channelId, name })
                     : undefined
                 }
               />
