@@ -25,24 +25,32 @@ const DEFAULT_COUNT = 25;
 export function BulkPurgeDialog({
   open,
   channelName,
+  initialCount,
   onConfirm,
   onClose,
 }: {
   open: boolean;
   channelName: string;
+  /** Seeds the count for this open, e.g. `/clear 50`. Falls back to `DEFAULT_COUNT`. */
+  initialCount?: number;
   onConfirm: (count: number) => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   const [count, setCount] = useState<number>(DEFAULT_COUNT);
 
-  // Every visit starts from the same number. A dialog that remembered "100"
-  // from last time is one Enter away from clearing a channel nobody meant to.
+  // Every visit starts from the same number, unless the command that opened it
+  // named one (`/clear 50`). A dialog that remembered "100" from last time is
+  // one Enter away from clearing a channel nobody meant to.
   useEffect(() => {
     if (open) {
-      setCount(DEFAULT_COUNT);
+      setCount(
+        initialCount && initialCount > 0
+          ? Math.min(initialCount, MESSAGE_BULK_DELETE_MAX)
+          : DEFAULT_COUNT,
+      );
     }
-  }, [open]);
+  }, [open, initialCount]);
 
   return (
     <Dialog

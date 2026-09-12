@@ -130,6 +130,8 @@ export interface ComposerSlashContext {
   isMuted: boolean;
   sendChance: (request: ChanceRequest) => void;
   sendPoll: (request: PollRequest) => void;
+  canPurgeMessages: boolean;
+  openPurgeDialog: (count?: number) => void;
 }
 
 export interface ComposerReplyTarget {
