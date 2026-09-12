@@ -94,6 +94,22 @@ stops every ACTIVE egress in a room we are presenting that is not one of ours;
 a camera egress missing from that set would be killed on the first monitor tick
 and restarted on the next reconcile, forever.
 
+Two more that only show up on a box that is already struggling:
+
+- **A dead camera cools off for two minutes.** Dropping it tells the room,
+  which reconciles, which finds the presenter's camera still published and
+  starts another. Once, on a healthy box, that is right. On a box where
+  egresses are dying it is a loop at the monitor's cadence, on the machine
+  that was already too busy. Deliberately **not** the session's own
+  `restartHistory` budget: a camera failing must never spend the restarts that
+  exist to bring the film back. Closing the camera clears it, so "turn it off
+  and on again" works at once.
+- **It reopens its own session row.** The camera is the only rendition that
+  comes back under a prefix it has already used — everything else mints a new
+  `startedAt` — so `ON CONFLICT DO NOTHING` would leave the row stamped
+  `ended_at` and the playlist proxy, which refuses an ended session by design,
+  would 404 a perfectly healthy second camera for the rest of the party.
+
 ### One LiveKit round trip, not two
 
 `pickScreenTracks` already walks the presenter's track list to find the share

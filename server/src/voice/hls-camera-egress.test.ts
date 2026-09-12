@@ -422,6 +422,56 @@ describe("the camera and the machinery that stops things", () => {
     expect(lk.stop).not.toHaveBeenCalled();
   });
 
+  it("does not restart a camera that just died, until it has cooled off", async () => {
+    // THE LOOP THIS STOPS. A dead camera is dropped, the room is told, the
+    // reconcile finds the presenter's camera still published and starts
+    // another. On a box that is struggling — which is exactly when an egress
+    // dies — that is die, restart, die, forever, on the machine that was
+    // already too busy.
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(lk.start).toHaveBeenCalledTimes(2);
+
+    lk.kill("EG_2");
+    await advance(20_000);
+    await checkLiveHlsHealth();
+    expect(liveHlsActivity().cameraSessions).toBe(0);
+
+    // The presenter's camera is still published, so without a cooldown this
+    // is where the second one starts.
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(lk.start).toHaveBeenCalledTimes(2);
+
+    await advance(2 * 60_000 + 1_000);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(lk.start).toHaveBeenCalledTimes(3);
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
+  it("lets the host bring it straight back by closing the camera first", async () => {
+    // Turning it off and on again is the first thing anybody does when
+    // something looks broken. Holding them out for two minutes after they did
+    // exactly the right thing would read as the feature being dead.
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    lk.kill("EG_2");
+    await advance(20_000);
+    await checkLiveHlsHealth();
+
+    cameraTrackId = null;
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    cameraTrackId = "TR_CAM";
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
   it("drops a dead camera without taking the film with it", async () => {
     enableHls();
     const lk = fakeLiveKit();

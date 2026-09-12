@@ -252,6 +252,25 @@ const orphanStopBackoff = new Map<
  * leak ever happened, because the leak itself is silent.
  */
 let orphansStopped = 0;
+/**
+ * Channels whose camera transcode died, and when another may start.
+ *
+ * WHY THERE HAS TO BE ONE. A dead camera is dropped by the health monitor,
+ * which tells the room, which reconciles, which finds the presenter's camera
+ * still published and starts another. On a healthy box that is the right
+ * behaviour and happens once. On a box that is struggling — which is exactly
+ * when an egress dies — it is a loop: die, restart, die, at roughly the
+ * monitor's cadence plus the grace, forever, on the machine that was already
+ * too busy.
+ *
+ * Two minutes, and deliberately NOT the session's `restartHistory` budget: a
+ * camera failing must never spend the restarts that exist to bring the FILM
+ * back. Cleared the moment the presenter actually closes their camera, so
+ * "turn it off and on again" — which is the first thing anybody does when
+ * something looks broken — works at once.
+ */
+const cameraCooldownUntil = new Map<string, number>();
+const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
 let changeListener: LiveHlsChangeListener | null = null;
 let sfuLoadReader: LiveHlsSfuLoadReader | null = null;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
@@ -880,6 +899,7 @@ export function resetLiveHlsForTests(): void {
   pendingRestarts.clear();
   reconcileQueue.clear();
   orphanStopBackoff.clear();
+  cameraCooldownUntil.clear();
   orphansStopped = 0;
   changeListener = null;
   sfuLoadReader = null;
@@ -1466,10 +1486,12 @@ export async function checkLiveHlsHealth(
         }
         await recordSessionEnded(channelId, startedAt, CAMERA_RUNG_NAME);
         room.stream = withoutCameraUrl(room.stream);
+        cameraCooldownUntil.set(channelId, now + CAMERA_COOLDOWN_MS);
         logEvent("voice.hlsCameraDied", {
           channelId,
           egressId: camera.egressId,
           error: cameraHealth.detail ?? null,
+          cooldownMs: CAMERA_COOLDOWN_MS,
         });
         // The viewers are holding a `cameraHlsUrl` that will now 404. Tell
         // them so the PiP disappears instead of spinning.
@@ -2218,6 +2240,7 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
     return;
   }
   rooms.delete(channelId);
+  cameraCooldownUntil.delete(channelId);
   logEvent("voice.hlsStopped", {
     channelId,
     reason,
@@ -2321,7 +2344,19 @@ async function reconcileCameraEgress(
     });
   }
   if (!wanted) {
+    // A DELIBERATE CLOSE CLEARS THE COOLDOWN. Turning it off and on again is
+    // the first thing anybody does when something looks broken, and holding
+    // them out for two minutes after they did exactly the right thing would
+    // read as the feature being dead.
+    cameraCooldownUntil.delete(channelId);
     return;
+  }
+  const cooldown = cameraCooldownUntil.get(channelId);
+  if (cooldown !== undefined) {
+    if (cooldown > Date.now()) {
+      return;
+    }
+    cameraCooldownUntil.delete(channelId);
   }
   const egress = getEgress();
   if (!egress) {
