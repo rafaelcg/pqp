@@ -943,6 +943,15 @@ function MainAppContent({
    * something that just happened.
    */
   const [appNotice, setAppNotice] = useState<string | null>(null);
+  /**
+   * The server's "you have been alone for a while" notice, with the moment
+   * it will hang up. One button answers it. Cleared by the answer, by the
+   * hangup itself, and by leaving the room.
+   */
+  const [idleWarning, setIdleWarning] = useState<{
+    voiceChannelId: string;
+    disconnectAt: number;
+  } | null>(null);
   // Set only by a successful handle claim, so the share offer appears at the
   // one moment it is a celebration rather than a request. Cleared with the
   // notice it rides on.
@@ -1470,6 +1479,13 @@ function MainAppContent({
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  // Leaving the room, or being moved out of it, ends the warning: the seat it
+  // was about is gone.
+  useEffect(() => {
+    if (idleWarning && voiceState.voiceChannelId !== idleWarning.voiceChannelId) {
+      setIdleWarning(null);
+    }
+  }, [idleWarning, voiceState.voiceChannelId]);
   /**
    * Somebody watching a live party without a seat is looking at a film. The
    * member column is the thing that eats the width the chat needs beside it,
@@ -3027,8 +3043,13 @@ function MainAppContent({
                 ? translateMessage("voice.serverMuted.self")
                 : message.action === "unmuted"
                   ? translateMessage("voice.serverMuted.cleared")
-                  : message.message,
+                  : message.reason === "idle"
+                    ? translateMessage("voice.idle.disconnected")
+                    : message.message,
             );
+            if (message.action === "disconnected") {
+              setIdleWarning(null);
+            }
             if (message.action === "moved" && message.movedToChannelId) {
               // Follow the move with an ordinary join: the server re-runs
               // every admission check (access, timeout, transport, room-full),
@@ -3044,6 +3065,21 @@ function MainAppContent({
             // "muted"/"unmuted": the roster's `serverMuted` flag does the
             // enforcing (see `serverMutedPeerIds` in `use-voice`); the banner
             // above is the explanation.
+            return;
+          }
+
+          // Alone in the room and about to be hung up. App behaviour, like
+          // the moderation frame above: the banner lives beside the other
+          // banners, and the answer is one client frame. Guarded to the room
+          // we are in for the same reason.
+          if (message.type === "voice-idle-warning") {
+            if (voice.getState().voiceChannelId !== message.voiceChannelId) {
+              return;
+            }
+            setIdleWarning({
+              voiceChannelId: message.voiceChannelId,
+              disconnectAt: message.disconnectAt,
+            });
             return;
           }
 
@@ -6892,6 +6928,29 @@ function MainAppContent({
               onClick={() => setAppError(null)}
             >
               {t("connection.dismiss")}
+            </button>
+          </div>
+        )}
+
+        {idleWarning && (
+          <div className="flex items-start gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning">
+            <span className="flex-1">
+              {t("voice.idle.warning", {
+                count: Math.max(
+                  1,
+                  Math.round((idleWarning.disconnectAt - Date.now()) / 60_000),
+                ),
+              })}
+            </span>
+            <button
+              type="button"
+              className="shrink-0 text-xs underline underline-offset-2"
+              onClick={() => {
+                transport.sendVoice({ type: "voice-still-here" });
+                setIdleWarning(null);
+              }}
+            >
+              {t("voice.idle.stillHere")}
             </button>
           </div>
         )}
