@@ -213,6 +213,7 @@ import {
 import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
+import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import {
   isCameraAtCap,
   isScreenShareAtCap,
@@ -5631,6 +5632,7 @@ function MainAppContent({
    */
   const sidebarFooter = (compact = false) => (
     <>
+      {!compact && <MusicMiniPlayer voiceState={voiceState} />}
       {voiceState.status !== "idle" && (
         <VoiceStatusBar
           channelName={

@@ -74,10 +74,15 @@ position sample does not re-render the call stage; `use-voice.ts` feeds it
 and registers a sender on every `welcome`. `components/voice/music-bar-button.tsx`
 is the control on the call bar beside camera and screen share ("Tocar
 música", lit while something plays); `components/voice/music-dock.tsx` is the
-line on the call strip and the popover both open: a visible YouTube embed,
-play/pause, skip, stop, a local volume slider and the queue with reorder and
-remove. The sidebar row is in `layout/channel-list.tsx`, off
-`voiceState.channelMusic`.
+line on the call strip and the popover both open: the add box and the queue
+with reorder and remove. The player itself is
+`components/voice/music-mini-player.tsx`, pinned at the bottom of the
+sidebar above the call controls the way a browser pins its media controls:
+the embed, play/pause, skip, stop, the local volume slider and a queue
+button. It is mounted for the whole call whatever the reader is looking at,
+because unmounting the embed is what stops the sound. Rooms you are not in
+show a card under their occupants instead (`channel-music-card.tsx`, off
+`voiceState.channelMusic`), whose title joins the call.
 
 Sync rules in the dock: a new track loads at the room's expected position; a
 status change plays or pauses; every two seconds a non-actor compares the
