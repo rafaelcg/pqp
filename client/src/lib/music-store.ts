@@ -1,0 +1,387 @@
+import { useSyncExternalStore } from "react";
+import {
+  MUSIC_QUEUE_LIMIT,
+  musicWriteIsStale,
+  type MusicResolved,
+  type MusicState,
+  type MusicTrack,
+} from "@pqp/shared";
+
+/**
+ * THE ROOM'S MUSIC QUEUE, ON THIS MACHINE.
+ *
+ * Kept out of `VoiceState` on purpose: a position sample arriving every few
+ * seconds would re-render the whole call stage, and the only things that
+ * read this are the dock and its player. `use-voice.ts` feeds it (`music`
+ * frames in, `set-music` frames out through the session it registers on
+ * `welcome`) and the dock subscribes with `useMusic()`.
+ *
+ * Every local action is last-writer-wins with `rev = seen + 1` and this
+ * peer's id as the tie-break, exactly as the watch party's contract says
+ * (`packages/shared/src/watch-party.ts`). The local copy is applied
+ * immediately and the echo confirms it; a stale answer from the server
+ * replaces it, which is how a lost race is settled in one round trip.
+ */
+
+export interface MusicSession {
+  channelId: string;
+  peerId: string;
+  userId: string;
+  displayName: string;
+  send: (state: MusicState | null) => void;
+}
+
+export interface MusicSnapshot {
+  channelId: string | null;
+  state: MusicState | null;
+  /** This machine's clock when `state` arrived. Drift is measured from here. */
+  receivedAt: number;
+  /** Whether the sidebar player is expanded. Shared so the call-bar button and the player agree. */
+  open: boolean;
+  /**
+   * Whether THIS machine plays the room's music. False is "parar de ouvir":
+   * the player unmounts here, the room's queue carries on for everyone
+   * else, and a pill offers the way back. Reset on every new seat.
+   */
+  listening: boolean;
+}
+
+let session: MusicSession | null = null;
+let snapshot: MusicSnapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
+const listeners = new Set<() => void>();
+
+function emit() {
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
+function set(state: MusicState | null, channelId: string | null) {
+  snapshot = { ...snapshot, channelId, state, receivedAt: Date.now() };
+  emit();
+}
+
+export function setMusicOpen(open: boolean): void {
+  if (snapshot.open === open) {
+    return;
+  }
+  snapshot = { ...snapshot, open };
+  emit();
+}
+
+export function toggleMusicOpen(): void {
+  setMusicOpen(!snapshot.open);
+}
+
+/**
+ * A new seat, or none. Either way the held state is dropped: the server
+ * sends the room's state right after `welcome`, and an optimistic copy
+ * from before a reconnect is a `rev` ahead of the truth and would otherwise
+ * call it stale. Only a reconnect INTO THE SAME ROOM keeps the personal
+ * toggles (listening, open).
+ */
+export function setMusicSession(next: MusicSession | null): void {
+  const sameRoom = next !== null && session?.channelId === next.channelId;
+  session = next;
+  if (!sameRoom) {
+    snapshot = { ...snapshot, listening: true, open: false };
+  }
+  set(null, next?.channelId ?? null);
+}
+
+/** The room this machine may write to right now, or null. */
+export function musicSessionChannelId(): string | null {
+  return session?.channelId ?? null;
+}
+
+export function setListening(listening: boolean): void {
+  if (snapshot.listening === listening) {
+    return;
+  }
+  snapshot = { ...snapshot, listening };
+  emit();
+}
+
+/** A `music` frame from the server (join, echo, another person's write). */
+export function receiveMusic(
+  channelId: string,
+  state: MusicState | null,
+  forced = false,
+): void {
+  // No seat, or a seat elsewhere: not ours. A frame that lands after
+  // leaving must not repopulate a player that has nowhere to play.
+  if (!session || session.channelId !== channelId) {
+    return;
+  }
+  // A refusal hands back what the server holds; our optimistic copy is
+  // ahead of it by one `rev` and would otherwise call the correction stale.
+  if (!forced && state !== null && musicWriteIsStale(snapshot.state, state)) {
+    return;
+  }
+  set(state, channelId);
+}
+
+export function subscribeMusic(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function getMusicSnapshot(): MusicSnapshot {
+  return snapshot;
+}
+
+export function useMusic(): MusicSnapshot {
+  return useSyncExternalStore(subscribeMusic, getMusicSnapshot, getMusicSnapshot);
+}
+
+export function resetMusicStoreForTests(): void {
+  session = null;
+  positionProbe = null;
+  snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
+  listeners.clear();
+}
+
+// ------------------------------------------------------------------ actions
+
+function write(next: Omit<MusicState, "rev" | "actorId" | "atMs">): void {
+  if (!session) {
+    return;
+  }
+  const state: MusicState = {
+    ...next,
+    atMs: Date.now(),
+    rev: (snapshot.state?.rev ?? 0) + 1,
+    actorId: session.peerId,
+  };
+  set(state, session.channelId);
+  session.send(state);
+}
+
+/**
+ * Where the player actually is, asked at write time. Registered by the
+ * player while one is mounted. Without it a queue edit would carry the
+ * position of the LAST sample, which can be a minute stale, and a joiner
+ * would land there.
+ */
+let positionProbe: (() => number) | null = null;
+
+export function setPositionProbe(probe: (() => number) | null): void {
+  positionProbe = probe;
+}
+
+function livePositionMs(held: MusicState | null): number {
+  if (!held || !held.current) {
+    return 0;
+  }
+  if (positionProbe) {
+    try {
+      const at = positionProbe();
+      if (Number.isFinite(at) && at >= 0) {
+        return Math.round(at);
+      }
+    } catch {
+      // fall through to the arithmetic
+    }
+  }
+  return Math.round(expectedPositionMs(snapshot));
+}
+
+function base(): Omit<MusicState, "rev" | "actorId" | "atMs"> {
+  const held = snapshot.state;
+  return {
+    current: held?.current ?? null,
+    queue: held?.queue ?? [],
+    status: held?.status ?? "paused",
+    positionMs: livePositionMs(held),
+  };
+}
+
+let trackSeq = 0;
+
+function mintTrack(resolved: MusicResolved): MusicTrack | null {
+  if (!session) {
+    return null;
+  }
+  trackSeq += 1;
+  return {
+    id: `${session.peerId.slice(0, 8)}-${Date.now().toString(36)}-${trackSeq}`,
+    provider: resolved.provider,
+    videoId: resolved.videoId,
+    title: resolved.title,
+    sourceUrl: resolved.sourceUrl,
+    thumbnailUrl: resolved.thumbnailUrl,
+    durationMs: resolved.durationMs,
+    addedByUserId: session.userId,
+    addedByName: session.displayName,
+  };
+}
+
+export type MusicAddOutcome = "playing" | "queued" | "full" | "no-session";
+
+export interface MusicAddManyOutcome {
+  /** How many went in, the first of them now playing if nothing was. */
+  added: number;
+  /** How many did not fit under `MUSIC_QUEUE_LIMIT`. */
+  dropped: number;
+  startedPlaying: boolean;
+}
+
+/** Add a list in one write: a playlist or an album. */
+export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
+  if (!session || resolved.length === 0) {
+    return { added: 0, dropped: resolved.length, startedPlaying: false };
+  }
+  const held = base();
+  const minted = resolved
+    .map(mintTrack)
+    .filter((track): track is MusicTrack => track !== null);
+  let current = held.current;
+  let rest = minted;
+  let startedPlaying = false;
+  if (current === null) {
+    current = rest[0] ?? null;
+    rest = rest.slice(1);
+    startedPlaying = current !== null;
+  }
+  const room = MUSIC_QUEUE_LIMIT - held.queue.length;
+  const fits = rest.slice(0, Math.max(0, room));
+  const dropped = rest.length - fits.length;
+  write({
+    current,
+    queue: [...held.queue, ...fits],
+    status: startedPlaying ? "playing" : held.status,
+    positionMs: startedPlaying ? 0 : held.positionMs,
+  });
+  return { added: fits.length + (startedPlaying ? 1 : 0), dropped, startedPlaying };
+}
+
+/** Add a resolved track: starts it when nothing is playing, queues otherwise. */
+export function addTrack(resolved: MusicResolved): MusicAddOutcome {
+  const track = mintTrack(resolved);
+  if (!track) {
+    return "no-session";
+  }
+  const held = base();
+  if (held.current === null) {
+    write({ current: track, queue: held.queue, status: "playing", positionMs: 0 });
+    return "playing";
+  }
+  if (held.queue.length >= MUSIC_QUEUE_LIMIT) {
+    return "full";
+  }
+  write({ ...held, queue: [...held.queue, track] });
+  return "queued";
+}
+
+/** Position defaults to the live player's, through the probe. */
+export function setPlaying(playing: boolean, positionMs?: number): void {
+  const held = base();
+  if (held.current === null) {
+    return;
+  }
+  write({
+    ...held,
+    status: playing ? "playing" : "paused",
+    positionMs: positionMs ?? held.positionMs,
+  });
+}
+
+export function seekTo(positionMs: number): void {
+  const held = base();
+  if (held.current === null) {
+    return;
+  }
+  write({ ...held, positionMs: Math.max(0, Math.round(positionMs)) });
+}
+
+/** Position-only sample while playing, so a late joiner lands close. */
+export function reportPosition(positionMs: number, durationMs?: number): void {
+  const held = snapshot.state;
+  if (!held || held.status !== "playing" || !session) {
+    return;
+  }
+  const next = base();
+  // The duration is what lets the server tell "the track ran out" from a
+  // skip, for people without MANAGE_MUSIC. Filled in by whoever samples.
+  if (next.current && next.current.durationMs === null && durationMs && durationMs > 0) {
+    next.current = { ...next.current, durationMs: Math.round(durationMs) };
+  }
+  write({ ...next, positionMs: Math.max(0, Math.round(positionMs)) });
+}
+
+/**
+ * Move to the next track. `endedTrackId` guards the automatic advance: a
+ * player that reports the end of a track the room has already moved past
+ * must not skip the one now playing.
+ */
+export function advance(endedTrackId?: string): void {
+  const held = base();
+  if (endedTrackId && held.current?.id !== endedTrackId) {
+    return;
+  }
+  const [next, ...rest] = held.queue;
+  write({
+    current: next ?? null,
+    queue: rest,
+    status: next ? "playing" : "paused",
+    positionMs: 0,
+  });
+}
+
+export function removeFromQueue(trackId: string): void {
+  const held = base();
+  write({ ...held, queue: held.queue.filter((track) => track.id !== trackId) });
+}
+
+export function moveInQueue(trackId: string, direction: -1 | 1): void {
+  const held = base();
+  const index = held.queue.findIndex((track) => track.id === trackId);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= held.queue.length) {
+    return;
+  }
+  const queue = [...held.queue];
+  const [track] = queue.splice(index, 1);
+  queue.splice(target, 0, track as MusicTrack);
+  write({ ...held, queue });
+}
+
+/** Drop a track at a position in the queue (the drag-and-drop write). */
+export function moveTrackTo(trackId: string, targetIndex: number): void {
+  const held = base();
+  const from = held.queue.findIndex((track) => track.id === trackId);
+  if (from < 0) {
+    return;
+  }
+  const queue = [...held.queue];
+  const [track] = queue.splice(from, 1);
+  const to = Math.max(0, Math.min(queue.length, targetIndex > from ? targetIndex - 1 : targetIndex));
+  if (to === from) {
+    return;
+  }
+  queue.splice(to, 0, track as MusicTrack);
+  write({ ...held, queue });
+}
+
+/** Tear the whole thing down for the room. */
+export function stopMusic(): void {
+  if (!session) {
+    return;
+  }
+  set(null, session.channelId);
+  session.send(null);
+}
+
+/** Where the room believes the track is right now, in ms. */
+export function expectedPositionMs(snap: MusicSnapshot, now = Date.now()): number {
+  const state = snap.state;
+  if (!state || !state.current) {
+    return 0;
+  }
+  if (state.status !== "playing") {
+    return state.positionMs;
+  }
+  return state.positionMs + Math.max(0, now - snap.receivedAt);
+}

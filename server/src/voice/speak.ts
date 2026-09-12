@@ -8,6 +8,8 @@ import { computeMemberPermissions } from "../services/permissions.js";
 export interface VoicePublishGrant {
   canSpeak: boolean;
   canStream: boolean;
+  /** `Permission.MANAGE_MUSIC`; true where there are no cargos. */
+  canManageMusic: boolean;
 }
 
 /**
@@ -42,7 +44,7 @@ export async function resolveVoicePublish(
   userId: string,
 ): Promise<VoicePublishGrant> {
   if (!channel || channel.kind !== "server" || !channel.server_id) {
-    return { canSpeak: true, canStream: true };
+    return { canSpeak: true, canStream: true, canManageMusic: true };
   }
   // Hand over the row when the caller has one. `type` and `parent_id` are the
   // only two columns the overwrite pass would otherwise re-read the channel
@@ -66,6 +68,7 @@ export async function resolveVoicePublish(
       channelType: channel.type ?? "voice",
       permissions: perms,
     }),
+    canManageMusic: hasPermission(perms, Permission.MANAGE_MUSIC),
   };
 }
 

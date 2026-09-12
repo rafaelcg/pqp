@@ -72,6 +72,8 @@ import {
 import { CinemaHint } from "@/components/voice/cinema-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
+import { MusicDock } from "@/components/voice/music-dock";
+import { MusicBarButton } from "@/components/voice/music-bar-button";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
 import {
   chooseFullscreenStrategy,
@@ -1430,6 +1432,7 @@ function ActiveCall({
           participants={roomParticipants}
           selfUserId={voiceState.self?.userId ?? null}
         />
+        <MusicDock compact voiceState={voiceState} />
         {watchPartyChrome ? null : controls}
       </div>
     );
@@ -2146,6 +2149,7 @@ export function CallControls({
           className="mb-1.5"
         />
       )}
+      {!collapsed && <MusicDock voiceState={voiceState} className="mb-1.5" />}
       {pushToTalk && (
         <div className={cn("w-full", collapsed ? "mb-1" : "mb-0.5")}>
           <Button
@@ -2308,6 +2312,7 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
+      <MusicBarButton size={size} iconSize={iconSize} />
       {!noVideo && (
       <Tooltip
         label={

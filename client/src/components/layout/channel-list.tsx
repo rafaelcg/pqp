@@ -54,6 +54,8 @@ import {
   type VoiceParticipant,
 } from "@pqp/shared";
 import type { ChannelLive } from "@/hooks/use-voice";
+import type { ChannelMusicTrack } from "@pqp/shared";
+import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { SearchDialog } from "@/components/search/search-dialog";
 import {
@@ -170,6 +172,8 @@ interface ChannelListProps {
    * for rooms it is in or has been told about, and never counts watchers.
    */
   channelLive?: Record<string, ChannelLive>;
+  /** channelId -> what the room is playing (`channel-music`), for the row under the occupants. */
+  channelMusic?: Record<string, ChannelMusicTrack | null>;
   speakingPeerIds?: string[];
   activeVoiceChannelId: string | null;
   unread: Record<string, UnreadState>;
@@ -319,6 +323,7 @@ export function ChannelList({
   isLoading = false,
   voiceOccupancy = {},
   channelLive = {},
+  channelMusic = {},
   speakingPeerIds = [],
   activeVoiceChannelId,
   unread,
@@ -1097,6 +1102,14 @@ export function ChannelList({
           onDragOverRow={(event) => handleRowDragOver(event, channel)}
           onDrop={() => handleRowDrop(channel)}
         />
+        {channelMusic[channel.id] && activeVoiceChannelId !== channel.id && (
+          <ChannelMusicCard
+            channelId={channel.id}
+            track={channelMusic[channel.id]!}
+            inCall={activeVoiceChannelId === channel.id}
+            onJoin={onJoinVoice ? () => onJoinVoice(channel.id) : undefined}
+          />
+        )}
         {occupants.length > 0 && (
           <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">
             {occupants.map((person) => {

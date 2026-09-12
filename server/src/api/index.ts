@@ -449,6 +449,7 @@ import {
   searchGifs,
   trendingGifs,
 } from "../services/gifs.js";
+import { MusicResolveError, resolveMusic } from "../services/music.js";
 import {
   completeConnection,
   connectionsConfig,
@@ -2603,6 +2604,49 @@ router.get("/api/gifs/trending", async (ctx) => {
     GIF_PAGE_MAX,
   );
   return respondWithGifs(() => trendingGifs(limit));
+});
+
+// ------------------------------------------------------------------ music
+
+/**
+ * Resolve a pasted link or a search into a YouTube video for the room's
+ * queue (`packages/shared/src/music.ts`). Metadata only: the client plays
+ * the result itself through the IFrame player. Per-user limited because a
+ * search fans out to YouTube (and to Spotify for a Spotify link).
+ */
+const musicResolveLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 0.5 });
+
+router.get("/api/music/resolve", async (ctx) => {
+  const key = `user:${ctx.user.id}`;
+  if (!musicResolveLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(musicResolveLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const query = (ctx.url.searchParams.get("q") ?? "").trim();
+  if (!query) {
+    throw new HttpError(400, "Missing q");
+  }
+  if (query.length > 2048) {
+    throw new HttpError(400, "Query too long");
+  }
+  try {
+    const { tracks, listName } = await resolveMusic(query);
+    // `track` stays for the first client build; `tracks` is the list.
+    return { track: tracks[0], tracks, listName };
+  } catch (error) {
+    if (error instanceof MusicResolveError) {
+      if (error.code === "busy") {
+        ctx.res.setHeader("Retry-After", "5");
+        throw new HttpError(429, "Music search is busy, try again in a moment");
+      }
+      if (error.code === "upstream") {
+        console.error("[music] upstream failed:", error.message);
+        throw new HttpError(502, "Music provider unavailable");
+      }
+      throw new HttpError(error.code === "not_found" ? 404 : 400, error.message);
+    }
+    throw error;
+  }
 });
 
 // ------------------------------------------------------------ attachments

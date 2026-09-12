@@ -3721,6 +3721,39 @@ BEGIN
   INSERT INTO data_migrations (name) VALUES ('start_watch_party_bit_2026_09');
 END $$;
 
+-- MANAGE_MUSIC (bit 24 = 16777216): skip, pause, reorder and stop the music
+-- queue in a voice call. Goes to whoever may already mute people in voice
+-- (MUTE_MEMBERS, bit 14 = 16384) and to the seeded Moderator cargo, never to
+-- @everyone: adding a song needs only SPEAK, and everybody may remove their
+-- own. One-shot via data_migrations, like start_watch_party_bit_2026_09.
+DO $$
+DECLARE
+  mute_members CONSTANT BIGINT := 16384;
+  manage_music CONSTANT BIGINT := 16777216;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'manage_music_bit_2026_09'
+  ) THEN
+    RETURN;
+  END IF;
+
+  -- Only the servers whose cargos actually changed get a version bump.
+  WITH changed AS (
+    UPDATE roles
+       SET permissions = permissions | manage_music
+     WHERE NOT is_everyone
+       AND (permissions & manage_music) = 0
+       AND ((permissions & mute_members) = mute_members
+            OR system_key = 'moderator')
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (SELECT DISTINCT server_id FROM changed);
+
+  INSERT INTO data_migrations (name) VALUES ('manage_music_bit_2026_09');
+END $$;
+
 -- ---------------------------------------------------------------------------
 -- Live HLS retention (docs/voice-backends.md). One row per egress run
 -- (`reconcileLiveHls` in `server/src/voice/hls-egress.ts` starting/stopping a

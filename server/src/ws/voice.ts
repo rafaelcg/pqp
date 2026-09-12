@@ -162,6 +162,15 @@ import {
   getWatchPartyState,
   resetWatchPartyLimits,
 } from "./watch-party.js";
+import { musicWriteAllowed } from "@pqp/shared";
+import {
+  applyMusicWrite,
+  channelMusicTrack,
+  endMusic,
+  getMusicState,
+  musicChannels,
+  resetMusicForTests,
+} from "./music.js";
 import {
   offerLiveReaction,
   resetLiveReactionLimits,
@@ -209,6 +218,8 @@ interface VoicePeer {
    * `Permission.STREAM`: camera and screen share. Independent of SPEAK.
    */
   canStream: boolean;
+  /** `Permission.MANAGE_MUSIC` here; always true in a conversation call. */
+  canManageMusic: boolean;
   /**
    * The seat is in a `watch_party` channel. Resolved from `channel.type` at
    * join, beside `canStream`, and read by exactly one thing: `pickHlsSharer`,
@@ -832,6 +843,7 @@ export function resetVoiceRoomTransports(): void {
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
+  resetMusicForTests();
   pendingTransportDecisions.clear();
   pendingPinRechecks.clear();
 }
@@ -1239,6 +1251,16 @@ function onLiveRoomMaybeEmpty(
       channelId: voiceChannelId,
       state: null,
     });
+  }
+  if (endMusic(voiceChannelId)) {
+    void broadcastChannelMusic(voiceChannelId);
+    if (notifySocket) {
+      send(notifySocket, {
+        type: "music",
+        channelId: voiceChannelId,
+        state: null,
+      });
+    }
   }
 }
 
@@ -1899,6 +1921,33 @@ function channelLiveFrame(
     stream: stream ? stampViewerStream(stream, userId) : null,
     watching: hlsAudience.count(channelId),
   };
+}
+
+function channelMusicFrame(channelId: string): VoiceSignalingMessage {
+  return { type: "channel-music", channelId, track: channelMusicTrack(channelId) };
+}
+
+/**
+ * What the room is playing, to everyone who may view the channel, so the
+ * sidebar row exists for people outside the call. Same audience as
+ * `channel-live`, and the same reason a socket in the room gets it too.
+ */
+async function broadcastChannelMusic(channelId: string): Promise<void> {
+  const audience = await getChannelAudience(channelId).catch(
+    (error: unknown) => {
+      console.error("[voice] failed to load audience for channel-music:", error);
+      return null;
+    },
+  );
+  if (!audience) {
+    return;
+  }
+  const frame = channelMusicFrame(channelId);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (audience.has(user.id)) {
+      send(socket, frame);
+    }
+  });
 }
 
 /**
@@ -3211,6 +3260,7 @@ export function resetVoicePeers(): void {
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
+  resetMusicForTests();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
@@ -3308,6 +3358,15 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       hlsAudienceFramesSent.frames += 1;
     }),
   );
+  // And every room with music this user may view, for the sidebar row.
+  // Off the audience cache (`getChannelAudience`, one query per channel per
+  // TTL, shared by every socket), not one access query per socket per room.
+  for (const channelId of musicChannels()) {
+    const audience = await getChannelAudience(channelId).catch(() => null);
+    if (audience?.has(user.id)) {
+      send(socket, channelMusicFrame(channelId));
+    }
+  }
 }
 
 type VoiceResumePlan =
@@ -3452,6 +3511,7 @@ async function welcomeVoicePeer(
     resumeToken: resumeToken ?? undefined,
     canSpeak: peer.canSpeak,
     canStream: peer.canStream,
+    canManageMusic: peer.canManageMusic,
   });
 
   // What the room is watching, to this socket alone and only if there is a
@@ -3465,6 +3525,14 @@ async function welcomeVoicePeer(
       type: "watch-party",
       channelId: peer.voiceChannelId,
       state: party,
+    });
+  }
+  const music = getMusicState(peer.voiceChannelId);
+  if (music) {
+    send(peer.socket, {
+      type: "music",
+      channelId: peer.voiceChannelId,
+      state: music,
     });
   }
   const liveStream = liveHlsStreamFor(peer.voiceChannelId);
@@ -3637,6 +3705,7 @@ export async function handleVoiceMessage(
     // watch party runs several hundred times in an evening.
     let canSpeak = true;
     let canStream = true;
+    let canManageMusic = true;
     let nickname: string | null = null;
     if (channel.kind === "server" && channel.server_id) {
       const resolved = await resolveMemberChannelPermissions(
@@ -3657,6 +3726,7 @@ export async function handleVoiceMessage(
         channelType: channel.type,
         permissions: resolved.permissions,
       });
+      canManageMusic = hasPermission(resolved.permissions, Permission.MANAGE_MUSIC);
       nickname = resolved.nickname;
     }
     // THE ROOM GATE for the egress, read off the same row as the stage gate
@@ -4260,6 +4330,7 @@ export async function handleVoiceMessage(
       // live path's job (`reevaluateVoiceSpeak`), which ran when it changed.
       resume.peer.canSpeak = canSpeak;
       resume.peer.canStream = canStream;
+      resume.peer.canManageMusic = canManageMusic;
       resume.peer.watchParty = watchParty;
       if (!canSpeak) {
         resume.peer.muted = true;
@@ -4318,6 +4389,7 @@ export async function handleVoiceMessage(
       deafened: adopted?.deafened ?? false,
       canSpeak,
       canStream,
+      canManageMusic,
       watchParty,
       canResume: payload.resume === true,
       // Deliberately not carried across a resume and not in the registry row.
@@ -4696,6 +4768,79 @@ export async function handleVoiceMessage(
         state: write.state,
       } satisfies VoiceWatchFrame);
     }
+    return;
+  }
+
+  // --- music queue ---
+  //
+  // Same audience and same echo-as-acknowledgement as the watch party above.
+  // Not mirrored into the registry: a room lives on one instance today.
+  if (payload.type === "set-music") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    const before = channelMusicTrack(peer.voiceChannelId)?.videoId ?? null;
+    // A privileged write (one a plain member could not make) re-resolves
+    // MANAGE_MUSIC before it is trusted: the cached bit is refreshed when
+    // cargos change (`reevaluateVoiceSpeak`), and this is the belt to that
+    // brace, so a member stripped of the bit a moment ago cannot skip on a
+    // stale seat. Ordinary adds never pay for it.
+    if (
+      peer.canManageMusic &&
+      !musicWriteAllowed(getMusicState(peer.voiceChannelId), payload.state, {
+        userId: user.id,
+        canManage: false,
+        canAdd: peer.canSpeak,
+      })
+    ) {
+      try {
+        const channel = await getChannel(peer.voiceChannelId);
+        const grant = await resolveVoicePublish(channel, peer.voiceChannelId, user.id);
+        peer.canManageMusic = grant.canManageMusic;
+      } catch (error) {
+        console.error("[voice] music permission re-check failed:", error);
+      }
+    }
+    const write = applyMusicWrite(peer.voiceChannelId, payload.state, {
+      userId: user.id,
+      canManage: peer.canManageMusic,
+      canAdd: peer.canSpeak,
+    });
+    if (write.kind === "coalesced") {
+      return;
+    }
+    if (write.kind === "refused") {
+      send(socket, {
+        type: "music",
+        channelId: peer.voiceChannelId,
+        state: write.held,
+        forced: true,
+      });
+      return;
+    }
+    if (
+      write.kind === "accepted" &&
+      (write.state?.current?.videoId ?? null) !== before
+    ) {
+      void broadcastChannelMusic(peer.voiceChannelId);
+    }
+    if (write.kind === "stale") {
+      send(socket, {
+        type: "music",
+        channelId: peer.voiceChannelId,
+        state: write.held,
+      });
+      return;
+    }
+    broadcastToRoom(peer.voiceChannelId, {
+      type: "music",
+      channelId: peer.voiceChannelId,
+      state: write.state,
+    });
     return;
   }
 
@@ -5652,7 +5797,9 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
       }
       const changed = userPeers.filter(
         (peer) =>
-          peer.canSpeak !== next.canSpeak || peer.canStream !== next.canStream,
+          peer.canSpeak !== next.canSpeak ||
+          peer.canStream !== next.canStream ||
+          peer.canManageMusic !== next.canManageMusic,
       );
       if (changed.length === 0) {
         continue;
@@ -5661,6 +5808,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
       for (const peer of changed) {
         peer.canSpeak = next.canSpeak;
         peer.canStream = next.canStream;
+        peer.canManageMusic = next.canManageMusic;
         if (!next.canSpeak) {
           peer.muted = true;
         }
@@ -5674,6 +5822,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
           voiceChannelId,
           canSpeak: next.canSpeak,
           canStream: next.canStream,
+          canManageMusic: next.canManageMusic,
         });
         writePeerRow(peer);
       }

@@ -121,7 +121,7 @@ import {
   useUpdatePromptShowing,
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
-import { isAutomatedBrowser } from "@/lib/cargos-hint";
+import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
 import {
@@ -213,6 +213,7 @@ import {
 import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
+import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import {
   isCameraAtCap,
   isScreenShareAtCap,
@@ -1065,6 +1066,13 @@ function MainAppContent({
   );
   const [wantsWatchPartyHint] = useState(() =>
     featureHintEligible("watchParty"),
+  );
+  const [wantsMusicHint] = useState(() => featureHintEligible("music"));
+  // The cargos card decides for itself whether it was seen; the corner queue
+  // has to know too, or the corner stays "taken" by a card that never draws
+  // and every attached tip behind it (share, music) waits for good.
+  const [wantsCargosHint] = useState(
+    () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
   const [wantsChannelPinHint] = useState(() =>
     featureHintEligible("channelPin"),
@@ -5523,6 +5531,7 @@ function MainAppContent({
       voiceState.status === "connected" &&
       voiceState.canStream &&
       supportsScreenShare(),
+    music: wantsMusicHint && voiceState.status === "connected",
     composerFormat:
       wantsComposerFormatHint &&
       selectedChannel?.type === "text" &&
@@ -5541,7 +5550,10 @@ function MainAppContent({
     qg: qgHintWanted,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
-    cargos: qgHintReady && Boolean(canManageRoles && selectedServerId),
+    cargos:
+      wantsCargosHint &&
+      qgHintReady &&
+      Boolean(canManageRoles && selectedServerId),
     shortcuts:
       wantsShortcutsHint &&
       shortcutsQuietReady &&
@@ -5631,6 +5643,7 @@ function MainAppContent({
    */
   const sidebarFooter = (compact = false) => (
     <>
+      <MusicMiniPlayer voiceState={voiceState} compact={compact} />
       {voiceState.status !== "idle" && (
         <VoiceStatusBar
           channelName={
@@ -6856,6 +6869,7 @@ function MainAppContent({
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}
+          channelMusic={voiceState.channelMusic}
           speakingPeerIds={voiceState.speakingPeerIds}
           activeVoiceChannelId={voiceState.voiceChannelId}
           unread={unread}

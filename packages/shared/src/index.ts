@@ -37,6 +37,7 @@ export * from "./voice-backend.js";
 export * from "./webhooks.js";
 export * from "./outgoing-webhooks.js";
 export * from "./watch-party.js";
+export * from "./music.js";
 export * from "./live-reactions.js";
 export * from "./watch-party-channel.js";
 export * from "./watch-party-session.js";

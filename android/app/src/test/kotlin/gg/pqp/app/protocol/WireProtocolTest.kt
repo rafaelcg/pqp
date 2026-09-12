@@ -240,6 +240,14 @@ class WireProtocolTest {
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",
+        // The music queue in a voice call: the room's whole state, echoed to
+        // everyone in it, and the channel-level "what is playing" for the
+        // sidebar. The phone draws neither yet, and ignoring `music` is safe
+        // because the web players sync among themselves; a phone that later
+        // joins in has to run the YouTube embed and the drift loop
+        // (docs/MUSIC.md), which is a feature and not a frame.
+        "music" to "no music player on the phone yet",
+        "channel-music" to "no now-playing row on the phone's channel list yet",
     )
 
     /**

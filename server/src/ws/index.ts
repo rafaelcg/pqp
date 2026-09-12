@@ -84,6 +84,9 @@ const VOICE_MESSAGE_TYPES = new Set([
   // A watch party lives inside a voice room, so its one client frame is routed
   // to the voice handler like every other thing said inside one.
   "set-watch-party",
+  // --- music queue ---
+  // Same reasoning: the queue is a thing said inside the room.
+  "set-music",
   // --- live reactions ---
   // Same reasoning as the line above: a reaction is something said inside a
   // voice room, over the share that room is watching.

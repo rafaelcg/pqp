@@ -12,6 +12,11 @@ import {
   setWatchPartyMessageSchema,
   watchPartyMessageSchema,
 } from "./watch-party.js";
+import {
+  channelMusicMessageSchema,
+  musicMessageSchema,
+  setMusicMessageSchema,
+} from "./music.js";
 
 export const iceCandidateInitSchema = z.object({
   candidate: z.string().optional(),
@@ -191,6 +196,8 @@ export const welcomeMessageSchema = z.object({
    * screen share. Absent reads as `canSpeak`.
    */
   canStream: z.boolean().optional(),
+  /** `Permission.MANAGE_MUSIC` here. Absent on older servers: treated as true. */
+  canManageMusic: z.boolean().optional(),
 });
 
 export const peerJoinedMessageSchema = z.object({
@@ -555,6 +562,8 @@ export const voiceSpeakChangedMessageSchema = z.object({
   voiceChannelId: z.string(),
   canSpeak: z.boolean(),
   canStream: z.boolean().optional(),
+  /** `Permission.MANAGE_MUSIC`, re-resolved with the rest. Absent: unchanged. */
+  canManageMusic: z.boolean().optional(),
 });
 
 export type VoiceSpeakChangedMessage = z.infer<
@@ -588,6 +597,9 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   voiceSpeakChangedMessageSchema,
   // --- watch party ---
   watchPartyMessageSchema,
+  // --- music queue --- see packages/shared/src/music.ts
+  musicMessageSchema,
+  channelMusicMessageSchema,
   // --- live reactions --- see packages/shared/src/live-reactions.ts. Coalesced
   // counts for the room, never per person and never stored.
   liveReactionsMessageSchema,
@@ -754,6 +766,8 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setRaisedHandMessageSchema,
   // --- watch party ---
   setWatchPartyMessageSchema,
+  // --- music queue ---
+  setMusicMessageSchema,
   // --- live reactions ---
   liveReactionMessageSchema,
   // --- live HLS watch mode (no seat) ---

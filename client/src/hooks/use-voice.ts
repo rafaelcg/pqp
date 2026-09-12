@@ -4,6 +4,7 @@ import {
   SCREEN_SHARE_LIMIT,
   meshVideoLimit,
   type ClientRelayMessage,
+  type ChannelMusicTrack,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type LiveHlsStream,
@@ -12,6 +13,7 @@ import {
   type LiveReactionEmoji,
 } from "@pqp/shared";
 import { publishLiveReactions } from "@/lib/live-reactions";
+import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
   audibleScreenPeerIds,
   isCameraAtCap,
@@ -246,6 +248,8 @@ export interface VoiceState {
    * treated as `canSpeak`.
    */
   canStream: boolean;
+  /** `Permission.MANAGE_MUSIC` in this room, from `welcome`. Older servers: true. */
+  canManageMusic: boolean;
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
@@ -385,6 +389,12 @@ export interface VoiceState {
    * the playlist without a seat; the room's own people are in `occupancy`.
    */
   channelLive: Record<string, ChannelLive>;
+  /**
+   * channelId -> what that room is playing, from `channel-music`, for the
+   * sidebar row. Channel-level like `channelLive`: reaches this client for
+   * every room it may view, in or out of the call.
+   */
+  channelMusic: Record<string, ChannelMusicTrack | null>;
   /** peerIds whose camera is on, from the roster's `cameraStreamId`. */
   cameraPeerIds: string[];
   /**
@@ -1056,6 +1066,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isDeafened: false,
     canSpeak: true,
     canStream: true,
+    canManageMusic: true,
     isAudienceSeat: false,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
@@ -1082,6 +1093,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     screenSharePeerIds: [],
     liveStream: null,
     channelLive: {},
+    channelMusic: {},
     cameraPeerIds: [],
     uplinkBps: null,
     focusedScreenPeerId: null,
@@ -1273,6 +1285,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.self = null;
         state.remotePeers = [];
         state.voiceChannelId = null;
+        setMusicSession(null);
         emit();
       }
     }, failure ? SFU_JOIN_TIMEOUT_MS : JOIN_TIMEOUT_MS);
@@ -1313,6 +1326,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     voiceActivityTracker.clear();
     state.isTransmitting = false;
     state.status = "idle";
+    setMusicSession(null);
     state.peerId = null;
     state.self = null;
     state.remotePeers = [];
@@ -1353,6 +1367,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       incomingCalls: [...state.incomingCalls],
       callDeclinedUserIds: [...state.callDeclinedUserIds],
       channelLive: { ...state.channelLive },
+      channelMusic: { ...state.channelMusic },
     };
   }
 
@@ -1956,6 +1971,25 @@ export function createVoiceController(transport: RealtimeTransport) {
       return;
     }
     sendRaisedHand(false);
+  }
+
+  /**
+   * Hand the music store a way to write for this seat. Re-registered on
+   * every welcome, since a resume or a transport change mints a new peer id
+   * and the id is the tie-break in the queue's ordering.
+   */
+  function registerMusicSession(
+    peerId: string,
+    channelId: string,
+    self: VoiceParticipant,
+  ) {
+    setMusicSession({
+      channelId,
+      peerId,
+      userId: self.userId,
+      displayName: self.displayName,
+      send: (music) => transport.sendVoice({ type: "set-music", state: music }),
+    });
   }
 
   /** Declare our own hand, and believe it until the room says otherwise. */
@@ -2624,6 +2658,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isDeafened: false,
       canSpeak: true,
       canStream: true,
+      canManageMusic: true,
       isAudienceSeat: false,
       inputMode: state.inputMode,
       isTransmitting: false,
@@ -2653,6 +2688,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Channel-level, not room-level: hanging up does not make the sidebar
       // forget which rooms are live.
       channelLive: state.channelLive,
+      channelMusic: state.channelMusic,
       cameraPeerIds: [],
     uplinkBps: null,
       focusedScreenPeerId: null,
@@ -2900,7 +2936,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           clearResumeGrace();
           state.peerId = peerId;
           state.voiceChannelId = channelId;
+          state.canManageMusic = message.canManageMusic ?? true;
           state.roomTransport = roomTransport;
+          registerMusicSession(peerId, channelId, message.self);
           state.status = "connected";
           applyPublishRules(
             publishFlagsFrom(message).canSpeak,
@@ -2937,7 +2975,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         knownPeerIds.clear();
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
+        state.canManageMusic = message.canManageMusic ?? true;
         state.transportFailure = null;
+        registerMusicSession(
+          message.peerId,
+          message.voiceChannelId,
+          message.self,
+        );
         // A fresh seat, so there is no "before" to have grown from. This is
         // what keeps the capacity card off the screen of somebody who walks
         // into a room that was already promoted.
@@ -3173,6 +3217,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           message.canStream ?? message.canSpeak,
           "change",
         );
+        if (message.canManageMusic !== undefined) {
+          state.canManageMusic = message.canManageMusic;
+        }
         emit();
         break;
       case "peer-joined": {
@@ -3295,6 +3342,20 @@ export function createVoiceController(transport: RealtimeTransport) {
       // coalesced window is an event with a 1.5 second lifetime, not room
       // state, and putting it in the snapshot would re-render the whole call
       // stage four times a second during a burst. See `lib/live-reactions.ts`.
+      // --- music queue ---
+      // Same treatment as the reactions: a position sample every few seconds
+      // must not re-render the stage, so it lives in its own store
+      // (`lib/music-store.ts`) and only the dock subscribes.
+      case "music":
+        receiveMusic(message.channelId, message.state, message.forced === true);
+        break;
+      case "channel-music":
+        state.channelMusic = {
+          ...state.channelMusic,
+          [message.channelId]: message.track,
+        };
+        emit();
+        break;
       case "live-reactions":
         publishLiveReactions({
           channelId: message.channelId,

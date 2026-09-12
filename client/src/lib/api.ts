@@ -1,5 +1,6 @@
 import type {
   ChannelType,
+  MusicResolved,
   AcquisitionInput,
   AgeCheckResponse,
   Attachment,
@@ -631,6 +632,15 @@ export const searchGifs = (query: string, signal?: AbortSignal) =>
 
 export const fetchTrendingGifs = (signal?: AbortSignal) =>
   apiFetch<{ gifs: Gif[] }>("/api/gifs/trending", signal ? { signal } : {});
+
+// -------------------------------------------------------------------- music
+
+/** A pasted link or a search, resolved to a YouTube video for the room's queue. */
+export const resolveMusic = (query: string, signal?: AbortSignal) =>
+  apiFetch<{ track: MusicResolved; tracks: MusicResolved[]; listName: string | null }>(
+    `/api/music/resolve?q=${encodeURIComponent(query)}`,
+    signal ? { signal } : {},
+  );
 
 // -------------------------------------------------------------- attachments
 

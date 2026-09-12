@@ -42,6 +42,7 @@ const idle: VoiceState = {
   isDeafened: false,
   canSpeak: true,
   canStream: true,
+  canManageMusic: true,
   isAudienceSeat: false,
   inputMode: "voice-activity",
   isTransmitting: false,
@@ -80,6 +81,7 @@ const idle: VoiceState = {
   callDeclinedUserIds: [],
   liveStream: null,
   channelLive: {},
+  channelMusic: {},
 };
 
 function render(voiceState: VoiceState) {

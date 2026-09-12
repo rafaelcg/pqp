@@ -17,20 +17,16 @@ import { isHintSeen, rememberHint, shouldPersistHints } from "./hints";
  */
 
 export const CINEMA_HINT_STORAGE_KEY = "pqp:cinema-hint-2026-09";
-export const HINTS_PERSIST_OVERRIDE_KEY = "pqp:hints-persist";
+import { HINTS_PERSIST_OVERRIDE_KEY } from "./hints";
+
+export { HINTS_PERSIST_OVERRIDE_KEY };
 
 export function cinemaHintPersists(
   storage: Pick<Storage, "getItem"> | null = safeStorage(),
   hostname?: string,
 ): boolean {
-  if (shouldPersistHints(hostname)) {
-    return true;
-  }
-  try {
-    return storage?.getItem(HINTS_PERSIST_OVERRIDE_KEY) === "1";
-  } catch {
-    return false;
-  }
+  // The override now lives in the shared store, so this is the store's rule.
+  return shouldPersistHints(hostname, storage);
 }
 
 export function isCinemaHintSeen(
