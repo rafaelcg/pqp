@@ -1320,6 +1320,22 @@ h2,
   transform: translateY(0);
 }
 
+/* The sidebar's now-playing title when it overflows: the text is drawn twice
+   with a gap and slides by half its width, so the loop is seamless. Duration
+   comes from the title length (`--marquee-s`). */
+@keyframes pqp-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.pqp-marquee {
+  animation: pqp-marquee var(--marquee-s, 10s) linear infinite;
+}
+
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -1478,6 +1494,7 @@ h2,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .pqp-marquee,
   .animate-toast-in,
   .animate-toast-out,
   .animate-badge-pop,

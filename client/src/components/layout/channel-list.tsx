@@ -2,7 +2,6 @@ import {
   ArrowDown,
   ArrowUp,
   Archive,
-  Music,
   ChevronRight,
   Copy,
   Eraser,
@@ -56,6 +55,7 @@ import {
 } from "@pqp/shared";
 import type { ChannelLive } from "@/hooks/use-voice";
 import type { ChannelMusicTrack } from "@pqp/shared";
+import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { SearchDialog } from "@/components/search/search-dialog";
 import {
@@ -1103,15 +1103,12 @@ export function ChannelList({
           onDrop={() => handleRowDrop(channel)}
         />
         {channelMusic[channel.id] && (
-          <p
-            data-channel-music={channel.id}
-            className="ml-2 flex items-center gap-1.5 border-l border-ink-4/70 py-0.5 pl-2 text-[11px] text-signal"
-            title={t("music.sidebar", { title: channelMusic[channel.id]!.title })}
-          >
-            <Music className="h-3 w-3 shrink-0" aria-hidden="true" />
-            <span className="sr-only">{t("music.sidebar.label")}</span>
-            <span className="truncate">{channelMusic[channel.id]!.title}</span>
-          </p>
+          <ChannelMusicCard
+            channelId={channel.id}
+            track={channelMusic[channel.id]!}
+            inCall={activeVoiceChannelId === channel.id}
+            onJoin={onJoinVoice ? () => onJoinVoice(channel.id) : undefined}
+          />
         )}
         {occupants.length > 0 && (
           <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">

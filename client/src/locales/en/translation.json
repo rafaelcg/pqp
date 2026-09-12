@@ -940,6 +940,7 @@
   "music.bar.playing": "Music: {title}",
   "music.sidebar": "Playing: {title}",
   "music.sidebar.label": "Playing",
+  "music.sidebar.join": "Join the call and listen: {title}",
   "voice.bar.connected": "Voice connected",
   "voice.bar.connecting": "Connecting…",
   "voice.bar.people": "{count} people",

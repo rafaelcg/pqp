@@ -204,12 +204,17 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
   return "queued";
 }
 
-export function setPlaying(playing: boolean, positionMs: number): void {
+/** Position defaults to the live player's, through the probe. */
+export function setPlaying(playing: boolean, positionMs?: number): void {
   const held = base();
   if (held.current === null) {
     return;
   }
-  write({ ...held, status: playing ? "playing" : "paused", positionMs });
+  write({
+    ...held,
+    status: playing ? "playing" : "paused",
+    positionMs: positionMs ?? held.positionMs,
+  });
 }
 
 export function seekTo(positionMs: number): void {
