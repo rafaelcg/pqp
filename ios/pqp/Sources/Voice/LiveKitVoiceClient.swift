@@ -587,6 +587,11 @@ final class LiveKitRemoteAudio: RemoteAudible, @unchecked Sendable {
 /// LiveKit's delegate protocol is Objective-C and its callbacks arrive on
 /// arbitrary threads, so this bridges each one onto the actor. Only `Sendable`
 /// values cross, or references boxed for a single handoff.
+/// The LiveKit track name a watch-party host's voice archive is published
+/// under. Never played, on any client; see `didSubscribeTrack` below and
+/// `MIC_ARCHIVE_TRACK_NAME` in `client/src/lib/livekit-session.ts`.
+private let micArchiveTrackName = "mic-archive"
+
 private final class RoomBridge: NSObject, RoomDelegate, @unchecked Sendable {
     weak var owner: LiveKitVoiceClient?
 
@@ -596,6 +601,23 @@ private final class RoomBridge: NSObject, RoomDelegate, @unchecked Sendable {
 
     func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
         guard let peerId = participant.identity?.stringValue, let track = publication.track else { return }
+        // THE ONE TRACK NOBODY PLAYS. A watch-party host on a deployment with
+        // LIVE_HLS_MIC_ARCHIVE on publishes their microphone a SECOND time,
+        // named `mic-archive`, purely so the server can record the voice to its
+        // own file beside the HLS segments. It is tagged `.microphone` like
+        // their real one (a publish grant is an allowlist of SOURCES, so an
+        // invented source would be refused by the media server), which means
+        // `file(track:publication:peerId:)` would take it for a second voice
+        // and play this person twice. Dropped here and unsubscribed, so the
+        // phone does not pay for the bytes either.
+        if publication.name == micArchiveTrackName {
+            // Boxed rather than captured directly, like `noteSubscribed` below:
+            // a RemoteTrackPublication is not Sendable and crossing it into a
+            // Task is a concurrency error, not a warning.
+            let unsubscribe = UncheckedBox(publication)
+            Task { try? await unsubscribe.value.set(subscribed: false) }
+            return
+        }
         let box = UncheckedBox((track, publication))
         Task { [owner] in await owner?.noteSubscribed(box, peerId: peerId) }
     }

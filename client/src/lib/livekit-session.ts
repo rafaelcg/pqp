@@ -114,6 +114,31 @@ const VIDEO_MAX_FRAMERATE = 30;
  * `livekit-client` is imported dynamically so mesh deployments never download it.
  */
 
+/**
+ * THE ONE TRACK NOBODY PLAYS.
+ *
+ * A watch-party host on a deployment with `LIVE_HLS_MIC_ARCHIVE` on publishes
+ * a SECOND copy of their processed microphone under this name, so the server
+ * can write the voice to its own file beside the HLS segments and a clip can
+ * later be cut with the film and the voice on separate tracks. Nothing in the
+ * room is meant to hear it: the seated room already hears the host once, and
+ * this track is that same voice again.
+ *
+ * IT IS A `Track.Source.Microphone` PUBLICATION, deliberately, and the name is
+ * the only thing that tells it apart. Pitfall 14: `liveKitPublishGrant` sends
+ * `canPublishSources: ["microphone"]` to anybody holding SPEAK without STREAM,
+ * and LiveKit treats a non-empty list as an allowlist that `Unknown` is not
+ * in — a track published under an invented source is refused by the media
+ * server while the host's own app shows it live and unmuted.
+ *
+ * Which makes the receive side load-bearing rather than an optimisation: to
+ * every other client this looks exactly like the presenter's microphone, and
+ * filing it would overwrite their real voice stream with a duplicate. So
+ * `TrackSubscribed` drops it AND unsubscribes, which is what stops the SFU
+ * sending the bytes at all. The same rule is in the Android and iOS clients.
+ */
+export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
+
 export interface LiveKitSession {
   /** Publish (or re-publish) the processed mic track. */
   publish(stream: MediaStream): Promise<void>;
@@ -126,6 +151,16 @@ export interface LiveKitSession {
    * their own LiveKit source, so receivers never have to guess.
    */
   publishScreen(stream: MediaStream): Promise<void>;
+  /**
+   * Publish the host's voice a second time, for the watch-party archive, under
+   * the name `mic-archive`. Only ever called while a watch-party share is up
+   * and the server has said it is recording (`micArchive` on
+   * `GET /api/live-hls/config`); a no-op otherwise. See
+   * `MIC_ARCHIVE_TRACK_NAME`.
+   */
+  publishMicArchive(stream: MediaStream): Promise<void>;
+  /** Stop publishing it. Safe to call when nothing is published. */
+  unpublishMicArchive(): Promise<void>;
   /** Stop publishing the screen share, audio half included. */
   unpublishScreen(): Promise<void>;
   /** Withdraw only the screen's audio, leaving the picture published. */
@@ -313,6 +348,8 @@ export async function connectLiveKit({
   }
   /** Track we published, kept so we can replace/mute it later. */
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
+  /** The watch-party voice archive publication, kept so it can be withdrawn. */
+  let publishedMicArchive: InstanceType<typeof LocalAudioTrack> | null = null;
   /** Raw screen-share track we published, kept so we can unpublish it later. */
   let publishedScreenTrack: MediaStreamTrack | null = null;
   /** Raw camera track we published, kept so we can unpublish it later. */
@@ -612,6 +649,21 @@ export async function connectLiveKit({
         return;
       }
       if (track.kind !== Track.Kind.Audio) {
+        return;
+      }
+      // THE ARCHIVE IS NOT A VOICE. It is the presenter's microphone a second
+      // time, published only so the server can record it, and it arrives here
+      // tagged `Microphone` like their real one (see
+      // `MIC_ARCHIVE_TRACK_NAME`). Filing it would overwrite their voice
+      // stream with a duplicate and play them twice; leaving it subscribed
+      // would cost every viewer in the room an extra audio stream for nothing.
+      // So: not filed, not metered, and unsubscribed.
+      if (pub.trackName === MIC_ARCHIVE_TRACK_NAME) {
+        try {
+          pub.setSubscribed(false);
+        } catch {
+          // Nothing to do about it here; it is still not played.
+        }
         return;
       }
       const stream = new MediaStream([track.mediaStreamTrack]);
@@ -1876,6 +1928,44 @@ export async function connectLiveKit({
       });
     },
 
+    async publishMicArchive(stream: MediaStream) {
+      const [audioTrack] = stream.getAudioTracks();
+      if (!audioTrack) {
+        return;
+      }
+      if (publishedMicArchive) {
+        await room.localParticipant.unpublishTrack(publishedMicArchive);
+        publishedMicArchive = null;
+      }
+      publishedMicArchive = new LocalAudioTrack(audioTrack);
+      await room.localParticipant.publishTrack(publishedMicArchive, {
+        // MICROPHONE, NOT AN INVENTED SOURCE. See `MIC_ARCHIVE_TRACK_NAME`:
+        // a grant is an allowlist of sources, and the name is what carries
+        // the meaning instead.
+        source: Track.Source.Microphone,
+        name: MIC_ARCHIVE_TRACK_NAME,
+        // This publication exists to become a file, so the two things that
+        // make speech cheaper on a live call make the file worse. DTX cuts
+        // the stream during silence, which an editor lining the voice up
+        // against the film reads as drift; RED sends redundant copies, which
+        // costs uplink the host is already spending on the share and buys a
+        // recording nothing to a listener who does not exist. Opus at 48 kHz
+        // mono is what `getUserMedia` and LiveKit already give us, so there
+        // is nothing to ask for there.
+        dtx: false,
+        red: false,
+      });
+    },
+
+    async unpublishMicArchive() {
+      if (!publishedMicArchive) {
+        return;
+      }
+      const track = publishedMicArchive;
+      publishedMicArchive = null;
+      await room.localParticipant.unpublishTrack(track);
+    },
+
     async unpublishScreenAudio() {
       return enqueueScreenOp(async () => {
         if (!publishedScreenAudioTrack) {
@@ -2053,6 +2143,7 @@ export async function connectLiveKit({
       clearHlsLayerRetry();
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
+      publishedMicArchive = null;
       await room.disconnect();
     },
 

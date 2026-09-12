@@ -28,9 +28,11 @@ import {
   hlsReplayHours,
   hlsRetentionMinutes,
   liveHlsStorageConfig,
+  adoptLiveHlsMicArchive,
   adoptLiveHlsSession,
   listActiveEgresses,
   stopEgressById,
+  MIC_ARCHIVE_RUNG,
 } from "./hls-egress.js";
 
 const SWEEP_BATCH = 25;
@@ -255,9 +257,22 @@ export async function reconcileStaleHlsSessions(): Promise<{
   let stopped = 0;
   const adoptedIds = new Set<string>();
 
+  // TWO PASSES, AND THE ORDER IS THE POINT. The host's voice archive
+  // (`rung = 'mic'`) is not a rendition: it attaches to a room that already
+  // exists rather than creating one, so it can only be adopted after the
+  // rungs of its session have rebuilt that room. `active` arrives in whatever
+  // order LiveKit answers in, so a single pass would attach it about half the
+  // time. See `adoptLiveHlsMicArchive` for why it cannot go through
+  // `adoptLiveHlsSession` at all.
+  const micArchives: { info: (typeof active)[number]; row: StaleSession }[] = [];
+
   for (const info of active) {
     const row = byEgressId.get(info.egressId);
     const session = row ? sessionFromPrefix(row.object_prefix) : null;
+    if (row && session !== null && row.rung === MIC_ARCHIVE_RUNG) {
+      micArchives.push({ info, row });
+      continue;
+    }
     if (!row || session === null || !row.presenter_peer_id) {
       // Nobody owns this transcode: no session row, or one we cannot rebuild
       // a room from. Left running it burns a core of the media box forever.
@@ -284,6 +299,35 @@ export async function reconcileStaleHlsSessions(): Promise<{
     });
     adoptedIds.add(row.id);
     adopted += 1;
+  }
+
+  for (const { info, row } of micArchives) {
+    const session = sessionFromPrefix(row.object_prefix)!;
+    const attached = adoptLiveHlsMicArchive({
+      channelId: row.channel_id,
+      egressId: info.egressId,
+      startedAt: session.startedAt,
+      trackId: row.video_track_id ?? "",
+    });
+    if (attached) {
+      adoptedIds.add(row.id);
+      adopted += 1;
+      continue;
+    }
+    // Nothing to attach it to: the session it belonged to is not running any
+    // more, so this handler is writing into a file whose row is about to be
+    // closed for retention. Stop it. The partial `.ogg` is swept with the
+    // session, which is right — an archive that stops mid-film is not one
+    // anybody wants to find in the bucket a day later.
+    const wasStopped = await stopEgressById(info.egressId, info.roomName);
+    if (wasStopped) {
+      stopped += 1;
+      logEvent("voice.hlsOrphanEgressStopped", {
+        channelId: info.roomName ?? null,
+        egressId: info.egressId,
+        reason: "mic-archive-without-session",
+      });
+    }
   }
 
   // Reopen the rows we adopted (a previous process may have ended them) and

@@ -1569,12 +1569,88 @@ room that is ten seconds ahead of the people they are addressing. That is
 ordinary for broadcast and it is worth saying out loud, because a watch party
 host is doing both at once. The panel says it in one line.
 
+**The host's voice can also be recorded on its own**, beside the stream and
+never in it, behind `LIVE_HLS_MIC_ARCHIVE`. That is a separate file and a
+separate switch; see "The host's voice as its own file" below.
+
 **Getting the host's microphone into the stream is a feature, not a fix**, and
 it is costed in [`docs/plans/WATCH_PARTY_STREAM_AUDIO.md`](./plans/WATCH_PARTY_STREAM_AUDIO.md):
 the recommendation is a client-side mix into the screen-share audio track, which
 costs the media box nothing, and explicitly NOT a Room Composite egress, which
 LiveKit's own docs price at 2 to 6 CPUs against the 0.51 to 0.88 core this one
 measures.
+
+### The host's voice as its own file
+
+**`LIVE_HLS_MIC_ARCHIVE`, off by default.** Nothing above changes when it is
+on: the HLS audience still hears the mix, the transcode is still a Track
+Composite bound to the share's two tracks, and a viewer cannot tell. What is
+added is a **second file**, beside the segments, containing the host's voice
+and nothing else, so a clip can be cut later with the film on one track and the
+voice on another instead of the two welded together.
+
+**How the voice becomes available at all.** It is not, today: the browser mixes
+the microphone into the screen-share audio before publishing, and mutes the
+separately published microphone while that mix is live, so there is no clean
+voice track on the wire to record. With the flag on, the host's browser
+publishes the SAME processed mic node a second time, tapped at `micGain`
+(post-gain, post-mute-gate, so the recording says what the stream said and the
+mute button gates both), under the LiveKit track **name** `mic-archive`.
+
+**It is a `Track.Source.Microphone` publication, and the name is the whole
+contract.** Pitfall 14 is why: `liveKitPublishGrant` sends
+`canPublishSources: ["microphone"]` to anybody holding SPEAK without STREAM,
+and LiveKit treats a non-empty list as an allowlist that `SOURCE_UNKNOWN` is
+not in, so a track published under an invented source is refused by the media
+server while the host's own app shows it live. Which makes the receive rule
+load-bearing rather than a saving: to every other client this looks exactly
+like the presenter's microphone, so **every client drops it and unsubscribes**
+— web (`livekit-session.ts`, `TrackSubscribed`), Android (`subscribeIfWanted`
+and `onTrackSubscribed` in `LiveKitEngine.kt`), iOS (`didSubscribeTrack` in
+`LiveKitVoiceClient.swift`). Filing it would overwrite the presenter's real
+voice stream with a duplicate of the same person; leaving it subscribed would
+cost every viewer in a 200-person party a second audio stream nobody hears.
+
+**Where the file lands.** `live/<channelId>/<startedAt>-mic.ogg`, in the same
+`LIVE_HLS_S3_*` bucket as the segments. Opus in OGG, because a **Track Egress**
+does not transcode — it remuxes the published track, and the container is
+chosen by the extension. It gets its own `hls_sessions` row with
+`rung = 'mic'`, which is deliberately not a name in `LADDER_RUNGS`: the master
+playlist and the keep-warm loop both filter the rows to rungs the build knows,
+so the archive is invisible to viewers for free, while retention, `keep_replay`
+and the cleanup sweep work on the `object_prefix` and know nothing about
+ladders. **So the recording is kept or deleted with the party it belongs to,
+under exactly the rules that were already there** — ten minutes by default, a
+day with `keep_replay`.
+
+**The track shows up late, and that is the normal case.** The browser publishes
+it only once the mix is running, which is after the share is published, which
+is the frame that starts the session. So the first look usually misses it and
+the health monitor is what actually starts the recording, retrying on each tick
+for **60 seconds** and then giving up (a host on an older bundle must not cost
+a `listParticipants` every ten seconds for the length of a film). It is stopped
+with the session, with the share, and with the flag; it is recognised as one of
+ours by `reapForeignEgresses`, which would otherwise stop it as a leftover on
+the first tick. `voice.hlsMicArchiveStarted` / `voice.hlsMicArchiveStopped`
+(with a reason) are the log lines, and `liveHls.micArchive` on
+`GET /api/admin/metrics` is the number of live sessions recording right now —
+zero with the flag on and `liveHls.sessions` above zero means the hosts'
+browsers have not picked up the bundle that publishes the track.
+
+A session records **once or not at all**: the file is named after the session's
+`startedAt`, so a second Track Egress would write to the same key and overwrite
+the half already recorded. Turning the flag back on mid-party therefore does
+not restart it; the next share gets its own name.
+
+**Stitching it back together**, once both files are pulled out of the bucket:
+
+```bash
+ffmpeg -i stream.mp4 -i mic.ogg -map 0:v -map 0:a -map 1:a -c copy out.mkv
+```
+
+Video and the mixed stream audio from the recording, the bare voice as a second
+audio track, no re-encode. `out.mkv` opens in any editor with the two audio
+tracks separate, which is the point of the whole thing.
 
 ## When a session restarts, and the leftovers it used to leave behind
 

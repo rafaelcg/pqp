@@ -13,14 +13,21 @@ import { fetchLiveHlsConfig, type LiveHlsConfig } from "@/lib/api";
  */
 const cache = new Map<string, Promise<LiveHlsConfig>>();
 
-export function loadLiveHlsConfig(serverId: string): Promise<LiveHlsConfig> {
-  let pending = cache.get(serverId);
+/**
+ * With no server id: the DEPLOYMENT-wide answer, which is what
+ * `GET /api/live-hls/config` with no query gives and what the voice controller
+ * asks for (it holds a channel and a transport, never a server id). Cached
+ * under its own key, so it never collides with a per-server answer.
+ */
+export function loadLiveHlsConfig(serverId?: string): Promise<LiveHlsConfig> {
+  const key = serverId ?? "";
+  let pending = cache.get(key);
   if (!pending) {
     pending = fetchLiveHlsConfig(serverId).catch((error: unknown) => {
-      cache.delete(serverId);
+      cache.delete(key);
       throw error;
     });
-    cache.set(serverId, pending);
+    cache.set(key, pending);
   }
   return pending;
 }

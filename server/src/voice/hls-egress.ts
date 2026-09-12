@@ -1,4 +1,5 @@
 import {
+  DirectFileOutput,
   EgressClient,
   EgressStatus,
   type EncodingOptions,
@@ -38,6 +39,37 @@ import {
  * production runs) the bucket stays private and everything a viewer or this
  * process reads goes through presigned URLs, so there is no public base.
  */
+
+/**
+ * THE HOST'S VOICE AS ITS OWN FILE.
+ *
+ * `mic-archive` is the LiveKit track NAME the presenter's browser publishes a
+ * second copy of its processed microphone under, when the server advertises
+ * `micArchive` on `GET /api/live-hls/config`. Nothing plays it: every client
+ * unsubscribes from a publication with this name on sight, and the HLS
+ * audience keeps hearing the mix exactly as before. It exists so a Track
+ * Egress can write the voice to its own Opus file beside the segments, and a
+ * clip can be cut later with the film and the voice on separate tracks.
+ *
+ * THE NAME IS THE CONTRACT, and pitfall 14 is why it is a name and not a
+ * source. `liveKitPublishGrant` sends `canPublishSources: ["microphone"]` to
+ * anybody holding SPEAK and not STREAM, and LiveKit treats a non-empty list as
+ * an allowlist that `SOURCE_UNKNOWN` is not in: a track published under an
+ * invented source would be refused by the media server while the host's own
+ * app showed it live. So this publication is a MICROPHONE like any other and
+ * is told apart by `TrackInfo.name`, which no grant reads.
+ */
+export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
+
+/**
+ * How long after a session starts the monitor keeps looking for the archive
+ * track. The browser publishes it AFTER the share is up and the mix is
+ * running, so it is normally absent on the first look and present a second or
+ * two later; a host whose browser never publishes one (an old bundle, the mic
+ * switch off, no WebAudio) must not cost a `listParticipants` every ten
+ * seconds for the length of a film.
+ */
+const MIC_ARCHIVE_WAIT_MS = 60_000;
 
 const TRACK_FIND_ATTEMPTS = 16;
 const TRACK_FIND_GAP_MS = 400;
@@ -120,6 +152,13 @@ export interface LiveHlsScreenTracks {
   audioTrackId?: string;
   /** Published capture height, when LiveKit stated it. */
   sourceHeight?: number;
+  /**
+   * The sharer's separate `mic-archive` audio publication, when they have one.
+   * NOT part of the transcode: the Track Composite takes one audio sid and
+   * that is still the share's own audio (which already carries the mixed
+   * voice). This one is written to its own file. See `MIC_ARCHIVE_TRACK_NAME`.
+   */
+  micArchiveTrackId?: string;
 }
 
 export interface LiveHlsEgressApi {
@@ -131,6 +170,16 @@ export interface LiveHlsEgressApi {
       videoTrackId: string;
       encodingOptions?: EncodingOptions;
     },
+  ) => Promise<{ egressId: string }>;
+  /**
+   * `TrackEgress`: one track, no transcode, straight to a file. Optional so
+   * every existing fake still compiles; without it the mic archive simply
+   * never starts, which is the pre-feature behaviour rather than a crash.
+   */
+  startTrackEgress?: (
+    roomName: string,
+    output: DirectFileOutput,
+    trackId: string,
   ) => Promise<{ egressId: string }>;
   stopEgress: (egressId: string) => Promise<void>;
   /**
@@ -201,6 +250,19 @@ interface RoomHls {
   videoTrackId: string;
   /** Wall clock when the session was requested. */
   startedAtMs: number;
+  /**
+   * The host's voice, recorded to its own file beside the segments. Null
+   * until the presenter's `mic-archive` publication shows up (or forever,
+   * when the feature is off or their browser never publishes one).
+   */
+  micArchive: { egressId: string; trackId: string } | null;
+  /**
+   * Stop looking for that publication after this instant. Zero means never
+   * look, which is what an ADOPTED session gets: its archive either came back
+   * with it or is gone, and starting a second one mid-film would write a
+   * second file nobody asked for.
+   */
+  micArchiveUntil: number;
 }
 
 const rooms = new Map<string, RoomHls>();
@@ -382,6 +444,27 @@ export function maxLiveHlsSessions(): number {
 export function reapOrphansEnabled(): boolean {
   const raw = process.env.LIVE_HLS_REAP_ORPHANS?.trim().toLowerCase();
   return raw !== "false" && raw !== "0" && raw !== "off";
+}
+
+/**
+ * `LIVE_HLS_MIC_ARCHIVE`: **off by default**, and off is a deployment that
+ * behaves exactly as it did before this existed.
+ *
+ * On, two things change and neither touches the stream. The config endpoint
+ * tells the presenter's browser to publish a second copy of its processed
+ * microphone under the name `mic-archive`, and this process starts a LiveKit
+ * **Track Egress** on it: no transcode, one Opus track straight to
+ * `live/<channelId>/<startedAt>-mic.ogg` in the same bucket as the segments,
+ * on the same retention row machinery as every rung. The HLS audience still
+ * hears the mix; what this buys is a clip cut later with the film and the
+ * voice on separate tracks.
+ *
+ * Read per call like every other switch in this file, so it can be turned on
+ * or off without a deploy. Turning it off mid-party stops the archive at the
+ * next monitor tick and leaves the party alone.
+ */
+export function micArchiveEnabled(): boolean {
+  return process.env.LIVE_HLS_MIC_ARCHIVE === "true";
 }
 
 /**
@@ -746,6 +829,17 @@ export interface LiveHlsConfig {
     framerate: number;
     videoKbps: number;
   }[];
+  /**
+   * Whether the presenter should publish the extra `mic-archive` track.
+   *
+   * The client must never decide this from a build flag: the recording is
+   * this deployment's, the bucket is this deployment's, and a browser that
+   * published the track against a server which is not recording it would put
+   * a second microphone into every room for nothing. False whenever HLS is
+   * off for this answer, because an archive with no session to hang off is
+   * not a thing that can start.
+   */
+  micArchive: boolean;
 }
 
 /**
@@ -759,6 +853,7 @@ export function liveHlsConfig(): LiveHlsConfig {
     enabled: isLiveHlsEnabled(),
     delaySeconds: delaySeconds(),
     allowlisted: allowlist !== null,
+    micArchive: isLiveHlsEnabled() && micArchiveEnabled(),
     ladder: liveHlsLadder().map((rung) => ({
       name: rung.name,
       width: rung.width,
@@ -782,10 +877,15 @@ export async function liveHlsConfigForServer(
     return base;
   }
   const override = await liveHlsServerOverride(serverId);
+  const enabled = resolveLiveHlsForServer(serverId, override);
   return {
     ...base,
-    enabled: resolveLiveHlsForServer(serverId, override),
+    enabled,
     allowlisted: base.allowlisted || override !== null,
+    // Follows THIS server's answer, not the deployment's: a server the
+    // operator has switched off records nothing, so its host must not be
+    // asked to publish a track for it.
+    micArchive: enabled && micArchiveEnabled(),
   };
 }
 
@@ -906,6 +1006,14 @@ export interface LiveHlsActivity {
    * process, so it resets on deploy like every counter here.
    */
   orphansStopped: number;
+  /**
+   * Live sessions with the host's voice being written to its own file right
+   * now (`LIVE_HLS_MIC_ARCHIVE`). Zero on a deployment where the flag is off,
+   * which is every deployment until somebody sets it; zero with the flag ON
+   * is the number that says the browsers have not picked up the bundle that
+   * publishes the track, or that the Track Egress request is failing.
+   */
+  micArchives: number;
 }
 
 /**
@@ -922,11 +1030,15 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
   let rungs = 0;
   let oldest: number | null = null;
   let silentSessions = 0;
+  let micArchives = 0;
   for (const room of rooms.values()) {
     rungs += room.rungs.length;
     oldest = oldest === null ? room.startedAtMs : Math.min(oldest, room.startedAtMs);
     if (room.stream.hasAudio === false) {
       silentSessions += 1;
+    }
+    if (room.micArchive) {
+      micArchives += 1;
     }
   }
   return {
@@ -936,6 +1048,7 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
     oldestMinutes: oldest === null ? null : Math.floor((now - oldest) / 60_000),
     silentSessions,
     orphansStopped,
+    micArchives,
   };
 }
 
@@ -1250,6 +1363,13 @@ async function reapForeignEgresses(
     return;
   }
   const ours = new Set(room.rungs.map((entry) => entry.egressId));
+  // THE ARCHIVE IS ONE OF OURS. It is an ACTIVE egress on a room this process
+  // is presenting and it is not a rung, which is the exact description of what
+  // this function stops. Forgetting it here would kill the recording on the
+  // first monitor tick and count it as a leak.
+  if (room.micArchive) {
+    ours.add(room.micArchive.egressId);
+  }
   for (const info of listing) {
     if (ours.has(info.egressId)) {
       continue;
@@ -1315,6 +1435,13 @@ export async function checkLiveHlsHealth(
     if (rooms.get(channelId) !== room) {
       continue;
     }
+    // AFTER the reap, so a just-started archive is never the thing the reap
+    // has not been told about yet, and before the health checks, which can
+    // delete the room from under it.
+    await tendMicArchive(egress, channelId, room, now);
+    if (rooms.get(channelId) !== room) {
+      continue;
+    }
     // Secondary rungs first, and one at a time: a dead extra rendition is
     // dropped from the ladder and the viewers on it fall to the primary,
     // which is what a master playlist is for. Only the primary dying is a
@@ -1368,6 +1495,10 @@ export async function checkLiveHlsHealth(
       continue;
     }
     rooms.delete(channelId);
+    // The room is gone from the map, so nothing else can reach its archive:
+    // stop it here or it transcodes to a file forever. Stated with its own
+    // reason rather than folded into the rung teardown.
+    await stopMicArchive(channelId, room, "egress-died");
     // EVERY RUNG, INCLUDING THE PRIMARY. This used to be `slice(1)`, on the
     // reasoning that a primary judged "ended" has already ended. That is true
     // of the LiveKit-said-so half and false of the other half: a primary whose
@@ -1445,6 +1576,10 @@ function getEgress(): LiveHlsEgressApi | null {
           encodingOptions: opts.encodingOptions,
         },
       );
+      return { egressId: info.egressId };
+    },
+    startTrackEgress: async (roomName, output, trackId) => {
+      const info = await client.startTrackEgress(roomName, output, trackId);
       return { egressId: info.egressId };
     },
     stopEgress: async (egressId) => {
@@ -1593,6 +1728,15 @@ export function adoptLiveHlsSession(input: {
     stream,
     videoTrackId: input.videoTrackId,
     startedAtMs: Date.now(),
+    // Carried over from the entry this adoption is rebuilding, so a ladder
+    // whose rungs arrive one at a time does not drop an archive the first of
+    // them already attached. `adoptLiveHlsMicArchive` fills it otherwise.
+    micArchive: existing?.micArchive ?? null,
+    // NEVER hunt for a new one after a deploy. The archive either came back
+    // with the process (the boot reconcile attaches it below) or its egress
+    // is gone, and starting a second one mid-film would write a second file
+    // that begins nowhere and that nobody asked for.
+    micArchiveUntil: 0,
   });
   logEvent("voice.hlsSessionAdopted", {
     channelId: input.channelId,
@@ -1605,16 +1749,58 @@ export function adoptLiveHlsSession(input: {
   return stream;
 }
 
+/**
+ * Take back a mic-archive Track Egress that outlived the process which started
+ * it, the same way `adoptLiveHlsSession` takes back a rendition.
+ *
+ * IT CANNOT GO THROUGH `adoptLiveHlsSession`, and that is the whole reason
+ * this exists. That function turns a row into a RUNG: it looks the rung name
+ * up in `LADDER_RUNGS`, and an unknown name falls back to `720p30`. A `mic`
+ * row put through it would join the room as a fake 720p rendition, be listed
+ * as a variant, be kept warm, and be handed to viewers as a playlist that is
+ * really an audio file.
+ *
+ * Returns whether it attached. False means there is no live session for that
+ * channel and startedAt to attach to, and the caller should stop the egress
+ * rather than leave a handler writing into a session nobody owns.
+ */
+export function adoptLiveHlsMicArchive(input: {
+  channelId: string;
+  egressId: string;
+  startedAt: number;
+  trackId: string;
+}): boolean {
+  const room = rooms.get(input.channelId);
+  if (!room || room.stream.startedAt !== input.startedAt) {
+    return false;
+  }
+  if (room.micArchive && room.micArchive.egressId !== input.egressId) {
+    // Two archives for one session is a leak, not a spare. Refuse the second
+    // and let the caller stop it.
+    return false;
+  }
+  room.micArchive = { egressId: input.egressId, trackId: input.trackId };
+  room.micArchiveUntil = 0;
+  logEvent("voice.hlsMicArchiveAdopted", {
+    channelId: input.channelId,
+    egressId: input.egressId,
+    startedAt: input.startedAt,
+  });
+  return true;
+}
+
 function isTrackSource(source: unknown, wanted: TrackSource): boolean {
   return source === wanted || source === TrackSource[wanted];
 }
 
-/** The two fields of a LiveKit `TrackInfo` this picker reads. */
+/** The fields of a LiveKit `TrackInfo` this picker reads. */
 export interface EgressCandidateTrack {
   source?: unknown;
   sid?: string;
   width?: number;
   height?: number;
+  /** The publication's name. Only `mic-archive` means anything here. */
+  name?: unknown;
 }
 
 export interface EgressCandidateParticipant {
@@ -1668,6 +1854,7 @@ export function pickScreenTracks(
   let videoTrackId: string | undefined;
   let audioTrackId: string | undefined;
   let sourceHeight: number | undefined;
+  let micArchiveTrackId: string | undefined;
   for (const track of sharer.tracks ?? []) {
     if (!track.sid) {
       continue;
@@ -1681,12 +1868,21 @@ export function pickScreenTracks(
     if (isTrackSource(track.source, TrackSource.SCREEN_SHARE_AUDIO)) {
       audioTrackId ??= track.sid;
     }
+    // BY NAME, NOT BY SOURCE, and the source is deliberately not checked:
+    // this publication is a MICROPHONE (pitfall 14 — a grant is an allowlist
+    // of sources and an invented one is refused), so the source says nothing
+    // that tells it from the host's ordinary mic. The name is the only thing
+    // that does, and it is the same string the browser publishes under.
+    if (track.name === MIC_ARCHIVE_TRACK_NAME) {
+      micArchiveTrackId ??= track.sid;
+    }
   }
   return videoTrackId
     ? {
         videoTrackId,
         audioTrackId,
         ...(sourceHeight ? { sourceHeight } : {}),
+        ...(micArchiveTrackId ? { micArchiveTrackId } : {}),
       }
     : null;
 }
@@ -1714,6 +1910,7 @@ async function defaultFindTracks(
         participant.tracks.map((track) => ({
           source: track.source,
           sid: track.sid,
+          name: track.name,
         })),
       ),
     });
@@ -1939,6 +2136,216 @@ function segmentOutput(
   });
 }
 
+/**
+ * The rung name the archive's retention row carries.
+ *
+ * It is a rung in the `hls_sessions` sense (one row, one `object_prefix`, one
+ * `egress_id`, swept and kept by exactly the same rules as a rendition) and it
+ * is deliberately NOT a name in `LADDER_RUNGS`. That is what keeps it off the
+ * master playlist and out of the keep-warm loop for free: `sessionRungs` in
+ * `hls-playlist-proxy.ts` already filters the rows to rungs this build knows,
+ * so a viewer never sees a variant pointing at an audio file, and nothing
+ * polls it. `keep_replay` and the retention sweep, meanwhile, work on the
+ * prefix and know nothing about ladders, so the archive is kept or deleted
+ * with the session it belongs to and no code there changes.
+ */
+export const MIC_ARCHIVE_RUNG = "mic";
+
+/**
+ * Where the host's voice lands: `live/<channelId>/<startedAt>-mic.ogg`.
+ *
+ * **OGG because the muxer is chosen by the extension.** A Track Egress does
+ * not transcode; it remuxes the published track, which for us is Opus, and
+ * LiveKit writes Opus into an OGG container. Asking for `.mp4` here would
+ * either fail or silently produce something no editor opens.
+ *
+ * The `.ogg` is INSIDE the session prefix (`...-mic` is the prefix, `.ogg` the
+ * suffix), which is what makes the retention sweep's prefix listing find it.
+ */
+export function micArchiveObjectKey(
+  channelId: string,
+  startedAt: number,
+): string {
+  return `${hlsObjectPrefix(channelId, startedAt, MIC_ARCHIVE_RUNG)}.ogg`;
+}
+
+function micArchiveOutput(channelId: string, startedAt: number): DirectFileOutput {
+  const storage = liveHlsStorage()!;
+  return new DirectFileOutput({
+    filepath: micArchiveObjectKey(channelId, startedAt),
+    output: {
+      case: "s3",
+      value: new S3Upload({
+        accessKey: storage.accessKey,
+        secret: storage.secret,
+        bucket: storage.bucket,
+        region: storage.region,
+        endpoint: storage.endpoint,
+        forcePathStyle: storage.forcePathStyle,
+      }),
+    },
+  });
+}
+
+/**
+ * Start the archive for a session that has just found its `mic-archive`
+ * track. Failure is never fatal: the party is the segments, and a party that
+ * refused to start because a side recording could not is a worse product than
+ * one that plays with no recording.
+ */
+async function startMicArchive(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  room: RoomHls,
+  trackId: string,
+): Promise<void> {
+  if (!egress.startTrackEgress || room.micArchive) {
+    return;
+  }
+  const startedAt = room.stream.startedAt;
+  let egressId: string;
+  try {
+    const started = await egress.startTrackEgress(
+      channelId,
+      micArchiveOutput(channelId, startedAt),
+      trackId,
+    );
+    egressId = started.egressId;
+  } catch (error) {
+    logEvent("voice.hlsMicArchiveFailed", {
+      channelId,
+      startedAt,
+      trackId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // No retry budget of its own: the deadline below is still open, so the
+    // next monitor tick tries again until it closes.
+    return;
+  }
+  // The room may have been replaced while LiveKit was answering. Stop what we
+  // just started rather than filing it on a session nobody owns any more.
+  if (rooms.get(channelId) !== room) {
+    await stopEgressById(egressId, channelId);
+    return;
+  }
+  room.micArchive = { egressId, trackId };
+  room.micArchiveUntil = 0;
+  await recordSessionStarted(
+    channelId,
+    startedAt,
+    egressId,
+    MIC_ARCHIVE_RUNG,
+    room.stream.presenterPeerId,
+    room.videoTrackId,
+  );
+  logEvent("voice.hlsMicArchiveStarted", {
+    channelId,
+    startedAt,
+    egressId,
+    trackId,
+    key: micArchiveObjectKey(channelId, startedAt),
+  });
+}
+
+/**
+ * Stop the archive and close its row. `reason` is not optional here for the
+ * same reason it is not on `stopRoom`: three callers that log nothing is how
+ * pitfall 15 stayed invisible for a week.
+ */
+async function stopMicArchive(
+  channelId: string,
+  room: RoomHls,
+  reason: string,
+  { stopEgress = true }: { stopEgress?: boolean } = {},
+): Promise<void> {
+  const archive = room.micArchive;
+  if (!archive) {
+    return;
+  }
+  room.micArchive = null;
+  room.micArchiveUntil = 0;
+  logEvent("voice.hlsMicArchiveStopped", {
+    channelId,
+    startedAt: room.stream.startedAt,
+    egressId: archive.egressId,
+    reason,
+  });
+  if (stopEgress) {
+    const egress = getEgress();
+    if (egress) {
+      try {
+        await egress.stopEgress(archive.egressId);
+      } catch (error) {
+        logEvent("voice.hlsStopFailed", {
+          channelId,
+          egressId: archive.egressId,
+          rung: MIC_ARCHIVE_RUNG,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  await recordSessionEnded(channelId, room.stream.startedAt, MIC_ARCHIVE_RUNG);
+}
+
+/**
+ * One monitor pass for the archive: start it when the track finally shows up,
+ * notice when it has ended, and stop it when the flag went off underneath.
+ *
+ * The late arrival is the normal case, not an edge: the browser publishes the
+ * second track only once the mix is running, which is after the share is up,
+ * which is what starts the session. So the first look almost always misses it
+ * and the tick a few seconds later finds it.
+ */
+async function tendMicArchive(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  room: RoomHls,
+  now: number,
+): Promise<void> {
+  if (!micArchiveEnabled()) {
+    // Turned off mid-party. Stop the recording; leave the party alone.
+    await stopMicArchive(channelId, room, "disabled");
+    return;
+  }
+  if (room.micArchive) {
+    if (!egress.listEgress) {
+      return;
+    }
+    let health: EgressHealth = "unknown";
+    try {
+      const listing = await egress.listEgress({
+        egressId: room.micArchive.egressId,
+      });
+      health = healthFromListing(room.micArchive.egressId, listing);
+    } catch (error) {
+      logEvent("voice.hlsMicArchiveHealthFailed", {
+        channelId,
+        egressId: room.micArchive.egressId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (health === "ended") {
+      // LiveKit says it is over, so there is nothing to stop: asking would
+      // only log a failure about an egress that finished. The row is closed
+      // so retention collects whatever was written.
+      await stopMicArchive(channelId, room, "egress-ended", {
+        stopEgress: false,
+      });
+    }
+    return;
+  }
+  if (now >= room.micArchiveUntil) {
+    return;
+  }
+  const tracks = await probeScreenTracks(channelId, room.stream.presenterPeerId);
+  if (!tracks?.micArchiveTrackId || rooms.get(channelId) !== room) {
+    return;
+  }
+  await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
+}
+
 /** Stop these renditions' egresses, tolerating one that is already gone. */
 async function stopRungs(
   channelId: string,
@@ -1988,6 +2395,11 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
     startedAt: current.stream.startedAt,
     egressIds: current.rungs.map((entry) => entry.egressId),
   });
+  // BEFORE the rungs, and unconditionally: the archive is an egress on the
+  // media box like any other, and a session torn down without stopping it
+  // leaves a handler writing to a file whose row has just been closed for
+  // retention — the exact shape of pitfall 15, one flag later.
+  await stopMicArchive(channelId, current, reason);
   await recordSessionEnded(channelId, current.stream.startedAt);
   await stopRungs(channelId, current.rungs);
 }
@@ -2173,6 +2585,11 @@ async function startRoom(
     stream,
     videoTrackId: tracks.videoTrackId,
     startedAtMs: startedAt,
+    micArchive: null,
+    // Open the window even when the flag is off right now: it is read per
+    // call, so an operator who turns it on thirty seconds into a party gets
+    // the archive rather than having to restart the share.
+    micArchiveUntil: startedAt + MIC_ARCHIVE_WAIT_MS,
   };
   rooms.set(channelId, room);
   // The rows AFTER the room is published, not before. They are what the
@@ -2199,6 +2616,14 @@ async function startRoom(
     startedAt,
     new Set(running.map((entry) => entry.egressId)),
   );
+  // AFTER `endSupersededSessions`, or the sweep of "every active egress on
+  // this room that is not one of the ids I just started" would stop the
+  // archive one line after starting it. Usually a no-op on this pass: the
+  // browser publishes the archive track only once the mix is up, which is
+  // after the share, which is what got us here. The monitor picks it up.
+  if (micArchiveEnabled() && tracks.micArchiveTrackId) {
+    await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
+  }
   // The readiness probe reads the bucket itself (presigned, endpoint form),
   // never the viewer-facing URL: a viewer gets the signed master path, which
   // this same process cannot usefully fetch from here. It waits on the

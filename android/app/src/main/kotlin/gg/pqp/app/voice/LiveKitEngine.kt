@@ -418,6 +418,15 @@ class LiveKitEngine(
      */
     private fun subscribeIfWanted(publication: TrackPublication) {
         val remote = publication as? RemoteTrackPublication ?: return
+        // THE ONE TRACK NOBODY PLAYS. A watch-party host on a deployment with
+        // LIVE_HLS_MIC_ARCHIVE on publishes their microphone a SECOND time,
+        // named `mic-archive`, purely so the server can record the voice to
+        // its own file beside the HLS segments. It is tagged MICROPHONE like
+        // their real one (a publish grant is an allowlist of SOURCES, so an
+        // invented source would be refused by the media server), so the name
+        // is the only thing that tells them apart. Subscribing would play the
+        // presenter twice and cost the phone the bytes for the privilege.
+        if (remote.name == MIC_ARCHIVE_TRACK_NAME) return
         if (!livekitSubscribesTo(remote.kind, remote.source)) return
         // `isDesired` is "we have asked", which is the question here.
         // `subscribed` is not: it stays false between the ask and the track
@@ -556,6 +565,15 @@ class LiveKitEngine(
         }
         if (track !is RemoteAudioTrack) {
             Log.w(TAG, "unexpected ${track.kind} subscription from $peerId; ignoring")
+            return
+        }
+        if (publication.name == MIC_ARCHIVE_TRACK_NAME) {
+            // Never asked for above, so reaching here means the server
+            // subscribed us anyway. Refuse it rather than play it: it is the
+            // presenter's own voice a second time (see `subscribeIfWanted`).
+            (publication as? RemoteTrackPublication)?.let { remote ->
+                runCatching { remote.setSubscribed(false) }
+            }
             return
         }
         if (publication.source == Track.Source.SCREEN_SHARE_AUDIO) {
@@ -1290,6 +1308,16 @@ class LiveKitEngine(
         private const val TAG = "pqp.voice"
         private const val LOCAL_AUDIO_ID = "pqp-mic"
         private const val SCREEN_TRACK_NAME = "pqp-screen"
+
+        /**
+         * The name a watch-party host's voice ARCHIVE is published under, on a
+         * deployment with LIVE_HLS_MIC_ARCHIVE on. Never subscribed to and
+         * never played, here or on any other client: it is the presenter's own
+         * microphone a second time, published so the server can write it to a
+         * file. See `subscribeIfWanted` and `MIC_ARCHIVE_TRACK_NAME` in
+         * `client/src/lib/livekit-session.ts`.
+         */
+        private const val MIC_ARCHIVE_TRACK_NAME = "mic-archive"
 
         /**
          * How long a camera keeps flowing after the last surface stops drawing

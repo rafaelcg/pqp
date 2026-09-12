@@ -306,6 +306,16 @@ export interface AdminMetrics {
      * whose only other symptom is the box getting slower.
      */
     orphansStopped: number;
+    /**
+     * Live sessions writing the host's voice to its own file beside the
+     * segments (`LIVE_HLS_MIC_ARCHIVE`). Zero while the flag is off, which is
+     * every deployment until somebody sets it. Zero WITH the flag on and
+     * `sessions` above zero is the number that says it is not working: either
+     * the host's browser has not picked up the bundle that publishes the
+     * `mic-archive` track, or the Track Egress request is being refused
+     * (`voice.hlsMicArchiveFailed`).
+     */
+    micArchive: number;
     /** Sessions past retention that still hold objects. Belongs at zero. */
     uncleaned: number;
     /** Whether this process runs the retention sweep (`WORKER_MODE`). */
@@ -947,6 +957,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       oldestSessionMinutes: hlsActivity.oldestMinutes,
       silentSessions: hlsActivity.silentSessions,
       orphansStopped: hlsActivity.orphansStopped,
+      micArchive: hlsActivity.micArchives,
       uncleaned: hlsUncleaned,
       sweepsHere: runsColdJobs(processRole()),
       keepWarmLoops: hlsKeepWarmLoopsActive(),
