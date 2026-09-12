@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BEHIND_LIVE_THRESHOLD_SECONDS,
   HLS_ABR_DEFAULT_ESTIMATE_BPS,
+  HLS_BACK_BUFFER_LENGTH_SECONDS,
   HLS_LIVE_SEGMENT_SECONDS,
   HLS_LIVE_WINDOW_SECONDS,
   buildMediaSessionMetadata,
@@ -11,6 +12,9 @@ import {
   isBehindLive,
   isPipAvailable,
   jumpToLiveTime,
+  liveSeekTarget,
+  mediaSeekableEnd,
+  resolveLiveEdge,
   secondsBehindLive,
 } from "./hls-live-edge";
 
@@ -24,6 +28,8 @@ describe("hlsLivePlayerConfig", () => {
     ).toBeLessThan(HLS_LIVE_WINDOW_SECONDS);
     expect(hlsLiveSyncFitsWindow(config)).toBe(true);
     expect(config.startLevel).toBe(-1);
+    expect(config.backBufferLength).toBe(HLS_BACK_BUFFER_LENGTH_SECONDS);
+    expect(config.backBufferLength).toBeLessThanOrEqual(HLS_LIVE_WINDOW_SECONDS);
     expect(HLS_ABR_DEFAULT_ESTIMATE_BPS).toBeGreaterThanOrEqual(2_500_000);
   });
 
@@ -72,6 +78,80 @@ describe("jumpToLiveTime", () => {
   it("lands one segment behind the live edge", () => {
     expect(jumpToLiveTime(20, 2)).toBe(18);
     expect(jumpToLiveTime(1, 2)).toBe(0);
+  });
+});
+
+describe("resolveLiveEdge", () => {
+  it("prefers the larger clock when liveSync is a leftover first-window value", () => {
+    // Playing at ~48 s of a growing timeline; startLoad reset liveSync to 8.
+    expect(resolveLiveEdge(8, 48)).toBe(48);
+  });
+
+  it("uses liveSync when seekable is empty", () => {
+    expect(resolveLiveEdge(46, Number.NaN)).toBe(46);
+  });
+
+  it("uses seekable when liveSync is missing", () => {
+    expect(resolveLiveEdge(null, 48)).toBe(48);
+    expect(resolveLiveEdge(undefined, 48)).toBe(48);
+  });
+
+  it("is null when neither clock is finite", () => {
+    expect(resolveLiveEdge(null, Number.NaN)).toBeNull();
+    expect(resolveLiveEdge(Number.POSITIVE_INFINITY, Number.NaN)).toBeNull();
+  });
+});
+
+describe("mediaSeekableEnd", () => {
+  it("reads the last seekable end", () => {
+    expect(
+      mediaSeekableEnd({
+        seekable: { length: 1, end: () => 48 },
+      }),
+    ).toBe(48);
+  });
+
+  it("is NaN when nothing is seekable yet", () => {
+    expect(
+      Number.isNaN(
+        mediaSeekableEnd({
+          seekable: { length: 0, end: () => 0 },
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("liveSeekTarget", () => {
+  it("lands near the real edge, not a stale 8 s liveSync", () => {
+    expect(
+      liveSeekTarget({
+        currentTime: 46,
+        liveSyncPosition: 8,
+        seekableEnd: 48,
+      }),
+    ).toBe(46);
+  });
+
+  it("refuses a rewind bigger than the live window when seekable is empty", () => {
+    // startLoad left liveSync at 8; duration/seekable not readable yet.
+    expect(
+      liveSeekTarget({
+        currentTime: 70,
+        liveSyncPosition: 8,
+        seekableEnd: Number.NaN,
+      }),
+    ).toBeNull();
+  });
+
+  it("still allows a small catch-up toward live", () => {
+    expect(
+      liveSeekTarget({
+        currentTime: 38,
+        liveSyncPosition: 46,
+        seekableEnd: 48,
+      }),
+    ).toBe(46);
   });
 });
 

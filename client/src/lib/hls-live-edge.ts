@@ -79,6 +79,68 @@ export function jumpToLiveTime(
 }
 
 /**
+ * The real live edge, not a leftover `liveSyncPosition` from a short window.
+ *
+ * THE BUG THIS EXISTS FOR. Recover / jump-to-live used
+ * `hls.liveSyncPosition ?? video.duration`. After `startLoad()` the sync
+ * point can be the first-window value (~6–8 s) while the media element's
+ * timeline has already grown with the session. Seeking there jumps the
+ * picture back about a minute of already-buffered media and keeps playing
+ * — no stall, just the wrong part of the film. Prefer the larger of the
+ * two finite clocks; that is the actual edge.
+ */
+export function resolveLiveEdge(
+  liveSyncPosition: number | null | undefined,
+  seekableEnd: number,
+): number | null {
+  const candidates = [liveSyncPosition, seekableEnd].filter(
+    (value): value is number =>
+      typeof value === "number" && Number.isFinite(value),
+  );
+  if (candidates.length === 0) {
+    return null;
+  }
+  return Math.max(...candidates);
+}
+
+/** Last end of `video.seekable`. Empty range is not a live edge. */
+export function mediaSeekableEnd(video: {
+  seekable: { length: number; end: (index: number) => number };
+}): number {
+  const { seekable } = video;
+  if (seekable.length === 0) {
+    return Number.NaN;
+  }
+  return seekable.end(seekable.length - 1);
+}
+
+/**
+ * Where a recover / jump-to-live seek may move the playhead.
+ *
+ * Returns null instead of a target more than one live window behind the
+ * current playhead: that seek is not "catch up", it is the Chrome content
+ * swap (old media still sitting in an infinite back-buffer).
+ */
+export function liveSeekTarget(input: {
+  currentTime: number;
+  liveSyncPosition: number | null | undefined;
+  seekableEnd: number;
+}): number | null {
+  const edge = resolveLiveEdge(input.liveSyncPosition, input.seekableEnd);
+  if (edge === null) {
+    return null;
+  }
+  const target = jumpToLiveTime(edge);
+  if (
+    Number.isFinite(input.currentTime) &&
+    input.currentTime - target > HLS_LIVE_WINDOW_SECONDS
+  ) {
+    return null;
+  }
+  return target;
+}
+
+/**
  * True when a live-sync / max-latency pair still sits inside the production
  * window. The attach path must not start so far from the edge that the
  * playhead falls out the back on the next playlist update.

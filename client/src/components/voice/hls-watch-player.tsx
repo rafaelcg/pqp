@@ -46,7 +46,9 @@ import {
   hlsLivePlayerConfig,
   isBehindLive,
   isPipAvailable,
-  jumpToLiveTime,
+  liveSeekTarget,
+  mediaSeekableEnd,
+  resolveLiveEdge,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -379,10 +381,13 @@ export function HlsWatchPlayer({
     if (!video) {
       return;
     }
-    const hls = hlsRef.current;
-    const liveEdge = hls?.liveSyncPosition ?? video.duration;
-    if (Number.isFinite(liveEdge)) {
-      video.currentTime = jumpToLiveTime(liveEdge as number);
+    const target = liveSeekTarget({
+      currentTime: video.currentTime,
+      liveSyncPosition: hlsRef.current?.liveSyncPosition ?? null,
+      seekableEnd: mediaSeekableEnd(video),
+    });
+    if (target !== null) {
+      video.currentTime = target;
     }
   }, [getVideo]);
 
@@ -426,13 +431,15 @@ export function HlsWatchPlayer({
       return;
     }
     const check = () => {
-      const hls = hlsRef.current;
-      const liveEdge = hls?.liveSyncPosition ?? video.duration;
-      if (!Number.isFinite(liveEdge)) {
+      const liveEdge = resolveLiveEdge(
+        hlsRef.current?.liveSyncPosition ?? null,
+        mediaSeekableEnd(video),
+      );
+      if (liveEdge === null) {
         setBehindLive(false);
         return;
       }
-      setBehindLive(isBehindLive(video.currentTime, liveEdge as number));
+      setBehindLive(isBehindLive(video.currentTime, liveEdge));
     };
     video.addEventListener("timeupdate", check);
     check();
@@ -635,10 +642,17 @@ export function HlsWatchPlayer({
         if (watch.lastReason === "fatal") {
           hls?.recoverMediaError?.();
         }
-        hls?.startLoad?.();
-        const liveEdge = hls?.liveSyncPosition ?? video.duration;
-        if (Number.isFinite(liveEdge)) {
-          video.currentTime = jumpToLiveTime(liveEdge as number);
+        // Compute the seek before startLoad: after it, liveSync can reset to
+        // the first-window value (~8 s) while the element still holds a
+        // minute of back-buffer. Seeking that leftover is the Chrome jump.
+        const target = liveSeekTarget({
+          currentTime: video.currentTime,
+          liveSyncPosition: hls?.liveSyncPosition ?? null,
+          seekableEnd: mediaSeekableEnd(video),
+        });
+        hls?.startLoad?.(-1);
+        if (target !== null) {
+          video.currentTime = target;
         }
         return;
       }
