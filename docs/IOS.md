@@ -488,6 +488,39 @@ to 4 s. Fixed by not writing a constant there at all: it is left unset, so
 of the actual playlist. `WatchLiveEdge.swift`'s own rejoin/jump math
 (`liveTargetOffset`, `minRunway`, `jumpOffset`, `tipBehind`) takes the same
 segment length, learned the same way, rather than a fixed number of seconds.
+**Fullscreen was a one-way door in build 28.** Reported from a real phone on
+2026-09-12: "pressing full screen freezes the app... can somehow zoom on the
+image but everything is frozen. no playback. nothing reacts to presses other
+than zoom." Two defects from #467/#468, both in the theater, both fixed in
+build 30.
+
+The chrome was never mounted. `WatchTheaterAnchor` read
+`AVPlayerViewController.contentOverlayView` on a freshly allocated controller,
+and that property is nil until the controller's view is loaded — nothing above
+it loaded one. The `if let` fell through silently, so the `UIHostingController`
+holding the cinema chrome was built and added to nothing. With
+`showsPlaybackControls = false` that leaves a theater with **no controls at
+all**: no play, no quality, and no X. The only recogniser still answering was
+AVKit's own pinch-to-zoom, which is exactly what the report describes. The
+chrome now goes on `controller.view` after `loadViewIfNeeded()`, and
+`makeTheater` is split from the presentation so a test can assert the mounting
+without a window (`WatchPartyTests.testTheTheaterMountsTheChromeThatIsTheWayBackOut`).
+
+The picture froze because opening the theater *lowered* the quality ceiling.
+`surfacePixels` is reported by `WatchVideoSurface`, and the surface is taken
+out of the hierarchy for the whole of fullscreen, so the last size it ever
+reported was the inline strip's. `applyQuality(trigger: .fullscreen)` is one
+of only two writes allowed onto a *playing* item, so entering fullscreen wrote
+a phone-strip `preferredMaximumResolution` onto a full screen: a rendition
+switch on a live window, which is the freeze this page already warns about
+twice. `toggleFullscreen` now supplies `WatchOrientation.screenPixels` first.
+`testFullscreenAllowsTheTallestRungAgain` had been green the whole time — it
+fed the pure rule a fullscreen rectangle the app never produced.
+
+Two smaller ones alongside: the theater no longer takes a second
+`AVPictureInPictureController` on the same player (the inline layer owns PiP),
+and `WatchVideoSurface.dismantleUIView` releases the player on removal so one
+`AVPlayer` is never rendering into two layers during the transition.
 
 ## Screen sharing
 
