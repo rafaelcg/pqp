@@ -200,10 +200,24 @@ export async function updateChannelSession(
   );
 }
 
+/**
+ * Call off a session that has not gone live.
+ *
+ * SCHEDULED ONLY, DELIBERATELY. This used to also accept `live`, which meant
+ * the generic scheduling route (`POST /api/sessions/:id/cancel`, gated on
+ * MANAGE_CHANNELS or the host, with no idea it might be pointed at a watch
+ * party) could end a live show through the back door even after
+ * `authoriseWatchParty`'s own `end`/`cancel` table was tightened to
+ * host/cohost-only (2026-09-12). The card that calls this route already
+ * hides Cancelar the moment a session goes live, for exactly the reason its
+ * own comment gives — "cancelling a stream in progress is not a thing this
+ * feature does" — so this was a promise the client kept and the server did
+ * not.
+ */
 export async function cancelChannelSession(sessionId: string): Promise<void> {
   const result = await getPool().query(
     `UPDATE channel_sessions SET status = 'cancelled', updated_at = NOW()
-      WHERE id = $1 AND status IN ('scheduled', 'live')`,
+      WHERE id = $1 AND status = 'scheduled'`,
     [sessionId],
   );
   if (result.rowCount === 0) {

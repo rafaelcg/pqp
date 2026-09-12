@@ -16,9 +16,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
  *     read and an empty list from the server-wide read. Not a 403: a 403
  *     would tell them a party is being set up, which is exactly what a draft
  *     must not do.
- *   * THE TWO ASYMMETRIES IN THE ROLE TABLE ARE REAL OVER HTTP. A manager may
- *     end someone else's party but may not start it or touch its roster; a
- *     co-host may run the party but may not promote, demote or hand it over.
+ *   * THE ASYMMETRY IN THE ROLE TABLE IS REAL OVER HTTP. A manager may edit
+ *     someone else's party but may not start, end, cancel or touch its
+ *     roster; a co-host may run the party but may not promote, demote or
+ *     hand it over. (Before 2026-09-12 a manager could also end/cancel; that
+ *     let an uninvolved admin end a live show they were only watching.)
  *   * SUCCESSION IS GATED ON THE HOST ACTUALLY BEING GONE. `claimHost` is
  *     refused while `host_disconnected_at` is NULL, and the sweep only ends a
  *     party once the grace window has run out.
@@ -332,21 +334,39 @@ describeDb("watch party ownership", () => {
     expect((await readChannelParty(member)).body.party?.state).toBe("scheduled");
   });
 
-  it("lets a manager end a live party and refuses a plain member", async () => {
+  it("refuses a manager and a plain member who try to end a live party", async () => {
+    // 2026-09-12 incident: a server admin (MANAGE_CHANNELS, not the host or
+    // a co-host) ended a live party while only watching it. `end`/`cancel`
+    // came out of the manager's row in the role table for exactly this;
+    // `edit` stays, so a manager can still rename or retime the party.
     const first = await draft();
     await setState(host, first.id, "live");
 
-    const ended = await setState(manager, first.id, "ended");
-    expect(ended.status).toBe(200);
-    expect(ended.body.party.state).toBe("ended");
-    // Ended is no longer active, so the channel is free for the next one.
-    expect((await readChannelParty(member)).body.party).toBeNull();
+    const byManager = await setState(manager, first.id, "ended");
+    expect(byManager.status).toBe(403);
+    expect((await readChannelParty(member)).body.party?.state).toBe("live");
 
-    const next = await draft();
-    await setState(host, next.id, "live");
-    const byMember = await setState(member, next.id, "ended");
+    const byMember = await setState(member, first.id, "ended");
     expect(byMember.status).toBe(403);
     expect((await readChannelParty(member)).body.party?.state).toBe("live");
+
+    // The host still can, unaffected by the manager's refusal above.
+    const endedByHost = await setState(host, first.id, "ended");
+    expect(endedByHost.status).toBe(200);
+    expect(endedByHost.body.party.state).toBe("ended");
+    // Ended is no longer active, so the channel is free for the next one.
+    expect((await readChannelParty(member)).body.party).toBeNull();
+  });
+
+  it("lets a co-host end a live party the manager may not touch", async () => {
+    const party = await draft();
+    expect((await setCohost(host, party.id, second.id, true)).status).toBe(200);
+    await setState(host, party.id, "live");
+
+    expect((await setState(manager, party.id, "ended")).status).toBe(403);
+    const endedByCohost = await setState(second, party.id, "ended");
+    expect(endedByCohost.status).toBe(200);
+    expect(endedByCohost.body.party.state).toBe("ended");
   });
 
   it("lets host, co-host and manager rename a live party, and the room sees it", async () => {

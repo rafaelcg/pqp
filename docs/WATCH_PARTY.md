@@ -107,8 +107,8 @@ Four roles, in descending authority. Only the first two are stored.
 | rename, retime, change options | yes | yes | yes | no |
 | publish a draft (give it a time) | yes | yes | no | no |
 | **Ir ao vivo** | yes | yes | **no** | no |
-| **Encerrar** a live party | yes | yes | yes | no |
-| cancel a party that never went live | yes | yes | yes | no |
+| **Encerrar** a live party | yes | yes | **no** | no |
+| cancel a party that never went live | yes | yes | **no** | no |
 | promote / demote a co-host | yes | **no** | no | no |
 | hand the host role over | yes | **no** | no | no |
 | claim the host role | no | **yes**, and only in the grace window | no | no |
@@ -122,10 +122,21 @@ they can, a co-host can demote the host and there is no chain of authority
 left. Succession runs through `claimHost`, which is gated on the host actually
 being gone.
 
-**A manager stops a party, it does not start one.** MANAGE_CHANNELS ends and
-edits a live party, which is moderation and is the point of having it. It does
-not press Ir ao vivo on somebody else's draft, and it does not see that draft
-at all: a draft is a person thinking, not channel configuration.
+**A manager edits a party. It does not start, end or cancel one.** MANAGE_CHANNELS
+edits a live party (rename it, close its floor), which is moderation and is
+the point of having it. It does not press Ir ao vivo on somebody else's draft,
+and it does not see that draft at all: a draft is a person thinking, not
+channel configuration. Until 2026-09-12 a manager could also end and cancel —
+that let a server admin who was only watching a live party end the host's
+show with one click meant for the host and co-hosts. Ending and cancelling
+are now host/cohost-only, same as going live: stopping someone else's show is
+not moderation of the channel, it is taking over the party. The same date
+closed a second door onto the same row: the generic scheduling route
+(`POST /api/sessions/:id/cancel`, used by the reminder card, gated on
+MANAGE_CHANNELS or the host and with no idea it might be pointed at a watch
+party) used to accept a `live` session too. `cancelChannelSession` now only
+touches `scheduled`, matching what its own client card already promised
+("cancelling a stream in progress is not a thing this feature does").
 
 **A Moderador is not a manager here.** The seeded Moderador cargo holds
 START_WATCH_PARTY and *not* MANAGE_CHANNELS, so a mod may run their own party
