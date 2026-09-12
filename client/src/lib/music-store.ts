@@ -202,6 +202,43 @@ function mintTrack(resolved: MusicResolved): MusicTrack | null {
 
 export type MusicAddOutcome = "playing" | "queued" | "full" | "no-session";
 
+export interface MusicAddManyOutcome {
+  /** How many went in, the first of them now playing if nothing was. */
+  added: number;
+  /** How many did not fit under `MUSIC_QUEUE_LIMIT`. */
+  dropped: number;
+  startedPlaying: boolean;
+}
+
+/** Add a list in one write: a playlist or an album. */
+export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
+  if (!session || resolved.length === 0) {
+    return { added: 0, dropped: resolved.length, startedPlaying: false };
+  }
+  const held = base();
+  const minted = resolved
+    .map(mintTrack)
+    .filter((track): track is MusicTrack => track !== null);
+  let current = held.current;
+  let rest = minted;
+  let startedPlaying = false;
+  if (current === null) {
+    current = rest[0] ?? null;
+    rest = rest.slice(1);
+    startedPlaying = current !== null;
+  }
+  const room = MUSIC_QUEUE_LIMIT - held.queue.length;
+  const fits = rest.slice(0, Math.max(0, room));
+  const dropped = rest.length - fits.length;
+  write({
+    current,
+    queue: [...held.queue, ...fits],
+    status: startedPlaying ? "playing" : held.status,
+    positionMs: startedPlaying ? 0 : held.positionMs,
+  });
+  return { added: fits.length + (startedPlaying ? 1 : 0), dropped, startedPlaying };
+}
+
 /** Add a resolved track: starts it when nothing is playing, queues otherwise. */
 export function addTrack(resolved: MusicResolved): MusicAddOutcome {
   const track = mintTrack(resolved);

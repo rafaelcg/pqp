@@ -1,11 +1,11 @@
-import { Plus } from "lucide-react";
+import { Music, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ApiError, resolveMusic } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
-import { addTrack } from "@/lib/music-store";
+import { addTrack, addTracks } from "@/lib/music-store";
 
 /**
  * The add box: a YouTube link, a Spotify track link, or a search. Resolved
@@ -13,7 +13,14 @@ import { addTrack } from "@/lib/music-store";
  * bar and the player at the bottom of the sidebar, so both say the same
  * things when a link is bad.
  */
-export function MusicAddForm({ compact = false }: { compact?: boolean }) {
+export function MusicAddForm({
+  compact = false,
+  variant = "queue",
+}: {
+  compact?: boolean;
+  /** `start`: nothing is on yet, so the box says so and wears a note. */
+  variant?: "start" | "queue";
+}) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -35,15 +42,29 @@ export function MusicAddForm({ compact = false }: { compact?: boolean }) {
     setBusy(true);
     setNotice(null);
     try {
-      const { track } = await resolveMusic(text);
-      const outcome = addTrack(track);
-      if (outcome === "queued") {
-        setNotice(t("music.queued"));
-      } else if (outcome === "full") {
-        setNotice(t("music.full"));
-      }
-      if (outcome !== "full") {
-        setQuery("");
+      const { track, tracks } = await resolveMusic(text);
+      if (tracks && tracks.length > 1) {
+        const outcome = addTracks(tracks);
+        if (outcome.added === 0) {
+          setNotice(t("music.full"));
+        } else {
+          setNotice(
+            outcome.dropped > 0
+              ? t("music.queuedManyDropped", { count: outcome.added, dropped: outcome.dropped })
+              : t("music.queuedMany", { count: outcome.added }),
+          );
+          setQuery("");
+        }
+      } else {
+        const outcome = addTrack(track);
+        if (outcome === "queued") {
+          setNotice(t("music.queued"));
+        } else if (outcome === "full") {
+          setNotice(t("music.full"));
+        }
+        if (outcome !== "full") {
+          setQuery("");
+        }
       }
     } catch (error) {
       if (error instanceof ApiError) {
@@ -70,11 +91,20 @@ export function MusicAddForm({ compact = false }: { compact?: boolean }) {
         void submit();
       }}
     >
-      <div className="flex gap-1.5">
+      <div className="flex items-center gap-1.5">
+        {variant === "start" && (
+          <Music className="h-4 w-4 shrink-0 text-signal" aria-hidden="true" />
+        )}
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder={compact ? t("music.placeholder.short") : t("music.placeholder")}
+          placeholder={
+            variant === "start"
+              ? t("music.placeholder.start")
+              : compact
+                ? t("music.placeholder.short")
+                : t("music.placeholder")
+          }
           aria-label={t("music.placeholder")}
           className="h-8 text-xs"
           disabled={busy}

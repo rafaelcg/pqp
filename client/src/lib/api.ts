@@ -637,7 +637,7 @@ export const fetchTrendingGifs = (signal?: AbortSignal) =>
 
 /** A pasted link or a search, resolved to a YouTube video for the room's queue. */
 export const resolveMusic = (query: string, signal?: AbortSignal) =>
-  apiFetch<{ track: MusicResolved }>(
+  apiFetch<{ track: MusicResolved; tracks: MusicResolved[]; listName: string | null }>(
     `/api/music/resolve?q=${encodeURIComponent(query)}`,
     signal ? { signal } : {},
   );

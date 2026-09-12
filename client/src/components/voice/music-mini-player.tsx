@@ -123,7 +123,7 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
         data-music-mini-player="empty"
         className="border-t border-ink-4/60 bg-ink px-2 py-2"
       >
-        <MusicAddForm compact />
+        <MusicAddForm compact variant="start" />
       </div>
     );
   }

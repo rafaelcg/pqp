@@ -156,21 +156,37 @@ const YOUTUBE_HOSTS = new Set([
 ]);
 
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
+const YOUTUBE_LIST_ID = /^[A-Za-z0-9_-]{10,}$/;
+const SPOTIFY_ID = /^[A-Za-z0-9]{22}$/;
+
+export type SpotifyEntity = "track" | "album" | "playlist" | "other";
 
 export type MusicLink =
   | { kind: "youtube"; videoId: string; url: string }
-  | { kind: "spotify"; url: string; entity: "track" | "other" }
+  /**
+   * A whole list. `videoId` is set when the link was a `watch?v=X&list=Y`,
+   * so the room can start from that video rather than the top. A YouTube
+   * "mix" (`RD...`) is generated per viewer and has no page to read, so it
+   * comes back as the single video instead.
+   */
+  | { kind: "youtube-playlist"; listId: string; videoId: string | null; url: string }
+  | { kind: "spotify"; url: string; entity: SpotifyEntity; id: string | null }
+  /** A `spotify.link` short URL: the server follows it and parses again. */
+  | { kind: "spotify-short"; url: string }
   | { kind: "search"; query: string };
 
-/**
- * What a person pasted. A YouTube link carries its id; a Spotify link is
- * resolved server side (the page's title and artist, then a YouTube search);
- * anything else is a search.
- */
+/** What a person pasted. Links become their kind; anything else is a search. */
 export function parseMusicInput(raw: string): MusicLink | null {
   const text = raw.trim();
   if (!text) {
     return null;
+  }
+  // spotify:track:ID and friends.
+  const uri = text.match(/^spotify:(track|album|playlist):([A-Za-z0-9]{22})$/);
+  if (uri) {
+    const entity = uri[1] as SpotifyEntity;
+    const id = uri[2] as string;
+    return { kind: "spotify", entity, id, url: `https://open.spotify.com/${entity}/${id}` };
   }
   let url: URL | null = null;
   try {
@@ -188,18 +204,41 @@ export function parseMusicInput(raw: string): MusicLink | null {
       const match = url.pathname.match(/^\/(?:shorts|embed|live|v)\/([^/?]+)/);
       id = match?.[1] ?? null;
     }
-    if (id && YOUTUBE_ID.test(id)) {
+    const videoId = id && YOUTUBE_ID.test(id) ? id : null;
+    const list = url.searchParams.get("list");
+    const listId = list && YOUTUBE_LIST_ID.test(list) ? list : null;
+    if (listId && !listId.startsWith("RD")) {
+      return {
+        kind: "youtube-playlist",
+        listId,
+        videoId,
+        url: `https://www.youtube.com/playlist?list=${listId}`,
+      };
+    }
+    if (videoId) {
       return {
         kind: "youtube",
-        videoId: id,
-        url: `https://www.youtube.com/watch?v=${id}`,
+        videoId,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
       };
     }
     return null;
   }
-  if (url && (url.hostname === "open.spotify.com" || url.hostname === "spotify.link")) {
-    const entity = /^\/(?:intl-[a-z]+\/)?track\//.test(url.pathname) ? "track" : "other";
-    return { kind: "spotify", url: url.toString(), entity };
+  if (url && url.hostname === "spotify.link") {
+    return { kind: "spotify-short", url: url.toString() };
+  }
+  if (url && (url.hostname === "open.spotify.com" || url.hostname === "play.spotify.com")) {
+    const match = url.pathname.match(
+      /^\/(?:intl-[a-z]+\/)?(?:embed\/)?(track|album|playlist)\/([A-Za-z0-9]+)/,
+    );
+    const entity = (match?.[1] as SpotifyEntity | undefined) ?? "other";
+    const id = match?.[2] && SPOTIFY_ID.test(match[2]) ? match[2] : null;
+    return {
+      kind: "spotify",
+      entity: id ? entity : "other",
+      id,
+      url: id ? `https://open.spotify.com/${entity}/${id}` : url.toString(),
+    };
   }
   if (url && text.includes("://")) {
     // Some other site: not something we can play.

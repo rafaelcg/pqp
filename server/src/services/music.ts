@@ -189,9 +189,38 @@ async function searchByScraping(query: string): Promise<SearchHit | null> {
   return firstResultFromHtml(html);
 }
 
+/**
+ * Search results, remembered for a while. A Spotify playlist is twenty-five
+ * searches, and the same playlist gets pasted into the same room more than
+ * once; the answer for "artist title" does not change between the two.
+ */
+const SEARCH_CACHE_MAX = 500;
+const SEARCH_CACHE_TTL_MS = 6 * 60 * 60_000;
+const searchCache = new Map<string, { at: number; hit: SearchHit }>();
+
+function rememberSearch(query: string, hit: SearchHit) {
+  if (searchCache.size >= SEARCH_CACHE_MAX) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest !== undefined) {
+      searchCache.delete(oldest);
+    }
+  }
+  searchCache.set(query, { at: Date.now(), hit });
+}
+
 export async function searchYouTube(query: string): Promise<MusicResolved> {
   const key = process.env.YOUTUBE_API_KEY?.trim();
-  const hit = key ? await searchWithDataApi(query, key) : await searchByScraping(query);
+  const cacheKey = query.toLowerCase();
+  const cached = searchCache.get(cacheKey);
+  let hit: SearchHit | null;
+  if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
+    hit = cached.hit;
+  } else {
+    hit = key ? await searchWithDataApi(query, key) : await searchByScraping(query);
+    if (hit) {
+      rememberSearch(cacheKey, hit);
+    }
+  }
   if (!hit) {
     throw new MusicResolveError("not_found", `Nothing on YouTube for "${query}"`);
   }
@@ -205,7 +234,244 @@ export async function searchYouTube(query: string): Promise<MusicResolved> {
   };
 }
 
-export async function resolveMusic(raw: string): Promise<MusicResolved> {
+/** How many of a list we take. The room's queue holds 50. */
+export const PLAYLIST_MAX = 50;
+/**
+ * Each Spotify track is a YouTube search, two at a time, at a couple of
+ * seconds each: ten is about twenty seconds, which is as long as a person
+ * will wait for a paste to land. A YouTube playlist is one page read and
+ * takes all fifty.
+ */
+export const SPOTIFY_LIST_MAX = 10;
+
+/** What a resolve answers: one track for a link or a search, many for a list. */
+export interface MusicResolution {
+  tracks: MusicResolved[];
+  /** The list's own name, when there was a list. */
+  listName: string | null;
+}
+
+/** Items off the public playlist page. Exported for the parser test. */
+export function playlistFromHtml(html: string): Array<{ videoId: string; title: string }> {
+  const re =
+    /\{"lockupViewModel":\{"contentImage".*?"contentId":"([A-Za-z0-9_-]{11})".*?"lockupMetadataViewModel":\{"title":\{"content":"((?:[^"\\]|\\.)*)"/gs;
+  const items: Array<{ videoId: string; title: string }> = [];
+  const seen = new Set<string>();
+  for (const match of html.matchAll(re)) {
+    const videoId = match[1] as string;
+    if (seen.has(videoId)) {
+      continue;
+    }
+    seen.add(videoId);
+    let title = match[2] ?? "";
+    try {
+      title = JSON.parse(`"${title}"`) as string;
+    } catch {
+      // keep the raw text
+    }
+    items.push({ videoId, title: title || videoId });
+    if (items.length >= PLAYLIST_MAX) {
+      break;
+    }
+  }
+  return items;
+}
+
+function playlistNameFromHtml(html: string): string | null {
+  const title = decodeHtml(html.match(/<title>([^<]*)<\/title>/)?.[1] ?? "");
+  const name = title.replace(/\s*-\s*YouTube\s*$/, "").trim();
+  return name || null;
+}
+
+async function youtubePlaylistWithDataApi(
+  listId: string,
+  key: string,
+): Promise<{ items: Array<{ videoId: string; title: string; thumbnailUrl: string | null }>; name: string | null }> {
+  const params = new URLSearchParams({
+    part: "snippet",
+    playlistId: listId,
+    maxResults: String(PLAYLIST_MAX),
+    key,
+  });
+  const body = await fetchText(
+    `https://www.googleapis.com/youtube/v3/playlistItems?${params.toString()}`,
+  );
+  const parsed = JSON.parse(body) as {
+    items?: Array<{
+      snippet?: {
+        title?: string;
+        resourceId?: { videoId?: string };
+        thumbnails?: { high?: { url?: string } };
+      };
+    }>;
+  };
+  const items = (parsed.items ?? [])
+    .map((item) => ({
+      videoId: item.snippet?.resourceId?.videoId ?? "",
+      title: decodeHtml(item.snippet?.title ?? ""),
+      thumbnailUrl: item.snippet?.thumbnails?.high?.url ?? null,
+    }))
+    // "Deleted video" and "Private video" come back as items with no
+    // playable id in practice; drop anything without one.
+    .filter((item) => item.videoId && item.title !== "Deleted video" && item.title !== "Private video");
+  return { items, name: null };
+}
+
+export async function resolveYouTubePlaylist(
+  listId: string,
+  startVideoId: string | null,
+): Promise<MusicResolution> {
+  const key = process.env.YOUTUBE_API_KEY?.trim();
+  let items: Array<{ videoId: string; title: string; thumbnailUrl: string | null }>;
+  let name: string | null = null;
+  if (key) {
+    ({ items, name } = await youtubePlaylistWithDataApi(listId, key));
+  } else {
+    const html = await fetchText(`https://www.youtube.com/playlist?list=${listId}`, {
+      cookie: "CONSENT=YES+1; SOCS=CAI",
+    });
+    items = playlistFromHtml(html).map((item) => ({
+      ...item,
+      thumbnailUrl: `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
+    }));
+    name = playlistNameFromHtml(html);
+  }
+  if (items.length === 0) {
+    throw new MusicResolveError("not_found", "That playlist is empty, private, or could not be read");
+  }
+  // A `watch?v=X&list=Y` link starts the list at X, like YouTube does.
+  const start = startVideoId ? items.findIndex((item) => item.videoId === startVideoId) : -1;
+  const ordered = start > 0 ? [...items.slice(start), ...items.slice(0, start)] : items;
+  return {
+    listName: name,
+    tracks: ordered.slice(0, PLAYLIST_MAX).map((item) => ({
+      provider: "youtube",
+      videoId: item.videoId,
+      title: item.title.trim().slice(0, 200) || item.videoId,
+      sourceUrl: `https://www.youtube.com/watch?v=${item.videoId}&list=${listId}`,
+      thumbnailUrl: item.thumbnailUrl,
+      durationMs: null,
+    })),
+  };
+}
+
+/** The track list off Spotify's embed page. Exported for the parser test. */
+export function spotifyTrackListFromHtml(
+  html: string,
+): { name: string | null; tracks: Array<{ title: string; artist: string }> } {
+  const start = html.indexOf('"trackList":[');
+  if (start < 0) {
+    return { name: null, tracks: [] };
+  }
+  // The array ends at the first `]` that closes it: track objects nest no
+  // arrays of their own except `labels`, which is why the scan below counts
+  // depth rather than trusting the first bracket.
+  let depth = 0;
+  let end = -1;
+  for (let i = start + '"trackList":'.length; i < html.length; i++) {
+    const ch = html[i];
+    if (ch === "[") depth++;
+    else if (ch === "]") {
+      depth--;
+      if (depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+  }
+  const slice = end > 0 ? html.slice(start + '"trackList":'.length, end) : "";
+  const tracks: Array<{ title: string; artist: string }> = [];
+  for (const match of slice.matchAll(
+    /"title":"((?:[^"\\]|\\.)*)","subtitle":"((?:[^"\\]|\\.)*)"/g,
+  )) {
+    let title = match[1] ?? "";
+    let artist = match[2] ?? "";
+    try {
+      title = JSON.parse(`"${title}"`) as string;
+      artist = JSON.parse(`"${artist}"`) as string;
+    } catch {
+      // keep raw
+    }
+    if (title) {
+      tracks.push({ title, artist });
+    }
+  }
+  // The page's own header is the first title/subtitle pair before the list.
+  const head = html.slice(0, start).match(/"title":"((?:[^"\\]|\\.)*)","subtitle":"((?:[^"\\]|\\.)*)"/);
+  let name: string | null = null;
+  if (head?.[1]) {
+    try {
+      name = JSON.parse(`"${head[1]}"`) as string;
+    } catch {
+      name = head[1];
+    }
+  }
+  return { name, tracks };
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R | null>): Promise<R[]> {
+  const out: Array<R | null> = new Array(items.length).fill(null);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        out[index] = await fn(items[index] as T);
+      } catch {
+        out[index] = null;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out.filter((item): item is R => item !== null);
+}
+
+export async function resolveSpotifyList(
+  entity: "album" | "playlist",
+  id: string,
+  url: string,
+): Promise<MusicResolution> {
+  const html = await fetchText(`https://open.spotify.com/embed/${entity}/${id}`);
+  const { name, tracks } = spotifyTrackListFromHtml(html);
+  if (tracks.length === 0) {
+    throw new MusicResolveError("not_found", "That Spotify list is empty, private, or could not be read");
+  }
+  // Two at a time, one retry: a burst of twenty-five searches from one
+  // address is what makes YouTube drop connections.
+  const resolved = await mapLimit(tracks.slice(0, SPOTIFY_LIST_MAX), 2, async (track) => {
+    const query = `${track.artist} ${track.title}`.trim().slice(0, 200);
+    let found: MusicResolved;
+    try {
+      found = await searchYouTube(query);
+    } catch (error) {
+      if (error instanceof MusicResolveError && error.code === "not_found") {
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      found = await searchYouTube(query);
+    }
+    return { ...found, sourceUrl: url };
+  });
+  if (resolved.length === 0) {
+    throw new MusicResolveError("not_found", "Nothing on YouTube for that list");
+  }
+  return { listName: name, tracks: resolved };
+}
+
+async function followShortLink(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { redirect: "follow", signal: controller.signal });
+    return res.url;
+  } catch (error) {
+    throw new MusicResolveError("upstream", error instanceof Error ? error.message : String(error));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function resolveMusic(raw: string): Promise<MusicResolution> {
   const link = parseMusicInput(raw);
   if (!link) {
     throw new MusicResolveError(
@@ -214,18 +480,32 @@ export async function resolveMusic(raw: string): Promise<MusicResolved> {
     );
   }
   if (link.kind === "youtube") {
-    return resolveYouTube(link.videoId, link.url);
+    return { listName: null, tracks: [await resolveYouTube(link.videoId, link.url)] };
+  }
+  if (link.kind === "youtube-playlist") {
+    return resolveYouTubePlaylist(link.listId, link.videoId);
+  }
+  if (link.kind === "spotify-short") {
+    const target = await followShortLink(link.url);
+    const inner = parseMusicInput(target);
+    if (!inner || inner.kind === "spotify-short") {
+      throw new MusicResolveError("not_found", "That short link did not lead to a Spotify track or list");
+    }
+    return resolveMusic(target);
   }
   if (link.kind === "spotify") {
-    if (link.entity !== "track") {
-      throw new MusicResolveError(
-        "unsupported",
-        "Only Spotify track links are supported (not albums or playlists)",
-      );
+    if (link.entity === "track") {
+      const query = await spotifyQuery(link.url);
+      const found = await searchYouTube(query);
+      return { listName: null, tracks: [{ ...found, sourceUrl: link.url }] };
     }
-    const query = await spotifyQuery(link.url);
-    const found = await searchYouTube(query);
-    return { ...found, sourceUrl: link.url };
+    if ((link.entity === "album" || link.entity === "playlist") && link.id) {
+      return resolveSpotifyList(link.entity, link.id, link.url);
+    }
+    throw new MusicResolveError(
+      "unsupported",
+      "Only Spotify track, album and playlist links are supported",
+    );
   }
-  return searchYouTube(link.query);
+  return { listName: null, tracks: [await searchYouTube(link.query)] };
 }

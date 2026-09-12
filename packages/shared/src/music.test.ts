@@ -48,6 +48,45 @@ describe("parseMusicInput", () => {
     }
   });
 
+  it("reads playlists, watch-with-list, and treats a mix as its video", () => {
+    expect(
+      parseMusicInput("https://www.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI"),
+    ).toEqual({
+      kind: "youtube-playlist",
+      listId: "PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI",
+      videoId: null,
+      url: "https://www.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI",
+    });
+    expect(
+      parseMusicInput("https://music.youtube.com/watch?v=tI9kSZgMLsc&list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI"),
+    ).toMatchObject({ kind: "youtube-playlist", videoId: "tI9kSZgMLsc" });
+    expect(
+      parseMusicInput("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ"),
+    ).toMatchObject({ kind: "youtube", videoId: "dQw4w9WgXcQ" });
+  });
+
+  it("reads every Spotify shape", () => {
+    expect(parseMusicInput("spotify:album:5ht7ItJgpBH7W6vJ5BqpPr")).toEqual({
+      kind: "spotify",
+      entity: "album",
+      id: "5ht7ItJgpBH7W6vJ5BqpPr",
+      url: "https://open.spotify.com/album/5ht7ItJgpBH7W6vJ5BqpPr",
+    });
+    expect(
+      parseMusicInput("https://open.spotify.com/playlist/37i9dQZF1DX0FOF1IUWK1W?si=x"),
+    ).toMatchObject({ kind: "spotify", entity: "playlist", id: "37i9dQZF1DX0FOF1IUWK1W" });
+    expect(
+      parseMusicInput("https://open.spotify.com/embed/album/5ht7ItJgpBH7W6vJ5BqpPr"),
+    ).toMatchObject({ kind: "spotify", entity: "album" });
+    expect(parseMusicInput("https://spotify.link/abc")).toEqual({
+      kind: "spotify-short",
+      url: "https://spotify.link/abc",
+    });
+    expect(
+      parseMusicInput("https://open.spotify.com/artist/0gxyHStUsqpMadRV0Di1Qt"),
+    ).toMatchObject({ kind: "spotify", entity: "other" });
+  });
+
   it("tells a Spotify track from an album", () => {
     expect(
       parseMusicInput("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC"),
@@ -57,7 +96,7 @@ describe("parseMusicInput", () => {
     ).toMatchObject({ kind: "spotify", entity: "track" });
     expect(
       parseMusicInput("https://open.spotify.com/album/4uLU6hMCjMI75M1A2tKUQC"),
-    ).toMatchObject({ kind: "spotify", entity: "other" });
+    ).toMatchObject({ kind: "spotify", entity: "album" });
   });
 
   it("treats plain text as a search and other sites as unsupported", () => {

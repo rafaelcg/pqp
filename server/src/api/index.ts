@@ -2630,7 +2630,9 @@ router.get("/api/music/resolve", async (ctx) => {
     throw new HttpError(400, "Query too long");
   }
   try {
-    return { track: await resolveMusic(query) };
+    const { tracks, listName } = await resolveMusic(query);
+    // `track` stays for the first client build; `tracks` is the list.
+    return { track: tracks[0], tracks, listName };
   } catch (error) {
     if (error instanceof MusicResolveError) {
       if (error.code === "upstream") {

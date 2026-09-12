@@ -53,19 +53,31 @@ is playing is what makes somebody outside the call join.
 
 ## Resolving a link
 
-`GET /api/music/resolve?q=`, per-user rate limited:
+`GET /api/music/resolve?q=`, per-user rate limited, answers `{ tracks,
+listName }` (and `track`, the first, for the first client build):
 
-- **YouTube link**: the id off the URL, the title and thumbnail off YouTube's
-  oEmbed endpoint. No key, no quota.
-- **Spotify track link**: the title off Spotify's oEmbed endpoint, the artist
-  off the server-rendered embed page, then a YouTube search. The result keeps
-  the Spotify URL so the panel can offer "abrir no Spotify". Albums and
-  playlists are refused.
-- **Anything else**: a YouTube search.
+| Pasted | What happens |
+|---|---|
+| YouTube video (`watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/`, YouTube Music) | id off the URL; title and thumbnail off YouTube's oEmbed, no key |
+| YouTube playlist (`playlist?list=`, `watch?v=X&list=Y`, YouTube Music) | up to 50 items off the public playlist page (`lockupViewModel` entries), or `playlistItems` with a key. A `watch?v=X&list=Y` starts at X. A mix (`list=RD...`) is generated per viewer and has no page, so it is treated as its single video |
+| Spotify track (`open.spotify.com/track/`, `intl-xx/track/`, `embed/track/`, `spotify:track:`) | title off Spotify's oEmbed, artist off the server-rendered embed page, then one YouTube search; keeps the Spotify URL for "abrir no Spotify" |
+| Spotify album or playlist (same shapes, `album/`, `playlist/`) | the track list off the embed page, then a YouTube search per track, two at a time with one retry, capped at `SPOTIFY_LIST_MAX` (10) |
+| `spotify.link/...` | followed, then parsed again |
+| Spotify artist, other sites | refused with a message |
+| Anything else | a YouTube search |
 
 Search uses the YouTube Data API when `YOUTUBE_API_KEY` is set (100 quota
-units per search on a 10,000/day free key) and otherwise reads the first
-result off the public results page. Metadata only, either way.
+units per search on a 10,000/day free key, which is why the key is not the
+default: ten playlists a day would exhaust it) and otherwise reads the first
+result off the public results page. Search answers are cached in memory for
+six hours, so a list pasted twice costs one round of searches. Metadata only,
+either way.
+
+**Known limit.** A Spotify list is slow (about two seconds per track, ten
+tracks in twenty seconds) because every track is a YouTube search and a
+burst of them from one address makes YouTube drop connections. The fix is
+progressive loading (resolve the first few, queue the rest as they land),
+not a bigger cap.
 
 ## The client
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { firstResultFromHtml } from "./music.js";
+import {
+  firstResultFromHtml,
+  playlistFromHtml,
+  spotifyTrackListFromHtml,
+} from "./music.js";
 
 describe("firstResultFromHtml", () => {
   it("reads the first videoRenderer's id and title", () => {
@@ -15,5 +19,32 @@ describe("firstResultFromHtml", () => {
 
   it("returns null on a page with no results", () => {
     expect(firstResultFromHtml("<html></html>")).toBeNull();
+  });
+});
+
+describe("playlistFromHtml", () => {
+  it("reads ids and titles off lockup view models, once each", () => {
+    const item = (id: string, title: string) =>
+      `{"lockupViewModel":{"contentImage":{"thumbnailViewModel":{}},"contentId":"${id}","metadata":{"lockupMetadataViewModel":{"title":{"content":"${title}"}}}}}`;
+    const html = item("aaaaaaaaaaa", "First") + item("aaaaaaaaaaa", "First again") + item("bbbbbbbbbbb", "Legi\\u00e3o");
+    expect(playlistFromHtml(html)).toEqual([
+      { videoId: "aaaaaaaaaaa", title: "First" },
+      { videoId: "bbbbbbbbbbb", title: "Legião" },
+    ]);
+  });
+});
+
+describe("spotifyTrackListFromHtml", () => {
+  it("reads the list and the header, skipping the header row", () => {
+    const html =
+      '{"title":"Top Brasil","subtitle":"Spotify","trackList":[{"uri":"x","title":"Postinho","subtitle":"João, Grelo","contentRatings":{"labels":[]}},{"title":"GRWM","subtitle":"Iguinho"}],"other":1}';
+    expect(spotifyTrackListFromHtml(html)).toEqual({
+      name: "Top Brasil",
+      tracks: [
+        { title: "Postinho", artist: "João, Grelo" },
+        { title: "GRWM", artist: "Iguinho" },
+      ],
+    });
+    expect(spotifyTrackListFromHtml("<html></html>")).toEqual({ name: null, tracks: [] });
   });
 });
