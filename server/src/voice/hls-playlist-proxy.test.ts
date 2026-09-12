@@ -59,6 +59,10 @@ const {
   resetHlsPlaylistCacheForTests,
   segmentSigningTime,
   SEGMENT_URL_BUCKET_MAX_MS,
+  HLS_KEEP_WARM_INTERVAL_MS,
+  HLS_KEEP_WARM_IDLE_MS,
+  hlsKeepWarmLoopsActive,
+  hlsKeepWarmRenders,
 } = await import("./hls-playlist-proxy.js");
 const { mintHlsViewerToken } = await import("./hls-viewer-token.js");
 const { playlistLooksLive } = await import("@pqp/shared");
@@ -685,5 +689,135 @@ describe("buildSignedPlaylist with a rung", () => {
     expect(fetched).toHaveLength(2);
     expect(fetched[0]).toContain("1080p30.m3u8");
     expect(fetched[1]).toContain("720p30.m3u8");
+  });
+});
+
+/**
+ * KEEP-WARM. Production 2026-09-12 15:41Z: a rung nobody had polled for a
+ * while came back with only the egress's own 5 entries, because the widened
+ * history only advances when someone requests that exact rendition. These
+ * tests run the loop forward with fake timers and never once request the
+ * "cold" rung directly, so any growth they see can only have come from the
+ * loop.
+ */
+describe("keep-warm loop", () => {
+  function stubSessionRungs(rungs: string[]) {
+    pool.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT rung FROM hls_sessions")) {
+        return { rowCount: rungs.length, rows: rungs.map((rung) => ({ rung })) };
+      }
+      // The exists-check every render runs (`SELECT 1 FROM hls_sessions ...`),
+      // scoped to a session that is live.
+      return { rowCount: 1, rows: [] };
+    });
+  }
+
+  /** A live playlist whose window slides forward by one segment per fetch. */
+  function slidingFetchMock() {
+    let call = 0;
+    return vi.fn(async () => {
+      call += 1;
+      const lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        "#EXT-X-TARGETDURATION:2",
+        `#EXT-X-MEDIA-SEQUENCE:${call}`,
+      ];
+      for (let i = 0; i < 5; i++) {
+        lines.push("#EXTINF:2.0,");
+        lines.push(`seg_${call + i}.ts`);
+      }
+      return new Response(lines.join("\n") + "\n", { status: 200 });
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    disableHls();
+    enableHls();
+    resetHlsPlaylistCacheForTests();
+    pool.query.mockReset();
+  });
+
+  afterEach(() => {
+    resetHlsPlaylistCacheForTests();
+    disableHls();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("rendering rung A once makes rung B's history grow over the next ticks without any request for B", async () => {
+    stubSessionRungs(["720p30", "1080p30"]);
+    vi.stubGlobal("fetch", slidingFetchMock());
+
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30");
+    expect(hlsKeepWarmLoopsActive()).toBe(1);
+
+    // Several warm ticks pass. Nobody ever asks for 1080p30 directly.
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(HLS_KEEP_WARM_INTERVAL_MS);
+    }
+    expect(hlsKeepWarmRenders()).toBeGreaterThan(0);
+
+    // The one and only request for rung B in this test, made AFTER the
+    // ticks above: any window wider than the egress's own 5 segments proves
+    // it came from the loop, not from this call.
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT, "1080p30");
+    // Rewritten into absolute presigned URLs by this point, so match on the
+    // segment name rather than the bare filename `widenLivePlaylist` wrote.
+    const segments = body.split("\n").filter((line) => line.includes("seg_"));
+    expect(segments.length).toBeGreaterThan(5);
+  });
+
+  it("stops once a render 404s (the session ended)", async () => {
+    stubSessionRungs(["720p30"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(PLAYLIST_BODY, { status: 200 })),
+    );
+
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30");
+    expect(hlsKeepWarmLoopsActive()).toBe(1);
+
+    // The session has ended: no rung rows, and the exists-check now misses.
+    pool.query.mockImplementation(async () => ({ rowCount: 0, rows: [] }));
+
+    await vi.advanceTimersByTimeAsync(HLS_KEEP_WARM_INTERVAL_MS);
+    expect(hlsKeepWarmLoopsActive()).toBe(0);
+  });
+
+  it("stops after HLS_KEEP_WARM_IDLE_MS with no viewer request for any rung", async () => {
+    stubSessionRungs(["720p30"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(PLAYLIST_BODY, { status: 200 })),
+    );
+
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30");
+    expect(hlsKeepWarmLoopsActive()).toBe(1);
+
+    // No one asks for anything else. Past the idle window, the loop must
+    // stop polling the bucket for an abandoned session on its own.
+    await vi.advanceTimersByTimeAsync(HLS_KEEP_WARM_IDLE_MS + HLS_KEEP_WARM_INTERVAL_MS);
+    expect(hlsKeepWarmLoopsActive()).toBe(0);
+  });
+
+  it("resetHlsPlaylistCacheForTests clears every running loop", async () => {
+    stubSessionRungs(["720p30"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(PLAYLIST_BODY, { status: 200 })),
+    );
+
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30");
+    expect(hlsKeepWarmLoopsActive()).toBe(1);
+
+    resetHlsPlaylistCacheForTests();
+    expect(hlsKeepWarmLoopsActive()).toBe(0);
+
+    // And it stays cleared: the interval itself was cancelled, not just the
+    // bookkeeping map.
+    await vi.advanceTimersByTimeAsync(HLS_KEEP_WARM_INTERVAL_MS * 3);
+    expect(hlsKeepWarmLoopsActive()).toBe(0);
   });
 });
