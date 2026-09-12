@@ -51,6 +51,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsManifest
 import androidx.media3.exoplayer.hls.HlsMediaSource
@@ -60,6 +61,7 @@ import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.watch.ChannelLive
+import gg.pqp.app.watch.HlsLiveEdge
 import gg.pqp.app.watch.HlsWatchdog
 import gg.pqp.app.watch.LiveStream
 import gg.pqp.app.watch.WatchPhase
@@ -68,6 +70,7 @@ import gg.pqp.app.watch.WatchdogDecision
 import gg.pqp.app.watch.watchPhaseOf
 import gg.pqp.app.watch.watchSourceChanged
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val TICK_MS = 1_000L
 
@@ -84,8 +87,11 @@ private const val TICK_MS = 1_000L
  * [gg.pqp.app.watch.WatchLiveStore] for the frame that announces a watcher and
  * for why that frame is the only one this path sends.
  *
- * The picture is eight to twelve seconds behind the presenter. That is the
- * product, not a fault, and the badge says so.
+ * The picture sits about twenty seconds behind the presenter (`HlsLiveEdge`'s
+ * target of five target durations, at the 4 s `LIVE_HLS_SEGMENT_SECONDS`
+ * production runs), free to drift between twelve and forty. That is the
+ * product, not a fault, and the badge says so: a deep, resilience-first
+ * cushion so an ordinary publish hiccup never surfaces as a pause.
  *
  * ## The three things Media3 needs told
  *
@@ -198,6 +204,33 @@ fun WatchPane(
                         .setAllowCrossProtocolRedirects(true),
                 ),
             )
+            // A deeper pre-load than Media3's own defaults (15/50 s, 2.5/5 s),
+            // to match the 20 s target cushion in `HlsLiveEdge`: the buffer
+            // that holds the cushion has to be at least as deep as the
+            // cushion itself, or the player reaches the target offset and
+            // then immediately empties it back out. `maxBufferMs` stays
+            // under the playlist's 60 s window
+            // (`server/src/voice/hls-live-window.ts`) so this never asks for
+            // more than the proxy can actually serve.
+            //
+            // `bufferForPlaybackAfterRebufferMs = 8_000`: after a stall,
+            // refill about two segments before resuming rather than the
+            // default one, so a resume does not immediately re-stall on the
+            // next tick of jitter. `HlsWatchdog.stallMs` carries a matching
+            // comment: it must stay comfortably above this number, or a
+            // legitimate refill and a "give up and reconnect" verdict race
+            // each other.
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        /* minBufferMs = */ HlsLiveEdge.MIN_BUFFER_MS,
+                        /* maxBufferMs = */ HlsLiveEdge.MAX_BUFFER_MS,
+                        /* bufferForPlaybackMs = */ HlsLiveEdge.BUFFER_FOR_PLAYBACK_MS,
+                        /* bufferForPlaybackAfterRebufferMs = */
+                        HlsLiveEdge.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+                    )
+                    .build(),
+            )
             .build()
             .apply {
             // Media focus under a call's `USAGE_VOICE_COMMUNICATION`, and
@@ -258,30 +291,73 @@ fun WatchPane(
         // with: a reconnect wants the freshest token, and by the time a retry
         // runs the keyframe has usually already handed one over.
         val url = (newest?.takeIf { it.startedAt == stream.startedAt } ?: stream).hlsUrl
-        player.setMediaItem(
-            MediaItem.Builder()
-                .setUri(url)
-                // Required. There is no `.m3u8` in the path for Media3 to
-                // sniff, so without this it builds a progressive source.
-                .setMimeType(MimeTypes.APPLICATION_M3U8)
-                // Deliberately no `setLiveConfiguration`. With none, and no
-                // `#EXT-X-SERVER-CONTROL` in this playlist (there is none),
-                // Media3 resolves the live target offset itself as
-                // `3 * targetDurationUs` read off the manifest it is
-                // actually playing (HlsMediaPeriod's live-offset fallback;
-                // see `HlsLiveEdge.kt`). A prior version of this call hard-
-                // coded that arithmetic at 2 s segments; production moved to
-                // 4 s without a client release and the hardcoded max sat the
-                // playhead on the segment the next playlist update expires,
-                // stalling once per segment. Trusting Media3's own manifest-
-                // driven default is correct for any segment length without
-                // this file ever needing to know which one is live.
-                .build(),
-        )
+        // The real `#EXT-X-TARGETDURATION` is not known until the manifest
+        // loads, so the join itself carries `HlsLiveEdge.ASSUMED_TARGET_DURATION_MS`
+        // (production's segment length today) rather than no configuration
+        // at all. That is not cosmetic: `DefaultLivePlaybackSpeedControl`
+        // only closes a gap between the CURRENT offset and the target at
+        // `MAX_PLAYBACK_SPEED`, so joining on Media3's own 3x fallback (12 s)
+        // and correcting to 20 s only once the manifest loads would spend the
+        // first several minutes of every watch drifting open the last 8 s at
+        // 1.05x — on the old, shallow buffer the "still too close" report was
+        // about. Starting the join on this ratio's own numbers means the
+        // deeper cushion is there from the first segment, not minutes later.
+        player.setMediaItem(liveMediaItem(url, HlsLiveEdge.ASSUMED_TARGET_DURATION_MS))
         player.prepare()
         player.playWhenReady = true
         watchdog.onSourceChanged(System.currentTimeMillis())
         reconnecting = false
+
+        // Correct the assumption once the real target duration is known,
+        // instead of ever trusting it blindly. #498 (2026-09-12) hardcoded
+        // `LiveConfiguration` at build time assuming 2 s segments; production
+        // silently moved to 4 s and the same numbers became a band one
+        // playlist update wide, stalling once a segment. Reading the real
+        // `HlsManifest` here means these ratios are correct at 2 s, 4 s, or
+        // whatever `LIVE_HLS_SEGMENT_SECONDS` is set to next, with no client
+        // release required either time — the join only has to be *plausible*
+        // above, never correct, because this poll fixes it the moment it is
+        // wrong.
+        //
+        // Forked rather than awaited in line: the manifest is not available
+        // until the first playlist fetch completes, and this must not hold
+        // up `playWhenReady` while it waits. Polls rather than reading
+        // `player.currentManifest` once, because the fetch races this
+        // coroutine, and keeps polling with no fixed number of attempts —
+        // there is no bounded worst case for how long a first playlist
+        // fetch can take, and giving up early would leave a slow-to-load
+        // session stuck on the assumption forever. Safe to leave unbounded
+        // because it is cancelled for free the moment this effect is: a
+        // reattach (a new `attempt` or `startedAt`) or the pane leaving
+        // composition both cancel this coroutine along with everything else
+        // `LaunchedEffect` started. `replaceMediaItem` (same index, same
+        // URI) rather than a fresh `setMediaItem` + `prepare`, so Media3
+        // updates the live-offset configuration on the existing period
+        // instead of restarting the load. Skips the replace entirely when
+        // the manifest agrees with the assumption — the ordinary case, since
+        // the join above already carries the right numbers — so a normal
+        // attach never pays for a needless swap of the item it just
+        // prepared.
+        launch {
+            while (true) {
+                delay(150)
+                val manifest = player.currentManifest as? HlsManifest
+                val targetDurationMs = manifest?.mediaPlaylist?.targetDurationUs?.let { it / 1_000 }
+                if (targetDurationMs != null && targetDurationMs > 0) {
+                    if (targetDurationMs != HlsLiveEdge.ASSUMED_TARGET_DURATION_MS) {
+                        player.replaceMediaItem(0, liveMediaItem(url, targetDurationMs))
+                    }
+                    break
+                }
+                // No manifest yet: keep polling rather than giving up after a
+                // fixed number of tries. There is no bounded worst case for
+                // the first playlist fetch, and this coroutine is cancelled
+                // for free the moment this `LaunchedEffect` is (a reattach
+                // bumps `attempt` or `startedAt`, or the pane leaves
+                // composition), so an unbounded loop here never outlives the
+                // attach it belongs to.
+            }
+        }
     }
 
     // The watchdog's clock. One second, matching the web, and it also reads the
@@ -494,6 +570,34 @@ fun WatchPane(
             }
         }
     }
+}
+
+/**
+ * The `MediaItem` this pane ever attaches with: same URI and MIME type
+ * every time, `LiveConfiguration` derived from [HlsLiveEdge.offsetsFor] on
+ * whatever target duration is passed in — [HlsLiveEdge.ASSUMED_TARGET_DURATION_MS]
+ * at attach, the manifest's real one once known. One function so the two
+ * call sites can never drift into building the item differently, and so
+ * neither one carries a raw millisecond literal of its own.
+ */
+@OptIn(UnstableApi::class)
+private fun liveMediaItem(url: String, targetDurationMs: Long): MediaItem {
+    val offsets = HlsLiveEdge.offsetsFor(targetDurationMs)
+    return MediaItem.Builder()
+        .setUri(url)
+        // Required. There is no `.m3u8` in the path for Media3 to sniff, so
+        // without this it builds a progressive source.
+        .setMimeType(MimeTypes.APPLICATION_M3U8)
+        .setLiveConfiguration(
+            MediaItem.LiveConfiguration.Builder()
+                .setTargetOffsetMs(offsets.targetMs)
+                .setMinOffsetMs(offsets.minMs)
+                .setMaxOffsetMs(offsets.maxMs)
+                .setMaxPlaybackSpeed(HlsLiveEdge.MAX_PLAYBACK_SPEED)
+                .setMinPlaybackSpeed(HlsLiveEdge.MIN_PLAYBACK_SPEED)
+                .build(),
+        )
+        .build()
 }
 
 @OptIn(UnstableApi::class)
