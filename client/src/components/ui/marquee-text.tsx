@@ -13,9 +13,12 @@ import { cn } from "@/lib/utils";
 export function MarqueeText({
   text,
   className,
+  always = false,
 }: {
   text: string;
   className?: string;
+  /** Scroll all the time, not only while the enclosing `.group` is hovered. */
+  always?: boolean;
 }) {
   const clipRef = useRef<HTMLSpanElement | null>(null);
   const textRef = useRef<HTMLSpanElement | null>(null);
@@ -42,7 +45,7 @@ export function MarqueeText({
     >
       <span
         ref={textRef}
-        className={cn("inline-block", overflows && "pqp-marquee")}
+        className={cn("inline-block", overflows && "pqp-marquee", overflows && always && "pqp-marquee-always")}
         style={
           overflows
             ? ({ "--marquee-s": `${Math.max(6, text.length / 4)}s` } as CSSProperties)

@@ -1,5 +1,5 @@
 import { Plus } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -18,6 +18,14 @@ export function MusicAddForm({ compact = false }: { compact?: boolean }) {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const timer = setTimeout(() => setNotice(null), 2_500);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   const submit = useCallback(async () => {
     const text = query.trim();

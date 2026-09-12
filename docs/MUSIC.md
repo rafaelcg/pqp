@@ -77,14 +77,22 @@ música", lit while something plays); `components/voice/music-dock.tsx` is the
 line on the call strip and the popover both open: the add box and the queue
 with reorder and remove. The player itself is
 `components/voice/music-mini-player.tsx`, pinned at the bottom of the
-sidebar above the call controls the way a browser pins its media controls:
-the embed, play/pause, skip, stop, the local volume slider and a queue
-button. It is mounted for the whole call whatever the reader is looking at,
-because unmounting the embed is what stops the sound. Rooms you are not in
-show a card under their occupants instead (`channel-music-card.tsx`, off
-`voiceState.channelMusic`), whose title joins the call.
+sidebar above the call controls, shaped like a music app's mini player. At
+rest it is one card: artwork, title (scrolls on hover), who added it,
+play/pause and skip. It opens (the chevron, or the button on the call bar)
+into the video toggle, volume with mute, the add box, the queue with
+reorder and remove, and two text actions: "Parar de ouvir", which unmounts
+this machine's embed and leaves a one-line pill with "Ouvir" as the way
+back while the room's queue carries on, and "Parar para todos", the
+room-wide stop. It is mounted for the whole call whatever the reader is
+looking at, because unmounting the embed is what stops the sound; the video
+is folded to zero height by default and the choice is remembered. Rooms you
+are not in show a card under their occupants instead
+(`channel-music-card.tsx`, off `voiceState.channelMusic`), whose title joins
+the call. `components/voice/music-dock.tsx` is only the title on the call
+strip.
 
-Sync rules in the dock: a new track loads at the room's expected position; a
+Sync rules in the player: a new track loads at the room's expected position; a
 status change plays or pauses; every two seconds a non-actor compares the
 player's clock with the room's and seeks when more than 2.5 s off; the actor
 samples their position every 10 s so a joiner lands close, and nobody else

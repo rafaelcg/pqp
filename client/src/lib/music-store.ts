@@ -36,12 +36,18 @@ export interface MusicSnapshot {
   state: MusicState | null;
   /** This machine's clock when `state` arrived. Drift is measured from here. */
   receivedAt: number;
-  /** Whether the queue list in the sidebar player is unfolded. Shared so the call-bar button and the player agree. */
+  /** Whether the sidebar player is expanded. Shared so the call-bar button and the player agree. */
   open: boolean;
+  /**
+   * Whether THIS machine plays the room's music. False is "parar de ouvir":
+   * the player unmounts here, the room's queue carries on for everyone
+   * else, and a pill offers the way back. Reset on every new seat.
+   */
+  listening: boolean;
 }
 
 let session: MusicSession | null = null;
-let snapshot: MusicSnapshot = { channelId: null, state: null, receivedAt: 0, open: true };
+let snapshot: MusicSnapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -70,10 +76,20 @@ export function toggleMusicOpen(): void {
 export function setMusicSession(next: MusicSession | null): void {
   session = next;
   if (next === null) {
+    snapshot = { ...snapshot, listening: true, open: false };
     set(null, null);
   } else if (snapshot.channelId !== next.channelId) {
+    snapshot = { ...snapshot, listening: true, open: false };
     set(null, next.channelId);
   }
+}
+
+export function setListening(listening: boolean): void {
+  if (snapshot.listening === listening) {
+    return;
+  }
+  snapshot = { ...snapshot, listening };
+  emit();
 }
 
 /** A `music` frame from the server (join, echo, another person's write). */
@@ -105,7 +121,7 @@ export function useMusic(): MusicSnapshot {
 export function resetMusicStoreForTests(): void {
   session = null;
   positionProbe = null;
-  snapshot = { channelId: null, state: null, receivedAt: 0, open: true };
+  snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
   listeners.clear();
 }
 

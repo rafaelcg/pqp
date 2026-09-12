@@ -6,8 +6,8 @@ import {
   Pause,
   Play,
   SkipForward,
-  Square,
   Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -22,6 +22,7 @@ import {
   moveInQueue,
   removeFromQueue,
   reportPosition,
+  setListening,
   setPlaying,
   setPositionProbe,
   stopMusic,
@@ -40,24 +41,30 @@ import type { VoiceState } from "@/hooks/use-voice";
 /**
  * THE PLAYER, AT THE BOTTOM OF THE SIDEBAR, ABOVE THE CALL CONTROLS.
  *
- * Where a browser puts its media controls: always in the same place, out of
- * the way of the conversation, and there for the whole call. Mounted while
- * this machine is in a call that has a track, whichever channel or
- * conversation the reader is looking at, because unmounting the embed is
- * what stops the sound.
+ * Shaped like a music app's mini player. AT REST it is one card: artwork,
+ * title, who added it, play/pause and skip. Nothing else competes for the
+ * eye, because most of the time the only thing a person wants is to pause
+ * or move on. THE CARD OPENS (the chevron, or the button on the call bar)
+ * into the rest: the video, the volume, the add box, the queue, and two
+ * quiet text actions at the bottom.
  *
- * The video is folded away by default and the thumbnail stands in for it:
- * this is a music queue, and a sidebar is no place for a film. The embed
- * stays mounted at zero height while folded, which keeps the audio going.
- * The choice is remembered per browser.
+ * "PARAR DE OUVIR" IS PERSONAL. It unmounts this machine's embed, which is
+ * what silences it, and leaves a one-line pill with the way back. The
+ * room's queue is untouched: one person not wanting the music is not the
+ * room not wanting it. "Parar para todos" is the room-wide stop, and it is
+ * deliberately text at the bottom rather than a button beside play.
  *
- * Sync (`lib/music-store.ts` holds the state; this file drives the player):
- * a change of track loads it at the room's expected position, a change of
- * status plays or pauses, and every two seconds the player's clock is
- * compared with the room's and nudged when it has drifted more than
- * `DRIFT_MS`. The person who last wrote the state samples their position
- * every `REPORT_MS` so a late joiner lands close; nobody else writes
- * unprompted, so a room of twenty is one writer, not twenty.
+ * The video is folded by default; this is a music queue. The embed stays
+ * mounted at zero height while folded, which keeps the audio going. The
+ * choice is remembered per browser.
+ *
+ * Sync (`lib/music-store.ts` holds the state; `MusicPlayer` below drives
+ * the embed): a change of track loads it at the room's expected position, a
+ * change of status plays or pauses, and every two seconds the player's
+ * clock is compared with the room's and nudged when it has drifted more
+ * than `DRIFT_MS`. The person who last wrote the state samples their
+ * position every `REPORT_MS` so a late joiner lands close; nobody else
+ * writes unprompted, so a room of twenty is one writer, not twenty.
  */
 
 const DRIFT_MS = 2_500;
@@ -87,13 +94,14 @@ function readVolume(): number {
   return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 40;
 }
 
-const controlClass =
-  "flex h-8 w-8 items-center justify-center rounded-full bg-ink-3 text-paper transition-colors hover:bg-ink-4 disabled:opacity-40";
+const ghostButton =
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper";
 
 export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
   const { t } = useTranslation();
   const music = useMusic();
   const [volume, setVolume] = useState(readVolume);
+  const [muted, setMuted] = useState(false);
   const [showVideo, setShowVideo] = useState(() => readStored(VIDEO_KEY) === "1");
   const [needsTap, setNeedsTap] = useState(false);
   const playerRef = useRef<YTPlayer | null>(null);
@@ -108,18 +116,36 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
     return null;
   }
 
-  // In a call with nothing on: just the way to put something on.
+  // Nothing on: one line, the way to put something on.
   if (!current) {
     return (
       <div
         data-music-mini-player="empty"
-        className="border-t border-ink-4/60 bg-ink px-2 pb-2 pt-2 text-xs"
+        className="border-t border-ink-4/60 bg-ink px-2 py-2"
       >
-        <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
-          <Music className="h-3 w-3" aria-hidden="true" />
-          {t("music.title")}
-        </p>
         <MusicAddForm compact />
+      </div>
+    );
+  }
+
+  // Not listening: a pill, and the way back.
+  if (!music.listening) {
+    return (
+      <div
+        data-music-mini-player="dismissed"
+        className="flex items-center gap-2 border-t border-ink-4/60 bg-ink px-3 py-2 text-[11px] text-paper-muted"
+      >
+        <Music className="h-3 w-3 shrink-0 text-signal" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate" title={current.title}>
+          {current.title}
+        </span>
+        <button
+          type="button"
+          className="shrink-0 font-semibold text-signal hover:underline"
+          onClick={() => setListening(true)}
+        >
+          {t("music.listen")}
+        </button>
       </div>
     );
   }
@@ -130,55 +156,56 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
       return !value;
     });
   };
+  const effectiveVolume = muted ? 0 : volume;
 
   return (
     <div
       data-music-mini-player=""
       data-video={showVideo ? "shown" : "folded"}
-      className="border-t border-ink-4/60 bg-ink px-2 pb-2 pt-2 text-xs"
+      className="border-t border-ink-4/60 bg-ink text-xs"
     >
       {/* The embed. Zero height while folded: still mounted, still audible. */}
-      <div className={cn(showVideo ? "mb-2" : "h-0 overflow-hidden")}>
+      <div className={cn(music.open && showVideo ? "px-2 pt-2" : "h-0 overflow-hidden")}>
         <MusicPlayer
           music={music}
           isActor={isActor}
-          volume={volume}
+          volume={effectiveVolume}
           playerRef={playerRef}
           onNeedsTap={setNeedsTap}
         />
       </div>
 
-      <div className="flex items-center gap-2">
+      {/* The card. */}
+      <div className="group flex items-center gap-2.5 px-2 py-2">
         <button
           type="button"
-          className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md bg-ink-3"
-          aria-pressed={showVideo}
-          aria-label={showVideo ? t("music.video.hide") : t("music.video.show")}
-          onClick={toggleVideo}
+          className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-ink-3"
+          aria-expanded={music.open}
+          aria-label={music.open ? t("music.collapse") : t("music.expand")}
+          onClick={() => toggleMusicOpen()}
         >
           {current.thumbnailUrl ? (
-            <img
-              src={current.thumbnailUrl}
-              alt=""
-              className="h-full w-full object-cover"
-            />
+            <img src={current.thumbnailUrl} alt="" className="h-full w-full object-cover" />
           ) : (
             <Music className="m-auto h-4 w-4 text-signal" aria-hidden="true" />
           )}
         </button>
-        <div className="min-w-0 flex-1">
-          <MarqueeText text={current.title} className="font-medium text-paper" />
-          <p className="truncate text-[11px] text-paper-muted">
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left"
+          aria-expanded={music.open}
+          aria-label={music.open ? t("music.collapse") : t("music.expand")}
+          onClick={() => toggleMusicOpen()}
+        >
+          <MarqueeText text={current.title} className="text-[13px] font-medium leading-tight text-paper" />
+          <span className="block truncate text-[11px] leading-tight text-paper-muted">
             {t("music.addedBy", { name: current.addedByName })}
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-2 flex items-center gap-1.5">
+          </span>
+        </button>
         {needsTap ? (
           <button
             type="button"
-            className="flex h-8 items-center gap-1 rounded-full bg-accent px-3 font-semibold text-on-accent"
+            className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-accent px-3 text-[11px] font-semibold text-on-accent"
             onClick={() => {
               playerRef.current?.playVideo();
               setNeedsTap(false);
@@ -191,105 +218,124 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
           <Tooltip label={playing ? t("music.pause") : t("music.play")}>
             <button
               type="button"
-              className={cn(controlClass, playing && "bg-signal/20 text-signal")}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-paper text-ink transition-transform hover:scale-105"
               aria-pressed={playing}
               onClick={() => setPlaying(!playing)}
             >
               {playing ? (
                 <Pause className="h-4 w-4" aria-hidden="true" />
               ) : (
-                <Play className="h-4 w-4" aria-hidden="true" />
+                <Play className="ml-0.5 h-4 w-4" aria-hidden="true" />
               )}
             </button>
           </Tooltip>
         )}
         <Tooltip label={t("music.skip")}>
-          <button type="button" className={controlClass} onClick={() => advance()}>
+          <button type="button" className={ghostButton} onClick={() => advance()}>
             <SkipForward className="h-4 w-4" aria-hidden="true" />
           </button>
         </Tooltip>
-        <Tooltip label={showVideo ? t("music.video.hide") : t("music.video.show")}>
+        <Tooltip label={music.open ? t("music.collapse") : t("music.expand")}>
           <button
             type="button"
-            className={cn(controlClass, showVideo && "bg-signal/20 text-signal")}
-            aria-pressed={showVideo}
-            onClick={toggleVideo}
+            className={cn(ghostButton, "h-7 w-7")}
+            aria-expanded={music.open}
+            onClick={() => toggleMusicOpen()}
           >
-            {showVideo ? (
+            {music.open ? (
               <ChevronDown className="h-4 w-4" aria-hidden="true" />
             ) : (
               <ChevronUp className="h-4 w-4" aria-hidden="true" />
             )}
           </button>
         </Tooltip>
-        <Tooltip label={t("music.stop")}>
-          <button
-            type="button"
-            className={cn(controlClass, "text-paper-muted")}
-            onClick={() => stopMusic()}
-          >
-            <Square className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </Tooltip>
       </div>
 
-      <label className="mt-2 flex items-center gap-2 text-paper-muted">
-        <Volume2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="sr-only">{t("music.volume")}</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={volume}
-          aria-label={t("music.volume")}
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            setVolume(next);
-            writeStored(VOLUME_KEY, String(next));
-          }}
-          className="h-1 min-w-0 flex-1 cursor-pointer accent-signal"
-        />
-      </label>
+      {music.open && (
+        <div className="space-y-2.5 px-2 pb-2.5">
+          <div className="flex items-center gap-2">
+            <Tooltip label={muted ? t("music.unmute") : t("music.mute")}>
+              <button
+                type="button"
+                className={cn(ghostButton, "h-7 w-7")}
+                aria-pressed={muted}
+                onClick={() => setMuted((value) => !value)}
+              >
+                {muted || volume === 0 ? (
+                  <VolumeX className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Volume2 className="h-4 w-4" aria-hidden="true" />
+                )}
+              </button>
+            </Tooltip>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={effectiveVolume}
+              aria-label={t("music.volume")}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                setMuted(false);
+                setVolume(next);
+                writeStored(VOLUME_KEY, String(next));
+              }}
+              className="h-1 min-w-0 flex-1 cursor-pointer accent-signal"
+            />
+            <button
+              type="button"
+              className="shrink-0 rounded-md px-2 py-1 text-[11px] text-paper-muted hover:bg-ink-3 hover:text-paper"
+              aria-pressed={showVideo}
+              onClick={toggleVideo}
+            >
+              {showVideo ? t("music.video.hide") : t("music.video.show")}
+            </button>
+          </div>
 
-      <div className="mt-2">
-        <MusicAddForm compact />
-      </div>
+          <MusicAddForm compact />
 
-      {state && state.queue.length > 0 && (
-        <div className="mt-2">
-          <button
-            type="button"
-            className="flex w-full items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-paper-muted hover:text-paper"
-            aria-expanded={music.open}
-            onClick={() => toggleMusicOpen()}
-          >
-            <ListMusic className="h-3 w-3" aria-hidden="true" />
-            {t("music.queue")}
-            <span className="tabular-nums">({state.queue.length})</span>
-            {music.open ? (
-              <ChevronDown className="ml-auto h-3 w-3" aria-hidden="true" />
-            ) : (
-              <ChevronUp className="ml-auto h-3 w-3" aria-hidden="true" />
-            )}
-          </button>
-          {music.open && (
-            <ol className="mt-1 space-y-0.5">
-              {state.queue.slice(0, QUEUE_SHOWN).map((track, index) => (
-                <QueueRow
-                  key={track.id}
-                  track={track}
-                  index={index}
-                  last={index === state.queue.length - 1}
-                  mine={track.addedByUserId === voiceState.self?.userId}
-                />
-              ))}
-              {state.queue.length > QUEUE_SHOWN && (
-                <li className="text-[11px] text-paper-muted">
-                  {t("music.more", { count: state.queue.length - QUEUE_SHOWN })}
-                </li>
-              )}
-            </ol>
+          {state && state.queue.length > 0 && (
+            <div>
+              <p className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
+                <ListMusic className="h-3 w-3" aria-hidden="true" />
+                {t("music.queue")}
+                <span className="tabular-nums">{state.queue.length}</span>
+              </p>
+              <ol className="space-y-0.5">
+                {state.queue.slice(0, QUEUE_SHOWN).map((track, index) => (
+                  <QueueRow
+                    key={track.id}
+                    track={track}
+                    index={index}
+                    last={index === state.queue.length - 1}
+                    mine={track.addedByUserId === voiceState.self?.userId}
+                  />
+                ))}
+                {state.queue.length > QUEUE_SHOWN && (
+                  <li className="text-[11px] text-paper-muted">
+                    {t("music.more", { count: state.queue.length - QUEUE_SHOWN })}
+                  </li>
+                )}
+              </ol>
+            </div>
           )}
+
+          <div className="flex items-center justify-between text-[11px]">
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-paper-muted hover:bg-ink-3 hover:text-paper"
+              onClick={() => setListening(false)}
+            >
+              {t("music.dismiss")}
+            </button>
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-paper-muted hover:bg-danger-soft hover:text-on-danger-soft"
+              onClick={() => stopMusic()}
+            >
+              {t("music.stopAll")}
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -311,8 +357,8 @@ function QueueRow({
   return (
     <li
       className={cn(
-        "flex items-center gap-1.5 rounded-md px-1 py-0.5",
-        mine && "bg-ink-3/40",
+        "group/row flex items-center gap-1.5 rounded-md px-1 py-1 hover:bg-ink-3/50",
+        mine && "bg-ink-3/30",
       )}
     >
       <span className="w-4 shrink-0 text-right tabular-nums text-paper-muted">
@@ -327,7 +373,7 @@ function QueueRow({
           type="button"
           disabled={index === 0}
           onClick={() => moveInQueue(track.id, -1)}
-          className="rounded p-0.5 text-paper-muted hover:bg-ink-3/70 hover:text-paper disabled:opacity-30"
+          className="rounded p-0.5 text-paper-muted opacity-0 hover:bg-ink-3/70 hover:text-paper focus-visible:opacity-100 disabled:opacity-30 group-hover/row:opacity-100"
         >
           <ChevronUp className="h-3 w-3" aria-hidden="true" />
         </button>
@@ -337,7 +383,7 @@ function QueueRow({
           type="button"
           disabled={last}
           onClick={() => moveInQueue(track.id, 1)}
-          className="rounded p-0.5 text-paper-muted hover:bg-ink-3/70 hover:text-paper disabled:opacity-30"
+          className="rounded p-0.5 text-paper-muted opacity-0 hover:bg-ink-3/70 hover:text-paper focus-visible:opacity-100 disabled:opacity-30 group-hover/row:opacity-100"
         >
           <ChevronDown className="h-3 w-3" aria-hidden="true" />
         </button>
@@ -346,7 +392,7 @@ function QueueRow({
         <button
           type="button"
           onClick={() => removeFromQueue(track.id)}
-          className="rounded p-0.5 text-paper-muted hover:bg-ink-3/70 hover:text-paper"
+          className="rounded p-0.5 text-paper-muted opacity-0 hover:bg-ink-3/70 hover:text-paper focus-visible:opacity-100 group-hover/row:opacity-100"
         >
           <X className="h-3 w-3" aria-hidden="true" />
         </button>

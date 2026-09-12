@@ -54,7 +54,7 @@ export function ChannelMusicCard({
         aria-label={inCall ? t("music.open") : t("music.sidebar.join", { title: track.title })}
         onClick={onTitleClick}
       >
-        <MarqueeText text={track.title} />
+        <MarqueeText text={track.title} always />
       </button>
       {inCall && (
         <>

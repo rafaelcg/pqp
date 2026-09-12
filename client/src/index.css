@@ -1334,6 +1334,15 @@ h2,
 
 .pqp-marquee {
   animation: pqp-marquee var(--marquee-s, 10s) linear infinite;
+  animation-play-state: paused;
+}
+
+/* Scrolls while the card is hovered or focused, the way a media player's
+   title does; at rest it is a plain truncated line. */
+.group:hover .pqp-marquee,
+.group:focus-within .pqp-marquee,
+.pqp-marquee-always {
+  animation-play-state: running;
 }
 
 @keyframes fade-in {
