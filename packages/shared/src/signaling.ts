@@ -12,6 +12,7 @@ import {
   setWatchPartyMessageSchema,
   watchPartyMessageSchema,
 } from "./watch-party.js";
+import { musicMessageSchema, setMusicMessageSchema } from "./music.js";
 
 export const iceCandidateInitSchema = z.object({
   candidate: z.string().optional(),
@@ -588,6 +589,8 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   voiceSpeakChangedMessageSchema,
   // --- watch party ---
   watchPartyMessageSchema,
+  // --- music queue --- see packages/shared/src/music.ts
+  musicMessageSchema,
   // --- live reactions --- see packages/shared/src/live-reactions.ts. Coalesced
   // counts for the room, never per person and never stored.
   liveReactionsMessageSchema,
@@ -754,6 +757,8 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setRaisedHandMessageSchema,
   // --- watch party ---
   setWatchPartyMessageSchema,
+  // --- music queue ---
+  setMusicMessageSchema,
   // --- live reactions ---
   liveReactionMessageSchema,
   // --- live HLS watch mode (no seat) ---

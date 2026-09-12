@@ -12,6 +12,7 @@ import {
   type LiveReactionEmoji,
 } from "@pqp/shared";
 import { publishLiveReactions } from "@/lib/live-reactions";
+import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
   audibleScreenPeerIds,
   isCameraAtCap,
@@ -1273,6 +1274,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.self = null;
         state.remotePeers = [];
         state.voiceChannelId = null;
+        setMusicSession(null);
         emit();
       }
     }, failure ? SFU_JOIN_TIMEOUT_MS : JOIN_TIMEOUT_MS);
@@ -1313,6 +1315,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     voiceActivityTracker.clear();
     state.isTransmitting = false;
     state.status = "idle";
+    setMusicSession(null);
     state.peerId = null;
     state.self = null;
     state.remotePeers = [];
@@ -1956,6 +1959,25 @@ export function createVoiceController(transport: RealtimeTransport) {
       return;
     }
     sendRaisedHand(false);
+  }
+
+  /**
+   * Hand the music store a way to write for this seat. Re-registered on
+   * every welcome, since a resume or a transport change mints a new peer id
+   * and the id is the tie-break in the queue's ordering.
+   */
+  function registerMusicSession(
+    peerId: string,
+    channelId: string,
+    self: VoiceParticipant,
+  ) {
+    setMusicSession({
+      channelId,
+      peerId,
+      userId: self.userId,
+      displayName: self.displayName,
+      send: (music) => transport.sendVoice({ type: "set-music", state: music }),
+    });
   }
 
   /** Declare our own hand, and believe it until the room says otherwise. */
@@ -2901,6 +2923,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.peerId = peerId;
           state.voiceChannelId = channelId;
           state.roomTransport = roomTransport;
+          registerMusicSession(peerId, channelId, message.self);
           state.status = "connected";
           applyPublishRules(
             publishFlagsFrom(message).canSpeak,
@@ -2938,6 +2961,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
         state.transportFailure = null;
+        registerMusicSession(
+          message.peerId,
+          message.voiceChannelId,
+          message.self,
+        );
         // A fresh seat, so there is no "before" to have grown from. This is
         // what keeps the capacity card off the screen of somebody who walks
         // into a room that was already promoted.
@@ -3295,6 +3323,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       // coalesced window is an event with a 1.5 second lifetime, not room
       // state, and putting it in the snapshot would re-render the whole call
       // stage four times a second during a burst. See `lib/live-reactions.ts`.
+      // --- music queue ---
+      // Same treatment as the reactions: a position sample every few seconds
+      // must not re-render the stage, so it lives in its own store
+      // (`lib/music-store.ts`) and only the dock subscribes.
+      case "music":
+        receiveMusic(message.channelId, message.state);
+        break;
       case "live-reactions":
         publishLiveReactions({
           channelId: message.channelId,

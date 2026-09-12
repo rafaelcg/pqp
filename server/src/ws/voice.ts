@@ -163,6 +163,12 @@ import {
   resetWatchPartyLimits,
 } from "./watch-party.js";
 import {
+  applyMusicWrite,
+  endMusic,
+  getMusicState,
+  resetMusicForTests,
+} from "./music.js";
+import {
   offerLiveReaction,
   resetLiveReactionLimits,
   resetLiveReactions,
@@ -832,6 +838,7 @@ export function resetVoiceRoomTransports(): void {
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
+  resetMusicForTests();
   pendingTransportDecisions.clear();
   pendingPinRechecks.clear();
 }
@@ -1236,6 +1243,13 @@ function onLiveRoomMaybeEmpty(
   if (endWatchParty(voiceChannelId) && notifySocket) {
     send(notifySocket, {
       type: "watch-party",
+      channelId: voiceChannelId,
+      state: null,
+    });
+  }
+  if (endMusic(voiceChannelId) && notifySocket) {
+    send(notifySocket, {
+      type: "music",
       channelId: voiceChannelId,
       state: null,
     });
@@ -3211,6 +3225,7 @@ export function resetVoicePeers(): void {
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
+  resetMusicForTests();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
@@ -3465,6 +3480,14 @@ async function welcomeVoicePeer(
       type: "watch-party",
       channelId: peer.voiceChannelId,
       state: party,
+    });
+  }
+  const music = getMusicState(peer.voiceChannelId);
+  if (music) {
+    send(peer.socket, {
+      type: "music",
+      channelId: peer.voiceChannelId,
+      state: music,
     });
   }
   const liveStream = liveHlsStreamFor(peer.voiceChannelId);
@@ -4696,6 +4719,38 @@ export async function handleVoiceMessage(
         state: write.state,
       } satisfies VoiceWatchFrame);
     }
+    return;
+  }
+
+  // --- music queue ---
+  //
+  // Same audience and same echo-as-acknowledgement as the watch party above.
+  // Not mirrored into the registry: a room lives on one instance today.
+  if (payload.type === "set-music") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    const write = applyMusicWrite(peer.voiceChannelId, payload.state, user.id);
+    if (write.kind === "coalesced") {
+      return;
+    }
+    if (write.kind === "stale") {
+      send(socket, {
+        type: "music",
+        channelId: peer.voiceChannelId,
+        state: write.held,
+      });
+      return;
+    }
+    broadcastToRoom(peer.voiceChannelId, {
+      type: "music",
+      channelId: peer.voiceChannelId,
+      state: write.state,
+    });
     return;
   }
 
