@@ -1856,6 +1856,20 @@ API machine (`mintHlsViewerToken` from `/app/server/dist`). It logs
 sequence, and `getVideoPlaybackQuality` once a second. Run it before
 touching any of these numbers again.
 
+**And a second thing the same rig found.** 500 viewers ramping over 30 s
+against staging (one shared CPU, a pool of 10) failed 491 of 500 master
+playlist fetches (15 s timeouts and 500s) while the media polls beside them
+answered in about 450 ms: every arrival ran its own `hls_sessions` rung
+query, and the pool queued them. The rung read now shares one in-flight
+query per session per second, the way the rendered media playlist already
+did. Rerun on the same box: 500 of 500 masters and 33,953 polls at 200,
+zero window misses, media p50 312 ms and p99 703 ms at 250 requests a
+second. A harness from one address measures the per-IP limiter (240 burst,
+60 a second, verified per client IP on Fly) before it measures the API:
+raise `RATE_LIMIT_ANON_CAPACITY` / `RATE_LIMIT_ANON_REFILL` on staging
+first, and never run the segment-fetching mode from the presenter's own
+network, which is what collapsed the presenter's upload on 2026-09-12.
+
 ### What the presenter publishes, and why 1080p was making it worse
 
 Measured on the live party, 2026-09-09. The presenter published
