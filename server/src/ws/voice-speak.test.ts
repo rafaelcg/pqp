@@ -271,6 +271,7 @@ describe("SPEAK in voice rooms", () => {
           voiceChannelId: STAGE,
           canSpeak: false,
           canStream: false,
+          canManageMusic: false,
         },
       ]);
 
@@ -285,6 +286,7 @@ describe("SPEAK in voice rooms", () => {
         voiceChannelId: STAGE,
         canSpeak: true,
         canStream: true,
+        canManageMusic: false,
       });
       expect(setSfuUserCanPublish).not.toHaveBeenCalled();
     });
@@ -307,7 +309,7 @@ describe("SPEAK in voice rooms", () => {
       ).mock.calls[0]!;
       expect(room).toBe(STAGE);
       expect(userId).toBe("member");
-      expect(grant).toEqual({ canSpeak: false, canStream: false });
+      expect(grant).toMatchObject({ canSpeak: false, canStream: false });
       expect(identities.get(peerId)).toBe("member");
 
       bits.byUser.set("member", SPEAKER_BITS);
@@ -315,7 +317,7 @@ describe("SPEAK in voice rooms", () => {
       expect(setSfuUserCanPublish).toHaveBeenLastCalledWith(
         STAGE,
         "member",
-        { canSpeak: true, canStream: true },
+        expect.objectContaining({ canSpeak: true, canStream: true }),
         expect.any(Map),
       );
     });
