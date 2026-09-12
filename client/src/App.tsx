@@ -1067,6 +1067,7 @@ function MainAppContent({
   const [wantsWatchPartyHint] = useState(() =>
     featureHintEligible("watchParty"),
   );
+  const [wantsMusicHint] = useState(() => featureHintEligible("music"));
   const [wantsChannelPinHint] = useState(() =>
     featureHintEligible("channelPin"),
   );
@@ -5524,6 +5525,7 @@ function MainAppContent({
       voiceState.status === "connected" &&
       voiceState.canStream &&
       supportsScreenShare(),
+    music: wantsMusicHint && voiceState.status === "connected",
     composerFormat:
       wantsComposerFormatHint &&
       selectedChannel?.type === "text" &&

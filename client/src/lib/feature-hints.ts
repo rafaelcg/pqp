@@ -19,6 +19,7 @@ export const FEATURE_HINT_IDS = [
   "watchPartyHost",
   "watchPartyViewer",
   "watchParty",
+  "music",
   "composerFormat",
   "channelPin",
   "shortcuts",
@@ -30,6 +31,7 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   watchPartyHost: "pqp:feature-hint-watch-party-host-2026-09",
   watchPartyViewer: "pqp:feature-hint-watch-party-viewer-2026-09",
   watchParty: "pqp:feature-hint-watch-party-2026-09",
+  music: "pqp:feature-hint-music-2026-09",
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
@@ -44,6 +46,11 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   "watchPartyHost",
   "watchPartyViewer",
   "watchParty",
+  // The music queue, on the player at the bottom of the sidebar, the first
+  // time a person is in a call with nothing on. After the share tip: both
+  // fire for anyone in any call, and share is the older, less discoverable
+  // control.
+  "music",
   "composerFormat",
   "channelPin",
 ] as const;

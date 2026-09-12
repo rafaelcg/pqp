@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { MusicTrack } from "@pqp/shared";
+import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MusicAddForm } from "@/components/voice/music-add-form";
@@ -113,6 +114,7 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
   const canManage = voiceState.canManageMusic;
+  const musicHintEnabled = useFeatureHintEnabled("music");
 
   if (!inCall) {
     return null;
@@ -125,6 +127,18 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
         data-music-mini-player="empty"
         className="border-t border-ink-4/60 bg-ink px-2 py-2"
       >
+        {/* The one-time tip: what this box is, and what it takes. Same
+            coachmark as the share tip, one at a time (`lib/feature-hints.ts`). */}
+        {musicHintEnabled && (
+          <div className="mb-2">
+            <FeatureHint
+              id="music"
+              enabled
+              title={t("featureHint.music.title")}
+              body={t("featureHint.music.body")}
+            />
+          </div>
+        )}
         <MusicAddForm compact variant="start" />
       </div>
     );
