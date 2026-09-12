@@ -2,12 +2,14 @@
 import { act } from "react";
 import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceState } from "@/hooks/use-voice";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   WatchStageOutlet,
   resolveWatchPlacement,
   shouldConfirmVoiceJoin,
+  useVoiceJoinGuard,
   useWatchDock,
   useWatchDockHost,
   type WatchDockSession,
@@ -299,5 +301,200 @@ describe("useWatchDock", () => {
     // The egress restarts ten minutes later; nobody asked for a player.
     walkAway(true);
     expect(latest?.placement).toBe("gone");
+  });
+});
+
+/**
+ * The confirm in front of a seat, and the promise it makes.
+ *
+ * Answering "yes" is answering about a TRADE: the call for the film. So the
+ * film is given up only once the seat is real, and the dialog gets out of the
+ * way before the join runs rather than after it, because the state behind
+ * `open` is the same state the join is waiting on.
+ */
+describe("useVoiceJoinGuard", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let guard: ReturnType<typeof useVoiceJoinGuard> | null = null;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    guard = null;
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function Harness({
+    dockedChannelId,
+    join,
+    seated,
+    onSeated,
+  }: {
+    dockedChannelId: string | null;
+    join: () => Promise<void>;
+    seated: boolean;
+    onSeated: () => void;
+  }) {
+    const value = useVoiceJoinGuard({
+      dockedChannelId,
+      seated: () => seated,
+      onSeated,
+    });
+    guard = value;
+    return (
+      <>
+        <button
+          type="button"
+          data-testid="join"
+          onClick={() => value.guard("chan-voice", join)}
+        />
+        <ConfirmDialog
+          open={value.pendingChannelId !== null}
+          title="Continuar?"
+          confirmLabel="Entrar na voz"
+          destructive={false}
+          onConfirm={value.confirm}
+          onClose={value.cancel}
+        />
+      </>
+    );
+  }
+
+  const buttonSaying = (label: string) =>
+    Array.from(document.body.querySelectorAll("button")).find(
+      (button) => button.textContent === label,
+    ) ?? null;
+  const confirmButton = () => buttonSaying("Entrar na voz");
+
+  const press = (testid: string) =>
+    act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(`[data-testid="${testid}"]`)
+        ?.click();
+    });
+
+  it("joins straight away with nothing docked", async () => {
+    const joined: string[] = [];
+    const onSeated = vi.fn();
+    act(() =>
+      root.render(
+        <Harness
+          dockedChannelId={null}
+          join={async () => {
+            joined.push("chan-voice");
+          }}
+          seated
+          onSeated={onSeated}
+        />,
+      ),
+    );
+    await press("join");
+    expect(confirmButton()).toBeNull();
+    expect(joined).toEqual(["chan-voice"]);
+    // Nothing was docked, so nothing is given up either.
+    expect(onSeated).not.toHaveBeenCalled();
+  });
+
+  it("closes the dialog on Continue and drops the stream once seated", async () => {
+    const onSeated = vi.fn();
+    let started = false;
+    act(() =>
+      root.render(
+        <Harness
+          dockedChannelId="chan-watch"
+          join={async () => {
+            started = true;
+          }}
+          seated
+          onSeated={onSeated}
+        />,
+      ),
+    );
+    await press("join");
+    expect(confirmButton()).not.toBeNull();
+    expect(started).toBe(false);
+
+    await act(async () => {
+      confirmButton()?.click();
+    });
+    // THE DIALOG IS GONE, not left over a joined app with nothing behind it
+    // to close the modal.
+    expect(confirmButton()).toBeNull();
+    expect(guard?.pendingChannelId).toBeNull();
+    expect(started).toBe(true);
+    expect(onSeated).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the stream when the join throws", async () => {
+    const onSeated = vi.fn();
+    act(() =>
+      root.render(
+        <Harness
+          dockedChannelId="chan-watch"
+          join={async () => {
+            throw new Error("mic on fire");
+          }}
+          seated
+          onSeated={onSeated}
+        />,
+      ),
+    );
+    await press("join");
+    await act(async () => {
+      confirmButton()?.click();
+    });
+    expect(confirmButton()).toBeNull();
+    expect(onSeated).not.toHaveBeenCalled();
+  });
+
+  it("keeps the stream when the join resolves without taking the seat", async () => {
+    // `voice.join` swallows a refused microphone and returns quietly when the
+    // join was abandoned, so resolving is not the same as being in the room.
+    const onSeated = vi.fn();
+    act(() =>
+      root.render(
+        <Harness
+          dockedChannelId="chan-watch"
+          join={async () => {}}
+          seated={false}
+          onSeated={onSeated}
+        />,
+      ),
+    );
+    await press("join");
+    await act(async () => {
+      confirmButton()?.click();
+    });
+    expect(onSeated).not.toHaveBeenCalled();
+  });
+
+  it("joins nothing and keeps the stream on Cancel", async () => {
+    const onSeated = vi.fn();
+    let started = false;
+    act(() =>
+      root.render(
+        <Harness
+          dockedChannelId="chan-watch"
+          join={async () => {
+            started = true;
+          }}
+          seated
+          onSeated={onSeated}
+        />,
+      ),
+    );
+    await press("join");
+    await act(async () => {
+      buttonSaying("Cancel")?.click();
+    });
+    expect(confirmButton()).toBeNull();
+    expect(guard?.pendingChannelId).toBeNull();
+    expect(started).toBe(false);
+    expect(onSeated).not.toHaveBeenCalled();
   });
 });

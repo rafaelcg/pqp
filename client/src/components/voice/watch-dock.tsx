@@ -127,6 +127,113 @@ export function shouldConfirmVoiceJoin({
   return dockedChannelId !== null && dockedChannelId !== channelId;
 }
 
+/**
+ * Take the seat the viewer agreed to, and give the stream up ONLY once the
+ * seat is real.
+ *
+ * Dismissing the mini player on the press was a lie the width of a failed
+ * join: a refused room, a join that timed out, a leave that raced it, and the
+ * person has answered "yes, end my film" and got neither the call nor the
+ * film. `seated` is asked after the join settles, because `voice.join` is
+ * deliberately forgiving (a microphone that will not open joins listen-only
+ * rather than throwing) and an abandoned join returns quietly: the only honest
+ * question is whether the controller is actually in the room that was asked
+ * for.
+ */
+export async function runGuardedVoiceJoin({
+  run,
+  seated,
+  onSeated,
+}: {
+  run: () => Promise<void> | void;
+  /** Is the controller in the room this join asked for? */
+  seated: () => boolean;
+  /** Called once, and only when the seat happened. */
+  onSeated: () => void;
+}): Promise<boolean> {
+  try {
+    await run();
+  } catch {
+    // They keep the film they were already watching.
+    return false;
+  }
+  if (!seated()) {
+    return false;
+  }
+  onSeated();
+  return true;
+}
+
+/**
+ * The confirm in front of a join that would cost a docked stream.
+ *
+ * Holds the parked join, and answers the dialog's `open`. `confirm` clears
+ * itself FIRST and runs the join after: the dialog is controlled by this
+ * state, so leaving it set while a join is in flight leaves a modal over the
+ * app with nothing behind it to close the modal.
+ */
+export function useVoiceJoinGuard({
+  dockedChannelId,
+  seated,
+  onSeated,
+}: {
+  dockedChannelId: string | null;
+  seated: (channelId: string) => boolean;
+  onSeated: () => void;
+}): {
+  /** The room a confirm is open about, or null when there is none. */
+  pendingChannelId: string | null;
+  guard: (channelId: string, run: () => Promise<void> | void) => void;
+  confirm: () => void;
+  cancel: () => void;
+} {
+  const [pending, setPending] = useState<{
+    channelId: string;
+    run: () => Promise<void> | void;
+  } | null>(null);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const seatedRef = useRef(seated);
+  seatedRef.current = seated;
+  const onSeatedRef = useRef(onSeated);
+  onSeatedRef.current = onSeated;
+  const dockedRef = useRef(dockedChannelId);
+  dockedRef.current = dockedChannelId;
+
+  const guard = useCallback(
+    (channelId: string, run: () => Promise<void> | void) => {
+      if (
+        shouldConfirmVoiceJoin({
+          dockedChannelId: dockedRef.current,
+          channelId,
+        })
+      ) {
+        setPending({ channelId, run });
+        return;
+      }
+      void run();
+    },
+    [],
+  );
+
+  const confirm = useCallback(() => {
+    const parked = pendingRef.current;
+    if (!parked) {
+      return;
+    }
+    setPending(null);
+    void runGuardedVoiceJoin({
+      run: parked.run,
+      seated: () => seatedRef.current(parked.channelId),
+      onSeated: () => onSeatedRef.current(),
+    });
+  }, []);
+
+  const cancel = useCallback(() => setPending(null), []);
+
+  return { pendingChannelId: pending?.channelId ?? null, guard, confirm, cancel };
+}
+
 /** Bottom-right, clear of the composer, and never wider than a phone. */
 export const WATCH_DOCK_BOX =
   "fixed bottom-20 right-3 z-40 w-[15rem] max-w-[calc(100vw-1.5rem)] sm:bottom-24 sm:right-4 sm:w-[20rem] " +

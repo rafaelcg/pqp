@@ -404,7 +404,7 @@ import {
 } from "@/components/voice/watch-stage";
 import {
   WatchStageOutlet,
-  shouldConfirmVoiceJoin,
+  useVoiceJoinGuard,
   useWatchDock,
   type WatchDockSession,
 } from "@/components/voice/watch-dock";
@@ -3252,11 +3252,20 @@ function MainAppContent({
     inCallChannelId:
       voiceState.status === "idle" ? null : voiceState.voiceChannelId,
   });
-  /** Set while a join is waiting on "you will lose the stream" being answered. */
-  const [pendingVoiceJoin, setPendingVoiceJoin] = useState<{
-    channelId: string;
-    run: () => void;
-  } | null>(null);
+  /**
+   * The confirm in front of a join that would cost the docked stream, and the
+   * rule that the stream is only given up once the seat is real. `seated` is
+   * read from the controller rather than from `voiceState`, because this is
+   * asked the moment the join settles and a render has not happened yet.
+   */
+  const joinGuard = useVoiceJoinGuard({
+    dockedChannelId: watchDock.dockedChannelId,
+    seated: (channelId) => {
+      const current = voice.getState();
+      return current.voiceChannelId === channelId && current.status !== "idle";
+    },
+    onSeated: watchDock.dismiss,
+  });
 
   const selectChannel = useCallback(
     async (channelId: string, serverIdOverride?: string) => {
@@ -4161,7 +4170,7 @@ function MainAppContent({
   function handleWatchPartyJoinAsAudience(channelId: string) {
     // Same rule as any other seat: a docked stream from another room is lost
     // by taking one, so it is asked about before it happens.
-    guardVoiceJoin(channelId, () => void joinWatchPartyAsAudience(channelId));
+    guardVoiceJoin(channelId, () => joinWatchPartyAsAudience(channelId));
   }
 
   async function joinWatchPartyAsAudience(channelId: string) {
@@ -4273,17 +4282,11 @@ function MainAppContent({
    * stage takes the picture back anyway. Everything else keeps today's
    * behaviour: no dialog, no extra click.
    */
-  function guardVoiceJoin(channelId: string, run: () => void) {
-    if (
-      shouldConfirmVoiceJoin({
-        dockedChannelId: watchDock.dockedChannelId,
-        channelId,
-      })
-    ) {
-      setPendingVoiceJoin({ channelId, run });
-      return;
-    }
-    run();
+  function guardVoiceJoin(
+    channelId: string,
+    run: () => Promise<void> | void,
+  ) {
+    joinGuard.guard(channelId, run);
   }
 
   /**
@@ -4323,7 +4326,7 @@ function MainAppContent({
     ) {
       return;
     }
-    guardVoiceJoin(channelId, () => void handleJoinVoice(channelId));
+    guardVoiceJoin(channelId, () => handleJoinVoice(channelId));
   }
 
   function voiceModerationError(err: unknown, fallback: string): string {
@@ -5851,9 +5854,8 @@ function MainAppContent({
                   aria-label={t("voice.join")}
                   className="flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success"
                   onClick={() =>
-                    guardVoiceJoin(
-                      selectedChannel.id,
-                      () => void handleJoinVoice(selectedChannel.id),
+                    guardVoiceJoin(selectedChannel.id, () =>
+                      handleJoinVoice(selectedChannel.id),
                     )
                   }
                 >
@@ -7662,9 +7664,8 @@ function MainAppContent({
                   : () => {
                       const channelId = watchDock.session?.channelId;
                       if (channelId) {
-                        guardVoiceJoin(
-                          channelId,
-                          () => void handleJoinVoice(channelId),
+                        guardVoiceJoin(channelId, () =>
+                          handleJoinVoice(channelId),
                         );
                       }
                     }
@@ -7705,23 +7706,19 @@ function MainAppContent({
           )
         : null}
 
+      {/* The mini player is NOT taken down on the press. A join that is
+          refused, times out or is raced by a leave would otherwise cost the
+          person both the call and the film they answered a question to keep.
+          `useVoiceJoinGuard` closes this dialog first, runs the join, and
+          dismisses the dock only once the seat is real. */}
       <ConfirmDialog
-        open={pendingVoiceJoin !== null}
+        open={joinGuard.pendingChannelId !== null}
         title={t("voice.watch.mini.joinConfirm.title")}
         description={t("voice.watch.mini.joinConfirm.body")}
         confirmLabel={t("voice.watch.mini.joinConfirm.confirm")}
         destructive={false}
-        onConfirm={() => {
-          const pending = pendingVoiceJoin;
-          if (!pending) {
-            return;
-          }
-          // The seat is what ends the stream, so the mini player goes with the
-          // answer rather than waiting for the join to land.
-          watchDock.dismiss();
-          pending.run();
-        }}
-        onClose={() => setPendingVoiceJoin(null)}
+        onConfirm={joinGuard.confirm}
+        onClose={joinGuard.cancel}
       />
 
       {ratableCall && (
