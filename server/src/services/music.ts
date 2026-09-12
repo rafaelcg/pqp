@@ -342,7 +342,20 @@ export async function resolveYouTubePlaylist(
   }
   // A `watch?v=X&list=Y` link starts the list at X, like YouTube does.
   const start = startVideoId ? items.findIndex((item) => item.videoId === startVideoId) : -1;
-  const ordered = start > 0 ? [...items.slice(start), ...items.slice(0, start)] : items;
+  let ordered = start > 0 ? [...items.slice(start), ...items.slice(0, start)] : items;
+  if (startVideoId && start < 0) {
+    // The linked video is past what one page holds (a list longer than
+    // PLAYLIST_MAX). It still goes first: that is what the person clicked.
+    try {
+      const first = await resolveYouTube(startVideoId, null);
+      ordered = [
+        { videoId: first.videoId, title: first.title, thumbnailUrl: first.thumbnailUrl },
+        ...items.filter((item) => item.videoId !== startVideoId),
+      ];
+    } catch {
+      // Unresolvable start video: the list from the top is still a list.
+    }
+  }
   return {
     listName: name,
     tracks: ordered.slice(0, PLAYLIST_MAX).map((item) => ({

@@ -3737,14 +3737,19 @@ BEGIN
     RETURN;
   END IF;
 
-  UPDATE roles
-     SET permissions = permissions | manage_music
-   WHERE NOT is_everyone
-     AND ((permissions & mute_members) = mute_members
-          OR system_key = 'moderator');
-
+  -- Only the servers whose cargos actually changed get a version bump.
+  WITH changed AS (
+    UPDATE roles
+       SET permissions = permissions | manage_music
+     WHERE NOT is_everyone
+       AND (permissions & manage_music) = 0
+       AND ((permissions & mute_members) = mute_members
+            OR system_key = 'moderator')
+    RETURNING server_id
+  )
   UPDATE servers
-     SET permissions_version = permissions_version + 1;
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (SELECT DISTINCT server_id FROM changed);
 
   INSERT INTO data_migrations (name) VALUES ('manage_music_bit_2026_09');
 END $$;

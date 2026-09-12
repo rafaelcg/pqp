@@ -162,6 +162,7 @@ import {
   getWatchPartyState,
   resetWatchPartyLimits,
 } from "./watch-party.js";
+import { musicWriteAllowed } from "@pqp/shared";
 import {
   applyMusicWrite,
   channelMusicTrack,
@@ -3358,19 +3359,14 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
     }),
   );
   // And every room with music this user may view, for the sidebar row.
-  await Promise.all(
-    musicChannels().map(async (channelId) => {
-      try {
-        if (!(await canAccessChannel(channelId, user.id))) {
-          return;
-        }
-      } catch (error) {
-        console.error("[voice] channel-music membership check failed:", error);
-        return;
-      }
+  // Off the audience cache (`getChannelAudience`, one query per channel per
+  // TTL, shared by every socket), not one access query per socket per room.
+  for (const channelId of musicChannels()) {
+    const audience = await getChannelAudience(channelId).catch(() => null);
+    if (audience?.has(user.id)) {
       send(socket, channelMusicFrame(channelId));
-    }),
-  );
+    }
+  }
 }
 
 type VoiceResumePlan =
@@ -4788,6 +4784,27 @@ export async function handleVoiceMessage(
       return;
     }
     const before = channelMusicTrack(peer.voiceChannelId)?.videoId ?? null;
+    // A privileged write (one a plain member could not make) re-resolves
+    // MANAGE_MUSIC before it is trusted: the cached bit is refreshed when
+    // cargos change (`reevaluateVoiceSpeak`), and this is the belt to that
+    // brace, so a member stripped of the bit a moment ago cannot skip on a
+    // stale seat. Ordinary adds never pay for it.
+    if (
+      peer.canManageMusic &&
+      !musicWriteAllowed(getMusicState(peer.voiceChannelId), payload.state, {
+        userId: user.id,
+        canManage: false,
+        canAdd: peer.canSpeak,
+      })
+    ) {
+      try {
+        const channel = await getChannel(peer.voiceChannelId);
+        const grant = await resolveVoicePublish(channel, peer.voiceChannelId, user.id);
+        peer.canManageMusic = grant.canManageMusic;
+      } catch (error) {
+        console.error("[voice] music permission re-check failed:", error);
+      }
+    }
     const write = applyMusicWrite(peer.voiceChannelId, payload.state, {
       userId: user.id,
       canManage: peer.canManageMusic,
