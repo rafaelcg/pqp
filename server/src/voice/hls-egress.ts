@@ -253,7 +253,8 @@ const orphanStopBackoff = new Map<
  */
 let orphansStopped = 0;
 /**
- * Channels whose camera transcode died, and when another may start.
+ * Channels whose camera transcode died or was refused, and when another may
+ * start.
  *
  * WHY THERE HAS TO BE ONE. A dead camera is dropped by the health monitor,
  * which tells the room, which reconciles, which finds the presenter's camera
@@ -268,6 +269,11 @@ let orphansStopped = 0;
  * back. Cleared the moment the presenter actually closes their camera, so
  * "turn it off and on again" — which is the first thing anybody does when
  * something looks broken — works at once.
+ *
+ * It doubles as the refusal's quiet period. `pushLiveHls` runs on every roster
+ * event, so a full box with a camera published would re-price and re-log the
+ * same budget refusal every time anybody joined or left, for the whole party.
+ * Two minutes is also the right cadence at which to ask a busy box again.
  */
 const cameraCooldownUntil = new Map<string, number>();
 const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
@@ -2371,11 +2377,19 @@ async function reconcileCameraEgress(
     boxBudgetMbps: promotionBudgetMbps(),
   });
   if (!decision.start) {
+    // THE SAME COOLDOWN, and it is what keeps this off the log. `pushLiveHls`
+    // runs on every roster event, so a full box with a camera published would
+    // otherwise re-price and re-log the same refusal every time anybody joined
+    // or left the room, for the whole party. One line, then two minutes of
+    // quiet, then it asks again — which is also the right retry cadence for a
+    // box that may have freed up.
+    cameraCooldownUntil.set(channelId, Date.now() + CAMERA_COOLDOWN_MS);
     logEvent("voice.hlsCameraRefused", {
       channelId,
       refusal: decision.refusal,
       boxMbps: Math.round(decision.boxMbps),
       boxBudgetMbps: promotionBudgetMbps(),
+      retryInMs: CAMERA_COOLDOWN_MS,
     });
     return;
   }

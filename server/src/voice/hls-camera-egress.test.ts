@@ -356,6 +356,17 @@ describe("the presenter's camera, beside the ladder", () => {
       "voice.hlsCameraRefused",
       expect.objectContaining({ refusal: "box-budget" }),
     );
+
+    // ONCE, NOT ONCE PER ROSTER EVENT. `pushLiveHls` runs whenever anybody
+    // joins or leaves, so a full box with a camera published would re-price
+    // and re-log the same refusal for the whole party.
+    logEvent.mockClear();
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.anything(),
+    );
   });
 });
 
