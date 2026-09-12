@@ -481,6 +481,14 @@ describe("a quality chosen before the track exists", () => {
     ).toBe(60);
   });
 
+  it("publishes a 22 fps capture at 30, not at the wandering track stat", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen22", 720, 22));
+    expect(
+      encodingFor(Track.Source.ScreenShare)?.screenShareEncoding?.maxFramerate,
+    ).toBe(30);
+  });
+
   it("gives the two sources different numbers for the same choice", async () => {
     // Same word, different cost: a talking head is a static background with a
     // moving oval, a shared screen is full-frame motion and hard edges.

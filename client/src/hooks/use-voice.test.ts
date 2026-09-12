@@ -464,6 +464,20 @@ describe("screen share audio", () => {
     expect(displayMediaCalls[0]).not.toHaveProperty("preferCurrentTab");
   });
 
+  it("keeps tab audio when the 30 fps ladder lock is asked for", async () => {
+    displayMedia = async () => fakeCapture("cap-tab-30", true, "browser");
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(false, {
+      preferBrowserTab: true,
+      watchParty: true,
+      maxFrameRate: 30,
+    });
+
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+    expect(voice.getState().isSharingSystemAudio).toBe(false);
+    expect(voice.getState().isSharingScreen).toBe(true);
+  });
+
   it("flags a whole-screen share that carries sound", async () => {
     // The only surface that can be carrying everybody's voices, and the one
     // the UI says so about while it is live.
