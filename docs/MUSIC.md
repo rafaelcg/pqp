@@ -114,11 +114,47 @@ last resort, which is where the feature started. Metadata only: no stream
 URL is ever requested, which is the half of InnerTube that PO tokens guard.
 
 Around it: a per-user limiter (20 burst, then one every two seconds), an
-aggregate limiter (120 burst, two a second across everyone), a six-hour
-search cache, eight-second upstream timeouts, and no query string in an
-error message (the Data API key travels in one). Measured on 2026-09-12:
-a search under a second, a 50-track playlist under a second, a 25-track
-Spotify playlist in four seconds.
+upstream budget across everybody on the process (300 burst, 10 a second)
+charged per call to YouTube or Spotify rather than per request, so a cache
+hit costs nothing, a pasted link costs one and a 25-track Spotify list costs
+twenty-six; a six-hour search cache; eight-second upstream timeouts; and no
+query string in an error message (the Data API key travels in one).
+
+## Measured
+
+`tools/music-load/` holds the two harnesses. Run on 2026-09-12 against the
+local API and the real upstreams, from one address, over a home connection
+in São Paulo.
+
+**Link resolution** (`resolve-load.mjs`, 40 age-checked identities round-robin):
+
+| Scenario | Result |
+|---|---|
+| 100 unique searches, concurrency 10 | 100/100 OK, p50 364 ms, p95 523 ms, 25 req/s served |
+| the same 100 again | 100/100 from cache, p50 1 ms |
+| 60 unique searches, concurrency 20 | 60/60 OK, p50 385 ms, p95 505 ms, 44 req/s |
+| 10 YouTube playlists (50 items each), concurrency 10 | 10/10 OK, p50 409 ms, p95 1.2 s |
+| 5 Spotify playlists (25 tracks each, 130 upstream calls), concurrency 5 | 5/5 OK, p50 3.6 s, max 5.6 s |
+| 1.5 searches/s sustained for 3 minutes, all unique | 269/270 OK; the one failure was our own budget; p95 rose from about 500 to 690 ms over the run; no refusal from YouTube |
+
+The first run of the same harness had the budget charged per request and
+sized at 120 burst / 2 a second: it refused cache hits and a burst of sixty,
+which is how the numbers above came to set the current size.
+
+**Fan-out** (`ws-load.mjs`, 50 seats in one LiveKit room, one writer, a
+50-track queue, so a frame is about 16.7 KB before compression):
+
+| Writer rate | Echo latency at the 50 seats | Bytes per seat |
+|---|---|---|
+| 1 write/s | p50 6 ms, p95 10 ms, 10/10 echoed everywhere | 18 KB/s |
+| 5 writes/s | p50 5 ms, p95 9 ms, 50/50 echoed | 82 KB/s |
+| 10 writes/s | p50 5 ms, p95 8 ms, 70/100 echoed: the server coalesced 30 position-only writes past its budget, by design | 115 KB/s |
+
+Real rooms sit far below the first row: the only unprompted writer samples
+every ten seconds, so a 50-track queue costs each seat about 1.7 KB/s before
+compression. The frame is dominated by the queue itself (about 330 bytes a
+track); if that ever matters, the step is a delta frame for the queue, not a
+smaller cap.
 
 ## The client
 

@@ -1,4 +1,5 @@
 import { parseMusicInput, type MusicResolved } from "@pqp/shared";
+import { createRateLimiter } from "../lib/rate-limit.js";
 import { innertubePlaylist, innertubeSearch } from "./innertube.js";
 
 /**
@@ -15,7 +16,7 @@ import { innertubePlaylist, innertubeSearch } from "./innertube.js";
 
 export class MusicResolveError extends Error {
   constructor(
-    readonly code: "unsupported" | "not_found" | "upstream",
+    readonly code: "unsupported" | "not_found" | "upstream" | "busy",
     message: string,
   ) {
     super(message);
@@ -25,7 +26,29 @@ export class MusicResolveError extends Error {
 
 const FETCH_TIMEOUT_MS = 8_000;
 
+/**
+ * THE UPSTREAM BUDGET, across everybody on this process. Charged per call
+ * to YouTube or Spotify, not per request: a cache hit costs nothing, a
+ * pasted link costs one, a 25-track Spotify list costs twenty-six. Sized
+ * from the load run of 2026-09-12 (`docs/MUSIC.md`), where InnerTube
+ * answered ten concurrent searches at p95 446 ms with no refusals; the
+ * ceiling here is ours, kept under whatever YouTube's is.
+ */
+const upstreamBudget = createRateLimiter({ capacity: 300, refillPerSecond: 10 });
+
+export function takeUpstreamBudget(): void {
+  if (!upstreamBudget.take("all")) {
+    throw new MusicResolveError("busy", "upstream budget spent");
+  }
+}
+
+/** Test hook. */
+export function resetUpstreamBudget(): void {
+  upstreamBudget.reset();
+}
+
 async function fetchText(url: string, headers: Record<string, string> = {}): Promise<string> {
+  takeUpstreamBudget();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -244,6 +267,7 @@ export async function searchYouTube(query: string): Promise<MusicResolved> {
  */
 async function searchUnofficial(query: string): Promise<SearchHit | null> {
   try {
+    takeUpstreamBudget();
     const videos = await innertubeSearch(query, 5);
     if (videos && videos.length > 0) {
       const first = videos[0]!;
@@ -256,6 +280,9 @@ async function searchUnofficial(query: string): Promise<SearchHit | null> {
     }
     return null;
   } catch (error) {
+    if (error instanceof MusicResolveError) {
+      throw error;
+    }
     console.warn(
       "[music] innertube search failed, falling back to the results page:",
       error instanceof Error ? error.message : String(error),
@@ -363,12 +390,16 @@ export async function resolveYouTubePlaylist(
   } else {
     // InnerTube `browse` first; the playlist page only when every client failed.
     try {
+      takeUpstreamBudget();
       const list = await innertubePlaylist(listId, PLAYLIST_MAX);
       if (list) {
         items = list.videos;
         name = list.name;
       }
     } catch (error) {
+      if (error instanceof MusicResolveError) {
+        throw error;
+      }
       console.warn(
         "[music] innertube playlist failed, falling back to the page:",
         error instanceof Error ? error.message : String(error),
@@ -509,7 +540,7 @@ export async function resolveSpotifyList(
     try {
       found = await searchYouTube(query);
     } catch (error) {
-      if (error instanceof MusicResolveError && error.code === "not_found") {
+      if (error instanceof MusicResolveError && error.code !== "upstream") {
         return null;
       }
       await new Promise((resolve) => setTimeout(resolve, 800));

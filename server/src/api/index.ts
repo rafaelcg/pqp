@@ -2615,18 +2615,12 @@ router.get("/api/gifs/trending", async (ctx) => {
  * search fans out to YouTube (and to Spotify for a Spotify link).
  */
 const musicResolveLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 0.5 });
-/** Across everybody: what one process may ask YouTube and Spotify per minute. */
-const musicResolveGlobalLimiter = createRateLimiter({ capacity: 120, refillPerSecond: 2 });
 
 router.get("/api/music/resolve", async (ctx) => {
   const key = `user:${ctx.user.id}`;
   if (!musicResolveLimiter.take(key)) {
     ctx.res.setHeader("Retry-After", String(musicResolveLimiter.retryAfter(key)));
     throw new HttpError(429, "Slow down");
-  }
-  if (!musicResolveGlobalLimiter.take("all")) {
-    ctx.res.setHeader("Retry-After", String(musicResolveGlobalLimiter.retryAfter("all")));
-    throw new HttpError(429, "Music search is busy, try again in a moment");
   }
   const query = (ctx.url.searchParams.get("q") ?? "").trim();
   if (!query) {
@@ -2641,6 +2635,10 @@ router.get("/api/music/resolve", async (ctx) => {
     return { track: tracks[0], tracks, listName };
   } catch (error) {
     if (error instanceof MusicResolveError) {
+      if (error.code === "busy") {
+        ctx.res.setHeader("Retry-After", "5");
+        throw new HttpError(429, "Music search is busy, try again in a moment");
+      }
       if (error.code === "upstream") {
         console.error("[music] upstream failed:", error.message);
         throw new HttpError(502, "Music provider unavailable");
