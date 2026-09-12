@@ -48,6 +48,7 @@ import { LivePill } from "@/components/watch-party/live-pill";
 import { browserShareCapabilities, type ShareOutcome } from "@/lib/share-handle";
 import { shareWatchParty, watchPartyShareUrl } from "@/lib/share-watch-party";
 import { WatchPartyTransmission } from "@/components/watch-party/watch-party-transmission";
+import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
@@ -1627,44 +1628,54 @@ function LiveSurface(
         <div
           data-testid="watch-party-waiting"
           data-watch-party-waiting={preparing ? "preparing" : "idle"}
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-black px-6 text-center"
+          className="relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden bg-black"
         >
-          <Radio
-            className={cn(
-              "h-7 w-7 text-danger",
-              preparing && "motion-safe:animate-pulse",
-            )}
-            aria-hidden
-          />
-          <p className="text-sm font-semibold text-paper">
-            {preparing
-              ? t("watchParty.live.preparing")
-              : t("watchParty.live.waiting")}
-          </p>
-          <p className="max-w-sm text-xs text-paper-muted">
-            {preparing
-              ? hostSide
-                ? t("watchParty.live.preparingHost")
-                : t("watchParty.live.preparingBody", {
-                    name: party.hostDisplayName,
-                  })
-              : hostSide
-                ? t("watchParty.live.waitingHost")
-                : t("watchParty.live.waitingBody", {
-                    name: party.hostDisplayName,
-                  })}
-          </p>
-          {hostSide && !preparing && props.onShareScreen && (
-            <Button
-              type="button"
-              className="mt-2"
-              onClick={() => void props.onShareScreen?.()}
-              data-watch-party-share-screen
-            >
-              <MonitorPlay className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              {t("watchParty.live.shareScreen")}
-            </Button>
-          )}
+          <StreamStartingSoon
+            caption={
+              preparing
+                ? t("watchParty.live.preparing")
+                : t("watchParty.live.waiting")
+            }
+          >
+            <div className="flex flex-col items-center gap-2 px-6 text-center">
+              <Radio
+                className={cn(
+                  "h-5 w-5 text-danger",
+                  preparing && "motion-safe:animate-pulse",
+                )}
+                aria-hidden
+              />
+              {/* The specific sentence, kept even though the headline and the
+                  caption above it already say "hang in there": a viewer who
+                  landed here after a reload has no idea yet whether anyone is
+                  even sharing, and the host needs their own line telling
+                  them what to do about it. Neither is the fun copy's job. */}
+              <p className="max-w-sm text-xs text-paper-muted">
+                {preparing
+                  ? hostSide
+                    ? t("watchParty.live.preparingHost")
+                    : t("watchParty.live.preparingBody", {
+                        name: party.hostDisplayName,
+                      })
+                  : hostSide
+                    ? t("watchParty.live.waitingHost")
+                    : t("watchParty.live.waitingBody", {
+                        name: party.hostDisplayName,
+                      })}
+              </p>
+              {hostSide && !preparing && props.onShareScreen && (
+                <Button
+                  type="button"
+                  className="mt-2"
+                  onClick={() => void props.onShareScreen?.()}
+                  data-watch-party-share-screen
+                >
+                  <MonitorPlay className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                  {t("watchParty.live.shareScreen")}
+                </Button>
+              )}
+            </div>
+          </StreamStartingSoon>
         </div>
       </div>
     );

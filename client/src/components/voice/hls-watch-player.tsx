@@ -79,6 +79,7 @@ import {
   useIdleChrome,
 } from "@/hooks/use-idle-chrome";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { cn } from "@/lib/utils";
 
 const STALL_TICK_MS = 1_000;
@@ -945,11 +946,13 @@ export function HlsWatchPlayer({
           data-testid={
             phase === "reconnecting" ? "hls-reconnecting" : "hls-buffering"
           }
-          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/40 text-sm text-paper-muted"
+          className="pointer-events-none absolute inset-0 z-10"
         >
-          {phase === "reconnecting"
-            ? t("voice.hls.stalled")
-            : t("voice.hls.buffering")}
+          <StreamStartingSoon
+            caption={
+              phase === "reconnecting" ? t("voice.hls.stalled") : undefined
+            }
+          />
         </div>
       ) : null}
       {cinema ? (

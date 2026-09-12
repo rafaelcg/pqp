@@ -7,6 +7,7 @@ import { fetchChannelLive } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
+import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
 
 /**
@@ -172,15 +173,26 @@ function EndedWatchStage({
     <div className="flex h-full w-full flex-col bg-black">
       <div
         data-testid="watch-stage-ended"
-        className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-1 px-6 text-center"
+        className={cn(
+          "relative flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-1 px-6 text-center",
+          !ended && "overflow-hidden",
+        )}
       >
-        <p className="text-sm font-semibold text-paper">
-          {ended ? t("voice.watch.ended") : t("voice.hls.buffering")}
-        </p>
-        {ended && (
-          <p className="text-xs text-paper-muted">
-            {t("voice.watch.endedHint")}
-          </p>
+        {ended ? (
+          <>
+            <p className="text-sm font-semibold text-paper">
+              {t("voice.watch.ended")}
+            </p>
+            <p className="text-xs text-paper-muted">
+              {t("voice.watch.endedHint")}
+            </p>
+          </>
+        ) : (
+          // Announced/live, still no playable frame: the same holding screen
+          // the player shows once it has a URL to buffer, so a viewer who
+          // opens the channel before the egress has one sees the same "on
+          // its way" screen rather than a bare loading sentence.
+          <StreamStartingSoon />
         )}
       </div>
       <div className="flex shrink-0 items-center justify-between gap-3 px-3 py-2">
