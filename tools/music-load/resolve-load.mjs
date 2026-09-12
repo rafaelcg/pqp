@@ -27,7 +27,7 @@ async function one(q) {
     const res = await fetch(`${API}/api/music/resolve?q=${encodeURIComponent(q)}`, { headers: headers() });
     const ms = performance.now() - t0;
     let body = null;
-    try { body = await res.json(); } catch {}
+    try { body = await res.json(); } catch { body = null; }
     return { ms, status: res.status, tracks: body?.tracks?.length ?? 0, error: body?.error ?? null };
   } catch (e) {
     return { ms: performance.now() - t0, status: 0, tracks: 0, error: String(e) };
