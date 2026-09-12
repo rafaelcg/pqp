@@ -6545,7 +6545,8 @@ function MainAppContent({
           canPurgeMessages: Boolean(
             selectedChannel &&
               selectedChannel.kind === "server" &&
-              selectedChannel.type === "text" &&
+              (selectedChannel.type === "text" ||
+                isWatchPartyChannelType(selectedChannel.type)) &&
               perms.can(Permission.MANAGE_MESSAGES, selectedChannel.id),
           ),
           openPurgeDialog: (count) => {
