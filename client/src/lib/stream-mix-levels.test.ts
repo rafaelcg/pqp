@@ -3,8 +3,10 @@ import {
   DEFAULT_DISPLAY_GAIN,
   DEFAULT_MIC_GAIN,
   DISPLAY_GAIN_RANGE,
+  formatGainDb,
   MIC_GAIN_RANGE,
   readStreamMixLevels,
+  resetStreamMixLevels,
   writeStreamMixLevels,
 } from "./stream-mix-levels";
 
@@ -92,5 +94,38 @@ describe("stream mix levels", () => {
       micGain: 1.4,
       displayGain: DEFAULT_DISPLAY_GAIN,
     });
+  });
+
+  it("restores both levels to their defaults and returns them", () => {
+    writeStreamMixLevels({ micGain: 3.5, displayGain: 0.3 });
+    expect(resetStreamMixLevels()).toEqual({
+      micGain: DEFAULT_MIC_GAIN,
+      displayGain: DEFAULT_DISPLAY_GAIN,
+    });
+    expect(readStreamMixLevels()).toEqual({
+      micGain: DEFAULT_MIC_GAIN,
+      displayGain: DEFAULT_DISPLAY_GAIN,
+    });
+  });
+});
+
+describe("formatGainDb", () => {
+  it("formats the default mic gain as +6.0 dB", () => {
+    expect(formatGainDb(DEFAULT_MIC_GAIN)).toBe("+6.0 dB");
+  });
+
+  it("formats the default display gain as -3.1 dB", () => {
+    expect(formatGainDb(DEFAULT_DISPLAY_GAIN)).toBe("-3.1 dB");
+  });
+
+  it("formats unity gain as 0.0 dB, with no sign", () => {
+    expect(formatGainDb(1)).toBe("0.0 dB");
+  });
+
+  it("formats the range extremes", () => {
+    expect(formatGainDb(MIC_GAIN_RANGE.max)).toBe("+12.0 dB");
+    expect(formatGainDb(MIC_GAIN_RANGE.min)).toBe("-6.0 dB");
+    expect(formatGainDb(DISPLAY_GAIN_RANGE.min)).toBe("-12.0 dB");
+    expect(formatGainDb(DISPLAY_GAIN_RANGE.max)).toBe("0.0 dB");
   });
 });

@@ -88,3 +88,27 @@ export function writeStreamMixLevels(levels: Partial<StreamMixLevels>): void {
     // Nothing to do: the control still works for this session.
   }
 }
+
+/** Both branches back to their defaults, persisted and returned for the caller to apply live. */
+export function resetStreamMixLevels(): StreamMixLevels {
+  const levels: StreamMixLevels = {
+    micGain: DEFAULT_MIC_GAIN,
+    displayGain: DEFAULT_DISPLAY_GAIN,
+  };
+  writeStreamMixLevels(levels);
+  return levels;
+}
+
+/**
+ * A linear `GainNode` value as the dB the mixer sliders show. `GainNode.gain`
+ * takes a linear factor, but nobody reasons about a mic in "x2.0" — the
+ * sliders' own numbers are in `stream-mix-levels.ts` doc comment above for
+ * that reason, and this is the same conversion for display: `20 * log10(v)`,
+ * one decimal, signed so +6.0 dB and -3.1 dB read as boosted/cut at a glance.
+ * `-0` rounds to a plain "0.0 dB" (`toFixed` already drops the sign on zero).
+ */
+export function formatGainDb(gain: number): string {
+  const db = Math.round(20 * Math.log10(gain) * 10) / 10;
+  const sign = db > 0 ? "+" : "";
+  return `${sign}${db.toFixed(1)} dB`;
+}
