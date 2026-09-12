@@ -175,3 +175,59 @@ describe("watchAudienceCount", () => {
     expect(watchAudienceCount({ stream: null, watching: 9 }, [seat("a")])).toBe(0);
   });
 });
+
+/**
+ * The mini player.
+ *
+ * Same component and the same `HlsWatchPlayer` inside it, one prop apart, so
+ * the dock never costs a remount. What changes is the chrome: a 240px box has
+ * room for the way back, the way out and mute, and for none of the stage's
+ * badges, quality menu or join.
+ */
+describe("WatchStage docked", () => {
+  const hlsUrl = "https://api.example.test/api/voice/hls-playlist/c1/1?t=tok";
+
+  const render = (props: Partial<Parameters<typeof WatchStage>[0]> = {}) =>
+    renderToStaticMarkup(
+      <WatchStage
+        hlsUrl={hlsUrl}
+        audienceCount={4}
+        ended={false}
+        onJoin={() => {}}
+        onLeaveParty={() => {}}
+        {...props}
+      />,
+    );
+
+  it("offers return, close, mute and the picture itself", () => {
+    const html = render({ docked: true, onReturn: () => {}, onDismiss: () => {} });
+    expect(html).toContain('data-testid="watch-mini-return"');
+    expect(html).toContain('data-testid="watch-mini-close"');
+    expect(html).toContain('data-testid="hls-mini-mute"');
+    expect(html).toContain('data-testid="watch-mini-picture"');
+    expect(html).toContain("<video");
+  });
+
+  it("drops the stage chrome a corner box cannot carry", () => {
+    const html = render({ docked: true, onReturn: () => {}, onDismiss: () => {} });
+    // The expensive offer, the badges and fullscreen all stay on the stage.
+    expect(html).not.toContain('data-testid="watch-stage-join"');
+    expect(html).not.toContain('data-testid="watch-stage-leave"');
+    expect(html).not.toContain('data-testid="watch-stage-live"');
+    expect(html).not.toContain('data-testid="watch-stage-fullscreen"');
+    expect(html).not.toContain('data-testid="hls-volume"');
+  });
+
+  it("shows none of it on the ordinary stage", () => {
+    const html = render({
+      fullscreen: { active: false, toggle: () => {} },
+    });
+    expect(html).not.toContain('data-testid="watch-mini-return"');
+    expect(html).not.toContain('data-testid="watch-mini-close"');
+    expect(html).not.toContain('data-testid="hls-mini-chrome"');
+    expect(html).not.toContain('data-testid="watch-mini-picture"');
+    // And the stage keeps everything it had.
+    expect(html).toContain('data-testid="watch-stage-join"');
+    expect(html).toContain('data-testid="watch-stage-live"');
+  });
+});

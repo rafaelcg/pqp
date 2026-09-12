@@ -18,6 +18,7 @@ import {
   Video,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   connectionProviderFromPath,
@@ -401,6 +402,12 @@ import {
   WatchChannelStage,
   watchAudienceCount,
 } from "@/components/voice/watch-stage";
+import {
+  WatchStageOutlet,
+  useVoiceJoinGuard,
+  useWatchDock,
+  type WatchDockSession,
+} from "@/components/voice/watch-dock";
 import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
 import { ShareAudioPrompt } from "@/components/voice/share-audio-prompt";
 import {
@@ -3203,6 +3210,63 @@ function MainAppContent({
     [channels],
   );
 
+  /**
+   * THE STREAM FOLLOWS THE VIEWER OUT OF THE CHANNEL.
+   *
+   * A seatless viewer who wants to read the chat in another channel used to
+   * have to choose: the watch stage is mounted by the selected channel, so
+   * clicking anything else destroyed hls.js and coming back cost a fresh
+   * attach, a fresh ladder negotiation and the buffering that goes with it.
+   * `watch-dock.tsx` mounts the surface once, at the root of this component,
+   * and MOVES it between the channel pane and a corner box. The candidate is
+   * "the voice room that is open right now"; a stream is not required to latch
+   * it, because the stage itself is what asks the API whether one is running.
+   */
+  const watchDockCandidate = useMemo<WatchDockSession | null>(() => {
+    if (selection.kind !== "server" || !selectedChannelId) {
+      return null;
+    }
+    const channel = channels.find((one) => one.id === selectedChannelId);
+    if (
+      !channel ||
+      channel.kind !== "server" ||
+      !isVoiceRoomChannelType(channel.type)
+    ) {
+      return null;
+    }
+    const server = servers.find((one) => one.id === channel.serverId);
+    return {
+      channelId: channel.id,
+      channelName: channel.name,
+      serverId: channel.serverId,
+      serverName: server?.name ?? null,
+      serverIconUrl: server?.iconUrl ?? null,
+      isWatchParty:
+        isWatchPartyChannelType(channel.type) && isWatchPartyChannelsEnabled(),
+    };
+  }, [channels, selectedChannelId, selection.kind, servers]);
+  const watchDock = useWatchDock({
+    selectedChannelId,
+    candidate: watchDockCandidate,
+    channelLive: voiceState.channelLive,
+    inCallChannelId:
+      voiceState.status === "idle" ? null : voiceState.voiceChannelId,
+  });
+  /**
+   * The confirm in front of a join that would cost the docked stream, and the
+   * rule that the stream is only given up once the seat is real. `seated` is
+   * read from the controller rather than from `voiceState`, because this is
+   * asked the moment the join settles and a render has not happened yet.
+   */
+  const joinGuard = useVoiceJoinGuard({
+    dockedChannelId: watchDock.dockedChannelId,
+    seated: (channelId) => {
+      const current = voice.getState();
+      return current.voiceChannelId === channelId && current.status !== "idle";
+    },
+    onSeated: watchDock.dismiss,
+  });
+
   const selectChannel = useCallback(
     async (channelId: string, serverIdOverride?: string) => {
       // The override matters when a server was only just chosen: `selection` is
@@ -4103,7 +4167,13 @@ function MainAppContent({
    * sem microfone" banner: nothing was asked for, so nothing was refused.
    * `voice.takeTheMicrophone()` is the deliberate second act.
    */
-  async function handleWatchPartyJoinAsAudience(channelId: string) {
+  function handleWatchPartyJoinAsAudience(channelId: string) {
+    // Same rule as any other seat: a docked stream from another room is lost
+    // by taking one, so it is asked about before it happens.
+    guardVoiceJoin(channelId, () => joinWatchPartyAsAudience(channelId));
+  }
+
+  async function joinWatchPartyAsAudience(channelId: string) {
     voiceServerIdRef.current = selectedServerId;
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
@@ -4201,6 +4271,47 @@ function MainAppContent({
     await selectChannel(channelId);
   }
 
+  /**
+   * A SEAT COSTS THE FILM, SO ASK FIRST.
+   *
+   * Joining a voice room is joining THAT room: the docked stream belongs to
+   * another one and the mini player goes with it. Somebody halfway through a
+   * watch party should not lose it to a click on a channel row they meant as
+   * navigation. Only asked while a stream is actually docked and playing
+   * (`dockedChannelId`), and never for the room being watched, where the
+   * stage takes the picture back anyway. Everything else keeps today's
+   * behaviour: no dialog, no extra click.
+   */
+  function guardVoiceJoin(
+    channelId: string,
+    run: () => Promise<void> | void,
+  ) {
+    joinGuard.guard(channelId, run);
+  }
+
+  /**
+   * The mini player's way home.
+   *
+   * Same server: an ordinary channel select, which is all the stage needs to
+   * take the picture back (the surface is never remounted, so there is nothing
+   * to reload). Another server: the route applier, because the channel is not
+   * in `channels` any more and switching the rail is its job, not this one's.
+   */
+  function returnToWatchChannel() {
+    const session = watchDock.session;
+    if (!session) {
+      return;
+    }
+    if (
+      session.serverId &&
+      !(selection.kind === "server" && selection.serverId === session.serverId)
+    ) {
+      void applyChannelRoute(session.serverId, session.channelId);
+      return;
+    }
+    void selectChannel(session.channelId, session.serverId ?? undefined);
+  }
+
   /** Sidebar: open the channel and join, unless already in it. */
   function handleJoinVoiceFromList(channelId: string) {
     void selectChannel(channelId);
@@ -4215,7 +4326,7 @@ function MainAppContent({
     ) {
       return;
     }
-    void handleJoinVoice(channelId);
+    guardVoiceJoin(channelId, () => handleJoinVoice(channelId));
   }
 
   function voiceModerationError(err: unknown, fallback: string): string {
@@ -5742,7 +5853,11 @@ function MainAppContent({
                   type="button"
                   aria-label={t("voice.join")}
                   className="flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success"
-                  onClick={() => void handleJoinVoice(selectedChannel.id)}
+                  onClick={() =>
+                    guardVoiceJoin(selectedChannel.id, () =>
+                      handleJoinVoice(selectedChannel.id),
+                    )
+                  }
                 >
                   <Phone className="h-3.5 w-3.5" />
                   {t("voice.join")}
@@ -6025,10 +6140,10 @@ function MainAppContent({
               handleWatchPartyCohost(userId, false)
             }
             onJoinCall={() =>
-              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+              handleWatchPartyJoinAsAudience(selectedChannel.id)
             }
             onWatchAsAudience={() =>
-              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+              handleWatchPartyJoinAsAudience(selectedChannel.id)
             }
             onTakeTheMicrophone={() => void voice.takeTheMicrophone()}
             onStageAction={handleWatchPartyStage}
@@ -6140,10 +6255,10 @@ function MainAppContent({
               handleWatchPartyCohost(userId, false)
             }
             onJoinCall={() =>
-              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+              handleWatchPartyJoinAsAudience(selectedChannel.id)
             }
             onWatchAsAudience={() =>
-              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+              handleWatchPartyJoinAsAudience(selectedChannel.id)
             }
             onTakeTheMicrophone={() => void voice.takeTheMicrophone()}
             onStageAction={handleWatchPartyStage}
@@ -6182,51 +6297,15 @@ function MainAppContent({
             onShapeChange={handleWatchPartyShape}
           />
         )}
-      {selectedChannel.kind === "server" &&
-        isVoiceRoomChannelType(selectedChannel.type) &&
-        user && (
-          <WatchChannelStage
-            fill={splitState.active}
-            onShapeChange={handleWatchStageShape}
-            channelId={selectedChannel.id}
-            channelName={selectedChannel.name}
-            serverName={selectedServer?.name ?? null}
-            serverIconUrl={selectedServer?.iconUrl ?? null}
-            voiceState={voiceState}
-            /* The party bar owns the join in a watch party room; a plain
-               voice channel with a share going out has no bar, so there this
-               is still the only way in. One control, not three. */
-            onJoin={
-              isWatchPartyChannelType(selectedChannel.type) &&
-              isWatchPartyChannelsEnabled()
-                ? undefined
-                : () => void handleJoinVoice(selectedChannel.id)
-            }
-            /* STOPPING WATCHING IS LEAVING THE ROOM, and only this component
-               knows where to go instead. Watching starts by itself when the
-               channel is opened, which is right; what was missing is any way
-               to stop, so a person could not tell whether they were watching,
-               in the call, both or neither, and could not end any of it. The
-               first text channel is where the server's conversation lives, so
-               it is where "not watching any more" lands. */
-            onLeaveParty={
-              firstTextChannelId
-                ? () => {
-                    if (voiceState.voiceChannelId === selectedChannel.id) {
-                      voice.leave();
-                    }
-                    void selectChannel(firstTextChannelId);
-                  }
-                : undefined
-            }
-            onSetWatchingLive={(channelId, watching) =>
-              voice.setWatchingLive(channelId, watching)
-            }
-            onSeedChannelLive={(channelId, live) =>
-              voice.seedChannelLive(channelId, live)
-            }
-          />
-        )}
+      {/* THE STAGE IS NOT MOUNTED HERE ANY MORE, only addressed. The watch
+          surface lives at the root of this component so that clicking another
+          channel cannot unmount it (and destroy hls.js with it); this is the
+          hole it is teleported into while its own channel is the open one.
+          `display: contents`, so the pane measures exactly what it did
+          before. See `watch-dock.tsx`. */}
+      {watchDock.placement === "stage" && user && (
+        <WatchStageOutlet host={watchDock.host} home={watchDock.dockRef} />
+      )}
       {selectedChannel.kind === "server" &&
         isVoiceRoomChannelType(selectedChannel.type) &&
         user && (
@@ -7555,6 +7634,91 @@ function MainAppContent({
           void refreshAfterJoin(result.serverId);
         }}
         onFailed={() => setAppError(t("qgHint.failed"))}
+      />
+
+      {/* The dock the watch surface falls back to whenever no channel pane is
+          holding it. An empty anchor: the surface's own box is `fixed`, so
+          this contributes nothing to the layout. */}
+      <div
+        ref={watchDock.dockRef}
+        data-testid="watch-dock-root"
+        className="contents"
+      />
+      {user && watchDock.session && watchDock.placement !== "gone"
+        ? createPortal(
+            <WatchChannelStage
+              docked={watchDock.placement === "dock"}
+              fill={splitState.active}
+              onShapeChange={handleWatchStageShape}
+              channelId={watchDock.session.channelId}
+              channelName={watchDock.session.channelName}
+              serverName={watchDock.session.serverName}
+              serverIconUrl={watchDock.session.serverIconUrl}
+              voiceState={voiceState}
+              /* The party bar owns the join in a watch party room; a plain
+                 voice channel with a share going out has no bar, so there
+                 this is still the only way in. One control, not three. */
+              onJoin={
+                watchDock.session.isWatchParty
+                  ? undefined
+                  : () => {
+                      const channelId = watchDock.session?.channelId;
+                      if (channelId) {
+                        guardVoiceJoin(channelId, () =>
+                          handleJoinVoice(channelId),
+                        );
+                      }
+                    }
+              }
+              /* STOPPING WATCHING IS LEAVING THE ROOM, and only this component
+                 knows where to go instead. Watching starts by itself when the
+                 channel is opened, which is right; what was missing is any way
+                 to stop, so a person could not tell whether they were
+                 watching, in the call, both or neither, and could not end any
+                 of it. The first text channel is where the server's
+                 conversation lives, so it is where "not watching any more"
+                 lands. */
+              onLeaveParty={
+                firstTextChannelId
+                  ? () => {
+                      const channelId = watchDock.session?.channelId;
+                      if (channelId && voiceState.voiceChannelId === channelId) {
+                        voice.leave();
+                      }
+                      // Parar de assistir means exactly that: without this the
+                      // stream would follow them into the text channel they
+                      // are being sent to, which is the opposite of the ask.
+                      watchDock.dismiss();
+                      void selectChannel(firstTextChannelId);
+                    }
+                  : undefined
+              }
+              onReturn={returnToWatchChannel}
+              onDismiss={watchDock.dismiss}
+              onSetWatchingLive={(channelId, watching) =>
+                voice.setWatchingLive(channelId, watching)
+              }
+              onSeedChannelLive={(channelId, live) =>
+                voice.seedChannelLive(channelId, live)
+              }
+            />,
+            watchDock.host,
+          )
+        : null}
+
+      {/* The mini player is NOT taken down on the press. A join that is
+          refused, times out or is raced by a leave would otherwise cost the
+          person both the call and the film they answered a question to keep.
+          `useVoiceJoinGuard` closes this dialog first, runs the join, and
+          dismisses the dock only once the seat is real. */}
+      <ConfirmDialog
+        open={joinGuard.pendingChannelId !== null}
+        title={t("voice.watch.mini.joinConfirm.title")}
+        description={t("voice.watch.mini.joinConfirm.body")}
+        confirmLabel={t("voice.watch.mini.joinConfirm.confirm")}
+        destructive={false}
+        onConfirm={joinGuard.confirm}
+        onClose={joinGuard.cancel}
       />
 
       {ratableCall && (

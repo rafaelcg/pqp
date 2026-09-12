@@ -177,9 +177,12 @@ export function HlsWatchPlayer({
   /**
    * `cinema` is the watch-party viewer: full-bleed film, Twitch-like bar that
    * autohides. `tile` is a share in the call grid, where that bar would eat
-   * the picture.
+   * the picture. `mini` is the docked player a viewer carries into another
+   * channel, where a 240px box has room for the film and almost nothing else:
+   * the caller's own `actions` in one corner, mute in the other, and none of
+   * the badges, fit, quality or picture-in-picture chrome a tile offers.
    */
-  layout?: "cinema" | "tile";
+  layout?: "cinema" | "tile" | "mini";
 }) {
   const { t } = useTranslation();
   const fit = useVideoFit("watch");
@@ -908,6 +911,7 @@ export function HlsWatchPlayer({
     "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal";
 
   const cinema = layout === "cinema";
+  const mini = layout === "mini";
 
   return (
     <div
@@ -1277,6 +1281,43 @@ export function HlsWatchPlayer({
           </div>
         </div>
       </div>
+      ) : mini ? (
+        /* The docked player. Everything a 240px box cannot afford is gone:
+           the live badge, the delay badge, the fit toggle, the quality menu
+           and picture-in-picture all live on the stage this came from, one
+           click away. What is left is what a person carrying a stream into
+           another channel actually reaches for. */
+        <div
+          data-testid="hls-mini-chrome"
+          className="pointer-events-none absolute inset-0 z-30 flex flex-col justify-between p-1.5"
+        >
+          <div className="pointer-events-auto flex items-start justify-end gap-1">
+            {actions}
+          </div>
+          <div className="pointer-events-auto flex items-end justify-end">
+            <button
+              type="button"
+              data-testid="hls-mini-mute"
+              aria-pressed={silenced}
+              aria-label={
+                silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")
+              }
+              title={
+                silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")
+              }
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-black/70 text-paper hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+              onClick={() => {
+                if (silenced) {
+                  restoreSound();
+                  return;
+                }
+                updateVolume(applyMuteToggle(volumePref, restoreRef.current));
+              }}
+            >
+              <VolumeGlyph volume={volumePref.volume} muted={silenced} />
+            </button>
+          </div>
+        </div>
       ) : (
         <>
           <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1.5">

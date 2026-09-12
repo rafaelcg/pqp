@@ -1244,6 +1244,76 @@ at all, so there is never a stream and the old code drew nothing. The change
 here does not conjure a picture out of a mesh room, but it does stop the
 silence.
 
+### The mini-player, and why it is a DOM move
+
+A seatless viewer who wanted to read another channel had to choose. The watch
+stage is mounted by the SELECTED channel (`WatchChannelStage` in
+`client/src/components/voice/watch-stage.tsx`), so clicking anything else
+unmounted it, destroyed hls.js with it, and coming back cost a fresh attach, a
+fresh ladder negotiation and the buffering that goes with both. That is the
+same cost `shouldAdoptHlsSource` exists to avoid on a restamped URL, paid on
+every click in the sidebar.
+
+So the surface is now mounted **once**, at the root of `App`, and portalled
+into a host element that is physically moved between two homes
+(`client/src/components/voice/watch-dock.tsx`):
+
+- the **stage outlet** inside the channel pane, while the watch channel is the
+  open one. `WatchStageOutlet` is a `display: contents` slot, so the pane
+  measures exactly the box it measured before any of this existed.
+- the **dock anchor** at the root of the app, while the viewer is anywhere
+  else: another text channel, a DM, Baú, another server.
+
+`appendChild` re-parents a node without destroying it, and because the move
+happens inside one synchronous task the `<video>` is back in the document
+before the HTML spec's "removed from a Document" step runs its pause. Same
+element, same hls.js instance, same buffer. The outlet's rescue is a
+`useLayoutEffect` CLEANUP on purpose: React runs those before it detaches the
+node being unmounted, which is the only window in which the host can be moved
+out of a dying subtree.
+
+`resolveWatchPlacement` is the whole decision, and it is a pure function with
+its own tests:
+
+| Placement | When |
+|---|---|
+| `stage` | the watch channel is the open one, dismissal or not |
+| `dock` | another channel is open, the stream is playing, they were watching it, they have not pressed X, and they hold no seat in that room |
+| `gone` | anything else |
+
+Two rules in there are the ones that keep it from being a pop-up. **`watched`**:
+only a stream that was playing while the viewer had the channel open follows
+them out of it, so a party that starts in a room they merely passed through
+does not throw a player over their chat. And a stream that **ends** while
+docked does not come back if the egress restarts ten minutes later; watching
+was a choice they made by opening the channel, and that choice is over.
+
+The mini player is bottom-right, above the composer, `z-40` (under dialogs at
+`z-[60]`, beside the call-rating prompt's own corner), ~320px on a desktop and
+~240px on a phone, never wider than the viewport. It carries the picture, mute,
+**Voltar pra transmissão** and an X; clicking the picture returns too. X is
+"not now", not "never": opening the channel again clears it. Everything else a
+stage offers, the live badge, the delay badge, fit, the quality menu,
+fullscreen, Entrar na call, stays on the stage, one click away. That is what
+`layout="mini"` means in `hls-watch-player.tsx`.
+
+### Taking a seat costs the film, so it is asked about
+
+Joining a voice room is joining THAT room, and the docked stream belongs to
+another one. A viewer halfway through a party should not lose it to a click on
+a channel row they meant as navigation, so while a player is actually docked,
+any join of a DIFFERENT room raises a confirm first: "Você vai entrar na voz e
+sair da transmissão. Continuar?" Continue joins and takes the mini player down;
+Cancel joins nothing and leaves it playing.
+
+`shouldConfirmVoiceJoin` is the rule and it is deliberately narrow. Nothing
+docked, no dialog: a viewer who is not watching gets exactly today's
+behaviour. Joining the very room being watched, no dialog either, because the
+stage takes the picture back rather than losing it. The guard sits on the three
+ways a person asks for a seat (the sidebar row, the channel header's Entrar,
+and the watch party panel's join-as-audience) rather than inside
+`voice.join`, so a host's own Ir ao vivo is untouched.
+
 ### Deliberately not done
 
 - **`stageMode` is enforced through the ordinary SPEAK overwrite**, not
