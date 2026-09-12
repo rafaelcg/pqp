@@ -19,6 +19,53 @@ import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
+ * THE CLOCK A SEGMENT URL IS SIGNED WITH, AND WHY IT IS NOT `Date.now()`.
+ *
+ * A SEGMENT'S URL MUST NOT CHANGE WHILE IT IS LISTED. RFC 8216 6.2.1 allows a
+ * live playlist to have entries appended and removed and nothing else: an
+ * entry that is still listed must be byte-identical to the one the player
+ * already read, because the URI IS the segment's identity. hls.js happens to
+ * survive a breach of that because it keys fragments by media sequence
+ * number, so the web audience never noticed. `AVPlayer` keys on the URI, as
+ * the specification says to, and so does every other native player.
+ *
+ * This proxy re-renders once a second per rendition and used to re-sign every
+ * line with the current clock, so the SAME segment came back under a
+ * different `X-Amz-Date` and a different signature on every refresh.
+ * Measured against the live party on 2026-09-12: `..._00230.ts` was listed as
+ * three different URLs in renders 1.5 s apart. To iOS that reads as fifteen
+ * unfamiliar segments every two seconds and nothing it has already fetched,
+ * so the download queue it had built is worthless on each reload, it refetches
+ * what is already in its buffer, and the picture hitches every ten to fifteen
+ * seconds while the refetch races the playhead. Web viewers of the same
+ * session were clean, which is the shape of pitfall #16 again: the failure
+ * lived only in the client our tests do not imitate.
+ *
+ * So the signing instant is quantised. Every render inside one bucket signs a
+ * given key to the same bytes, on this process and on any other, because the
+ * bucket is a function of the wall clock and the bucket credentials and of no
+ * per-process state. A segment therefore keeps one URL for its whole life in
+ * the window: a 30 s window on a 5 minute bucket crosses a boundary about
+ * once every ten windows, and that boundary re-signs everything once, which
+ * costs a cache miss and not a discontinuity.
+ *
+ * The bucket is a third of the TTL, so a URL handed out at the very end of
+ * its bucket still has two thirds of its life in front of it (600 s of the
+ * default 900). An operator who shortens `LIVE_HLS_URL_TTL_SECONDS` shortens
+ * the bucket with it, rather than being handed URLs that expired before they
+ * were sent.
+ */
+export const SEGMENT_URL_BUCKET_MAX_MS = 5 * 60_000;
+
+export function segmentSigningTime(now: number, ttlSeconds: number): Date {
+  const bucketMs = Math.max(
+    1_000,
+    Math.min(SEGMENT_URL_BUCKET_MAX_MS, Math.floor((ttlSeconds * 1_000) / 3)),
+  );
+  return new Date(Math.floor(now / bucketMs) * bucketMs);
+}
+
+/**
  * Per rendition, the segments this process has seen listed, so the window a
  * viewer gets is wider than the five entries the egress writes. Keyed like
  * the render cache and dropped with it. See `hls-live-window.ts`.
@@ -180,7 +227,7 @@ export async function buildSignedPlaylist(
       return cached.inflight;
     }
   }
-  const inflight = renderSignedPlaylist(channelId, startedAt, rung)
+  const inflight = renderSignedPlaylist(channelId, startedAt, rung, now)
     .then((body) => {
       // Stamped with the caller's clock, not a fresh read, so a test (and a
       // slow render) measure the TTL from the same instant the caller did.
@@ -200,7 +247,8 @@ export async function buildSignedPlaylist(
 async function renderSignedPlaylist(
   channelId: string,
   startedAt: number,
-  rung?: string,
+  rung: string | undefined,
+  now: number,
 ): Promise<string> {
   const config = liveHlsStorageConfig();
   if (!config) {
@@ -272,6 +320,9 @@ async function renderSignedPlaylist(
     await response.text(),
   );
   const ttl = hlsUrlTtlSeconds();
+  // Quantised, never `new Date()`: see `segmentSigningTime` above. This one
+  // argument is the whole fix for the native stall.
+  const signedAt = segmentSigningTime(now, ttl);
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
 
   const rewritten = body
@@ -292,6 +343,7 @@ async function renderSignedPlaylist(
         ttlSeconds: ttl,
         forRead: true,
         config,
+        now: signedAt,
       }).url;
     })
     .join("\n");
