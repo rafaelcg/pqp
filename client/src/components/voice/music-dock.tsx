@@ -27,6 +27,7 @@ import {
   setPlaying,
   setPositionProbe,
   stopMusic,
+  toggleMusicOpen,
   useMusic,
   type MusicSnapshot,
 } from "@/lib/music-store";
@@ -92,7 +93,7 @@ export function MusicDock({
 }) {
   const { t } = useTranslation();
   const music = useMusic();
-  const [open, setOpen] = useState(false);
+  const open = music.open;
   const inCall = voiceState.status === "connected" && voiceState.voiceChannelId !== null;
   const current = music.state?.current ?? null;
   const isActor = music.state?.actorId === voiceState.peerId;
@@ -113,7 +114,7 @@ export function MusicDock({
         <button
           type="button"
           aria-pressed={open}
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => toggleMusicOpen()}
           className={cn(
             "flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-ink-3/70",
             current ? "text-signal" : "text-paper-muted",

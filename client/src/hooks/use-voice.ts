@@ -4,6 +4,7 @@ import {
   SCREEN_SHARE_LIMIT,
   meshVideoLimit,
   type ClientRelayMessage,
+  type ChannelMusicTrack,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type LiveHlsStream,
@@ -386,6 +387,12 @@ export interface VoiceState {
    * the playlist without a seat; the room's own people are in `occupancy`.
    */
   channelLive: Record<string, ChannelLive>;
+  /**
+   * channelId -> what that room is playing, from `channel-music`, for the
+   * sidebar row. Channel-level like `channelLive`: reaches this client for
+   * every room it may view, in or out of the call.
+   */
+  channelMusic: Record<string, ChannelMusicTrack | null>;
   /** peerIds whose camera is on, from the roster's `cameraStreamId`. */
   cameraPeerIds: string[];
   /**
@@ -1083,6 +1090,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     screenSharePeerIds: [],
     liveStream: null,
     channelLive: {},
+    channelMusic: {},
     cameraPeerIds: [],
     uplinkBps: null,
     focusedScreenPeerId: null,
@@ -1356,6 +1364,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       incomingCalls: [...state.incomingCalls],
       callDeclinedUserIds: [...state.callDeclinedUserIds],
       channelLive: { ...state.channelLive },
+      channelMusic: { ...state.channelMusic },
     };
   }
 
@@ -2675,6 +2684,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Channel-level, not room-level: hanging up does not make the sidebar
       // forget which rooms are live.
       channelLive: state.channelLive,
+      channelMusic: state.channelMusic,
       cameraPeerIds: [],
     uplinkBps: null,
       focusedScreenPeerId: null,
@@ -3329,6 +3339,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       // (`lib/music-store.ts`) and only the dock subscribes.
       case "music":
         receiveMusic(message.channelId, message.state);
+        break;
+      case "channel-music":
+        state.channelMusic = {
+          ...state.channelMusic,
+          [message.channelId]: message.track,
+        };
+        emit();
         break;
       case "live-reactions":
         publishLiveReactions({

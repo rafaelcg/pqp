@@ -44,6 +44,13 @@ included as the acknowledgement. A joiner is handed the state after
 `welcome`. Not mirrored into the voice registry: a room lives on one
 instance, and an API restart clears the queue.
 
+A third frame, `channel-music`, carries only the current track (id, title,
+thumbnail) to everyone who may view the channel, in or out of the call, the
+way `channel-live` does for a stream. It is sent when the current track
+changes, when the room empties, and on connect for every room with music.
+It exists for the sidebar: a row under the channel's occupants saying what
+is playing is what makes somebody outside the call join.
+
 ## Resolving a link
 
 `GET /api/music/resolve?q=`, per-user rate limited:
@@ -64,10 +71,13 @@ result off the public results page. Metadata only, either way.
 
 `client/src/lib/music-store.ts` holds the state outside `VoiceState` so a
 position sample does not re-render the call stage; `use-voice.ts` feeds it
-and registers a sender on every `welcome`. `components/voice/music-dock.tsx`
-is one line on the call strip (what is playing, a button) and a popover with
-a visible YouTube embed, play/pause, skip, stop, a local volume slider and
-the queue with reorder and remove.
+and registers a sender on every `welcome`. `components/voice/music-bar-button.tsx`
+is the control on the call bar beside camera and screen share ("Tocar
+música", lit while something plays); `components/voice/music-dock.tsx` is the
+line on the call strip and the popover both open: a visible YouTube embed,
+play/pause, skip, stop, a local volume slider and the queue with reorder and
+remove. The sidebar row is in `layout/channel-list.tsx`, off
+`voiceState.channelMusic`.
 
 Sync rules in the dock: a new track loads at the room's expected position; a
 status change plays or pauses; every two seconds a non-actor compares the

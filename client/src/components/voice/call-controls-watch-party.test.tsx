@@ -80,6 +80,7 @@ const idle: VoiceState = {
   callDeclinedUserIds: [],
   liveStream: null,
   channelLive: {},
+  channelMusic: {},
 };
 
 function render(voiceState: VoiceState) {

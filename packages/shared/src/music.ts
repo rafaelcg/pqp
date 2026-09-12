@@ -70,6 +70,28 @@ export const musicMessageSchema = z.object({
 
 export type MusicMessage = z.infer<typeof musicMessageSchema>;
 
+/**
+ * Server to everyone who may view the channel, in or out of the call: what
+ * the room is playing, so the sidebar can say so. Sent when the current
+ * track changes and on connect for every room with music. Same audience
+ * rule as `channel-live`; no position, no queue, nothing to sync.
+ */
+export const channelMusicTrackSchema = z.object({
+  videoId: z.string().min(1).max(64),
+  title: z.string().min(1).max(200),
+  thumbnailUrl: z.string().url().max(2048).nullable(),
+});
+
+export type ChannelMusicTrack = z.infer<typeof channelMusicTrackSchema>;
+
+export const channelMusicMessageSchema = z.object({
+  type: z.literal("channel-music"),
+  channelId: z.string().uuid(),
+  track: channelMusicTrackSchema.nullable(),
+});
+
+export type ChannelMusicMessage = z.infer<typeof channelMusicMessageSchema>;
+
 /** `GET /api/music/resolve?q=` answers with one of these. */
 export const musicResolvedSchema = z.object({
   provider: z.literal("youtube"),

@@ -6856,6 +6856,7 @@ function MainAppContent({
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}
+          channelMusic={voiceState.channelMusic}
           speakingPeerIds={voiceState.speakingPeerIds}
           activeVoiceChannelId={voiceState.voiceChannelId}
           unread={unread}

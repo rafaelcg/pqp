@@ -164,8 +164,10 @@ import {
 } from "./watch-party.js";
 import {
   applyMusicWrite,
+  channelMusicTrack,
   endMusic,
   getMusicState,
+  musicChannels,
   resetMusicForTests,
 } from "./music.js";
 import {
@@ -1247,12 +1249,15 @@ function onLiveRoomMaybeEmpty(
       state: null,
     });
   }
-  if (endMusic(voiceChannelId) && notifySocket) {
-    send(notifySocket, {
-      type: "music",
-      channelId: voiceChannelId,
-      state: null,
-    });
+  if (endMusic(voiceChannelId)) {
+    void broadcastChannelMusic(voiceChannelId);
+    if (notifySocket) {
+      send(notifySocket, {
+        type: "music",
+        channelId: voiceChannelId,
+        state: null,
+      });
+    }
   }
 }
 
@@ -1913,6 +1918,33 @@ function channelLiveFrame(
     stream: stream ? stampViewerStream(stream, userId) : null,
     watching: hlsAudience.count(channelId),
   };
+}
+
+function channelMusicFrame(channelId: string): VoiceSignalingMessage {
+  return { type: "channel-music", channelId, track: channelMusicTrack(channelId) };
+}
+
+/**
+ * What the room is playing, to everyone who may view the channel, so the
+ * sidebar row exists for people outside the call. Same audience as
+ * `channel-live`, and the same reason a socket in the room gets it too.
+ */
+async function broadcastChannelMusic(channelId: string): Promise<void> {
+  const audience = await getChannelAudience(channelId).catch(
+    (error: unknown) => {
+      console.error("[voice] failed to load audience for channel-music:", error);
+      return null;
+    },
+  );
+  if (!audience) {
+    return;
+  }
+  const frame = channelMusicFrame(channelId);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (audience.has(user.id)) {
+      send(socket, frame);
+    }
+  });
 }
 
 /**
@@ -3321,6 +3353,20 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       }
       send(socket, channelLiveFrame(channelId, user.id));
       hlsAudienceFramesSent.frames += 1;
+    }),
+  );
+  // And every room with music this user may view, for the sidebar row.
+  await Promise.all(
+    musicChannels().map(async (channelId) => {
+      try {
+        if (!(await canAccessChannel(channelId, user.id))) {
+          return;
+        }
+      } catch (error) {
+        console.error("[voice] channel-music membership check failed:", error);
+        return;
+      }
+      send(socket, channelMusicFrame(channelId));
     }),
   );
 }
@@ -4734,9 +4780,16 @@ export async function handleVoiceMessage(
     if (!peer) {
       return;
     }
+    const before = channelMusicTrack(peer.voiceChannelId)?.videoId ?? null;
     const write = applyMusicWrite(peer.voiceChannelId, payload.state, user.id);
     if (write.kind === "coalesced") {
       return;
+    }
+    if (
+      write.kind === "accepted" &&
+      (write.state?.current?.videoId ?? null) !== before
+    ) {
+      void broadcastChannelMusic(peer.voiceChannelId);
     }
     if (write.kind === "stale") {
       send(socket, {

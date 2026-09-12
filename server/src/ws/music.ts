@@ -1,6 +1,7 @@
 import {
   musicWriteIsStale,
   musicWriteIsStructural,
+  type ChannelMusicTrack,
   type MusicState,
 } from "@pqp/shared";
 import { logEvent } from "../lib/log.js";
@@ -34,6 +35,19 @@ export function resetMusicLimits(): void {
 
 export function getMusicState(voiceChannelId: string): MusicState | null {
   return rooms.get(voiceChannelId) ?? null;
+}
+
+/** Every room with music, for the connect-time `channel-music` frames. */
+export function musicChannels(): string[] {
+  return [...rooms.keys()];
+}
+
+/** What the sidebar is told: the current track, nothing else. */
+export function channelMusicTrack(voiceChannelId: string): ChannelMusicTrack | null {
+  const current = rooms.get(voiceChannelId)?.current;
+  return current
+    ? { videoId: current.videoId, title: current.title, thumbnailUrl: current.thumbnailUrl }
+    : null;
 }
 
 /** Returns whether there was a queue to end. */
