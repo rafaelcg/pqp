@@ -21,7 +21,11 @@ import {
   voiceConfigHash,
 } from "./voice/registry.js";
 import { startVoiceHello } from "./ws/voice-hello.js";
-import { runVoiceReconcile } from "./ws/voice.js";
+import {
+  IDLE_ALONE_SWEEP_MS,
+  runVoiceReconcile,
+  sweepIdleAloneSeats,
+} from "./ws/voice.js";
 import {
   assertCorsConfig,
   corsHeaders,
@@ -456,6 +460,13 @@ const communityHomeSweep = setInterval(() => {
   void sweepCommunityHomeSchedule();
 }, COMMUNITY_HOME_SCHEDULE_MS);
 communityHomeSweep.unref?.();
+
+// The idle hangup (`VOICE_IDLE_ALONE_MINUTES`): somebody alone in a voice
+// room past the limit is warned, then disconnected. See `sweepIdleAloneSeats`.
+const idleAloneSweep = setInterval(() => {
+  void sweepIdleAloneSeats();
+}, IDLE_ALONE_SWEEP_MS);
+idleAloneSweep.unref?.();
 
 /**
  * Multi-instance chat, off by default.

@@ -244,6 +244,14 @@ interface VoicePeer {
    * Not in the registry: a reconnect re-declares with the share.
    */
   sourceHeight: number | null;
+  /**
+   * When this seat last became the only one in its room, or the last time
+   * its occupant did something while alone. Absent while somebody else is
+   * seated. Read by `sweepIdleAloneSeats`, which is the idle hangup.
+   */
+  aloneSince?: number;
+  /** The `voice-idle-warning` for the current alone stretch went out. */
+  idleWarnedAt?: number;
 }
 
 /**
@@ -370,6 +378,42 @@ function clusterOn(): boolean {
  * is rare enough to be worth a look and common enough not to be an alarm.
  */
 const SEAT_IDLE_ALARM_MS = 60 * 60_000;
+
+/**
+ * THE IDLE HANGUP: somebody alone in a room for this long is disconnected,
+ * with one warning a minute before.
+ *
+ * Why: a seat with nobody behind it still keeps a TURN allocation (billed
+ * by the gigabyte) and an SFU session, and the green badge on the channel
+ * tells everybody a friend is there to talk to when they are asleep. On
+ * 2026-09-08 ten of nineteen live rooms held exactly one person, the oldest
+ * for fifteen hours. Discord moves an idle person to an AFK channel after a
+ * server-set 1 to 60 minutes; Google Meet leaves an empty call after a few
+ * minutes with a prompt; Zoom ends a meeting 40 minutes after the last other
+ * participant left. This is the Meet shape: ALONE is the condition, not
+ * idle, because kicking somebody out of a live conversation is the
+ * complaint under every Discord AFK thread.
+ *
+ * `VOICE_IDLE_ALONE_MINUTES` sets the limit (default 10); `0` turns the
+ * hangup off, which is what a self-host with no bandwidth bill may want.
+ * Anything the person does on purpose while alone (mute, share, camera,
+ * hand, reaction, or the warning's own button) starts the clock over.
+ * Orphaned seats are skipped: the resume window is already a timer.
+ */
+function idleAloneLimitMs(): number {
+  const raw = Number(process.env.VOICE_IDLE_ALONE_MINUTES);
+  const minutes = Number.isFinite(raw) && raw >= 0 ? raw : 10;
+  return minutes * 60_000;
+}
+
+/** How long before the hangup the warning goes out. */
+const IDLE_ALONE_WARNING_MS = 60_000;
+
+/** How often `sweepIdleAloneSeats` runs; the warning window is four ticks. */
+export const IDLE_ALONE_SWEEP_MS = 15_000;
+
+let idleAloneWarned = 0;
+let idleAloneDisconnected = 0;
 
 let staleRowWritesRefused = 0;
 let ghostSeatsSwept = 0;
@@ -1401,6 +1445,9 @@ export interface VoiceActivitySnapshot {
     staleRowWritesRefused: number;
     ghostsSwept: number;
     meshHoldsRefused: number;
+    /** Idle hangups since boot: warnings sent, and seats actually released. */
+    idleAloneWarned: number;
+    idleAloneDisconnected: number;
     /**
      * Sockets that declared `mesh-resume`, against `roster.sockets` for the
      * denominator. THE NUMBER THAT SAYS WHEN TO FLIP
@@ -1526,6 +1573,8 @@ async function readSeatHealth(): Promise<VoiceActivitySnapshot["seats"]> {
       staleRowWritesRefused,
       ghostsSwept: ghostSeatsSwept,
       meshHoldsRefused,
+      idleAloneWarned,
+      idleAloneDisconnected,
       meshResumeSockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume)
         .withCap,
       sockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume).sockets,
@@ -1573,6 +1622,8 @@ async function logSeatHealth(now = Date.now()): Promise<void> {
     ghostsSwept: seats.ghostsSwept,
     staleRowWritesRefused: seats.staleRowWritesRefused,
     meshHoldsRefused: seats.meshHoldsRefused,
+    idleAloneWarned: seats.idleAloneWarned,
+    idleAloneDisconnected: seats.idleAloneDisconnected,
     meshResumeSockets: seats.meshResumeSockets,
     sockets: seats.sockets,
     requiresCap: meshResumeRequiresCap(),
@@ -3149,6 +3200,114 @@ function meshHoldAllowed(peer: VoicePeer, socket: WebSocket): boolean {
  * id without broadcasting `peer-left`. Everyone else (phones, old tabs)
  * is removed now. Intentional hangup is `leave-voice-room`.
  */
+/** The client frames that count as the person doing something. */
+const SELF_INITIATED_VOICE_FRAMES: ReadonlySet<string> = new Set([
+  "set-voice-state",
+  "set-sharing-screen",
+  "set-camera",
+  "set-raised-hand",
+  "set-watch-party",
+  "live-reaction",
+  "voice-still-here",
+]);
+
+/**
+ * Distinct people seated in a room, cluster-wide when the registry is on.
+ * Orphans count: a seat held for a resume is still a seat.
+ */
+async function countRoomOccupants(voiceChannelId: string): Promise<number> {
+  const users = new Set<string>();
+  for (const peer of getRoomPeers(voiceChannelId)) {
+    users.add(peer.userId);
+  }
+  if (registryOn() && users.size <= 1) {
+    for (const row of await listVoicePeersInRoom(voiceChannelId)) {
+      users.add(row.userId);
+    }
+  }
+  return users.size;
+}
+
+/**
+ * THE IDLE HANGUP'S TICK. Walks this instance's live seats; a seat whose
+ * room holds nobody else starts (or keeps) its `aloneSince`, gets one
+ * `voice-idle-warning` a minute before the limit and is released through
+ * `disconnectVoiceUser` at it, which is the same path a moderator's
+ * disconnect takes (notice first, then the seat, then the SFU). A room that
+ * gains a second person clears both marks without a frame. Never throws.
+ *
+ * Exported for the tests and for `server/src/index.ts`, which runs it every
+ * `IDLE_ALONE_SWEEP_MS`. `now` is a parameter so a test can move the clock.
+ */
+export async function sweepIdleAloneSeats(now = Date.now()): Promise<void> {
+  const limit = idleAloneLimitMs();
+  if (limit <= 0) {
+    return;
+  }
+  const byRoom = new Map<string, VoicePeer[]>();
+  for (const peer of peers.values()) {
+    if (peer.orphanedAt !== undefined) {
+      continue;
+    }
+    const list = byRoom.get(peer.voiceChannelId) ?? [];
+    list.push(peer);
+    byRoom.set(peer.voiceChannelId, list);
+  }
+  for (const [voiceChannelId, seated] of byRoom) {
+    let occupants: number;
+    try {
+      occupants = await countRoomOccupants(voiceChannelId);
+    } catch (error) {
+      console.error("[voice] idle sweep: occupancy read failed:", error);
+      continue;
+    }
+    for (const peer of seated) {
+      // Re-read: an earlier hangup in this loop may have removed it.
+      if (!peers.has(peer.id)) {
+        continue;
+      }
+      if (occupants > 1) {
+        peer.aloneSince = undefined;
+        peer.idleWarnedAt = undefined;
+        continue;
+      }
+      if (peer.aloneSince === undefined) {
+        peer.aloneSince = now;
+        continue;
+      }
+      const elapsed = now - peer.aloneSince;
+      if (elapsed >= limit) {
+        idleAloneDisconnected += 1;
+        logEvent("voice.idleAloneDisconnected", {
+          channelId: voiceChannelId,
+          userId: peer.userId,
+          peerId: peer.id,
+          aloneMinutes: Math.round(elapsed / 60_000),
+        });
+        disconnectVoiceUser(peer.userId, voiceChannelId, {
+          message: `You were alone in the call for ${Math.round(
+            limit / 60_000,
+          )} minutes, so you were disconnected.`,
+          reason: "idle",
+        });
+        continue;
+      }
+      if (
+        peer.idleWarnedAt === undefined &&
+        elapsed >= limit - IDLE_ALONE_WARNING_MS
+      ) {
+        peer.idleWarnedAt = now;
+        idleAloneWarned += 1;
+        send(peer.socket, {
+          type: "voice-idle-warning",
+          voiceChannelId,
+          disconnectAt: peer.aloneSince + limit,
+        });
+      }
+    }
+  }
+}
+
 export function removeVoicePeerBySocket(socket: WebSocket) {
   // Before the peer lookup: a watcher never had a peer, and its close must
   // still leave the count.
@@ -3533,6 +3692,21 @@ export async function handleVoiceMessage(
   const payload = message.data;
   const { socket, user } = session;
   const existingPeerId = socketToPeerId.get(socket);
+
+  // Anything the person does on purpose restarts the idle-alone clock. The
+  // signaling frames (offer, answer, ICE) are not on the list: browsers
+  // send those on their own, and a seat that renegotiates by itself is
+  // exactly the seat this clock is for.
+  if (existingPeerId && SELF_INITIATED_VOICE_FRAMES.has(payload.type)) {
+    const peer = peers.get(existingPeerId);
+    if (peer?.aloneSince !== undefined) {
+      peer.aloneSince = Date.now();
+      peer.idleWarnedAt = undefined;
+    }
+  }
+  if (payload.type === "voice-still-here") {
+    return;
+  }
 
   if (payload.type === "join-voice-room") {
     if (!roomLimiter.take(user.id)) {
@@ -5533,6 +5707,7 @@ function notifyLocalVoiceModeration(
         ? { movedToChannelId: notice.movedToChannelId }
         : {}),
       message: notice.message,
+      ...(notice.reason ? { reason: notice.reason } : {}),
     });
     told += 1;
   }
@@ -5553,7 +5728,7 @@ function notifyLocalVoiceModeration(
 export function disconnectVoiceUser(
   userId: string,
   voiceChannelId: string,
-  notice: { movedToChannelId?: string; message: string },
+  notice: { movedToChannelId?: string; message: string; reason?: "idle" },
   /** Peer ids seen elsewhere in the cluster (`findVoicePeerIdentities`), merged into the SFU sweep's hint. */
   knownIdentities: Map<string, string> = getVoicePeerIdentities(
     userId,
@@ -5570,6 +5745,7 @@ export function disconnectVoiceUser(
       ? { movedToChannelId: notice.movedToChannelId }
       : {}),
     message: notice.message,
+    ...(notice.reason ? { reason: notice.reason } : {}),
   };
   // Local only: the cluster hears the notice inside the eviction frame, so
   // the other instance says it once, right before it drops the peer.
@@ -6396,6 +6572,7 @@ const voiceModerationNoticeSchema = voiceModerationMessageSchema.pick({
   action: true,
   movedToChannelId: true,
   message: true,
+  reason: true,
 });
 type VoiceModerationNotice = z.infer<typeof voiceModerationNoticeSchema>;
 
