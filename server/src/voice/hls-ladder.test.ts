@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildMasterPlaylist,
+  CAMERA_RUNG,
+  CAMERA_RUNG_NAME,
+  decideCameraEgress,
   decideLadder,
+  HLS_CAMERA_MBPS,
   DEFAULT_MAX_LADDER_MBPS,
   HLS_RUNG_MBPS,
   LADDER_RUNGS,
@@ -380,5 +384,91 @@ describe("buildMasterPlaylist", () => {
     expect(body.startsWith("#EXTM3U\n")).toBe(true);
     expect(body.match(/#EXT-X-STREAM-INF/g)).toHaveLength(1);
     expect(body.endsWith("\n")).toBe(true);
+  });
+});
+
+describe("decideCameraEgress", () => {
+  it("starts the camera when the box has room", () => {
+    expect(
+      decideCameraEgress({
+        runningRungs: 2,
+        sfuLoadMbps: 0,
+        boxBudgetMbps: DEFAULT_MAX_LADDER_MBPS * 2,
+      }),
+    ).toMatchObject({ start: true, refusal: null });
+  });
+
+  it("refuses on the box budget, never on the ladder's", () => {
+    // THE TRADE ONLY GOES ONE WAY. `LIVE_HLS_MAX_LADDER_MBPS` governs how many
+    // renditions of the SHARE a party gets, and a webcam must never be the
+    // reason a viewer loses a rung of the film. A box with nothing left simply
+    // gets no camera.
+    const decision = decideCameraEgress({
+      runningRungs: 4,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS * 4,
+    });
+    expect(decision).toMatchObject({ start: false, refusal: "box-budget" });
+    expect(decision.boxMbps).toBeGreaterThan(HLS_RUNG_MBPS * 4);
+  });
+
+  it("counts the WebRTC already on the box", () => {
+    // The cameras and screen shares on the same machine are priced by
+    // `promotion.ts`, and this must not pretend they are free.
+    const budget = HLS_RUNG_MBPS * 2;
+    expect(
+      decideCameraEgress({ runningRungs: 1, sfuLoadMbps: 0, boxBudgetMbps: budget }),
+    ).toMatchObject({ start: true });
+    expect(
+      decideCameraEgress({
+        runningRungs: 1,
+        sfuLoadMbps: HLS_RUNG_MBPS,
+        boxBudgetMbps: budget,
+      }),
+    ).toMatchObject({ start: false, refusal: "box-budget" });
+  });
+
+  it("is priced well under a full rendition", () => {
+    // `docs/CAPACITY.md` §2: 0.51 core at 720p30, 0.88 at 1080p30. A 360p30
+    // rendition is roughly a fifth of the 720p pixel rate, so 0.2 to 0.3 of a
+    // core, and the top of that range is what is charged.
+    expect(HLS_CAMERA_MBPS).toBeLessThan(HLS_RUNG_MBPS / 3);
+    expect(HLS_CAMERA_MBPS).toBeGreaterThan(0);
+  });
+});
+
+describe("the camera rung", () => {
+  it("is not on the ladder, so no master playlist can list it", () => {
+    // `sessionRungs` filters stored rungs through `LADDER_RUNGS`. A camera in
+    // that table is a variant a viewer's ABR could climb onto, and they would
+    // watch a webcam instead of the film.
+    expect(LADDER_RUNGS[CAMERA_RUNG_NAME]).toBeUndefined();
+    expect(Object.values(LADDER_RUNGS)).not.toContain(CAMERA_RUNG);
+  });
+
+  it("asks the encoder for no audio at all", () => {
+    // Proto3: zero is unset, so `audioBitrate: 0` is the video-only request.
+    // The audience's sound comes off the main stream, which is the only place
+    // it is mixed.
+    expect(CAMERA_RUNG.audioKbps).toBe(0);
+    expect(rungEncodingOptions(CAMERA_RUNG)).toMatchObject({
+      width: 640,
+      height: 360,
+      framerate: 30,
+      videoBitrate: 400,
+      audioBitrate: 0,
+    });
+  });
+
+  it("matches what the presenter is actually publishing", () => {
+    // Lockstep with `WATCH_PARTY_PRESENTER_CAMERA_QUALITY` on the client
+    // (640x360, 30 fps, 400 kbit/s). The egress transcodes from the published
+    // track, so a rung above it is a core spent inventing pixels.
+    expect(CAMERA_RUNG).toMatchObject({
+      width: 640,
+      height: 360,
+      framerate: 30,
+      videoKbps: 400,
+    });
   });
 });

@@ -923,6 +923,8 @@
   "voice.hls.play": "Play",
   "voice.hls.pause": "Pause",
   "voice.hls.pip": "Picture-in-picture",
+  "voice.hls.cameraSwap": "Swap the camera and the stream",
+  "voice.hls.cameraCorner": "Move the camera to another corner",
   "voice.hls.stalled": "The stream stalled, reconnecting",
   "voice.hls.dead": "The stream dropped",
   "voice.hls.retry": "Try again",

@@ -17,6 +17,33 @@ export function resolveHlsUrl(hlsUrl: string): string {
 }
 
 /**
+ * Both of a stream's playlists, resolved.
+ *
+ * A stream now carries two URLs — the film and, when the presenter has a
+ * camera on, a second video-only playlist for it — and they arrive by four
+ * different doors (`voice-stream`, `channel-live`, the one-shot
+ * `GET /api/channels/:id/live`, and the player's own reconnect). Resolving
+ * them field by field at each door is how one of them ends up API-relative and
+ * unplayable at exactly one of the four, which is the sort of thing that shows
+ * up during somebody's film. One function, one rule.
+ *
+ * Generic over the stream shape so the four call sites keep their own types:
+ * the field is optional on the wire (older servers, iOS, Android) and stays
+ * optional here.
+ */
+export function resolveLiveHlsStream<
+  T extends { hlsUrl: string; cameraHlsUrl?: string },
+>(stream: T): T {
+  return {
+    ...stream,
+    hlsUrl: resolveHlsUrl(stream.hlsUrl),
+    ...(stream.cameraHlsUrl
+      ? { cameraHlsUrl: resolveHlsUrl(stream.cameraHlsUrl) }
+      : {}),
+  };
+}
+
+/**
  * WHICH SESSION A PLAYLIST URL NAMES, ignoring the query string.
  *
  * THE BUG THIS EXISTS FOR. `hlsUrl` is stamped per recipient with a signed

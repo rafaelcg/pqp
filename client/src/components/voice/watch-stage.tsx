@@ -28,6 +28,7 @@ import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
  */
 export function WatchStage({
   hlsUrl,
+  cameraHlsUrl = null,
   delaySeconds,
   audienceCount,
   ended,
@@ -41,6 +42,12 @@ export function WatchStage({
 }: {
   /** Playable playlist URL; null while nothing is live. */
   hlsUrl: string | null;
+  /**
+   * The presenter's camera, as its own playlist. Null unless the server is
+   * running a camera transcode beside the ladder; the player floats it in a
+   * corner. See `docs/plans/WATCH_PARTY_CAMERA_PIP.md`.
+   */
+  cameraHlsUrl?: string | null;
   delaySeconds?: number;
   /** Everybody watching, seated or not, presenter excluded. */
   audienceCount: number;
@@ -124,6 +131,7 @@ export function WatchStage({
       {live ? (
         <HlsWatchPlayer
           src={hlsUrl}
+          cameraSrc={cameraHlsUrl}
           delaySeconds={delaySeconds}
           mediaTitle={mediaTitle}
           communityName={communityName}
@@ -366,6 +374,7 @@ export function WatchChannelStage({
     >
       <WatchStage
         hlsUrl={stream?.hlsUrl ?? null}
+        cameraHlsUrl={stream?.cameraHlsUrl ?? null}
         delaySeconds={stream?.delaySeconds}
         audienceCount={watchAudienceCount(
           live,

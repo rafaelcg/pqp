@@ -107,3 +107,66 @@ describe("collectScreenTiles", () => {
     expect(mine!.hlsUrl).toBeNull();
   });
 });
+
+describe("the presenter's camera on a screen tile", () => {
+  const peer = (over: Record<string, unknown> = {}) =>
+    ({
+      peerId: "p2",
+      userId: "u2",
+      displayName: "Bia",
+      screenStream: { id: "video" },
+      screenAudioStream: null,
+      ...over,
+    }) as never;
+
+  const liveStream = {
+    hlsUrl: "https://api.test/film",
+    cameraHlsUrl: "https://api.test/cam",
+    presenterPeerId: "p2",
+    delaySeconds: 10,
+  };
+
+  it("carries the camera playlist beside the film's", () => {
+    const [tile] = collectScreenTiles({
+      peerIds: ["p2"],
+      localPeerId: "p1",
+      localName: "eu",
+      localStream: null,
+      remotePeers: [peer()],
+      fallbackName: "alguem",
+      liveStream,
+    });
+    expect(tile!.hlsUrl).toBe("https://api.test/film");
+    expect(tile!.cameraHlsUrl).toBe("https://api.test/cam");
+  });
+
+  it("gives nobody else's tile the presenter's camera", () => {
+    const [tile] = collectScreenTiles({
+      peerIds: ["p3"],
+      localPeerId: "p1",
+      localName: "eu",
+      localStream: null,
+      remotePeers: [peer({ peerId: "p3" })],
+      fallbackName: "alguem",
+      liveStream,
+    });
+    expect(tile!.hlsUrl).toBeNull();
+    expect(tile!.cameraHlsUrl).toBeNull();
+  });
+
+  it("never gives the presenter their own camera back", () => {
+    // A host watching themselves ten seconds late is not useful, and that
+    // goes double for their own face.
+    const [tile] = collectScreenTiles({
+      peerIds: ["p1"],
+      localPeerId: "p1",
+      localName: "eu",
+      localStream: null,
+      remotePeers: [],
+      fallbackName: "alguem",
+      liveStream: { ...liveStream, presenterPeerId: "p1" },
+    });
+    expect(tile!.hlsUrl).toBeNull();
+    expect(tile!.cameraHlsUrl ?? null).toBeNull();
+  });
+});

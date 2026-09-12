@@ -16,6 +16,7 @@ import {
   Maximize2,
   MessageSquare,
   Minimize2,
+  Move,
   Pause,
   PictureInPicture2,
   Play,
@@ -80,6 +81,15 @@ import {
   tapIsOnStage,
   useIdleChrome,
 } from "@/hooks/use-idle-chrome";
+import {
+  cameraPipBoxes,
+  cameraPipMounted,
+  nextCameraPipCorner,
+  readCameraPipPref,
+  writeCameraPipPref,
+  type CameraPipPref,
+} from "@/lib/watch-camera-pip";
+import { WatchCameraPip } from "@/components/voice/watch-camera-pip";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 
@@ -134,6 +144,7 @@ function VolumeGlyph({ volume, muted }: { volume: number; muted: boolean }) {
  */
 export function HlsWatchPlayer({
   src,
+  cameraSrc = null,
   delaySeconds = 10,
   className,
   videoRef,
@@ -148,6 +159,17 @@ export function HlsWatchPlayer({
   layout = "tile",
 }: {
   src: string;
+  /**
+   * The presenter's camera, as a second playlist (`cameraHlsUrl` on the
+   * stream frame, already resolved against the API base).
+   *
+   * A SECOND, MUTED hls.js INSTANCE, never a second audio source: the
+   * audience's sound comes off the main stream, which is the only place it is
+   * mixed. Null in every case the server is not running a camera transcode,
+   * and `layout="tile"` ignores it entirely — a webcam inside a grid tile is
+   * a picture in a picture in a picture.
+   */
+  cameraSrc?: string | null;
   delaySeconds?: number;
   className?: string;
   videoRef?: RefObject<HTMLVideoElement | null>;
@@ -895,6 +917,33 @@ export function HlsWatchPlayer({
 
   const cinema = layout === "cinema";
 
+  /**
+   * THE PRESENTER'S CAMERA, FLOATING OVER THEIR FILM.
+   *
+   * A second, muted hls.js on a second playlist (`WatchCameraPip`), and a pure
+   * module deciding which of the two pictures gets the stage and which gets
+   * the corner (`lib/watch-camera-pip.ts`). Swapping moves the CLASSES, never
+   * the players: neither instance is re-attached, so nobody rebuffers to look
+   * at a webcam, and the control bar stays where it is because it belongs to
+   * the stage rather than to a picture.
+   */
+  const [cameraPip, setCameraPip] = useState<CameraPipPref>(readCameraPipPref);
+  const [cameraFrame, setCameraFrame] = useState(false);
+  const cameraMounted = cameraPipMounted({
+    cameraSrc,
+    fullscreen: Boolean(fullscreen?.active),
+    cinema,
+  });
+  const boxes = cameraPipBoxes({
+    mounted: cameraMounted,
+    hasFrame: cameraFrame,
+    pref: cameraPip,
+  });
+  const updateCameraPip = useCallback((next: CameraPipPref) => {
+    setCameraPip(next);
+    writeCameraPipPref(next);
+  }, []);
+
   return (
     <div
       className={cn(
@@ -939,11 +988,61 @@ export function HlsWatchPlayer({
            letterboxed more often than not. Fit stays the default (a crop can
            eat a subtitle), and the button below is the way out.
            `lib/video-fit.ts` has the argument for the third kind. */
-        className={cn("h-full w-full", videoFitClass(fit.fit))}
+        /* THE BOX IS NOT ALWAYS THE STAGE. With the camera swapped onto it
+           the film becomes the corner thumbnail, and this is the whole of
+           that move: the same element, the same hls.js, a different class.
+           `absolute inset-0 h-full w-full` is what "the stage" means here, so
+           the corner case needs no other change. */
+        className={cn(boxes.film, videoFitClass(fit.fit))}
         autoPlay
         playsInline
         onDoubleClick={onDoubleClick}
       />
+      {cameraMounted && cameraSrc ? (
+        <WatchCameraPip
+          src={cameraSrc}
+          className={cn(boxes.camera ?? "", videoFitClass("cover"))}
+          onFrame={setCameraFrame}
+        />
+      ) : null}
+      {/* THE CONTROLS SIT OVER WHICHEVER PICTURE IS IN THE CORNER, which is
+          why there is one of them rather than one per player: the corner is a
+          box, and what is in it changes. `z-30` is above the pictures (z-20)
+          and below the chrome (z-50), so the control bar is never behind a
+          webcam. */}
+      {boxes.corner ? (
+        <div
+          data-testid="watch-camera-pip-controls"
+          data-camera-on-stage={cameraPip.onStage ? "" : undefined}
+          className={cn(boxes.corner, "group/pip z-30")}
+        >
+          <button
+            type="button"
+            data-testid="watch-camera-pip-swap"
+            aria-label={t("voice.hls.cameraSwap")}
+            title={t("voice.hls.cameraSwap")}
+            className="absolute inset-0 h-full w-full rounded-[var(--radius-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+            onClick={() =>
+              updateCameraPip({ ...cameraPip, onStage: !cameraPip.onStage })
+            }
+          />
+          <button
+            type="button"
+            data-testid="watch-camera-pip-corner"
+            aria-label={t("voice.hls.cameraCorner")}
+            title={t("voice.hls.cameraCorner")}
+            className="absolute right-1 top-1 rounded bg-black/60 p-1 text-paper opacity-0 transition-opacity hover:bg-black/85 focus-visible:opacity-100 motion-reduce:transition-none group-hover/pip:opacity-100"
+            onClick={() =>
+              updateCameraPip({
+                ...cameraPip,
+                corner: nextCameraPipCorner(cameraPip.corner),
+              })
+            }
+          >
+            <Move className="h-3 w-3" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
       {phase === "dead" ? (
         <div
           data-testid="hls-dead"

@@ -32,6 +32,7 @@ import {
   listActiveEgresses,
   stopEgressById,
 } from "./hls-egress.js";
+import { CAMERA_RUNG_NAME } from "./hls-ladder.js";
 
 const SWEEP_BATCH = 25;
 
@@ -101,6 +102,15 @@ interface StaleSession {
  * STOPPED. That would kill a live watch party on every deploy, which is the
  * exact failure this whole file was written to stop.
  */
+/** A stale row that names the camera rendition rather than a ladder rung. */
+function isCameraEgress(row: StaleSession | undefined): boolean {
+  if (!row) {
+    return false;
+  }
+  const rung = row.rung ?? sessionFromPrefix(row.object_prefix)?.rung ?? null;
+  return rung === CAMERA_RUNG_NAME;
+}
+
 function sessionFromPrefix(
   prefix: string,
 ): { startedAt: number; rung: string | null } | null {
@@ -255,7 +265,18 @@ export async function reconcileStaleHlsSessions(): Promise<{
   let stopped = 0;
   const adoptedIds = new Set<string>();
 
-  for (const info of active) {
+  // CAMERA EGRESSES LAST, and the order is load-bearing rather than tidy.
+  // `adoptCameraEgress` attaches a camera transcode to the session it belongs
+  // to and refuses when that session is not back yet; LiveKit answers
+  // `ListEgress` in no particular order, so without this a camera could arrive
+  // before its own ladder and be stopped for no reason on one deploy in two.
+  const ordered = [...active].sort((left, right) => {
+    const leftCamera = isCameraEgress(byEgressId.get(left.egressId));
+    const rightCamera = isCameraEgress(byEgressId.get(right.egressId));
+    return Number(leftCamera) - Number(rightCamera);
+  });
+
+  for (const info of ordered) {
     const row = byEgressId.get(info.egressId);
     const session = row ? sessionFromPrefix(row.object_prefix) : null;
     if (!row || session === null || !row.presenter_peer_id) {
@@ -274,7 +295,7 @@ export async function reconcileStaleHlsSessions(): Promise<{
     }
     // Still running and still ours: take it back rather than killing a live
     // watch party because the API happened to restart.
-    adoptLiveHlsSession({
+    const stream = adoptLiveHlsSession({
       channelId: row.channel_id,
       egressId: info.egressId,
       startedAt: session.startedAt,
@@ -282,6 +303,16 @@ export async function reconcileStaleHlsSessions(): Promise<{
       videoTrackId: row.video_track_id ?? "",
       rung: row.rung ?? session.rung,
     });
+    if (stream === null) {
+      // Only a camera answers null, and only when the session it was filming
+      // did not come back. A transcode with no room is a core of the media box
+      // spent on a webcam nobody can reach.
+      const wasStopped = await stopEgressById(info.egressId, info.roomName);
+      if (wasStopped) {
+        stopped += 1;
+      }
+      continue;
+    }
     adoptedIds.add(row.id);
     adopted += 1;
   }

@@ -923,6 +923,8 @@
   "voice.hls.play": "Continuar",
   "voice.hls.pause": "Pausar",
   "voice.hls.pip": "Câmera em câmera (PiP)",
+  "voice.hls.cameraSwap": "Trocar a câmera com a transmissão",
+  "voice.hls.cameraCorner": "Mudar a câmera de canto",
   "voice.hls.stalled": "A transmissão travou, reconectando",
   "voice.hls.dead": "A transmissão caiu",
   "voice.hls.retry": "Tentar de novo",

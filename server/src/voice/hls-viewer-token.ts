@@ -267,11 +267,24 @@ export function stampViewerStream(
   if (!token) {
     return stream;
   }
-  const separator = stream.hlsUrl.includes("?") ? "&" : "?";
   return {
     ...stream,
-    hlsUrl: `${stream.hlsUrl}${separator}${HLS_VIEWER_TOKEN_PARAM}=${token}`,
+    hlsUrl: appendToken(stream.hlsUrl, token),
+    // THE SAME TOKEN, because it is the same capability: it names the user,
+    // the channel and the session, and the camera's playlist is a rendition
+    // OF that session (`<startedAt>-cam360p30`). Minting a second one would
+    // be a second thing that can expire at a different moment, which is
+    // exactly the shape of the failure that stalled every web viewer once
+    // already (CLAUDE.md pitfall 16).
+    ...(stream.cameraHlsUrl && stream.cameraHlsUrl.startsWith("/")
+      ? { cameraHlsUrl: appendToken(stream.cameraHlsUrl, token) }
+      : {}),
   };
+}
+
+function appendToken(url: string, token: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}${HLS_VIEWER_TOKEN_PARAM}=${token}`;
 }
 
 /** `/api/voice/hls-playlist/<channelId>/<startedAt>` -> channelId. */

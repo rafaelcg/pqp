@@ -94,6 +94,40 @@ describe("HLS viewer token", () => {
     expect(stampViewerStream(publicStream, USER)).toEqual(publicStream);
   });
 
+  it("stamps the camera playlist with the SAME token, not a second one", () => {
+    // A SECOND CREDENTIAL IS A SECOND THING THAT CAN FAIL (pitfall 16). The
+    // camera is a rendition of the same session, so it is the same capability:
+    // one token, one expiry, one thing to get wrong.
+    const stream = {
+      hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}`,
+      cameraHlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/cam360p30`,
+      startedAt: STARTED_AT,
+      presenterPeerId: "peer-1",
+      delaySeconds: 10,
+    };
+    const stamped = stampViewerStream(stream, USER);
+    const film = new URL(stamped.hlsUrl, "https://api.example.test");
+    const camera = new URL(stamped.cameraHlsUrl!, "https://api.example.test");
+    expect(camera.pathname).toBe(stream.cameraHlsUrl);
+    expect(camera.searchParams.get("t")).toBe(film.searchParams.get("t"));
+    expect(
+      verifyHlsViewerToken(camera.searchParams.get("t"), {
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toEqual({ userId: USER, issuedAt: expect.any(Number) });
+  });
+
+  it("leaves a stream with no camera exactly as it was", () => {
+    const stream = {
+      hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}`,
+      startedAt: STARTED_AT,
+      presenterPeerId: "peer-1",
+      delaySeconds: 10,
+    };
+    expect(stampViewerStream(stream, USER).cameraHlsUrl).toBeUndefined();
+  });
+
   it("has no key without Clerk or the dev bypass, and a dev key with it", () => {
     delete process.env.CLERK_SECRET_KEY;
     expect(

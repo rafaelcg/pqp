@@ -16,6 +16,11 @@ export interface ScreenShareTile {
   stream: MediaStream | null;
   /** LiveKit egress playlist for this presenter; remote tiles prefer it. */
   hlsUrl?: string | null;
+  /**
+   * The presenter's camera, as a second playlist. Only the cinema stage draws
+   * it: a webcam inside a grid tile is a picture in a picture in a picture.
+   */
+  cameraHlsUrl?: string | null;
   delaySeconds?: number;
   presenterName: string;
   isSelf: boolean;
@@ -40,16 +45,22 @@ export function collectScreenTiles(args: {
   localStream: MediaStream | null;
   remotePeers: RemotePeer[];
   fallbackName: string;
-  liveStream?: { hlsUrl: string; presenterPeerId: string; delaySeconds?: number } | null;
+  liveStream?: {
+    hlsUrl: string;
+    cameraHlsUrl?: string;
+    presenterPeerId: string;
+    delaySeconds?: number;
+  } | null;
 }): ScreenShareTile[] {
   return args.peerIds.map((peerId) => {
     const hls =
       args.liveStream && args.liveStream.presenterPeerId === peerId
         ? {
             hlsUrl: args.liveStream.hlsUrl,
+            cameraHlsUrl: args.liveStream.cameraHlsUrl ?? null,
             delaySeconds: args.liveStream.delaySeconds,
           }
-        : { hlsUrl: null, delaySeconds: undefined };
+        : { hlsUrl: null, cameraHlsUrl: null, delaySeconds: undefined };
     if (peerId === args.localPeerId) {
       return {
         peerId,
@@ -68,6 +79,7 @@ export function collectScreenTiles(args: {
       peerId,
       stream: remote?.screenStream ?? null,
       hlsUrl: hls.hlsUrl,
+      cameraHlsUrl: hls.cameraHlsUrl,
       delaySeconds: hls.delaySeconds,
       presenterName: remote?.displayName ?? args.fallbackName,
       isSelf: false,
