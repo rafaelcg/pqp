@@ -701,7 +701,8 @@ export function HlsWatchPlayer({
         ...hlsLivePlayerConfig(),
         enableWorker: true,
         capLevelToPlayerSize: true,
-        maxLiveSyncPlaybackRate: 1.5,
+        // 1 = off. 1.5 pitched music up when the 10 s window slipped.
+        maxLiveSyncPlaybackRate: 1,
         startLevel: start.startLevel,
         abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
         // Playlist is written after the first 2 s segment. Retry the
