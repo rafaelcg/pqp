@@ -562,17 +562,18 @@ UIKit removes the presenting view controller's view from the window when a
 `onDisappear` calls `tearDown()` and `model.close()`. So the film was paused
 and the player dropped by our own code, the watchdog task was cancelled, and
 every chrome button wrote into a `@State` box SwiftUI had stopped rendering,
-including the X. Rotation kept working because rotation is UIKit's, not ours.
-Builds 28, 30 and 31 all had it, and it survived taking AVKit out because AVKit
-was never the reason.
+the X included. Rotation kept working because rotation is UIKit's, not ours.
 
-Build 32 presents `.overFullScreen`, which covers the screen identically and
-leaves the presenter in the hierarchy, and the stage additionally refuses to
-tear down while `isFullscreen` is true. Nothing about this is visible in the
-source of either file, so
-`testTheTheaterDoesNotEvictTheChatThatOwnsThePlayer` presents a real
-controller in a real window and asserts the presenter is still in it; it fails
-on `.fullScreen` at exactly that assertion.
+**Build 32 has no fullscreen button and presents nothing.** Fullscreen is the
+phone: turn it on its side and the stage fills the screen, turn it back and
+the transcript returns. It is the same view, the same `WatchPicture` layer and
+the same overlay given a bigger frame, which is why the film does not blink on
+the way in or out. `WatchStageView` lives in `ChatView`'s top safe-area inset,
+so an inset as tall as the screen IS the screen. Landscape is unlocked only
+while a party is live and the viewer has no seat (`WatchOrientation`, still
+named enter/leaveTheater); the app is portrait everywhere else. Three presented
+theaters failed in three different ways, and the fourth attempt was to stop
+presenting.
 
 The lesson is the one on the pitfalls list: every source-text assertion about
 the theater was green for both broken builds. The tests that replaced them run
