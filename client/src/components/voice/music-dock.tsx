@@ -1,13 +1,9 @@
 import { ChevronDown, ChevronUp, ListMusic, Music, X } from "lucide-react";
-import { useCallback, useState } from "react";
 import type { MusicTrack } from "@pqp/shared";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
-import { ApiError, resolveMusic } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { MusicAddForm } from "@/components/voice/music-add-form";
 import {
-  addTrack,
   moveInQueue,
   removeFromQueue,
   toggleMusicOpen,
@@ -118,81 +114,12 @@ function MusicPanel({
   selfUserId: string | null;
 }) {
   const { t } = useTranslation();
-  const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const state = music.state;
   const current = state?.current ?? null;
 
-  const submit = useCallback(async () => {
-    const text = query.trim();
-    if (!text || busy) {
-      return;
-    }
-    setBusy(true);
-    setNotice(null);
-    try {
-      const { track } = await resolveMusic(text);
-      const outcome = addTrack(track);
-      if (outcome === "queued") {
-        setNotice(t("music.queued"));
-      } else if (outcome === "full") {
-        setNotice(t("music.full"));
-      }
-      if (outcome !== "full") {
-        setQuery("");
-      }
-    } catch (error) {
-      if (error instanceof ApiError) {
-        if (error.status === 404) {
-          setNotice(t("music.error.notFound"));
-        } else if (error.status === 400) {
-          setNotice(t("music.error.unsupported"));
-        } else {
-          setNotice(t("music.error.upstream"));
-        }
-      } else {
-        setNotice(t("music.error.upstream"));
-      }
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, query, t]);
-
   return (
     <div className="space-y-2">
-      <form
-        className="flex gap-1.5"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
-      >
-        <Input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={t("music.placeholder")}
-          aria-label={t("music.placeholder")}
-          className="h-8 text-xs"
-          disabled={busy}
-          onKeyDown={(event) => {
-            // The window-level shortcut handlers run in the capture phase;
-            // submitting here keeps Enter meaning "add" whatever they do.
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void submit();
-            }
-          }}
-        />
-        <Button type="submit" size="sm" disabled={busy || !query.trim()}>
-          {t("music.add")}
-        </Button>
-      </form>
-      {notice && (
-        <p role="status" className="text-[11px] text-paper-muted">
-          {notice}
-        </p>
-      )}
+      <MusicAddForm />
 
       {current ? (
         <p className="truncate text-[11px] text-paper-muted" title={current.title}>

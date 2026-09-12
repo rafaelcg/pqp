@@ -1,6 +1,6 @@
 import { Music, Pause, Play, SkipForward } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
 import type { ChannelMusicTrack } from "@pqp/shared";
+import { MarqueeText } from "@/components/ui/marquee-text";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -9,7 +9,6 @@ import {
   setPlaying,
   useMusic,
 } from "@/lib/music-store";
-import { cn } from "@/lib/utils";
 
 /**
  * What a voice channel is playing, as a small card under its occupants.
@@ -19,10 +18,7 @@ import { cn } from "@/lib/utils";
  * queue. Somebody outside it sees the title and a click joins the call,
  * because "they're listening to Legião" is the reason to walk in.
  *
- * A title longer than the card scrolls. The text is drawn twice with a gap
- * and the pair slides by half its width, so the loop is seamless; the
- * animation only runs when the title actually overflows, measured after
- * layout, and not at all under `prefers-reduced-motion`.
+ * A title longer than the card scrolls (`MarqueeText`).
  */
 export function ChannelMusicCard({
   channelId,
@@ -38,24 +34,6 @@ export function ChannelMusicCard({
   const { t } = useTranslation();
   const music = useMusic();
   const playing = inCall && music.channelId === channelId && music.state?.status === "playing";
-  const clipRef = useRef<HTMLSpanElement | null>(null);
-  const textRef = useRef<HTMLSpanElement | null>(null);
-  const [overflows, setOverflows] = useState(false);
-
-  useLayoutEffect(() => {
-    const clip = clipRef.current;
-    const text = textRef.current;
-    if (!clip || !text) {
-      return;
-    }
-    const measure = () => setOverflows(text.scrollWidth > clip.clientWidth + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(clip);
-    return () => observer.disconnect();
-  }, [track.title]);
-
-  const label = t("music.sidebar", { title: track.title });
   const onTitleClick = () => {
     if (inCall) {
       setMusicOpen(true);
@@ -74,23 +52,9 @@ export function ChannelMusicCard({
         type="button"
         className="min-w-0 flex-1 text-left"
         aria-label={inCall ? t("music.open") : t("music.sidebar.join", { title: track.title })}
-        title={label}
         onClick={onTitleClick}
       >
-        <span ref={clipRef} className="block overflow-hidden whitespace-nowrap">
-          <span
-            ref={textRef}
-            className={cn("inline-block", overflows && "pqp-marquee")}
-            style={overflows ? { "--marquee-s": `${Math.max(6, track.title.length / 4)}s` } as React.CSSProperties : undefined}
-          >
-            {track.title}
-            {overflows && (
-              <span aria-hidden="true" className="pl-8">
-                {track.title}
-              </span>
-            )}
-          </span>
-        </span>
+        <MarqueeText text={track.title} />
       </button>
       {inCall && (
         <>
