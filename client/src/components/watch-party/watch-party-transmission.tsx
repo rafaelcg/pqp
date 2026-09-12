@@ -247,10 +247,46 @@ export function WatchPartyTransmission({
               : t("watchParty.tx.carries")}{" "}
             {t("watchParty.tx.behind", { seconds: stream?.delaySeconds ?? 10 })}
           </p>
+          {/* THE RULE THE HOST WOULD OTHERWISE READ AS A BROKEN CAMERA. While
+              their share is the ladder's source the camera is held at 360p
+              (`effectiveCameraQuality` in `lib/video-quality.ts`), because the
+              two leave the same machine on the same uplink and the share is
+              what the audience came for. Stated only while a session is
+              actually live, which is exactly when the cap is in force. */}
+          {showsCameraHeldHint(isPresenting, stream) && (
+            <p
+              data-testid="watch-party-tx-camera-held"
+              className="text-[11px] text-text-tertiary"
+            >
+              {t("watchParty.tx.cameraHeld")}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * Whether to state the camera rule, which is only true while the cap is
+ * actually in force.
+ *
+ * The cap (`effectiveCameraQuality` in `lib/video-quality.ts`) is applied
+ * exactly when this machine's share is what a live egress is transcoding, and
+ * `use-voice.ts` reads that from one place so the two halves cannot disagree.
+ * Those are the same two facts here: presenting, and a session live. A host
+ * who is not presenting is told nothing, and a host mid-"preparing" is told
+ * nothing either, because the cap has not landed yet.
+ *
+ * A function rather than an inline `&&` for the same reason `streamAudioState`
+ * is one: the detail rows are behind a click the static render cannot make, so
+ * this is the only way the rule is reachable from a test at all.
+ */
+export function showsCameraHeldHint(
+  isPresenting: boolean,
+  stream: LiveHlsStream | null,
+): boolean {
+  return isPresenting && stream !== null;
 }
 
 /**
