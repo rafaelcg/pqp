@@ -1,6 +1,13 @@
+// @vitest-environment jsdom
+import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import { WatchStage, watchAudienceCount } from "./watch-stage";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it } from "vitest";
+import type { VoiceState } from "@/hooks/use-voice";
+import { WatchStage, WatchChannelStage, watchAudienceCount } from "./watch-stage";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+  true;
 
 /**
  * The seatless watch stage: a picture, a count, and one way into the call.
@@ -229,5 +236,99 @@ describe("WatchStage docked", () => {
     // And the stage keeps everything it had.
     expect(html).toContain('data-testid="watch-stage-join"');
     expect(html).toContain('data-testid="watch-stage-live"');
+  });
+});
+
+/**
+ * The double surface Rafael saw in production: a viewer whose watch party
+ * stream ended got the idle "Nenhuma watch party rolando aqui" setup surface
+ * AND this component's own "A transmissão acabou" card stacked in the same
+ * pane, pushing chat and the composer off screen. `WatchPartyPanel`'s surface
+ * slot already answers "nothing is on air" for a watch party channel the
+ * instant the stream drops (`watchPartySurface`, tested in
+ * `watch-party-session.test.ts`), so this mount must stay out of the way on
+ * a watch party channel and leave the ended card to a plain voice room's bare
+ * share, which has nothing else covering that pane.
+ */
+describe("WatchChannelStage ended", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function voiceStateWithStream(hasStream: boolean): VoiceState {
+    return {
+      voiceChannelId: null,
+      status: "idle",
+      channelLive: {
+        c1: {
+          stream: hasStream
+            ? {
+                hlsUrl: "https://api.example.test/api/voice/hls-playlist/c1/1?t=tok",
+                startedAt: 0,
+                presenterPeerId: "peer-1",
+              }
+            : null,
+          watching: 1,
+        },
+      },
+      occupancy: { c1: [] },
+    } as unknown as VoiceState;
+  }
+
+  function renderStage(isWatchParty: boolean, voiceState: VoiceState) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root.render(
+        <WatchChannelStage
+          channelId="c1"
+          channelName="cinema"
+          voiceState={voiceState}
+          isWatchParty={isWatchParty}
+          onSetWatchingLive={() => {}}
+          onSeedChannelLive={() => {}}
+        />,
+      );
+    });
+  }
+
+  it("never shows the ended card on a watch party channel, leaving the panel's own surface alone", () => {
+    renderStage(true, voiceStateWithStream(true));
+    act(() => {
+      root.render(
+        <WatchChannelStage
+          channelId="c1"
+          channelName="cinema"
+          voiceState={voiceStateWithStream(false)}
+          isWatchParty
+          onSetWatchingLive={() => {}}
+          onSeedChannelLive={() => {}}
+        />,
+      );
+    });
+    expect(container.querySelector('[data-testid="watch-stage-ended"]')).toBeNull();
+    expect(container.querySelector('[data-testid="watch-channel-stage"]')).toBeNull();
+  });
+
+  it("still shows the ended card on a plain voice room's bare share", () => {
+    renderStage(false, voiceStateWithStream(true));
+    act(() => {
+      root.render(
+        <WatchChannelStage
+          channelId="c1"
+          channelName="cinema"
+          voiceState={voiceStateWithStream(false)}
+          isWatchParty={false}
+          onSetWatchingLive={() => {}}
+          onSeedChannelLive={() => {}}
+        />,
+      );
+    });
+    expect(container.querySelector('[data-testid="watch-stage-ended"]')).not.toBeNull();
   });
 });
