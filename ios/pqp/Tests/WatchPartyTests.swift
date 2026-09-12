@@ -1,4 +1,6 @@
 import AVFoundation
+import AVKit
+import SwiftUI
 import UIKit
 import XCTest
 @testable import pqp
@@ -448,6 +450,17 @@ final class WatchPartyTests: XCTestCase {
             stage.contains("WatchTheaterPresenter"),
             "the cover from the chat inset left the transcript in the layout"
         )
+        // `testFullscreenAllowsTheTallestRungAgain` has always passed, and
+        // build 28 still wrote a phone-strip ceiling the moment the theater
+        // opened: that test feeds `resolutionCap` a fullscreen rectangle
+        // nothing in the app ever produced, because `WatchVideoSurface` is
+        // removed for the whole of fullscreen and it is the only thing that
+        // reports a size. This is the missing half, that the product supplies
+        // the number the pure rule is tested with.
+        XCTAssertTrue(
+            stage.contains("WatchOrientation.screenPixels"),
+            "the theater has to say how big it is; nothing else measures it"
+        )
         let push = try String(
             contentsOf: sources.appending(path: "Core/PushNotifications.swift"), encoding: .utf8
         )
@@ -456,6 +469,45 @@ final class WatchPartyTests: XCTestCase {
             "UIKit never asks WatchOrientation unless the app delegate answers"
         )
         XCTAssertTrue(push.contains("WatchOrientation.allowed"))
+    }
+
+    /**
+     THE ONE-WAY DOOR, AND WHY A TEXT TEST COULD NOT SEE IT.
+
+     Build 28 reached TestFlight with a fullscreen nobody could leave: a still
+     frame that answered a pinch and nothing else. Every assertion above was
+     green for it, because every one of them reads the source. The defect was
+     one `if let` that fell through at runtime, `contentOverlayView` being nil
+     until the controller's view is loaded, so the cinema chrome, which is the
+     only thing in the theater that can dismiss it (the system transport bar
+     is deliberately off), was built and never added to anything.
+
+     So this one runs the code. No window and no presentation are needed for
+     the half that failed, which is why `makeTheater` is separate from
+     `presentIfNeeded`.
+     */
+    @MainActor
+    func testTheTheaterMountsTheChromeThatIsTheWayBackOut() throws {
+        let anchor = WatchTheaterAnchor()
+        let controller = anchor.makeTheater(player: AVPlayer(), overlay: Color.clear)
+        let host = try XCTUnwrap(anchor.overlayHost, "the theater built no chrome at all")
+        XCTAssertTrue(
+            host.view.isDescendant(of: controller.view),
+            "chrome that is not in the hierarchy is a fullscreen with no exit"
+        )
+        XCTAssertIdentical(host.parent, controller)
+        XCTAssertTrue(
+            host.view.isUserInteractionEnabled,
+            "the X, play and the quality menu are buttons; they have to take touches"
+        )
+        XCTAssertFalse(
+            controller.showsPlaybackControls,
+            "our chrome replaced the system bar, which is why losing it strands somebody"
+        )
+        XCTAssertFalse(
+            controller.allowsPictureInPicturePlayback,
+            "PiP lives on the inline layer; two controllers on one player is two owners"
+        )
     }
 
     // MARK: - Telling a watch party apart from a voice channel

@@ -725,6 +725,22 @@ struct WatchStageView: View {
             isFullscreen = false
         } else {
             isMinimised = false
+            // THE THEATER'S PIXELS, BEFORE THE THEATER OPENS.
+            //
+            // `surfacePixels` is reported by `WatchVideoSurface`, and the
+            // surface is taken out of the hierarchy for the whole of
+            // fullscreen (`picture` draws a black 16:9 hole instead). So the
+            // last number it ever reported is the inline strip's, and
+            // `applyQuality(trigger: .fullscreen)` is one of only two writes
+            // allowed onto a PLAYING item: entering the theater wrote a
+            // phone-strip ceiling onto a full screen, which is a rendition
+            // switch on a live window, which is the freeze this file keeps
+            // warning about. Written first so the `.surface` change is seen
+            // before the `.fullscreen` one; `.surface` is refused mid-playback
+            // by design, so only the fullscreen write lands, and now it can
+            // only raise the ceiling.
+            let theater = WatchOrientation.screenPixels
+            if theater.width > 0, theater.height > 0 { surfacePixels = theater }
             isFullscreen = true
         }
         chrome.reveal(at: Date())

@@ -49,6 +49,20 @@ struct WatchVideoSurface: UIViewRepresentable {
         }
     }
 
+    /// ONE `AVPlayer`, ONE LAYER.
+    ///
+    /// Fullscreen hands the SAME player to the AVKit controller in
+    /// `WatchTheater`, which has a layer of its own, while this one is being
+    /// removed (`picture` draws a black hole instead). An `AVPlayer`
+    /// renders into one layer at a time, so leaving this one holding it until
+    /// SwiftUI gets round to releasing the view is how the theater opened on a
+    /// still frame. Removal releases it here, on the spot.
+    static func dismantleUIView(_ canvas: WatchPlayerCanvas, coordinator: Coordinator) {
+        canvas.onLayout = nil
+        canvas.player = nil
+        coordinator.release()
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -68,6 +82,12 @@ struct WatchVideoSurface: UIViewRepresentable {
             controller?.canStartPictureInPictureAutomaticallyFromInline = false
             pipController = controller
             pip.attach(controller)
+        }
+
+        /// PiP belongs to the layer. When the layer goes, so does it.
+        func release() {
+            pipController = nil
+            onSurfacePixels = nil
         }
 
         func report(_ pixels: CGSize) {

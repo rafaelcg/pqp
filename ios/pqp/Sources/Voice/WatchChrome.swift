@@ -371,6 +371,24 @@ enum WatchOrientation {
         )
     }
 
+    /// The screen in DEVICE PIXELS.
+    ///
+    /// The theater draws into an `AVPlayerViewController`, which reports no
+    /// size to us the way `WatchVideoSurface` does. Without this number the
+    /// only surface the quality rule has ever seen is the inline strip, so
+    /// opening fullscreen re-asked with the STRIP's pixels and wrote a
+    /// ceiling a phone-wide rectangle implies onto a full screen. Portrait
+    /// pixels whichever way the phone is held: `resolutionCap` compares one
+    /// height against the ladder, and both of this rectangle's sides are
+    /// taller than the tallest rung we publish.
+    static var screenPixels: CGSize {
+        guard let screen = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first?.screen
+        else { return .zero }
+        return screen.nativeBounds.size
+    }
+
     static func enterTheater() {
         theaterOpen = true
         apply()
