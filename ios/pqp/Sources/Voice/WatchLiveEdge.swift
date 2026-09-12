@@ -112,6 +112,25 @@ struct WatchLiveEdge: Equatable {
     /// Where a join lands, in target durations (RFC 8216 6.3.3).
     static let targetDurationMultiplier: Double = 3
 
+    /// Plausible bounds on a real segment length, for the clamp below.
+    ///
+    /// `recommendedTimeOffsetFromLive` is three target durations ONLY when the
+    /// playlist declares no `EXT-X-SERVER-CONTROL` HOLD-BACK; a configured
+    /// hold-back (or LL-HLS) makes it a different multiple, so dividing by
+    /// three can yield a "segment length" that is nothing of the sort. The
+    /// egress is not low-latency HLS and `LIVE_HLS_SEGMENT_SECONDS` has been
+    /// 2 s and 4 s, so a result outside this band is a reading distorted by a
+    /// hold-back, not a real segment, and is clamped rather than trusted to
+    /// size the runway, tip and seek thresholds. It is a bounded inference,
+    /// not a playlist parse: AVFoundation offers no clean public target
+    /// duration, only this recommended offset.
+    static let minSegmentSeconds: Double = 1
+    static let maxSegmentSeconds: Double = 8
+
+    private static func clampSegmentSeconds(_ value: Double) -> Double {
+        min(max(value, minSegmentSeconds), maxSegmentSeconds)
+    }
+
     /// The floor: never land closer to the tip than this many target
     /// durations, because that is waiting for a segment not yet written.
     static let minDurationMultiplier: Double = 2
@@ -135,14 +154,14 @@ struct WatchLiveEdge: Equatable {
     /// in place rather than resetting a learned one back down.
     mutating func learnSegmentSeconds(recommendedOffset: Double?) {
         guard let recommendedOffset, recommendedOffset.isFinite, recommendedOffset > 0 else { return }
-        segmentSeconds = recommendedOffset / Self.targetDurationMultiplier
+        segmentSeconds = Self.clampSegmentSeconds(recommendedOffset / Self.targetDurationMultiplier)
     }
 
     static func segmentSeconds(recommendedOffset: Double?) -> Double {
         guard let recommendedOffset, recommendedOffset.isFinite, recommendedOffset > 0 else {
             return fallbackSegmentSeconds
         }
-        return recommendedOffset / targetDurationMultiplier
+        return clampSegmentSeconds(recommendedOffset / targetDurationMultiplier)
     }
 
     /// How far back from the LIVE EDGE to land. Three target durations: the

@@ -248,21 +248,53 @@ enum WatchQualityRetune {
  segment two target durations from the tip instead of three, and asked for
  half the forward buffer three target durations actually need. Fixed two
  different ways because AVFoundation offers two different amounts of help:
- there is no API for "the buffer three target durations need" so
- `forwardBuffer` is a floor re-tuned to today's number, but there IS one for
- the live offset, so `timeOffsetFromLive` is gone — see `apply` below.
+ there is no clean public API for the playlist's target duration, so
+ `forwardBuffer` is derived from the segment length the session learns
+ (`WatchLiveEdge.segmentSeconds`) and capped at the window, re-applied by
+ `retune` once the manifest loads; but there IS one for the live offset, so
+ `timeOffsetFromLive` is gone — see `apply` below.
  */
 enum WatchPlayerItemTuning {
-    /// Three target durations at today's `LIVE_HLS_SEGMENT_SECONDS` (4 s).
-    /// A floor, not a ceiling: this file cannot read the operator's actual
-    /// segment length before `prepare()`, only `apply()`'s pre-play
-    /// ordering (see below) matters for it, so if that knob moves again this
-    /// needs moving with it — `WatchLiveEdgeTests` pins the arithmetic, not
-    /// the knob.
-    static let forwardBuffer: TimeInterval = 12
+    /// Forward buffer as a multiple of the segment length, not a hardcoded
+    /// number of seconds. Three target durations (matching
+    /// `WatchLiveEdge.liveTargetOffset`), floored at two so it is never
+    /// thinner than the join runway, and — the point — never wider than the
+    /// live window: asking `AVPlayer` for more media than a five-segment
+    /// playlist can hold is exactly how it sits forever at
+    /// `.waitingToPlayAtSpecifiedRate`. The old fixed 12 s was three target
+    /// durations at 4 s segments; if the operator drops back to 2 s the
+    /// five-segment window is only 10 s and 12 s could never be filled.
+    static let forwardBufferMultiplier: Double = WatchLiveEdge.targetDurationMultiplier
+    static let minForwardBufferMultiplier: Double = WatchLiveEdge.minDurationMultiplier
+
+    static func forwardBuffer(
+        segmentSeconds: Double = WatchLiveEdge.fallbackSegmentSeconds,
+        windowSpan: Double? = nil
+    ) -> TimeInterval {
+        var buffer = max(
+            forwardBufferMultiplier * segmentSeconds,
+            minForwardBufferMultiplier * segmentSeconds
+        )
+        if let windowSpan, windowSpan.isFinite, windowSpan > 0 {
+            buffer = min(buffer, windowSpan)
+        }
+        return buffer
+    }
+
+    /// Re-apply the forward buffer once the session's real segment length is
+    /// known. `apply` runs before the manifest loads and so uses the fallback;
+    /// the tick loop calls this with the learned length and the live window,
+    /// narrowing the buffer to what production actually serves and never past
+    /// what the window can hold.
+    static func retune(_ item: AVPlayerItem, segmentSeconds: Double, windowSpan: Double?) {
+        let target = forwardBuffer(segmentSeconds: segmentSeconds, windowSpan: windowSpan)
+        if item.preferredForwardBufferDuration != target {
+            item.preferredForwardBufferDuration = target
+        }
+    }
 
     static func apply(_ item: AVPlayerItem) {
-        item.preferredForwardBufferDuration = forwardBuffer
+        item.preferredForwardBufferDuration = forwardBuffer()
         // Deliberately NOT set. `configuredTimeOffsetFromLive` defaults to
         // `kCMTimeInvalid`, which tells `AVPlayerItem` to use
         // `recommendedTimeOffsetFromLive` — Apple's own reading of the
