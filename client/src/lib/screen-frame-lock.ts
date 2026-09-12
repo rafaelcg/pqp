@@ -361,8 +361,6 @@ export async function lockScreenVideoToFps(
     return {
       ...nativeGetSettings(),
       displaySurface: sourceNow.displaySurface,
-      cursor: sourceNow.cursor,
-      logicalSurface: sourceNow.logicalSurface,
       width: canvas.width,
       height: canvas.height,
       frameRate: fps,
