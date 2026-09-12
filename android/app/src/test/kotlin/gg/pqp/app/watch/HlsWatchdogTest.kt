@@ -67,6 +67,24 @@ class HlsWatchdogTest {
         assertEquals(WatchdogReason.Stall, dog.lastReason)
     }
 
+    /**
+     * `ui/WatchPane.kt`'s `DefaultLoadControl` legitimately holds the player
+     * in `STATE_BUFFERING` for up to
+     * `HlsLiveEdge.BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS` (8 s) after a
+     * stall, refilling on purpose before resuming. The default `stallMs`
+     * (12_000) must clear that with real margin, or a healthy refill gets
+     * called dead in the same instant it was about to recover.
+     */
+    @Test
+    fun `an 8s deliberate rebuffer refill is not mistaken for a dead stream`() {
+        val dog = HlsWatchdog()
+        dog.onSourceChanged(0)
+        dog.onBuffering(0)
+        assertEquals(WatchdogDecision.None, dog.tick(8_000))
+        assertEquals(WatchdogDecision.None, dog.tick(11_999))
+        assertEquals(WatchdogDecision.Reconnect, dog.tick(12_000))
+    }
+
     @Test
     fun `a frame arriving clears the stall clock`() {
         val dog = HlsWatchdog(stallMs = 8_000)

@@ -1306,17 +1306,20 @@ class is a reference. Same reasoning as registering the GIF decoder by hand in
 `PqpApplication` rather than trusting a `META-INF/services` entry through the
 shrinker.
 
-`HlsWatchdog` is a port of the web's `client/src/lib/hls-stall.ts`, with the
-same numbers on purpose, and it exists because Media3's own retry cannot fix
-the failure that actually happens: the *session* changed. Four triggers, each
-one something seen at a party:
+`HlsWatchdog` is a port of the web's `client/src/lib/hls-stall.ts`, sharing
+most of its numbers on purpose, and it exists because Media3's own retry
+cannot fix the failure that actually happens: the *session* changed. Four
+triggers, each one something seen at a party:
 
 - a fatal `PlaybackException`;
 - `STATE_ENDED`, which is `#EXT-X-ENDLIST`. LiveKit writes it when the egress
   stops, and a reused `live.m3u8` stays that finished VOD until the next share
   overwrites it. A player handed one plays to the end and freezes on a black
   frame, which is exactly what the web hit on 7 September;
-- buffering for more than 8 s with nothing playing;
+- buffering for more than 12 s with nothing playing (raised from 8 s once the
+  player started running a `DefaultLoadControl` with a real, legitimate 8 s
+  refill window after a stall — see "A deep buffer needed a slower trigger
+  finger" below);
 - the playlist's media sequence not advancing for 15 s, which is what a dead
   egress looks like while the playlist still answers 200.
 
@@ -1367,7 +1370,9 @@ over and over," and the period is one target duration because the band was
 never wider than one segment to begin with.
 
 This is a **different** failure from `HlsWatchdog`'s reconnect
-(`stallMs = 8_000`, `sequenceStuckMs = 15_000`, both above): each micro-stall
+(`stallMs = 8_000` at the time, `sequenceStuckMs = 15_000`, both above; see
+"A deep buffer needed a slower trigger finger" below for why `stallMs` moved
+to 12_000): each micro-stall
 here is a real, short, genuine rebuffer that Media3 resolves on its own well
 under 8 s, so `watchdog.onPlaying()` keeps resetting the stall clock and a
 full reconnect (a new `MediaItem`, `attempt += 1`) never fires. Nothing was
@@ -1409,6 +1414,69 @@ and is a reasonable fast follow, not part of this fix.
 Pinned by `HlsLiveEdgeTest`, which asserts the ratios rather than a
 millisecond figure, and by a source check that `ui/WatchPane.kt` does not
 reintroduce `setLiveConfiguration`.
+
+### A deep buffer needed a slower trigger finger (2026-09-12)
+
+The no-`LiveConfiguration` fix above shipped and cleared the once-a-segment
+loop, and the same day the owner reported it on the new APK anyway:
+"android is better but still too close a buffer... it pauses every now and
+then. can we guarantee it will load enough?" Media3's own fallback holds
+exactly 3 target durations of cushion (12 s at 4 s segments) with no
+configurable floor or ceiling — correct in *ratio*, but a fixed ratio with no
+slack either side of it is still a thin margin against an ordinary publish
+hiccup, and Farol's review of the same PR separately flagged that dropping
+`setLiveConfiguration` had also dropped its `1.5f` playback-speed catch-up
+cap.
+
+**Fixed** by going back to an explicit `LiveConfiguration`, deeper this time
+and never a millisecond guess: `HlsLiveEdge.TARGET_DURATION_MULTIPLIER` moved
+3 → 5 (20 s at 4 s), `MIN_DURATION_MULTIPLIER` 2 → 3 (12 s), and
+`MAX_DURATION_MULTIPLIER` 6 → 10 (40 s, still inside the 60 s playlist
+window). `ui/WatchPane.kt` attaches exactly as before — no `LiveConfiguration`
+on the initial `MediaItem`, because the real `#EXT-X-TARGETDURATION` still
+is not known until the manifest loads — then, in the same `LaunchedEffect`,
+forks a short poll (every 150 ms, up to 4.5 s) for `player.currentManifest as?
+HlsManifest` and corrects the item to these ratios via
+`player.replaceMediaItem(0, …)` the moment a real `targetDurationUs` shows
+up: same index, same URI, so Media3 updates the live-offset configuration on
+the existing period rather than restarting the load. That lands within a
+couple of seconds of attach, before the player has actually buffered
+anywhere near a 12-to-20 s cushion, so there is nothing on screen yet for the
+correction to visibly interrupt. The `1.5f` cap came back too, but lower:
+`setMaxPlaybackSpeed(1.05f)` / `setMinPlaybackSpeed(0.97f)`, gentle enough
+that closing a lag is an inaudible nudge over tens of seconds rather than
+pitch-shifted catch-up, which is the right trade once the cushion itself is
+carrying the resilience.
+
+The `LiveConfiguration` alone only decides where the playhead sits; whether a
+buffer that *deep* is actually sitting behind it is `DefaultLoadControl`'s
+job, and the ExoPlayer in `ui/WatchPane.kt` did not have one — it ran on
+Media3's own defaults (15 s / 50 s / 2.5 s / 5 s), noticeably shallower than
+the new 20 s target. It now builds with
+`setBufferDurationsMs(minBufferMs = 20_000, maxBufferMs = 60_000,
+bufferForPlaybackMs = 4_000, bufferForPlaybackAfterRebufferMs = 8_000)`:
+roughly two segments before first play, up to 60 s held (still inside the
+proxy's window, never asking for more than it can serve), and about two
+segments refilled before resuming from a stall rather than the default one
+— because resuming into another immediate stall on the very next tick of
+jitter is worse than waiting one extra segment to resume solidly.
+
+That last number is exactly `HlsWatchdog`'s `stallMs` from the previous
+section, which is the trap: after a real stall, Media3 will now legitimately
+sit in `STATE_BUFFERING` for up to 8 s on purpose, refilling, and
+`HlsWatchdog.onBuffering` cannot tell that apart from a dead source by state
+alone — both look like "buffering, position frozen." A `stallMs` at 8_000
+could therefore call a healthy, about-to-resume refill dead in the same
+instant it was going to recover. `stallMs` moved 8_000 → 12_000, 4 s of
+margin over the refill window and still under `sequenceStuckMs`'s 15_000, so
+a legitimate deep-buffer refill and the "give up" verdict no longer race.
+`HlsWatchdog`'s own doc comment on `stallMs` carries this coupling forward:
+if either number moves again, the other has to be re-read against it.
+
+Pinned by `HlsLiveEdgeTest` (the new ratios and playback-speed constants) and
+by a new `HlsWatchdogTest` case asserting that an 8 s buffering spell — the
+`DefaultLoadControl`'s own designed refill window — does not trip the
+default watchdog.
 
 ### What it looks like
 
