@@ -254,6 +254,116 @@ export function isBehindLive(
   return secondsBehindLive(currentTime, liveEdge) > threshold;
 }
 
+/**
+ * How fast the picture should chase the live edge, keyed on how far behind
+ * it currently sits. Never faster than this (`BROADCAST_PIPELINE.md` B1.1).
+ */
+export const HLS_CATCH_UP_MAX_PLAYBACK_RATE = 1.2;
+
+/**
+ * A gentle catch-up curve, not the flat multiplier the review re-proposed.
+ *
+ * WHY A CURVE, AND WHY IT STAYS LOW. `maxLiveSyncPlaybackRate: 1.5` was
+ * shipped once and reverted (`hls-watch-player.tsx`, next to
+ * `HLS_LIVE_SYNC_DURATION_COUNT`): against the old 10 s window the playhead
+ * sat past the sync point almost always, so 1.5x was not catch-up, it was
+ * the ordinary playback speed, and it pitched the presenter's music for the
+ * whole party. The player now sits ~20 s behind live ON PURPOSE
+ * (`HLS_PLAYER_CUSHION_SECONDS`), so "distance from where the design put
+ * you" is a meaningful, rare trigger rather than the common case.
+ *
+ * Even so, whether the presenter's audio is music-heavy right now is not
+ * something this player can detect, so there is no "hold 1.0x during music"
+ * rule to fall back on -- the curve is gentle everywhere instead of fast
+ * anywhere. 1.2x is a barely-perceptible pitch shift; 1.5x was not. This
+ * moves the target smoothly (`video.playbackRate`, applied continuously
+ * below): a viewer who drifts gets nudged back over several seconds, never
+ * a jump-cut seek.
+ */
+export function catchUpPlaybackRate(secondsBehindTarget: number): number {
+  if (!Number.isFinite(secondsBehindTarget) || secondsBehindTarget <= 1) {
+    // Comfortably covers "back to 1.0x within 0.5 s of target" too.
+    return 1;
+  }
+  if (secondsBehindTarget <= 3) {
+    return 1.05;
+  }
+  if (secondsBehindTarget <= 6) {
+    return 1.1;
+  }
+  return HLS_CATCH_UP_MAX_PLAYBACK_RATE;
+}
+
+/**
+ * The subset of an hls.js instance the recovery ladder's in-place steps
+ * touch. Kept apart from `HlsQualityHandle` even though it overlaps: this
+ * one exists for recovery, not for a viewer's own quality pick, and the two
+ * should stay free to diverge.
+ */
+export interface HlsRecoveryHandle {
+  currentLevel: number;
+  recoverMediaError?: () => void;
+  startLoad?: (startPosition?: number) => void;
+  stopLoad?: () => void;
+}
+
+/**
+ * Force hls.js to re-request the currently playing level's media playlist,
+ * without creating a new instance and, where the level is pinned rather
+ * than Auto, without losing the pin.
+ *
+ * THE MECHANISM. hls.js has no direct "reload this level" call. Cycling
+ * `currentLevel` through Auto (`-1`) and back to whatever was actually
+ * selected is what forces its level controller to treat the level as
+ * changed and re-fetch its playlist; reassigning the SAME value again is
+ * not guaranteed to register as a change at all. A level already on Auto
+ * only needs the one assignment: ABR will reselect and the resulting fetch
+ * reloads it regardless of which rung it lands on.
+ */
+export function reloadHlsLevelPlaylist(hls: HlsRecoveryHandle): void {
+  const level = hls.currentLevel;
+  hls.stopLoad?.();
+  hls.currentLevel = -1;
+  if (level >= 0) {
+    hls.currentLevel = level;
+  }
+  hls.startLoad?.(-1);
+}
+
+/**
+ * Run one step of the recovery ladder (`hls-stall.ts`) against a real hls.js
+ * instance. Split out from the component so the mapping from a decision to
+ * an actual hls.js call is itself something a test can hand a fake handle
+ * to, the same way `applyHlsQualityLevel` is (`hls-quality.ts`).
+ *
+ * Deliberately silent on every decision this ladder does not own
+ * (`"none"`, `"reconnect"`, `"rebuild"`, `"dead"`): those are the
+ * component's job (asking the server, or tearing the instance down).
+ */
+export function applyHlsRecoveryStep(
+  hls: HlsRecoveryHandle | null | undefined,
+  decision: "recover-media-error" | "start-load" | "restart-load" | "reload-level",
+): void {
+  if (!hls) {
+    return;
+  }
+  switch (decision) {
+    case "recover-media-error":
+      hls.recoverMediaError?.();
+      return;
+    case "start-load":
+      hls.startLoad?.(-1);
+      return;
+    case "restart-load":
+      hls.stopLoad?.();
+      hls.startLoad?.(-1);
+      return;
+    case "reload-level":
+      reloadHlsLevelPlaylist(hls);
+      return;
+  }
+}
+
 export interface MediaSessionMetadataInput {
   /** The party or presenter's title. Falls back to the channel name. */
   title: string;

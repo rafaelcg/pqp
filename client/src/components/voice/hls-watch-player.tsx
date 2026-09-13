@@ -34,14 +34,18 @@ import {
   hlsSessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
+  recordHlsRebuild,
   resolveHlsUrl,
   sameHlsSession,
   sampleVideoPlaybackQuality,
   setHlsPlaybackStats,
   shouldAdoptHlsSource,
+  withFreshHlsToken,
 } from "@/lib/hls-playback";
 import {
+  applyHlsRecoveryStep,
   buildMediaSessionMetadata,
+  catchUpPlaybackRate,
   effectiveLiveSyncDurationCount,
   hasSafariPresentationMode,
   HLS_ABR_DEFAULT_ESTIMATE_BPS,
@@ -51,6 +55,7 @@ import {
   liveSeekTarget,
   mediaSeekableEnd,
   resolveLiveEdge,
+  secondsBehindLive,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { drainJitterMs } from "@/lib/reconnect-jitter";
@@ -126,6 +131,7 @@ interface HlsHandle {
   levels: HlsLevelLike[];
   recoverMediaError?: () => void;
   startLoad?: (startPosition?: number) => void;
+  stopLoad?: () => void;
   bandwidthEstimate?: number;
 }
 
@@ -413,33 +419,69 @@ export function HlsWatchPlayer({
     }
   }, [activeSrc, attempt, clearAuthGraceTimer]);
 
-  const reconnect = useCallback(async () => {
-    setPhase("reconnecting");
-    const channelId = channelIdFromHlsUrl(activeSrc);
-    let next: string | null = null;
-    if (channelId) {
-      try {
-        const live = await fetchChannelLive(channelId);
-        next = live.stream ? resolveHlsUrl(live.stream.hlsUrl) : null;
-      } catch {
-        // The API is the thing that is down, or we lost access: retry the
-        // URL we have, the watchdog will call it dead if that fails too.
+  // The freshest playlist URL known for the CURRENT session, kept a token
+  // ahead of `activeSrc` without ever being a rebuild trigger itself
+  // (`BROADCAST_PIPELINE.md` B1.3, item 3): `xhrSetup` below rewrites every
+  // outgoing playlist request onto this ref, so a routine token restamp
+  // reaches hls.js through the loader rather than through tearing the
+  // instance down for it. Reset to `activeSrc` at the top of every real
+  // attach (new session, or an actual rebuild), so a stale ref can never
+  // outlive the instance it was rewriting requests for.
+  const freshPlaylistUrlRef = useRef(activeSrc);
+
+  const reconnect = useCallback(
+    async (options: { forceRebuild?: boolean } = {}) => {
+      setPhase("reconnecting");
+      const channelId = channelIdFromHlsUrl(activeSrc);
+      let next: string | null = null;
+      if (channelId) {
+        try {
+          const live = await fetchChannelLive(channelId);
+          next = live.stream ? resolveHlsUrl(live.stream.hlsUrl) : null;
+        } catch {
+          // The API is the thing that is down, or we lost access. Nothing to
+          // adopt; fall through to the "nothing new" branch below.
+        }
       }
-    }
-    if (next && !sameHlsSession(next, activeSrc)) {
-      // A genuinely different session: follow it, and remember it so the
-      // `src` prop arriving with the same session a moment later does not
-      // re-attach on top of this one.
-      sessionRef.current = hlsSessionKey(next);
-      setActiveSrc(next);
-    } else if (next && next !== activeSrc) {
-      // Same session, fresher token. Worth taking on a reconnect (the old one
-      // may be what failed) and never worth taking otherwise.
-      setActiveSrc(next);
-    } else {
-      setAttempt((n) => n + 1);
-    }
-  }, [activeSrc]);
+      if (next && !sameHlsSession(next, activeSrc)) {
+        // A genuinely different session: follow it, and remember it so the
+        // `src` prop arriving with the same session a moment later does not
+        // re-attach on top of this one. A new egress session is a new media
+        // timeline, so a rebuild is correct here regardless of who asked
+        // (B1.3, items 1/2: keep).
+        sessionRef.current = hlsSessionKey(next);
+        setActiveSrc(next);
+        return;
+      }
+      if (options.forceRebuild) {
+        // A person pressed "try again": always give them a visible restart,
+        // on the freshest URL this check turned up (B1.3: "stays a rebuild").
+        if (next) {
+          setActiveSrc(next);
+        } else {
+          setAttempt((n) => n + 1);
+        }
+        return;
+      }
+      if (next && next !== activeSrc) {
+        // Same session, fresher token only (B1.3, item 3: remove). No media
+        // timeline changed, so swap the token into the loader instead of
+        // dropping the buffer for it. If the true cause of whatever asked
+        // for this reconnect was the token, this alone clears it; the
+        // recovery ladder gets another pass before it asks again either way.
+        freshPlaylistUrlRef.current = next;
+        setPhase("playing");
+        return;
+      }
+      // Nothing fresher is available -- the API is unreachable, or this
+      // really is the same URL (B1.3, item 4: remove for the URL-unchanged
+      // case). Rebuilding onto an identical source buys nothing a local
+      // retry would not, so leave the player alone; the watchdog asks again
+      // if the condition persists.
+      setPhase("reconnecting");
+    },
+    [activeSrc],
+  );
 
   // Held in a ref so the attach effect does not list `reconnect` as a
   // dependency. That callback's identity changes with `activeSrc`, and a
@@ -449,7 +491,7 @@ export function HlsWatchPlayer({
 
   const retryFromDead = useCallback(() => {
     watchRef.current.reset(Date.now());
-    void reconnect();
+    void reconnect({ forceRebuild: true });
   }, [reconnect]);
 
   const getVideo = useCallback(
@@ -534,7 +576,8 @@ export function HlsWatchPlayer({
   }, [getVideo, jumpToLive]);
 
   // Behind-live polling. `timeupdate` fires roughly 4x/s, which is plenty
-  // for a badge nobody needs to the millisecond.
+  // for a badge nobody needs to the millisecond, and also drives the B1.1
+  // catch-up curve below.
   useEffect(() => {
     const video = getVideo();
     if (!video) {
@@ -549,11 +592,25 @@ export function HlsWatchPlayer({
         setBehindLive(false);
         return;
       }
+      const distance = secondsBehindLive(video.currentTime, liveEdge);
       setBehindLive(isBehindLive(video.currentTime, liveEdge));
+      // Move the target smoothly rather than seeking: a small, continuous
+      // playback-rate nudge closes ordinary drift over several seconds
+      // instead of a jump-cut. `maxLiveSyncPlaybackRate` stays fixed at 1
+      // (see the comment where the player is constructed) so hls.js's own
+      // flat catch-up never fights this curve. Left alone while paused --
+      // there is nothing to chase without a running clock, and the pause
+      // path already re-seeks to the edge on resume.
+      if (!video.paused) {
+        video.playbackRate = catchUpPlaybackRate(distance);
+      }
     };
     video.addEventListener("timeupdate", check);
     check();
-    return () => video.removeEventListener("timeupdate", check);
+    return () => {
+      video.removeEventListener("timeupdate", check);
+      video.playbackRate = 1;
+    };
   }, [getVideo, src]);
 
   // Picture-in-Picture: standard API where it exists, Safari's
@@ -727,6 +784,11 @@ export function HlsWatchPlayer({
     };
     const watch = watchRef.current;
     watch.onSourceChanged(Date.now());
+    // This attach's own starting point for the token-swap ref (B1.3, item
+    // 3): a real re-attach (this effect re-running at all) always deserves
+    // the freshest URL it was actually given, never a stale ref left over
+    // from whatever the previous instance was mid-swap on.
+    freshPlaylistUrlRef.current = activeSrc;
     // Before the first frame, so a viewer who muted the last watch party does
     // not get one loud second of this one.
     video.volume = volumePrefRef.current.volume;
@@ -742,10 +804,10 @@ export function HlsWatchPlayer({
         setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
         watch.onPlaying();
         reportSize();
-        // The stream recovered on its own (or the "recover" branch's seek
-        // worked) before a jittered reconnect from an earlier tick fired.
-        // That reconnect is now stale — cancel it rather than reloading a
-        // player that just came back (Farol review).
+        // The stream recovered on its own (or one of the recovery ladder's
+        // in-place steps worked) before a jittered reconnect/rebuild from an
+        // earlier tick fired. That response is now stale -- cancel it rather
+        // than reloading a player that just came back (Farol review).
         clearPendingReconnect();
       }
     };
@@ -753,9 +815,14 @@ export function HlsWatchPlayer({
       watch.onWaiting(Date.now());
     };
     const onMediaError = () => {
-      // Native player (no hls.js): a decode or network failure on the
-      // element itself. Same policy as a fatal hls.js error.
-      watch.onError({ fatal: true });
+      // The native player (no hls.js), or an MSE decode failure that
+      // bubbled past hls.js to the element itself. `MEDIA_ERR_DECODE` is
+      // the one code the recovery ladder treats specially: `recoverMediaError()`
+      // is the one remedy built for it, and nothing else here plausibly
+      // fixes a broken decoder pipeline.
+      watch.onNativeMediaError({
+        decode: video.error?.code === MediaError.MEDIA_ERR_DECODE,
+      });
     };
     video.addEventListener("playing", onPlaying);
     video.addEventListener("waiting", onWaiting);
@@ -787,45 +854,66 @@ export function HlsWatchPlayer({
         setPhase("dead");
         return;
       }
-      if (decision === "recover") {
-        // This tick is handling the stall a different way (a local seek, not
-        // a reconnect); an earlier tick's still-pending reconnect would be a
-        // second, redundant response to the same stall.
+      if (
+        decision === "recover-media-error" ||
+        decision === "start-load" ||
+        decision === "restart-load" ||
+        decision === "reload-level"
+      ) {
+        // The recovery ladder, in place: never a new hls.js instance
+        // (`BROADCAST_PIPELINE.md` B1.3). This tick is handling the stall
+        // without a reconnect at all, so an earlier tick's still-pending
+        // jittered reconnect/rebuild (below) would be a second, redundant
+        // response to the same episode. Compute the seek before touching the
+        // loader -- after `startLoad`/`stopLoad`, `liveSyncPosition` can
+        // reset to the first-window value (~8 s) while the element still
+        // holds a minute of back-buffer, and seeking that leftover is the
+        // Chrome jump.
         clearPendingReconnect();
         const hls = hlsRef.current;
-        console.warn(`[hls] stream stalled (${watch.lastReason}), recovering`);
-        if (watch.lastReason === "fatal") {
-          hls?.recoverMediaError?.();
-        }
-        // Compute the seek before startLoad: after it, liveSync can reset to
-        // the first-window value (~8 s) while the element still holds a
-        // minute of back-buffer. Seeking that leftover is the Chrome jump.
+        console.warn(`[hls] stream stalled (${watch.lastReason}), ${decision}`);
         const target = liveSeekTarget({
           currentTime: video.currentTime,
           liveSyncPosition: hls?.liveSyncPosition ?? null,
           seekableEnd: mediaSeekableEnd(video),
         });
-        hls?.startLoad?.(-1);
+        applyHlsRecoveryStep(hls, decision);
         if (target !== null) {
           video.currentTime = target;
         }
         return;
       }
+      // decision is "reconnect" (sequence-stuck checking whether the
+      // session moved on) or "rebuild" (the fatal/stall ladder genuinely
+      // exhausted -- three full cycles with no recovery, or a decode error
+      // `recoverMediaError` did not clear). Both are jittered: a restarted
+      // egress or an API blip stalls every open viewer's playlist at once,
+      // so either decision firing for the whole audience in the same instant
+      // is the same thundering-herd shape as a `/ws` deploy drain.
       if (reconnectJitterTimer !== null) {
-        // Already waiting out a jittered reconnect from an earlier tick of
-        // the SAME ongoing stall — let it run rather than stacking another
-        // (each tick re-evaluates the same "sequence-stuck" condition until
-        // it resolves, so without this guard a persistent stall would queue
-        // one reconnect per tick — Farol review).
+        // Already waiting out a jittered response from an earlier tick of
+        // the SAME ongoing episode -- let it run rather than stacking
+        // another (each tick re-evaluates the same condition until it
+        // resolves, so without this guard a persistent stall would queue one
+        // per tick).
         return;
       }
-      console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
+      console.warn(
+        decision === "reconnect"
+          ? `[hls] stream stalled (${watch.lastReason}), checking for a fresher session`
+          : `[hls] stream stalled (${watch.lastReason}), rebuilding the player`,
+      );
       reconnectJitterTimer = window.setTimeout(() => {
         reconnectJitterTimer = null;
         if (cancelled) {
           return;
         }
-        void reconnectRef.current();
+        if (decision === "rebuild") {
+          recordHlsRebuild();
+          setAttempt((n) => n + 1);
+        } else {
+          void reconnectRef.current();
+        }
       }, drainJitterMs());
     }, STALL_TICK_MS);
 
@@ -884,10 +972,16 @@ export function HlsWatchPlayer({
         ...hlsLivePlayerConfig(),
         enableWorker: true,
         capLevelToPlayerSize: true,
-        // 1 = off. 1.5 sped playback up (and pitched music) whenever the
-        // playhead drifted past the sync point, which on the old 10 s window
-        // was most of the time. The proxy's wider window is what absorbs
-        // drift now; a viewer far behind gets the "jump to live" affordance.
+        // 1 = off, deliberately, and still. 1.5 sped playback up (and
+        // pitched music) whenever the playhead drifted past the sync point,
+        // which on the old 10 s window was most of the time. Catch-up now
+        // lives OUTSIDE hls.js entirely (`catchUpPlaybackRate`, the
+        // "Behind-live polling" effect below), keyed on actual distance from
+        // the target rather than a single flat multiplier hls.js applies
+        // whenever it judges itself behind; leaving this at 1 is what stops
+        // the two fighting over the same `video.playbackRate`. A viewer far
+        // enough behind that the gentle curve caps out still gets the
+        // "jump to live" affordance.
         maxLiveSyncPlaybackRate: 1,
         startLevel: start.startLevel,
         abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
@@ -922,11 +1016,29 @@ export function HlsWatchPlayer({
         // deployment with no `LIVE_HLS_VIEWER_KEY` mints none, and there the
         // Bearer is the only door. hls.js calls this synchronously per XHR,
         // so the token has to be in hand already.
+        //
+        // B1.3, item 3: also the loader-level fix for a routine token
+        // restamp. `freshPlaylistUrlRef` holds the newest `?t=` `reconnect()`
+        // has seen for this SAME session; every request against our own
+        // proxy is rewritten onto it here before anything else runs, so a
+        // stale token reaches hls.js through the URL it fetches rather than
+        // through a rebuilt instance. `xhr.open` is called again
+        // deliberately: hls.js already opened the request against the OLD
+        // url before this function ran, and re-opening (still before
+        // `send()`) is the only way to redirect it.
         xhrSetup: (xhr, url) => {
+          let effectiveUrl = url;
+          if (isOwnHlsPlaylistProxyUrl(url)) {
+            const fresh = withFreshHlsToken(url, freshPlaylistUrlRef.current);
+            if (fresh !== url) {
+              xhr.open("GET", fresh, true);
+              effectiveUrl = fresh;
+            }
+          }
           if (
-            isOwnHlsPlaylistProxyUrl(url) &&
+            isOwnHlsPlaylistProxyUrl(effectiveUrl) &&
             authToken &&
-            !hasHlsViewerToken(url)
+            !hasHlsViewerToken(effectiveUrl)
           ) {
             xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
           }

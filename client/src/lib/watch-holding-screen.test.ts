@@ -36,6 +36,18 @@ describe("resolveHoldingScreenReason", () => {
     ).toBe("restarting");
   });
 
+  it("shows restarting even with a frame still on screen and phase still playing (B1.3: no rebuild for sequence-stuck)", () => {
+    // The player no longer tears hls.js down for a stuck egress, so `phase`
+    // never leaves "playing" and the last frame never leaves `hasFrame`.
+    // `stallReason` has to carry this on its own.
+    expect(
+      resolveHoldingScreenReason({
+        ...playing,
+        stallReason: "sequence-stuck",
+      }),
+    ).toBe("restarting");
+  });
+
   it("maps every other stall reason to the generic reconnecting copy", () => {
     for (const stallReason of ["fatal", "stall", null] as const) {
       expect(
