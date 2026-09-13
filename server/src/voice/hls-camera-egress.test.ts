@@ -267,6 +267,10 @@ describe("the presenter's camera, beside the ladder", () => {
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     cameraTrackId = "TR_CAM";
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera is the NEXT LINK of this channel's own reconcile queue, not
+    // part of the return value above: it settles a few microtask ticks later.
+    // See `flush`.
+    await flush();
 
     const inserts = query.mock.calls
       .map((call) => String(call[0]))
@@ -303,17 +307,24 @@ describe("the presenter's camera, beside the ladder", () => {
     // master, so every viewer re-attaches and rebuffers.
     cameraTrackId = "TR_CAM";
     const on = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera is the NEXT LINK of this channel's own reconcile queue, not
+    // part of the return value above: it settles a few microtask ticks
+    // later. See `flush`.
+    await flush();
+    const onStream = liveHlsStreamFor(CHANNEL);
     expect(on?.startedAt).toBe(before!.startedAt);
     expect(on?.hlsUrl).toBe(before!.hlsUrl);
-    expect(on?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
+    expect(onStream?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
     expect(lk.stop).not.toHaveBeenCalled();
 
     // And off again.
     cameraTrackId = null;
     const off = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const offStream = liveHlsStreamFor(CHANNEL);
     expect(off?.startedAt).toBe(before!.startedAt);
     expect(off?.hlsUrl).toBe(before!.hlsUrl);
-    expect(off?.cameraHlsUrl).toBeUndefined();
+    expect(offStream?.cameraHlsUrl).toBeUndefined();
     expect(lk.stop).toHaveBeenCalledTimes(1);
     expect(lk.stop).toHaveBeenCalledWith("EG_2");
     expect(liveHlsActivity().cameraSessions).toBe(0);
@@ -325,11 +336,16 @@ describe("the presenter's camera, beside the ladder", () => {
     cameraTrackId = "TR_CAM_1";
     install(lk);
     const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
 
     // A device switch mints a new sid. A Track Composite egress is bound to
     // one sid and goes on running against a dead one, writing nothing.
     cameraTrackId = "TR_CAM_2";
     const after = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera is the NEXT LINK of this channel's own reconcile queue, not
+    // part of the return value above: it settles a few microtask ticks
+    // later. See `flush`.
+    await flush();
 
     expect(after?.startedAt).toBe(first!.startedAt);
     expect(lk.stop).toHaveBeenCalledWith("EG_2");
@@ -353,6 +369,135 @@ describe("the presenter's camera, beside the ladder", () => {
 
     expect(after?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
     expect(lk.stop).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE RACE THIS FILE'S OWN QUEUE EXISTS TO CLOSE. A previous revision ran
+   * the camera step as a free-floating promise off `startRoom`'s return, so a
+   * roster event landing while a brand-new room's camera start was still
+   * awaiting LiveKit or its session-row write could reach `reconcileCameraEgress`
+   * a second time for the same channel before the first call had finished —
+   * two `startTrackCompositeEgress` calls, two egresses, one presenter.
+   *
+   * In this single-threaded design "overlapping" is two `reconcileLiveHls`
+   * calls issued back to back, with no await between them — exactly what two
+   * roster events landing on the same tick look like. `reconcileLiveHls`
+   * itself is synchronous up to its first await, so both calls read and
+   * update `reconcileQueue` before either's own reconcile logic has run,
+   * which is what proves the chaining rather than the timing is what
+   * serialises them.
+   */
+  it("starts exactly one camera egress when reconciles overlap", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+
+    const [first, second] = await Promise.all([
+      reconcileLiveHls(CHANNEL, "peer-1", SERVER),
+      reconcileLiveHls(CHANNEL, "peer-1", SERVER),
+    ]);
+    // The camera is the NEXT LINK of this channel's own reconcile queue, not
+    // part of either return value above: it settles a few microtask ticks
+    // later. See `flush`.
+    await flush();
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    const cameraStarts = startedWith(lk).filter(
+      (opts) => opts?.videoTrackId === "TR_CAM",
+    );
+    expect(cameraStarts).toHaveLength(1);
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
+  /**
+   * ITEM (b)/(c) FROM THE SAME REVIEW. The per-channel queue is what stops
+   * another RECONCILE from running `reconcileCameraEgress` concurrently, but
+   * the operator's rollback switch is read fresh on every check, not just
+   * once when this call started. Flipping it off while THIS call's own
+   * session-row write is still in flight must not let the write's success
+   * resurrect a camera nobody wants any more — `cameraStillWanted`'s
+   * post-write check is exactly what refuses that.
+   */
+  it("ends with no camera when it is disabled mid-write", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+
+    let releaseWrite: (() => void) | undefined;
+    const original = query.getMockImplementation();
+    query.mockImplementation(async (sql: unknown, ...rest: unknown[]) => {
+      if (typeof sql === "string" && sql.includes("DO UPDATE")) {
+        await new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        });
+      }
+      return original!(sql, ...rest);
+    });
+
+    try {
+      const reconcile = reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.waitFor(() => {
+        expect(releaseWrite).toBeDefined();
+      });
+      // The operator disables the rollback switch while the camera's own
+      // session row is mid-write.
+      process.env.LIVE_HLS_CAMERA = "false";
+      releaseWrite!();
+      await reconcile;
+      await flush();
+    } finally {
+      // Restore the shared mock for every test that runs after this one.
+      query.mockImplementation(original!);
+    }
+
+    const stream = liveHlsStreamFor(CHANNEL);
+    expect(stream?.cameraHlsUrl).toBeUndefined();
+    // The egress LiveKit already reported started is stopped rather than
+    // left running with no row and no advertisement — an orphan.
+    expect(lk.stop).toHaveBeenCalledWith("EG_2");
+    expect(liveHlsActivity().cameraSessions).toBe(0);
+  });
+
+  /**
+   * A device switch during a *film* restart replaces the whole `RoomHls`
+   * object (a new `startedAt`), so a camera start still chasing the OLD
+   * room's identity must back off rather than hand the old presenter's
+   * camera to the new session — `cameraStillWanted`'s room-identity check,
+   * exercised end to end rather than by calling it directly.
+   */
+  it("ends with the new presenter's camera only when the presenter changes during start", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM_1";
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(liveHlsStreamFor(CHANNEL)?.cameraHlsUrl).toContain(
+      CAMERA_RUNG_NAME,
+    );
+
+    // The presenter changes cameras, and a second reconcile lands before the
+    // first has had a chance to run — the same back-to-back shape as the
+    // overlap test above, just with a track change in the middle.
+    cameraTrackId = "TR_CAM_2";
+    const after = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(after?.startedAt).toBeDefined();
+    const stream = liveHlsStreamFor(CHANNEL);
+    expect(stream?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
+    // Exactly one camera egress running at the end, bound to the new track —
+    // the old one stopped, never resurrected.
+    expect(lk.stop).toHaveBeenCalledWith("EG_2");
+    expect(lk.stop).not.toHaveBeenCalledWith("EG_1");
+    expect(startedWith(lk).at(-1)).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM_2" }),
+    );
+    expect(liveHlsActivity().cameraSessions).toBe(1);
   });
 
   it("stops with the session when the share ends", async () => {
@@ -501,6 +646,10 @@ describe("the camera and the machinery that stops things", () => {
     await advance(30 * 60_000);
     cameraTrackId = "TR_CAM";
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera is the NEXT LINK of this channel's own reconcile queue, not
+    // part of the return value above: it settles a few microtask ticks
+    // later. See `flush`.
+    await advance(0);
     expect(liveHlsActivity().cameraSessions).toBe(1);
 
     await advance(5_000);
@@ -540,6 +689,10 @@ describe("the camera and the machinery that stops things", () => {
 
     await advance(2 * 60_000 + 1_000);
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera is the NEXT LINK of this channel's own reconcile queue, not
+    // part of the return value above: it settles a few microtask ticks
+    // later. See `flush`.
+    await advance(0);
     expect(lk.start).toHaveBeenCalledTimes(3);
     expect(liveHlsActivity().cameraSessions).toBe(1);
   });
@@ -553,6 +706,11 @@ describe("the camera and the machinery that stops things", () => {
     cameraTrackId = "TR_CAM";
     install(lk);
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera settles a few microtask ticks after the film's own return
+    // value, on purpose: see `flush`. Waiting for it here (rather than
+    // killing an egress id that does not exist yet) is what makes the kill
+    // below land on the camera this call actually started.
+    await advance(0);
     lk.kill("EG_2");
     await advance(20_000);
     await checkLiveHlsHealth();
@@ -561,6 +719,10 @@ describe("the camera and the machinery that stops things", () => {
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     cameraTrackId = "TR_CAM";
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera is the NEXT LINK of this channel's own reconcile queue, not
+    // part of the return value above: it settles a few microtask ticks
+    // later. See `flush`.
+    await advance(0);
 
     expect(liveHlsActivity().cameraSessions).toBe(1);
   });

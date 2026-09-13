@@ -3072,6 +3072,43 @@ async function startRung(
  * only when it actually looked. A probe that failed returns before reaching
  * here, so a momentary LiveKit hiccup never tears the camera down.
  */
+/**
+ * Whether the camera egress this call is about to advertise (or has just
+ * started) is still the one this room actually wants, re-checked after every
+ * await in `reconcileCameraEgress` that can itself take real time or fail
+ * (the LiveKit start call, the session-row write).
+ *
+ * THE PER-CHANNEL QUEUE (`reconcileLiveHls`) is what stops two RECONCILES for
+ * the same channel from running this function concurrently — but the health
+ * monitor is a separate timer, not a queued reconcile, and it directly clears
+ * `room.camera` when a camera dies. This is the belt to that brace: room and
+ * film-session identity alone (the old check) would still let a camera
+ * disabled mid-write, or a slot something else has since claimed, be
+ * resurrected or clobbered.
+ *
+ *  - room/session identity: unchanged from before.
+ *  - `liveHlsCameraEnabled()`: the operator's rollback switch, re-read rather
+ *    than trusted from when this call started.
+ *  - `room.camera === null`: by the time either checkpoint below runs, THIS
+ *    call has not set it yet, so anything else already sitting there means
+ *    another attempt won the slot first and this one must back off rather
+ *    than overwrite it.
+ */
+function cameraStillWanted(
+  channelId: string,
+  room: RoomHls,
+  startedAt: number,
+): boolean {
+  const current = rooms.get(channelId);
+  if (!current || current !== room || current.stream.startedAt !== startedAt) {
+    return false;
+  }
+  if (!liveHlsCameraEnabled()) {
+    return false;
+  }
+  return current.camera === null;
+}
+
 async function reconcileCameraEgress(
   channelId: string,
   cameraTrackId: string | null,
@@ -3176,9 +3213,12 @@ async function reconcileCameraEgress(
   }
   // The room may have been replaced while LiveKit was answering. Starting a
   // transcode into a session that no longer exists is an orphan, so stop it
-  // rather than filing it under a room that moved on.
-  const after = rooms.get(channelId);
-  if (!after || after !== room || after.stream.startedAt !== startedAt) {
+  // rather than filing it under a room that moved on. `cameraStillWanted`
+  // checks more than identity — see its comment — because the per-channel
+  // queue keeps another RECONCILE from running concurrently, but the health
+  // monitor is a separate timer and is not, so this is the belt to that
+  // brace.
+  if (!cameraStillWanted(channelId, room, startedAt)) {
     await stopEgressById(egressId, channelId);
     return;
   }
@@ -3205,9 +3245,13 @@ async function reconcileCameraEgress(
     await stopEgressById(egressId, channelId);
     return;
   }
-  // The room may have moved on again while that write was in flight.
-  const afterWrite = rooms.get(channelId);
-  if (!afterWrite || afterWrite !== room || afterWrite.stream.startedAt !== startedAt) {
+  // The room may have moved on again — or the camera may have been disabled,
+  // or the slot claimed by something else — while that write was in flight.
+  // THIS is the check that stops a camera turned off mid-write from being
+  // resurrected: `LIVE_HLS_CAMERA` flipping, or `room.camera` already holding
+  // something, both fail it now, where the old version only checked room and
+  // film-session identity.
+  if (!cameraStillWanted(channelId, room, startedAt)) {
     await stopEgressById(egressId, channelId);
     return;
   }
@@ -3255,19 +3299,49 @@ async function readSfuLoad(reader: LiveHlsSfuLoadReader): Promise<number> {
   }
 }
 
+/**
+ * What one film-side reconcile pass decided: the film's own outcome, plus —
+ * when THIS pass is the one that decided it — the camera track to reconcile
+ * next.
+ *
+ * `cameraTrackId` is optional-vs-null on purpose, not just nullable:
+ * `undefined` means "already handled, nothing left to do" (the room was torn
+ * down, or a probe genuinely could not be made and a bounded retry is already
+ * scheduled — see `scheduleCameraProbeRetry`), and `null` means "handle it:
+ * the presenter has no camera published right now." Collapsing the two would
+ * either skip a stop that has to happen or repeat a probe retry that is
+ * already pending.
+ *
+ * WHY THE CAMERA IS NEVER DECIDED INSIDE THIS RETURN. `reconcileLiveHls`
+ * (below) is what actually calls `reconcileCameraEgress`, as the NEXT link of
+ * this channel's own per-channel queue — chained so it can never overlap a
+ * later push's camera work for the same channel, but never awaited by the
+ * film path either. A version of this that ran the camera step here (or
+ * detached it with a free-floating promise, which is what a previous revision
+ * did) let two reconciles for the same channel run their camera logic
+ * concurrently: a roster event arriving while a brand-new room's camera start
+ * was still awaiting LiveKit or its session-row write could start a SECOND
+ * camera egress, or resurrect one a concurrent "turn the camera off" had just
+ * stopped.
+ */
+interface LiveHlsReconcileResult {
+  stream: LiveHlsStream | null;
+  cameraTrackId?: string | null;
+}
+
 async function startRoom(
   channelId: string,
   presenterPeerId: string,
   knownTracks?: LiveHlsScreenTracks,
   sourceHeight?: number | null,
-): Promise<LiveHlsStream | null> {
+): Promise<LiveHlsReconcileResult> {
   const egress = getEgress();
   if (!egress || !isLiveHlsEnabled()) {
-    return null;
+    return { stream: null };
   }
   if (isFailed(channelId)) {
     logEvent("voice.hlsStartSuppressed", { channelId, presenterPeerId });
-    return null;
+    return { stream: null };
   }
   // The concurrency guard, and it comes BEFORE the track probe on purpose:
   // `findScreenTracks` polls LiveKit up to sixteen times over six seconds,
@@ -3292,12 +3366,12 @@ async function startRoom(
       sessions: rooms.size,
       maxSessions,
     });
-    return null;
+    return { stream: null };
   }
   const tracks = knownTracks ?? (await findScreenTracks(channelId, presenterPeerId));
   if (!tracks) {
     logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
-    return null;
+    return { stream: null };
   }
   const ladder = liveHlsLadder();
   const decisions = decideLadder({
@@ -3344,7 +3418,7 @@ async function startRoom(
         // The lowest rung is the stream. Nothing above it is worth starting
         // if a viewer would have no rendition to fall back to.
         scheduleRestart(channelId, "start-failed");
-        return null;
+        return { stream: null };
       }
       continue;
     }
@@ -3358,7 +3432,7 @@ async function startRoom(
   const primary = running[0];
   if (!primary) {
     scheduleRestart(channelId, "start-failed");
-    return null;
+    return { stream: null };
   }
   const stream: LiveHlsStream = {
     hlsUrl: viewerPlaylistUrl(channelId, startedAt),
@@ -3460,30 +3534,16 @@ async function startRoom(
       await stopRoom(channelId, "playlist-not-ready");
       scheduleRestart(channelId, "playlist-not-ready");
     }
-    return null;
+    return { stream: null };
   }
-  // AFTER the film is proven, and IN THE BACKGROUND from here. Awaiting this
-  // used to delay every caller's film URL on a camera-specific LiveKit RPC,
-  // the box-budget probe and the session-row write: a camera dependency
-  // stalling could hold up or abort the primary result even though the film
-  // egress is already healthy and playing. The film is what this function
-  // exists to hand back, so it is handed back the moment it is ready, and the
-  // camera settles on its own — `notifyChanged` below is what tells the room
-  // once it does, since starting it here rather than from `reconcileLiveHls`
-  // means nothing else is waiting on this promise to know to look again.
-  void reconcileCameraEgress(channelId, tracks.cameraTrackId ?? null)
-    .then(() => {
-      if (rooms.get(channelId)?.stream.cameraHlsUrl) {
-        notifyChanged(channelId, "camera-started");
-      }
-    })
-    .catch((error) => {
-      logEvent("voice.hlsCameraReconcileFailed", {
-        channelId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  return stream;
+  // AFTER the film is proven, but NOT DONE HERE. This function hands the film
+  // back the moment it is ready — a camera-specific LiveKit RPC, box-budget
+  // probe or session-row write stalling must never hold up or abort the
+  // primary result. The camera track is returned alongside the film instead,
+  // for `reconcileLiveHls` to reconcile as the NEXT link of this channel's own
+  // serialisation queue: chained, so it can never overlap a later push's own
+  // camera work for this channel, but never awaited by the film path either.
+  return { stream, cameraTrackId: tracks.cameraTrackId ?? null };
 }
 
 /**
@@ -3505,18 +3565,42 @@ export function reconcileLiveHls(
   sourceHeight?: number | null,
 ): Promise<LiveHlsStream | null> {
   const previous = reconcileQueue.get(channelId) ?? Promise.resolve();
-  const run = previous
+  const filmPromise = previous
     .catch(() => undefined)
     .then(() =>
       reconcileLiveHlsNow(channelId, presenterPeerId, serverId, sourceHeight),
     );
-  reconcileQueue.set(channelId, run);
-  void run.finally(() => {
-    if (reconcileQueue.get(channelId) === run) {
+  const streamPromise = filmPromise.then((result) => result.stream);
+  // THE CAMERA IS THE NEXT LINK OF THIS CHANNEL'S OWN QUEUE, not a
+  // free-floating promise. `reconcileLiveHls` still resolves the moment the
+  // film does (`streamPromise`, returned below), but `reconcileQueue` is
+  // updated to point at THIS combined chain, so the next call for this
+  // channel — a roster event, `set-camera`, anything — waits for the camera
+  // step to finish first. That is what stops two reconciles for the same
+  // channel from running their camera logic at the same time: a previous
+  // revision detached the camera step here, and a roster event arriving
+  // while a brand-new room's camera start was still awaiting LiveKit or its
+  // session-row write could start a second camera egress, or resurrect one a
+  // concurrent "turn the camera off" had just stopped.
+  const queued = filmPromise
+    .then((result) =>
+      result.cameraTrackId === undefined
+        ? undefined
+        : reconcileCameraEgress(channelId, result.cameraTrackId),
+    )
+    .catch((error: unknown) => {
+      logEvent("voice.hlsCameraReconcileFailed", {
+        channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  reconcileQueue.set(channelId, queued);
+  void queued.finally(() => {
+    if (reconcileQueue.get(channelId) === queued) {
       reconcileQueue.delete(channelId);
     }
   });
-  return run;
+  return streamPromise;
 }
 
 async function reconcileLiveHlsNow(
@@ -3524,7 +3608,7 @@ async function reconcileLiveHlsNow(
   presenterPeerId: string | null,
   serverId: string | null,
   sourceHeight?: number | null,
-): Promise<LiveHlsStream | null> {
+): Promise<LiveHlsReconcileResult> {
   if (!(await isLiveHlsEnabledForServer(serverId))) {
     // "not allowlisted" and "nobody is sharing" used to arrive here as the
     // same thing, because `pushLiveHls` resolved the server id only when it
@@ -3535,7 +3619,7 @@ async function reconcileLiveHlsNow(
     if (rooms.has(channelId)) {
       await stopRoom(channelId, "not-allowlisted");
     }
-    return null;
+    return { stream: null };
   }
   const current = rooms.get(channelId);
   if (!presenterPeerId) {
@@ -3545,7 +3629,7 @@ async function reconcileLiveHlsNow(
     if (current) {
       await stopRoom(channelId, "no-share");
     }
-    return null;
+    return { stream: null };
   }
   if (current && current.stream.presenterPeerId === presenterPeerId) {
     const tracks = await probeScreenTracks(channelId, presenterPeerId);
@@ -3556,7 +3640,7 @@ async function reconcileLiveHlsNow(
       // turned their camera on stuck with no PiP until some unrelated roster
       // event happens to try again — see `scheduleCameraProbeRetry`.
       scheduleCameraProbeRetry(channelId);
-      return current.stream;
+      return { stream: current.stream };
     }
     clearCameraProbeRetry(channelId);
     if (tracks.videoTrackId === current.videoTrackId) {
@@ -3564,9 +3648,9 @@ async function reconcileLiveHlsNow(
       // path: it runs on every roster event and on the `set-camera` frame,
       // and it is where a webcam being switched on actually starts its
       // transcode. It reuses the `listParticipants` call above, so it costs
-      // no extra RPC.
-      await reconcileCameraEgress(channelId, tracks.cameraTrackId ?? null);
-      return current.stream;
+      // no extra RPC. The camera itself is reconciled by the caller, as the
+      // next link of the queue — never here.
+      return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null };
     }
     logEvent("voice.hlsTrackReplaced", {
       channelId,
@@ -3600,9 +3684,8 @@ async function reconcileLiveHlsNow(
       });
       // The reconnect republished their camera on a fresh sid, so the running
       // camera egress is bound to a dead track. Same reasoning as the share's
-      // `videoTrackId` comparison directly above.
-      await reconcileCameraEgress(channelId, tracks.cameraTrackId ?? null);
-      return current.stream;
+      // `videoTrackId` comparison directly above; reconciled by the caller.
+      return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null };
     }
     await stopRoom(channelId, "presenter-changed");
   }

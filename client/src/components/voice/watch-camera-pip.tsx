@@ -84,6 +84,10 @@ export function WatchCameraPip({
   // same-session token refresh still needs the freshest URL on hand.
   const latestSrcRef = useRef(src);
   latestSrcRef.current = src;
+  // Set only in the native (non hls.js) branch of `attachOnce`, so the
+  // token-refresh effect below knows there is no `hlsPlayerRef` to hand the
+  // fresh URL to and must update the `<video>` element directly instead.
+  const usingNativeRef = useRef(false);
 
   /**
    * TOKEN REFRESHES ARE APPLIED IN PLACE, NEVER BY REATTACHING. This runs
@@ -97,18 +101,28 @@ export function WatchCameraPip({
    * long party) — and `loadSource` reloads the manifest against the new URL
    * without detaching the `<video>` or losing anything `onFrame` already
    * reported, a world apart from destroying and recreating the whole player.
-   * Native Safari has no equivalent call and is left alone: it is the
-   * fallback path, not the common one, and forcing a reload there would
-   * itself interrupt playback.
+   *
+   * NATIVE SAFARI GETS THE SAME TREATMENT, JUST APPLIED DIFFERENTLY: there is
+   * no `loadSource` to call, so a same-session token refresh is applied
+   * straight to the element's `src` in place — the same `<video>` node, not
+   * a fresh one, and no unmount of this component. Leaving it alone (as a
+   * previous revision did) meant a native viewer's camera silently stopped
+   * once the URL's `?t=` the element was still fetching against expired,
+   * even though the film's own player, playing on hls.js, kept refreshing
+   * fine right beside it.
    */
   useEffect(() => {
-    if (!hlsPlayerRef.current) {
+    if (shouldAdoptHlsSource(sessionRef.current, src)) {
+      // A genuine session change: the effect below does the (one) real
+      // reattach, so there is nothing for this one to apply in place.
       return;
     }
-    if (!shouldAdoptHlsSource(sessionRef.current, src)) {
-      // Not a session-changing URL, but the token portion may have moved:
-      // that IS what this effect exists to apply.
+    if (hlsPlayerRef.current) {
       hlsPlayerRef.current.loadSource(src);
+      return;
+    }
+    if (usingNativeRef.current && videoRef.current) {
+      videoRef.current.src = src;
     }
   }, [src]);
 
@@ -137,6 +151,7 @@ export function WatchCameraPip({
       return;
     }
     let cancelled = false;
+    usingNativeRef.current = false;
     onFrameRef.current(false);
 
     // Same rule as the film's player: the header is only for our own proxy,
@@ -198,6 +213,7 @@ export function WatchCameraPip({
         // browser with neither simply never produces a frame and the corner
         // stays empty.
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          usingNativeRef.current = true;
           video.src = latestSrcRef.current;
           void video.play().catch(() => {
             // Muted autoplay is allowed everywhere; if it still refused, the
