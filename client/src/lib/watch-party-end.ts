@@ -27,7 +27,7 @@ import { ApiError } from "./api";
  *     clearing itself. Only when that fetch confirms nothing is active
  *     there any more does this run the same cleanup as branch 1: that is
  *     this exact end having actually landed, just without an answer this
- *     request could see (2026-09-13 addition, Farol review of #532 — the
+ *     request could see (2026-09-13 addition, Farol review of PR 532 — the
  *     first cut of B8 refreshed and stopped there, so a confirmed
  *     server-side end whose response got lost left the presenter connected
  *     and transmitting to a party that no longer existed).

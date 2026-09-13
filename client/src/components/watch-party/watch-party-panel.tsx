@@ -1094,7 +1094,20 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         surfaceHeight(props.fill, "h-[68svh] min-h-[320px]"),
       )}
     >
-      <div className="flex min-h-0 flex-1">
+      {/* A FLOOR, NOT JUST A SHARE. `min-h-0` let this row shrink to
+          nothing whenever its siblings below it (the options summary, the
+          go-live checklist, the state bar) needed more room than the
+          surface had: on a narrow stage the state bar's own text wraps
+          hard enough to run past a few hundred pixels tall on its own, and
+          adding the checklist (postmortem B3) was enough to push the total
+          over the top — collapsing the preview to 0×0 and failing
+          `watch-party-preview`'s visibility check in e2e, not because
+          nothing was picked but because there was nowhere left to draw it.
+          160px matches `MIN_STAGE_HEIGHT_PX` in `lib/call-split.ts` ("a
+          stage shorter than this is a letterbox, not a picture"): below it,
+          whatever grew too tall to fit is what the surface's own
+          `overflow-hidden` clips, never the picture the host just picked. */}
+      <div className="flex min-h-[160px] flex-1">
         <div className="relative min-w-0 flex-1 bg-black">
           {stream ? (
             <video
