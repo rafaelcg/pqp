@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRealtimeTransport, type RealtimeStatus } from "./realtime";
+import {
+  createRealtimeTransport,
+  reconnectDelayMs,
+  type RealtimeStatus,
+} from "./realtime";
 
 /**
  * The transport previously had no reconnect at all: one dropped socket left the
@@ -348,16 +352,131 @@ describe("createRealtimeTransport", () => {
     expect(types).toEqual(["auth"]);
   });
 
-  it("reconnects immediately on close 1001", async () => {
+  it("delays the first reconnect after a drain close (1001) instead of reconnecting immediately", async () => {
+    // 141 tabs reconnecting the instant a deploy's drain closed them pinned
+    // the Postgres pool on 2026-09-12 (item C7). The first attempt after a
+    // drain-shaped close must never be immediate.
     const transport = createRealtimeTransport();
     transport.connect(async () => "t");
     await flush();
     sockets[0]!.accept();
 
     sockets[0]!.close(1001);
+    // Math.random is mocked to 0 in beforeEach, so the drain jitter resolves
+    // to its floor (500ms) exactly — still not zero.
+    await vi.advanceTimersByTimeAsync(499);
+    await flush();
+    expect(sockets).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(sockets).toHaveLength(2);
+  });
+
+  it.each([1001, 1006, 1012])(
+    "spreads the first reconnect after close %d uniformly across 0.5s-4s",
+    (closeCode) => {
+      vi.restoreAllMocks(); // use real Math.random for the distribution check
+      for (let i = 0; i < 200; i++) {
+        const delay = reconnectDelayMs(0, closeCode);
+        expect(delay).toBeGreaterThanOrEqual(500);
+        expect(delay).toBeLessThanOrEqual(4_000);
+      }
+    },
+  );
+
+  it("does not apply the drain spread to a later attempt in the same backoff sequence", () => {
+    vi.restoreAllMocks();
+    for (let i = 0; i < 200; i++) {
+      // attempt 1 after a second 1006 in the same sequence: ordinary
+      // full-jitter backoff (cap 2s at attempt 1), not the 0.5-4s drain window.
+      const delay = reconnectDelayMs(1, 1006);
+      expect(delay).toBeGreaterThanOrEqual(0);
+      expect(delay).toBeLessThanOrEqual(2_000);
+    }
+  });
+
+  it("does not apply the drain spread to a non-drain close code", () => {
+    vi.restoreAllMocks();
+    for (let i = 0; i < 200; i++) {
+      // attempt 0, close 1000: ordinary full-jitter backoff (cap 1s), not
+      // the 0.5-4s drain window a deploy earns.
+      const delay = reconnectDelayMs(0, 1000);
+      expect(delay).toBeGreaterThanOrEqual(0);
+      expect(delay).toBeLessThanOrEqual(1_000);
+    }
+  });
+
+  it("grows the backoff delay's cap exponentially and stops at 30s", () => {
+    vi.restoreAllMocks();
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
+    // factor 2, base 1s: 1s, 2s, 4s, 8s, 16s, then capped at 30s.
+    expect(reconnectDelayMs(0, 1000)).toBeCloseTo(1_000);
+    expect(reconnectDelayMs(1, 1000)).toBeCloseTo(2_000);
+    expect(reconnectDelayMs(2, 1000)).toBeCloseTo(4_000);
+    expect(reconnectDelayMs(3, 1000)).toBeCloseTo(8_000);
+    expect(reconnectDelayMs(4, 1000)).toBeCloseTo(16_000);
+    expect(reconnectDelayMs(5, 1000)).toBeCloseTo(30_000);
+    expect(reconnectDelayMs(9, 1000)).toBeCloseTo(30_000);
+    randomSpy.mockRestore();
+  });
+
+  it("resets the backoff attempt counter on a successful ready", async () => {
+    // With Math.random mocked to 0 (beforeEach), the drain spread floors at
+    // 500ms while the ordinary backoff at attempt >= 1 floors at 0ms — so
+    // whether a second drop reconnects instantly or waits 500ms tells us
+    // whether the attempt counter actually reset.
+    const transport = createRealtimeTransport();
+    transport.connect(async () => "t");
+    await flush();
+    sockets[0]!.accept();
+
+    // First drop: attempt 0 -> drain spread floor of 500ms.
+    sockets[0]!.close(1006);
+    await vi.advanceTimersByTimeAsync(500);
+    await flush();
+    expect(sockets).toHaveLength(2);
+
+    // Reaches ready: the attempt counter resets to 0.
+    sockets[1]!.accept();
+    expect(transport.isConnected()).toBe(true);
+
+    // A second drop after that ready is attempt 0 again, so it gets the same
+    // 500ms floor rather than the near-zero delay a continuing sequence
+    // (attempt 1) would use.
+    sockets[1]!.close(1006);
     await vi.advanceTimersByTimeAsync(0);
     await flush();
+    expect(sockets).toHaveLength(2); // not yet — short of the 500ms floor
 
+    await vi.advanceTimersByTimeAsync(500);
+    await flush();
+    expect(sockets).toHaveLength(3);
+  });
+
+  it("reconnects immediately on a network online event, skipping the pending backoff", async () => {
+    const listeners: Record<string, () => void> = {};
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: () => void) => {
+        listeners[type] = listener;
+      },
+      removeEventListener: () => {},
+      location: { protocol: "https:", host: "example.test" },
+    });
+    const transport = createRealtimeTransport();
+    transport.connect(async () => "t");
+    await flush();
+    sockets[0]!.accept();
+
+    sockets[0]!.close(1006);
+    // A reconnect is scheduled behind the drain spread, nothing sent yet.
+    expect(sockets).toHaveLength(1);
+
+    listeners.online?.();
+    await flush();
+
+    // The online handler skips the remaining backoff outright — this is the
+    // user's own connectivity returning, not a deploy-shaped herd.
     expect(sockets).toHaveLength(2);
   });
 
@@ -379,6 +498,14 @@ describe("createRealtimeTransport", () => {
   it("fires onAuthUnavailable when a later token fetch returns null", async () => {
     let issued = 0;
     let lost = 0;
+    // Pin the one drain-jitter roll (this close) and the one backoff roll
+    // (the retry after the null token) so exactly one retry lands inside the
+    // 2s window: full jitter can otherwise redraw a near-zero delay on every
+    // attempt, which is correct (see the distribution tests above) but would
+    // make this specific count nondeterministic under a fixed mock.
+    const randomSpy = vi.spyOn(Math, "random");
+    randomSpy.mockReturnValueOnce(0); // drain jitter floor: 500ms
+    randomSpy.mockReturnValueOnce(1); // next backoff: 2000ms, past this window
     const transport = createRealtimeTransport();
     transport.onAuthUnavailable(() => {
       lost += 1;

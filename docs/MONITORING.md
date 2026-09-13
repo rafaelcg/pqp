@@ -190,7 +190,12 @@ Things that are **deliberately still 200**:
   `tools/admin-dashboard/README.md`). Note the probe queues for a connection
   like everything else, so a pool jammed for longer than 45 seconds *does* go
   red — which is honest: if nothing can get a connection for a minute, the app
-  is not serving.
+  is not serving. The stampede itself is smaller than it used to be: after
+  item C7 of `docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md` (141 tabs
+  pinning the pool at 70 with 79 queued), the client's first reconnect after a
+  drain-shaped close (1001/1006/1012) waits a random 0.5-4s instead of
+  reconnecting at once, then backs off exponentially with full jitter on any
+  further attempt (`client/src/lib/realtime.ts`, `reconnect-jitter.ts`).
 - **A draining machine (SIGTERM).** Failing readiness while draining is the
   usual practice so a load balancer sheds traffic, but there is exactly one
   machine and nowhere to shed to. All it would produce is an alert on every

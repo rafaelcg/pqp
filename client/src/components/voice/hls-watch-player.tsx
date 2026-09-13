@@ -54,6 +54,7 @@ import {
   resolveLiveEdge,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
+import { drainJitterMs } from "@/lib/reconnect-jitter";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
@@ -679,6 +680,13 @@ export function HlsWatchPlayer({
     let cancelled = false;
     let hls: HlsHandle | null = null;
     let hlsFragmentLoaded = false;
+    // A restarted egress or an API blip stalls every open viewer's playlist
+    // at once, so the watchdog's "reconnect" decision below fires for the
+    // whole audience in the same instant — the same thundering-herd shape as
+    // a `/ws` deploy drain (CLAUDE.md pitfall 10/11), just against
+    // `GET /api/channels/:id/live`. Spread only that call, not the watchdog's
+    // own tick cadence (`STALL_TICK_MS`, unchanged below).
+    let reconnectJitterTimer: number | null = null;
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -788,7 +796,13 @@ export function HlsWatchPlayer({
         return;
       }
       console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
-      void reconnectRef.current();
+      reconnectJitterTimer = window.setTimeout(() => {
+        reconnectJitterTimer = null;
+        if (cancelled) {
+          return;
+        }
+        void reconnectRef.current();
+      }, drainJitterMs());
     }, STALL_TICK_MS);
 
     // A refused play() is a paused element behind the "loading" overlay
@@ -967,6 +981,9 @@ export function HlsWatchPlayer({
       cancelled = true;
       window.clearInterval(authTokenTimer);
       window.clearInterval(stallTimer);
+      if (reconnectJitterTimer !== null) {
+        window.clearTimeout(reconnectJitterTimer);
+      }
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);

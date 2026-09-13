@@ -71,6 +71,13 @@ vi.mock("livekit-client", () => {
     async mute() {}
     async unmute() {}
   }
+  // Real shape (nextRetryDelayInMs), never exercised in these tests — no
+  // reconnect scenario runs here, only `new DefaultReconnectPolicy()`.
+  class DefaultReconnectPolicy {
+    nextRetryDelayInMs() {
+      return 0;
+    }
+  }
   return {
     Room: FakeFirefoxRoom,
     RoomEvent,
@@ -93,6 +100,7 @@ vi.mock("livekit-client", () => {
       ) {}
     },
     VideoQuality: { LOW: 0, MEDIUM: 1, HIGH: 2 },
+    DefaultReconnectPolicy,
   };
 });
 

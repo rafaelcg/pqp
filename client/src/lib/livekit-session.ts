@@ -1,6 +1,11 @@
 import type { VoiceSessionInfo } from "@pqp/shared";
+// Type-only: erased at compile time, so this does not pull the (heavy,
+// dynamically-imported-below) livekit-client runtime into this module's
+// eager bundle.
+import type { ReconnectPolicy } from "livekit-client";
 import type { PeerConnectionState, RemotePeer } from "./peer-connection-manager";
 import type { ReceiveQuality } from "./receive-quality";
+import { drainJitterMs } from "./reconnect-jitter";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
 import { sfuIceServers } from "./sfu-ice-servers";
 import {
@@ -291,7 +296,31 @@ export async function connectLiveKit({
     ConnectionState,
     VideoPreset,
     VideoQuality: LayerQuality,
+    DefaultReconnectPolicy,
   } = await import("livekit-client");
+
+  /**
+   * LiveKit's own engine reconnect (an already-connected room's link to the
+   * SFU drops — a media-box restart, a network blip) retries its FIRST
+   * attempt at 0ms (`DefaultReconnectPolicy`'s own delay table starts at 0;
+   * jitter is only added from the second retry on). A deploy that bounces
+   * the SFU alongside the API drops every open room's engine connection at
+   * once, so that immediate first retry is the same thundering herd as
+   * CLAUDE.md pitfall 10/11 and item C7 of
+   * docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md, just against the SFU
+   * instead of `/ws`. Spread only that first attempt, across the same
+   * window `realtime.ts` uses for a drain-shaped WS close; every later
+   * retry keeps LiveKit's own steady-state backoff untouched.
+   */
+  const defaultReconnectPolicy = new DefaultReconnectPolicy();
+  const reconnectPolicy: ReconnectPolicy = {
+    nextRetryDelayInMs(context) {
+      if (context.retryCount === 0) {
+        return drainJitterMs();
+      }
+      return defaultReconnectPolicy.nextRetryDelayInMs(context);
+    },
+  };
 
   /**
    * ADAPTIVE STREAM IS ON, AND HOW IT MEETS AN EXPLICIT CHOICE. Verified
@@ -315,6 +344,7 @@ export async function connectLiveKit({
   const room = new Room({
     adaptiveStream: true,
     dynacast: true,
+    reconnectPolicy,
   });
 
   /** The largest layer this viewer asks for. Applied to every subscription. */
