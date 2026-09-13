@@ -655,6 +655,9 @@ export function evictSfuUsersExcept(
   });
 }
 
+/** How long to wait before retrying a failed `deleteVoiceResweep`. */
+const RESWEEP_CANCEL_RETRY_MS = 250;
+
 /**
  * Cancel an outstanding channel-private re-sweep — the channel just went
  * public, or its `@everyone` overwrite regained VIEW, so nobody needs to be
@@ -664,8 +667,15 @@ export function evictSfuUsersExcept(
  * Idempotent and safe to call for a channel that never had one — callers are
  * expected to call this unconditionally whenever a channel's access widens,
  * rather than trying to know in advance whether a resweep is actually live.
+ *
+ * The registry delete gets one retry: a lost row here is not cosmetic, it is
+ * the cluster resweep worker (`tickSfuResweeps`) going on evicting people for
+ * up to `RESWEEP_WINDOW_MS` after they were supposed to be let back in. A
+ * transient failure clears on the retry; a persistent one is logged
+ * distinctly so it shows up as something other than an authorization change
+ * that silently did nothing.
  */
-export function cancelSfuPrivateResweep(room: string): Promise<void> {
+export async function cancelSfuPrivateResweep(room: string): Promise<void> {
   const key = `private:${room}`;
   const existing = resweeps.get(key);
   if (existing) {
@@ -673,11 +683,20 @@ export function cancelSfuPrivateResweep(room: string): Promise<void> {
     resweeps.delete(key);
   }
   if (!isVoiceRegistryEnabled()) {
-    return Promise.resolve();
+    return;
   }
-  return deleteVoiceResweep(key).catch((error: unknown) => {
+  try {
+    await deleteVoiceResweep(key);
+    return;
+  } catch (error: unknown) {
     logEvent("voice.sfuResweepCancelFailed", { key, error: describeError(error) });
-  });
+  }
+  await new Promise((resolve) => setTimeout(resolve, RESWEEP_CANCEL_RETRY_MS));
+  try {
+    await deleteVoiceResweep(key);
+  } catch (error: unknown) {
+    logEvent("voice.sfuResweepCancelGaveUp", { key, error: describeError(error) });
+  }
 }
 
 /**
