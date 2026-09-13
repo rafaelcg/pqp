@@ -1,6 +1,6 @@
 # Watch party: the presenter's surface
 
-Status: 2026-09-13. §6.1 to §6.3 built on the same branch as the audience bar split; §6.4 open. Scope: the web client, host and
+Status: 2026-09-13. §6.1 to §6.4 built on the same branch as the audience bar split, plus the live layout below. Scope: the web client, host and
 co-host only, while a party is live. The audience surface is out of scope
 here (the bar split landed on the same branch and is enough for now).
 
@@ -180,3 +180,26 @@ moves into the header's health dot. Gaps 2, 4.
 | Mute controls | 3 | 1 |
 | Rows between the bar and the picture | up to 3 (banner, host-gone, Transmissão) | up to 2 (banner sentence, host-gone) |
 | Clicks to see the mic meter | 1 | 0 |
+
+## 8. The live layout (built 2026-09-13)
+
+What the presenter sees once their share is up, after the pattern of
+Twitch Studio and YouTube's live view:
+
+- The pane stops mirroring the host's tab at full size. It draws
+  `WatchPartyPresenterStage`: a small monitor of the outgoing picture, a
+  second monitor of what the audience gets (the HLS at its real delay,
+  forced silent, opt-in because it is a second decode), and the room's
+  activity under both (people arriving, raised hands with Chamar inline,
+  reactions).
+- Chat comes back if the host had collapsed it, and the roster column is
+  put away, the same way it is for a viewer.
+- The strips between the header and the picture went from five to three:
+  header, one status row (health dot, summary, uptime, and the muted mic
+  as the amber end of the same line with Ativar mic inline), the dock.
+  The stage overlay is not drawn over the presenter's own share.
+- Going live with the mic muted asks once, "Ativar o mic?", instead of a
+  permanent red strip.
+
+Gap 9 is closed by the audience monitor. Camera in the stream (B6) is
+still not built, and the presenter surface still offers no camera.

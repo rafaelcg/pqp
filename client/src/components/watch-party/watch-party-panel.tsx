@@ -2435,6 +2435,32 @@ function LiveSurface(
    * and every change lands immediately for the people already watching (the
    * server re-reconciles the channel on every edit).
    */
+  // "SEU MIC ESTÁ MUDO", ON THE STATUS LINE (2026-09-13). It used to be a
+  // full-width red strip of its own between the header and the dock, one of
+  // five stacked rows. It is the amber end of the status row now, with the
+  // fix beside it, so the muted state reads with the health dot rather than
+  // as an alarm above everything. Still exists only in the state a recording
+  // was lost to (`presenterMicWarning`).
+  const micMutedInline = micMutedWarning ? (
+    <span
+      data-testid="watch-party-mic-muted-warning"
+      className="flex shrink-0 items-center gap-1.5 text-[11px] text-warning"
+    >
+      <MicOff className="h-3 w-3 shrink-0" aria-hidden />
+      <span className="hidden sm:inline">{t("watchParty.live.micMutedShort")}</span>
+      {props.onToggleMute && (
+        <button
+          type="button"
+          className="rounded-sm font-semibold text-warning underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+          onClick={props.onToggleMute}
+          data-watch-party-activate-mic
+        >
+          {t("watchParty.live.activateMic")}
+        </button>
+      )}
+    </span>
+  ) : null;
+
   /* HOST SIDE ONLY, and `runsTheShow` is the gate rather than `canStart`: a
      co-host running the show wants this too, and a moderator who merely holds
      MANAGE_CHANNELS is not transmitting anything. A viewer has no use for the
@@ -2459,6 +2485,7 @@ function LiveSurface(
       onStreamQualityChange={setLiveQuality}
       onOpenMixer={() => setMixerOpen(true)}
       detailsInDialog
+      trailing={micMutedInline}
     />
   );
 
@@ -2502,26 +2529,6 @@ function LiveSurface(
     </div>
   );
 
-  // "SEU MIC ESTÁ MUDO", ABOVE THE FOLD. Unlike the bar's own mic pill (a
-  // small, easy-to-miss badge among several), this is a full-width row that
-  // cannot be collapsed away and cannot be confused with an ordinary "not
-  // talking right now" mute: it exists only in the exact state a recording
-  // was lost to (`presenterMicWarning`). The button is the fix in one click.
-  const micMutedBanner = micMutedWarning && (
-    <div
-      data-testid="watch-party-mic-muted-warning"
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-danger/40 bg-danger/15 px-3 py-1.5 text-xs text-danger"
-    >
-      <MicOff className="h-3.5 w-3.5 shrink-0" aria-hidden />
-      <span className="min-w-0 flex-1 font-semibold">
-        {t("watchParty.live.micMutedWarning")}
-      </span>
-      {/* THE BUTTON LEFT (2026-09-13): the dock's mic pill is the next row
-          down and is the same toggle. Two mute buttons a centimetre apart
-          were gap 3 of the presenter-UI plan. */}
-    </div>
-  );
-
   // THE CHROME HALF: the party's controls, drawn above the split so that
   // collapsing the video cannot take Encerrar with it.
   if (props.slot === "chrome") {
@@ -2529,7 +2536,6 @@ function LiveSurface(
       <div className="relative shrink-0">
         {bar}
         {transmission}
-        {micMutedBanner}
         {presenterDock}
         {/* Portalled by `Dialog`, so it takes no room in this column and the
             split below it never moves. */}

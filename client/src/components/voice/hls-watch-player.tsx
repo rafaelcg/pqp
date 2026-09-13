@@ -206,6 +206,7 @@ export function HlsWatchPlayer({
   meta,
   actions,
   layout = "tile",
+  forceMuted = false,
   dualDeviceWarning = false,
   mode = "live",
   partTargetMs: partTargetMsProp,
@@ -273,6 +274,15 @@ export function HlsWatchPlayer({
    * the badges, fit, quality or picture-in-picture chrome a tile offers.
    */
   layout?: "cinema" | "tile" | "mini";
+  /**
+   * Always silent, whatever the shared volume preference says, and no
+   * mute button. For the presenter's audience monitor (2026-09-13): the
+   * host is already hearing the film out of their own tab, and the mini
+   * mute button writes the SAME per-browser preference the cinema player
+   * reads, so a monitor that could be unmuted would silence a viewer's
+   * player on the same machine.
+   */
+  forceMuted?: boolean;
   /**
    * The signed-in account holds a seat in this channel's call right now, on
    * some OTHER device or tab (`lib/dual-device-watch.ts`). Says so once,
@@ -451,6 +461,8 @@ export function HlsWatchPlayer({
   const [volumePref, setVolumePref] = useState<HlsVolumePref>(readHlsVolume);
   const volumePrefRef = useRef(volumePref);
   volumePrefRef.current = volumePref;
+  const forceMutedRef = useRef(forceMuted);
+  forceMutedRef.current = forceMuted;
   // Where the mute button comes back to.
   const restoreRef = useRef(volumePref.volume || 1);
   useEffect(() => {
@@ -722,11 +734,13 @@ export function HlsWatchPlayer({
       return;
     }
     video.volume = volumePref.volume;
-    video.muted = effectiveMuted({
-      pref: volumePref,
-      autoplayMuted: needsUnmute,
-    });
-  }, [getVideo, volumePref, needsUnmute, activeSrc, attempt, hasFrame]);
+    video.muted =
+      forceMuted ||
+      effectiveMuted({
+        pref: volumePref,
+        autoplayMuted: needsUnmute,
+      });
+  }, [getVideo, volumePref, needsUnmute, activeSrc, attempt, hasFrame, forceMuted]);
 
   /** Both unmute affordances: the person asked for sound, so give them sound. */
   const silenced = effectiveMuted({
@@ -1292,7 +1306,7 @@ export function HlsWatchPlayer({
     // Before the first frame, so a viewer who muted the last watch party does
     // not get one loud second of this one.
     video.volume = volumePrefRef.current.volume;
-    video.muted = volumePrefRef.current.muted;
+    video.muted = forceMutedRef.current || volumePrefRef.current.muted;
     const onPlaying = () => {
       if (!cancelled) {
         setHasFrame(true);
@@ -2473,6 +2487,7 @@ export function HlsWatchPlayer({
             {actions}
           </div>
           <div className="pointer-events-auto flex items-end justify-end">
+            {!forceMuted && (
             <button
               type="button"
               data-testid="hls-mini-mute"
@@ -2494,6 +2509,7 @@ export function HlsWatchPlayer({
             >
               <VolumeGlyph volume={volumePref.volume} muted={silenced} />
             </button>
+            )}
           </div>
         </div>
       ) : (
