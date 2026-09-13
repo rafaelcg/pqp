@@ -64,6 +64,19 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "mixer-e-o-bau-com-embeds",
+    date: "2026-09-13",
+    title: {
+      "pt-BR": "O mixer da watch party, e o Baú com embeds",
+      en: "The watch party mixer, and Baú with embeds",
+    },
+    summary: {
+      "pt-BR":
+        "Mixer pra equilibrar mic e filme, qualidade que você escolhe, checklist antes de ir ao vivo e tela cheia em todo canto. O Baú ganhou embeds do Twitch, TikTok e Instagram.",
+      en: "A mixer to balance mic and film, quality you pick yourself, a checklist before going live and fullscreen everywhere. Baú got embeds from Twitch, TikTok and Instagram.",
+    },
+  },
+  {
     slug: "automod-e-esconder-o-chat",
     date: "2026-09-09",
     title: {
