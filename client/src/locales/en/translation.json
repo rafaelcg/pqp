@@ -1911,6 +1911,8 @@
   "chrome.inCall_one": "{count} in the call",
   "chrome.inCall_other": "{count} in the call",
   "chrome.noServer": "No server",
+  "chrome.publicCommunity": "Public",
+  "chrome.serverMenu": "Server menu",
   "chrome.text": "Text",
   "chrome.voice": "Voice",
   "chrome.watchParty": "Watch party",
