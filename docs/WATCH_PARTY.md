@@ -400,7 +400,7 @@ watching.
 |---|---|---|
 | **Voz** (`voiceEnabled`) | **off** | nothing to the channel at all, and `join-voice-room` refuses a seat to anybody who is not running the party or invited up |
 | **Quem pode falar** (`stageMode`) | `hosts_only`, and it applies only once voice is on | closes the floor: denies SPEAK to @everyone, and grants it back to the host and co-hosts |
-| **Pedir pra falar** (`raiseHand`) | on, and shown only for `invited` with voice on | nothing by itself; it is what makes the queue exist |
+| **Pedir pra falar** (`raiseHand`) | on, and the toggle itself is shown only for `invited` | nothing by itself; it is what lets the audience's "Pedir para falar" (2026-09-13) reach the host's queue, on any stage mode, not only `invited` |
 | **Chat lento** (`slowModeSeconds`) | 0 | writes `channels.slowmode_seconds`, the channel's own slow mode, and puts the old value back at the end |
 | **Reações** (`reactionsEnabled`) | on | carried on the party, read by the client |
 | **Quem pode ver** | not a control | the channel's own permissions. A sentence, not a switch |
@@ -1005,14 +1005,23 @@ about each other, each correct on its own.
 | invited up to speak | yes | being invited up is precisely the permission to talk, and it is useless without a way in |
 | manager | **no** | MANAGE_CHANNELS ends and edits somebody else's party. It does not perform in it |
 | everybody else, voice off | **no** | they watch |
-| everybody else, **voice on** | yes | the host asked for a room that talks, and a setting that opens voice and offers nobody a way in is a setting that does nothing |
+| everybody else, **voice on**, not yet invited | **no** | they get "Pedir para falar" instead, never a seat — see the note below |
 
-The last row is the one a blanket removal got wrong, and it is why the rule
-lives in `mayTakeWatchPartySeat` rather than in the component. "A viewer
-cannot join a watch party" was said about a broadcast with three green buttons
-on it, and it is right about a broadcast. It is wrong about six friends
-watching a film whose host has deliberately turned Voz on: that party's
-audience IS the call.
+**2026-09-13 (Rafael's "the audience never joins a call" decision) narrowed
+the last row.** It used to be a straight "yes": the host asked for a room
+that talks, and a setting that opened voice and offered nobody a way in was a
+setting that did nothing. That is still true of the DOOR — `mayTakeWatchPartySeat`
+below is unchanged, and `join-voice-room` still lets a plain viewer in the
+instant Voz is on, because the server must not be narrower than the switch
+promises. It stopped being true of the BUTTON: the bar no longer draws
+"Entrar na call" for a plain viewer just because voice is on. What it draws
+instead is "Pedir para falar", the same raise/lower hand `invited` mode
+already had, now for every stage mode. Only once the host brings somebody up
+(`stage.invited`) does that person see an actual way in, worded "Entrar no
+palco". Six friends watching a film still get there in one click each — Voz
+on, then Pedir para falar, then the host taps their name — it is one more
+step than before, and it is the step that keeps a transmission from reading
+as a call.
 
 `stage.invited` is public on the wire and always has been (`presentStage`: who
 is UP is public, who is ASKING is not), so this is the party's own answer

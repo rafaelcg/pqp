@@ -440,6 +440,31 @@ function WatchPartyShareButton({
 // ------------------------------------------------- options: one dialog, one row
 
 /**
+ * How many raised hands the options dialog draws before it stops and just
+ * counts the rest. Farol flagged the uncapped list (2026-09-13): with voice
+ * on and `hosts_only`/`everyone`, every viewer can raise a hand, and a real
+ * audience could put hundreds of avatar rows into one dialog on every open.
+ */
+const MAX_VISIBLE_HANDS = 20;
+
+/**
+ * Splits a raised-hand queue at `MAX_VISIBLE_HANDS`: the rows the dialog
+ * actually draws, and how many more are waiting than that. The queue already
+ * arrives in the server's own raise order (`docs/RAISED_HANDS.md`), so the
+ * visible slice is the people waiting longest — exactly who a host should
+ * see first — and not an arbitrary cut. Exported (pure, no Dialog/portal
+ * involved) so the cap has a test that does not need a DOM.
+ */
+export function visibleRaisedHands(
+  hands: WatchParty["stage"]["hands"],
+): { visible: WatchParty["stage"]["hands"]; hiddenCount: number } {
+  return {
+    visible: hands.slice(0, MAX_VISIBLE_HANDS),
+    hiddenCount: Math.max(0, hands.length - MAX_VISIBLE_HANDS),
+  };
+}
+
+/**
  * THE SAME DIALOG BEFORE AND DURING THE SHOW. The setup surface used to carry
  * a 72-unit column of every option plus the co-host list beside the preview,
  * and the live bar opened a dialog with the same controls. Two surfaces for
@@ -510,10 +535,13 @@ function WatchPartyOptionsDialog({
             party see it: an audience that can watch who asked and was passed
             over is an audience having a worse time. It is also nonsense in a
             party with no voice, where nobody is asking for anything, so it
-            follows the Voz control rather than the stored stage mode. */}
-        {stage &&
-          party.options.voiceEnabled &&
-          party.options.stageMode === "invited" && (
+            follows the Voz control rather than the stored stage mode.
+            NO LONGER RESTRICTED TO `invited` (2026-09-13): the bar's "Pedir
+            para falar" is offered on every stage mode now the audience never
+            joins a call outright, so a request can land while the party is
+            `hosts_only` or `everyone` too, and the host needs somewhere to
+            see and grant it. */}
+        {stage && party.options.voiceEnabled && (
             <div className="border-t border-border pt-4">
               <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
                 {t("watchParty.stage.hands")}
@@ -523,35 +551,67 @@ function WatchPartyOptionsDialog({
                   {t("watchParty.stage.noHands")}
                 </p>
               ) : (
-                <ul className="flex flex-col gap-1">
-                  {party.stage.hands.map((person) => (
-                    <li
-                      key={person.userId}
-                      className="flex items-center gap-2"
-                      data-watch-party-hand
-                    >
-                      <UserAvatar
-                        name={person.displayName}
-                        avatarUrl={person.avatarUrl}
-                        rounded="full"
-                        className="h-6 w-6 shrink-0"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                        {person.displayName}
-                      </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() =>
-                          void props.onStageAction?.("invite", person.userId)
-                        }
-                        data-watch-party-invite
-                      >
-                        {t("watchParty.stage.invite")}
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  {/* CAPPED, NOT VIRTUALISED (2026-09-13). `visibleRaisedHands`
+                      keeps the first `MAX_VISIBLE_HANDS` — the people waiting
+                      longest, exactly who a host should see first — and
+                      everybody past that shows only as a count instead of a
+                      DOM row and an avatar fetch each. A hall running
+                      voice-on with a real audience could otherwise put
+                      hundreds of rows and image loads into this dialog on
+                      every open. */}
+                  {(() => {
+                    const { visible, hiddenCount } = visibleRaisedHands(
+                      party.stage.hands,
+                    );
+                    return (
+                      <>
+                        <ul className="flex flex-col gap-1">
+                          {visible.map((person) => (
+                            <li
+                              key={person.userId}
+                              className="flex items-center gap-2"
+                              data-watch-party-hand
+                            >
+                              <UserAvatar
+                                name={person.displayName}
+                                avatarUrl={person.avatarUrl}
+                                rounded="full"
+                                className="h-6 w-6 shrink-0"
+                              />
+                              <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                                {person.displayName}
+                              </span>
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() =>
+                                  void props.onStageAction?.(
+                                    "invite",
+                                    person.userId,
+                                  )
+                                }
+                                data-watch-party-invite
+                              >
+                                {t("watchParty.stage.invite")}
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                        {hiddenCount > 0 && (
+                          <p
+                            className="mt-1 text-[11px] text-paper-muted"
+                            data-watch-party-hands-more
+                          >
+                            {t("watchParty.stage.handsMore", {
+                              count: hiddenCount,
+                            })}
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
+                </>
               )}
               {party.stage.invited.length > 0 && (
                 <>
@@ -1253,6 +1313,16 @@ function LiveSurface(
     canSpeak: props.canSpeak ?? false,
   });
   /**
+   * `stage.invited` is public on the wire (`presentStage`: who is UP is
+   * public, who is ASKING is not), so an invited guest recognises themselves
+   * without a second request and without the client guessing.
+   */
+  const isInvited =
+    props.currentUserId !== undefined &&
+    party.stage.invited.some(
+      (person) => person.userId === props.currentUserId,
+    );
+  /**
    * Whether a seat in this room is this person's to take at all.
    *
    * THE SAME FUNCTION THE SERVER REFUSES THE JOIN WITH. This used to be a
@@ -1261,10 +1331,6 @@ function LiveSurface(
    * button that does nothing gets shipped. `mayTakeWatchPartySeat` is now the
    * only place the rule is written, so a control drawn here is one the server
    * will honour and a control withheld is a join it would refuse.
-   *
-   * `stage.invited` is public on the wire (`presentStage`: who is UP is
-   * public, who is ASKING is not), so an invited guest recognises themselves
-   * without a second request and without the client guessing.
    */
   const mayTakeASeat = mayTakeWatchPartySeat({
     canStartWatchParty: props.canStart,
@@ -1272,13 +1338,64 @@ function LiveSurface(
       voiceEnabled: party.options.voiceEnabled,
       isHost: party.viewerRole === "host",
       isCohost: party.viewerRole === "cohost",
-      isInvited:
-        props.currentUserId !== undefined &&
-        party.stage.invited.some(
-          (person) => person.userId === props.currentUserId,
-        ),
+      isInvited,
     },
   });
+  /**
+   * THE AUDIENCE NEVER JOINS A CALL (2026-09-13). `mayTakeASeat` above is
+   * what the SERVER honours, and it is deliberately generous: with voice on
+   * it is true for every viewer, because `join-voice-room` must not refuse a
+   * seat the host's own Voz switch promised. That is the right rule for the
+   * DOOR. It is the wrong rule for this BUTTON: drawing it for every viewer
+   * the moment voice is on is exactly the "Entrar na call" Rafael's 2026-09-13
+   * decision retires — the audience is the transmission, not a lobby, and
+   * nobody watching presses a button labelled like a phone call.
+   *
+   * So the bar earns its own, narrower question: a seat here is offered only
+   * to the people already trusted with the room — the host, a co-host,
+   * anyone who may start a party on this channel at all, and anyone the host
+   * has already invited up. Everybody else gets `showRequestToSpeak` below
+   * instead, and only ever that.
+   *
+   * THE HOST/CO-HOST HALF STAYS GATED ON VOICE, exactly as it always was: "A
+   * WATCH PARTY IS NOT A LOBBY" below is the reason, unchanged by this
+   * decision. With voice off the host is seated by going live or sharing,
+   * never by this button; a co-host takes over with Assumir the same way.
+   * `canStart` and an invited guest are NOT gated on it, also unchanged:
+   * they run parties here, or were brought up, whether or not this show has
+   * voice.
+   *
+   * `canStart` IS SCOPED TO EVERYBODY ELSE (2026-09-13 fix). The party's own
+   * host and co-hosts almost always also hold START_WATCH_PARTY — they are
+   * usually who started it — so an unscoped `|| props.canStart` reopened the
+   * exact door the line above just gated: a host with voice off got the
+   * button back through the permission check instead of the role check. The
+   * `canStart` branch exists for somebody who is trusted with the room but
+   * is not currently running this show; the current host/cohost's own path
+   * is the branch above, and only that one.
+   */
+  const mayEnterPalco =
+    (runsTheShow && party.options.voiceEnabled) ||
+    (!runsTheShow && props.canStart) ||
+    isInvited;
+  const showEnterPalco =
+    !props.inCall && mayEnterPalco && mayTakeASeat;
+  /**
+   * "Pedir para falar", never "Entrar na call". A plain viewer with voice on
+   * has nothing to press until the host brings them up — reusing the same
+   * raise/lower hand request `docs/RAISED_HANDS.md` already has, regardless
+   * of which stage mode is configured, because the request itself is
+   * harmless (it only ever sets `handRaised`) and the alternative is a
+   * viewer offered no way to ask at all outside `invited` mode. The host's
+   * queue in the options dialog is widened to match, below. Still gated on
+   * `raiseHand`: a host who explicitly turned the ask-to-speak queue off
+   * gets exactly that, an audience with nothing to press.
+   */
+  const showRequestToSpeak =
+    !props.inCall &&
+    !mayEnterPalco &&
+    party.options.voiceEnabled &&
+    party.options.raiseHand;
 
   const bar = (
     <div
@@ -1393,12 +1510,23 @@ function LiveSurface(
             {t("watchParty.stage.speak")}
           </Button>
         )}
-        {affordance === "raiseHand" && (
+        {/* THE AUDIENCE NEVER JOINS A CALL (2026-09-13, Rafael). The
+            transmission is the product: screen, voice and face. A watch
+            party has an audience and it has the people running it, and the
+            only thing the audience ever presses is "Pedir para falar" — a
+            stage request, the same raise/lower hand `docs/RAISED_HANDS.md`
+            already has, never "Entrar na call". This is offered regardless
+            of `stageMode`: the request is harmless by itself (it only sets
+            `handRaised`, which the host's queue below now shows for any
+            voice-on party), and the alternative is a viewer with voice on
+            and no way at all to ask, outside `invited` mode. */}
+        {showRequestToSpeak && (
           <Button
             type="button"
             variant={party.stage.handRaised ? "default" : "secondary"}
             size="sm"
             aria-pressed={party.stage.handRaised}
+            title={t("watchParty.stage.speakHint")}
             onClick={() =>
               void props.onStageAction?.(
                 party.stage.handRaised ? "lower" : "raise",
@@ -1438,13 +1566,17 @@ function LiveSurface(
             somebody else's party, it does not perform in it and, since
             2026-09-12, it does not end it either.
 
-            AND EVERYBODY, ONCE A HOST TURNS VOZ ON. That is the film night,
-            and it is the case the blanket removal got wrong: a party whose
-            host deliberately opened voice and then offered nobody a way in
-            would be a setting that does nothing. The rule is
-            `mayTakeWatchPartySeat` above, which is the same function
-            `join-voice-room` refuses with, so this control is never drawn for
-            a join the server would turn away.
+            NOT "EVERYBODY ONCE VOICE IS ON" ANY MORE (2026-09-13). That used
+            to be the film-night case this rule got right and it is now the
+            one Rafael's decision retires on purpose: a plain viewer presses
+            "Pedir para falar" above and gets this button, in these same
+            words, only once the host has actually brought them up
+            (`stage.invited`). `mayTakeWatchPartySeat` — the same function
+            `join-voice-room` refuses with — still says yes to every viewer
+            while voice is on, because the DOOR must not be narrower than the
+            Voz switch promises; this BUTTON is deliberately narrower than
+            that function, because a door being open is not a reason to point
+            at it.
 
             The listen-only label went with the control. Everybody who can
             still see this button can speak once they are in, so a warning
@@ -1454,10 +1586,15 @@ function LiveSurface(
             Assumir and shares. So with voice off, nobody running the show
             is offered a seat here; a host who wants to chat with friends
             while the film plays uses a voice channel. With voice on, the
-            floor is a thing and the door stays. */}
-        {!props.inCall &&
-          mayTakeASeat &&
-          (party.options.voiceEnabled || !runsTheShow) && (
+            floor is a thing and the door stays.
+
+            THE COPY IS "ENTRAR NO PALCO", NOT "ENTRAR NA CALL" (2026-09-13).
+            The party's own words for its own room, for exactly the people who
+            run it or were brought up to: the host and co-hosts (gated on
+            voice being on — see above), anyone holding START_WATCH_PARTY on
+            this channel (gated on nothing: they run parties here whether or
+            not this one has voice), and an invited guest (same). */}
+        {showEnterPalco && (
           <Button
             type="button"
             variant="ghost"
