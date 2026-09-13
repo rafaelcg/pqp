@@ -1175,6 +1175,7 @@
   "call.stage.unpin": "Desafixar",
   "call.stage.fullscreenTile": "Ver {name} em tela cheia",
   "call.split.resize": "Ajustar call e chat",
+  "chat.paneTitle": "Chat",
   "call.split.hint": "Arraste, ou use as setas.",
   "call.split.value": "A call está com {percent}% do espaço",
   "call.split.sideBySide": "Chat do lado da call",
