@@ -623,6 +623,8 @@ function fakeAudioTrack(id: string): MediaStreamTrack {
     enabled: true,
     getConstraints: () => ({}),
     applyConstraints: async () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
   } as unknown as MediaStreamTrack;
 }
 
