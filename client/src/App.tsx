@@ -182,10 +182,15 @@ import {
   createServerWatchParty as apiCreateServerWatchParty,
   fetchChannelWatchParty as apiFetchChannelWatchParty,
   setWatchPartyCohost as apiSetWatchPartyCohost,
+  setWatchPartyGuestAction,
   setWatchPartyStage,
   setWatchPartyState as apiSetWatchPartyState,
   updateWatchParty as apiUpdateWatchParty,
 } from "@/lib/watch-parties-api";
+import {
+  WatchPartyGuestsOverlay,
+  type GuestAction,
+} from "@/components/watch-party/guests/watch-party-guests-overlay";
 import { endWatchParty } from "@/lib/watch-party-end";
 import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
 import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
@@ -4486,6 +4491,76 @@ function MainAppContent({
   }
 
   /**
+   * CONVIDADOS: every guest action but `join`, which has its own flow right
+   * below (`handleWatchPartyGuestGoOnAir`) because going on air is not just a
+   * route call — it stops the player and opens the room first (§3.4).
+   */
+  async function handleWatchPartyGuestAction(action: GuestAction) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await setWatchPartyGuestAction(party.id, action);
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  /**
+   * `Entrar no ar`. §3.4's order: the player already stops itself (the HLS
+   * player watches for this browser appearing in its own `guests.onAir` and
+   * pauses), so what is left here is mic/camera then the room, and only once
+   * the room actually has the guest does the server hear about it — a failed
+   * `getUserMedia` must never claim a slot with nobody speaking into it.
+   */
+  async function handleWatchPartyGuestGoOnAir(channelId: string) {
+    voiceServerIdRef.current = selectedServerId;
+    await voice.join(channelId, {
+      inputDeviceId: localSettings.inputDeviceId,
+      inputVolume: localSettings.inputVolume,
+      inputMode: localSettings.inputMode,
+      vadThreshold: localSettings.vadThreshold,
+      processing: localSettings.micProcessing,
+    });
+    await handleWatchPartyGuestAction({ action: "join" });
+  }
+
+  /** `Sair do ar`. Tell the party first, then leave — same order `onLeaveSeat` uses elsewhere. */
+  async function handleWatchPartyGuestGoOffAir() {
+    await handleWatchPartyGuestAction({ action: "leave" });
+    voice.leave();
+  }
+
+  const presentingPartyId =
+    currentWatchParty()?.channelId === voiceState.voiceChannelId &&
+    voiceState.isSharingScreen
+      ? currentWatchParty()?.id
+      : null;
+  const presentingPartyGuests = presentingPartyId
+    ? currentWatchParty()?.options.guests
+    : undefined;
+  const presentingPartyOnAirKey = presentingPartyId
+    ? (currentWatchParty()?.guests.onAir.map((p) => p.userId).join(",") ?? "")
+    : "";
+  /**
+   * CONVIDADOS §5.2: tell `use-voice.ts`'s mixer what to carry, whenever a
+   * party's `guests` or `guests.onAir` changes for the channel THIS BROWSER
+   * IS PRESENTING. A no-op for anyone else — every other tab, every ordinary
+   * voice channel, gets `setWatchPartyGuests("off", [])`, which is what the
+   * mixer already treats as "carry nothing".
+   */
+  useEffect(() => {
+    if (!presentingPartyId || presentingPartyGuests === undefined) {
+      voice.setWatchPartyGuests("off", []);
+      return;
+    }
+    const onAirUserIds = presentingPartyOnAirKey
+      ? presentingPartyOnAirKey.split(",")
+      : [];
+    voice.setWatchPartyGuests(presentingPartyGuests, onAirUserIds);
+  }, [presentingPartyId, presentingPartyGuests, presentingPartyOnAirKey, voice]);
+
+  /**
    * Promote or demote a co-host.
    *
    * THE CALLER `setWatchPartyCohost` NEVER HAD. The route, the table and this
@@ -6638,6 +6713,32 @@ function MainAppContent({
             transport={voiceState.roomTransport}
             cameraOn={voiceState.isCameraOn}
             slot="chrome"
+          />
+        )}
+      {/* CONVIDADOS (docs/plans/WATCH_PARTY_GUESTS.md). One mount line: every
+          new control lives in `guests/watch-party-guests-overlay.tsx`, which
+          is mounted here rather than threaded through `watch-party-panel.tsx`
+          (frozen ahead of PR 538's rewrite). */}
+      {selectedChannel.kind === "server" &&
+        isWatchPartyChannelType(selectedChannel.type) &&
+        isWatchPartyChannelsEnabled() &&
+        user && (
+          <WatchPartyGuestsOverlay
+            party={watchParties.byChannel[selectedChannel.id] ?? null}
+            currentUserId={user.id}
+            cohostCandidates={cohostCandidates}
+            inRoom={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status === "connected"
+            }
+            micOn={!voiceState.isMuted}
+            cameraOn={voiceState.isCameraOn}
+            onToggleMic={() => voice.toggleMute()}
+            onToggleCamera={() => void voice.toggleCamera()}
+            onGuestAction={(action) => void handleWatchPartyGuestAction(action)}
+            onGoOnAir={() => handleWatchPartyGuestGoOnAir(selectedChannel.id)}
+            onGoOffAir={() => handleWatchPartyGuestGoOffAir()}
+            className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
       <CallSplit
