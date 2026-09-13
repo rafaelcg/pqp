@@ -1,0 +1,122 @@
+// Grafana Alloy on the pqp API box (Vultr, São Paulo, api.pqp.gg).
+//
+// Two things this box needs to ship that the SFU box (tools/sfu-monitoring/
+// config.alloy) does not:
+//   * container LOGS. On Fly, tools/log-shipper reads the org's NATS log
+//     stream — a Fly-only mechanism that does not exist here. On this box
+//     Alloy reads the `api` and `worker` containers' logs straight off the
+//     Docker API and pushes them to the same Grafana Cloud Loki stack, under
+//     the same job label pattern the dashboards already query
+//     (`{fly_app_name="pqp-api"}` becomes `{container="api"}` — update saved
+//     LogQL queries and alert rules across the cutover, see docs/MONITORING.md).
+//   * box METRICS, same as the SFU box: CPU, memory, disk, the unit health of
+//     the containers.
+// LiveKit-shaped app metrics do not apply here; this box runs the API and
+// worker, whose own counters (voice.seats, voice.roster.deltas, ...) are
+// read via GET /api/admin/metrics, not scraped by Alloy.
+//
+// Credentials come from /etc/alloy/credentials.env (root-owned, 0600) via a
+// systemd drop-in, installed by provision.sh. Nothing secret belongs in this
+// file: it is in the repo.
+
+prometheus.exporter.unix "box" {
+  set_collectors = [
+    "cpu", "diskstats", "filesystem", "loadavg", "meminfo",
+    "netdev", "os", "stat", "systemd", "time", "uname", "vmstat",
+  ]
+
+  filesystem {
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+    mount_points_exclude = "^/(dev|proc|run/credentials/.+|sys|var/lib/docker/.+)($|/)"
+    mount_timeout        = "5s"
+  }
+
+  netdev {
+    device_exclude = "^(veth.*|br-.*|docker.*|lo)$"
+  }
+
+  // The units worth waking up for, same reasoning as the SFU box: the
+  // default is every unit, which is noise. docker.service covers the
+  // engine; the three containers are watched through Docker's own health
+  // check via loki.source.docker's container label below, not systemd.
+  systemd {
+    unit_include    = "^(docker|alloy|unattended-upgrades|fail2ban)\\.service$"
+    enable_restarts = false
+    start_time      = false
+    task_metrics    = false
+  }
+}
+
+discovery.relabel "box" {
+  targets = prometheus.exporter.unix.box.targets
+
+  rule {
+    target_label = "instance"
+    replacement  = "api-pqp"
+  }
+}
+
+prometheus.scrape "box" {
+  targets         = discovery.relabel.box.output
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+prometheus.remote_write "grafana_cloud" {
+  external_labels = {
+    box = "api-pqp",
+  }
+
+  endpoint {
+    url = "https://prometheus-prod-40-prod-sa-east-1.grafana.net/api/prom/push"
+
+    basic_auth {
+      username = sys.env("GC_PROM_USER")
+      password = sys.env("GC_PROM_TOKEN")
+    }
+  }
+}
+
+// --- Container logs ---------------------------------------------------------
+//
+// discovery.docker talks to the local Docker socket (read-only bind mount in
+// compose.yaml's alloy service, or the host socket if Alloy runs as a
+// systemd unit instead — provision.sh runs it as a systemd unit, same as the
+// SFU box, with the pqp/alloy user added to the docker group for the socket
+// read).
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Compose names containers "<project>-<service>-<n>", e.g. "pqp-api-1".
+  // Keep the service name as the label queries actually want.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "container"
+  }
+
+  rule {
+    target_label = "box"
+    replacement  = "api-pqp"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+loki.write "grafana_cloud" {
+  endpoint {
+    url = sys.env("LOKI_URL")
+
+    basic_auth {
+      username = sys.env("LOKI_USERNAME")
+      password = sys.env("LOKI_PASSWORD")
+    }
+  }
+}

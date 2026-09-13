@@ -1,0 +1,226 @@
+name: Deploy API (Vultr)
+
+# The Vultr counterpart to deploy-api-fly.yml. Both files exist on purpose:
+# Fly stays deployable for ~30 days after the Vultr cutover, as the rollback
+# target (docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md section E,
+# docs/deploy-vultr.md "Rollback").
+#
+# ONLY ONE OF fly / vultr / railway MAY BE LIVE AT A TIME — same reasoning as
+# deploy-api-fly.yml's header: two APIs on two databases behind two hostnames
+# is two products, not a warm standby. The switch is deliberate and two-sided:
+#
+#   cut over to Vultr:  gh variable set DEPLOY_TARGET --body vultr
+#                        gh workflow disable "Deploy API (Fly)"
+#   roll back to Fly:    gh workflow enable "Deploy API (Fly)"
+#                        gh variable set DEPLOY_TARGET --body fly
+#
+# The `vars.DEPLOY_TARGET` gate below means merging this file changes nothing
+# until someone flips it — this can land, and the box can be provisioned and
+# even smoke-tested by hand, well before the flip.
+#
+# `vars.DEPLOY_FREEZE` is checked too, forward-compatible with the merge
+# freeze A6 in the postmortem plan describes (docs/plans/
+# WATCH_PARTY_POSTMORTEM_2026-09-12.md section A) if and when it lands on
+# deploy-api-fly.yml — today the variable does not exist anywhere in this
+# repo, so the check is a no-op (an unset repo variable is never the string
+# "true"). Nothing here invents the freeze mechanism; it only agrees to
+# respect it once something else does.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  # Shared with deploy-api.yml and deploy-api-fly.yml on purpose: during any
+  # transition at most one backend-pointing deploy runs at a time, never a
+  # race to decide which one production actually ends up running.
+  group: deploy-api
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/rafaelcg/pqp-api
+  HEALTH_URL: https://api.pqp.gg/health
+  READY_URL: https://api.pqp.gg/ready
+
+jobs:
+  deploy:
+    name: Build & deploy Vultr (gru)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) && vars.DEPLOY_TARGET == 'vultr' && vars.DEPLOY_FREEZE != 'true' }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          # Full history: the relevance check diffs against whatever commit
+          # production is actually running, same reason deploy-api-fly.yml
+          # gives for the same line.
+          fetch-depth: 0
+
+      - name: Resolve commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Same question, same answer, as deploy-api-fly.yml's "Does the API
+      # need this commit?" step, and deliberately the SAME script
+      # (scripts/deploy/api-deploy-needed.mjs) for the code-relevance half —
+      # one definition of "does the server image need to change" shared by
+      # both backends, so it cannot drift between them. This workflow adds
+      # its OWN box-relevance check on top (this file and tools/api-host/**),
+      # rather than teaching the shared script about a path that has nothing
+      # to do with the Fly deploy: editing deploy-api-vultr.yml or the
+      # compose/Caddy config on this box must redeploy here without ever
+      # causing an extra Fly restart, and the reverse.
+      - name: Does the API need this commit?
+        id: relevant
+        run: |
+          set -uo pipefail
+          decide() {
+            echo "needed=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice::Vultr deploy needed=$1 ($2)"
+          }
+
+          body=$(curl -fsS --max-time 15 "$HEALTH_URL" 2>/dev/null) || {
+            decide true "could not reach $HEALTH_URL, failing open"; exit 0; }
+          deployed=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null) || deployed=""
+
+          case "$deployed" in
+            ?*[!0-9a-f]* | "" ) decide true "no usable commit in /health (got '${deployed:-empty}'), failing open"; exit 0 ;;
+          esac
+          if ! git cat-file -e "${deployed}^{commit}" 2>/dev/null; then
+            decide true "deployed commit $deployed is not in this clone, failing open"; exit 0
+          fi
+
+          changed=$(git diff --name-only "$deployed" HEAD) || {
+            decide true "git diff failed, failing open"; exit 0; }
+          if [ -z "$changed" ]; then
+            decide false "production is already on this tree"; exit 0
+          fi
+
+          if printf '%s\n' "$changed" | grep -qE '^(\.github/workflows/deploy-api-vultr\.yml|tools/api-host/)'; then
+            decide true "this workflow or tools/api-host/ changed"
+            exit 0
+          fi
+
+          set +e
+          reason=$(printf '%s\n' "$changed" | node scripts/deploy/api-deploy-needed.mjs)
+          status=$?
+          set -e
+          case "$status" in
+            0)  decide true "$reason (since ${deployed:0:7})" ;;
+            20)
+              decide false "$reason (since ${deployed:0:7})"
+              printf '%s\n' "$changed" | sed 's/^/  skipped: /'
+              ;;
+            *)  decide true "relevance script exited $status, failing open" ;;
+          esac
+
+      - name: Check deploy environment
+        if: steps.relevant.outputs.needed == 'true'
+        run: |
+          missing=""
+          [ -n "${{ secrets.VULTR_API_HOST }}" ] || missing="$missing VULTR_API_HOST"
+          [ -n "${{ secrets.VULTR_API_SSH_KEY }}" ] || missing="$missing VULTR_API_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing secret(s):$missing. See docs/deploy-vultr.md."
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.relevant.outputs.needed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.relevant.outputs.needed == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Same Dockerfile deploy-api-fly.yml builds via `flyctl deploy`
+      # (root Dockerfile, the multi-stage image documented there and in
+      # docs/deploy-fly.md): building it once here and pushing to GHCR means
+      # both backends could in principle run the identical artifact, though
+      # only one is ever live per vars.DEPLOY_TARGET.
+      - name: Build & push image
+        if: steps.relevant.outputs.needed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.commit.outputs.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Write deploy SSH key
+        if: steps.relevant.outputs.needed == 'true'
+        run: |
+          install -m 0600 /dev/null "$RUNNER_TEMP/vultr_deploy_key"
+          printf '%s\n' "${{ secrets.VULTR_API_SSH_KEY }}" > "$RUNNER_TEMP/vultr_deploy_key"
+
+      # Copies the two files whose content actually matters at deploy time
+      # (compose.yaml, Caddyfile) so the box never runs a stale copy of
+      # either while the image tag moves forward, then pulls and restarts
+      # only api + worker. Caddy is left running: TLS state and the
+      # cert/key files under ./certs are untouched by this, and a Caddyfile
+      # edit alone does not require this workflow to run (it never changes
+      # what the API serves) — hand-run `docker compose up -d caddy` for that.
+      #
+      # stop_grace_period: 60s in compose.yaml is what gives
+      # server/src/lib/drain.ts's SIGTERM handling room to finish (25s
+      # budget) before Compose sends SIGKILL, same contract as fly.toml's
+      # kill_timeout.
+      - name: Deploy over SSH
+        if: steps.relevant.outputs.needed == 'true'
+        env:
+          SSH_KEY: ${{ runner.temp }}/vultr_deploy_key
+          HOST: ${{ secrets.VULTR_API_HOST }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          ssh_cmd() {
+            ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp@$HOST" "$@"
+          }
+          scp -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
+            tools/api-host/compose.yaml tools/api-host/Caddyfile \
+            "pqp@$HOST:/opt/pqp/"
+          ssh_cmd "cd /opt/pqp && \
+            APP_IMAGE_TAG=$SHA APP_VERSION=$SHA \
+            docker compose pull api worker && \
+            APP_IMAGE_TAG=$SHA APP_VERSION=$SHA \
+            docker compose up -d api worker && \
+            docker compose ps"
+
+      # Mirrors deploy-api-fly.yml's "Verify the deployed commit" step:
+      # /api/* routes all resolve a Bearer token before routing (CLAUDE.md
+      # pitfall #8), so /health (and /ready, which additionally proves
+      # Postgres/LiveKit/storage — docs/MONITORING.md) are the only surfaces
+      # that can say what code is actually running.
+      - name: Verify the deployed commit
+        if: steps.relevant.outputs.needed == 'true'
+        env:
+          EXPECTED: ${{ steps.commit.outputs.sha }}
+          HOST: ${{ secrets.VULTR_API_HOST }}
+        run: |
+          for attempt in $(seq 1 40); do
+            body=$(curl -fsS --max-time 10 "$HEALTH_URL" || echo '{}')
+            got=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null || echo "")
+            ready=$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 "$READY_URL" || echo "000")
+            if [ "$got" = "$EXPECTED" ] && [ "$ready" = "200" ]; then
+              echo "API is serving $got, /ready is 200"
+              exit 0
+            fi
+            echo "attempt $attempt: /health version='${got:-unknown}' (want '$EXPECTED'), /ready=$ready"
+            sleep 15
+          done
+          echo "::error::The box never reported the deployed commit as healthy and ready. Check 'ssh pqp@$HOST docker compose logs api worker' (see docs/deploy-vultr.md)."
+          exit 1

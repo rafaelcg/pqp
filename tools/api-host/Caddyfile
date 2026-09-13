@@ -1,0 +1,77 @@
+# Caddy in front of the pqp API box. Reverse-proxies api.pqp.gg to the `api`
+# container, WebSocket included — Caddy's reverse_proxy handles the Upgrade
+# handshake for `/ws` automatically, no extra directive needed.
+#
+# TWO TLS MODES, because Cloudflare sits in front of this box either way
+# (api.pqp.gg is proxied, orange-cloud — see docs/deploy-vultr.md "cutover"):
+# pick ONE of the two site blocks below and delete or comment the other.
+# Both give Cloudflare a certificate it will accept under "Full (strict)"
+# SSL mode, which is the only mode that does not eventually get MITM'd or
+# refused; do not run this box under Cloudflare "Flexible" (that terminates
+# TLS at Cloudflare only, so a request replayed at Caddy over plain HTTP is
+# indistinguishable from Cloudflare's own health probes, and this box's own
+# `TRUST_PROXY` accounting assumes exactly one TLS-terminating hop in front
+# of it — see fly.toml's TRUST_PROXY comment for why the hop count matters).
+#
+# MODE A (default below): Cloudflare Origin CA certificate on the box.
+#   Generate one in Cloudflare dashboard -> SSL/TLS -> Origin Server ->
+#   Create Certificate (RSA or ECDSA, hostnames api.pqp.gg, 15-year
+#   validity is fine — Cloudflare is the only client that ever validates
+#   it). Save the cert as certs/origin.pem and the key as certs/origin.key
+#   next to this file (both 0600, NEVER in git — see docs/deploy-vultr.md).
+#   No port 80 / ACME dependency, no rate limit, works even if Cloudflare's
+#   proxy is the only thing that can ever reach this box on 443.
+#
+# MODE B: Caddy's automatic HTTPS (Let's Encrypt) instead. Cloudflare's
+#   proxy passes the ACME HTTP-01 challenge through on port 80 even while
+#   orange-cloud, so this works without an Origin CA cert. Simpler, but now
+#   renewal depends on Let's Encrypt's own availability and rate limits, and
+#   on port 80 staying reachable from Cloudflare's edge. Use this if you
+#   would rather not manage the Origin CA cert file on the box (e.g. a
+#   self-host without Cloudflare in front at all — point DNS straight at the
+#   box and this mode alone gives you a real, publicly-trusted cert).
+
+# --- MODE A: Cloudflare Origin CA -------------------------------------------
+api.pqp.gg {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+
+	# Answer Fly's own health path the same way so the same external
+	# monitors (docs/MONITORING.md) work unmodified against this box.
+	handle /health {
+		reverse_proxy api:3001
+	}
+
+	handle {
+		reverse_proxy api:3001 {
+			# Caddy already sets X-Forwarded-For / -Proto / -Host by default;
+			# this is one hop (Caddy) in front of the app, matching fly.toml's
+			# TRUST_PROXY=true / one-hop assumption. Cloudflare is a SECOND
+			# hop in front of Caddy, but it is opaque to the app: Caddy is what
+			# clientAddress() sees, and Caddy's default forwarding already
+			# carries Cloudflare's CF-Connecting-IP chain through
+			# X-Forwarded-For correctly because Cloudflare itself sets that
+			# header before Caddy ever sees the request.
+			flush_interval -1
+		}
+	}
+
+	encode gzip zstd
+}
+
+# --- MODE B: automatic HTTPS (Let's Encrypt) --------------------------------
+# Comment out MODE A above and uncomment this block instead. Caddy needs no
+# `tls` directive at all here — omitting it is what turns automatic HTTPS on.
+#
+# api.pqp.gg {
+# 	handle /health {
+# 		reverse_proxy api:3001
+# 	}
+#
+# 	handle {
+# 		reverse_proxy api:3001 {
+# 			flush_interval -1
+# 		}
+# 	}
+#
+# 	encode gzip zstd
+# }
