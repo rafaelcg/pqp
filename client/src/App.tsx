@@ -165,6 +165,8 @@ import {
 import { shouldReleaseAudienceWatchSeat } from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
+import { watchPartyHistoryCandidates } from "@/lib/watch-party-history-access";
+import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
@@ -1742,6 +1744,23 @@ function MainAppContent({
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
   permsRef.current = perms;
+  /**
+   * Every `watch_party` channel on the open server this viewer may see the
+   * history of, that actually has a broadcast to show -- see the long
+   * comment on `watchPartyHistoryCandidates`. Computed here, ahead of every
+   * conditional early return below (bootstrap error, age gate, onboarding),
+   * because it calls a hook and the Rules of Hooks do not bend for how deep
+   * in the component that hook's answer is actually used.
+   */
+  const watchPartyHistoryCandidateChannels = watchPartyHistoryCandidates(
+    channels,
+    (channelId) =>
+      perms.can(Permission.START_WATCH_PARTY, channelId) ||
+      perms.can(Permission.MANAGE_CHANNELS, channelId),
+  );
+  const watchPartyHistoryChannels = useWatchPartyHistoryAvailability(
+    watchPartyHistoryCandidateChannels,
+  );
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
   /**
@@ -6987,6 +7006,10 @@ function MainAppContent({
             hasPermission: perms.can(Permission.START_WATCH_PARTY),
           })}
           onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
+          watchPartyHistoryChannels={watchPartyHistoryChannels}
+          onOpenWatchPartyHistory={(channelId) =>
+            setWatchPartyHistoryChannelId(channelId)
+          }
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}

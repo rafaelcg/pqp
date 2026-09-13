@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Clapperboard, Copy, Eraser, Eye } from "lucide-react";
+import { Clapperboard, Copy, Eraser, Eye, History } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { LivePill } from "@/components/watch-party/live-pill";
@@ -47,6 +47,51 @@ import { cn } from "@/lib/utils";
  * party's own `wentLiveAt`, ticked once a minute here so a card looked at
  * for hours stays true.
  */
+/**
+ * The one-or-many "Transmissões anteriores" link(s) rendered beside the
+ * create/pending card, and the whole reason `historyChannels` exists on
+ * `LivePartyBlock`: this is a person's only way back into a `watch_party`
+ * channel's own history once its show has ended and the channel has gone
+ * back to being unreachable. Split out mainly so the three branches of
+ * `parties.length === 0` below can share it without repeating the map.
+ */
+function HistoryLinks({
+  channels,
+  onOpen,
+}: {
+  channels: readonly { id: string; name: string }[];
+  onOpen: (channelId: string) => void;
+}) {
+  const { t } = useTranslation();
+  if (channels.length === 0) {
+    return null;
+  }
+  return (
+    <ul
+      className="mt-1.5 flex flex-col gap-0.5"
+      data-testid="live-party-history-links"
+    >
+      {channels.map((channel) => (
+        <li key={channel.id}>
+          <button
+            type="button"
+            data-live-party-history={channel.id}
+            className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs text-paper-muted transition-colors hover:text-paper"
+            onClick={() => onOpen(channel.id)}
+          >
+            <History className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="truncate">
+              {channels.length > 1
+                ? t("chrome.watchPartyHistoryNamed", { name: channel.name })
+                : t("chrome.watchPartyHistory")}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function LivePartyBlock({
   parties,
   selectedChannelId,
@@ -57,6 +102,8 @@ export function LivePartyBlock({
   onCreate,
   canPurge,
   onPurge,
+  historyChannels = [],
+  onOpenHistory,
 }: {
   /** Live parties in this server, newest first. Usually exactly one. */
   parties: readonly WatchParty[];
@@ -78,6 +125,16 @@ export function LivePartyBlock({
   canPurge?: boolean;
   /** Opens the same purge confirm dialog a text channel's context menu opens, on this party's channel. */
   onPurge?: (channelId: string, name: string) => void;
+  /**
+   * `watch_party` channels this viewer may see the history of AND that have
+   * a broadcast to show (`watchPartyHistoryCandidates` +
+   * `useWatchPartyHistoryAvailability`). This is THE reachability fix: with
+   * no party running, the channel these came from has no row anywhere else
+   * in the app. Empty draws nothing extra.
+   */
+  historyChannels?: readonly { id: string; name: string }[];
+  /** Opens `WatchPartyHistoryDialog` on the given channel. Required to use `historyChannels`. */
+  onOpenHistory?: (channelId: string) => void;
 }) {
   const { t } = useTranslation();
   // The uptime ticks once a minute while a party is on, and not at all
@@ -95,12 +152,25 @@ export function LivePartyBlock({
 
   if (parties.length === 0) {
     /**
-     * NOTHING, OR ONE BUTTON. A member with no permission and no party
-     * running sees no heading, no empty section and no placeholder: watch
-     * parties simply are not part of their sidebar until one exists. A person
-     * who may start one gets a single control, and it reads as an action
-     * rather than as a channel type, which is the whole point of the change.
+     * NOTHING, OR ONE BUTTON -- PLUS, MAYBE, THE WAY BACK TO YESTERDAY'S SHOW.
+     * A member with no permission, no party running and no history to see
+     * gets no heading, no empty section and no placeholder: watch parties
+     * simply are not part of their sidebar until one exists. A person who
+     * may start one gets a single control, and it reads as an action rather
+     * than as a channel type, which is the whole point of the change.
+     *
+     * `historyChannels` is the exception, and a deliberately narrow one: a
+     * moderator who may see a channel's past broadcasts (START_WATCH_PARTY
+     * or MANAGE_CHANNELS) gets a small secondary link even here, because an
+     * idle `watch_party` channel has no row anywhere else in the app for
+     * them to reach it from. It is not gated on `canStart` -- a
+     * MANAGE_CHANNELS moderator without START_WATCH_PARTY cannot start a
+     * party but can still administer the channel's history.
      */
+    const historyLinks =
+      onOpenHistory && historyChannels.length > 0 ? (
+        <HistoryLinks channels={historyChannels} onOpen={onOpenHistory} />
+      ) : null;
     if (pending) {
       const scheduled = pending.state === "scheduled";
       return (
@@ -123,11 +193,19 @@ export function LivePartyBlock({
               </span>
             </span>
           </button>
+          {historyLinks}
         </div>
       );
     }
     if (!canStart || !onCreate) {
-      return null;
+      if (!historyLinks) {
+        return null;
+      }
+      return (
+        <div className="mb-3 px-1" data-testid="live-party-history-only">
+          {historyLinks}
+        </div>
+      );
     }
     return (
       <div className="mb-3 px-1" data-testid="live-party-create">
@@ -142,6 +220,7 @@ export function LivePartyBlock({
             {t("watchParty.create.button")}
           </span>
         </button>
+        {historyLinks}
       </div>
     );
   }
@@ -175,6 +254,21 @@ export function LivePartyBlock({
             icon: Copy,
             onSelect: () => void navigator.clipboard.writeText(party.channelId),
           });
+          // Reachable a second way while this party is live: the chat pane's
+          // own header icon (`canViewWatchPartyHistory` in `App.tsx`) once
+          // the channel is selected, which watching it already does. This
+          // entry is for right-clicking the card without switching to it.
+          if (
+            onOpenHistory &&
+            historyChannels.some((channel) => channel.id === party.channelId)
+          ) {
+            menuItems.push({
+              id: "history",
+              label: t("chrome.watchPartyHistory"),
+              icon: History,
+              onSelect: () => onOpenHistory(party.channelId),
+            });
+          }
           return (
             <li key={party.id}>
               <ContextMenu items={menuItems}>

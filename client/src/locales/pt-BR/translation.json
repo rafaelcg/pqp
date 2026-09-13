@@ -1899,6 +1899,7 @@
   "chrome.pins": "Fixadas",
   "chrome.channelSettings": "Configurações do canal",
   "chrome.watchPartyHistory": "Transmissões anteriores",
+  "chrome.watchPartyHistoryNamed": "Transmissões anteriores · {name}",
   "chrome.searchMessages": "Buscar mensagens",
   "chrome.invitePeople": "Convidar pessoas",
   "chrome.members": "Membros",
