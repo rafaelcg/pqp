@@ -1,3 +1,8 @@
+import {
+  browserNoiseSuppression,
+  type NoiseSuppressionMode,
+} from "./noise-suppression";
+
 export interface MediaDeviceOption {
   deviceId: string;
   label: string;
@@ -91,13 +96,18 @@ export async function listAudioDevices(): Promise<{
  */
 export interface MicProcessing {
   echoCancellation: boolean;
-  noiseSuppression: boolean;
+  /**
+   * Three settings, not a tick box: `off`, `browser` (the constraint), or
+   * `advanced` (RNNoise in a worklet). See `./noise-suppression`. It was a
+   * boolean until Sep 2026 and persisted values are migrated on read.
+   */
+  noiseSuppression: NoiseSuppressionMode;
   autoGainControl: boolean;
 }
 
 export const defaultMicProcessing: MicProcessing = {
   echoCancellation: true,
-  noiseSuppression: true,
+  noiseSuppression: "browser",
   autoGainControl: true,
 };
 
@@ -124,7 +134,10 @@ export function buildAudioConstraints(
 ): MediaTrackConstraints {
   const constraints: MediaTrackConstraints = {
     echoCancellation: processing.echoCancellation,
-    noiseSuppression: processing.noiseSuppression,
+    // FALSE in advanced mode. RNNoise runs on the raw capture; letting the
+    // browser suppress first would hand it a signal unlike anything it was
+    // trained on, and the two together sound worse than either alone.
+    noiseSuppression: browserNoiseSuppression(processing.noiseSuppression),
     autoGainControl: processing.autoGainControl,
   };
   if (deviceId) {

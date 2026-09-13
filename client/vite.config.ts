@@ -125,6 +125,13 @@ export default defineConfig({
         // cached: a chat app serving yesterday's messages from a cache is worse
         // than one that says it is offline.
         globPatterns: ["**/*.{js,css,html,woff2}"],
+        // The RNNoise worklet is a `.js` file and would otherwise be swept
+        // into the shell precache, which is 63 kB downloaded by every install
+        // for a setting almost nobody turns on — and useless besides, since
+        // the wasm beside it is not a `.js` and is never precached, so the
+        // advanced suppressor could not start offline either way. It is
+        // fetched on demand, like the wasm.
+        globIgnores: ["**/workletProcessor-*.js"],
         // Vite emits hashed chunks and the emoji-data chunk is large; the
         // default 2 MiB ceiling silently drops files past it.
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,

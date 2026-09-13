@@ -430,7 +430,7 @@ describe("microphone processing", () => {
     await voice.join(CHANNEL, {
       processing: {
         echoCancellation: false,
-        noiseSuppression: false,
+        noiseSuppression: "off",
         autoGainControl: true,
       },
     });
@@ -450,7 +450,7 @@ describe("microphone processing", () => {
 
     await voice.setMicProcessing({
       echoCancellation: false,
-      noiseSuppression: false,
+      noiseSuppression: "off",
       autoGainControl: false,
     });
 
@@ -474,7 +474,7 @@ describe("microphone processing", () => {
 
     await voice.setMicProcessing({
       echoCancellation: true,
-      noiseSuppression: true,
+      noiseSuppression: "browser",
       autoGainControl: true,
     });
 
@@ -488,7 +488,7 @@ describe("microphone processing", () => {
 
     await voice.setMicProcessing({
       echoCancellation: false,
-      noiseSuppression: true,
+      noiseSuppression: "browser",
       autoGainControl: true,
     });
 

@@ -54,6 +54,13 @@ import {
   sameMicProcessing,
   type MicProcessing,
 } from "@/lib/audio-devices";
+import {
+  ADVANCED_SAMPLE_RATE,
+  advancedNoiseSuppressionSupported,
+  connectMicChain,
+  createRnnoiseNode,
+  loadRnnoiseBinary,
+} from "../lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 import {
   connectLiveKit,
@@ -516,6 +523,12 @@ interface MicPipeline {
   audioContext: AudioContext;
   gainNode: GainNode;
   analyser: AnalyserNode;
+  /**
+   * The RNNoise worklet, when advanced suppression is on and it loaded.
+   * Held only so teardown can free the wasm state it owns on the render
+   * thread; closing the context alone leaves that to the collector.
+   */
+  noiseSuppressor: { destroy(): void } | null;
 }
 
 interface IceServerConfig {
@@ -616,6 +629,26 @@ function micLabel(stream: MediaStream): string | null {
   return label ? label : null;
 }
 
+function stopStreamTracks(stream: MediaStream): void {
+  for (const track of stream.getTracks()) {
+    track.stop();
+  }
+}
+
+/**
+ * Thrown when `createMicPipeline` notices, via `isCancelled`, that its caller
+ * has already moved on (left the call, started another join, or superseded
+ * the swap). Every resource opened up to that point is released before this
+ * is thrown, so a caller can just treat it as "nothing to clean up" and
+ * discard it silently rather than surfacing it as a mic failure.
+ */
+export class MicSetupCancelledError extends Error {
+  constructor() {
+    super("Microphone setup was abandoned before it finished");
+    this.name = "MicSetupCancelledError";
+  }
+}
+
 /**
  * Open the microphone, and when the one asked for will not start, walk the
  * others before giving up.
@@ -634,6 +667,14 @@ function micLabel(stream: MediaStream): string | null {
  *
  * `onFallback` fires with the label of whatever did start when it is not the
  * one asked for, so the call can say "using the built-in microphone".
+ *
+ * `isCancelled` is polled after every await from here on: the advanced path
+ * alone can take a WASM fetch, a worklet module load and a microphone
+ * permission prompt, and a caller (leave, a superseding join, a second
+ * device/processing change) can go stale at any point in that chain. Once it
+ * reports true, setup stops opening anything new, unwinds whatever it already
+ * opened (raw stream, `AudioContext`, worklet), and throws
+ * `MicSetupCancelledError` rather than handing back a pipeline nobody owns.
  */
 async function createMicPipeline(
   deviceId: string | undefined,
@@ -641,10 +682,47 @@ async function createMicPipeline(
   processing: MicProcessing,
   onDeviceGone?: () => void,
   onFallback?: (label: string | null) => void,
+  isCancelled?: () => boolean,
 ): Promise<MicPipeline> {
+  // Resolve the advanced path BEFORE the microphone is opened, because the
+  // answer changes what `getUserMedia` is asked for: advanced mode wants the
+  // browser's own suppressor off, and falling back afterwards would mean
+  // capturing twice on exactly the machines least able to afford it. Probe,
+  // fetch, then one capture.
+  let mode = processing.noiseSuppression;
+  let rnnoiseBinary: ArrayBuffer | null = null;
+  if (mode === "advanced") {
+    if (!advancedNoiseSuppressionSupported()) {
+      console.warn(
+        "[mic] advanced noise suppression unavailable",
+        new Error("AudioWorklet or WebAssembly missing"),
+      );
+      mode = "browser";
+    } else {
+      try {
+        rnnoiseBinary = await loadRnnoiseBinary();
+      } catch (err) {
+        console.warn("[mic] advanced noise suppression unavailable", err);
+        mode = "browser";
+      }
+    }
+  }
+  // The WASM fetch is the one await that happens before the microphone is
+  // ever touched. Catching a cancellation here is the difference between
+  // "nothing happened" and opening a mic — and, on the advanced path,
+  // capturing WITHOUT the browser's own suppressor — for a caller that has
+  // already walked away.
+  if (isCancelled?.()) {
+    throw new MicSetupCancelledError();
+  }
+  const effective: MicProcessing =
+    mode === processing.noiseSuppression
+      ? processing
+      : { ...processing, noiseSuppression: mode };
+
   let rawStream: MediaStream;
   try {
-    rawStream = await openMic(deviceId, processing);
+    rawStream = await openMic(deviceId, effective);
   } catch (err) {
     if (err instanceof Error && err.name === "NotAllowedError") {
       throw err;
@@ -679,7 +757,7 @@ async function createMicPipeline(
     let opened: MediaStream | null = null;
     for (const candidate of candidates.slice(0, MIC_FALLBACK_ATTEMPTS + 1)) {
       try {
-        opened = await openMic(candidate, processing);
+        opened = await openMic(candidate, effective);
         break;
       } catch (next) {
         if (next instanceof Error && next.name === "NotAllowedError") {
@@ -697,7 +775,56 @@ async function createMicPipeline(
     onFallback?.(micLabel(rawStream));
   }
 
-  const audioContext = new AudioContext();
+  // The microphone the ladder above may have prompted for is now open. A
+  // cancellation from here on must give it back rather than leave the
+  // browser's recording indicator lit for a call nobody is in.
+  if (isCancelled?.()) {
+    stopStreamTracks(rawStream);
+    throw new MicSetupCancelledError();
+  }
+
+  // The rate is only pinned in advanced mode: RNNoise is a 48 kHz model, and
+  // asking for a rate is asking for a resampler nobody else here needs. Some
+  // browsers and audio backends reject a rate they cannot honour (an
+  // exhausted hardware sample rate, a device that only does 44.1 kHz), and
+  // the constructor throws synchronously rather than resolving — so this is
+  // the one construction step that runs AFTER the microphone is already
+  // live and must not be allowed to abort the whole join over it. Falling
+  // back also has to undo the constraint the capture above was asked for:
+  // advanced mode opened the raw track with the browser suppressor OFF, so a
+  // dropped-to-standard path best-effort turns it back on.
+  let audioContext: AudioContext;
+  if (mode === "advanced") {
+    try {
+      audioContext = new AudioContext({ sampleRate: ADVANCED_SAMPLE_RATE });
+    } catch (err) {
+      console.warn("[mic] advanced noise suppression unavailable", err);
+      mode = "browser";
+      for (const track of rawStream.getAudioTracks()) {
+        void track.applyConstraints({ noiseSuppression: true }).catch(() => {});
+      }
+      try {
+        audioContext = new AudioContext();
+      } catch (fallbackErr) {
+        stopStreamTracks(rawStream);
+        throw fallbackErr;
+      }
+    }
+  } else {
+    try {
+      audioContext = new AudioContext();
+    } catch (err) {
+      stopStreamTracks(rawStream);
+      throw err;
+    }
+  }
+
+  if (isCancelled?.()) {
+    stopStreamTracks(rawStream);
+    void audioContext.close().catch(() => {});
+    throw new MicSetupCancelledError();
+  }
+
   const source = audioContext.createMediaStreamSource(rawStream);
   const gainNode = audioContext.createGain();
   gainNode.gain.value = clampVolume(inputVolume);
@@ -706,7 +833,41 @@ async function createMicPipeline(
   analyser.smoothingTimeConstant = 0.7;
   const destination = audioContext.createMediaStreamDestination();
 
-  source.connect(gainNode);
+  let noiseSuppressor: (AudioNode & { destroy(): void }) | null = null;
+  if (mode === "advanced" && rnnoiseBinary) {
+    try {
+      noiseSuppressor = await createRnnoiseNode(audioContext, rnnoiseBinary);
+    } catch (err) {
+      // The worklet module or the wasm refused this late. Never break the mic
+      // over it: ask the browser to suppress instead (best effort, the track
+      // is already live) and carry on with the plain chain.
+      console.warn("[mic] advanced noise suppression unavailable", err);
+      noiseSuppressor = null;
+      for (const track of rawStream.getAudioTracks()) {
+        void track.applyConstraints({ noiseSuppression: true }).catch(() => {});
+      }
+    }
+    if (isCancelled?.()) {
+      // A worklet that already lost its render context (the failure that
+      // just sent it through the catch above, or a browser tearing the tab
+      // down) can throw out of `destroy()` itself. Guarded the same way
+      // `closeMicContext` guards it, so a throw here never skips stopping
+      // the raw stream or closing the context underneath it.
+      try {
+        noiseSuppressor?.destroy();
+      } catch {
+        // Already gone with the context; nothing left to free.
+      }
+      stopStreamTracks(rawStream);
+      void audioContext.close().catch(() => {});
+      throw new MicSetupCancelledError();
+    }
+  }
+
+  // Suppressor first, then gain, then the meter and the published stream —
+  // which is also the stream the watch-party mix carries, so one insertion
+  // here covers the room and the audience both.
+  connectMicChain({ source, suppressor: noiseSuppressor, gain: gainNode });
   gainNode.connect(analyser);
   gainNode.connect(destination);
 
@@ -716,6 +877,7 @@ async function createMicPipeline(
     audioContext,
     gainNode,
     analyser,
+    noiseSuppressor,
   };
 }
 
@@ -734,6 +896,11 @@ function stopMicTracks(pipeline: MicPipeline | null) {
 function closeMicContext(pipeline: MicPipeline | null) {
   if (!pipeline) {
     return;
+  }
+  try {
+    pipeline.noiseSuppressor?.destroy();
+  } catch {
+    // Already gone with the context; nothing left to free.
   }
   void pipeline.audioContext.close();
 }
@@ -1697,6 +1864,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (!pipeline || state.status === "idle") {
       return;
     }
+    // Shares `joinGeneration` with the join path rather than a counter of its
+    // own: leaving, a rejoin, or a second device/processing change while an
+    // advanced pipeline is still loading its WASM and worklet all bump it
+    // already, and re-checking it here is what lets `createMicPipeline` bail
+    // out of a setup nobody is waiting on any more instead of opening (or
+    // keeping open) a microphone that outlives the call.
+    const generation = ++joinGeneration;
     try {
       const next = await createMicPipeline(
         audioOptions.inputDeviceId || undefined,
@@ -1708,7 +1882,14 @@ export function createVoiceController(transport: RealtimeTransport) {
             ? translateMessage("voice.notice.micFallback", { label })
             : translateMessage("voice.notice.micFallbackUnnamed");
         },
+        () => generation !== joinGeneration,
       );
+      if (generation !== joinGeneration) {
+        // Superseded while the new mic was being set up (left, rejoined, or
+        // another swap started): nothing left to swap it into.
+        stopMicPipeline(next);
+        return;
+      }
       stopMicPipeline(pipeline);
       pipeline = next;
       // Carries mute, deafen and the push-to-talk gate onto the new track: a
@@ -1731,6 +1912,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       emit();
     } catch (err) {
+      if (err instanceof MicSetupCancelledError || generation !== joinGeneration) {
+        return;
+      }
       state.error = err instanceof Error ? err.message : failureMessage;
       if (screenMix && state.isSharingMic && pipeline) {
         screenMix.setMic(pipeline.processedStream);
@@ -3719,10 +3903,12 @@ export function createVoiceController(transport: RealtimeTransport) {
               ? translateMessage("voice.notice.micFallback", { label })
               : translateMessage("voice.notice.micFallbackUnnamed");
           },
+          // Abandoned (left, timed out, or superseded) while the WASM load
+          // or the permission prompt was pending: never open (or keep open)
+          // a mic for a join nobody is waiting on.
+          () => generation !== joinGeneration,
         );
 
-        // Abandoned (left, timed out, or superseded) while the permission
-        // prompt was open: never open a mic for a join nobody is waiting on.
         if (generation !== joinGeneration) {
           stopMicPipeline(next);
           return;
@@ -3732,7 +3918,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         applyMuteToPipeline();
         sendJoin(voiceChannelId);
       } catch (err) {
-        if (generation !== joinGeneration) {
+        if (err instanceof MicSetupCancelledError || generation !== joinGeneration) {
           return;
         }
         if (!fromIdle) {

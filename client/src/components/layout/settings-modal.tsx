@@ -91,6 +91,11 @@ import {
   type MediaDeviceOption,
   type MicProcessing,
 } from "@/lib/audio-devices";
+import {
+  NOISE_SUPPRESSION_MODES,
+  parseNoiseSuppressionMode,
+  type NoiseSuppressionMode,
+} from "../../lib/noise-suppression";
 import { desktopContext, getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -278,7 +283,12 @@ export function loadLocalSettings(): LocalSettings {
       shortcuts: parseShortcutOverrides(parsed.shortcuts),
       micProcessing: {
         echoCancellation: parsed.micProcessing?.echoCancellation !== false,
-        noiseSuppression: parsed.micProcessing?.noiseSuppression !== false,
+        // Was a boolean until Sep 2026: `true` and a missing value both read
+        // as the browser's own suppressor, `false` as none, which is what
+        // every stored blob out there says today.
+        noiseSuppression: parseNoiseSuppressionMode(
+          parsed.micProcessing?.noiseSuppression,
+        ),
         autoGainControl: parsed.micProcessing?.autoGainControl !== false,
       },
       // Hand-edited storage, or a level a later build stopped offering, falls
@@ -835,8 +845,12 @@ const INPUT_MODES: {
   },
 ];
 
+/**
+ * The two that are still yes-or-no. Noise suppression left this list when it
+ * grew a third setting; it gets a select of its own below.
+ */
 const MIC_PROCESSING_OPTIONS: {
-  key: keyof MicProcessing;
+  key: "echoCancellation" | "autoGainControl";
   label: MessageKey;
   description: MessageKey;
 }[] = [
@@ -846,16 +860,18 @@ const MIC_PROCESSING_OPTIONS: {
     description: "settings.voice.processing.echoHint",
   },
   {
-    key: "noiseSuppression",
-    label: "settings.voice.processing.noise",
-    description: "settings.voice.processing.noiseHint",
-  },
-  {
     key: "autoGainControl",
     label: "settings.voice.processing.gain",
     description: "settings.voice.processing.gainHint",
   },
 ];
+
+/** Labels for the three suppressors, in the order the select offers them. */
+const NOISE_SUPPRESSION_LABELS: Record<NoiseSuppressionMode, MessageKey> = {
+  off: "settings.voice.processing.noise.off",
+  browser: "settings.voice.processing.noise.browser",
+  advanced: "settings.voice.processing.noise.advanced",
+};
 
 /**
  * Devices, levels, input mode and microphone processing.
@@ -1063,6 +1079,36 @@ function VoiceSection({
             </span>
           </label>
         ))}
+        <label className="block">
+          <span className="mb-1 block text-sm">
+            {t("settings.voice.processing.noise")}
+          </span>
+          <select
+            value={draftLocal.micProcessing.noiseSuppression}
+            onChange={(e) =>
+              patchLocal({
+                micProcessing: {
+                  ...draftLocal.micProcessing,
+                  noiseSuppression: parseNoiseSuppressionMode(e.target.value),
+                },
+              })
+            }
+            className={selectClass}
+          >
+            {NOISE_SUPPRESSION_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {t(NOISE_SUPPRESSION_LABELS[mode])}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 block text-xs text-paper-muted">
+            {t(
+              draftLocal.micProcessing.noiseSuppression === "advanced"
+                ? "settings.voice.processing.noise.advancedHint"
+                : "settings.voice.processing.noiseHint",
+            )}
+          </span>
+        </label>
         <p className="text-xs text-paper-muted">
           {t("settings.voice.processing.note")}
         </p>
