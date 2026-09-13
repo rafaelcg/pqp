@@ -717,62 +717,6 @@ function WatchPartyOptionsDialog({
  * normal · Sem co-host") so a host can confirm the defaults at a glance
  * without opening anything, which is what most of them will do.
  */
-function WatchPartyOptionsSummary({
-  party,
-  micInStream,
-  onOpen,
-}: {
-  party: WatchParty;
-  micInStream?: boolean;
-  onOpen: () => void;
-}) {
-  const { t } = useTranslation();
-  const { options } = party;
-  const parts = [
-    options.voiceEnabled
-      ? t("watchParty.summary.voiceOn")
-      : t("watchParty.summary.voiceOff"),
-    options.reactionsEnabled
-      ? t("watchParty.summary.reactionsOn")
-      : t("watchParty.summary.reactionsOff"),
-    options.slowModeSeconds > 0
-      ? t("watchParty.summary.slow", {
-          value: t(slowModeKey(options.slowModeSeconds)),
-        })
-      : t("watchParty.summary.chatNormal"),
-    party.cohosts.length > 0
-      ? t("watchParty.summary.cohosts", { count: party.cohosts.length })
-      : t("watchParty.summary.noCohost"),
-    ...(micInStream === undefined
-      ? []
-      : [
-          micInStream
-            ? t("watchParty.summary.micInStream")
-            : t("watchParty.summary.micRoomOnly"),
-        ]),
-  ];
-  return (
-    <div
-      data-testid="watch-party-options-summary"
-      className="flex shrink-0 items-center gap-2 border-t border-ink-4/60 bg-ink px-3 py-1.5"
-    >
-      <p className="min-w-0 flex-1 truncate text-xs text-paper-muted">
-        {parts.join(" · ")}
-      </p>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={onOpen}
-        data-watch-party-options-toggle
-      >
-        <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-        {t("watchParty.summary.adjust")}
-      </Button>
-    </div>
-  );
-}
-
 // ------------------------------------------------------------- no party yet
 
 function EmptyStage(props: WatchPartyPanelProps) {
@@ -892,16 +836,20 @@ function checklistCopyKey(item: ChecklistItem): MessageKey {
 function GoLiveChecklist({
   items,
   className,
+  compact = false,
 }: {
   items: readonly ChecklistItem[];
   className?: string;
+  /** Inside the setup card: no box of its own, the card is the box. */
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   return (
     <div
       data-testid="watch-party-go-live-checklist"
       className={cn(
-        "flex flex-col gap-1.5 rounded-lg border border-border bg-surface-0 px-2.5 py-2",
+        "flex flex-col gap-1.5",
+        !compact && "rounded-lg border border-border bg-surface-0 px-2.5 py-2",
         className,
       )}
     >
@@ -967,6 +915,137 @@ function ChecklistRow({
       )}
       <span>{children}</span>
     </li>
+  );
+}
+
+/** One numbered row of the setup card: a small circled number, a label, the control. */
+function SetupStep({
+  number,
+  label,
+  done = false,
+  children,
+}: {
+  number: number;
+  label: string;
+  done?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-1.5" data-watch-party-step={number}>
+      <h3 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        <span
+          className={cn(
+            "flex h-4 w-4 items-center justify-center rounded-full text-[10px]",
+            done ? "bg-success text-ink" : "bg-surface-1 text-paper-muted",
+          )}
+          aria-hidden
+        >
+          {done ? <Check className="h-2.5 w-2.5" /> : number}
+        </span>
+        {label}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * The settings as chips, replacing the dotted summary string. Each chip is
+ * a fact and a door: tapping any of them opens the options dialog, which is
+ * where every one of these is changed. Same values the summary had, plus
+ * the stream quality, which lives with the encoder numbers when live and
+ * has no other home before that.
+ */
+function WatchPartyOptionsChips({
+  party,
+  micInStream,
+  quality,
+  onOpen,
+}: {
+  party: WatchParty;
+  micInStream?: boolean;
+  quality: WatchPartyStreamQuality;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation();
+  const { options } = party;
+  const chips: { key: string; label: string; on: boolean }[] = [
+    {
+      key: "voice",
+      label: options.voiceEnabled
+        ? t("watchParty.summary.voiceOn")
+        : t("watchParty.summary.voiceOff"),
+      on: options.voiceEnabled,
+    },
+    {
+      key: "reactions",
+      label: options.reactionsEnabled
+        ? t("watchParty.summary.reactionsOn")
+        : t("watchParty.summary.reactionsOff"),
+      on: options.reactionsEnabled,
+    },
+    {
+      key: "chat",
+      label:
+        options.slowModeSeconds > 0
+          ? t("watchParty.summary.slow", {
+              value: t(slowModeKey(options.slowModeSeconds)),
+            })
+          : t("watchParty.summary.chatNormal"),
+      on: options.slowModeSeconds > 0,
+    },
+    { key: "quality", label: quality, on: false },
+    {
+      key: "cohosts",
+      label:
+        party.cohosts.length > 0
+          ? t("watchParty.summary.cohosts", { count: party.cohosts.length })
+          : t("watchParty.summary.noCohost"),
+      on: party.cohosts.length > 0,
+    },
+    ...(micInStream === undefined
+      ? []
+      : [
+          {
+            key: "mic",
+            label: micInStream
+              ? t("watchParty.summary.micInStream")
+              : t("watchParty.summary.micRoomOnly"),
+            on: micInStream,
+          },
+        ]),
+  ];
+  return (
+    <div
+      data-testid="watch-party-options-summary"
+      className="flex flex-wrap items-center gap-1.5"
+    >
+      {chips.map((chip) => (
+        <button
+          key={chip.key}
+          type="button"
+          onClick={onOpen}
+          data-watch-party-chip={chip.key}
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[11px] transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
+            chip.on
+              ? "border-signal/40 bg-signal/10 text-paper"
+              : "border-border bg-surface-0 text-paper-muted",
+          )}
+        >
+          {chip.label}
+        </button>
+      ))}
+      <button
+        type="button"
+        onClick={onOpen}
+        data-watch-party-options-toggle
+        className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-signal hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+      >
+        <SlidersHorizontal className="h-3 w-3" aria-hidden />
+        {t("watchParty.summary.adjust")}
+      </button>
+    </div>
   );
 }
 
@@ -1122,6 +1201,36 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
     }
   };
 
+  /**
+   * TWO COLUMNS, ONE STEPPER, ONE BUTTON (2026-09-13). The setup surface
+   * used to be a black pane with a grey button in the middle, a name pill
+   * floating top-right, a settings string that read like a log line, a
+   * checklist card and a state bar: five blocks in five visual languages
+   * and no "what do I do first". Meet's green room and Discord's Go Live
+   * agree on the shape: the preview on one side reflecting state, a card
+   * on the other that reads top to bottom (name, source, settings) and
+   * ends in the one button. Everything below reuses what already existed
+   * (the picker, the options dialog, the checklist rules, the link
+   * button); only the arrangement is new.
+   *
+   * `watch-party-not-live` is still the LAST thing in the card and never
+   * scrolls away (the co-host list and the checklist scroll above it), and
+   * it still leads with the state in words: that is the production
+   * incident this bar exists for, unchanged.
+   */
+  const sourceState: "none" | "silent" | "ok" = !stream
+    ? "none"
+    : silentPick
+      ? "silent"
+      : "ok";
+  const goLiveReason = checklistBlocked
+    ? t("watchParty.checklist.blockedFirefox")
+    : stream
+      ? null
+      : canPutPictureUp
+        ? t("watchParty.setup.pickFirst")
+        : t("watchParty.setup.phoneHint");
+
   return (
     <div
       data-testid="watch-party-setup"
@@ -1130,42 +1239,56 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         surfaceHeight(props.fill, "h-[68svh] min-h-[320px]"),
       )}
     >
-      {/* A FLOOR, NOT JUST A SHARE. `min-h-0` let this row shrink to
-          nothing whenever its siblings below it (the options summary, the
-          go-live checklist, the state bar) needed more room than the
-          surface had: on a narrow stage the state bar's own text wraps
-          hard enough to run past a few hundred pixels tall on its own, and
-          adding the checklist (postmortem B3) was enough to push the total
-          over the top — collapsing the preview to 0×0 and failing
-          `watch-party-preview`'s visibility check in e2e, not because
-          nothing was picked but because there was nowhere left to draw it.
-          160px matches `MIN_STAGE_HEIGHT_PX` in `lib/call-split.ts` ("a
-          stage shorter than this is a letterbox, not a picture"): below it,
-          whatever grew too tall to fit is what the surface's own
-          `overflow-hidden` clips, never the picture the host just picked. */}
-      <div className="flex min-h-[160px] flex-1">
-        <div className="relative min-w-0 flex-1 bg-black">
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {/* THE PREVIEW, OR THE PICKER IN ITS PLACE. Before a pick there is
+            nothing to preview, so the pane is not left black with a small
+            button in it: the picker itself is the content, with the one
+            sentence that prevents the silent-film incident (tab, with tab
+            audio ticked). After the pick, the real capture. 160px floor for
+            the reason `MIN_STAGE_HEIGHT_PX` gives in `lib/call-split.ts`. */}
+        <div className="relative min-h-[160px] min-w-0 flex-1 bg-black">
           {stream ? (
-            <video
-              ref={videoRef}
-              autoPlay
-              muted
-              playsInline
-              className="h-full w-full object-contain"
-              data-testid="watch-party-preview"
-            />
-          ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center">
-              <MonitorPlay
-                className="h-7 w-7 text-paper-muted"
-                aria-hidden
+            <>
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                className="h-full w-full object-contain"
+                data-testid="watch-party-preview"
               />
+              <span className="pointer-events-none absolute left-3 top-3 rounded-full bg-ink/70 px-2 py-0.5 text-[11px] text-paper-muted">
+                {t("watchParty.setup.heading")}
+              </span>
+              {silentPick && (
+                <p
+                  data-testid="watch-party-no-audio"
+                  className="pointer-events-none absolute bottom-3 left-3 right-3 rounded-md border border-warning/40 bg-surface-0/90 px-2.5 py-1.5 text-xs text-warning"
+                >
+                  {t("watchParty.setup.noAudio", silentPickHint)}
+                </p>
+              )}
+            </>
+          ) : (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
+              <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-1">
+                <MonitorPlay className="h-7 w-7 text-paper-muted" aria-hidden />
+              </span>
               {canPutPictureUp ? (
                 <>
-                  <p className="text-sm text-paper-muted">
-                    {t("watchParty.setup.noSource")}
+                  <p className="text-base font-semibold text-paper">
+                    {t("watchParty.setup.pickTitle")}
                   </p>
-                  <Button type="button" variant="secondary" onClick={() => void pick()}>
+                  <p className="max-w-sm text-sm text-paper-muted">
+                    {t("watchParty.setup.pickBody")}
+                  </p>
+                  <Button
+                    type="button"
+                    size="default"
+                    onClick={() => void pick()}
+                    data-watch-party-pick
+                  >
+                    <MonitorPlay className="mr-1.5 h-4 w-4" aria-hidden />
                     {t("watchParty.setup.pick")}
                   </Button>
                   {pickError && (
@@ -1182,147 +1305,140 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               )}
             </div>
           )}
-          {/* The name sits on the picture, where the live bar will show it,
-              rather than at the top of a form. Same input the e2e reads. */}
-          <div className="absolute right-2 top-2 flex items-center gap-2">
-            <input
-              type="text"
-              maxLength={120}
-              aria-label={t("watchParty.setup.nameLabel")}
-              className="w-32 rounded-md border border-ink-4/60 sm:w-44 bg-surface-0/90 px-2 py-1 text-right text-sm font-semibold text-paper focus:border-ink-4"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              onBlur={() => {
-                const next = name.trim();
-                if (next.length > 0 && next !== party.name) {
-                  void props.onRename(next);
+        </div>
+
+        {/* THE SETUP CARD. Reads top to bottom: name, source, settings, the
+            checklist's hints, then the button. On a narrow stage it stacks
+            under the preview. */}
+        <aside
+          data-testid="watch-party-setup-card"
+          className="flex w-full shrink-0 flex-col border-t border-ink-4/60 bg-ink-2 md:w-80 md:border-l md:border-t-0"
+        >
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
+            <SetupStep number={1} label={t("watchParty.setup.nameLabel")}>
+              <input
+                type="text"
+                maxLength={120}
+                aria-label={t("watchParty.setup.nameLabel")}
+                className="w-full rounded-md border border-ink-4/60 bg-surface-0 px-2.5 py-1.5 text-sm font-semibold text-paper focus:border-ink-4 focus:outline-none"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                onBlur={() => {
+                  const next = name.trim();
+                  if (next.length > 0 && next !== party.name) {
+                    void props.onRename(next);
+                  }
+                }}
+                data-watch-party-name
+              />
+            </SetupStep>
+
+            <SetupStep
+              number={2}
+              label={t("watchParty.setup.stepSource")}
+              done={sourceState === "ok"}
+            >
+              <div
+                data-testid="watch-party-source"
+                data-watch-party-source={sourceState}
+                className="flex items-center justify-between gap-2 rounded-md border border-ink-4/60 bg-surface-0 px-2.5 py-1.5 text-xs"
+              >
+                <span
+                  className={cn(
+                    "min-w-0 truncate",
+                    sourceState === "ok" && "text-paper",
+                    sourceState === "silent" && "text-warning",
+                    sourceState === "none" && "text-paper-muted",
+                  )}
+                >
+                  {sourceState === "ok"
+                    ? t("watchParty.setup.sourceOk")
+                    : sourceState === "silent"
+                      ? t("watchParty.setup.sourceSilent")
+                      : t("watchParty.setup.noSource")}
+                </span>
+                {canPutPictureUp && (
+                  <Button
+                    type="button"
+                    variant={stream ? "ghost" : "secondary"}
+                    size="sm"
+                    onClick={() => void pick()}
+                    data-watch-party-repick={stream ? "" : undefined}
+                  >
+                    {stream
+                      ? t("watchParty.setup.repick")
+                      : t("watchParty.setup.pickShort")}
+                  </Button>
+                )}
+              </div>
+            </SetupStep>
+
+            <SetupStep number={3} label={t("watchParty.setup.stepSettings")}>
+              <WatchPartyOptionsChips
+                party={party}
+                micInStream={
+                  props.onMicInStreamChange
+                    ? props.micInStream !== false
+                    : undefined
                 }
-              }}
-              data-watch-party-name
-            />
-            {stream && (
+                quality={readWatchPartyStreamQuality(props.currentUserId ?? null)}
+                onOpen={() => setOptionsOpen(true)}
+              />
+            </SetupStep>
+
+            {/* THE GO-LIVE CHECKLIST (postmortem B3), now inside the card and
+                without its own box: the rows that pass are quiet ticks, the
+                rows that do not are the amber lines a host should read. */}
+            {canPutPictureUp && <GoLiveChecklist items={checklistItems} compact />}
+          </div>
+
+          {/* A STATE BAR, NOT A FOOTER. Leads with whose eyes are on this and
+              what to do about it; the button that changes the state is under
+              that sentence. Always last, never scrolls. */}
+          <div
+            data-testid="watch-party-not-live"
+            className="flex shrink-0 flex-col gap-2 border-t border-ink-4/60 bg-ink-2 p-3"
+          >
+            <p className="flex min-w-0 items-start gap-2 text-xs">
+              <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-warning" />
+              <span className="min-w-0">
+                <span className="font-semibold text-warning">
+                  {t("watchParty.setup.heading")}
+                </span>{" "}
+                <span className="text-text-tertiary">
+                  {goLiveReason ?? t("watchParty.setup.goLiveHint")}
+                </span>
+              </span>
+            </p>
+            {canPutPictureUp && (
               <Button
                 type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => void pick()}
+                size="default"
+                disabled={busy || !stream || checklistBlocked}
+                title={goLiveReason ?? undefined}
+                onClick={() => void goLive()}
+                data-watch-party-go-live
+                className="w-full bg-danger text-paper hover:bg-danger/85"
               >
-                {t("watchParty.setup.repick")}
+                <Radio className="mr-1.5 h-4 w-4" aria-hidden />
+                {t("watchParty.setup.goLive")}
               </Button>
             )}
+            <div className="flex items-center justify-between gap-2">
+              <WatchPartyShareButton party={party} />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfirmDiscard(true)}
+                data-watch-party-discard
+              >
+                <Undo2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                {t("watchParty.setup.discard")}
+              </Button>
+            </div>
           </div>
-          {silentPick && (
-            <p
-              data-testid="watch-party-no-audio"
-              className="pointer-events-none absolute bottom-3 left-3 right-3 rounded-md border border-warning/40 bg-surface-0/90 px-2.5 py-1.5 text-xs text-warning"
-            >
-              {t("watchParty.setup.noAudio", silentPickHint)}
-            </p>
-          )}
-        </div>
-
-      </div>
-
-      <WatchPartyOptionsSummary
-        party={party}
-        micInStream={props.onMicInStreamChange ? props.micInStream !== false : undefined}
-        onOpen={() => setOptionsOpen(true)}
-      />
-
-      {/* THE GO-LIVE CHECKLIST (postmortem B3). Every failure mode on
-          2026-09-12 was on this list before it happened: the wrong browser,
-          a tab picked with no tab audio, 1080p over a long path, a camera
-          left on next to the share. Shown here, in setup, because this is
-          the one moment a host can still act on all four without having
-          told a room anything yet. */}
-      {canPutPictureUp && (
-        <div className="px-3 pt-2">
-          <GoLiveChecklist items={checklistItems} />
-        </div>
-      )}
-
-      {/* A STATE BAR, NOT A FOOTER, and that is the whole of the third fix.
-          A host on production picked a window, watched his own preview and
-          told a room he was live while nothing at all was being sent. The
-          controls were here already; what was missing was anything that said
-          what state he was in. So the bar leads with the state in words, in
-          the warning tone, and the button that changes it sits at the end of
-          that sentence rather than at the bottom of a form.
-
-          IT IS ALWAYS THE LAST THING IN THE PANE. `shrink-0` under a row that
-          is `min-h-0 flex-1`, inside a surface that now takes its height from
-          the pane (`fill`). However long the options column and the co-host
-          list get, they scroll inside the row above; this never moves and
-          never needs scrolling to. That is the other half of the same
-          report: the host's screenshot only showed Ir ao vivo after
-          scrolling, under a co-host list long enough to push it away. */}
-      <div
-        data-testid="watch-party-not-live"
-        className="flex shrink-0 flex-col gap-2 border-t border-warning/30 bg-warning/10 px-3 py-2.5 sm:flex-row sm:items-center"
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="h-2 w-2 shrink-0 rounded-full bg-warning" />
-          <p className="min-w-0 text-xs">
-            {/* ONE WARNING, NOT TWO. The preview used to carry a pill ("Só
-                você tá vendo isso") and this row said "Ainda não tá no ar"
-                with the next step after it: the same fact in two places, in
-                two tones. The row says it once: whose eyes are on this, then
-                what to do about it. The bar is why a host on production once
-                announced "im live" to a room with nothing going out; it
-                stays the sentence, and the pill goes. */}
-            <span className="font-semibold text-warning">
-              {t("watchParty.setup.heading")}
-            </span>{" "}
-            <span className="text-text-tertiary">
-              {checklistBlocked
-                ? t("watchParty.checklist.blockedFirefox")
-                : stream
-                  ? t("watchParty.setup.goLiveHint")
-                  : canPutPictureUp
-                    ? t("watchParty.setup.pickFirst")
-                    : t("watchParty.setup.phoneHint")}
-            </span>
-          </p>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <WatchPartyShareButton party={party} size="default" />
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setConfirmDiscard(true)}
-            data-watch-party-discard
-          >
-            <Undo2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            {t("watchParty.setup.discard")}
-          </Button>
-          {/* NO PICTURE, NO BUTTON. Discord's Go Live and YouTube's "Ready to
-              go live?" both refuse to start until there is a source, and the
-              one production incident this surface has had was a host going
-              live to a black pane. The party and the picture stay separable
-              on the server (a share that dies mid-show does not end the
-              party); the setup surface just will not START one without a
-              picture. The scheduled card keeps its own unconditional button
-              for the host who set a time and shares once they are in. */}
-          {canPutPictureUp && (
-            <Button
-              type="button"
-              disabled={busy || !stream || checklistBlocked}
-              title={
-                checklistBlocked
-                  ? t("watchParty.checklist.blockedFirefox")
-                  : stream
-                    ? undefined
-                    : t("watchParty.setup.pickFirst")
-              }
-              onClick={() => void goLive()}
-              data-watch-party-go-live
-              className="bg-danger text-paper hover:bg-danger/85"
-            >
-              <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              {t("watchParty.setup.goLive")}
-            </Button>
-          )}
-        </div>
+        </aside>
       </div>
 
       <WatchPartyOptionsDialog

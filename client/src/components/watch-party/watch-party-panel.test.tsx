@@ -1001,3 +1001,68 @@ describe("the live bar, by who is behind it", () => {
     expect(html).not.toContain("watch-party-tx-mic-gain-slider");
   });
 });
+
+/**
+ * THE SETUP CARD (2026-09-13): two columns, a numbered card, one button.
+ * The picker is the preview's content until something is picked, the
+ * settings are chips that open the options dialog, and the checklist has no
+ * box of its own inside the card.
+ */
+describe("the setup card", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getDisplayMedia: () => Promise.reject(new Error("test")) },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: undefined,
+      configurable: true,
+    });
+  });
+  const draft = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({
+      party: { ...PARTY, state: "draft", viewerRole: "host" },
+      ...over,
+    });
+
+  it("reads as three numbered steps ending in Go live", () => {
+    const html = draft();
+    expect(html).toContain("watch-party-setup-card");
+    expect(html).toContain('data-watch-party-step="1"');
+    expect(html).toContain('data-watch-party-step="2"');
+    expect(html).toContain('data-watch-party-step="3"');
+    const card = html.slice(html.indexOf("watch-party-setup-card"));
+    expect(card).toContain("data-watch-party-name");
+    expect(card).toContain('data-watch-party-source="none"');
+    expect(card).toContain("data-watch-party-go-live");
+    expect(card.indexOf("data-watch-party-name")).toBeLessThan(
+      card.indexOf("data-watch-party-go-live"),
+    );
+  });
+
+  it("puts the picker where the preview will be, as the primary action", () => {
+    const html = draft();
+    expect(html).toContain("data-watch-party-pick");
+    expect(html).toContain("going on screen?");
+    expect(html).not.toContain("watch-party-preview");
+  });
+
+  it("shows the settings as chips that all open the options dialog", () => {
+    const html = draft();
+    expect(html).toContain("watch-party-options-summary");
+    for (const key of ["voice", "reactions", "chat", "quality", "cohosts"]) {
+      expect(html).toContain(`data-watch-party-chip="${key}"`);
+    }
+    expect(html).toContain("data-watch-party-options-toggle");
+    expect(html).not.toContain("Voice off · ");
+  });
+
+  it("draws the checklist inside the card without its own box", () => {
+    const html = draft();
+    const at = html.indexOf('data-testid="watch-party-go-live-checklist"');
+    const tag = html.slice(at - 60, at + 200);
+    expect(tag).not.toContain("rounded-lg border");
+  });
+});
