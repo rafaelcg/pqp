@@ -23,21 +23,37 @@ package_update: true
 package_upgrade: true
 
 users:
-  # A non-root account for the deploy workflow to SSH into. Kept separate
-  # from root the same way the SFU box's own hardening story assumes a key
-  # holder, not necessarily root — provision.sh grants this user passwordless
-  # sudo (only) for `docker` and `systemctl`, not a blanket NOPASSWD:ALL, so a
-  # leaked deploy key cannot rewrite arbitrary system files.
+  # A non-root account for a HUMAN to SSH into (troubleshooting, manual
+  # ops per docs/deploy-vultr.md). Kept separate from root the same way the
+  # SFU box's own hardening story assumes a key holder, not necessarily
+  # root. Note this account IS effectively root-equivalent (docker group:
+  # the Docker daemon socket can mount `/`, read any file, replace any
+  # running service) — that is acceptable for a human's own key, but it is
+  # exactly why the CI deploy key below does NOT authenticate to this
+  # account. Its authorized_keys is populated ONLY by Vultr's own "SSH
+  # Keys" instance attachment (a human's personal key), never by
+  # provision.sh or this file.
   - name: pqp
     groups: [docker, sudo]
     shell: /bin/bash
     sudo: ["ALL=(ALL) NOPASSWD:/usr/bin/docker, /usr/bin/systemctl"]
     lock_passwd: true
+
+  # The account the deploy workflow's GitHub secret (VULTR_API_SSH_KEY)
+  # actually authenticates to. Deliberately powerless on its own: no
+  # docker/sudo group, and (once provision.sh has run — see that script)
+  # exactly one sudo rule for one fixed, root-owned script,
+  # /usr/local/bin/pqp-deploy, which only pulls fixed images and reloads
+  # Caddy from fixed files under /opt/pqp. A fully leaked
+  # VULTR_API_SSH_KEY therefore cannot start an arbitrary container, read
+  # /opt/pqp/.env, or touch any file this script does not already touch —
+  # see tools/api-host/pqp-deploy.sh for the whole of what it can do.
+  - name: pqp-deploy
+    shell: /bin/bash
+    lock_passwd: true
     ssh_authorized_keys:
       # Replaced at instance-creation time with the deploy key's PUBLIC half
-      # (the private half is GitHub secret VULTR_API_SSH_KEY). Vultr's own
-      # "SSH Keys" attachment also lands keys on this user because `groups`
-      # includes no exclusion; either mechanism is fine, use both.
+      # (the private half is GitHub secret VULTR_API_SSH_KEY).
       - __PQP_DEPLOY_PUBLIC_KEY__
 
 write_files:
@@ -72,13 +88,21 @@ runcmd:
   # a kernel patch landing a day late beats an API restart nobody scheduled.
 
   # ufw: 22 only from the allowlist (never the world — this box holds
-  # DATABASE_URL and CLERK_SECRET_KEY, not the disposable SFU config), 80/443
-  # open for Caddy/ACME and for Cloudflare's proxy IPs.
+  # DATABASE_URL and CLERK_SECRET_KEY, not the disposable SFU config).
+  # 80/443 are NOT opened to the world either: api.pqp.gg is proxied
+  # (orange-cloud) behind Cloudflare, so the origin only ever needs to hear
+  # from Cloudflare's edge — anyone else connecting directly would bypass
+  # Cloudflare's WAF, rate limiting and DDoS protection entirely, cert
+  # notwithstanding (a client can always disable validation). Restricted to
+  # Cloudflare's own published ranges, fetched live rather than pinned in
+  # this file, since they occasionally change; provision.sh refreshes the
+  # same rules on every re-run for a box that outlives this one boot.
   - ufw default deny incoming
   - ufw default allow outgoing
   - for cidr in __SSH_ALLOWLIST_CIDRS__; do ufw allow from "$cidr" to any port 22 proto tcp; done
-  - ufw allow 80/tcp
-  - ufw allow 443/tcp
+  - curl -fsS --max-time 10 https://www.cloudflare.com/ips-v4 -o /etc/pqp-cloudflare-ips || true
+  - curl -fsS --max-time 10 https://www.cloudflare.com/ips-v6 >>/etc/pqp-cloudflare-ips || true
+  - test -s /etc/pqp-cloudflare-ips && while read -r cidr; do [ -n "$cidr" ] && ufw allow from "$cidr" to any port 80 proto tcp && ufw allow from "$cidr" to any port 443 proto tcp; done </etc/pqp-cloudflare-ips || echo "!! could not fetch Cloudflare ranges at boot; provision.sh will retry"
   - ufw --force enable
 
   # Sorry-cloud-init reload, not restart, so this boot's own session survives

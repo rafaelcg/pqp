@@ -48,7 +48,13 @@ jobs:
     name: Build & deploy Vultr (gru)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: ${{ (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) && vars.DEPLOY_TARGET == 'vultr' && vars.DEPLOY_FREEZE != 'true' }}
+    # A manual dispatch is only trusted when it runs FROM main — never an
+    # arbitrary branch, which would otherwise let anyone who can run
+    # workflows (not necessarily anyone who can merge to main) build and
+    # deploy unreviewed code (a modified Dockerfile or compose/Caddy file)
+    # straight to production. workflow_run already only fires for a run of
+    # main; this closes the same door on the workflow_dispatch side.
+    if: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) && vars.DEPLOY_TARGET == 'vultr' && vars.DEPLOY_FREEZE != 'true' }}
     permissions:
       contents: read
       packages: write
@@ -168,59 +174,115 @@ jobs:
           install -m 0600 /dev/null "$RUNNER_TEMP/vultr_deploy_key"
           printf '%s\n' "${{ secrets.VULTR_API_SSH_KEY }}" > "$RUNNER_TEMP/vultr_deploy_key"
 
+      # This key authenticates to `pqp-deploy`, not `pqp` — see
+      # tools/api-host/cloud-init.yaml and provision.sh. That account has
+      # no docker group and no broad sudo; the ONLY thing it can do is
+      # invoke the one fixed, root-owned script below via a sudoers rule
+      # scoped to that exact path, which is why a leaked
+      # VULTR_API_SSH_KEY cannot start an arbitrary container or read
+      # /opt/pqp/.env directly. It also cannot write into /opt/pqp, so the
+      # new compose.yaml/Caddyfile land in its own home first; pqp-deploy
+      # (the script) installs them into /opt/pqp as root before using them.
+      - name: Read previously deployed tag
+        id: prevtag
+        if: steps.relevant.outputs.needed == 'true'
+        env:
+          SSH_KEY: ${{ runner.temp }}/vultr_deploy_key
+          HOST: ${{ secrets.VULTR_API_HOST }}
+        run: |
+          ssh_cmd() {
+            ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
+          }
+          tag=$(ssh_cmd 'cat /opt/pqp/.deployed-tag 2>/dev/null' || true)
+          echo "tag=${tag:-}" >> "$GITHUB_OUTPUT"
+          echo "Previously deployed tag: ${tag:-none (first deploy on this box)}"
+
       # Copies the two files whose content actually matters at deploy time
-      # (compose.yaml, Caddyfile) so the box never runs a stale copy of
-      # either while the image tag moves forward, then pulls and restarts
-      # only api + worker. Caddy is left running: TLS state and the
-      # cert/key files under ./certs are untouched by this, and a Caddyfile
-      # edit alone does not require this workflow to run (it never changes
-      # what the API serves) — hand-run `docker compose up -d caddy` for that.
+      # (compose.yaml, Caddyfile) into pqp-deploy's own staging directory,
+      # then runs the one script that account may sudo. That script (root)
+      # installs them into /opt/pqp, pulls BOTH images before touching
+      # either running container (so a bad tag never leaves api and worker
+      # on different releases), brings up api + worker, and reloads Caddy
+      # from whatever Caddyfile is now in place — a Caddy-only change no
+      # longer sits copied-but-inert. It waits for both containers' own
+      # Docker healthchecks and confirms the API is actually serving this
+      # commit before exiting 0; any of that failing is a non-zero exit,
+      # which this step surfaces via `continue-on-error` so the rollback
+      # step below still gets to run.
       #
       # stop_grace_period: 60s in compose.yaml is what gives
       # server/src/lib/drain.ts's SIGTERM handling room to finish (25s
       # budget) before Compose sends SIGKILL, same contract as fly.toml's
       # kill_timeout.
       - name: Deploy over SSH
+        id: deploy
         if: steps.relevant.outputs.needed == 'true'
+        continue-on-error: true
         env:
           SSH_KEY: ${{ runner.temp }}/vultr_deploy_key
           HOST: ${{ secrets.VULTR_API_HOST }}
           SHA: ${{ steps.commit.outputs.sha }}
         run: |
           ssh_cmd() {
-            ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp@$HOST" "$@"
+            ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
           scp -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
             tools/api-host/compose.yaml tools/api-host/Caddyfile \
-            "pqp@$HOST:/opt/pqp/"
-          ssh_cmd "cd /opt/pqp && \
-            APP_IMAGE_TAG=$SHA APP_VERSION=$SHA \
-            docker compose pull api worker && \
-            APP_IMAGE_TAG=$SHA APP_VERSION=$SHA \
-            docker compose up -d api worker && \
-            docker compose ps"
+            "pqp-deploy@$HOST:/home/pqp-deploy/incoming/"
+          ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA"
 
-      # Mirrors deploy-api-fly.yml's "Verify the deployed commit" step:
-      # /api/* routes all resolve a Bearer token before routing (CLAUDE.md
-      # pitfall #8), so /health (and /ready, which additionally proves
-      # Postgres/LiveKit/storage — docs/MONITORING.md) are the only surfaces
-      # that can say what code is actually running.
+      # Mirrors deploy-api-fly.yml's "Verify the deployed commit" step, but
+      # pinned at the box itself rather than DNS: api.pqp.gg's A/AAAA
+      # record, Cloudflare's routing, or a mid-cutover DNS state could all
+      # point somewhere other than this box, in which case a check against
+      # the hostname alone could pass or fail for reasons that have
+      # nothing to do with this deploy. `--connect-to` keeps the real TLS
+      # handshake (SNI, cert, Host header) for api.pqp.gg while forcing the
+      # TCP connection itself at $HOST, so this proves the box, not DNS.
       - name: Verify the deployed commit
-        if: steps.relevant.outputs.needed == 'true'
+        id: verify
+        if: steps.relevant.outputs.needed == 'true' && steps.deploy.outcome == 'success'
+        continue-on-error: true
         env:
           EXPECTED: ${{ steps.commit.outputs.sha }}
           HOST: ${{ secrets.VULTR_API_HOST }}
         run: |
+          curl_pinned() { curl --connect-to "api.pqp.gg:443:$HOST:443" "$@"; }
           for attempt in $(seq 1 40); do
-            body=$(curl -fsS --max-time 10 "$HEALTH_URL" || echo '{}')
+            body=$(curl_pinned -fsS --max-time 10 "$HEALTH_URL" || echo '{}')
             got=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null || echo "")
-            ready=$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 10 "$READY_URL" || echo "000")
+            ready=$(curl_pinned -fsS -o /dev/null -w '%{http_code}' --max-time 10 "$READY_URL" || echo "000")
             if [ "$got" = "$EXPECTED" ] && [ "$ready" = "200" ]; then
-              echo "API is serving $got, /ready is 200"
+              echo "$HOST is serving $got, /ready is 200"
               exit 0
             fi
             echo "attempt $attempt: /health version='${got:-unknown}' (want '$EXPECTED'), /ready=$ready"
             sleep 15
           done
-          echo "::error::The box never reported the deployed commit as healthy and ready. Check 'ssh pqp@$HOST docker compose logs api worker' (see docs/deploy-vultr.md)."
+          echo "::error::$HOST never reported the deployed commit as healthy and ready over its own connection."
+          exit 1
+
+      # Both the deploy script's own internal health wait and the
+      # DNS-independent external check above have to pass, or production
+      # goes back to whatever it was serving before this run touched it —
+      # a half-updated api/worker pair, or a Caddyfile that failed to
+      # reload, is worse than staying on the last known-good tag.
+      - name: Roll back to the previous tag on failure
+        if: steps.relevant.outputs.needed == 'true' && (steps.deploy.outcome == 'failure' || steps.verify.outcome == 'failure') && steps.prevtag.outputs.tag != '' && steps.prevtag.outputs.tag != 'none'
+        env:
+          SSH_KEY: ${{ runner.temp }}/vultr_deploy_key
+          HOST: ${{ secrets.VULTR_API_HOST }}
+          PREV: ${{ steps.prevtag.outputs.tag }}
+        run: |
+          echo "::warning::Deploy of ${{ steps.commit.outputs.sha }} failed; rolling back to $PREV"
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+            "pqp-deploy@$HOST" "sudo /usr/local/bin/pqp-deploy $PREV" \
+            || echo "::error::Rollback to $PREV itself failed. SSH in as pqp (docs/deploy-vultr.md) and check 'docker compose logs api worker caddy' immediately."
+
+      - name: Fail the job if the new tag never became healthy
+        if: steps.relevant.outputs.needed == 'true' && (steps.deploy.outcome == 'failure' || steps.verify.outcome == 'failure')
+        env:
+          HOST: ${{ secrets.VULTR_API_HOST }}
+        run: |
+          echo "::error::Vultr deploy of ${{ steps.commit.outputs.sha }} did not become healthy. Check 'ssh pqp@$HOST docker compose logs api worker caddy' (see docs/deploy-vultr.md)."
           exit 1

@@ -9,10 +9,19 @@
 #
 # Fresh box (Ubuntu 24.04, root or sudo, public IP, DNS not required yet):
 #   scp -r tools/api-host root@<ip>:/opt/pqp-provision
-#   ssh root@<ip> 'SSH_ALLOWLIST_CIDRS="1.2.3.4/32 5.6.7.8/32" bash /opt/pqp-provision/provision.sh'
+#   ssh root@<ip> 'SSH_ALLOWLIST_CIDRS="1.2.3.4/32 5.6.7.8/32" \
+#     PQP_DEPLOY_PUBLIC_KEY="ssh-ed25519 AAAA... pqp-api-deploy" \
+#     GHCR_USER=<gh-username> GHCR_TOKEN=<PAT with read:packages> \
+#     bash /opt/pqp-provision/provision.sh'
 #
 # Existing box (verify drift, change nothing that is already correct):
 #   ssh pqp@<box> 'sudo bash /opt/pqp/provision.sh'
+#
+# Two accounts, two threat models: `pqp` is for a human with their own SSH
+# key (docker group, broad-ish sudo, for troubleshooting); `pqp-deploy` is
+# what the CI secret VULTR_API_SSH_KEY authenticates to, and it can do
+# exactly one thing — see "the pqp-deploy user" below and
+# tools/api-host/pqp-deploy.sh.
 #
 # Secrets (.env, backup.env, certs/origin.{pem,key}) are NEVER written by
 # this script beyond an empty template on first run. See docs/deploy-vultr.md
@@ -51,7 +60,7 @@ systemctl enable --now unattended-upgrades
 # Automatic-Reboot commented out (false); left that way on purpose. Reboot
 # by hand in a quiet window, see docs/deploy-vultr.md.
 
-echo "== the pqp user"
+echo "== the pqp user (human admin: docker + scoped sudo, own SSH keys via Vultr)"
 if ! id pqp >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash --groups docker,sudo pqp
   passwd -l pqp
@@ -63,14 +72,68 @@ chmod 0700 /home/pqp/.ssh
 touch /home/pqp/.ssh/authorized_keys
 chmod 0600 /home/pqp/.ssh/authorized_keys
 chown -R pqp:pqp /home/pqp/.ssh
-if [[ -n "${PQP_DEPLOY_PUBLIC_KEY:-}" ]] && ! grep -qF "$PQP_DEPLOY_PUBLIC_KEY" /home/pqp/.ssh/authorized_keys; then
-  echo "$PQP_DEPLOY_PUBLIC_KEY" >>/home/pqp/.ssh/authorized_keys
+# No deploy key goes here anymore (see "the pqp-deploy user" below) — this
+# account's authorized_keys only ever gets a human's own key, via Vultr's
+# account-level "SSH Keys" attachment at instance creation.
+
+echo "== the pqp-deploy user (CI only: no docker group, one sudo rule)"
+# This is the account VULTR_API_SSH_KEY actually authenticates to. It holds
+# NO docker group membership and NO broad sudo — the Docker daemon socket
+# is root-equivalent (start a container that bind-mounts /, read any file,
+# replace any running service), so an account a CI secret can reach must
+# never have it. Its one privilege is passwordless sudo for exactly one
+# root-owned, fixed script (installed below), which only ever pulls fixed
+# images and reloads Caddy from fixed files under /opt/pqp — never an
+# arbitrary docker/compose invocation. See tools/api-host/pqp-deploy.sh.
+if ! id pqp-deploy >/dev/null 2>&1; then
+  useradd --create-home --shell /bin/bash pqp-deploy
+  passwd -l pqp-deploy
+fi
+mkdir -p /home/pqp-deploy/.ssh /home/pqp-deploy/incoming
+chmod 0700 /home/pqp-deploy/.ssh
+touch /home/pqp-deploy/.ssh/authorized_keys
+chmod 0600 /home/pqp-deploy/.ssh/authorized_keys
+chmod 0700 /home/pqp-deploy/incoming
+chown -R pqp-deploy:pqp-deploy /home/pqp-deploy/.ssh /home/pqp-deploy/incoming
+if [[ -n "${PQP_DEPLOY_PUBLIC_KEY:-}" ]] && ! grep -qF "$PQP_DEPLOY_PUBLIC_KEY" /home/pqp-deploy/.ssh/authorized_keys; then
+  echo "$PQP_DEPLOY_PUBLIC_KEY" >>/home/pqp-deploy/.ssh/authorized_keys
+fi
+
+install -m 0755 -o root -g root "$HERE/pqp-deploy.sh" /usr/local/bin/pqp-deploy
+cat >/etc/sudoers.d/91-pqp-deploy <<'SUDOERS'
+Defaults!/usr/local/bin/pqp-deploy !requiretty
+pqp-deploy ALL=(root) NOPASSWD: /usr/local/bin/pqp-deploy
+SUDOERS
+chmod 0440 /etc/sudoers.d/91-pqp-deploy
+visudo -cf /etc/sudoers.d/91-pqp-deploy
+
+echo "== GHCR credentials (only needed while the image is private)"
+mkdir -p /etc/pqp
+if [[ -n "${GHCR_USER:-}${GHCR_TOKEN:-}" ]]; then
+  umask 077
+  cat >/etc/pqp/ghcr.env <<GHCR
+GHCR_USER=${GHCR_USER:-}
+GHCR_TOKEN=${GHCR_TOKEN:-}
+GHCR
+  chmod 0600 /etc/pqp/ghcr.env
+fi
+if [[ ! -s /etc/pqp/ghcr.env ]]; then
+  touch /etc/pqp/ghcr.env
+  chmod 0600 /etc/pqp/ghcr.env
+  echo "   !! /etc/pqp/ghcr.env is empty; pqp-deploy will skip 'docker login ghcr.io'."
+  echo "   !! Fine if ghcr.io/rafaelcg/pqp-api is public. Otherwise re-run with"
+  echo "   !! GHCR_USER/GHCR_TOKEN set (a PAT scoped to read:packages only)."
 fi
 
 echo "== firewall"
 # 22 from an allowlist ONLY (unlike the disposable SFU box, this one holds
 # DATABASE_URL and CLERK_SECRET_KEY — see the README on why the two boxes'
-# threat models differ), 80/443 open for Caddy and Cloudflare's proxy IPs.
+# threat models differ). 80/443 are NOT opened to the world: api.pqp.gg is
+# proxied (orange-cloud) behind Cloudflare (docs/deploy-vultr.md "cutover"),
+# so the origin only needs to hear from Cloudflare's edge — anyone else
+# connecting directly would bypass Cloudflare's WAF and rate limits
+# entirely. Restricted to Cloudflare's own published ranges instead,
+# refreshed on every re-run since they do occasionally change.
 ufw default deny incoming
 ufw default allow outgoing
 if [[ -n "$SSH_ALLOWLIST_CIDRS" ]]; then
@@ -82,8 +145,30 @@ else
   echo "   !! alone rather than either opening 22 to the world or locking"
   echo "   !! out an admin who is mid-session. Re-run with it set."
 fi
-ufw allow 80/tcp
-ufw allow 443/tcp
+
+cf_ranges=""
+for url in https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6; do
+  ranges=$(curl -fsS --max-time 10 "$url") && cf_ranges="$cf_ranges $ranges"
+done
+if [[ -n "$(echo "$cf_ranges" | tr -d '[:space:]')" ]]; then
+  echo "$cf_ranges" >/etc/pqp-cloudflare-ips
+  for cidr in $cf_ranges; do
+    ufw allow from "$cidr" to any port 80 proto tcp
+    ufw allow from "$cidr" to any port 443 proto tcp
+  done
+else
+  echo "   !! could not fetch Cloudflare's IP ranges; falling back to any"
+  echo "   !! ranges cached from a previous run at /etc/pqp-cloudflare-ips"
+  if [[ -s /etc/pqp-cloudflare-ips ]]; then
+    while read -r cidr; do
+      [[ -n "$cidr" ]] || continue
+      ufw allow from "$cidr" to any port 80 proto tcp
+      ufw allow from "$cidr" to any port 443 proto tcp
+    done </etc/pqp-cloudflare-ips
+  else
+    echo "   !! no cache either — 80/443 stay closed until this succeeds. Re-run."
+  fi
+fi
 ufw status | grep -q '^Status: active' || ufw --force enable
 
 echo "== /opt/pqp layout"
@@ -135,7 +220,13 @@ echo "== nightly db backup"
 # see tools/db-backup/backup.sh and docs/DB_RUNBOOK.md), built locally on
 # this box rather than pulled, so the backup path has no GHCR dependency.
 if [[ -d "$HERE/db-backup" ]]; then
-  cp -r "$HERE/db-backup" "$DEST/db-backup"
+  # Copy CONTENTS into an existing destination (trailing "/." on the
+  # source, trailing "/" on the destination) rather than the directory
+  # itself, so a second run overwrites the same files in place instead of
+  # nesting a stale copy at $DEST/db-backup/db-backup — `cp -r src dst`
+  # nests when dst already exists, which the first run itself creates.
+  mkdir -p "$DEST/db-backup"
+  cp -r "$HERE/db-backup/." "$DEST/db-backup/"
   chown -R pqp:pqp "$DEST/db-backup"
   docker build -t pqp-db-backup:local "$DEST/db-backup" >/dev/null
   cat >/etc/cron.d/pqp-db-backup <<CRON

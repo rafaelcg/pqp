@@ -52,7 +52,8 @@ Nothing below bills anything until you create the instance in step 1.
 Vultr dashboard (or `vultr-cli`): Cloud Compute, **High Performance**, AMD,
 `vhp-4c-8gb-amd`, region **São Paulo (bjs? — pick the São Paulo location
 code shown at creation, matching the SFU box's region)**, image **Ubuntu
-24.04 LTS**, attach your SSH key, and paste
+24.04 LTS**, attach your SSH key (this lands on the human account, `pqp` —
+see "Two accounts" below), and paste
 [`tools/api-host/cloud-init.yaml`](../tools/api-host/cloud-init.yaml) into
 **User Data** after replacing `__PQP_DEPLOY_PUBLIC_KEY__` with the *public*
 half of a **dedicated deploy key** (generate one just for this:
@@ -64,6 +65,28 @@ to the world — this box holds `DATABASE_URL` and `CLERK_SECRET_KEY`, unlike
 the disposable SFU box, which is why `tools/sfu`'s "22 open to everyone, key
 auth only" call does not carry over here.
 
+**Two accounts, two threat models.** `pqp` is for a human, with a human's
+own key (docker group, broad-ish scoped sudo, for troubleshooting — see
+"Check what is running" below). `pqp-deploy` is what
+`VULTR_API_SSH_KEY` actually authenticates to, and it is deliberately
+powerless: no docker group, no broad sudo, only a sudoers rule for one
+fixed, root-owned script (`/usr/local/bin/pqp-deploy <image-tag>`,
+[`tools/api-host/pqp-deploy.sh`](../tools/api-host/pqp-deploy.sh)) that
+pulls fixed images and reloads Caddy from fixed files under `/opt/pqp`. A
+fully leaked `VULTR_API_SSH_KEY` cannot start an arbitrary container,
+mount `/`, or read `/opt/pqp/.env` — the Docker socket a docker-group
+account has is root-equivalent, which is exactly what a CI secret must
+never be handed.
+
+**80/443 are not open to the world.** `api.pqp.gg` is proxied (orange
+cloud) behind Cloudflare — see "Cutover" below — so cloud-init and
+`provision.sh` both restrict 80/443 to Cloudflare's own published IP
+ranges (fetched live at boot, refreshed on every `provision.sh` re-run) and
+leave everyone else's traffic dropped by `ufw`. If you point DNS straight
+at this box instead (no Cloudflare in front), those ranges will refuse
+your own real traffic too — open the ports yourself in that case
+(`ufw allow 80/tcp`, `ufw allow 443/tcp`) and use Caddyfile Mode B.
+
 Wait for the instance, then confirm cloud-init finished:
 
 ```bash
@@ -73,13 +96,29 @@ ssh pqp@<new-ip> 'cloud-init status --wait'
 ## 2. Provision
 
 ```bash
-scp -r tools/api-host tools/db-backup pqp@<new-ip>:/tmp/pqp-provision
+ssh pqp@<new-ip> 'mkdir -p /tmp/pqp-provision'
+scp -r tools/api-host tools/db-backup pqp@<new-ip>:/tmp/pqp-provision/
 ssh pqp@<new-ip> 'sudo mv /tmp/pqp-provision/db-backup /tmp/pqp-provision/api-host/db-backup && \
   sudo SSH_ALLOWLIST_CIDRS="<your CIDRs>" \
+    PQP_DEPLOY_PUBLIC_KEY="$(cat deploy_vultr_api.pub)" \
+    GHCR_USER=<gh username> GHCR_TOKEN=<PAT scoped to read:packages only> \
     GC_PROM_USER=<grafana cloud prom user> GC_PROM_TOKEN=<metrics:write token> \
     LOKI_URL=<grafanacloud loki push url> LOKI_USERNAME=<loki user> LOKI_PASSWORD=<logs:write token> \
     bash /tmp/pqp-provision/api-host/provision.sh'
 ```
+
+`scp` needs `/tmp/pqp-provision` to already exist before it will accept two
+source directories in one call — hence the `mkdir -p` first; skipping it
+fails the copy before either directory lands.
+
+`PQP_DEPLOY_PUBLIC_KEY` here is the same public key you already pasted into
+`cloud-init.yaml`'s `__PQP_DEPLOY_PUBLIC_KEY__` placeholder in step 1 (now
+provisioned onto `pqp-deploy`, not `pqp` — see "Two accounts" above);
+passing it again to `provision.sh` is what re-provisioning (or a box that
+skipped cloud-init) uses to catch it up. `GHCR_USER`/`GHCR_TOKEN` are only
+needed if `ghcr.io/rafaelcg/pqp-api` stays **private** — see "GHCR pull on
+the host" below; omit both and make the package public instead if you'd
+rather not manage a token on the box.
 
 The Grafana Cloud values are the same stack `tools/sfu-monitoring` and
 `tools/log-shipper` already push to — see `docs/MONITORING.md` and
@@ -159,6 +198,24 @@ gh secret set VULTR_API_SSH_KEY < deploy_vultr_api   # the PRIVATE half from ste
 `GITHUB_TOKEN` already has what it needs to push to
 `ghcr.io/rafaelcg/pqp-api` (the workflow requests `packages: write`); no
 extra PAT.
+
+**GHCR pull on the host.** The runner pushing an image is a separate
+question from the *box* being allowed to pull it back down — GHCR packages
+default to private, and a private package needs its own credential on the
+box or every `docker compose pull` there fails with "unauthorized",
+starting with the very first deploy. Pick one:
+
+- **Make the package public** (Settings → Packages →
+  `ghcr.io/rafaelcg/pqp-api` → Package settings → Change visibility). The
+  image has no secrets baked in (env vars are injected at container start,
+  never at build time), so this is usually the simpler choice.
+- **Or** give the box a **read-only** credential: a GitHub PAT scoped to
+  `read:packages` only, passed to `provision.sh` as `GHCR_TOKEN` (with
+  `GHCR_USER` set to the account that minted it) the same way the Grafana
+  Cloud tokens are — it lands at `/etc/pqp/ghcr.env` (0600, root-only), and
+  `pqp-deploy` (the script) logs in with it before every pull. Leave both
+  unset and the login is skipped, which only works if the package is
+  public.
 
 Leave `vars.DEPLOY_TARGET` at `fly` for now — merging
 `deploy-api-vultr.yml` changes nothing until you flip it (see the
