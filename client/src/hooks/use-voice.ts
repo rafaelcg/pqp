@@ -84,7 +84,7 @@ import {
   subscribeReceiveQuality,
 } from "@/lib/receive-quality";
 import { beaconVoiceLeave } from "@/lib/voice-leave-beacon";
-import { resolveHlsUrl } from "@/lib/hls-playback";
+import { resolveLiveHlsStream } from "@/lib/hls-playback";
 import {
   applyCameraQuality,
   cameraBitrateFor,
@@ -3655,11 +3655,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (message.channelId !== state.voiceChannelId) {
           return;
         }
-        // `hlsUrl` may be API-relative (the signed playlist proxy) rather
-        // than a full URL, when `LIVE_HLS_SIGNED_URLS` is on. See
-        // `resolveHlsUrl`.
+        // `hlsUrl` (and `cameraHlsUrl`) may be API-relative (the signed
+        // playlist proxy) rather than a full URL, when `LIVE_HLS_SIGNED_URLS`
+        // is on. See `resolveLiveHlsStream`.
         state.liveStream = message.stream
-          ? { ...message.stream, hlsUrl: resolveHlsUrl(message.stream.hlsUrl) }
+          ? resolveLiveHlsStream(message.stream)
           : null;
         // An egress that just started (or stopped) changes what the
         // presenter should be publishing: the ladder transcodes from their
@@ -3676,10 +3676,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           ...state.channelLive,
           [message.channelId]: {
             stream: message.stream
-              ? {
-                  ...message.stream,
-                  hlsUrl: resolveHlsUrl(message.stream.hlsUrl),
-                }
+              ? resolveLiveHlsStream(message.stream)
               : null,
             watching: message.watching,
           },
@@ -5057,9 +5054,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.channelLive = {
         ...state.channelLive,
         [channelId]: {
-          stream: live.stream
-            ? { ...live.stream, hlsUrl: resolveHlsUrl(live.stream.hlsUrl) }
-            : null,
+          stream: live.stream ? resolveLiveHlsStream(live.stream) : null,
           watching: live.watching,
         },
       };

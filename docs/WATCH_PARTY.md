@@ -1496,7 +1496,7 @@ about, so it is written out rather than left to be inferred from
 | the screen's own audio | yes | **only if the capture had it** |
 | the host's microphone | yes | **yes, since "Meu mic vai no stream"** (on by default; see below) |
 | every other microphone | yes | **no** |
-| every camera | yes | **no** |
+| every camera | yes | **the host's, since 2026-09-13, as a second playlist**; everybody else's, no |
 | delay | sub-second | about ten seconds |
 
 **The host's voice, since 2026-09-10.** The transcode is still bound to the
@@ -1660,6 +1660,91 @@ ffmpeg -i stream.mp4 -i mic.ogg -map 0:v -map 0:a -map 1:a -c copy out.mkv
 Video and the mixed stream audio from the recording, the bare voice as a second
 audio track, no re-encode. `out.mkv` opens in any editor with the two audio
 tracks separate, which is the point of the whole thing.
+
+### The presenter's camera, floating over the film
+
+**Since 2026-09-13, "every camera: no" has one exception: the presenter's.**
+Owner's framing: the transmission IS the product — screen, voice and face —
+and nobody joins a call to get any of it. The table above is otherwise
+unchanged, and the mechanism is not a change to the ladder: each rung still
+carries exactly two tracks. The camera gets a **second, video-only 360p30
+Track Composite egress** beside the ladder, under the same session prefix
+(`<startedAt>-cam360p30`), served by the same playlist proxy
+(`GET /api/voice/hls-playlist/:channelId/:startedAt/cam360p30`) and authorised
+by the same viewer token.
+
+**It is additive, and that is the load-bearing property.** The camera starts
+and stops inside the running session and never mints a new `startedAt`. A new
+one is a new playlist path, a new token and a new master, so every viewer
+re-attaches and rebuffers; turning a webcam on must not do that to five hundred
+people. The only thing a viewer sees is `cameraHlsUrl` appearing or
+disappearing on a `voice-stream` / `channel-live` frame they were already being
+sent, which is why `pushLiveHls` compares that field as well, and `set-camera`
+now reconciles the stream too so a webcam turning on mid-party starts its
+transcode at once rather than at the next unrelated roster event.
+
+**It is deliberately not a ladder rung.** `cam360p30` (`CAMERA_RUNG_NAME` in
+`hls-ladder.ts`) is absent from `LADDER_RUNGS`, so `sessionRungs` never lists
+it as a master-playlist variant a viewer's ABR could switch onto and find a
+webcam instead of the film, and `adoptLiveHlsSession` routes it to the room's
+camera slot (`adoptCameraEgress`) rather than letting it become a 720p30 rung
+across a deploy. It is in `reapForeignEgresses`'s `ours` set, without which the
+reaper would stop it every ten seconds and the reconcile would start it again
+forever, with `liveHls.orphansStopped` climbing and the party looking
+perfectly healthy — the same failure shape as pitfall 15 above.
+
+**A dead camera cools off for two minutes and never touches the film's own
+restart budget.** Dropping it tells the room, which reconciles, which finds
+the presenter's camera still published and would otherwise start another at
+the monitor's cadence — a loop, on a box that is already struggling, which is
+exactly when an egress dies. `cameraCooldownUntil` is a separate map from
+`restartHistory` on purpose: a camera failing must never spend the restarts
+that exist to bring the film back, and closing the camera clears the cooldown
+outright, so "turn it off and on again" works at once. The camera is also the
+only rendition that reopens its own `hls_sessions` row (`recordSessionStarted`'s
+`reopen` flag, `ON CONFLICT ... DO UPDATE` instead of `DO NOTHING`): everything
+else mints a new `startedAt` on restart, but the camera starts and stops
+*inside* one, so the second time it comes back it lands on a row it already
+stamped `ended_at`, and without the reopen the playlist proxy would refuse it
+(by design) for the rest of the party.
+
+**What it costs.** About 0.2 to 0.3 of a core, estimated from the measured
+0.51 (`720p30`) and 0.88 (`1080p30`) in `docs/CAPACITY.md` §2 and charged as
+30 % of a rendition (`HLS_CAMERA_MBPS = HLS_RUNG_MBPS * 0.3`).
+`decideCameraEgress` refuses it when the ladder plus the camera plus the
+WebRTC already on the box would pass the promotion budget — and refuses on the
+**box** budget only, never the ladder's: a webcam must never be the reason a
+viewer loses a rung of the film. `LIVE_HLS_CAMERA=false` turns it off in one
+command with no deploy, and `liveHls.cameraSessions` on the operator dashboard
+says how many are running.
+
+**What the viewer gets.** A second, muted hls.js instance (`WatchCameraPip`)
+floated in a corner of the film, mounted only in the cinema layout —
+never inside a grid tile, which would be a picture in a picture in a picture,
+and never in the docked mini player, a 240px box with room for the film and
+almost nothing else. The stage and the corner are boxes rather than players
+(`lib/watch-camera-pip.ts`), so swapping (click the small picture) re-attaches
+neither hls.js instance and nobody rebuffers to look at a webcam; the control
+bar stays where it is because it belongs to the stage. The corner is one of
+four and is remembered per browser with the swap (`pqp:watch-camera-pip`).
+**Fullscreen unmounts it**, so a camera nobody can see costs no decode. A
+camera that never produces a frame draws nothing at all — no spinner, no
+placeholder, no error.
+
+**Audio stays on the main stream, always**, and the camera playlist has no
+audio track at all (`CAMERA_RUNG.audioKbps = 0`, proto3's "unset"). The two
+egresses start seconds apart and run their own segment timers, so expect
+drift between the face and the film — bounded below by the segment length
+(`LIVE_HLS_SEGMENT_SECONDS`, 4 s in production) and not chased further: holding
+the film back to match a webcam would be a worse film.
+
+**iOS and Android are out of scope.** `cameraHlsUrl` is optional on the shared
+schema, so they parse the frame and ignore the field.
+
+**Recording.** The camera's segments live under the same session prefix as
+every other rendition, so the retention sweep and the superseded-session sweep
+already cover it; a future stitch of face-plus-film side by side reads the
+`-cam360p30` prefix beside whichever rung it wants for the film.
 
 ## When a session restarts, and the leftovers it used to leave behind
 

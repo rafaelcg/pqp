@@ -1883,7 +1883,14 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     );
     const changed =
       (prev?.hlsUrl ?? null) !== (next?.hlsUrl ?? null) ||
-      (prev?.presenterPeerId ?? null) !== (next?.presenterPeerId ?? null);
+      (prev?.presenterPeerId ?? null) !== (next?.presenterPeerId ?? null) ||
+      // THE CAMERA APPEARING OR DISAPPEARING IS A CHANGE. It is additive to
+      // the session on purpose (`docs/WATCH_PARTY.md`, "The presenter's
+      // camera, floating over the film"), so `hlsUrl` and the presenter are
+      // both identical either side of a host switching their webcam on, and
+      // without this line the frame that carries `cameraHlsUrl` would simply
+      // never be sent.
+      (prev?.cameraHlsUrl ?? null) !== (next?.cameraHlsUrl ?? null);
     if (!changed) {
       return;
     }
@@ -5290,6 +5297,15 @@ export async function handleVoiceMessage(
       kind: "updated",
       peer: toParticipant(peer),
     });
+    // A WATCH PARTY'S PRESENTER TURNING THEIR CAMERA ON IS A STREAM CHANGE.
+    // The seatless audience never joins the room, so a camera published into
+    // it reaches nobody on the playlist; the reconcile is what gives it a
+    // transcode of its own. Nothing else on this path ever called it, so
+    // without this line the camera egress would only ever start at the next
+    // unrelated roster event. Cheap and fire-and-forget: the reconcile is
+    // serialised per channel and returns without an RPC in every room that is
+    // not transcoding.
+    void pushLiveHls(peer.voiceChannelId);
     return;
   }
 

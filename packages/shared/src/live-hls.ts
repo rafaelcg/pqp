@@ -57,6 +57,31 @@ export const liveHlsStreamSchema = z.object({
    * film that is playing fine is worse than no warning.
    */
   hasAudio: z.boolean().optional(),
+  /**
+   * A SECOND playlist, carrying the presenter's camera and nothing else.
+   *
+   * The HLS audience is seatless — they never join the LiveKit room — so a
+   * camera published into the room reaches the seated participants over WebRTC
+   * and reaches nobody watching the playlist. And a Track Composite egress
+   * carries one video and one audio track, singular fields in the protocol, so
+   * the running transcode cannot be asked to also carry a face. The answer is
+   * a second, video-only 360p30 egress beside the ladder, writing under the
+   * SAME session prefix (`<startedAt>-cam360p30`).
+   *
+   * SAME SESSION, DELIBERATELY. The camera starts and stops inside the running
+   * session and never mints a new `startedAt`: a new one is a new playlist
+   * path, a new token and a new master, which re-attaches and rebuffers every
+   * viewer. Turning a webcam on must not do that to five hundred people.
+   *
+   * Stamped with the same `?t=` viewer token as `hlsUrl`. Absent means there
+   * is no camera in this broadcast right now: the presenter has none on, the
+   * media box refused it for budget, or the server predates this. **Optional
+   * on purpose** — iOS and Android parse the frame and ignore the field.
+   *
+   * There is no audio here and there never will be: the audience's sound comes
+   * off the main stream, which is the only place it is mixed.
+   */
+  cameraHlsUrl: z.string().min(1).optional(),
 });
 
 export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;

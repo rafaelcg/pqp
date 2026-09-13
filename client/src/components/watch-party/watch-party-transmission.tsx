@@ -433,6 +433,25 @@ export function WatchPartyTransmission({
                 : t("watchParty.tx.outputSilentWarning")}
             </p>
           )}
+          {/* THE FACE ON THE STREAM. Only drawn while the camera rung is
+              actually running (`stream.cameraHlsUrl`): a host with no webcam
+              on, or on a box that refused it for budget, or with
+              `LIVE_HLS_CAMERA=false`, sees nothing here, the same as before
+              this existed.
+              TODO (PR 490's idea): fold in the presenter's camera cap (360p while
+              presenting) if it turns out cheap — the egress already assumes
+              it (`CAMERA_RUNG` matches 640x360@30 exactly) but nothing on the
+              client holds the camera to that profile yet, so an uncapped
+              camera can still crowd the share's own uplink. Leaving it as a
+              TODO rather than adding a second quality control here. */}
+          {cameraLiveOnStream(stream) && (
+            <p
+              data-testid="watch-party-tx-camera"
+              className="text-[11px] text-text-tertiary"
+            >
+              {t("watchParty.tx.cameraLive")}
+            </p>
+          )}
           {/* THE HOST'S ONE ENCODER LEVER, and why it is here rather than on
               the crowded live bar: it belongs beside the numbers it changes.
               720p by default because a 1080p share over a lossy path corrupts
@@ -807,6 +826,20 @@ export function streamAudioState(
     return "unknown";
   }
   return stream.hasAudio ? "screen" : "none";
+}
+
+/**
+ * Whether the camera note belongs on this render.
+ *
+ * Exported for the same reason `streamAudioState` is: the note lives behind
+ * the panel's own click, which `react-dom/server` cannot make, so the rule it
+ * draws on is tested directly rather than through markup. `stream.cameraHlsUrl`
+ * is absent for the ordinary film night (no webcam on), for a box that
+ * refused the camera on budget, and for `LIVE_HLS_CAMERA=false` — all of which
+ * must read exactly like a server that predates the feature.
+ */
+export function cameraLiveOnStream(stream: LiveHlsStream | null): boolean {
+  return Boolean(stream?.cameraHlsUrl);
 }
 
 /** One stat: a small label over one value. */
