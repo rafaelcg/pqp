@@ -76,6 +76,7 @@ const {
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
   setVoiceUserHandRaised,
+  setVoiceUserServerMuted,
   voiceUserHandRaisedAt,
 } = await import("./voice.js");
 const { setCoalesceImmediate } = await import("./fanout.js");
@@ -421,5 +422,22 @@ describe("raised hands", () => {
     expect(voiceUserHandRaisedAt(channel, alice)).toBeNull();
     expect(queueOn(b, channel)).toEqual([bob]);
     expect(queueOn(a, channel)).toEqual([bob]);
+  });
+
+  // "What lowers a hand" in docs/RAISED_HANDS.md lists exactly four things,
+  // and a moderator's server mute is not one of them: it is a sanction on
+  // the microphone, not an answer to the request. A muted person is often
+  // exactly who is waiting for the floor, so muting must not silently drop
+  // them from the queue.
+  it("does not lower a hand when a moderator server-mutes that person", async () => {
+    const channel = randomUUID();
+    const alice = randomUUID();
+    const a = await join(alice, channel);
+    await raise(a, alice, true);
+    expect(voiceUserHandRaisedAt(channel, alice)).not.toBeNull();
+
+    await setVoiceUserServerMuted(channel, alice, true);
+    expect(voiceUserHandRaisedAt(channel, alice)).not.toBeNull();
+    expect(queueOn(a, channel)).toEqual([alice]);
   });
 });

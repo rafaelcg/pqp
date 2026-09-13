@@ -81,6 +81,16 @@ const VOICE_MESSAGE_TYPES = new Set([
   "set-camera",
   // --- voice state ---
   "set-voice-state",
+  // --- raised hands ---
+  // Missing from this hand-kept list from the day the feature shipped (#406):
+  // `voiceClientMessageSchema` in @pqp/shared accepted the frame, and
+  // `handleVoiceMessage`/`voice-raised-hands.test.ts` call straight into the
+  // handler and never through this router, so nothing caught that every real
+  // `set-raised-hand` frame was dropped right here before reaching it. A
+  // browser's hand went up for exactly `HAND_ECHO_MS` (the client's own
+  // optimistic guess) and then silently fell back down with no server ever
+  // having seen it. See the routing doc comment above.
+  "set-raised-hand",
   // --- watch party ---
   // A watch party lives inside a voice room, so its one client frame is routed
   // to the voice handler like every other thing said inside one.
