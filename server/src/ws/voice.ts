@@ -16,7 +16,7 @@ import {
   hasPermission,
   isVoiceRoomChannelType,
   isWatchPartyChannelType,
-  mayTakeWatchPartySeat,
+  mayGoOnAir,
   Permission,
   callDeclinedMessageSchema,
   callIncomingMessageSchema,
@@ -4264,9 +4264,10 @@ export async function handleVoiceMessage(
       // direction whose worst case is one seat rather than a cancelled show.
       let allowed = true;
       try {
-        allowed = mayTakeWatchPartySeat({
+        const seat = await loadWatchPartySeat(payload.voiceChannelId, user.id);
+        allowed = mayGoOnAir({
           canStartWatchParty: false,
-          party: await loadWatchPartySeat(payload.voiceChannelId, user.id),
+          party: seat,
         });
       } catch (error) {
         console.error("[voice] failed to read the watch party seat:", error);

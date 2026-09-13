@@ -112,6 +112,7 @@ interface PartyBody {
     voiceEnabled: boolean;
     stageMode: string;
     raiseHand: boolean;
+    guests: string;
     slowModeSeconds: number;
     reactionsEnabled: boolean;
   };
@@ -119,6 +120,14 @@ interface PartyBody {
     invited: StagePerson[];
     hands: StagePerson[];
     handRaised: boolean;
+  };
+  guests: {
+    onAir: StagePerson[];
+    invited: StagePerson[];
+    requests: StagePerson[];
+    requestCount: number;
+    requested: boolean;
+    position: number | null;
   };
 }
 
@@ -241,6 +250,10 @@ describeDb("watch party options and the stage", () => {
   const stage = (as: User, id: string, body: Record<string, unknown>) =>
     call<{ party: PartyBody }>(as, "POST", `/api/watch-parties/${id}/stage`, body);
 
+  /** The real route (`/guests`) every new surface calls; see `watch-party-guests.test.ts`. */
+  const guestsAction = (as: User, id: string, body: Record<string, unknown>) =>
+    call<{ party: PartyBody }>(as, "POST", `/api/watch-parties/${id}/guests`, body);
+
   const cohost = (as: User, id: string, userId: string, promote: boolean) =>
     call<{ party: PartyBody | null }>(
       as,
@@ -361,6 +374,9 @@ describeDb("watch party options and the stage", () => {
       voiceEnabled: false,
       stageMode: "hosts_only",
       raiseHand: true,
+      // CONVIDADOS. The real setting now; the three above are derived from
+      // it for the compatibility release (`deriveLegacyWatchPartyVoiceTriple`).
+      guests: "off",
       slowModeSeconds: 0,
       reactionsEnabled: true,
     });
@@ -582,35 +598,52 @@ describeDb("watch party options and the stage", () => {
     expect(await memberSpeakAllowed(host.id)).toBe(true);
   });
 
-  it("leaves the floor open for everyone", async () => {
-    const party = await draft({ options: { voiceEnabled: true, stageMode: "everyone" } });
-    expect(party.options.stageMode).toBe("everyone");
+  it("leaves the floor open with guests off", async () => {
+    const party = await draft({ options: { guests: "off" } });
+    expect(party.options.guests).toBe("off");
 
     expect((await setState(host, party.id, "live")).status).toBe(200);
 
-    // A film night among six friends. Nobody is denied anything, and no
-    // overwrite row is invented on a channel that had none.
+    // A watch-only film night. Nobody is denied anything, and no overwrite
+    // row is invented on a channel that had none.
     expect(await everyoneSpeakDenied()).toBe(false);
     expect(await overwrite("role", everyoneId)).toBeNull();
   });
 
-  it("applies a stage mode changed while the party is live, both ways", async () => {
+  /**
+   * A MIGRATED "everyone" PARTY NOW CLOSES THE FLOOR, AND THAT IS THE POINT.
+   * `stageMode: "everyone"` was retired with no replacement precisely because
+   * the 2026-09-05 spike put two hundred people in an open microphone in
+   * twenty minutes (`docs/plans/WATCH_PARTY_GUESTS.md` §2.3). The migration
+   * maps it to `guests: "request"`, which — unlike the mode it replaces —
+   * DOES close the floor: viewers ask, the host accepts. A party stored the
+   * old way before this shipped must come back closed, not open.
+   */
+  it("migrates a stored 'everyone' party to guests: request, which closes the floor", async () => {
     const party = await draft({ options: { voiceEnabled: true, stageMode: "everyone" } });
+    expect(party.options.guests).toBe("request");
+
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    expect(await everyoneSpeakDenied()).toBe(true);
+  });
+
+  it("applies guests changed while the party is live, both ways", async () => {
+    const party = await draft({ options: { guests: "off" } });
     expect((await setState(host, party.id, "live")).status).toBe(200);
     expect(await everyoneSpeakDenied()).toBe(false);
 
-    // The room got loud. The host closes the floor mid-show, and it has to
-    // take effect for the people already sitting in it.
-    const closed = await patchOptions(host, party.id, { stageMode: "hosts_only" });
+    // The room got loud. The host turns Convidados on mid-show, and it has
+    // to take effect for the people already sitting in it.
+    const closed = await patchOptions(host, party.id, { guests: "invite" });
     expect(closed.status).toBe(200);
-    expect(closed.body.party.options.stageMode).toBe("hosts_only");
+    expect(closed.body.party.options.guests).toBe("invite");
     expect(closed.body.party.state).toBe("live");
     expect(await everyoneSpeakDenied()).toBe(true);
     // The same trap as the go-live path, reached by a different route.
     expect(await memberSpeakAllowed(host.id)).toBe(true);
 
-    // And back. Opening the floor again lifts what the party put down.
-    const reopened = await patchOptions(host, party.id, { stageMode: "everyone" });
+    // And back. Turning guests off again lifts what the party put down.
+    const reopened = await patchOptions(host, party.id, { guests: "off" });
     expect(reopened.status).toBe(200);
     expect(await everyoneSpeakDenied()).toBe(false);
 
@@ -670,10 +703,10 @@ describeDb("watch party options and the stage", () => {
   });
 
   it("lets the people running the party change the options and refuses the audience", async () => {
-    // Voice on, so the last assertion below (a manager opening a floor
+    // Guests on, so the last assertion below (a manager opening a floor
     // somebody else closed) is about the floor moving rather than about a
     // party that never had one.
-    const party = await draft({ options: { voiceEnabled: true } });
+    const party = await draft({ options: { guests: "invite" } });
     // Live, so a refusal below is about the role table and not about a draft
     // being invisible: a member who cannot see a draft is told 404, and a
     // 404 would prove nothing about who may edit.
@@ -682,11 +715,11 @@ describeDb("watch party options and the stage", () => {
     // 403, not 404. The party is live, so the member can see it; what they
     // may not do is change how it runs.
     const byMember = await patchOptions(member, party.id, {
-      stageMode: "everyone",
+      guests: "off",
     });
     expect(byMember.status).toBe(403);
-    expect((await readChannelParty(host)).body.party?.options.stageMode).toBe(
-      "hosts_only",
+    expect((await readChannelParty(host)).body.party?.options.guests).toBe(
+      "invite",
     );
 
     // A co-host runs the party, which is the entire reason a co-host exists.
@@ -703,35 +736,37 @@ describeDb("watch party options and the stage", () => {
     expect(byCohost.body.party.options.slowModeSeconds).toBe(10);
 
     // MANAGE_CHANNELS may edit a live party, because that is moderation: the
-    // stage mode is exactly the lever somebody needs when a room goes wrong.
+    // guests setting is exactly the lever somebody needs when a room goes
+    // wrong.
     const byManager = await patchOptions(manager, party.id, {
-      stageMode: "everyone",
+      guests: "off",
     });
     expect(byManager.status).toBe(200);
-    expect(byManager.body.party.options.stageMode).toBe("everyone");
+    expect(byManager.body.party.options.guests).toBe("off");
     expect(await everyoneSpeakDenied()).toBe(false);
   });
 
-  it("runs the invited stage: a hand, an invitation, and a hand nobody else sees", async () => {
+  it("runs the guest queue: a request, an approval via accept, and a request nobody else sees", async () => {
     const party = await draft({
       options: { voiceEnabled: true, stageMode: "invited", raiseHand: true },
     });
+    expect(party.options.guests).toBe("request");
     expect((await setState(host, party.id, "live")).status).toBe(200);
     expect(await everyoneSpeakDenied()).toBe(true);
 
-    // A hand is a request, not a permission: it needs nothing but the
-    // ability to see the party.
-    const raised = await stage(member, party.id, { action: "raise" });
-    expect(raised.status).toBe(200);
-    // Everyone is told about their OWN hand, or the button cannot show its
-    // state and people press it twice.
-    expect(raised.body.party.stage.handRaised).toBe(true);
+    // A request is, well, a request: it needs nothing but the ability to
+    // see the party.
+    const requested = await guestsAction(member, party.id, { action: "request" });
+    expect(requested.status).toBe(200);
+    // Everyone is told about their OWN request, or the button cannot show
+    // its state and people press it twice.
+    expect(requested.body.party.guests.requested).toBe(true);
     // But not about anyone else's, including their own place in a queue.
-    expect(raised.body.party.stage.hands).toEqual([]);
+    expect(requested.body.party.guests.requests).toEqual([]);
 
     // The host sees the queue, because the host is the one who works it.
     const asHost = await readChannelParty(host);
-    expect(asHost.body.party?.stage.hands.map((h) => h.userId)).toEqual([
+    expect(asHost.body.party?.guests.requests.map((h) => h.userId)).toEqual([
       member.id,
     ]);
 
@@ -740,52 +775,57 @@ describeDb("watch party options and the stage", () => {
      *
      * A queue an audience can read is a queue where being passed over
      * happens in public. `second` is a plain viewer here (never promoted in
-     * this case) and gets an empty list plus a false flag for a hand that is
-     * genuinely up two rows away.
+     * this case) and gets an empty list plus a false flag for a request that
+     * is genuinely up two rows away.
      */
     const asOtherViewer = await readChannelParty(second);
-    expect(asOtherViewer.body.party?.stage.hands).toEqual([]);
-    expect(asOtherViewer.body.party?.stage.handRaised).toBe(false);
+    expect(asOtherViewer.body.party?.guests.requests).toEqual([]);
+    expect(asOtherViewer.body.party?.guests.requested).toBe(false);
 
     // Nobody hands out microphones except the people running the party.
-    const byMember = await stage(member, party.id, {
+    const byMember = await guestsAction(member, party.id, {
       action: "invite",
       userId: second.id,
     });
     expect(byMember.status).toBe(403);
     expect(await memberSpeakAllowed(second.id)).toBe(false);
 
-    // The host puts them up. One microphone, granted per member, on top of a
-    // floor that stays closed to everybody else.
-    const invited = await stage(host, party.id, {
-      action: "invite",
+    // The host approves the request. Not yet on air — an invitation is not
+    // an acceptance, the invited person still has to confirm with `join`.
+    const accepted = await guestsAction(host, party.id, {
+      action: "accept",
       userId: member.id,
     });
-    expect(invited.status).toBe(200);
+    expect(accepted.status).toBe(200);
+    expect(await memberSpeakAllowed(member.id)).toBe(false);
+    expect(accepted.body.party.guests.requests).toEqual([]);
+
+    // The invited person confirms and goes on air. One microphone, granted
+    // per member, on top of a floor that stays closed to everybody else.
+    const joined = await guestsAction(member, party.id, { action: "join" });
+    expect(joined.status).toBe(200);
     expect(await memberSpeakAllowed(member.id)).toBe(true);
     expect(await everyoneSpeakDenied()).toBe(true);
     // Being up is public: the room deserves to know why a stranger is
-    // talking. The hand comes down with the invitation, so the queue does
-    // not keep asking for someone who is already speaking.
-    expect(invited.body.party.stage.invited.map((p) => p.userId)).toEqual([
+    // talking.
+    expect(joined.body.party.guests.onAir.map((p) => p.userId)).toEqual([
       member.id,
     ]);
-    expect(invited.body.party.stage.hands).toEqual([]);
 
     // And down again.
-    const removed = await stage(host, party.id, {
+    const removed = await guestsAction(host, party.id, {
       action: "remove",
       userId: member.id,
     });
     expect(removed.status).toBe(200);
-    expect(removed.body.party.stage.invited).toEqual([]);
+    expect(removed.body.party.guests.onAir).toEqual([]);
     expect(await memberSpeakAllowed(member.id)).toBe(false);
-    // The host keeps theirs: they are on the stage by role, not by an
-    // invitation anybody could take back.
+    // The host keeps theirs: they are on air by role, not by an invitation
+    // anybody could take back.
     expect(await memberSpeakAllowed(host.id)).toBe(true);
   });
 
-  it("refuses a hand on a party that is not on air", async () => {
+  it("refuses a request on a party that is not on air", async () => {
     // A second channel, because one active party per channel and the live
     // one above is not what this asks about.
     const other = await createChannel(serverId, "sessao-da-noite", "watch_party");
@@ -801,14 +841,16 @@ describeDb("watch party options and the stage", () => {
     expect(created.body.party.state).toBe("scheduled");
 
     // The member can see it (it is announced), which is why this is a 409
-    // about the state and not a 404 about visibility. A hand raised at a
+    // about the state and not a 404 about visibility. A request made at a
     // party that has not started is a queue position in a room with nobody
     // in it, and it would still be up an hour later when the show begins.
-    const early = await stage(member, created.body.party.id, { action: "raise" });
+    const early = await guestsAction(member, created.body.party.id, {
+      action: "request",
+    });
     expect(early.status).toBe(409);
 
     const asHost = await readChannelParty(host, other.id);
-    expect(asHost.body.party?.stage.hands).toEqual([]);
+    expect(asHost.body.party?.guests.requests).toEqual([]);
   });
 
   /**
@@ -851,14 +893,20 @@ describeDb("watch party options and the stage", () => {
    * take the other with it, or a host who demotes a co-host has also, silently,
    * cut off a guest they invited up to talk.
    */
-  it("leaves a demoted co-host speaking when they were also invited up", async () => {
-    const party = await draft({ options: { voiceEnabled: true, stageMode: "invited" } });
+  it("leaves a demoted co-host speaking when they were also an accepted guest", async () => {
+    const party = await draft({ options: { guests: "invite" } });
     expect((await setState(host, party.id, "live")).status).toBe(200);
 
     expect((await cohost(host, party.id, second.id, true)).status).toBe(200);
     expect(
-      (await stage(host, party.id, { action: "invite", userId: second.id }))
+      (await guestsAction(host, party.id, { action: "invite", userId: second.id }))
         .status,
+    ).toBe(200);
+    // An invitation is not an acceptance: `second` has to confirm, same as
+    // any other guest, before the mirror-image guard below has anything to
+    // guard.
+    expect(
+      (await guestsAction(second, party.id, { action: "join" })).status,
     ).toBe(200);
     expect(await memberSpeakAllowed(second.id)).toBe(true);
 

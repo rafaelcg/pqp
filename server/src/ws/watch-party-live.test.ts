@@ -135,10 +135,10 @@ describe("a party's state reaches the transcode", () => {
 describe("a party's state reaches the seat cache", () => {
   it("drops a live snapshot so the next join cannot keep a stale Voz setting", async () => {
     rememberWatchPartySeatSnapshot(CHANNEL, {
-      voiceEnabled: false,
+      guests: "off",
       hostUserId: "host",
       cohostIds: [],
-      invitedIds: [],
+      acceptedGuestIds: [],
     });
     rows.current.status = "live";
     await broadcastWatchParty("session-1");
@@ -147,10 +147,10 @@ describe("a party's state reaches the seat cache", () => {
 
   it("remembers there is no party after it ends", async () => {
     rememberWatchPartySeatSnapshot(CHANNEL, {
-      voiceEnabled: false,
+      guests: "off",
       hostUserId: "host",
       cohostIds: [],
-      invitedIds: [],
+      acceptedGuestIds: [],
     });
     rows.current.status = "ended";
     await broadcastWatchParty("session-1");

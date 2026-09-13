@@ -4060,25 +4060,50 @@ ALTER TABLE channel_sessions
   ADD COLUMN IF NOT EXISTS low_latency_requested BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Who the host has personally put on the stage of a party whose floor is
--- closed (`stageMode = 'invited'`). One row per person per party; the row is
+-- closed (`guests != 'off'`). One row per person per party; the row is
 -- what makes the SPEAK allow overwrite on the channel removable again when
 -- the party ends, without having to guess which overwrites were ours.
+--
+-- CONVIDADOS (docs/plans/WATCH_PARTY_GUESTS.md §5.6): this table IS the
+-- guests table now, unchanged shape, one word wiser. `accepted_at` is what
+-- tells an "invited" row (called up, or approved off the request queue, has
+-- not confirmed) from an "onAir" one (`accepted_at IS NOT NULL`, the person
+-- pressed "Entrar no ar" and holds a slot). `WATCH_PARTY_MAX_GUESTS` bounds
+-- the accepted rows, never the invited ones — an unanswered invitation does
+-- not hold a slot.
 CREATE TABLE IF NOT EXISTS channel_session_stage_invites (
   session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   invited_by UUID REFERENCES users(id) ON DELETE SET NULL,
   invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  accepted_at TIMESTAMPTZ,
   PRIMARY KEY (session_id, user_id)
 );
 
+ALTER TABLE channel_session_stage_invites
+  ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_channel_session_stage_invites_onair
+  ON channel_session_stage_invites (session_id)
+  WHERE accepted_at IS NOT NULL;
+
 -- A viewer asking to come up. Deleted when the hand is lowered, when they are
--- put on the stage, and with the party.
+-- put on the stage, and with the party; kept (not deleted) when the host
+-- passes, so `declined_at` has a row to carry the five-minute cooldown on.
 CREATE TABLE IF NOT EXISTS channel_session_raised_hands (
   session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   raised_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (session_id, user_id)
 );
+
+-- CONVIDADOS: a declined request survives instead of being deleted, so the
+-- cooldown (`GUEST_REQUEST_COOLDOWN_MS`) has something to read. NULL means
+-- "pending or never declined"; the queue query is `WHERE declined_at IS
+-- NULL`. A withdraw still deletes the row outright — no cooldown for
+-- changing your own mind.
+ALTER TABLE channel_session_raised_hands
+  ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_channel_session_raised_hands_queue
   ON channel_session_raised_hands (session_id, raised_at);

@@ -108,6 +108,29 @@ export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
 export const VOICE_TRACK_NAME = "voice-track";
 
 /**
+ * CONVIDADOS (`docs/plans/WATCH_PARTY_GUESTS.md` §5.2): the presenter's
+ * browser is the mixer, and this is its output — the presenter's own
+ * microphone plus every accepted guest's, summed client-side
+ * (`client/src/lib/stage-mix.ts`) and published under this name, exactly the
+ * shape `VOICE_TRACK_NAME` already is and for the same pitfall-14 reason (a
+ * grant is an allowlist of SOURCES, so a second publication has to be told
+ * apart by NAME).
+ *
+ * PREFERRED OVER `VOICE_TRACK_NAME`, NEVER BOTH. A party with guests on
+ * publishes `stage-mix` instead of the plain `voice-track` copy of the mic
+ * (see `syncVoiceTrackPublication`'s guest branch): the stage rung's audio
+ * is always exactly one of "nothing", "the presenter alone" (`voice-track`,
+ * #544's shape, guests off) or "the presenter plus every guest"
+ * (`stage-mix`), never a choice between two live inputs. `pickScreenTracks`
+ * below is the one place that ordering is written down — prefer a
+ * `stage-mix` publication when one exists, fall back to `voice-track`
+ * otherwise — so everything downstream (`reconcileCameraEgress`, the row,
+ * the adoption path) keeps reading the single `voiceTrackId` field it
+ * already understands and needs no idea guests exist at all.
+ */
+export const STAGE_MIX_TRACK_NAME = "stage-mix";
+
+/**
  * How long after a session starts the monitor keeps looking for the archive
  * track. The browser publishes it AFTER the share is up and the mix is
  * running, so it is normally absent on the first look and present a second or
@@ -2813,6 +2836,7 @@ export function pickScreenTracks(
   let micArchiveTrackId: string | undefined;
   let cameraTrackId: string | undefined;
   let voiceTrackId: string | undefined;
+  let stageMixTrackId: string | undefined;
   for (const track of sharer.tracks ?? []) {
     if (!track.sid) {
       continue;
@@ -2850,6 +2874,14 @@ export function pickScreenTracks(
     if (track.name === VOICE_TRACK_NAME) {
       voiceTrackId ??= track.sid;
     }
+    // CONVIDADOS: the same by-name rule, one more name. When both exist
+    // (should never happen — the client publishes one or the other, never
+    // both, see `STAGE_MIX_TRACK_NAME`'s doc) `stageMixTrackId` wins below,
+    // which is the side that carries every guest rather than the presenter
+    // alone.
+    if (track.name === STAGE_MIX_TRACK_NAME) {
+      stageMixTrackId ??= track.sid;
+    }
   }
   return videoTrackId
     ? {
@@ -2858,7 +2890,9 @@ export function pickScreenTracks(
         ...(sourceHeight ? { sourceHeight } : {}),
         ...(micArchiveTrackId ? { micArchiveTrackId } : {}),
         ...(cameraTrackId ? { cameraTrackId } : {}),
-        ...(voiceTrackId ? { voiceTrackId } : {}),
+        ...(stageMixTrackId || voiceTrackId
+          ? { voiceTrackId: stageMixTrackId ?? voiceTrackId }
+          : {}),
       }
     : null;
 }

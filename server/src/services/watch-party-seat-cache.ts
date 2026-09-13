@@ -41,24 +41,25 @@
  *
  * FAILS OPEN at the caller. A thrown load is not cached, so a hiccup is
  * still one missed snapshot rather than a stuck "voice off" for the rest
- * of the show. `mayTakeWatchPartySeat` stays the decision; this only feeds
- * it.
+ * of the show. `mayGoOnAir` stays the decision; this only feeds it.
  */
 
 import { isBusEnabled, publishToCluster, subscribeToCluster } from "../lib/bus.js";
+import type { WatchPartyGuestsMode } from "@pqp/shared";
 
 export type WatchPartySeatSnapshot = {
-  voiceEnabled: boolean;
+  guests: WatchPartyGuestsMode;
   hostUserId: string;
   cohostIds: readonly string[];
-  invitedIds: readonly string[];
+  /** `accepted_at IS NOT NULL` rows only — an unanswered invitation is not a seat. */
+  acceptedGuestIds: readonly string[];
 } | null;
 
 export type WatchPartySeatInfo = {
-  voiceEnabled: boolean;
+  guests: WatchPartyGuestsMode;
   isHost: boolean;
   isCohost: boolean;
-  isInvited: boolean;
+  isGuest: boolean;
 };
 
 const snapshots = new Map<string, WatchPartySeatSnapshot>();
@@ -82,10 +83,10 @@ export function watchPartySeatForUser(
     return null;
   }
   return {
-    voiceEnabled: snapshot.voiceEnabled,
+    guests: snapshot.guests,
     isHost: snapshot.hostUserId === userId,
     isCohost: snapshot.cohostIds.includes(userId),
-    isInvited: snapshot.invitedIds.includes(userId),
+    isGuest: snapshot.acceptedGuestIds.includes(userId),
   };
 }
 

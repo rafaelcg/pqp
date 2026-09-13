@@ -4,20 +4,34 @@ import type { VoiceBackendType, VoiceSessionInfo } from "@pqp/shared";
 export interface LiveKitPublishOptions {
   canSpeak: boolean;
   canStream: boolean;
+  /**
+   * CONVIDADOS' third axis (`docs/plans/WATCH_PARTY_GUESTS.md` §5.7): a
+   * guest may show their face without holding STREAM. Adds
+   * `TrackSource.CAMERA` alone — never the two screen-share sources, so a
+   * guest cannot start a share (`pickHlsSharer` scans the whole roster for
+   * `sharingScreen && canStream`, and a guest with STREAM would confuse it).
+   * Meaningless when `canStream` is already true, which already carries the
+   * camera. Defaults false so every existing call site is unchanged.
+   */
+  canShowFace?: boolean;
 }
 
 /**
- * LiveKit publish grant for SPEAK (mic) and STREAM (camera / screen).
+ * LiveKit publish grant for SPEAK (mic), STREAM (camera / screen) and, since
+ * guests, face-only (camera without a screen share).
  *
- * Both true omits `canPublishSources`, so the token matches the old
- * "may publish anything" grant. One side only lists the allowed sources.
- * Neither is `canPublish: false`.
+ * `canSpeak && canStream` omits `canPublishSources`, so the token matches
+ * the old "may publish anything" grant. Otherwise one side lists the allowed
+ * sources. `{ canPublish: false }` is exactly `!canSpeak && !canStream &&
+ * !canShowFace` — a seatless viewer's grant, and the structural half of "a
+ * non-guest can never publish audio": the token itself carries no
+ * microphone source for them, whatever a patched client tries.
  */
 export function liveKitPublishGrant(
   options: LiveKitPublishOptions,
 ): Pick<VideoGrant, "canPublish" | "canPublishSources"> {
-  const { canSpeak, canStream } = options;
-  if (!canSpeak && !canStream) {
+  const { canSpeak, canStream, canShowFace = false } = options;
+  if (!canSpeak && !canStream && !canShowFace) {
     return { canPublish: false };
   }
   if (canSpeak && canStream) {
@@ -33,6 +47,8 @@ export function liveKitPublishGrant(
       TrackSource.SCREEN_SHARE,
       TrackSource.SCREEN_SHARE_AUDIO,
     );
+  } else if (canShowFace) {
+    sources.push(TrackSource.CAMERA);
   }
   return { canPublish: true, canPublishSources: sources };
 }
@@ -178,10 +194,11 @@ export async function createLiveKitSession(
   peerId: string,
   displayName: string,
   userId: string,
-  options: { canSpeak?: boolean; canStream?: boolean } = {},
+  options: { canSpeak?: boolean; canStream?: boolean; canShowFace?: boolean } = {},
 ): Promise<VoiceSessionInfo> {
   const canSpeak = options.canSpeak ?? true;
   const canStream = options.canStream ?? canSpeak;
+  const canShowFace = options.canShowFace ?? false;
   const url = process.env.LIVEKIT_URL;
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
@@ -202,7 +219,7 @@ export async function createLiveKitSession(
   at.addGrant({
     room: voiceChannelId,
     roomJoin: true,
-    ...liveKitPublishGrant({ canSpeak, canStream }),
+    ...liveKitPublishGrant({ canSpeak, canStream, canShowFace }),
     canSubscribe: true,
     // No data channel needed (chat rides the app WS).
     canPublishData: false,
