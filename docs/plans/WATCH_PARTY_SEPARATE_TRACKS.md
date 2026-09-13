@@ -43,7 +43,8 @@ hears the host's voice AT ALL): "junto" is exactly today's behaviour, and
 | | junto (default, and the only mode before this flag) | separada |
 |---|---|---|
 | film's own audio (`hlsUrl`) | film + mixed voice | film alone |
-| ordinary mic publication | muted (doubling — pitfall in `screen-mix.ts`'s own header) | **unmuted** — the only place the room or the voice rung hears it |
+| ordinary mic publication | muted (doubling — pitfall in `screen-mix.ts`'s own header) | **unmuted** — this is what the ROOM hears the host from |
+| `voice-track` publication | does not exist | published — this is what the SERVER's camera/voice egress reads |
 | camera/voice rung (`cameraHlsUrl`) | video only, silent (unchanged) | video (if a camera is on) **+ the mic** |
 | no camera, "separada" | rung does not exist | **audio-only rung**, mic alone, tiny bitrate |
 
@@ -51,24 +52,63 @@ The room-mute rule (`publicationShouldBeMuted` in `use-voice.ts`) already
 existed to stop the seated room hearing the host twice — once from the mix
 (published as the share's audio), once from the raw mic publication. That
 rule is what "separada" turns off: with the mic out of the mix, there is only
-one copy left, so it has to be the one that is not muted, for the *room* as
-much as for the HLS audience. This is the load-bearing insight the whole
-feature rests on — nothing about "separada" is really about the stream at
-all; it is about which of two already-existing publications gets to carry the
-voice, changed by NOT feeding one of them into a WebAudio graph.
+one copy left for the room, so it has to be the one that is not muted.
+
+**THE SIGNAL THE SERVER TRUSTS IS NOT THE ORDINARY MICROPHONE — A FIRST
+VERSION OF THIS FEATURE GOT THAT WRONG, AND A FAROL REVIEW CAUGHT IT.** The
+first cut had `reconcileCameraEgress` attach whichever non-`mic-archive`,
+`Microphone`-sourced track it found on the sharer, gated only on
+`LIVE_HLS_VOICE_TRACK`. That publication exists for every presenter with a
+microphone, "separada" chosen or not, and its LiveKit mute state is not a
+safe proxy either — mute flips for push-to-talk, deafen and SPEAK being
+revoked, none of which are this decision. So with the flag on, every host
+with a mic got a camera+voice or voice-only egress regardless of which mode
+they had actually picked: a "junto" host's voice reached the audience twice,
+once in the film's mix and once on the rung.
+
+The fix is the same shape `LIVE_HLS_MIC_ARCHIVE` already uses for exactly
+this problem: a SECOND, distinctly-named publication (`voice-track`,
+`VOICE_TRACK_NAME` in both `livekit-session.ts` and `hls-egress.ts`),
+published under source `Microphone` (pitfall 14 — a grant is an allowlist of
+sources) but told apart by name. The client publishes it — a plain clone of
+`pipeline.processedStream`, tapped independently of the screen mix's own
+graph, since "separada" means the mic is deliberately NOT in that graph —
+only when `syncVoiceTrackPublication` finds ALL three true: `voiceTrackMode`
+is "separada", the mic is meant to reach the audience at all (`isSharingMic`),
+and the deployment actually answered `voiceTrack: true`
+(`effectiveVoiceSeparated()`, see below). Every OTHER client drops and
+unsubscribes from a `voice-track`-named publication on sight, exactly like
+`mic-archive` — filing it would overwrite the presenter's real voice with a
+duplicate of the same person, for the *room* now, not just the stream.
+`pickScreenTracks` picks it by name into `voiceTrackId`; the server never
+again infers the mode from the ordinary microphone's mere presence.
+
+**A PERSISTED PREFERENCE IS NOT A LIVE CAPABILITY — Farol's second finding.**
+`voiceTrackMode` is a standing, per-browser choice (`localStorage`), and
+nothing stopped a host who once picked "separada" from sharing again on a
+deployment (or a moment) where the flag is off: `micForScreenMix()` would
+still pull the mic OUT of the film with nothing left to carry it, and the
+audience would hear nothing from the host at all. Every read of the mode now
+goes through `effectiveVoiceSeparated()` — `voiceTrackMode === "separada" &&
+voiceTrackAvailable` — never `state.voiceTrackMode` directly.
+`voiceTrackAvailable` is refreshed from `GET /api/live-hls/config`
+(deployment-wide, the same scope `micArchive` already checks at) before every
+decision point that matters: starting a watch-party share, flipping "meu mic
+vai no stream", flipping the mode itself. Its default is `false` — the safe
+side, "junto" — until a check has actually run.
 
 **Camera egress, generalized.** `server/src/voice/hls-egress.ts`'s
 `reconcileCameraEgress` used to take one input (the sharer's camera sid, or
 null) and run a video-only Track Composite. It now takes two — camera sid and
-the sharer's *ordinary* (non-`mic-archive`) microphone sid, both picked in the
-same `listParticipants` pass `pickScreenTracks` already made (`micTrackId` is
-the new field) — and starts whichever of three shapes is wanted:
+the sharer's `voice-track` sid, both picked in the same `listParticipants`
+pass `pickScreenTracks` already made — and starts whichever of three shapes
+is wanted:
 
-- camera, no mic (flag off, or mic not shared into the stream): `CAMERA_RUNG`,
-  unchanged from #535.
-- camera + mic (flag on, both present): `CAMERA_RUNG_WITH_VOICE` — same
-  360p30 video, plus a 64 kbit/s AAC audio track.
-- mic alone, no camera (flag on, "separada", no webcam): `VOICE_RUNG` — audio
+- camera, no voice-track (flag off, or "junto", or the mic is not shared into
+  the party at all): `CAMERA_RUNG`, unchanged from #535.
+- camera + voice-track (flag on, "separada", both present): `CAMERA_RUNG_WITH_VOICE`
+  — same 360p30 video, plus a 64 kbit/s AAC audio track.
+- voice-track alone, no camera ("separada", no webcam): `VOICE_RUNG` — audio
   only, no video track requested at all, ~32 kbit/s.
 
 All three share `CAMERA_RUNG_NAME` on purpose: same object prefix, same
@@ -78,13 +118,30 @@ nobody watching rebuffers. `cameraHlsUrl` stays the single field it always
 was; two new booleans on the frame, `cameraHasVideo` and `cameraHasVoiceAudio`
 (both default to the pre-flag shape when absent — an older client parses the
 frame and ignores them, same convention `cameraHlsUrl` itself already uses),
-say which of the three shapes is live.
+say which of the three shapes is live. `cameraStillWanted`, the post-start
+sanity check, now judges each half against its OWN flag — `LIVE_HLS_CAMERA`
+for video, `LIVE_HLS_VOICE_TRACK` for audio — rather than always requiring
+the camera flag; the first version of that check would start a voice-only
+egress and immediately stop it again on any deployment with the camera off,
+which is exactly the deployment shape a presenter with no webcam is in.
 
 Box-budget accounting follows the shape: the video+audio combo still costs
 `HLS_CAMERA_MBPS` (audio is negligible next to a 360p encode); the audio-only
 rung costs a new, much smaller `HLS_VOICE_ONLY_MBPS` — there is no frame to
 encode, so a box too tight for a full camera slot can still carry a
 voice-only one.
+
+**Adoption restores the exact shape, not a guess.** `hls_sessions` gained
+`audio_track_id`, alongside the existing `video_track_id`: the camera/voice
+slot's two sids now live in their own columns instead of being collapsed
+into one, so a boot reconcile after a restart or a deploy adopts a
+camera+voice or voice-only egress in the shape it actually was, with
+`cameraHasVideo`/`cameraHasVoiceAudio` correct from the first frame a
+resumed viewer gets. Before that column existed, a voice-only egress had
+nowhere to keep its mic sid but `video_track_id`, so it came back mislabelled
+as a silent camera and cost one extra restart on the very next reconcile
+tick to self-correct — client-invisible (the slot's URL never moved) but a
+real, avoidable interruption of the voice rung specifically.
 
 **Client: the PiP unmutes for "separada."** `WatchCameraPip` was hardcoded
 `muted` — correct when the rung could never carry anything worth hearing.
@@ -96,7 +153,10 @@ element to play audio through regardless of whether there is a picture).
 Both flow from the stream frame through `WatchStage` → `CinemaStage` →
 `HlsWatchPlayer` → `WatchCameraPip`, the same path `cameraHlsUrl` already
 took, so a seated viewer's cinema stage and a seatless viewer's watch stage
-both get it for free.
+both get it for free. Unmuted autoplay can be refused with no prior gesture
+on the document at all (a link opened straight into cinema fullscreen, say);
+a `NotAllowedError` now drives a small "tap to hear" affordance rather than
+leaving the viewer permanently and silently muted with no way back in.
 
 **Host control: a new component, not a rewrite.** `VoiceTrackModeToggle`
 (`client/src/components/watch-party/voice-track-mode-toggle.tsx`) is a plain
@@ -117,7 +177,18 @@ requested, no unmuted publication, no toggle rendered, no new booleans on the
 frame (they are simply absent, which every consumer already treats as "the
 pre-flag shape"). Every code path this document describes is additive; none
 of it runs unless `LIVE_HLS_VOICE_TRACK=true` on the server AND the
-presenter picks "separada" on the client.
+presenter picks "separada" on a client that has confirmed the deployment can
+carry it.
+
+**A cherry-picked, unrelated race also lived on this branch.** #490's
+360p camera cap (see the PR body) shares `refreshHlsSource` with this
+feature, and a Farol review on ITS wiring caught a real overlap: two calls
+— one entering the capped state, one right behind it leaving it — could
+interleave so the slower one resumed after the faster one had already
+finished, reapplying a stale quality on top of a correct one.
+`applyWatchPartyCameraCap` now carries a generation counter and backs off
+after every await if a later call has already superseded it; pinned in
+`use-voice-watch-party-camera.test.ts`.
 
 ## What a test party has to verify
 
@@ -169,11 +240,12 @@ presenter picks "separada" on the client.
   turning the flag on for the first time changes nothing until a host
   deliberately asks for it — the same caution `LIVE_HLS_CAMERA` and
   `LIVE_HLS_MIC_ARCHIVE` both shipped with.
-- **Adoption across an API restart is intentionally imperfect for the
-  audio-only shape** (see the comment on `adoptCameraEgress` in
-  `hls-egress.ts`): a voice-only rung adopted after a deploy gets
-  mislabelled internally as a camera-shaped row until the next reconcile
-  tick corrects it with one extra restart of that rung. Camera and
-  camera+voice adoption are both exact. Worth a proper `audio_track_id`
-  column on `hls_sessions` if this rung sees real use — not done here to
-  keep the migration surface small for a flag nobody has turned on yet.
+- **`voiceTrackAvailable` is checked deployment-wide, not per-server.**
+  `GET /api/live-hls/config` with no `serverId` is the same scope
+  `publishMicArchiveIfRecording` already checks `micArchive` at, and
+  `LIVE_HLS_VOICE_TRACK` itself has no per-server override to begin with —
+  only whether HLS is on AT ALL varies per server. So the one gap left is a
+  server whose *own* `live_hls_enabled` allowlist row differs from the
+  deployment's default while the presenter is mid-share; a real edge case,
+  and the same one `micArchive` has carried since it shipped. Worth
+  threading a `serverId` into the voice controller if it ever bites.

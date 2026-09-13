@@ -3155,6 +3155,7 @@
   "watchParty.tx.cameraLive": "Camera: on the stream. It reaches outside watchers too, and costs extra upload on top of the share.",
   "watchParty.camera.voiceOnly": "Presenter's voice",
   "watchParty.camera.voiceVolume": "Presenter's voice volume",
+  "watchParty.camera.tapToHear": "Tap to hear",
   "watchParty.voiceTrack.label": "Voice",
   "watchParty.voiceTrack.junto": "With the film",
   "watchParty.voiceTrack.separada": "Separate",

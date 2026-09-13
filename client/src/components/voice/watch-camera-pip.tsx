@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Mic } from "lucide-react";
+import { Mic, Volume2 } from "lucide-react";
 import {
   hasHlsViewerToken,
   hlsSessionKey,
@@ -120,6 +120,16 @@ export function WatchCameraPip({
    * changing means the camera egress actually restarted.
    */
   const [activeSrc, setActiveSrc] = useState(src);
+  /**
+   * The browser refused unmuted autoplay (`NotAllowedError`). Only possible
+   * while `hasVoiceAudio` — a muted element is never refused, anywhere. A
+   * Farol review caught the gap this closes: without it, a viewer who opened
+   * the watch stage with no prior gesture on THIS document (a link opened
+   * straight into cinema fullscreen, say) stayed permanently silent, because
+   * nothing after the first `play()` rejection ever tried again. This state
+   * drives a small "tap to hear" affordance in the corner instead.
+   */
+  const [blocked, setBlocked] = useState(false);
   const sessionRef = useRef<string | null>(hlsSessionKey(src));
 
   // The live hls.js instance, reachable outside the attach effect so a plain
@@ -220,6 +230,7 @@ export function WatchCameraPip({
     let cancelled = false;
     usingNativeRef.current = false;
     onFrameRef.current(false);
+    setBlocked(false);
 
     // Same rule as the film's player: the header is only for our own proxy,
     // only when the URL carries no `?t=`, and never on the presigned bucket
@@ -258,6 +269,7 @@ export function WatchCameraPip({
     const onPlaying = () => {
       if (!cancelled) {
         onFrameRef.current(true);
+        setBlocked(false);
       }
     };
     const onFailed = () => {
@@ -280,6 +292,25 @@ export function WatchCameraPip({
       if (hasVoiceAudioRef.current) {
         video.volume = getVoicePipVolume();
       }
+      // ONE PLACE BOTH `play()` CALLS GO THROUGH, so the "tap to hear"
+      // fallback cannot drift from which failure it is actually for. Muted
+      // autoplay is allowed everywhere, so a rejection there is never the
+      // autoplay policy and stays silently swallowed exactly as before.
+      // Unmuted autoplay ("separada"'s voice) CAN be refused with no prior
+      // gesture on this document, and that refusal must not just vanish —
+      // `blocked` drives the retry affordance below.
+      const attemptPlay = () => {
+        void video.play().catch((err: unknown) => {
+          if (
+            !cancelled &&
+            hasVoiceAudioRef.current &&
+            err instanceof Error &&
+            err.name === "NotAllowedError"
+          ) {
+            setBlocked(true);
+          }
+        });
+      };
       if (!Hls.isSupported()) {
         // Safari and iOS play MPEG-TS natively. No engine choice to make: a
         // browser with neither simply never produces a frame and the corner
@@ -287,10 +318,7 @@ export function WatchCameraPip({
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           usingNativeRef.current = true;
           video.src = latestSrcRef.current;
-          void video.play().catch(() => {
-            // Muted autoplay is allowed everywhere; if it still refused, the
-            // camera stays hidden and the film is untouched.
-          });
+          attemptPlay();
         }
         return;
       }
@@ -333,9 +361,7 @@ export function WatchCameraPip({
         }
       });
       player.on(Hls.Events.MANIFEST_PARSED, () => {
-        void video.play().catch(() => {
-          // See above: muted, so a refusal here is not the autoplay policy.
-        });
+        attemptPlay();
       });
     }
 
@@ -392,6 +418,17 @@ export function WatchCameraPip({
     };
   }, [activeSrc]);
 
+  /**
+   * The click IS the user gesture: a `play()` called from inside a click
+   * handler is not subject to the autoplay policy at all, so this always
+   * succeeds where the automatic attempt was refused. `onPlaying` clears
+   * `blocked`; a rejection here (element torn down mid-click, say) just
+   * leaves the affordance showing rather than throwing.
+   */
+  const retryFromGesture = () => {
+    void videoRef.current?.play().catch(() => {});
+  };
+
   return (
     <div
       data-testid="watch-camera-pip"
@@ -428,6 +465,25 @@ export function WatchCameraPip({
             className="h-1/3 w-1/3 text-paper/70"
           />
         </div>
+      ) : null}
+      {hasVoiceAudio && blocked ? (
+        // THE AUTOPLAY POLICY'S ESCAPE HATCH. Unmuted autoplay can be refused
+        // with no prior gesture on this document at all (opening the watch
+        // stage straight into cinema fullscreen, say); a click here IS that
+        // gesture, so the retry always succeeds where the automatic one
+        // could not.
+        <button
+          type="button"
+          data-testid="watch-camera-pip-tap-to-hear"
+          onClick={(event) => {
+            event.stopPropagation();
+            retryFromGesture();
+          }}
+          className="absolute inset-0 flex items-center justify-center gap-1 bg-black/50 text-xs font-medium text-paper"
+        >
+          <Volume2 className="h-4 w-4" aria-hidden />
+          {t("watchParty.camera.tapToHear")}
+        </button>
       ) : null}
       {hasVoiceAudio ? (
         <input

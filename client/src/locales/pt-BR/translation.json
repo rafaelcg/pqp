@@ -3155,6 +3155,7 @@
   "watchParty.tx.cameraLive": "Câmera: no stream. Também chega em quem assiste de fora, e custa upload extra além do compartilhamento.",
   "watchParty.camera.voiceOnly": "Voz de quem apresenta",
   "watchParty.camera.voiceVolume": "Volume da voz de quem apresenta",
+  "watchParty.camera.tapToHear": "Toque para ouvir",
   "watchParty.voiceTrack.label": "Voz",
   "watchParty.voiceTrack.junto": "Junto com o filme",
   "watchParty.voiceTrack.separada": "Separada",

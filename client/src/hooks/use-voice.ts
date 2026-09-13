@@ -1113,6 +1113,24 @@ export function createVoiceController(transport: RealtimeTransport) {
    */
   let hlsSourceTimer: ReturnType<typeof setInterval> | null = null;
   /**
+   * Bumped at the start of every `applyWatchPartyCameraCap` call, so an
+   * awaited call can tell whether a LATER one has already superseded it.
+   *
+   * WHY THIS HAS TO EXIST. `refreshHlsSource` runs on both a signaling event
+   * (the egress starting or ending) and a periodic sampler, so two calls can
+   * overlap: one entering the capped state, one right behind it leaving it.
+   * Farol caught the shape this produces without a guard — the SECOND call
+   * (faster, or simply started later) can finish completely, correctly
+   * uncapping the camera, and then the FIRST call resumes from its own await
+   * and re-applies the 360p settings on top, leaving the stored
+   * `watchPartyCameraCapped` flag and the actual hardware/encoder disagreeing
+   * about which state the camera is in. A superseded call now checks this
+   * counter after every await and backs off rather than resuming — the later
+   * call already left the camera in the state it should be in, so there is
+   * nothing left for the earlier one to correctly do.
+   */
+  let cameraCapGeneration = 0;
+  /**
    * Hold the camera at 360p while this machine's share is the ladder's source,
    * and give the chosen quality back the moment it stops being.
    *
@@ -1133,6 +1151,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (presenting === watchPartyCameraCapped) {
       return;
     }
+    const generation = ++cameraCapGeneration;
     const before = currentCameraQuality();
     watchPartyCameraCapped = presenting;
     const applied = currentCameraQuality();
@@ -1147,11 +1166,19 @@ export function createVoiceController(transport: RealtimeTransport) {
     const maxBitrate = cameraBitrateFor(applied);
     manager?.setCameraMaxBitrate(maxBitrate);
     await sfu?.setCameraMaxBitrate(maxBitrate);
+    if (generation !== cameraCapGeneration) {
+      // A later call already decided what the camera should be (and, by now,
+      // has applied it). Resuming here would stomp that with a stale answer.
+      return;
+    }
     const track = cameraCaptureStream?.getVideoTracks()[0];
     if (!track) {
       return;
     }
     await applyCameraQuality(track, applied);
+    if (generation !== cameraCapGeneration) {
+      return;
+    }
     // The capture is a different size now and, on the SFU, the simulcast
     // ladder was solved against the size it used to be.
     await sfu?.reconcileCameraLadder();
@@ -1891,12 +1918,15 @@ export function createVoiceController(transport: RealtimeTransport) {
     // The mic is already in the share's audio track: publishing it a second
     // time would have every seated listener hear the host twice, out of two
     // jitter buffers, which is flanging. Moderation still reaches the mix
-    // (`muteSfuUser` walks `type === AUDIO`). NOT while "separada"
-    // (`voiceTrackMode`): there the mic is deliberately kept OUT of the mix
+    // (`muteSfuUser` walks `type === AUDIO`). NOT while EFFECTIVELY
+    // "separada" (`effectiveVoiceSeparated`, never the raw preference — see
+    // its own doc): there the mic is deliberately kept OUT of the mix
     // (`screenMix.setMic(null)`, see `setMicInStream`/`startScreenShare`), so
-    // this publication is the only place the room — and the camera/voice
-    // egress reading the same track — ever hears the presenter at all.
-    if (screenMix && state.isSharingMic && state.voiceTrackMode !== "separada") {
+    // this publication is the only place the ROOM hears the presenter at
+    // all (the camera/voice egress has its own, separately-named
+    // publication — `syncVoiceTrackPublication` — so the server is never
+    // left inferring the mode from this one's mute state).
+    if (screenMix && state.isSharingMic && !effectiveVoiceSeparated()) {
       return true;
     }
     if (state.inputMode === "voice-activity") {
@@ -2025,12 +2055,16 @@ export function createVoiceController(transport: RealtimeTransport) {
       // The stream mix follows the room, not the other way round: only once
       // the room is on the new microphone does the audience get it too, so
       // a failed replacement never leaves the two on different devices.
-      // `micForScreenMix` returns null while "separada": the mix's mic branch
-      // stays disconnected there on purpose, and `sfu.replaceTrack` above
-      // already carried the new device onto the publication the voice rung
-      // (and the room) actually hear.
+      // `micForScreenMix` returns null while effectively "separada": the
+      // mix's mic branch stays disconnected there on purpose, and
+      // `sfu.replaceTrack` above already carried the new device onto the
+      // ordinary publication the room hears. The `voice-track` publication is
+      // a SEPARATE one (`syncVoiceTrackPublication`) and does not follow
+      // `replaceTrack` — it has to be told about the new device itself, or it
+      // keeps sending the old one to the camera/voice egress.
       if (screenMix && state.isSharingMic) {
         screenMix.setMic(micForScreenMix());
+        void syncVoiceTrackPublication();
       }
       emit();
     } catch (err) {
@@ -2382,19 +2416,82 @@ export function createVoiceController(transport: RealtimeTransport) {
   /** The running share was started for a watch party (`intent.watchParty`). */
   let screenCaptureIsWatchParty = false;
   /**
+   * Whether THIS deployment can actually carry a "separada" voice
+   * (`GET /api/live-hls/config` → `voiceTrack`), cached from the last check.
+   *
+   * `voiceTrackMode` is a STANDING preference (`lib/voice-track-mode.ts`,
+   * `localStorage`) that outlives any one server or share — exactly like
+   * `micInStream` does. A Farol review on the first version of this feature
+   * caught what that means if nothing re-checks it: a host who picked
+   * "separada" once, then shares again on a deployment (or a moment) where
+   * the flag is off, would still have the mic pulled OUT of the film's audio
+   * with nothing left to carry it — the film loses the voice, the audience
+   * hears nothing, and nobody asked for that. So every place that reads the
+   * preference reads it through `effectiveVoiceSeparated()`, never
+   * `state.voiceTrackMode` directly, and the default here is `false` — the
+   * safe side, "junto" — until a check has actually run.
+   */
+  let voiceTrackAvailable = false;
+  /**
+   * Refresh `voiceTrackAvailable` from the server. Deployment-wide, not
+   * per-server, the same scope `publishMicArchiveIfRecording` already checks
+   * `micArchive` at — `loadLiveHlsConfig()` with no server id.
+   */
+  async function refreshVoiceTrackAvailable(): Promise<boolean> {
+    try {
+      const config = await loadLiveHlsConfig();
+      voiceTrackAvailable = config.voiceTrack === true;
+    } catch {
+      // Could not ask: leave the last known answer in place rather than
+      // flipping a live "separada" share back to "junto" over a network
+      // hiccup. A fresh join or share always re-checks anyway.
+    }
+    return voiceTrackAvailable;
+  }
+  /**
+   * The mode actually in force, as opposed to the standing preference. Every
+   * decision in this file — what the mix carries, whether the ordinary mic
+   * publication is muted, whether the voice-track publication exists — reads
+   * THIS, never `state.voiceTrackMode` on its own.
+   */
+  function effectiveVoiceSeparated(): boolean {
+    return state.voiceTrackMode === "separada" && voiceTrackAvailable;
+  }
+  /**
    * What `ScreenMix.setMic`/`createScreenMix` should be handed for the mic
-   * branch, given `voiceTrackMode`. `null` in "separada": the film's own
-   * audio stays mic-free on purpose, and the presenter's ordinary mic
-   * publication (unmuted for exactly this reason — see
-   * `publicationShouldBeMuted`) is what the room and the camera/voice egress
-   * hear instead. One function so every call site that feeds the mix — the
-   * initial share, a late "meu mic vai no stream", a device swap — agrees.
+   * branch. `null` in EFFECTIVE "separada": the film's own audio stays
+   * mic-free on purpose, and the presenter's ordinary mic publication
+   * (unmuted for exactly this reason — see `publicationShouldBeMuted`) plus
+   * the `voice-track` publication (see `syncVoiceTrackPublication`) are what
+   * the room and the camera/voice egress hear instead. One function so every
+   * call site that feeds the mix — the initial share, a late "meu mic vai no
+   * stream", a device swap — agrees.
    */
   function micForScreenMix(): MediaStream | null {
-    if (state.voiceTrackMode === "separada" || !pipeline) {
+    if (effectiveVoiceSeparated() || !pipeline) {
       return null;
     }
     return pipeline.processedStream;
+  }
+  /**
+   * Publish or withdraw the `voice-track` copy of the mic — the unambiguous
+   * signal `reconcileCameraEgress` needs (see `VOICE_TRACK_NAME`'s own doc):
+   * the server must never infer "separada" from the deployment flag plus the
+   * mere existence of a microphone, because that publication exists whether
+   * or not this host chose it, and whether or not it is even muted for the
+   * room right now. Safe to call whenever the surrounding state might have
+   * changed — mode flips, "meu mic vai no stream" flips, a device swap, the
+   * share starting or ending — it is a no-op when nothing needs to move.
+   */
+  async function syncVoiceTrackPublication(): Promise<void> {
+    if (!sfu) {
+      return;
+    }
+    if (!screenMix || !state.isSharingMic || !effectiveVoiceSeparated() || !pipeline) {
+      await sfu.unpublishVoiceTrack();
+      return;
+    }
+    await sfu.publishVoiceTrack(pipeline.processedStream);
   }
 
   /**
@@ -2475,8 +2572,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (hadMix) {
       // Before the mix is closed: the archive is a track out of its graph, and
       // a publication left up after its source stops is a silent microphone on
-      // the roster that nothing ever takes down.
+      // the roster that nothing ever takes down. The voice-track publication
+      // is not tied to the mix's graph at all (it taps `pipeline` directly),
+      // but the share ending is exactly the end of its own reason to exist.
       void sfu?.unpublishMicArchive();
+      void sfu?.unpublishVoiceTrack();
     }
     screenMix?.close();
     screenMix = null;
@@ -4312,18 +4412,27 @@ export function createVoiceController(transport: RealtimeTransport) {
      * (the mic branch is connected or dropped) and is remembered for the
      * next one.
      */
-    setMicInStream(on: boolean) {
+    async setMicInStream(on: boolean) {
       saveMicInStream(on);
       state.micInStream = on;
+      // Freshest answer before `micForScreenMix()` is consulted below: a
+      // stale "separada" from a previous, capable server must never pull the
+      // mic out of the film on one that cannot carry it any other way.
+      await refreshVoiceTrackAvailable();
+      if (state.status === "idle") {
+        // Left mid-await: nothing left to apply this to.
+        return;
+      }
       if (screenMix && pipeline) {
         // A mix is up: connect or drop the mic branch in place. `on` alone
         // decides whether the mic reaches the audience AT ALL; `micForScreenMix`
         // is what decides whether it goes in THIS bus or stays out for the
-        // voice rung — see `voiceTrackMode`.
+        // voice rung — see `effectiveVoiceSeparated`.
         screenMix.setMic(on ? micForScreenMix() : null);
         state.isSharingMic = on;
         sfuPublicationMuted = null;
         void applyPublicationMute();
+        void syncVoiceTrackPublication();
       } else if (
         on &&
         pipeline &&
@@ -4335,9 +4444,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         // the mixed stream on the wire. The SFU republishes the share when
         // audio appears, which a running HLS egress rebinds to; a few
         // seconds of picture, and then the host is heard. `micForScreenMix()`
-        // is null in "separada", so the mix carries the film alone and the
-        // ordinary mic publication (unmuted below, via `applyPublicationMute`)
-        // is what reaches the room and the voice rung.
+        // is null in effective "separada", so the mix carries the film alone
+        // and the ordinary mic publication (unmuted below, via
+        // `applyPublicationMute`) plus `syncVoiceTrackPublication`'s own
+        // publication are what reach the room and the voice rung.
         try {
           const source = screenCaptureStream;
           screenMix = createScreenMix(source, micForScreenMix());
@@ -4347,6 +4457,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.isSharingMic = true;
           sfuPublicationMuted = null;
           void applyPublicationMute();
+          void syncVoiceTrackPublication();
           void (async () => {
             await manager?.setLocalScreenStream(screenMix!.stream);
             if (sfu) {
@@ -4379,16 +4490,23 @@ export function createVoiceController(transport: RealtimeTransport) {
      * host panel's own toggle, which only ever calls this with a value that
      * changed.
      */
-    setVoiceTrackMode(mode: VoiceTrackMode) {
+    async setVoiceTrackMode(mode: VoiceTrackMode) {
       saveVoiceTrackMode(mode);
       if (state.voiceTrackMode === mode) {
         return;
       }
       state.voiceTrackMode = mode;
+      // Freshest answer before `effectiveVoiceSeparated()` is consulted
+      // below — same reasoning as `setMicInStream`.
+      await refreshVoiceTrackAvailable();
+      if (state.status === "idle") {
+        return;
+      }
       if (screenMix && state.isSharingMic) {
         screenMix.setMic(micForScreenMix());
         sfuPublicationMuted = null;
         void applyPublicationMute();
+        void syncVoiceTrackPublication();
       }
       emit();
     },
@@ -4622,6 +4740,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       // and a mixed track always has audio in it whether or not the tab did.
       const hasAudio = stream.getAudioTracks().length > 0;
       screenCaptureIsWatchParty = intent.watchParty === true;
+      if (screenCaptureIsWatchParty) {
+        // Before `micForScreenMix()` is consulted below: the picker was
+        // already open for as long as the host took to choose, so this is
+        // very rarely a fresh fetch. See `effectiveVoiceSeparated`'s doc.
+        await refreshVoiceTrackAvailable();
+      }
       if (screenCaptureIsWatchParty && state.micInStream && !pipeline) {
         // Listen-only seat (no mic could be opened): the switch is on and
         // there is nothing to mix. The pill will say muted; this says why.
@@ -4642,11 +4766,12 @@ export function createVoiceController(transport: RealtimeTransport) {
           // goes quiet at once, not on the next mute toggle. "Separada": the
           // film's own audio stays mic-free and this is the opposite move —
           // that same publication is what carries the voice, so it unmutes
-          // instead. `applyPublicationMute` reads `voiceTrackMode` to tell
-          // the two apart; this call is what makes either happen immediately
-          // rather than waiting for the next mute toggle.
+          // instead. `applyPublicationMute` reads `effectiveVoiceSeparated()`
+          // to tell the two apart; this call is what makes either happen
+          // immediately rather than waiting for the next mute toggle.
           sfuPublicationMuted = null;
           void applyPublicationMute();
+          void syncVoiceTrackPublication();
         } catch (err) {
           // No WebAudio here, or the graph refused: the share goes out as it
           // is, room-only mic. Said out loud, because a pill reading "só a

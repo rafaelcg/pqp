@@ -65,6 +65,13 @@ vi.mock("@/lib/peer-connection-manager", () => ({
 /** Every camera ceiling the SFU session was handed, in order. */
 const cameraCeilings: number[] = [];
 let ladderReconciles = 0;
+/**
+ * When set, `setCameraMaxBitrate` hangs on this promise before resolving —
+ * lets a test hold one call's SFU round trip open while a LATER,
+ * overlapping call runs to completion, to pin the generation guard in
+ * `applyWatchPartyCameraCap`.
+ */
+let cameraBitrateGate: Promise<void> | null = null;
 
 vi.mock("@/lib/livekit-session", () => ({
   connectLiveKit: vi.fn(async () => ({
@@ -77,6 +84,13 @@ vi.mock("@/lib/livekit-session", () => ({
     publishCamera: async () => {},
     setCameraMaxBitrate: async (bitrate: number) => {
       cameraCeilings.push(bitrate);
+      // ONE-SHOT: only the very next call is held. A later, overlapping call
+      // (the race the gate exists to construct) must run to completion.
+      const gate = cameraBitrateGate;
+      cameraBitrateGate = null;
+      if (gate) {
+        await gate;
+      }
     },
     reconcileCameraLadder: async () => {
       ladderReconciles += 1;
@@ -282,6 +296,7 @@ beforeEach(() => {
   cameraRequests.length = 0;
   appliedConstraints.length = 0;
   ladderReconciles = 0;
+  cameraBitrateGate = null;
   vi.mocked(connectLiveKit).mockClear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -391,5 +406,59 @@ describe("the presenter's camera while a watch party is transcoding", () => {
     await settle();
 
     expect(cameraCeilings.slice(before)).toEqual([]);
+  });
+
+  /**
+   * THE RACE A FAROL REVIEW CAUGHT: two overlapping `refreshHlsSource` calls
+   * — one entering the capped state, one right behind it leaving it — can
+   * interleave so the SLOWER (capping) call resumes from its own await
+   * AFTER the faster (uncapping) one has already finished, and reapplies
+   * 360p on top of a camera and SFU that are correctly back at "auto". The
+   * generation guard in `applyWatchPartyCameraCap` exists to stop exactly
+   * that: a superseded call must back off rather than resume.
+   */
+  it("a capping call stuck on its own SFU round trip does not clobber a faster uncap that landed after it", async () => {
+    const { voice } = await presentingHost();
+    await voice.toggleCamera();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(AUTO_BPS);
+
+    let releaseGate: () => void = () => {};
+    cameraBitrateGate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+
+    // Egress starts: this call's setCameraMaxBitrate(CAP_BPS) hangs on the
+    // gate before it can go on to touch the capture or the ladder.
+    voice.handleSignaling(voiceStream(1080));
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(CAP_BPS);
+
+    // Egress ends before the stuck call resumes. Its own setCameraMaxBitrate
+    // call is not gated (the gate is one-shot and already spent), so this
+    // one runs to completion: the camera and the SFU are correctly "auto"
+    // again.
+    voice.handleSignaling(voiceStream(null));
+    await settle();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(AUTO_BPS);
+    expect(appliedConstraints.at(-1)).toMatchObject({
+      height: { ideal: 720 },
+    });
+
+    // Now let the stuck capping call resume. Without the generation guard it
+    // would re-apply 360p here, on top of a camera the audience (and the
+    // stored `videoQuality`) both already agree is back at auto.
+    releaseGate();
+    await settle();
+    await settle();
+
+    expect(cameraCeilings.at(-1)).toBe(AUTO_BPS);
+    expect(appliedConstraints.at(-1)).toMatchObject({
+      height: { ideal: 720 },
+    });
+    // The stuck call must not have republished the simulcast ladder either:
+    // that read the STALE 360p capture, which no longer exists.
+    expect(ladderReconciles).toBe(1);
   });
 });

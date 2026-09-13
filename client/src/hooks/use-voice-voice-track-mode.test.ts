@@ -81,6 +81,9 @@ vi.mock("@/lib/peer-connection-manager", () => ({
 /** Every `setMuted` call the SFU session got, in order. */
 const mutedCalls: boolean[] = [];
 
+/** Every `publishVoiceTrack`/`unpublishVoiceTrack` call, in order. */
+const voiceTrackCalls: ("publish" | "unpublish")[] = [];
+
 vi.mock("@/lib/livekit-session", () => ({
   connectLiveKit: vi.fn(async () => ({
     publish: async () => {},
@@ -93,6 +96,12 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishScreenAudio: async () => {},
     publishMicArchive: async () => {},
     unpublishMicArchive: async () => {},
+    publishVoiceTrack: async () => {
+      voiceTrackCalls.push("publish");
+    },
+    unpublishVoiceTrack: async () => {
+      voiceTrackCalls.push("unpublish");
+    },
     publishCamera: async () => {},
     unpublishCamera: async () => {},
     setCameraMaxBitrate: async () => {},
@@ -106,6 +115,16 @@ vi.mock("@/lib/livekit-session", () => ({
     disconnect: async () => {},
     isConnected: () => true,
   })),
+}));
+
+/**
+ * Whatever `GET /api/live-hls/config` says about `voiceTrack`, for
+ * `refreshVoiceTrackAvailable()` — default `true` (a deployment that
+ * supports the flag), one test below flips it to prove the fallback.
+ */
+let voiceTrackServerSupport = true;
+vi.mock("@/hooks/use-live-hls-config", () => ({
+  loadLiveHlsConfig: async () => ({ voiceTrack: voiceTrackServerSupport }),
 }));
 
 const { createVoiceController } = await import("./use-voice");
@@ -265,6 +284,8 @@ beforeEach(() => {
   installBrowserStubs();
   screenMixInstances.length = 0;
   mutedCalls.length = 0;
+  voiceTrackCalls.length = 0;
+  voiceTrackServerSupport = true;
 });
 
 describe("voiceTrackMode defaults", () => {
@@ -375,6 +396,78 @@ describe("turning 'meu mic vai no stream' on while already 'separada'", () => {
     expect(voice.getState().isSharingMic).toBe(true);
     expect(screenMixInstances).toHaveLength(1);
     expect(screenMixInstances[0]!.initialMic).toBeNull();
+    expect(mutedCalls.at(-1)).toBe(false);
+  });
+});
+
+describe("'separada' publishes voice-track, and only voice-track — never the ordinary mic clone", () => {
+  it("publishes voice-track once the mix is up in separada", async () => {
+    const voice = await joinedHost();
+    voice.setVoiceTrackMode("separada");
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+
+    expect(voiceTrackCalls).toContain("publish");
+  });
+
+  it("withdraws voice-track when the mode moves back to junto", async () => {
+    const voice = await joinedHost();
+    voice.setVoiceTrackMode("separada");
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+    voiceTrackCalls.length = 0;
+
+    voice.setVoiceTrackMode("junto");
+    await settle();
+
+    expect(voiceTrackCalls).toContain("unpublish");
+  });
+});
+
+/**
+ * THE PERSISTED PREFERENCE, RE-CHECKED AGAINST THE SERVER THAT IS ACTUALLY
+ * ANSWERING. `voiceTrackMode` is a standing, per-browser choice
+ * (`localStorage`) that outlives any one server or deployment — a Farol
+ * review on the first version of this feature caught what happens without
+ * this check: a host who picked "separada" once, then shares again on a
+ * deployment where the flag is off, would still have the mic pulled OUT of
+ * the film's audio with nothing left to carry it to the audience at all.
+ */
+describe("a persisted 'separada' preference on a deployment that cannot carry it", () => {
+  it("falls back to junto: the mix keeps the mic, the publication stays muted, no voice-track is published", async () => {
+    voiceTrackServerSupport = false;
+    const voice = await joinedHost();
+    voice.setVoiceTrackMode("separada");
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+
+    expect(voice.getState().voiceTrackMode).toBe("separada");
+    expect(screenMixInstances).toHaveLength(1);
+    // NOT null: the deployment cannot carry the voice any other way, so the
+    // film's own audio is what the audience gets it from, same as "junto".
+    expect(screenMixInstances[0]!.initialMic).not.toBeNull();
+    // Muted, not unmuted: with the mic IN the mix, an unmuted ordinary
+    // publication would double it for the room.
+    expect(mutedCalls.at(-1)).toBe(true);
+    expect(voiceTrackCalls).not.toContain("publish");
+  });
+
+  it("stops excluding the mic the moment the deployment starts supporting it", async () => {
+    voiceTrackServerSupport = false;
+    const voice = await joinedHost();
+    voice.setVoiceTrackMode("separada");
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+    expect(screenMixInstances[0]!.initialMic).not.toBeNull();
+
+    voiceTrackServerSupport = true;
+    // Any of the re-check points works; a mode toggle is the most direct.
+    voice.setVoiceTrackMode("junto");
+    await settle();
+    voice.setVoiceTrackMode("separada");
+    await settle();
+
+    expect(screenMixInstances[0]!.setMic).toHaveBeenLastCalledWith(null);
     expect(mutedCalls.at(-1)).toBe(false);
   });
 });
