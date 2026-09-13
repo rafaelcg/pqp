@@ -1,7 +1,18 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
-import { Check, type LucideIcon } from "lucide-react";
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { type LucideIcon } from "lucide-react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { cn } from "@/lib/utils";
+import {
+  MenuItemRows,
+  type MenuItemComponentProps,
+  type MenuSeparatorComponentProps,
+} from "@/components/ui/menu-items";
 
 export interface ContextMenuItemDef {
   id: string;
@@ -113,8 +124,6 @@ export function ContextMenu({
 
   const strip = reactions ?? [];
   const hasStrip = strip.length > 0;
-  const reserveIcon = items.some((item) => !item.separator && item.icon);
-
   if (disabled || (items.length === 0 && !hasStrip)) {
     return <>{children}</>;
   }
@@ -191,41 +200,15 @@ export function ContextMenu({
               {items.length > 0 && <div className="mb-1 h-px bg-border" />}
             </>
           )}
-          {items.map((item) =>
-            item.separator ? (
-              <ContextMenuPrimitive.Separator
-                key={item.id}
-                className="my-1 h-px bg-border"
-              />
-            ) : (
-              <ContextMenuPrimitive.Item
-                key={item.id}
-                disabled={item.disabled}
-                onSelect={() => item.onSelect?.()}
-                aria-checked={item.checked}
-                data-menu-item={item.id}
-                className={cn(
-                  "flex w-full cursor-default select-none items-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-surface-2",
-                  item.danger
-                    ? "text-danger data-[highlighted]:bg-danger/15"
-                    : "text-text",
-                )}
-              >
-                {reserveIcon && (
-                  <span
-                    aria-hidden="true"
-                    className="flex h-4 w-4 shrink-0 items-center justify-center"
-                  >
-                    {item.icon ? <item.icon className="h-3.5 w-3.5" /> : null}
-                  </span>
-                )}
-                <span className="min-w-0 flex-1">{item.label}</span>
-                {item.checked ? (
-                  <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                ) : null}
-              </ContextMenuPrimitive.Item>
-            ),
-          )}
+          <MenuItemRows
+            items={items}
+            Item={
+              ContextMenuPrimitive.Item as ComponentType<MenuItemComponentProps>
+            }
+            Separator={
+              ContextMenuPrimitive.Separator as ComponentType<MenuSeparatorComponentProps>
+            }
+          />
         </ContextMenuPrimitive.Content>
       </ContextMenuPrimitive.Portal>
     </ContextMenuPrimitive.Root>
