@@ -15,5 +15,30 @@
   "vars": {
     "ORIGIN_BASE": "https://api.pqp.gg"
   },
+
+  // ALWAYS-ON (not built yet): the owner wants a watch party to keep playing
+  // when the API is down. That needs a SECOND `PlaylistOrigin`
+  // (src/playlist-origin.ts) that lists a session's segments straight from
+  // R2 and renders a media playlist itself, with a Durable Object per
+  // session remembering which segments it has seen -- the edge-side version
+  // of `hls-live-window.ts`'s in-process history on the API. See
+  // docs/plans/ALWAYS_ON.md task A1.x. Left commented out on purpose: a
+  // binding here with no code reading it is a silent no-op at best and, for
+  // the Durable Object migration, a deploy-time class Cloudflare has to
+  // provision for nothing at worst. Uncomment both together with the
+  // implementation that uses them, not before.
+  //
+  // "r2_buckets": [
+  //   { "binding": "SEGMENTS", "bucket_name": "pqp-live-hls" }
+  // ],
+  // "durable_objects": {
+  //   "bindings": [
+  //     { "name": "SESSION_WINDOW", "class_name": "SessionWindow" }
+  //   ]
+  // },
+  // "migrations": [
+  //   { "tag": "v1", "new_classes": ["SessionWindow"] }
+  // ],
+
   "observability": { "enabled": true }
 }

@@ -13,15 +13,29 @@
  * re-deriving the same playlist on the API process that also owns the
  * database connection pool.
  *
- * THE SHAPE. This Worker's route is the SAME path shape as the origin's
- * (`/api/voice/hls-playlist/:channelId/:startedAt(/:rung)?`) — deliberately,
- * because `LIVE_HLS_PLAYLIST_BASE_URL` on the server (`hls-egress.ts`) just
- * prepends this Worker's origin to that same path, so a viewer's client makes
- * the exact request it always made, against a different host. See
- * `docs/WATCH_PARTY.md` "Playlists at the edge".
+ * THE SHAPE. This Worker's route (`playlist-route.ts`) is the SAME path
+ * shape as the origin's (`/api/voice/hls-playlist/:channelId/:startedAt(/:rung)?`)
+ * — deliberately, because `LIVE_HLS_PLAYLIST_BASE_URL` on the server
+ * (`hls-egress.ts`) just prepends this Worker's origin to that same path, so
+ * a viewer's client makes the exact request it always made, against a
+ * different host. See `docs/WATCH_PARTY.md` "Playlists at the edge".
  *
- * TWO ROUTES, TWO RULES, because the two playlist bodies are not the same
- * kind of thing:
+ * THREE JOBS, THREE MODULES, kept apart on purpose (see
+ * `playlist-origin.ts`'s doc comment for why — the owner wants a watch party
+ * to keep playing when the API is down, which means the THIRD job below
+ * needs a second implementation later, and this file should not have to
+ * change when it arrives):
+ *
+ *  1. Is this even a playlist request, and for what — `playlist-route.ts`.
+ *  2. Is the caller allowed to see it — `hls-viewer-token.js`.
+ *  3. Where do the actual bytes come from — `playlist-origin.ts`. Today:
+ *     ask the API, same as always. This file's OWN job is what sits around
+ *     that: deciding whether a given request is even askABLE for (never the
+ *     session/master route — see below), sharing one answer across every
+ *     viewer who asks in the same window, and never caching a failure.
+ *
+ * TWO ROUTES, TWO CACHING RULES, because the two playlist bodies are not the
+ * same kind of thing:
  *
  *  - `/:channelId/:startedAt/:rung` — a RENDITION's media playlist. Its body
  *    depends on nothing but (channel, session, rung, time), never on who
@@ -62,6 +76,8 @@ import {
   describeHlsViewerToken,
   verifyHlsViewerToken,
 } from "./hls-viewer-token.js";
+import { parsePlaylistPath } from "./playlist-route.js";
+import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
 
@@ -77,11 +93,12 @@ export interface Env {
   HLS_VIEWER_TOKEN_SECRET?: string;
   /** Comma-separated allowlist. Unset: every origin is echoed back (see cors.ts). */
   CORS_ALLOWED_ORIGINS?: string;
+  // ALWAYS-ON (not yet built, see playlist-origin.ts and
+  // docs/plans/ALWAYS_ON.md task A1.x): a future R2-backed PlaylistOrigin
+  // would add its own bindings here (an R2Bucket, a DurableObjectNamespace).
+  // Nothing reads them yet — see the commented placeholders in
+  // wrangler.jsonc for why they are not declared until something does.
 }
-
-/** Same shape as `HLS_PLAYLIST_PATH` in `server/src/api/index.ts`. */
-const PLAYLIST_PATH =
-  /^\/api\/voice\/hls-playlist\/([^/]{1,64})\/(\d{1,20})(?:\/([A-Za-z0-9]{1,16}))?$/;
 
 /**
  * How long a rendition's playlist is shared across viewers. The egress
@@ -167,32 +184,6 @@ function statusForRejection(reason: string): number {
   return reason === "wrong-channel" || reason === "wrong-session" ? 403 : 401;
 }
 
-async function fetchWithTimeout(url: string, signalMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), signalMs);
-  try {
-    return await fetch(url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** The origin URL for one playlist request, same path shape, token attached. */
-function originUrl(
-  originBase: string,
-  channelId: string,
-  startedAt: string,
-  rung: string | undefined,
-  token: string,
-): string {
-  const path =
-    `/api/voice/hls-playlist/${encodeURIComponent(channelId)}/${startedAt}` +
-    (rung ? `/${encodeURIComponent(rung)}` : "");
-  const url = new URL(path, originBase);
-  url.searchParams.set(HLS_VIEWER_TOKEN_PARAM, token);
-  return url.toString();
-}
-
 /** The cache-key request for a rendition: path only, no query — the token never varies the body. */
 function cacheKeyRequest(request: Request): Request {
   const url = new URL(request.url);
@@ -202,8 +193,9 @@ function cacheKeyRequest(request: Request): Request {
 
 async function handlePlaylistRequest(
   request: Request,
-  env: Env,
+  origin: PlaylistOrigin,
   ctx: ExecutionContext,
+  env: Pick<Env, "HLS_VIEWER_TOKEN_SECRET">,
   channelId: string,
   startedAt: string,
   rung: string | undefined,
@@ -220,7 +212,7 @@ async function handlePlaylistRequest(
     return json(statusForRejection(reason), { error: "Unauthorized", reason });
   }
 
-  if (!env.ORIGIN_BASE) {
+  if (!origin.ready) {
     logEvent("hlsEdge.originNotConfigured", { channelId, rung: rung ?? null });
     return text(503, "Origin not configured");
   }
@@ -230,10 +222,11 @@ async function handlePlaylistRequest(
   if (!rung) {
     let originResponse: Response;
     try {
-      originResponse = await fetchWithTimeout(
-        originUrl(env.ORIGIN_BASE, channelId, startedAt, undefined, token!),
-        UPSTREAM_TIMEOUT_MS,
-      );
+      originResponse = await origin.fetchPlaylist({
+        channelId,
+        startedAt,
+        token: token!,
+      });
     } catch {
       logEvent("hlsEdge.originError", { channelId, rung: null });
       return text(502, "Origin fetch failed");
@@ -256,11 +249,15 @@ async function handlePlaylistRequest(
     return new Response(cached.body, { status: cached.status, headers });
   }
 
-  const upstreamUrl = originUrl(env.ORIGIN_BASE, channelId, startedAt, rung, token!);
   const startTime = Date.now();
   let originResponse: Response;
   try {
-    originResponse = await fetchWithTimeout(upstreamUrl, UPSTREAM_TIMEOUT_MS);
+    originResponse = await origin.fetchPlaylist({
+      channelId,
+      startedAt,
+      rung,
+      token: token!,
+    });
   } catch {
     logEvent("hlsEdge.originError", { channelId, rung });
     return text(502, "Origin fetch failed");
@@ -314,29 +311,27 @@ export default {
       return preflight;
     }
     if (request.method !== "GET" && request.method !== "HEAD") {
-      return withCors(
-        text(405, "Method not allowed"),
-        env,
-        request,
-      );
+      return withCors(text(405, "Method not allowed"), env, request);
     }
 
     const url = new URL(request.url);
-    const match = PLAYLIST_PATH.exec(url.pathname);
+    const match = parsePlaylistPath(url.pathname);
     if (!match) {
       return withCors(json(404, { error: "Not found" }), env, request);
     }
-    const channelId = match[1]!;
-    const startedAt = match[2]!;
-    const rung = match[3];
+
+    // Today's only `PlaylistOrigin`: ask the API. See `playlist-origin.ts`
+    // for the seam a future R2-backed implementation swaps in through.
+    const origin = new ApiPlaylistOrigin(env.ORIGIN_BASE, UPSTREAM_TIMEOUT_MS);
 
     const response = await handlePlaylistRequest(
       request,
-      env,
+      origin,
       ctx,
-      channelId,
-      startedAt,
-      rung,
+      env,
+      match.channelId,
+      match.startedAt,
+      match.rung,
     );
     return withCors(response, env, request);
   },

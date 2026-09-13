@@ -15,6 +15,29 @@ Not part of the pnpm workspace, the same way `tools/admin-dashboard` isn't
 (its own `package.json`, its own install, its own CI test step) — see that
 tool's README for why.
 
+## Module layout, and the seam for always-on
+
+The owner wants a watch party to keep playing when the API is down, not just
+faster while it's up — a different problem from the one this PR solves (this
+PR cuts *load* on the API; that one removes the *dependency* on it), but it
+lands on the same Worker, so the code is already split along that line:
+
+| Module | Job | Changes when always-on lands? |
+|---|---|---|
+| `src/hls-viewer-token.js` | Is the caller allowed to see this playlist | No — the token check is unrelated to where the bytes come from |
+| `src/playlist-route.ts` | Is this even a playlist request, and for what | No — the shape a viewer's client requests never changes |
+| `src/playlist-origin.ts` | Where the playlist's BYTES actually come from | **Yes** — gets a second implementation |
+| `src/index.ts` | Routing, the cache-or-forward decision, CORS, logging | No, or minimally — it is written against the `PlaylistOrigin` interface, not against "the API" |
+
+`playlist-origin.ts` today has exactly one implementation, `ApiPlaylistOrigin`
+(ask the API — this Worker still goes down with it). See that file's doc
+comment for the planned second implementation (R2 segment listings + a
+Durable Object per session remembering what it has seen, the edge-side
+version of `hls-live-window.ts`'s in-process history on the API) and
+`docs/plans/ALWAYS_ON.md` task A1.x for the plan itself — not built here.
+`wrangler.jsonc` has the R2 bucket and Durable Object bindings that work will
+need, commented out until code exists to read them.
+
 ## What it does
 
 For `GET /api/voice/hls-playlist/:channelId/:startedAt(/:rung)?`, the SAME

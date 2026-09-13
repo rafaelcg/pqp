@@ -89,3 +89,20 @@ viewers on every party from here on, reconnect storm or not.
 
 Each step stands alone and ships as its own PR. This document tracks order,
 not a single branch.
+
+## Next: serve from R2
+
+A separate, parallel line of work: the owner wants a watch party to keep
+playing when the API is down, not just faster while it is up. That is a
+different problem from this one (this PR cuts *load*; that one removes a
+*dependency*), but it lands on the same Worker, so `tools/hls-edge/` is
+already structured for it — the token check, the inbound path parsing and the
+"where do the bytes come from" step are three separate modules
+(`hls-viewer-token.js`, `playlist-route.ts`, `playlist-origin.ts`), and only
+the last one talks to the API today. A second implementation of that same
+interface, backed by R2 segment listings and a Durable Object per session
+remembering what it has seen, is what makes the edge itself the source of
+truth for a playlist instead of a cache in front of one. Not built in this
+PR — see `docs/plans/ALWAYS_ON.md` task A1.x for the plan, and the commented
+`r2_buckets` / `durable_objects` placeholders in `tools/hls-edge/wrangler.jsonc`
+for where it attaches.
