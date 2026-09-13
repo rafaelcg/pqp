@@ -259,15 +259,17 @@ describe("screenPermission", () => {
     }
   });
 
-  it("calls macOS denied and restricted blocked", () => {
-    assert.equal(screenPermission("darwin", "denied"), "blocked");
+  it("calls only macOS restricted blocked before listing", () => {
     assert.equal(screenPermission("darwin", "restricted"), "blocked");
   });
 
-  it("does not call not-determined blocked", () => {
-    // Refusing here means the macOS prompt is never shown, so permission can
-    // never be granted and the app is permanently stuck saying "go turn it on"
-    // about a switch that does not exist yet.
+  it("does not call denied or not-determined blocked", () => {
+    // Electron's screen preflight on macOS is a yes/no: a Mac that was never
+    // asked reports "denied". Refusing here means the macOS prompt is never
+    // shown, the app never appears under Privacy & Security, and the user is
+    // permanently told to "go turn it on" about a switch that does not exist.
+    // The caller lists first (which is what raises the prompt) and re-reads.
+    assert.equal(screenPermission("darwin", "denied"), "undetermined");
     assert.equal(screenPermission("darwin", "not-determined"), "undetermined");
   });
 
