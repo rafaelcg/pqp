@@ -4,6 +4,7 @@ import type { LiveHlsStream } from "@pqp/shared";
 import {
   streamAudioState,
   StreamMixControl,
+  StreamMixSummary,
   StreamQualityControl,
   WatchPartyTransmission,
 } from "./watch-party-transmission";
@@ -125,5 +126,20 @@ describe("StreamMixControl", () => {
     const html = renderToStaticMarkup(<StreamMixControl />);
     expect(html).toContain("watch-party-tx-mic-level");
     expect(html).toMatch(/watch-party-tx-mic-level[\s\S]*?width:\s*0%/);
+  });
+});
+
+/**
+ * The mixer's stand-in inside the transmission details (2026-09-13): the
+ * two levels as set, and the door to the dialog that owns the sliders.
+ */
+describe("StreamMixSummary", () => {
+  it("reads both levels and offers Ajustar, with no slider of its own", () => {
+    const html = renderToStaticMarkup(<StreamMixSummary onOpen={() => {}} />);
+    expect(html).toContain("watch-party-tx-mixer-summary");
+    expect(html).toContain("watch-party-tx-mixer-open");
+    expect(html).toContain("+6.0 dB");
+    expect(html).toContain("-3.1 dB");
+    expect(html).not.toContain("watch-party-tx-mic-gain-slider");
   });
 });

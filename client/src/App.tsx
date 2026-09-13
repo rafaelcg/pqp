@@ -5650,10 +5650,26 @@ function MainAppContent({
    * controls that cannot wait (which call, and the way out) and the user panel
    * stacks. Nothing is dropped that has no second home.
    */
+  /**
+   * NO CALL STRIP FOR A LIVE WATCH PARTY (2026-09-13, presenter-UI plan
+   * §6.3). Section 10 of the setup plan retired the generic strip for a
+   * watch party and the in-pane one obeyed; this one kept rendering on
+   * `voiceState.status` alone, so a presenter had a red "Sair da call" in
+   * the sidebar one click from Encerrar, plus a third Compartilhar tela
+   * and a camera the stream never carries. The party bar and the dock say
+   * everything this strip said, in the party's words. Keyed on the room
+   * the person is SEATED in, not the channel they are looking at: leaving
+   * the channel must not bring the strip back for a seat that is still a
+   * party seat.
+   */
+  const seatedInLiveParty =
+    voiceState.status !== "idle" &&
+    voiceState.voiceChannelId !== null &&
+    watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
   const sidebarFooter = (compact = false) => (
     <>
       <MusicMiniPlayer voiceState={voiceState} compact={compact} />
-      {voiceState.status !== "idle" && (
+      {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar
           channelName={
             voiceChannel?.name ??
