@@ -97,7 +97,20 @@ if [[ -f "$STAGING/compose.yaml" || -f "$STAGING/Caddyfile" || -f "$STAGING/pqp-
     echo "refusing staged config: /etc/pqp/deploy-hmac.key is not provisioned" >&2
     exit 1
   fi
-  VERIFIED="$(mktemp -d)"
+  # A bare `mktemp -d` honours $TMPDIR when set, and this process's
+  # environment is not something to trust: sudoers' default env_reset
+  # should already strip it before this script ever starts, but that is a
+  # sudo CONFIGURATION fact this file cannot see or enforce, and the whole
+  # point of the design above is to not depend on facts this file cannot
+  # verify for itself. A caller-controlled TMPDIR pointed at a directory
+  # pqp-deploy owns would let it repoint or replace VERIFIED's path after
+  # creation, reopening exactly the race the copy-into-VERIFIED step
+  # exists to close. So: fixed, hardcoded, root-only parent (/root is
+  # 0700 by definition on any normal install) with an explicit mktemp
+  # template under it, never the environment-dependent default location.
+  mkdir -p /root/.pqp-deploy-verify
+  chmod 0700 /root/.pqp-deploy-verify
+  VERIFIED="$(mktemp -d /root/.pqp-deploy-verify/XXXXXX)"
   for f in compose.yaml Caddyfile pqp-deploy.sh manifest.sha256 manifest.sig; do
     p="$STAGING/$f"
     if [[ -e "$p" || -L "$p" ]]; then
