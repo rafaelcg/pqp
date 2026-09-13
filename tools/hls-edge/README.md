@@ -100,16 +100,44 @@ way the API can, so it treats the whole route conservatively: always forward,
 never cache. This route is also fetched once per viewer join rather than
 polled, so the cost this Worker exists to cut was never on this path anyway.
 
-## What this Worker does NOT make faster
+## What this Worker does NOT make faster, and needs a sign-off
 
-A ban or a lost VIEW permission is enforced by `hls-revocation.ts`, an
-in-memory set that only exists on the API process. This Worker's cache widens
-the gap between "revoked" and "the next real check" from "per viewer's own
-2-4 s poll" to "per rung's `CACHE_TTL_SECONDS` cache window" — worse by a
-small constant factor, never unbounded, and never skipped: every cache MISS
-still asks the API, and the API still runs the check on that request. The
-token check that DOES run on every request here (signature, expiry, channel,
-session) is unrelated to revocation and is unaffected by caching at all.
+**A ban or a lost VIEW permission does not reliably cut a viewer off while
+this Worker's cache is warm, and that is a real, not a cosmetic, weakening of
+today's behavior.** `hls-revocation.ts` is an in-memory set that exists ONLY
+on the API process; this Worker never consults it and has no way to. Without
+caching, that gap is "the next request THIS SPECIFIC VIEWER makes" — a couple
+of seconds, per viewer, exactly as `hls-viewer-token.ts`'s own TTL comment on
+the API describes. WITH this Worker's shared cache, the gap is instead "how
+long the cache entry for that rung stays populated" — and a cache HIT is
+served to EVERY viewer holding a still-signature-valid token, revoked or not,
+without ever reaching the origin. Because ANY valid viewer's request keeps
+the entry warm, a popular rung during an active party can keep a banned or
+kicked viewer's playlist (and its segment URLs) flowing for as long as the
+party runs, not for one cache window. This is a direct, structural
+consequence of collapsing N viewers into one origin fetch: there is no way to
+keep that collapse and still re-check each individual viewer's standing on
+every request, because the second thing is exactly what the first thing
+removes.
+
+Nothing here is a bug to fix with more code in this file — it is a trade-off
+inherent to caching authorization-gated content at all, and it needs
+Rafael's explicit decision before `LIVE_HLS_PLAYLIST_BASE_URL` is set in
+production, not just a merge. Two directions worth naming, both out of scope
+for this PR: (1) a lightweight revocation signal pushed from the origin to
+the edge (a lease the edge checks against the verified `userId`, refreshed
+far more often than the playlist cache) — a natural fit for whatever channel
+the "always-on" R2 work ends up building between origin and edge anyway (see
+`playlist-origin.ts` and `docs/plans/ALWAYS_ON.md` task A1.x); or (2)
+accepting the exposure as bounded by "this party's duration" and relying on
+`VOICE_MESH_RESUME_REQUIRES_CAP`-style narrow mitigations elsewhere (kicking
+a banned user's WebSocket session immediately still stops them from doing
+anything else; only the HLS *viewing* of an already-open stream is affected).
+
+The token check that DOES run on every request here (signature, expiry,
+channel, session) is unrelated to revocation and is unaffected by caching at
+all — a stolen or expired token is refused exactly as reliably with this
+Worker in front as without it.
 
 ## Why a port, and why plain JS
 

@@ -191,26 +191,18 @@ describe("live HLS egress", () => {
     expect(internal.searchParams.get("X-Amz-Signature")).toBeTruthy();
   });
 
-  it("points a viewer at the edge host when LIVE_HLS_PLAYLIST_BASE_URL is set, same path", async () => {
+  it("never edge-prefixes the channel-wide stream itself, even when LIVE_HLS_PLAYLIST_BASE_URL is set", async () => {
+    // `viewerPlaylistUrl` builds the stream `liveHlsStreamFor` shares across
+    // every viewer -- the edge host goes on later, per recipient, in
+    // `stampViewerStream` (hls-viewer-token.ts), AFTER that function mints
+    // the `?t=` token. Prepending it here instead once made every viewer's
+    // URL absolute-but-tokenless: `stampViewerStream`'s "already absolute,
+    // leave it alone" check (correct for the raw-bucket case below) treated
+    // it the same way and skipped minting a token entirely, so the edge
+    // Worker 401'd "missing" on every request. See `hls-viewer-token.test.ts`
+    // for the per-recipient stamping this test deliberately does NOT cover.
     enableHls();
-    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg/";
-    setLiveHlsTestHooks({
-      egress: {
-        startTrackCompositeEgress: vi.fn(async () => ({ egressId: "EG_1" })),
-        stopEgress: vi.fn(),
-      },
-      findTracks: async () => ({ videoTrackId: "TR_V" }),
-    });
-    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
-    // Trailing slash on the env var is stripped, same as LIVE_HLS_PUBLIC_BASE_URL.
-    expect(stream?.hlsUrl).toBe(
-      `https://hls.pqp.gg/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}`,
-    );
-  });
-
-  it("falls back to the API-relative path when LIVE_HLS_PLAYLIST_BASE_URL is unset, as today", async () => {
-    enableHls();
-    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
     setLiveHlsTestHooks({
       egress: {
         startTrackCompositeEgress: vi.fn(async () => ({ egressId: "EG_1" })),

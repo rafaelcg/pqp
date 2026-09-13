@@ -93,7 +93,25 @@ export class ApiPlaylistOrigin implements PlaylistOrigin {
       // nothing); `Response.body` re-derives a fresh stream from the buffer
       // for whichever caller in index.ts passes it straight through.
       const body = await response.arrayBuffer();
-      return new Response(body, { status: response.status, headers: response.headers });
+      // `arrayBuffer()` transparently DECODES a standard `Content-Encoding`
+      // (gzip/br/deflate) the same way `.text()`/`.json()` would; `body`
+      // here is always the DECODED bytes. `response.headers`, though, still
+      // carries whatever the origin put on the wire -- `Content-Encoding`
+      // naming a codec the bytes are no longer in, and a `Content-Length`
+      // that describes the COMPRESSED transfer size, not this buffer's. The
+      // API itself sends neither today, but once `api.pqp.gg` sits behind
+      // Cloudflare's own proxy (the Vultr move, `docs/deploy-vultr.md`),
+      // automatic compression between this Worker and the origin is exactly
+      // the kind of thing that starts being true without anyone touching
+      // this file. Reusing those two headers unchanged would then hand a
+      // player `Content-Encoding: br` on a body that is already plain text.
+      // Dropping them and letting the runtime compute a correct
+      // `Content-Length` from the actual buffer is cheap insurance now and
+      // load-bearing later.
+      const headers = new Headers(response.headers);
+      headers.delete("Content-Encoding");
+      headers.delete("Content-Length");
+      return new Response(body, { status: response.status, headers });
     } finally {
       clearTimeout(timer);
     }

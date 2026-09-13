@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { LiveHlsStream } from "@pqp/shared";
+import { playlistBaseUrl } from "./hls-egress.js";
 
 /**
  * A signed query token for the playlist proxy (`hls-playlist-proxy.ts`).
@@ -279,9 +280,20 @@ export function describeHlsViewerToken(
 
 /**
  * The stream as one recipient should see it: the API-relative proxy path
- * with this user's token appended. A full public URL
+ * with this user's token appended, then (`LIVE_HLS_PLAYLIST_BASE_URL`) the
+ * edge host prepended, in that order. A full public URL
  * (`LIVE_HLS_SIGNED_URLS=false`) is passed through untouched, and so is the
  * stream when no key is configured (the Bearer path still works for hls.js).
+ *
+ * ORDER MATTERS. `stream.hlsUrl` arriving here is always the plain
+ * API-relative path (`viewerPlaylistUrl` in `hls-egress.ts` never applies the
+ * edge base itself, on purpose -- see that function's doc comment for the
+ * bug this fixed: an already-absolute, not-yet-tokened URL looks exactly
+ * like the `LIVE_HLS_SIGNED_URLS=false` case below and would have its token
+ * skipped entirely). So the check below is still a reliable way to tell "an
+ * already-public raw bucket URL" apart from "one of ours" -- it only has to
+ * stay true for what THIS function is handed, not for what a caller further
+ * down the line ends up with.
  */
 export function stampViewerStream(
   stream: LiveHlsStream,
@@ -300,7 +312,7 @@ export function stampViewerStream(
   }
   return {
     ...stream,
-    hlsUrl: appendToken(stream.hlsUrl, token),
+    hlsUrl: withEdgeBase(appendToken(stream.hlsUrl, token)),
     // THE SAME TOKEN, because it is the same capability: it names the user,
     // the channel and the session, and the camera's playlist is a rendition
     // OF that session (`<startedAt>-cam360p30`). Minting a second one would
@@ -308,7 +320,7 @@ export function stampViewerStream(
     // exactly the shape of the failure that stalled every web viewer once
     // already (CLAUDE.md pitfall 16).
     ...(stream.cameraHlsUrl && stream.cameraHlsUrl.startsWith("/")
-      ? { cameraHlsUrl: appendToken(stream.cameraHlsUrl, token) }
+      ? { cameraHlsUrl: withEdgeBase(appendToken(stream.cameraHlsUrl, token)) }
       : {}),
   };
 }
@@ -316,6 +328,18 @@ export function stampViewerStream(
 function appendToken(url: string, token: string): string {
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}${HLS_VIEWER_TOKEN_PARAM}=${token}`;
+}
+
+/**
+ * Prepends `LIVE_HLS_PLAYLIST_BASE_URL` (`playlistBaseUrl()` in
+ * `hls-egress.ts`) to an already-tokened, API-relative playlist path, or
+ * returns it unchanged when the flag is unset. The one and only place this
+ * repo turns a signed playlist path into an edge URL -- see this function's
+ * caller for why it has to happen here, after the token, and not earlier.
+ */
+function withEdgeBase(path: string): string {
+  const edge = playlistBaseUrl();
+  return edge ? `${edge}${path}` : path;
 }
 
 /** `/api/voice/hls-playlist/<channelId>/<startedAt>` -> channelId. */

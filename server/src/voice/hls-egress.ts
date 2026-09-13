@@ -464,26 +464,38 @@ function publicBaseUrl(): string | null {
 /**
  * `LIVE_HLS_PLAYLIST_BASE_URL`: where a viewer's playlist URLs point.
  *
- * Unset (every deployment today): `viewerPlaylistUrl` / `cameraPlaylistUrl`
- * hand out the API-relative path they always have, and hls.js/native players
- * poll it on the API process — see `docs/plans/RELOAD_STORM.md` for why that
- * does not scale past a few hundred concurrent viewers.
+ * Unset (every deployment today): a viewer's `hlsUrl` / `cameraHlsUrl` stay
+ * API-relative, and hls.js/native players poll it on the API process — see
+ * `docs/plans/RELOAD_STORM.md` for why that does not scale past a few
+ * hundred concurrent viewers.
  *
  * Set to an edge host (`tools/hls-edge/`, proposed `hls.pqp.gg`): the SAME
  * path, with this base prepended, so the request shape a client makes is
- * unchanged and only the host differs. This is safe to flip with no client
- * change because `resolveHlsUrl` in `client/src/lib/hls-playback.ts` already
- * passes an absolute URL through untouched (it exists to handle
+ * unchanged and only the host differs. Safe to flip with no client change
+ * because `resolveHlsUrl` in `client/src/lib/hls-playback.ts` already passes
+ * an absolute URL through untouched (it exists to handle
  * `LIVE_HLS_SIGNED_URLS=false`'s raw bucket URLs, which are absolute the same
  * way) and the master playlist's own rung URIs are written as absolute PATHS
  * (`buildMasterPlaylistFor` in `hls-playlist-proxy.ts`), which a player
- * resolves against whatever host actually served the master — the edge host,
- * once this is set — with no code path needing to know the base URL exists.
+ * resolves against whatever host actually served the master.
+ *
+ * ONLY APPLIED IN `stampViewerStream` (`hls-viewer-token.ts`), never here.
+ * `viewerPlaylistUrl` / `cameraPlaylistUrl` below build the CHANNEL-WIDE
+ * stream, shared by every viewer and never itself sent over the wire; the
+ * per-recipient `?t=` token is stamped later, and the edge host has to go on
+ * AFTER that stamping, not before. Prepending it here once produced a stream
+ * whose `hlsUrl` was already absolute by the time `stampViewerStream` saw
+ * it, which made that function's "already absolute -- a raw, unsigned bucket
+ * URL, leave it alone" check (correct for `LIVE_HLS_SIGNED_URLS=false`) treat
+ * an edge URL the same way and skip minting a token for it entirely: every
+ * viewer got a `?t=`-less URL and the edge Worker 401'd "missing" on every
+ * request. Caught in review before it shipped; `hls-viewer-token.test.ts`
+ * pins the fix.
  *
  * Only meaningful in signed mode; `LIVE_HLS_SIGNED_URLS=false` keeps handing
  * out the raw bucket URL regardless, same as today.
  */
-function playlistBaseUrl(): string | null {
+export function playlistBaseUrl(): string | null {
   const raw = process.env.LIVE_HLS_PLAYLIST_BASE_URL?.trim();
   if (!raw) {
     return null;
@@ -2696,17 +2708,22 @@ function viewerPlaylistUrl(channelId: string, startedAt: number): string {
   if (!hlsSignedUrlsEnabled()) {
     return rawPlaylistUrl(channelId, startedAt);
   }
-  const path = `/api/voice/hls-playlist/${channelId}/${startedAt}`;
-  const edge = playlistBaseUrl();
-  if (edge) {
-    // Absolute, at the edge host: see `playlistBaseUrl()`'s doc comment for
-    // why this needs no client change.
-    return `${edge}${path}`;
-  }
   // API-relative: the client prefixes this with its own API base URL and
   // (for hls.js) attaches its Bearer token via xhrSetup. See
   // `hls-playlist-proxy.ts` for the proxy that answers this route.
-  return path;
+  //
+  // NOT edge-prefixed here, even when `LIVE_HLS_PLAYLIST_BASE_URL` is set.
+  // This value is the CHANNEL-WIDE stream (`liveHlsStreamFor`), built once
+  // and shared by every viewer; the `?t=` token is stamped per RECIPIENT,
+  // later, by `stampViewerStream` in `hls-viewer-token.ts`, which is also
+  // where the edge host gets prepended -- AFTER the token, not before. A
+  // token-less absolute URL handed straight to the edge Worker would 401
+  // "missing" on every request: the Worker only ever reads `?t=`, and
+  // `stampViewerStream`'s own "is this already absolute" check (the one that
+  // correctly leaves a raw, unsigned bucket URL alone) would otherwise treat
+  // an edge-prefixed-but-unstamped URL the same way and skip minting a token
+  // for it entirely. See `stampViewerStream`'s doc comment.
+  return `/api/voice/hls-playlist/${channelId}/${startedAt}`;
 }
 
 /**
@@ -2724,9 +2741,8 @@ function cameraPlaylistUrl(channelId: string, startedAt: number): string {
   if (!hlsSignedUrlsEnabled()) {
     return rawPlaylistUrl(channelId, startedAt, CAMERA_RUNG_NAME);
   }
-  const path = `/api/voice/hls-playlist/${channelId}/${startedAt}/${CAMERA_RUNG_NAME}`;
-  const edge = playlistBaseUrl();
-  return edge ? `${edge}${path}` : path;
+  // Not edge-prefixed here either -- same reasoning as `viewerPlaylistUrl`.
+  return `/api/voice/hls-playlist/${channelId}/${startedAt}/${CAMERA_RUNG_NAME}`;
 }
 
 /** The same stream, now advertising a camera. */

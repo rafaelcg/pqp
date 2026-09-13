@@ -251,7 +251,10 @@ describe("the presenter's camera, beside the ladder", () => {
     expect(liveHlsActivity().cameraSessions).toBe(1);
   });
 
-  it("points the camera playlist at the edge host too, when LIVE_HLS_PLAYLIST_BASE_URL is set", async () => {
+  it("does not edge-prefix the channel-wide camera URL either, when LIVE_HLS_PLAYLIST_BASE_URL is set", async () => {
+    // Same reasoning as `hls-egress.test.ts`'s equivalent case: the edge host
+    // is applied per recipient in `stampViewerStream`, after the token, never
+    // here. See that file's test for the bug this pins.
     enableHls();
     process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
     const lk = fakeLiveKit();
@@ -263,10 +266,10 @@ describe("the presenter's camera, beside the ladder", () => {
     const stream = liveHlsStreamFor(CHANNEL);
 
     expect(stream?.hlsUrl).toBe(
-      `https://hls.pqp.gg/api/voice/hls-playlist/${CHANNEL}/${started?.startedAt}`,
+      `/api/voice/hls-playlist/${CHANNEL}/${started?.startedAt}`,
     );
     expect(stream?.cameraHlsUrl).toBe(
-      `https://hls.pqp.gg/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}/${CAMERA_RUNG_NAME}`,
+      `/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}/${CAMERA_RUNG_NAME}`,
     );
   });
 

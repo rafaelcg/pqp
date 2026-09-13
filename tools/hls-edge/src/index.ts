@@ -57,18 +57,30 @@
  *    caller's own token, never cached. It is also fetched once per viewer
  *    join, not polled, so the cost this Worker exists to cut was never here.
  *
- * WHAT STAYS AUTHORITATIVE. The token check runs in THIS Worker, on every
+ * WHAT STAYS AUTHORITATIVE, AND THE ONE THING THAT DOES NOT. The token check
+ * (signature, expiry, channel, session) runs in THIS Worker, on every
  * request, using the same HMAC scheme as `hls-viewer-token.ts`
  * (`./hls-viewer-token.js`) — an invalid or expired token never reaches the
- * cache or the origin. What this Worker's cache does NOT know about is a ban
- * or a lost VIEW permission recorded after a token was minted
- * (`hls-revocation.ts`, origin-only, in-memory): that is bounded by how often
- * a REAL origin fetch happens for a given rung, which with this Worker in
- * front is once per `CACHE_TTL_SECONDS`, not once per viewer. That is the
- * same "worst case is one refresh interval" shape the origin's own comment on
- * `hls-viewer-token.ts` describes for its TTL — this Worker widens the
- * interval from "per viewer's own poll" to "per cache window", never removes
- * the check.
+ * cache or the origin.
+ *
+ * REVOCATION IS THE EXCEPTION, AND IT IS WEAKER THAN A SINGLE VIEWER'S OWN
+ * POLL INTERVAL WOULD SUGGEST. A ban or a lost VIEW permission is enforced by
+ * `hls-revocation.ts`, an in-memory set that exists ONLY on the API process —
+ * this Worker has no way to consult it, and never tries to. Without the
+ * cache, that gap is bounded by "the next request THIS VIEWER makes", a
+ * couple of seconds. WITH the cache, it is bounded by how long the SHARED
+ * cache entry for that rung stays populated, which is refreshed by ANY valid
+ * viewer's request, not particularly the revoked one's. During an active
+ * party on a popular rung, that is effectively "as long as the party runs":
+ * a banned or kicked viewer can keep receiving a live playlist and its
+ * segment URLs for as long as other viewers keep the cache warm, because a
+ * cache HIT never reaches the origin at all. This is a real, deliberate
+ * trade-off of collapsing N viewers into one origin fetch — there is no way
+ * to keep that collapse AND re-check each individual viewer's standing on
+ * every request, since the second thing is what the first thing removes.
+ * Flagged for explicit sign-off before this ships to production; see
+ * `docs/plans/RELOAD_STORM.md` and `README.md` "What this Worker does NOT
+ * make faster".
  */
 
 import {
@@ -262,7 +274,7 @@ async function handlePlaylistRequest(
 
   const cache = caches.default;
   const cacheKey = cacheKeyRequest(request);
-  const cached = await cache.match(cacheKey);
+  const cached = await safeCacheMatch(cache, cacheKey);
   if (cached) {
     noteCacheHit(channelId, rung);
     const headers = new Headers(cached.headers);
@@ -270,10 +282,9 @@ async function handlePlaylistRequest(
     return new Response(cached.body, { status: cached.status, headers });
   }
 
-  const startTime = Date.now();
-  let originResponse: Response;
+  let fetched: FetchedPlaylist;
   try {
-    originResponse = await origin.fetchPlaylist({
+    fetched = await fetchRenditionCoalesced(cacheKey.url, origin, {
       channelId,
       startedAt,
       rung,
@@ -284,25 +295,21 @@ async function handlePlaylistRequest(
     return text(502, "Origin fetch failed");
   }
 
-  if (!originResponse.ok) {
+  if (fetched.status < 200 || fetched.status >= 300) {
     // Never cache non-200 — a stream that has not started yet or has just
     // ended must not get frozen into "not found" for every viewer for the
     // rest of the cache window.
     logEvent("hlsEdge.originRejected", {
       channelId,
       rung,
-      status: originResponse.status,
+      status: fetched.status,
     });
-    const headers = new Headers(originResponse.headers);
+    const headers = new Headers(fetched.headers);
     headers.set("X-HLS-Edge-Cache", "SKIP");
-    return new Response(originResponse.body, {
-      status: originResponse.status,
-      headers,
-    });
+    return new Response(fetched.body, { status: fetched.status, headers });
   }
 
-  const body = await originResponse.arrayBuffer();
-  const headers = new Headers(originResponse.headers);
+  const headers = new Headers(fetched.headers);
   // The origin sets `private, no-store` (it has to: the same URL is also
   // Bearer-reachable, per-viewer). This Worker's cache is the one place that
   // is deliberately NOT per-viewer — the body is identical for every valid
@@ -310,19 +317,102 @@ async function handlePlaylistRequest(
   // purpose rather than failing to cache at all.
   headers.set("Cache-Control", `public, max-age=${CACHE_TTL_SECONDS}`);
 
-  const toCache = new Response(body, { status: 200, headers });
-  ctx.waitUntil(cache.put(cacheKey, toCache.clone()));
+  const toCache = new Response(fetched.body, { status: 200, headers });
+  ctx.waitUntil(safeCachePut(cache, cacheKey, toCache.clone()));
 
-  logEvent("hlsEdge.originFetch", {
-    channelId,
-    rung,
-    bytes: body.byteLength,
-    durationMs: Date.now() - startTime,
-  });
-
-  const response = new Response(body, { status: 200, headers: new Headers(headers) });
+  const response = new Response(fetched.body, { status: 200, headers: new Headers(headers) });
   response.headers.set("X-HLS-Edge-Cache", "MISS");
   return response;
+}
+
+/**
+ * `cache.match` failing (a transient Cache API error) must read as a MISS,
+ * not as a thrown error that fails the whole request — this cache is an
+ * optimization, and losing it for one request is a much smaller problem than
+ * turning a Cache API hiccup into a 500 for every viewer of a rung.
+ */
+async function safeCacheMatch(cache: Cache, key: Request): Promise<Response | undefined> {
+  try {
+    return await cache.match(key);
+  } catch {
+    logEvent("hlsEdge.cacheReadError", {});
+    return undefined;
+  }
+}
+
+/**
+ * Same reasoning in the other direction: a failed `cache.put` must not
+ * become an unhandled rejection under `ctx.waitUntil` (which Cloudflare
+ * treats as a Worker error) when the response it was populating the cache
+ * FOR has already been served successfully. Losing one write just means the
+ * next request repeats the origin fetch this write would have saved it.
+ */
+async function safeCachePut(cache: Cache, key: Request, response: Response): Promise<void> {
+  try {
+    await cache.put(key, response);
+  } catch {
+    logEvent("hlsEdge.cacheWriteError", {});
+  }
+}
+
+interface FetchedPlaylist {
+  status: number;
+  headers: Headers;
+  body: ArrayBuffer;
+}
+
+/**
+ * One rendition's origin fetch, shared by every concurrent caller asking for
+ * the SAME cache key.
+ *
+ * WHY THIS EXISTS. When a rendition's cached entry expires, every viewer
+ * polling that rung can observe `cache.match` as empty before the FIRST of
+ * them finishes populating it — at party scale that is hundreds of
+ * synchronized viewers each starting their own origin fetch in the same few
+ * milliseconds, which is exactly the fan-in this Worker exists to collapse.
+ * Coalescing concurrent misses onto one in-flight promise (keyed by the same
+ * cache key `index.ts` already uses, never the token) turns that burst back
+ * into one real fetch; only THIS isolate's concurrent requests share it,
+ * since Cloudflare can and does run more than one isolate for a busy Worker,
+ * but that is still a real reduction and it composes with, rather than
+ * replaces, the cache above.
+ *
+ * Returns a plain buffered record rather than a `Response` because a
+ * `Response` body can only be read once: every awaiter needs its own copy of
+ * the bytes to build its own reply and, separately, its own cache-store
+ * candidate.
+ */
+const inFlightRenditionFetches = new Map<string, Promise<FetchedPlaylist>>();
+
+async function fetchRenditionCoalesced(
+  cacheKeyUrl: string,
+  origin: PlaylistOrigin,
+  req: { channelId: string; startedAt: string; rung: string; token: string },
+): Promise<FetchedPlaylist> {
+  const existing = inFlightRenditionFetches.get(cacheKeyUrl);
+  if (existing) {
+    return existing;
+  }
+  const startTime = Date.now();
+  const promise = (async (): Promise<FetchedPlaylist> => {
+    const response = await origin.fetchPlaylist(req);
+    const body = await response.arrayBuffer();
+    if (response.ok) {
+      logEvent("hlsEdge.originFetch", {
+        channelId: req.channelId,
+        rung: req.rung,
+        bytes: body.byteLength,
+        durationMs: Date.now() - startTime,
+      });
+    }
+    return { status: response.status, headers: response.headers, body };
+  })();
+  inFlightRenditionFetches.set(cacheKeyUrl, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlightRenditionFetches.delete(cacheKeyUrl);
+  }
 }
 
 export default {

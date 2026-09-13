@@ -18,6 +18,7 @@ describe("HLS viewer token", () => {
   afterEach(() => {
     delete process.env.CLERK_SECRET_KEY;
     delete process.env.DEV_AUTH_BYPASS;
+    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
   });
 
   it("round-trips the user for the same channel and session", () => {
@@ -116,6 +117,58 @@ describe("HLS viewer token", () => {
         startedAt: STARTED_AT,
       }),
     ).toEqual({ userId: USER, issuedAt: expect.any(Number) });
+  });
+
+  it("stamps the token BEFORE prepending the edge host, so the edge Worker gets a real token", () => {
+    // THE BUG THIS PINS. An earlier version applied `LIVE_HLS_PLAYLIST_BASE_URL`
+    // inside `viewerPlaylistUrl` (hls-egress.ts), before this function ever
+    // saw the stream. That made `stream.hlsUrl` arrive here already absolute
+    // (`https://hls.pqp.gg/...`), which is indistinguishable from the
+    // `LIVE_HLS_SIGNED_URLS=false` raw-bucket case just below -- so
+    // `stampViewerStream` took the "already public, leave it alone" branch
+    // and handed out a `?t=`-less URL. Every request to the edge Worker then
+    // 401'd "missing". The edge host now goes on HERE, after minting, so the
+    // "is this already absolute" check only ever sees a genuinely public URL.
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+    const stream = {
+      hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}`,
+      cameraHlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/cam360p30`,
+      startedAt: STARTED_AT,
+      presenterPeerId: "peer-1",
+      delaySeconds: 10,
+    };
+    const stamped = stampViewerStream(stream, USER);
+    expect(stamped.hlsUrl.startsWith("https://hls.pqp.gg/api/voice/hls-playlist/")).toBe(
+      true,
+    );
+    const film = new URL(stamped.hlsUrl);
+    const camera = new URL(stamped.cameraHlsUrl!);
+    expect(film.host).toBe("hls.pqp.gg");
+    expect(film.pathname).toBe(stream.hlsUrl);
+    expect(camera.host).toBe("hls.pqp.gg");
+    expect(camera.pathname).toBe(stream.cameraHlsUrl);
+    // The token verifies against the ORIGINAL channel/session, same as an
+    // API-relative stamp -- the edge host is cosmetic to the capability.
+    expect(
+      verifyHlsViewerToken(film.searchParams.get("t"), {
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toEqual({ userId: USER, issuedAt: expect.any(Number) });
+    expect(camera.searchParams.get("t")).toBe(film.searchParams.get("t"));
+  });
+
+  it("strips a trailing slash from LIVE_HLS_PLAYLIST_BASE_URL, same as the public base URL", () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg/";
+    const stream = {
+      hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}`,
+      startedAt: STARTED_AT,
+      presenterPeerId: "peer-1",
+      delaySeconds: 10,
+    };
+    const stamped = stampViewerStream(stream, USER);
+    expect(stamped.hlsUrl.startsWith("https://hls.pqp.gg//")).toBe(false);
+    expect(stamped.hlsUrl.startsWith(`https://hls.pqp.gg${stream.hlsUrl}`)).toBe(true);
   });
 
   it("leaves a stream with no camera exactly as it was", () => {
