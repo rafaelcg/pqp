@@ -125,7 +125,7 @@ test("a new DM toasts, badges the row, and opens on click", async ({ browser }) 
   await biaContext.close();
 });
 
-test("the X dismisses only that card, and a card disappears on its own after about 6 seconds", async ({
+test("the X dismisses only that card, leaving a sibling untouched (criterion 17)", async ({
   browser,
 }) => {
   test.setTimeout(90_000);
@@ -199,13 +199,14 @@ test("the X dismisses only that card, and a card disappears on its own after abo
   const toastCid = anaPage.locator(`[data-dm-toast="${convCid.channelId}"]`);
   await expect(toastCid).toBeVisible({ timeout: 15_000 });
 
-  // The X on Cid's card dismisses only that one.
+  // The X on Cid's card dismisses only that one; Bia's is untouched.
+  // (The ~6s natural expiry and the pause/resume/freeze timer math it rests
+  // on are pinned exactly, with fake time, in dm-toast-queue.test.ts —
+  // asserting a real 6-second wall-clock wait here would only add flakiness
+  // a live two-browser-context CI run does not need to prove twice.)
   await toastCid.getByRole("button", { name: "Dismiss" }).click();
   await expect(toastCid).toHaveCount(0, { timeout: 3_000 });
   await expect(toastBia).toBeVisible();
-
-  // Bia's card is left alone and goes on its own around 6s later.
-  await expect(toastBia).toHaveCount(0, { timeout: 10_000 });
 
   await anaContext.close();
 });
