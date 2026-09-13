@@ -22,8 +22,6 @@ Web, Safari do iPhone e app do iPhone. No app, o celular inteiro vira tela cheia
 
 ## Quem assiste sabe o que tá vendo
 
-Selo fixo no player: **Ao vivo · ~Xs de atraso**. É o atraso normal da transmissão, todo mundo vê a mesma coisa junto.
-
 A tela de espera agora diz o motivo: reconectando, reiniciando (com contagem) ou o host ainda não compartilhou nada.
 
 Sala com mais de 10 pessoas silencia os sons de entrada e saída sozinha. Tem um botão pra trazer de volta.
