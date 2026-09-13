@@ -90,6 +90,38 @@ export function collectScreenTiles(args: {
   });
 }
 
+/**
+ * Which tiles are actually allowed to play over HLS instead of WebRTC.
+ *
+ * Kept pure and exported so the rule pins without mounting `HlsWatchPlayer`
+ * or its chrome: `CallStage` (`call-stage.tsx`) filters `hlsUrl` down to
+ * `null` for two independent reasons, and every one of the delay badge, the
+ * viewer pill, the quality menu and the holding screen lives *inside*
+ * `HlsWatchPlayer` — so a tile this returns with `hlsUrl: null` is a tile
+ * whose chrome cannot mount at all, because nothing else in the grid ever
+ * renders that component.
+ *
+ * 1. `readyHlsUrls` — the playlist has to be a live window, not a 404 or the
+ *    previous share's ENDLIST (a black video is not a watch party).
+ * 2. `watchPartyChrome` — once this account holds a seat in the room this
+ *    HLS egress belongs to, PR 551's rule applies: the SFU screen share is
+ *    the one and only picture, whoever is presenting. Cinema mode already
+ *    refuses itself in that case (`shouldShowCinema`'s `isWatchParty` gate);
+ *    this is the same rule for the ordinary grid, which carried `hlsUrl` on
+ *    a peer's tile regardless of anyone's seat until this function existed.
+ */
+export function resolveScreenTileSources<T extends { hlsUrl?: string | null }>(
+  tiles: T[],
+  readyHlsUrls: ReadonlySet<string>,
+  watchPartyChrome: boolean,
+): T[] {
+  return tiles.map((tile) =>
+    tile.hlsUrl && !watchPartyChrome && readyHlsUrls.has(tile.hlsUrl)
+      ? tile
+      : { ...tile, hlsUrl: null },
+  );
+}
+
 function ThumbVideo({ stream }: { stream: MediaStream | null }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {

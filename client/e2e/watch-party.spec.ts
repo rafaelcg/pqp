@@ -707,6 +707,22 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     // says which control came back rather than only that the stage did.
     await expect(viewer.getByTestId("cinema-stage-join")).toHaveCount(0);
 
+    // 2026-09-13, the SAME DAY as the fix above: the owner took the seat in
+    // his OWN party (host, already sharing) and got a black rectangle with
+    // the delay badge, the viewer pill and the one-time explainer piled on
+    // top of each other — the chrome `HlsWatchPlayer` carries, left mounted
+    // with nothing under it because a peer's grid TILE (not just the cinema
+    // surface above) could still carry an HLS source regardless of anyone's
+    // seat. `resolveScreenTileSources` (`screen-stage.tsx`) is the fix, and
+    // like `cinemaTile` above, CI cannot make a real one of these tiles
+    // exist (no LiveKit, no egress, nobody actually publishing); the pixel
+    // rule is pinned at the unit level in `screen-stage.test.ts`. What this
+    // asserts is the same outer contract: none of the chrome that only ever
+    // ships inside `HlsWatchPlayer` is on the stage once seated, whatever
+    // the roster looks like.
+    await expect(viewer.getByTestId("hls-delay-badge")).toHaveCount(0);
+    await expect(viewer.getByTestId("hls-delay-explainer")).toHaveCount(0);
+
     // The seat's exit is on the party bar, in the party's words; the call
     // strip and its Leave are not drawn in a watch party channel.
     await expect(viewer.getByTestId("call-stage-collapsed")).toHaveCount(0);
@@ -1489,11 +1505,13 @@ test("a viewer can tell they are watching, and can stop", async ({
     // implementation (a voice room with an HLS audience attached) and frames
     // the thing everybody came for as an abstention. Rafael: "how's that even
     // a thing in watch party lol". A playing film says they are watching; the
-    // row says the two things it cannot: how many people, and how far behind.
+    // row says the one thing it cannot: how many people. The delay figure
+    // that used to sit beside it is gone (2026-09-13): it printed a constant
+    // off the wire config rather than the stream's actual distance from
+    // live, which read as broken more often than informative.
     const state = viewer.getByTestId("watch-stage-state");
     await expect(state).toBeVisible({ timeout: 20_000 });
     await expect(state).toContainText("watching");
-    await expect(viewer.getByTestId("watch-stage")).toContainText("delay");
     await expect(viewer.getByText("without joining the call")).toHaveCount(0);
 
     // And the way out is beside the statement, which is honest about what

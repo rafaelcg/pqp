@@ -33,7 +33,6 @@ describe("WatchStage", () => {
     expect(html).toContain("Join the call");
     expect(html).toContain("12 people watching");
     expect(html).toContain('data-testid="watch-stage-live"');
-    expect(html).toContain("~10s delay");
     expect(html).toContain("<video");
   });
 
@@ -101,13 +100,15 @@ describe("WatchStage draws only the controls it was given", () => {
      * that even a thing in watch party lol". It described the implementation,
      * a voice room with an HLS audience attached, and framed the thing
      * everybody came for as an abstention. A playing film is evidence enough;
-     * what is left is the count and the delay, neither of which is derivable
-     * from looking.
+     * what is left is the count, which is not derivable from looking. The
+     * delay figure that used to sit beside it is gone entirely (2026-09-13):
+     * it was a constant read off the wire config rather than the stream's
+     * actual distance from live, which read as broken more often than it
+     * read as informative.
      */
     const html = render({ delaySeconds: 8, onJoin: () => {} });
     expect(html).not.toContain("without joining");
     expect(html).toContain("3 people watching");
-    expect(html).toContain("~8s delay");
   });
 
   it("offers a way to stop only when the caller knows where to go", () => {
