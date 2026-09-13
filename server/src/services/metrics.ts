@@ -165,9 +165,14 @@ export interface AdminMetrics {
    * for this to see it. `byRoute` breaks the total down by the HTTP route
    * the query happened inside (`GET /api/servers/:serverId/members`, the
    * path template, never an interpolated id), via an AsyncLocalStorage
-   * context `handleApi` sets once per request (`lib/route-context.ts`); a
-   * query issued from a WS handler, a cold job, or anything at boot has no
-   * route and is counted under `"other"`. Added alongside the 2026-09-13
+   * context `handleApi` sets once per request (`lib/route-context.ts`). Two
+   * reserved labels stand outside the route table: `"auth"` is Bearer
+   * resolution and the age-gate/timeout gates, which run before any route
+   * has matched and are shared across every request rather than belonging
+   * to whichever endpoint follows — folding them into `"other"` would have
+   * hidden a real cost center (53k auth-resolution writes alone) behind the
+   * same label used for background work; `"other"` itself is left for a WS
+   * handler, a cold job, or anything at boot. Added alongside the 2026-09-13
    * Vultr cutover cache work (member list, auth-write skip, webhook poll
    * backoff, per-request permission caches) specifically so the drop from
    * that work is a number on this endpoint, not a guess from query-log

@@ -20,7 +20,11 @@ import { pgSslConfig } from "../db.js";
  * `OUTGOING_WEBHOOK_POLL_MAX_MS`. A dedicated Postgres LISTEN connection
  * wakes the poller immediately on a NOTIFY from *any* process (including a
  * separate worker) and resets the backoff, rather than leaving that process
- * to wait out whatever its current idle interval happens to be.
+ * to wait out whatever its current idle interval happens to be. A NOTIFY
+ * that lands while a tick is already running is not dropped: it sets a
+ * pending-wake flag that forces an immediate re-tick at the fast interval
+ * once the in-flight one finishes, because that tick's own claim query may
+ * already have run before the row the NOTIFY is about was committed.
  *
  * NOT THE CLUSTER BUS. `outgoing-webhooks.ts` already says why delivery
  * itself lives in Postgres rather than the cluster bus ("CLUSTER_BUS is the
@@ -35,6 +39,27 @@ import { pgSslConfig } from "../db.js";
  * `outgoing-webhooks.ts`); this module only changes how often the *idle*
  * outbox gets polled between real events, never how fast a real enqueue is
  * served.
+ *
+ * ONE ACCEPTED GAP. A row becoming due for RETRY (its backoff elapsing) or a
+ * `delivering` row's lease expiring emits no NOTIFY — only a fresh enqueue
+ * does — so if either happens right after an empty tick, this waits out the
+ * rest of that tick's backoff window (up to 30s) rather than firing right on
+ * the deadline. This is the same 30s ceiling the task this module was built
+ * for explicitly asked for ("backing off to 30s when idle"); a deadline-aware
+ * timer that schedules itself against the next row's actual due time would
+ * close it, and is deliberately left for a follow-up rather than folded in
+ * here.
+ *
+ * STATE IDENTITY. Every async function below takes the specific
+ * `PollerState` it started with as a parameter and checks `isActive`
+ * (identity, not just `.stopped`) before touching anything mutable. A bare
+ * `!state.stopped` check on the shared module-level `state` variable is not
+ * enough: `stop()` followed by a fresh `start()` while an old tick or LISTEN
+ * connect was still in flight would let that old continuation run its
+ * checks against the NEW poller's (unstopped) state and mutate it — doubling
+ * its interval, replacing its `pg.Client` without closing the old one, or
+ * scheduling a second concurrent tick loop. Comparing against the captured
+ * instance closes that window regardless of how the two overlap in time.
  */
 
 export const OUTGOING_WEBHOOK_POLL_MIN_MS = 2_000;
@@ -56,6 +81,9 @@ interface PollerState {
   intervalMs: number;
   stopped: boolean;
   ticking: boolean;
+  /** Set when a NOTIFY (or another wake) arrives while `ticking` is true —
+   *  see the module comment's "WHAT THIS DOES" paragraph. */
+  wakeRequested: boolean;
   listenClient: pg.Client | null;
   listenReconnectMs: number;
   listenReconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -63,39 +91,54 @@ interface PollerState {
 
 let state: PollerState | null = null;
 
-function scheduleTick(): void {
-  if (!state || state.stopped) {
-    return;
-  }
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
-  const timer = setTimeout(() => void runTick(), state.intervalMs);
-  timer.unref?.();
-  state.timer = timer;
+/** True only for the specific instance that is still the live, running
+ *  poller — see the module comment's "STATE IDENTITY" paragraph. */
+function isActive(s: PollerState): boolean {
+  return state === s && !s.stopped;
 }
 
-async function runTick(): Promise<void> {
-  if (!state || state.stopped) {
+function scheduleTick(s: PollerState): void {
+  if (!isActive(s)) {
     return;
   }
-  state.timer = null;
-  state.ticking = true;
+  if (s.timer) {
+    clearTimeout(s.timer);
+  }
+  const timer = setTimeout(() => void runTick(s), s.intervalMs);
+  timer.unref?.();
+  s.timer = timer;
+}
+
+async function runTick(s: PollerState): Promise<void> {
+  if (!isActive(s)) {
+    return;
+  }
+  s.timer = null;
+  s.ticking = true;
   let delivered = 0;
   try {
-    delivered = await state.deliver();
+    delivered = await s.deliver();
   } catch (error) {
     console.error("[outgoing-webhooks] poll failed:", error);
   }
-  if (!state || state.stopped) {
+  if (!isActive(s)) {
     return;
   }
-  state.ticking = false;
-  state.intervalMs =
+  s.ticking = false;
+  if (s.wakeRequested) {
+    // A wake arrived mid-tick: the claim query above may have run before
+    // the row it is about was committed, so treat this exactly like a fresh
+    // wake rather than trusting this tick's (possibly stale) `delivered`.
+    s.wakeRequested = false;
+    s.intervalMs = OUTGOING_WEBHOOK_POLL_MIN_MS;
+    scheduleTick(s);
+    return;
+  }
+  s.intervalMs =
     delivered > 0
       ? OUTGOING_WEBHOOK_POLL_MIN_MS
-      : Math.min(state.intervalMs * BACKOFF_MULTIPLIER, OUTGOING_WEBHOOK_POLL_MAX_MS);
-  scheduleTick();
+      : Math.min(s.intervalMs * BACKOFF_MULTIPLIER, OUTGOING_WEBHOOK_POLL_MAX_MS);
+  scheduleTick(s);
 }
 
 /**
@@ -103,56 +146,58 @@ async function runTick(): Promise<void> {
  * the poller: run a tick immediately, ignoring however long is left on the
  * current wait, and reset the backoff to the fast interval so a burst of
  * enqueues keeps ticking fast rather than backing off again on the very
- * next — now empty — poll.
+ * next — now empty — poll. Arriving mid-tick, it is recorded rather than
+ * dropped (see `wakeRequested` above).
  */
-function wake(): void {
-  if (!state || state.stopped || state.ticking) {
+function wake(s: PollerState): void {
+  if (!isActive(s)) {
     return;
   }
-  state.intervalMs = OUTGOING_WEBHOOK_POLL_MIN_MS;
-  if (state.timer) {
-    clearTimeout(state.timer);
-    state.timer = null;
+  if (s.ticking) {
+    s.wakeRequested = true;
+    return;
   }
-  void runTick();
+  s.intervalMs = OUTGOING_WEBHOOK_POLL_MIN_MS;
+  if (s.timer) {
+    clearTimeout(s.timer);
+    s.timer = null;
+  }
+  void runTick(s);
 }
 
-function teardownListenClient(): void {
-  if (!state?.listenClient) {
+function teardownListenClient(s: PollerState): void {
+  if (!s.listenClient) {
     return;
   }
-  const client = state.listenClient;
-  state.listenClient = null;
+  const client = s.listenClient;
+  s.listenClient = null;
   client.removeAllListeners();
   void client.end().catch(() => {});
 }
 
-function scheduleListenReconnect(): void {
-  if (!state || state.stopped) {
+function scheduleListenReconnect(s: PollerState): void {
+  if (!isActive(s)) {
     return;
   }
-  teardownListenClient();
-  if (state.listenReconnectTimer) {
+  teardownListenClient(s);
+  if (s.listenReconnectTimer) {
     return;
   }
-  const wait = state.listenReconnectMs;
-  state.listenReconnectMs = Math.min(
-    state.listenReconnectMs * 2,
-    LISTEN_RECONNECT_MAX_MS,
-  );
+  const wait = s.listenReconnectMs;
+  s.listenReconnectMs = Math.min(s.listenReconnectMs * 2, LISTEN_RECONNECT_MAX_MS);
   const timer = setTimeout(() => {
-    if (!state) {
+    if (!isActive(s)) {
       return;
     }
-    state.listenReconnectTimer = null;
-    void connectListener();
+    s.listenReconnectTimer = null;
+    void connectListener(s);
   }, wait);
   timer.unref?.();
-  state.listenReconnectTimer = timer;
+  s.listenReconnectTimer = timer;
 }
 
-async function connectListener(): Promise<void> {
-  if (!state || state.stopped) {
+async function connectListener(s: PollerState): Promise<void> {
+  if (!isActive(s)) {
     return;
   }
   const connectionString = process.env.DATABASE_URL;
@@ -165,7 +210,7 @@ async function connectListener(): Promise<void> {
   const client = new pg.Client({ connectionString, ...pgSslConfig() });
   client.on("error", (error) => {
     console.error("[outgoing-webhooks] listen connection error:", error);
-    scheduleListenReconnect();
+    scheduleListenReconnect(s);
   });
   try {
     await client.connect();
@@ -173,20 +218,23 @@ async function connectListener(): Promise<void> {
   } catch (error) {
     console.error("[outgoing-webhooks] listen connect failed:", error);
     await client.end().catch(() => {});
-    scheduleListenReconnect();
+    scheduleListenReconnect(s);
     return;
   }
   client.on("notification", (msg) => {
     if (msg.channel === OUTGOING_WEBHOOK_NOTIFY_CHANNEL) {
-      wake();
+      wake(s);
     }
   });
-  if (!state || state.stopped) {
+  if (!isActive(s)) {
+    // Stopped (or replaced by a newer poller) while `connect`/`LISTEN` was
+    // in flight: this client belongs to no one and must be closed, not
+    // handed to `s` or left to leak.
     await client.end().catch(() => {});
     return;
   }
-  state.listenClient = client;
-  state.listenReconnectMs = LISTEN_RECONNECT_MIN_MS;
+  s.listenClient = client;
+  s.listenReconnectMs = LISTEN_RECONNECT_MIN_MS;
 }
 
 /**
@@ -200,18 +248,20 @@ export function startOutgoingWebhookPoller(deliver: DeliverFn): {
   if (state && !state.stopped) {
     return { stop: stopOutgoingWebhookPoller };
   }
-  state = {
+  const s: PollerState = {
     deliver,
     timer: null,
     intervalMs: OUTGOING_WEBHOOK_POLL_MIN_MS,
     stopped: false,
     ticking: false,
+    wakeRequested: false,
     listenClient: null,
     listenReconnectMs: LISTEN_RECONNECT_MIN_MS,
     listenReconnectTimer: null,
   };
-  scheduleTick();
-  void connectListener();
+  state = s;
+  scheduleTick(s);
+  void connectListener(s);
   return { stop: stopOutgoingWebhookPoller };
 }
 
@@ -219,15 +269,20 @@ export function stopOutgoingWebhookPoller(): void {
   if (!state) {
     return;
   }
-  state.stopped = true;
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
-  if (state.listenReconnectTimer) {
-    clearTimeout(state.listenReconnectTimer);
-  }
-  teardownListenClient();
+  const s = state;
+  s.stopped = true;
+  // Cleared before teardown, not after: `isActive` (and therefore every
+  // guard above) must already see this instance as inactive the moment a
+  // synchronous continuation of `teardownListenClient` or a timer callback
+  // could otherwise run.
   state = null;
+  if (s.timer) {
+    clearTimeout(s.timer);
+  }
+  if (s.listenReconnectTimer) {
+    clearTimeout(s.listenReconnectTimer);
+  }
+  teardownListenClient(s);
 }
 
 /**
@@ -250,11 +305,20 @@ export async function notifyOutgoingWebhookEnqueued(pool: {
   }
 }
 
+/** Test seam: trigger the same wake a real NOTIFY would, without a
+ *  Postgres LISTEN connection. No-op with no poller running. */
+export function wakeOutgoingWebhookPollerForTests(): void {
+  if (state) {
+    wake(state);
+  }
+}
+
 /** Test seam. */
 export function outgoingWebhookPollerSnapshotForTests(): {
   intervalMs: number;
   stopped: boolean;
   listening: boolean;
+  wakeRequested: boolean;
 } | null {
   if (!state) {
     return null;
@@ -263,5 +327,6 @@ export function outgoingWebhookPollerSnapshotForTests(): {
     intervalMs: state.intervalMs,
     stopped: state.stopped,
     listening: state.listenClient !== null,
+    wakeRequested: state.wakeRequested,
   };
 }

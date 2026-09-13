@@ -1,6 +1,9 @@
 import { MINIMUM_AGE_YEARS, type AgeGateStatus } from "@pqp/shared";
 import { getPool } from "../db.js";
-import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
+import {
+  coalesce,
+  invalidateExact as invalidateReadCache,
+} from "../lib/read-cache.js";
 
 export type { AgeGateStatus };
 

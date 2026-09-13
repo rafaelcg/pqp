@@ -24,7 +24,11 @@ import { getPreferences } from "./preferences.js";
 import { invalidateServerAudience } from "./servers.js";
 import { bumpPermissionsVersion } from "./permissions.js";
 import { stampTurma1000 } from "./badges.js";
-import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
+import {
+  coalesce,
+  invalidate as invalidateReadCache,
+  invalidateExact as invalidateReadCacheExact,
+} from "../lib/read-cache.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
 const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at, banner_url, banner_key, custom_status`;
@@ -1022,7 +1026,10 @@ function memberListCacheKey(serverId: string): string {
  * of write paths to keep in sync.
  */
 export function invalidateServerMemberList(serverId: string): void {
-  invalidateReadCache(memberListCacheKey(serverId));
+  // The full key, not a prefix: `invalidateExact` drops it in O(1) rather
+  // than scanning the whole cache for a string match that can only ever be
+  // this one key.
+  invalidateReadCacheExact(memberListCacheKey(serverId));
 }
 
 /**

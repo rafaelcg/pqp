@@ -22,6 +22,7 @@ const {
   OUTGOING_WEBHOOK_POLL_MIN_MS,
   OUTGOING_WEBHOOK_POLL_MAX_MS,
   notifyOutgoingWebhookEnqueued,
+  wakeOutgoingWebhookPollerForTests,
 } = await import("./outgoing-webhook-poller.js");
 
 describe("outgoing webhook poller: backoff", () => {
@@ -126,6 +127,89 @@ describe("outgoing webhook poller: backoff", () => {
     await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_POLL_MIN_MS);
     // One loop, one tick — not two overlapping ones.
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The pending-wake path: a NOTIFY (or any wake) arriving while a tick's
+   * own `deliver()` is still in flight must not be dropped, because that
+   * tick's claim query may already have run before the row the wake is
+   * about was committed.
+   */
+  it("does not drop a wake that arrives while a tick is in flight", async () => {
+    const gate = (() => {
+      let resolve!: (n: number) => void;
+      const promise = new Promise<number>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    })();
+    let calls = 0;
+    const deliver = vi.fn(() => {
+      calls += 1;
+      return calls === 1 ? gate.promise : Promise.resolve(0);
+    });
+    startOutgoingWebhookPoller(deliver);
+    await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_POLL_MIN_MS);
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    // The wake arrives while the first tick's `deliver()` is still pending.
+    wakeOutgoingWebhookPollerForTests();
+    expect(outgoingWebhookPollerSnapshotForTests()?.wakeRequested).toBe(true);
+
+    // The in-flight tick finally resolves empty. The pending wake schedules
+    // its forced re-tick at the fast interval rather than firing inline.
+    gate.resolve(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(outgoingWebhookPollerSnapshotForTests()?.intervalMs).toBe(
+      OUTGOING_WEBHOOK_POLL_MIN_MS,
+    );
+    expect(outgoingWebhookPollerSnapshotForTests()?.wakeRequested).toBe(false);
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    // The forced re-tick fires at the fast interval — not the doubled
+    // backoff an empty tick would otherwise have applied.
+    await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_POLL_MIN_MS);
+    expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The restart race: an old poller's in-flight tick must not resurrect
+   * itself against a NEW poller started while it was still running.
+   */
+  it("a tick started by a stopped poller does not mutate the poller that replaced it", async () => {
+    const gate = (() => {
+      let resolve!: (n: number) => void;
+      const promise = new Promise<number>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    })();
+    const oldDeliver = vi.fn(() => gate.promise);
+    startOutgoingWebhookPoller(oldDeliver);
+    await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_POLL_MIN_MS);
+    expect(oldDeliver).toHaveBeenCalledTimes(1);
+
+    // Stop while the tick above is still pending, then start a fresh one.
+    stopOutgoingWebhookPoller();
+    const newDeliver = vi.fn(async () => 0);
+    startOutgoingWebhookPoller(newDeliver);
+    const freshIntervalAfterStart =
+      outgoingWebhookPollerSnapshotForTests()?.intervalMs;
+
+    // NOW the old poller's stuck tick resolves.
+    gate.resolve(5);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The old tick's "work found" result must not have reset the NEW
+    // poller's interval or scheduled an extra tick on it.
+    expect(outgoingWebhookPollerSnapshotForTests()?.intervalMs).toBe(
+      freshIntervalAfterStart,
+    );
+    expect(newDeliver).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_POLL_MIN_MS);
+    // The new poller's own loop still runs normally.
+    expect(newDeliver).toHaveBeenCalledTimes(1);
   });
 });
 

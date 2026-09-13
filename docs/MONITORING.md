@@ -816,11 +816,16 @@ the fixes for each are actually running:
   process has issued since boot, and the same total broken down by the HTTP
   route it happened inside (`GET /api/servers/:serverId/members`, the path
   template, never an interpolated id) — a WS handler, a cold job, or
-  anything at boot has no route and is counted under `"other"`. Wrapped once
-  at the pool itself (`db.ts`), so unlike `dbTx.byPath` next to it, nothing
-  had to remember to instrument a new call site for this to see it. This is
-  the number the 785k figure should now be read against — a route whose
-  count did not drop after this shipped is a route the caching missed.
+  anything at boot has no route and is counted under `"other"`. A reserved
+  `"auth"` label sits next to those two: Bearer resolution and the age-gate
+  and timeout gates run in `handleApi` before any route has matched, and
+  folding that work into `"other"` would have hidden a real cost center (the
+  53k auth-resolution writes below) behind the same bucket used for
+  background jobs. Wrapped once at the pool itself (`db.ts`), so unlike
+  `dbTx.byPath` next to it, nothing had to remember to instrument a new call
+  site for this to see it. This is the number the 785k figure should now be
+  read against — a route whose count did not drop after this shipped is a
+  route the caching missed.
 - **`readCache.*`** (documented above) now also covers the server member
   list (`services/users.ts`'s `listServerMembers`, 30s TTL, keyed per
   server) and the three per-request permission lookups: the age gate

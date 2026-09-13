@@ -17,6 +17,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
  */
 const storage = new AsyncLocalStorage<string>();
 
+/** The label `handleApi` uses for auth resolution and the pre-router gates
+ *  (age gate, timeout) — work that runs before any route has matched and
+ *  is shared across every route, not business logic belonging to whichever
+ *  endpoint happens to follow it. Exported so callers can name it precisely
+ *  rather than repeating the string. */
+export const AUTH_ROUTE_LABEL = "auth";
+
 /** Run `fn` with `route` as the current route label for anything it awaits. */
 export function runWithRoute<T>(route: string, fn: () => Promise<T>): Promise<T> {
   return storage.run(route, fn);

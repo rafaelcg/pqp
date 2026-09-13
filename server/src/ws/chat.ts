@@ -867,19 +867,6 @@ export async function notifyPermissionsUpdate(
 ): Promise<void> {
   const version = await bumpPermissionsVersion(serverId);
   const memberIds = await listServerMemberIds(serverId);
-  // An overwrite change can move `listChannels`' per-viewer answer without
-  // touching the `channels` table row itself, so nothing in `servers.ts`'s
-  // own write paths would otherwise catch it. Read-cache.ts's cached columns
-  // don't currently encode visibility, so this is a no-op query saved rather
-  // than a correctness fix today — but it keeps the invalidation table
-  // honest if that ever changes, and it costs one Map scan on an
-  // already-rare event.
-  invalidateServerChannelList(serverId);
-  // An overwrite change moves `canAccessChannel`'s answer too, without
-  // touching `channel_members` or `is_private` — the one write this cache
-  // needs a hook for that `servers.ts`'s own invalidation chokepoints do not
-  // already cover (see `services/users.ts`).
-  invalidateChannelAccessForServer();
   deliverPermissionsUpdate(serverId, version, memberIds);
   if (isBusEnabled()) {
     publishToCluster(PERMISSIONS_TOPIC, {
@@ -909,12 +896,49 @@ export function onPermissionsUpdate(
   };
 }
 
-/** Test seam and local half. Membership is passed in so unit tests need no DB. */
+/**
+ * Test seam and the half that runs on EVERY instance: the local bump calls
+ * this directly, and `subscribeToCluster(PERMISSIONS_TOPIC, ...)` below
+ * calls it again on every other instance once membership over there resolves
+ * — the same shape `servers.ts`'s `invalidateServerAudienceLocally` uses for
+ * the same reason. That is why the two cache invalidations below live here
+ * and not in `notifyPermissionsUpdate`: a call placed there only ever runs
+ * on the instance an overwrite change originated on, leaving every other
+ * instance's `canAccessChannel` cache (services/users.ts) answering with a
+ * revoked overwrite for up to 30s when `CLUSTER_BUS` is on. Membership is
+ * passed in so unit tests need no DB.
+ */
 export function deliverPermissionsUpdate(
   serverId: string,
   version: number,
   memberIds: readonly string[],
 ): void {
+  // An overwrite change can move `listChannels`' per-viewer answer without
+  // touching the `channels` table row itself, so nothing in `servers.ts`'s
+  // own write paths would otherwise catch it. Read-cache.ts's cached columns
+  // don't currently encode visibility, so this is a no-op query saved rather
+  // than a correctness fix today — but it keeps the invalidation table
+  // honest if that ever changes, and it costs one Map scan on an
+  // already-rare event.
+  //
+  // An overwrite change ALSO moves `canAccessChannel`'s answer, without
+  // touching `channel_members` or `is_private` — the one write this cache
+  // needs a hook for that `servers.ts`'s own invalidation chokepoints do not
+  // already cover (see `services/users.ts`).
+  //
+  // Guarded, not bare calls: this function is this file's own test seam
+  // (see the doc comment above), and a couple of suites in this file's test
+  // tree mock `../services/servers.js` down to the handful of exports they
+  // need to exercise the fan-out itself, predating these two invalidations
+  // — the identical problem, and the identical fix, as `onAudienceInvalidated`
+  // in `ws/voice.ts`: vitest's mock proxy throws on the mere property read
+  // of an export the factory never declared, even inside a `typeof` check.
+  try {
+    invalidateServerChannelList(serverId);
+    invalidateChannelAccessForServer();
+  } catch {
+    // Mocked without one or both exports — see above.
+  }
   for (const listener of permissionsListeners) {
     try {
       listener(serverId);

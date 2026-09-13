@@ -756,9 +756,6 @@ export async function updateMessageBody(
   if (!message) {
     return null;
   }
-  // The edited body is inside the cached latest-page rows, so a stale cache
-  // would keep serving the pre-edit text.
-  invalidateLatestMessages(message.channel_id);
 
   await getPool().query(`DELETE FROM message_mentions WHERE message_id = $1`, [
     messageId,
@@ -775,6 +772,15 @@ export async function updateMessageBody(
       ? { parentId: message.reply_to_id, authorId: message.author_id }
       : undefined,
   );
+  // After both writes, not before: the body update itself already committed
+  // in the CTE above, but the mention rows had not yet been rewritten. A
+  // concurrent reload landing between an earlier invalidation and this line
+  // could have repopulated the cache with the new body against a mention set
+  // that was mid-rewrite (briefly empty, or still the pre-edit rows) —
+  // narrower than a stale body, but still a mismatch this cache should never
+  // produce. Invalidating only once every write this edit makes has landed
+  // closes that window entirely.
+  invalidateLatestMessages(message.channel_id);
 
   // An edit never touches attachments, but the broadcast it produces is a whole
   // message — dropping them here would blank the images out of every open tab
