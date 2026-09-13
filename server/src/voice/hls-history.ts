@@ -222,70 +222,89 @@ export async function checkWatchPartyReplayAccess(
 
 /**
  * Flips `keep_replay` on every row of the broadcast (every ladder rung, the
- * mic archive and the camera pip alike) in ONE statement, so the retention
- * sweep keeps or drops the whole thing together. Refuses once the segments
- * are already gone -- there is nothing left to keep, in either direction.
+ * mic archive and the camera pip alike), so the retention sweep keeps or
+ * drops the whole thing together. Refuses once the segments are already gone
+ * -- there is nothing left to keep, in either direction.
  *
- * ONE STATEMENT, NOT A READ THEN A WRITE. A separate "is it still available"
- * read followed by an unconditional `UPDATE` leaves a window for
- * `sweepHlsSessions` to clean the very rows this function is about to touch:
- * the read says available, the sweep marks `cleaned_at` a moment later, the
- * write still runs and this function still returns "ok" even though the
- * recording the caller just asked to keep is already gone. The eligibility
- * check and the write are one CTE here so Postgres evaluates them against a
- * single snapshot with no gap a concurrent sweep can land in.
+ * `SELECT ... FOR UPDATE` FIRST, THEN CHECK, THEN WRITE -- NOT A CTE
+ * COMPUTING ELIGIBILITY IN ONE SHOT. An earlier version folded the
+ * eligibility check and the `UPDATE` into one statement via a CTE, reasoning
+ * that one statement could not have a gap a concurrent sweep lands in. It
+ * still could: a CTE referenced more than once is materialised rather than
+ * inlined, computed ONCE against the snapshot at the start of the statement.
+ * If `sweepHlsSessions` holds a row lock on one of these rows when this
+ * statement starts, the `UPDATE` blocks waiting for it, but Postgres's
+ * conflict re-check (EvalPlanQual) re-applies only the `UPDATE`'s own WHERE
+ * clause to the new row version -- it does not re-run the materialised CTE
+ * that clause reads from. So the write could still land using the
+ * PRE-sweep "available" answer, against a row the sweep had just cleaned out
+ * from under it, and this function would still report "ok".
+ *
+ * Locking the rows explicitly closes that: whichever of this call and the
+ * sweep's own `UPDATE ... WHERE id = $1` reaches a row first holds it until
+ * it commits or rolls back, and the loser's next read (this transaction's
+ * `SELECT ... FOR UPDATE`, or the sweep's own `WHERE ... AND ended_at IS NOT
+ * NULL` filter re-run against a since-changed row) sees the finished result
+ * rather than the state before it. Same pattern as `votePoll` in
+ * `services/polls.ts`.
  */
 export async function setWatchPartyKeepReplay(
   channelId: string,
   startedAtMs: number,
   keepReplay: boolean,
 ): Promise<WatchPartyHistoryLookup> {
-  const result = await getPool().query<{
-    has_rows: boolean;
-    updated_count: number;
-  }>(
-    `WITH target AS (
-       SELECT
-         EXISTS (
-           SELECT 1 FROM hls_sessions
-           WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
-         ) AS has_rows,
-         EXISTS (
-           SELECT 1 FROM hls_sessions
-           WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
-             AND (rung IS NULL OR rung = ANY($6::text[]))
-         ) AS has_ladder,
-         NOT EXISTS (
-           SELECT 1 FROM hls_sessions
-           WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
-             AND (rung IS NULL OR rung = ANY($6::text[]))
-             AND NOT (${availablePredicate(3, 4)})
-         ) AS fully_available
-     ),
-     updated AS (
-       UPDATE hls_sessions SET keep_replay = $5
-       WHERE channel_id = $1
-         AND started_at = to_timestamp($2 / 1000.0)
-         AND (SELECT has_ladder AND fully_available FROM target)
-       RETURNING 1
-     )
-     SELECT
-       (SELECT has_rows FROM target) AS has_rows,
-       (SELECT COUNT(*) FROM updated)::int AS updated_count`,
-    [
-      channelId,
-      startedAtMs,
-      hlsRetentionMinutes(),
-      hlsReplayHours(),
-      keepReplay,
-      LADDER_RUNG_NAMES,
-    ],
-  );
-  const row = result.rows[0];
-  if (!row?.has_rows) {
-    return "not-found";
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const rows = await client.query<{
+      id: string;
+      rung: string | null;
+      cleaned_at: Date | null;
+      ended_at: Date | null;
+      keep_replay: boolean;
+    }>(
+      `SELECT id, rung, cleaned_at, ended_at, keep_replay
+       FROM hls_sessions
+       WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+       FOR UPDATE`,
+      [channelId, startedAtMs],
+    );
+    if (rows.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return "not-found";
+    }
+    const ladderRungs = new Set(LADDER_RUNG_NAMES);
+    const isAvailable = (row: (typeof rows.rows)[number]): boolean => {
+      if (row.cleaned_at !== null || row.ended_at === null) {
+        return false;
+      }
+      // `<=`, not `<`, to match every SQL form of this predicate elsewhere
+      // in this file (`ended_at >= NOW() - interval`).
+      const ageMs = Date.now() - row.ended_at.getTime();
+      return row.keep_replay
+        ? ageMs <= hlsReplayHours() * 60 * 60 * 1000
+        : ageMs <= hlsRetentionMinutes() * 60 * 1000;
+    };
+    const ladderRows = rows.rows.filter(
+      (row) => row.rung === null || ladderRungs.has(row.rung),
+    );
+    const eligible = ladderRows.length > 0 && ladderRows.every(isAvailable);
+    if (!eligible) {
+      await client.query("ROLLBACK");
+      return "unavailable";
+    }
+    await client.query(
+      `UPDATE hls_sessions SET keep_replay = $2 WHERE id = ANY($1::uuid[])`,
+      [rows.rows.map((row) => row.id), keepReplay],
+    );
+    await client.query("COMMIT");
+    return "ok";
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-  return row.updated_count > 0 ? "ok" : "unavailable";
 }
 
 // --------------------------------------------------------------------------
@@ -343,6 +362,19 @@ export function resetHlsReplayCachesForTests(): void {
   replayRungCache.clear();
 }
 
+/**
+ * ALL OR NOTHING, matching `checkWatchPartyReplayAccess`'s definition of
+ * "available" exactly: every ladder row of the broadcast, not just the ones
+ * that still individually pass. Returning whichever rungs currently happen
+ * to survive would let an already-minted master playlist quietly advertise
+ * fewer renditions than the broadcast actually had (or, worse, disagree with
+ * what `GET .../history` told the caller was available at all) the moment
+ * one rung's `ended_at` falls out of its window slightly ahead of its
+ * siblings -- rare since `setWatchPartyKeepReplay` now writes `keep_replay`
+ * to every row atomically, but LiveKit can still stamp `ended_at` unevenly
+ * across rungs (a stalled rendition stopped on its own, see
+ * `docs/WATCH_PARTY.md` "When a session restarts").
+ */
 async function replaySessionRungs(
   channelId: string,
   startedAt: number,
@@ -353,12 +385,15 @@ async function replaySessionRungs(
   if (cached && now - cached.at < REPLAY_CACHE_TTL_MS) {
     return cached.rungs;
   }
-  const result = await getPool().query<{ rung: string | null }>(
-    `SELECT rung FROM hls_sessions
+  const result = await getPool().query<{
+    rung: string | null;
+    available: boolean;
+  }>(
+    `SELECT rung, (${availablePredicate(3, 4)}) AS available
+     FROM hls_sessions
      WHERE channel_id = $1
        AND object_prefix LIKE $2
        AND rung IS NOT NULL
-       AND ${availablePredicate(3, 4)}
      ORDER BY started_at ASC`,
     [
       channelId,
@@ -367,9 +402,13 @@ async function replaySessionRungs(
       hlsReplayHours(),
     ],
   );
-  const rungs = result.rows
-    .map((row) => row.rung)
-    .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
+  const ladderRows = result.rows.filter(
+    (row) => row.rung !== null && LADDER_RUNGS[row.rung] !== undefined,
+  );
+  const rungs =
+    ladderRows.length > 0 && ladderRows.every((row) => row.available)
+      ? ladderRows.map((row) => row.rung!)
+      : [];
   pruneStale(replayRungCache, now);
   replayRungCache.set(key, { rungs, at: now });
   return rungs;

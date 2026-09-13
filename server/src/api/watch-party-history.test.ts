@@ -700,6 +700,44 @@ describeDb("watch party history", () => {
       expect(r.status).toBe(401);
     });
 
+    /**
+     * ALL-OR-NOTHING AT THE SERVING BOUNDARY TOO, not just at mint time. A
+     * token minted while the whole broadcast was available must stop
+     * advertising a master playlist the moment ANY one of its ladder rungs
+     * falls out of its own window, rather than quietly serving a master
+     * missing that rendition while claiming the party is fine.
+     */
+    it("the master 404s once one sibling rung falls out of its window, even with a valid token", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await seedBroadcast({
+        startedAt: 1_700_000_018_000,
+        endedMinutesAgo: 3,
+        rungs: ["1080p30"],
+      });
+      const minted = await call<{ hlsUrl: string }>(
+        owner,
+        "GET",
+        `${historyPath()}/1700000018000/replay`,
+      );
+      expect(minted.status).toBe(200);
+      const stillGood = await getRaw(minted.body.hlsUrl, null);
+      expect(stillGood.status).toBe(200);
+
+      // A second rung of the SAME broadcast falls out of its window on its
+      // own -- an uneven `ended_at`, which LiveKit can genuinely produce
+      // (a stalled rendition stopped early; see docs/WATCH_PARTY.md).
+      await getPool().query(
+        `INSERT INTO hls_sessions
+           (channel_id, object_prefix, started_at, ended_at, keep_replay, rung)
+         VALUES ($1, $2, to_timestamp($3 / 1000.0), NOW() - interval '20 minutes', FALSE, '720p30')`,
+        [channelId, `live/${channelId}/1700000018000-720p30`, 1_700_000_018_000],
+      );
+      resetHlsReplayCachesForTests();
+
+      const nowBroken = await getRaw(minted.body.hlsUrl, null);
+      expect(nowBroken.status).toBe(404);
+    });
+
     it("a token for a different channel is refused", async () => {
       await seedBroadcast({ startedAt: 1_700_000_013_000, endedMinutesAgo: 5 });
       const t = mintHlsViewerToken({
