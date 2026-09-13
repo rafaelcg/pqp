@@ -17,6 +17,7 @@ import {
   type ProfileUpdate,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
+import { DatabaseUnavailableError } from "../db.js";
 import {
   isBusEnabled,
   publishToCluster,
@@ -1285,7 +1286,37 @@ export type PostChannelMessageResult =
       automodMessage?: string;
     };
 
+/**
+ * A3.1: the DB breaker is open, so hand the sender a specific, immediate
+ * `database-unavailable` rejection (client copy: retry, not "gone forever")
+ * instead of leaving the optimistic bubble to time out after 10s with no
+ * information at all, or an unhandled rejection to reach the generic
+ * catch-and-log in `ws/index.ts`'s `onMessage`.
+ *
+ * Wraps the WHOLE function, not just the pre-creation guard clauses, which
+ * has one known edge: if the breaker opens in the narrow window between
+ * `createMessage` succeeding and a post-creation step below it (recording
+ * mentions, the thread-chip update) the sender is told to retry a message
+ * that in fact already landed, and a retry double-posts. That race existed
+ * before this change too — nothing here previously caught a failure in
+ * those steps either, and an uncaught rejection there was and is a bare,
+ * unexplained timeout on the client. A specific-but-occasionally-wrong
+ * signal beats a silent one.
+ */
 export async function postChannelMessage(
+  input: PostChannelMessageInput,
+): Promise<PostChannelMessageResult> {
+  try {
+    return await postChannelMessageAttempt(input);
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      return { ok: false, reason: "database-unavailable" };
+    }
+    throw error;
+  }
+}
+
+async function postChannelMessageAttempt(
   input: PostChannelMessageInput,
 ): Promise<PostChannelMessageResult> {
   if (!(await canAccessChannel(input.channelId, input.author.id))) {

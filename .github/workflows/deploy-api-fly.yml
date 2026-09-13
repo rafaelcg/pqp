@@ -301,6 +301,36 @@ jobs:
           echo "::error::API never reported the deployed commit. It is probably still serving the previous build."
           exit 1
 
+      # A3.1 (docs/plans/ALWAYS_ON.md): `/health` above proves the process is
+      # up and serving this commit, but as of A3.1 it no longer touches
+      # Postgres at all — a release that can never reach the database now
+      # reports healthy instantly, which is exactly the guarantee the old
+      # DB-coupled `/health` used to give this workflow for free. `/ready`
+      # is the endpoint built to answer that question and is unaffected by
+      # A3.1, so it is what closes the gap: routing health and deploy safety
+      # checked by two different endpoints instead of one overloaded one.
+      - name: Verify the release is ready (Postgres reachable)
+        if: steps.relevant.outputs.needed == 'true'
+        env:
+          API_URL: ${{ secrets.VITE_API_URL }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::warning::VITE_API_URL is not set, skipping the readiness check"
+            exit 0
+          fi
+          for attempt in $(seq 1 10); do
+            status=$(curl -s -o /tmp/ready-body.json -w '%{http_code}' --max-time 10 "$API_URL/ready" || echo '000')
+            if [ "$status" = "200" ]; then
+              echo "API is ready: $(cat /tmp/ready-body.json)"
+              exit 0
+            fi
+            echo "attempt $attempt: /ready answered $status"
+            cat /tmp/ready-body.json 2>/dev/null || true
+            sleep 5
+          done
+          echo "::error::/ready never went healthy after the deploy — the release is up but cannot reach a dependency (Postgres, LiveKit or storage; see the last response body above). Check docs/MONITORING.md."
+          exit 1
+
       # The worker (fly.worker.toml): same image the step above just pushed,
       # under the label of this commit, so the two apps can never run two
       # different builds of jobs.ts. It deploys AFTER the API has verified,

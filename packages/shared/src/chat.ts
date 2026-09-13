@@ -236,6 +236,14 @@ export const messageRejectReasonSchema = z.enum([
    * default otherwise. The matched term is never echoed back.
    */
   "automod",
+  /**
+   * A3.1 (docs/plans/ALWAYS_ON.md): the DB circuit breaker is open. Distinct
+   * from every reason above it, all of which are a real decision about this
+   * message — this one means no decision could be made at all, so it is
+   * retriable (not in `isPermanentRejectReason`'s set on the client) the
+   * moment the database is back.
+   */
+  "database-unavailable",
 ]);
 export type MessageRejectReason = z.infer<typeof messageRejectReasonSchema>;
 

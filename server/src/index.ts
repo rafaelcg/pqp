@@ -11,7 +11,7 @@ import {
   isDevAuthBypassEnabled,
   sweepAuthCaches,
 } from "./auth/clerk.js";
-import { closePool, getPool, initDb } from "./db.js";
+import { closePool, initDb, startDbBreakerSampler } from "./db.js";
 import { closeApnsSessions } from "./services/apns.js";
 import { seedDevHall } from "./services/dev-seed.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
@@ -184,23 +184,30 @@ const httpServer = createServer((req, res) => {
     const pathname = url.pathname;
 
     if (pathname === "/health") {
-      // FLY'S CHECK (fly.toml). Keep it exactly this shallow: one SELECT 1 and
-      // nothing else, because a dependency-aware answer here makes Fly restart
-      // the only machine on a Postgres blip. External monitors get /ready.
+      // FLY'S CHECK (fly.toml) AND THE VULTR BOX'S (tools/api-host/compose.yaml,
+      // Caddyfile). PROCESS LIVENESS ONLY — A3.1 of docs/plans/ALWAYS_ON.md.
       //
-      // Report unhealthy if the DB is unreachable so the platform can restart /
-      // route away instead of serving a process with a dead pool, and from the
-      // moment SIGTERM lands (`lib/drain.ts`), so a rolling deploy's proxy
-      // sends the reconnects to the machine that is staying up.
+      // This used to run a real `SELECT 1` here, so a 200 meant "process up
+      // AND database reachable". On 2026-09-12 that coupling was the whole
+      // incident: Postgres collapsed, the pool saturated, this endpoint
+      // failed with it, and the platform stopped routing here at all —
+      // taking WebSockets, the HLS playlist proxy and every cached read down
+      // too, none of which needed Postgres at that instant. The database's
+      // health now belongs entirely to `/ready`, which external monitors
+      // poll (`services/ready.ts`); a DB-dependent route answers its own 503
+      // via the breaker in `db.ts` instead of borrowing this one's verdict.
       //
-      // The 200 body carries the deployed commit, so "is the API actually
-      // running this code?" has an answer from outside. It did not, and a
-      // stalled deploy went unnoticed across five releases: every /api/ route
-      // answers 401 before it routes, so a missing route is indistinguishable
-      // from an unauthenticated one, and the client degrades quietly enough
-      // that the app still looks healthy. `/health` is the only
-      // unauthenticated surface, so the version belongs here.
-      const verdict = await healthVerdict(() => getPool().query("SELECT 1"));
+      // What is left to check here has no query in it: `isDraining()`
+      // (`lib/drain.ts`, flips the instant SIGTERM lands, so a rolling
+      // deploy's proxy sends reconnects to the machine staying up) and
+      // whether this HTTP server is the one actually accepting connections
+      // — which a request reaching this handler at all already proves, so
+      // `httpServer.listening` mostly documents the claim.
+      //
+      // The 200 body still carries the deployed commit, so "is the API
+      // actually running this code?" has an answer from outside — see
+      // CLAUDE.md pitfall #8's history on why that line exists.
+      const verdict = healthVerdict(httpServer.listening);
       res.writeHead(verdict.status, {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
@@ -404,6 +411,10 @@ const statusLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 1 });
 // clocks once a second, so those windows mean continuous and not "seen at two
 // instants a minute apart".
 const stopReadySampler = startReadySampler();
+
+// A3.1's circuit breaker: its own `SELECT 1` timer, independent of whether
+// any external monitor is polling `/ready`. See `lib/db-breaker.ts`.
+const stopDbBreakerSampler = startDbBreakerSampler();
 
 const statusSampler = setInterval(() => {
   void recordStatusSamples().catch((error) => {
@@ -656,6 +667,7 @@ async function shutdown(signal: string) {
   beginDrain();
   stopHeartbeat();
   stopReadySampler();
+  stopDbBreakerSampler();
   clearInterval(rateLimitSweep);
   clearInterval(communityHomeSweep);
   coldJobs?.stop();

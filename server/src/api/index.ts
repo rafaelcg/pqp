@@ -215,6 +215,7 @@ import {
   recordAgeDeclaration,
 } from "../services/age-gate.js";
 import type { DbUser, MemberRole } from "../db.js";
+import { DatabaseUnavailableError } from "../db.js";
 import {
   clampLimit,
   corsHeaders,
@@ -224,6 +225,7 @@ import {
   readJsonBody,
   SECURITY_HEADERS,
   sendConditionalJson,
+  sendDatabaseUnavailable,
   sendError,
   sendJson,
 } from "../lib/http.js";
@@ -2438,6 +2440,15 @@ async function serveHlsPlaylistWithToken(
     });
     res.end(result.body);
   } catch (error) {
+    // Reached only when the playlist proxy's own stale-cache fallback
+    // (`renderCachedPlaylist` / `sessionRungs` in hls-playlist-proxy.ts)
+    // had nothing to fall back to — a viewer's very first request for a
+    // session while the breaker is open. Every subsequent poll for the same
+    // session serves the cached window instead of reaching here.
+    if (error instanceof DatabaseUnavailableError) {
+      sendDatabaseUnavailable(res, req);
+      return;
+    }
     if (error instanceof HttpError) {
       sendError(res, error.status, error.message, req);
       return;
@@ -5335,6 +5346,10 @@ async function tryHlsReplayCapabilityDoor(
     });
     res.end(result.body);
   } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      sendDatabaseUnavailable(res, req);
+      return true;
+    }
     if (error instanceof HttpError) {
       sendError(res, error.status, error.message, req);
       return true;
@@ -5583,6 +5598,8 @@ router.post(
             422,
             posted.automodMessage ?? "This message was blocked by AutoMod",
           );
+        case "database-unavailable":
+          throw new DatabaseUnavailableError();
         case "bad-reply":
           throw new HttpError(400, "Reply is not in this channel");
         case "empty":
@@ -8265,7 +8282,9 @@ export async function handleApi(
     try {
       sendJson(res, 200, await machineRoute.run(req, query), req);
     } catch (error) {
-      if (error instanceof HttpError) {
+      if (error instanceof DatabaseUnavailableError) {
+        sendDatabaseUnavailable(res, req);
+      } else if (error instanceof HttpError) {
         sendError(res, error.status, error.message, req);
       } else if (
         error &&
@@ -8286,6 +8305,13 @@ export async function handleApi(
   try {
     resolved = await resolveAuthSession(req.headers.authorization);
   } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      // The breaker is open: this rejected in milliseconds rather than
+      // hanging on the pool, and the caller gets the same shape every other
+      // DB-dependent route does instead of the generic message below.
+      sendDatabaseUnavailable(res, req);
+      return;
+    }
     console.error("[auth] resolve failed:", error);
     sendError(res, 503, "Authentication temporarily unavailable", req);
     return;
@@ -8443,6 +8469,16 @@ export async function handleApi(
     }
     sendJson(res, 200, result, req);
   } catch (error) {
+    // A3.1: the breaker rejected a query in milliseconds rather than the
+    // route hanging on a saturated or unreachable pool for
+    // `connectionTimeoutMillis`. Checked ahead of `HttpErrorWithDetail` and
+    // `HttpError`, which it extends, for the same reason as the check below —
+    // the extra header this one carries would be silently dropped by the
+    // more general match.
+    if (error instanceof DatabaseUnavailableError) {
+      sendDatabaseUnavailable(res, req);
+      return;
+    }
     // Checked before the plain `HttpError` branch it extends, or the extra
     // fields would be silently dropped by the more general match.
     if (error instanceof HttpErrorWithDetail) {

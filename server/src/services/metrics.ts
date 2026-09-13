@@ -1127,6 +1127,22 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
         cached = { at: Date.now(), payload };
         return payload;
       })
+      .catch((error: unknown) => {
+        // A3.1: the operator needs this dashboard MOST during the outage
+        // it is reporting on. `computeAdminMetrics` is ~30 queries against
+        // the pool the breaker watches, so an open breaker fails all of them
+        // at once — serve the last good snapshot instead of taking the
+        // whole endpoint down over it. `getAdminMetrics` layers fresh
+        // `runtime` (which carries `db.breaker`), `ready` and `sfu` blocks
+        // on top of whatever this returns, live, every request, so the
+        // breaker's own state is never itself stale. Only when nothing has
+        // ever been cached (a fresh boot with a dead database) does this
+        // still propagate — there is no snapshot to fall back to.
+        if (cached) {
+          return cached.payload;
+        }
+        throw error;
+      })
       .finally(() => {
         inFlight = null;
       });

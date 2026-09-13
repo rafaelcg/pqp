@@ -137,6 +137,22 @@ export function sendError(
 }
 
 /**
+ * A3.1: what a DB-dependent route answers instead of queueing on a
+ * saturated or unreachable pool for `connectionTimeoutMillis`. `Retry-After`
+ * is a flat 5s rather than derived from the breaker's own cooldown — a
+ * caller close enough to read `db.ts` internals to compute a better number
+ * can also just retry sooner; this is a hint for everyone else, not a
+ * promise the pool will be back by then.
+ */
+export function sendDatabaseUnavailable(
+  res: ServerResponse,
+  req?: IncomingMessage,
+) {
+  res.setHeader("Retry-After", "5");
+  sendError(res, 503, "database_unavailable", req);
+}
+
+/**
  * A 200 with a validator, or a bodyless 304 when the caller already holds this
  * exact response.
  *

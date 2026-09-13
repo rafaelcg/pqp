@@ -171,18 +171,30 @@ kill_timeout = 30
 
   # Health check. `/health` is the only unauthenticated route (every /api/*
   # route resolves a Bearer token before routing, so anything else answers 401)
-  # and it does a real `SELECT 1`, so a 200 here means "process up AND database
-  # reachable". That is what gates a deploy: a machine whose check never goes
-  # green fails the release instead of quietly replacing a working one.
+  # and, as of A3.1 in docs/plans/ALWAYS_ON.md, is PROCESS LIVENESS ONLY: no
+  # `SELECT 1`, no database call of any kind. It used to run one, and on
+  # 2026-09-12 that coupling was the incident — Postgres collapsed, the pool
+  # saturated, this check failed with it, and Fly stopped routing to the only
+  # machine, taking WebSockets, the HLS playlist proxy and every cached read
+  # down too, none of which needed Postgres at that instant. A 200 here now
+  # means only "process up and not draining"; database health belongs to
+  # `/ready` (services/ready.ts), which is deliberately NOT what this check
+  # points at, same as before.
+  #
+  # This means `/health` no longer proves a broken release can reach
+  # Postgres at all, so it no longer alone gates a deploy against that class
+  # of failure — deploy-api-fly.yml's "Verify the deployed commit" step
+  # additionally curls `/ready` before declaring the release done, so routing
+  # health and deploy safety are two different checks instead of one
+  # overloaded one.
   #
   # It also answers 503 from the moment the process gets SIGTERM
   # (server/src/lib/drain.ts), which is how a rolling deploy hands the
   # sockets over: the proxy stops routing to the draining machine within one
   # interval, and the reconnects land on the other one. 10 s rather than the
   # old 30 s for that reason; with two machines an unhealthy one has a
-  # sibling to fail over to, so a tight interval no longer turns a Postgres
-  # blip into an outage. Note `/up` (the external monitor) deliberately does
-  # NOT go red on a drain: a deploy is not an incident.
+  # sibling to fail over to. Note `/up` (the external monitor) deliberately
+  # does NOT go red on a drain: a deploy is not an incident.
   [[http_service.checks]]
     method = "GET"
     path = "/health"

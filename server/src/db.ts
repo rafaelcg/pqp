@@ -6,11 +6,154 @@ import {
   clearPoolStats,
   noteRuntimeSample,
   registerPoolStats,
+  registerDbBreakerStats,
 } from "./lib/runtime.js";
+import {
+  createDbBreaker,
+  DB_BREAKER_PROBE_INTERVAL_MS,
+  type DbBreaker,
+  type DbBreakerState,
+  type DbBreakerStats,
+} from "./lib/db-breaker.js";
+import { HttpError } from "./lib/http.js";
+import { logEvent } from "./lib/log.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let pool: pg.Pool | null = null;
+
+/**
+ * The 503 a DB-dependent caller gets instead of queueing on a saturated or
+ * unreachable pool for `connectionTimeoutMillis` (30s). It is an `HttpError`
+ * so every existing `catch (error) { if (error instanceof HttpError) ... }`
+ * in `api/index.ts` already answers *something* sane; the handful of central
+ * catch points special-case this subclass first, to also set
+ * `Retry-After: 5` and the exact `{ error: "database_unavailable" }` body
+ * A3.1 asks for.
+ */
+export class DatabaseUnavailableError extends HttpError {
+  constructor() {
+    super(503, "database_unavailable");
+    this.name = "DatabaseUnavailableError";
+  }
+}
+
+/**
+ * `DB_BREAKER=off` (or `false` / `0`) is the rollback switch — the breaker
+ * still tracks state and logs it, but `guardPoolQueries` never fast-rejects
+ * a query, so the process behaves exactly as it did before this shipped.
+ * Default on.
+ */
+export function isDbBreakerEnabled(): boolean {
+  const raw = process.env.DB_BREAKER;
+  return raw !== "off" && raw !== "false" && raw !== "0";
+}
+
+const dbBreaker: DbBreaker = createDbBreaker({
+  probe: () => getPool().query("SELECT 1"),
+  poolStats: () => currentDbBreakerPoolStats(),
+  onStateChange: (next, previous) => {
+    logEvent("db.breaker.stateChange", { from: previous, to: next });
+  },
+});
+
+registerDbBreakerStats(() => dbBreaker.stats());
+
+let dbBreakerSamplerTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Starts the breaker's own `SELECT 1` timer. Separate from `services/ready.ts`'s
+ * pool sampler (which only runs its Postgres probe when an external monitor
+ * asks `/ready`): the breaker has to notice a dead database even when nobody
+ * is polling anything. Idempotent; returns the stopper. Unref'd, same as
+ * every other background timer in this process — it must never be the reason
+ * `node` refuses to exit.
+ */
+export function startDbBreakerSampler(): () => void {
+  if (dbBreakerSamplerTimer) {
+    return () => stopDbBreakerSampler();
+  }
+  dbBreakerSamplerTimer = setInterval(() => {
+    void dbBreaker.tick().catch(() => {
+      // A sampler must never be the reason a request path throws.
+    });
+  }, DB_BREAKER_PROBE_INTERVAL_MS);
+  dbBreakerSamplerTimer.unref?.();
+  return () => stopDbBreakerSampler();
+}
+
+function stopDbBreakerSampler(): void {
+  if (dbBreakerSamplerTimer) {
+    clearInterval(dbBreakerSamplerTimer);
+    dbBreakerSamplerTimer = null;
+  }
+}
+
+export function dbBreakerState(): DbBreakerState {
+  return dbBreaker.state();
+}
+
+export function dbBreakerStats(): DbBreakerStats {
+  return dbBreaker.stats();
+}
+
+/** Test hook: forget every clock, streak and count, and stop the sampler. */
+export function resetDbBreakerForTests(): void {
+  stopDbBreakerSampler();
+  dbBreaker.reset();
+}
+
+/**
+ * Test hook: jump the breaker straight to a state, for an HTTP-level test
+ * that wants "the breaker is open" as a precondition without waiting on a
+ * real failing probe and a real grace window first.
+ */
+export function forceDbBreakerStateForTests(state: DbBreakerState): void {
+  dbBreaker.forceStateForTests(state);
+}
+
+/**
+ * Every query issued through the pool this process holds, while the breaker
+ * is open, counts against the same threshold — so this reads the pool the
+ * breaker itself watches, not a second bookkeeping path.
+ */
+function currentDbBreakerPoolStats(): { waiting: number } | null {
+  if (!pool) {
+    return null;
+  }
+  return { waiting: pool.waitingCount };
+}
+
+/**
+ * Makes every call through `target.query` — however it was reached, `pool`
+ * or `registry.ts`'s own imports, anything holding this exact instance —
+ * fail fast while the breaker is open, instead of joining pg-pool's queue
+ * and waiting out `connectionTimeoutMillis` one caller at a time. The
+ * wrapper only intercepts; a query issued while the breaker is closed or
+ * half-open is entirely unmodified, same object, same promise.
+ *
+ * `no-explicit-any`-clean on purpose: `pg.Pool.query` is a large overloaded
+ * signature (this codebase only ever uses the promise form, `query(text,
+ * params?)`, never the callback form), so the wrapper forwards through
+ * `unknown` and the assignment back onto `target.query` is asserted rather
+ * than structurally checked. Call sites are unaffected — `pool.query<T>(...)`
+ * still type-checks against `pg.Pool`'s own declared (generic) signature,
+ * because TypeScript resolves that from `pool`'s static type, not from
+ * whatever function object happens to be sitting there at runtime.
+ */
+function guardPoolQueries(target: pg.Pool): void {
+  const original = target.query.bind(target) as unknown as (
+    ...args: unknown[]
+  ) => Promise<unknown>;
+  const guarded = (...args: unknown[]): Promise<unknown> => {
+    if (isDbBreakerEnabled() && dbBreaker.isOpen()) {
+      dbBreaker.noteRejected();
+      return Promise.reject(new DatabaseUnavailableError());
+    }
+    return original(...args);
+  };
+  target.query = guarded as unknown as pg.Pool["query"];
+}
 
 /**
  * Opt into TLS when the host needs it (most managed Postgres over public
@@ -42,6 +185,9 @@ export function getPool(): pg.Pool {
       ...pgSslConfig(),
     });
     pool = created;
+    // A3.1: fail fast on every query while the breaker is open, rather than
+    // let each caller discover a dead database by queueing on this pool.
+    guardPoolQueries(created);
     // Idle-client errors (Postgres restart, network blip) are emitted on the
     // pool; without a listener they crash the process.
     created.on("error", (error) => {

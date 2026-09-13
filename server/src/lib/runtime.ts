@@ -148,6 +148,21 @@ export interface RuntimeMetrics {
   peakPoolBusy: number;
   /** ISO. Process start or the last São Paulo midnight, whichever is later. */
   peakTrackedSince: string;
+  /**
+   * The A3.1 circuit breaker over the pool (`lib/db-breaker.ts`, wired up in
+   * `db.ts`). `state` is what a DB-dependent route is answering with right
+   * now: `closed` normal, `open` every query fast-rejects with 503, `half-open`
+   * one trial probe is running. `opened` and `rejected` are cumulative since
+   * boot — a rate is for the caller to derive by polling twice, same
+   * convention as `dbTx` and `voice.roster` on this same payload.
+   */
+  db: {
+    breaker: {
+      state: "closed" | "open" | "half-open";
+      opened: number;
+      rejected: number;
+    };
+  };
 }
 
 // -------------------------------------------------------------- registration
@@ -155,6 +170,9 @@ export interface RuntimeMetrics {
 let readSocketCount: (() => number) | null = null;
 let readCompressedSocketCount: (() => number) | null = null;
 let readPoolStats: (() => PoolStats) | null = null;
+let readDbBreakerStats:
+  | (() => { state: "closed" | "open" | "half-open"; opened: number; rejected: number })
+  | null = null;
 
 /** Called once by `index.ts` with `() => wss.clients.size`. */
 export function registerSocketCount(read: () => number): void {
@@ -178,6 +196,13 @@ export function registerPoolStats(read: () => PoolStats): void {
 /** Called by `closePool`, so a torn-down pool is never read from. */
 export function clearPoolStats(): void {
   readPoolStats = null;
+}
+
+/** Called once by `db.ts` when it creates the breaker. */
+export function registerDbBreakerStats(
+  read: () => { state: "closed" | "open" | "half-open"; opened: number; rejected: number },
+): void {
+  readDbBreakerStats = read;
 }
 
 /**
@@ -257,6 +282,18 @@ function safeCompressedSocketCount(): number {
   }
 }
 
+function safeDbBreakerStats(): {
+  state: "closed" | "open" | "half-open";
+  opened: number;
+  rejected: number;
+} {
+  try {
+    return readDbBreakerStats?.() ?? { state: "closed", opened: 0, rejected: 0 };
+  } catch {
+    return { state: "closed", opened: 0, rejected: 0 };
+  }
+}
+
 /**
  * Fold the current values into the high-water marks.
  *
@@ -304,14 +341,16 @@ export function runtimeSnapshot(): RuntimeMetrics {
     peakPoolWaiting,
     peakPoolBusy,
     peakTrackedSince,
+    db: { breaker: safeDbBreakerStats() },
   };
 }
 
-/** Test hook: forget both registrations and every peak. */
+/** Test hook: forget every registration and every peak. */
 export function resetRuntimeMetrics(): void {
   readSocketCount = null;
   readCompressedSocketCount = null;
   readPoolStats = null;
+  readDbBreakerStats = null;
   peakSockets = 0;
   peakPoolWaiting = 0;
   peakPoolBusy = 0;

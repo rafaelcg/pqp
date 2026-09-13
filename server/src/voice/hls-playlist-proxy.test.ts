@@ -19,7 +19,24 @@ const pool = vi.hoisted(() => ({
     rows: [] as { rung: string }[],
   })),
 }));
-vi.mock("../db.js", () => ({ getPool: () => pool }));
+/**
+ * `DatabaseUnavailableError` has to exist on the mock (even though nothing
+ * in this suite constructs it, other than the "A3.1" tests below) or
+ * `error instanceof DatabaseUnavailableError` inside `hls-playlist-proxy.ts`'s
+ * catch blocks throws on `undefined` for every other test in this file.
+ * Defined inside `vi.hoisted` (not a plain top-level `class`) because
+ * `vi.mock`'s factory is itself hoisted above ordinary module code — a class
+ * declared below it in source would still be in its temporal dead zone when
+ * the factory runs.
+ */
+const MockDatabaseUnavailableError = vi.hoisted(
+  () =>
+    class MockDatabaseUnavailableError extends Error {},
+);
+vi.mock("../db.js", () => ({
+  getPool: () => pool,
+  DatabaseUnavailableError: MockDatabaseUnavailableError,
+}));
 
 const PLAYLIST_BODY = [
   "#EXTM3U",
@@ -337,6 +354,53 @@ describe("playlist render cache", () => {
     await expect(
       buildSignedPlaylist(CHANNEL, STARTED_AT),
     ).resolves.toContain("#EXTM3U");
+  });
+
+  /**
+   * A3.1 (docs/plans/ALWAYS_ON.md): the party keeps playing through a DB
+   * blip. Distinct from the test above on purpose — a `DatabaseUnavailableError`
+   * (the breaker is open) must fall back to the last good body, while a real
+   * `HlsPlaylistNotFound` (the session actually ended) must still 404, or a
+   * stale window would go on being served for a stream that is over.
+   */
+  it("A3.1: the breaker being open serves the last cached body instead of failing", async () => {
+    const now = 1_800_000_000_000;
+    const first = await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Past the TTL, so a fresh render is attempted — and the pool rejects
+    // with the breaker's own error rather than a generic failure.
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    const stale = await buildSignedPlaylist(
+      CHANNEL,
+      STARTED_AT,
+      undefined,
+      now + HLS_PLAYLIST_CACHE_TTL_MS + 1,
+    );
+    expect(stale).toBe(first);
+    // No new upstream fetch: the DB check failed before the fetch ever ran.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The fallback is not remembered as fresh: the very next poll tries
+    // again rather than being stuck on stale content once the DB recovers.
+    const recovered = await buildSignedPlaylist(
+      CHANNEL,
+      STARTED_AT,
+      undefined,
+      now + HLS_PLAYLIST_CACHE_TTL_MS + 2,
+    );
+    expect(recovered).toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("A3.1: a genuinely ended session still 404s even while the same error type is in play elsewhere", async () => {
+    await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    pool.rowCount = 0;
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, Date.now() + HLS_PLAYLIST_CACHE_TTL_MS + 1),
+    ).rejects.toThrow(HlsPlaylistNotFound);
   });
 
   it("the cached body still carries segment URLs that work for the viewer who gets it", async () => {
@@ -699,6 +763,26 @@ describe("buildMasterPlaylistFor", () => {
     rungRows(["720p30"]);
     expect(await master(undefined, clock)).toContain("/720p30");
     expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+
+  it("A3.1: the breaker being open still serves the master from the last known rung list", async () => {
+    rungRows(["1080p30", "720p30"]);
+    const first = await master(undefined, clock);
+    expect(pool.query).toHaveBeenCalledTimes(1);
+
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    const stale = await master(undefined, clock + HLS_PLAYLIST_CACHE_TTL_MS + 1);
+    expect(stale).toBe(first);
+
+    // Not remembered as fresh: recovery is picked up on the very next poll.
+    rungRows(["1080p30", "720p30", "360p30"]);
+    const recovered = await master(
+      undefined,
+      clock + HLS_PLAYLIST_CACHE_TTL_MS + 2,
+    );
+    expect(recovered).toContain("/360p30");
   });
 });
 

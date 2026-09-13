@@ -50,6 +50,7 @@ export function failedSendKey(
   | "chat.reject.undeliverable"
   | "chat.reject.slowMode"
   | "chat.reject.automod"
+  | "chat.reject.databaseUnavailable"
   | "chat.failedSend" {
   switch (reason) {
     case "rate-limited":
@@ -64,6 +65,8 @@ export function failedSendKey(
       return "chat.reject.slowMode";
     case "automod":
       return "chat.reject.automod";
+    case "database-unavailable":
+      return "chat.reject.databaseUnavailable";
     default:
       return "chat.failedSend";
   }

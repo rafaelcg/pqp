@@ -629,6 +629,17 @@ describe("message-rejected", () => {
     expect(posted).toEqual({ ok: false, reason: "cannot-send" });
   });
 
+  it("A3.1: a DatabaseUnavailableError anywhere in the send path becomes a database-unavailable rejection, not an unhandled rejection", async () => {
+    const { DatabaseUnavailableError } = await import("../db.js");
+    vi.mocked(canAccessChannel).mockRejectedValueOnce(new DatabaseUnavailableError());
+    const posted = await postChannelMessage({
+      author: asUser("user-a"),
+      channelId: nextChannelId(),
+      body: "hello",
+    });
+    expect(posted).toEqual({ ok: false, reason: "database-unavailable" });
+  });
+
   it("restores a closed 1:1 from the shared send path", async () => {
     const channelId = nextChannelId();
     const posted = await postChannelMessage({

@@ -264,6 +264,17 @@ post-deploy verification additionally curl `/ready` (which is unaffected by
 this change) before declaring the release done, so routing health and deploy
 safety are checked by two different endpoints instead of one overloaded one.
 
+**Status: in PR** (branch `feat/health-decoupled-from-db`, restarts-api).
+`/health` is process liveness only; a small circuit breaker in
+`server/src/db.ts` (`server/src/lib/db-breaker.ts`) fast-rejects queries with
+`DatabaseUnavailableError` while open (`DB_BREAKER=off` to roll back), and the
+HTTP chokepoints in `api/index.ts` turn that into a 503 with `Retry-After: 5`
+and `{ error: "database_unavailable" }`; the HLS playlist proxy and its rung
+list keep serving their last rendered body/list through an open breaker; a
+chat send gets `message-rejected` with reason `database-unavailable`
+(retriable) instead of a silent drop; `deploy-api-fly.yml`'s post-deploy
+verification now also curls `/ready`, per the tension noted above.
+
 **A3.2 - PgBouncer in transaction mode on the API box(es).** Raises the
 effective connection ceiling by multiplexing many short queries onto fewer
 real Postgres backends, so a burst queues inside PgBouncer instead of hitting
