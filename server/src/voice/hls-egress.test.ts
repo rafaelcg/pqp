@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EgressStatus, TrackSource } from "livekit-server-sdk";
 import {
+  activeBoxEgressCount,
   hlsSegmentSeconds,
+  type EgressListing,
   type LiveHlsEgressApi,
   HLS_MAX_RESTARTS,
   ORPHAN_STOP_BACKOFF_FIRST_MS,
@@ -51,6 +53,16 @@ const overrideRow = vi.hoisted(() => ({
   value: null as boolean | null,
   present: true,
 }));
+/**
+ * Channels the box-budget ghost filter should treat as having a live
+ * `hls_sessions` row. Every existing test in this suite runs a channel that
+ * is (as far as this mock is concerned) always live, so only a test that
+ * deliberately narrows this list exercises the "no live session" ghost
+ * signal; everything else exercises the age signal alone.
+ */
+const liveSessionChannelIds = vi.hoisted(() => ({
+  ids: null as string[] | null, // null = "every channel is live"
+}));
 const query = vi.hoisted(() =>
   vi.fn(async (sql: string) => {
     if (typeof sql === "string" && sql.includes("live_hls_enabled")) {
@@ -58,6 +70,14 @@ const query = vi.hoisted(() =>
         rowCount: overrideRow.present ? 1 : 0,
         rows: overrideRow.present ? [{ live_hls_enabled: overrideRow.value }] : [],
       };
+    }
+    if (
+      typeof sql === "string" &&
+      sql.includes("hls_sessions") &&
+      sql.includes("DISTINCT")
+    ) {
+      const ids = liveSessionChannelIds.ids ?? [CHANNEL, OTHER_CHANNEL];
+      return { rowCount: ids.length, rows: ids.map((channel_id) => ({ channel_id })) };
     }
     return { rowCount: 0, rows: [] };
   }),
@@ -114,6 +134,7 @@ describe("live HLS egress", () => {
     disableHls();
     overrideRow.value = null;
     overrideRow.present = true;
+    liveSessionChannelIds.ids = null;
   });
 
   afterEach(() => {
@@ -877,6 +898,103 @@ describe("live HLS egress", () => {
       await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
       await reconcileLiveHls(CHANNEL, null, SERVER);
       expect(stop.mock.calls.map((call) => call[0])).toEqual(["EG_1", "EG_2"]);
+    });
+  });
+
+  /**
+   * Real incident, 2026-09-12: nine ACTIVE egress records sat in LiveKit's
+   * own state with nothing writing to them, and a 720p rung was refused
+   * twice with `box-budget` while the box was otherwise idle. The box-budget
+   * count reads `listEgress({active:true})` across the whole box, so a
+   * record LiveKit never cleaned up must not count toward it forever.
+   */
+  describe("box budget: ghost egresses", () => {
+    const HOUR_MS = 60 * 60_000;
+
+    function record(id: string, ageMs: number): EgressListing {
+      return {
+        egressId: id,
+        status: EgressStatus.EGRESS_ACTIVE,
+        roomName: CHANNEL,
+        startedAt: Date.now() - ageMs,
+      };
+    }
+
+    it("ignores records older than an hour and logs each one once", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      const fresh = [record("EG_fresh-1", 1_000), record("EG_fresh-2", 2_000)];
+      const stale = Array.from({ length: 9 }, (_, i) =>
+        record(`EG_stale-${i + 1}`, HOUR_MS + 60_000),
+      );
+      const listing = [...fresh, ...stale];
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: vi.fn(),
+          stopEgress: vi.fn(),
+          listEgress: async () => listing,
+        },
+      });
+      logEvent.mockClear();
+
+      const count = await activeBoxEgressCount();
+
+      expect(count).toBe(2);
+      const ghostLogs = logEvent.mock.calls.filter(
+        (call) => call[0] === "voice.hlsGhostEgress",
+      );
+      expect(ghostLogs).toHaveLength(9);
+      expect(
+        ghostLogs
+          .map((call) => (call[1] as { egressId: string }).egressId)
+          .sort(),
+      ).toEqual(stale.map((entry) => entry.egressId).sort());
+      expect(ghostLogs[0]![1]).toMatchObject({ reason: "stale" });
+
+      // A ghost that is still there on the next tick is not re-logged: it
+      // would otherwise be the noisiest line in the log for as long as it
+      // sits unstopped.
+      logEvent.mockClear();
+      const again = await activeBoxEgressCount();
+      expect(again).toBe(2);
+      expect(
+        logEvent.mock.calls.filter((call) => call[0] === "voice.hlsGhostEgress"),
+      ).toHaveLength(0);
+    });
+
+    it("ignores an ACTIVE record whose room has no live hls_sessions row", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      liveSessionChannelIds.ids = [OTHER_CHANNEL]; // CHANNEL is not live
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: vi.fn(),
+          stopEgress: vi.fn(),
+          listEgress: async () => [record("EG_orphan-1", 1_000)],
+        },
+      });
+      logEvent.mockClear();
+
+      const count = await activeBoxEgressCount();
+
+      expect(count).toBe(0);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsGhostEgress",
+        expect.objectContaining({
+          egressId: "EG_orphan-1",
+          reason: "no-live-session",
+        }),
+      );
+    });
+
+    it("falls back to the local rung count when the fake has no listEgress", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      setLiveHlsTestHooks({
+        egress: { startTrackCompositeEgress: vi.fn(), stopEgress: vi.fn() },
+      });
+
+      expect(await activeBoxEgressCount()).toBe(0);
     });
   });
 

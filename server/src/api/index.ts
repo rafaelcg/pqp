@@ -152,6 +152,7 @@ import {
   applyManualStatus,
   broadcastProfileUpdate,
   broadcastToChannel,
+  cancelPrivateVoiceResweep,
   evictChannelViewers,
   evictUserFromChannels,
   evictVoiceChannel,
@@ -4300,6 +4301,15 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
       evictChannelViewers(threadId, { exceptUserIds: [...allowed] });
     }
   }
+  // The reverse: a channel that just went public needs nobody kept out
+  // anymore, so any channel-private re-sweep still running for it (from an
+  // earlier ban, or from an overwrite save while it was still private) is
+  // cancelled rather than left to spend its window evicting people — and,
+  // while the registry is off, the room's own HLS egress — who have every
+  // right to be there now.
+  if (!updated.is_private && channel.is_private) {
+    void cancelPrivateVoiceResweep(channelId!);
+  }
   if (body.isPrivate !== undefined && body.isPrivate !== channel.is_private) {
     pingPermissions(channel.server_id);
   }
@@ -5958,7 +5968,21 @@ router.delete(
   },
 );
 
-async function evictViewersOutsideAudience(channelId: string): Promise<void> {
+/**
+ * `isChannelPrivate` is the channel's state as this request found it (the
+ * row read for the authorization check, before this write). When it is
+ * false, an outstanding channel-private re-sweep for the room is cancelled:
+ * `evictVoiceUsersExcept` schedules one on every call regardless of privacy,
+ * and an overwrite save on an already-public channel must not leave one
+ * running its 15-minute window against a room nobody needs kept out of.
+ */
+async function evictViewersOutsideAudience(
+  channelId: string,
+  isChannelPrivate: boolean,
+): Promise<void> {
+  if (!isChannelPrivate) {
+    void cancelPrivateVoiceResweep(channelId);
+  }
   const audience = await getChannelAudience(channelId);
   if (!audience) {
     return;
@@ -6042,7 +6066,7 @@ router.put(
     if (channel.is_private && body.targetType === "role" && body.targetId === everyoneId) {
       await restorePrivateEveryoneViewOverwrite(channelId!, channel.server_id);
     }
-    await evictViewersOutsideAudience(channelId!);
+    await evictViewersOutsideAudience(channelId!, channel.is_private);
     pingPermissions(channel.server_id);
     await logAudit({
       serverId: channel.server_id,
@@ -6084,7 +6108,7 @@ router.delete(
         await restorePrivateEveryoneViewOverwrite(channelId!, channel.server_id);
       }
     }
-    await evictViewersOutsideAudience(channelId!);
+    await evictViewersOutsideAudience(channelId!, channel.is_private);
     pingPermissions(channel.server_id);
     await logAudit({
       serverId: channel.server_id,

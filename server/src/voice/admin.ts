@@ -10,6 +10,7 @@ import {
 } from "./backends.js";
 import {
   claimVoiceResweeps,
+  deleteVoiceResweep,
   hasLiveVoiceResweeps,
   isVoiceRegistryEnabled,
   upsertVoiceResweep,
@@ -196,6 +197,27 @@ const resweeps = new Map<string, ReturnType<typeof setInterval>>();
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+/**
+ * True for a LiveKit participant that is not a pqp voice peer at all — the
+ * room's own HLS egress, joined to composite the presenter's stream for the
+ * watch-party transcode. Never a moderation target: the channel-private sweep
+ * exists to remove people who lost access to a channel, and an egress has no
+ * `userId` to lose it. Live production evidence (2026-09-12): a channel's own
+ * transcoder got evicted every 5 s by the resweep that a permission save
+ * scheduled, because `evictSfuUsersExcept`'s `allowedUserIds` never includes
+ * it and its `userId` resolves to null, which the "fails closed" comment on
+ * `evictSfuUsersExcept` turns into "remove it".
+ *
+ * `EG_` is the prefix LiveKit's own Track/RoomComposite egress assigns to the
+ * participant identity it creates for itself — a pqp voice peer's identity
+ * (a `randomUUID()`, `server/src/ws/voice.ts`) can never collide with it, so
+ * the check is exact rather than a shape guess that could exempt a real
+ * account whose identity happens to look unfamiliar.
+ */
+function isEgressIdentity(identity: string): boolean {
+  return identity.startsWith("EG_");
 }
 
 /**
@@ -541,6 +563,16 @@ async function sweepRoom(
   await Promise.all(
     participants.map(async (participant) => {
       const identity = participant.identity;
+      // Only the channel-private sweep is scoped by user identity in a way an
+      // egress can never satisfy (see `isEgressIdentity`). The other two
+      // reasons ("channel", "user") mean the room itself is gone or a
+      // specific account is being ejected, and this deliberately does not
+      // exempt an egress from either: a deleted channel's transcoder should
+      // stop too.
+      if (reason === "channel-private" && isEgressIdentity(identity)) {
+        logEvent("voice.sfuEvictSkippedEgress", { room, identity, reason });
+        return;
+      }
       const userId =
         userIdFromParticipantMetadata(participant.metadata) ??
         knownIdentities.get(identity) ??
@@ -620,6 +652,31 @@ export function evictSfuUsersExcept(
     room,
     allowedUserIds: [...allowedUserIds],
     knownIdentities: Object.fromEntries(knownIdentities),
+  });
+}
+
+/**
+ * Cancel an outstanding channel-private re-sweep — the channel just went
+ * public, or its `@everyone` overwrite regained VIEW, so nobody needs to be
+ * kept out of the window `evictSfuUsersExcept` opened. Clears both forms:
+ * the in-process timer (flag off) and the `voice_resweeps` row (registry on).
+ *
+ * Idempotent and safe to call for a channel that never had one — callers are
+ * expected to call this unconditionally whenever a channel's access widens,
+ * rather than trying to know in advance whether a resweep is actually live.
+ */
+export function cancelSfuPrivateResweep(room: string): Promise<void> {
+  const key = `private:${room}`;
+  const existing = resweeps.get(key);
+  if (existing) {
+    clearInterval(existing);
+    resweeps.delete(key);
+  }
+  if (!isVoiceRegistryEnabled()) {
+    return Promise.resolve();
+  }
+  return deleteVoiceResweep(key).catch((error: unknown) => {
+    logEvent("voice.sfuResweepCancelFailed", { key, error: describeError(error) });
   });
 }
 

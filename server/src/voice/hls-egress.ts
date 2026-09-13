@@ -102,6 +102,21 @@ const ORPHAN_STOP_BACKOFF_STEPS_MS = [
 ] as const;
 
 /**
+ * How old an ACTIVE `listEgress` record may be before the box-budget count
+ * stops trusting it. Real incident, 2026-09-12: nine ACTIVE egress records
+ * sat in LiveKit's own state (Redis on the media box) with nothing writing
+ * to them, and a 720p rung was refused twice with `box-budget` while the box
+ * was otherwise idle. LiveKit reporting a dead handler as ACTIVE forever is
+ * the same failure `rungHealth`'s playlist-stuck check exists for on THIS
+ * process's own rungs; this is the same fix for records that belong to
+ * nobody this process can ask a playlist question about at all. One hour is
+ * generous — a real watch party's egress writes a segment every couple of
+ * seconds — and deliberately independent of the second check below, since
+ * either one catching a ghost is enough.
+ */
+const GHOST_EGRESS_MAX_AGE_MS = 60 * 60_000;
+
+/**
  * What LiveKit says about one egress, reduced to the three answers the
  * monitor acts on. `unknown` is "could not ask" and never triggers a restart.
  */
@@ -113,6 +128,13 @@ export interface EgressListing {
   error?: string;
   /** The LiveKit room, which for us is the voice channel id. */
   roomName?: string;
+  /**
+   * Wall-clock ms this egress started, when LiveKit stated it. Undefined for
+   * an older fake in a test that has no reason to care — every caller that
+   * uses it (the ghost filter below) already treats "unknown" as "cannot be
+   * aged out", never as "definitely fresh".
+   */
+  startedAt?: number;
 }
 
 export interface LiveHlsScreenTracks {
@@ -223,6 +245,14 @@ const orphanStopBackoff = new Map<
  * leak ever happened, because the leak itself is silent.
  */
 let orphansStopped = 0;
+/**
+ * Egress ids the box-budget count has already logged as a ghost, so a
+ * record that lives on for hours (exactly what makes it a ghost) does not
+ * re-log every monitor tick. Cleared only by `resetLiveHlsForTests`; nothing
+ * in production ever needs to forget one, since a stopped id simply stops
+ * appearing in `listEgress({active:true})`.
+ */
+const loggedGhostEgressIds = new Set<string>();
 let changeListener: LiveHlsChangeListener | null = null;
 let sfuLoadReader: LiveHlsSfuLoadReader | null = null;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
@@ -831,6 +861,7 @@ export function resetLiveHlsForTests(): void {
   reconcileQueue.clear();
   orphanStopBackoff.clear();
   orphansStopped = 0;
+  loggedGhostEgressIds.clear();
   changeListener = null;
   sfuLoadReader = null;
   stopLiveHlsMonitor();
@@ -860,6 +891,94 @@ export function runningRungCount(): number {
     total += room.rungs.length;
   }
   return total;
+}
+
+/**
+ * Channel ids with a session `hls_sessions` still calls live (`ended_at IS
+ * NULL`). Null means "could not ask" — the same convention as
+ * `listActiveEgresses` — and every caller must read that as "do not judge a
+ * record by this", never as "no channel is live".
+ */
+async function listChannelsWithLiveHlsSessions(): Promise<Set<string> | null> {
+  try {
+    const result = await getPool().query<{ channel_id: string }>(
+      `SELECT DISTINCT channel_id FROM hls_sessions WHERE ended_at IS NULL`,
+    );
+    return new Set(result.rows.map((row) => row.channel_id));
+  } catch (error) {
+    logEvent("voice.hlsLiveSessionsQueryFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * Renditions running on the WHOLE box right now, for the box-budget check —
+ * across every process, not just this one's `rooms` map. `decideLadder`
+ * used to be handed `runningRungCount()`, which is exactly right for a box
+ * that has never restarted and exactly wrong the moment `listEgress` still
+ * remembers something this process does not: an adopted session mid-boot, or
+ * — the case that actually cost a rung — a ghost record LiveKit never
+ * cleaned up.
+ *
+ * A record counts only when it is BOTH: `alive` per `healthFromListing`, AND
+ * not a ghost. A record is a ghost when either is true — its age alone is
+ * enough, so is an unrecognised room alone — and each is checked
+ * independently because either can be the only signal available (an ancient
+ * `startedAt` needs no database round trip to condemn; a channel with no
+ * live session row is damning even for a `startedAt` LiveKit did not send).
+ * Every ghost id is logged exactly once via `loggedGhostEgressIds`, because
+ * a real ghost sits there for hours and this must not become the noisiest
+ * line in the log.
+ *
+ * Falls back to `runningRungCount()` — this process's own honest count —
+ * when there is no egress, no `listEgress` support (an older fake in a
+ * test), or the listing call itself failed: "could not ask" must never read
+ * as "the box is empty" and refuse nothing, but it must also never read as
+ * infinite and refuse everything, so the floor is what we know for certain.
+ */
+export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
+  const egress = getEgress();
+  if (!egress?.listEgress) {
+    return runningRungCount();
+  }
+  let listing: EgressListing[];
+  try {
+    listing = await egress.listEgress({ active: true });
+  } catch (error) {
+    logEvent("voice.hlsBoxBudgetListFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return runningRungCount();
+  }
+  const liveChannels = await listChannelsWithLiveHlsSessions();
+  let count = 0;
+  for (const info of listing) {
+    if (healthFromListing(info.egressId, listing) !== "alive") {
+      continue;
+    }
+    const tooOld =
+      info.startedAt !== undefined && now - info.startedAt > GHOST_EGRESS_MAX_AGE_MS;
+    const noLiveSession =
+      liveChannels !== null &&
+      info.roomName !== undefined &&
+      !liveChannels.has(info.roomName);
+    if (tooOld || noLiveSession) {
+      if (!loggedGhostEgressIds.has(info.egressId)) {
+        loggedGhostEgressIds.add(info.egressId);
+        logEvent("voice.hlsGhostEgress", {
+          egressId: info.egressId,
+          roomName: info.roomName ?? null,
+          ageMs: info.startedAt !== undefined ? now - info.startedAt : null,
+          reason: tooOld ? "stale" : "no-live-session",
+        });
+      }
+      continue;
+    }
+    count += 1;
+  }
+  return count;
 }
 
 /**
@@ -1457,6 +1576,12 @@ function getEgress(): LiveHlsEgressApi | null {
         status: info.status,
         error: info.error || undefined,
         roomName: info.roomName,
+        // `startedAt` is unix nanoseconds (protobuf int64). Dividing the
+        // bigint first keeps the result inside Number's safe range — doing
+        // that division after `Number()` would already have lost precision,
+        // since nanoseconds-since-1970 overflows MAX_SAFE_INTEGER today.
+        startedAt:
+          info.startedAt > 0n ? Number(info.startedAt / 1_000_000n) : undefined,
       }));
     },
   };
@@ -2103,7 +2228,7 @@ async function startRoom(
   const ladder = liveHlsLadder();
   const decisions = decideLadder({
     rungs: ladder,
-    runningRungs: runningRungCount(),
+    runningRungs: await activeBoxEgressCount(),
     sfuLoadMbps: await currentSfuLoadMbps(),
     ladderBudgetMbps: ladderBudgetMbps(),
     boxBudgetMbps: promotionBudgetMbps(),

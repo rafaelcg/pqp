@@ -71,6 +71,7 @@ import { canAccessChannel, resolveMemberName } from "../services/users.js";
 import { broadcastToChannel, onPermissionsUpdate } from "./chat.js";
 import { resolveStatus } from "./status.js";
 import {
+  cancelSfuPrivateResweep,
   evictSfuRoom,
   evictSfuUser,
   evictSfuUsersExcept,
@@ -2800,6 +2801,20 @@ export function evictVoiceUsersExcept(
     return;
   }
   void evictSfuUsersExcept(voiceChannelId, allowedUserIds, knownIdentities);
+}
+
+/**
+ * A channel's access just widened — it went public, or its `@everyone`
+ * overwrite regained VIEW — so any channel-private re-sweep `evictVoiceUsersExcept`
+ * left running for it no longer has anybody to keep out. Cancel it rather
+ * than let it run its window: `evictSfuUsersExcept` schedules one on every
+ * call regardless of whether the channel is still private, and a permission
+ * save on an already-public channel must not leave a 15-minute sweep behind
+ * that spends its ticks evicting the room's own HLS egress every 5 s (see
+ * `isEgressIdentity` in `voice/admin.ts`).
+ */
+export function cancelPrivateVoiceResweep(voiceChannelId: string): Promise<void> {
+  return cancelSfuPrivateResweep(voiceChannelId);
 }
 
 /** Drop a specific user from a channel's voice room (kick / access revoked). */
