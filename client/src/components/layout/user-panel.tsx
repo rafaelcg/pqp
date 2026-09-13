@@ -168,6 +168,12 @@ export function UserPanel({
   const [hintDismissed, setHintDismissed] = useState(isDownloadHintDismissed);
   const popoverRef = useRef<HTMLDivElement>(null);
   const choiceRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  /**
+   * `Escape` closing the popover has to hand focus back to what opened it —
+   * the button unmounts the popover it was inside of, so without this the
+   * browser just drops focus to `<body>` once the focused row disappears.
+   */
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const showDownload = !isDesktopApp();
   // Phone browsers get the corner card instead. Two invites for the same
   // APK/TestFlight hop in a 16rem sidebar is noise, and this strip used to
@@ -192,7 +198,17 @@ export function UserPanel({
       return;
     }
     function onPointerDown(event: MouseEvent) {
-      if (!popoverRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      // The trigger button is outside `popoverRef` too, so without this a
+      // second click meant to CLOSE the menu closed it here on `mousedown`
+      // and the button's own `onClick` toggle — reading state that already
+      // flipped, in the same batch — immediately reopened it on `click`.
+      // The button owns its own open/close there; this handler is only for
+      // a click genuinely outside both.
+      if (
+        !popoverRef.current?.contains(target) &&
+        !triggerRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     }
@@ -205,6 +221,7 @@ export function UserPanel({
       }
       event.preventDefault();
       setOpen(false);
+      triggerRef.current?.focus();
     }
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown, true);
@@ -477,6 +494,7 @@ export function UserPanel({
 
         <Tooltip label={t("status.change")}>
         <button
+        ref={triggerRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
