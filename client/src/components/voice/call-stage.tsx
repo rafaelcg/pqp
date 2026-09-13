@@ -34,6 +34,7 @@ import {
   useState,
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
   type SyntheticEvent,
@@ -595,12 +596,20 @@ export interface CallStageProps {
    * goes. See docs/plans/WATCH_PARTY_SETUP_UX.md section 10.
    */
   watchPartyChrome?: boolean;
+  /**
+   * THE PRESENTER'S OWN STAGE (2026-09-13). With `watchPartyChrome`, when the
+   * lone share on this stage is our own, the pane draws this instead of a
+   * full-size mirror of the host's tab: a small monitor, the audience's
+   * view, and the room's activity. See `WatchPartyPresenterStage`.
+   */
+  presenterStage?: (stream: MediaStream | null) => ReactNode;
 }
 
 export function CallStage({
   channelId,
   title,
   watchPartyChrome = false,
+  presenterStage,
   serverName = null,
   serverIconUrl = null,
   currentUser,
@@ -656,6 +665,7 @@ export function CallStage({
     <ActiveCall
       channelId={channelId}
       title={title}
+      presenterStage={presenterStage}
       watchPartyChrome={watchPartyChrome}
       serverName={serverName}
       serverIconUrl={serverIconUrl}
@@ -705,6 +715,7 @@ function ActiveCall({
   channelId,
   title,
   watchPartyChrome = false,
+  presenterStage,
   serverName = null,
   serverIconUrl = null,
   currentUser,
@@ -746,6 +757,7 @@ function ActiveCall({
   channelId: string;
   title: string;
   watchPartyChrome?: boolean;
+  presenterStage?: (stream: MediaStream | null) => ReactNode;
   serverName?: string | null;
   serverIconUrl?: string | null;
   currentUser: CallStageProps["currentUser"];
@@ -1140,6 +1152,10 @@ function ActiveCall({
       ? null
       : (screenTiles.find((tile) => tile.peerId === fullscreen.soloPeerId) ??
         null);
+  // The presenter's own share in a watch party, for `presenterStage`: the
+  // ordinary (non-fullscreen) path renders the grid, and the grid is where
+  // a lone local share lives, so the swap happens ahead of it.
+  const localShare = screenTiles.find((tile) => tile.isSelf) ?? null;
   const soloPersonKey = fullscreen.soloPeerId
     ? personKeyFromCameraSoloId(fullscreen.soloPeerId)
     : null;
@@ -1507,6 +1523,8 @@ function ActiveCall({
               onPin={() => togglePin(cameraSoloId(soloPerson.key))}
               pinned={pinnedTileId === cameraSoloId(soloPerson.key)}
             />
+          ) : soloTile && soloTile.isSelf && watchPartyChrome && presenterStage ? (
+            presenterStage(soloTile.stream)
           ) : soloTile ? (
             /* The same for a share. Switching between the two costs no
                platform call, which is why they share one solo id. */
@@ -1525,6 +1543,8 @@ function ActiveCall({
               communityName={serverName}
               coverUrl={serverIconUrl}
             />
+          ) : watchPartyChrome && presenterStage && localShare ? (
+            presenterStage(localShare.stream)
           ) : stage.tiles.length > 0 ? (
             <ul
               data-testid="stage-grid"
@@ -1796,6 +1816,13 @@ function ActiveCall({
           "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
           (voiceState.error || voiceState.notice) && "mt-7",
+          // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
+          // (2026-09-13): the party header one row up already says the name,
+          // the count and the uptime, and "watch-party · 1 na chamada" over
+          // the host's own tab was the fifth strip between them and their
+          // picture. A phone cannot share, so the landscape toggle this
+          // overlay also holds is never wanted here.
+          watchPartyChrome && focusedIsLocal && "hidden",
         )}
       >
         <div className="min-w-0">

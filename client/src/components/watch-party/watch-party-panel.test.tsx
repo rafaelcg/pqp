@@ -506,13 +506,14 @@ describe("the persistent mic-muted warning (2026-09-13)", () => {
       ...over,
     });
 
-  it("warns while presenting with the mic muted; the dock's mic pill is the fix", () => {
-    // The banner used to carry its own Ativar mic button. Since the dock
-    // (2026-09-13) the mute toggle is the pill one row down, so the banner
-    // is a sentence and the pill is the only mute control on the surface.
+  it("warns on the status row while presenting with the mic muted, with Ativar mic inline", () => {
+    // Not a red strip of its own any more (2026-09-13): the amber end of the
+    // same line as the health dot, inside the transmission row.
     const html = live({ isPresenting: true, micState: "muted" });
-    expect(html).toContain("watch-party-mic-muted-warning");
-    expect(html).not.toContain("data-watch-party-activate-mic");
+    const tx = html.slice(html.indexOf('data-testid="watch-party-transmission"'));
+    const row = tx.slice(0, tx.indexOf('data-testid="watch-party-dock"'));
+    expect(row).toContain("watch-party-mic-muted-warning");
+    expect(row).toContain("data-watch-party-activate-mic");
     expect(html).toContain('data-watch-party-mic="muted"');
   });
 

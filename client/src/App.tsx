@@ -433,6 +433,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
+import { WatchPartyPresenterStage } from "@/components/watch-party/presenter-stage";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -1513,11 +1514,40 @@ function MainAppContent({
       voiceState.voiceChannelId === selectedChannelId &&
       voiceState.status !== "idle"
     );
+  /**
+   * THE PRESENTER'S LIVE LAYOUT (2026-09-13, the live-layout pass of
+   * `docs/plans/WATCH_PARTY_PRESENTER_UI.md`). Once the host's own share is
+   * up in a live party, the roster column is put away the same way it is
+   * for a viewer, and a chat the host had collapsed comes back: their job
+   * is now the room, and the members list is not the room.
+   */
+  const presentingAParty =
+    selectedChannelId !== null &&
+    watchParties.byChannel[selectedChannelId]?.state === "live" &&
+    voiceState.voiceChannelId === selectedChannelId &&
+    voiceState.isSharingScreen;
   useEffect(() => {
-    memberSidebar.suspend(watchingAParty);
+    memberSidebar.suspend(watchingAParty || presentingAParty);
     // `memberSidebar.suspend` is a stable callback from the hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchingAParty]);
+  }, [watchingAParty, presentingAParty]);
+  const wasPresenting = useRef(false);
+  useEffect(() => {
+    const rose = presentingAParty && !wasPresenting.current;
+    wasPresenting.current = presentingAParty;
+    if (rose && callSplit.collapsed === "chat") {
+      handleCallSplitChange({ ...callSplit, collapsed: "none" }, true);
+    }
+    // Only the rising edge matters; the split is read at that instant.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presentingAParty]);
+  /**
+   * "ATIVAR O MIC?" ONCE, AT GO-LIVE. The host always joins muted (see
+   * `handleWatchPartyGoLive`), which used to leave a permanent red strip
+   * saying so. One question at the moment it matters instead; the status
+   * row keeps the quiet reminder afterwards.
+   */
+  const [micPromptPartyId, setMicPromptPartyId] = useState<string | null>(null);
   const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
    * Audio consent for a Windows desktop shell whose picker cannot ask yet.
@@ -4080,6 +4110,9 @@ function MainAppContent({
     // matches the setup picker so a retry without a handed stream stays on
     // the echo-safe path.
     startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
+    if (voice.getState().isMuted) {
+      setMicPromptPartyId(party.id);
+    }
   }
 
   /**
@@ -6416,6 +6449,25 @@ function MainAppContent({
               splitKind === "watch" &&
               watchParties.byChannel[selectedChannel.id]?.state === "live"
             }
+            presenterStage={(stream) => (
+              <WatchPartyPresenterStage
+                stream={stream}
+                liveStream={
+                  voiceState.channelLive[selectedChannel.id]?.stream ?? null
+                }
+                channelId={selectedChannel.id}
+                audienceCount={watchAudienceCount(
+                  voiceState.channelLive[selectedChannel.id],
+                  voiceState.occupancy[selectedChannel.id],
+                )}
+                hands={
+                  watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []
+                }
+                onInvite={(userId) =>
+                  void handleWatchPartyStage("invite", userId)
+                }
+              />
+            )}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
@@ -7650,6 +7702,20 @@ function MainAppContent({
         onClose={() => setHlsHostAck(null)}
       />
 
+      <ConfirmDialog
+        open={micPromptPartyId !== null}
+        title={t("watchParty.live.micPromptTitle")}
+        description={t("watchParty.live.micPromptBody")}
+        confirmLabel={t("watchParty.live.micPromptConfirm")}
+        destructive={false}
+        onConfirm={() => {
+          if (voice.getState().isMuted) {
+            voice.toggleMute();
+          }
+          setMicPromptPartyId(null);
+        }}
+        onClose={() => setMicPromptPartyId(null)}
+      />
       <ConfirmDialog
         open={pendingDeleteChannelId !== null}
         title={t("chrome.deleteChannel")}

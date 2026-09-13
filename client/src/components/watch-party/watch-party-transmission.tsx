@@ -164,6 +164,7 @@ export function WatchPartyTransmission({
   onStreamQualityChange,
   onOpenMixer,
   detailsInDialog = false,
+  trailing,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
   stream: LiveHlsStream | null;
@@ -244,6 +245,13 @@ export function WatchPartyTransmission({
    * the row unfolds inline exactly as it did, which is what the tests pin.
    */
   detailsInDialog?: boolean;
+  /**
+   * Drawn at the right end of the status row, outside the toggle (a button
+   * cannot hold a button). The panel puts the mic warning and its Ativar
+   * mic here, so the muted state is part of the same line as the health
+   * dot instead of a red strip of its own (2026-09-13).
+   */
+  trailing?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -475,11 +483,12 @@ export function WatchPartyTransmission({
         className,
       )}
     >
+      <div className="flex items-center gap-2">
       <button
         type="button"
         data-testid="watch-party-tx-toggle"
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 text-left text-[11px] text-paper-muted hover:text-paper"
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px] text-paper-muted hover:text-paper"
         onClick={() => setOpen((was) => !was)}
         title={
           detailsInDialog
@@ -553,6 +562,8 @@ export function WatchPartyTransmission({
           />
         )}
       </button>
+      {trailing}
+      </div>
 
       {open && detailsInDialog && (
         <Dialog
