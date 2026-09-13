@@ -179,6 +179,23 @@ export async function openApp(page: Page): Promise<void> {
 }
 
 /**
+ * Opens the server settings dialog from the channel sidebar header.
+ *
+ * `docs/plans/SERVER_HEADER_REDO.md`: "Community settings" is no longer a
+ * standalone button in the row — it moved into the server menu the chevron
+ * opens, alongside Invite and Members. Every spec that needs the dialog goes
+ * through here rather than repeating "click the trigger, then the item",
+ * so the whole suite updates in one place the next time this menu changes.
+ */
+export async function openServerSettings(page: Page): Promise<void> {
+  await page.locator("[data-server-menu-trigger]").first().click();
+  await page
+    .getByRole("menuitem", { name: "Community settings" })
+    .click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+}
+
+/**
  * Camera, screen share, and push-to-talk are no-ops until the socket is
  * connected. The slim bar appears while still joining, so waiting on it alone
  * is not enough.

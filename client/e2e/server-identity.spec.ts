@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./fixtures";
+import { openApp, openServerSettings } from "./fixtures";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
@@ -74,16 +74,14 @@ async function storageEnabled(): Promise<boolean> {
 }
 
 /**
- * The banner *in the channel column*, which is not the only one on the page:
- * the Identity section previews it with the very same component, deliberately,
- * so the preview and the thing previewed cannot disagree. `aside` is the column.
+ * The 72px decorative strip *in the channel column* — `ServerBannerStrip`,
+ * not `ServerBanner` (the tall one with the name over it, which only the
+ * Identity section's own preview draws; `data-server-banner`, no `-strip`,
+ * is that one, and it is not what a viewer of the column itself ever sees).
+ * `aside` is the column.
  */
-const columnBanner = (page: Page) => page.locator("aside [data-server-banner]");
-
-async function openServerSettings(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Community settings" }).first().click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-}
+const columnBanner = (page: Page) =>
+  page.locator("aside [data-server-banner-strip]");
 
 /** List (or unlist) the suite's own server in the public directory. */
 async function setListed(isCommunity: boolean): Promise<void> {
@@ -199,8 +197,9 @@ test.describe("uploading a banner", () => {
 
     const band = columnBanner(page);
     await expect(band).toBeVisible();
-    // ~120px tall, which is the height the whole design assumes.
-    expect((await band.boundingBox())!.height).toBeGreaterThan(100);
+    // 72px (`h-18`, spec §6.1) — a decoration, not a second header. Never
+    // the old design's ~120px aspect-ratio box.
+    expect((await band.boundingBox())!.height).toBeCloseTo(72, 0);
     await page.screenshot({ path: "/tmp/srv-banner-1440.png" });
   });
 
@@ -317,7 +316,7 @@ test.describe("a banner on a phone", () => {
       documentScrollWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
       bannerWidth: document
-        .querySelector("aside [data-server-banner]")!
+        .querySelector("aside [data-server-banner-strip]")!
         .getBoundingClientRect().width,
     }));
     expect(geometry.documentScrollWidth).toBeLessThanOrEqual(
