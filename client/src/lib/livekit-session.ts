@@ -1814,6 +1814,32 @@ export async function connectLiveKit({
       }
       throw err;
     }
+
+    // Another publish() (or disconnect()) can run to completion while THIS
+    // call was awaiting publishTrack above and repoint the shared `published`
+    // at its own handle before this one got here. Unlike the catch block
+    // above, `unpublishTrack` below is NOT a no-op in that case: LiveKit just
+    // finished registering a real sender for `localTrack`, so leaving it be
+    // means two live microphone publications on the wire at once, and this
+    // is the only code path left holding a reference to the losing one — the
+    // shared pointer already moved on, and nothing else will ever fire an
+    // "ended" for a source that has not actually ended. Tear it down here,
+    // unconditionally: only the shared-pointer check is conditional, so a
+    // publish that DID win the race is left alone.
+    if (published !== localTrack) {
+      try {
+        await room.localParticipant.unpublishTrack(localTrack);
+      } catch (err) {
+        console.warn("[pqp] could not unpublish a superseded mic clone", err);
+      } finally {
+        // Guarantee the clone stops even if the unpublish above rejected or
+        // found nothing to do — `stop()` on an already-stopped track is a
+        // no-op, so this is safe whether or not it just succeeded.
+        localTrack.stop();
+      }
+      return;
+    }
+
     // A clone does not stop when the source does — only the `.enabled` bit is
     // shared, per the comment further up; `stop()` on one sibling leaves the
     // other running (`MediaStreamTrack.clone()`, MDN). `stopMicPipeline`
@@ -1821,17 +1847,29 @@ export async function connectLiveKit({
     // the `replaceTrack` call that would otherwise unpublish this clone, and
     // a real device can also fail mid-call. Tie the clone to the source's
     // lifecycle from here on, now that `publishTrack` has actually
-    // registered a publication for it — attaching this any earlier would
-    // race an in-flight `publishTrack`: an "ended" firing before it resolves
-    // would find no publication yet (`unpublishTrack` a no-op) and still
-    // null out `published`, so the moment publishTrack DID resolve above,
-    // this function would go on to leave a live, now-untracked publication
-    // in the room with nothing left holding a reference to clean it up.
+    // registered a publication for it (checked above) — attaching this any
+    // earlier would race an in-flight `publishTrack`: an "ended" firing
+    // before it resolves would find no publication yet (`unpublishTrack` a
+    // no-op) and still null out `published`, so the moment publishTrack DID
+    // resolve above, this function would go on to leave a live, now-untracked
+    // publication in the room with nothing left holding a reference to clean
+    // it up.
     const onSourceEnded = () => {
-      if (published === localTrack) {
-        void room.localParticipant.unpublishTrack(localTrack);
-        published = null;
-      }
+      void (async () => {
+        try {
+          await room.localParticipant.unpublishTrack(localTrack);
+        } catch (err) {
+          console.warn("[pqp] could not unpublish an ended mic clone", err);
+        } finally {
+          // `unpublishTrack`'s own stop-on-success might not have run (it
+          // rejected, or the room disconnected mid-call); make certain the
+          // clone stops regardless rather than lose the only handle to it.
+          localTrack.stop();
+        }
+        if (published === localTrack) {
+          published = null;
+        }
+      })();
     };
     if (audioTrack.readyState === "ended") {
       // Ended while publishTrack was in flight, before this listener could
