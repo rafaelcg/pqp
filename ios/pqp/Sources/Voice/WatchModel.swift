@@ -108,6 +108,12 @@ final class WatchModel {
     /// Whether a stream has been seen at all during this visit. What separates
     /// `idle` from `ended`.
     private var sawStream = false
+    /// Bumped on every `applyStream`, wire or refetch alike. `refreshLive`
+    /// reads it before its network call and compares after: if a socket
+    /// frame applied in between, that frame is newer than anything an HTTP
+    /// response started earlier can carry, so the response is discarded
+    /// rather than overwriting a token the socket has already superseded.
+    private var streamGeneration = 0
 
     // MARK: - Lifecycle
 
@@ -191,12 +197,28 @@ final class WatchModel {
      can read `phase`, since a successful-but-empty answer already moved it
      to `.ended` or `.idle` before returning.
      */
-    func refreshLive() async -> LiveHlsStream? {
+    func refreshLive() async throws -> LiveHlsStream? {
         guard let channelId, let session else { return nil }
-        guard let state: ChannelLiveState =
-                try? await session.api.get("/api/channels/\(channelId)/live")
-        else { return nil }
+        let requestedGeneration = streamGeneration
+        let state: ChannelLiveState
+        do {
+            state = try await session.api.get("/api/channels/\(channelId)/live")
+        } catch {
+            // The watchdog task that called us can be cancelled mid-request
+            // (view torn down, channel switched away from) — that is not a
+            // verdict on the stream, so it must not read as one to the
+            // caller. Propagate it instead of returning `nil`, which
+            // `recoverFromFailure` would otherwise read as "the refetch
+            // failed" and mark the picture dead on its way out the door.
+            if error is CancellationError { throw error }
+            return nil
+        }
         guard self.channelId == channelId else { return nil }
+        // A socket frame landed while this request was in flight and is
+        // necessarily fresher than a response an HTTP request started
+        // before it. Drop this one rather than reattaching a token, or an
+        // "ended", the socket has already superseded.
+        guard requestedGeneration == streamGeneration else { return nil }
         participants = state.participants
         watching = state.watching
         applyStream(state.stream)
@@ -235,6 +257,7 @@ final class WatchModel {
     }
 
     private func applyStream(_ next: LiveHlsStream?) {
+        streamGeneration &+= 1
         stream = next
         if next != nil { sawStream = true }
         phase = Self.phase(stream: next, sawStream: sawStream)

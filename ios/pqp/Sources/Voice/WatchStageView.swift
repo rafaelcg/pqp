@@ -46,6 +46,14 @@ struct WatchStageView: View {
     /// Bounded automatic recovery from a hard `AVPlayerItem` failure. See
     /// `WatchFailureRecovery`.
     @State private var recovery = WatchFailureRecovery()
+    /// The `attachedAt` of the last attach for which `recovery` was cleared.
+    /// A fresh `attach()` does NOT reset the budget by itself anymore: a
+    /// replacement item that fails again immediately must still count
+    /// against `WatchFailureRecovery.maxAttempts`, or a failure loop never
+    /// reaches `giveUp`. The watchdog clears it once THIS attach is seen
+    /// playing, which is the only signal that the replacement actually
+    /// works.
+    @State private var recoveryClearedAttachedAt: Date?
     @State private var isMinimised = false
 
     /// What the master playlist advertised for THIS broadcast, and how far
@@ -219,6 +227,14 @@ struct WatchStageView: View {
             let status = player.timeControlStatus
             isPlaying = status == .playing || player.rate > 0
             chrome.tick(playing: isPlaying, at: now)
+            // The budget clears once, the first tick this attach is actually
+            // playing, not on attach itself, so a replacement item that
+            // fails again right away still spends from the same budget as
+            // the failure that produced it.
+            if isPlaying, let attached, recoveryClearedAttachedAt != attached.attachedAt {
+                recovery.reset()
+                recoveryClearedAttachedAt = attached.attachedAt
+            }
 
             edge.learnSegmentSeconds(recommendedOffset: item.recommendedTimeOffsetFromLive.seconds)
             // Once the real segment length is known, narrow the forward
@@ -282,21 +298,31 @@ struct WatchStageView: View {
                 String(localized: "The connection to the stream dropped.")
             )
         case .refetch:
-            if await model.refreshLive() != nil {
-                // A fresh stream came back: reattach to it regardless of how
-                // old `attached` is, the same way a stall or a manual retry
-                // does.
-                reconcile(force: true)
-            } else if model.phase == .live {
-                // The refetch itself failed (network), so `phase` was never
-                // touched by it and is still `.live` from before this
-                // failure. Nothing better is available: show the card. A
-                // successful refetch that came back empty already moved
-                // `phase` to `.ended` or `.idle` inside `refreshLive`, and
-                // that sentence is truer than "the connection dropped".
-                model.playbackFailed(
-                    String(localized: "The connection to the stream dropped.")
-                )
+            do {
+                if try await model.refreshLive() != nil {
+                    // A fresh stream came back: reattach to it regardless of
+                    // how old `attached` is, the same way a stall or a
+                    // manual retry does.
+                    reconcile(force: true)
+                } else if model.phase == .live {
+                    // The refetch itself failed (network), so `phase` was
+                    // never touched by it and is still `.live` from before
+                    // this failure. Nothing better is available: show the
+                    // card. A successful refetch that came back empty
+                    // already moved `phase` to `.ended` or `.idle` inside
+                    // `refreshLive`, and that sentence is truer than "the
+                    // connection dropped".
+                    model.playbackFailed(
+                        String(localized: "The connection to the stream dropped.")
+                    )
+                }
+            } catch is CancellationError {
+                // The watchdog task itself was cancelled while this was in
+                // flight (the view went away). Nothing to reconcile and
+                // nothing to mark failed: there is no picture left to be
+                // wrong about.
+            } catch {
+                // `refreshLive` never throws anything but cancellation.
             }
         }
     }
@@ -681,7 +707,8 @@ struct WatchStageView: View {
         attached = AttachedStream(startedAt: stream.startedAt, attachedAt: Date())
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
-        recovery.reset()
+        // NOT `recovery.reset()` here: this attach is unproven until the
+        // watchdog sees it actually play. See `recoveryClearedAttachedAt`.
         behindLive = false
         delaySeconds = nil
         effectiveLines = nil
@@ -905,6 +932,7 @@ struct WatchStageView: View {
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
         recovery.reset()
+        recoveryClearedAttachedAt = nil
         ladder = .empty
         behindLive = false
         delaySeconds = nil

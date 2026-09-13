@@ -70,6 +70,7 @@ import gg.pqp.app.watch.WatchdogDecision
 import gg.pqp.app.watch.reconnectAttachment
 import gg.pqp.app.watch.watchPhaseOf
 import gg.pqp.app.watch.watchSourceChanged
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -413,11 +414,34 @@ fun WatchPane(
                     // `startedAt` did not change. A failure here is not
                     // fatal: the attempt bump re-attaches what we already
                     // have and the watchdog judges that on its own.
-                    val fresh = runCatching { refreshNow() }.getOrNull()
+                    //
+                    // `beforeFetch` captures `newest` before the request, so
+                    // a same-session keyframe that lands WHILE the request
+                    // is in flight can be told apart from one that did not.
+                    // `runCatching` would also catch this coroutine's own
+                    // cancellation (the pane leaving composition, a reattach
+                    // elsewhere) and read it as an ordinary failed refetch,
+                    // which then goes on to mutate `attached`/`attempt` for
+                    // a watchdog loop that should already be dead, so only
+                    // network and decoding failures are swallowed here.
+                    val beforeFetch = newest
+                    val fresh = try {
+                        refreshNow()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
                     attached = reconnectAttachment(fresh, attached)
                     // A successful refetch is trusted over `newest` for the
-                    // next reattach — see `trustFreshRefetch` above.
-                    trustFreshRefetch = fresh != null
+                    // next reattach — see `trustFreshRefetch` above — but
+                    // only when nothing fresher arrived over the socket
+                    // while the fetch was in flight. A same-session keyframe
+                    // changes only the token, not `startedAt`, so it would
+                    // not otherwise show up here at all: without this check
+                    // the fetch's own (now stale) token would win over a
+                    // token the socket had already delivered.
+                    trustFreshRefetch = fresh != null && newest == beforeFetch
                     // Always bumped: when the session changed, `startedAt`
                     // alone already reruns the keyed attach effect below, so
                     // this is a no-op key change riding along with it; when
