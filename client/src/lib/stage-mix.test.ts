@@ -115,6 +115,32 @@ describe("createStageMix", () => {
     mix.close();
   });
 
+  it("does not rebuild a guest's branch when handed the same stream again", () => {
+    // `onPeersChanged` fires for every roster change, not only one guest's,
+    // so `syncStageMixGuestBranches` in use-voice.ts calls this for every
+    // guest on every tick. Rebuilding a branch that already has the right
+    // stream tears down and reconnects a live Web Audio node, which is an
+    // audible interruption for every OTHER guest sharing the same
+    // compressor, not just this one's.
+    const { context } = fakeContext();
+    const createSource = vi.fn(context.createMediaStreamSource);
+    const spied: AudioContextLike = { ...context, createMediaStreamSource: createSource };
+    const mix = createStageMix(null, () => spied);
+    const stream = new FakeStream([new FakeTrack("audio")]) as unknown as MediaStream;
+    mix.setGuestTrack("guest-1", stream);
+    expect(createSource).toHaveBeenCalledTimes(1);
+    // Same object, called again — the shape `onPeersChanged` produces.
+    mix.setGuestTrack("guest-1", stream);
+    mix.setGuestTrack("guest-1", stream);
+    expect(createSource).toHaveBeenCalledTimes(1);
+    expect(mix.guestCount()).toBe(1);
+    // A genuinely different stream (a reconnect) still replaces the branch.
+    const reconnected = new FakeStream([new FakeTrack("audio")]) as unknown as MediaStream;
+    mix.setGuestTrack("guest-1", reconnected);
+    expect(createSource).toHaveBeenCalledTimes(2);
+    mix.close();
+  });
+
   it("ignores a stream with no audio track", () => {
     const { context } = fakeContext();
     const mix = createStageMix(null, () => context);

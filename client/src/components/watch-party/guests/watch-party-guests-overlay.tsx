@@ -102,14 +102,24 @@ export function WatchPartyGuestsOverlay({
     setAccepting(true);
     try {
       await onGoOnAir();
+      // Only on success: a permission refusal or a failed room join means
+      // the invitation still stands (the row was never touched), and hiding
+      // the dialog here would strand the person with no way back to it
+      // short of a reload. Farol flagged the `finally` version of this.
+      setAnswered(true);
     } finally {
       setAccepting(false);
-      setAnswered(true);
     }
   }
 
   function decline() {
     setAnswered(true);
+    // `leave`, not `decline`: `decline` is the host's action on a REQUEST
+    // (§5.8), gated on `manageGuests`, and takes the OTHER person's id — an
+    // invited person calling it on themselves would 403. `leaveWatchPartyGuestSlot`
+    // deletes the invite row whether it is pending (this case) or already
+    // accepted (on-air leaving), which is exactly "I don't want this any
+    // more" for both. Farol suggested `decline` here; that would break.
     onGuestAction({ action: "leave" });
   }
 
@@ -134,7 +144,11 @@ export function WatchPartyGuestsOverlay({
           cameraOn={cameraOn}
           onToggleMic={onToggleMic}
           onToggleCamera={onToggleCamera}
-          onLeave={() => void onGoOffAir()}
+          onLeave={() =>
+            onGoOffAir().catch((err) =>
+              console.warn("[watch-party] go-off-air failed", err),
+            )
+          }
         />
       )}
 

@@ -2754,6 +2754,17 @@ export function createVoiceController(transport: RealtimeTransport) {
   const stageMixGuestIds = new Set<string>();
   let watchPartyGuestsMode: WatchPartyGuestsMode = "off";
   let watchPartyOnAirUserIds: readonly string[] = [];
+  /**
+   * Which named publication is actually up on the SFU right now, so
+   * `syncVoiceTrackPublication` republishes `stage-mix` only when the SHAPE
+   * changes (nothing published, `voice-track`, or `stage-mix`) rather than
+   * every time `setWatchPartyGuests` runs — a guest joining or leaving air
+   * changes the mix's CONTENT, not which track object is publishing it, and
+   * `StageMix.stream`'s underlying `MediaStreamTrack` never changes once
+   * created. Re-publishing it anyway is a needless SFU round trip and a
+   * moment of dead air on every guest's audio.
+   */
+  let publishedVoiceShape: "none" | "voice-track" | "stage-mix" = "none";
 
   /**
    * Feed the mix from the current roster. Cheap and safe to call whenever
@@ -2798,9 +2809,21 @@ export function createVoiceController(transport: RealtimeTransport) {
     mode: WatchPartyGuestsMode,
     onAirUserIds: readonly string[],
   ) {
+    const modeChanged = mode !== watchPartyGuestsMode;
     watchPartyGuestsMode = mode;
     watchPartyOnAirUserIds = onAirUserIds;
     syncStageMixGuestBranches();
+    if (modeChanged && screenMix && state.isSharingMic) {
+      // The same reconfiguration `setVoiceTrackMode` runs on a real
+      // transition: guests turning on or off changes `effectiveVoiceSeparated()`
+      // out from under whatever mix and mute state the film mix was already
+      // in, and both have to move in the same tick this does or the mic is
+      // briefly in the film mix AND on the stage-mix bus at once (or in
+      // neither) — the doubling/silence §5.3 warns about.
+      screenMix.setMic(micForScreenMix());
+      sfuPublicationMuted = null;
+      void applyPublicationMute();
+    }
     void syncVoiceTrackPublication();
   }
 
@@ -2934,14 +2957,30 @@ export function createVoiceController(transport: RealtimeTransport) {
           // mutually exclusive shapes of the same slot (§5.2). The mix
           // persists across calls so a guest joining mid-show is an input
           // added to a bus already running, not a fresh one starting.
+          const isNew = !stageMix;
           if (!stageMix) {
             stageMix = createStageMix(pipeline.processedStream);
           } else {
             stageMix.setOwnMic(pipeline.processedStream);
           }
           syncStageMixGuestBranches();
-          await sfu.unpublishVoiceTrack();
-          await sfu.publishStageMix(stageMix.stream);
+          // Only touch the SFU when the PUBLISHED SHAPE is actually
+          // changing: `stageMix.stream`'s track is the same object for the
+          // life of this mix, so a guest joining or leaving (which already
+          // reached the room through `syncStageMixGuestBranches` above)
+          // needs no republish at all.
+          if (publishedVoiceShape !== "stage-mix") {
+            if (publishedVoiceShape === "voice-track") {
+              await sfu.unpublishVoiceTrack();
+            }
+            await sfu.publishStageMix(stageMix.stream);
+            publishedVoiceShape = "stage-mix";
+          } else if (isNew) {
+            // Should not happen (a fresh mix implies the shape was not
+            // already "stage-mix"), but never leave a freshly built mix
+            // unpublished if the flag and reality ever disagree.
+            await sfu.publishStageMix(stageMix.stream);
+          }
         } else if (wantsSeparated && pipeline) {
           // Only ever touches `unpublishStageMix` when this browser had one
           // running: every ordinary "separada" call site (no guests, ever)
@@ -2951,17 +2990,26 @@ export function createVoiceController(transport: RealtimeTransport) {
             stageMix.close();
             stageMix = null;
             stageMixGuestIds.clear();
-            await sfu.unpublishStageMix();
           }
-          await sfu.publishVoiceTrack(pipeline.processedStream);
+          if (publishedVoiceShape !== "voice-track") {
+            if (publishedVoiceShape === "stage-mix") {
+              await sfu.unpublishStageMix();
+            }
+            await sfu.publishVoiceTrack(pipeline.processedStream);
+            publishedVoiceShape = "voice-track";
+          }
         } else {
           if (stageMix) {
             stageMix.close();
             stageMix = null;
             stageMixGuestIds.clear();
-            await sfu.unpublishStageMix();
           }
-          await sfu.unpublishVoiceTrack();
+          if (publishedVoiceShape === "stage-mix") {
+            await sfu.unpublishStageMix();
+          } else if (publishedVoiceShape === "voice-track") {
+            await sfu.unpublishVoiceTrack();
+          }
+          publishedVoiceShape = "none";
         }
         if (generation === voiceTrackGeneration) {
           transport.sendVoice({

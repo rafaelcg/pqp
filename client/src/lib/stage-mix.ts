@@ -125,10 +125,20 @@ export function createStageMix(
 
   const guestBranches = new Map<
     string,
-    { source: AudioNodeLike; gain: GainNodeLike }
+    { source: AudioNodeLike; gain: GainNodeLike; stream: MediaStream }
   >();
   const setGuestTrack = (userId: string, stream: MediaStream | null) => {
     const existing = guestBranches.get(userId);
+    // Same stream object as last time: `onPeersChanged` fires for every
+    // roster change, not only this guest's, so most calls hand back a
+    // stream this branch already has. Rebuilding it anyway tears the
+    // AudioContext branch down and reconnects it, which is an audible
+    // interruption for every OTHER guest's audio in the same graph, not
+    // just this one's — see the Web Audio branch-churn note in
+    // `use-voice.ts`'s `syncStageMixGuestBranches`.
+    if (existing && existing.stream === stream) {
+      return;
+    }
     if (existing) {
       existing.source.disconnect();
       existing.gain.disconnect();
@@ -142,7 +152,7 @@ export function createStageMix(
         new MediaStream(stream.getAudioTracks()),
       );
       source.connect(gain);
-      guestBranches.set(userId, { source, gain });
+      guestBranches.set(userId, { source, gain, stream });
     }
   };
 

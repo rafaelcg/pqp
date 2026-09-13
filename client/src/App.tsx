@@ -4495,8 +4495,20 @@ function MainAppContent({
    * below (`handleWatchPartyGuestGoOnAir`) because going on air is not just a
    * route call — it stops the player and opens the room first (§3.4).
    */
-  async function handleWatchPartyGuestAction(action: GuestAction) {
-    const party = currentWatchParty();
+  /**
+   * `channelId` is optional and, when given, wins over the currently
+   * selected channel — the go-on-air/go-off-air flows below capture it
+   * BEFORE their own awaits (a mic prompt, a room join) specifically so a
+   * channel switch mid-flight sends the action to the party that was
+   * actually joined, not whatever the user has since navigated to.
+   */
+  async function handleWatchPartyGuestAction(
+    action: GuestAction,
+    channelId?: string,
+  ) {
+    const party = channelId
+      ? (watchParties.byChannel[channelId] ?? null)
+      : currentWatchParty();
     if (!party) {
       return;
     }
@@ -4512,6 +4524,14 @@ function MainAppContent({
    * pauses), so what is left here is mic/camera then the room, and only once
    * the room actually has the guest does the server hear about it — a failed
    * `getUserMedia` must never claim a slot with nobody speaking into it.
+   *
+   * ROLLED BACK ON EITHER FAILURE. A `voice.join` that throws never reaches
+   * the server at all — nothing to roll back. A `join` action that fails
+   * AFTER the room join succeeded (the invitation expired, the cap filled in
+   * the meantime) leaves this browser connected and possibly transmitting
+   * with no guest state behind it, so that path leaves the room again before
+   * the error is re-thrown to the caller (the invite dialog keeps itself
+   * open on a failure it is told about).
    */
   async function handleWatchPartyGuestGoOnAir(channelId: string) {
     voiceServerIdRef.current = selectedServerId;
@@ -4522,13 +4542,28 @@ function MainAppContent({
       vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
     });
-    await handleWatchPartyGuestAction({ action: "join" });
+    try {
+      await handleWatchPartyGuestAction({ action: "join" }, channelId);
+    } catch (err) {
+      voice.leave();
+      throw err;
+    }
   }
 
-  /** `Sair do ar`. Tell the party first, then leave — same order `onLeaveSeat` uses elsewhere. */
-  async function handleWatchPartyGuestGoOffAir() {
-    await handleWatchPartyGuestAction({ action: "leave" });
-    voice.leave();
+  /**
+   * `Sair do ar`. Tell the party first, then leave — same order `onLeaveSeat`
+   * uses elsewhere — but `voice.leave()` runs in `finally`: a rejected
+   * `leave` action (a timeout, a dropped connection) must not strand the
+   * guest connected and transmitting just because the server never heard
+   * about it. The server-side row is cleaned up independently by the
+   * client's own eventual disconnect and the orphan sweep either way.
+   */
+  async function handleWatchPartyGuestGoOffAir(channelId: string) {
+    try {
+      await handleWatchPartyGuestAction({ action: "leave" }, channelId);
+    } finally {
+      voice.leave();
+    }
   }
 
   const presentingPartyId =
@@ -6735,9 +6770,14 @@ function MainAppContent({
             cameraOn={voiceState.isCameraOn}
             onToggleMic={() => voice.toggleMute()}
             onToggleCamera={() => void voice.toggleCamera()}
-            onGuestAction={(action) => void handleWatchPartyGuestAction(action)}
+            onGuestAction={(action) =>
+              handleWatchPartyGuestAction(action, selectedChannel.id).catch(
+                (err) =>
+                  console.warn("[watch-party] guest action failed", err),
+              )
+            }
             onGoOnAir={() => handleWatchPartyGuestGoOnAir(selectedChannel.id)}
-            onGoOffAir={() => handleWatchPartyGuestGoOffAir()}
+            onGoOffAir={() => handleWatchPartyGuestGoOffAir(selectedChannel.id)}
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
