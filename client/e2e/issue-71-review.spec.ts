@@ -245,7 +245,12 @@ test("issue 71: overwrites, hoist, colour, live eviction", async ({
     ).toContainText(shared.muted.displayName);
 
     // --- Roles: hoist + colour ---
-    await owner.page.getByRole("button", { name: "Community settings" }).first().click();
+    // "Community settings" moved into the server menu the chevron opens
+    // (docs/plans/SERVER_HEADER_REDO.md) — no longer a standalone button.
+    await owner.page.locator("[data-server-menu-trigger]").first().click();
+    await owner.page
+      .getByRole("menuitem", { name: "Community settings" })
+      .click();
     const settings = owner.page.getByRole("dialog");
     await expect(settings).toBeVisible();
     await settings.getByRole("tab", { name: "Roles", exact: true }).click();

@@ -449,8 +449,23 @@ against a double Enter creating two channels.
 one-row quick-reaction strip, icons, ticks, separators and danger rows. Measures
 itself on mount and flips above the pointer when it does not fit below.
 
-- **Use it** for a right-click or long-press menu. There is no click-triggered
-  dropdown menu (see Planned primitives).
+- **Use it** for a right-click or long-press menu. For a plain click, use
+  `Menu` below — the two share their row rendering (`menu-items.tsx`), so an
+  item never drifts between the surfaces that both offer it.
+
+### Menu
+
+`menu.tsx`. A Radix dropdown menu, click-triggered, drawing the same
+`ContextMenuItemDef[]` row shape as `ContextMenu` through the shared
+`MenuItemRows` in `menu-items.tsx`.
+
+- **Use it** for a chevron, a `⋮`, or any control that opens a menu on a
+  plain click rather than a right-click or long-press.
+- `topContent` renders non-interactive content above the items, with its own
+  trailing separator — a fact about the surface the menu belongs to, not an
+  action. The server header's "Público" row is the first caller.
+- `items.length === 0` (or `disabled`) renders the trigger alone, same as
+  `ContextMenu`.
 
 ### ScrollArea
 
@@ -488,7 +503,6 @@ variant set, and then use it everywhere.
   `index.css` and each caller draws its own container.
 - **Badge.** `BetaTag` is one badge with one word. There is no general count or
   status badge.
-- **Menu.** A click-triggered dropdown. Only the context menu exists.
 
 ## Rules
 

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./fixtures";
+import { openApp, openServerSettings } from "./fixtures";
 
 /**
  * Server settings as a sectioned surface.
@@ -23,11 +23,6 @@ const SECTIONS = [
   "Audit log",
   "Danger zone",
 ] as const;
-
-async function openServerSettings(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Community settings" }).first().click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-}
 
 const ssoField = (page: Page) =>
   page.getByRole("textbox", { name: "SSO email domain" });
@@ -118,10 +113,12 @@ test.describe("server settings sections", () => {
 
   test("escape closes server settings", async ({ page }) => {
     await openApp(page);
-    const trigger = page
-      .getByRole("button", { name: "Community settings" })
-      .first();
+    // "Community settings" is a menu item now, opened from the server
+    // menu's trigger — that trigger is the stable, always-present control,
+    // so it is what should hold focus once the dialog it led to is gone.
+    const trigger = page.locator("[data-server-menu-trigger]").first();
     await trigger.click();
+    await page.getByRole("menuitem", { name: "Community settings" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
     await page.keyboard.press("Escape");

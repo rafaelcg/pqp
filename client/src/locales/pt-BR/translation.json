@@ -1920,6 +1920,8 @@
   "chrome.inCall_one": "{count} na call",
   "chrome.inCall_other": "{count} na call",
   "chrome.noServer": "Nenhuma comunidade",
+  "chrome.publicCommunity": "Público",
+  "chrome.serverMenu": "Menu da comunidade",
   "chrome.text": "Texto",
   "chrome.voice": "Voz",
   "chrome.watchParty": "Watch party",

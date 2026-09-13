@@ -2,6 +2,7 @@ import {
   ArrowDown,
   ArrowUp,
   Archive,
+  ChevronDown,
   ChevronRight,
   Copy,
   Eraser,
@@ -34,9 +35,13 @@ import {
   PanelLeftClose,
 } from "lucide-react";
 import {
+  forwardRef,
   useEffect,
+  useId,
   useMemo,
+  useRef,
   useState,
+  type ComponentPropsWithoutRef,
   type CSSProperties,
   type DragEvent,
   type ReactNode,
@@ -71,13 +76,18 @@ import {
   resolveVoiceRowDoubleClick,
   resolveVoiceRowKey,
 } from "@/lib/voice-row-interaction";
-import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
+import {
+  ServerBannerStrip,
+  ServerIcon,
+} from "@/components/layout/server-identity";
 import {
   ContextMenu,
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
+import { Menu } from "@/components/ui/menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useIsTruncated } from "@/lib/use-is-truncated";
 import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { publicProfileHref } from "@/components/user/profile-relations";
@@ -1254,96 +1264,68 @@ export function ChannelList({
         onWidthChange={setSidebarWidth}
         onCommit={commitSidebarWidth}
       />
-      {/* Above the header, and only when there is one. See `ServerBanner`: a
-          server without a banner keeps exactly the column it has always had. */}
-      {server && <ServerBanner name={server.name} bannerUrl={server.bannerUrl} />}
+      {/* Outside the ContextMenu on purpose: a right-click on the picture
+          does nothing. Absent entirely without a banner — see
+          `ServerBannerStrip`. */}
+      {server && <ServerBannerStrip bannerUrl={server.bannerUrl} />}
 
       <ContextMenu items={headerItems}>
-        {/* `min-h-16` rather than a fixed `h-14`: the row now has to hold a
-            36px icon beside two lines of text without either crowding the
-            other, and a header that can grow by a few pixels for a long name
-            is better than one that truncates the role away. */}
-        <div className="flex min-h-16 items-center justify-between gap-2 border-b border-ink-4/60 px-4 py-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            {/* Desktop only. The drawer is the same 256px wide at 390px but
-                carries one more control — the button that closes it — and the
-                icon is what tips the row into truncating the server's name to
-                a single letter. The rail's icon is still on screen there. */}
-            {server && (
-              <span className="hidden h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-ink-3 font-display text-xs font-bold text-paper md:flex">
-                <ServerIcon name={server.name} iconUrl={server.iconUrl} />
-              </span>
-            )}
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <p className="truncate font-display text-base font-bold leading-tight">
-                  {server?.name ?? (isLoading ? t("common.loading") : t("chrome.noServer"))}
-                </p>
-                {/* Says "community" only about a listed community; the Baú
-                    flag being on is not a fact about this server. */}
-                {communityHomeEnabled && server?.isCommunity && (
-                  <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
-                    {t("communityHome.communityBadge")}
-                  </span>
-                )}
-              </div>
-              {/* `truncate`: without it the rank sits outside its own column
-                  and runs under the three buttons to its right, which is what
-                  a narrowed sidebar shows first. */}
-              {server?.role && (
-                <p className="mt-0.5 truncate text-[11px] uppercase tracking-wider text-paper-muted">
-                  {server.role}
-                </p>
-              )}
-            </div>
-          </div>
+        <div
+          data-server-header=""
+          // `py-1.5`, not the `py-2` a first pass had: `border-b` (1px) is
+          // part of the border-box `min-h-12` constrains, and content (the
+          // 32px icon) plus `py-2` plus that border comes to 49px — over the
+          // floor, so the floor stops applying and 49 wins. `py-1.5` keeps
+          // content-plus-padding-plus-border under 48px so `min-h-12` is
+          // what actually decides the row's height, exactly, at every width
+          // and with every name. Caught by a live Playwright render
+          // (`e2e/server-header.spec.ts`), not by `channel-list-header.test.tsx`
+          // — jsdom has no layout engine, so a static-markup test cannot see
+          // a box model computation like this one.
+          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5"
+        >
+          {server ? (
+            <Menu
+              items={headerItems}
+              align="start"
+              side="bottom"
+              topContent={
+                server.isCommunity ? (
+                  <>
+                    <div
+                      data-server-menu-public=""
+                      className="px-2.5 py-1.5 text-sm text-text-tertiary"
+                    >
+                      {t("chrome.publicCommunity")}
+                    </div>
+                    <div className="my-1 h-px bg-border" />
+                  </>
+                ) : undefined
+              }
+            >
+              <ServerHeaderMenuTrigger server={server} />
+            </Menu>
+          ) : (
+            <p className="min-w-0 flex-1 truncate text-sm text-text-tertiary">
+              {isLoading ? t("common.loading") : t("chrome.noServer")}
+            </p>
+          )}
           {/* `shrink-0`: these are all fixed-width controls, so letting flex
               compress them only squeezes their tap targets while the name is
               already truncating anyway. */}
-          <div className="flex shrink-0 items-center gap-0.5">
+          <div
+            data-server-header-actions=""
+            className="flex shrink-0 items-center gap-0.5"
+          >
             {server && (
               <>
-                {/* Manage Messages too: that rank has Moderação and a
-                    read-only AutoMod in the dialog, which decides the rail.
-                    Four controls now, at p-1 rather than p-1.5 so the name
-                    keeps the pixels the fourth would have taken. */}
-                {(canManage || canManageMessages) && (
-                  <Tooltip label={t("chrome.communitySettings")}>
-                    <button
-                      type="button"
-                      className="rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                      onClick={onOpenServerSettings}
-                    >
-                      <Settings className="h-4 w-4" />
-                    </button>
-                  </Tooltip>
-                )}
                 <Tooltip label={t("chrome.members")}>
                   <button
                     type="button"
-                    className="rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 md:h-7 md:w-7"
                     onClick={onOpenMembers}
                   >
-                    <Users className="h-4 w-4" />
-                  </button>
-                </Tooltip>
-                {/* An icon, not the word.
-                    The column is a fixed 256px and this row also carries a
-                    36px server icon, two icon buttons and the name. Spelled
-                    out, "Convidar" took about 66 of those pixels and left the
-                    name roughly 48 — which is why "QG do pqp" rendered as
-                    "QG...". The label is the one thing here that could give
-                    the pixels back, and losing it costs least: invite is also
-                    in this header's context menu and in the rail's, both of
-                    them spelled out, and the signal colour keeps it reading as
-                    the action of the row rather than a third grey icon. */}
-                <Tooltip label={t("chrome.invitePeople")}>
-                  <button
-                    type="button"
-                    className="rounded-md p-1 text-signal hover:bg-ink-3"
-                    onClick={onInvite}
-                  >
-                    <UserPlus className="h-4 w-4" />
+                    <Users className="h-4 w-4" aria-hidden="true" />
                   </button>
                 </Tooltip>
                 {channelSidebarToggle && (
@@ -1359,24 +1341,23 @@ export function ChannelList({
                       type="button"
                       data-channel-sidebar-toggle=""
                       aria-pressed={channelSidebarToggle.iconsOnly}
-                      className="hidden rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper md:block"
+                      className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 md:flex md:h-7 md:w-7"
                       onClick={channelSidebarToggle.onToggle}
                     >
-                      <PanelLeftClose className="h-4 w-4" />
+                      <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
                     </button>
                   </Tooltip>
                 )}
-
               </>
             )}
             {onMobileClose && (
               <button
                 type="button"
-                className="rounded p-1 hover:bg-ink-3 md:hidden"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 md:hidden"
                 aria-label={t("chrome.closeChannelList")}
                 onClick={onMobileClose}
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -1706,6 +1687,89 @@ export function ChannelList({
     </aside>
   );
 }
+
+/**
+ * Icon, name and chevron: the one control that opens the server menu.
+ *
+ * `forwardRef`, and every unrecognised prop spread onto the `<button>`,
+ * because `Menu` renders this as `DropdownMenuPrimitive.Trigger`'s `asChild`
+ * child — Radix clones it to attach `ref`, `onClick`, `onPointerDown`,
+ * `onKeyDown`, `data-state`, `aria-expanded`, `aria-haspopup` and `id`. A
+ * plain function component that ignores its extra props and forwards no ref
+ * drops all of that on the floor: Radix cannot find the trigger's DOM node,
+ * and the button never opens on a click, Enter, Space or ArrowDown. (A real
+ * click in a browser is what caught this — every DOM assertion here still
+ * passes against the closed markup, because closed is exactly what it looks
+ * like when nothing is wired up at all.)
+ *
+ * The name gets a `Tooltip` only when `truncate` is actually cutting it —
+ * see `useIsTruncated` — so a short name does not sprout a bubble that
+ * repeats what is already on screen. `aria-label` on the button names its
+ * job ("Server menu") rather than the server, which is correct — the
+ * control opens a menu, it is not the name — but an explicit `aria-label`
+ * also suppresses the accessible name a browser would otherwise compute
+ * from the button's own content, so the server's name would be announced
+ * nowhere at all without `aria-describedby` pointing at `[data-server-name]`
+ * explicitly. That id is stable and always present (the tooltip wrapping
+ * the name when it overflows changes nothing about the `<p>` itself), so a
+ * screen reader always gets both: "Server menu" as the control's name and
+ * the full server name as its description, sighted or not, truncated or
+ * not.
+ */
+const ServerHeaderMenuTrigger = forwardRef<
+  HTMLButtonElement,
+  { server: Server } & ComponentPropsWithoutRef<"button">
+>(function ServerHeaderMenuTrigger({ server, ...triggerProps }, ref) {
+  const { t } = useTranslation();
+  const nameRef = useRef<HTMLParagraphElement | null>(null);
+  const truncated = useIsTruncated(nameRef, server.name);
+  const nameId = useId();
+
+  const nameNode = (
+    <p
+      ref={nameRef}
+      id={nameId}
+      data-server-name=""
+      className="min-w-0 flex-1 truncate font-display text-sm font-bold tracking-tight leading-tight text-text"
+    >
+      {server.name}
+    </p>
+  );
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      data-server-menu-trigger=""
+      aria-label={t("chrome.serverMenu")}
+      aria-describedby={nameId}
+      // `px-1`, no `py-*`: the row's own `py-2` (§6.2) plus the 32px icon
+      // already total 48px (`min-h-12`) exactly. A vertical pad here on top
+      // of that pushed a live-browser render to 56px — jsdom-only static
+      // markup cannot see this (no layout engine), which is why it took a
+      // real Playwright run to catch. `items-center` on the row still
+      // centers everything; only the click/hover rectangle's own height
+      // changed, not the icon's position.
+      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2"
+      {...triggerProps}
+    >
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-2 font-display text-[11px] font-bold text-text">
+        <ServerIcon name={server.name} iconUrl={server.iconUrl} />
+      </span>
+      {truncated ? (
+        <Tooltip label={server.name} side="bottom">
+          {nameNode}
+        </Tooltip>
+      ) : (
+        nameNode
+      )}
+      <ChevronDown
+        aria-hidden="true"
+        className="h-4 w-4 shrink-0 text-text-tertiary transition-transform duration-[var(--duration-fast)] group-data-[state=open]:rotate-180"
+      />
+    </button>
+  );
+});
 
 function PinnedChannelsSection({
   collapsed,

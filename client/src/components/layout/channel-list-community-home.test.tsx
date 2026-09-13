@@ -138,7 +138,7 @@ describe("ChannelList Community Home row", () => {
     expect(html).not.toContain("data-channel-settings");
   });
 
-  it("flag on + community server: the Community badge shows", () => {
+  it("flag on + community server: no Community chip in the header (that fact moved into the server menu as 'Público')", () => {
     const html = renderList(
       <ChannelList
         {...baseProps}
@@ -147,7 +147,8 @@ describe("ChannelList Community Home row", () => {
         onSelectCommunityHome={() => {}}
       />,
     );
-    expect(html).toContain(">Community<");
+    expect(html).not.toContain(">Community<");
+    expect(html).not.toContain(">Comunidade<");
   });
 
   it("unread count outranks the New chip", () => {
