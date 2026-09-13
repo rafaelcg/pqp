@@ -174,80 +174,87 @@ test("raising, lowering and the order of two raised hands is the same queue ever
   await openAs(page, here, "hands-a");
   await joinVoice(page, shared.voiceChannelName);
 
+  // Wrapped in try/finally from here: a throw anywhere below (a bad
+  // selector, a slow roster) must not leave this second browser context —
+  // and the voice/media resources its socket holds — open for the rest of
+  // the run.
   const second = await secondClient(browser);
-  await openAs(second.page, here, "hands-b");
-  await joinVoice(second.page, shared.voiceChannelName);
+  try {
+    await openAs(second.page, here, "hands-b");
+    await joinVoice(second.page, shared.voiceChannelName);
 
-  const raiseA = page.locator("[data-raise-hand]");
-  const raiseB = second.page.locator("[data-raise-hand]");
-  await expect(raiseA).toBeVisible({ timeout: 20_000 });
-  await expect(raiseB).toBeVisible({ timeout: 20_000 });
+    const raiseA = page.locator("[data-raise-hand]");
+    const raiseB = second.page.locator("[data-raise-hand]");
+    await expect(raiseA).toBeVisible({ timeout: 20_000 });
+    await expect(raiseB).toBeVisible({ timeout: 20_000 });
 
-  // A raises first. Nobody else has a hand up, so the compact strip (this is
-  // an audio-only call: no camera on either side, so it never expands) shows
-  // A's name and A's own line reads "next" rather than a position.
-  await raiseA.click();
-  await expect(raiseA).toHaveAttribute("aria-pressed", "true");
-  await expect(raiseA).toHaveAttribute("aria-label", "Lower your hand");
+    // A raises first. Nobody else has a hand up, so the compact strip (this is
+    // an audio-only call: no camera on either side, so it never expands) shows
+    // A's name and A's own line reads "next" rather than a position.
+    await raiseA.click();
+    await expect(raiseA).toHaveAttribute("aria-pressed", "true");
+    await expect(raiseA).toHaveAttribute("aria-label", "Lower your hand");
 
-  const queueOnA = page.locator('[data-hand-queue="compact"]');
-  const queueOnB = second.page.locator('[data-hand-queue="compact"]');
-  await expect(queueOnA).toBeVisible({ timeout: 10_000 });
-  await expect(queueOnB).toBeVisible({ timeout: 10_000 });
-  await expect(
-    queueOnA.locator(`[data-hand-queue-entry="${shared.ownerId}"]`),
-  ).toBeVisible();
-  await expect(
-    queueOnB.locator(`[data-hand-queue-entry="${shared.ownerId}"]`),
-  ).toBeVisible();
-  await expect(queueOnA.locator("[data-hand-position]")).toHaveAttribute(
-    "data-hand-position",
-    "1",
-  );
+    const queueOnA = page.locator('[data-hand-queue="compact"]');
+    const queueOnB = second.page.locator('[data-hand-queue="compact"]');
+    await expect(queueOnA).toBeVisible({ timeout: 10_000 });
+    await expect(queueOnB).toBeVisible({ timeout: 10_000 });
+    await expect(
+      queueOnA.locator(`[data-hand-queue-entry="${shared.ownerId}"]`),
+    ).toBeVisible();
+    await expect(
+      queueOnB.locator(`[data-hand-queue-entry="${shared.ownerId}"]`),
+    ).toBeVisible();
+    await expect(queueOnA.locator("[data-hand-position]")).toHaveAttribute(
+      "data-hand-position",
+      "1",
+    );
 
-  // B raises second. The order is the server's, not either client's: both
-  // screens must still show A first, and B's own line must say "2nd", never
-  // "1st" — that is the whole point of a server-stamped queue.
-  await raiseB.click();
-  await expect(raiseB).toHaveAttribute("aria-pressed", "true");
-  await expect(queueOnB.locator("[data-hand-position]")).toHaveAttribute(
-    "data-hand-position",
-    "2",
-  );
-  // The compact line always names the OLDEST raise, whoever is looking.
-  await expect(
-    queueOnA.locator(`[data-hand-queue-entry="${shared.ownerId}"]`),
-  ).toBeVisible();
-  await expect(
-    queueOnB.locator(`[data-hand-queue-entry="${shared.ownerId}"]`),
-  ).toBeVisible();
+    // B raises second. The order is the server's, not either client's: both
+    // screens must still show A first, and B's own line must say "2nd", never
+    // "1st" — that is the whole point of a server-stamped queue.
+    await raiseB.click();
+    await expect(raiseB).toHaveAttribute("aria-pressed", "true");
+    await expect(queueOnB.locator("[data-hand-position]")).toHaveAttribute(
+      "data-hand-position",
+      "2",
+    );
+    // The compact line always names the OLDEST raise, whoever is looking.
+    await expect(
+      queueOnA.locator(`[data-hand-queue-entry="${shared.ownerId}"]`),
+    ).toBeVisible();
+    await expect(
+      queueOnB.locator(`[data-hand-queue-entry="${shared.ownerId}"]`),
+    ).toBeVisible();
 
-  // The sidebar occupant row carries the same fact for people outside the
-  // call, not only inside it: the raised-hand glyph on A's row.
-  await expect(
-    page
-      .locator(`[data-voice-occupant="${shared.ownerId}"]`)
-      .getByLabel("Hand raised"),
-  ).toBeVisible();
+    // The sidebar occupant row carries the same fact for people outside the
+    // call, not only inside it: the raised-hand glyph on A's row.
+    await expect(
+      page
+        .locator(`[data-voice-occupant="${shared.ownerId}"]`)
+        .getByLabel("Hand raised"),
+    ).toBeVisible();
 
-  // A lowers their own hand. B is now the only one left, so the compact
-  // line on B's screen names B and carries no "2nd" line (queue length 1).
-  await raiseA.click();
-  await expect(raiseA).toHaveAttribute("aria-pressed", "false");
-  await expect(
-    queueOnB.locator(`[data-hand-queue-entry="${shared.guestId}"]`),
-  ).toBeVisible();
-  // B is now the only hand up, so B's own line reads "next" (position 1),
-  // not a "2nd" line — `data-hand-position` still prints (it is 1-based and
-  // covers "next" too), just with a different number than before.
-  await expect(queueOnB.locator("[data-hand-position]")).toHaveAttribute(
-    "data-hand-position",
-    "1",
-  );
+    // A lowers their own hand. B is now the only one left, so the compact
+    // line on B's screen names B and carries no "2nd" line (queue length 1).
+    await raiseA.click();
+    await expect(raiseA).toHaveAttribute("aria-pressed", "false");
+    await expect(
+      queueOnB.locator(`[data-hand-queue-entry="${shared.guestId}"]`),
+    ).toBeVisible();
+    // B is now the only hand up, so B's own line reads "next" (position 1),
+    // not a "2nd" line — `data-hand-position` still prints (it is 1-based and
+    // covers "next" too), just with a different number than before.
+    await expect(queueOnB.locator("[data-hand-position]")).toHaveAttribute(
+      "data-hand-position",
+      "1",
+    );
 
-  await leaveVoiceIfConnected(page);
-  await leaveVoiceIfConnected(second.page);
-  await second.context.close();
+    await leaveVoiceIfConnected(page);
+    await leaveVoiceIfConnected(second.page);
+  } finally {
+    await second.context.close();
+  }
 });
 
 test("a hand lowers on its own when that person leaves the room", async ({
@@ -261,28 +268,31 @@ test("a hand lowers on its own when that person leaves the room", async ({
   await joinVoice(page, shared.voiceChannelName);
 
   const second = await secondClient(browser);
-  await openAs(second.page, here, "hands-d");
-  await joinVoice(second.page, shared.voiceChannelName);
+  try {
+    await openAs(second.page, here, "hands-d");
+    await joinVoice(second.page, shared.voiceChannelName);
 
-  // The guest (B) raises a hand; the owner (A) watches it appear.
-  const raiseB = second.page.locator("[data-raise-hand]");
-  await raiseB.click();
-  await expect(
-    page
-      .locator('[data-hand-queue="compact"]')
-      .locator(`[data-hand-queue-entry="${shared.guestId}"]`),
-  ).toBeVisible({ timeout: 10_000 });
+    // The guest (B) raises a hand; the owner (A) watches it appear.
+    const raiseB = second.page.locator("[data-raise-hand]");
+    await raiseB.click();
+    await expect(
+      page
+        .locator('[data-hand-queue="compact"]')
+        .locator(`[data-hand-queue-entry="${shared.guestId}"]`),
+    ).toBeVisible({ timeout: 10_000 });
 
-  // The guest leaves the call outright (not a refresh, not a resume): the
-  // hand is a request, not a sanction, so it must not survive that.
-  await leaveVoiceIfConnected(second.page);
+    // The guest leaves the call outright (not a refresh, not a resume): the
+    // hand is a request, not a sanction, so it must not survive that.
+    await leaveVoiceIfConnected(second.page);
 
-  await expect(page.locator('[data-hand-queue="compact"]')).toHaveCount(0, {
-    timeout: 10_000,
-  });
+    await expect(page.locator('[data-hand-queue="compact"]')).toHaveCount(0, {
+      timeout: 10_000,
+    });
 
-  await leaveVoiceIfConnected(page);
-  await second.context.close();
+    await leaveVoiceIfConnected(page);
+  } finally {
+    await second.context.close();
+  }
 });
 
 test("a moderator can lower somebody else's hand from the sidebar", async ({
@@ -298,26 +308,29 @@ test("a moderator can lower somebody else's hand from the sidebar", async ({
   await openAs(page, here, "hands-e");
 
   const second = await secondClient(browser);
-  await openAs(second.page, here, "hands-f");
-  await joinVoice(second.page, shared.voiceChannelName);
+  try {
+    await openAs(second.page, here, "hands-f");
+    await joinVoice(second.page, shared.voiceChannelName);
 
-  const raiseB = second.page.locator("[data-raise-hand]");
-  await raiseB.click();
-  await expect(raiseB).toHaveAttribute("aria-pressed", "true");
+    const raiseB = second.page.locator("[data-raise-hand]");
+    await raiseB.click();
+    await expect(raiseB).toHaveAttribute("aria-pressed", "true");
 
-  const row = page.locator(`[data-voice-occupant="${shared.guestId}"]`);
-  await expect(row).toBeVisible({ timeout: 20_000 });
-  await row.click({ button: "right" });
-  const menu = page.getByRole("menu");
-  await menu.getByRole("menuitem", { name: "Lower their hand" }).click();
+    const row = page.locator(`[data-voice-occupant="${shared.guestId}"]`);
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await row.click({ button: "right" });
+    const menu = page.getByRole("menu");
+    await menu.getByRole("menuitem", { name: "Lower their hand" }).click();
 
-  await expect(raiseB).toHaveAttribute("aria-pressed", "false", {
-    timeout: 10_000,
-  });
-  await expect(raiseB).toHaveAttribute("aria-label", "Raise your hand");
+    await expect(raiseB).toHaveAttribute("aria-pressed", "false", {
+      timeout: 10_000,
+    });
+    await expect(raiseB).toHaveAttribute("aria-label", "Raise your hand");
 
-  await leaveVoiceIfConnected(second.page);
-  await second.context.close();
+    await leaveVoiceIfConnected(second.page);
+  } finally {
+    await second.context.close();
+  }
 });
 
 test("phone: the hand button is reachable and the queue is readable at 390px", async ({
