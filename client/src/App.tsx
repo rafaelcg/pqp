@@ -4904,16 +4904,38 @@ function MainAppContent({
    * render, and closes over `localSettings` directly rather than chasing that
    * identity through a dependency array.
    */
-  function activateVoiceClean() {
+  async function activateVoiceClean() {
+    // Dismissing the card is "the nudge was answered" and happens either
+    // way, immediately — same as "Depois". The toast is a different claim
+    // ("it is ON"), so it waits for confirmation below, and is not shown at
+    // all when the confirmation says the request fell back.
     settleVoiceCleanNudge();
-    handleAudioSettingsLive({
+    const next: LocalSettings = {
       ...localSettings,
       micProcessing: {
         ...localSettings.micProcessing,
         noiseSuppression: "advanced",
       },
-    });
-    setVoiceCleanActivatedToast(true);
+    };
+    setLocalSettings(next);
+    saveLocalSettings(next);
+    // NOT `handleAudioSettingsLive`: it fires `voice.setMicProcessing`
+    // without awaiting it, and `setMicProcessing` no-ops on a processing
+    // value that already matches `audioOptions.processing` — so calling it a
+    // second time ourselves, to await it, would see its own first call's
+    // synchronous update and return immediately without ever waiting for the
+    // real pipeline swap. One call, awaited here, is what lets this function
+    // tell a real switch from a fallback: `createMicPipeline`'s "browser
+    // cannot run RNNoise" path (used whether or not a call is live — it is a
+    // no-op pipeline swap when idle, same as every other processing change)
+    // stamps this exact notice, so seeing it right after the call settles
+    // means the request did not actually turn Voz limpa on, and the toast
+    // must not say it did — the notice banner on the call stage already says
+    // why.
+    await voice.setMicProcessing(next.micProcessing);
+    if (voice.getState().notice !== t("voice.notice.noiseSuppressionUnsupported")) {
+      setVoiceCleanActivatedToast(true);
+    }
   }
 
   useEffect(() => {
@@ -5657,15 +5679,33 @@ function MainAppContent({
     voiceState.voiceChannelId
       ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
       : null;
-  const wantsVoiceCleanHint = shouldOfferVoiceCleanNudge({
-    dismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
-    automated: isAutomatedBrowser(),
-    inCall: voiceState.status === "connected",
-    micOn: !voiceState.isMuted,
-    presentingWatchParty:
-      voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
-    isDesktopViewport: voiceCleanDesktopViewport,
+  // Hoisted above `sidebarIconsOnly`'s original spot (near the channel-list
+  // toggle further down) so the Voz limpa eligibility below can read it: the
+  // nudge is rendered only in the wide sidebar footer (`!compact` in
+  // `sidebarFooter`), so a compact rail must not be able to hold the corner
+  // queue's `voiceClean` slot for a card nothing mounts.
+  const watchingAShare =
+    voiceState.status === "connected" &&
+    voiceState.screenSharePeerIds.some(
+      (peerId) => peerId !== voiceState.peerId,
+    );
+  const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
+    // A party's stream alone does NOT fold the list: the live party block
+    // lives in it, and it is the way back to the show for everybody else.
+    watchingAShare,
+    columnLayout,
   });
+  const wantsVoiceCleanHint =
+    !sidebarIconsOnly &&
+    shouldOfferVoiceCleanNudge({
+      dismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
+      automated: isAutomatedBrowser(),
+      inCall: voiceState.status === "connected",
+      micOn: !voiceState.isMuted,
+      presentingWatchParty:
+        voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
+      isDesktopViewport: voiceCleanDesktopViewport,
+    });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
     communityHomePost: Boolean(
@@ -5726,17 +5766,9 @@ function MainAppContent({
   // Taking the list away from the one person using it, at the moment they
   // start using it, is not a saving. The viewer, who has no reason to touch
   // the channel list while watching, is who this is for.
-  const watchingAShare =
-    voiceState.status === "connected" &&
-    voiceState.screenSharePeerIds.some(
-      (peerId) => peerId !== voiceState.peerId,
-    );
-  const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
-    // A party's stream alone does NOT fold the list: the live party block
-    // lives in it, and it is the way back to the show for everybody else.
-    watchingAShare,
-    columnLayout,
-  });
+  //
+  // (`watchingAShare` / `sidebarIconsOnly` themselves moved above the Voz
+  // limpa eligibility block — same values, computed once.)
   // A plain function, not a `useCallback`: it is read below the early returns
   // that this component is full of, and nothing takes it as a dependency.
   const toggleChannelSidebar = () => {

@@ -16,13 +16,35 @@ function query(): MediaQueryList | null {
   }
 }
 
+/**
+ * `MediaQueryList` older than the 2020 dpub spec — old Safari, plenty of
+ * embedded WebViews — has `matchMedia` but only the pre-standard
+ * `addListener`/`removeListener` pair, not `addEventListener`. Calling the
+ * modern method there throws (not "does nothing"), so `useSmUp` would crash
+ * the whole app on mount rather than just fail to react to a resize.
+ */
+interface LegacyMediaQueryList {
+  addListener(listener: () => void): void;
+  removeListener(listener: () => void): void;
+}
+
 function subscribe(onChange: () => void): () => void {
   const list = query();
   if (!list) {
     return () => {};
   }
-  list.addEventListener("change", onChange);
-  return () => list.removeEventListener("change", onChange);
+  if (typeof list.addEventListener === "function") {
+    list.addEventListener("change", onChange);
+    return () => list.removeEventListener("change", onChange);
+  }
+  const legacy = list as unknown as LegacyMediaQueryList;
+  if (typeof legacy.addListener === "function") {
+    legacy.addListener(onChange);
+    return () => legacy.removeListener(onChange);
+  }
+  // Neither API: the snapshot is read once and never updates, which is safe
+  // — `getSnapshot` still answers correctly for however the window opened.
+  return () => {};
 }
 
 function getSnapshot(): boolean {

@@ -1893,12 +1893,26 @@ export function createVoiceController(transport: RealtimeTransport) {
         audioOptions.processing,
         forgetInputDevice,
         (label) => {
+          // Guarded the same as the WASM-fallback notice just below: this
+          // fires after an await (the device retry ladder), so a superseded
+          // swap must not overwrite whatever notice the operation that
+          // replaced it is showing.
+          if (generation !== joinGeneration) {
+            return;
+          }
           state.notice = label
             ? translateMessage("voice.notice.micFallback", { label })
             : translateMessage("voice.notice.micFallbackUnnamed");
         },
         () => generation !== joinGeneration,
         () => {
+          // `createMicPipeline` can reach this after `loadRnnoiseBinary()`
+          // rejects, which is on the far side of an await: a swap this
+          // generation no longer owns must not stamp a fallback notice over
+          // whatever the swap that superseded it is showing.
+          if (generation !== joinGeneration) {
+            return;
+          }
           state.notice = translateMessage(
             "voice.notice.noiseSuppressionUnsupported",
           );
@@ -3948,6 +3962,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           audioOptions.processing,
           forgetInputDevice,
           (label) => {
+            if (generation !== joinGeneration) {
+              return;
+            }
             state.notice = label
               ? translateMessage("voice.notice.micFallback", { label })
               : translateMessage("voice.notice.micFallbackUnnamed");
@@ -3957,6 +3974,13 @@ export function createVoiceController(transport: RealtimeTransport) {
           // a mic for a join nobody is waiting on.
           () => generation !== joinGeneration,
           () => {
+            // Same guard as the label callback above: this can fire after
+            // `loadRnnoiseBinary()` rejects, on the far side of an await, and
+            // a join this generation no longer owns must not stamp a notice
+            // over whatever superseded it.
+            if (generation !== joinGeneration) {
+              return;
+            }
             state.notice = translateMessage(
               "voice.notice.noiseSuppressionUnsupported",
             );
