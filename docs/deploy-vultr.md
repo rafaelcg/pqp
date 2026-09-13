@@ -472,15 +472,29 @@ Either way, once the transition is applied, a bare `docker compose ps` on
 the box correctly shows only `api-a`.
 
 **Database connection budget.** `api-a` and `api-b` each keep their own
-independent Postgres pool, both sized off the same `PG_POOL_MAX` in
-`.env` — enabling the `replicas` profile doubles the API side's worst-case
-connection count against the small managed Postgres tier, on top of
-`worker`'s own (already-separate) `WORKER_PG_POOL_MAX`. Check that doubled
-number against `docs/DB_RUNBOOK.md` §3's connection budget before relying
-on two replicas in production, and lower `.env`'s `PG_POOL_MAX` first if it
-doesn't fit — this compose file does not do that sizing for you, on
-purpose, since `docs/plans/ALWAYS_ON.md`'s A3.2 (PgBouncer) is the
-dedicated fix for connection pressure and this PR predates it.
+independent Postgres pool — nothing here shares one pool between them — so
+`pqp-deploy.sh` treats `.env`'s `PG_POOL_MAX` as the TOTAL budget for the
+API side and divides it evenly across however many replicas are actually
+running (`API_PG_POOL_MAX_PER_REPLICA`, re-derived on every deploy and
+passed to `compose.yaml` as each api container's own `PG_POOL_MAX`
+override). Production's `PG_POOL_MAX=70` (`docs/plans/
+WATCH_PARTY_POSTMORTEM_2026-09-12.md` §E) means two replicas get 35 each —
+the SAME total the single `api` container used to hold alone, not double
+it, and `API_REPLICAS=1` restores the full 70 to `api-a` on its own. This
+is on top of `worker`'s own, already-separate `WORKER_PG_POOL_MAX` (default
+4), which this split does not touch. Before changing `.env`'s `PG_POOL_MAX`
+itself, check what the box's actual Vultr Managed PostgreSQL plan reports
+for `max_connections` in the Vultr dashboard — same "could not fetch this
+live" gap `docs/plans/ALWAYS_ON.md`'s A3.5 already flags for Vultr pricing,
+so this doc does not repeat a number here that might not match the plan —
+and re-derive the total the way `docs/DB_RUNBOOK.md` §3 walks through for
+Fly's memory-based ceiling (that section predates the Vultr move and still
+describes Fly's tiers, but the reasoning — leave headroom for shared
+buffers and the OS, not just backend count — carries over). `PG_POOL_MAX`
+in `.env` staying a single number an operator sizes once, rather than a
+separate one per replica to keep in sync, is deliberate; `docs/plans/
+ALWAYS_ON.md`'s A3.2 (PgBouncer) is the follow-up that raises the ceiling
+itself rather than just dividing today's number more ways.
 
 **Migrating an existing box (the very first deploy after this PR merges).**
 A box already running the old single-`api` service still has an `api`

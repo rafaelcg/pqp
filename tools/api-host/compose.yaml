@@ -22,17 +22,25 @@
 # distinct rows in the voice registry with zero wiring here; nothing in
 # this compose file needs to invent or pass one.
 #
-# Deploy sets two variables before `docker compose pull && up -d`:
-#   APP_IMAGE_TAG  the commit sha, becomes part of the image reference
-#   APP_VERSION    the same sha, becomes the env var GET /health and
-#                  GET /ready report — this is what the post-deploy check
-#                  in .github/workflows/deploy-api-vultr.yml polls for, the
-#                  same "did the running process actually pick this up"
-#                  question deploy-api-fly.yml's `-e APP_VERSION=...` answers.
+# Deploy sets three variables before `docker compose pull && up -d`:
+#   APP_IMAGE_TAG                the commit sha, becomes part of the image
+#                                 reference
+#   APP_VERSION                  the same sha, becomes the env var GET
+#                                 /health and GET /ready report — this is
+#                                 what the post-deploy check in
+#                                 .github/workflows/deploy-api-vultr.yml
+#                                 polls for, the same "did the running
+#                                 process actually pick this up" question
+#                                 deploy-api-fly.yml's `-e APP_VERSION=...`
+#                                 answers.
+#   API_PG_POOL_MAX_PER_REPLICA   .env's PG_POOL_MAX divided by however
+#                                 many api replicas this run starts — see
+#                                 api-a/api-b's PG_POOL_MAX override below.
 # Compose reads them from the shell environment or a second --env-file
-# layered on top of .env (see the workflow); both default to `dev` so a
-# manual `docker compose up` without them still starts something recognisable
-# rather than failing to interpolate.
+# layered on top of .env (see the workflow); APP_IMAGE_TAG/APP_VERSION
+# default to `dev` and API_PG_POOL_MAX_PER_REPLICA to `10` so a manual
+# `docker compose up` without any of them still starts something
+# recognisable rather than failing to interpolate.
 #
 # .env (NOT in git — see docs/deploy-vultr.md "Secrets") carries everything
 # with a credential in it: DATABASE_URL, CLERK_SECRET_KEY, TURN/ICE vars,
@@ -51,19 +59,6 @@ services:
   api-a:
     image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
     env_file:
-      # DATABASE CONNECTION BUDGET: api-a and api-b both read the SAME
-      # PG_POOL_MAX out of .env, and each keeps its own independent pool —
-      # nothing here splits that number between them the way worker's
-      # WORKER_PG_POOL_MAX below is deliberately its own, smaller value.
-      # Turning on the `replicas` profile (the normal, shipped state)
-      # therefore doubles the API side's worst-case Postgres connection
-      # count versus the single-`api` box this replaces, on top of
-      # worker's own. Before relying on two replicas in production, size
-      # .env's PG_POOL_MAX against docs/DB_RUNBOOK.md §3's budget with that
-      # doubling accounted for — this is exactly the sizing exercise
-      # docs/plans/ALWAYS_ON.md's A3.2 (PgBouncer) exists to make less
-      # fragile, not something this compose file guesses a new default
-      # for.
       - .env
     environment:
       # Overrides .env on purpose: this file is the one place the two
@@ -72,6 +67,20 @@ services:
       - WORKER_MODE=api
       - APP_VERSION=${APP_VERSION:-dev}
       - PORT=3001
+      # DATABASE CONNECTION BUDGET: .env's PG_POOL_MAX is read by
+      # pqp-deploy.sh as the TOTAL budget for the api-a/api-b side, then
+      # divided evenly by however many replicas are actually running
+      # (API_PG_POOL_MAX_PER_REPLICA, exported right before `docker
+      # compose` runs — see that script). This override is what makes
+      # that split take effect instead of both containers getting .env's
+      # raw, undivided number and doubling the API side's worst-case
+      # Postgres connection count. The `:-10` fallback only matters for a
+      # manual `docker compose up` run outside pqp-deploy.sh, matching
+      # server/src/db.ts's own hard-coded default. Same independent-pool
+      # caveat as worker's PG_POOL_MAX below applies here too: this is a
+      # per-container pool, not a shared one. See docs/deploy-vultr.md
+      # "Two replicas on one box" -> "Database connection budget".
+      - PG_POOL_MAX=${API_PG_POOL_MAX_PER_REPLICA:-10}
     restart: unless-stopped
     # Matches kill_timeout in fly.toml. The server's own SIGTERM handling
     # (server/src/lib/drain.ts) budgets 25s internally (2s settle + up to
@@ -112,13 +121,17 @@ services:
   api-b:
     image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
     env_file:
-      # Same PG_POOL_MAX / connection-budget note as api-a above — this is
-      # the second of the two independent pools that doubling counts.
       - .env
     environment:
       - WORKER_MODE=api
       - APP_VERSION=${APP_VERSION:-dev}
       - PORT=3001
+      # Same split as api-a above, same variable — pqp-deploy.sh computes
+      # ONE per-replica number off the current replica count and both
+      # containers get that same value, which is what keeps the two
+      # independent pools summing back to .env's PG_POOL_MAX instead of
+      # each taking the full amount.
+      - PG_POOL_MAX=${API_PG_POOL_MAX_PER_REPLICA:-10}
     restart: unless-stopped
     stop_grace_period: 60s
     stop_signal: SIGTERM

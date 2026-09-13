@@ -136,6 +136,40 @@ else
   export COMPOSE_PROFILES="replicas"
   API_SERVICES=(api-a api-b)
 fi
+REPLICA_COUNT=${#API_SERVICES[@]}
+# Printed for the workflow's own "Deploy over SSH" step, which greps this
+# line out of our stdout and threads it through as a step output so the
+# LATER "Verify the deployed commit" step -- a different SSH identity, no
+# access to this box's .env -- knows whether api-b being unreachable right
+# now is the expected API_REPLICAS=1 shape or a real failure. Emitted
+# before any container is touched, on purpose: it states this run's
+# TARGET topology, which is what a caller needs even if something below
+# fails partway through.
+echo "api-replicas=${REPLICA_COUNT}"
+
+# DATABASE CONNECTION BUDGET: PG_POOL_MAX in .env is read here as the
+# TOTAL budget for the API side (api-a + api-b combined), not a
+# per-container value -- the same number that was previously handed
+# straight to the single `api` container now gets split evenly across
+# however many replicas are actually running, so turning on a second
+# replica does not silently double the box's worst-case Postgres
+# connection count the way just reusing .env's value unmodified in both
+# containers would. Re-computed every deploy so flipping API_REPLICAS
+# always re-derives the right split without a second variable to keep in
+# sync. `server/src/db.ts`'s own hard-coded default (10) is the fallback
+# if .env does not set PG_POOL_MAX at all, matching docs/DB_RUNBOOK.md §3.
+# Check the resulting total against whatever max_connections the box's
+# actual Postgres plan reports (Vultr's dashboard, not a number hard-coded
+# here -- docs/plans/ALWAYS_ON.md's A3.5 hit the same "could not fetch
+# this live" wall) before relying on two replicas in production; see
+# docs/deploy-vultr.md "Two replicas on one box" -> "Database connection
+# budget".
+TOTAL_API_PG_POOL_MAX="$(grep -m1 '^PG_POOL_MAX=' "$DEST/.env" 2>/dev/null | cut -d'=' -f2- || true)"
+TOTAL_API_PG_POOL_MAX="${TOTAL_API_PG_POOL_MAX:-10}"
+API_PG_POOL_MAX_PER_REPLICA=$(( TOTAL_API_PG_POOL_MAX / REPLICA_COUNT ))
+(( API_PG_POOL_MAX_PER_REPLICA >= 1 )) || API_PG_POOL_MAX_PER_REPLICA=1
+export API_PG_POOL_MAX_PER_REPLICA
+echo "PG_POOL_MAX budget: ${TOTAL_API_PG_POOL_MAX} total / ${REPLICA_COUNT} replica(s) = ${API_PG_POOL_MAX_PER_REPLICA} each"
 
 # Pull every image this run will touch before touching any running
 # container. A pull failure here (bad tag, registry hiccup) exits non-zero

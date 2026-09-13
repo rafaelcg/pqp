@@ -256,7 +256,26 @@ jobs:
             tools/api-host/compose.yaml tools/api-host/Caddyfile \
             "$RUNNER_TEMP/manifest.sha256" "$RUNNER_TEMP/manifest.sig" \
             "pqp-deploy@$HOST:/home/pqp-deploy/incoming/"
-          ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA"
+          # Captured (via `tee` so the log still streams live) rather than
+          # just run directly: pqp-deploy.sh prints an "api-replicas=N"
+          # line stating this run's TARGET replica count, and the
+          # "Verify the deployed commit" step below needs that number --
+          # it has no access to this box's .env (a different, more
+          # restricted SSH identity) and otherwise has no way to tell "api-b
+          # is intentionally not running (API_REPLICAS=1)" apart from "api-b
+          # crashed and should be failing this deploy". `set +e`/`set -e`
+          # bracket only this one command: under GitHub Actions' default
+          # `bash -eo pipefail`, letting a failing pipeline hit `set -e`
+          # inside an assignment would exit the step before the exit code is
+          # ever captured into $ssh_status below, which is exactly the
+          # (also failure) case this needs to still report accurately.
+          set +e
+          deploy_output=$(ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA" | tee /dev/stderr)
+          ssh_status=${PIPESTATUS[0]}
+          set -e
+          replicas=$(printf '%s\n' "$deploy_output" | grep -o '^api-replicas=[0-9]\+' | tail -1 | cut -d= -f2)
+          echo "replicas=${replicas:-2}" >> "$GITHUB_OUTPUT"
+          exit "$ssh_status"
 
       # Mirrors deploy-api-fly.yml's "Verify the deployed commit" step in
       # intent, but NOT in mechanism: that step curls the box straight from
@@ -311,16 +330,23 @@ jobs:
       # access at all. api-b's port intentionally refuses connections when
       # this box is running with `API_REPLICAS=1` (compose.yaml's
       # `replicas` profile is inactive, so the container never starts) —
-      # that is a valid, expected state, not a failure. The distinction
-      # that matters is curl's OWN exit code, not just "did we get a
-      # body": exit 7 is "couldn't connect at all" (nothing listening on
-      # :3012, i.e. api-b genuinely isn't running), which is the only
-      # case this step treats as acceptably absent. Any other failure —
-      # a timeout, a non-2xx from `-f`, a reset mid-response — means
+      # that is a valid, expected state, not a failure, but ONLY when this
+      # deploy's own target topology says so: `EXPECTED_REPLICAS` (below)
+      # carries pqp-deploy.sh's own "api-replicas=N" line through from the
+      # "Deploy over SSH" step, so a connection refused on :3012 during a
+      # deploy that targeted TWO replicas still fails this check instead of
+      # being waved through as "must be single-replica mode" — this SSH
+      # identity has no access to the box's .env and cannot otherwise tell
+      # the two apart. Beyond that, the distinction that matters is curl's
+      # OWN exit code, not just "did we get a body": exit 7 is "couldn't
+      # connect at all" (nothing listening on :3012), the only code this
+      # step will even consider treating as absent. Any other failure — a
+      # timeout, a non-2xx from `-f`, a reset mid-response — means
       # something IS listening on :3012 but unhealthy, and that must
-      # still fail the check; api-b existing in a broken state is not the
-      # same thing as api-b not existing, and conflating the two would
-      # let a genuinely degraded two-replica deploy pass as clean.
+      # always fail the check regardless of replica count; api-b existing
+      # in a broken state is not the same thing as api-b not existing, and
+      # conflating the two would let a genuinely degraded two-replica
+      # deploy pass as clean.
       - name: Verify the deployed commit
         id: verify
         if: steps.relevant.outputs.needed == 'true' && steps.deploy.outcome == 'success'
@@ -329,6 +355,14 @@ jobs:
           SSH_KEY: ${{ runner.temp }}/vultr_deploy_key
           EXPECTED: ${{ steps.commit.outputs.sha }}
           HOST: ${{ secrets.VULTR_API_HOST }}
+          # Threaded through from pqp-deploy.sh's own "api-replicas=N" line
+          # (captured by the "Deploy over SSH" step above) so this step
+          # knows whether api-b being unreachable right now is the
+          # expected API_REPLICAS=1 shape or api-b having gone down in a
+          # deploy that was supposed to leave two replicas running. This
+          # SSH identity has no access to the box's .env, so it cannot
+          # just look that up itself.
+          EXPECTED_REPLICAS: ${{ steps.deploy.outputs.replicas }}
         run: |
           ssh_cmd() {
             ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
@@ -381,10 +415,21 @@ jobs:
                 [ "$got_b" = "$EXPECTED" ] && b_ok=true || b_ok=false
                 ;;
               7)
-                # Connection refused: nothing listening on :3012 at all —
-                # the expected, non-failure shape of API_REPLICAS=1.
-                b_status="not running"
-                b_ok=true
+                # Connection refused: nothing listening on :3012 at all.
+                # Only acceptable when THIS deploy's own target topology
+                # (EXPECTED_REPLICAS, from pqp-deploy.sh's "api-replicas="
+                # line) says api-b was never supposed to be running. If the
+                # box was deployed for two replicas and api-b is refusing
+                # connections, that is api-b having gone down, not api-b
+                # being intentionally absent — must fail, not pass as
+                # "expected API_REPLICAS=1" when it isn't.
+                if [ "$EXPECTED_REPLICAS" = "1" ]; then
+                  b_status="not running (API_REPLICAS=1)"
+                  b_ok=true
+                else
+                  b_status="not running (unexpected: this deploy targeted $EXPECTED_REPLICAS replicas)"
+                  b_ok=false
+                fi
                 ;;
               *)
                 # Reachable-but-broken (timeout, reset, non-2xx, ...): a
