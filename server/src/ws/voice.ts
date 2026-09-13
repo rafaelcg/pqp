@@ -3347,14 +3347,20 @@ const rosterAccessCache = new Map<string, RosterAccessEntry>();
  *  channel-scoped invalidation doesn't have to scan the whole cache. */
 const rosterAccessChannelIndex = new Map<string, Set<string>>();
 /**
- * Bumped per-channel on a channel-scoped invalidation. A query that started
- * before the bump and resolves after it must not repopulate the cache with
- * what it saw — see the generation check in `canAccessChannelForRoster`.
+ * Bumped on EVERY invalidation — channel-scoped or whole-cache alike. A
+ * single counter rather than a per-channel generation map on purpose: a
+ * per-channel map needs its own reclamation (a long-lived process that sees
+ * invalidations for many distinct channels over its lifetime would grow it
+ * forever, independent of the 20k cache cap), while one integer is bounded
+ * by construction. The cost is coarseness — an invalidation on channel A
+ * also makes an in-flight query for channel B skip caching its answer this
+ * one time — which is strictly cheaper than the bug this replaces (a stale
+ * answer served after revocation) and self-heals on the next request.
+ * Consulted twice: before caching a resolved query's answer, and by a
+ * caller that joined someone else's in-flight query (see
+ * `canAccessChannelForRoster`) to decide whether that shared answer is
+ * still trustworthy for THEM, not just whether it was safe to cache.
  */
-const rosterAccessGeneration = new Map<string, number>();
-/** Bumped on any invalidation that clears the whole cache (no channelId
- *  travels with those events), so an in-flight query racing one of those
- *  can't repopulate it either. */
 let rosterAccessEpoch = 0;
 /** Coalesces concurrent misses for the same pair — a reconnect storm asks
  *  the same question from N sockets at once; only the first actually queries
@@ -3417,8 +3423,17 @@ function rosterAccessSet(
   }
 }
 
-/** Drops one channel's entries and bumps its generation so an in-flight
- *  query started before this call can't repopulate what it just cleared. */
+/**
+ * Drops one channel's cache entries AND its in-flight queries, then bumps
+ * the epoch. Dropping the in-flight entries is what stops a NEW caller from
+ * being handed a pending query that is about to answer a question that no
+ * longer applies — it will instead see a clean miss and start its own,
+ * current query. The epoch bump is the second half: a caller that already
+ * captured a reference to the now-removed in-flight promise (a straight
+ * race between reading the map and this delete) still safely awaits it, but
+ * `canAccessChannelForRoster` re-checks the epoch after that await and
+ * refuses to trust an answer that predates it — see the comment there.
+ */
 function rosterAccessInvalidateChannel(channelId: string): void {
   const bucket = rosterAccessChannelIndex.get(channelId);
   if (bucket) {
@@ -3427,10 +3442,13 @@ function rosterAccessInvalidateChannel(channelId: string): void {
     }
     rosterAccessChannelIndex.delete(channelId);
   }
-  rosterAccessGeneration.set(
-    channelId,
-    (rosterAccessGeneration.get(channelId) ?? 0) + 1,
-  );
+  const prefix = `${channelId}:`;
+  for (const key of rosterAccessInFlight.keys()) {
+    if (key.startsWith(prefix)) {
+      rosterAccessInFlight.delete(key);
+    }
+  }
+  rosterAccessEpoch += 1;
 }
 
 /** Drops everything and bumps the epoch, for invalidations that carry no
@@ -3453,29 +3471,41 @@ async function canAccessChannelForRoster(
   }
 
   const key = rosterAccessKey(channelId, userId);
-  const inFlight = rosterAccessInFlight.get(key);
-  if (inFlight) {
-    return inFlight;
-  }
-
-  // Captured before the query starts: if either counter moves while it is
-  // in flight, membership or a permission moved out from under it and the
-  // answer it comes back with must not be cached.
-  const generationAtStart = rosterAccessGeneration.get(channelId) ?? 0;
+  // Captured before joining or starting a query: this is the epoch OUR
+  // answer needs to still be current under, whether that answer comes from
+  // a query we start below or one somebody else already has in flight.
   const epochAtStart = rosterAccessEpoch;
+
+  const existing = rosterAccessInFlight.get(key);
+  if (existing) {
+    const allowed = await existing;
+    if (epochAtStart === rosterAccessEpoch) {
+      return allowed;
+    }
+    // The channel was invalidated while we were waiting on someone else's
+    // in-flight query — normally that query's own promise is removed from
+    // `rosterAccessInFlight` by `rosterAccessInvalidateChannel` the moment
+    // this happens, so a caller arriving after us would already see a clean
+    // miss; we got here because we had already captured `existing` before
+    // that happened. Its answer predates the invalidation and is not
+    // trustworthy for us, cached or not: ask again, fresh.
+    return canAccessChannelForRoster(channelId, userId);
+  }
 
   const promise = canAccessChannel(channelId, userId)
     .then((allowed) => {
-      const stillCurrent =
-        epochAtStart === rosterAccessEpoch &&
-        generationAtStart === (rosterAccessGeneration.get(channelId) ?? 0);
-      if (stillCurrent) {
+      if (epochAtStart === rosterAccessEpoch) {
         rosterAccessSet(channelId, userId, allowed, Date.now());
       }
       return allowed;
     })
     .finally(() => {
-      rosterAccessInFlight.delete(key);
+      // Only clear it if it's still OUR promise: an invalidation may have
+      // already deleted this entry (and, in principle, let a later query
+      // replace it) by the time this runs.
+      if (rosterAccessInFlight.get(key) === promise) {
+        rosterAccessInFlight.delete(key);
+      }
     });
 
   rosterAccessInFlight.set(key, promise);

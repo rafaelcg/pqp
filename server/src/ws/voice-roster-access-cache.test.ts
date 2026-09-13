@@ -343,4 +343,88 @@ describe("canAccessChannelForRoster (via sendAllVoiceRosters)", () => {
     await sendAllVoiceRosters(fakeSocket(), firstViewer);
     expect(canAccessChannelMock.mock.calls.length).toBeGreaterThan(callsBefore);
   }, 30_000);
+
+  it("a caller who joined an in-flight query before invalidation re-queries instead of trusting it", async () => {
+    const host = { socket: fakeSocket(), user: fakeUser() };
+    const { handleVoiceMessage } = await import("./voice.js");
+    await handleVoiceMessage(host, {
+      type: "join-voice-room",
+      voiceChannelId: channelId,
+      transports: ["mesh", "livekit"],
+    });
+
+    const viewer = fakeUser();
+    const callsBeforeStorm = canAccessChannelMock.mock.calls.length;
+
+    // Caller A's query is held open on purpose: `mockImplementationOnce`
+    // intercepts exactly this one call, so anything after it (A's original
+    // call is the only consumer) falls back to the default `async () =>
+    // true` from `beforeEach` — including caller B's eventual re-query.
+    let resolveQuery!: (allowed: boolean) => void;
+    canAccessChannelMock.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (resolveQuery = resolve)),
+    );
+
+    const callerA = sendAllVoiceRosters(fakeSocket(), viewer);
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+
+    // Caller B joins the SAME in-flight query — it must do so before the
+    // invalidation below removes the in-flight entry, so start it now and
+    // give it room to reach the "found an in-flight promise" branch.
+    const callerB = sendAllVoiceRosters(fakeSocket(), viewer);
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+
+    // Membership is revoked while A's query is still pending and B is
+    // awaiting that same shared promise.
+    fireAudienceInvalidated({ channelId });
+
+    // A's query — the one both A and B are waiting on — resolves ALLOWED
+    // after the revocation.
+    resolveQuery(true);
+    await Promise.all([callerA, callerB]);
+
+    // A made the original (now-stale) query. B, having joined it before the
+    // invalidation, must have detected the epoch moved after the shared
+    // promise resolved and issued its OWN fresh query rather than trusting
+    // the pre-invalidation answer — exactly two calls, not one.
+    expect(canAccessChannelMock.mock.calls.length - callsBeforeStorm).toBe(2);
+  });
+
+  it("invalidating many distinct channels does not grow unbounded per-channel bookkeeping", async () => {
+    const host = { socket: fakeSocket(), user: fakeUser() };
+    const { handleVoiceMessage } = await import("./voice.js");
+    await handleVoiceMessage(host, {
+      type: "join-voice-room",
+      voiceChannelId: channelId,
+      transports: ["mesh", "livekit"],
+    });
+
+    const viewer = fakeUser();
+    await sendAllVoiceRosters(fakeSocket(), viewer);
+    expect(voiceChannelAccessCacheStats().entries).toBe(1);
+
+    // A flood of invalidations for channels this cache has never heard of.
+    // With a single global epoch (not a per-channel generation map) this is
+    // O(1) per call — a plain integer increment — and leaves no per-channel
+    // residue behind, so it must run fast and leave the real channel's
+    // bookkeeping untouched.
+    const start = Date.now();
+    for (let i = 0; i < 5_000; i++) {
+      fireAudienceInvalidated({ channelId: randomUUID() });
+    }
+    expect(Date.now() - start).toBeLessThan(2_000);
+
+    // The flood of unrelated invalidations must not have disturbed the real
+    // channel's cache: a fresh viewer is still an ordinary, correctly
+    // handled cache miss, same as it would be with no flood at all.
+    const callsBefore = canAccessChannelMock.mock.calls.length;
+    const freshViewer = fakeUser();
+    await sendAllVoiceRosters(fakeSocket(), freshViewer);
+    expect(canAccessChannelMock.mock.calls.length).toBeGreaterThan(callsBefore);
+    expect(voiceChannelAccessCacheStats().entries).toBe(2);
+  }, 30_000);
 });
