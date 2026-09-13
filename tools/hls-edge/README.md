@@ -146,6 +146,25 @@ deliberately not reached for here, since standing up a Durable Object is
 its own deploy-time commitment and this task's job is the blocking-reload
 **protocol**, not new durable infrastructure.
 
+**Retained state is bounded, both in time and in size.** The loop's
+last-known `lastEdge`/`lastPlaylist` answer a NEW waiter's fast path only
+while younger than 2 s — the same order of staleness the non-blocking cache
+above already tolerates — so a rendition this isolate has not heard from
+recently always falls through to a real fetch instead of trusting long-stale
+content for an availability, too-far-ahead, OR revocation-adjacent decision
+(a Farol review of this file's first draft, 2026-09-13, flagged all three as
+the same underlying gap: retained state with no freshness bound). The map
+itself is capped (`MAX_POLL_STATE_ENTRIES`) and opportunistically swept of
+idle, stale entries, the same shape `index.ts`'s own `rejectionLog` already
+uses for a hostile-traffic ceiling. Two further hardenings from that same
+review: a poll tick's fetch is raced against the soonest waiter's own
+deadline once there is a fallback playlist to use, so a stalled origin
+cannot silently hold every waiter past the 3x-part-target promise this
+module makes; and a disconnected viewer's `AbortSignal` (threaded through
+from `index.ts`) removes their waiter immediately instead of polling on
+their behalf until the timeout. See `src/hls-blocking-reload.js`'s module
+doc comment for the full detail on each.
+
 **Deferred to later L2 tasks** (`docs/plans/LL_HLS.md` §7):
 `EXT-X-SERVER-CONTROL`/`EXT-X-PART-INF`/`EXT-X-PART`/`EXT-X-PRELOAD-HINT`
 emission on the playlist body (L2.2), and proxying PART byte ranges

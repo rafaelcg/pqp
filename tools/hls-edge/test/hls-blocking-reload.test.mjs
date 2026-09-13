@@ -1,7 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  DEFAULT_PART_TARGET_SECONDS,
   HLS_MSN_PARAM,
   HLS_PART_PARAM,
   awaitBlockingReload,
@@ -28,6 +27,10 @@ function makeClock(startMs = 0) {
         now += ms;
         queueMicrotask(resolve);
       }),
+    /** Jumps the clock forward without going through `sleep` (simulates quiet time between two viewer requests). */
+    advance: (ms) => {
+      now += ms;
+    },
   };
 }
 
@@ -262,10 +265,26 @@ test("awaitBlockingReload: a second call for an msn the isolate already knows ab
   assert.equal(fetchCalls, 1, "the fast path must not touch the origin again");
 });
 
+// The tests below hold across MULTIPLE poll ticks, which (from the second
+// tick onward) races each fetch against the soonest waiter's own deadline
+// (`fetchWithDeadlineRace`). That race is a genuine `Promise.race` against a
+// REAL timer inside the module, so it needs REAL relative timing to behave
+// deterministically -- `makeClock`'s instant-resolving fake `sleep` collapses
+// every duration onto the same microtask tick and would make the race's
+// outcome an accident of scheduling order rather than a reflection of actual
+// elapsed time. These use real `setTimeout`/`Date.now` (by omitting `now`/
+// `sleep` from `deps`) with a 30ms `PART-TARGET` fixture (comfortably above
+// `MIN_POLL_INTERVAL_MS`) so the tests
+// stay fast (tens of milliseconds) while the relative ordering is real.
+
+/** Same as PLAYLIST_A, but a 30ms PART-TARGET so real-timer tests stay fast. */
+const PLAYLIST_A_FAST = PLAYLIST_A.replace("PART-TARGET=0.5", "PART-TARGET=0.03");
+/** Same as PLAYLIST_B, but a 30ms PART-TARGET. */
+const PLAYLIST_B_FAST = PLAYLIST_B.replace("PART-TARGET=0.5", "PART-TARGET=0.03");
+
 test("awaitBlockingReload: holds, then resolves once the origin advances", async () => {
   resetBlockingReloadStateForTests();
-  const clock = makeClock();
-  const playlists = [PLAYLIST_A, PLAYLIST_B];
+  const playlists = [PLAYLIST_A_FAST, PLAYLIST_B_FAST];
   let fetchCalls = 0;
   const deps = {
     fetchRendition: async () => {
@@ -273,8 +292,6 @@ test("awaitBlockingReload: holds, then resolves once the origin advances", async
       fetchCalls += 1;
       return toFetched(text);
     },
-    now: clock.now,
-    sleep: clock.sleep,
   };
 
   // Part 0 of segment 102 does not exist in PLAYLIST_A, only in PLAYLIST_B.
@@ -285,47 +302,52 @@ test("awaitBlockingReload: holds, then resolves once the origin advances", async
 
 test("awaitBlockingReload: never polls faster than once per part duration", async () => {
   resetBlockingReloadStateForTests();
-  const clock = makeClock();
-  const sleeps = [];
+  // Measures spacing between actual origin fetches, not internal `sleep`
+  // calls: from the second poll tick onward, a tick's fetch is raced
+  // against the soonest waiter's own deadline (`fetchWithDeadlineRace`),
+  // whose internal sleep duration is "time left until that deadline", not
+  // "the part-duration cadence" -- a different number the loop's own
+  // per-tick pacing sleep already enforces. Fetch spacing is what the
+  // "never faster than once per part" requirement actually constrains.
+  const fetchTimestamps = [];
   const deps = {
-    fetchRendition: async () => toFetched(PLAYLIST_A),
-    now: clock.now,
-    sleep: (ms) => {
-      sleeps.push(ms);
-      return clock.sleep(ms);
+    fetchRendition: async () => {
+      fetchTimestamps.push(Date.now());
+      return toFetched(PLAYLIST_A_FAST);
     },
   };
 
-  // Never satisfied by PLAYLIST_A, never too far ahead (live edge 101, +2 = 103).
+  // Never satisfied by PLAYLIST_A_FAST, never too far ahead (live edge 101, +2 = 103).
   await awaitBlockingReload("rendition-4", { msn: 103 }, deps);
-  assert.ok(sleeps.length > 0);
-  for (const ms of sleeps) {
-    assert.ok(ms <= Math.round(DEFAULT_PART_TARGET_SECONDS * 1000), `poll interval ${ms}ms exceeded the part target`);
+  assert.ok(fetchTimestamps.length >= 2, "expected more than one origin fetch");
+  for (let i = 1; i < fetchTimestamps.length; i += 1) {
+    const gapMs = fetchTimestamps[i] - fetchTimestamps[i - 1];
+    // 30ms part target, with slack for real-timer jitter.
+    assert.ok(gapMs >= 20, `fetches ${i - 1} and ${i} were only ${gapMs}ms apart, faster than the part target`);
   }
 });
 
 test("awaitBlockingReload: times out at 3x the part target and returns the current playlist", async () => {
   resetBlockingReloadStateForTests();
-  const clock = makeClock();
   let fetchCalls = 0;
   const deps = {
     fetchRendition: async () => {
       fetchCalls += 1;
-      return toFetched(PLAYLIST_A);
+      return toFetched(PLAYLIST_A_FAST);
     },
-    now: clock.now,
-    sleep: clock.sleep,
   };
 
-  const start = clock.now();
-  // msn 103 is never satisfied by PLAYLIST_A (live edge 101) and is not too
-  // far ahead (101 + 2 = 103), so this holds all the way to the timeout.
+  const start = Date.now();
+  // msn 103 is never satisfied by PLAYLIST_A_FAST (live edge 101) and is not
+  // too far ahead (101 + 2 = 103), so this holds all the way to the timeout.
   const outcome = await awaitBlockingReload("rendition-5", { msn: 103 }, deps);
+  const elapsed = Date.now() - start;
   assert.equal(outcome.kind, "timeout");
   assert.equal(outcome.playlist.status, 200);
 
-  const expectedTimeoutMs = Math.round(DEFAULT_PART_TARGET_SECONDS * 1000) * 3;
-  assert.equal(clock.now() - start, expectedTimeoutMs);
+  const expectedTimeoutMs = 30 * 3; // PLAYLIST_A_FAST's PART-TARGET is 0.03s
+  assert.ok(elapsed >= expectedTimeoutMs, `expected at least ${expectedTimeoutMs}ms, took ${elapsed}ms`);
+  assert.ok(elapsed < expectedTimeoutMs + 300, `expected close to ${expectedTimeoutMs}ms (real-timer slack), took ${elapsed}ms`);
   assert.ok(fetchCalls >= 2, "should have polled more than once before giving up");
 });
 
@@ -366,8 +388,7 @@ test("awaitBlockingReload: an origin failure fails every current waiter instead 
 
 test("awaitBlockingReload: N waiters on the same rendition, wildly different requests, coalesce onto one poll loop", async () => {
   resetBlockingReloadStateForTests();
-  const clock = makeClock();
-  const playlists = [PLAYLIST_A, PLAYLIST_B]; // clamps to B once exhausted
+  const playlists = [PLAYLIST_A_FAST, PLAYLIST_B_FAST]; // clamps to B once exhausted
   let fetchCalls = 0;
   const deps = {
     fetchRendition: async () => {
@@ -375,8 +396,6 @@ test("awaitBlockingReload: N waiters on the same rendition, wildly different req
       fetchCalls += 1;
       return toFetched(text);
     },
-    now: clock.now,
-    sleep: clock.sleep,
   };
 
   const key = "rendition-coalesced";
@@ -404,6 +423,171 @@ test("awaitBlockingReload: N waiters on the same rendition, wildly different req
   // fetches here. The shared loop costs 4: this is the whole point of L2.1's
   // origin-discipline requirement.
   assert.equal(fetchCalls, 4);
+});
+
+test("awaitBlockingReload: a slow origin fetch does not block a waiter past its own deadline", async () => {
+  resetBlockingReloadStateForTests();
+  let fetchCalls = 0;
+  const deps = {
+    fetchRendition: async () => {
+      fetchCalls += 1;
+      if (fetchCalls === 1) {
+        // Populates `lastPlaylist` so the SECOND tick onward is eligible to
+        // race against the deadline at all.
+        return toFetched(PLAYLIST_A_FAST);
+      }
+      // Every tick after the first stalls far longer than the 30ms timeout
+      // budget (30ms x 3) -- simulates an origin that has stopped answering.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return toFetched(PLAYLIST_A_FAST);
+    },
+  };
+
+  const start = Date.now();
+  // msn 103 is never satisfied by PLAYLIST_A_FAST and is not too far ahead.
+  const outcome = await awaitBlockingReload("rendition-slow-origin", { msn: 103 }, deps);
+  const elapsed = Date.now() - start;
+  assert.equal(outcome.kind, "timeout");
+  // Without the deadline race, this would have blocked for (at least) the
+  // stalled tick's artificial 500ms delay before ever checking a deadline.
+  assert.ok(elapsed < 400, `expected the hold to give up near its own ~90ms deadline, took ${elapsed}ms`);
+});
+
+test("awaitBlockingReload: a cold hold's provisional timeout is corrected once the real PART-TARGET is known", async () => {
+  resetBlockingReloadStateForTests();
+  // No prior fetch for this key, so the FIRST tick's timeout is provisional
+  // (computed from DEFAULT_PART_TARGET_SECONDS = 0.5s, i.e. a 1500ms
+  // budget) until that first tick's response reveals the REAL target, 30ms
+  // (a 90ms budget). If the correction never ran, this would take ~1500ms.
+  const deps = {
+    fetchRendition: async () => toFetched(PLAYLIST_A_FAST),
+  };
+
+  const start = Date.now();
+  const outcome = await awaitBlockingReload("rendition-provisional-timeout", { msn: 103 }, deps);
+  const elapsed = Date.now() - start;
+  assert.equal(outcome.kind, "timeout");
+  assert.ok(
+    elapsed < 500,
+    `expected the corrected ~30ms budget, not the provisional ~1500ms one; took ${elapsed}ms`,
+  );
+});
+
+test("awaitBlockingReload: retained state stops trusting the fast path once it goes stale", async () => {
+  resetBlockingReloadStateForTests();
+  const clock = makeClock();
+  const key = "rendition-freshness";
+
+  // First call: populates `lastEdge` from PLAYLIST_A (live edge msn 101).
+  const firstDeps = {
+    fetchRendition: async () => toFetched(PLAYLIST_A),
+    now: clock.now,
+    sleep: clock.sleep,
+  };
+  const first = await awaitBlockingReload(key, { msn: 100 }, firstDeps);
+  assert.equal(first.kind, "available");
+
+  // Time passes well beyond FAST_PATH_FRESHNESS_MS (2000ms) with no further
+  // requests -- in the real Worker this is exactly a quiet rendition between
+  // two viewer polls.
+  clock.advance(3_000);
+
+  // The rendition has genuinely moved on to msn 200 by now, but a stale
+  // fast path (Farol's 2026-09-13 finding) would classify this as "more
+  // than two segments beyond the STALE edge (101)" and reject it with a 400
+  // WITHOUT ever asking the origin. A fresh fetch must run instead.
+  const ADVANCED_PLAYLIST = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:9",
+    "#EXT-X-PART-INF:PART-TARGET=0.5",
+    "#EXT-X-MEDIA-SEQUENCE:199",
+    "#EXTINF:4.0,",
+    "seg199.m4s",
+    "#EXTINF:4.0,",
+    "seg200.m4s",
+  ].join("\n");
+  let secondFetchCalls = 0;
+  const secondDeps = {
+    fetchRendition: async () => {
+      secondFetchCalls += 1;
+      return toFetched(ADVANCED_PLAYLIST);
+    },
+    now: clock.now,
+    sleep: clock.sleep,
+  };
+  const second = await awaitBlockingReload(key, { msn: 200 }, secondDeps);
+  assert.equal(second.kind, "available", "a fresh fetch should have found msn 200, not a stale 400");
+  assert.equal(secondFetchCalls, 1, "the stale edge must not shortcut past a real fetch");
+});
+
+test("awaitBlockingReload: a non-2xx origin response never poisons the retained fast path", async () => {
+  resetBlockingReloadStateForTests();
+  const clock = makeClock();
+  const key = "rendition-non-2xx";
+
+  const failing = {
+    fetchRendition: async () => toFetched("service unavailable", 503),
+    now: clock.now,
+    sleep: clock.sleep,
+  };
+  const failed = await awaitBlockingReload(key, { msn: 100 }, failing);
+  assert.equal(failed.kind, "origin-error");
+  assert.equal(failed.playlist.status, 503);
+
+  // If the 503 had been allowed to populate `lastEdge`/`lastPlaylist`, this
+  // second call would take the fast path and serve the 503 body back as if
+  // it were an "available" playlist. It must instead run its own real fetch.
+  let secondFetchCalls = 0;
+  const succeeding = {
+    fetchRendition: async () => {
+      secondFetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    now: clock.now,
+    sleep: clock.sleep,
+  };
+  const second = await awaitBlockingReload(key, { msn: 100 }, succeeding);
+  assert.equal(second.kind, "available");
+  assert.equal(second.playlist.status, 200);
+  assert.equal(secondFetchCalls, 1, "the failed fetch must not have been retained as a fast-path answer");
+});
+
+test("awaitBlockingReload: an already-aborted signal resolves immediately, with no fetch at all", async () => {
+  resetBlockingReloadStateForTests();
+  const clock = makeClock();
+  const controller = new AbortController();
+  controller.abort();
+  let fetchCalls = 0;
+  const deps = {
+    fetchRendition: async () => {
+      fetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    now: clock.now,
+    sleep: clock.sleep,
+    signal: controller.signal,
+  };
+
+  const outcome = await awaitBlockingReload("rendition-abort-pre", { msn: 103 }, deps);
+  assert.deepEqual(outcome, { kind: "aborted" });
+  assert.equal(fetchCalls, 0);
+});
+
+test("awaitBlockingReload: aborting mid-hold resolves as aborted without waiting for the timeout", async () => {
+  resetBlockingReloadStateForTests();
+  const controller = new AbortController();
+  const deps = {
+    // Never satisfies msn 103; PLAYLIST_A_FAST's timeout budget is 90ms.
+    fetchRendition: async () => toFetched(PLAYLIST_A_FAST),
+    signal: controller.signal,
+  };
+
+  setTimeout(() => controller.abort(), 20);
+  const start = Date.now();
+  const outcome = await awaitBlockingReload("rendition-abort-mid", { msn: 103 }, deps);
+  const elapsed = Date.now() - start;
+  assert.deepEqual(outcome, { kind: "aborted" });
+  assert.ok(elapsed < 90, `expected the abort at ~20ms to win well before the ~90ms timeout, took ${elapsed}ms`);
 });
 
 // ---------------------------------------------------------------------------
@@ -470,4 +654,40 @@ test("handleBlockingReload: an origin fetch failure -> 502, logged", async () =>
   );
   assert.equal(response.status, 502);
   assert.ok(events.some((e) => e.event === "hlsEdge.blockingReloadOriginError"));
+});
+
+test("handleBlockingReload: a non-2xx origin response passes through, logged, never a BLOCKING-* hit", async () => {
+  resetBlockingReloadStateForTests();
+  const events = [];
+  const response = await handleBlockingReload(
+    "rendition-h5",
+    { msn: 1 },
+    async () => toFetched("service unavailable", 503),
+    (event, fields) => events.push({ event, fields }),
+    { channelId: "chan-1", rung: "720p30" },
+  );
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("X-HLS-Edge-Cache"), "SKIP");
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.ok(events.some((e) => e.event === "hlsEdge.blockingReloadOriginRejected"));
+});
+
+test("handleBlockingReload: an already-aborted signal short-circuits to a 499, no fetch", async () => {
+  resetBlockingReloadStateForTests();
+  const controller = new AbortController();
+  controller.abort();
+  let fetchCalls = 0;
+  const response = await handleBlockingReload(
+    "rendition-h6",
+    { msn: 1 },
+    async () => {
+      fetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    () => {},
+    { channelId: "chan-1", rung: "720p30" },
+    controller.signal,
+  );
+  assert.equal(response.status, 499);
+  assert.equal(fetchCalls, 0);
 });
