@@ -111,6 +111,31 @@ describe("liveHlsTelemetryBatchSchema", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts an optional sessionToken and omits it when absent", () => {
+    const withToken = liveHlsTelemetryBatchSchema.parse({
+      sessionId: "channel-1:1700000000000",
+      sessionToken: "abc.def",
+      samples: [{ rung: "720p30", latencyMs: 1_000 }],
+    });
+    expect(withToken.sessionToken).toBe("abc.def");
+
+    const withoutToken = liveHlsTelemetryBatchSchema.parse({
+      sessionId: "channel-1:1700000000000",
+      samples: [{ rung: "720p30", latencyMs: 1_000 }],
+    });
+    expect(withoutToken.sessionToken).toBeUndefined();
+  });
+
+  it("refuses an absurdly long sessionToken", () => {
+    expect(() =>
+      liveHlsTelemetryBatchSchema.parse({
+        sessionId: "channel-1:1700000000000",
+        sessionToken: "x".repeat(1_000),
+        samples: [{ rung: "720p30", latencyMs: 1_000 }],
+      }),
+    ).toThrow();
+  });
 });
 
 describe("isSampledForHlsTelemetry", () => {

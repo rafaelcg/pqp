@@ -5,10 +5,12 @@ import {
   encodeToPaintLatencyMs,
   getHlsRebuildCount,
   hasHlsViewerToken,
+  hlsFallbackRungLabel,
   hlsRungFromPlaylistUrl,
   hlsSessionKey,
   hlsTelemetryIdentityFromToken,
   hlsTelemetrySessionKey,
+  hlsViewerTokenFromUrl,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
   nextFreshPlaylistUrl,
@@ -316,6 +318,25 @@ describe("withFreshHlsToken", () => {
   });
 });
 
+describe("hlsViewerTokenFromUrl", () => {
+  const PROXY = "https://api.example.test/api/voice/hls-playlist/ch-1/17889";
+
+  it("reads the token out", () => {
+    expect(hlsViewerTokenFromUrl(`${PROXY}?t=abc.def`)).toBe("abc.def");
+  });
+
+  it("finds it beside other parameters, in any order", () => {
+    expect(hlsViewerTokenFromUrl(`${PROXY}?x=1&t=abc.def`)).toBe("abc.def");
+    expect(hlsViewerTokenFromUrl(`${PROXY}?t=abc.def&x=1`)).toBe("abc.def");
+  });
+
+  it("is null with no query string, no t, or a look-alike parameter", () => {
+    expect(hlsViewerTokenFromUrl(PROXY)).toBeNull();
+    expect(hlsViewerTokenFromUrl(`${PROXY}?x=1`)).toBeNull();
+    expect(hlsViewerTokenFromUrl(`${PROXY}?token=abc`)).toBeNull();
+  });
+});
+
 describe("sampleVideoPlaybackQuality", () => {
   it("reads dropped and total frames when the engine reports them", () => {
     expect(
@@ -392,6 +413,9 @@ describe("the hls rebuild counter", () => {
   it("resets cleanly for the next test file's run", () => {
     resetHlsRebuildCountForTest();
     expect(getHlsRebuildCount()).toBe(0);
+  });
+});
+
 describe("hlsTelemetrySessionKey", () => {
   it("extracts channel and startedAt from a media playlist URL", () => {
     expect(
@@ -444,6 +468,25 @@ describe("hlsRungFromPlaylistUrl", () => {
     expect(hlsRungFromPlaylistUrl(null)).toBeNull();
     expect(hlsRungFromPlaylistUrl(undefined)).toBeNull();
     expect(hlsRungFromPlaylistUrl("https://live.example.test/a.ts")).toBeNull();
+  });
+});
+
+describe("hlsFallbackRungLabel", () => {
+  it("builds a <height>p<framerate> label matching the server's own rung naming", () => {
+    expect(hlsFallbackRungLabel({ height: 720, framerate: 30 })).toBe("720p30");
+    expect(hlsFallbackRungLabel({ height: 1080, framerate: 60 })).toBe("1080p60");
+  });
+
+  it("rounds a non-integer framerate", () => {
+    expect(hlsFallbackRungLabel({ height: 720, framerate: 29.97 })).toBe("720p30");
+  });
+
+  it("is null when height or framerate is missing, zero, or the level itself is missing", () => {
+    expect(hlsFallbackRungLabel({ height: 720 })).toBeNull();
+    expect(hlsFallbackRungLabel({ framerate: 30 })).toBeNull();
+    expect(hlsFallbackRungLabel({ height: 0, framerate: 30 })).toBeNull();
+    expect(hlsFallbackRungLabel(null)).toBeNull();
+    expect(hlsFallbackRungLabel(undefined)).toBeNull();
   });
 });
 
@@ -593,6 +636,39 @@ describe("createHlsTelemetryQueue", () => {
     // Nothing left to flush even if something called flush() after stop.
     queue.flush();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("forwards sessionToken on every flush when one was given", () => {
+    const send = vi.fn();
+    const queue = createHlsTelemetryQueue({
+      sessionId: "s1",
+      sessionToken: "abc.def",
+      send,
+      ...fakeTimers(),
+    });
+    queue.push({ rung: "720p30", latencyMs: 1_000 });
+    tick!();
+    expect(send).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionToken: "abc.def",
+      samples: [{ rung: "720p30", latencyMs: 1_000 }],
+    });
+    queue.stop();
+  });
+
+  it("omits sessionToken entirely rather than sending it as null", () => {
+    const send = vi.fn();
+    const queue = createHlsTelemetryQueue({
+      sessionId: "s1",
+      sessionToken: null,
+      send,
+      ...fakeTimers(),
+    });
+    queue.push({ rung: "720p30", latencyMs: 1_000 });
+    tick!();
+    const [sent] = send.mock.calls[0]!;
+    expect(sent).not.toHaveProperty("sessionToken");
+    queue.stop();
   });
 });
 

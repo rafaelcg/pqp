@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  decodeHlsViewerToken,
   HLS_VIEWER_TOKEN_TTL_MS,
   mintHlsViewerToken,
   stampViewerStream,
@@ -190,5 +191,69 @@ describe("HLS viewer token", () => {
     expect(
       mintHlsViewerToken({ userId: USER, channelId: CHANNEL, startedAt: STARTED_AT }),
     ).not.toBeNull();
+  });
+
+  describe("decodeHlsViewerToken", () => {
+    // BROADCAST_PIPELINE B0.6: the telemetry route uses this, not
+    // `verifyHlsViewerToken`, because it does not yet know which
+    // channel/session to expect -- the whole point is to have the token NAME
+    // it, rather than trusting a client-supplied string (Farol finding,
+    // 2026-09-13).
+    it("names the channel and session a valid token carries, with no expected pair to check against", () => {
+      const token = mintHlsViewerToken({
+        userId: USER,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      });
+      expect(decodeHlsViewerToken(token)).toEqual({
+        userId: USER,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+        issuedAt: expect.any(Number),
+        purpose: "live",
+      });
+    });
+
+    it("carries the replay purpose through", () => {
+      const token = mintHlsViewerToken({
+        userId: USER,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+        purpose: "replay",
+      });
+      expect(decodeHlsViewerToken(token)?.purpose).toBe("replay");
+    });
+
+    it("is null for a missing, malformed, tampered or expired token", () => {
+      const now = 1_000_000;
+      const token = mintHlsViewerToken({
+        userId: USER,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+        now,
+      })!;
+      expect(decodeHlsViewerToken(null)).toBeNull();
+      expect(decodeHlsViewerToken(undefined)).toBeNull();
+      expect(decodeHlsViewerToken("not-a-token")).toBeNull();
+      expect(decodeHlsViewerToken(`${token.slice(0, -2)}xx`)).toBeNull();
+      expect(
+        decodeHlsViewerToken(token, now + HLS_VIEWER_TOKEN_TTL_MS + 1),
+      ).toBeNull();
+    });
+
+    it("agrees with verifyHlsViewerToken on the same token", () => {
+      const token = mintHlsViewerToken({
+        userId: USER,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      });
+      const decoded = decodeHlsViewerToken(token);
+      const verified = verifyHlsViewerToken(token, {
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      });
+      expect(decoded?.userId).toBe(verified?.userId);
+      expect(decoded?.issuedAt).toBe(verified?.issuedAt);
+    });
   });
 });

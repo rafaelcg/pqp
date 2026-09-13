@@ -65,6 +65,20 @@ export type LiveHlsTelemetrySample = z.infer<typeof liveHlsTelemetrySampleSchema
  */
 export const liveHlsTelemetryBatchSchema = z.object({
   sessionId: z.string().min(1).max(64),
+  /**
+   * The `?t=` HLS viewer token the playlist request this batch is about
+   * carried, when the client was attached to the signed playlist proxy
+   * (`hls-playlist-proxy.ts`) at the time -- absent only for the
+   * `LIVE_HLS_SIGNED_URLS=false` configuration, which mints no such token
+   * (`stampViewerStream`). The server verifies this and, when it checks out,
+   * uses the channel/session it names INSTEAD of trusting `sessionId`, which
+   * is otherwise a free-text label the caller could set to anything (a Farol
+   * finding, 2026-09-13: "authenticated users can submit telemetry for
+   * arbitrary sessions"). `sessionId` is kept regardless, both as the fallback
+   * for that unsigned configuration and because it is still what the log line
+   * shows a human first.
+   */
+  sessionToken: z.string().min(1).max(512).optional(),
   samples: z
     .array(liveHlsTelemetrySampleSchema)
     .min(1)

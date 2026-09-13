@@ -153,9 +153,11 @@ import {
   recordHlsTelemetryBatchAccepted,
   recordHlsTelemetryBatchRejectedRateLimit,
   recordHlsTelemetryBatchRejectedSchema,
+  recordHlsTelemetryBatchRejectedSession,
 } from "../voice/hls-latency-metrics.js";
 import { isKnownHlsRung } from "../voice/hls-ladder.js";
 import {
+  decodeHlsViewerToken,
   describeHlsViewerToken,
   HLS_VIEWER_TOKEN_PARAM,
   mintHlsViewerToken,
@@ -790,6 +792,21 @@ const liveHlsTelemetryLimiter = createRateLimiter({
   refillPerSecond: 0.2,
 });
 /**
+ * The same budget as `liveHlsTelemetryLimiter` above, keyed by SESSION
+ * instead of by user (a Farol finding, 2026-09-13: the route only capped one
+ * caller's own rate, not how much one session's worth of traffic could add
+ * up to across many accounts watching the same party). One party with a very
+ * large audience still fits comfortably under this: at the 10% sample rate
+ * and one flush per `LIVE_HLS_TELEMETRY_FLUSH_MS` (30s), even a thousand
+ * sampled viewers average under four batches a second, well inside a refill
+ * this roomy. What it bounds is a script hammering ONE session id (real or
+ * made up) from many accounts at once, which no ordinary audience does.
+ */
+const liveHlsTelemetrySessionLimiter = createRateLimiter({
+  capacity: 120,
+  refillPerSecond: 10,
+});
+/**
  * Post-call ratings. Roomier than feedback because this one is *asked for*:
  * somebody who genuinely has ten short calls in an evening should be able to
  * answer every prompt, and the client already refuses to ask more than once
@@ -880,6 +897,7 @@ export function resetApiRateLimits(): void {
   voiceLeaveLimiter.reset();
   bulkDeleteLimiter.reset();
   liveHlsTelemetryLimiter.reset();
+  liveHlsTelemetrySessionLimiter.reset();
   // Keyed on the string "machine" rather than a user id, so unlike every
   // bucket above it is shared by every test in a file and would otherwise
   // drain across them.
@@ -7755,13 +7773,27 @@ function feedbackIdParam(value: string | undefined): string {
  * BROADCAST_PIPELINE B0.5: sampled, batched, droppable client playback
  * telemetry for a live watch party. Authenticated (the normal Bearer flow,
  * CLAUDE.md pitfall #8) and rate-limited, but deliberately NOT gated on
- * channel access or on the named session actually being live: this is an
- * aggregate operational metric, not a read of anything sensitive, and
- * checking either would put a database round trip on a path this doc's whole
- * premise is to keep cheap. A batch naming a made-up or stale session id is
- * an opaque, unverified label that never becomes a metrics key on its own
- * (only `rung` does, and that is validated below); the worst it buys is a
- * confusing `sessionId` in one log line.
+ * channel access via a database round trip: this is an aggregate operational
+ * metric, not a read of anything sensitive, and a query here is a cost this
+ * doc's whole premise is to avoid.
+ *
+ * SESSION IDENTITY IS BOUND TO THE VIEWER TOKEN, NOT TRUSTED AS FREE TEXT (a
+ * Farol finding, 2026-09-13: "authenticated users can submit telemetry for
+ * arbitrary sessions", permitting cross-session log/metric poisoning).
+ * `batch.sessionToken` is the SAME `?t=` capability the client's playlist
+ * request carried (`hls-viewer-token.ts`), which already names a user, a
+ * channel and a `startedAt` and is signed by this server -- so verifying it
+ * here costs one HMAC, not a query, and the channel/session it reports is
+ * the one the token's own signature vouches for rather than whatever the
+ * client typed. A token that does not verify, or that names a user other
+ * than the one this request authenticated as, is rejected outright: a wrong
+ * token is a stronger signal of a caller lying about its session than
+ * omitting one. Omitting `sessionToken` entirely is still accepted on
+ * `sessionId` alone -- `LIVE_HLS_SIGNED_URLS=false` mints no such token at
+ * all (`stampViewerStream`), and that configuration is fully supported -- but
+ * that `sessionId` stays exactly what it always was: an opaque, unverified
+ * label that never becomes a metrics key on its own (only `rung` does, and
+ * that is validated below).
  *
  * A REJECTED BATCH IS A NO-OP THE CLIENT NEVER RETRIES (see
  * `client/src/lib/hls-playback.ts`'s telemetry queue): this is a measurement,
@@ -7782,6 +7814,31 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
     recordHlsTelemetryBatchRejectedSchema();
     throw error;
   }
+  // `sessionVerified` says whether `sessionId` below is this server's own
+  // signed claim (trustworthy for the log line, and the key the per-session
+  // rate limit uses) or the client's own unverified string (still logged,
+  // just not something a reader — human or alert rule — should treat as
+  // proven).
+  let sessionId = batch.sessionId;
+  let sessionVerified = false;
+  if (batch.sessionToken !== undefined) {
+    const claims = decodeHlsViewerToken(batch.sessionToken);
+    if (!claims || claims.userId !== user.id) {
+      recordHlsTelemetryBatchRejectedSession();
+      throw new HttpError(400, "Invalid session token");
+    }
+    sessionId = `${claims.channelId}:${claims.startedAt}`;
+    sessionVerified = true;
+  }
+  const sessionKey = `session:${sessionId}`;
+  if (!liveHlsTelemetrySessionLimiter.take(sessionKey)) {
+    recordHlsTelemetryBatchRejectedRateLimit();
+    res.setHeader(
+      "Retry-After",
+      String(liveHlsTelemetrySessionLimiter.retryAfter(sessionKey)),
+    );
+    throw new HttpError(429, "Slow down");
+  }
   // `recordHlsLatencySample` refuses a rung it does not recognise on its
   // own (a caller-independent guard against an authenticated account
   // growing the per-rung histogram map without bound -- a Farol finding,
@@ -7789,12 +7846,19 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
   // the same way first: otherwise a batch full of garbage rung names would
   // still produce a clean-looking log line while every sample inside it was
   // silently dropped from the histogram.
+  // Every sample goes through `recordHlsLatencySample`, unfiltered: it is
+  // the one place that counts `samplesRejectedUnknownRung`, and pre-filtering
+  // here (a Farol finding, 2026-09-13) fed it only the samples it would have
+  // accepted anyway, so a batch full of garbage rungs recorded nothing AND
+  // never incremented the counter meant to say so.
+  for (const sample of batch.samples) {
+    recordHlsLatencySample(sample.rung, sample.latencyMs);
+  }
+  // `knownSamples` is for the log line below ONLY -- it must not name a rung
+  // this build refused, but it plays no part in what got recorded above.
   const knownSamples = batch.samples.filter((sample) =>
     isKnownHlsRung(sample.rung),
   );
-  for (const sample of knownSamples) {
-    recordHlsLatencySample(sample.rung, sample.latencyMs);
-  }
   recordHlsTelemetryBatchAccepted();
   // One structured line per batch (not per sample): a live party's worth of
   // these is meant to be readable by a human during an event, not a second
@@ -7839,7 +7903,8 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
         bufferSecondsValues.length
       : undefined;
   logEvent("voice.hlsTelemetryBatch", {
-    sessionId: batch.sessionId,
+    sessionId,
+    sessionVerified,
     samples: batch.samples.length,
     droppedUnknownRungSamples: batch.samples.length - knownSamples.length,
     rungs: [...new Set(knownSamples.map((sample) => sample.rung))],

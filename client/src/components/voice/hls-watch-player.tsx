@@ -33,10 +33,12 @@ import {
   createHlsTelemetryQueue,
   encodeToPaintLatencyMs,
   hasHlsViewerToken,
+  hlsFallbackRungLabel,
   hlsRungFromPlaylistUrl,
   hlsSessionKey,
   hlsTelemetryIdentityFromToken,
   hlsTelemetrySessionKey,
+  hlsViewerTokenFromUrl,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
   nextFreshPlaylistUrl,
@@ -940,6 +942,12 @@ export function HlsWatchPlayer({
       }
       telemetryQueue = createHlsTelemetryQueue({
         sessionId,
+        // The server verifies this and, when it checks out, uses the
+        // channel/session it names instead of `sessionId` above -- see the
+        // route's own comment in `server/src/api/index.ts` (Farol finding,
+        // 2026-09-13). Null on the `LIVE_HLS_SIGNED_URLS=false` config,
+        // which mints no such token; the batch still goes out on `sessionId`.
+        sessionToken: hlsViewerTokenFromUrl(activeSrc),
         send: (batch) => sendHlsTelemetryBatch(batch, getAuthToken),
       });
     }
@@ -1352,10 +1360,21 @@ export function HlsWatchPlayer({
           startSeconds: frag.start,
         };
         const level = player.levels[frag.level] as
-          | { url?: string[] | string }
+          | { url?: string[] | string; height?: number; frameRate?: number }
           | undefined;
         const levelUrl = Array.isArray(level?.url) ? level.url[0] : level?.url;
-        currentRung = hlsRungFromPlaylistUrl(levelUrl) ?? currentRung;
+        // The proxy path names the rung directly; a level whose URL is not
+        // our proxy at all (a raw public bucket URL, `LIVE_HLS_SIGNED_URLS=
+        // false`) falls back to naming it from the level's own resolution
+        // and framerate instead of reporting no rung -- and therefore never
+        // sending telemetry -- for an otherwise fully supported stream.
+        currentRung =
+          hlsRungFromPlaylistUrl(levelUrl) ??
+          hlsFallbackRungLabel({
+            height: level?.height,
+            framerate: level?.frameRate,
+          }) ??
+          currentRung;
       });
       player.loadSource(activeSrc);
       player.attachMedia(video);

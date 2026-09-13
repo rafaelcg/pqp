@@ -191,6 +191,25 @@ export function withFreshHlsToken(url: string, freshUrl: string): string {
 }
 
 /**
+ * The `?t=` HLS viewer token a playlist URL carries, or null. This is the
+ * SAME capability `hasHlsViewerToken` above only checks for the presence of
+ * -- here it is read out so `hls-watch-player.tsx` can hand it to the
+ * telemetry route, which verifies it server-side and uses the channel/session
+ * it names instead of trusting a client-typed `sessionId` string (Farol
+ * finding, 2026-09-13: "authenticated users can submit telemetry for
+ * arbitrary sessions"). Null for a URL with no query string at all, or one
+ * whose query does not carry `t` -- the `LIVE_HLS_SIGNED_URLS=false`
+ * configuration, which mints no such token (`stampViewerStream`).
+ */
+export function hlsViewerTokenFromUrl(url: string): string | null {
+  const query = url.indexOf("?");
+  if (query === -1) {
+    return null;
+  }
+  return new URLSearchParams(url.slice(query + 1)).get("t");
+}
+
+/**
  * Whether a URL hls.js is about to fetch is our own signed playlist proxy --
  * the one request in the whole HLS pipeline that needs a Bearer header. Every
  * segment/media URL the proxy hands back is already an absolute, presigned
@@ -395,6 +414,27 @@ export function hlsRungFromPlaylistUrl(url: string | null | undefined): string |
 }
 
 /**
+ * A rung label for a level whose URL is not our own proxy at all (a Farol
+ * finding, 2026-09-13: `LIVE_HLS_SIGNED_URLS=false` hands out a raw public
+ * bucket URL with no rung in its path, so `hlsRungFromPlaylistUrl` above
+ * always returns null for it and telemetry silently never had a rung to
+ * report). Built from the level's own declared resolution and framerate the
+ * same way this repo names a rung everywhere else (`hls-ladder.ts`'s
+ * `LADDER_RUNGS` keys: `<height>p<framerate>`), so a level matching a real
+ * ladder rung produces the SAME string the server already knows; one that
+ * does not is refused by the server's own rung whitelist rather than
+ * silently mislabelled, which is the safer failure for a metric.
+ */
+export function hlsFallbackRungLabel(
+  level: { height?: number; framerate?: number } | null | undefined,
+): string | null {
+  if (!level?.height || !level.framerate) {
+    return null;
+  }
+  return `${level.height}p${Math.round(level.framerate)}`;
+}
+
+/**
  * The sampling identity for `isSampledForHlsTelemetry`, read off whatever
  * `getAuthToken()` already resolved -- so this needs no Clerk hook of its
  * own, which matters because `HlsWatchPlayer` renders under the dev-auth
@@ -497,6 +537,15 @@ export interface HlsTelemetryQueue {
 
 export function createHlsTelemetryQueue(input: {
   sessionId: string;
+  /**
+   * The `?t=` viewer token the playlist request carried, when there was one
+   * (`hlsViewerTokenFromUrl`) -- forwarded on every flush so the server can
+   * bind this batch to the session ITS OWN signature names, rather than
+   * trusting `sessionId` above as free text (Farol finding, 2026-09-13).
+   * Absent for the `LIVE_HLS_SIGNED_URLS=false` configuration, which mints no
+   * token at all; that batch is still sent, on `sessionId` alone.
+   */
+  sessionToken?: string | null;
   send: (batch: LiveHlsTelemetryBatch) => void;
   flushMs?: number;
   setInterval?: typeof window.setInterval;
@@ -511,7 +560,11 @@ export function createHlsTelemetryQueue(input: {
     }
     const samples = buffer;
     buffer = [];
-    input.send({ sessionId: input.sessionId, samples });
+    input.send({
+      sessionId: input.sessionId,
+      ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
+      samples,
+    });
   }
   const timer = setIntervalFn(flush, input.flushMs ?? LIVE_HLS_TELEMETRY_FLUSH_MS);
   return {

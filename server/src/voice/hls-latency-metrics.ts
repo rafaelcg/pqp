@@ -52,6 +52,18 @@ let batchesAccepted = 0;
 let batchesRejectedSchema = 0;
 /** Batches refused by the per-user rate limit. */
 let batchesRejectedRateLimit = 0;
+/**
+ * Batches refused for carrying a `sessionToken` that does not verify (bad
+ * signature, expired, or naming a user other than the authenticated caller).
+ * Distinct from a batch simply omitting the token (the `LIVE_HLS_SIGNED_URLS
+ * =false` configuration mints none, and that batch is accepted on its
+ * `sessionId` alone): this counts a token that was PRESENT and WRONG, which
+ * is the shape an attacker trying to claim a session it does not hold would
+ * produce. Pitfall 16's lesson: an endpoint that refuses somebody must say
+ * why, so this stays a distinct counter from schema/rate-limit rejections
+ * rather than folding into either.
+ */
+let batchesRejectedSession = 0;
 /** Individual samples folded into a histogram, across every accepted batch. */
 let samplesRecorded = 0;
 /**
@@ -111,9 +123,14 @@ export function recordHlsTelemetryBatchRejectedSchema(): void {
   batchesRejectedSchema += 1;
 }
 
-/** Record one batch refused by the per-user rate limit. */
+/** Record one batch refused by the per-user or per-session rate limit. */
 export function recordHlsTelemetryBatchRejectedRateLimit(): void {
   batchesRejectedRateLimit += 1;
+}
+
+/** Record one batch refused for carrying a `sessionToken` that does not verify. */
+export function recordHlsTelemetryBatchRejectedSession(): void {
+  batchesRejectedSession += 1;
 }
 
 /**
@@ -175,6 +192,7 @@ export interface HlsTelemetryActivity {
   batchesAccepted: number;
   batchesRejectedSchema: number;
   batchesRejectedRateLimit: number;
+  batchesRejectedSession: number;
   samplesRecorded: number;
   samplesRejectedUnknownRung: number;
   byRung: HlsLatencyRungSummary[];
@@ -186,6 +204,7 @@ export function hlsTelemetryActivity(): HlsTelemetryActivity {
     batchesAccepted,
     batchesRejectedSchema,
     batchesRejectedRateLimit,
+    batchesRejectedSession,
     samplesRecorded,
     samplesRejectedUnknownRung,
     byRung: hlsLatencySnapshot(),
@@ -197,6 +216,7 @@ export function resetHlsLatencyMetricsForTests(): void {
   batchesAccepted = 0;
   batchesRejectedSchema = 0;
   batchesRejectedRateLimit = 0;
+  batchesRejectedSession = 0;
   samplesRecorded = 0;
   samplesRejectedUnknownRung = 0;
 }

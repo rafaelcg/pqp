@@ -7,6 +7,7 @@ import {
   recordHlsTelemetryBatchAccepted,
   recordHlsTelemetryBatchRejectedRateLimit,
   recordHlsTelemetryBatchRejectedSchema,
+  recordHlsTelemetryBatchRejectedSession,
   resetHlsLatencyMetricsForTests,
 } from "./hls-latency-metrics.js";
 
@@ -92,6 +93,7 @@ describe("hlsTelemetryActivity", () => {
     recordHlsTelemetryBatchAccepted();
     recordHlsTelemetryBatchRejectedSchema();
     recordHlsTelemetryBatchRejectedRateLimit();
+    recordHlsTelemetryBatchRejectedSession();
     recordHlsLatencySample("720p30", 5_000);
     recordHlsLatencySample("720p30", 6_000);
 
@@ -99,6 +101,7 @@ describe("hlsTelemetryActivity", () => {
     expect(activity.batchesAccepted).toBe(2);
     expect(activity.batchesRejectedSchema).toBe(1);
     expect(activity.batchesRejectedRateLimit).toBe(1);
+    expect(activity.batchesRejectedSession).toBe(1);
     expect(activity.samplesRecorded).toBe(2);
     expect(activity.byRung).toHaveLength(1);
   });

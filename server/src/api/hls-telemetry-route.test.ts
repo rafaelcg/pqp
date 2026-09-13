@@ -49,6 +49,10 @@ const { upsertUser } = await import("../services/users.js");
 const { hlsTelemetryActivity, resetHlsLatencyMetricsForTests } = await import(
   "../voice/hls-latency-metrics.js"
 );
+const { mintHlsViewerToken } = await import("../voice/hls-viewer-token.js");
+
+const TOKEN_CHANNEL = "00000000-0000-4000-8000-0000000000cc";
+const TOKEN_STARTED_AT = 1_700_000_000_000;
 
 let server: Server;
 let baseUrl: string;
@@ -74,6 +78,10 @@ describeDb("POST /api/live-hls/telemetry", () => {
   let viewer: { id: string; clerk_id: string };
 
   beforeAll(async () => {
+    // Needed for mintHlsViewerToken/decodeHlsViewerToken below -- the
+    // session-token tests mint a real, verifiable capability rather than a
+    // fixture string.
+    process.env.CLERK_SECRET_KEY = "sk_test_hls_telemetry";
     await initDb();
     server = createServer((req, res) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -90,6 +98,7 @@ describeDb("POST /api/live-hls/telemetry", () => {
   });
 
   afterAll(async () => {
+    delete process.env.CLERK_SECRET_KEY;
     await new Promise<void>((done) => server.close(() => done()));
     await closePool();
   });
@@ -170,6 +179,36 @@ describeDb("POST /api/live-hls/telemetry", () => {
     expect(logEvent).not.toHaveBeenCalled();
   });
 
+  it("counts an unknown rung in samplesRejectedUnknownRung and drops it from the log line's rungs, but still accepts the batch", async () => {
+    // Farol finding, 2026-09-13: the route used to pre-filter unknown rungs
+    // before calling recordHlsLatencySample, which is the ONLY place that
+    // increments this counter -- so a batch full of garbage rungs recorded
+    // nothing AND the counter meant to say so stayed at zero.
+    const result = await post(
+      {
+        sessionId: "session-abc",
+        samples: [
+          { rung: "720p30", latencyMs: 1_000 },
+          { rung: "not-a-real-rung", latencyMs: 2_000 },
+        ],
+      },
+      viewer,
+    );
+    expect(result.status).toBe(200);
+    const activity = hlsTelemetryActivity();
+    expect(activity.batchesAccepted).toBe(1);
+    expect(activity.samplesRecorded).toBe(1);
+    expect(activity.samplesRejectedUnknownRung).toBe(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsTelemetryBatch",
+      expect.objectContaining({
+        samples: 2,
+        droppedUnknownRungSamples: 1,
+        rungs: ["720p30"],
+      }),
+    );
+  });
+
   it("refuses a batch with no session id", async () => {
     const result = await post(
       { samples: [{ rung: "720p30", latencyMs: 1_000 }] },
@@ -194,6 +233,149 @@ describeDb("POST /api/live-hls/telemetry", () => {
       lastStatus = result.status;
     }
     expect(lastStatus).toBe(429);
+    expect(hlsTelemetryActivity().batchesRejectedRateLimit).toBeGreaterThan(0);
+  });
+
+  /**
+   * Farol finding, 2026-09-13: "authenticated users can submit telemetry for
+   * arbitrary sessions". A `sessionToken` is the SAME `?t=` capability the
+   * caller's playlist request carried, verified here rather than trusted, so
+   * the batch's real session identity cannot be a string the caller invented.
+   */
+  describe("sessionToken binding", () => {
+    it("uses the verified token's channel/session instead of the client's sessionId, and marks it verified", async () => {
+      const token = mintHlsViewerToken({
+        userId: viewer.id,
+        channelId: TOKEN_CHANNEL,
+        startedAt: TOKEN_STARTED_AT,
+      })!;
+      const result = await post(
+        {
+          sessionId: "whatever-the-client-typed",
+          sessionToken: token,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(result.status).toBe(200);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsTelemetryBatch",
+        expect.objectContaining({
+          sessionId: `${TOKEN_CHANNEL}:${TOKEN_STARTED_AT}`,
+          sessionVerified: true,
+        }),
+      );
+    });
+
+    it("logs sessionVerified: false and the client's own sessionId when no token is sent", async () => {
+      const result = await post(
+        {
+          sessionId: "unverified-session-label",
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(result.status).toBe(200);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsTelemetryBatch",
+        expect.objectContaining({
+          sessionId: "unverified-session-label",
+          sessionVerified: false,
+        }),
+      );
+    });
+
+    it("refuses a session token naming a different user than the authenticated caller", async () => {
+      const otherUsersToken = mintHlsViewerToken({
+        userId: "11111111-1111-4111-8111-111111111111",
+        channelId: TOKEN_CHANNEL,
+        startedAt: TOKEN_STARTED_AT,
+      })!;
+      const result = await post(
+        {
+          sessionId: "session-abc",
+          sessionToken: otherUsersToken,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(result.status).toBe(400);
+      expect(hlsTelemetryActivity().batchesRejectedSession).toBe(1);
+      expect(hlsTelemetryActivity().batchesAccepted).toBe(0);
+      expect(logEvent).not.toHaveBeenCalled();
+    });
+
+    it("refuses a tampered session token", async () => {
+      const token = mintHlsViewerToken({
+        userId: viewer.id,
+        channelId: TOKEN_CHANNEL,
+        startedAt: TOKEN_STARTED_AT,
+      })!;
+      const result = await post(
+        {
+          sessionId: "session-abc",
+          sessionToken: `${token.slice(0, -2)}xx`,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(result.status).toBe(400);
+      expect(hlsTelemetryActivity().batchesRejectedSession).toBe(1);
+    });
+
+    it("refuses an expired session token", async () => {
+      const now = 1_700_000_000_000;
+      const token = mintHlsViewerToken({
+        userId: viewer.id,
+        channelId: TOKEN_CHANNEL,
+        startedAt: TOKEN_STARTED_AT,
+        now: now - 2 * 60 * 60 * 1000,
+      })!;
+      const result = await post(
+        {
+          sessionId: "session-abc",
+          sessionToken: token,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(result.status).toBe(400);
+      expect(hlsTelemetryActivity().batchesRejectedSession).toBe(1);
+    });
+  });
+
+  /**
+   * Farol finding, 2026-09-13 (performance): the route only capped one
+   * caller's own rate, not how much traffic one session's worth of viewers
+   * could add up to across many accounts. Each of these callers is under
+   * its OWN per-user budget (one request each), so only the per-session
+   * limiter can be what trips.
+   */
+  it("rate-limits a session receiving far more batches than one real party would, across many accounts", async () => {
+    let lastStatus = 200;
+    let accepted = 0;
+    for (let i = 0; i < 130; i++) {
+      const fakeViewer = { id: `session-limit-user-${i}`, clerk_id: `session-limit-${i}` };
+      const token = mintHlsViewerToken({
+        userId: fakeViewer.id,
+        channelId: TOKEN_CHANNEL,
+        startedAt: TOKEN_STARTED_AT,
+      })!;
+      const result = await post(
+        {
+          sessionId: "irrelevant-because-verified",
+          sessionToken: token,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        fakeViewer,
+      );
+      lastStatus = result.status;
+      if (result.status === 200) {
+        accepted += 1;
+      }
+    }
+    expect(lastStatus).toBe(429);
+    expect(accepted).toBeLessThan(130);
     expect(hlsTelemetryActivity().batchesRejectedRateLimit).toBeGreaterThan(0);
   });
 });

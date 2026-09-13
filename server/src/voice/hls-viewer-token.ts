@@ -136,26 +136,30 @@ export function mintHlsViewerToken(input: {
   return `${payload}.${sign(payload, secret)}`;
 }
 
+/** Everything a token names, once its signature and expiry check out. */
+export interface HlsViewerTokenClaims {
+  userId: string;
+  channelId: string;
+  startedAt: number;
+  issuedAt: number;
+  purpose: "live" | "replay";
+}
+
 /**
- * The user id the token was issued to, and when, or null. Bound to the exact
- * channel and session: a token for last night's stream, or another channel's,
- * is not a token at all.
- *
- * `issuedAt` is what makes this a capability rather than just an identity:
- * the playlist proxy serves a verified token with NO database round trip, and
- * asks only whether access was revoked after this instant.
+ * Verify a token's signature and expiry ONLY, returning what it claims about
+ * itself rather than checking those claims against an expected channel and
+ * session. `verifyHlsViewerToken` below is the door a caller who already
+ * knows which channel/session to expect should use; this is for a caller
+ * that does not know that yet and wants the token to NAME it instead --
+ * BROADCAST_PIPELINE B0.6's telemetry route, which binds a batch's session
+ * identity to this rather than trusting a client-supplied string (a Farol
+ * finding, 2026-09-13: an authenticated caller could otherwise claim any
+ * session id it liked).
  */
-export function verifyHlsViewerToken(
+export function decodeHlsViewerToken(
   token: string | null | undefined,
-  expected: {
-    channelId: string;
-    startedAt: number;
-    /** See `ViewerClaims.p`. Omitted accepts a token of any purpose,
-     * matching every caller before this claim existed. */
-    purpose?: "live" | "replay";
-  },
   now = Date.now(),
-): { userId: string; issuedAt: number } | null {
+): HlsViewerTokenClaims | null {
   if (!token) {
     return null;
   }
@@ -185,22 +189,55 @@ export function verifyHlsViewerToken(
   if (
     claims.v !== 1 ||
     typeof claims.u !== "string" ||
+    typeof claims.c !== "string" ||
+    typeof claims.s !== "number" ||
     typeof claims.e !== "number" ||
-    claims.e < now ||
-    claims.c !== expected.channelId ||
-    claims.s !== expected.startedAt ||
-    (expected.purpose !== undefined &&
-      (claims.p ?? "live") !== expected.purpose)
+    claims.e < now
   ) {
     return null;
   }
   return {
     userId: claims.u,
+    channelId: claims.c,
+    startedAt: claims.s,
     issuedAt:
       typeof claims.i === "number"
         ? claims.i
         : claims.e - HLS_VIEWER_TOKEN_TTL_MS,
+    purpose: claims.p ?? "live",
   };
+}
+
+/**
+ * The user id the token was issued to, and when, or null. Bound to the exact
+ * channel and session: a token for last night's stream, or another channel's,
+ * is not a token at all.
+ *
+ * `issuedAt` is what makes this a capability rather than just an identity:
+ * the playlist proxy serves a verified token with NO database round trip, and
+ * asks only whether access was revoked after this instant.
+ */
+export function verifyHlsViewerToken(
+  token: string | null | undefined,
+  expected: {
+    channelId: string;
+    startedAt: number;
+    /** See `ViewerClaims.p`. Omitted accepts a token of any purpose,
+     * matching every caller before this claim existed. */
+    purpose?: "live" | "replay";
+  },
+  now = Date.now(),
+): { userId: string; issuedAt: number } | null {
+  const claims = decodeHlsViewerToken(token, now);
+  if (
+    !claims ||
+    claims.channelId !== expected.channelId ||
+    claims.startedAt !== expected.startedAt ||
+    (expected.purpose !== undefined && claims.purpose !== expected.purpose)
+  ) {
+    return null;
+  }
+  return { userId: claims.userId, issuedAt: claims.issuedAt };
 }
 
 /**
