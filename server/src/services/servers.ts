@@ -1123,6 +1123,7 @@ export function invalidateServerAudience(serverId: string): void {
 function invalidateChannelAudienceLocally(channelId: string): void {
   audienceEpoch++;
   dropCachedAudience(channelId);
+  notifyAudienceInvalidated({ channelId });
 }
 
 function invalidateServerAudienceLocally(serverId: string): void {
@@ -1130,6 +1131,40 @@ function invalidateServerAudienceLocally(serverId: string): void {
   for (const [channelId, entry] of audienceCache) {
     if (entry.audience.serverId === serverId) {
       dropCachedAudience(channelId);
+    }
+  }
+  notifyAudienceInvalidated({ serverId });
+}
+
+/**
+ * In-process subscribers to "this audience just went stale", channel- or
+ * server-scoped. `ws/voice.ts`'s roster-membership cache is the one caller:
+ * it already imports this module, so — same reasoning as `onPermissionsUpdate`
+ * next door in `ws/chat.ts` — this is a listener registry rather than a
+ * direct call, so this file does not have to import `ws/voice.ts` back.
+ */
+const audienceInvalidationListeners = new Set<
+  (event: { channelId?: string; serverId?: string }) => void
+>();
+
+export function onAudienceInvalidated(
+  listener: (event: { channelId?: string; serverId?: string }) => void,
+): () => void {
+  audienceInvalidationListeners.add(listener);
+  return () => {
+    audienceInvalidationListeners.delete(listener);
+  };
+}
+
+function notifyAudienceInvalidated(event: {
+  channelId?: string;
+  serverId?: string;
+}): void {
+  for (const listener of audienceInvalidationListeners) {
+    try {
+      listener(event);
+    } catch (error) {
+      console.error("[servers] audience-invalidation listener failed:", error);
     }
   }
 }

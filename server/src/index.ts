@@ -21,7 +21,7 @@ import {
   voiceConfigHash,
 } from "./voice/registry.js";
 import { startVoiceHello } from "./ws/voice-hello.js";
-import { runVoiceReconcile } from "./ws/voice.js";
+import { runVoiceReconcile, sweepVoiceChannelAccessCache } from "./ws/voice.js";
 import {
   assertCorsConfig,
   corsHeaders,
@@ -390,6 +390,7 @@ const rateLimitSweep = setInterval(() => {
   // memory after a busy server goes quiet, not about bounding it.
   sweepAuthCaches();
   sweepChannelAudiences();
+  sweepVoiceChannelAccessCache();
 }, 60_000);
 rateLimitSweep.unref?.();
 

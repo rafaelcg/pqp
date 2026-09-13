@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
+import { countedQuery } from "../lib/db-tx-metrics.js";
 import { logEvent } from "../lib/log.js";
 import {
   VOICE_RESUME_TOKEN_TTL_MS,
@@ -91,7 +92,61 @@ export function voiceConfigHash(): string {
 
 const inFlight = new Set<Promise<unknown>>();
 
+/**
+ * `voice.registry.writesPerMinute`: a sliding count of registry writes
+ * actually issued, in one-second buckets over the last minute.
+ *
+ * Counted here rather than at each call site, because `track()` is the one
+ * place every real write passes through — `trackPendingRegistryWork`'s
+ * `"chain"` event is the exception: it wraps a peer's *whole chain* of
+ * writes (`ws/voice.ts`'s `trackRowWrite`) so tests can await it, and the
+ * writes inside that chain each pass through `track()` again on their own.
+ * Counting `"chain"` too would double-count every chained write.
+ */
+const REGISTRY_WRITE_BUCKET_MS = 1_000;
+const REGISTRY_WRITE_BUCKETS = 60;
+const registryWriteBuckets = new Array<number>(REGISTRY_WRITE_BUCKETS).fill(0);
+let registryWriteBucketIndex = 0;
+let registryWriteBucketAt = Date.now();
+
+function rollRegistryWriteBuckets(now: number): void {
+  const elapsed = Math.floor((now - registryWriteBucketAt) / REGISTRY_WRITE_BUCKET_MS);
+  if (elapsed <= 0) {
+    return;
+  }
+  if (elapsed >= REGISTRY_WRITE_BUCKETS) {
+    registryWriteBuckets.fill(0);
+  } else {
+    for (let i = 0; i < elapsed; i++) {
+      registryWriteBucketIndex = (registryWriteBucketIndex + 1) % REGISTRY_WRITE_BUCKETS;
+      registryWriteBuckets[registryWriteBucketIndex] = 0;
+    }
+  }
+  registryWriteBucketAt = now;
+}
+
+function noteRegistryWrite(now = Date.now()): void {
+  rollRegistryWriteBuckets(now);
+  registryWriteBuckets[registryWriteBucketIndex] += 1;
+}
+
+/** Registry writes issued in the trailing 60 seconds. Test seam takes a fake clock. */
+export function voiceRegistryWritesPerMinute(now = Date.now()): number {
+  rollRegistryWriteBuckets(now);
+  return registryWriteBuckets.reduce((sum, n) => sum + n, 0);
+}
+
+/** Test seam: a suite that fast-forwards time needs a clean slate too. */
+export function resetVoiceRegistryWriteRate(): void {
+  registryWriteBuckets.fill(0);
+  registryWriteBucketIndex = 0;
+  registryWriteBucketAt = Date.now();
+}
+
 function track<T>(work: Promise<T>, event: string): Promise<T | null> {
+  if (event !== "chain") {
+    noteRegistryWrite();
+  }
   const guarded = work
     .catch((error: unknown) => {
       logEvent("voice.registryWriteFailed", {
@@ -339,13 +394,17 @@ export function upsertVoicePeer(peer: VoicePeerWrite): Promise<unknown> {
 async function writePeer(peer: VoicePeerWrite): Promise<void> {
   const pool = getPool();
   for (let attempt = 0; attempt < 2; attempt++) {
-    await pool.query(
+    await countedQuery(
+      pool,
+      "registry.upsertPeerRoom",
       `INSERT INTO voice_rooms (channel_id, transport) VALUES ($1, $2)
        ON CONFLICT (channel_id) DO NOTHING`,
       [peer.channelId, peer.transport],
     );
     try {
-      await pool.query(
+      await countedQuery(
+        pool,
+        "registry.upsertPeer",
         `INSERT INTO voice_peers (
            peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
            muted, deafened, sharing_screen, camera_stream_id,
@@ -422,7 +481,10 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
 export function deleteVoicePeer(peerId: string): Promise<unknown> {
   return track(
     (async () => {
-      const gone = await getPool().query<{ channel_id: string }>(
+      const pool = getPool();
+      const gone = await countedQuery<{ channel_id: string }>(
+        pool,
+        "registry.deletePeer",
         `DELETE FROM voice_peers WHERE peer_id = $1 RETURNING channel_id`,
         [peerId],
       );
@@ -430,7 +492,9 @@ export function deleteVoicePeer(peerId: string): Promise<unknown> {
       if (!channelId) {
         return;
       }
-      await getPool().query(
+      await countedQuery(
+        pool,
+        "registry.deletePeerRoom",
         `DELETE FROM voice_rooms r
           WHERE r.channel_id = $1
             AND NOT EXISTS (
@@ -499,7 +563,13 @@ export async function sweepOwnStaleVoicePeers(
 ): Promise<{ peerId: string; channelId: string }[]> {
   const me = options.instanceId ?? INSTANCE_ID;
   const graceMs = options.graceMs ?? VOICE_OWN_ROW_GRACE_MS;
-  const result = await getPool().query<{ peer_id: string; channel_id: string }>(
+  // ONE STATEMENT FOR EVERY PEER THIS INSTANCE HOLDS, not one per peer:
+  // `heldPeerIds` — however many seats this instance's whole in-process map
+  // has right now — rides in as a single `uuid[]` parameter, so a tick with
+  // sixty seated users still costs this call exactly one round trip.
+  const result = await countedQuery<{ peer_id: string; channel_id: string }>(
+    getPool(),
+    "registry.sweepOwnStale",
     `WITH gone AS (
        DELETE FROM voice_peers p
         WHERE p.instance_id = $1
@@ -760,7 +830,9 @@ function groupRosters(rows: RosterDbRow[]): VoiceRoomRoster[] {
 export async function listVoiceRoster(
   channelId: string,
 ): Promise<VoiceRoomRoster | null> {
-  const result = await getPool().query<RosterDbRow>(
+  const result = await countedQuery<RosterDbRow>(
+    getPool(),
+    "registry.listRoster",
     `${ROSTER_SELECT} WHERE r.channel_id = $1 ORDER BY p.joined_at`,
     [channelId],
   );
@@ -769,7 +841,9 @@ export async function listVoiceRoster(
 
 /** Every occupied room in the cluster, for the rosters a fresh socket is sent. */
 export async function listVoiceRosters(): Promise<VoiceRoomRoster[]> {
-  const result = await getPool().query<RosterDbRow>(
+  const result = await countedQuery<RosterDbRow>(
+    getPool(),
+    "registry.listRosters",
     `${ROSTER_SELECT} ORDER BY r.channel_id, p.joined_at`,
   );
   return groupRosters(result.rows).filter((room) => room.peers.length > 0);
@@ -1109,7 +1183,9 @@ export async function reconcileVoiceRegistry(options: {
   const roomGraceMs = options.roomGraceMs ?? 30_000;
   const pool = getPool();
 
-  const orphaned = await pool.query<{ peer_id: string; channel_id: string }>(
+  const orphaned = await countedQuery<{ peer_id: string; channel_id: string }>(
+    pool,
+    "registry.reconcileOrphan",
     `UPDATE voice_peers p
         SET orphaned_at = COALESCE(i.heartbeat_at, NOW()), updated_at = NOW()
        FROM voice_peers q
@@ -1127,7 +1203,9 @@ export async function reconcileVoiceRegistry(options: {
   // pass either adopts the row (and the delete sees nothing) or finds it
   // gone *and* retired (and cold-joins). The room row goes with the last
   // peer exactly as in `deleteVoicePeer`.
-  const removed = await pool.query<{ peer_id: string; channel_id: string }>(
+  const removed = await countedQuery<{ peer_id: string; channel_id: string }>(
+    pool,
+    "registry.reconcileRemove",
     `WITH gone AS (
        DELETE FROM voice_peers p
         USING voice_peers q
@@ -1159,7 +1237,9 @@ export async function reconcileVoiceRegistry(options: {
     [me, ttlMs, resumeTtlMs],
   );
 
-  const rooms = await pool.query(
+  const rooms = await countedQuery(
+    pool,
+    "registry.reconcileRooms",
     `DELETE FROM voice_rooms r
       WHERE r.created_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
         AND NOT EXISTS (SELECT 1 FROM voice_peers p WHERE p.channel_id = r.channel_id)`,
@@ -1168,7 +1248,9 @@ export async function reconcileVoiceRegistry(options: {
 
   // After the orphaning above, which is what needed the dead lease's
   // timestamp. Its peers are stamped; the lease itself is noise now.
-  const instances = await pool.query(
+  const instances = await countedQuery(
+    pool,
+    "registry.reconcileInstances",
     `DELETE FROM voice_instances
       WHERE instance_id <> $1
         AND heartbeat_at < NOW() - ($2::bigint * INTERVAL '1 millisecond')`,
@@ -1228,7 +1310,14 @@ export async function heartbeatVoiceInstance(
   instanceId = INSTANCE_ID,
   configHash = voiceConfigHash(),
 ): Promise<void> {
-  await getPool().query(
+  // ONE ROW PER INSTANCE PER TICK, ALREADY — not one per seated peer. This is
+  // the whole of what "the instance is alive" costs, however many peers it
+  // holds; `reconcileVoiceRegistry` below is what spends that lease, and it
+  // too batches across every peer a dead instance owned in one statement
+  // rather than looping.
+  await countedQuery(
+    getPool(),
+    "registry.instanceHeartbeat",
     `INSERT INTO voice_instances (instance_id, config_hash, heartbeat_at)
      VALUES ($1, $2, NOW())
      ON CONFLICT (instance_id) DO UPDATE

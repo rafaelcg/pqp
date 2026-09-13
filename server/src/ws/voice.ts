@@ -54,6 +54,7 @@ import {
   getChannel,
   getChannelAudience,
   getServerVoiceProfile,
+  onAudienceInvalidated,
   type ChannelRow,
 } from "../services/servers.js";
 import { resolveMemberChannelPermissions } from "../services/permissions.js";
@@ -133,6 +134,7 @@ import {
   trackPendingRegistryWork,
   unpinVoiceRoomIfEmpty,
   upsertVoicePeer,
+  voiceRegistryWritesPerMinute,
   type VoicePeerRow,
   type VoiceRosterPeerRow,
 } from "../voice/registry.js";
@@ -1401,6 +1403,18 @@ export interface VoiceActivitySnapshot {
     framesReceived: number;
   };
   /**
+   * `voice.registry.writesPerMinute`: registry writes actually issued
+   * (`voice/registry.ts`'s `track()`, excluding the per-peer chain wrapper
+   * that would double-count them) in the trailing 60 seconds. Zero when the
+   * registry is off — there is nothing to write. This is the number the
+   * 2026-09-12 postmortem (A2) needed and did not have: before that night's
+   * fix, a mute toggle, a join and a leave each cost their own round trip
+   * with no way to see the rate add up across sixty seated people.
+   */
+  registry: {
+    writesPerMinute: number;
+  };
+  /**
    * WHETHER ANYONE IS SITTING IN A CALL THEY LEFT.
    *
    * `idleOverAnHour` and `oldestIdleMinutes` read the rows: a seat is written
@@ -1642,6 +1656,9 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
     cluster: {
       framesRelayed: clusterFrames.relayed,
       framesReceived: clusterFrames.received,
+    },
+    registry: {
+      writesPerMinute: registryOn() ? voiceRegistryWritesPerMinute() : 0,
     },
     seats,
     roster: {
@@ -3275,12 +3292,298 @@ export function resetVoicePeers(): void {
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
+  rosterAccessInvalidateAll();
   resetMusicForTests();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
 export function isSocketInVoice(socket: WebSocket): boolean {
   return socketToPeerId.has(socket);
+}
+
+// --- roster membership cache -------------------------------------------------
+//
+// `canAccessChannel` is one query, and `sendAllVoiceRosters` below asks it
+// once per room this instance (or the registry) knows about, EVERY TIME a
+// socket (re)authenticates. A watch party's reconnect storm multiplies that
+// by rooms times reconnecting sockets for a question — "can this user still
+// see this channel" — that almost never changes between one reconnect and
+// the next. CLAUDE.md's watch-party postmortem (item A2) named this
+// call site directly ("roster membership check failed").
+//
+// Wraps the already-imported `canAccessChannel` binding rather than calling a
+// new cached export from `services/users.js`, on purpose: this file's tests
+// mock that module at the `canAccessChannel` granularity throughout (over
+// twenty suites), and a cache living in `users.js` under a new export name
+// would be invisible to every one of those mocks — the roster would silently
+// stop being sent under test while working in production, exactly the
+// pitfall-9 shape CLAUDE.md already warns about (the flag/path a test
+// exercises is not the one production takes). Wrapping the mocked binding
+// keeps every existing test correct with no changes to any of them.
+//
+// INVALIDATION: `onAudienceInvalidated` (servers.ts) fires on every write
+// that can move `canAccessChannel`'s answer through membership or privacy —
+// `channel_members`, `is_private`, `server_members`, a role change, a
+// deleted channel or server — and `onPermissionsUpdate` (chat.ts, already
+// subscribed by this file for SPEAK) fires on top of that for a channel
+// overwrite change, which moves the answer without touching either
+// membership table. Both invalidations are BLUNT (channel-scoped clears one
+// channel; server-scoped and permissions-update clear the whole cache)
+// rather than tracking which channel belongs to which server: invalidations
+// are rare and the cache is small, so a full clear costs one extra query
+// burst on the next reconnect, not a correctness gap. The TTL below is the
+// bound that does not depend on this list being complete.
+const ROSTER_ACCESS_TTL_MS = 30_000;
+const ROSTER_ACCESS_JITTER_MS = 5_000;
+/**
+ * Global cap on distinct (channel, user) pairs. Without one, a sustained
+ * multi-room reconnect/auth workload grows this map without bound — every
+ * miss (including a denied one) adds an entry, and the TTL only bounds how
+ * long an entry survives, not how many can pile up before it expires. LRU by
+ * touch order (see `rosterAccessGet`/`rosterAccessSet`): the entries evicted
+ * first are the ones nobody has asked about recently.
+ */
+export const ROSTER_ACCESS_MAX_ENTRIES = 20_000;
+
+interface RosterAccessEntry {
+  allowed: boolean;
+  expiresAt: number;
+}
+
+/**
+ * `Map` iteration order is insertion order, which is what makes this an LRU:
+ * a "touch" (hit or fresh write) deletes-then-reinserts the key so it moves
+ * to the end, and eviction always takes from the front (oldest-touched).
+ * Keyed on a colon-joined composite; channel and user ids are UUIDs, which
+ * never contain one.
+ */
+const rosterAccessCache = new Map<string, RosterAccessEntry>();
+/** channelId -> the composite keys living in `rosterAccessCache` for it, so a
+ *  channel-scoped invalidation doesn't have to scan the whole cache. */
+const rosterAccessChannelIndex = new Map<string, Set<string>>();
+/**
+ * Bumped on EVERY invalidation — channel-scoped or whole-cache alike. A
+ * single counter rather than a per-channel generation map on purpose: a
+ * per-channel map needs its own reclamation (a long-lived process that sees
+ * invalidations for many distinct channels over its lifetime would grow it
+ * forever, independent of the 20k cache cap), while one integer is bounded
+ * by construction. The cost is coarseness — an invalidation on channel A
+ * also makes an in-flight query for channel B skip caching its answer this
+ * one time — which is strictly cheaper than the bug this replaces (a stale
+ * answer served after revocation) and self-heals on the next request.
+ * Consulted twice: before caching a resolved query's answer, and by a
+ * caller that joined someone else's in-flight query (see
+ * `canAccessChannelForRoster`) to decide whether that shared answer is
+ * still trustworthy for THEM, not just whether it was safe to cache.
+ */
+let rosterAccessEpoch = 0;
+/** Coalesces concurrent misses for the same pair — a reconnect storm asks
+ *  the same question from N sockets at once; only the first actually queries
+ *  Postgres, the rest await its result. */
+const rosterAccessInFlight = new Map<string, Promise<boolean>>();
+
+function rosterAccessKey(channelId: string, userId: string): string {
+  return `${channelId}:${userId}`;
+}
+
+function rosterAccessGet(
+  channelId: string,
+  userId: string,
+  now: number,
+): boolean | undefined {
+  const key = rosterAccessKey(channelId, userId);
+  const entry = rosterAccessCache.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  if (entry.expiresAt <= now) {
+    rosterAccessCache.delete(key);
+    rosterAccessChannelIndex.get(channelId)?.delete(key);
+    return undefined;
+  }
+  // Touch: move to the end so a hot pair survives LRU eviction.
+  rosterAccessCache.delete(key);
+  rosterAccessCache.set(key, entry);
+  return entry.allowed;
+}
+
+function rosterAccessSet(
+  channelId: string,
+  userId: string,
+  allowed: boolean,
+  now: number,
+): void {
+  const key = rosterAccessKey(channelId, userId);
+  rosterAccessCache.delete(key);
+  rosterAccessCache.set(key, {
+    allowed,
+    expiresAt:
+      now + ROSTER_ACCESS_TTL_MS - Math.random() * ROSTER_ACCESS_JITTER_MS,
+  });
+  let bucket = rosterAccessChannelIndex.get(channelId);
+  if (!bucket) {
+    bucket = new Set();
+    rosterAccessChannelIndex.set(channelId, bucket);
+  }
+  bucket.add(key);
+  while (rosterAccessCache.size > ROSTER_ACCESS_MAX_ENTRIES) {
+    const oldestKey = rosterAccessCache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    rosterAccessCache.delete(oldestKey);
+    const sep = oldestKey.indexOf(":");
+    const oldestChannel = sep === -1 ? oldestKey : oldestKey.slice(0, sep);
+    rosterAccessChannelIndex.get(oldestChannel)?.delete(oldestKey);
+  }
+}
+
+/**
+ * Drops one channel's cache entries AND its in-flight queries, then bumps
+ * the epoch. Dropping the in-flight entries is what stops a NEW caller from
+ * being handed a pending query that is about to answer a question that no
+ * longer applies — it will instead see a clean miss and start its own,
+ * current query. The epoch bump is the second half: a caller that already
+ * captured a reference to the now-removed in-flight promise (a straight
+ * race between reading the map and this delete) still safely awaits it, but
+ * `canAccessChannelForRoster` re-checks the epoch after that await and
+ * refuses to trust an answer that predates it — see the comment there.
+ */
+function rosterAccessInvalidateChannel(channelId: string): void {
+  const bucket = rosterAccessChannelIndex.get(channelId);
+  if (bucket) {
+    for (const key of bucket) {
+      rosterAccessCache.delete(key);
+    }
+    rosterAccessChannelIndex.delete(channelId);
+  }
+  const prefix = `${channelId}:`;
+  for (const key of rosterAccessInFlight.keys()) {
+    if (key.startsWith(prefix)) {
+      rosterAccessInFlight.delete(key);
+    }
+  }
+  rosterAccessEpoch += 1;
+}
+
+/** Drops everything and bumps the epoch, for invalidations that carry no
+ *  channelId (server-scoped, permissions update) and for test resets. */
+function rosterAccessInvalidateAll(): void {
+  rosterAccessCache.clear();
+  rosterAccessChannelIndex.clear();
+  rosterAccessInFlight.clear();
+  rosterAccessEpoch += 1;
+}
+
+async function canAccessChannelForRoster(
+  channelId: string,
+  userId: string,
+): Promise<boolean> {
+  const now = Date.now();
+  const cached = rosterAccessGet(channelId, userId, now);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const key = rosterAccessKey(channelId, userId);
+  // Captured before joining or starting a query: this is the epoch OUR
+  // answer needs to still be current under, whether that answer comes from
+  // a query we start below or one somebody else already has in flight.
+  const epochAtStart = rosterAccessEpoch;
+
+  const existing = rosterAccessInFlight.get(key);
+  if (existing) {
+    const allowed = await existing;
+    if (epochAtStart === rosterAccessEpoch) {
+      return allowed;
+    }
+    // The channel was invalidated while we were waiting on someone else's
+    // in-flight query — normally that query's own promise is removed from
+    // `rosterAccessInFlight` by `rosterAccessInvalidateChannel` the moment
+    // this happens, so a caller arriving after us would already see a clean
+    // miss; we got here because we had already captured `existing` before
+    // that happened. Its answer predates the invalidation and is not
+    // trustworthy for us, cached or not: ask again, fresh.
+    return canAccessChannelForRoster(channelId, userId);
+  }
+
+  const promise = canAccessChannel(channelId, userId)
+    .then((allowed) => {
+      if (epochAtStart === rosterAccessEpoch) {
+        rosterAccessSet(channelId, userId, allowed, Date.now());
+      }
+      return allowed;
+    })
+    .finally(() => {
+      // Only clear it if it's still OUR promise: an invalidation may have
+      // already deleted this entry (and, in principle, let a later query
+      // replace it) by the time this runs.
+      if (rosterAccessInFlight.get(key) === promise) {
+        rosterAccessInFlight.delete(key);
+      }
+    });
+
+  rosterAccessInFlight.set(key, promise);
+  return promise;
+}
+
+// Guarded, not a bare call: a couple dozen suites in this file's own test
+// tree mock `../services/servers.js` down to the handful of exports they
+// need (`getChannel`, `getChannelAudience`, ...) and predate this one.
+// Vitest's mock proxy throws on the mere PROPERTY READ of an export the
+// factory never declared — even inside a `typeof` check — so this has to be
+// a try/catch, not an `if`: skipping registration when it is absent costs
+// those suites nothing they exercise, and the TTL above is still the
+// correctness bound either way, exactly as documented on the cache.
+try {
+  onAudienceInvalidated(({ channelId, serverId }) => {
+    if (channelId) {
+      rosterAccessInvalidateChannel(channelId);
+      return;
+    }
+    if (serverId) {
+      // No per-entry server id kept (see the block comment above): the whole
+      // cache is small, so a server-scoped invalidation clears all of it
+      // rather than tracking a channel→server index nothing else here needs.
+      rosterAccessInvalidateAll();
+    }
+  });
+} catch {
+  // Mocked without this export — see above.
+}
+
+onPermissionsUpdate(() => {
+  // An overwrite change: same reasoning, no channelId travels with this
+  // event, so the whole cache clears.
+  rosterAccessInvalidateAll();
+});
+
+/** Drop expired entries. Called from the same 60s sweep as the audience cache. */
+export function sweepVoiceChannelAccessCache(now = Date.now()): void {
+  for (const [key, entry] of rosterAccessCache) {
+    if (entry.expiresAt <= now) {
+      rosterAccessCache.delete(key);
+      const sep = key.indexOf(":");
+      const channelId = sep === -1 ? key : key.slice(0, sep);
+      rosterAccessChannelIndex.get(channelId)?.delete(key);
+    }
+  }
+  for (const [channelId, bucket] of rosterAccessChannelIndex) {
+    if (bucket.size === 0) {
+      rosterAccessChannelIndex.delete(channelId);
+    }
+  }
+}
+
+/** Test helper: what the cache is holding. */
+export function voiceChannelAccessCacheStats(): {
+  channels: number;
+  entries: number;
+} {
+  return {
+    channels: rosterAccessChannelIndex.size,
+    entries: rosterAccessCache.size,
+  };
 }
 
 /**
@@ -3329,7 +3632,16 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   await Promise.all(
     [...rooms].map(async ([voiceChannelId, room]) => {
       try {
-        if (!(await canAccessChannel(voiceChannelId, user.id))) {
+        // CACHED, NOT `canAccessChannel` DIRECTLY: this runs once per room this
+        // instance or the registry knows about, on EVERY socket that
+        // (re)authenticates — a reconnect storm multiplies it by both the
+        // number of rooms and the number of reconnecting sockets, for a
+        // question ("can this user still see this channel") that does not
+        // change from one reconnect to the next. 30s of staleness here costs
+        // nothing a client would notice: a room this socket cannot see is
+        // simply not sent, same as before, at most half a minute later than a
+        // membership change that just happened.
+        if (!(await canAccessChannelForRoster(voiceChannelId, user.id))) {
           return;
         }
       } catch (error) {
@@ -3362,7 +3674,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   await Promise.all(
     hlsAudience.liveChannels().map(async (channelId) => {
       try {
-        if (!(await canAccessChannel(channelId, user.id))) {
+        if (!(await canAccessChannelForRoster(channelId, user.id))) {
           return;
         }
       } catch (error) {

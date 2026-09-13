@@ -23,6 +23,7 @@ import {
   type AcquisitionReport,
   type RetentionReport,
 } from "./acquisition.js";
+import { dbTxByPath } from "../lib/db-tx-metrics.js";
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
@@ -132,6 +133,22 @@ export interface AdminMetrics {
   activeTextChannels24h: number;
   channels: { text: number; voice: number; category: number; thread: number };
   /**
+   * `db.tx.byPath`: Postgres round trips since boot, by labelled call site.
+   *
+   * Born from the 2026-09-12 watch party postmortem (A2): ~330 tx/s against
+   * 60-90 seated users killed a shared-CPU database, and nothing said which
+   * query path was responsible. Not every `pool.query` call in the app —
+   * only the voice / presence / registry call sites that investigation
+   * needed: `registry.*` (server/src/voice/registry.ts, every write and
+   * roster read), `users.canAccessChannel` (the roster membership check),
+   * and `bus.publish` / `bus.publishBatch` (server/src/lib/bus-postgres.ts).
+   * A label absent from the map has not fired since boot, not "zero"; see
+   * `dbTxByPath` in lib/db-tx-metrics.ts.
+   */
+  dbTx: {
+    byPath: Record<string, number>;
+  };
+  /**
    * What the channel-presence fan-out is doing since the last deploy: frames
    * that went out as a delta against frames that went out as a whole viewer
    * list, and how many connected sockets asked for deltas at all.
@@ -165,6 +182,11 @@ export interface AdminMetrics {
     cluster: {
       framesRelayed: number;
       framesReceived: number;
+    };
+    /** Registry writes issued in the trailing 60 seconds. See `ws/voice.ts`'s
+     *  `VoiceActivitySnapshot.registry`. Zero when `VOICE_REGISTRY` is off. */
+    registry: {
+      writesPerMinute: number;
     };
     /**
      * WHETHER ANYBODY IS SITTING IN A CALL THEY LEFT.
@@ -923,6 +945,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     distinctSenders24h: Number(m?.senders ?? 0),
     activeTextChannels24h: Number(m?.active_text_channels ?? 0),
     channels: channelCounts,
+    dbTx: { byPath: dbTxByPath() },
     presence: getPresenceFanoutStats(),
     voice: {
       activeRooms: voice.activeRooms,
@@ -932,6 +955,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       peakTrackedSince: voice.peakTrackedSince,
       backend: voice.backend,
       cluster: voice.cluster,
+      registry: voice.registry,
       seats: voice.seats,
       roster: voice.roster,
       rooms: voice.rooms.map((room) => {

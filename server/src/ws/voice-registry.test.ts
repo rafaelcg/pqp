@@ -97,11 +97,15 @@ const {
   pinVoiceRoom,
   promoteVoiceRoomTransport,
   readVoiceRoomTransport,
+  resetVoiceRegistryWriteRate,
   settleVoiceRegistryWrites,
   startVoiceInstanceHeartbeat,
+  sweepOwnStaleVoicePeers,
+  voiceRegistryWritesPerMinute,
   withdrawVoiceInstance,
 } = await import("../voice/registry.js");
 const { INSTANCE_ID } = await import("../lib/bus.js");
+const { dbTxByPath, resetDbTxMetrics } = await import("../lib/db-tx-metrics.js");
 
 interface Frame {
   type: string;
@@ -619,6 +623,62 @@ describeDb("voice registry", () => {
       expect(
         await count("voice_instances", "instance_id = $1", [INSTANCE_ID]),
       ).toBe(0);
+    });
+  });
+
+  /**
+   * Watch-party postmortem item A2: "batch voice-registry seat writes and
+   * heartbeats... instead of a query per peer". `heartbeatVoiceInstance`
+   * above already proves the instance beat is one row per tick regardless of
+   * how many peers it holds; these two prove the other half — that a sweep
+   * touching many peers at once is one round trip, not one per peer, and
+   * that the write-rate counter the dashboard reads agrees with what
+   * actually ran.
+   */
+  describe("write budget: many peers, one round trip", () => {
+    it("sweepOwnStaleVoicePeers reclaims N peers in a single statement", async () => {
+      // Mesh caps at 8 (`MESH_VOICE_LIMIT`); 25 distinct joiners need the SFU.
+      backend.configured = "livekit";
+      const channelId = randomUUID();
+      const N = 25;
+      for (let i = 0; i < N; i++) {
+        await join(recorder(), randomUUID(), channelId);
+      }
+      expect(
+        await count("voice_peers", "channel_id = $1", [channelId]),
+      ).toBe(N);
+
+      resetDbTxMetrics();
+      // An empty `heldPeerIds`: this instance's own in-process map holds none
+      // of them any more (a restart, or a process that lost its map), which
+      // is exactly the shape `sweepOwnStaleVoicePeers` exists to reclaim.
+      const swept = await sweepOwnStaleVoicePeers([], { graceMs: 0 });
+
+      expect(swept.length).toBe(N);
+      // ONE round trip for all N peers, not N: the whole point of the
+      // `= ANY($3::uuid[])` shape over a per-peer loop.
+      expect(dbTxByPath()["registry.sweepOwnStale"]).toBe(1);
+      expect(
+        await count("voice_peers", "channel_id = $1", [channelId]),
+      ).toBe(0);
+    });
+
+    it("voiceRegistryWritesPerMinute counts real writes, not the per-peer chain wrapper", async () => {
+      resetVoiceRegistryWriteRate();
+      const base = Date.now();
+
+      const channelId = randomUUID();
+      const N = 5;
+      for (let i = 0; i < N; i++) {
+        await join(recorder(), randomUUID(), channelId, {}); // one upsertPeer each
+      }
+
+      // At least N: join may also touch `voice_rooms`' own pin path, but
+      // never fewer than one logical write per peer joined.
+      expect(voiceRegistryWritesPerMinute(base)).toBeGreaterThanOrEqual(N);
+
+      // A minute later, the window has rolled entirely past these writes.
+      expect(voiceRegistryWritesPerMinute(base + 61_000)).toBe(0);
     });
   });
 });

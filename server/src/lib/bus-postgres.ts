@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { pgSslConfig } from "../db.js";
 import { INSTANCE_ID, type BusFrame, type BusTransport } from "./bus.js";
+import { countedQuery } from "./db-tx-metrics.js";
 import { logEvent } from "./log.js";
 
 /**
@@ -42,6 +43,22 @@ import { logEvent } from "./log.js";
  * frames a second, not tens of thousands. Measured chat throughput today is
  * ~180 msg/s (docs/LAUNCH.md §T1), so the headroom is roughly an order of
  * magnitude. Past that, replace this file with Redis rather than tuning it.
+ *
+ * 4. BURSTS GET ONE ROUND TRIP INSTEAD OF ONE EACH. The 2026-09-12 watch
+ *    party's write-budget audit found every discrete room event — a mute
+ *    toggle, a join, a leave — publishing its own `pg_notify`, even when
+ *    `voice.ts`'s roster coalescer had already batched the roster SEND for
+ *    the same burst into one frame: the coalescing bought nothing on this
+ *    side of the wire. Below `NOTIFY_BATCH_THRESHOLD` frames in a rolling
+ *    `NOTIFY_BATCH_WINDOW_MS`, publishing is unchanged — one frame in, one
+ *    `pg_notify` out, no added latency. Only once a burst crosses the
+ *    threshold does it switch to collecting the rest of that window into one
+ *    `{ batch: BusFrame[] }` envelope and a single `pg_notify` (or a single
+ *    spill row, if the batch outgrows the inline cap). Ordering is exact: a
+ *    frame published after the threshold trips joins the SAME batch as
+ *    everything published before it flushes, never a later one, so nothing
+ *    the receiver processes can be reordered by which side of a flush it
+ *    landed on.
  */
 
 /** One channel for every topic: LISTEN is per session, not per subject. */
@@ -61,10 +78,22 @@ const SPILL_SWEEP_INTERVAL_MS = 60_000;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
 
+/** The rolling window a burst is measured over, and batched into. */
+const NOTIFY_BATCH_WINDOW_MS = 50;
+/** Frames published within one window before batching kicks in. Below this,
+ *  every frame still gets its own immediate `pg_notify`, unchanged. */
+const NOTIFY_BATCH_THRESHOLD = 20;
+
 interface SpillReference {
   origin: string;
   /** Row id in `cluster_bus_payloads` holding the real frame. */
   spill: string;
+}
+
+/** Several frames sent as one `pg_notify` (or one spill row) once a burst
+ *  crosses `NOTIFY_BATCH_THRESHOLD` inside `NOTIFY_BATCH_WINDOW_MS`. */
+interface BatchEnvelope {
+  batch: BusFrame[];
 }
 
 function isSpillReference(value: unknown): value is SpillReference {
@@ -81,6 +110,14 @@ function isFrame(value: unknown): value is BusFrame {
     value !== null &&
     typeof (value as BusFrame).origin === "string" &&
     typeof (value as BusFrame).topic === "string"
+  );
+}
+
+function isBatchEnvelope(value: unknown): value is BatchEnvelope {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as BatchEnvelope).batch)
   );
 }
 
@@ -237,17 +274,150 @@ export function createPostgresBusTransport(
       }
     }
 
+    if (isBatchEnvelope(parsed)) {
+      for (const item of parsed.batch) {
+        if (isFrame(item)) {
+          // Same delivery call single frames use below, one item at a time,
+          // in array order — a batch is already delivered from inside one
+          // link of `dispatchChain` (see `enqueue`), so nothing else on the
+          // bus can interleave with it. Isolated per item: one handler
+          // throwing must not cost the rest of the batch its delivery, the
+          // same guarantee a run of individual frames already has.
+          deliver(item);
+        } else {
+          logEvent("bus.badFrame", { bytes: payload.length });
+        }
+      }
+      return;
+    }
+
     if (!isFrame(parsed)) {
       logEvent("bus.badFrame", { bytes: payload.length });
       return;
     }
-    handler?.(parsed);
+    deliver(parsed);
+  }
+
+  /** The one place a frame reaches `handler`, single or batched. */
+  function deliver(frame: BusFrame): void {
+    try {
+      handler?.(frame);
+    } catch (error) {
+      console.error("[bus] frame handler failed:", error);
+    }
   }
 
   function onPublishError(error: Error): void {
     // A failed publish is one frame the rest of the cluster never sees. It must
     // not surface to the caller, which has already served its own sockets.
     logEvent("bus.publishFailed", { message: error.message });
+  }
+
+  /**
+   * Send one already-encoded envelope (a lone frame, or `{ batch: [...] }`),
+   * inline or spilled exactly as a single frame always has been. `label`
+   * feeds `db.tx.byPath` so the two shapes are countable separately.
+   */
+  function sendEnvelope(encoded: string, origin: string, label: string): void {
+    const current = client;
+    if (!current) {
+      droppedWhileDown += 1;
+      return;
+    }
+    if (Buffer.byteLength(encoded) <= MAX_INLINE_BYTES) {
+      void countedQuery(current, label, `SELECT pg_notify($1, $2)`, [
+        NOTIFY_CHANNEL,
+        encoded,
+      ]).catch(onPublishError);
+      return;
+    }
+    // Oversize: park the frame(s) and notify a reference to it. One statement,
+    // so the row and the notification commit together — a notification whose
+    // row is not yet visible would be a read of nothing.
+    const id = randomUUID();
+    void countedQuery(
+      current,
+      label,
+      `WITH spilled AS (
+         INSERT INTO cluster_bus_payloads (id, payload) VALUES ($1, $2)
+       )
+       SELECT pg_notify($3, $4)`,
+      [id, encoded, NOTIFY_CHANNEL, JSON.stringify({ origin, spill: id })],
+    ).catch(onPublishError);
+  }
+
+  function publishNow(frame: BusFrame): void {
+    sendEnvelope(JSON.stringify(frame), frame.origin, "bus.publish");
+  }
+
+  function publishBatch(frames: BusFrame[]): void {
+    if (frames.length === 0) {
+      return;
+    }
+    if (frames.length === 1) {
+      publishNow(frames[0]!);
+      return;
+    }
+    // Every frame here was published by this process in the same tick, so
+    // they share one origin; that origin is all a spill reference needs.
+    sendEnvelope(
+      JSON.stringify({ batch: frames } satisfies BatchEnvelope),
+      frames[0]!.origin,
+      "bus.publishBatch",
+    );
+  }
+
+  // --- burst batching -------------------------------------------------------
+  //
+  // Two pieces of state: how many frames this WINDOW has seen (to decide
+  // whether we are still below `NOTIFY_BATCH_THRESHOLD`), and the BATCH
+  // itself once that threshold trips. They are deliberately not the same
+  // counter — frames sent immediately before the threshold tripped are gone
+  // (already on the wire), so what the batch holds is only what tripped it
+  // and everything published after, for the rest of that one window.
+
+  let windowFrameCount = 0;
+  let windowResetTimer: ReturnType<typeof setTimeout> | null = null;
+  let batching = false;
+  let pendingBatch: BusFrame[] = [];
+  let batchFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function flushBatch(): void {
+    batchFlushTimer = null;
+    batching = false;
+    windowFrameCount = 0;
+    if (windowResetTimer) {
+      clearTimeout(windowResetTimer);
+      windowResetTimer = null;
+    }
+    const frames = pendingBatch;
+    pendingBatch = [];
+    publishBatch(frames);
+  }
+
+  function publishFrame(frame: BusFrame): void {
+    if (batching) {
+      pendingBatch.push(frame);
+      return;
+    }
+    windowFrameCount += 1;
+    if (!windowResetTimer) {
+      windowResetTimer = setTimeout(() => {
+        windowResetTimer = null;
+        windowFrameCount = 0;
+      }, NOTIFY_BATCH_WINDOW_MS);
+      windowResetTimer.unref?.();
+    }
+    if (windowFrameCount > NOTIFY_BATCH_THRESHOLD) {
+      // This burst just crossed the line: everything from here through the
+      // end of the window rides in one envelope, including this frame.
+      batching = true;
+      pendingBatch = [frame];
+      batchFlushTimer = setTimeout(flushBatch, NOTIFY_BATCH_WINDOW_MS);
+      batchFlushTimer.unref?.();
+      return;
+    }
+    publishNow(frame);
   }
 
   const sweep = setInterval(() => {
@@ -272,36 +442,11 @@ export function createPostgresBusTransport(
     name: "postgres",
 
     publish(frame) {
-      const current = client;
-      if (!current) {
+      if (!client) {
         droppedWhileDown += 1;
         return;
       }
-      const encoded = JSON.stringify(frame);
-      if (Buffer.byteLength(encoded) <= MAX_INLINE_BYTES) {
-        void current
-          .query(`SELECT pg_notify($1, $2)`, [NOTIFY_CHANNEL, encoded])
-          .catch(onPublishError);
-        return;
-      }
-      // Oversize: park the frame and notify a reference to it. One statement,
-      // so the row and the notification commit together — a notification whose
-      // row is not yet visible would be a read of nothing.
-      const id = randomUUID();
-      void current
-        .query(
-          `WITH spilled AS (
-             INSERT INTO cluster_bus_payloads (id, payload) VALUES ($1, $2)
-           )
-           SELECT pg_notify($3, $4)`,
-          [
-            id,
-            encoded,
-            NOTIFY_CHANNEL,
-            JSON.stringify({ origin: frame.origin, spill: id }),
-          ],
-        )
-        .catch(onPublishError);
+      publishFrame(frame);
     },
 
     onFrame(next) {
@@ -319,6 +464,20 @@ export function createPostgresBusTransport(
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+      if (windowResetTimer) {
+        clearTimeout(windowResetTimer);
+        windowResetTimer = null;
+      }
+      if (batchFlushTimer) {
+        clearTimeout(batchFlushTimer);
+        batchFlushTimer = null;
+      }
+      // Ephemeral by design (see the module comment): a batch still waiting
+      // out its window when the transport closes is dropped, not flushed —
+      // the same fate any single in-flight frame already had on a dead
+      // connection.
+      pendingBatch = [];
+      batching = false;
       const current = client;
       client = null;
       handler = null;
