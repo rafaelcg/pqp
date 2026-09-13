@@ -1,5 +1,6 @@
 import { STAFF_ROLE_NAMES, type RoleSystemKey } from "@pqp/shared";
 import type { MessageKey, Translator } from "@/lib/i18n";
+import type { MemberRole } from "@/lib/member-groups";
 
 const SYSTEM_KEY: Record<RoleSystemKey, MessageKey> = {
   everyone: "roles.system.everyone",
@@ -71,4 +72,26 @@ export function displayRoleName(
     );
   });
   return collides ? role.name : label;
+}
+
+/**
+ * The channel sidebar header's role badge: `owner` and `admin` say the same
+ * thing `displayRoleName` says about the matching cargo, so a server owner
+ * reads one word for "who I am here" everywhere it appears rather than one
+ * spelling in the roles editor and another over the channel list. `member`
+ * has no cargo to borrow from — everyone has it, the way `@everyone` does —
+ * so it gets its own key.
+ */
+export function compatRoleLabel(
+  role: MemberRole,
+  t: Translator["t"],
+): string {
+  switch (role) {
+    case "owner":
+      return t("roles.system.owner");
+    case "admin":
+      return t("roles.system.admin");
+    case "member":
+      return t("chrome.role.member");
+  }
 }
