@@ -1748,7 +1748,22 @@ export async function connectLiveKit({
       await room.localParticipant.unpublishTrack(published);
       published = null;
     }
-    published = new LocalAudioTrack(audioTrack);
+    // A CLONE, not the caller's own track object. LiveKit's mute()/unmute()
+    // (and ours, below) work by flipping this object's `.enabled` bit — and
+    // the caller keeps its own hand on the SAME underlying MediaStreamTrack
+    // for reasons of its own: a mesh call sends it straight to peers, and a
+    // watch-party stream mix (`screen-mix.ts`) taps it to gate how loud the
+    // mic is in the mix. If this publication wrapped that original track,
+    // both owners would be writing one shared `.enabled` bit, and whichever
+    // wrote last would win. That is exactly how the mic doubled in production
+    // (2026-09-12): unmuting while "Meu mic vai no stream" was on re-enabled
+    // the track this standalone publication had been muted onto, which
+    // silently reopened the microphone the mix exists to replace, so seated
+    // listeners heard the host once live and once through the SFU. A clone
+    // gives this publication a bit nobody else can touch, and enabling it
+    // stays no-op unless the source itself is stopped.
+    const publishedTrack = audioTrack.clone ? audioTrack.clone() : audioTrack;
+    published = new LocalAudioTrack(publishedTrack);
     // publishTrack starts the sender live. If the capture is already
     // closed (user mute, deafen, SPEAK denied), mute the publication
     // before the first packet, then again if the library re-opened it.

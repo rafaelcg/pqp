@@ -985,6 +985,8 @@
   "voice.hls.qualityAuto": "Auto",
   "voice.hls.qualityAutoAt": "Auto ({quality})",
   "voice.hls.slowStart": "Started at {quality} so it does not stall. Change it under Quality.",
+  "voice.hls.dualDevice": "You're already in the call on another device: audio here will lag ~25s and echo. Pause one of the two.",
+  "voice.hls.dualDeviceMute": "Mute here",
   "voice.watch.leave": "Stop watching",
   "voice.watch.fullscreen": "Fullscreen",
   "voice.watch.exitFullscreen": "Leave fullscreen",

@@ -7,6 +7,7 @@ import { fetchChannelLive } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
+import { isSeatedOnAnotherDevice } from "@/lib/dual-device-watch";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { WATCH_DOCK_BOX } from "@/components/voice/watch-dock";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
@@ -43,6 +44,7 @@ export function WatchStage({
   docked = false,
   onReturn,
   onDismiss,
+  dualDeviceWarning = false,
 }: {
   /** Playable playlist URL; null while nothing is live. */
   hlsUrl: string | null;
@@ -94,6 +96,11 @@ export function WatchStage({
   onReturn?: () => void;
   /** Stop watching without leaving whatever channel is open. Docked only. */
   onDismiss?: () => void;
+  /**
+   * This account already holds a seat in this channel's call, on some other
+   * device or tab (`lib/dual-device-watch.ts`). See `HlsWatchPlayer`.
+   */
+  dualDeviceWarning?: boolean;
 }) {
   const { t } = useTranslation();
   const live = hlsUrl !== null;
@@ -186,6 +193,7 @@ export function WatchStage({
           }
           meta={docked ? null : audienceMeta}
           actions={docked ? miniActions : overlayActions}
+          dualDeviceWarning={dualDeviceWarning}
         />
       ) : (
         <EndedWatchStage
@@ -299,12 +307,19 @@ export function WatchChannelStage({
   onReturn,
   onDismiss,
   isWatchParty = false,
+  meUserId = null,
 }: {
   channelId: string;
   channelName: string;
   serverName?: string | null;
   serverIconUrl?: string | null;
   voiceState: VoiceState;
+  /**
+   * This account's own user id, for the "you are also seated elsewhere" hint
+   * (`lib/dual-device-watch.ts`). Null while auth has not resolved yet, which
+   * just means the hint stays off until it has.
+   */
+  meUserId?: string | null;
   /** Omitted where another surface already offers it. See `WatchStage`. */
   onJoin?: () => void;
   /**
@@ -347,6 +362,11 @@ export function WatchChannelStage({
   const known = live !== undefined;
   const stream = inThisCall ? null : (live?.stream ?? null);
   const hasStream = stream !== null;
+  const dualDeviceWarning = isSeatedOnAnotherDevice(
+    voiceState.occupancy[channelId],
+    meUserId,
+    inThisCall,
+  );
 
   // A socket that opened this channel after the last `channel-live` knows
   // nothing yet. Ask once; the socket keeps it current from then on.
@@ -498,6 +518,7 @@ export function WatchChannelStage({
         mediaTitle={channelName}
         communityName={serverName}
         coverUrl={serverIconUrl}
+        dualDeviceWarning={dualDeviceWarning}
       />
     </div>
   );

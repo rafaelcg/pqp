@@ -985,6 +985,8 @@
   "voice.hls.qualityAuto": "Automático",
   "voice.hls.qualityAutoAt": "Automático ({quality})",
   "voice.hls.slowStart": "Começou em {quality} pra não travar. Muda em Qualidade.",
+  "voice.hls.dualDevice": "Você já está na call em outro aparelho: aqui o som vai atrasar ~25 s e duplicar. Pausa um dos dois.",
+  "voice.hls.dualDeviceMute": "Mutar aqui",
   "voice.watch.leave": "Parar de assistir",
   "voice.watch.fullscreen": "Tela cheia",
   "voice.watch.exitFullscreen": "Sair da tela cheia",

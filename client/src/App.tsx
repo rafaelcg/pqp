@@ -7697,6 +7697,7 @@ function MainAppContent({
               serverIconUrl={watchDock.session.serverIconUrl}
               voiceState={voiceState}
               isWatchParty={watchDock.session.isWatchParty}
+              meUserId={user?.id ?? null}
               /* The party bar owns the join in a watch party room; a plain
                  voice channel with a share going out has no bar, so there
                  this is still the only way in. One control, not three. */

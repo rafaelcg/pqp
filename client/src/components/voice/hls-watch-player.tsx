@@ -151,6 +151,7 @@ export function HlsWatchPlayer({
   meta,
   actions,
   layout = "tile",
+  dualDeviceWarning = false,
 }: {
   src: string;
   delaySeconds?: number;
@@ -183,6 +184,14 @@ export function HlsWatchPlayer({
    * the badges, fit, quality or picture-in-picture chrome a tile offers.
    */
   layout?: "cinema" | "tile" | "mini";
+  /**
+   * The signed-in account holds a seat in this channel's call right now, on
+   * some OTHER device or tab (`lib/dual-device-watch.ts`). Says so once,
+   * plainly: this device's own audio and that seat's are about 25s apart, so
+   * whichever one is unmuted is heard twice. Omitted for `mini`, the docked
+   * corner player, which has no room for a second line of chrome.
+   */
+  dualDeviceWarning?: boolean;
 }) {
   const { t } = useTranslation();
   const fit = useVideoFit("watch");
@@ -1507,6 +1516,26 @@ export function HlsWatchPlayer({
         >
           {t("voice.hls.unmute")}
         </button>
+      ) : null}
+      {dualDeviceWarning && !mini ? (
+        <div
+          data-testid="hls-dual-device-warning"
+          className={cn(
+            "pointer-events-auto absolute left-1/2 z-40 flex max-w-[92%] -translate-x-1/2 items-center gap-2 rounded-[var(--radius-control)] bg-black/80 px-2.5 py-1.5 text-[11px] text-paper sm:max-w-[75%]",
+            cinema ? "bottom-24" : "bottom-14",
+          )}
+        >
+          <span className="min-w-0 flex-1">{t("voice.hls.dualDevice")}</span>
+          <button
+            type="button"
+            className="shrink-0 rounded-[var(--radius-control)] border border-paper/30 px-2 py-1 text-[11px] font-medium hover:bg-paper/15"
+            onClick={() =>
+              updateVolume({ volume: volumePref.volume, muted: true })
+            }
+          >
+            {t("voice.hls.dualDeviceMute")}
+          </button>
+        </div>
       ) : null}
     </div>
   );
