@@ -258,27 +258,73 @@ jobs:
             "pqp-deploy@$HOST:/home/pqp-deploy/incoming/"
           ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA"
 
-      # Mirrors deploy-api-fly.yml's "Verify the deployed commit" step, but
-      # pinned at the box itself rather than DNS: api.pqp.gg's A/AAAA
-      # record, Cloudflare's routing, or a mid-cutover DNS state could all
-      # point somewhere other than this box, in which case a check against
-      # the hostname alone could pass or fail for reasons that have
-      # nothing to do with this deploy. `--connect-to` keeps the real TLS
-      # handshake (SNI, cert, Host header) for api.pqp.gg while forcing the
-      # TCP connection itself at $HOST, so this proves the box, not DNS.
+      # Mirrors deploy-api-fly.yml's "Verify the deployed commit" step in
+      # intent, but NOT in mechanism: that step curls the box straight from
+      # the runner, and here that is not possible. tools/api-host/
+      # provision.sh (and cloud-init.yaml) leave ufw denying 80/443 to
+      # everyone except Cloudflare's own published ranges, because
+      # api.pqp.gg is proxied (orange-cloud) and the origin should only
+      # ever hear from Cloudflare's edge. A GitHub-hosted runner is not in
+      # those ranges, so a direct `curl --connect-to api.pqp.gg:443:$HOST:443`
+      # from here has its TCP connection dropped by ufw and the whole loop
+      # times out after 40 attempts — every Vultr deploy would fail and
+      # roll back even when the box came up perfectly healthy.
+      #
+      # So the check runs ON the box instead, over the same SSH identity
+      # the deploy step above already used (pqp-deploy@$HOST). From
+      # loopback, ufw is irrelevant: `--connect-to` still forces the TCP
+      # connection at 127.0.0.1 while keeping the real TLS handshake (SNI,
+      # cert, Host header) for api.pqp.gg, so this proves Caddy is actually
+      # serving the site, not just that something answers on port 3001.
+      # `-k` is required, not optional: tools/api-host/Caddyfile's default
+      # (Mode A) terminates TLS with a Cloudflare Origin CA certificate,
+      # which only Cloudflare's own client trusts — curl on the box would
+      # otherwise fail the handshake against its own reverse proxy.
+      #
+      # The box only ever runs curl and returns the raw body/status; the
+      # version comparison itself happens back on the runner via jq, kept
+      # off the box on purpose (pqp-deploy has no need for another
+      # dependency, and jq's absence there was never the point of this fix).
+      # Both curls keep `-f`, same as before: without it, a 4xx/5xx
+      # response whose JSON body still happens to carry the right version
+      # string would read as a healthy deploy instead of failing the
+      # attempt.
+      #
+      # This proves Caddy → api on the box itself, not that Cloudflare's
+      # edge can still reach it (a wrong DNS record, a stale ufw allowlist,
+      # or a misrouted proxy would all pass this check and still be a real
+      # outage). That gap is intentional, not missed: the box has no
+      # Cloudflare-range vantage point to check FROM, and the outside-in
+      # half is exactly what `.github/workflows/monitor-uptime.yml` and the
+      # UptimeRobot checks in docs/MONITORING.md already watch, continuously,
+      # independent of any one deploy.
       - name: Verify the deployed commit
         id: verify
         if: steps.relevant.outputs.needed == 'true' && steps.deploy.outcome == 'success'
         continue-on-error: true
         env:
+          SSH_KEY: ${{ runner.temp }}/vultr_deploy_key
           EXPECTED: ${{ steps.commit.outputs.sha }}
           HOST: ${{ secrets.VULTR_API_HOST }}
         run: |
-          curl_pinned() { curl --connect-to "api.pqp.gg:443:$HOST:443" "$@"; }
+          ssh_cmd() {
+            ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
+          }
+          # One SSH session per attempt (not two): both curls run on the box
+          # in a single remote script, printing "<body>\t<ready-code>" for
+          # the runner to split, instead of paying a fresh handshake twice
+          # per attempt for up to 80 handshakes across the full loop.
+          remote_check=$(cat <<REMOTE
+          body=\$(curl -fsS -k --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$HEALTH_URL' 2>/dev/null) || body='{}'
+          ready=\$(curl -fsS -k -o /dev/null -w '%{http_code}' --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$READY_URL' 2>/dev/null) || ready='000'
+          printf '%s\t%s\n' "\$body" "\$ready"
+          REMOTE
+          )
           for attempt in $(seq 1 40); do
-            body=$(curl_pinned -fsS --max-time 10 "$HEALTH_URL" || echo '{}')
+            line=$(ssh_cmd "$remote_check" || printf '{}\t000')
+            body=$(printf '%s' "$line" | cut -f1)
+            ready=$(printf '%s' "$line" | cut -f2)
             got=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null || echo "")
-            ready=$(curl_pinned -fsS -o /dev/null -w '%{http_code}' --max-time 10 "$READY_URL" || echo "000")
             if [ "$got" = "$EXPECTED" ] && [ "$ready" = "200" ]; then
               echo "$HOST is serving $got, /ready is 200"
               exit 0
@@ -286,11 +332,11 @@ jobs:
             echo "attempt $attempt: /health version='${got:-unknown}' (want '$EXPECTED'), /ready=$ready"
             sleep 15
           done
-          echo "::error::$HOST never reported the deployed commit as healthy and ready over its own connection."
+          echo "::error::$HOST never reported the deployed commit as healthy and ready from its own loopback."
           exit 1
 
       # Both the deploy script's own internal health wait and the
-      # DNS-independent external check above have to pass, or production
+      # on-box verification above have to pass, or production
       # goes back to whatever it was serving before this run touched it —
       # a half-updated api/worker pair, or a Caddyfile that failed to
       # reload, is worse than staying on the last known-good tag.
