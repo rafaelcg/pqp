@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # The ENTIRE surface a leaked VULTR_API_SSH_KEY can reach.
 #
+# The HMAC key that guards the config-signature check below (search for
+# "deploy-hmac.key") is read from its file with a plain `open(...).read()`
+# in a python3 one-liner, never passed as a command-line argument to
+# anything -- it does not appear in this process's argv or in `ps`/
+# /proc/<pid>/cmdline for any other local user (including pqp-deploy
+# itself) to read. There is no `openssl dgst -hmac` in this file.
+#
 # Installed at /usr/local/bin/pqp-deploy (0755, root:root) by provision.sh.
 # The `pqp-deploy` account the deploy workflow SSHes into (cloud-init.yaml /
 # provision.sh) is not in the docker group and has no other sudo rule, so
