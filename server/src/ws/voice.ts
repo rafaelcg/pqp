@@ -2242,17 +2242,34 @@ const hlsAudience = createHlsAudience({
 
 /**
  * One loop over a live session's already-known watchers (`hlsAudience`
- * tracks the `Set<WebSocket>` in memory; no DB round trip), minting each a
- * fresh capability and pushing it as an ordinary `channel-live` frame. Same
- * frame shape a change or a keyframe would have sent, so the client's
- * existing same-session token-swap path (`shouldAdoptHlsSource` on web,
- * `WatchStreamSwap`/`watchSourceChanged` on iOS/Android) is what actually
- * applies it — this only has to make sure a fresh one keeps arriving.
+ * tracks the `Set<WebSocket>` in memory; no DB round trip for the
+ * membership itself), minting each a fresh capability and pushing it as an
+ * ordinary `channel-live` frame. Same frame shape a change or a keyframe
+ * would have sent, so the client's existing same-session token-swap path
+ * (`shouldAdoptHlsSource` on web, `WatchStreamSwap`/`watchSourceChanged` on
+ * iOS/Android) is what actually applies it — this only has to make sure a
+ * fresh one keeps arriving.
+ *
+ * `watch-live` checks `canAccessChannel` once, at subscribe time, and never
+ * again — a socket that stays open and subscribed is otherwise never asked
+ * twice. Without a re-check here, a ban, a kick, a channel turned private,
+ * or a permission overwrite that revokes VIEW would leave that socket
+ * quietly re-authorized every `HLS_VIEWER_TOKEN_REMINT_MS` for as long as
+ * the connection and the broadcast both last — the exact opposite of what a
+ * capability with a TTL is for. `canAccessChannelForRoster` is the cached,
+ * invalidation-aware wrapper this file already built for "ask access
+ * repeatedly for many sockets against the same channel": its cache is
+ * cleared by the same events that can make this answer flip (membership,
+ * privacy, an overwrite change), so a revoked watcher is caught within one
+ * cache TTL rather than only on their next natural resubscribe. A watcher
+ * that fails the check is dropped from `hlsAudience` outright, not merely
+ * skipped this once, so the next remint does not re-ask the same settled
+ * question for a socket that is never getting the answer back.
  */
-function remintHlsAudienceTokens(
+async function remintHlsAudienceTokens(
   channelId: string,
   watchers: readonly WebSocket[],
-): void {
+): Promise<void> {
   const stream = liveHlsStreamFor(channelId);
   if (!stream) {
     return;
@@ -2264,6 +2281,10 @@ function remintHlsAudienceTokens(
     }
     const user = getSocketUser(socket);
     if (!user) {
+      continue;
+    }
+    if (!(await canAccessChannelForRoster(channelId, user.id))) {
+      hlsAudience.unsubscribe(channelId, socket);
       continue;
     }
     send(socket, {
