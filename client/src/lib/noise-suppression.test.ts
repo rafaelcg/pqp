@@ -3,9 +3,33 @@ import {
   advancedNoiseSuppressionSupported,
   browserNoiseSuppression,
   connectMicChain,
+  createRnnoiseNode,
   parseNoiseSuppressionMode,
   type MicChainNode,
 } from "./noise-suppression";
+
+/** What `RnnoiseWorkletNode` was actually constructed with, across calls. */
+const receivedWasmBinaries: ArrayBuffer[] = [];
+
+vi.mock("@sapphi-red/web-noise-suppressor", () => ({
+  loadRnnoise: vi.fn(),
+  RnnoiseWorkletNode: class {
+    destroy = vi.fn();
+    constructor(
+      _context: unknown,
+      options: { maxChannels: number; wasmBinary: ArrayBuffer },
+    ) {
+      receivedWasmBinaries.push(options.wasmBinary);
+    }
+  },
+}));
+
+/** Enough of an `AudioContext` for `createRnnoiseNode` to wire up a worklet. */
+function fakeAudioContext(): AudioContext {
+  return {
+    audioWorklet: { addModule: vi.fn(async () => undefined) },
+  } as unknown as AudioContext;
+}
 
 describe("parseNoiseSuppressionMode", () => {
   it("migrates the boolean every existing browser has stored", () => {
@@ -71,6 +95,37 @@ function fakeNode(name: string) {
   };
   return node;
 }
+
+describe("createRnnoiseNode", () => {
+  afterEach(() => {
+    receivedWasmBinaries.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it("hands each worklet instance its own copy of the cached binary", async () => {
+    // The real cache in `loadRnnoiseBinary` returns ONE `ArrayBuffer` shared
+    // by every advanced pipeline in the page. The worklet transfers whatever
+    // it is given to the render thread and detaches it, so passing the
+    // cached buffer itself would leave it unusable (byteLength 0) for the
+    // next pipeline. See noise-suppression.ts pitfall notes on
+    // `createRnnoiseNode`.
+    const cached = new ArrayBuffer(8);
+    const context = fakeAudioContext();
+
+    await createRnnoiseNode(context, cached);
+    await createRnnoiseNode(context, cached);
+
+    expect(receivedWasmBinaries).toHaveLength(2);
+    // Neither copy IS the cached buffer...
+    expect(receivedWasmBinaries[0]).not.toBe(cached);
+    expect(receivedWasmBinaries[1]).not.toBe(cached);
+    // ...and the two worklets do not share one either, so detaching one
+    // (simulated here by transferring it) cannot affect the other or the
+    // cache.
+    expect(receivedWasmBinaries[0]).not.toBe(receivedWasmBinaries[1]);
+    expect(cached.byteLength).toBe(8);
+  });
+});
 
 describe("connectMicChain", () => {
   it("puts the suppressor between the microphone and the gain node", () => {

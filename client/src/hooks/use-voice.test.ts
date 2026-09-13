@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
+import { defaultMicProcessing } from "@/lib/audio-devices";
+import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -55,6 +57,26 @@ const beaconVoiceLeaveMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/voice-leave-beacon", () => ({
   beaconVoiceLeave: (...args: unknown[]) => beaconVoiceLeaveMock(...args),
 }));
+
+// Real support detection and a real WASM fetch have no place in this suite:
+// `advancedNoiseSuppressionSupported` reaches for `AudioWorkletNode`, which
+// Node does not have, and `loadRnnoiseBinary` is a real network call. Both
+// stay real for the two functions no test below drives: `connectMicChain`
+// and `ADVANCED_SAMPLE_RATE` are plain, deterministic code and worth
+// exercising for real rather than reimplementing.
+const advancedNoiseSuppressionSupportedMock = vi.hoisted(() => vi.fn(() => false));
+const loadRnnoiseBinaryMock = vi.hoisted(() => vi.fn());
+const createRnnoiseNodeMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/noise-suppression", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/noise-suppression")>();
+  return {
+    ...actual,
+    advancedNoiseSuppressionSupported: advancedNoiseSuppressionSupportedMock,
+    loadRnnoiseBinary: loadRnnoiseBinaryMock,
+    createRnnoiseNode: createRnnoiseNodeMock,
+  };
+});
 
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
@@ -177,6 +199,10 @@ function fakeTrack(label: string) {
   return {
     enabled: true,
     stop: () => stoppedTracks.push(label),
+    // Real MediaStreamTracks have this; the advanced-noise-suppression
+    // fallback paths call it best-effort with no guard, matching the shape a
+    // browser actually hands back.
+    applyConstraints: async () => {},
   };
 }
 
@@ -1141,6 +1167,10 @@ describe("lobby presence sounds", () => {
     playCueMock.mockReset();
     whenCueSettledMock.mockReset();
     whenCueSettledMock.mockImplementation(async () => {});
+    advancedNoiseSuppressionSupportedMock.mockReset();
+    advancedNoiseSuppressionSupportedMock.mockReturnValue(false);
+    loadRnnoiseBinaryMock.mockReset();
+    createRnnoiseNodeMock.mockReset();
   });
 
   it("plays join as soon as you ask, not after welcome", async () => {
@@ -1180,6 +1210,115 @@ describe("lobby presence sounds", () => {
     releaseCue();
     await joining;
     expect(getUserMedia).toHaveBeenCalled();
+  });
+
+  it("never opens the microphone for an advanced setup abandoned before the WASM load resolves", async () => {
+    // Farol #517: the advanced path used to have no cancellation check at
+    // all, so a `leave()` (or a superseding join) while `loadRnnoiseBinary()`
+    // was still pending did not stop it from opening — and keeping open — a
+    // microphone nobody owned any more.
+    advancedNoiseSuppressionSupportedMock.mockReturnValue(true);
+    let resolveBinary: (buffer: ArrayBuffer) => void = () => {};
+    loadRnnoiseBinaryMock.mockImplementation(
+      () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          resolveBinary = resolve;
+        }),
+    );
+
+    const getUserMedia = vi.fn(async () => fakeStream("mic"));
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const joining = voice.join(CHANNEL, {
+      processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+    });
+    // Flush every microtask the join can run through on its own; it cannot
+    // get past `loadRnnoiseBinary()` until `resolveBinary` is called below,
+    // so however many ticks this takes, execution is parked there.
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+    expect(getUserMedia).not.toHaveBeenCalled();
+
+    voice.leave();
+    resolveBinary(new ArrayBuffer(8));
+    await joining;
+
+    // The cancelled setup never captured anything, so there is nothing to
+    // release either — this is "never opened", not "opened then closed".
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(voice.getState().status).toBe("idle");
+    expect(voice.getState().error).toBeFalsy();
+  });
+
+  it("falls back to a standard mic when the browser refuses a 48kHz AudioContext", async () => {
+    // Farol #517: `new AudioContext({ sampleRate: 48000 })` threw outside any
+    // try/catch, which aborted the whole join (or swap) instead of falling
+    // back — and did it after the microphone was already open.
+    advancedNoiseSuppressionSupportedMock.mockReturnValue(true);
+    loadRnnoiseBinaryMock.mockResolvedValue(new ArrayBuffer(8));
+
+    class FlakyAudioContext {
+      constructor(options?: { sampleRate?: number }) {
+        if (options?.sampleRate === ADVANCED_SAMPLE_RATE) {
+          throw new DOMException(
+            "sample-rate is not supported",
+            "NotSupportedError",
+          );
+        }
+      }
+      createMediaStreamSource() {
+        return { connect: () => {} };
+      }
+      createGain() {
+        return { gain: { value: 1 }, connect: () => {} };
+      }
+      createAnalyser() {
+        return { fftSize: 0, smoothingTimeConstant: 0, connect: () => {} };
+      }
+      createMediaStreamDestination() {
+        return { stream: fakeStream("processed") };
+      }
+      close() {
+        return Promise.resolve();
+      }
+    }
+    (globalThis as unknown as { AudioContext: unknown }).AudioContext =
+      FlakyAudioContext;
+
+    const getUserMedia = vi.fn(async () => fakeStream("mic"));
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, {
+      processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+    });
+
+    // Captured once (no re-capture needed), never torn down, and the join
+    // went through as an ordinary join rather than failing.
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(stoppedTracks).not.toContain("mic");
+    expect(voice.getState().status).not.toBe("idle");
+    expect(voice.getState().error).toBeFalsy();
+    expect(sent.some((m) => m.type === "join-voice-room")).toBe(true);
+    // The worklet is a mode-"advanced" thing only: falling back means it is
+    // never reached at all.
+    expect(createRnnoiseNodeMock).not.toHaveBeenCalled();
   });
 
   it("falls back to the default mic when the saved device is gone, and stops asking for it", async () => {

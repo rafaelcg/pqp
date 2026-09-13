@@ -133,9 +133,15 @@ export async function createRnnoiseNode(
     await context.audioWorklet.addModule(rnnoiseWorkletUrl);
     modulesAdded.add(context);
   }
+  // `binary` is the one cached buffer every advanced pipeline shares
+  // (`loadRnnoiseBinary`). Handing it straight to the worklet is a transfer
+  // hazard: the node posts it to the render thread, which detaches it, so
+  // whichever pipeline reuses the cache next gets a 0-byte buffer and fails
+  // to initialise. A slice copies the bytes into a new, unshared buffer, so
+  // the cache stays intact no matter how many pipelines are built from it.
   return new mod.RnnoiseWorkletNode(context, {
     maxChannels: 2,
-    wasmBinary: binary,
+    wasmBinary: binary.slice(0),
   });
 }
 
