@@ -72,7 +72,17 @@ async function permissionsFor(
  * how the block disappears.
  */
 export async function broadcastWatchParty(sessionId: string): Promise<void> {
-  const row = await getWatchPartyRow(sessionId).catch(() => null);
+  // This read follows a write to the SAME row moments earlier (the mutation
+  // that made this call happen at all), so a failure here is almost always
+  // a transient blip rather than a real absence — and giving up after one
+  // try would also skip every invalidation below, including the read-cache
+  // entry, leaving a stale "party is live" (or "no party") answer up to its
+  // fresh-plus-stale window with nothing else positioned to catch it: this
+  // function is the one place every mutation passes through. One retry
+  // costs nothing on the common path and meaningfully narrows that gap.
+  const row = await getWatchPartyRow(sessionId).catch(() =>
+    getWatchPartyRow(sessionId).catch(() => null),
+  );
   if (!row) {
     return;
   }

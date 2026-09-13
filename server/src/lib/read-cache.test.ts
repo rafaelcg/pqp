@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   coalesce,
   invalidate,
+  MAX_BYTES,
   MAX_ENTRIES,
   readCacheEnabled,
   readCacheMetrics,
@@ -166,6 +167,45 @@ describe("read-cache", () => {
     expect(calls).toBe(2);
   });
 
+  it("does not let an invalidated load's late answer overwrite a fresher one, even resolving last", async () => {
+    // The exact ordering the review caught: a read starts, a write
+    // invalidates it mid-flight, a second read starts and finishes FIRST,
+    // and only then does the original (invalidated) read resolve. Its
+    // now-stale answer must not land in the cache on top of the fresh one,
+    // and its cleanup must not delete the fresh entry's in-flight bookkeeping
+    // out from under a THIRD caller.
+    const staleGate = deferred<string>();
+    let calls = 0;
+    const staleLoad = coalesce("k", 2_000, () => {
+      calls += 1;
+      return staleGate.promise;
+    });
+
+    invalidate("k"); // a write lands while `staleLoad` is still in flight
+
+    const freshLoad = await coalesce("k", 2_000, async () => {
+      calls += 1;
+      return "fresh";
+    });
+    expect(freshLoad).toBe("fresh");
+
+    // Now let the ORIGINAL, invalidated load resolve, after the fresh one
+    // already completed and populated the cache.
+    staleGate.resolve("stale");
+    expect(await staleLoad).toBe("stale"); // the caller still gets its own answer
+
+    // But the cache must still hold the fresh value, not the stale one, and
+    // must not have been left in an in-flight state either.
+    let thirdCalls = 0;
+    const thirdRead = await coalesce("k", 2_000, async () => {
+      thirdCalls += 1;
+      return "should not run";
+    });
+    expect(thirdRead).toBe("fresh");
+    expect(thirdCalls).toBe(0); // served from the cache, not a new load
+    expect(calls).toBe(2); // only the stale and fresh loaders ever ran
+  });
+
   // ------------------------------------------------------- stale-while-revalidate
 
   it("serves a stale value inside the stale window and refreshes it in the background", async () => {
@@ -277,4 +317,34 @@ describe("read-cache", () => {
     });
     expect(reloadedLast).toBe(false);
   }, 20_000);
+
+  it("evicts the oldest entry once the byte budget is exceeded, well under the entry cap", async () => {
+    // A handful of large entries, each a fraction of MAX_BYTES, should start
+    // evicting long before MAX_ENTRIES is anywhere close — the count cap
+    // alone would happily hold thousands of these.
+    const chunk = "x".repeat(Math.floor(MAX_BYTES / 4));
+    await coalesce("big0", 60_000, async () => chunk);
+    await coalesce("big1", 60_000, async () => chunk);
+    await coalesce("big2", 60_000, async () => chunk);
+    expect(readCacheMetrics().size).toBe(3);
+
+    // A fourth entry of the same size pushes total bytes over budget, so
+    // the oldest-touched one (`big0`) must go.
+    await coalesce("big3", 60_000, async () => chunk);
+    expect(readCacheMetrics().bytes).toBeLessThanOrEqual(MAX_BYTES);
+
+    let reloaded = false;
+    await coalesce("big0", 60_000, async () => {
+      reloaded = true;
+      return chunk;
+    });
+    expect(reloaded).toBe(true);
+
+    let reloadedLast = false;
+    await coalesce("big3", 60_000, async () => {
+      reloadedLast = true;
+      return chunk;
+    });
+    expect(reloadedLast).toBe(false);
+  });
 });

@@ -251,6 +251,48 @@ async function fetchAllServerChannels(serverId: string): Promise<ChannelRow[]> {
   return result.rows;
 }
 
+/**
+ * In-flight DEDUPLICATION, not caching, for the per-viewer visibility query
+ * below — there is no store, no TTL, and no entry survives past its own
+ * query resolving. The distinction matters: `read-cache.ts` explicitly must
+ * never hold an authorization answer across time because a later permission
+ * change would go stale, but two callers asking the exact same question
+ * (same server, same user) in the exact same instant — which is what a
+ * reload storm is, one account's several tabs reconnecting together — get
+ * the same in-flight Postgres round trip instead of one each, with the
+ * "still ours" identity guard `read-cache.ts` uses for the same reason.
+ */
+const visibilityInFlight = new Map<string, Promise<Set<string>>>();
+
+async function visibleChannelIds(
+  serverId: string,
+  userId: string,
+): Promise<Set<string>> {
+  const key = `${serverId}:${userId}`;
+  const pending = visibilityInFlight.get(key);
+  if (pending) {
+    return pending;
+  }
+  const promise: Promise<Set<string>> = getPool()
+    .query<{ id: string }>(
+      `SELECT c.id
+         FROM channels c
+         JOIN server_members sm ON sm.server_id = c.server_id
+         WHERE c.server_id = $1 AND sm.user_id = $2
+           AND c.type <> 'thread'
+           AND ${channelVisibleSql("$2")}`,
+      [serverId, userId],
+    )
+    .then((result) => new Set(result.rows.map((row) => row.id)))
+    .finally(() => {
+      if (visibilityInFlight.get(key) === promise) {
+        visibilityInFlight.delete(key);
+      }
+    });
+  visibilityInFlight.set(key, promise);
+  return promise;
+}
+
 export async function listChannels(
   serverId: string,
   userId: string,
@@ -264,23 +306,18 @@ export async function listChannels(
     return all;
   }
 
-  // Per-viewer authorization, run fresh on every call — never cached, never
-  // shared, and the exact predicate this function always used: server
-  // membership, then `channelVisibleSql`, which folds in privacy and every
-  // per-channel permission overwrite. Only the column list changed (`id`
-  // alone, since the rest came from the cached fetch above); a non-member of
-  // `serverId` matches no row here regardless of what the cache holds, and
-  // gets back the same `[]` as before this cache existed.
-  const visible = await getPool().query<{ id: string }>(
-    `SELECT c.id
-       FROM channels c
-       JOIN server_members sm ON sm.server_id = c.server_id
-       WHERE c.server_id = $1 AND sm.user_id = $2
-         AND c.type <> 'thread'
-         AND ${channelVisibleSql("$2")}`,
-    [serverId, userId],
-  );
-  const visibleIds = new Set(visible.rows.map((row) => row.id));
+  // Per-viewer authorization, run fresh on every call — never cached across
+  // time, never shared with a different (server, user) pair, and the exact
+  // predicate this function always used: server membership, then
+  // `channelVisibleSql`, which folds in privacy and every per-channel
+  // permission overwrite. Only the column list changed (`id` alone, since
+  // the rest came from the cached fetch above); a non-member of `serverId`
+  // matches no row here regardless of what the cache holds, and gets back
+  // the same `[]` as before this cache existed. `visibleChannelIds` still
+  // dedupes truly concurrent callers asking this exact question — the same
+  // account's several reconnecting tabs — without caching the answer past
+  // that one burst.
+  const visibleIds = await visibleChannelIds(serverId, userId);
   // `all` is already position-ordered; `filter` preserves that order.
   return all.filter((channel) => visibleIds.has(channel.id));
 }
@@ -313,16 +350,26 @@ export async function createChannel(
     [serverId, name, type, position, isPrivate, topic || null],
   );
   const channel = result.rows[0]!;
-  if (isPrivate) {
-    await applyPrivateChannelOverwrites(
-      getPool(),
-      channel.id,
-      serverId,
-      true,
-    );
-    await bumpPermissionsVersion(serverId);
+  // `finally`, not a plain call after the `if`: the INSERT above already
+  // committed, so the channel row exists regardless of what happens next.
+  // If `applyPrivateChannelOverwrites` or `bumpPermissionsVersion` throws,
+  // this function still throws too (nothing here swallows the error) — but
+  // a cache warmed before this call must not be left describing a server
+  // that is now missing a channel that really exists, which is what
+  // skipping the invalidation on that error path would do.
+  try {
+    if (isPrivate) {
+      await applyPrivateChannelOverwrites(
+        getPool(),
+        channel.id,
+        serverId,
+        true,
+      );
+      await bumpPermissionsVersion(serverId);
+    }
+  } finally {
+    invalidateServerChannelList(serverId);
   }
-  invalidateServerChannelList(serverId);
   return channel;
 }
 

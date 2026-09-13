@@ -155,12 +155,15 @@ export interface AdminMetrics {
    * that joined an already-running load instead of starting a second one
    * (`coalesced` — the number that collapses during a reload storm), and
    * that were served a stale-but-within-window value while a background
-   * refresh ran (`staleServed`). `size` is the current entry count, bounded
-   * by the module's LRU cap. Born from the same 2026-09-12 postmortem (A2)
-   * as `dbTx` above: this is the read side of that fix, caching the latest
-   * message page, a server's channel list, and a channel's watch-party
-   * state. Off (falling back to `misses` for everything) when
-   * `READ_CACHE=off`.
+   * refresh ran (`staleServed`). `size` is the current entry count and
+   * `bytes` the approximate resident size, each bounded by its own eviction
+   * trigger in the module (an entry-count LRU cap and a byte budget — a
+   * cache full of large message pages gives up entries sooner than one full
+   * of small watch-party rows would). Born from the same 2026-09-12
+   * postmortem (A2) as `dbTx` above: this is the read side of that fix,
+   * caching the latest message page, a server's channel list, and a
+   * channel's watch-party state. Off (falling back to `misses` for
+   * everything) when `READ_CACHE=off`.
    */
   readCache: {
     hits: number;
@@ -168,6 +171,7 @@ export interface AdminMetrics {
     coalesced: number;
     staleServed: number;
     size: number;
+    bytes: number;
   };
   /**
    * What the channel-presence fan-out is doing since the last deploy: frames

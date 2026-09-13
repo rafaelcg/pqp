@@ -44,9 +44,24 @@ const DEFAULT_TTL_MS = 2_000;
  *  Exported for the eviction test in `read-cache.test.ts`. */
 export const MAX_ENTRIES = 5_000;
 
+/**
+ * A count cap alone bounds how many DISTINCT KEYS live here, not how much a
+ * single one costs — a message page can hold up to `MESSAGE_PAGE_MAX` full
+ * rows with bodies, so 5,000 of the biggest possible entries is not a small
+ * number of bytes. This is a second, independent eviction trigger: `touch`
+ * evicts oldest-first until BOTH the count and the byte budget are back
+ * under their caps, so a cache full of large message pages gives up entries
+ * sooner than one full of small watch-party rows would. 50 MB is generous
+ * for a process whose real job is holding WebSocket connections open, not
+ * caching query results.
+ */
+export const MAX_BYTES = 50 * 1024 * 1024;
+
 interface Entry<T> {
   value: T;
   storedAt: number;
+  /** Approximate serialized size in bytes, computed once at write time. */
+  size: number;
 }
 
 interface Metrics {
@@ -59,6 +74,33 @@ interface Metrics {
 const store = new Map<string, Entry<unknown>>();
 const inflight = new Map<string, Promise<unknown>>();
 const metrics: Metrics = { hits: 0, misses: 0, coalesced: 0, staleServed: 0 };
+let totalBytes = 0;
+
+/**
+ * A rough size estimate, not an exact one — `JSON.stringify(...).length` is
+ * close enough to bytes for mostly-ASCII rows (message bodies, names, ids)
+ * to bound memory within a small constant factor, which is all an eviction
+ * budget needs. A value that fails to stringify (should not happen for the
+ * plain DB-row shapes this module caches) falls back to a conservative
+ * guess rather than throwing out of a cache write.
+ */
+function estimateSize(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 1024;
+  } catch {
+    return 1024;
+  }
+}
+
+/** The one place an entry leaves `store`, so `totalBytes` cannot drift from
+ *  what is actually cached. */
+function removeEntry(key: string): void {
+  const entry = store.get(key);
+  if (entry) {
+    totalBytes -= entry.size;
+    store.delete(key);
+  }
+}
 
 /**
  * `READ_CACHE=off` (or `false`/`0`) disables it. Anything else, including
@@ -69,17 +111,32 @@ export function readCacheEnabled(env: NodeJS.ProcessEnv = process.env): boolean 
   return raw !== "off" && raw !== "false" && raw !== "0";
 }
 
-/** `Map` iteration order is insertion order; a touch deletes-then-reinserts
- *  so the entry moves to the end, and eviction always takes from the front. */
+/**
+ * `Map` iteration order is insertion order; a touch deletes-then-reinserts so
+ * the entry moves to the end, and eviction always takes from the front.
+ *
+ * `entry` may be the SAME object already sitting in `store` (a plain
+ * touch-for-recency on a hit) or a brand new one replacing what was there
+ * (a fresh write after a load, including a stale-while-revalidate refresh
+ * landing on top of the stale entry it is replacing). Either way,
+ * subtracting whatever was there before adding what is there now keeps
+ * `totalBytes` correct without the two cases needing to be told apart —
+ * subtracting and re-adding the same size on a plain touch nets to zero.
+ */
 function touch<T>(key: string, entry: Entry<T>): void {
+  const existing = store.get(key);
+  if (existing) {
+    totalBytes -= existing.size;
+  }
   store.delete(key);
   store.set(key, entry);
-  while (store.size > MAX_ENTRIES) {
+  totalBytes += entry.size;
+  while (store.size > 0 && (store.size > MAX_ENTRIES || totalBytes > MAX_BYTES)) {
     const oldest = store.keys().next().value;
     if (oldest === undefined) {
       break;
     }
-    store.delete(oldest);
+    removeEntry(oldest);
   }
 }
 
@@ -101,14 +158,29 @@ function revalidate<T>(
   if (inflight.has(key)) {
     return;
   }
-  const promise = loader()
+  // `promise` is referenced inside its own `.then`/`.catch` below, which is
+  // fine — those only run once this assignment has completed — and it is
+  // exactly what makes the guard work: `inflight.get(key) === promise` asks
+  // "is this load still the one the map points to for this key", which is
+  // false when an `invalidate()` ran while this was in flight (it deletes
+  // the map entry, so nothing points to this promise any more) and a fresh
+  // load may since have taken the slot. Skipping the write in that case is
+  // the fix for the race Farol's review caught: without this guard, an
+  // invalidated load that finishes late writes its stale answer back in —
+  // and, since `inflight.delete(key)` was unconditional, could also delete
+  // the newer load's in-flight entry out from under it.
+  const promise: Promise<T> = loader()
     .then((value) => {
-      inflight.delete(key);
-      touch(key, { value, storedAt: Date.now() });
+      if (inflight.get(key) === promise) {
+        inflight.delete(key);
+        touch(key, { value, storedAt: Date.now(), size: estimateSize(value) });
+      }
       return value;
     })
     .catch((error: unknown) => {
-      inflight.delete(key);
+      if (inflight.get(key) === promise) {
+        inflight.delete(key);
+      }
       throw error;
     });
   // A background refresh's rejection must not become an unhandled rejection
@@ -160,7 +232,7 @@ export async function coalesce<T>(
     }
     // Doubly stale: treat exactly like a miss below, including sharing an
     // in-flight load with anyone else who arrives while this one runs.
-    store.delete(key);
+    removeEntry(key);
   }
 
   const pending = inflight.get(key);
@@ -170,14 +242,27 @@ export async function coalesce<T>(
   }
 
   metrics.misses += 1;
-  const promise = loader()
+  // Same "am I still the load this key points to" guard as `revalidate`,
+  // and for the same reason: `invalidate()` may run while this is in
+  // flight (an edit landing mid-fetch, say), clear this key's `inflight`
+  // entry, and let a second, fresher load start and even finish before
+  // this one does. Without the guard, this one's `.then` would overwrite
+  // that fresher answer with data read before the write — exactly the
+  // pre-edit-text-survives-the-edit bug the review flagged — and its
+  // unconditional `inflight.delete` would remove the newer load's entry
+  // too, letting a THIRD caller start a third redundant query.
+  const promise: Promise<T> = loader()
     .then((value) => {
-      inflight.delete(key);
-      touch(key, { value, storedAt: Date.now() });
+      if (inflight.get(key) === promise) {
+        inflight.delete(key);
+        touch(key, { value, storedAt: Date.now(), size: estimateSize(value) });
+      }
       return value;
     })
     .catch((error: unknown) => {
-      inflight.delete(key);
+      if (inflight.get(key) === promise) {
+        inflight.delete(key);
+      }
       throw error;
     });
   inflight.set(key, promise);
@@ -192,9 +277,9 @@ export async function coalesce<T>(
  * channel's latest page, say).
  */
 export function invalidate(prefix: string): void {
-  for (const key of store.keys()) {
+  for (const key of [...store.keys()]) {
     if (key.startsWith(prefix)) {
-      store.delete(key);
+      removeEntry(key);
     }
   }
   for (const key of inflight.keys()) {
@@ -206,9 +291,11 @@ export function invalidate(prefix: string): void {
 
 /** Snapshot for `GET /api/admin/metrics` under `readCache.*`. Cumulative
  *  since boot (or the last `resetReadCacheForTests`), same convention as
- *  `dbTxByPath`. */
-export function readCacheMetrics(): Metrics & { size: number } {
-  return { ...metrics, size: store.size };
+ *  `dbTxByPath`. `bytes` is the running total behind the `MAX_BYTES`
+ *  eviction trigger, so a sustained climb toward it is visible before an
+ *  eviction storm starts, not just after. */
+export function readCacheMetrics(): Metrics & { size: number; bytes: number } {
+  return { ...metrics, size: store.size, bytes: totalBytes };
 }
 
 /** Test seam: wipe every entry, in-flight load and counter. */

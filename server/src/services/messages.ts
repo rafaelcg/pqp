@@ -790,6 +790,16 @@ export async function updateMessageBody(
     listThreadsForMessages([messageId]),
     listPollsForMessages([messageId]),
   ]);
+  // Invalidated again now that every write this edit makes has landed
+  // (mentions included), on top of the call right after the UPDATE above.
+  // `read-cache.ts`'s `coalesce` already refuses to let a load that started
+  // before an `invalidate()` write its answer back over a fresher one (the
+  // "still ours" identity guard), so this second call is not closing a gap
+  // that fix leaves open — it is a second, independent line of defense
+  // against a mistake in that guard, cheap enough (one key-prefix scan over
+  // a capped map) to keep even though it should never do anything the first
+  // call didn't already.
+  invalidateLatestMessages(message.channel_id);
   return {
     ...message,
     reactions: reactions.get(messageId) ?? [],
