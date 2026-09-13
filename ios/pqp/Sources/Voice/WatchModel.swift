@@ -190,6 +190,33 @@ final class WatchModel {
         applyStream(state.stream)
     }
 
+    /// What a `refreshLive()` call resolved to. A plain `LiveHlsStream?`
+    /// cannot tell a caller "this genuinely failed" apart from "this was
+    /// superseded and something newer already spoke for the stream" — both
+    /// looked like `nil`, and `recoverFromFailure()` treated either as proof
+    /// the broadcast is unreachable. It is not: a superseded call means a
+    /// socket frame or a newer overlapping `refreshLive()` already applied
+    /// its own (fresher) answer, correctly, before this one returned. Taking
+    /// that as a failure would paint a picture that is already playing fine
+    /// as dead.
+    enum RefreshOutcome {
+        /// The freshest answer, and it was applied. `nil` means the
+        /// broadcast is over or never started; `applyStream` already moved
+        /// `phase` accordingly.
+        case applied(LiveHlsStream?)
+        /// A genuine failure to ask the server at all (network, non-2xx).
+        /// Silent, same posture as `seed`: a transient 500 is not a verdict
+        /// on the broadcast, only a caller in `recoverFromFailure` decides
+        /// whether this is worth surfacing.
+        case failed
+        /// This call's answer no longer matters: the channel changed, there
+        /// is no active channel, or a socket frame / newer overlapping call
+        /// already applied something more recent. Whatever superseded it is
+        /// responsible for `phase`/`stream` being correct; this caller has
+        /// nothing left to do.
+        case superseded
+    }
+
     /**
      `GET /api/channels/:channelId/live` again, on demand.
 
@@ -205,16 +232,10 @@ final class WatchModel {
      so a broadcast that genuinely ended surfaces here as `.ended` exactly
      like it would over the socket — the caller does not need to special-case
      that outcome, only tell it apart from a request that flat-out failed
-     (see the `nil` contract below).
-
-     Failure is silent, same posture as `seed`: a transient 500 is not a
-     verdict on the broadcast. Returns `nil` on that silent failure OR when
-     the channel changed underneath the request; a caller that cares which
-     can read `phase`, since a successful-but-empty answer already moved it
-     to `.ended` or `.idle` before returning.
+     (see `RefreshOutcome`).
      */
-    func refreshLive() async throws -> LiveHlsStream? {
-        guard let channelId, let session else { return nil }
+    func refreshLive() async throws -> RefreshOutcome {
+        guard let channelId, let session else { return .superseded }
         // Claim the next number before the GET goes out. If another
         // `refreshLive()` call is already in flight, this bump is what
         // demotes it: its captured snapshot is now behind `generation`, so
@@ -228,13 +249,13 @@ final class WatchModel {
             // The watchdog task that called us can be cancelled mid-request
             // (view torn down, channel switched away from) — that is not a
             // verdict on the stream, so it must not read as one to the
-            // caller. Propagate it instead of returning `nil`, which
+            // caller. Propagate it instead of returning `.failed`, which
             // `recoverFromFailure` would otherwise read as "the refetch
             // failed" and mark the picture dead on its way out the door.
             if error is CancellationError { throw error }
-            return nil
+            return .failed
         }
-        guard self.channelId == channelId else { return nil }
+        guard self.channelId == channelId else { return .superseded }
         // Either a socket frame landed while this request was in flight
         // (necessarily fresher than a response an HTTP request started
         // before it), or a NEWER `refreshLive()` call started after this one
@@ -243,11 +264,11 @@ final class WatchModel {
         // recent than this call now speaks for the stream; drop this
         // response rather than reattaching a token, or an "ended", that has
         // been superseded.
-        guard requestedGeneration == generation else { return nil }
+        guard requestedGeneration == generation else { return .superseded }
         participants = state.participants
         watching = state.watching
         applyStream(state.stream)
-        return state.stream
+        return .applied(state.stream)
     }
 
     // MARK: - Wire

@@ -334,22 +334,40 @@ struct WatchStageView: View {
             )
         case .refetch:
             do {
-                if try await model.refreshLive() != nil {
-                    // A fresh stream came back: reattach to it regardless of
-                    // how old `attached` is, the same way a stall or a
-                    // manual retry does.
-                    reconcile(force: true)
-                } else if model.phase == .live {
-                    // The refetch itself failed (network), so `phase` was
-                    // never touched by it and is still `.live` from before
-                    // this failure. Nothing better is available: show the
-                    // card. A successful refetch that came back empty
-                    // already moved `phase` to `.ended` or `.idle` inside
-                    // `refreshLive`, and that sentence is truer than "the
-                    // connection dropped".
-                    model.playbackFailed(
-                        String(localized: "The connection to the stream dropped.")
-                    )
+                switch try await model.refreshLive() {
+                case .applied(let stream):
+                    if stream != nil {
+                        // A fresh stream came back: reattach to it
+                        // regardless of how old `attached` is, the same way
+                        // a stall or a manual retry does.
+                        reconcile(force: true)
+                    }
+                    // `stream == nil` means the broadcast genuinely ended
+                    // or never started, and `applyStream` already moved
+                    // `phase` to `.ended` / `.idle` inside `refreshLive` —
+                    // that sentence is truer than "the connection dropped",
+                    // and `.onChange(of: model.phase)` tears the player
+                    // down on its own.
+                case .failed:
+                    if model.phase == .live {
+                        // The refetch itself failed (network), so `phase`
+                        // was never touched by it and is still `.live` from
+                        // before this failure. Nothing better is available:
+                        // show the card.
+                        model.playbackFailed(
+                            String(localized: "The connection to the stream dropped.")
+                        )
+                    }
+                case .superseded:
+                    // Something more recent than this call already spoke
+                    // for the stream — a socket frame, or a newer
+                    // overlapping `refreshLive()` — and applied its own
+                    // answer correctly. This call has nothing to add, and
+                    // MUST NOT fall through to `playbackFailed`: `phase` can
+                    // already be `.live` again with a perfectly good,
+                    // freshly attached stream, and painting that as dead is
+                    // exactly the false failure this case exists to avoid.
+                    break
                 }
             } catch is CancellationError {
                 // The watchdog task itself was cancelled while this was in
