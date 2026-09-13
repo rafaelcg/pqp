@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   coalesce,
   invalidate,
+  invalidateExact,
   MAX_BYTES,
   MAX_CACHEABLE_ROWS,
   MAX_ENTRIES,
@@ -110,6 +111,35 @@ describe("read-cache", () => {
     expect(calls).toBe(2);
   });
 
+  /**
+   * The narrower timing this pins: a retry chained directly off the
+   * rejected promise itself (the earliest a caller could possibly react),
+   * not one that only runs after an extra `await` has already given any
+   * stray cleanup microtask time to finish. `inflight`'s cleanup has to
+   * happen inside the same handler that produces the rejection, not in a
+   * separate chain attached after it — see the comment on `revalidate` in
+   * read-cache.ts for why that distinction is load-bearing.
+   */
+  it("a retry chained directly off a rejection does not rejoin the just-rejected load", async () => {
+    let firstCalls = 0;
+    const first = coalesce("k", 2_000, async () => {
+      firstCalls += 1;
+      throw new Error("boom");
+    });
+
+    let secondCalls = 0;
+    const retried = first.catch(() =>
+      coalesce("k", 2_000, async () => {
+        secondCalls += 1;
+        return "fresh";
+      }),
+    );
+
+    await expect(retried).resolves.toBe("fresh");
+    expect(firstCalls).toBe(1);
+    expect(secondCalls).toBe(1);
+  });
+
   // ------------------------------------------------------------ invalidation
 
   it("invalidate(key) drops the entry so the next call reloads", async () => {
@@ -121,6 +151,44 @@ describe("read-cache", () => {
     expect(await coalesce("k", 2_000, load)).toBe(1);
     invalidate("k");
     expect(await coalesce("k", 2_000, load)).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  it("invalidateExact(key) drops only that key, with no prefix scan semantics", async () => {
+    let calls = 0;
+    const load = () => {
+      calls += 1;
+      return Promise.resolve(calls);
+    };
+    await coalesce("member-list", 2_000, load);
+    await coalesce("member-list-extra", 2_000, load);
+    expect(calls).toBe(2);
+
+    invalidateExact("member-list");
+    // The other key, which merely shares a prefix with the exact one
+    // dropped, is untouched — unlike `invalidate`, this never does a
+    // string-prefix match.
+    expect(await coalesce("member-list-extra", 2_000, load)).toBe(2);
+    expect(await coalesce("member-list", 2_000, load)).toBe(3);
+    expect(calls).toBe(3);
+  });
+
+  it("invalidateExact also cancels a matching in-flight load", async () => {
+    const gate = deferred<string>();
+    let calls = 0;
+    const firstLoad = coalesce("k", 2_000, () => {
+      calls += 1;
+      return gate.promise;
+    });
+    invalidateExact("k");
+    const secondLoad = coalesce("k", 2_000, async () => {
+      calls += 1;
+      return "second";
+    });
+    gate.resolve("first");
+
+    expect(await firstLoad).toBe("first");
+    expect(await secondLoad).toBe("second");
     expect(calls).toBe(2);
   });
 
@@ -207,6 +275,19 @@ describe("read-cache", () => {
     expect(calls).toBe(2); // only the stale and fresh loaders ever ran
   });
 
+  it("an invalidation racing a fresh miss (not a stale revalidate) is not undone when that miss lands late", async () => {
+    const gate = deferred<string>();
+    const firstLoad = coalesce("k", 2_000, () => gate.promise);
+    // No second caller joins this one — this is the plain-miss path in
+    // `coalesce` itself, not `revalidate`'s background-refresh path.
+    invalidate("k");
+    gate.resolve("first");
+    expect(await firstLoad).toBe("first");
+
+    const readBack = await coalesce("k", 2_000, async () => "second");
+    expect(readBack).toBe("second");
+  });
+
   // ------------------------------------------------------- stale-while-revalidate
 
   it("serves a stale value inside the stale window and refreshes it in the background", async () => {
@@ -249,6 +330,38 @@ describe("read-cache", () => {
     expect(calls).toBe(2);
     gate.resolve("v2");
     await new Promise((r) => setTimeout(r, 5));
+  });
+
+  it("a background refresh invalidated mid-flight does not overwrite a fresher value once it lands", async () => {
+    const gate = deferred<string>();
+    let calls = 0;
+    const load = () => {
+      calls += 1;
+      return calls === 1 ? Promise.resolve("v1") : gate.promise;
+    };
+    await coalesce("k", 20, load);
+    await new Promise((r) => setTimeout(r, 30)); // now stale
+
+    // Kicks the background refresh (`revalidate`), served from the stale
+    // value with no wait.
+    const stale = await coalesce("k", 20, load);
+    expect(stale).toBe("v1");
+    expect(calls).toBe(2);
+
+    // A write invalidates the key while that background refresh is still
+    // running, then a fresh value is loaded and cached.
+    invalidate("k");
+    const fresh = await coalesce("k", 20, async () => "fresh");
+    expect(fresh).toBe("fresh");
+
+    // NOW the stale background refresh finally resolves.
+    gate.resolve("v2 (stale, arrived late)");
+    await new Promise((r) => setTimeout(r, 5));
+
+    const readBack = await coalesce("k", 20, async () => {
+      throw new Error("should have been a cache hit, not a reload");
+    });
+    expect(readBack).toBe("fresh");
   });
 
   it("falls through to a blocking load once an entry is doubly stale", async () => {

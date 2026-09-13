@@ -370,6 +370,7 @@ export async function createChannel(
   } finally {
     invalidateServerChannelList(serverId);
   }
+  invalidateServerChannelList(serverId);
   return channel;
 }
 
