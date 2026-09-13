@@ -3067,6 +3067,8 @@
   "watchParty.stage.hands": "Asking to speak",
   "watchParty.stage.empty": "Nobody on stage but you.",
   "watchParty.stage.noHands": "Nobody has asked to speak.",
+  "watchParty.stage.handsMore_one": "and {count} more waiting",
+  "watchParty.stage.handsMore_other": "and {count} more waiting",
   "watchParty.stage.invite": "Bring up",
   "watchParty.stage.remove": "Take down",
   "watchParty.stage.raise": "Ask to speak",

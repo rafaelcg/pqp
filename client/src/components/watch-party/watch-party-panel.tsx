@@ -440,6 +440,31 @@ function WatchPartyShareButton({
 // ------------------------------------------------- options: one dialog, one row
 
 /**
+ * How many raised hands the options dialog draws before it stops and just
+ * counts the rest. Farol flagged the uncapped list (2026-09-13): with voice
+ * on and `hosts_only`/`everyone`, every viewer can raise a hand, and a real
+ * audience could put hundreds of avatar rows into one dialog on every open.
+ */
+const MAX_VISIBLE_HANDS = 20;
+
+/**
+ * Splits a raised-hand queue at `MAX_VISIBLE_HANDS`: the rows the dialog
+ * actually draws, and how many more are waiting than that. The queue already
+ * arrives in the server's own raise order (`docs/RAISED_HANDS.md`), so the
+ * visible slice is the people waiting longest — exactly who a host should
+ * see first — and not an arbitrary cut. Exported (pure, no Dialog/portal
+ * involved) so the cap has a test that does not need a DOM.
+ */
+export function visibleRaisedHands(
+  hands: WatchParty["stage"]["hands"],
+): { visible: WatchParty["stage"]["hands"]; hiddenCount: number } {
+  return {
+    visible: hands.slice(0, MAX_VISIBLE_HANDS),
+    hiddenCount: Math.max(0, hands.length - MAX_VISIBLE_HANDS),
+  };
+}
+
+/**
  * THE SAME DIALOG BEFORE AND DURING THE SHOW. The setup surface used to carry
  * a 72-unit column of every option plus the co-host list beside the preview,
  * and the live bar opened a dialog with the same controls. Two surfaces for
@@ -526,35 +551,67 @@ function WatchPartyOptionsDialog({
                   {t("watchParty.stage.noHands")}
                 </p>
               ) : (
-                <ul className="flex flex-col gap-1">
-                  {party.stage.hands.map((person) => (
-                    <li
-                      key={person.userId}
-                      className="flex items-center gap-2"
-                      data-watch-party-hand
-                    >
-                      <UserAvatar
-                        name={person.displayName}
-                        avatarUrl={person.avatarUrl}
-                        rounded="full"
-                        className="h-6 w-6 shrink-0"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                        {person.displayName}
-                      </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() =>
-                          void props.onStageAction?.("invite", person.userId)
-                        }
-                        data-watch-party-invite
-                      >
-                        {t("watchParty.stage.invite")}
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  {/* CAPPED, NOT VIRTUALISED (2026-09-13). `visibleRaisedHands`
+                      keeps the first `MAX_VISIBLE_HANDS` — the people waiting
+                      longest, exactly who a host should see first — and
+                      everybody past that shows only as a count instead of a
+                      DOM row and an avatar fetch each. A hall running
+                      voice-on with a real audience could otherwise put
+                      hundreds of rows and image loads into this dialog on
+                      every open. */}
+                  {(() => {
+                    const { visible, hiddenCount } = visibleRaisedHands(
+                      party.stage.hands,
+                    );
+                    return (
+                      <>
+                        <ul className="flex flex-col gap-1">
+                          {visible.map((person) => (
+                            <li
+                              key={person.userId}
+                              className="flex items-center gap-2"
+                              data-watch-party-hand
+                            >
+                              <UserAvatar
+                                name={person.displayName}
+                                avatarUrl={person.avatarUrl}
+                                rounded="full"
+                                className="h-6 w-6 shrink-0"
+                              />
+                              <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                                {person.displayName}
+                              </span>
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() =>
+                                  void props.onStageAction?.(
+                                    "invite",
+                                    person.userId,
+                                  )
+                                }
+                                data-watch-party-invite
+                              >
+                                {t("watchParty.stage.invite")}
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                        {hiddenCount > 0 && (
+                          <p
+                            className="mt-1 text-[11px] text-paper-muted"
+                            data-watch-party-hands-more
+                          >
+                            {t("watchParty.stage.handsMore", {
+                              count: hiddenCount,
+                            })}
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
+                </>
               )}
               {party.stage.invited.length > 0 && (
                 <>
@@ -1307,10 +1364,19 @@ function LiveSurface(
    * `canStart` and an invited guest are NOT gated on it, also unchanged:
    * they run parties here, or were brought up, whether or not this show has
    * voice.
+   *
+   * `canStart` IS SCOPED TO EVERYBODY ELSE (2026-09-13 fix). The party's own
+   * host and co-hosts almost always also hold START_WATCH_PARTY — they are
+   * usually who started it — so an unscoped `|| props.canStart` reopened the
+   * exact door the line above just gated: a host with voice off got the
+   * button back through the permission check instead of the role check. The
+   * `canStart` branch exists for somebody who is trusted with the room but
+   * is not currently running this show; the current host/cohost's own path
+   * is the branch above, and only that one.
    */
   const mayEnterPalco =
     (runsTheShow && party.options.voiceEnabled) ||
-    props.canStart ||
+    (!runsTheShow && props.canStart) ||
     isInvited;
   const showEnterPalco =
     !props.inCall && mayEnterPalco && mayTakeASeat;

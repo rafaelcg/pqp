@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WatchParty } from "@pqp/shared";
-import { WatchPartyPanel } from "./watch-party-panel";
+import { visibleRaisedHands, WatchPartyPanel } from "./watch-party-panel";
 
 /**
  * The copy a live party shows when there is no picture yet.
@@ -468,6 +468,23 @@ describe("the way into the room", () => {
     expect(inBar({ canStart: true })).toContain(joinControl);
   });
 
+  it("does not reopen the voice gate for a host who also holds that permission", () => {
+    // THE 2026-09-13 REGRESSION THIS PINS. A party's own host almost always
+    // holds START_WATCH_PARTY too — they are usually who started it — so an
+    // unscoped `canStart` OR reopened exactly the door "offers it to the
+    // people running the show only once the party has voice" (above) just
+    // closed: the CI e2e "the people running the party keep their way into
+    // the room" caught this in production shape (a seeded server owner, host
+    // of their own live party, voice off) when this unit suite did not,
+    // because no other test here combines a host/cohost role with
+    // `canStart: true`.
+    for (const viewerRole of ["host", "cohost"] as const) {
+      expect(
+        inBar({ canStart: true, party: { ...PARTY, viewerRole } }),
+      ).not.toContain(joinControl);
+    }
+  });
+
   it("offers it to somebody the host invited up to speak", () => {
     const me = "55555555-5555-4555-8555-555555555555";
     expect(
@@ -707,5 +724,45 @@ describe("Sair do palco", () => {
   it("is offered to a seated guest and not to the host", () => {
     expect(seated("viewer")).toContain("data-watch-party-leave-stage");
     expect(seated("host")).not.toContain("data-watch-party-leave-stage");
+  });
+});
+
+/**
+ * FAROL, 2026-09-13: with voice enabled for `hosts_only` or `everyone`,
+ * opening the options dialog mapped the entire raised-hand queue into DOM
+ * rows and avatar fetches, so a large audience could put hundreds of them
+ * into one dialog on every open. Pure logic, tested without the
+ * Dialog/portal machinery around it.
+ */
+describe("visibleRaisedHands", () => {
+  const hand = (n: number) => ({
+    userId: `${n}`,
+    displayName: `Person ${n}`,
+    avatarUrl: null,
+  });
+
+  it("keeps a small queue whole, with nothing hidden", () => {
+    const hands = [hand(1), hand(2), hand(3)];
+    expect(visibleRaisedHands(hands)).toEqual({
+      visible: hands,
+      hiddenCount: 0,
+    });
+  });
+
+  it("caps a large queue at 20 and counts the rest", () => {
+    const hands = Array.from({ length: 137 }, (_, i) => hand(i));
+    const { visible, hiddenCount } = visibleRaisedHands(hands);
+    expect(visible).toHaveLength(20);
+    expect(hiddenCount).toBe(117);
+    // The visible slice is the FRONT of the queue: the people waiting
+    // longest, in the server's own raise order, not an arbitrary cut.
+    expect(visible.map((p) => p.userId)).toEqual(
+      Array.from({ length: 20 }, (_, i) => `${i}`),
+    );
+  });
+
+  it("hides nothing at exactly the cap", () => {
+    const hands = Array.from({ length: 20 }, (_, i) => hand(i));
+    expect(visibleRaisedHands(hands).hiddenCount).toBe(0);
   });
 });

@@ -3067,6 +3067,8 @@
   "watchParty.stage.hands": "Pedindo pra falar",
   "watchParty.stage.empty": "Ninguém no palco além de você.",
   "watchParty.stage.noHands": "Ninguém pediu pra falar.",
+  "watchParty.stage.handsMore_one": "e mais {count} esperando",
+  "watchParty.stage.handsMore_other": "e mais {count} esperando",
   "watchParty.stage.invite": "Chamar",
   "watchParty.stage.remove": "Tirar",
   "watchParty.stage.raise": "Pedir pra falar",
