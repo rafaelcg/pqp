@@ -1237,6 +1237,7 @@ private fun SendRefusalLine(refusal: SendRefusal?, waitSeconds: Int) {
             MessageRejectReason.Undeliverable -> stringResource(R.string.chat_reject_undeliverable)
             MessageRejectReason.SlowMode -> stringResource(R.string.chat_reject_slow_mode)
             MessageRejectReason.Automod -> refusal.message ?: stringResource(R.string.chat_reject_automod)
+            MessageRejectReason.DatabaseUnavailable -> stringResource(R.string.chat_reject_database_unavailable)
             null -> stringResource(R.string.chat_reject_generic)
         }
         else -> ""

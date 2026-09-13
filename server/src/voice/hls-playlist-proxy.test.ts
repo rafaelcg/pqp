@@ -73,6 +73,7 @@ const {
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
   HLS_PLAYLIST_CACHE_TTL_MS,
+  STALE_ON_BREAKER_MAX_MS,
   resetHlsPlaylistCacheForTests,
   segmentSigningTime,
   SEGMENT_URL_BUCKET_MAX_MS,
@@ -401,6 +402,31 @@ describe("playlist render cache", () => {
     await expect(
       buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, Date.now() + HLS_PLAYLIST_CACHE_TTL_MS + 1),
     ).rejects.toThrow(HlsPlaylistNotFound);
+  });
+
+  it("A3.1: the stale fallback stops after STALE_ON_BREAKER_MAX_MS, so a sustained outage degrades to database_unavailable rather than an indefinitely-served stream", async () => {
+    const now = 1_800_000_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
+    // Exactly two more renders are attempted below; `mockImplementationOnce`
+    // twice rather than a persistent `mockImplementation` so this test
+    // cannot leak an always-throwing `pool.query` into whichever test runs
+    // after it in this file.
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    // Just inside the bound: still falls back.
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + STALE_ON_BREAKER_MAX_MS),
+    ).resolves.toContain("#EXTM3U");
+    pool.query.mockImplementationOnce(async () => {
+      throw new MockDatabaseUnavailableError();
+    });
+    // Past it: the security bound wins over availability, and the DB error
+    // that could not confirm the session either way propagates instead of
+    // a possibly-revoked session going on being served.
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + STALE_ON_BREAKER_MAX_MS + 1),
+    ).rejects.toThrow(MockDatabaseUnavailableError);
   });
 
   it("the cached body still carries segment URLs that work for the viewer who gets it", async () => {

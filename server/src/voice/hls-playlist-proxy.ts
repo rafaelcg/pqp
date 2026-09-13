@@ -150,6 +150,28 @@ function segmentMemoFor(key: string): Map<string, MemoisedSegmentUrl> {
  */
 export const HLS_PLAYLIST_CACHE_TTL_MS = 1_000;
 
+/**
+ * A3.1's stale-while-the-breaker-is-open fallback (`renderCachedPlaylist`,
+ * `sessionRungs` below) is bounded to this long past the last render that
+ * actually confirmed the session live, and it exists for exactly one
+ * security reason: `DatabaseUnavailableError` means the `ended_at IS NULL`
+ * liveness/authorization check could not run, not that it ran and passed. A
+ * session can legitimately end (the write commits, `renderSignedPlaylist`
+ * would now 404) and the breaker can then open for an unrelated reason on
+ * the very next poll; without a bound, that poll would keep re-serving the
+ * pre-end body forever, and a viewer who should have lost access the moment
+ * the session ended keeps a working stream for as long as the outage lasts
+ * and their presigned segment URLs remain valid — minutes, on this
+ * deployment's own TTLs. Bounding it to 30s (this codebase's own live-window
+ * size — see `EGRESS_LIVE_WINDOW_SEGMENTS`/`hls-live-window.ts`) rides out
+ * the pool-queue and single-slow-probe blips this breaker is tuned to
+ * recover from within its own grace/cooldown windows, while a real,
+ * sustained outage degrades to the honest `database_unavailable` response
+ * within half a minute rather than serving a possibly-revoked stream
+ * indefinitely.
+ */
+export const STALE_ON_BREAKER_MAX_MS = 30_000;
+
 interface CachedPlaylist {
   /** Resolved body, once the render finished. */
   body?: string;
@@ -314,11 +336,16 @@ async function renderCachedPlaylist(
       // ended) must still 404, or a stale window would go on being served
       // for a stream that is actually over — the one behaviour the comment
       // on `buildSignedPlaylist` above promises callers.
-      if (error instanceof DatabaseUnavailableError && cached?.body !== undefined) {
+      if (
+        error instanceof DatabaseUnavailableError &&
+        cached?.body !== undefined &&
+        now - cached.at <= STALE_ON_BREAKER_MAX_MS
+      ) {
         // Left at the cached `at`, not refreshed to `now`: the entry still
         // reads as stale, so the very next poll tries a fresh render rather
         // than being stuck on this fallback until the TTL logic forgets it
-        // was ever a fallback.
+        // was ever a fallback, and the `STALE_ON_BREAKER_MAX_MS` bound above
+        // still measures from the same, real last-confirmed-live instant.
         playlistCache.set(key, { body: cached.body, at: cached.at });
         return cached.body;
       }
@@ -680,7 +707,11 @@ async function sessionRungs(
       // keeps the master playlist (and therefore every rendition it points
       // at) answering through a DB blip instead of 503ing viewers who are
       // mid-ladder-switch.
-      if (error instanceof DatabaseUnavailableError && cached?.rungs !== undefined) {
+      if (
+        error instanceof DatabaseUnavailableError &&
+        cached?.rungs !== undefined &&
+        now - cached.at <= STALE_ON_BREAKER_MAX_MS
+      ) {
         rungCache.set(key, { rungs: cached.rungs, at: cached.at });
         return cached.rungs;
       }

@@ -266,14 +266,25 @@ safety are checked by two different endpoints instead of one overloaded one.
 
 **Status: in PR** (branch `feat/health-decoupled-from-db`, restarts-api).
 `/health` is process liveness only; a small circuit breaker in
-`server/src/db.ts` (`server/src/lib/db-breaker.ts`) fast-rejects queries with
-`DatabaseUnavailableError` while open (`DB_BREAKER=off` to roll back), and the
-HTTP chokepoints in `api/index.ts` turn that into a 503 with `Retry-After: 5`
-and `{ error: "database_unavailable" }`; the HLS playlist proxy and its rung
-list keep serving their last rendered body/list through an open breaker; a
-chat send gets `message-rejected` with reason `database-unavailable`
-(retriable) instead of a silent drop; `deploy-api-fly.yml`'s post-deploy
-verification now also curls `/ready`, per the tension noted above.
+`server/src/db.ts` (`server/src/lib/db-breaker.ts`) fast-rejects `pool.query`,
+`pool.connect()` and every `PoolClient.query()` (transactions included) with
+`DatabaseUnavailableError` while open **or half-open** (`DB_BREAKER=off` to
+roll back), probed on its own connection so the probe itself cannot occupy
+the pool capacity it is protecting; the HTTP chokepoints in `api/index.ts`
+turn that into a 503 with `Retry-After: 5` and `{ error: "database_unavailable" }`;
+the HLS playlist proxy and its rung list keep serving their last rendered
+body/list through an open breaker, bounded to `STALE_ON_BREAKER_MAX_MS` (30s)
+past the last confirmed-live render so a session that ended right as the
+breaker opened cannot go on being served for a whole outage; a chat send
+gets `message-rejected` with reason `database-unavailable` (retriable) when
+the failure is before creation, and still a real error afterward so a
+duplicate is never invited; `deploy-api-fly.yml`'s post-deploy verification
+now also curls `/ready`, placed after the worker deploy so a readiness
+failure cannot leave the two on different images. A first Farol pass (1/5)
+caught four of those five refinements — half-open admitting ordinary
+traffic, `connect()`/`PoolClient` bypassing the guard entirely, the HLS
+fallback having no bound, and the chat wrapper covering post-creation
+failures too — all fixed in the same PR before merge.
 
 **A3.2 - PgBouncer in transaction mode on the API box(es).** Raises the
 effective connection ceiling by multiplexing many short queries onto fewer

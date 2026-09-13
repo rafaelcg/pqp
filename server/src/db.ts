@@ -49,8 +49,77 @@ export function isDbBreakerEnabled(): boolean {
   return raw !== "off" && raw !== "false" && raw !== "0";
 }
 
+/**
+ * The breaker's own connection, deliberately NOT `getPool()`. Two reasons,
+ * both from a first review of this change:
+ *
+ *  - If the probe drew from the app pool, it would have to go through
+ *    `guardPoolQueries` below like every other query, and during `half-open`
+ *    that guard MUST reject ordinary application queries while still letting
+ *    the one recovery trial through — which needs some way to tell "this is
+ *    the breaker's own probe" from "this is a request". A private, ungated
+ *    connection sidesteps that distinction entirely: the guard can reject
+ *    unconditionally whenever the breaker is not `closed`, full stop.
+ *  - A stalled Postgres does not make a query fail instantly; `pg` has no
+ *    query cancellation this version can use (no `AbortSignal` support), so
+ *    a probe that times out client-side can still be running server-side.
+ *    On the shared pool that is a checked-out connection an application
+ *    request cannot use; on this dedicated one it only ever blocks the NEXT
+ *    probe tick, which is bounded by `statement_timeout`/`query_timeout`
+ *    below rather than accumulating pool pressure during the exact outage
+ *    the breaker exists to contain.
+ *
+ * Lazily connected, dropped and reconnected on any error — a connection that
+ * has seen an error is in an unknown state and must not be reused silently.
+ */
+let probeClient: pg.Client | null = null;
+
+async function probeConnection(): Promise<void> {
+  if (!probeClient) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error("DATABASE_URL is required");
+    }
+    const client = new pg.Client({
+      connectionString,
+      // Bounded independently of the app pool's own timeouts: this
+      // connection exists only to answer "is Postgres reachable, right
+      // now", so it must fail fast rather than inherit the pool's patience.
+      connectionTimeoutMillis: 2_000,
+      statement_timeout: 1_000,
+      query_timeout: 1_000,
+      ...pgSslConfig(),
+    });
+    client.on("error", (error) => {
+      console.error("[db] breaker probe connection error:", error);
+      if (probeClient === client) {
+        probeClient = null;
+      }
+    });
+    await client.connect();
+    probeClient = client;
+  }
+  const client = probeClient;
+  try {
+    await client.query("SELECT 1");
+  } catch (error) {
+    if (probeClient === client) {
+      probeClient = null;
+    }
+    void client.end().catch(() => {});
+    throw error;
+  }
+}
+
+/** Test/shutdown hook: drop the probe's own connection. */
+export async function closeDbBreakerProbe(): Promise<void> {
+  const client = probeClient;
+  probeClient = null;
+  await client?.end().catch(() => {});
+}
+
 const dbBreaker: DbBreaker = createDbBreaker({
-  probe: () => getPool().query("SELECT 1"),
+  probe: probeConnection,
   poolStats: () => currentDbBreakerPoolStats(),
   onStateChange: (next, previous) => {
     logEvent("db.breaker.stateChange", { from: previous, to: next });
@@ -101,6 +170,7 @@ export function dbBreakerStats(): DbBreakerStats {
 export function resetDbBreakerForTests(): void {
   stopDbBreakerSampler();
   dbBreaker.reset();
+  void closeDbBreakerProbe();
 }
 
 /**
@@ -125,34 +195,99 @@ function currentDbBreakerPoolStats(): { waiting: number } | null {
 }
 
 /**
- * Makes every call through `target.query` — however it was reached, `pool`
- * or `registry.ts`'s own imports, anything holding this exact instance —
- * fail fast while the breaker is open, instead of joining pg-pool's queue
- * and waiting out `connectionTimeoutMillis` one caller at a time. The
- * wrapper only intercepts; a query issued while the breaker is closed or
- * half-open is entirely unmodified, same object, same promise.
+ * Whether the pool wrapper should fast-reject right now: the breaker is
+ * enabled and not `closed`.
  *
- * `no-explicit-any`-clean on purpose: `pg.Pool.query` is a large overloaded
- * signature (this codebase only ever uses the promise form, `query(text,
- * params?)`, never the callback form), so the wrapper forwards through
- * `unknown` and the assignment back onto `target.query` is asserted rather
- * than structurally checked. Call sites are unaffected — `pool.query<T>(...)`
- * still type-checks against `pg.Pool`'s own declared (generic) signature,
- * because TypeScript resolves that from `pool`'s static type, not from
- * whatever function object happens to be sitting there at runtime.
+ * NOT `isOpen()`. A first review of this change correctly flagged that
+ * checking `isOpen()` alone let every ordinary request through during
+ * `half-open`, which is supposed to be a single recovery TRIAL — with the
+ * pool wrapper unguarded there, a still-broken database would let a whole
+ * burst of application queries queue or hang again the moment the cooldown
+ * elapsed, instead of only the breaker's own probe. That is safe to do
+ * unconditionally now that the probe runs on its own connection
+ * (`probeConnection` above) rather than through this pool at all: nothing
+ * that reaches `guardPoolQueries`'s wrapped methods is ever the breaker
+ * checking itself, so `half-open` can reject everything here with no risk
+ * of the breaker rejecting its own recovery attempt.
  */
-function guardPoolQueries(target: pg.Pool): void {
-  const original = target.query.bind(target) as unknown as (
+function shouldRejectDbCall(): boolean {
+  return isDbBreakerEnabled() && dbBreaker.state() !== "closed";
+}
+
+/**
+ * Makes every call through `target.query`, `target.connect()` and the
+ * `PoolClient.query` of whatever `connect()` hands back — however it was
+ * reached, `pool` or `registry.ts`'s own imports, a one-off query or a
+ * transaction acquired for `BEGIN`/`COMMIT` — fail fast while the breaker is
+ * open or half-open, instead of joining pg-pool's queue and waiting out
+ * `connectionTimeoutMillis` one caller at a time.
+ *
+ * BOTH HALVES MATTER. A first review of this change found that only
+ * `target.query` was wrapped: every transactional write in this codebase
+ * (`server/src/services/*.ts`, `getPool().connect()` then `client.query(...)`
+ * for `BEGIN`/`COMMIT`) went straight around it, so exactly the writes this
+ * change was meant to protect — the ones most likely to be mid-flight when a
+ * pool empties — still queued or hung. `connect()` itself is guarded too,
+ * not just the client it returns: checking out a connection from a
+ * saturated or dead pool is the failure this whole change exists to avoid,
+ * and letting `connect()` through only to reject the first `query()` on the
+ * client it returned would still pay that cost.
+ *
+ * The wrapper only intercepts; a call issued while the breaker is closed is
+ * entirely unmodified, same object, same promise.
+ *
+ * `no-explicit-any`-clean on purpose: `pg.Pool.query` and `PoolClient.query`
+ * are large overloaded signatures (this codebase only ever uses the promise
+ * form, `query(text, params?)`, never the callback form), so the wrapper
+ * forwards through `unknown` and the assignment back onto the object's
+ * `query`/`connect` property is asserted rather than structurally checked.
+ * Call sites are unaffected — `pool.query<T>(...)` still type-checks against
+ * `pg.Pool`'s own declared (generic) signature, because TypeScript resolves
+ * that from the variable's static type, not from whatever function object
+ * happens to be sitting there at runtime.
+ */
+function guardQueryMethod(
+  target: { query: (...args: unknown[]) => unknown },
+): void {
+  const original = target.query.bind(target) as (
     ...args: unknown[]
   ) => Promise<unknown>;
   const guarded = (...args: unknown[]): Promise<unknown> => {
-    if (isDbBreakerEnabled() && dbBreaker.isOpen()) {
+    if (shouldRejectDbCall()) {
       dbBreaker.noteRejected();
       return Promise.reject(new DatabaseUnavailableError());
     }
     return original(...args);
   };
-  target.query = guarded as unknown as pg.Pool["query"];
+  (target as { query: unknown }).query = guarded;
+}
+
+function guardPoolQueries(target: pg.Pool): void {
+  guardQueryMethod(target as unknown as { query: (...args: unknown[]) => unknown });
+
+  const originalConnect = target.connect.bind(target) as (
+    ...args: unknown[]
+  ) => Promise<pg.PoolClient>;
+  const guardedConnect = async (...args: unknown[]): Promise<pg.PoolClient> => {
+    if (shouldRejectDbCall()) {
+      dbBreaker.noteRejected();
+      throw new DatabaseUnavailableError();
+    }
+    const client = await originalConnect(...args);
+    // Guarded once per checkout. A client returned by `connect()` is reused
+    // across every query in its transaction, so this covers `BEGIN`,
+    // whatever runs between it and `COMMIT`/`ROLLBACK`, and both of those.
+    // Defensive on `client` itself: the callback overload of `pg.Pool.connect`
+    // resolves this wrapper's `await` to `undefined` rather than a client
+    // (the callback receives it instead), and this codebase's own call sites
+    // never use that form, but this guard must never be the thing that turns
+    // an already-unusual result into a crash of its own.
+    if (client) {
+      guardQueryMethod(client as unknown as { query: (...args: unknown[]) => unknown });
+    }
+    return client;
+  };
+  (target as unknown as { connect: unknown }).connect = guardedConnect;
 }
 
 /**
@@ -222,6 +357,7 @@ export async function closePool(): Promise<void> {
   // is being torn down.
   clearPoolStats();
   await current?.end().catch(() => {});
+  await closeDbBreakerProbe();
 }
 
 export async function initDb(): Promise<void> {
