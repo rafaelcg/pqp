@@ -2,6 +2,8 @@
 
 Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.md). Roadmap checklist: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
+**Open work (13 Sep 2026):** screen-share audio echo, PR #537, branch `feat/screen-share-echo`. Code and staging are up. The hearing is a Windows 11 box (build ≥ 22000). If this chat is on that PC, start at [`plans/SCREEN_SHARE_AUDIO_ECHO.md`](./plans/SCREEN_SHARE_AUDIO_ECHO.md). Do not merge until the probe rows are on the PR.
+
 ## Product
 
 **pqp** — open-source Discord-like voice + text chat. Hosted twin aimed at **pqp.gg**; self-host is an independent copy (own URL, DB, Clerk).

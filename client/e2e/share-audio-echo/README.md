@@ -1,5 +1,8 @@
 # Share-audio echo harness
 
+Windows takeover (what to run, what to paste on PR #537):
+[`docs/plans/SCREEN_SHARE_AUDIO_ECHO.md`](../../../docs/plans/SCREEN_SHARE_AUDIO_ECHO.md).
+
 On-demand. Not `pnpm e2e`. Not CI. Same idea as the bandwidth harness: print
 numbers from a real capture, then PASS/FAIL.
 
