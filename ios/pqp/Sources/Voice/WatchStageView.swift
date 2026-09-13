@@ -50,10 +50,22 @@ struct WatchStageView: View {
     /// A fresh `attach()` does NOT reset the budget by itself anymore: a
     /// replacement item that fails again immediately must still count
     /// against `WatchFailureRecovery.maxAttempts`, or a failure loop never
-    /// reaches `giveUp`. The watchdog clears it once THIS attach is seen
-    /// playing, which is the only signal that the replacement actually
-    /// works.
+    /// reaches `giveUp`. The watchdog clears it only once THIS attach has
+    /// held `.readyToPlay` and an advancing playhead for
+    /// `recoveryConfirmTicks` straight seconds, which is the only signal
+    /// that the replacement is not about to fail again in the next breath.
     @State private var recoveryClearedAttachedAt: Date?
+    /// Consecutive watchdog ticks (one per second) this attach has spent
+    /// confirmed healthy. Reset to zero the moment a tick is not, so a
+    /// flicker (ready for one second, failed the next) never accumulates
+    /// toward the threshold across two different unhealthy stretches.
+    @State private var healthyPlaybackTicks = 0
+    /// Straight seconds of confirmed playback before the recovery budget is
+    /// considered proven, not merely started. Three ticks: long enough that
+    /// a replacement item still holding together after a couple of seconds
+    /// is actually different from the one that just failed, short enough
+    /// that a real recovery is not made to look slower than it is.
+    private static let recoveryConfirmTicks = 3
     @State private var isMinimised = false
 
     /// What the master playlist advertised for THIS broadcast, and how far
@@ -227,11 +239,19 @@ struct WatchStageView: View {
             let status = player.timeControlStatus
             isPlaying = status == .playing || player.rate > 0
             chrome.tick(playing: isPlaying, at: now)
-            // The budget clears once, the first tick this attach is actually
-            // playing, not on attach itself, so a replacement item that
-            // fails again right away still spends from the same budget as
-            // the failure that produced it.
-            if isPlaying, let attached, recoveryClearedAttachedAt != attached.attachedAt {
+            // The budget clears only once THIS attach has held
+            // `.readyToPlay` and `.playing` for `recoveryConfirmTicks`
+            // straight seconds, not on attach itself and not on the first
+            // healthy-looking tick: a replacement item that fails again a
+            // second later must still spend from the same budget as the
+            // failure that produced it, or the three-attempt cap is never
+            // reached. Any tick that is not confirmed healthy resets the
+            // streak, so two short healthy stretches never add up.
+            let confirmedHealthyTick = item.status == .readyToPlay && isPlaying
+            healthyPlaybackTicks = confirmedHealthyTick ? healthyPlaybackTicks + 1 : 0
+            if let attached,
+               healthyPlaybackTicks >= Self.recoveryConfirmTicks,
+               recoveryClearedAttachedAt != attached.attachedAt {
                 recovery.reset()
                 recoveryClearedAttachedAt = attached.attachedAt
             }
@@ -708,7 +728,8 @@ struct WatchStageView: View {
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
         // NOT `recovery.reset()` here: this attach is unproven until the
-        // watchdog sees it actually play. See `recoveryClearedAttachedAt`.
+        // watchdog confirms it. See `recoveryClearedAttachedAt`.
+        healthyPlaybackTicks = 0
         behindLive = false
         delaySeconds = nil
         effectiveLines = nil
@@ -933,6 +954,7 @@ struct WatchStageView: View {
         edge = WatchLiveEdge()
         recovery.reset()
         recoveryClearedAttachedAt = nil
+        healthyPlaybackTicks = 0
         ladder = .empty
         behindLive = false
         delaySeconds = nil

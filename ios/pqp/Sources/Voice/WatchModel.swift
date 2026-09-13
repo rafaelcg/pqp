@@ -108,12 +108,14 @@ final class WatchModel {
     /// Whether a stream has been seen at all during this visit. What separates
     /// `idle` from `ended`.
     private var sawStream = false
-    /// Bumped on every `applyStream`, wire or refetch alike. `refreshLive`
-    /// reads it before its network call and compares after: if a socket
-    /// frame applied in between, that frame is newer than anything an HTTP
-    /// response started earlier can carry, so the response is discarded
-    /// rather than overwriting a token the socket has already superseded.
-    private var streamGeneration = 0
+    /// Bumped on every socket-delivered stream frame (`channel-live`,
+    /// `voice-stream`) — and ONLY those, never on `refreshLive`'s own write.
+    /// `refreshLive` snapshots this before its GET and compares after: a
+    /// socket delivers a fresher token strictly faster than an HTTP
+    /// round-trip this server itself serves, so if the count moved while the
+    /// GET was in flight, the socket already said something newer and the
+    /// GET's answer is discarded rather than overwriting it.
+    private var socketGeneration = 0
 
     // MARK: - Lifecycle
 
@@ -199,7 +201,7 @@ final class WatchModel {
      */
     func refreshLive() async throws -> LiveHlsStream? {
         guard let channelId, let session else { return nil }
-        let requestedGeneration = streamGeneration
+        let requestedGeneration = socketGeneration
         let state: ChannelLiveState
         do {
             state = try await session.api.get("/api/channels/\(channelId)/live")
@@ -218,7 +220,7 @@ final class WatchModel {
         // necessarily fresher than a response an HTTP request started
         // before it. Drop this one rather than reattaching a token, or an
         // "ended", the socket has already superseded.
-        guard requestedGeneration == streamGeneration else { return nil }
+        guard requestedGeneration == socketGeneration else { return nil }
         participants = state.participants
         watching = state.watching
         applyStream(state.stream)
@@ -232,6 +234,7 @@ final class WatchModel {
         case .channelLive(let id, let stream, let watching):
             guard id == channelId else { return }
             self.watching = watching
+            socketGeneration &+= 1
             applyStream(stream)
 
         // The room's own copy. Only reaches a socket with a seat, so it is
@@ -239,6 +242,7 @@ final class WatchModel {
         // and the model is still alive; it carries no headcount.
         case .voiceStream(let id, let stream):
             guard id == channelId else { return }
+            socketGeneration &+= 1
             applyStream(stream)
 
         // A NEW SOCKET KNOWS NOTHING ABOUT THIS VIEWER. The audience is a set
@@ -257,7 +261,6 @@ final class WatchModel {
     }
 
     private func applyStream(_ next: LiveHlsStream?) {
-        streamGeneration &+= 1
         stream = next
         if next != nil { sawStream = true }
         phase = Self.phase(stream: next, sawStream: sawStream)
