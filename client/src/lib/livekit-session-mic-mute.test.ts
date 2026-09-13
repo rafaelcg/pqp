@@ -64,12 +64,27 @@ const unpublishCalls: LocalAudioTrack[] = [];
 /** Set from a test to make the next `publishTrack` reject, as an unmet grant does. */
 let failNextPublish = false;
 
+/** Set from a test to make the next `unpublishTrack` reject. */
+let failNextUnpublish = false;
+
+/** Set from a test to hold the next `publishTrack` call in flight until released. */
+let publishGate: Promise<void> | null = null;
+
 class FakeRoom {
   state = "connected";
   remoteParticipants = new Map<string, unknown>();
   handlers = new Map<string, (...args: unknown[]) => void>();
   localParticipant = {
     publishTrack: async (track: FakeTrack, options: { source?: string } = {}) => {
+      // Consumed on read, not just checked: a gate set for ONE in-flight
+      // call must not also hold up a second `publish()` that starts and
+      // completes while the first is still pending — that concurrency is
+      // exactly what the "replaced while in flight" test below depends on.
+      const gate = publishGate;
+      publishGate = null;
+      if (gate) {
+        await gate;
+      }
       if (failNextPublish) {
         failNextPublish = false;
         throw new Error("not allowed yet");
@@ -78,6 +93,19 @@ class FakeRoom {
     },
     unpublishTrack: async (track: LocalAudioTrack) => {
       unpublishCalls.push(track);
+      if (failNextUnpublish) {
+        failNextUnpublish = false;
+        throw new Error("SFU unreachable");
+      }
+      // The real `unpublishTrack`: no publication is found (and nothing is
+      // stopped) unless `publishTrack` for this exact object already
+      // resolved — that gap is what the "still in flight" race depends on.
+      const isRegistered = published.some(
+        (p) => (p.track as unknown as LocalAudioTrack) === track,
+      );
+      if (!isRegistered) {
+        return;
+      }
       // The real `unpublishTrack` stops the track by default
       // (`stopOnUnpublish` defaults to true) whenever it finds a live
       // publication for it.
@@ -156,6 +184,7 @@ interface FakeTrack {
   id: string;
   enabled: boolean;
   stopped: boolean;
+  readyState: "live" | "ended";
   getConstraints: () => Record<string, never>;
   applyConstraints: () => Promise<void>;
   clone: () => FakeTrack;
@@ -176,6 +205,7 @@ function makeTrack(id: string, enabled: boolean): FakeTrack {
     id,
     enabled,
     stopped: false,
+    readyState: "live",
     getConstraints: () => ({}),
     applyConstraints: async () => {},
     // A real `MediaStreamTrack.clone()`: a new object, independent
@@ -188,6 +218,7 @@ function makeTrack(id: string, enabled: boolean): FakeTrack {
     },
     stop: () => {
       self.stopped = true;
+      self.readyState = "ended";
     },
     addEventListener: (type, listener) => {
       if (!listeners.has(type)) {
@@ -198,7 +229,12 @@ function makeTrack(id: string, enabled: boolean): FakeTrack {
     removeEventListener: (type, listener) => {
       listeners.get(type)?.delete(listener);
     },
+    // A real "ended" (device unplugged, permission revoked) sets
+    // `readyState` before the event fires, which is what lets code that
+    // checks the flag *after* the fact (rather than only listening) notice
+    // an event it missed.
     fireEnded: () => {
+      self.readyState = "ended";
       for (const listener of Array.from(listeners.get("ended") ?? [])) {
         listener();
       }
@@ -243,7 +279,18 @@ beforeEach(() => {
   unpublishCalls.length = 0;
   clones.length = 0;
   failNextPublish = false;
+  failNextUnpublish = false;
+  publishGate = null;
 });
+
+/** Holds the next `publishTrack` call until the returned function is called. */
+function gatePublish(): () => void {
+  let release!: () => void;
+  publishGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return release;
+}
 
 describe("the standalone microphone publication while a watch-party mix is live", () => {
   it("does not reopen when the caller re-enables its own copy of the track", async () => {
@@ -346,5 +393,86 @@ describe("the standalone microphone publication's clone lifecycle", () => {
     // A stray `setMuted` after the source has ended must not resurrect
     // anything or throw — there is no live publication left to touch.
     await expect(sfu.setMuted(true)).resolves.toBeUndefined();
+  });
+
+  it("does not strand an orphaned publication when the source ends while publishTrack is still in flight", async () => {
+    const sfu = await session();
+    const original = fakeMicTrack("mic");
+    const release = gatePublish();
+
+    const publishPromise = sfu.publish(micStream(original));
+    // The source ends before `publishTrack` has resolved and registered a
+    // publication for the clone: listening for "ended" from the very start
+    // of `publish()` would try to `unpublishTrack` a publication that does
+    // not exist yet (a no-op) and null out `published` regardless — so by
+    // the time `publishTrack` DOES resolve below, this call would have gone
+    // on to leave a live publication in the room with nothing left
+    // referencing it to ever clean it up.
+    original.fireEnded();
+    expect(unpublishCalls).toHaveLength(0);
+
+    release();
+    await publishPromise;
+
+    expect(published).toHaveLength(1);
+    // The already-ended source must be noticed and cleaned up the moment
+    // `publish()` can safely do it, not silently left running.
+    expect(unpublishCalls).toHaveLength(1);
+    expect(clones[0]!.stopped).toBe(true);
+  });
+
+  it("unpublishes itself if another publish() wins the shared pointer while it is still in flight", async () => {
+    const sfu = await session();
+    const trackA = fakeMicTrack("mic-a");
+    const trackB = fakeMicTrack("mic-b");
+    const release = gatePublish();
+
+    // A's publishTrack is now blocked. A second publish — a device swap
+    // landing mid-retry, or a fast mute/unmute cycle — runs to completion
+    // in the meantime and becomes the room's current publication.
+    const publishA = sfu.publish(micStream(trackA));
+    await sfu.publish(micStream(trackB));
+    expect(clones).toHaveLength(2);
+    const cloneA = clones[0]!;
+    const cloneB = clones[1]!;
+
+    release();
+    await publishA;
+
+    // A's publishTrack DID succeed once unblocked — LiveKit now holds a
+    // real, live sender for cloneA — but B already won the shared pointer
+    // first. A has to tear its own publication down rather than leave two
+    // live microphones on the wire with only one of them tracked. (B's own
+    // opening `if (published) unpublishTrack(...)` also targets cloneA
+    // here, harmlessly, since A had not registered a publication yet at
+    // that point — the real SDK no-ops on an unregistered track too.)
+    expect(published).toHaveLength(2);
+    expect(unpublishCalls.length).toBeGreaterThanOrEqual(1);
+    expect(
+      unpublishCalls.every((t) => t.mediaStreamTrack === cloneA),
+    ).toBe(true);
+    expect(cloneA.stopped).toBe(true);
+    // B's publication is left alone.
+    expect(cloneB.stopped).toBe(false);
+  });
+
+  it("still stops the clone when the source ends and unpublishTrack rejects", async () => {
+    const sfu = await session();
+    const original = fakeMicTrack("mic");
+    await sfu.publish(micStream(original));
+    const clone = clones[0]!;
+
+    failNextUnpublish = true;
+    original.fireEnded();
+    // `onSourceEnded`'s cleanup runs in a detached async IIFE, not inline
+    // with `fireEnded()` — give its rejected `unpublishTrack` a turn to
+    // settle before asserting on its result.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(unpublishCalls).toHaveLength(1);
+    // The unpublish rejected, so LiveKit's own stop-on-success never ran —
+    // `publish()` has to stop the clone itself instead of losing the only
+    // handle to a publication that is still live on the SFU.
+    expect(clone.stopped).toBe(true);
   });
 });
