@@ -166,7 +166,6 @@ export function HlsWatchPlayer({
   cameraSrc = null,
   cameraHasVideo = true,
   cameraHasVoiceAudio = false,
-  delaySeconds = 20,
   className,
   videoRef,
   onDoubleClick,

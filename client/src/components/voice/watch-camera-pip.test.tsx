@@ -1,6 +1,50 @@
+// @vitest-environment jsdom
+import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WatchCameraPip } from "./watch-camera-pip";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+  true;
+
+/**
+ * A fake `hls.js` good enough to drive the attach effect to
+ * `Hls.Events.MANIFEST_PARSED`, which is the one thing `attachOnce` needs
+ * before it calls `video.play()`. Nothing here decodes anything — the real
+ * decode path is exercised by hand, same as `hls-watch-player.tsx`'s own
+ * sibling code has no jsdom coverage for it either.
+ */
+vi.mock("hls.js", () => {
+  class FakeHls {
+    static isSupported() {
+      return true;
+    }
+    static Events = { ERROR: "hlsError", MANIFEST_PARSED: "hlsManifestParsed" };
+    private listeners = new Map<string, Array<() => void>>();
+    on(event: string, cb: () => void) {
+      const list = this.listeners.get(event) ?? [];
+      list.push(cb);
+      this.listeners.set(event, list);
+    }
+    loadSource() {
+      // no-op: this fake never actually fetches a manifest.
+    }
+    attachMedia() {
+      // Real hls.js parses the manifest asynchronously; a microtask is
+      // enough to keep this off the synchronous mount call stack.
+      queueMicrotask(() => {
+        for (const cb of this.listeners.get("hlsManifestParsed") ?? []) {
+          cb();
+        }
+      });
+    }
+    destroy() {
+      // no-op
+    }
+  }
+  return { default: FakeHls };
+});
 
 /**
  * THE STATIC SHAPE `LIVE_HLS_VOICE_TRACK` ADDS TO THE CORNER BOX.
@@ -59,5 +103,83 @@ describe("WatchCameraPip", () => {
     // The mic badge AND the volume slider both show: no camera, but the
     // voice is the whole point of this rung.
     expect(html).toContain('data-testid="watch-camera-pip-voice-volume"');
+  });
+});
+
+/**
+ * A Farol finding claimed a rejected unmuted autoplay permanently silences
+ * the voice track — the code already answers that with `blocked` and a
+ * "tap to hear" affordance (see the file doc), but nothing pinned it. This
+ * mounts the real component with a faked `hls.js` so the actual attach
+ * effect runs, rather than asserting on markup alone.
+ */
+describe("WatchCameraPip: rejected unmuted autoplay", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let playMock: ReturnType<typeof vi.fn>;
+  let originalPlay: typeof HTMLMediaElement.prototype.play;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    originalPlay = HTMLMediaElement.prototype.play;
+    playMock = vi.fn();
+    HTMLMediaElement.prototype.play = playMock as unknown as typeof HTMLMediaElement.prototype.play;
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    HTMLMediaElement.prototype.play = originalPlay;
+  });
+
+  it("shows tap-to-hear when the browser refuses the automatic unmuted play, and a click recovers it", async () => {
+    // The automatic attempt right after the manifest parses is refused —
+    // exactly what a tab opened straight into cinema fullscreen with no
+    // prior gesture on the document produces.
+    playMock.mockRejectedValueOnce(
+      new DOMException("blocked", "NotAllowedError"),
+    );
+    // The click-driven retry: a `play()` called from inside a click handler
+    // is not subject to the autoplay policy at all, so it always succeeds
+    // where the automatic one could not.
+    playMock.mockResolvedValueOnce(undefined);
+
+    act(() => {
+      root.render(
+        <WatchCameraPip
+          src="https://example.com/cam.m3u8"
+          hasVoiceAudio
+          className="h-full w-full"
+          onFrame={() => {}}
+        />,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(playMock).toHaveBeenCalledTimes(1);
+    });
+
+    const button = await vi.waitFor(() => {
+      const found = container.querySelector<HTMLButtonElement>(
+        '[data-testid="watch-camera-pip-tap-to-hear"]',
+      );
+      expect(found).not.toBeNull();
+      return found;
+    });
+
+    act(() => {
+      button?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(playMock).toHaveBeenCalledTimes(2);
+      expect(
+        container.querySelector('[data-testid="watch-camera-pip-tap-to-hear"]'),
+      ).toBeNull();
+    });
   });
 });
