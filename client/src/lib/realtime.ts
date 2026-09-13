@@ -8,6 +8,7 @@ import type {
 // into a transport.
 import { translateMessage } from "@/lib/i18n";
 import { getWsUrl } from "@/lib/utils";
+import { drainJitterMs } from "@/lib/reconnect-jitter";
 
 type MessageHandler = (message: ChatServerMessage | VoiceSignalingMessage) => void;
 type TokenProvider = () => Promise<string | null>;
@@ -64,7 +65,46 @@ const WIRE_CAPS = [
 const PING_INTERVAL_MS = 20_000;
 const MAX_MISSED_PONGS = 2;
 const RECONNECT_BASE_DELAY_MS = 1_000;
+const RECONNECT_BACKOFF_FACTOR = 2;
 const RECONNECT_MAX_DELAY_MS = 30_000;
+// Close codes a deploy produces: 1001 is the drain's own close
+// (server/src/lib/drain.ts), 1006/1012 are what an outright process restart
+// looks like from the browser (abnormal close / service restart). Every open
+// tab sees one of these at nearly the same instant, so the FIRST reconnect
+// attempt after one gets the wider drainJitterMs() spread instead of the
+// tight backoff window — see docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md
+// item C7 and CLAUDE.md pitfall 10/11. A later attempt in the same backoff
+// sequence (the drain closed us again, or the retry itself failed) falls
+// through to the ordinary full-jitter backoff below.
+const DRAIN_CLOSE_CODES = new Set([1001, 1006, 1012]);
+
+/**
+ * Exponential backoff with full jitter (the AWS formula): a delay drawn
+ * uniformly from [0, min(cap, base * factor ** attempt)]. `attempt` is
+ * 0-based and counts failed reconnect attempts since the last successful
+ * `ready`.
+ */
+function backoffDelayMs(attempt: number): number {
+  const cap = Math.min(
+    RECONNECT_MAX_DELAY_MS,
+    RECONNECT_BASE_DELAY_MS * RECONNECT_BACKOFF_FACTOR ** attempt,
+  );
+  return Math.random() * cap;
+}
+
+/**
+ * The delay before the reconnect attempt numbered `attempt` (0-based). Only
+ * the very first attempt (`attempt === 0`) of a deploy-shaped close gets the
+ * wide drain spread; everything else — later attempts in the same sequence,
+ * and the first attempt after any other close reason (auth refused, a
+ * malformed WS URL, an ordinary 1000) — uses the standard backoff.
+ */
+export function reconnectDelayMs(attempt: number, closeCode?: number): number {
+  if (attempt === 0 && closeCode !== undefined && DRAIN_CLOSE_CODES.has(closeCode)) {
+    return drainJitterMs();
+  }
+  return backoffDelayMs(attempt);
+}
 // Bound the offline outbound queues so a long disconnect can't grow memory
 // without limit; overflow drops the oldest entries.
 const MAX_CHAT_QUEUE = 200;
@@ -220,28 +260,28 @@ export function createRealtimeTransport(): RealtimeTransport {
     }, PING_INTERVAL_MS);
   }
 
-  function scheduleReconnect(immediate = false) {
+  /**
+   * `closeCode` is passed straight through to `reconnectDelayMs` — only the
+   * caller that just saw a close event has one; the auth-refused and
+   * malformed-URL paths below have nothing to pass and get ordinary backoff.
+   */
+  function scheduleReconnect(closeCode?: number) {
     if (manualClose || reconnectTimer) {
       return;
     }
     setPendingStatus();
-    const delay = immediate
-      ? 0
-      : Math.min(
-          RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt,
-          RECONNECT_MAX_DELAY_MS,
-        );
-    if (!immediate) {
-      reconnectAttempt += 1;
-    }
+    const delay = reconnectDelayMs(reconnectAttempt, closeCode);
+    reconnectAttempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       void connectSocket();
-    }, delay + (immediate ? 0 : Math.random() * 500));
+    }, delay);
   }
 
   function handleOnline() {
-    // Network came back: skip the remaining backoff and retry now.
+    // Network came back: this is the user's own connectivity returning, not
+    // a deploy — skip the remaining backoff and retry right away rather than
+    // waiting out a delay sized for a thundering herd that isn't this tab.
     if (!manualClose && reconnectTimer) {
       clearReconnectTimer();
       void connectSocket();
@@ -301,7 +341,7 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
     setPendingStatus();
     errorHandler?.(translateMessage("connection.reconnecting"));
-    scheduleReconnect(closeCode === 1001);
+    scheduleReconnect(closeCode);
   }
 
   async function connectSocket() {

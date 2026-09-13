@@ -165,6 +165,13 @@ vi.mock("livekit-client", () => ({
   ConnectionState: { Disconnected: "disconnected", Connected: "connected" },
   VideoPreset: FakeVideoPreset,
   VideoQuality: { LOW: 0, MEDIUM: 1, HIGH: 2 },
+  // Real shape (nextRetryDelayInMs), never exercised in these tests — no
+  // reconnect scenario runs here, only `new DefaultReconnectPolicy()`.
+  DefaultReconnectPolicy: class {
+    nextRetryDelayInMs() {
+      return 0;
+    }
+  },
 }));
 
 vi.stubGlobal(

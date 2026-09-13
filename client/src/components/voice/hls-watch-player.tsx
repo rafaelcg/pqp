@@ -53,6 +53,7 @@ import {
   resolveLiveEdge,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
+import { drainJitterMs } from "@/lib/reconnect-jitter";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
@@ -677,6 +678,19 @@ export function HlsWatchPlayer({
     let cancelled = false;
     let hls: HlsHandle | null = null;
     let hlsFragmentLoaded = false;
+    // A restarted egress or an API blip stalls every open viewer's playlist
+    // at once, so the watchdog's "reconnect" decision below fires for the
+    // whole audience in the same instant — the same thundering-herd shape as
+    // a `/ws` deploy drain (CLAUDE.md pitfall 10/11), just against
+    // `GET /api/channels/:id/live`. Spread only that call, not the watchdog's
+    // own tick cadence (`STALL_TICK_MS`, unchanged below).
+    let reconnectJitterTimer: number | null = null;
+    const clearPendingReconnect = () => {
+      if (reconnectJitterTimer !== null) {
+        window.clearTimeout(reconnectJitterTimer);
+        reconnectJitterTimer = null;
+      }
+    };
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -728,6 +742,11 @@ export function HlsWatchPlayer({
         setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
         watch.onPlaying();
         reportSize();
+        // The stream recovered on its own (or the "recover" branch's seek
+        // worked) before a jittered reconnect from an earlier tick fired.
+        // That reconnect is now stale — cancel it rather than reloading a
+        // player that just came back (Farol review).
+        clearPendingReconnect();
       }
     };
     const onWaiting = () => {
@@ -762,10 +781,17 @@ export function HlsWatchPlayer({
         setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
       }
       if (decision === "dead") {
+        // The watchdog has given up outright; a reconnect still waiting out
+        // its jitter from an earlier tick would only fire into a dead player.
+        clearPendingReconnect();
         setPhase("dead");
         return;
       }
       if (decision === "recover") {
+        // This tick is handling the stall a different way (a local seek, not
+        // a reconnect); an earlier tick's still-pending reconnect would be a
+        // second, redundant response to the same stall.
+        clearPendingReconnect();
         const hls = hlsRef.current;
         console.warn(`[hls] stream stalled (${watch.lastReason}), recovering`);
         if (watch.lastReason === "fatal") {
@@ -785,8 +811,22 @@ export function HlsWatchPlayer({
         }
         return;
       }
+      if (reconnectJitterTimer !== null) {
+        // Already waiting out a jittered reconnect from an earlier tick of
+        // the SAME ongoing stall — let it run rather than stacking another
+        // (each tick re-evaluates the same "sequence-stuck" condition until
+        // it resolves, so without this guard a persistent stall would queue
+        // one reconnect per tick — Farol review).
+        return;
+      }
       console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
-      void reconnectRef.current();
+      reconnectJitterTimer = window.setTimeout(() => {
+        reconnectJitterTimer = null;
+        if (cancelled) {
+          return;
+        }
+        void reconnectRef.current();
+      }, drainJitterMs());
     }, STALL_TICK_MS);
 
     // A refused play() is a paused element behind the "loading" overlay
@@ -965,6 +1005,9 @@ export function HlsWatchPlayer({
       cancelled = true;
       window.clearInterval(authTokenTimer);
       window.clearInterval(stallTimer);
+      if (reconnectJitterTimer !== null) {
+        window.clearTimeout(reconnectJitterTimer);
+      }
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);

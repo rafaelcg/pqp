@@ -221,6 +221,13 @@ vi.mock("livekit-client", () => {
       this.isMuted = false;
     }
   }
+  // Real shape (nextRetryDelayInMs), never exercised in these tests — no
+  // reconnect scenario runs here, only `new DefaultReconnectPolicy()`.
+  class DefaultReconnectPolicy {
+    nextRetryDelayInMs() {
+      return 0;
+    }
+  }
   return {
     Room: FakeRoom,
     RoomEvent,
@@ -229,6 +236,7 @@ vi.mock("livekit-client", () => {
     ConnectionState: { Disconnected: "disconnected", Connected: "connected" },
     VideoPreset: FakePreset,
     VideoQuality: { LOW: 0, MEDIUM: 1, HIGH: 2 },
+    DefaultReconnectPolicy,
   };
 });
 

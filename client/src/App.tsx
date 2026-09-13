@@ -109,6 +109,7 @@ import {
 } from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
+import { uniformJitterMs } from "@/lib/reconnect-jitter";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
@@ -453,6 +454,29 @@ export type TokenResolver = (options?: {
 /** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
 const HEADER_ACTION_TILE =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
+
+/**
+ * A reconnect's message refetch (`transport.onReady`, `reconnected` branch)
+ * is spread across this window instead of firing the instant `ready` lands —
+ * same reasoning as the WS reconnect itself (`reconnect-jitter.ts`): every
+ * open tab on the channel just reconnected in the same window, so an
+ * unstaggered refetch re-concentrates the herd.
+ *
+ * Deliberately NOT skipped by a "fetched recently" freshness check: `GET
+ * /api/channels/:id/messages` is this client's only way to learn about a
+ * message sent while the socket was down — rejoining a channel
+ * (`chat.resubscribe`) only re-subscribes to what is broadcast *after* that
+ * point (`join-channel` in `server/src/ws/chat.ts` carries no history replay)
+ * — so treating "fetched a few seconds ago" as proof nothing arrived since
+ * would drop messages sent in that gap until some unrelated refresh caught
+ * them. What IS safe to skip is a second, overlapping request for the SAME
+ * channel: a pending timer or an in-flight fetch already covers whatever a
+ * later reconnect event would ask for (tracked per channel, not with one
+ * shared flag — a slow fetch for channel A must never block channel B's
+ * refetch after a mid-outage switch). See
+ * `scheduleReconnectMessagesRefetch` below.
+ */
+const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
 
 interface AppProps {
   devBypass?: boolean;
@@ -2620,6 +2644,115 @@ function MainAppContent({
 
   useEffect(() => {
     let cancelled = false;
+    // The reconnect handler's message refetch (onReady below) is jittered
+    // and coalesced, PER CHANNEL: a shared "is anything pending" flag would
+    // let a slow fetch for one channel silently swallow a needed refetch for
+    // a different one after a mid-outage channel switch (Farol review, round
+    // 2). `again` covers the other gap that review found: a second reconnect
+    // landing while a fetch is already on the wire (a flap) can't be
+    // answered by that in-flight request, whose snapshot may predate it, so
+    // it is not simply dropped — one more refetch runs right after this one
+    // finishes.
+    const reconnectMessagesRefetchState = new Map<
+      string,
+      {
+        timer: ReturnType<typeof setTimeout> | null;
+        inFlight: boolean;
+        again: boolean;
+      }
+    >();
+
+    function getReconnectMessagesRefetchState(channelId: string) {
+      let state = reconnectMessagesRefetchState.get(channelId);
+      if (!state) {
+        state = { timer: null, inFlight: false, again: false };
+        reconnectMessagesRefetchState.set(channelId, state);
+      }
+      return state;
+    }
+
+    function scheduleReconnectMessagesRefetch(channelId: string) {
+      // Guards the `.finally()` retry path too (below): a fetch that was
+      // still in flight when this effect tore down must not schedule a
+      // fresh timer after the fact — cleanup already ran and nothing will
+      // ever clear that new one.
+      if (cancelled) {
+        return;
+      }
+      const state = getReconnectMessagesRefetchState(channelId);
+      if (state.inFlight) {
+        state.again = true;
+        return;
+      }
+      if (state.timer !== null) {
+        // Already queued for this channel — it will fetch a snapshot no
+        // older than the moment it actually runs, which covers this event
+        // too.
+        return;
+      }
+      // Spread the refetch itself: every open tab on this channel just
+      // reconnected within the same drain-jitter window (realtime.ts), so
+      // firing the HTTP request the instant `ready` lands would
+      // re-concentrate exactly the herd that window just spread out.
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        runReconnectMessagesRefetch(channelId, state);
+      }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
+    }
+
+    /**
+     * Drops `channelId`'s entry, but ONLY if `state` is still the object the
+     * map holds for it. `state` is a specific object this call's caller
+     * owns, passed down from `scheduleReconnectMessagesRefetch` rather than
+     * re-read from the map — so if that channel's slot has since moved on to
+     * a newer cycle (a fresh entry created after this one was already
+     * removed once), this stays a no-op instead of deleting state that
+     * belongs to that newer cycle (Farol review).
+     */
+    function dropReconnectMessagesRefetchStateIfCurrent(
+      channelId: string,
+      state: unknown,
+    ) {
+      if (reconnectMessagesRefetchState.get(channelId) === state) {
+        reconnectMessagesRefetchState.delete(channelId);
+      }
+    }
+
+    function runReconnectMessagesRefetch(
+      channelId: string,
+      state: { inFlight: boolean; again: boolean },
+    ) {
+      if (cancelled || selectedChannelIdRef.current !== channelId) {
+        // Nothing left for this channel's entry — drop it rather than keep a
+        // tiny idle record for every channel a long session ever reconnected
+        // on (Farol review: the map otherwise grows unbounded).
+        dropReconnectMessagesRefetchStateIfCurrent(channelId, state);
+        return;
+      }
+      state.inFlight = true;
+      void fetchMessages(channelId)
+        .then((page) => {
+          if (selectedChannelIdRef.current === channelId) {
+            chat.setMessages(page.messages, page.hasMore);
+            refresh();
+          }
+        })
+        .catch(() => {
+          // A flap that lands while this is in flight already sets `again`
+          // below regardless of outcome, so a failed fetch still gets
+          // retried; otherwise the next reconnect will.
+        })
+        .finally(() => {
+          state.inFlight = false;
+          if (state.again) {
+            state.again = false;
+            scheduleReconnectMessagesRefetch(channelId);
+          } else {
+            // Fully idle: no timer, not in flight, nothing else queued.
+            dropReconnectMessagesRefetchStateIfCurrent(channelId, state);
+          }
+        });
+    }
 
     async function init() {
       setBootstrapReady(false);
@@ -3180,16 +3313,7 @@ function MainAppContent({
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
-            void fetchMessages(channelId)
-              .then((page) => {
-                if (selectedChannelIdRef.current === channelId) {
-                  chat.setMessages(page.messages, page.hasMore);
-                  refresh();
-                }
-              })
-              .catch(() => {
-                // Next reconnect will retry.
-              });
+            scheduleReconnectMessagesRefetch(channelId);
           }
           return rejoin;
         });
@@ -3214,6 +3338,11 @@ function MainAppContent({
 
     return () => {
       cancelled = true;
+      for (const state of reconnectMessagesRefetchState.values()) {
+        if (state.timer !== null) {
+          clearTimeout(state.timer);
+        }
+      }
       voice.leave();
       transport.disconnect();
     };
