@@ -103,9 +103,17 @@ test("a new DM toasts, badges the row, and opens on click", async ({ browser }) 
   }
 
   // Opening it lands in the conversation and retires the card (criterion 16).
+  // The click lands on the big open button — the small dismiss X is a sibling
+  // in the same card, not a descendant, so a click centred on the whole card
+  // never risks it.
   await toast.click();
   await expect(anaPage).toHaveURL(new RegExp(`/app/dm/${conversation.channelId}`));
-  await expect(anaPage.getByText("bora terça?")).toBeVisible({ timeout: 10_000 });
+  // Scoped to the message log: the same words now also sit in the sidebar's
+  // own preview line (this PR's own feature), so a bare page-wide text match
+  // is ambiguous.
+  await expect(
+    anaPage.getByRole("log").getByText("bora terça?"),
+  ).toBeVisible({ timeout: 10_000 });
   await expect(toast).toHaveCount(0);
 
   // The row carries a stamp (a time, since it was today).
@@ -178,10 +186,16 @@ test("the X dismisses only that card, and a card disappears on its own after abo
   }
 
   await sendFrom(bia, convBia.channelId, "oi da bia");
+  // Opening and closing Bia's own context can steal the OS-level foreground
+  // window from Ana's page, which the toast's own tab-hidden freeze (§3.4)
+  // correctly reacts to — bring it back so the 6s countdown below is timed
+  // against a genuinely visible+focused tab, the same as a person would see.
+  await anaPage.bringToFront();
   const toastBia = anaPage.locator(`[data-dm-toast="${convBia.channelId}"]`);
   await expect(toastBia).toBeVisible({ timeout: 15_000 });
 
   await sendFrom(cid, convCid.channelId, "oi do cid");
+  await anaPage.bringToFront();
   const toastCid = anaPage.locator(`[data-dm-toast="${convCid.channelId}"]`);
   await expect(toastCid).toBeVisible({ timeout: 15_000 });
 
