@@ -2429,12 +2429,16 @@ function DirectMessagesSection() {
   const { t } = useTranslation();
   const state = useNotificationState();
   const [dmDetails, setDmDetails] = useState(false);
+  // Set the moment a person touches the switch, so the initial config fetch
+  // — which can resolve after that click — knows not to stomp a choice
+  // already in flight with whatever the server answered a moment earlier.
+  const touchedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     void getPushConfig()
       .then((config) => {
-        if (!cancelled) {
+        if (!cancelled && !touchedRef.current) {
           setDmDetails(config.dmDetails);
         }
       })
@@ -2448,6 +2452,7 @@ function DirectMessagesSection() {
   }, []);
 
   const toggleDmDetails = () => {
+    touchedRef.current = true;
     const next = !dmDetails;
     setDmDetails(next);
     void setPushDmDetails(next)

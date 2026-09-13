@@ -363,10 +363,9 @@ describe("dmSummarySchema", () => {
       ).toBe(false);
     });
 
-    it("is required (not optional) — a server that predates this ships null explicitly", () => {
-      expect(
-        dmSummarySchema.safeParse({ ...base }).success,
-      ).toBe(false);
+    it("is optional too — a server mid rolling-deploy that predates this field must still parse", () => {
+      const parsed = dmSummarySchema.parse({ ...base });
+      expect(parsed.lastMessage).toBeUndefined();
     });
   });
 });

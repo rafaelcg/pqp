@@ -82,22 +82,42 @@ export function DmToasts({
   const cardsRef = useRef(cards);
   cardsRef.current = cards;
   const expireTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keyed on `${channelId}:${token}`, not `channelId` alone: a dismiss and a
+  // fresh arrival for the same conversation can race within the same
+  // `LEAVE_MS` window, and two card instances sharing a channel id must not
+  // share one timer slot either — the second would clobber the first's.
   const removalTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
-  const dismiss = useCallback((channelId: string) => {
-    setCards((previous) => markToastLeaving(previous, channelId));
-    const existing = removalTimers.current.get(channelId);
+  const scheduleRemoval = useCallback((channelId: string, token: number) => {
+    const key = `${channelId}:${token}`;
+    const existing = removalTimers.current.get(key);
     if (existing) {
       clearTimeout(existing);
     }
     removalTimers.current.set(
-      channelId,
+      key,
       setTimeout(() => {
-        removalTimers.current.delete(channelId);
-        setCards((previous) => removeToastCard(previous, channelId));
+        removalTimers.current.delete(key);
+        setCards((previous) => removeToastCard(previous, channelId, token));
       }, LEAVE_MS),
     );
   }, []);
+
+  const dismiss = useCallback(
+    (channelId: string, token?: number) => {
+      setCards((previous) => markToastLeaving(previous, channelId, token));
+      // The token to schedule removal for is whichever instance is actually
+      // current when this runs, not a possibly-stale one the caller closed
+      // over — reading it off `cardsRef` keeps the two in step.
+      const current = cardsRef.current.find(
+        (card) => card.channelId === channelId && (token === undefined || card.token === token),
+      );
+      if (current) {
+        scheduleRemoval(channelId, current.token);
+      }
+    },
+    [scheduleRemoval],
+  );
 
   // The one timer for the whole stack: fires at the soonest `expiresAt` among
   // active (not paused, not already leaving) cards, starts their exit, then
@@ -114,6 +134,7 @@ export function DmToasts({
     }
     expireTimer.current = setTimeout(() => {
       const now = Date.now();
+      const due: Array<{ channelId: string; token: number }> = [];
       setCards((previous) => {
         let next: DisplayCard[] = previous;
         for (const card of previous) {
@@ -122,22 +143,15 @@ export function DmToasts({
             card.pausedRemainingMs === null &&
             card.expiresAt <= now
           ) {
-            next = markToastLeaving(next, card.channelId) as DisplayCard[];
-            const existing = removalTimers.current.get(card.channelId);
-            if (existing) {
-              clearTimeout(existing);
-            }
-            removalTimers.current.set(
-              card.channelId,
-              setTimeout(() => {
-                removalTimers.current.delete(card.channelId);
-                setCards((p) => removeToastCard(p, card.channelId));
-              }, LEAVE_MS),
-            );
+            next = markToastLeaving(next, card.channelId, card.token) as DisplayCard[];
+            due.push({ channelId: card.channelId, token: card.token });
           }
         }
         return next;
       });
+      for (const { channelId, token } of due) {
+        scheduleRemoval(channelId, token);
+      }
     }, Math.max(0, deadline));
     return () => {
       if (expireTimer.current) {
@@ -145,20 +159,29 @@ export function DmToasts({
         expireTimer.current = null;
       }
     };
-  }, [cards]);
+  }, [cards, scheduleRemoval]);
 
   // New arrivals: coalesce/position/cap is the pure module's job; the preview
   // text is attached here since it is not part of that stack math.
   useEffect(() => {
     return onActivityToast((toast: ActivityToast) => {
       const now = Date.now();
+      // A frame that slips in while the tab is hidden (the toast normally
+      // never fires then, but a visibilitychange and the frame's arrival can
+      // race) must not start an unfrozen countdown nobody is watching — it
+      // would burn its whole 6s before the tab is looked at again.
+      const hidden =
+        typeof document !== "undefined" && document.visibilityState === "hidden";
       setCards((previous) => {
-        const next = upsertToastCard(
+        let next = upsertToastCard(
           previous,
           { channelId: toast.channelId, count: toast.count, mentions: toast.mentions },
           now,
-        ) as DisplayCard[];
-        return next.map((card) =>
+        );
+        if (hidden) {
+          next = freezeToastCards(next, now);
+        }
+        return (next as DisplayCard[]).map((card) =>
           card.channelId === toast.channelId
             ? { ...card, preview: toast.preview, authorName: toast.authorName }
             : card,
@@ -198,7 +221,7 @@ export function DmToasts({
     return subscribeEscapeUnlessOverlay(() => {
       for (const card of cardsRef.current) {
         if (!card.leaving) {
-          dismiss(card.channelId);
+          dismiss(card.channelId, card.token);
         }
       }
     });
@@ -253,14 +276,18 @@ export function DmToasts({
     >
       {cards.map((card) => (
         <ToastCardView
-          key={card.channelId}
+          // Not `card.channelId` alone: a dismissed card mid-exit-animation
+          // and a fresh arrival for the same conversation can be two entries
+          // in this array at once (see `ToastCard.token`'s doc comment), and
+          // React requires distinct keys for distinct siblings.
+          key={`${card.channelId}:${card.token}`}
           card={card}
           conversation={conversations.find((c) => c.channelId === card.channelId)}
           onOpen={() => {
-            dismiss(card.channelId);
+            dismiss(card.channelId, card.token);
             onOpen(card.channelId);
           }}
-          onDismiss={() => dismiss(card.channelId)}
+          onDismiss={() => dismiss(card.channelId, card.token)}
           onPause={() => pause(card.channelId)}
           onResume={() => resume(card.channelId)}
         />
@@ -329,7 +356,15 @@ function ToastCardView({
       <button
         type="button"
         className="flex min-w-0 flex-1 items-start gap-3 text-left"
-        onClick={onOpen}
+        onClick={() => {
+          // A touch's synthetic click still fires after a swipe that sprang
+          // back — a drag past the small jitter threshold means this tap was
+          // never a tap.
+          if (swipe.consumeDidDrag()) {
+            return;
+          }
+          onOpen();
+        }}
       >
         {isGroup ? (
           <GroupAvatarStack participants={participants} />
@@ -398,6 +433,9 @@ function GroupAvatarStack({
   );
 }
 
+/** Past this a touch move counts as a drag, not the small jitter under a tap. */
+const DRAG_CLICK_SUPPRESS_PX = 10;
+
 /**
  * Horizontal drag to dismiss, touch only. Vertical movement past 12px cancels
  * the gesture so a page scroll started on a card is never eaten; a release
@@ -410,12 +448,28 @@ function useSwipeDismiss(onDismiss: () => void): {
   onPointerMove: (event: ReactPointerEvent) => void;
   onPointerUp: (event: ReactPointerEvent) => void;
   onPointerCancel: (event: ReactPointerEvent) => void;
+  /**
+   * Read (and clear) whether the gesture just ended moved far enough to be a
+   * drag rather than a tap. A touch's synthetic `click` still fires after a
+   * spring-back release, so the open button's own handler calls this first
+   * and bails if it was a drag — otherwise brushing a card while scrolling
+   * past it, or a swipe that springs back under the 48px threshold, would
+   * also open the conversation.
+   */
+  consumeDidDrag: () => boolean;
 } {
   const startX = useRef<number | null>(null);
   const startY = useRef<number | null>(null);
   const cancelled = useRef(false);
+  const didDrag = useRef(false);
   const [translateX, setTranslateX] = useState(0);
   const [springing, setSpringing] = useState(false);
+
+  const consumeDidDrag = useCallback(() => {
+    const value = didDrag.current;
+    didDrag.current = false;
+    return value;
+  }, []);
 
   const onPointerDown = useCallback((event: ReactPointerEvent) => {
     if (event.pointerType !== "touch") {
@@ -437,6 +491,9 @@ function useSwipeDismiss(onDismiss: () => void): {
       cancelled.current = true;
       setTranslateX(0);
       return;
+    }
+    if (Math.abs(dx) > DRAG_CLICK_SUPPRESS_PX) {
+      didDrag.current = true;
     }
     setTranslateX(dx);
   }, []);
@@ -465,5 +522,6 @@ function useSwipeDismiss(onDismiss: () => void): {
     onPointerMove,
     onPointerUp,
     onPointerCancel: onPointerUp,
+    consumeDidDrag,
   };
 }

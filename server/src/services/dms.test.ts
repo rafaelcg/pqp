@@ -374,6 +374,18 @@ describeDb("conversations", () => {
     });
   });
 
+  it("never previews a message from someone the viewer blocked", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    await say(channelId, bob.id, "oi");
+    await blockUser(alice.id, bob.id);
+
+    const [summary] = await listConversations(alice.id);
+    // No non-blocked message to fall back to in a 1:1, so the preview is
+    // null rather than showing the blocked person's words — the same
+    // discipline the unread count already gets via `notBlockedSql`.
+    expect(summary?.lastMessage).toBeNull();
+  });
+
   it("is null for a conversation nobody has spoken in yet", async () => {
     await openConversation(alice.id, [bob.id]);
     const [summary] = await listConversations(alice.id);

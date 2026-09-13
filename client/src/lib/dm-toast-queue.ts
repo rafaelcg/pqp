@@ -74,6 +74,15 @@ export const VISIBILITY_RESUME_MS = 3000;
 
 export interface ToastCard {
   channelId: string;
+  /**
+   * Identifies this particular card instance, distinct from `channelId`:
+   * dismissing a card and a fresh arrival for the same conversation racing
+   * within the same `LEAVE_MS` window are two different instances that
+   * happen to share a channel id. A removal keyed on `channelId` alone would
+   * delete whichever one happened to be current when the timer fires — see
+   * `removeToastCard`.
+   */
+  token: number;
   count: number;
   mentions: number;
   /** When this card is due to leave, or would be if it were not paused. */
@@ -86,12 +95,24 @@ export interface ToastCard {
   leaving: boolean;
 }
 
+let tokenCounter = 0;
+
+/** A fresh identity for a new card instance. Exported only for tests. */
+export function nextToastToken(): number {
+  tokenCounter += 1;
+  return tokenCounter;
+}
+
 /**
  * A new arrival. Coalesces into the existing card for the same conversation —
  * preview replaced, count incremented, timer reset to the full 6000ms,
  * POSITION UNCHANGED (a card moving under a pointer about to click it is how
  * the wrong conversation gets opened). A genuinely new conversation goes to
  * the front (newest on top) and, past the cap, drops the oldest.
+ *
+ * A coalesce onto a card that is currently paused (the pointer or focus is
+ * still on it) stays paused, just refilled to the full duration — the
+ * countdown must not sneak past a card the reader is still looking at.
  */
 export function upsertToastCard(
   cards: readonly ToastCard[],
@@ -103,12 +124,13 @@ export function upsertToastCard(
   );
   if (existingIndex !== -1) {
     const existing = cards[existingIndex]!;
+    const stillPaused = existing.pausedRemainingMs !== null;
     const updated: ToastCard = {
       ...existing,
       count: existing.count + toast.count,
       mentions: existing.mentions + toast.mentions,
       expiresAt: now + TOAST_MS,
-      pausedRemainingMs: null,
+      pausedRemainingMs: stillPaused ? TOAST_MS : null,
       leaving: false,
     };
     const next = [...cards];
@@ -118,6 +140,7 @@ export function upsertToastCard(
 
   const fresh: ToastCard = {
     channelId: toast.channelId,
+    token: nextToastToken(),
     count: toast.count,
     mentions: toast.mentions,
     expiresAt: now + TOAST_MS,
@@ -195,21 +218,38 @@ export function thawToastCards(
   }));
 }
 
-/** Mark a card leaving (its exit animation), for the component to unmount later. */
+/**
+ * Mark a card leaving (its exit animation), for the component to unmount
+ * later. Keyed on `token` when given, so a dismiss aimed at one instance can
+ * never touch a different card that has since taken its channel id.
+ */
 export function markToastLeaving(
   cards: readonly ToastCard[],
   channelId: string,
+  token?: number,
 ): ToastCard[] {
   return cards.map((card) =>
-    card.channelId === channelId ? { ...card, leaving: true } : card,
+    card.channelId === channelId && (token === undefined || card.token === token)
+      ? { ...card, leaving: true }
+      : card,
   );
 }
 
+/**
+ * Keyed on `token` when given. Without it, a removal timer that outlives its
+ * own card (a dismiss racing a fresh arrival for the same conversation
+ * within the same `LEAVE_MS` window) would delete the *replacement* instead
+ * of the stale card it was actually scheduled for.
+ */
 export function removeToastCard(
   cards: readonly ToastCard[],
   channelId: string,
+  token?: number,
 ): ToastCard[] {
-  return cards.filter((card) => card.channelId !== channelId);
+  return cards.filter(
+    (card) =>
+      !(card.channelId === channelId && (token === undefined || card.token === token)),
+  );
 }
 
 /** Milliseconds until the next card not currently paused is due, or null. */

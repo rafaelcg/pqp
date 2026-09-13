@@ -444,6 +444,7 @@ export async function listConversations(
          FROM messages lm
          JOIN users u2 ON u2.id = lm.author_id
          WHERE lm.channel_id = c.id
+           AND ${notBlockedSql("$1", "lm.author_id")}
          ORDER BY lm.created_at DESC
          LIMIT 1
        ) lastmsg ON true
@@ -455,14 +456,18 @@ export async function listConversations(
        ORDER BY last_message_at DESC NULLS LAST, c.id`,
       [userId, onlyChannelId ?? null],
     ),
-    getPreferences(userId),
+    // A preference read that fails must not take the whole conversation list
+    // down with it — the list itself did not fail, only the choice of
+    // whether to show text on top of it. Default to previews on, the same
+    // default an absent/never-set preference reads as.
+    getPreferences(userId).catch(() => null),
   ]);
 
   const channelIds = rows.rows.map((row) => row.channel_id);
   const participants = await listParticipants(channelIds, userId);
   // Default true: previews are on until the reader turns them off in
   // Settings → Notificações → Mensagens diretas.
-  const previewsOn = preferences.notifications?.previewInApp !== false;
+  const previewsOn = preferences?.notifications?.previewInApp !== false;
 
   return rows.rows.map((row) => ({
     channelId: row.channel_id,

@@ -383,17 +383,45 @@ describe("setUnreadBadge", () => {
     expect(doc.title).toBe("pqp");
   });
 
-  it("mirrors the same count onto the installed PWA's app badge", () => {
+  it("mirrors the same count onto the installed PWA's app badge", async () => {
     const setAppBadge = vi.fn().mockResolvedValue(undefined);
     const clearAppBadge = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("document", { title: "pqp" });
     vi.stubGlobal("navigator", { setAppBadge, clearAppBadge });
 
+    // Queued on a single chain (so two calls in a row apply in order rather
+    // than racing) — flushing past a macrotask lets it actually run.
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
     setUnreadBadge(3);
+    await flush();
     expect(setAppBadge).toHaveBeenCalledWith(3);
 
     setUnreadBadge(0);
+    await flush();
     expect(clearAppBadge).toHaveBeenCalled();
+  });
+
+  it("applies two rapid calls to the platform badge in order, not by resolution race", async () => {
+    // The bug this pins: setAppBadge(3) then clearAppBadge() queued back to
+    // back must not let the OS apply them out of order even if the
+    // underlying calls would otherwise resolve out of order.
+    const order: string[] = [];
+    const setAppBadge = vi.fn(async (n: number) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      order.push(`set:${n}`);
+    });
+    const clearAppBadge = vi.fn(async () => {
+      order.push("clear");
+    });
+    vi.stubGlobal("document", { title: "pqp" });
+    vi.stubGlobal("navigator", { setAppBadge, clearAppBadge });
+
+    setUnreadBadge(3);
+    setUnreadBadge(0);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(order).toEqual(["set:3", "clear"]);
   });
 
   it("does not throw when the badge API is absent — iOS Safari, Firefox", () => {

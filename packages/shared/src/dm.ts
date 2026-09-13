@@ -86,6 +86,12 @@ export const dmSummarySchema = z.object({
    * when the reader has `notifications.previewInApp` off — the server omits
    * the content rather than sending it for the client to hide, the same
    * discipline `channelActivitySchema.preview` follows.
+   *
+   * Optional, not just nullable: a server mid-rolling-deploy that predates
+   * this field omits the key entirely, and a client that already has the new
+   * schema must still parse that response rather than fail the whole DM list
+   * over one added field (the CLUSTER_BUS mixed-version case this repo has
+   * been burned by before — see `channelActivitySchema.preview`).
    */
   lastMessage: z
     .object({
@@ -98,7 +104,8 @@ export const dmSummarySchema = z.object({
       /** Refines `isAttachment`: the sole attachment was a GIF, not a file. */
       isGif: z.boolean(),
     })
-    .nullable(),
+    .nullable()
+    .optional(),
 });
 
 export type DmSummary = z.infer<typeof dmSummarySchema>;

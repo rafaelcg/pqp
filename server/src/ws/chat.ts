@@ -43,7 +43,7 @@ import {
 import { listBlockersOf } from "../services/blocks.js";
 import { buildMessagePreview, type MessagePreview } from "../services/dm-preview.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
-import { getPreferences } from "../services/preferences.js";
+import { getPreferencesForUsers } from "../services/preferences.js";
 import {
   findTimeoutForChannel,
   timeoutMessage,
@@ -1117,21 +1117,25 @@ async function notifyChannelActivity(
     options?.preview != null &&
     !options.preview.isAttachment &&
     (audience.kind === "dm" || audience.kind === "group");
+  // A failed preference read must not take the whole fan-out down with it —
+  // this is only the narrowing for whether a card's text is shown, not
+  // whether it is sent at all. Falling back to "nobody sees a preview this
+  // round" is the safe direction: the badge and the count still land.
   const previewWantedBy = canShowPreview
-    ? new Set(
-        (
-          await Promise.all(
-            audience.userIds
-              .filter((id) => id !== authorId)
-              .map(async (id) => {
-                const preferences = await getPreferences(id);
-                return preferences.notifications?.previewInApp !== false
-                  ? id
-                  : null;
-              }),
-          )
-        ).filter((id): id is string => id !== null),
-      )
+    ? await (async () => {
+        const recipientIds = audience.userIds.filter((id) => id !== authorId);
+        try {
+          const preferences = await getPreferencesForUsers(recipientIds);
+          return new Set(
+            recipientIds.filter(
+              (id) => preferences.get(id)?.notifications?.previewInApp !== false,
+            ),
+          );
+        } catch (error) {
+          console.error("[chat] preview preference read failed:", error);
+          return new Set<string>();
+        }
+      })()
     : null;
 
   forEachAuthenticatedSocket((socket, user) => {

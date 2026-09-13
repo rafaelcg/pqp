@@ -181,6 +181,26 @@ describe("pause / resume", () => {
     cards = pauseToastCard(cards, "a", now + 3000);
     expect(cards[0]!.pausedRemainingMs).toBe(remaining);
   });
+
+  it("a coalesced arrival onto a paused card stays paused, refilled to the full duration", () => {
+    // The countdown must not sneak past a card the pointer is still on —
+    // resuming later should still get the fresh 6000ms, not whatever was
+    // left when the new message coalesced in.
+    const now = 1000;
+    let cards = upsertToastCard([], { channelId: "a", count: 1, mentions: 0 }, now);
+    cards = pauseToastCard(cards, "a", now + 4000); // 2000ms left
+    cards = upsertToastCard(cards, { channelId: "a", count: 1, mentions: 0 }, now + 4500);
+    expect(cards[0]!.pausedRemainingMs).toBe(TOAST_MS);
+    cards = resumeToastCard(cards, "a", now + 5000);
+    expect(cards[0]!.expiresAt).toBe(now + 5000 + TOAST_MS);
+  });
+
+  it("a coalesced arrival onto an unpaused card stays unpaused", () => {
+    const now = 1000;
+    let cards = upsertToastCard([], { channelId: "a", count: 1, mentions: 0 }, now);
+    cards = upsertToastCard(cards, { channelId: "a", count: 1, mentions: 0 }, now + 1000);
+    expect(cards[0]!.pausedRemainingMs).toBeNull();
+  });
 });
 
 describe("tab visibility", () => {
@@ -226,6 +246,42 @@ describe("leaving / removal", () => {
     let cards = upsertToastCard([], { channelId: "a", count: 1, mentions: 0 }, 0);
     cards = removeToastCard(cards, "a");
     expect(cards).toHaveLength(0);
+  });
+
+  it("a token-scoped removal never deletes a different instance sharing the channel id", () => {
+    // The exact race a removal timer can hit: dismiss "a" (marks it leaving,
+    // schedules its removal), then a fresh message for "a" arrives before
+    // that timer fires — two entries for the same channelId. The removal
+    // must only ever take the one it was scheduled for.
+    let cards = upsertToastCard([], { channelId: "a", count: 1, mentions: 0 }, 0);
+    const staleToken = cards[0]!.token;
+    cards = markToastLeaving(cards, "a", staleToken);
+    cards = upsertToastCard(cards, { channelId: "a", count: 1, mentions: 0 }, 50);
+    expect(cards).toHaveLength(2);
+
+    cards = removeToastCard(cards, "a", staleToken);
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.leaving).toBe(false);
+    expect(cards[0]!.token).not.toBe(staleToken);
+  });
+
+  it("an unscoped removal (no token) still removes by channelId, for callers that do not care", () => {
+    let cards = upsertToastCard([], { channelId: "a", count: 1, mentions: 0 }, 0);
+    cards = upsertToastCard(cards, { channelId: "b", count: 1, mentions: 0 }, 0);
+    cards = removeToastCard(cards, "a");
+    expect(cards.map((c) => c.channelId)).toEqual(["b"]);
+  });
+
+  it("markToastLeaving scoped to a token only marks that instance", () => {
+    let cards = upsertToastCard([], { channelId: "a", count: 1, mentions: 0 }, 0);
+    const firstToken = cards[0]!.token;
+    cards = markToastLeaving(cards, "a", firstToken);
+    cards = upsertToastCard(cards, { channelId: "a", count: 1, mentions: 0 }, 50);
+
+    const leavingCount = cards.filter((c) => c.leaving).length;
+    expect(leavingCount).toBe(1);
+    expect(cards.find((c) => c.leaving)!.token).toBe(firstToken);
   });
 });
 

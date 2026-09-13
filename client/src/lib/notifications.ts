@@ -919,24 +919,33 @@ export function formatBadge(mentions: number): string {
  * Surface the cross-server mention count where it is visible with the app in
  * the background: the OS dock in the desktop shell, the tab title on the web.
  */
+/**
+ * One promise chain for the whole module, so two `setUnreadBadge` calls in
+ * quick succession (a count that changes twice before the first OS call has
+ * even resolved) apply to the platform badge in the order they were made
+ * rather than whichever `setAppBadge`/`clearAppBadge` round-trip happens to
+ * resolve first — which, left to fire-and-forget, can and does reorder.
+ */
+let badgeChain: Promise<void> = Promise.resolve();
+
 export function setUnreadBadge(mentions: number): void {
   getDesktop()?.setBadgeCount?.(mentions);
   // The installed PWA's own icon badge (Chrome Android / desktop; absent on
   // iOS Safari and on Firefox, which is exactly why this is wrapped — a
   // missing API must not take the tab title down with it).
-  try {
-    const badgeable = navigator as Navigator & {
-      setAppBadge?: (count?: number) => Promise<void>;
-      clearAppBadge?: () => Promise<void>;
-    };
-    if (mentions > 0) {
-      void badgeable.setAppBadge?.(mentions)?.catch(() => {});
-    } else {
-      void badgeable.clearAppBadge?.()?.catch(() => {});
-    }
-  } catch {
-    // Not available in this browser, or thrown outright by a hostile one.
-  }
+  badgeChain = badgeChain
+    .then(() => {
+      const badgeable = navigator as Navigator & {
+        setAppBadge?: (count?: number) => Promise<void>;
+        clearAppBadge?: () => Promise<void>;
+      };
+      return mentions > 0
+        ? badgeable.setAppBadge?.(mentions)
+        : badgeable.clearAppBadge?.();
+    })
+    .catch(() => {
+      // Not available in this browser, or thrown outright by a hostile one.
+    });
   if (typeof document === "undefined") {
     return;
   }
