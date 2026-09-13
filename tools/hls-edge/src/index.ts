@@ -133,18 +133,24 @@ const UPSTREAM_TIMEOUT_MS = 8_000;
  * through distinct channel ids on every request would otherwise grow this
  * map forever — nothing ever deleted an entry, only added or updated one.
  * Two bounds, in `logRejection` below: an ACTIVE sweep drops every entry
- * whose `REJECTION_LOG_WINDOW_MS` has already closed whenever a new key
- * would be added (so ordinary traffic settles back near zero entries once
- * the flood stops), and `REJECTION_LOG_MAX_ENTRIES` is the hard ceiling for
- * a SUSTAINED flood of genuinely fresh unique keys the sweep alone can't
- * shrink fast enough, past which the oldest entry (by insertion order) is
- * evicted — an approximation of LRU, not a precise one, which is enough for
- * a hostile-traffic bound on a log dedupe table, not a cache whose eviction
- * policy anyone depends on.
+ * whose `REJECTION_LOG_WINDOW_MS` has already closed (so ordinary traffic
+ * settles back near zero entries once a flood stops), throttled to once per
+ * `REJECTION_LOG_SWEEP_INTERVAL_MS` rather than on every new key — a full
+ * scan is O(map size), and running it on every previously-unseen key would
+ * turn a sustained stream of unique invalid requests into its own CPU cost
+ * on the request hot path, which is exactly the kind of amplification this
+ * whole rejection log exists to avoid elsewhere. `REJECTION_LOG_MAX_ENTRIES`
+ * is the hard ceiling in between sweeps, checked (cheaply, O(1)) on every
+ * new key regardless of the throttle: past it, the oldest entry (by
+ * insertion order) is evicted — an approximation of LRU, not a precise one,
+ * which is enough for a hostile-traffic bound on a log dedupe table, not a
+ * cache whose eviction policy anyone depends on.
  */
 const REJECTION_LOG_WINDOW_MS = 30_000;
 const REJECTION_LOG_MAX_ENTRIES = 1_000;
+const REJECTION_LOG_SWEEP_INTERVAL_MS = 10_000;
 const rejectionLog = new Map<string, { at: number; suppressed: number }>();
+let rejectionLogLastSweptAt = 0;
 
 function logRejection(
   channelId: string,
@@ -165,16 +171,17 @@ function logRejection(
     suppressed: seen?.suppressed ?? 0,
   });
   if (!seen) {
-    // Active expiry, not just a size cap: drop every entry whose 30s window
-    // has already closed before growing the map with a new key. Runs only
-    // on a genuinely new (or re-expired) key -- a repeat rejection within
-    // its own window takes the early return above and never reaches this --
-    // so this is bounded by `REJECTION_LOG_MAX_ENTRIES` per sweep, not by
-    // request volume.
-    for (const [existingKey, entry] of rejectionLog) {
-      if (now - entry.at >= REJECTION_LOG_WINDOW_MS) {
-        rejectionLog.delete(existingKey);
+    // Active expiry, throttled: at most one full scan per
+    // `REJECTION_LOG_SWEEP_INTERVAL_MS`, regardless of how many new keys
+    // arrive in between -- see the doc comment above for why an unthrottled
+    // scan on every new key would itself be a hot-path cost.
+    if (now - rejectionLogLastSweptAt >= REJECTION_LOG_SWEEP_INTERVAL_MS) {
+      for (const [existingKey, entry] of rejectionLog) {
+        if (now - entry.at >= REJECTION_LOG_WINDOW_MS) {
+          rejectionLog.delete(existingKey);
+        }
       }
+      rejectionLogLastSweptAt = now;
     }
     if (rejectionLog.size >= REJECTION_LOG_MAX_ENTRIES) {
       // Still over the cap after expiry (a sustained flood of genuinely
