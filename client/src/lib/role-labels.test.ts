@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Translator } from "@/lib/i18n";
-import { displayRoleName } from "./role-labels";
+import { compatRoleLabel, displayRoleName } from "./role-labels";
 
 const t = ((key: string) => key) as Translator["t"];
 
@@ -12,6 +12,7 @@ const tPt = ((key: string) => {
     "roles.system.manager": "Gerente",
     "roles.system.moderator": "Mod",
     "roles.system.vip": "VIP",
+    "chrome.role.member": "Membro",
   };
   return map[key] ?? key;
 }) as Translator["t"];
@@ -59,5 +60,24 @@ describe("displayRoleName", () => {
     const seed = { id: "1", name: "Moderator", systemKey: "moderator" as const };
     const vip = { id: "2", name: "VIP", systemKey: null };
     expect(displayRoleName(seed, tPt, [seed, vip])).toBe("Mod");
+  });
+});
+
+describe("compatRoleLabel", () => {
+  // The channel sidebar header's badge used to print the bare compatibility
+  // rank straight from the API ("owner", uppercased by CSS) — unlabelled and
+  // untranslated. `owner` and `admin` now say the same word the roles editor
+  // uses for the matching cargo, so a server owner reads one word for "who I
+  // am here" everywhere it appears.
+  it("borrows owner and admin from the roles editor's own words", () => {
+    expect(compatRoleLabel("owner", t)).toBe("roles.system.owner");
+    expect(compatRoleLabel("admin", t)).toBe("roles.system.admin");
+    expect(compatRoleLabel("owner", tPt)).toBe("Dono");
+    expect(compatRoleLabel("admin", tPt)).toBe("Adm");
+  });
+
+  it("gives plain member its own key — no cargo to borrow from", () => {
+    expect(compatRoleLabel("member", t)).toBe("chrome.role.member");
+    expect(compatRoleLabel("member", tPt)).toBe("Membro");
   });
 });

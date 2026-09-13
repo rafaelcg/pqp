@@ -1899,6 +1899,7 @@
   "chrome.searchMessages": "Buscar mensagens",
   "chrome.invitePeople": "Convidar pessoas",
   "chrome.members": "Membros",
+  "chrome.role.member": "Membro",
   "chrome.communitySettings": "Configurações da comunidade",
   "chrome.closeChannelList": "Fechar a lista de canais",
   "chrome.collapseChannelList": "Encolher a lista de canais",

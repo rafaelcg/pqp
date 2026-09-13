@@ -70,7 +70,11 @@ import {
   resolveVoiceRowDoubleClick,
   resolveVoiceRowKey,
 } from "@/lib/voice-row-interaction";
-import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
+import {
+  ServerHeaderBanner,
+  ServerIcon,
+} from "@/components/layout/server-identity";
+import { compatRoleLabel } from "@/lib/role-labels";
 import {
   ContextMenu,
   type ContextMenuItemDef,
@@ -1213,134 +1217,213 @@ export function ChannelList({
         onWidthChange={setSidebarWidth}
         onCommit={commitSidebarWidth}
       />
-      {/* Above the header, and only when there is one. See `ServerBanner`: a
-          server without a banner keeps exactly the column it has always had. */}
-      {server && <ServerBanner name={server.name} bannerUrl={server.bannerUrl} />}
-
-      <ContextMenu items={headerItems}>
-        {/* `min-h-16` rather than a fixed `h-14`: the row now has to hold a
-            36px icon beside two lines of text without either crowding the
-            other, and a header that can grow by a few pixels for a long name
-            is better than one that truncates the role away. */}
-        <div className="flex min-h-16 items-center justify-between gap-2 border-b border-ink-4/60 px-4 py-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            {/* Desktop only. The drawer is the same 256px wide at 390px but
-                carries one more control — the button that closes it — and the
-                icon is what tips the row into truncating the server's name to
-                a single letter. The rail's icon is still on screen there. */}
-            {server && (
-              <span className="hidden h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-ink-3 font-display text-xs font-bold text-paper md:flex">
-                <ServerIcon name={server.name} iconUrl={server.iconUrl} />
-              </span>
-            )}
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <p className="truncate font-display text-base font-bold leading-tight">
-                  {server?.name ?? (isLoading ? t("common.loading") : t("chrome.noServer"))}
-                </p>
-                {/* Says "community" only about a listed community; the Baú
-                    flag being on is not a fact about this server. */}
-                {communityHomeEnabled && server?.isCommunity && (
-                  <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
-                    {t("communityHome.communityBadge")}
+      {/* ONE header block. It used to be two: a banner with the server's
+          name drawn over it, stacked on top of a second, solid-background
+          row that named the server again next to its icon and role. That is
+          the bug the owner flagged as "very confusing" — the name appeared
+          three times (inside the banner image itself, over the banner, and
+          again below) and nothing beside it said what the icon row did. Now
+          there is exactly one row, named once: `ServerHeaderBanner` draws the
+          banner as this row's *background* when the server has one, and the
+          server's own plain background otherwise — the row itself, and
+          everything in it, never changes shape between the two. */}
+      {server ? (
+        <ServerHeaderBanner bannerUrl={server.bannerUrl}>
+          {(hasBanner) => (
+            <ContextMenu items={headerItems}>
+              {/* `min-h-16` rather than a fixed `h-14`: the row has to hold a
+                  36px icon beside up to two lines of name and a role badge
+                  without crowding the actions, and a header that can grow by
+                  a few pixels for a long name is better than one that
+                  truncates the role away. */}
+              <div className="flex min-h-16 items-center justify-between gap-2 px-4 py-3">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  {/* Desktop only. The drawer is the same 256px wide at 390px
+                      but carries one more control — the button that closes
+                      it — and the icon is what tips the row into crowding
+                      the name off its second line. The rail's icon is still
+                      on screen there. */}
+                  <span className="hidden h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-ink-3 font-display text-xs font-bold text-paper md:flex">
+                    <ServerIcon name={server.name} iconUrl={server.iconUrl} />
                   </span>
-                )}
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-start gap-2">
+                      {/* THE NAME, ONCE. `line-clamp-2` rather than
+                          `truncate`: nothing else in this header draws the
+                          name any more, so it gets two full lines before
+                          anything is cut, instead of "QG do pqp" losing to
+                          "QG..." on a single line with room to spare below
+                          it. Over a banner it switches to light text with a
+                          shadow — `hasBanner`, from `ServerHeaderBanner` —
+                          the same treatment `ServerBanner`'s own name gets.
+                          `text-white`, not `text-paper`: a photo's brightness
+                          has nothing to do with the app's light/dark
+                          preference, so a theme-relative text role is exactly
+                          wrong here — in a light theme it is dark text sitting
+                          on this same dark scrim. See the longer note beside
+                          `ServerBanner`'s own name in `server-identity.tsx`. */}
+                      <p
+                        className={cn(
+                          "line-clamp-2 font-display text-base font-bold leading-tight",
+                          hasBanner &&
+                            "text-white drop-shadow-[var(--shadow-banner-text)]",
+                        )}
+                      >
+                        {server.name}
+                      </p>
+                      {/* Says "community" only about a listed community; the
+                          Baú flag being on is not a fact about this server. */}
+                      {communityHomeEnabled && server.isCommunity && (
+                        <span className="mt-0.5 shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
+                          {t("communityHome.communityBadge")}
+                        </span>
+                      )}
+                    </div>
+                    {/* The role, said in words rather than the bare
+                        compatibility rank ("owner"/"admin"/"member") the
+                        header used to print straight from the API —
+                        unlabelled and untranslated, which is half of why a
+                        plain "OWNER" next to the icon read as noise instead
+                        of information. `compatRoleLabel` gives it the same
+                        word the roles editor uses for the matching cargo.
+                        `truncate`: without it the badge sits outside its own
+                        column and runs under the action buttons, which is
+                        what a narrowed sidebar shows first. Optional on the
+                        wire — a response from before communities predates
+                        the field — so still guarded rather than assumed. */}
+                    {server.role && (
+                      <p
+                        className={cn(
+                          "mt-0.5 truncate text-[11px] uppercase tracking-wider",
+                          hasBanner
+                            ? "text-white/80 drop-shadow-[var(--shadow-banner-text)]"
+                            : "text-paper-muted",
+                        )}
+                      >
+                        {compatRoleLabel(server.role, t)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {/* `shrink-0`: these are all fixed-width controls, so letting
+                    flex compress them only squeezes their tap targets while
+                    the name is already wrapping anyway. Every one of them is
+                    a `Tooltip`, which is also what gives it its
+                    `aria-label` — see `tooltip.tsx`: the visible bubble and
+                    the accessible name share one source so they cannot say
+                    different things. Over a banner the icons pick up the
+                    same light-text treatment as the name and role, for the
+                    same reason. */}
+                <div
+                  className={cn(
+                    "flex shrink-0 items-center gap-0.5",
+                    hasBanner && "[&_svg]:drop-shadow-[var(--shadow-banner-text)]",
+                  )}
+                >
+                  {/* Manage Messages too: that rank has Moderação and a
+                      read-only AutoMod in the dialog, which decides the rail. */}
+                  {(canManage || canManageMessages) && (
+                    <Tooltip label={t("chrome.communitySettings")}>
+                      <button
+                        type="button"
+                        className={cn(
+                          "rounded-md p-1 hover:bg-ink-3",
+                          hasBanner
+                            ? "text-white/90 hover:text-white"
+                            : "text-paper-muted hover:text-paper",
+                        )}
+                        onClick={onOpenServerSettings}
+                      >
+                        <Settings className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
+                  )}
+                  <Tooltip label={t("chrome.members")}>
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded-md p-1 hover:bg-ink-3",
+                        hasBanner
+                          ? "text-white/90 hover:text-white"
+                          : "text-paper-muted hover:text-paper",
+                      )}
+                      onClick={onOpenMembers}
+                    >
+                      <Users className="h-4 w-4" />
+                    </button>
+                  </Tooltip>
+                  {/* An icon, not the word.
+                      The column is a fixed 256px and this row also carries a
+                      36px server icon, two icon buttons and the name.
+                      Spelled out, "Convidar" took about 66 of those pixels
+                      and left the name roughly 48 — which is why "QG do pqp"
+                      rendered as "QG...". The label is the one thing here
+                      that could give the pixels back, and losing it costs
+                      least: invite is also in this header's context menu and
+                      in the rail's, both of them spelled out, and the signal
+                      colour keeps it reading as the action of the row rather
+                      than a third grey icon. */}
+                  <Tooltip label={t("chrome.invitePeople")}>
+                    <button
+                      type="button"
+                      className="rounded-md p-1 text-signal hover:bg-ink-3"
+                      onClick={onInvite}
+                    >
+                      <UserPlus className="h-4 w-4" />
+                    </button>
+                  </Tooltip>
+                  {channelSidebarToggle && (
+                    <Tooltip
+                      label={
+                        channelSidebarToggle.iconsOnly
+                          ? t("chrome.expandChannelList")
+                          : t("chrome.collapseChannelList")
+                      }
+                      detail={t("chrome.collapseChannelListHint")}
+                    >
+                      <button
+                        type="button"
+                        data-channel-sidebar-toggle=""
+                        aria-pressed={channelSidebarToggle.iconsOnly}
+                        className={cn(
+                          "hidden rounded-md p-1 hover:bg-ink-3 md:block",
+                          hasBanner
+                            ? "text-white/90 hover:text-white"
+                            : "text-paper-muted hover:text-paper",
+                        )}
+                        onClick={channelSidebarToggle.onToggle}
+                      >
+                        <PanelLeftClose className="h-4 w-4" />
+                      </button>
+                    </Tooltip>
+                  )}
+                  {onMobileClose && (
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded p-1 hover:bg-ink-3 md:hidden",
+                        hasBanner
+                          ? "text-white/90 hover:text-white"
+                          : "text-paper-muted hover:text-paper",
+                      )}
+                      aria-label={t("chrome.closeChannelList")}
+                      onClick={onMobileClose}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
               </div>
-              {/* `truncate`: without it the rank sits outside its own column
-                  and runs under the three buttons to its right, which is what
-                  a narrowed sidebar shows first. */}
-              {server?.role && (
-                <p className="mt-0.5 truncate text-[11px] uppercase tracking-wider text-paper-muted">
-                  {server.role}
-                </p>
-              )}
-            </div>
-          </div>
-          {/* `shrink-0`: these are all fixed-width controls, so letting flex
-              compress them only squeezes their tap targets while the name is
-              already truncating anyway. */}
-          <div className="flex shrink-0 items-center gap-0.5">
-            {server && (
-              <>
-                {/* Manage Messages too: that rank has Moderação and a
-                    read-only AutoMod in the dialog, which decides the rail.
-                    Four controls now, at p-1 rather than p-1.5 so the name
-                    keeps the pixels the fourth would have taken. */}
-                {(canManage || canManageMessages) && (
-                  <Tooltip label={t("chrome.communitySettings")}>
-                    <button
-                      type="button"
-                      className="rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                      onClick={onOpenServerSettings}
-                    >
-                      <Settings className="h-4 w-4" />
-                    </button>
-                  </Tooltip>
-                )}
-                <Tooltip label={t("chrome.members")}>
-                  <button
-                    type="button"
-                    className="rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                    onClick={onOpenMembers}
-                  >
-                    <Users className="h-4 w-4" />
-                  </button>
-                </Tooltip>
-                {/* An icon, not the word.
-                    The column is a fixed 256px and this row also carries a
-                    36px server icon, two icon buttons and the name. Spelled
-                    out, "Convidar" took about 66 of those pixels and left the
-                    name roughly 48 — which is why "QG do pqp" rendered as
-                    "QG...". The label is the one thing here that could give
-                    the pixels back, and losing it costs least: invite is also
-                    in this header's context menu and in the rail's, both of
-                    them spelled out, and the signal colour keeps it reading as
-                    the action of the row rather than a third grey icon. */}
-                <Tooltip label={t("chrome.invitePeople")}>
-                  <button
-                    type="button"
-                    className="rounded-md p-1 text-signal hover:bg-ink-3"
-                    onClick={onInvite}
-                  >
-                    <UserPlus className="h-4 w-4" />
-                  </button>
-                </Tooltip>
-                {channelSidebarToggle && (
-                  <Tooltip
-                    label={
-                      channelSidebarToggle.iconsOnly
-                        ? t("chrome.expandChannelList")
-                        : t("chrome.collapseChannelList")
-                    }
-                    detail={t("chrome.collapseChannelListHint")}
-                  >
-                    <button
-                      type="button"
-                      data-channel-sidebar-toggle=""
-                      aria-pressed={channelSidebarToggle.iconsOnly}
-                      className="hidden rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper md:block"
-                      onClick={channelSidebarToggle.onToggle}
-                    >
-                      <PanelLeftClose className="h-4 w-4" />
-                    </button>
-                  </Tooltip>
-                )}
-
-              </>
-            )}
-            {onMobileClose && (
-              <button
-                type="button"
-                className="rounded p-1 hover:bg-ink-3 md:hidden"
-                aria-label={t("chrome.closeChannelList")}
-                onClick={onMobileClose}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
+            </ContextMenu>
+          )}
+        </ServerHeaderBanner>
+      ) : (
+        <div className="flex min-h-16 shrink-0 items-center border-b border-ink-4/60 bg-channel px-4 py-3">
+          <p className="truncate font-display text-base font-bold leading-tight">
+            {isLoading ? t("common.loading") : t("chrome.noServer")}
+          </p>
         </div>
-      </ContextMenu>
+      )}
 
       {server && (
         <div className="px-3 pt-3">

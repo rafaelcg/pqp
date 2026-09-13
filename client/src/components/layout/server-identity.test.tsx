@@ -6,9 +6,8 @@ vi.mock("@/lib/utils", async (importOriginal) => ({
   getApiBaseUrl: () => "https://api.example.test",
 }));
 
-const { ServerBanner, ServerIcon, serverMonogram } = await import(
-  "./server-identity"
-);
+const { ServerBanner, ServerHeaderBanner, ServerIcon, serverMonogram } =
+  await import("./server-identity");
 
 /**
  * A server's pictures, on the two paths that matter: the picture is missing (by
@@ -105,5 +104,45 @@ describe("ServerBanner", () => {
     // no colour token can promise contrast against one.
     expect(html).toContain("bg-gradient-to-t");
     expect(html).toContain('referrerPolicy="no-referrer"');
+  });
+});
+
+describe("ServerHeaderBanner", () => {
+  it("wraps the caller's row in the plain background without a banner, and reports no banner", () => {
+    const html = renderToStaticMarkup(
+      <ServerHeaderBanner bannerUrl={null}>
+        {(hasBanner) => <p>row content: {String(hasBanner)}</p>}
+      </ServerHeaderBanner>,
+    );
+    expect(html).toContain("row content: false");
+    // Never the decorated box: no image, no `data-server-banner` marker, and
+    // no second copy of the name — the caller's row is the only thing drawn.
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("data-server-banner");
+  });
+
+  it("wraps the row in the plain background for a non-https URL too", () => {
+    const html = renderToStaticMarkup(
+      <ServerHeaderBanner bannerUrl="javascript:alert(1)">
+        {(hasBanner) => <p>row content: {String(hasBanner)}</p>}
+      </ServerHeaderBanner>,
+    );
+    expect(html).toContain("row content: false");
+    expect(html).not.toContain("<img");
+  });
+
+  it("draws the image and scrim behind the row, reports a banner, and never draws the name itself", () => {
+    const html = renderToStaticMarkup(
+      <ServerHeaderBanner bannerUrl="https://cdn.example.com/b.png">
+        {(hasBanner) => <p>row content: {String(hasBanner)}</p>}
+      </ServerHeaderBanner>,
+    );
+    expect(html).toContain('src="https://cdn.example.com/b.png"');
+    expect(html).toContain('data-server-banner=""');
+    expect(html).toContain("bg-gradient-to-t");
+    expect(html).toContain("row content: true");
+    // This component never has a `name` prop at all — it cannot draw a second
+    // copy of it, which is the whole reason it exists next to `ServerBanner`.
+    expect(html).not.toContain("Ghostty");
   });
 });
