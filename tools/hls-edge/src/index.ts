@@ -322,6 +322,9 @@ async function handlePlaylistRequest(
   // see hls-blocking-reload.js's module doc comment for why a hold is not a
   // cache entry — and shares its origin fetches with the coalesced fetcher
   // below via the injected closure, rather than a second in-flight map.
+  // `request.signal` lets the hold notice a disconnected viewer instead of
+  // polling on their behalf until the timeout (see that module's doc
+  // comment, "DISCONNECTED VIEWERS DO NOT KEEP A LOOP ALIVE").
   if (blockingReload.kind === "directives") {
     return handleBlockingReload(
       cacheKeyRequest(request).url,
@@ -335,6 +338,7 @@ async function handlePlaylistRequest(
         }),
       logEvent,
       { channelId, rung },
+      request.signal,
     );
   }
 

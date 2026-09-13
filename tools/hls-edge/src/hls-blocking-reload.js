@@ -23,7 +23,7 @@
  * bytes that ship, the same fidelity argument `hls-viewer-token.js`'s doc
  * comment makes.
  *
- * THREE THINGS THIS FILE DOES, kept as separate pure-ish pieces:
+ * FOUR THINGS THIS FILE DOES, kept as separate pure-ish pieces:
  *
  *  1. **Parse and validate the directives** (`parseBlockingReloadParams`) —
  *     no I/O, no state, a pure function of the URL.
@@ -32,8 +32,10 @@
  *     functions of playlist text, so a test can hand them a hand-written
  *     manifest string without ever touching the network.
  *  3. **Hold a request open until the edge catches up, or time out**
- *     (`awaitBlockingReload`, `handleBlockingReload`) — the only stateful
- *     part, and the only part that talks to the caller's injected fetch.
+ *     (`awaitBlockingReload`, `runPollLoop`) — the stateful part, and the
+ *     only part that talks to the caller's injected fetch.
+ *  4. **Build the Response** (`handleBlockingReload`) — the thin wrapper
+ *     `index.ts` actually calls.
  *
  * ORIGIN DISCIPLINE: ONE POLL LOOP PER RENDITION, NOT PER WAITER, NOT A
  * SECOND CACHE. `awaitBlockingReload` is called once per incoming request
@@ -46,19 +48,84 @@
  * `runPollLoop`; every waiter that arrives while it is already running just
  * joins `state.waiters` and gets checked against the loop's next fetch (or
  * resolved immediately, with no fetch at all, if the loop's last-known edge
- * already satisfies it — see the "fast path" in `awaitBlockingReload`). The
- * loop polls the origin at most once per part duration, stops the instant
- * `state.waiters` is empty, and never touches Cloudflare's `caches.default`
- * at all: an LL playlist body is stale in well under a second, which is not
- * a thing worth putting in a cache with any TTL, so this deliberately does
- * NOT add a second cache next to `index.ts`'s existing 2 s one. The actual
- * origin *fetch* — the network call a poll iteration makes — is not
- * reimplemented here either: the caller (`index.ts`) injects a
- * `fetchRendition` closure that wraps its own existing `fetchRenditionCoalesced`
- * single-flight map, so a poll tick here and an ordinary cache-miss fetch on
- * the non-blocking path for the SAME rendition, happening in the same
- * instant, still collapse into one real HTTP request to the API — the exact
- * mechanism this file is told to reuse rather than duplicate.
+ * is both satisfying AND fresh enough to trust — see "REVOCATION AND
+ * FRESHNESS" below). The loop polls the origin at most once per part
+ * duration, stops the instant `state.waiters` is empty, and never touches
+ * Cloudflare's `caches.default` at all: an LL playlist body is stale in well
+ * under a second, which is not a thing worth putting in a cache with any
+ * TTL, so this deliberately does NOT add a second cache next to `index.ts`'s
+ * existing 2 s one. The actual origin *fetch* — the network call a poll
+ * iteration makes — is not reimplemented here either: the caller
+ * (`index.ts`) injects a `fetchRendition` closure that wraps its own
+ * existing `fetchRenditionCoalesced` single-flight map, so a poll tick here
+ * and an ordinary cache-miss fetch on the non-blocking path for the SAME
+ * rendition, happening in the same instant, still collapse into one real
+ * HTTP request to the API — the exact mechanism this file is told to reuse
+ * rather than duplicate. Racing a poll tick against a waiter's own deadline
+ * (see "A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN DEADLINE" below) reuses
+ * this same coalescing for free: abandoning a slow tick never cancels the
+ * underlying fetch, so the very next tick's call to `fetchRendition` reuses
+ * whatever is still in flight instead of starting a second request.
+ *
+ * REVOCATION AND FRESHNESS. `state.lastEdge`/`state.lastPlaylist` answer a
+ * NEW waiter's fast path only while they are younger than
+ * `FAST_PATH_FRESHNESS_MS` — the same order of staleness `index.ts`'s own 2 s
+ * non-blocking cache already tolerates. This bounds three things Farol's
+ * 2026-09-13 review of this file's first draft found, all stemming from the
+ * same root cause (retained state with no freshness bound): a rendition that
+ * has genuinely moved on being wrongly told "too far ahead" from a long-
+ * stale edge (an old edge cannot be trusted for THAT decision either, so it
+ * is gated by the same freshness check, not just the availability check); a
+ * revoked viewer's still-valid token being served from a fast path with no
+ * expiry at all instead of the ~2 s window the non-blocking cache already
+ * accepts as a trade-off (see `README.md` "What this Worker does NOT make
+ * faster"); and unbounded memory, since a stale-and-idle entry is now both
+ * useless (nothing trusts it) and swept (see `sweepIdlePollStates` and
+ * `MAX_POLL_STATE_ENTRIES` below). The waiter's TIMEOUT, in contrast,
+ * tolerates a stale `partTargetSeconds` on purpose — see
+ * "PROVISIONAL TIMEOUTS" below for why that is a different question from
+ * trusting stale content.
+ *
+ * PROVISIONAL TIMEOUTS. A cold rendition's very first waiter has no
+ * `PART-TARGET` to time its hold against yet, so its deadline starts
+ * provisional (computed from `DEFAULT_PART_TARGET_SECONDS`) and is
+ * corrected, once, the moment the first successful fetch reveals the
+ * playlist's real `PART-TARGET` — `fixProvisionalDeadlines`. Without this, a
+ * playlist with a real target larger than the default would time out a
+ * waiter too early (RFC 8216bis's own fallback fires before the promised 3x
+ * window), and a smaller one would hold too long. `partTargetSeconds`
+ * itself, unlike `lastEdge`/`lastPlaylist`, is read without a freshness
+ * check even once known: a part duration is an encoder-config property that
+ * does not change mid-session, so a slightly stale value is still the right
+ * value, which is why this is a SEPARATE rule from the freshness gate above.
+ *
+ * A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN DEADLINE. `runPollLoop` used
+ * to simply `await` each poll tick's fetch before checking any deadline, so
+ * an origin that stalled (up to `index.ts`'s own `UPSTREAM_TIMEOUT_MS`)
+ * could hold every current waiter well past the 3x-part-target promise this
+ * module makes. Once there is a `lastPlaylist` to fall back to,
+ * `fetchWithDeadlineRace` races that tick's fetch against a timer for the
+ * soonest waiter's own deadline; if the deadline wins, waiters already due
+ * are settled with the last KNOWN playlist without waiting on the slow
+ * fetch further (see "origin discipline" above for why abandoning it here
+ * costs nothing). Before any playlist has ever been fetched for this
+ * rendition there is nothing to fall back to, so the very first tick is
+ * never raced — RFC 8216bis's timeout fallback is "return the current
+ * playlist", which does not exist yet.
+ *
+ * NON-2XX NEVER POISONS THE RETAINED STATE. A poll tick's response updates
+ * `lastPlaylist`/`lastEdge`/`lastFetchedAt` together, and ONLY on a 2xx
+ * response — never separately, and never on an error. Every waiter alive at
+ * that tick is settled immediately with the error response, the same way a
+ * thrown network failure already was, rather than left to time out against
+ * whatever the LAST successful fetch said.
+ *
+ * DISCONNECTED VIEWERS DO NOT KEEP A LOOP ALIVE. `index.ts` passes the
+ * incoming request's `AbortSignal` through as `deps.signal`; a waiter whose
+ * signal fires is removed from `state.waiters` and settled immediately
+ * (`{ kind: "aborted" }`) instead of sitting in the set — polled for,
+ * counted toward "keep this loop alive" — until its timeout arrives for a
+ * browser tab that is already gone.
  *
  * THE PER-COLO LIMIT, STATED HONESTLY. `pollStates` is a module-level Map:
  * memory local to ONE Worker isolate. Cloudflare runs a busy Worker across
@@ -97,8 +164,8 @@ export const HLS_PART_PARAM = "_HLS_part";
  * (a cold rendition, or one this Worker has not seen a fresh fetch for) —
  * `docs/plans/LL_HLS.md` §1 pins the target part duration at 500 ms. Once a
  * real fetch reveals the playlist's own `PART-TARGET`, that value is used
- * instead (see `awaitBlockingReload`'s doc comment) — this constant is a
- * floor for "we do not know yet", not an override of what the origin says.
+ * instead (see "PROVISIONAL TIMEOUTS" above) — this constant is a floor for
+ * "we do not know yet", not an override of what the origin says.
  */
 export const DEFAULT_PART_TARGET_SECONDS = 0.5;
 
@@ -107,6 +174,30 @@ const TIMEOUT_PART_MULTIPLIER = 3;
 
 /** Guards against a pathological (zero or tiny) PART-TARGET turning the poll loop into a busy-wait. */
 const MIN_POLL_INTERVAL_MS = 20;
+
+/**
+ * How long retained `lastEdge`/`lastPlaylist` state may answer a NEW
+ * waiter's fast path (availability AND too-far-ahead) without a fresh origin
+ * fetch. See the module doc comment, "REVOCATION AND FRESHNESS". Matches
+ * `CACHE_TTL_SECONDS` on the non-blocking path in `index.ts`.
+ */
+const FAST_PATH_FRESHNESS_MS = 2_000;
+
+/**
+ * Ceiling on distinct renditions (channel + session + rung) this isolate
+ * retains poll state for at once. A viewer with an otherwise-valid token can
+ * choose the `rung` segment freely, so an attacker cycling through many
+ * distinct rung values could otherwise grow `pollStates` without bound —
+ * `sweepIdlePollStates` handles the ordinary case (idle entries expiring),
+ * this handles a sustained flood of genuinely distinct, still-fresh keys.
+ * Same shape as `REJECTION_LOG_MAX_ENTRIES` in `index.ts`.
+ */
+const MAX_POLL_STATE_ENTRIES = 500;
+
+/** How often the opportunistic idle sweep is allowed to run a full scan. Same shape as `index.ts`'s `REJECTION_LOG_SWEEP_INTERVAL_MS`. */
+const POLL_STATE_SWEEP_INTERVAL_MS = 10_000;
+
+let pollStatesLastSweptAt = 0;
 
 /**
  * @typedef {{ msn: number, part?: number }} BlockingReloadDirectives
@@ -279,13 +370,16 @@ export function isMsnTooFarAhead(edge, requested) {
  * @typedef {
  *   { kind: "available", playlist: FetchedPlaylist } |
  *   { kind: "timeout", playlist: FetchedPlaylist } |
- *   { kind: "too-far-ahead" }
+ *   { kind: "too-far-ahead" } |
+ *   { kind: "origin-error", playlist: FetchedPlaylist } |
+ *   { kind: "aborted" }
  * } BlockingReloadOutcome
  */
 
 /**
  * @typedef {{
  *   fetchRendition: () => Promise<FetchedPlaylist>,
+ *   signal?: AbortSignal,
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
  * }} BlockingReloadDeps
@@ -294,7 +388,9 @@ export function isMsnTooFarAhead(edge, requested) {
 /**
  * @typedef {{
  *   requested: BlockingReloadDirectives,
+ *   registeredAt: number,
  *   deadlineAt: number,
+ *   provisional: boolean,
  *   settle: (outcome: BlockingReloadOutcome) => void,
  *   fail: (err: unknown) => void,
  * }} Waiter
@@ -305,6 +401,7 @@ export function isMsnTooFarAhead(edge, requested) {
  *   waiters: Set<Waiter>,
  *   lastPlaylist: FetchedPlaylist | null,
  *   lastEdge: PlaylistLiveEdge | null,
+ *   lastFetchedAt: number,
  *   polling: boolean,
  * }} RenditionPollState
  */
@@ -335,13 +432,68 @@ function currentPollIntervalMs(edge) {
 }
 
 /**
+ * Opportunistic, throttled eviction of idle poll-state entries whose
+ * retained data has already aged out of the fast path anyway (see the
+ * module doc comment, "REVOCATION AND FRESHNESS"). Never touches an entry
+ * with an active loop or a live waiter — only genuinely idle, stale ones.
+ *
+ * @param {number} nowMs
+ */
+function sweepIdlePollStates(nowMs) {
+  if (nowMs - pollStatesLastSweptAt < POLL_STATE_SWEEP_INTERVAL_MS) {
+    return;
+  }
+  pollStatesLastSweptAt = nowMs;
+  for (const [key, state] of pollStates) {
+    if (
+      !state.polling &&
+      state.waiters.size === 0 &&
+      nowMs - state.lastFetchedAt >= FAST_PATH_FRESHNESS_MS
+    ) {
+      pollStates.delete(key);
+    }
+  }
+}
+
+/**
+ * Inserts a new poll-state entry, evicting one first if `pollStates` is at
+ * `MAX_POLL_STATE_ENTRIES` — an idle entry if one exists (never a rendition
+ * with a live loop or waiter), else the oldest by insertion order, the same
+ * approximation-of-LRU trade-off `index.ts`'s `rejectionLog` already makes
+ * for a hostile-traffic ceiling.
+ *
+ * @param {string} key
+ * @param {RenditionPollState} state
+ */
+function insertPollState(key, state) {
+  if (pollStates.size >= MAX_POLL_STATE_ENTRIES) {
+    let evictedIdle = false;
+    for (const [existingKey, existingState] of pollStates) {
+      if (!existingState.polling && existingState.waiters.size === 0) {
+        pollStates.delete(existingKey);
+        evictedIdle = true;
+        break;
+      }
+    }
+    if (!evictedIdle) {
+      const oldestKey = pollStates.keys().next().value;
+      if (oldestKey !== undefined) {
+        pollStates.delete(oldestKey);
+      }
+    }
+  }
+  pollStates.set(key, state);
+}
+
+/**
  * Holds one request's Promise open until `renditionKey`'s playlist advances
  * to contain `requested`, the request turns out to be too far ahead of the
- * live edge, or `TIMEOUT_PART_MULTIPLIER` part durations pass — whichever
- * comes first. Never issues an origin fetch itself; every fetch goes through
- * `deps.fetchRendition`, which `index.ts` wires to its existing single-flight
- * `fetchRenditionCoalesced`, so this function's only job is deciding WHEN to
- * call that closure and WHO to wake up with the result.
+ * live edge, the caller's `signal` aborts, or `TIMEOUT_PART_MULTIPLIER` part
+ * durations pass — whichever comes first. Never issues an origin fetch
+ * itself; every fetch goes through `deps.fetchRendition`, which `index.ts`
+ * wires to its existing single-flight `fetchRenditionCoalesced`, so this
+ * function's only job is deciding WHEN to call that closure and WHO to wake
+ * up with the result.
  *
  * @param {string} renditionKey
  * @param {BlockingReloadDirectives} requested
@@ -351,19 +503,25 @@ function currentPollIntervalMs(edge) {
 export async function awaitBlockingReload(renditionKey, requested, deps) {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? defaultSleep;
+  const signal = deps.signal;
+  const nowMs = now();
+
+  sweepIdlePollStates(nowMs);
 
   let state = pollStates.get(renditionKey);
   if (!state) {
-    state = { waiters: new Set(), lastPlaylist: null, lastEdge: null, polling: false };
-    pollStates.set(renditionKey, state);
+    state = { waiters: new Set(), lastPlaylist: null, lastEdge: null, lastFetchedAt: 0, polling: false };
+    insertPollState(renditionKey, state);
   }
 
-  // Fast path: this isolate already knows enough, from a previous fetch on
-  // this same rendition, to answer without touching the origin at all. This
-  // is what makes "requests for an msn already published return immediately"
-  // true even when this is a brand-new waiter arriving mid-party, not just
-  // the one that happens to be running the poll loop.
-  if (state.lastEdge) {
+  // Fast path: this isolate already knows enough, from a recent fetch on
+  // this same rendition, to answer without touching the origin at all. Only
+  // trusted while fresh -- see the module doc comment, "REVOCATION AND
+  // FRESHNESS" -- so a rendition this isolate has not heard from in a while
+  // always falls through to a real fetch below instead of answering (or
+  // rejecting) from long-stale content.
+  const freshEnough = state.lastEdge !== null && nowMs - state.lastFetchedAt < FAST_PATH_FRESHNESS_MS;
+  if (freshEnough) {
     if (isMsnTooFarAhead(state.lastEdge, requested)) {
       return { kind: "too-far-ahead" };
     }
@@ -372,22 +530,169 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
     }
   }
 
+  // `partTargetSeconds`, unlike the rest of `lastEdge`, is trusted even when
+  // stale -- see the module doc comment, "PROVISIONAL TIMEOUTS".
+  const knownPartTargetSeconds = state.lastEdge?.partTargetSeconds ?? null;
   const timeoutMs = currentPollIntervalMs(state.lastEdge) * TIMEOUT_PART_MULTIPLIER;
 
   return new Promise((resolve, reject) => {
     /** @type {Waiter} */
-    const waiter = {
-      requested,
-      deadlineAt: now() + timeoutMs,
-      settle: resolve,
-      fail: reject,
+    let waiter;
+    const cleanup = () => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
     };
+    const settle = (outcome) => {
+      cleanup();
+      resolve(outcome);
+    };
+    const fail = (err) => {
+      cleanup();
+      reject(err);
+    };
+    const onAbort = () => {
+      state.waiters.delete(waiter);
+      settle({ kind: "aborted" });
+    };
+
+    waiter = {
+      requested,
+      registeredAt: nowMs,
+      deadlineAt: nowMs + timeoutMs,
+      provisional: knownPartTargetSeconds === null,
+      settle,
+      fail,
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        // Already gone before this request ever joined the waiter set.
+        settle({ kind: "aborted" });
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     state.waiters.add(waiter);
     if (!state.polling) {
       state.polling = true;
       void runPollLoop(renditionKey, state, deps, now, sleep);
     }
   });
+}
+
+/**
+ * Corrects every still-provisional waiter's deadline the moment a real
+ * `PART-TARGET` becomes known, so a cold rendition's hold times out against
+ * the playlist's ACTUAL part duration rather than the default guess it
+ * necessarily started with. See the module doc comment, "PROVISIONAL
+ * TIMEOUTS".
+ *
+ * @param {RenditionPollState} state
+ */
+function fixProvisionalDeadlines(state) {
+  if (!state.lastEdge || state.lastEdge.partTargetSeconds === null) {
+    return;
+  }
+  const fixedIntervalMs = currentPollIntervalMs(state.lastEdge);
+  for (const waiter of state.waiters) {
+    if (waiter.provisional) {
+      waiter.deadlineAt = waiter.registeredAt + fixedIntervalMs * TIMEOUT_PART_MULTIPLIER;
+      waiter.provisional = false;
+    }
+  }
+}
+
+/**
+ * Settles every waiter this tick's fetch actually answers: available, too
+ * far ahead, or past its own deadline. Whatever remains keeps waiting for
+ * the next tick.
+ *
+ * @param {RenditionPollState} state
+ * @param {FetchedPlaylist} fetched
+ * @param {number} nowMs
+ */
+function settleReadyWaiters(state, fetched, nowMs) {
+  const settled = [];
+  for (const waiter of state.waiters) {
+    if (state.lastEdge && isMsnTooFarAhead(state.lastEdge, waiter.requested)) {
+      waiter.settle({ kind: "too-far-ahead" });
+      settled.push(waiter);
+    } else if (state.lastEdge && isMsnPartAvailable(state.lastEdge, waiter.requested)) {
+      waiter.settle({ kind: "available", playlist: fetched });
+      settled.push(waiter);
+    } else if (nowMs >= waiter.deadlineAt) {
+      // RFC 8216bis's timeout fallback: hand back whatever the current
+      // playlist is rather than an error. The client's own reload logic
+      // takes it from here (a non-blocking re-request, or a retry).
+      waiter.settle({ kind: "timeout", playlist: fetched });
+      settled.push(waiter);
+    }
+  }
+  for (const waiter of settled) {
+    state.waiters.delete(waiter);
+  }
+}
+
+/**
+ * Settles only the waiters that are ALREADY past their own deadline, using
+ * `state.lastPlaylist` (the last successfully fetched one) rather than
+ * whatever slow fetch this tick abandoned. Called only from the "the origin
+ * did not answer before the soonest deadline" branch of `runPollLoop` — see
+ * the module doc comment, "A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN
+ * DEADLINE".
+ *
+ * @param {RenditionPollState} state
+ * @param {number} nowMs
+ */
+function settleDueWaiters(state, nowMs) {
+  const due = [];
+  for (const waiter of state.waiters) {
+    if (nowMs >= waiter.deadlineAt) {
+      due.push(waiter);
+    }
+  }
+  for (const waiter of due) {
+    waiter.settle({ kind: "timeout", playlist: state.lastPlaylist });
+    state.waiters.delete(waiter);
+  }
+}
+
+/**
+ * One poll tick's fetch, raced against the soonest current waiter's own
+ * deadline once there is a `lastPlaylist` to fall back to if that deadline
+ * wins. Never cancels the fetch itself: a lost race just means THIS tick
+ * does not wait on it any further, and the SAME in-flight call is reused by
+ * the next tick via the caller's own single-flight `fetchRendition` closure
+ * (see the module doc comment, "ORIGIN DISCIPLINE").
+ *
+ * @param {BlockingReloadDeps} deps
+ * @param {RenditionPollState} state
+ * @param {() => number} now
+ * @param {(ms: number) => Promise<void>} sleep
+ * @returns {Promise<{ kind: "fetched", value: FetchedPlaylist } | { kind: "error", err: unknown } | { kind: "deadline" }>}
+ */
+function fetchWithDeadlineRace(deps, state, now, sleep) {
+  const outcomePromise = deps.fetchRendition().then(
+    (value) => ({ kind: "fetched", value }),
+    (err) => ({ kind: "error", err }),
+  );
+  if (!state.lastPlaylist) {
+    // Nothing to fall back to yet -- RFC 8216bis's timeout fallback is
+    // "return the current playlist", which does not exist for this
+    // rendition yet, so there is no deadline worth racing against.
+    return outcomePromise;
+  }
+  let soonestDeadline = Infinity;
+  for (const waiter of state.waiters) {
+    if (waiter.deadlineAt < soonestDeadline) {
+      soonestDeadline = waiter.deadlineAt;
+    }
+  }
+  const waitMs = Math.max(0, soonestDeadline - now());
+  const deadlinePromise = sleep(waitMs).then(() => ({ kind: "deadline" }));
+  return Promise.race([outcomePromise, deadlinePromise]);
 }
 
 /**
@@ -407,53 +712,57 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
 async function runPollLoop(renditionKey, state, deps, now, sleep) {
   try {
     while (state.waiters.size > 0) {
-      let fetched;
-      try {
-        fetched = await deps.fetchRendition();
-      } catch (err) {
+      const raced = await fetchWithDeadlineRace(deps, state, now, sleep);
+
+      if (raced.kind === "deadline") {
+        settleDueWaiters(state, now());
+        if (state.waiters.size === 0) {
+          break;
+        }
+        // The slow fetch is still in flight; the next iteration's call to
+        // `fetchRendition` reuses it via the caller's single-flight map
+        // rather than starting a second request.
+        continue;
+      }
+
+      if (raced.kind === "error") {
         // An origin that is actually down is not something a hold should
         // paper over by waiting out the full timeout on every waiter — fail
         // everyone currently waiting now, the same way a normal cache-miss
         // fetch failure becomes a 502 for the caller on the non-blocking path.
         for (const waiter of state.waiters) {
-          waiter.fail(err);
+          waiter.fail(raced.err);
+        }
+        state.waiters.clear();
+        break;
+      }
+
+      const fetched = raced.value;
+      if (fetched.status < 200 || fetched.status >= 300) {
+        // Never let a non-2xx response become the retained fast-path state
+        // (see the module doc comment, "NON-2XX NEVER POISONS THE RETAINED
+        // STATE") -- settle current waiters with it directly instead,
+        // leaving `lastPlaylist`/`lastEdge` exactly as they were.
+        for (const waiter of state.waiters) {
+          waiter.settle({ kind: "origin-error", playlist: fetched });
         }
         state.waiters.clear();
         break;
       }
 
       state.lastPlaylist = fetched;
-      if (fetched.status >= 200 && fetched.status < 300) {
-        try {
-          state.lastEdge = parseLiveEdge(decodeText(fetched));
-        } catch {
-          // A body that fails to parse (should not happen for a 2xx
-          // playlist response) just means this tick learned nothing new;
-          // keep whatever edge was already known and let the next
-          // iteration, or the timeout, resolve things.
-        }
+      state.lastFetchedAt = now();
+      try {
+        state.lastEdge = parseLiveEdge(decodeText(fetched));
+      } catch {
+        // A body that fails to parse (should not happen for a 2xx playlist
+        // response) just means this tick learned nothing new; keep whatever
+        // edge was already known and let the next iteration, or the
+        // timeout, resolve things.
       }
 
-      const settled = [];
-      const nowMs = now();
-      for (const waiter of state.waiters) {
-        if (state.lastEdge && isMsnTooFarAhead(state.lastEdge, waiter.requested)) {
-          waiter.settle({ kind: "too-far-ahead" });
-          settled.push(waiter);
-        } else if (state.lastEdge && isMsnPartAvailable(state.lastEdge, waiter.requested)) {
-          waiter.settle({ kind: "available", playlist: fetched });
-          settled.push(waiter);
-        } else if (nowMs >= waiter.deadlineAt) {
-          // RFC 8216bis's timeout fallback: hand back whatever the current
-          // playlist is rather than an error. The client's own reload logic
-          // takes it from here (a non-blocking re-request, or a retry).
-          waiter.settle({ kind: "timeout", playlist: fetched });
-          settled.push(waiter);
-        }
-      }
-      for (const waiter of settled) {
-        state.waiters.delete(waiter);
-      }
+      fixProvisionalDeadlines(state);
+      settleReadyWaiters(state, fetched, now());
       if (state.waiters.size === 0) {
         break;
       }
@@ -471,15 +780,12 @@ async function runPollLoop(renditionKey, state, deps, now, sleep) {
   } finally {
     // Stop POLLING the instant nobody is left holding — a rendition nobody
     // is blocking on costs this Worker nothing once this runs. The entry
-    // itself, and its `lastEdge`/`lastPlaylist`, are deliberately kept
-    // rather than deleted: that is what lets the very next request's fast
-    // path in `awaitBlockingReload` answer without a fetch at all, which is
-    // exactly the "requests for an msn already published return
-    // immediately" requirement for a viewer who was not one of the waiters
-    // this loop just resolved. The entry is bounded by how many distinct
-    // renditions (channel + session + rung) this isolate has ever served a
-    // directive for — small in practice, and isolates themselves are
-    // recycled by the Workers runtime, so this is not an unbounded leak.
+    // itself is deliberately kept rather than deleted immediately: that is
+    // what lets the very next request's fast path in `awaitBlockingReload`
+    // answer without a fetch at all, for a viewer who was not one of the
+    // waiters this loop just resolved. It stops being useful, and gets
+    // swept, once `FAST_PATH_FRESHNESS_MS` passes with nobody asking — see
+    // `sweepIdlePollStates`.
     state.polling = false;
   }
 }
@@ -490,6 +796,7 @@ async function runPollLoop(renditionKey, state, deps, now, sleep) {
  */
 export function resetBlockingReloadStateForTests() {
   pollStates.clear();
+  pollStatesLastSweptAt = 0;
 }
 
 /**
@@ -497,25 +804,33 @@ export function resetBlockingReloadStateForTests() {
  * directive: parse it (already done by the caller), then build the actual
  * `Response`. Kept here rather than inline in `index.ts` so that file's own
  * diff for this task is just "recognize a directive, call this" — see this
- * module's doc comment, "THREE THINGS THIS FILE DOES".
+ * module's doc comment, "FOUR THINGS THIS FILE DOES".
  *
  * @param {string} renditionKey - Same cache-key URL `index.ts` already uses for the non-blocking path (path only, no query).
  * @param {BlockingReloadDirectives} directives
  * @param {() => Promise<FetchedPlaylist>} fetchRendition - Caller's existing single-flight origin fetch (`fetchRenditionCoalesced`).
  * @param {(event: string, fields?: Record<string, unknown>) => void} logEvent
  * @param {{ channelId: string, rung: string }} context
+ * @param {AbortSignal} [signal] - The incoming request's signal, so a disconnected viewer's hold does not outlive the connection.
  * @returns {Promise<Response>}
  */
-export async function handleBlockingReload(renditionKey, directives, fetchRendition, logEvent, context) {
+export async function handleBlockingReload(renditionKey, directives, fetchRendition, logEvent, context, signal) {
   let outcome;
   try {
-    outcome = await awaitBlockingReload(renditionKey, directives, { fetchRendition });
+    outcome = await awaitBlockingReload(renditionKey, directives, { fetchRendition, signal });
   } catch {
     logEvent("hlsEdge.blockingReloadOriginError", { channelId: context.channelId, rung: context.rung });
     return new Response("Origin fetch failed", {
       status: 502,
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
+  }
+
+  if (outcome.kind === "aborted") {
+    // The client is already gone; nothing reads this response, but the
+    // Workers runtime still expects the handler to return something. 499
+    // ("client closed request") is the closest conventional status.
+    return new Response(null, { status: 499 });
   }
 
   if (outcome.kind === "too-far-ahead") {
@@ -532,6 +847,18 @@ export async function handleBlockingReload(renditionKey, directives, fetchRendit
     });
   }
 
+  if (outcome.kind === "origin-error") {
+    logEvent("hlsEdge.blockingReloadOriginRejected", {
+      channelId: context.channelId,
+      rung: context.rung,
+      status: outcome.playlist.status,
+    });
+    const headers = new Headers(outcome.playlist.headers);
+    headers.set("Cache-Control", "no-store");
+    headers.set("X-HLS-Edge-Cache", "SKIP");
+    return new Response(outcome.playlist.body, { status: outcome.playlist.status, headers });
+  }
+
   if (outcome.kind === "timeout") {
     logEvent("hlsEdge.blockingReloadTimeout", {
       channelId: context.channelId,
@@ -542,7 +869,7 @@ export async function handleBlockingReload(renditionKey, directives, fetchRendit
   }
 
   const headers = new Headers(outcome.playlist.headers);
-  // Never persisted to `caches.default` — see this module's doc comment,
+  // Never persisted to `caches.default` — see the module doc comment,
   // "ORIGIN DISCIPLINE" — so make sure a downstream cache (a browser, a CDN
   // sitting in front of this Worker for some other reason) does not treat a
   // held response as a normal 2 s-fresh playlist either.
