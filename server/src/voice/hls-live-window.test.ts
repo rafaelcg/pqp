@@ -179,6 +179,76 @@ describe("LiveWindowHistory", () => {
   });
 });
 
+/**
+ * BROADCAST_PIPELINE B0.2/B0.3. The egress DOES write
+ * `#EXT-X-PROGRAM-DATE-TIME` (see the fixture's own doc comment above,
+ * copied from a real session), so `render` should leave it untouched. These
+ * pin the defensive path for the day it is not there, and the `firstSeenAt`
+ * stamp the age header and the synthesis both read from.
+ */
+describe("LiveWindowHistory PDT synthesis and firstSeenAt", () => {
+  it("leaves an existing #EXT-X-PROGRAM-DATE-TIME exactly as the egress wrote it", () => {
+    const history = new LiveWindowHistory();
+    const body = widenLivePlaylist(history, egressPlaylist(0), 15, 1_000);
+    expect(body).toContain(
+      "#EXT-X-PROGRAM-DATE-TIME:2026-09-12T10:10:39.718Z",
+    );
+    // Not the synthesised form, which would be an ISO string derived from
+    // the fake `now` of 1000 ms since epoch.
+    expect(body).not.toContain(new Date(1_000).toISOString());
+  });
+
+  it("synthesises a PDT from firstSeenAt when a segment's tags carry none", () => {
+    const history = new LiveWindowHistory();
+    const noPdt = [
+      "#EXTM3U",
+      "#EXT-X-TARGETDURATION:2",
+      "#EXT-X-MEDIA-SEQUENCE:0",
+      "#EXTINF:2.000,",
+      "a_00000.ts",
+    ].join("\n");
+    const now = 1_726_000_000_000;
+    const body = widenLivePlaylist(history, noPdt, 15, now);
+    const lines = body.split("\n");
+    const uriAt = lines.indexOf("a_00000.ts");
+    expect(lines[uriAt - 1]).toBe("#EXTINF:2.000,");
+    expect(lines[uriAt - 2]).toBe(
+      `#EXT-X-PROGRAM-DATE-TIME:${new Date(now).toISOString()}`,
+    );
+  });
+
+  it("a synthesised PDT never moves once set, even if the segment is re-seen later", () => {
+    const history = new LiveWindowHistory();
+    const noPdt = [
+      "#EXTM3U",
+      "#EXT-X-MEDIA-SEQUENCE:0",
+      "#EXTINF:2.0,",
+      "a_00000.ts",
+    ].join("\n");
+    const firstSeen = 1_000;
+    widenLivePlaylist(history, noPdt, 15, firstSeen);
+    const second = widenLivePlaylist(history, noPdt, 15, firstSeen + 5_000);
+    expect(second).toContain(
+      `#EXT-X-PROGRAM-DATE-TIME:${new Date(firstSeen).toISOString()}`,
+    );
+    expect(second).not.toContain(new Date(firstSeen + 5_000).toISOString());
+  });
+
+  it("newestFirstSeenAt is null on an empty history and tracks the newest segment otherwise", () => {
+    const history = new LiveWindowHistory();
+    expect(history.newestFirstSeenAt).toBeNull();
+    widenLivePlaylist(history, egressPlaylist(0), 15, 10_000);
+    expect(history.newestFirstSeenAt).toBe(10_000);
+    // A later fetch that only re-lists the same entries does not bump it:
+    // firstSeenAt is stamped once, not refreshed on every poll.
+    widenLivePlaylist(history, egressPlaylist(0), 15, 20_000);
+    expect(history.newestFirstSeenAt).toBe(10_000);
+    // A genuinely new segment arriving bumps it to when THAT one first showed.
+    widenLivePlaylist(history, egressPlaylist(1), 15, 30_000);
+    expect(history.newestFirstSeenAt).toBe(30_000);
+  });
+});
+
 describe("liveWindowSegments", () => {
   afterEach(() => {
     delete process.env.LIVE_HLS_WINDOW_SEGMENTS;

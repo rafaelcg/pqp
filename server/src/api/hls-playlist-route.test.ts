@@ -58,9 +58,15 @@ function firstUri(body: string): string | undefined {
   return body.split("\n").find((line) => line !== "" && !line.startsWith("#"));
 }
 
+// Carries its own `#EXT-X-PROGRAM-DATE-TIME`, matching what production's
+// egress actually writes (BROADCAST_PIPELINE B0.2), so this file's "two real
+// renders agree byte-for-byte" tests are not incidentally exercising the
+// proxy's synthesised-PDT fallback, whose whole point is a wall clock that
+// legitimately differs between two independent renders.
 const PLAYLIST_BODY = [
   "#EXTM3U",
   "#EXT-X-TARGETDURATION:2",
+  "#EXT-X-PROGRAM-DATE-TIME:2026-09-12T10:10:39.718Z",
   "#EXTINF:2.0,",
   `${STARTED_AT}_00000.ts`,
 ].join("\n");

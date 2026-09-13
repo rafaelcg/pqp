@@ -123,6 +123,7 @@ import {
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
+  liveHlsTelemetryBatchSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -141,11 +142,18 @@ import {
 import {
   buildMasterPlaylistFor,
   buildSignedPlaylist,
+  hlsPlaylistAgeMs,
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
 } from "../voice/hls-playlist-proxy.js";
 import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
+import {
+  recordHlsLatencySample,
+  recordHlsTelemetryBatchAccepted,
+  recordHlsTelemetryBatchRejectedRateLimit,
+  recordHlsTelemetryBatchRejectedSchema,
+} from "../voice/hls-latency-metrics.js";
 import {
   describeHlsViewerToken,
   HLS_VIEWER_TOKEN_PARAM,
@@ -769,6 +777,18 @@ const feedbackLimiter = createRateLimiter({
   refillPerSecond: 0.05,
 });
 /**
+ * BROADCAST_PIPELINE B0.5. Only ~10% of viewers are sampled at all
+ * (`isSampledForHlsTelemetry`, client-side), and a sampled viewer flushes at
+ * most once per `LIVE_HLS_TELEMETRY_FLUSH_MS` (30s), so even a large party
+ * should never come close to this. Roomy enough that a client racing to
+ * catch up after a dropped connection (a few queued flushes) is not the thing
+ * that trips it; a script pretending to be many viewers from one account is.
+ */
+const liveHlsTelemetryLimiter = createRateLimiter({
+  capacity: 10,
+  refillPerSecond: 0.2,
+});
+/**
  * Post-call ratings. Roomier than feedback because this one is *asked for*:
  * somebody who genuinely has ten short calls in an evening should be able to
  * answer every prompt, and the client already refuses to ask more than once
@@ -858,6 +878,7 @@ export function resetApiRateLimits(): void {
   publicCommunityLimiter.reset();
   voiceLeaveLimiter.reset();
   bulkDeleteLimiter.reset();
+  liveHlsTelemetryLimiter.reset();
   // Keyed on the string "machine" rather than a user id, so unlike every
   // bucket above it is shared by every test in a file and would otherwise
   // drain across them.
@@ -2365,6 +2386,16 @@ async function hlsPlaylistResponse(
   // per-session render cache in `hls-playlist-proxy.ts`.
   res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Vary", "Authorization");
+  // BROADCAST_PIPELINE B0.3: how stale, in milliseconds, the freshest
+  // segment in this render already was when it was signed -- the T5-T6 span
+  // ("in the bucket, to listed in the playlist a viewer polls"), which is the
+  // one nothing watched before this. Read from the SAME render just above,
+  // so it reflects this exact response body. Not a viewer-facing number: no
+  // UI reads this header, only telemetry and an operator's network panel.
+  const ageMs = hlsPlaylistAgeMs(channelId, parsedStartedAt, options.rung);
+  if (ageMs !== null) {
+    res.setHeader("X-Pqp-Playlist-Age-Ms", String(ageMs));
+  }
   return new RawResponse(body, "application/vnd.apple.mpegurl");
 }
 
@@ -7718,6 +7749,51 @@ function feedbackIdParam(value: string | undefined): string {
   }
   return value;
 }
+
+/**
+ * BROADCAST_PIPELINE B0.5: sampled, batched, droppable client playback
+ * telemetry for a live watch party. Authenticated (the normal Bearer flow,
+ * CLAUDE.md pitfall #8) and rate-limited, but deliberately NOT gated on
+ * channel access or on the named session actually being live: this is an
+ * aggregate operational metric, not a read of anything sensitive, and
+ * checking either would put a database round trip on a path this doc's whole
+ * premise is to keep cheap. A batch naming a made-up or stale session id
+ * costs one histogram bucket a viewer never sees; that is a cheaper failure
+ * mode than a DB lookup on every flush from every sampled viewer.
+ *
+ * A REJECTED BATCH IS A NO-OP THE CLIENT NEVER RETRIES (see
+ * `client/src/lib/hls-playback.ts`'s telemetry queue): this is a measurement,
+ * not an event anything downstream is waiting on, so there is no retry
+ * machinery here to abuse and no reason to build one.
+ */
+router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!liveHlsTelemetryLimiter.take(key)) {
+    recordHlsTelemetryBatchRejectedRateLimit();
+    res.setHeader("Retry-After", String(liveHlsTelemetryLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  let batch: ReturnType<typeof liveHlsTelemetryBatchSchema.parse>;
+  try {
+    batch = liveHlsTelemetryBatchSchema.parse(await readJsonBody(req));
+  } catch (error) {
+    recordHlsTelemetryBatchRejectedSchema();
+    throw error;
+  }
+  for (const sample of batch.samples) {
+    recordHlsLatencySample(sample.rung, sample.latencyMs);
+  }
+  recordHlsTelemetryBatchAccepted();
+  // One structured line per batch (not per sample): a live party's worth of
+  // these is meant to be readable by a human during an event, not a second
+  // copy of the histogram in the log shipper.
+  logEvent("voice.hlsTelemetryBatch", {
+    sessionId: batch.sessionId,
+    samples: batch.samples.length,
+    rungs: [...new Set(batch.samples.map((sample) => sample.rung))],
+  });
+  return { ok: true };
+});
 
 /**
  * The settings box. Rate-limited like reports — it is the same "small text

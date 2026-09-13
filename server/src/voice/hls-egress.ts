@@ -318,6 +318,15 @@ interface RunningRung {
   startedAtMs: number;
   /** Last playlist shape the monitor saw (`sequence:segments`) and when it changed. */
   progress: { key: string; at: number } | null;
+  /**
+   * The `hls_sessions.id` this rendition's row was written under
+   * (BROADCAST_PIPELINE B0.4), so the `voice.hls*` lines about it name the
+   * same id the playlist's own `#EXT-X-PQP-SESSION` tag carries. Null for a
+   * row adopted back after a restart (the boot reconcile has the egress and
+   * the track, not the row's id) or when the insert itself failed; nothing
+   * downstream treats null as an error, only as "not known yet".
+   */
+  sessionId: string | null;
 }
 
 interface RoomHls {
@@ -376,7 +385,7 @@ interface RoomHls {
    * until the presenter's `mic-archive` publication shows up (or forever,
    * when the feature is off or their browser never publishes one).
    */
-  micArchive: { egressId: string; trackId: string } | null;
+  micArchive: { egressId: string; trackId: string; sessionId: string | null } | null;
   /**
    * Stop looking for that publication after this instant. Zero means never
    * look, which is what an ADOPTED session gets: its archive either came back
@@ -903,6 +912,36 @@ export function sessionPrefixPattern(
  * `LIVE_HLS_RETENTION_MINUTES` has had its objects swept, and the fresh egress
  * writes new ones under the same prefix.
  */
+/** What `recordSessionStarted` hands back: whether the write is safe to
+ * build on, separately from whether the row's id could be resolved. */
+interface RecordedSession {
+  /** False only when the write itself threw. Callers that gate on the write
+   * succeeding (the camera path) check this, not `sessionId`. */
+  ok: boolean;
+  /**
+   * The row's `hls_sessions.id` (BROADCAST_PIPELINE B0.4), threaded into
+   * `voice.hlsStarted` and its neighbours and into the playlist's own
+   * `#EXT-X-PQP-SESSION` tag. Null whenever it could not be resolved --
+   * which is NOT the same as the write failing: see below.
+   */
+  sessionId: string | null;
+}
+
+/**
+ * `RETURNING id` answers directly on an insert or a `reopen` update, but a
+ * plain `DO NOTHING` conflict returns no row at all -- Postgres did not touch
+ * one, so there is nothing to return -- even though the row the caller wants
+ * the id of is sitting right there. One extra read on that one path hands
+ * every caller the same id every other path gets.
+ *
+ * `sessionId: null` ON A SUCCESSFUL WRITE IS EXPECTED, NOT AN ERROR. A test
+ * pool that answers every query with `{ rowCount: 0, rows: [] }` (most of
+ * this file's suite) never gives either statement above a row to return, so
+ * the id stays null while the write itself did exactly what it always did.
+ * `ok` is the only field a caller may treat as failure; conflating "the id"
+ * with "did it work" would make a mocked pool's silence about the id look
+ * like the insert never happened, which is a different bug from B0.4.
+ */
 async function recordSessionStarted(
   channelId: string,
   startedAt: number,
@@ -918,9 +957,10 @@ async function recordSessionStarted(
   // adopt the exact shape a restart interrupted rather than guessing it
   // back from a single id: see `adoptCameraEgress`.
   audioTrackId: string | null = null,
-): Promise<boolean> {
+): Promise<RecordedSession> {
+  const objectPrefix = hlsObjectPrefix(channelId, startedAt, rung);
   try {
-    await getPool().query(
+    const result = await getPool().query<{ id: string }>(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, egress_id, rung,
           presenter_peer_id, video_track_id, audio_track_id)
@@ -935,10 +975,11 @@ async function recordSessionStarted(
                     ended_at = NULL,
                     cleaned_at = NULL`
            : "ON CONFLICT (object_prefix) DO NOTHING"
-       }`,
+       }
+       RETURNING id`,
       [
         channelId,
-        hlsObjectPrefix(channelId, startedAt, rung),
+        objectPrefix,
         startedAt,
         egressId,
         rung,
@@ -947,7 +988,14 @@ async function recordSessionStarted(
         audioTrackId,
       ],
     );
-    return true;
+    if (result.rows[0]) {
+      return { ok: true, sessionId: result.rows[0].id };
+    }
+    const existing = await getPool().query<{ id: string }>(
+      `SELECT id FROM hls_sessions WHERE object_prefix = $1`,
+      [objectPrefix],
+    );
+    return { ok: true, sessionId: existing.rows[0]?.id ?? null };
   } catch (error) {
     logEvent("voice.hlsSessionRecordFailed", {
       channelId,
@@ -955,7 +1003,7 @@ async function recordSessionStarted(
       rung,
       error: error instanceof Error ? error.message : String(error),
     });
-    return false;
+    return { ok: false, sessionId: null };
   }
 }
 
@@ -2085,6 +2133,7 @@ export async function checkLiveHlsHealth(
       logEvent("voice.hlsRungDied", {
         channelId,
         egressId: entry.egressId,
+        sessionId: entry.sessionId,
         rung: entry.rung.name,
         remaining: room.rungs.map((item) => item.rung.name),
         error: detail ?? null,
@@ -2138,6 +2187,7 @@ export async function checkLiveHlsHealth(
         logEvent("voice.hlsCameraDied", {
           channelId,
           egressId: camera.egressId,
+          sessionId: camera.sessionId,
           error: cameraHealth.detail ?? null,
           cooldownMs: CAMERA_COOLDOWN_MS,
         });
@@ -2191,6 +2241,7 @@ export async function checkLiveHlsHealth(
     logEvent("voice.hlsEgressDied", {
       channelId,
       egressId: primary.egressId,
+      sessionId: primary.sessionId,
       rung: primary.rung.name,
       error: detail ?? null,
     });
@@ -2400,6 +2451,12 @@ export function adoptLiveHlsSession(input: {
     // playlist's progress has not been sampled by THIS process yet.
     startedAtMs: Date.now(),
     progress: null,
+    // `adoptLiveHlsSession` is synchronous (its caller is the boot reconcile
+    // walking LiveKit's own egress list, not a DB read), so there is no row
+    // id in hand here. The next health check or stop that touches this rung
+    // logs `sessionId: null` until then, which is an honest "not known yet"
+    // rather than a wrong guess.
+    sessionId: null,
   };
   // ADOPTION IS PER EGRESS AND A LADDER HAS SEVERAL. The boot reconcile walks
   // what the media server is running, one egress at a time, so the rungs of
@@ -2547,6 +2604,8 @@ function adoptCameraEgress(input: {
     progress: null,
     cameraTrackId: hasVideo ? input.videoTrackId : null,
     audioTrackId: hasAudio ? audioTrackId : null,
+    // Same gap as the ladder's own adoption path above: no row read here.
+    sessionId: null,
   };
   room.stream = withCameraUrl(room.stream, input.channelId, {
     hasVideo,
@@ -2592,7 +2651,12 @@ export function adoptLiveHlsMicArchive(input: {
     // and let the caller stop it.
     return false;
   }
-  room.micArchive = { egressId: input.egressId, trackId: input.trackId };
+  // No `hls_sessions.id` to hand back here: adoption inherits the egress and
+  // the track from the boot reconcile, not the row. The next thing that
+  // touches this archive (the health monitor, a stop) leaves it null too --
+  // adoption is rare enough that a gap in B0.4's coverage here is an honest
+  // one, not worth a second query on a boot-time path.
+  room.micArchive = { egressId: input.egressId, trackId: input.trackId, sessionId: null };
   room.micArchiveUntil = 0;
   logEvent("voice.hlsMicArchiveAdopted", {
     channelId: input.channelId,
@@ -3129,9 +3193,12 @@ async function startMicArchive(
     await stopEgressById(egressId, channelId);
     return;
   }
-  room.micArchive = { egressId, trackId };
+  // Set synchronously, before the write below, so a second call landing
+  // during that await sees `room.micArchive` already taken and refuses
+  // rather than starting a duplicate egress on the same track.
+  room.micArchive = { egressId, trackId, sessionId: null };
   room.micArchiveUntil = 0;
-  await recordSessionStarted(
+  const { sessionId } = await recordSessionStarted(
     channelId,
     startedAt,
     egressId,
@@ -3139,11 +3206,15 @@ async function startMicArchive(
     room.stream.presenterPeerId,
     room.videoTrackId,
   );
+  if (room.micArchive && room.micArchive.egressId === egressId) {
+    room.micArchive.sessionId = sessionId;
+  }
   logEvent("voice.hlsMicArchiveStarted", {
     channelId,
     startedAt,
     egressId,
     trackId,
+    sessionId,
     key: micArchiveObjectKey(channelId, startedAt),
   });
 }
@@ -3169,6 +3240,7 @@ async function stopMicArchive(
     channelId,
     startedAt: room.stream.startedAt,
     egressId: archive.egressId,
+    sessionId: archive.sessionId,
     reason,
   });
   if (stopEgress) {
@@ -3263,6 +3335,7 @@ async function stopRungs(
       logEvent("voice.hlsStopFailed", {
         channelId,
         egressId: entry.egressId,
+        sessionId: entry.sessionId,
         rung: entry.rung.name,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -3298,7 +3371,9 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
     presenterPeerId: current.stream.presenterPeerId,
     startedAt: current.stream.startedAt,
     egressIds: current.rungs.map((entry) => entry.egressId),
+    sessionIds: current.rungs.map((entry) => entry.sessionId),
     cameraEgressId: current.camera?.egressId ?? null,
+    cameraSessionId: current.camera?.sessionId ?? null,
   });
   // BEFORE the rungs, and unconditionally: the archive is an egress on the
   // media box like any other, and a session torn down without stopping it
@@ -3466,6 +3541,7 @@ async function reconcileCameraEgress(
     logEvent("voice.hlsCameraStopped", {
       channelId,
       egressId: current.egressId,
+      sessionId: current.sessionId,
       reason: wantedVideo || wantedAudio ? "track-replaced" : "no-camera",
     });
   }
@@ -3583,7 +3659,7 @@ async function reconcileCameraEgress(
   // playlist path `renderSignedPlaylist` 404s (no session to be found) while
   // the transcode goes on consuming an encoder with nothing here to reclaim
   // it once this process exits.
-  const recorded = await recordSessionStarted(
+  const { ok: recorded, sessionId } = await recordSessionStarted(
     channelId,
     startedAt,
     egressId,
@@ -3627,6 +3703,7 @@ async function reconcileCameraEgress(
     progress: null,
     cameraTrackId: wantedVideo,
     audioTrackId: wantedAudio,
+    sessionId,
   };
   room.stream = withCameraUrl(room.stream, channelId, {
     hasVideo: Boolean(wantedVideo),
@@ -3636,6 +3713,7 @@ async function reconcileCameraEgress(
     channelId,
     egressId,
     startedAt,
+    sessionId,
     cameraTrackId: wantedVideo,
     audioTrackId: wantedAudio,
     boxMbps: Math.round(decision.boxMbps),
@@ -3799,6 +3877,9 @@ async function startRoom(
       egressId,
       startedAtMs: startedAt,
       progress: null,
+      // Filled in below, once `recordSessionStarted` has actually run: this
+      // object exists before that write starts.
+      sessionId: null,
     });
   }
   const primary = running[0];
@@ -3842,7 +3923,7 @@ async function startRoom(
   // round trip in front of `rooms.set` is what made the health-monitor tests
   // flake on the CI runner and would delay a restart in production for
   // exactly as long as the database felt like taking.
-  await Promise.all(
+  const recordedSessions = await Promise.all(
     running.map((entry) =>
       recordSessionStarted(
         channelId,
@@ -3854,6 +3935,15 @@ async function startRoom(
       ),
     ),
   );
+  // Mutates the same objects `primary` and `stream`'s callers already hold a
+  // reference to, so `voice.hlsStarted` below (and every later log that reads
+  // `room.rungs`) sees the id without a second lookup. A per-rung write
+  // failing here is not new behaviour: the pre-B0.4 code discarded this
+  // result too, and `recordSessionStarted` already logged
+  // `voice.hlsSessionRecordFailed` for it.
+  running.forEach((entry, i) => {
+    entry.sessionId = recordedSessions[i]?.sessionId ?? null;
+  });
   await endSupersededSessions(
     channelId,
     startedAt,
@@ -3878,6 +3968,10 @@ async function startRoom(
   logEvent("voice.hlsStarted", {
     channelId,
     presenterPeerId,
+    // The primary rung's `hls_sessions.id` (BROADCAST_PIPELINE B0.4): the
+    // same id every rung's row carries its own copy of in `sessionIds`
+    // below, and the same one the playlist's `#EXT-X-PQP-SESSION` tag names.
+    sessionId: primary.sessionId,
     playlistReady: ready,
     // How long the first live playlist actually took. The only way to know
     // whether `PLAYLIST_WAIT_ATTEMPTS` is set anywhere near right, and the
@@ -3896,6 +3990,7 @@ async function startRoom(
       .filter((decision) => !decision.start)
       .map((decision) => `${decision.rung.name}:${decision.refusal}`),
     egressIds: running.map((entry) => entry.egressId),
+    sessionIds: running.map((entry) => entry.sessionId),
   });
   if (!ready) {
     // Twenty seconds and no live playlist: this egress is not going to

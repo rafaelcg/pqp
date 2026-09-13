@@ -16,6 +16,7 @@ import {
   ladderMaxFramerate,
   parseLadder,
   rungEncodingOptions,
+  withPqpSessionTag,
   type LadderRung,
 } from "./hls-ladder.js";
 
@@ -387,6 +388,40 @@ describe("buildMasterPlaylist", () => {
     expect(body.startsWith("#EXTM3U\n")).toBe(true);
     expect(body.match(/#EXT-X-STREAM-INF/g)).toHaveLength(1);
     expect(body.endsWith("\n")).toBe(true);
+  });
+
+  it("tags the master with the session id (BROADCAST_PIPELINE B0.4) when one is given", () => {
+    const body = buildMasterPlaylist(variants, "session-123");
+    const lines = body.split("\n");
+    expect(lines[0]).toBe("#EXTM3U");
+    expect(lines[1]).toBe("#EXT-X-PQP-SESSION:session-123");
+  });
+
+  it("omits the session tag entirely when none is given", () => {
+    const body = buildMasterPlaylist(variants);
+    expect(body).not.toContain("#EXT-X-PQP-SESSION");
+  });
+});
+
+describe("withPqpSessionTag", () => {
+  it("inserts the tag right after #EXTM3U", () => {
+    const playlist = "#EXTM3U\n#EXT-X-VERSION:3\nfoo.ts\n";
+    expect(withPqpSessionTag(playlist, "abc-123")).toBe(
+      "#EXTM3U\n#EXT-X-PQP-SESSION:abc-123\n#EXT-X-VERSION:3\nfoo.ts\n",
+    );
+  });
+
+  it("prepends the tag when the playlist does not start with #EXTM3U", () => {
+    expect(withPqpSessionTag("#EXT-X-VERSION:3\n", "abc-123")).toBe(
+      "#EXT-X-PQP-SESSION:abc-123\n#EXT-X-VERSION:3\n",
+    );
+  });
+
+  it("is a no-op for a null, undefined or empty id", () => {
+    const playlist = "#EXTM3U\nfoo.ts\n";
+    expect(withPqpSessionTag(playlist, null)).toBe(playlist);
+    expect(withPqpSessionTag(playlist, undefined)).toBe(playlist);
+    expect(withPqpSessionTag(playlist, "")).toBe(playlist);
   });
 });
 

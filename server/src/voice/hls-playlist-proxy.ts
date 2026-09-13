@@ -11,6 +11,7 @@ import {
 import {
   buildMasterPlaylist,
   LADDER_RUNGS,
+  withPqpSessionTag,
   type MasterVariant,
 } from "./hls-ladder.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
@@ -454,7 +455,7 @@ async function runKeepWarmTick(
   try {
     let rungs: (string | undefined)[];
     try {
-      const list = await sessionRungs(channelId, startedAt, now);
+      const { rungs: list } = await sessionRungs(channelId, startedAt, now);
       // A pre-ladder session (no rung rows at all) still has one media
       // playlist to keep warm: `rung: undefined`.
       rungs = list.length > 0 ? list : [undefined];
@@ -527,8 +528,8 @@ async function renderSignedPlaylist(
   // makes that true. A 404 is what the client's watchdog wants: it refetches
   // `GET /api/channels/:id/live` and follows the current session, which is
   // machinery that already exists and already works.
-  const session = await getPool().query(
-    `SELECT 1 FROM hls_sessions
+  const session = await getPool().query<{ id: string }>(
+    `SELECT id FROM hls_sessions
      WHERE channel_id = $1
        AND object_prefix = $2
        AND ended_at IS NULL
@@ -544,6 +545,7 @@ async function renderSignedPlaylist(
       `No live HLS session ${objectPrefix} for channel ${channelId}`,
     );
   }
+  const sessionId = session.rows?.[0]?.id ?? null;
   // A presigned endpoint-form GET: the bucket can be fully private and no
   // public base is needed (production runs that way).
   const playlistUrl = internalPlaylistUrl(channelId, startedAt, rung);
@@ -569,10 +571,8 @@ async function renderSignedPlaylist(
   // listed media behind the playhead stalls on every slow poll. The widened
   // body still carries the egress's own URI lines, so the rewrite below is
   // unchanged.
-  const body = widenLivePlaylist(
-    historyFor(cacheKey(channelId, startedAt, rung)),
-    await response.text(),
-  );
+  const history = historyFor(cacheKey(channelId, startedAt, rung));
+  const body = widenLivePlaylist(history, await response.text(), undefined, now);
   const ttl = hlsUrlTtlSeconds();
   // Quantised, never `new Date()`: see `segmentSigningTime` above. A segment
   // appearing for the first time is signed at this instant; one already in
@@ -627,7 +627,30 @@ async function renderSignedPlaylist(
     }
   }
 
-  return rewritten;
+  return withPqpSessionTag(rewritten, sessionId);
+}
+
+/**
+ * `X-Pqp-Playlist-Age-Ms` (BROADCAST_PIPELINE B0.3): how stale, in
+ * milliseconds, the freshest segment in this render already was when it was
+ * served -- `now` minus the wall clock this process first saw that segment
+ * listed (`LiveWindowHistory.newestFirstSeenAt`). Null when nothing has been
+ * rendered for this rendition yet (a viewer's very first request, before
+ * `buildSignedPlaylist` has populated the history), in which case the route
+ * omits the header rather than sending a lie.
+ *
+ * Reads the same in-process history `buildSignedPlaylist` just populated, so
+ * call this AFTER awaiting it, not before.
+ */
+export function hlsPlaylistAgeMs(
+  channelId: string,
+  startedAt: number,
+  rung?: string,
+  now = Date.now(),
+): number | null {
+  const history = windowHistory.get(cacheKey(channelId, startedAt, rung));
+  const firstSeenAt = history?.newestFirstSeenAt ?? null;
+  return firstSeenAt === null ? null : Math.max(0, now - firstSeenAt);
 }
 
 /**
@@ -640,9 +663,21 @@ async function renderSignedPlaylist(
  * viewer's own token and is therefore not shared. Building the string from a
  * cached list costs nothing.
  */
+interface SessionRungs {
+  rungs: string[];
+  /**
+   * One `hls_sessions.id` representing the whole party for the
+   * `#EXT-X-PQP-SESSION` tag on the master (BROADCAST_PIPELINE B0.4): the
+   * lowest-bitrate row, same tiebreak the rungs themselves are ordered by
+   * plus `id` for determinism when two rows share a `started_at`. Null only
+   * when there are no rungs at all.
+   */
+  sessionId: string | null;
+}
+
 const rungCache = new Map<
   string,
-  { rungs?: string[]; inflight?: Promise<string[]>; at: number }
+  { rungs?: SessionRungs; inflight?: Promise<SessionRungs>; at: number }
 >();
 
 /**
@@ -665,7 +700,7 @@ async function sessionRungs(
   channelId: string,
   startedAt: number,
   now: number,
-): Promise<string[]> {
+): Promise<SessionRungs> {
   const key = cacheKey(channelId, startedAt, "master");
   const cached = rungCache.get(key);
   if (cached) {
@@ -683,22 +718,26 @@ async function sessionRungs(
     }
   }
   const inflight = getPool()
-    .query<{ rung: string | null }>(
-      `SELECT rung FROM hls_sessions
+    .query<{ id: string; rung: string | null }>(
+      `SELECT id, rung FROM hls_sessions
        WHERE channel_id = $1
          AND object_prefix LIKE $2
          AND rung IS NOT NULL
          AND ended_at IS NULL
          AND cleaned_at IS NULL
-       ORDER BY started_at ASC`,
+       ORDER BY started_at ASC, id ASC`,
       [channelId, sessionPrefixPattern(channelId, startedAt)],
     )
     .then((rows) => {
-      const rungs = rows.rows
-        .map((row) => row.rung)
-        .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
-      rungCache.set(key, { rungs, at: now });
-      return rungs;
+      const known = (rows.rows ?? []).filter((row) =>
+        Boolean(row.rung && LADDER_RUNGS[row.rung]),
+      );
+      const result: SessionRungs = {
+        rungs: known.map((row) => row.rung!),
+        sessionId: known[0]?.id ?? null,
+      };
+      rungCache.set(key, { rungs: result, at: now });
+      return result;
     })
     .catch((error: unknown) => {
       // A3.1: the breaker is open. Same reasoning as `renderCachedPlaylist`'s
@@ -747,7 +786,7 @@ export async function buildMasterPlaylistFor(input: {
   token?: string | null;
   now?: number;
 }): Promise<string | null> {
-  const rungs = await sessionRungs(
+  const { rungs, sessionId } = await sessionRungs(
     input.channelId,
     input.startedAt,
     input.now ?? Date.now(),
@@ -764,5 +803,5 @@ export async function buildMasterPlaylistFor(input: {
       `/api/voice/hls-playlist/${encodeURIComponent(input.channelId)}` +
       `/${input.startedAt}/${encodeURIComponent(rung)}${query}`,
   }));
-  return buildMasterPlaylist(variants);
+  return buildMasterPlaylist(variants, sessionId);
 }

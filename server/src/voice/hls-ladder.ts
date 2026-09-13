@@ -580,6 +580,32 @@ export interface MasterVariant {
 }
 
 /**
+ * `#EXT-X-PQP-SESSION:<id>` — our own comment tag naming the `hls_sessions`
+ * row a playlist came from (BROADCAST_PIPELINE B0.4). Deliberately not a
+ * standard HLS tag and deliberately not a status: it names identity only, so
+ * a client's telemetry batch and this server's own `voice.hls*` logs can be
+ * stitched together on one id instead of a reader guessing from a time
+ * window. CLAUDE.md already explains why `hls_sessions` gets no status enum
+ * of its own; this is the same rule applied to the playlist.
+ *
+ * A comment tag (`#EXT-X-...` with no player-defined meaning) is ignored by
+ * every HLS parser this product ships against: hls.js skips unknown tags,
+ * and so does `AVPlayer`.
+ */
+export function withPqpSessionTag(
+  playlist: string,
+  sessionId: string | null | undefined,
+): string {
+  if (!sessionId) {
+    return playlist;
+  }
+  const lines = playlist.split("\n");
+  const insertAt = lines[0] === "#EXTM3U" ? 1 : 0;
+  lines.splice(insertAt, 0, `#EXT-X-PQP-SESSION:${sessionId}`);
+  return lines.join("\n");
+}
+
+/**
  * The master playlist: one `EXT-X-STREAM-INF` per rendition that actually
  * started, highest bitrate LAST so the list reads the conventional way and a
  * player that ignores ABR entirely lands on the lowest rung rather than the
@@ -594,7 +620,10 @@ export interface MasterVariant {
  * one code path, and hls.js handles a one-level master identically to a bare
  * media playlist.
  */
-export function buildMasterPlaylist(variants: readonly MasterVariant[]): string {
+export function buildMasterPlaylist(
+  variants: readonly MasterVariant[],
+  sessionId?: string | null,
+): string {
   const ordered = [...variants].sort(
     (a, b) => a.rung.videoKbps - b.rung.videoKbps,
   );
@@ -609,5 +638,5 @@ export function buildMasterPlaylist(variants: readonly MasterVariant[]): string 
     );
     lines.push(variant.uri);
   }
-  return `${lines.join("\n")}\n`;
+  return withPqpSessionTag(`${lines.join("\n")}\n`, sessionId);
 }
