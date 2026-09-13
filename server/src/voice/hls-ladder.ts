@@ -243,13 +243,20 @@ export const VOICE_RUNG: LadderRung = {
  * per-rung histogram map -- one authenticated account sending distinct
  * garbage rungs grows that map without bound for the life of the process.
  */
-const ALL_KNOWN_RUNGS: Readonly<Record<string, LadderRung>> = {
-  ...LADDER_RUNGS,
-  [CAMERA_RUNG_NAME]: CAMERA_RUNG,
-};
+// `Object.create(null)` on purpose, not `{}`: a plain object literal
+// inherits `Object.prototype`, so a bracket lookup with an ATTACKER-CONTROLLED
+// key like `"toString"` or `"constructor"` returns a real (truthy) function
+// off the prototype chain instead of `undefined` -- a second Farol finding,
+// 2026-09-13, on the exact line meant to close the first one. A prototype-less
+// object has no such inherited properties to leak through the lookup.
+const ALL_KNOWN_RUNGS: Readonly<Record<string, LadderRung>> = Object.assign(
+  Object.create(null) as Record<string, LadderRung>,
+  LADDER_RUNGS,
+  { [CAMERA_RUNG_NAME]: CAMERA_RUNG },
+);
 
 export function isKnownHlsRung(rung: string): boolean {
-  return Boolean(ALL_KNOWN_RUNGS[rung]);
+  return Object.hasOwn(ALL_KNOWN_RUNGS, rung);
 }
 
 /**
@@ -259,7 +266,7 @@ export function isKnownHlsRung(rung: string): boolean {
  * all, so a caller can put those last rather than guessing where they sort.
  */
 export function hlsRungVideoKbps(rung: string): number | null {
-  return ALL_KNOWN_RUNGS[rung]?.videoKbps ?? null;
+  return isKnownHlsRung(rung) ? ALL_KNOWN_RUNGS[rung]!.videoKbps : null;
 }
 
 /**

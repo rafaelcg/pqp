@@ -16,6 +16,8 @@ import {
   ladderMaxFramerate,
   parseLadder,
   rungEncodingOptions,
+  hlsRungVideoKbps,
+  isKnownHlsRung,
   withPqpSessionTag,
   type LadderRung,
 } from "./hls-ladder.js";
@@ -591,5 +593,44 @@ describe("the camera rung", () => {
       framerate: 30,
       videoKbps: 400,
     });
+  });
+});
+
+describe("isKnownHlsRung / hlsRungVideoKbps", () => {
+  it("recognises every ladder rung and the camera rung", () => {
+    for (const rung of Object.keys(LADDER_RUNGS)) {
+      expect(isKnownHlsRung(rung)).toBe(true);
+      expect(hlsRungVideoKbps(rung)).toBe(LADDER_RUNGS[rung]!.videoKbps);
+    }
+    expect(isKnownHlsRung(CAMERA_RUNG_NAME)).toBe(true);
+    expect(hlsRungVideoKbps(CAMERA_RUNG_NAME)).toBe(CAMERA_RUNG.videoKbps);
+  });
+
+  it("refuses an arbitrary string", () => {
+    expect(isKnownHlsRung("some-made-up-rung")).toBe(false);
+    expect(hlsRungVideoKbps("some-made-up-rung")).toBeNull();
+  });
+
+  it("refuses every inherited Object.prototype property name -- the exact bypass a plain object literal lookup allows", () => {
+    // A Farol finding, 2026-09-13: `({...})[key]` for an attacker-controlled
+    // `key` like "toString" or "constructor" returns a real, truthy value
+    // off the prototype chain rather than undefined, which let a client
+    // send `rung: "toString"` and have it accepted as a known rung.
+    for (const key of [
+      "toString",
+      "constructor",
+      "hasOwnProperty",
+      "valueOf",
+      "__proto__",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+    ]) {
+      expect(isKnownHlsRung(key)).toBe(false);
+      expect(hlsRungVideoKbps(key)).toBeNull();
+    }
+  });
+
+  it("empty string is not a known rung", () => {
+    expect(isKnownHlsRung("")).toBe(false);
   });
 });
