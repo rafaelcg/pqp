@@ -183,4 +183,37 @@ describe("the channel sidebar header", () => {
     expect(html).toContain('aria-label="Members"');
     expect(html).toContain('aria-label="Invite people"');
   });
+
+  it("keeps the mobile close button while loading or with no server selected", () => {
+    // The drawer can be open in either state, and a header with no way to
+    // close it traps a mobile viewer — this failed for a beat: the
+    // server-present and no-server branches of the header used to diverge on
+    // whether `onMobileClose` was inside the `server` conditional at all.
+    for (const props of [
+      { ...baseProps, server: null, isLoading: true },
+      { ...baseProps, server: null, isLoading: false },
+    ]) {
+      const html = render(<ChannelList {...props} onMobileClose={() => {}} />);
+      expect(html).toContain('aria-label="Close channel list"');
+    }
+  });
+
+  it("never clips the header row inside a fixed-height banner box", () => {
+    // The banner wrapper used to give the row a fixed `aspectRatio` height
+    // with `overflow-hidden`, which clips a two-line name plus a role badge
+    // at a normal sidebar width. The row is normal flow now, not absolutely
+    // positioned inside the box, so nothing caps its height.
+    const html = render(
+      <ChannelList
+        {...baseProps}
+        server={{
+          ...server,
+          bannerUrl: "https://cdn.example.com/banner.png",
+        }}
+      />,
+    );
+    const banner = /<div data-server-banner="" class="([^"]*)"/.exec(html);
+    expect(banner).not.toBeNull();
+    expect(banner![1]).not.toContain("overflow-hidden");
+  });
 });

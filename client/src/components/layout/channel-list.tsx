@@ -1418,10 +1418,23 @@ export function ChannelList({
           )}
         </ServerHeaderBanner>
       ) : (
-        <div className="flex min-h-16 shrink-0 items-center border-b border-ink-4/60 bg-channel px-4 py-3">
+        // Same close control as the server-present row, and for the same
+        // reason: the drawer can be open while loading or with nothing
+        // selected, and a header with no way to close it is a trap on mobile.
+        <div className="flex min-h-16 shrink-0 items-center justify-between gap-2 border-b border-ink-4/60 bg-channel px-4 py-3">
           <p className="truncate font-display text-base font-bold leading-tight">
             {isLoading ? t("common.loading") : t("chrome.noServer")}
           </p>
+          {onMobileClose && (
+            <button
+              type="button"
+              className="shrink-0 rounded p-1 text-paper-muted hover:bg-ink-3 hover:text-paper md:hidden"
+              aria-label={t("chrome.closeChannelList")}
+              onClick={onMobileClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       )}
 
