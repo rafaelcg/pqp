@@ -32,17 +32,22 @@ set -euo pipefail
 TAG="${1:?usage: pqp-deploy <image-tag>}"
 DEST=/opt/pqp
 STAGING=/home/pqp-deploy/incoming
+VERIFIED=""
+tmp_bin=""
 
 # Unconditional, on every exit path (success, a rejected/tampered config,
-# a failed pull, a healthcheck timeout -- anything). pqp-deploy owns this
-# directory and can re-stage into it at any time, so a run that dies
-# before reaching the end must never leave files behind for the NEXT
-# invocation (e.g. the rollback call the workflow makes right after a
-# failure) to find still sitting there -- a half-copied scp or a
-# deliberately-broken upload from a previous attempt could otherwise block
-# that rollback at the same manifest check, or get installed a second time
-# by accident.
-trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/pqp-deploy.sh "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig' EXIT
+# a failed pull, a healthcheck timeout -- anything). pqp-deploy owns
+# STAGING and can re-stage into it at any time, so a run that dies before
+# reaching the end must never leave files behind for the NEXT invocation
+# (e.g. the rollback call the workflow makes right after a failure) to
+# find still sitting there -- a half-copied scp or a deliberately-broken
+# upload from a previous attempt could otherwise block that rollback at
+# the same manifest check, or get installed a second time by accident.
+# VERIFIED and tmp_bin are ours (root-owned, created below), not
+# pqp-deploy's, but the same "never leave residue for the next run" logic
+# applies -- quoted with defaults so this fires safely even before either
+# variable is ever assigned (a run that exits before reaching that point).
+trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/pqp-deploy.sh "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig; rm -rf "${VERIFIED:-}"; rm -f "${tmp_bin:-}"' EXIT
 
 cd "$DEST"
 
@@ -69,12 +74,41 @@ cd "$DEST"
 # (rather than trusting it separately, or not at all) is what makes
 # self-updating safe: the exact same signature that has always gated
 # compose.yaml/Caddyfile now gates root code, not just root config.
+#
+# CRITICAL: verify-then-use must not mean "check bytes at path P, then
+# separately re-read path P to install it" -- STAGING stays writable by
+# pqp-deploy for the ENTIRE time this script runs, so if verification and
+# installation are two separate reads of the same attacker-writable path,
+# a compromised pqp-deploy key can swap the content (or repoint a symlink)
+# in between, install its OWN payload as root, and never once fail a
+# check. So every staged file this run will trust is copied ONCE, up
+# front, into VERIFIED -- a fresh `mktemp -d` owned by root, mode 0700,
+# which pqp-deploy has no permission to read or write into. Everything
+# from here on (the HMAC check, the sha256sum check, and the installs
+# themselves) reads ONLY from VERIFIED, never from STAGING again, so
+# "what got hashed" and "what got installed" are provably the same bytes
+# regardless of what pqp-deploy does to STAGING afterward. Symlinks are
+# refused outright rather than followed: a symlink is itself something
+# pqp-deploy can repoint at any moment, including between this copy and
+# whatever it points at being read, which is exactly the class of race
+# this whole block exists to close.
 if [[ -f "$STAGING/compose.yaml" || -f "$STAGING/Caddyfile" || -f "$STAGING/pqp-deploy.sh" ]]; then
   if [[ ! -s /etc/pqp/deploy-hmac.key ]]; then
     echo "refusing staged config: /etc/pqp/deploy-hmac.key is not provisioned" >&2
     exit 1
   fi
-  if [[ ! -f "$STAGING/manifest.sha256" || ! -f "$STAGING/manifest.sig" ]]; then
+  VERIFIED="$(mktemp -d)"
+  for f in compose.yaml Caddyfile pqp-deploy.sh manifest.sha256 manifest.sig; do
+    p="$STAGING/$f"
+    if [[ -e "$p" || -L "$p" ]]; then
+      if [[ -L "$p" || ! -f "$p" ]]; then
+        echo "refusing staged config: $f is not a regular file" >&2
+        exit 1
+      fi
+      cp --no-preserve=mode,ownership,timestamps -- "$p" "$VERIFIED/$f"
+    fi
+  done
+  if [[ ! -f "$VERIFIED/manifest.sha256" || ! -f "$VERIFIED/manifest.sig" ]]; then
     echo "refusing staged config: missing manifest.sha256/manifest.sig" >&2
     exit 1
   fi
@@ -96,31 +130,42 @@ with open("/etc/pqp/deploy-hmac.key", "rb") as f:
 with open(sys.argv[1], "rb") as f:
     data = f.read()
 print(hmac.new(key, data, hashlib.sha256).hexdigest())
-' "$STAGING/manifest.sha256")"
-  got="$(tr -d '[:space:]' <"$STAGING/manifest.sig")"
+' "$VERIFIED/manifest.sha256")"
+  got="$(tr -d '[:space:]' <"$VERIFIED/manifest.sig")"
   if [[ -z "$expected" || "$expected" != "$got" ]]; then
     echo "refusing staged config: manifest signature does not verify" >&2
     exit 1
   fi
-  if ! (cd "$STAGING" && sha256sum -c manifest.sha256 --quiet); then
+  if ! (cd "$VERIFIED" && sha256sum -c manifest.sha256 --quiet); then
     echo "refusing staged config: staged files do not match the signed manifest" >&2
     exit 1
   fi
-  install -m 0644 -o pqp -g pqp "$STAGING/compose.yaml" "$DEST/compose.yaml"
-  install -m 0644 -o pqp -g pqp "$STAGING/Caddyfile" "$DEST/Caddyfile"
+  install -m 0644 -o pqp -g pqp "$VERIFIED/compose.yaml" "$DEST/compose.yaml"
+  install -m 0644 -o pqp -g pqp "$VERIFIED/Caddyfile" "$DEST/Caddyfile"
   # Same permissions/ownership provision.sh uses for the initial install.
-  # SAFE to do while THIS SCRIPT IS RUNNING: `install` writes the new
-  # content to a fresh inode in the destination directory and renames it
-  # into place, an atomic filesystem operation -- it does not truncate the
-  # file the currently-executing interpreter already has open. The shell
-  # that is running RIGHT NOW keeps reading the OLD content from the OLD
-  # (now unlinked-but-still-referenced) inode until it exits normally; only
-  # the NEXT invocation of `pqp-deploy` picks up whatever is installed
-  # here. Verified empirically before relying on it -- this is the same
-  # "safe self-replacing script" pattern several installers use, not a
-  # novel trick.
-  if [[ -f "$STAGING/pqp-deploy.sh" ]]; then
-    install -m 0755 -o root -g root "$STAGING/pqp-deploy.sh" /usr/local/bin/pqp-deploy
+  # Explicit temp-file-then-rename rather than trusting `install`'s own
+  # internals to do the equivalent: GNU coreutils' `install` DOES already
+  # write to a fresh inode and rename it into place for a plain file copy
+  # like this (verified directly against Ubuntu 24.04's coreutils 9.4, the
+  # exact box/version this runs on, root-owned destination, matching
+  # flags -- the currently-executing interpreter kept running its OLD,
+  # unlinked-but-still-open inode to completion across the replacement
+  # every time), but doing the rename ourselves removes any doubt for
+  # whoever reads this next without re-deriving that from coreutils
+  # internals. `mktemp` in the SAME directory as the destination is what
+  # makes the final `mv` a same-filesystem rename (atomic, not a
+  # cross-filesystem copy) -- mode and ownership are set on the temp file
+  # BEFORE it is moved into place, so there is no window where the final
+  # path exists with the wrong permissions. The shell currently executing
+  # this script keeps reading whatever inode it already opened; only the
+  # NEXT invocation of `pqp-deploy` sees the newly renamed-in file.
+  if [[ -f "$VERIFIED/pqp-deploy.sh" ]]; then
+    tmp_bin="$(mktemp /usr/local/bin/.pqp-deploy.XXXXXX)"
+    cp --no-preserve=mode,ownership,timestamps -- "$VERIFIED/pqp-deploy.sh" "$tmp_bin"
+    chmod 0755 "$tmp_bin"
+    chown root:root "$tmp_bin"
+    mv -f -- "$tmp_bin" /usr/local/bin/pqp-deploy
+    tmp_bin=""
   fi
 fi
 
