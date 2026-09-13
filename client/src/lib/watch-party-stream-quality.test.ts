@@ -4,6 +4,7 @@ import {
   DEFAULT_WATCH_PARTY_STREAM_QUALITY,
   parseWatchPartyStreamQuality,
   readWatchPartyStreamQuality,
+  resetWatchPartyStreamQualityForNewParty,
   watchPartyPublishCeilingHeight,
   writeWatchPartyStreamQuality,
 } from "./watch-party-stream-quality";
@@ -72,5 +73,49 @@ describe("watch-party stream quality", () => {
       },
     });
     expect(readWatchPartyStreamQuality()).toBe("720p");
+  });
+
+  /**
+   * B7 (2026-09-13 postmortem): a shared browser used to hand the second
+   * account whatever the first had chosen. Two accounts, two keys, no
+   * bleed-through either way.
+   */
+  describe("per account", () => {
+    it("keeps two accounts' choices apart", () => {
+      writeWatchPartyStreamQuality("1080p", "alice");
+      writeWatchPartyStreamQuality("720p", "bob");
+      expect(readWatchPartyStreamQuality("alice")).toBe("1080p");
+      expect(readWatchPartyStreamQuality("bob")).toBe("720p");
+    });
+
+    it("does not leak into or out of the bare, no-account key", () => {
+      writeWatchPartyStreamQuality("1080p", null);
+      expect(readWatchPartyStreamQuality("alice")).toBe(
+        DEFAULT_WATCH_PARTY_STREAM_QUALITY,
+      );
+      expect(readWatchPartyStreamQuality("bob")).toBe(
+        DEFAULT_WATCH_PARTY_STREAM_QUALITY,
+      );
+      writeWatchPartyStreamQuality("1080p", "carol");
+      expect(readWatchPartyStreamQuality(null)).toBe("1080p");
+    });
+
+    it("falls back to the bare key when there is no account to scope it to", () => {
+      writeWatchPartyStreamQuality("1080p", null);
+      expect(readWatchPartyStreamQuality()).toBe("1080p");
+      expect(readWatchPartyStreamQuality(undefined as never)).toBe("1080p");
+    });
+  });
+
+  describe("resetWatchPartyStreamQualityForNewParty", () => {
+    it("puts a chosen 1080p back to the safe default, for that account only", () => {
+      writeWatchPartyStreamQuality("1080p", "alice");
+      writeWatchPartyStreamQuality("1080p", "bob");
+      resetWatchPartyStreamQualityForNewParty("alice");
+      expect(readWatchPartyStreamQuality("alice")).toBe(
+        DEFAULT_WATCH_PARTY_STREAM_QUALITY,
+      );
+      expect(readWatchPartyStreamQuality("bob")).toBe("1080p");
+    });
   });
 });

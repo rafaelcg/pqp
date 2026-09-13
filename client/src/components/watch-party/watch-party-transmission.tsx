@@ -1,4 +1,11 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -12,6 +19,13 @@ import {
   writeWatchPartyStreamQuality,
   type WatchPartyStreamQuality,
 } from "@/lib/watch-party-stream-quality";
+import {
+  INITIAL_OUTPUT_SILENCE_STATE,
+  isOutputSilenceWarning,
+  nextOutputSilenceState,
+  type OutputSilenceState,
+} from "@/lib/watch-party-output-silence";
+import { presenterMicWarning } from "@/lib/watch-party-mic-warning";
 import {
   DISPLAY_GAIN_RANGE,
   formatGainDb,
@@ -54,6 +68,81 @@ import { cn } from "@/lib/utils";
  * own sender rows, and those carry the published plan as the ceiling, so
  * "bandwidth" there is the host's uplink, not a leftover mesh reading.
  */
+
+/** How often the output meter is sampled for the sustained-silence warning. */
+const OUTPUT_LEVEL_POLL_MS = 100;
+
+/**
+ * "Your broadcast has no sound", ten seconds after the mixed bus goes
+ * digitally silent (postmortem B2). Runs for as long as this component is
+ * mounted — which is as long as the host or a co-host is running the show —
+ * NOT only while the panel is expanded, because a warning only visible
+ * behind a click nobody has taken is a warning nobody gets (the same reason
+ * the existing `silentPill` lives in the collapsed row).
+ *
+ * The timer itself is `nextOutputSilenceState` / `isOutputSilenceWarning`
+ * (`watch-party-output-silence.ts`), pure and tested on their own; this is
+ * only the polling loop around them, same shape as `useShareUplinkStrain`.
+ */
+function useOutputSilenceWarning(
+  outputLevelDb: (() => number | null) | undefined,
+  /**
+   * The broadcast's own identity (`stream.startedAt`, or `null` while
+   * nothing is live) — NOT the caller's, unlike `outputLevelDb` below.
+   * Ten seconds of silence at the end of one show must not count toward
+   * the next one just because this component never unmounted between
+   * them (a host who ends a party and starts another without the panel
+   * closing): the streak is about a broadcast, and a new broadcast starts
+   * the count at zero, warning or not (Farol, 2026-09-13).
+   */
+  sessionKey: number | string | null,
+): boolean {
+  const [warning, setWarning] = useState(false);
+  // A caller re-rendering (any unrelated app or voice-state update while a
+  // party is live) can hand this a new function with the same behavior. The
+  // streak lives in the effect below, so tracking `outputLevelDb` itself as
+  // that effect's dependency would restart it — and reset a real silence
+  // streak — on every such render. The ref reads the latest reading without
+  // restarting anything; only whether a meter exists at all, or the session
+  // underneath it changing, reopens the effect.
+  const readerRef = useRef(outputLevelDb);
+  readerRef.current = outputLevelDb;
+  const hasReader = outputLevelDb !== undefined;
+
+  // `useLayoutEffect`, not `useEffect`: an ordinary effect runs AFTER the
+  // browser has already painted the render that triggered it, so clearing
+  // `warning` there can still show one true frame of the OLD broadcast's
+  // warning on top of the NEW session before the reset lands (Farol,
+  // 2026-09-13, sharpening the earlier fix below). The layout effect runs
+  // synchronously before paint, so the reset in the same commit that
+  // changed `sessionKey` is what the audience ever sees — never a flash of
+  // stale state in between.
+  useLayoutEffect(() => {
+    // Cleared on EVERY run of this effect (a new session included) rather
+    // than only when there is no reader at all: the interval below has not
+    // sampled anything yet on its first tick, up to `OUTPUT_LEVEL_POLL_MS`
+    // away, and a stale `warning === true` from the broadcast this session
+    // just replaced must not still be on screen for that gap.
+    setWarning(false);
+    if (!hasReader) {
+      return;
+    }
+    let tracked: OutputSilenceState = INITIAL_OUTPUT_SILENCE_STATE;
+    const interval = setInterval(() => {
+      const now = Date.now();
+      tracked = nextOutputSilenceState(
+        tracked,
+        readerRef.current?.() ?? null,
+        now,
+      );
+      setWarning(isOutputSilenceWarning(tracked, now));
+    }, OUTPUT_LEVEL_POLL_MS);
+    return () => clearInterval(interval);
+  }, [hasReader, sessionKey]);
+
+  return warning;
+}
+
 export function WatchPartyTransmission({
   stream,
   wentLiveAt,
@@ -68,6 +157,10 @@ export function WatchPartyTransmission({
   onMicGainChange,
   onDisplayGainChange,
   micLevelDb,
+  outputLevelDb,
+  micMuted = false,
+  userId = null,
+  onStreamQualityChange,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
   stream: LiveHlsStream | null;
@@ -98,6 +191,36 @@ export function WatchPartyTransmission({
    * panel is open) — see `ScreenMix.micLevelDb` / `use-voice.ts`.
    */
   micLevelDb?: () => number | null;
+  /**
+   * The MIXED BUS's live level, in dBFS, for the "your broadcast has no
+   * sound" warning below (postmortem B2). A different question from
+   * `micLevelDb`: this reads the whole mix post-limiter, the same point the
+   * egress subscribes to, and is what caught -91 dB going out while the
+   * panel still read "the window's + your mic". See `screen-mix.ts` and
+   * `watch-party-output-silence.ts`.
+   */
+  outputLevelDb?: () => number | null;
+  /**
+   * The ROOM microphone (`micState === "muted"`), not `micInStream` above
+   * (whether an OPEN mic is folded into the share's audio). Combined with
+   * `isPresenting` via `presenterMicWarning` to fold "seu mic está mudo"
+   * into the B2 silence warning when both are true at once: a persistent
+   * banner already says this on its own in the party bar
+   * (`watch-party-panel.tsx`), so this panel only needs to say it again
+   * where the silence warning is already being read (postmortem, 2026-09-13).
+   */
+  micMuted?: boolean;
+  /** For `StreamQualityControl`'s per-account preference (postmortem B7). */
+  userId?: string | null;
+  /**
+   * `StreamQualityControl` keeps its own `useState` and this panel is not
+   * the only reader of the choice: the go-live checklist beside it also
+   * shows a `quality` row (`watch-party-panel.tsx`'s `LiveSurface`), read
+   * once from `localStorage` at mount. Without this callback a host who
+   * switches to 1080p mid-show keeps seeing the checklist's stale 720p
+   * "ok" row until something else remounts the panel (Farol, 2026-09-13).
+   */
+  onStreamQualityChange?: (quality: WatchPartyStreamQuality) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -107,6 +230,12 @@ export function WatchPartyTransmission({
     roomViewers,
     transport,
   );
+  const outputSilentWarning = useOutputSilenceWarning(
+    outputLevelDb,
+    stream?.startedAt ?? null,
+  );
+  const micMutedWhilePresenting =
+    presenterMicWarning(isPresenting, micMuted) === "warn";
 
   const height = stream?.topHeight ?? null;
   /**
@@ -188,7 +317,25 @@ export function WatchPartyTransmission({
             </span>
           </span>
         )}
-        {strained && !silent && (
+        {/* A DIFFERENT SIGNAL FROM `silent` ABOVE, and shown only when that
+            one is not already saying something: `silent` is the SERVER's
+            "no audio track at all" (`hasAudio`); this is the live mixed-bus
+            meter reading ten seconds of actual silence on a track that DOES
+            exist (postmortem B2's -91 dB while the panel read "screen +
+            mic"). Both mean the audience hears nothing; no reason to stack
+            two pills saying so. */}
+        {!silent && outputSilentWarning && (
+          <span
+            data-testid="watch-party-tx-output-silent-pill"
+            className="ml-auto flex shrink-0 items-center gap-1 text-warning"
+          >
+            <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
+            <span className="hidden sm:inline">
+              {t("watchParty.tx.outputSilentPill")}
+            </span>
+          </span>
+        )}
+        {strained && !silent && !outputSilentWarning && (
           <TriangleAlert
             className="ml-auto h-3 w-3 shrink-0 text-warning"
             aria-hidden
@@ -269,6 +416,23 @@ export function WatchPartyTransmission({
               {t("watchParty.tx.silentFix")}
             </p>
           )}
+          {!silent && outputSilentWarning && (
+            <p
+              data-testid="watch-party-tx-output-silent"
+              className="flex items-start gap-1.5 text-[11px] text-warning"
+            >
+              <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+              {/* WHEN THE SILENCE AND A MUTED MIC COINCIDE, say the mic
+                  fact too, in the same breath: a host reading "your
+                  broadcast has no sound" who then finds their mic muted has
+                  found the whole explanation, not half of it, and the
+                  persistent bar banner (`watch-party-panel.tsx`) may not be
+                  in view while this panel is open. */}
+              {micMutedWhilePresenting
+                ? `${t("watchParty.tx.outputSilentWarning")} ${t("watchParty.live.micMutedWarning")}`
+                : t("watchParty.tx.outputSilentWarning")}
+            </p>
+          )}
           {/* THE HOST'S ONE ENCODER LEVER, and why it is here rather than on
               the crowded live bar: it belongs beside the numbers it changes.
               720p by default because a 1080p share over a lossy path corrupts
@@ -278,7 +442,10 @@ export function WatchPartyTransmission({
               share start — the running egress binds its source at the start
               and cannot be re-pointed in place. See
               `lib/watch-party-stream-quality.ts`. */}
-          <StreamQualityControl />
+          <StreamQualityControl
+            userId={userId}
+            onQualityChange={onStreamQualityChange}
+          />
           {/* THE STREAM'S OWN MIXER, next to the picture's other numbers.
               Unlike the quality picker above, both sliders change the
               RUNNING mix: the gain nodes they write are already in the
@@ -290,6 +457,7 @@ export function WatchPartyTransmission({
             onMicGainChange={onMicGainChange}
             onDisplayGainChange={onDisplayGainChange}
             micLevelDb={micLevelDb}
+            outputLevelDb={outputLevelDb}
           />
           {/* One footnote, stated whether or not anything is wrong: the two
               audiences are on two different paths and the seated one is
@@ -330,12 +498,25 @@ const STREAM_QUALITY_KEYS: Record<WatchPartyStreamQuality, MessageKey> = {
  *
  * Rendered for the host only (the whole panel is), whether or not they are
  * presenting this instant, so the choice can be made before going live.
+ *
+ * PER ACCOUNT (postmortem B7): `userId` scopes the storage key so a shared
+ * browser's second host does not inherit the first host's opt-in. Optional
+ * only because the two test files that render this control on its own
+ * (`watch-party-transmission.test.tsx`) have no account to give it; the panel
+ * always passes `props.currentUserId`.
  */
-export function StreamQualityControl() {
+export function StreamQualityControl({
+  userId = null,
+  onQualityChange,
+}: {
+  userId?: string | null;
+  /** Told on every change, including the one this control makes to itself. */
+  onQualityChange?: (quality: WatchPartyStreamQuality) => void;
+} = {}) {
   const { t } = useTranslation();
   const selectId = useId();
   const [quality, setQuality] = useState<WatchPartyStreamQuality>(() =>
-    readWatchPartyStreamQuality(),
+    readWatchPartyStreamQuality(userId),
   );
   return (
     <div
@@ -361,7 +542,8 @@ export function StreamQualityControl() {
         onChange={(event) => {
           const next = event.target.value as WatchPartyStreamQuality;
           setQuality(next);
-          writeWatchPartyStreamQuality(next);
+          writeWatchPartyStreamQuality(next, userId);
+          onQualityChange?.(next);
         }}
       >
         {WATCH_PARTY_STREAM_QUALITIES.map((value) => (
@@ -407,10 +589,13 @@ export function StreamMixControl({
   onMicGainChange,
   onDisplayGainChange,
   micLevelDb,
+  outputLevelDb,
 }: {
   onMicGainChange?: (value: number) => void;
   onDisplayGainChange?: (value: number) => void;
   micLevelDb?: () => number | null;
+  /** The mixed bus's live level, for the "Saída" row below. Postmortem B2. */
+  outputLevelDb?: () => number | null;
 }) {
   const { t } = useTranslation();
   const micId = useId();
@@ -422,6 +607,7 @@ export function StreamMixControl({
     () => readStreamMixLevels().displayGain,
   );
   const [levelDb, setLevelDb] = useState<number | null>(null);
+  const [outputLevel, setOutputLevel] = useState<number | null>(null);
 
   useEffect(() => {
     if (!micLevelDb) {
@@ -432,6 +618,16 @@ export function StreamMixControl({
     }, MIC_LEVEL_POLL_MS);
     return () => clearInterval(interval);
   }, [micLevelDb]);
+
+  useEffect(() => {
+    if (!outputLevelDb) {
+      return;
+    }
+    const interval = setInterval(() => {
+      setOutputLevel(outputLevelDb());
+    }, MIC_LEVEL_POLL_MS);
+    return () => clearInterval(interval);
+  }, [outputLevelDb]);
 
   return (
     <div
@@ -458,6 +654,25 @@ export function StreamMixControl({
         </button>
       </div>
 
+      {/* THE OUTPUT METER (postmortem B2): what is ACTUALLY leaving on the
+          wire, post-limiter — not a lever, just the one number a host has no
+          other way to see. No slider: there is nothing to adjust here, only
+          something to notice. */}
+      {outputLevelDb && (
+        <div className="flex items-center justify-between gap-2 text-[11px] text-paper-muted">
+          <span>{t("watchParty.tx.outputMeter")}</span>
+          <div className="flex items-center gap-2">
+            <span data-testid="watch-party-tx-output-level-db">
+              {formatLevelDb(outputLevel)}
+            </span>
+            <MicLevelMeterBar
+              db={outputLevel}
+              testId="watch-party-tx-output-level"
+            />
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-1">
         <div className="flex items-center justify-between gap-2 text-[11px] text-paper-muted">
           <label htmlFor={micId}>{t("watchParty.tx.micGain")}</label>
@@ -482,7 +697,7 @@ export function StreamMixControl({
               onMicGainChange?.(next);
             }}
           />
-          <MicLevelMeterBar db={levelDb} />
+          <MicLevelMeterBar db={levelDb} testId="watch-party-tx-mic-level" />
         </div>
         <span className="text-[11px] text-text-tertiary">
           {t("watchParty.tx.micGainHint")}
@@ -518,13 +733,21 @@ export function StreamMixControl({
 }
 
 /**
- * The mic's live level next to its slider. Green below -12 dBFS (comfortable
- * headroom under the mix's own compressor, which sits at -6 dB); amber at or
- * above, so a host sees they are pushing the limiter before the audience
- * hears it clip. `null` (nothing mixed yet) draws an empty bar, not a
- * warning.
+ * A live level next to its slider (the mic gain), or on its own (the output
+ * meter). Green below -12 dBFS (comfortable headroom under the mix's own
+ * compressor, which sits at -6 dB); amber at or above, so a host sees they
+ * are pushing the limiter before the audience hears it clip. `null` or
+ * `-Infinity` (nothing mixed yet, or true digital silence) both draw an
+ * empty bar rather than a warning — the warning text is a separate element
+ * for the output case (`outputSilentWarning`), so this stays a plain meter.
  */
-function MicLevelMeterBar({ db }: { db: number | null }) {
+function MicLevelMeterBar({
+  db,
+  testId,
+}: {
+  db: number | null;
+  testId: string;
+}) {
   const pct =
     db === null || !Number.isFinite(db)
       ? 0
@@ -535,7 +758,7 @@ function MicLevelMeterBar({ db }: { db: number | null }) {
   const loud = db !== null && db >= MIC_LEVEL_WARN_DBFS;
   return (
     <div
-      data-testid="watch-party-tx-mic-level"
+      data-testid={testId}
       className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-surface-2"
     >
       <div
@@ -547,6 +770,14 @@ function MicLevelMeterBar({ db }: { db: number | null }) {
       />
     </div>
   );
+}
+
+/** `-91 dB`, `-∞ dB` for true digital silence, or `--` while unmeasured. */
+function formatLevelDb(db: number | null): string {
+  if (db === null) {
+    return "--";
+  }
+  return Number.isFinite(db) ? `${Math.round(db)} dB` : "-∞ dB";
 }
 
 /**

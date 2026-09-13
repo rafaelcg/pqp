@@ -399,6 +399,134 @@ describe("a host can tell they are not live", () => {
   });
 });
 
+describe("the go-live checklist (postmortem B3)", () => {
+  const draft: Partial<Parameters<typeof WatchPartyPanel>[0]> = {
+    party: { ...PARTY, state: "draft", viewerRole: "host" },
+  };
+  const realUserAgent = navigator.userAgent;
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getDisplayMedia: () => Promise.reject(new Error("test")) },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: undefined,
+      configurable: true,
+    });
+    Object.defineProperty(navigator, "userAgent", {
+      value: realUserAgent,
+      configurable: true,
+    });
+  });
+
+  function setUserAgent(ua: string) {
+    Object.defineProperty(navigator, "userAgent", {
+      value: ua,
+      configurable: true,
+    });
+  }
+
+  it("shows the checklist in the setup surface, all-clear on an ordinary browser", () => {
+    const html = render(draft);
+    expect(html).toContain("watch-party-go-live-checklist");
+    expect(html).toContain("watch-party-checklist-item=\"browser\"");
+    expect(html).toContain("watch-party-checklist-item=\"quality\"");
+    expect(html).toContain("watch-party-checklist-item=\"camera\"");
+    // Nothing picked yet: no opinion on tab audio.
+    expect(html).not.toContain("watch-party-checklist-item=\"tabAudio\"");
+    expect(html).not.toContain("watch-party-checklist-blocked");
+    // Go live is only disabled for lack of a picture here, not the checklist.
+    expect(html).toContain("data-watch-party-go-live");
+  });
+
+  it("hints when the camera is on, without blocking anything", () => {
+    const html = render({
+      ...draft,
+      cameraOn: true,
+    });
+    expect(html).toMatch(
+      /class="[^"]*text-warning[^"]*"\s+data-watch-party-checklist-item="camera"/,
+    );
+    expect(html).not.toContain("watch-party-checklist-blocked");
+  });
+
+  it("blocks Go live on Firefox, with an explanation", () => {
+    setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0",
+    );
+    const html = render(draft);
+    expect(html).toContain("watch-party-checklist-blocked");
+    expect(html).toMatch(
+      /class="[^"]*text-danger[^"]*"\s+data-watch-party-checklist-item="browser"/,
+    );
+    // The button itself is disabled, not just described as blocked.
+    expect(html).toMatch(/disabled=""[^>]*data-watch-party-go-live/);
+  });
+
+  it("does not block on an ordinary Chromium user agent", () => {
+    setUserAgent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    );
+    const html = render(draft);
+    expect(html).not.toContain("watch-party-checklist-blocked");
+  });
+
+  it("shows a mic hint, never a block, once the room mic is muted (2026-09-13)", () => {
+    const html = render({ ...draft, micState: "muted" });
+    expect(html).toMatch(
+      /class="[^"]*text-warning[^"]*"\s+data-watch-party-checklist-item="mic"/,
+    );
+    expect(html).not.toContain("watch-party-checklist-blocked");
+  });
+
+  it("shows the mic row as ok while the mic is open", () => {
+    const html = render({ ...draft, micState: "everyone" });
+    expect(html).toMatch(
+      /class="[^"]*text-text-tertiary[^"]*"\s+data-watch-party-checklist-item="mic"/,
+    );
+  });
+});
+
+/**
+ * "Seu mic está mudo: ninguém te ouve, nem na transmissão" — the addition
+ * this postmortem asked for after a recording lost the host's voice for an
+ * hour with only the small bar pill to notice by. `LiveSurface` renders both
+ * slots for a live party, so `slot: "chrome"` reaches the bar without
+ * needing a picture on screen.
+ */
+describe("the persistent mic-muted warning (2026-09-13)", () => {
+  const live = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({
+      party: { ...PARTY, viewerRole: "host" },
+      slot: "chrome",
+      onToggleMute: () => {},
+      ...over,
+    });
+
+  it("warns, with an Ativar mic button, while presenting with the mic muted", () => {
+    const html = live({ isPresenting: true, micState: "muted" });
+    expect(html).toContain("watch-party-mic-muted-warning");
+    expect(html).toContain("data-watch-party-activate-mic");
+  });
+
+  it("says nothing while not presenting, muted or not", () => {
+    expect(
+      live({ isPresenting: false, micState: "muted" }),
+    ).not.toContain("watch-party-mic-muted-warning");
+    expect(
+      live({ isPresenting: false, micState: "everyone" }),
+    ).not.toContain("watch-party-mic-muted-warning");
+  });
+
+  it("says nothing while presenting with the mic open", () => {
+    const html = live({ isPresenting: true, micState: "everyone" });
+    expect(html).not.toContain("watch-party-mic-muted-warning");
+  });
+});
+
 describe("a host on a phone", () => {
   const draft: Partial<Parameters<typeof WatchPartyPanel>[0]> = {
     party: { ...PARTY, state: "draft", viewerRole: "host" },
