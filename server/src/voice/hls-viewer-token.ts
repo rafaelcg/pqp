@@ -60,6 +60,26 @@ interface ViewerClaims {
    * number for every token this code has ever minted.
    */
   i?: number;
+  /**
+   * What this capability is FOR: `"live"` (the default, and every token
+   * minted before this claim existed) or `"replay"`
+   * (`GET .../watch-party/history/:sessionAt/replay`).
+   *
+   * WHY THIS EXISTS. The claims otherwise name only a user, a channel and a
+   * `startedAt` -- identical for a live viewer's token and a moderator's
+   * replay token on the SAME broadcast, minted minutes apart from two
+   * different, differently-authorised routes. Without a purpose, an ordinary
+   * audience member's live-stream token (minted by `GET
+   * /api/channels/:id/live`, gated only on ordinary channel access) verifies
+   * just as well against the replay proxy, which is gated on
+   * `START_WATCH_PARTY` / `MANAGE_CHANNELS` -- silently handing the audience
+   * a door around the moderator-only surface. A caller that cares (the
+   * replay proxy) passes `purpose: "replay"` on `verifyHlsViewerToken`'s
+   * `expected` and a token minted for anything else, live tokens included,
+   * fails verification. A caller that does not care (the live proxy, which
+   * has never needed this) omits it and nothing about its behaviour changes.
+   */
+  p?: "live" | "replay";
 }
 
 function viewerSecret(): string | null {
@@ -92,6 +112,8 @@ export function mintHlsViewerToken(input: {
   channelId: string;
   startedAt: number;
   now?: number;
+  /** See `ViewerClaims.p`. Omitted (and stamped `"live"`) for every existing caller. */
+  purpose?: "live" | "replay";
 }): string | null {
   const secret = viewerSecret();
   if (!secret) {
@@ -105,6 +127,7 @@ export function mintHlsViewerToken(input: {
     s: input.startedAt,
     e: issuedAt + HLS_VIEWER_TOKEN_TTL_MS,
     i: issuedAt,
+    p: input.purpose ?? "live",
   };
   const payload = Buffer.from(JSON.stringify(claims), "utf8").toString(
     "base64url",
@@ -123,7 +146,13 @@ export function mintHlsViewerToken(input: {
  */
 export function verifyHlsViewerToken(
   token: string | null | undefined,
-  expected: { channelId: string; startedAt: number },
+  expected: {
+    channelId: string;
+    startedAt: number;
+    /** See `ViewerClaims.p`. Omitted accepts a token of any purpose,
+     * matching every caller before this claim existed. */
+    purpose?: "live" | "replay";
+  },
   now = Date.now(),
 ): { userId: string; issuedAt: number } | null {
   if (!token) {
@@ -158,7 +187,9 @@ export function verifyHlsViewerToken(
     typeof claims.e !== "number" ||
     claims.e < now ||
     claims.c !== expected.channelId ||
-    claims.s !== expected.startedAt
+    claims.s !== expected.startedAt ||
+    (expected.purpose !== undefined &&
+      (claims.p ?? "live") !== expected.purpose)
   ) {
     return null;
   }

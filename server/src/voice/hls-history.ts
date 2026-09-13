@@ -32,16 +32,25 @@
  * is no column and no metric to read it back from, so the field is left off
  * the response entirely rather than invented.
  *
- * AVAILABILITY MIRRORS THE SWEEP EXACTLY. `sessionReplayAvailable` is the
- * logical negation of `dueSessions`' WHERE clause in `hls-cleanup.ts`: a row
- * is still there when it has not been cleaned AND (either it is not marked
- * `keep_replay` and is younger than `LIVE_HLS_RETENTION_MINUTES`, or it IS
- * marked and is younger than `LIVE_HLS_REPLAY_HOURS`). Keeping the two
- * predicates as exact negations of each other, rather than approximating with
- * `cleaned_at IS NULL` alone, is what CLAUDE.md pitfall about "a finished
- * session went on answering as if it were live" was about: `cleaned_at` lags
- * the real window by up to one sweep tick (60s), so a session can be past its
- * window and still show `cleaned_at IS NULL`.
+ * AVAILABILITY IS "EVERY LADDER RUNG", NOT "ANY OF THEM", AND MIRRORS THE
+ * SWEEP EXACTLY. `sessionReplayAvailable` requires every ladder-rung row of
+ * the group (mic/camera excluded -- see above) to satisfy the negation of
+ * `dueSessions`' WHERE clause in `hls-cleanup.ts`: not cleaned, and either not
+ * `keep_replay` and younger than `LIVE_HLS_RETENTION_MINUTES`, or `keep_replay`
+ * and younger than `LIVE_HLS_REPLAY_HOURS`. ANY-of-them would mark a broadcast
+ * replayable after one of its renditions was swept and the rest were not,
+ * which hands the master playlist an incomplete ladder while the client still
+ * offers Watch and Keep recording as if the whole thing were intact. And
+ * approximating with `cleaned_at IS NULL` alone, rather than the exact
+ * predicate, is what CLAUDE.md's "a finished session went on answering as if
+ * it were live" pitfall was about: `cleaned_at` lags the real window by up to
+ * one sweep tick (60s), so a session can be past its window and still show
+ * `cleaned_at IS NULL`. The replay-SERVING functions below (not just the
+ * mint/list/patch ones) re-check this same predicate on every request, not
+ * only `ended_at`/`cleaned_at`: a 60-minute viewer token easily outlives a
+ * 10-minute default retention window, and without the re-check a request late
+ * in that gap would keep being served after the history API already reports
+ * the broadcast gone.
  */
 import { getPool } from "../db.js";
 import { signRequest } from "../lib/s3.js";
@@ -58,6 +67,28 @@ import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 
 const LADDER_RUNG_NAMES = Object.keys(LADDER_RUNGS);
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/** The exact "still available" predicate, inlined into every query that
+ * decides whether a row's segments are still there -- one string so the
+ * mint-time check and the serve-time check cannot drift apart. */
+const AVAILABLE_PREDICATE = `
+  cleaned_at IS NULL
+  AND ended_at IS NOT NULL
+  AND (
+    (keep_replay = FALSE AND ended_at >= NOW() - ($retentionParam || ' minutes')::interval)
+    OR (keep_replay = TRUE AND ended_at >= NOW() - ($replayParam || ' hours')::interval)
+  )
+`;
+
+/** `AVAILABLE_PREDICATE` with its named placeholders bound to real `$n`
+ * positions, so every call site stays in sync with whatever positions it
+ * actually passes. */
+function availablePredicate(retentionParam: number, replayParam: number): string {
+  return AVAILABLE_PREDICATE.replace(
+    "$retentionParam",
+    `$${retentionParam}`,
+  ).replace("$replayParam", `$${replayParam}`);
+}
 
 export interface WatchPartyHistoryEntry {
   /** The broadcast's `started_at`, epoch milliseconds, as a string. Stable
@@ -96,14 +127,10 @@ export async function listWatchPartyHistory(
          BOOL_OR(keep_replay) AS keep_replay,
          (COUNT(*) FILTER (WHERE ended_at IS NULL) = 0) AS all_ended,
          MAX(ended_at) AS ended_at,
-         BOOL_OR(
-           cleaned_at IS NULL
-           AND ended_at IS NOT NULL
-           AND (
-             (keep_replay = FALSE AND ended_at >= NOW() - ($3 || ' minutes')::interval)
-             OR (keep_replay = TRUE AND ended_at >= NOW() - ($4 || ' hours')::interval)
-           )
-         ) AS any_available
+         -- EVERY ladder-rung row of the group has to still be available, not
+         -- just one of them -- see the file header on why ANY-of-them is
+         -- wrong here.
+         BOOL_AND(${availablePredicate(3, 4)}) AS fully_available
        FROM hls_sessions
        WHERE channel_id = $1
          AND (rung IS NULL OR rung = ANY($5::text[]))
@@ -116,7 +143,7 @@ export async function listWatchPartyHistory(
        (EXTRACT(EPOCH FROM s.started_at) * 1000)::bigint AS started_at_ms,
        CASE WHEN s.all_ended THEN s.ended_at END AS ended_at,
        s.keep_replay,
-       (s.all_ended AND s.any_available) AS replay_available,
+       (s.all_ended AND s.fully_available) AS replay_available,
        presenter.user_id AS presenter_user_id,
        presenter.display_name AS presenter_display_name
      FROM sessions s
@@ -155,83 +182,110 @@ export async function listWatchPartyHistory(
   }));
 }
 
-async function sessionRowsExist(
-  channelId: string,
-  startedAtMs: number,
-): Promise<boolean> {
-  const result = await getPool().query<{ exists: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1 FROM hls_sessions
-       WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
-     ) AS exists`,
-    [channelId, startedAtMs],
-  );
-  return result.rows[0]?.exists ?? false;
-}
-
-/** The negation of `dueSessions` in `hls-cleanup.ts` -- see file header. */
-async function sessionReplayAvailable(
-  channelId: string,
-  startedAtMs: number,
-): Promise<boolean> {
-  const result = await getPool().query<{ available: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1 FROM hls_sessions
-       WHERE channel_id = $1
-         AND started_at = to_timestamp($2 / 1000.0)
-         AND (rung IS NULL OR rung = ANY($5::text[]))
-         AND cleaned_at IS NULL
-         AND ended_at IS NOT NULL
-         AND (
-           (keep_replay = FALSE AND ended_at >= NOW() - ($3 || ' minutes')::interval)
-           OR (keep_replay = TRUE AND ended_at >= NOW() - ($4 || ' hours')::interval)
-         )
-     ) AS available`,
-    [channelId, startedAtMs, hlsRetentionMinutes(), hlsReplayHours(), LADDER_RUNG_NAMES],
-  );
-  return result.rows[0]?.available ?? false;
-}
-
+/** Used by the replay-URL route: does this broadcast exist, and can it still
+ * be watched (every ladder-rung row still available)? */
 export type WatchPartyHistoryLookup = "ok" | "not-found" | "unavailable";
 
-/** Used by the replay-URL route: does this broadcast exist, and can it still
- * be watched? Kept separate from the write below so a read never risks a
- * write's side effect. */
 export async function checkWatchPartyReplayAccess(
   channelId: string,
   startedAtMs: number,
 ): Promise<WatchPartyHistoryLookup> {
-  if (!(await sessionRowsExist(channelId, startedAtMs))) {
+  const result = await getPool().query<{
+    has_rows: boolean;
+    has_ladder: boolean;
+    fully_available: boolean;
+  }>(
+    `SELECT
+       EXISTS (
+         SELECT 1 FROM hls_sessions
+         WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+       ) AS has_rows,
+       EXISTS (
+         SELECT 1 FROM hls_sessions
+         WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+           AND (rung IS NULL OR rung = ANY($5::text[]))
+       ) AS has_ladder,
+       NOT EXISTS (
+         SELECT 1 FROM hls_sessions
+         WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+           AND (rung IS NULL OR rung = ANY($5::text[]))
+           AND NOT (${availablePredicate(3, 4)})
+       ) AS fully_available`,
+    [channelId, startedAtMs, hlsRetentionMinutes(), hlsReplayHours(), LADDER_RUNG_NAMES],
+  );
+  const row = result.rows[0];
+  if (!row?.has_rows) {
     return "not-found";
   }
-  return (await sessionReplayAvailable(channelId, startedAtMs))
-    ? "ok"
-    : "unavailable";
+  return row.has_ladder && row.fully_available ? "ok" : "unavailable";
 }
 
 /**
  * Flips `keep_replay` on every row of the broadcast (every ladder rung, the
- * mic archive and the camera pip alike), so the retention sweep keeps or
- * drops the whole thing together. Refuses once the segments are already gone
- * -- there is nothing left to keep, in either direction.
+ * mic archive and the camera pip alike) in ONE statement, so the retention
+ * sweep keeps or drops the whole thing together. Refuses once the segments
+ * are already gone -- there is nothing left to keep, in either direction.
+ *
+ * ONE STATEMENT, NOT A READ THEN A WRITE. A separate "is it still available"
+ * read followed by an unconditional `UPDATE` leaves a window for
+ * `sweepHlsSessions` to clean the very rows this function is about to touch:
+ * the read says available, the sweep marks `cleaned_at` a moment later, the
+ * write still runs and this function still returns "ok" even though the
+ * recording the caller just asked to keep is already gone. The eligibility
+ * check and the write are one CTE here so Postgres evaluates them against a
+ * single snapshot with no gap a concurrent sweep can land in.
  */
 export async function setWatchPartyKeepReplay(
   channelId: string,
   startedAtMs: number,
   keepReplay: boolean,
 ): Promise<WatchPartyHistoryLookup> {
-  if (!(await sessionRowsExist(channelId, startedAtMs))) {
+  const result = await getPool().query<{
+    has_rows: boolean;
+    updated_count: number;
+  }>(
+    `WITH target AS (
+       SELECT
+         EXISTS (
+           SELECT 1 FROM hls_sessions
+           WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+         ) AS has_rows,
+         EXISTS (
+           SELECT 1 FROM hls_sessions
+           WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+             AND (rung IS NULL OR rung = ANY($6::text[]))
+         ) AS has_ladder,
+         NOT EXISTS (
+           SELECT 1 FROM hls_sessions
+           WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+             AND (rung IS NULL OR rung = ANY($6::text[]))
+             AND NOT (${availablePredicate(3, 4)})
+         ) AS fully_available
+     ),
+     updated AS (
+       UPDATE hls_sessions SET keep_replay = $5
+       WHERE channel_id = $1
+         AND started_at = to_timestamp($2 / 1000.0)
+         AND (SELECT has_ladder AND fully_available FROM target)
+       RETURNING 1
+     )
+     SELECT
+       (SELECT has_rows FROM target) AS has_rows,
+       (SELECT COUNT(*) FROM updated)::int AS updated_count`,
+    [
+      channelId,
+      startedAtMs,
+      hlsRetentionMinutes(),
+      hlsReplayHours(),
+      keepReplay,
+      LADDER_RUNG_NAMES,
+    ],
+  );
+  const row = result.rows[0];
+  if (!row?.has_rows) {
     return "not-found";
   }
-  if (!(await sessionReplayAvailable(channelId, startedAtMs))) {
-    return "unavailable";
-  }
-  await getPool().query(
-    `UPDATE hls_sessions SET keep_replay = $3
-     WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)`,
-    [channelId, startedAtMs, keepReplay],
-  );
-  return "ok";
+  return row.updated_count > 0 ? "ok" : "unavailable";
 }
 
 // --------------------------------------------------------------------------
@@ -261,13 +315,28 @@ function replayObjectKey(
 
 /** A finished broadcast's segments do not change, so this is cheap to hold
  * for a while -- unlike the live proxy's 1s cache, which exists because the
- * underlying playlist is still being rewritten every segment. */
+ * underlying playlist is still being rewritten every segment.
+ *
+ * PRUNED ON EVERY INSERT, not just consulted by TTL. A viewer touches a
+ * distinct `(channel, startedAt, rung)` key at most a handful of times, so
+ * without eviction every broadcast and rendition ever requested by a
+ * long-running process adds a permanent entry -- unbounded growth for a
+ * process that is never restarted. `pruneStale` below is the same one-line
+ * sweep on both maps. */
 const REPLAY_CACHE_TTL_MS = 30_000;
 const replayBodyCache = new Map<string, { body: string; at: number }>();
-const replayRungCache = new Map<
-  string,
-  { rungs: string[]; at: number }
->();
+const replayRungCache = new Map<string, { rungs: string[]; at: number }>();
+
+function pruneStale<K, V extends { at: number }>(
+  cache: Map<K, V>,
+  now: number,
+): void {
+  for (const [key, value] of cache) {
+    if (now - value.at >= REPLAY_CACHE_TTL_MS) {
+      cache.delete(key);
+    }
+  }
+}
 
 export function resetHlsReplayCachesForTests(): void {
   replayBodyCache.clear();
@@ -289,21 +358,26 @@ async function replaySessionRungs(
      WHERE channel_id = $1
        AND object_prefix LIKE $2
        AND rung IS NOT NULL
-       AND ended_at IS NOT NULL
-       AND cleaned_at IS NULL
+       AND ${availablePredicate(3, 4)}
      ORDER BY started_at ASC`,
-    [channelId, `${hlsObjectPrefix(channelId, startedAt)}-%`],
+    [
+      channelId,
+      `${hlsObjectPrefix(channelId, startedAt)}-%`,
+      hlsRetentionMinutes(),
+      hlsReplayHours(),
+    ],
   );
   const rungs = result.rows
     .map((row) => row.rung)
     .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
+  pruneStale(replayRungCache, now);
   replayRungCache.set(key, { rungs, at: now });
   return rungs;
 }
 
 /** The master playlist for a replay, or null when the broadcast never ran a
  * ladder rung that is still available (a pre-ladder session, or one whose
- * objects are already swept). */
+ * objects are already swept or past their retention window). */
 export async function buildReplayMasterPlaylist(input: {
   channelId: string;
   startedAt: number;
@@ -330,10 +404,24 @@ export async function buildReplayMasterPlaylist(input: {
   return buildMasterPlaylist(variants);
 }
 
+/** How many segment/URI lines are signed before yielding the event loop.
+ * A multi-hour broadcast can carry thousands of them, and `signRequest` is a
+ * synchronous HMAC; without a yield the whole rewrite runs as one long
+ * synchronous block on the API process, delaying every other request queued
+ * behind it. 200 lines is a few milliseconds of work per slice, measured
+ * against the ~2.3ms/30-line figure `hls-playlist-proxy.ts` documents for the
+ * live path's much shorter windows. */
+const SIGN_YIELD_EVERY = 200;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 /** One rendition of a replay: the accumulated `-index.m3u8`, segment lines
  * rewritten into presigned URLs. Throws `HlsPlaylistNotFound` when this
- * broadcast never ended, was swept, or never existed, and
- * `HlsPlaylistUnavailable` when the bucket could not be read. */
+ * broadcast never ended, was swept, fell outside its retention window, or
+ * never existed, and `HlsPlaylistUnavailable` when the bucket could not be
+ * read. */
 export async function buildReplaySignedPlaylist(
   channelId: string,
   startedAt: number,
@@ -354,9 +442,8 @@ export async function buildReplaySignedPlaylist(
     `SELECT 1 FROM hls_sessions
      WHERE channel_id = $1
        AND object_prefix = $2
-       AND ended_at IS NOT NULL
-       AND cleaned_at IS NULL`,
-    [channelId, objectPrefix],
+       AND ${availablePredicate(3, 4)}`,
+    [channelId, objectPrefix, hlsRetentionMinutes(), hlsReplayHours()],
   );
   if (session.rowCount === 0) {
     replayBodyCache.delete(cacheKey);
@@ -391,24 +478,30 @@ export async function buildReplaySignedPlaylist(
   const ttl = hlsUrlTtlSeconds();
   const signedAt = new Date(now);
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
-  const rewritten = body
-    .split("\n")
-    .map((line) => {
-      const trimmed = line.trim();
-      if (trimmed === "" || trimmed.startsWith("#")) {
-        return line;
-      }
-      const key = trimmed.includes("/") ? trimmed : `${prefixDir}${trimmed}`;
-      return signRequest({
-        method: "GET",
-        key,
-        ttlSeconds: ttl,
-        forRead: true,
-        config,
-        now: signedAt,
-      }).url;
-    })
-    .join("\n");
+  const lines = body.split("\n");
+  const rewrittenLines = new Array<string>(lines.length);
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      rewrittenLines[i] = line;
+      continue;
+    }
+    const key = trimmed.includes("/") ? trimmed : `${prefixDir}${trimmed}`;
+    rewrittenLines[i] = signRequest({
+      method: "GET",
+      key,
+      ttlSeconds: ttl,
+      forRead: true,
+      config,
+      now: signedAt,
+    }).url;
+    if (i > 0 && i % SIGN_YIELD_EVERY === 0) {
+      await yieldToEventLoop();
+    }
+  }
+  const rewritten = rewrittenLines.join("\n");
+  pruneStale(replayBodyCache, now);
   replayBodyCache.set(cacheKey, { body: rewritten, at: now });
   return rewritten;
 }

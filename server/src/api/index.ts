@@ -5159,6 +5159,7 @@ router.get(
       userId: user.id,
       channelId: channelId!,
       startedAt: startedAtMs,
+      purpose: "replay",
     });
     const query = token
       ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(token)}`
@@ -5174,6 +5175,16 @@ router.get(
  * as the live one (`hlsPlaylistResponse` above), pointed at
  * `hls-history.ts`'s replay builders instead. Kept as its own path rather
  * than a mode on the live route on purpose -- see that file's header comment.
+ *
+ * BOTH DOORS CHECK THE HISTORY PERMISSION, NOT JUST CHANNEL ACCESS. A
+ * replay is the moderator-only surface (`requireWatchPartyHistoryAccess`
+ * gates the list, the toggle and the URL mint), and this proxy is the thing
+ * that actually hands out the bytes, so it has to hold the same line: an
+ * ordinary member who can see the channel (and so would pass
+ * `requireChannelAccess`) must not be able to reach a recording just by
+ * knowing or guessing a `startedAt`. The token door is closed the same way
+ * one level up, by only ever minting a `purpose: "replay"` token from the
+ * permission-checked mint route (`hls-viewer-token.ts`).
  */
 async function hlsReplayResponse(
   res: ServerResponse,
@@ -5184,7 +5195,8 @@ async function hlsReplayResponse(
   options: { rung?: string; token?: string | null } = {},
 ): Promise<RawResponse> {
   if (tokenIssuedAt === null) {
-    await requireChannelAccess(channelId, userId);
+    const channel = await requireServerChannel(channelId);
+    await requireWatchPartyHistoryAccess(channel, userId);
   } else if (isHlsAccessRevoked(userId, channelId, tokenIssuedAt)) {
     throw new NotFound("Channel not found");
   }
@@ -5251,6 +5263,7 @@ function hlsReplayRouteResponse(
     token,
     channelId,
     startedAt: Number(startedAt),
+    purpose: "replay",
   });
   return hlsReplayResponse(
     res,
@@ -5293,6 +5306,7 @@ async function tryHlsReplayCapabilityDoor(
     token,
     channelId,
     startedAt,
+    purpose: "replay",
   });
   if (!viewer) {
     return false;

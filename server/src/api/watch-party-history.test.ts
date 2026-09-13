@@ -62,6 +62,9 @@ const { setLiveHlsTestHooks, resetLiveHlsForTests } = await import(
   "../voice/hls-egress.js"
 );
 const { mintHlsViewerToken } = await import("../voice/hls-viewer-token.js");
+const { resetHlsReplayCachesForTests } = await import(
+  "../voice/hls-history.js"
+);
 
 let server: Server;
 let baseUrl: string;
@@ -135,6 +138,7 @@ describeDb("watch party history", () => {
     resetApiRateLimits();
     resetHlsSweepWarningsForTests();
     resetLiveHlsForTests();
+    resetHlsReplayCachesForTests();
     delete process.env.LIVE_HLS_RETENTION_MINUTES;
     delete process.env.LIVE_HLS_REPLAY_HOURS;
     process.env.LIVE_HLS_S3_BUCKET = "pqp-live-test";
@@ -539,6 +543,39 @@ describeDb("watch party history", () => {
       expect(playlist.text).toContain("#EXT-X-STREAM-INF");
       expect(playlist.text).toContain("/api/voice/hls-replay/");
     });
+
+    /**
+     * ONE EXPIRED RUNG MAKES THE WHOLE BROADCAST UNAVAILABLE, not just that
+     * rendition -- a partial ladder is an incomplete broadcast, not a lower-
+     * quality one, so `replayAvailable` (and the mint route) has to say no
+     * rather than hand the master playlist a ladder missing a rung.
+     */
+    it("409s once even ONE ladder rung has fallen out of its retention window", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await seedBroadcast({
+        startedAt: 1_700_000_016_000,
+        endedMinutesAgo: 5,
+        rungs: ["1080p30"],
+      });
+      // A second rung of the SAME broadcast, already past the window.
+      await getPool().query(
+        `INSERT INTO hls_sessions
+           (channel_id, object_prefix, started_at, ended_at, keep_replay, rung)
+         VALUES ($1, $2, to_timestamp($3 / 1000.0), NOW() - interval '20 minutes', FALSE, '720p30')`,
+        [channelId, `live/${channelId}/1700000016000-720p30`, 1_700_000_016_000],
+      );
+      const list = await call<{
+        broadcasts: Array<{ replayAvailable: boolean }>;
+      }>(owner, "GET", historyPath());
+      expect(list.body.broadcasts[0]!.replayAvailable).toBe(false);
+
+      const res = await call(
+        owner,
+        "GET",
+        `${historyPath()}/1700000016000/replay`,
+      );
+      expect(res.status).toBe(409);
+    });
   });
 
   describe("GET /api/voice/hls-replay/:channelId/:startedAt(/:rung)", () => {
@@ -572,12 +609,86 @@ describeDb("watch party history", () => {
         userId: owner.id,
         channelId,
         startedAt: 1_700_000_011_000,
+        purpose: "replay",
       });
       const r = await getRaw(
         `/api/voice/hls-replay/${channelId}/1700000011000?t=${t}`,
         null,
       );
       expect(r.status).toBe(404);
+    });
+
+    /**
+     * A LIVE-PURPOSE TOKEN MUST NOT OPEN THE REPLAY DOOR. The claims
+     * otherwise name only a user, a channel and a `startedAt`, identical for
+     * a live viewer's token (minted by `GET /api/channels/:id/live`, gated
+     * only on ordinary channel access) and a moderator's replay token on the
+     * same broadcast. Without the purpose claim an ordinary audience member
+     * could reuse their live token to reach the moderator-only replay.
+     */
+    it("a live-purpose token is refused on the replay proxy", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_014_000, endedMinutesAgo: 5 });
+      const liveToken = mintHlsViewerToken({
+        userId: member.id,
+        channelId,
+        startedAt: 1_700_000_014_000,
+      });
+      const r = await getRaw(
+        `/api/voice/hls-replay/${channelId}/1700000014000?t=${liveToken}`,
+        null,
+      );
+      expect(r.status).toBe(401);
+    });
+
+    /**
+     * A BEARER FALLBACK MUST NOT WIDEN THE DOOR EITHER. An authenticated
+     * member with ordinary channel access, but none of START_WATCH_PARTY /
+     * MANAGE_CHANNELS, must not reach the replay bytes just by knowing the
+     * channel and the broadcast's `startedAt`, even with a valid session and
+     * no token at all.
+     */
+    it("a plain member's own Bearer session cannot reach the replay bytes", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_015_000, endedMinutesAgo: 5 });
+      const r = await getRaw(
+        `/api/voice/hls-replay/${channelId}/1700000015000`,
+        member,
+      );
+      expect(r.status).toBe(403);
+    });
+
+    /**
+     * A TOKEN MINTED WHILE AVAILABLE MUST STILL 404 ONCE THE RETENTION
+     * WINDOW HAS PASSED, even with time left on its own (60-minute) TTL and
+     * even before the sweep has run. `buildReplayMasterPlaylist` and
+     * `buildReplaySignedPlaylist` re-check the full availability predicate on
+     * every request rather than trusting `cleaned_at IS NULL` alone.
+     */
+    it("stops serving once the retention window passes, before any sweep runs", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await seedBroadcast({ startedAt: 1_700_000_017_000, endedMinutesAgo: 3 });
+      const minted = await call<{ hlsUrl: string }>(
+        owner,
+        "GET",
+        `${historyPath()}/1700000017000/replay`,
+      );
+      expect(minted.status).toBe(200);
+      const stillGood = await getRaw(minted.body.hlsUrl, null);
+      expect(stillGood.status).toBe(200);
+
+      // Time passes past the 10-minute window. `cleaned_at` is still NULL --
+      // no sweep has run -- so a check against `ended_at`/`cleaned_at` alone
+      // would still serve this.
+      await getPool().query(
+        `UPDATE hls_sessions SET ended_at = NOW() - interval '20 minutes'
+         WHERE channel_id = $1 AND started_at = to_timestamp(1700000017000 / 1000.0)`,
+        [channelId],
+      );
+      // Without this, the in-process 30s replay cache (not the database)
+      // would answer the next request and the test would prove nothing.
+      resetHlsReplayCachesForTests();
+
+      const stale = await getRaw(minted.body.hlsUrl, null);
+      expect(stale.status).toBe(404);
     });
 
     it("no header and no token is 401", async () => {
@@ -595,6 +706,7 @@ describeDb("watch party history", () => {
         userId: owner.id,
         channelId: "00000000-0000-4000-8000-000000000000",
         startedAt: 1_700_000_013_000,
+        purpose: "replay",
       });
       const r = await getRaw(
         `/api/voice/hls-replay/${channelId}/1700000013000?t=${t}`,
