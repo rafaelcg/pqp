@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   HLS_MSN_PARAM,
   HLS_PART_PARAM,
+  MAX_POLL_STATE_ENTRIES,
   awaitBlockingReload,
   handleBlockingReload,
   isMsnPartAvailable,
@@ -690,4 +691,156 @@ test("handleBlockingReload: an already-aborted signal short-circuits to a 499, n
   );
   assert.equal(response.status, 499);
   assert.equal(fetchCalls, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Farol 2026-09-14: bounded pollStates must never evict an active rendition,
+// and the retained-state fast path must honor an already-aborted signal.
+// ---------------------------------------------------------------------------
+
+/**
+ * A `fetchRendition` that never settles -- keeps a poll loop permanently
+ * "polling" (no `lastPlaylist` yet, so `fetchWithDeadlineRace` awaits this
+ * directly with nothing to race it against), which is exactly what an ACTIVE
+ * rendition looks like from `insertPollState`'s point of view: a live loop,
+ * a live waiter, never idle. Records each call so a test can tell whether a
+ * loop was started more than once for the same key.
+ */
+function neverSettlingFetch(calls, key) {
+  return async () => {
+    calls.set(key, (calls.get(key) ?? 0) + 1);
+    return new Promise(() => {});
+  };
+}
+
+test("insertPollState: an active rendition survives eviction pressure at a full map", async () => {
+  resetBlockingReloadStateForTests();
+  const calls = new Map();
+
+  const survivorKey = "capacity-survivor";
+  // Registered first so it is an early entry in insertion order -- exactly
+  // the entry the OLD "evict the oldest" fallback would have sacrificed.
+  void awaitBlockingReload(survivorKey, { msn: 1 }, { fetchRendition: neverSettlingFetch(calls, survivorKey) });
+  assert.equal(calls.get(survivorKey), 1, "the survivor's loop should have started immediately");
+
+  // Fill the rest of the map with other equally-active renditions.
+  for (let i = 0; i < MAX_POLL_STATE_ENTRIES - 1; i += 1) {
+    const key = `capacity-filler-${i}`;
+    void awaitBlockingReload(key, { msn: 1 }, { fetchRendition: neverSettlingFetch(calls, key) });
+  }
+
+  // The map is now completely full and every entry is active (a live loop,
+  // a live waiter). One more distinct key must NOT evict any of them.
+  const overflow = await awaitBlockingReload(
+    "capacity-overflow",
+    { msn: 1 },
+    { fetchRendition: neverSettlingFetch(calls, "capacity-overflow") },
+  );
+  assert.deepEqual(overflow, { kind: "capacity-fallback" });
+  assert.equal(calls.get("capacity-overflow"), undefined, "a fallback must never start its own loop");
+
+  // The survivor must still be the SAME retained state: a second request for
+  // its key joins the existing waiter set of the SAME loop rather than
+  // starting a fresh one. If it had been evicted, this call would create a
+  // brand-new entry with its own loop and call `fetchRendition` again.
+  void awaitBlockingReload(survivorKey, { msn: 2 }, { fetchRendition: neverSettlingFetch(calls, survivorKey) });
+  assert.equal(calls.get(survivorKey), 1, "the survivor's loop must not have been restarted");
+});
+
+test("handleBlockingReload: a full map of active renditions falls back to the plain fetch instead of a hold", async () => {
+  resetBlockingReloadStateForTests();
+  const calls = new Map();
+  const events = [];
+
+  for (let i = 0; i < MAX_POLL_STATE_ENTRIES; i += 1) {
+    const key = `h-capacity-filler-${i}`;
+    void awaitBlockingReload(key, { msn: 1 }, { fetchRendition: neverSettlingFetch(calls, key) });
+  }
+
+  let plainFetchCalls = 0;
+  const response = await handleBlockingReload(
+    "h-capacity-overflow",
+    { msn: 1 },
+    async () => {
+      // Represents the CALLER's own plain, non-blocking fetch -- this must
+      // never be reached, because a capacity-fallback outcome is a `null`
+      // Response, not a call into the hold machinery's own fetch closure.
+      plainFetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    (event, fields) => events.push({ event, fields }),
+    { channelId: "chan-1", rung: "720p30" },
+  );
+
+  assert.equal(response, null, "the caller must fall back to its own non-blocking path");
+  assert.equal(plainFetchCalls, 0, "handleBlockingReload's own fetch closure must not run on a capacity fallback");
+  assert.ok(
+    events.some((e) => e.event === "hlsEdge.blockingReloadCapacityFallback"),
+    "the fallback must be logged",
+  );
+});
+
+test("awaitBlockingReload: an aborted signal wins even when retained state could answer instantly", async () => {
+  resetBlockingReloadStateForTests();
+  const clock = makeClock();
+  const key = "rendition-abort-fastpath";
+
+  // Warm the retained state: a normal call populates lastEdge/lastPlaylist
+  // so a SECOND call for the same satisfiable msn would, before this fix,
+  // resolve "available" straight from that state with no abort check at all.
+  const warm = await awaitBlockingReload(key, { msn: 100 }, {
+    fetchRendition: async () => toFetched(PLAYLIST_A),
+    now: clock.now,
+    sleep: clock.sleep,
+  });
+  assert.equal(warm.kind, "available");
+
+  const controller = new AbortController();
+  controller.abort();
+  let fetchCalls = 0;
+  const outcome = await awaitBlockingReload(key, { msn: 100 }, {
+    fetchRendition: async () => {
+      fetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    now: clock.now,
+    sleep: clock.sleep,
+    signal: controller.signal,
+  });
+
+  assert.deepEqual(outcome, { kind: "aborted" });
+  assert.equal(fetchCalls, 0, "an already-aborted request must not even reach the fast path check");
+});
+
+test("handleBlockingReload: an already-aborted signal wins over a warm retained state, no body served", async () => {
+  resetBlockingReloadStateForTests();
+  const key = "rendition-h-abort-fastpath";
+
+  const warm = await handleBlockingReload(
+    key,
+    { msn: 100 },
+    async () => toFetched(PLAYLIST_A),
+    () => {},
+    { channelId: "chan-1", rung: "720p30" },
+  );
+  assert.equal(warm.status, 200);
+  assert.equal(warm.headers.get("X-HLS-Edge-Cache"), "BLOCKING-HIT");
+
+  const controller = new AbortController();
+  controller.abort();
+  let fetchCalls = 0;
+  const response = await handleBlockingReload(
+    key,
+    { msn: 100 },
+    async () => {
+      fetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    () => {},
+    { channelId: "chan-1", rung: "720p30" },
+    controller.signal,
+  );
+
+  assert.equal(response.status, 499);
+  assert.equal(fetchCalls, 0, "an aborted request must never be served the retained playlist body");
 });

@@ -326,7 +326,7 @@ async function handlePlaylistRequest(
   // polling on their behalf until the timeout (see that module's doc
   // comment, "DISCONNECTED VIEWERS DO NOT KEEP A LOOP ALIVE").
   if (blockingReload.kind === "directives") {
-    return handleBlockingReload(
+    const blockingResponse = await handleBlockingReload(
       cacheKeyRequest(request).url,
       blockingReload.value,
       () =>
@@ -340,6 +340,14 @@ async function handlePlaylistRequest(
       { channelId, rung },
       request.signal,
     );
+    // `null` is the capacity-fallback signal (`hls-blocking-reload.js`,
+    // `MAX_POLL_STATE_ENTRIES`): this isolate's poll-state map is full of
+    // OTHER active renditions, so this one request is served the ordinary
+    // way below -- the non-blocking cache-or-forward path -- rather than
+    // evicting one of those active holds to make room for it.
+    if (blockingResponse) {
+      return blockingResponse;
+    }
   }
 
   const cache = caches.default;
