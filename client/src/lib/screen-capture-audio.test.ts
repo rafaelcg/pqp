@@ -1,12 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
   needsShareAudioPrompt,
   offersBrowserSystemAudio,
   offersShellSystemAudio,
+  liveScreenCaptureEnvironment,
   screenCaptureOptions,
   shareStreamHasAudio,
   shellCarriesScreenAudio,
+  steersAtBrowserTab,
   type ScreenCaptureEnvironment,
 } from "./screen-capture-audio";
 
@@ -15,12 +17,16 @@ const browser: ScreenCaptureEnvironment = {
   shellPlatform: null,
   supportsRestrictOwnAudio: true,
   sharePickerOffersAudio: false,
+  shellSystemAudio: null,
+  shellRestrictOwnAudio: null,
 };
 const oldBrowser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
   shellPlatform: null,
   supportsRestrictOwnAudio: false,
   sharePickerOffersAudio: false,
+  shellSystemAudio: null,
+  shellRestrictOwnAudio: null,
 };
 /** The installed v0.1.3 build on Windows: loopback is real there. */
 const shell: ScreenCaptureEnvironment = {
@@ -28,18 +34,42 @@ const shell: ScreenCaptureEnvironment = {
   shellPlatform: "win32",
   supportsRestrictOwnAudio: false,
   sharePickerOffersAudio: false,
+  shellSystemAudio: null,
+  shellRestrictOwnAudio: null,
 };
 const newShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
   sharePickerOffersAudio: false,
+  shellSystemAudio: null,
+  shellRestrictOwnAudio: null,
 };
 const pickerShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
   sharePickerOffersAudio: true,
+  shellSystemAudio: null,
+  shellRestrictOwnAudio: null,
+};
+/** 0.1.6 on Windows: the shell states its own abilities instead of being guessed at. */
+const capableShell: ScreenCaptureEnvironment = {
+  isDesktopShell: true,
+  shellPlatform: "win32",
+  supportsRestrictOwnAudio: true,
+  sharePickerOffersAudio: true,
+  shellSystemAudio: "loopback",
+  shellRestrictOwnAudio: true,
+};
+/** 0.1.6 on macOS, saying so rather than being inferred from `platform`. */
+const capableMacShell: ScreenCaptureEnvironment = {
+  isDesktopShell: true,
+  shellPlatform: "darwin",
+  supportsRestrictOwnAudio: true,
+  sharePickerOffersAudio: false,
+  shellSystemAudio: "none",
+  shellRestrictOwnAudio: true,
 };
 /** The same build on macOS, where no capture can carry the machine's sound. */
 const macShell: ScreenCaptureEnvironment = {
@@ -47,6 +77,8 @@ const macShell: ScreenCaptureEnvironment = {
   shellPlatform: "darwin",
   supportsRestrictOwnAudio: false,
   sharePickerOffersAudio: false,
+  shellSystemAudio: null,
+  shellRestrictOwnAudio: null,
 };
 
 describe("screenCaptureOptions", () => {
@@ -139,9 +171,11 @@ describe("screenCaptureOptions", () => {
 
   it("asks a macOS shell for no audio even when the user opted in", () => {
     // The 3 Sep 2026 report: ticking the box made the picker close and nothing
-    // happen. `useSystemPicker: true` means our video-only handler is skipped,
-    // the request reaches Chromium intact, and macOS has no system audio to
-    // give — which rejects the capture whole, video included.
+    // happen. That build let the OS picker skip our video-only handler, so the
+    // request reached Chromium intact, and macOS has no system audio to give,
+    // which rejects the capture whole, video included. 0.1.6 answers every
+    // request itself and the page still asks for nothing, because "asked for
+    // nothing" is the only shape with no failure mode in it.
     expect(screenCaptureOptions(true, macShell).audio).toBe(false);
     expect(screenCaptureOptions(true, macShell).systemAudio).toBe("exclude");
   });
@@ -254,6 +288,74 @@ describe("screenCaptureOptions", () => {
     ).toMatchObject({ displaySurface: "browser", cursor: "never" });
   });
 
+  it("never asks the desktop shell for a tab surface", () => {
+    // THE 13 SEP 2026 REPORT, in one assertion. A shell has no tab surfaces:
+    // its picker lists screens and windows, which is all `desktopCapturer`
+    // knows. `displaySurface: "browser"` is a constraint, not a hint, so
+    // Chromium refuses the whole capture once the picker closes with something
+    // that is not a tab ("Invalid capture constraints"), and `startScreenShare`
+    // does not retry that name. A presenter on the desktop app could not start
+    // a watch party at all.
+    for (const env of [
+      shell,
+      newShell,
+      pickerShell,
+      capableShell,
+      macShell,
+      capableMacShell,
+    ]) {
+      const options = screenCaptureOptions(false, env, {
+        preferBrowserTab: true,
+      });
+      expect(options.video).not.toHaveProperty("displaySurface");
+      expect(options.monitorTypeSurfaces).toBeUndefined();
+    }
+  });
+
+  it("still asks for a tab in a browser, where tabs exist", () => {
+    expect(
+      screenCaptureOptions(false, browser, { preferBrowserTab: true }).video,
+    ).toMatchObject({ displaySurface: "browser" });
+  });
+
+  it("lets a desktop watch party carry the machine's sound", () => {
+    // The other half of the same report: a watch party in a browser wants tab
+    // audio and never the mixer, and in the shell there is no tab, so the mixer
+    // minus this app's own output is the ONLY sound a capture can carry. The
+    // old rule made a desktop watch party silent by construction.
+    const options = screenCaptureOptions(false, capableShell, {
+      preferBrowserTab: true,
+    });
+    expect(options.audio).toMatchObject({ restrictOwnAudio: true });
+    expect(options.systemAudio).toBe("include");
+  });
+
+  it("keeps a macOS watch party audio-free, tab intent or not", () => {
+    // Nothing to capture there, and asking costs the video too.
+    for (const env of [macShell, capableMacShell]) {
+      expect(
+        screenCaptureOptions(true, env, { preferBrowserTab: true }).audio,
+      ).toBe(false);
+    }
+  });
+
+  it("believes the shell about its own audio rather than reading its platform", () => {
+    expect(shellCarriesScreenAudio(capableShell)).toBe(true);
+    expect(shellCarriesScreenAudio(capableMacShell)).toBe(false);
+    // The point of asking the shell: a future build with a loopback device on
+    // another platform is believed without a client deploy, and a Windows build
+    // that loses one is believed the same way.
+    expect(
+      shellCarriesScreenAudio({
+        ...capableMacShell,
+        shellSystemAudio: "loopback",
+      }),
+    ).toBe(true);
+    expect(
+      shellCarriesScreenAudio({ ...capableShell, shellSystemAudio: "none" }),
+    ).toBe(false);
+  });
+
   it("does not steer a normal share toward a tab", () => {
     const options = screenCaptureOptions(false, browser);
     expect(options.preferCurrentTab).toBeUndefined();
@@ -277,6 +379,24 @@ describe("where the audio checkbox lives", () => {
     expect(offersShellSystemAudio(shell)).toBe(false);
     expect(offersShellSystemAudio(macShell)).toBe(false);
     expect(offersShellSystemAudio(browser)).toBe(false);
+  });
+
+  it("takes a shell's word that it cannot strip the call", () => {
+    // A build that admits it cannot keep its own playback out of the tap is
+    // never offered the tap. Null is every build that never said, and those are
+    // already gated by the renderer's own constraint support.
+    expect(
+      offersShellSystemAudio({ ...capableShell, shellRestrictOwnAudio: false }),
+    ).toBe(false);
+    expect(offersShellSystemAudio(capableShell)).toBe(true);
+  });
+
+  it("knows a tab steer is a browser-only idea", () => {
+    expect(steersAtBrowserTab(browser, { preferBrowserTab: true })).toBe(true);
+    expect(steersAtBrowserTab(browser)).toBe(false);
+    for (const env of [shell, capableShell, macShell]) {
+      expect(steersAtBrowserTab(env, { preferBrowserTab: true })).toBe(false);
+    }
   });
 
   it("prompts in the page only when the picker cannot ask yet", () => {
@@ -351,5 +471,75 @@ describe("shareStreamHasAudio", () => {
     expect(
       shareStreamHasAudio([{ readyState: "ended" }, { readyState: "live" }]),
     ).toBe(true);
+  });
+});
+
+/**
+ * THE READER, AND THE BUG THAT MADE IT ONE FUNCTION.
+ *
+ * Four call sites used to assemble the environment themselves, and the watch
+ * party's setup surface assembled one without the shell's picker flag: the one
+ * share that most needs sound asked for none of it, on a Windows desktop whose
+ * picker was ready to offer the box. A capability the page forgets to pass is a
+ * capability the shell does not have, so there is one reader now and this is it.
+ */
+describe("liveScreenCaptureEnvironment", () => {
+  afterEach(() => {
+    delete (globalThis as { window?: unknown }).window;
+  });
+
+  function setShell(shell: unknown): void {
+    (globalThis as { window?: unknown }).window =
+      shell === undefined ? {} : { pqpDesktop: shell };
+  }
+
+  it("carries every capability the shell published", () => {
+    setShell({
+      isElectron: true,
+      platform: "win32",
+      capabilities: {
+        displayMedia: true,
+        systemAudio: "loopback",
+        restrictOwnAudio: true,
+        pickerOffersAudio: true,
+        version: "0.1.6",
+      },
+    });
+    const env = liveScreenCaptureEnvironment();
+    expect(env.isDesktopShell).toBe(true);
+    expect(env.shellPlatform).toBe("win32");
+    expect(env.shellSystemAudio).toBe("loopback");
+    expect(env.shellRestrictOwnAudio).toBe(true);
+    expect(env.sharePickerOffersAudio).toBe(true);
+    // And the whole point of reading it: a watch party there is offered the
+    // machine's sound, because there is no tab to take it from.
+    expect(offersShellSystemAudio({ ...env, supportsRestrictOwnAudio: true })).toBe(
+      true,
+    );
+  });
+
+  it("falls back to the flags a 0.1.5 shell publishes", () => {
+    // The hosted client runs inside binaries that have no capability object.
+    // Those keep the platform guess and the old boolean, unchanged.
+    setShell({
+      isElectron: true,
+      platform: "win32",
+      canShareScreen: true,
+      sharePickerOffersAudio: true,
+    });
+    const env = liveScreenCaptureEnvironment();
+    expect(env.shellSystemAudio).toBeNull();
+    expect(env.shellRestrictOwnAudio).toBeNull();
+    expect(env.sharePickerOffersAudio).toBe(true);
+    expect(shellCarriesScreenAudio(env)).toBe(true);
+  });
+
+  it("is a browser when there is no shell", () => {
+    setShell(undefined);
+    const env = liveScreenCaptureEnvironment();
+    expect(env.isDesktopShell).toBe(false);
+    expect(env.shellPlatform).toBeNull();
+    expect(env.shellSystemAudio).toBeNull();
+    expect(steersAtBrowserTab(env, { preferBrowserTab: true })).toBe(true);
   });
 });

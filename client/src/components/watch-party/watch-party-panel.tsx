@@ -51,10 +51,11 @@ import { WatchPartyTransmission } from "@/components/watch-party/watch-party-tra
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { supportsScreenShare } from "@/components/voice/capabilities";
-import { getDesktop, isDesktopApp } from "@/lib/desktop";
+import { isDesktopApp } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import {
-  screenCaptureEnvironment,
+  liveScreenCaptureEnvironment,
+  offersShellSystemAudio,
   screenCaptureOptions,
 } from "@/lib/screen-capture-audio";
 import { cn } from "@/lib/utils";
@@ -762,6 +763,25 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   // picked the tab and left "share tab audio" unticked, and nobody hears the
   // film. Say so under the preview, before anyone is watching.
   const silentPick = stream !== null && stream.getAudioTracks().length === 0;
+  // WHAT TO DO ABOUT IT DEPENDS ON WHERE THEY ARE. "Tick share tab audio" is
+  // the answer in a browser and nonsense in the desktop app, which has no tabs
+  // to tick anything on: there the answer is the picker's own sound box, and on
+  // a shell that cannot carry sound at all (macOS: no loopback device in
+  // Chromium) the honest answer is to host from Chrome instead.
+  //
+  // "The picker's own sound box" only exists on a shell new enough to draw it
+  // (`sharePickerOffersAudio`) AND able to strip this app's own call out of
+  // the tap (`offersShellSystemAudio`). An older Windows build can carry
+  // loopback and still have neither: its picker has no checkbox at all, this
+  // surface never offers the page-owned `shareSystemAudio` prompt that could
+  // stand in for one, so "desktop" would point the presenter at a box that is
+  // not there. That build gets the same honest answer as macOS.
+  const captureEnv = liveScreenCaptureEnvironment();
+  const silentPickHint = !isDesktopApp()
+    ? undefined
+    : offersShellSystemAudio(captureEnv) && captureEnv.sharePickerOffersAudio
+      ? { context: "desktop" }
+      : { context: "desktopSilent" };
 
   useEffect(() => setName(party.name), [party.id, party.name]);
 
@@ -791,12 +811,13 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // Same builder every ordinary share uses. `preferBrowserTab` is the
       // watch-party product: the player tab and its sound, never the machine
       // mixer that contains the call. See `lib/screen-capture-audio.ts`.
+      // `liveScreenCaptureEnvironment`, not a hand-rolled one. This call site
+      // used to build its own and leave out the shell's picker flag, so a
+      // Windows desktop host was asked for a capture with no audio at all while
+      // the shell's own picker stood ready to offer the box. One reader now.
       const options = screenCaptureOptions(
         false,
-        screenCaptureEnvironment(
-          isDesktopApp(),
-          getDesktop()?.platform ?? null,
-        ),
+        liveScreenCaptureEnvironment(),
         { preferBrowserTab: true, maxFrameRate: props.hlsMaxFrameRate },
       );
       const picked = await navigator.mediaDevices.getDisplayMedia(options);
@@ -911,7 +932,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               data-testid="watch-party-no-audio"
               className="pointer-events-none absolute bottom-3 left-3 right-3 rounded-md border border-warning/40 bg-surface-0/90 px-2.5 py-1.5 text-xs text-warning"
             >
-              {t("watchParty.setup.noAudio")}
+              {t("watchParty.setup.noAudio", silentPickHint)}
             </p>
           )}
         </div>

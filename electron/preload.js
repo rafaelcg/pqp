@@ -4,6 +4,68 @@ const { contextBridge, ipcRenderer } = require("electron");
  * Minimal, allowlisted bridge for the web client.
  * Do not expose ipcRenderer or Node APIs directly.
  */
+
+/**
+ * This build's version, handed over by main through `additionalArguments`.
+ *
+ * Null when the argument is absent, which is any window this preload is
+ * attached to that main did not configure. Null is "unknown", never "old": the
+ * capability booleans below are what the client decides anything on.
+ */
+function shellVersion() {
+  const prefix = "--pqp-shell-version=";
+  const argv = Array.isArray(process.argv) ? process.argv : [];
+  for (const arg of argv) {
+    if (typeof arg === "string" && arg.startsWith(prefix)) {
+      const value = arg.slice(prefix.length).trim();
+      return value || null;
+    }
+  }
+  return null;
+}
+
+/**
+ * WHAT THIS SHELL CAN ACTUALLY DO WITH A SCREEN CAPTURE.
+ *
+ * One object instead of the next five `canDoThing: true` version flags, and it
+ * exists because the web client had to GUESS two of these from
+ * `process.platform`. Guessing worked while "desktop" meant one binary, and it
+ * is exactly the reading that broke a watch party on this app: the page asked
+ * for a browser-tab surface, because in a browser that is the clean audio path,
+ * and this shell has no tab surfaces at all to satisfy it.
+ *
+ * Every field is a build-time fact about THIS binary, decided here rather than
+ * inferred over there:
+ *
+ * - `displayMedia`: the main process answers `setDisplayMediaRequestHandler`
+ *   with a real picker. Same signal as `canShareScreen`, which stays for the
+ *   shells already installed that have no `capabilities` at all.
+ * - `systemAudio`: `"loopback"` only where Chromium has a loopback device,
+ *   which is WASAPI and therefore Windows. Everywhere else `"none"`, and the
+ *   page must not ask for an audio track, because a display audio request the
+ *   embedder cannot satisfy fails the WHOLE capture, video included.
+ * - `restrictOwnAudio`: this Electron honours
+ *   `getDisplayMedia({ audio: { restrictOwnAudio: true } })` by remapping
+ *   Windows loopback to `loopbackWithoutChrome`, which is what keeps the call
+ *   playing in this window out of the tap (the 23 Aug 2026 echo). True from
+ *   Electron 43.4; package.json pins 44 and `lib/share-capabilities.test.mjs`
+ *   fails if that pin ever drops below the version that honours it.
+ * - `pickerOffersAudio`: the picker window asks "share this computer's sound?"
+ *   itself, so the page does not have to ask first.
+ *
+ * `loopbackWithMute` is deliberately NOT used anywhere. It captures the same
+ * tap and silences the machine's own output while it does, so the presenter
+ * stops hearing both the call and the thing they are presenting. Excluding our
+ * own output from the tap is `restrictOwnAudio`, and that is a different device.
+ */
+const SHARE_CAPABILITIES = Object.freeze({
+  displayMedia: true,
+  systemAudio: process.platform === "win32" ? "loopback" : "none",
+  restrictOwnAudio: true,
+  pickerOffersAudio: process.platform === "win32",
+  version: shellVersion(),
+});
+
 contextBridge.exposeInMainWorld("pqpDesktop", {
   platform: process.platform,
   isElectron: true,
@@ -37,6 +99,15 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
    * `audioRequested` as the whole switch and would loop back every share.
    */
   sharePickerOffersAudio: true,
+
+  /**
+   * What a screen capture in this shell can do. See `SHARE_CAPABILITIES`.
+   *
+   * Absent in every shell built before this one, which is why the two flags
+   * above it stay: the hosted client runs inside binaries this repo shipped
+   * weeks ago and has to keep reading them.
+   */
+  capabilities: SHARE_CAPABILITIES,
 
   /** Subscribe to Cmd/Ctrl+Shift+M mute toggle from the app menu. */
   onToggleMute(callback) {

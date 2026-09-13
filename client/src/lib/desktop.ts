@@ -20,6 +20,14 @@ export interface PqpDesktop {
    * switch, so the page must ask first — or not request audio at all.
    */
   sharePickerOffersAudio?: true;
+  /**
+   * What a screen capture can do in THIS shell, said by the shell.
+   *
+   * Absent in every build before 0.1.6, so absence is not "cannot": it means
+   * fall back to the two flags above plus `platform`, which is what the client
+   * did for every shell until now. See `DesktopShareCapabilities`.
+   */
+  capabilities?: DesktopShareCapabilities;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
@@ -71,6 +79,45 @@ export interface PqpDesktop {
   onVoiceCommand?(cb: (command: DesktopVoiceCommand) => void): () => void;
 }
 
+/**
+ * What the desktop shell says its own screen capture can do.
+ *
+ * WHY THE SHELL SAYS IT AND THE PAGE DOES NOT WORK IT OUT. Until 0.1.6 the
+ * client inferred the two things that matter from `platform`: Windows means
+ * loopback audio, anything else means silence. That inference was right, and it
+ * was still the wrong design, because the page was reasoning about a binary it
+ * cannot see — the hosted client runs inside whatever build the user installed.
+ * The failure that proved it was not audio at all: the watch party asks for a
+ * browser-tab surface, which is the clean audio path in a browser and does not
+ * exist in this shell, and the capture was refused outright rather than falling
+ * back to a window.
+ *
+ * So the shell states its own abilities and the page reads them. Every field is
+ * a fact about the installed binary, and an OLD shell has none of this object,
+ * which is a perfectly good answer too: keep doing what we did before.
+ */
+export interface DesktopShareCapabilities {
+  /** The main process answers `getDisplayMedia` with a real picker. */
+  displayMedia: boolean;
+  /**
+   * `"loopback"` where the shell can hand over the machine's output (Windows
+   * only: Chromium's loopback device is WASAPI), `"none"` where it cannot. On
+   * `"none"` the page must not ask for audio: a display-audio request the
+   * embedder cannot satisfy fails the whole capture, video included.
+   */
+  systemAudio: "loopback" | "none";
+  /**
+   * The shell honours `restrictOwnAudio` on the capture request, i.e. it keeps
+   * this app's own playback (everybody's voices) out of the tap. False is a
+   * shell saying it cannot, and the page then never offers computer audio.
+   */
+  restrictOwnAudio: boolean;
+  /** The shell's own picker asks about computer audio, so the page need not. */
+  pickerOffersAudio: boolean;
+  /** The shell's version, for diagnostics. Null when it could not be read. */
+  version: string | null;
+}
+
 export interface DesktopVoiceState {
   inCall: boolean;
   muted: boolean;
@@ -118,7 +165,27 @@ export function desktopContext(): { context: "desktop" } | undefined {
  */
 export function desktopPredatesScreenShare(): boolean {
   const desktop = getDesktop();
-  return desktop !== undefined && desktop.canShareScreen !== true;
+  if (desktop === undefined) {
+    return false;
+  }
+  // Either signal is enough. `capabilities.displayMedia` is what a current
+  // shell says; `canShareScreen` is what 0.1.3 through 0.1.5 said and what the
+  // hosted client still meets every day. A shell that says neither is old, and
+  // saying "update the app" to somebody whose app CAN share is the mistake this
+  // whole function exists to avoid.
+  return (
+    desktop.capabilities?.displayMedia !== true && desktop.canShareScreen !== true
+  );
+}
+
+/**
+ * The shell's screen-capture abilities, or null in a browser / an old shell.
+ *
+ * Null is not "cannot share": it is "this shell does not say", and every caller
+ * has to keep the answer it had before the object existed.
+ */
+export function desktopShareCapabilities(): DesktopShareCapabilities | null {
+  return getDesktop()?.capabilities ?? null;
 }
 
 /**

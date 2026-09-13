@@ -43,6 +43,18 @@ jobs:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # THE macOS JOB MUST NOT HOLD A RELEASE HOSTAGE. It has been red since early
+    # September over signing (the write-up is beside "Package Electron" below and
+    # in docs/DESKTOP.md 3.8), and Windows is where the desktop users are.
+    # `fail-fast: false` already keeps the other two runners going; this is the
+    # other half, so a `v*` tag whose mac job dies still finishes as a green
+    # workflow with the Windows and Linux artifacts published to the release
+    # rather than a red run nobody can ship from.
+    #
+    # It is a plaster and it is labelled as one. The step below annotates the run
+    # so a failure is still visible, and this line comes out the moment a mac
+    # build is green again: a permanently ignored job is a job nobody fixes.
+    continue-on-error: ${{ matrix.platform == 'mac' }}
     strategy:
       fail-fast: false
       matrix:
@@ -185,7 +197,18 @@ jobs:
           # Publish only from a version tag. Everything else is an artifact you
           # download from the run, so a push to main cannot rewrite the update
           # feed that installed apps are polling.
-          if [ "$IS_TAG" = "true" ]; then
+          #
+          # macOS is the one exception, and it NEVER publishes here, tag or
+          # not. electron-builder's `--publish always` uploads as part of THIS
+          # command, which runs before "Verify macOS signing and notarization"
+          # below — so publishing here can hand a user an unsigned or
+          # notarization-stripped .dmg before anything has checked it, and the
+          # job-level `continue-on-error` above hides that from the run's
+          # status. macOS publishes for real in "Publish macOS release
+          # assets", gated on that verification step passing (an unsigned
+          # build still counts as passing — see that step). Windows and Linux
+          # have no such gate, so they keep the one-step build-and-publish.
+          if [ "$IS_TAG" = "true" ] && [ "$PLATFORM" != "mac" ]; then
             args+=("--publish" "always")
           else
             args+=("--publish" "never")
@@ -201,6 +224,7 @@ jobs:
       # it. This step asks Gatekeeper about the file a user actually
       # double-clicks, and fails the job when the answer is wrong.
       - name: Verify macOS signing and notarization
+        id: verify-mac
         if: matrix.platform == 'mac'
         working-directory: electron
         shell: bash
@@ -258,6 +282,52 @@ jobs:
           # above, which ran on the same bundle the zip was made from.
 
           exit $status
+
+      # `continue-on-error` on this job hides the red X, so say it out loud here.
+      # A warning annotation still shows on the run summary and in the PR, which
+      # is the difference between "known and tolerated" and "silently broken".
+      - name: Say so when the macOS build failed
+        if: failure() && matrix.platform == 'mac'
+        shell: bash
+        run: |
+          echo "::warning::The macOS desktop build failed and the workflow was allowed to pass anyway (known signing issue, docs/DESKTOP.md 3.8). Windows and Linux artifacts are unaffected. Remove continue-on-error from .github/workflows/electron.yml once a mac build is green."
+
+      # The other half of moving macOS's publish out of "Package Electron":
+      # upload the artifacts it already built, but only now that Gatekeeper
+      # has actually looked at them. `steps.verify-mac.outcome` reads the
+      # verification step's own result, not the job's — the job-level
+      # `continue-on-error` above only changes what the RUN reports, it does
+      # not change what this step sees, so a failed check still blocks this.
+      # An unsigned build (fork, or secrets not set yet) still publishes here:
+      # the verify step exits 0 for that case on purpose, same as it always
+      # has, and that was never what this gate is for.
+      #
+      # electron-builder still writes `latest-mac.yml` and the `.blockmap`
+      # files to `release/` even with `--publish never` above; only the
+      # network upload was skipped, so nothing here needs a second build.
+      # Windows and Linux create the tag's draft release themselves in one
+      # step; this only creates it when macOS's job happens to finish first.
+      - name: Publish macOS release assets
+        if: |
+          matrix.platform == 'mac' &&
+          startsWith(github.ref, 'refs/tags/v') &&
+          steps.verify-mac.outcome == 'success'
+        working-directory: electron
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" --repo rafaelcg/pqp >/dev/null 2>&1 || \
+            gh release create "$tag" --repo rafaelcg/pqp --draft --title "$tag"
+          assets=(release/*.dmg release/*.zip release/*.blockmap release/*.yml)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::warning::No macOS release assets found in release/ to publish for $tag."
+            exit 0
+          fi
+          gh release upload "$tag" "${assets[@]}" --repo rafaelcg/pqp --clobber
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

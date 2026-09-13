@@ -107,6 +107,71 @@ TTL is 90 seconds. A minimized call must still reconnect before the server
 drops the orphaned peer. Auto-update that reloads the page is a tab reload:
 media is gone, same as the browser. iOS and Android do not resume yet.
 
+### Screen sharing on the desktop app
+
+`getDisplayMedia` exists in every Electron renderer and resolves **nothing**
+until the main process answers: Chromium delegates "which screen?" to the
+embedder. `electron/main.js` registers `session.setDisplayMediaRequestHandler`,
+and from 0.1.6 it registers it with **`useSystemPicker: false`**, so that
+handler answers every request on every platform. It used to be `true`, which
+reads as "prefer the nicer native list on macOS 15+" and means "on macOS none
+of our code runs": the screen-recording diagnosis, the labelled picker, the
+auto-pick and the loopback mapping were all unreachable there, and every test
+of them was testing a path that platform never took.
+
+**The picker** (`electron/picker/`, a `file://` page inside the bundle, strings
+from `electron/locales/`) lists screens first, then windows, each with a
+thumbnail and an app icon, arrow keys and Enter, Escape to cancel. One surface
+and no choice to make (Wayland portals, a permission-less macOS) skips the
+dialog entirely. Cancelling becomes a `NotAllowedError`, which the client words
+as "blocked or cancelled" rather than as a failure.
+
+**Audio, per OS** — `captureResponse` in `electron/lib/display-sources.js`:
+
+| OS | What a share can carry | How |
+|---|---|---|
+| Windows | The machine's own output, minus pqp's | `{ video: source, audio: "loopback" }` when the page asked for audio **and** the picker's box was ticked. Electron 43.4+ remaps that to `loopbackWithoutChrome` when the page sent `restrictOwnAudio: true`, so the call playing in this window stays out of the tap (the 23 Aug 2026 echo report) |
+| macOS | Video only | Chromium's loopback device is WASAPI and exists nowhere else. The client asks for no audio track at all, because an audio request the embedder cannot satisfy rejects the **whole** capture, video included (3 Sep 2026: "o picker fecha e a stream não começa") |
+| Linux | Video only | Same reason; best effort, and Wayland may hand back one pre-picked surface |
+
+`loopbackWithMute` is deliberately never used. It taps the same output and
+silences the machine while it does, so the presenter stops hearing both the call
+and the thing they are presenting. Keeping *our own* audio out of the tap is
+`restrictOwnAudio`, a different device.
+
+**What the client is told.** `preload.js` publishes a `capabilities` object
+(`displayMedia`, `systemAudio: "loopback" | "none"`, `restrictOwnAudio`,
+`pickerOffersAudio`, `version`) and the web client reads it through
+`desktopShareCapabilities()` / `liveScreenCaptureEnvironment()`. Before 0.1.6
+the page inferred the audio half from `process.platform`, which was correct and
+still wrong in kind: the hosted client runs inside whatever binary the user
+installed, so the binary has to state its own abilities. The older
+`canShareScreen` and `sharePickerOffersAudio` flags stay, because absence is the
+signal that tells an out-of-date shell ("update the app") apart from a browser
+that genuinely cannot capture.
+
+**There are no tab surfaces here.** `desktopCapturer` knows screens and windows,
+full stop. A watch party in a browser asks for `displaySurface: "browser"`
+because tab audio is the clean path; that member is a **constraint**, not a
+hint, so in the shell Chromium refused the whole capture after the picker closed
+("Invalid capture constraints") and `startScreenShare` did not retry, because
+that name is neither `TypeError` nor `NotSupportedError`. A presenter on the
+desktop app could not start a watch party at all (13 Sep 2026). So the shell
+never gets the tab steer, and a desktop watch party may take Windows loopback,
+which is the only sound it can carry.
+
+**The trade this made.** macOS now needs the Screen Recording grant, where the
+system picker could hand over a surface without one. `screenPermission` +
+`explainScreenPermission` open the right System Settings pane when it is
+missing. Flipping `useSystemPicker` back to `true` in `main.js` is the one-line
+rollback if that grant turns out to be the bigger problem.
+
+**Frame rate and size** stay the page's business, not the shell's:
+`screenCaptureOptions` asks for 1080p at 30 (60 when the HLS ladder wants it)
+and the watch party lowers the capture's height with `applyConstraints` while it
+runs. A capture that refuses a constraint keeps running unchanged; nothing in
+that path stops a track.
+
 ---
 
 ## 2. Build locally
@@ -664,6 +729,12 @@ download an Apple Silicon build.
       (`electron/lib/nav-policy.js`). Game-connection hops still use that
       list.
 - [ ] Join a voice channel and confirm the mic prompt appears and audio flows.
+- [ ] Share a screen **and** a single window from the picker. On Windows tick
+      "share this computer's sound" and confirm the room hears the machine and
+      does **not** hear itself. On macOS confirm the grant prompt appears the
+      first time, and that a share goes ahead silently rather than failing.
+- [ ] Start a watch party from the app (not the browser) and confirm the picker
+      opens and the stream starts. That is the 13 Sep 2026 regression.
 - [ ] `pqp://` deep link from a browser focuses the app on the right route.
 - [ ] Install an older version, publish a newer one, confirm the update prompt
       appears and Restart actually lands on the new version.

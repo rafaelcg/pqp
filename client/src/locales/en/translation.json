@@ -2967,6 +2967,8 @@
   "watchParty.setup.goLiveHint": "The moment you press it, the watch party appears at the top of the sidebar for everyone here, and they can watch.",
   "watchParty.setup.pickFirst": "Pick what to share first.",
   "watchParty.setup.noAudio": "No audio. Click Change and tick share tab audio.",
+  "watchParty.setup.noAudio_desktop": "No audio. Click Change and tick \"share this computer's sound\" in the picker.",
+  "watchParty.setup.noAudio_desktopSilent": "No audio. This system cannot hand the app the computer's sound, so host from Chrome if the sound matters.",
   "watchParty.setup.phoneHost": "To stream, open pqp on a computer. From here you can set the time, adjust the options and send the link.",
   "watchParty.setup.phoneHint": "Open it on a computer to put the picture up.",
   "watchParty.setup.discard": "Discard",

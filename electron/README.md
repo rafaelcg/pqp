@@ -120,10 +120,11 @@ off, close behaves as it always did. The preference lives in
 
 `getDisplayMedia` in the renderer resolves nothing until the main process answers it, so the shell owns "which surface?" entirely (`setDisplayMediaRequestHandler` in `main.js`).
 
-Two paths, in this order:
+One path, on purpose. From 0.1.6 the handler is registered with **`useSystemPicker: false`** and answers every request on every platform with our own picker (`electron/picker/`).
 
-1. **The OS picker**, via `useSystemPicker: true`. macOS 15+ takes over and Electron never calls our handler. Leave this on: it is the list the user already knows, it does not need a screen-recording grant, and it survives switching surfaces mid-share.
-2. **Our picker**, `electron/picker/`, everywhere else. That is Windows, Linux, and macOS before 15.
+It used to be `true`, which reads as "prefer the nicer native list on macOS 15+" and means "on macOS none of the code below runs": Electron does not call the handler at all when the OS picker takes over, so the screen-recording diagnosis, the labels, the auto-pick and the loopback mapping were unreachable there and `lib/display-sources.test.mjs` was testing a path that platform never took. It also let the renderer's request reach Chromium untouched, which is how an audio ask macOS has no device for took the video with it (3 Sep 2026), and how a request for a surface this embedder does not have (a browser tab, which a watch party asks for) failed the whole capture with "Invalid capture constraints" (13 Sep 2026).
+
+The trade: macOS now needs the Screen Recording grant, which the OS picker could do without. `screenPermission` opens the right pane when it is missing. Flipping the option back to `true` is the one-line rollback.
 
 Our picker is a small `file://` window owned by the shell, **not** a React screen in the client. The packaged shell loads the *hosted* client, so a picker over there would mean the main process waiting on a reply from a renderer that may have been deployed before the message existed, and a reply that never comes is a `getDisplayMedia` that never settles. Version skew between the two is normal here; a page inside the bundle cannot skew.
 
@@ -141,7 +142,8 @@ Notes:
 - A list of exactly one surface skips the picker entirely (Wayland portals hand back one pre-picked surface).
 - Cancelling, Escape, and closing the window all answer `null`, which Chromium turns into `NotAllowedError`, which the client already words as "blocked or cancelled".
 - **macOS screen recording**: `desktopCapturer` does not fail without it, it returns a plausible list of nothing useful. The status is read again *after* listing (the listing is what raises the OS prompt) and a dialog offers `x-apple.systempreferences:…Privacy_ScreenCapture`. The grant only takes effect after a relaunch, and the copy says so.
-- Loopback audio is Windows-only in Chromium. Asking for it elsewhere fails the whole request rather than degrading to a silent share.
+- Loopback audio is Windows-only in Chromium. Asking for it elsewhere fails the whole request rather than degrading to a silent share. The picker's own checkbox is the consent; `captureResponse` ANDs it with what the page asked for. `loopbackWithMute` is never used: it silences the machine while it taps it, so the presenter loses the call and the film. Keeping *our* audio out of the tap is `restrictOwnAudio`, which Electron 43.4+ turns into `loopbackWithoutChrome`.
+- The renderer is told all of this rather than guessing it: `preload.js` publishes `capabilities` (`displayMedia`, `systemAudio`, `restrictOwnAudio`, `pickerOffersAudio`, `version`) and the client reads it in `client/src/lib/screen-capture-audio.ts`. `lib/share-capabilities.test.mjs` fails if a promise there stops matching this binary (an Electron downgrade below 43.4, a `loopbackWithMute`, a system picker creeping back).
 - `picker/**/*` is in `build.files`. Leaving it out ships a shell whose picker cannot load.
 
 ## Security model
