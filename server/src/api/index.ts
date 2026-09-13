@@ -154,6 +154,7 @@ import {
   recordHlsTelemetryBatchRejectedRateLimit,
   recordHlsTelemetryBatchRejectedSchema,
 } from "../voice/hls-latency-metrics.js";
+import { isKnownHlsRung } from "../voice/hls-ladder.js";
 import {
   describeHlsViewerToken,
   HLS_VIEWER_TOKEN_PARAM,
@@ -7757,9 +7758,10 @@ function feedbackIdParam(value: string | undefined): string {
  * channel access or on the named session actually being live: this is an
  * aggregate operational metric, not a read of anything sensitive, and
  * checking either would put a database round trip on a path this doc's whole
- * premise is to keep cheap. A batch naming a made-up or stale session id
- * costs one histogram bucket a viewer never sees; that is a cheaper failure
- * mode than a DB lookup on every flush from every sampled viewer.
+ * premise is to keep cheap. A batch naming a made-up or stale session id is
+ * an opaque, unverified label that never becomes a metrics key on its own
+ * (only `rung` does, and that is validated below); the worst it buys is a
+ * confusing `sessionId` in one log line.
  *
  * A REJECTED BATCH IS A NO-OP THE CLIENT NEVER RETRIES (see
  * `client/src/lib/hls-playback.ts`'s telemetry queue): this is a measurement,
@@ -7780,7 +7782,17 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
     recordHlsTelemetryBatchRejectedSchema();
     throw error;
   }
-  for (const sample of batch.samples) {
+  // `recordHlsLatencySample` refuses a rung it does not recognise on its
+  // own (a caller-independent guard against an authenticated account
+  // growing the per-rung histogram map without bound -- a Farol finding,
+  // 2026-09-13), but the log line below is built here too, so it filters
+  // the same way first: otherwise a batch full of garbage rung names would
+  // still produce a clean-looking log line while every sample inside it was
+  // silently dropped from the histogram.
+  const knownSamples = batch.samples.filter((sample) =>
+    isKnownHlsRung(sample.rung),
+  );
+  for (const sample of knownSamples) {
     recordHlsLatencySample(sample.rung, sample.latencyMs);
   }
   recordHlsTelemetryBatchAccepted();
@@ -7793,14 +7805,54 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
   // correctly bucketed per rung, is `GET /api/admin/metrics`'s
   // `liveHls.latency.byRung`, which this line is a rough live preview of and
   // not a replacement for.
-  const sortedLatencies = batch.samples
+  const sortedLatencies = knownSamples
     .map((sample) => sample.latencyMs)
     .sort((a, b) => a - b);
+  // The schema also accepts `bufferSeconds`/`stalls`/`rebufferMs`/
+  // `startupMs`/`playerRebuildCount`, and until this line they were parsed,
+  // validated and then thrown away entirely (a Farol finding, 2026-09-13):
+  // the request returned 200 while none of that reached anywhere a human or
+  // a panel could read it. There is no per-field histogram for these -- that
+  // is more than a live party's log line needs -- so they are folded into
+  // one summary per batch instead, which is enough to say "the audience is
+  // stalling" or "rebuilding the player a lot" during an event.
+  const totalStalls = batch.samples.reduce(
+    (sum, sample) => sum + (sample.stalls ?? 0),
+    0,
+  );
+  const maxRebufferMs = batch.samples.reduce(
+    (max, sample) => Math.max(max, sample.rebufferMs ?? 0),
+    0,
+  );
+  const maxPlayerRebuildCount = batch.samples.reduce(
+    (max, sample) => Math.max(max, sample.playerRebuildCount ?? 0),
+    0,
+  );
+  const startupMs = batch.samples.find((sample) => sample.startupMs !== undefined)
+    ?.startupMs;
+  const bufferSecondsValues = batch.samples
+    .map((sample) => sample.bufferSeconds)
+    .filter((value): value is number => value !== undefined);
+  const avgBufferSeconds =
+    bufferSecondsValues.length > 0
+      ? bufferSecondsValues.reduce((sum, value) => sum + value, 0) /
+        bufferSecondsValues.length
+      : undefined;
   logEvent("voice.hlsTelemetryBatch", {
     sessionId: batch.sessionId,
     samples: batch.samples.length,
-    rungs: [...new Set(batch.samples.map((sample) => sample.rung))],
-    medianLatencyMs: sortedLatencies[Math.floor(sortedLatencies.length / 2)],
+    droppedUnknownRungSamples: batch.samples.length - knownSamples.length,
+    rungs: [...new Set(knownSamples.map((sample) => sample.rung))],
+    medianLatencyMs:
+      sortedLatencies.length > 0
+        ? sortedLatencies[Math.floor(sortedLatencies.length / 2)]
+        : undefined,
+    totalStalls,
+    maxRebufferMs,
+    maxPlayerRebuildCount,
+    startupMs,
+    avgBufferSeconds:
+      avgBufferSeconds !== undefined ? Math.round(avgBufferSeconds * 10) / 10 : undefined,
   });
   return { ok: true };
 });

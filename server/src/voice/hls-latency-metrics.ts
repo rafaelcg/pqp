@@ -1,3 +1,5 @@
+import { hlsRungVideoKbps, isKnownHlsRung } from "./hls-ladder.js";
+
 /**
  * In-process aggregation of client-reported watch-party latency
  * (BROADCAST_PIPELINE B0.5/B0.6): a viewer's batch lands here, folded into a
@@ -52,6 +54,16 @@ let batchesRejectedSchema = 0;
 let batchesRejectedRateLimit = 0;
 /** Individual samples folded into a histogram, across every accepted batch. */
 let samplesRecorded = 0;
+/**
+ * Samples refused for naming a rung this build does not recognise (Farol
+ * finding, 2026-09-13): `POST /api/live-hls/telemetry`'s `rung` field is a
+ * free-form 1-16 character string the caller controls, and every accepted
+ * value would otherwise become its OWN permanent key in the map below --
+ * one authenticated account sending distinct garbage rungs grows it without
+ * bound for the life of the process. Enforced here, not just at the route,
+ * so this module is safe to call from anywhere the same way.
+ */
+let samplesRejectedUnknownRung = 0;
 
 function histogramFor(rung: string): RungHistogram {
   let histogram = histograms.get(rung);
@@ -66,8 +78,16 @@ function histogramFor(rung: string): RungHistogram {
   return histogram;
 }
 
-/** Fold one sample into its rung's histogram. */
+/**
+ * Fold one sample into its rung's histogram. A no-op, counted separately,
+ * when `rung` is not one of `LADDER_RUNGS`/`CAMERA_RUNG_NAME`: see
+ * `samplesRejectedUnknownRung` above.
+ */
 export function recordHlsLatencySample(rung: string, latencyMs: number): void {
+  if (!isKnownHlsRung(rung)) {
+    samplesRejectedUnknownRung += 1;
+    return;
+  }
   const histogram = histogramFor(rung);
   histogram.count += 1;
   samplesRecorded += 1;
@@ -129,7 +149,13 @@ export interface HlsLatencyRungSummary {
   p95Ms: number | null;
 }
 
-/** Per-rung p50/p95, lowest bitrate first by name for a stable panel order. */
+/**
+ * Per-rung p50/p95, lowest bitrate first (the actual `videoKbps` a rung
+ * encodes at, not `localeCompare` on its name -- alphabetically `1080p30`
+ * sorts before `720p30`, which is backwards). A rung this build no longer
+ * recognises (an operator's ladder changed since the histogram was warmed)
+ * sorts last rather than throwing.
+ */
 export function hlsLatencySnapshot(): HlsLatencyRungSummary[] {
   return [...histograms.entries()]
     .map(([rung, histogram]) => ({
@@ -138,7 +164,11 @@ export function hlsLatencySnapshot(): HlsLatencyRungSummary[] {
       p50Ms: percentile(histogram, 0.5),
       p95Ms: percentile(histogram, 0.95),
     }))
-    .sort((a, b) => a.rung.localeCompare(b.rung));
+    .sort((a, b) => {
+      const kbpsA = hlsRungVideoKbps(a.rung) ?? Number.MAX_SAFE_INTEGER;
+      const kbpsB = hlsRungVideoKbps(b.rung) ?? Number.MAX_SAFE_INTEGER;
+      return kbpsA !== kbpsB ? kbpsA - kbpsB : a.rung.localeCompare(b.rung);
+    });
 }
 
 export interface HlsTelemetryActivity {
@@ -146,6 +176,7 @@ export interface HlsTelemetryActivity {
   batchesRejectedSchema: number;
   batchesRejectedRateLimit: number;
   samplesRecorded: number;
+  samplesRejectedUnknownRung: number;
   byRung: HlsLatencyRungSummary[];
 }
 
@@ -156,6 +187,7 @@ export function hlsTelemetryActivity(): HlsTelemetryActivity {
     batchesRejectedSchema,
     batchesRejectedRateLimit,
     samplesRecorded,
+    samplesRejectedUnknownRung,
     byRung: hlsLatencySnapshot(),
   };
 }
@@ -166,4 +198,5 @@ export function resetHlsLatencyMetricsForTests(): void {
   batchesRejectedSchema = 0;
   batchesRejectedRateLimit = 0;
   samplesRecorded = 0;
+  samplesRejectedUnknownRung = 0;
 }

@@ -366,10 +366,16 @@ const HLS_PLAYLIST_SESSION_KEY_RE =
 
 export function hlsTelemetrySessionKey(url: string): string | null {
   const match = HLS_PLAYLIST_SESSION_KEY_RE.exec(url);
-  if (!match) {
-    return null;
+  if (match) {
+    return `${match[1]}:${match[2]}`;
   }
-  return `${match[1]}:${match[2]}`;
+  // Not our proxy: `LIVE_HLS_SIGNED_URLS=false` hands out the raw public
+  // bucket URL directly (a supported configuration -- see `resolveHlsUrl`),
+  // and that stream is just as worth measuring. `hlsSessionKey` already
+  // strips the query string, which is the only thing that varies on this
+  // URL shape (nothing re-signs it per viewer the way the proxy's `?t=`
+  // does), so what is left is stable for the life of the session.
+  return hlsSessionKey(url);
 }
 
 /**
@@ -547,6 +553,16 @@ export function sendHlsTelemetryBatch(
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(batch),
+        // The unmount flush (`HlsWatchPlayer`'s cleanup) fires this same
+        // path on a navigate-away, and an ordinary fetch is exactly the
+        // request class the browser is free to abort once the document
+        // starts unloading (a Farol finding, 2026-09-13). `keepalive` is
+        // the documented escape hatch for "send this even if the page is
+        // going away" and, unlike `navigator.sendBeacon`, still allows the
+        // Authorization header this route requires. The body is a handful
+        // of samples -- nowhere near the ~64 KiB keepalive budget browsers
+        // share across all such requests.
+        keepalive: true,
       });
     } catch {
       // Dropped. See the doc comment above.

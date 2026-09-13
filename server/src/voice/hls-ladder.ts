@@ -234,6 +234,35 @@ export const VOICE_RUNG: LadderRung = {
 };
 
 /**
+ * Every rung name this build can ever produce a transcode under, ladder plus
+ * camera. The thing to check a CLIENT-SUPPLIED rung name against before it
+ * touches anything keyed on it (a Farol B0.5 finding, 2026-09-13): without
+ * this, `POST /api/live-hls/telemetry`'s `rung` field is a free-form 1-16
+ * character string an authenticated caller controls, and every accepted
+ * value becomes its own permanent key in `hls-latency-metrics.ts`'s
+ * per-rung histogram map -- one authenticated account sending distinct
+ * garbage rungs grows that map without bound for the life of the process.
+ */
+const ALL_KNOWN_RUNGS: Readonly<Record<string, LadderRung>> = {
+  ...LADDER_RUNGS,
+  [CAMERA_RUNG_NAME]: CAMERA_RUNG,
+};
+
+export function isKnownHlsRung(rung: string): boolean {
+  return Boolean(ALL_KNOWN_RUNGS[rung]);
+}
+
+/**
+ * The bitrate a rung name sorts by, lowest first -- what "lowest bitrate
+ * first" actually means, rather than `localeCompare` on the name (which puts
+ * `1080p30` before `720p30`). Null for a name this build does not know at
+ * all, so a caller can put those last rather than guessing where they sort.
+ */
+export function hlsRungVideoKbps(rung: string): number | null {
+  return ALL_KNOWN_RUNGS[rung]?.videoKbps ?? null;
+}
+
+/**
  * The default ladder. One 720p30 rung: 1080p30 tiled HLS hit RTP gaps and
  * egress CPU on the media box, so watch party ships at 720p30. Named 1080
  * and 60 fps rungs stay in `LADDER_RUNGS` for an operator who wants them

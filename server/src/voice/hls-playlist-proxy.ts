@@ -10,6 +10,7 @@ import {
 } from "./hls-egress.js";
 import {
   buildMasterPlaylist,
+  hlsRungVideoKbps,
   LADDER_RUNGS,
   withPqpSessionTag,
   type MasterVariant,
@@ -732,9 +733,21 @@ async function sessionRungs(
       const known = (rows.rows ?? []).filter((row) =>
         Boolean(row.rung && LADDER_RUNGS[row.rung]),
       );
+      // The canonical session id is the LOWEST-bitrate rung's row -- the one
+      // `buildMasterPlaylistFor`'s callers always have a variant for and the
+      // one a viewer with no explicit pick lands on -- not whichever row this
+      // query happened to return first. `started_at, id` orders the SQL
+      // result deterministically; it says nothing about bitrate (a Farol
+      // finding, 2026-09-13: `ORDER BY started_at ASC, id ASC` was read as if
+      // it also meant "lowest bitrate first").
+      const byBitrate = [...known].sort((a, b) => {
+        const kbpsA = hlsRungVideoKbps(a.rung!) ?? Number.MAX_SAFE_INTEGER;
+        const kbpsB = hlsRungVideoKbps(b.rung!) ?? Number.MAX_SAFE_INTEGER;
+        return kbpsA !== kbpsB ? kbpsA - kbpsB : a.id.localeCompare(b.id);
+      });
       const result: SessionRungs = {
         rungs: known.map((row) => row.rung!),
-        sessionId: known[0]?.id ?? null,
+        sessionId: byBitrate[0]?.id ?? null,
       };
       rungCache.set(key, { rungs: result, at: now });
       return result;

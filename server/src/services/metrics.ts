@@ -17,7 +17,7 @@ import {
 } from "../voice/hls-playlist-proxy.js";
 import {
   hlsTelemetryActivity,
-  type HlsLatencyRungSummary,
+  type HlsTelemetryActivity,
 } from "../voice/hls-latency-metrics.js";
 import { processRole, runsColdJobs } from "../lib/process-role.js";
 import { getPresenceFanoutStats } from "../ws/chat.js";
@@ -396,13 +396,7 @@ export interface AdminMetrics {
      * -- see the T0-T4 row of B0.3's table). In-process only: a restart
      * clears it, same as `keepWarmRenders` above.
      */
-    latency: {
-      batchesAccepted: number;
-      batchesRejectedSchema: number;
-      batchesRejectedRateLimit: number;
-      samplesRecorded: number;
-      byRung: HlsLatencyRungSummary[];
-    };
+    latency: HlsTelemetryActivity;
   };
   topServers24h: {
     name: string;

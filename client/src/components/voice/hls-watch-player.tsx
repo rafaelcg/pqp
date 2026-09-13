@@ -887,6 +887,14 @@ export function HlsWatchPlayer({
     const rebuildCountAtAttach = rebuildCountRef.current;
     let telemetryQueue: HlsTelemetryQueue | null = null;
     let telemetrySampleTimer: number | null = null;
+    // Farol finding, 2026-09-13: a naive "call requestVideoFrameCallback
+    // every 5s" schedules a NEW one even while a previous one is still
+    // outstanding (paused, backgrounded, or a stalled stream never paints a
+    // fresh frame), so callbacks pile up and all fire at once when playback
+    // resumes -- a burst of duplicate samples and a CPU/memory spike. This
+    // tracks the one outstanding handle so at most one is ever pending, and
+    // is cancelled on cleanup so a torn-down player cannot fire into it.
+    let pendingRvfcHandle: number | null = null;
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -936,7 +944,7 @@ export function HlsWatchPlayer({
       });
     }
     function pushTelemetrySample(paintedMediaTimeSeconds: number): void {
-      if (!telemetryQueue || !currentFrag) {
+      if (!telemetryQueue || !currentFrag || !currentRung) {
         return;
       }
       const latencyMs = encodeToPaintLatencyMs(currentFrag, paintedMediaTimeSeconds);
@@ -951,7 +959,7 @@ export function HlsWatchPlayer({
             )
           : undefined;
       telemetryQueue.push({
-        rung: currentRung ?? "unknown",
+        rung: currentRung,
         latencyMs: Math.round(latencyMs),
         bufferSeconds,
         stalls: stallsSinceLastSample,
@@ -966,20 +974,37 @@ export function HlsWatchPlayer({
       if (!telemetryQueue || cancelled) {
         return;
       }
+      // A paused (or stalled-with-no-new-frame) video is showing a static
+      // picture: "encode-to-paint" has no meaning for a frame that is not
+      // newly arriving, and the fallback path below would otherwise report a
+      // growing latency for the same painted frame for as long as the pause
+      // lasts. Resuming playback picks sampling back up on the next tick.
+      if (video.paused) {
+        return;
+      }
       const videoWithRvfc = video as HTMLVideoElement & {
         requestVideoFrameCallback?: (
           callback: (now: number, metadata: { mediaTime: number }) => void,
         ) => number;
+        cancelVideoFrameCallback?: (handle: number) => void;
       };
-      if (typeof videoWithRvfc.requestVideoFrameCallback === "function") {
-        videoWithRvfc.requestVideoFrameCallback((_now, metadata) => {
-          if (!cancelled) {
-            pushTelemetrySample(metadata.mediaTime);
-          }
-        });
-      } else {
+      if (typeof videoWithRvfc.requestVideoFrameCallback !== "function") {
         pushTelemetrySample(video.currentTime);
+        return;
       }
+      // At most one outstanding request at a time: a stalled stream that
+      // never paints a new frame would otherwise accumulate one callback per
+      // tick, all firing together (for the same frame) the moment playback
+      // recovers.
+      if (pendingRvfcHandle !== null) {
+        return;
+      }
+      pendingRvfcHandle = videoWithRvfc.requestVideoFrameCallback((_now, metadata) => {
+        pendingRvfcHandle = null;
+        if (!cancelled) {
+          pushTelemetrySample(metadata.mediaTime);
+        }
+      });
     }
     telemetrySampleTimer = window.setInterval(
       sampleTelemetryOnce,
@@ -1368,6 +1393,14 @@ export function HlsWatchPlayer({
       }
       if (telemetrySampleTimer !== null) {
         window.clearInterval(telemetrySampleTimer);
+      }
+      if (pendingRvfcHandle !== null) {
+        (
+          video as HTMLVideoElement & {
+            cancelVideoFrameCallback?: (handle: number) => void;
+          }
+        ).cancelVideoFrameCallback?.(pendingRvfcHandle);
+        pendingRvfcHandle = null;
       }
       // The window since the last flush is worth sending: it is the tail
       // end of a viewer's session, exactly the part a fixed 30s timer would

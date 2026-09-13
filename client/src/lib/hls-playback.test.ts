@@ -409,8 +409,17 @@ describe("hlsTelemetrySessionKey", () => {
     ).toBe("chan-1:1700000000000");
   });
 
-  it("is null for a URL that is not the playlist proxy", () => {
-    expect(hlsTelemetrySessionKey("https://live.example.test/a.m3u8")).toBeNull();
+  it("falls back to the query-stripped URL for a supported non-proxy stream (LIVE_HLS_SIGNED_URLS=false)", () => {
+    // Farol finding, 2026-09-13: this used to return null, which meant a
+    // deployment running unsigned public bucket URLs sent no telemetry at
+    // all despite playing the stream just fine.
+    expect(
+      hlsTelemetrySessionKey("https://live.example.test/live/chan-1/a.m3u8?x=1"),
+    ).toBe("https://live.example.test/live/chan-1/a.m3u8");
+  });
+
+  it("is null only when there is nothing at all to key on", () => {
+    expect(hlsTelemetrySessionKey("")).toBeNull();
   });
 });
 

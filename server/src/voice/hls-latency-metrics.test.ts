@@ -59,15 +59,30 @@ describe("hlsLatencySnapshot", () => {
     expect(summary!.count).toBe(1);
   });
 
-  it("results are sorted by rung name for a stable panel order", () => {
+  it("results are sorted by bitrate, lowest first -- NOT alphabetically", () => {
+    // Farol finding, 2026-09-13: `localeCompare` on the name puts "1080p30"
+    // before "720p30", which is backwards. The correct order is by the
+    // rung's actual `videoKbps`.
     recordHlsLatencySample("1080p30", 1_000);
     recordHlsLatencySample("480p30", 1_000);
     recordHlsLatencySample("720p30", 1_000);
     expect(hlsLatencySnapshot().map((r) => r.rung)).toEqual([
-      "1080p30",
       "480p30",
       "720p30",
+      "1080p30",
     ]);
+  });
+
+  it("refuses a rung this build does not recognise, counted separately, never added to the histogram", () => {
+    // Farol finding, 2026-09-13: `rung` on the wire is a free-form 1-16
+    // character string an authenticated caller controls. Without this guard
+    // every distinct garbage value becomes its own permanent histogram key.
+    recordHlsLatencySample("720p30", 1_000);
+    recordHlsLatencySample("some-made-up-rung", 1_000);
+    const snapshot = hlsLatencySnapshot();
+    expect(snapshot.map((r) => r.rung)).toEqual(["720p30"]);
+    expect(hlsTelemetryActivity().samplesRejectedUnknownRung).toBe(1);
+    expect(hlsTelemetryActivity().samplesRecorded).toBe(1);
   });
 });
 
