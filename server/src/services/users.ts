@@ -7,6 +7,7 @@ import {
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
+import { countedQuery } from "../lib/db-tx-metrics.js";
 import { logEvent } from "../lib/log.js";
 import type { AuthUser } from "../auth/clerk.js";
 import { HttpError } from "../lib/http.js";
@@ -881,7 +882,9 @@ export async function canAccessChannel(
   channelId: string,
   userId: string,
 ): Promise<boolean> {
-  const result = await getPool().query(
+  const result = await countedQuery(
+    getPool(),
+    "users.canAccessChannel",
     `SELECT 1 FROM channels c
      LEFT JOIN server_members sm
        ON sm.server_id = c.server_id AND sm.user_id = $2

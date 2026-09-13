@@ -21,6 +21,7 @@ if (DATABASE_URL) {
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { createPostgresBusTransport } = await import("./bus-postgres.js");
+const { dbTxByPath, resetDbTxMetrics } = await import("./db-tx-metrics.js");
 
 async function waitFor(
   predicate: () => boolean,
@@ -122,5 +123,50 @@ describeDb("postgres cluster bus", () => {
     expect(() =>
       closed.publish({ origin: "instance-gone", topic, data: { n: 3 } }),
     ).not.toThrow();
+  });
+
+  it("sends a light burst as individual NOTIFYs, unchanged", async () => {
+    resetDbTxMetrics();
+    const before = onBeta.length;
+
+    // Five frames, well under NOTIFY_BATCH_THRESHOLD: no batching, no added
+    // latency, one `pg_notify` per frame — the pre-existing behaviour.
+    for (let i = 0; i < 5; i++) {
+      alpha.publish({ origin: "instance-alpha", topic, data: { n: 100 + i } });
+    }
+
+    await waitFor(() => onBeta.length >= before + 5);
+    expect((dbTxByPath()["bus.publish"] ?? 0)).toBeGreaterThanOrEqual(5);
+    expect(dbTxByPath()["bus.publishBatch"] ?? 0).toBe(0);
+    expect(
+      onBeta.slice(-5).map((f) => (f.data as { n: number }).n),
+    ).toEqual([100, 101, 102, 103, 104]);
+  });
+
+  it("batches a burst above the threshold into one NOTIFY, order preserved", async () => {
+    resetDbTxMetrics();
+    const before = onBeta.length;
+
+    // 30 frames in a tight loop: comfortably over NOTIFY_BATCH_THRESHOLD (20)
+    // inside one NOTIFY_BATCH_WINDOW_MS (50ms) window.
+    const n = 30;
+    for (let i = 0; i < n; i++) {
+      alpha.publish({ origin: "instance-alpha", topic, data: { n: i } });
+    }
+
+    await waitFor(() => onBeta.length >= before + n, 2_000);
+
+    const received = onBeta.slice(-n).map((f) => (f.data as { n: number }).n);
+    // Ordering is exact, whichever frames rode in the batch and whichever
+    // went out immediately before the threshold tripped.
+    expect(received).toEqual(Array.from({ length: n }, (_, i) => i));
+
+    // Fewer round trips than frames: the whole point of batching. At most
+    // NOTIFY_BATCH_THRESHOLD immediate sends plus one batched envelope for
+    // the rest, against 30 frames.
+    const publishCalls = dbTxByPath()["bus.publish"] ?? 0;
+    const batchCalls = dbTxByPath()["bus.publishBatch"] ?? 0;
+    expect(publishCalls + batchCalls).toBeLessThan(n);
+    expect(batchCalls).toBeGreaterThanOrEqual(1);
   });
 });
