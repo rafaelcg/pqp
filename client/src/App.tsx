@@ -8,6 +8,7 @@ import {
 import {
   CalendarClock,
   Columns2,
+  History,
   Lock,
   Menu,
   Phone,
@@ -163,6 +164,7 @@ import {
 } from "@/lib/watch-party-channels";
 import { shouldReleaseAudienceWatchSeat } from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
+import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
@@ -1357,6 +1359,13 @@ function MainAppContent({
     section: ChannelSettingsSectionId;
     forceAdvanced: boolean;
   } | null>(null);
+  // "Transmissões anteriores": past broadcasts for a watch-party channel.
+  // Its own dialog and its own trigger next to the settings gear, because
+  // START_WATCH_PARTY alone does not open `ChannelSettingsDialog` (that gear
+  // is MANAGE_CHANNELS / MANAGE_ROLES only) and the two groups who should
+  // reach this are the same OR the server route checks.
+  const [watchPartyHistoryChannelId, setWatchPartyHistoryChannelId] =
+    useState<string | null>(null);
   const [channelPrompt, setChannelPrompt] = useState<ChannelPromptState | null>(
     null,
   );
@@ -5519,6 +5528,14 @@ function MainAppContent({
   const meVip = rankBadges(meMember?.roleIds, serverRoles).vipBadge;
   const canManageChannels = perms.can(Permission.MANAGE_CHANNELS);
   const canManageRoles = perms.can(Permission.MANAGE_ROLES);
+  // Same OR the server checks (`requireWatchPartyHistoryAccess` in
+  // `server/src/api/index.ts`): whoever may go live or whoever administers
+  // the channel, per-channel overwrites included.
+  const canViewWatchPartyHistory =
+    selectedChannel?.kind === "server" &&
+    isWatchPartyChannelType(selectedChannel.type) &&
+    (perms.can(Permission.START_WATCH_PARTY, selectedChannel.id) ||
+      perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id));
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
   const canManageWebhooks = perms.can(Permission.MANAGE_WEBHOOKS);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
@@ -6003,6 +6020,21 @@ function MainAppContent({
               <Pin className="h-4 w-4" />
             </button>
           </Tooltip>
+          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.watchPartyHistory")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-channel-header-watch-party-history=""
+                aria-label={t("chrome.watchPartyHistory")}
+                onClick={() =>
+                  setWatchPartyHistoryChannelId(selectedChannel.id)
+                }
+              >
+                <History className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
           {(canManageChannels || canManageRoles) &&
             selectedChannel.kind === "server" && (
             <Tooltip label={t("chrome.channelSettings")}>
@@ -7528,6 +7560,14 @@ function MainAppContent({
           );
         }}
       />
+
+      {watchPartyHistoryChannelId && (
+        <WatchPartyHistoryDialog
+          open
+          channelId={watchPartyHistoryChannelId}
+          onClose={() => setWatchPartyHistoryChannelId(null)}
+        />
+      )}
 
       <PinnedMessagesPanel
         open={pinsOpen}

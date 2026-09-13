@@ -203,10 +203,17 @@ export function resolveHlsPlaylistViewer(input: {
   channelId: string;
   startedAt: number;
   now?: number;
+  /** See `ViewerClaims.p` in `hls-viewer-token.ts`. The replay proxy passes
+   * `"replay"` so an ordinary live-stream token cannot be reused against it. */
+  purpose?: "live" | "replay";
 }): { userId: string; issuedAt: number | null } | null {
   const fromToken = verifyHlsViewerToken(
     input.token,
-    { channelId: input.channelId, startedAt: input.startedAt },
+    {
+      channelId: input.channelId,
+      startedAt: input.startedAt,
+      purpose: input.purpose,
+    },
     input.now,
   );
   // A token that verifies but names somebody else than the authenticated
