@@ -18,6 +18,17 @@ TAG="${1:?usage: pqp-deploy <image-tag>}"
 DEST=/opt/pqp
 STAGING=/home/pqp-deploy/incoming
 
+# Unconditional, on every exit path (success, a rejected/tampered config,
+# a failed pull, a healthcheck timeout -- anything). pqp-deploy owns this
+# directory and can re-stage into it at any time, so a run that dies
+# before reaching the end must never leave files behind for the NEXT
+# invocation (e.g. the rollback call the workflow makes right after a
+# failure) to find still sitting there -- a half-copied scp or a
+# deliberately-broken upload from a previous attempt could otherwise block
+# that rollback at the same manifest check, or get installed a second time
+# by accident.
+trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig' EXIT
+
 cd "$DEST"
 
 # The deploy workflow scp's a fresh compose.yaml/Caddyfile as pqp-deploy
@@ -47,7 +58,20 @@ if [[ -f "$STAGING/compose.yaml" || -f "$STAGING/Caddyfile" ]]; then
     echo "refusing staged config: missing manifest.sha256/manifest.sig" >&2
     exit 1
   fi
-  expected="$(openssl dgst -sha256 -hmac "$(cat /etc/pqp/deploy-hmac.key)" -r "$STAGING/manifest.sha256" | awk '{print $1}')"
+  # Deliberately NOT `openssl dgst -hmac "$(cat ...)"` -- that would put
+  # the key's bytes on this process's own command line, readable by any
+  # local user (including pqp-deploy itself, the account a leaked
+  # VULTR_API_SSH_KEY reaches) via `ps` or /proc/<pid>/cmdline for as long
+  # as the command runs. python3 opens the key file itself, root-only
+  # (0600), and the key never appears as an argument to anything.
+  expected="$(python3 -c '
+import hashlib, hmac, sys
+with open("/etc/pqp/deploy-hmac.key", "rb") as f:
+    key = f.read().strip()
+with open(sys.argv[1], "rb") as f:
+    data = f.read()
+print(hmac.new(key, data, hashlib.sha256).hexdigest())
+' "$STAGING/manifest.sha256")"
   got="$(tr -d '[:space:]' <"$STAGING/manifest.sig")"
   if [[ -z "$expected" || "$expected" != "$got" ]]; then
     echo "refusing staged config: manifest signature does not verify" >&2
@@ -60,9 +84,6 @@ if [[ -f "$STAGING/compose.yaml" || -f "$STAGING/Caddyfile" ]]; then
   install -m 0644 -o pqp -g pqp "$STAGING/compose.yaml" "$DEST/compose.yaml"
   install -m 0644 -o pqp -g pqp "$STAGING/Caddyfile" "$DEST/Caddyfile"
 fi
-# Consumed (or rejected) -- never leave a signed manifest lying around for
-# a later, unrelated invocation to accidentally satisfy.
-rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig
 
 # GHCR credentials, only needed while ghcr.io/rafaelcg/pqp-api is private.
 # See docs/deploy-vultr.md "GHCR pull on the host" -- the alternative is
