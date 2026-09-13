@@ -9,9 +9,15 @@ import {
   pickScreenTracks,
   reconcileLiveHls,
   resetLiveHlsForTests,
+  setLiveHlsChangeListener,
   setLiveHlsTestHooks,
 } from "./hls-egress.js";
-import { CAMERA_RUNG_NAME, LADDER_RUNGS } from "./hls-ladder.js";
+import {
+  CAMERA_RUNG_NAME,
+  HLS_CAMERA_MBPS,
+  HLS_RUNG_MBPS,
+  LADDER_RUNGS,
+} from "./hls-ladder.js";
 
 /**
  * THE PRESENTER'S CAMERA GETS A TRANSCODE OF ITS OWN, BESIDE THE LADDER.
@@ -97,6 +103,8 @@ function disableHls() {
     "LIVE_HLS_CAMERA",
     "LIVE_HLS_REAP_ORPHANS",
     "VOICE_PROMOTION_MAX_SFU_MBPS",
+    "LIVE_HLS_SIGNED_URLS",
+    "LIVE_HLS_PUBLIC_BASE_URL",
   ]) {
     delete process.env[name];
   }
@@ -357,6 +365,24 @@ describe("the presenter's camera, beside the ladder", () => {
     expect(stream?.hlsUrl).toContain("/api/voice/hls-playlist/");
   });
 
+  it("still advertises a camera URL when LIVE_HLS_SIGNED_URLS=false", async () => {
+    // Unsigned is a supported configuration, not a degraded one: it must not
+    // lose the camera on top of losing signing. Same raw-bucket-URL split
+    // `viewerPlaylistUrl` already gives the film.
+    enableHls();
+    process.env.LIVE_HLS_SIGNED_URLS = "false";
+    process.env.LIVE_HLS_PUBLIC_BASE_URL = "https://bucket.example.test";
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    expect(stream?.cameraHlsUrl).toBeDefined();
+    expect(stream?.cameraHlsUrl).toContain("https://bucket.example.test");
+    expect(stream?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
+  });
+
   it("refuses the camera rather than the film when the box is full", async () => {
     enableHls();
     // Priced against the WHOLE box. Zero budget is the honest extreme: the
@@ -526,6 +552,71 @@ describe("the camera and the machinery that stops things", () => {
       expect.objectContaining({ egressId: "EG_2" }),
     );
   });
+
+  /**
+   * THE PRESENTER WHOSE PUSH LANDS ON A HICCUP. A probe that could not ask
+   * LiveKit at all is deliberately a silent no-op (a momentary
+   * `listParticipants` failure must not tear a running transcode down), but
+   * `pushLiveHls` otherwise only fires on a roster event or `set-camera` --
+   * without a retry, a presenter unlucky enough to turn their camera on into
+   * exactly that hiccup would get no camera until an unrelated event happened
+   * to try again.
+   */
+  it("retries once on its own after a probe that could not ask", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(liveHlsActivity().cameraSessions).toBe(0);
+
+    // The same wiring `ws/voice.ts` registers: a change fires another
+    // reconcile for the same presenter.
+    setLiveHlsChangeListener((channelId, _reason) => {
+      void reconcileLiveHls(channelId, "peer-1", SERVER);
+    });
+
+    // The host turns their webcam on, and LiveKit cannot be asked at all on
+    // this exact push.
+    cameraTrackId = "TR_CAM";
+    setLiveHlsTestHooks({ egress: lk.api, findTracks: async () => null });
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(liveHlsActivity().cameraSessions).toBe(0);
+    expect(lk.start).toHaveBeenCalledTimes(1); // only the film's own rung
+
+    // LiveKit recovers before the retry fires, on its own, with no further
+    // roster event or `set-camera` frame.
+    install(lk);
+    await advance(3_100);
+
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
+  it("never stacks a second retry while one is already pending", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    install(lk);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    let reconciles = 0;
+    setLiveHlsChangeListener((channelId) => {
+      reconciles += 1;
+      void reconcileLiveHls(channelId, "peer-1", SERVER);
+    });
+
+    cameraTrackId = "TR_CAM";
+    setLiveHlsTestHooks({ egress: lk.api, findTracks: async () => null });
+    // Two pushes while LiveKit is unreachable, same as two roster events
+    // arriving before the hiccup clears.
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    install(lk);
+    await advance(3_100);
+
+    // One retry fired, not two: `cameraProbeRetryTimers` refused the second.
+    expect(reconciles).toBe(1);
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
 });
 
 describe("adopting a camera across a deploy", () => {
@@ -615,5 +706,48 @@ describe("pickScreenTracks and the camera", () => {
         "peer-1",
       ),
     ).toEqual({ videoTrackId: "TR_SCREEN", audioTrackId: undefined });
+  });
+});
+
+describe("box budget: a camera must never be priced twice", () => {
+  it("does not charge an existing camera as a full ladder rung on top of its own weight", async () => {
+    // LiveKit's `ListEgress` carries no rung name, only an id, a room and a
+    // status, so the box-wide count (`activeBoxEgressCount`, PR #526) cannot
+    // itself tell a camera egress from a ladder rendition: every active
+    // egress on the box is one `HLS_RUNG_MBPS`. Both `decideLadder` and
+    // `decideCameraEgress` ALSO add every running camera's real, smaller
+    // weight separately (`runningCameraMbps`). Feeding either of them the raw
+    // box count therefore double-charges every camera already running: once
+    // as a full rendition, once again as a camera.
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+
+    // CHANNEL: one ladder rung plus one camera, under whatever the default
+    // budget is. Two active egresses, ONE real ladder rendition.
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(liveHlsActivity()).toMatchObject({ rungs: 1, cameraSessions: 1 });
+
+    // The budget a SECOND party's camera is decided against: enough for both
+    // channels' one real rendition each plus both cameras' real (30%)
+    // weight, but not enough if CHANNEL's already-running camera were ALSO
+    // charged as a third full rendition on top of that.
+    const correctBoxMbps = 2 * HLS_RUNG_MBPS + 2 * HLS_CAMERA_MBPS;
+    const doubleCountedBoxMbps = 3 * HLS_RUNG_MBPS + 2 * HLS_CAMERA_MBPS;
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(
+      Math.round((correctBoxMbps + doubleCountedBoxMbps) / 2),
+    );
+
+    // A second party, a second camera. Refused here would mean CHANNEL's
+    // camera got charged twice.
+    const stream = await reconcileLiveHls(OTHER_CHANNEL, "peer-2", SERVER);
+
+    expect(stream?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
+    expect(liveHlsActivity().cameraSessions).toBe(2);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.anything(),
+    );
   });
 });

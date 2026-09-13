@@ -372,6 +372,47 @@ const loggedGhostEgressIds = new Set<string>();
  */
 const cameraCooldownUntil = new Map<string, number>();
 const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
+/**
+ * Bounded, ONE-SHOT retry for a `probeScreenTracks` call that could not ask
+ * LiveKit at all — a momentary hiccup, not "no camera" (see where this is
+ * scheduled, in `reconcileLiveHlsNow`).
+ *
+ * WHY IT HAS TO EXIST. That call is deliberately a silent no-op: tearing a
+ * running transcode down because one `listParticipants` timed out would be
+ * worse than waiting. But `pushLiveHls` otherwise fires only on a roster
+ * event or `set-camera`, so a presenter whose "turn the camera on" push lands
+ * on exactly that hiccup would get no camera until some UNRELATED event
+ * happened to trigger another push — which on a quiet two-person watch party
+ * can be a long wait, and looks exactly like the feature not working.
+ *
+ * ONE RETRY, NOT A LADDER, and deliberately NOT the film's own
+ * `restartHistory` budget: a camera probe hiccup must never spend the
+ * restarts that exist to bring the FILM back. At most one pending retry per
+ * channel — a second push while one is already scheduled does not stack
+ * another.
+ */
+const cameraProbeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const CAMERA_PROBE_RETRY_MS = 3_000;
+
+function scheduleCameraProbeRetry(channelId: string): void {
+  if (cameraProbeRetryTimers.has(channelId)) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    cameraProbeRetryTimers.delete(channelId);
+    notifyChanged(channelId, "camera-probe-retry");
+  }, CAMERA_PROBE_RETRY_MS);
+  timer.unref?.();
+  cameraProbeRetryTimers.set(channelId, timer);
+}
+
+function clearCameraProbeRetry(channelId: string): void {
+  const timer = cameraProbeRetryTimers.get(channelId);
+  if (timer) {
+    clearTimeout(timer);
+    cameraProbeRetryTimers.delete(channelId);
+  }
+}
 let changeListener: LiveHlsChangeListener | null = null;
 let sfuLoadReader: LiveHlsSfuLoadReader | null = null;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
@@ -1068,6 +1109,10 @@ export function resetLiveHlsForTests(): void {
   orphansStopped = 0;
   loggedGhostEgressIds.clear();
   cameraCooldownUntil.clear();
+  for (const timer of cameraProbeRetryTimers.values()) {
+    clearTimeout(timer);
+  }
+  cameraProbeRetryTimers.clear();
   changeListener = null;
   sfuLoadReader = null;
   stopLiveHlsMonitor();
@@ -1240,6 +1285,33 @@ export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
     count += 1;
   }
   return Math.max(count, localFloor);
+}
+
+/**
+ * `activeBoxEgressCount`, minus this process's own camera egresses.
+ *
+ * WHY THIS HAS TO EXIST SEPARATELY. LiveKit's `ListEgress` carries no rung
+ * name — only an id, a room and a status — so `activeBoxEgressCount` cannot
+ * itself tell a camera egress from a ladder rendition; every active egress on
+ * the box, camera included, is counted as one `HLS_RUNG_MBPS` rendition. Both
+ * `decideLadder` and `decideCameraEgress` also add every running camera's
+ * cost separately, at its own much smaller `HLS_CAMERA_MBPS`, via
+ * `runningCameraMbps()`. Feeding either of them `activeBoxEgressCount()`
+ * directly therefore charges each of THIS PROCESS's cameras twice: once here
+ * as a full rendition and once again as a camera, which can refuse a camera
+ * that fits or drop a film rendition despite the box having room for both.
+ *
+ * Subtracting `runningCameraCount()` is an approximation, not a full fix: a
+ * camera this process has not adopted yet, or one another instance is
+ * running, is still counted as a full rung on the box side (nothing here can
+ * tell those apart without a query keyed on `hls_sessions.egress_id`, which
+ * `activeBoxEgressCount` does not do). It is the same approximation
+ * `runningRungCount` already makes everywhere else in this file — "what THIS
+ * process itself knows it is running" — and it can never undercount: the
+ * subtraction is floored at zero.
+ */
+async function activeLadderEgressCount(): Promise<number> {
+  return Math.max(0, (await activeBoxEgressCount()) - runningCameraCount());
 }
 
 /**
@@ -1793,7 +1865,20 @@ export async function checkLiveHlsHealth(
         camera,
         now,
       );
-      if (cameraHealth.health === "ended" && rooms.get(channelId) === room) {
+      // `room.camera === camera`, NOT JUST the room's identity. `rungHealth`
+      // is an await, and a camera replaced during it (a device switch, or the
+      // presenter re-declaring) is a NEW egress on the same `room` object:
+      // `room.camera` was mutated in place by `reconcileCameraEgress`, so the
+      // room-identity check alone still passes and this stale health result
+      // would null out the replacement's `room.camera`, strip its
+      // `cameraHlsUrl`, start its cooldown, and stop the OLD egress ID —
+      // leaving the NEW one running and unowned, forever, since nothing else
+      // ever looks for it again.
+      if (
+        cameraHealth.health === "ended" &&
+        rooms.get(channelId) === room &&
+        room.camera === camera
+      ) {
         room.camera = null;
         if (cameraHealth.stillRunning) {
           await stopRungs(channelId, [camera]);
@@ -2130,6 +2215,21 @@ function adoptCameraEgress(input: {
   startedAt: number;
   videoTrackId: string;
 }): LiveHlsStream | null {
+  // THE ROLLBACK SWITCH APPLIES ACROSS A DEPLOY TOO. Without this, a boot
+  // reconcile with `LIVE_HLS_CAMERA=false` still adopted a camera row it
+  // found running, kept its transcode alive and could go on advertising
+  // `cameraHlsUrl` — exactly the behaviour the switch exists to turn off, and
+  // the one case an operator flipping it during an incident actually needs.
+  // Null is the same "unadoptable" answer a missing session gives, so the
+  // caller (`reconcileStaleHlsSessions`) stops the egress by the same path.
+  if (!liveHlsCameraEnabled()) {
+    logEvent("voice.hlsCameraAdoptionDisabled", {
+      channelId: input.channelId,
+      egressId: input.egressId,
+      startedAt: input.startedAt,
+    });
+    return null;
+  }
   const room = rooms.get(input.channelId);
   if (!room || room.stream.startedAt !== input.startedAt) {
     logEvent("voice.hlsCameraNotAdoptable", {
@@ -2528,27 +2628,27 @@ function viewerPlaylistUrl(channelId: string, startedAt: number): string {
 /**
  * The camera's playlist, as a viewer is handed it.
  *
- * ALWAYS THE RUNG PATH, never a session path, and never a raw bucket URL.
- * `viewerPlaylistUrl` has an unsigned branch for `LIVE_HLS_SIGNED_URLS=false`;
- * this one does not need it, because the rendition path is exactly what the
- * proxy serves and the same `?t=` token authorises both. A deployment running
- * unsigned simply gets no camera URL, which is a missing PiP rather than a
- * broken one.
+ * SAME SIGNED/UNSIGNED SPLIT AS `viewerPlaylistUrl`, and it has to be: a
+ * deployment running `LIVE_HLS_SIGNED_URLS=false` is a supported
+ * configuration, not a degraded one, and it must not lose the camera on top
+ * of losing signing. The signed branch is the rung path the playlist proxy
+ * serves, authorised by the same `?t=` token as the film; the unsigned branch
+ * is the raw bucket URL for this rendition (`rawPlaylistUrl` already takes a
+ * rung), the same shape every ladder rung already gets unsigned.
  */
-function cameraPlaylistUrl(channelId: string, startedAt: number): string | null {
+function cameraPlaylistUrl(channelId: string, startedAt: number): string {
   if (!hlsSignedUrlsEnabled()) {
-    return null;
+    return rawPlaylistUrl(channelId, startedAt, CAMERA_RUNG_NAME);
   }
   return `/api/voice/hls-playlist/${channelId}/${startedAt}/${CAMERA_RUNG_NAME}`;
 }
 
 /** The same stream, now advertising a camera. */
 function withCameraUrl(stream: LiveHlsStream, channelId: string): LiveHlsStream {
-  const url = cameraPlaylistUrl(channelId, stream.startedAt);
-  if (!url) {
-    return stream;
-  }
-  return { ...stream, cameraHlsUrl: url };
+  return {
+    ...stream,
+    cameraHlsUrl: cameraPlaylistUrl(channelId, stream.startedAt),
+  };
 }
 
 /** The same stream with the camera gone. Deleted, not set to undefined. */
@@ -2841,6 +2941,7 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
   }
   rooms.delete(channelId);
   cameraCooldownUntil.delete(channelId);
+  clearCameraProbeRetry(channelId);
   logEvent("voice.hlsStopped", {
     channelId,
     reason,
@@ -2970,8 +3071,14 @@ async function reconcileCameraEgress(
   // Priced against the WHOLE box, and never against the ladder budget: see
   // `decideCameraEgress`. A refusal costs a face, never a rendition of the
   // film.
+  //
+  // `activeLadderEgressCount`, NOT `activeBoxEgressCount`, for `runningRungs`:
+  // every running camera (this one's neighbours included) is already added
+  // below via `runningCameraMbps()`, at its own much smaller weight, and
+  // `activeBoxEgressCount` cannot itself tell a camera egress from a ladder
+  // rendition. Passing it directly would charge every existing camera twice.
   const decision = decideCameraEgress({
-    runningRungs: await activeBoxEgressCount(),
+    runningRungs: await activeLadderEgressCount(),
     sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
     boxBudgetMbps: promotionBudgetMbps(),
   });
@@ -3130,9 +3237,13 @@ async function startRoom(
   const ladder = liveHlsLadder();
   const decisions = decideLadder({
     rungs: ladder,
-    runningRungs: await activeBoxEgressCount(),
-    // The cameras go in with the WebRTC load rather than into `runningRungs`:
-    // one is 30 % of a rendition, not one of them. See `runningCameraMbps`.
+    // `activeLadderEgressCount`, not `activeBoxEgressCount`: see the comment
+    // on that function. The cameras go in with the WebRTC load rather than
+    // into `runningRungs` either way — one is 30 % of a rendition, not one of
+    // them — but `activeBoxEgressCount` counts every active egress as a full
+    // rendition, cameras included, so passing it here on top of
+    // `runningCameraMbps()` below would price every running camera twice.
+    runningRungs: await activeLadderEgressCount(),
     sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
     ladderBudgetMbps: ladderBudgetMbps(),
     boxBudgetMbps: promotionBudgetMbps(),
@@ -3359,9 +3470,13 @@ async function reconcileLiveHlsNow(
     if (!tracks) {
       // COULD NOT ASK, which is not "no camera". A momentary LiveKit hiccup
       // must not tear a running camera transcode down and start another one
-      // on the next push.
+      // on the next push. But it also must not leave a presenter who just
+      // turned their camera on stuck with no PiP until some unrelated roster
+      // event happens to try again — see `scheduleCameraProbeRetry`.
+      scheduleCameraProbeRetry(channelId);
       return current.stream;
     }
+    clearCameraProbeRetry(channelId);
     if (tracks.videoTrackId === current.videoTrackId) {
       // The film has not moved; the camera may have. This is the ordinary
       // path: it runs on every roster event and on the `set-camera` frame,

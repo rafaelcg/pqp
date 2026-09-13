@@ -1,5 +1,10 @@
-import { useEffect, useRef } from "react";
-import { hasHlsViewerToken, isOwnHlsPlaylistProxyUrl } from "@/lib/hls-playback";
+import { useEffect, useRef, useState } from "react";
+import {
+  hasHlsViewerToken,
+  hlsSessionKey,
+  isOwnHlsPlaylistProxyUrl,
+  shouldAdoptHlsSource,
+} from "@/lib/hls-playback";
 import { hlsLivePlayerConfig } from "@/lib/hls-live-edge";
 import { getAuthToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -54,6 +59,27 @@ export function WatchCameraPip({
   const onFrameRef = useRef(onFrame);
   onFrameRef.current = onFrame;
 
+  /**
+   * A RESTAMPED TOKEN IS NOT A NEW SESSION, and this is the same rule
+   * `hls-watch-player.tsx` needed for the film after every seatless viewer
+   * rebuffered twice a minute on it (CLAUDE.md pitfall 16's sibling bug). The
+   * server restamps `cameraHlsUrl`'s `?t=` on the same audience-keyframe
+   * cadence it restamps the film's, so `src` changes about every 30s for a
+   * camera transcode that has not moved at all. Adopting every change would
+   * tear hls.js down, drop the buffer and hide the PiP on that cadence for
+   * the whole party. Only the path (`hlsSessionKey`, which strips the query)
+   * changing means the camera egress actually restarted.
+   */
+  const [activeSrc, setActiveSrc] = useState(src);
+  const sessionRef = useRef<string | null>(hlsSessionKey(src));
+  useEffect(() => {
+    if (!shouldAdoptHlsSource(sessionRef.current, src)) {
+      return;
+    }
+    sessionRef.current = hlsSessionKey(src);
+    setActiveSrc(src);
+  }, [src]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) {
@@ -103,7 +129,7 @@ export function WatchCameraPip({
         // browser with neither simply never produces a frame and the corner
         // stays empty.
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          video.src = src;
+          video.src = activeSrc;
           void video.play().catch(() => {
             // Muted autoplay is allowed everywhere; if it still refused, the
             // camera stays hidden and the film is untouched.
@@ -131,7 +157,7 @@ export function WatchCameraPip({
         },
       });
       hls = player as unknown as { destroy: () => void };
-      player.loadSource(src);
+      player.loadSource(activeSrc);
       player.attachMedia(video);
       player.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal && !cancelled) {
@@ -161,7 +187,7 @@ export function WatchCameraPip({
       video.load();
       onFrameRef.current(false);
     };
-  }, [src]);
+  }, [activeSrc]);
 
   return (
     <video
