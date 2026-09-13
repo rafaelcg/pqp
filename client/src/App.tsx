@@ -109,7 +109,7 @@ import {
 } from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
-import { isFreshEnough, uniformJitterMs } from "@/lib/reconnect-jitter";
+import { uniformJitterMs } from "@/lib/reconnect-jitter";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
@@ -455,16 +455,23 @@ const HEADER_ACTION_TILE =
 
 /**
  * A reconnect's message refetch (`transport.onReady`, `reconnected` branch)
- * is skipped when the channel's messages were fetched more recently than
- * this — two drops in quick succession (a flap) should not repeat a request
- * the outage barely aged.
- */
-const RECONNECT_MESSAGES_FRESH_MS = 5_000;
-/**
- * The refetch that does run is spread across this window instead of firing
- * the instant `ready` lands, same reasoning as the WS reconnect itself
- * (`reconnect-jitter.ts`): every open tab on the channel just reconnected in
- * the same window, so an unstaggered refetch re-concentrates the herd.
+ * is spread across this window instead of firing the instant `ready` lands —
+ * same reasoning as the WS reconnect itself (`reconnect-jitter.ts`): every
+ * open tab on the channel just reconnected in the same window, so an
+ * unstaggered refetch re-concentrates the herd.
+ *
+ * Deliberately NOT skipped by a "fetched recently" freshness check: `GET
+ * /api/channels/:id/messages` is this client's only way to learn about a
+ * message sent while the socket was down — rejoining a channel
+ * (`chat.resubscribe`) only re-subscribes to what is broadcast *after* that
+ * point (`join-channel` in `server/src/ws/chat.ts` carries no history replay)
+ * — so treating "fetched a few seconds ago" as proof nothing arrived since
+ * would drop messages sent in that gap until some unrelated refresh caught
+ * them. What IS safe to skip is a second, overlapping request: a pending
+ * timer or an in-flight fetch for the same channel already covers whatever
+ * this event would ask for, so a flap coalesces onto it instead of queuing
+ * another one (see `reconnectMessagesRefetchTimer` /
+ * `reconnectMessagesFetchInFlightFor` below).
  */
 const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
 
@@ -1663,14 +1670,6 @@ function MainAppContent({
   const selectedChannelIdRef = useRef<string | null>(null);
   selectedChannelIdRef.current = selectedChannelId;
   /**
-   * When each channel's message list was last fetched from the API, keyed by
-   * channel id. Read on reconnect: a reconnect that lands within
-   * `RECONNECT_MESSAGES_FRESH_MS` of the last fetch (a flap, or two drops in
-   * quick succession) skips the refetch outright instead of repeating a
-   * request the outage barely aged.
-   */
-  const lastMessagesFetchAtRef = useRef<Record<string, number>>({});
-  /**
    * The realtime handler is installed once at bootstrap and lives for the whole
    * session, so it cannot read the conversation list from a closure — by the
    * time an activity frame arrives that closure is arbitrarily old.
@@ -2463,7 +2462,6 @@ function MainAppContent({
         if (selectedChannelIdRef.current !== channelId) {
           return;
         }
-        lastMessagesFetchAtRef.current[channelId] = Date.now();
         chat.setMessages(page.messages, page.hasMore);
         setUnreadSince(
           previousLastReadAt &&
@@ -2626,10 +2624,15 @@ function MainAppContent({
 
   useEffect(() => {
     let cancelled = false;
-    // The reconnect handler's message refetch is jittered (see onReady
-    // below); this is the one in-flight timer so cleanup can cancel it.
+    // The reconnect handler's message refetch (onReady below) is jittered
+    // and coalesced: at most one pending timer, and at most one in-flight
+    // fetch, per channel. A second `onReady` that lands while either is
+    // still outstanding piggybacks on it instead of firing a second
+    // overlapping `fetchMessages` (which could apply an older response after
+    // a newer one — Farol review, PR #558).
     let reconnectMessagesRefetchTimer: ReturnType<typeof setTimeout> | null =
       null;
+    let reconnectMessagesFetchInFlightFor: string | null = null;
 
     async function init() {
       setBootstrapReady(false);
@@ -3191,32 +3194,36 @@ function MainAppContent({
           const rejoin = voice.notifyReconnected();
           if (
             channelId &&
-            !isFreshEnough(
-              lastMessagesFetchAtRef.current[channelId],
-              RECONNECT_MESSAGES_FRESH_MS,
-            )
+            reconnectMessagesRefetchTimer === null &&
+            reconnectMessagesFetchInFlightFor !== channelId
           ) {
             // Spread the refetch itself: every open tab on this channel just
             // reconnected within the same drain-jitter window (realtime.ts),
             // so firing the HTTP request the instant `ready` lands would
             // re-concentrate exactly the herd that window just spread out.
-            // A skipped-if-fresh channel that got a message while offline
-            // still catches up — the WS join above re-subscribes it live.
+            // (A second `onReady` for the same channel while this is
+            // pending or in flight is a no-op here — see the guard above —
+            // rather than queuing an overlapping request.)
             reconnectMessagesRefetchTimer = setTimeout(() => {
               reconnectMessagesRefetchTimer = null;
               if (cancelled || selectedChannelIdRef.current !== channelId) {
                 return;
               }
+              reconnectMessagesFetchInFlightFor = channelId;
               void fetchMessages(channelId)
                 .then((page) => {
                   if (selectedChannelIdRef.current === channelId) {
-                    lastMessagesFetchAtRef.current[channelId] = Date.now();
                     chat.setMessages(page.messages, page.hasMore);
                     refresh();
                   }
                 })
                 .catch(() => {
                   // Next reconnect will retry.
+                })
+                .finally(() => {
+                  if (reconnectMessagesFetchInFlightFor === channelId) {
+                    reconnectMessagesFetchInFlightFor = null;
+                  }
                 });
             }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
           }

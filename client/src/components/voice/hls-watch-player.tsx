@@ -687,6 +687,12 @@ export function HlsWatchPlayer({
     // `GET /api/channels/:id/live`. Spread only that call, not the watchdog's
     // own tick cadence (`STALL_TICK_MS`, unchanged below).
     let reconnectJitterTimer: number | null = null;
+    const clearPendingReconnect = () => {
+      if (reconnectJitterTimer !== null) {
+        window.clearTimeout(reconnectJitterTimer);
+        reconnectJitterTimer = null;
+      }
+    };
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -738,6 +744,11 @@ export function HlsWatchPlayer({
         setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
         watch.onPlaying();
         reportSize();
+        // The stream recovered on its own (or the "recover" branch's seek
+        // worked) before a jittered reconnect from an earlier tick fired.
+        // That reconnect is now stale — cancel it rather than reloading a
+        // player that just came back (Farol review, PR #558).
+        clearPendingReconnect();
       }
     };
     const onWaiting = () => {
@@ -772,10 +783,17 @@ export function HlsWatchPlayer({
         setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
       }
       if (decision === "dead") {
+        // The watchdog has given up outright; a reconnect still waiting out
+        // its jitter from an earlier tick would only fire into a dead player.
+        clearPendingReconnect();
         setPhase("dead");
         return;
       }
       if (decision === "recover") {
+        // This tick is handling the stall a different way (a local seek, not
+        // a reconnect); an earlier tick's still-pending reconnect would be a
+        // second, redundant response to the same stall.
+        clearPendingReconnect();
         const hls = hlsRef.current;
         console.warn(`[hls] stream stalled (${watch.lastReason}), recovering`);
         if (watch.lastReason === "fatal") {
@@ -793,6 +811,14 @@ export function HlsWatchPlayer({
         if (target !== null) {
           video.currentTime = target;
         }
+        return;
+      }
+      if (reconnectJitterTimer !== null) {
+        // Already waiting out a jittered reconnect from an earlier tick of
+        // the SAME ongoing stall — let it run rather than stacking another
+        // (each tick re-evaluates the same "sequence-stuck" condition until
+        // it resolves, so without this guard a persistent stall would queue
+        // one reconnect per tick — Farol review, PR #558).
         return;
       }
       console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
