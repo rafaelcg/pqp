@@ -93,6 +93,32 @@ export function shouldAdoptHlsSource(
 }
 
 /**
+ * What a same-session `src` prop change should do to the loader's freshest
+ * known playlist token, without ever touching `activeSrc` or re-attaching
+ * hls.js. `null` means "this is an attach, not a restamp" -- the caller's
+ * own adopt branch handles that case, including resetting the ref to the
+ * new `activeSrc` itself.
+ *
+ * THE BUG THIS EXISTS FOR (Farol review, PR 570). The server restamps a
+ * playlist's `?t=` on every audience keyframe, and that restamped URL
+ * arrives here as a same-session `src` prop change -- `shouldAdoptHlsSource`
+ * correctly says not to re-attach for it, but the effect used to just
+ * return on that branch without doing anything else, so the fresher token
+ * was silently dropped. It reached the loader only when `reconnect()`'s own
+ * `fetchChannelLive` poll happened to run in between, which left the token
+ * stale for as long as the stream stayed healthy and quiet.
+ */
+export function nextFreshPlaylistUrl(
+  attachedSessionKey: string | null,
+  incomingUrl: string,
+): string | null {
+  if (shouldAdoptHlsSource(attachedSessionKey, incomingUrl)) {
+    return null;
+  }
+  return incomingUrl;
+}
+
+/**
  * Whether a playlist URL already carries its own per-viewer capability.
  *
  * The one question `xhrSetup` has to ask before attaching a Bearer header. A
@@ -109,6 +135,54 @@ export function hasHlsViewerToken(url: string): boolean {
     return false;
   }
   return new URLSearchParams(url.slice(query + 1)).has("t");
+}
+
+/**
+ * Swap a fresher `?t=` capability into an outgoing playlist request, keeping
+ * everything else about it -- INCLUDING A RUNG'S OWN PATH SUFFIX, which
+ * `sameHlsSession` deliberately does not consider equal to the master
+ * (`sameHlsSession(SESSION, \`${SESSION}/720p30\`) === false`). A live
+ * stream's actual repeated fetching is the rung's media playlist, not the
+ * master, so a token swap that only matched an exact `sameHlsSession` would
+ * never reach the one request that needed it.
+ *
+ * WHY THIS EXISTS (`BROADCAST_PIPELINE.md` B1.3, item 3). A restamped token
+ * used to be adopted by re-attaching hls.js entirely -- dropping the buffer
+ * for a change that never touched the media timeline. This is the
+ * loader-level alternative: `xhrSetup` calls this on every request against
+ * our own playlist proxy, and a fresher token found here reaches hls.js
+ * through the URL it fetches rather than through a rebuilt instance.
+ *
+ * `url` and `freshUrl` are treated as the same session when `url`'s path
+ * (query stripped) either equals `freshUrl`'s or extends it with a further
+ * segment (`/720p30`, a rung); anything else -- a different channel, a
+ * different `startedAt`, a raw unsigned bucket URL with no token to swap --
+ * is left untouched.
+ */
+export function withFreshHlsToken(url: string, freshUrl: string): string {
+  const freshToken = hasHlsViewerToken(freshUrl)
+    ? new URLSearchParams(freshUrl.slice(freshUrl.indexOf("?") + 1)).get("t")
+    : null;
+  if (!freshToken) {
+    return url;
+  }
+  const urlPath = hlsSessionKey(url);
+  const freshPath = hlsSessionKey(freshUrl);
+  if (
+    urlPath === null ||
+    freshPath === null ||
+    (urlPath !== freshPath && !urlPath.startsWith(`${freshPath}/`))
+  ) {
+    return url;
+  }
+  const query = url.indexOf("?");
+  const params = new URLSearchParams(query === -1 ? "" : url.slice(query + 1));
+  if (params.get("t") === freshToken) {
+    // Already carrying this exact token; nothing to rewrite.
+    return url;
+  }
+  params.set("t", freshToken);
+  return `${urlPath}?${params.toString()}`;
 }
 
 /**
@@ -174,6 +248,50 @@ export function useHlsPlaybackStats(): HlsPlaybackStats | null {
     };
   }, []);
   return value;
+}
+
+let hlsRebuildCount = 0;
+const rebuildListeners = new Set<(next: number) => void>();
+
+/**
+ * A full hls.js instance was torn down and recreated -- the recovery
+ * ladder's last resort (`hls-stall.ts`), a genuinely new session, or a
+ * person's own "try again". Counted here rather than only logged, so B0's
+ * telemetry hook (`BROADCAST_PIPELINE.md`) has a number to read instead of
+ * having to scrape the console; `useHlsRebuildCount` is the same
+ * subscribe-on-mount shape as `useHlsPlaybackStats` above.
+ */
+export function recordHlsRebuild(): number {
+  hlsRebuildCount += 1;
+  for (const listener of rebuildListeners) {
+    listener(hlsRebuildCount);
+  }
+  return hlsRebuildCount;
+}
+
+/** Total rebuilds this tab has recorded, across every stream so far. */
+export function getHlsRebuildCount(): number {
+  return hlsRebuildCount;
+}
+
+export function useHlsRebuildCount(): number {
+  const [value, setValue] = useState(hlsRebuildCount);
+  useEffect(() => {
+    rebuildListeners.add(setValue);
+    setValue(hlsRebuildCount);
+    return () => {
+      rebuildListeners.delete(setValue);
+    };
+  }, []);
+  return value;
+}
+
+/** Test-only: this module's counter otherwise leaks between vitest cases. */
+export function resetHlsRebuildCountForTest(): void {
+  hlsRebuildCount = 0;
+  for (const listener of rebuildListeners) {
+    listener(hlsRebuildCount);
+  }
 }
 
 export type HlsEngine = "hlsjs" | "native" | "none";

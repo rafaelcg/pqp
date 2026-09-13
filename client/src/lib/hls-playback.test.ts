@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   chooseHlsEngine,
+  getHlsRebuildCount,
   hasHlsViewerToken,
   hlsSessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
+  nextFreshPlaylistUrl,
+  recordHlsRebuild,
+  resetHlsRebuildCountForTest,
   resolveHlsUrl,
   resolveLiveHlsStream,
   sameHlsSession,
   sampleVideoPlaybackQuality,
   shouldAdoptHlsSource,
+  withFreshHlsToken,
 } from "./hls-playback";
 
 describe("chooseHlsEngine", () => {
@@ -182,6 +187,34 @@ describe("shouldAdoptHlsSource", () => {
 });
 
 /**
+ * THE BUG THIS EXISTS FOR (Farol review, PR 570). A same-session `src`
+ * restamp (the server refreshes `?t=` on every audience keyframe) must not
+ * re-attach hls.js, but it still has to reach the loader some way -- the
+ * first cut of the ladder rework just returned on that branch and dropped
+ * the fresher token on the floor until `reconnect()`'s own poll happened to
+ * pick it up.
+ */
+describe("nextFreshPlaylistUrl", () => {
+  const SESSION =
+    "https://api.example.test/api/voice/hls-playlist/ch-1/1788962552321";
+
+  it("is null on an attach -- nothing to restamp, the caller re-attaches instead", () => {
+    expect(nextFreshPlaylistUrl(null, `${SESSION}?t=aaa`)).toBeNull();
+    const later =
+      "https://api.example.test/api/voice/hls-playlist/ch-1/1788963814707?t=aaa";
+    const attached = hlsSessionKey(`${SESSION}?t=aaa`);
+    expect(nextFreshPlaylistUrl(attached, later)).toBeNull();
+  });
+
+  it("hands back a same-session restamp, for the loader token ref", () => {
+    const attached = hlsSessionKey(`${SESSION}?t=aaa`);
+    expect(nextFreshPlaylistUrl(attached, `${SESSION}?t=bbb`)).toBe(
+      `${SESSION}?t=bbb`,
+    );
+  });
+});
+
+/**
  * WHETHER TO ATTACH A BEARER HEADER, which is the client half of the stall.
  *
  * The header was called belt and braces in the code that added it. It was the
@@ -220,6 +253,60 @@ describe("hasHlsViewerToken", () => {
   it("is not fooled by a parameter that merely starts with t", () => {
     expect(hasHlsViewerToken(`${PROXY}?token=abc`)).toBe(false);
     expect(hasHlsViewerToken(`${PROXY}?tt=abc`)).toBe(false);
+  });
+});
+
+/**
+ * B1.3, item 3: the loader-level alternative to rebuilding hls.js for a
+ * routine token restamp.
+ */
+describe("withFreshHlsToken", () => {
+  const SESSION = "https://api.example.test/api/voice/hls-playlist/ch-1/1788962552321";
+
+  it("swaps the token on the exact master URL", () => {
+    expect(withFreshHlsToken(`${SESSION}?t=old`, `${SESSION}?t=new`)).toBe(
+      `${SESSION}?t=new`,
+    );
+  });
+
+  it("swaps the token on a rung's own playlist, which is not sameHlsSession", () => {
+    // The live stream's actual repeated fetch: a rung's media playlist,
+    // never the master. `sameHlsSession` alone would miss this on purpose.
+    expect(sameHlsSession(SESSION, `${SESSION}/720p30`)).toBe(false);
+    expect(
+      withFreshHlsToken(`${SESSION}/720p30?t=old`, `${SESSION}?t=new`),
+    ).toBe(`${SESSION}/720p30?t=new`);
+  });
+
+  it("leaves a different channel or session alone", () => {
+    const otherChannel =
+      "https://api.example.test/api/voice/hls-playlist/ch-2/1788962552321?t=old";
+    expect(withFreshHlsToken(otherChannel, `${SESSION}?t=new`)).toBe(
+      otherChannel,
+    );
+    const laterSession =
+      "https://api.example.test/api/voice/hls-playlist/ch-1/1788963814707?t=old";
+    expect(withFreshHlsToken(laterSession, `${SESSION}?t=new`)).toBe(
+      laterSession,
+    );
+  });
+
+  it("leaves the URL alone when the fresh URL carries no token at all", () => {
+    expect(withFreshHlsToken(`${SESSION}?t=old`, SESSION)).toBe(
+      `${SESSION}?t=old`,
+    );
+  });
+
+  it("is a no-op once the URL already carries the freshest token", () => {
+    expect(withFreshHlsToken(`${SESSION}?t=new`, `${SESSION}?t=new`)).toBe(
+      `${SESSION}?t=new`,
+    );
+  });
+
+  it("preserves other query parameters on the request", () => {
+    expect(
+      withFreshHlsToken(`${SESSION}?x=1&t=old`, `${SESSION}?t=new`),
+    ).toBe(`${SESSION}?x=1&t=new`);
   });
 });
 
@@ -278,5 +365,26 @@ describe("resolveLiveHlsStream", () => {
       cameraHlsUrl: "https://live.example.test/cam.m3u8",
     };
     expect(resolveLiveHlsStream(absolute)).toEqual(absolute);
+  });
+});
+
+/**
+ * B1: how often the recovery ladder had to give up and tear the whole
+ * player down, for B0's telemetry hook to read. A module-level counter
+ * (like `stats` above), not per-render state, so it survives the rebuild it
+ * is counting.
+ */
+describe("the hls rebuild counter", () => {
+  it("starts at zero and counts every rebuild recorded since", () => {
+    resetHlsRebuildCountForTest();
+    expect(getHlsRebuildCount()).toBe(0);
+    expect(recordHlsRebuild()).toBe(1);
+    expect(recordHlsRebuild()).toBe(2);
+    expect(getHlsRebuildCount()).toBe(2);
+  });
+
+  it("resets cleanly for the next test file's run", () => {
+    resetHlsRebuildCountForTest();
+    expect(getHlsRebuildCount()).toBe(0);
   });
 });

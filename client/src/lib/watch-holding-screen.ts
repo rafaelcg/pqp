@@ -28,6 +28,14 @@ import type { HlsStallReason } from "@/lib/hls-stall";
  * - `dead`: the watchdog gave up (`HlsStallWatch` `dead` decision) — the
  *   existing retry-button overlay, unchanged.
  * - `null`: nothing to say — a frame is playing.
+ *
+ * `restarting` is checked BEFORE the "a frame is playing" guard below
+ * (`BROADCAST_PIPELINE.md` B1.3): the player no longer tears hls.js down for
+ * a `sequence-stuck` egress, so `phase` stays `"playing"` and the last frame
+ * stays on screen — `hasFrame` and `phase` alone would say nothing is wrong.
+ * `stallReason` is the one signal that still says so, and `onPlaying`
+ * already clears it the moment a frame actually arrives again, so this
+ * cannot linger past the episode it describes.
  */
 export type HoldingScreenReason =
   | "restarting"
@@ -50,9 +58,6 @@ export function resolveHoldingScreenReason(input: {
   /** True for `AUTH_GRACE_MS` after a playlist request came back 401. */
   authGraceActive: boolean;
 }): HoldingScreenReason {
-  if (input.phase === "playing" && input.hasFrame) {
-    return null;
-  }
   if (input.phase === "dead") {
     return "dead";
   }
@@ -61,6 +66,9 @@ export function resolveHoldingScreenReason(input: {
   }
   if (input.stallReason === "sequence-stuck") {
     return "restarting";
+  }
+  if (input.phase === "playing" && input.hasFrame) {
+    return null;
   }
   return "reconnecting";
 }
