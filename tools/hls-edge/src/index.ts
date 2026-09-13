@@ -132,11 +132,15 @@ const UPSTREAM_TIMEOUT_MS = 8_000;
  * `playlist-route.ts`'s own bound, not this map's), so an attacker cycling
  * through distinct channel ids on every request would otherwise grow this
  * map forever — nothing ever deleted an entry, only added or updated one.
- * `REJECTION_LOG_MAX_ENTRIES` bounds it: once full, the OLDEST entry (by
- * insertion order, which a `Map` preserves) is evicted before a new key is
- * added. That is an approximation of LRU, not a precise one — good enough
- * for a hostile-traffic bound on a log dedupe table, not a cache whose
- * eviction policy anyone depends on.
+ * Two bounds, in `logRejection` below: an ACTIVE sweep drops every entry
+ * whose `REJECTION_LOG_WINDOW_MS` has already closed whenever a new key
+ * would be added (so ordinary traffic settles back near zero entries once
+ * the flood stops), and `REJECTION_LOG_MAX_ENTRIES` is the hard ceiling for
+ * a SUSTAINED flood of genuinely fresh unique keys the sweep alone can't
+ * shrink fast enough, past which the oldest entry (by insertion order) is
+ * evicted — an approximation of LRU, not a precise one, which is enough for
+ * a hostile-traffic bound on a log dedupe table, not a cache whose eviction
+ * policy anyone depends on.
  */
 const REJECTION_LOG_WINDOW_MS = 30_000;
 const REJECTION_LOG_MAX_ENTRIES = 1_000;
@@ -160,10 +164,28 @@ function logRejection(
     reason,
     suppressed: seen?.suppressed ?? 0,
   });
-  if (!seen && rejectionLog.size >= REJECTION_LOG_MAX_ENTRIES) {
-    const oldestKey = rejectionLog.keys().next().value;
-    if (oldestKey !== undefined) {
-      rejectionLog.delete(oldestKey);
+  if (!seen) {
+    // Active expiry, not just a size cap: drop every entry whose 30s window
+    // has already closed before growing the map with a new key. Runs only
+    // on a genuinely new (or re-expired) key -- a repeat rejection within
+    // its own window takes the early return above and never reaches this --
+    // so this is bounded by `REJECTION_LOG_MAX_ENTRIES` per sweep, not by
+    // request volume.
+    for (const [existingKey, entry] of rejectionLog) {
+      if (now - entry.at >= REJECTION_LOG_WINDOW_MS) {
+        rejectionLog.delete(existingKey);
+      }
+    }
+    if (rejectionLog.size >= REJECTION_LOG_MAX_ENTRIES) {
+      // Still over the cap after expiry (a sustained flood of genuinely
+      // fresh unique keys): fall back to evicting the oldest by insertion
+      // order, an approximation of LRU that is enough for a hostile-traffic
+      // bound on a log dedupe table, not a cache anyone depends on for
+      // eviction precision.
+      const oldestKey = rejectionLog.keys().next().value;
+      if (oldestKey !== undefined) {
+        rejectionLog.delete(oldestKey);
+      }
     }
   }
   rejectionLog.set(key, { at: now, suppressed: 0 });

@@ -119,6 +119,9 @@ vi.mock("../voice/hls-egress.js", () => ({
   setLiveHlsSfuLoadReader: () => {},
   isLiveHlsEnabled: () => true,
   isLiveHlsEnabledForServer: () => true,
+  // `stampViewerStream` (hls-viewer-token.ts) reads this to decide whether
+  // to prepend an edge host; unset here, same as every deployment today.
+  playlistBaseUrl: () => null,
   liveHlsStreamFor: (channelId: string) =>
     egress.streams.get(channelId) ?? null,
   reconcileLiveHls: async (
