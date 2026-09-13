@@ -13,29 +13,55 @@ const registry = vi.hoisted(() => ({
   deleteVoiceResweep: vi.fn<(key: string) => Promise<void>>(),
   claimVoiceResweeps: vi.fn(async () => []),
   hasLiveVoiceResweeps: vi.fn(async () => false),
-  upsertVoiceResweep: vi.fn(async () => undefined),
+  upsertVoiceResweep: vi.fn<(...args: unknown[]) => Promise<void>>(
+    async () => undefined,
+  ),
 }));
 vi.mock("./registry.js", () => registry);
 
 const logEvent = vi.hoisted(() => vi.fn());
 vi.mock("../lib/log.js", () => ({ logEvent }));
 
+const lk = vi.hoisted(() => ({
+  listParticipants: vi.fn(async () => []),
+}));
 vi.mock("livekit-server-sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("livekit-server-sdk")>();
-  return { ...actual, RoomServiceClient: class {} };
+  return {
+    ...actual,
+    RoomServiceClient: class {
+      listParticipants = lk.listParticipants;
+    },
+  };
 });
 
-const { cancelSfuPrivateResweep } = await import("./admin.js");
+const { cancelSfuPrivateResweep, evictSfuUsersExcept, resetSfuAdminClient, stopSfuResweeps } =
+  await import("./admin.js");
+
+function configureLiveKit() {
+  process.env.LIVEKIT_URL = "wss://sfu.example.test";
+  process.env.LIVEKIT_API_KEY = "key";
+  process.env.LIVEKIT_API_SECRET = "secret";
+  resetSfuAdminClient();
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
   registry.isVoiceRegistryEnabled.mockReturnValue(true);
   registry.deleteVoiceResweep.mockReset();
+  registry.upsertVoiceResweep.mockClear();
+  lk.listParticipants.mockReset().mockResolvedValue([]);
   logEvent.mockClear();
+  configureLiveKit();
 });
 
 afterEach(() => {
+  stopSfuResweeps();
   vi.useRealTimers();
+  delete process.env.LIVEKIT_URL;
+  delete process.env.LIVEKIT_API_KEY;
+  delete process.env.LIVEKIT_API_SECRET;
+  resetSfuAdminClient();
 });
 
 describe("cancelSfuPrivateResweep: registry delete retry", () => {
@@ -79,5 +105,63 @@ describe("cancelSfuPrivateResweep: registry delete retry", () => {
     await cancelSfuPrivateResweep("voice-a");
 
     expect(registry.deleteVoiceResweep).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Farol HIGH, 2026-09-13: `evictViewersOutsideAudience` used to fire
+ * `cancelPrivateVoiceResweep` and continue straight on to `evictVoiceUsersExcept`,
+ * which can write a replacement `voice_resweeps` row for the very same key.
+ * A slow cancel delete landing after that replacement upsert would erase the
+ * row the request just wrote, leaving a still-private channel with no
+ * cluster resweep. The fix is ordering: await the cancellation to completion
+ * before anything can schedule a replacement for the same key.
+ */
+describe("cancel-then-schedule ordering for the same key", () => {
+  it("delete lands before the replacement upsert when the caller awaits cancellation first", async () => {
+    const order: string[] = [];
+    registry.deleteVoiceResweep.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      order.push("delete");
+    });
+    registry.upsertVoiceResweep.mockImplementation(async () => {
+      order.push("upsert");
+    });
+
+    const cancel = cancelSfuPrivateResweep("private-channel-a");
+    await vi.advanceTimersByTimeAsync(100);
+    await cancel;
+
+    await evictSfuUsersExcept(
+      "private-channel-a",
+      new Set(["user-1"]),
+      new Map(),
+    );
+
+    expect(order).toEqual(["delete", "upsert"]);
+  });
+
+  it("an unawaited cancel can let the delete land after the replacement upsert (the bug this ordering prevents)", async () => {
+    const order: string[] = [];
+    registry.deleteVoiceResweep.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      order.push("delete");
+    });
+    registry.upsertVoiceResweep.mockImplementation(async () => {
+      order.push("upsert");
+    });
+
+    void cancelSfuPrivateResweep("private-channel-a"); // fire-and-forget: the old bug
+    await evictSfuUsersExcept(
+      "private-channel-a",
+      new Set(["user-1"]),
+      new Map(),
+    );
+    await vi.advanceTimersByTimeAsync(100);
+
+    // The replacement lands first and the cancel's delete lands second — on
+    // a real `DELETE FROM voice_resweeps WHERE key = $1` this would erase
+    // the row the upsert just wrote, exactly what the HIGH comment flagged.
+    expect(order).toEqual(["upsert", "delete"]);
   });
 });

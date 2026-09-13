@@ -5980,9 +5980,17 @@ router.delete(
  * grants a role access, and per `cancelSfuPrivateResweep`'s own contract,
  * callers are expected to call it unconditionally rather than infer in
  * advance whether a resweep is actually live.
+ *
+ * The cancellation is AWAITED, not fired and forgotten: `cancelSfuPrivateResweep`
+ * deletes the `voice_resweeps` row (with a retry, so it can take a moment),
+ * and `evictVoiceUsersExcept` below can write a replacement row for the same
+ * key when the room still needs one. Racing those two — a delete still in
+ * flight when the fresh upsert lands — would let the delete land second and
+ * erase the replacement, leaving a still-private room with no cluster
+ * resweep at all. Finishing the delete first makes that ordering impossible.
  */
 async function evictViewersOutsideAudience(channelId: string): Promise<void> {
-  void cancelPrivateVoiceResweep(channelId);
+  await cancelPrivateVoiceResweep(channelId);
   const audience = await getChannelAudience(channelId);
   if (!audience) {
     return;
