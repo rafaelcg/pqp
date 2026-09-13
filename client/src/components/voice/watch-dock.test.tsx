@@ -28,6 +28,18 @@ const SESSION: WatchDockSession = {
   isWatchParty: true,
 };
 
+// An ordinary voice room, unrelated to the party in SESSION — what
+// `App.tsx`'s `watchDockCandidate` builds for whichever voice channel is
+// currently selected, party or not.
+const OTHER_VOICE: WatchDockSession = {
+  channelId: "chan-voice-other",
+  channelName: "AFK",
+  serverId: "server-1",
+  serverName: "QG",
+  serverIconUrl: null,
+  isWatchParty: false,
+};
+
 describe("resolveWatchPlacement", () => {
   const base = {
     session: SESSION,
@@ -246,6 +258,25 @@ describe("useWatchDock", () => {
         />,
       ),
     );
+  // Clicking a VOICE channel in the sidebar, without joining it: `App.tsx`
+  // still builds a candidate (it does not special-case watch parties), so
+  // unlike `walkAway` this passes a non-null one for the newly selected
+  // room.
+  const browseVoice = (
+    candidate: WatchDockSession,
+    live = true,
+    inCallChannelId: string | null = null,
+  ) =>
+    act(() =>
+      root.render(
+        <Probe
+          selectedChannelId={candidate.channelId}
+          candidate={candidate}
+          live={live}
+          inCallChannelId={inCallChannelId}
+        />,
+      ),
+    );
 
   it("docks a stream the viewer was watching and gives it back on return", () => {
     open();
@@ -284,6 +315,23 @@ describe("useWatchDock", () => {
     expect(latest?.placement).toBe("stage");
     walkAway(true);
     expect(latest?.placement).toBe("gone");
+  });
+
+  it("stays docked when the viewer selects a different voice channel without joining it", () => {
+    open();
+    walkAway();
+    expect(latest?.placement).toBe("dock");
+    expect(latest?.dockedChannelId).toBe(SESSION.channelId);
+
+    // Selecting (not joining) another voice channel must not steal the
+    // session away from the party stream that is actually on screen.
+    browseVoice(OTHER_VOICE);
+    expect(latest?.placement).toBe("dock");
+    expect(latest?.dockedChannelId).toBe(SESSION.channelId);
+
+    // The party's own room still takes it back, same as any other return.
+    open();
+    expect(latest?.placement).toBe("stage");
   });
 
   it("does not follow somebody who took a seat in that very room", () => {

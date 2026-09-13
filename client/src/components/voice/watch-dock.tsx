@@ -348,14 +348,48 @@ export function useWatchDock({
   const [dismissedId, setDismissedId] = useState<string | null>(null);
   const [watchedId, setWatchedId] = useState<string | null>(null);
 
+  const hasStream =
+    session !== null && channelLive[session.channelId]?.stream != null;
+  const onStage = session !== null && selectedChannelId === session.channelId;
+  const watched = session !== null && watchedId === session.channelId;
+  const dismissed = session !== null && dismissedId === session.channelId;
+  const inCall = session !== null && inCallChannelId === session.channelId;
+
+  // Computed from the CURRENT session (the one this render started with),
+  // before the effect below decides whether a new candidate gets to replace
+  // it. That is the point: it answers "is the session already on screen?"
+  // using the session as it stood when the viewer picked a channel, not
+  // whatever this effect is about to do to it.
+  const placement = resolveWatchPlacement({
+    session,
+    selectedChannelId,
+    hasStream,
+    watched,
+    dismissed,
+    inCall,
+  });
+
   useEffect(() => {
     if (!candidate) {
       return;
     }
-    setSession((previous) =>
-      sameWatchSession(previous, candidate) ? previous : candidate,
-    );
-  }, [candidate]);
+    setSession((previous) => {
+      if (sameWatchSession(previous, candidate)) {
+        return previous;
+      }
+      // Opening a DIFFERENT voice channel is not the same as opening the
+      // one being watched: a stream that is actually docked on screen is
+      // not bumped just because the viewer looked at some other room.
+      // Only a session with nothing left to show (dismissed, ended, no
+      // stream ever started) makes room for the new one — otherwise every
+      // voice channel in the sidebar would double as an "close the mini
+      // player" button.
+      if (previous && placement === "dock") {
+        return previous;
+      }
+      return candidate;
+    });
+  }, [candidate, placement]);
 
   // X is "not now", not "never": opening the channel again brings it back.
   useEffect(() => {
@@ -364,24 +398,11 @@ export function useWatchDock({
     }
   }, [dismissedId, selectedChannelId]);
 
-  const hasStream =
-    session !== null && channelLive[session.channelId]?.stream != null;
-  const onStage = session !== null && selectedChannelId === session.channelId;
-
   useEffect(() => {
     if (onStage && hasStream && session) {
       setWatchedId(session.channelId);
     }
   }, [onStage, hasStream, session]);
-
-  const placement = resolveWatchPlacement({
-    session,
-    selectedChannelId,
-    hasStream,
-    watched: session !== null && watchedId === session.channelId,
-    dismissed: session !== null && dismissedId === session.channelId,
-    inCall: session !== null && inCallChannelId === session.channelId,
-  });
 
   // A stream that ends while docked does not come back on its own. Watching is
   // something a person chose by opening the channel, and an egress that
