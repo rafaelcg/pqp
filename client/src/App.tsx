@@ -2681,6 +2681,24 @@ function MainAppContent({
       }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
     }
 
+    /**
+     * Drops `channelId`'s entry, but ONLY if `state` is still the object the
+     * map holds for it. `state` is a specific object this call's caller
+     * owns, passed down from `scheduleReconnectMessagesRefetch` rather than
+     * re-read from the map — so if that channel's slot has since moved on to
+     * a newer cycle (a fresh entry created after this one was already
+     * removed once), this stays a no-op instead of deleting state that
+     * belongs to that newer cycle (Farol review).
+     */
+    function dropReconnectMessagesRefetchStateIfCurrent(
+      channelId: string,
+      state: unknown,
+    ) {
+      if (reconnectMessagesRefetchState.get(channelId) === state) {
+        reconnectMessagesRefetchState.delete(channelId);
+      }
+    }
+
     function runReconnectMessagesRefetch(
       channelId: string,
       state: { inFlight: boolean; again: boolean },
@@ -2689,7 +2707,7 @@ function MainAppContent({
         // Nothing left for this channel's entry — drop it rather than keep a
         // tiny idle record for every channel a long session ever reconnected
         // on (Farol review: the map otherwise grows unbounded).
-        reconnectMessagesRefetchState.delete(channelId);
+        dropReconnectMessagesRefetchStateIfCurrent(channelId, state);
         return;
       }
       state.inFlight = true;
@@ -2712,7 +2730,7 @@ function MainAppContent({
             scheduleReconnectMessagesRefetch(channelId);
           } else {
             // Fully idle: no timer, not in flight, nothing else queued.
-            reconnectMessagesRefetchState.delete(channelId);
+            dropReconnectMessagesRefetchStateIfCurrent(channelId, state);
           }
         });
     }
