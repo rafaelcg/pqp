@@ -848,7 +848,16 @@ async function createMicPipeline(
       }
     }
     if (isCancelled?.()) {
-      noiseSuppressor?.destroy();
+      // A worklet that already lost its render context (the failure that
+      // just sent it through the catch above, or a browser tearing the tab
+      // down) can throw out of `destroy()` itself. Guarded the same way
+      // `closeMicContext` guards it, so a throw here never skips stopping
+      // the raw stream or closing the context underneath it.
+      try {
+        noiseSuppressor?.destroy();
+      } catch {
+        // Already gone with the context; nothing left to free.
+      }
       stopStreamTracks(rawStream);
       void audioContext.close().catch(() => {});
       throw new MicSetupCancelledError();

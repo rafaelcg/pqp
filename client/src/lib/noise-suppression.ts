@@ -95,22 +95,40 @@ export function advancedNoiseSuppressionSupported(): boolean {
 let binaryPromise: Promise<ArrayBuffer> | null = null;
 
 /**
+ * How long the ~150 kB (or ~213 kB SIMD) fetch is allowed to take before it
+ * counts as stuck rather than slow. Generous on purpose — this only trips a
+ * request that has genuinely stalled, not a bad connection finishing late.
+ */
+const RNNOISE_LOAD_TIMEOUT_MS = 15_000;
+
+/**
  * Fetch the RNNoise wasm once per page, SIMD build where the CPU has it.
  *
  * Cached as the promise rather than the result so two microphones opening at
  * once share one download. A failure clears the cache: a flaky fetch must not
- * pin the feature off for the rest of the session.
+ * pin the feature off for the rest of the session — and a stall counts as a
+ * failure. Without the timeout, a request that never settles (a dropped
+ * connection with no error, a service worker gone quiet) leaves `binaryPromise`
+ * pending forever: every advanced join after the stuck one — not just the one
+ * that started it — would await the same promise and never open the call
+ * either, since nothing ever replaces it. The timeout rejects that shared
+ * promise, clears the cache, and lets the next call start a fresh attempt.
  */
 export function loadRnnoiseBinary(): Promise<ArrayBuffer> {
   if (!binaryPromise) {
-    binaryPromise = import("@sapphi-red/web-noise-suppressor")
-      .then((mod) =>
-        mod.loadRnnoise({ url: rnnoiseWasmUrl, simdUrl: rnnoiseSimdWasmUrl }),
-      )
-      .catch((err: unknown) => {
-        binaryPromise = null;
-        throw err;
-      });
+    const attempt = import("@sapphi-red/web-noise-suppressor").then((mod) =>
+      mod.loadRnnoise({ url: rnnoiseWasmUrl, simdUrl: rnnoiseSimdWasmUrl }),
+    );
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error("RNNoise WASM load timed out")),
+        RNNOISE_LOAD_TIMEOUT_MS,
+      );
+    });
+    binaryPromise = Promise.race([attempt, timeout]).catch((err: unknown) => {
+      binaryPromise = null;
+      throw err;
+    });
   }
   return binaryPromise;
 }

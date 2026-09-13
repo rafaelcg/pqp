@@ -169,10 +169,37 @@ const server = createServer(async (req, res) => {
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const { port } = server.address();
 
-const browser = await chromium.launch({
-  args: ["--autoplay-policy=no-user-gesture-required"],
-});
+// The loopback server must never outlive this process, however it ends: a
+// launch that throws before the `try` block below, Chromium crashing or
+// being killed mid-measurement (which the `finally` never reaches, because
+// `browser.close()` on an already-dead browser can itself hang), or the
+// script being interrupted from the terminal. Every one of those leaves a
+// listening socket bound to 127.0.0.1 with nothing left to stop it.
+let closedServer = false;
+function closeServerOnce() {
+  if (closedServer) {
+    return;
+  }
+  closedServer = true;
+  server.close();
+}
+process.once("exit", closeServerOnce);
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => {
+    closeServerOnce();
+    process.exit(1);
+  });
+}
+
+let browser;
 try {
+  browser = await chromium.launch({
+    args: ["--autoplay-policy=no-user-gesture-required"],
+  });
+  // Chromium can exit on its own (a crash, an OOM-kill in a constrained CI
+  // container) without ever reaching the `finally` below.
+  browser.on("disconnected", closeServerOnce);
+
   const page = await browser.newPage();
   page.on("console", (m) => {
     if (m.type() === "error") console.error("[page]", m.text());
@@ -194,6 +221,6 @@ try {
   console.log(`  after:  ${fmt(r.toneAfter)}`);
   console.log(`  removed: ${(r.toneBefore - r.toneAfter).toFixed(1)} dB`);
 } finally {
-  await browser.close();
-  server.close();
+  await browser?.close();
+  closeServerOnce();
 }

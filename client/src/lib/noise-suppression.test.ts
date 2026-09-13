@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   advancedNoiseSuppressionSupported,
   browserNoiseSuppression,
   connectMicChain,
   createRnnoiseNode,
+  loadRnnoiseBinary,
   parseNoiseSuppressionMode,
   type MicChainNode,
 } from "./noise-suppression";
@@ -11,8 +12,10 @@ import {
 /** What `RnnoiseWorkletNode` was actually constructed with, across calls. */
 const receivedWasmBinaries: ArrayBuffer[] = [];
 
+const loadRnnoiseMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@sapphi-red/web-noise-suppressor", () => ({
-  loadRnnoise: vi.fn(),
+  loadRnnoise: loadRnnoiseMock,
   RnnoiseWorkletNode: class {
     destroy = vi.fn();
     constructor(
@@ -124,6 +127,37 @@ describe("createRnnoiseNode", () => {
     // cache.
     expect(receivedWasmBinaries[0]).not.toBe(receivedWasmBinaries[1]);
     expect(cached.byteLength).toBe(8);
+  });
+});
+
+describe("loadRnnoiseBinary", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    loadRnnoiseMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("gives up on a load that never settles, and lets the next call retry fresh", async () => {
+    // Farol #517: without a timeout, a stalled fetch (a dropped connection
+    // with no error, a service worker gone quiet) left the cached promise
+    // pending forever, and every advanced join after the stuck one — not
+    // just the one that started it — awaited that same promise and never
+    // opened the call either.
+    loadRnnoiseMock.mockImplementationOnce(() => new Promise(() => {}));
+
+    const stalled = loadRnnoiseBinary();
+    const assertion = expect(stalled).rejects.toThrow(/timed out/i);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
+
+    // The cache was cleared on the timeout, so this is a fresh attempt, not
+    // the same dead promise.
+    loadRnnoiseMock.mockImplementationOnce(async () => new ArrayBuffer(4));
+    await expect(loadRnnoiseBinary()).resolves.toBeInstanceOf(ArrayBuffer);
+    expect(loadRnnoiseMock).toHaveBeenCalledTimes(2);
   });
 });
 
