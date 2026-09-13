@@ -151,6 +151,13 @@ export const notificationPreferencesSchema = z.object({
   default: notificationLevelSchema.optional(),
   servers: z.record(z.string().uuid(), notificationLevelSchema).optional(),
   channels: z.record(z.string().uuid(), notificationLevelSchema).optional(),
+  /** The MSN-style arrival card for a conversation message. Default true. */
+  arrivalToast: z.boolean().optional(),
+  /**
+   * Whether the sidebar's preview line and the arrival toast's second line may
+   * show message content. Default true. Off falls both back to a count.
+   */
+  previewInApp: z.boolean().optional(),
 });
 
 export type NotificationPreferences = z.infer<
@@ -249,6 +256,14 @@ export const userPreferencesSchema = z.object({
    * member at all.
    */
   status: manualStatusSchema.optional(),
+  /**
+   * The language this account reads the app in, written whenever the
+   * Language picker in Settings changes it. Read server-side for push copy
+   * (`server/src/services/push-copy.ts`) — there is no i18next on the
+   * server, so this is the one signal it has. Defaults to `"pt-BR"` when
+   * absent, the instance's own default rather than the browser's.
+   */
+  locale: z.enum(["pt-BR", "en"]).optional(),
   theme: themePreferenceSchema.optional(),
   appearance: appearancePreferenceSchema.optional(),
   contrast: contrastPreferenceSchema.optional(),

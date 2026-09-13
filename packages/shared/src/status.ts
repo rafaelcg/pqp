@@ -29,17 +29,25 @@ import { z } from "zod";
  * Keeping it out of that union is the type system's half of the privacy
  * guarantee — a function returning `UserStatus` cannot leak it by accident.
  *
- * WHAT WAS REJECTED. A *manual* idle (Discord has one). "Idle" is the single
- * state whose meaning is objective — nobody has touched this device in a while —
- * and letting it be asserted turns it into one more opinion, at which point it
- * needs a rule for whether real activity clears it, and either answer is wrong:
- * clearing it ignores what the person asked for, not clearing it means the badge
- * says "away" while they type. Someone who wants to be left alone has `dnd`;
- * someone who wants to disappear has `invisible`.
+ * WHAT WAS REJECTED, AND WHAT SHIPPED INSTEAD. A *manual* idle (Discord has
+ * one) is still rejected: "idle" is the single state whose meaning is
+ * objective — nobody has touched this device in a while — and letting it be
+ * asserted turns it into one more opinion, at which point it needs a rule for
+ * whether real activity clears it, and either answer is wrong: clearing it
+ * ignores what the person asked for, not clearing it means the badge says
+ * "idle" while they type.
+ *
+ * What shipped instead is `away` — a fourth MANUAL value, not a manual idle.
+ * The difference is not cosmetic: `away` is a declaration, sticky like `dnd`,
+ * and activity never clears it. It resolves to `idle` on the wire, so every
+ * reader (member list, profile card, iOS, Android) renders the amber crescent
+ * it already renders for the derived state and no client needs a release. It
+ * suppresses nothing — no toast rule, no sound rule, no push rule reads it;
+ * `shouldPush` and the notification suppression table key on `dnd` only.
  */
 
 /** What an account may set about itself. Absent from storage means `online`. */
-export const manualStatusSchema = z.enum(["online", "dnd", "invisible"]);
+export const manualStatusSchema = z.enum(["online", "away", "dnd", "invisible"]);
 
 export type ManualStatus = z.infer<typeof manualStatusSchema>;
 
