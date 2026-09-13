@@ -114,6 +114,7 @@ export function OptionRow({
   htmlFor,
   children,
   className,
+  stacked = false,
   ...rest
 }: {
   label: string;
@@ -122,11 +123,23 @@ export function OptionRow({
   htmlFor?: string;
   children?: ReactNode;
   className?: string;
+  /**
+   * Control under the label instead of beside it: for a narrow column (the
+   * setup card is 320px) where a select beside a two-line description leaves
+   * both squeezed.
+   */
+  stacked?: boolean;
 } & Record<`data-${string}`, string | number | boolean | undefined>) {
   const Label = htmlFor ? "label" : "span";
   return (
     <div
-      className={cn("flex items-center justify-between gap-4 px-3 py-2.5", className)}
+      className={cn(
+        "px-3 py-2.5",
+        stacked
+          ? "flex flex-col gap-1.5 [&>span:last-child]:w-full [&_select]:w-full [&_select]:max-w-none"
+          : "flex items-center justify-between gap-4",
+        className,
+      )}
       {...rest}
     >
       <Label htmlFor={htmlFor} className="min-w-0">
@@ -177,12 +190,15 @@ export function WatchPartyOptionsPanel({
   disabled = false,
   audienceCount,
   onChange,
+  stacked = false,
 }: {
   options: WatchPartyOptions;
   disabled?: boolean;
   /** Drives the "with a crowd, try 10 or 30 seconds" nudge. */
   audienceCount: number;
   onChange: (patch: Partial<WatchPartyOptions>) => void;
+  /** See `OptionRow.stacked`: the narrow-column layout the setup card uses. */
+  stacked?: boolean;
 }) {
   const { t } = useTranslation();
   // "Big" is where an open floor and an unthrottled chat stop being fine. The
@@ -215,6 +231,7 @@ export function WatchPartyOptionsPanel({
             and the server writes no permission rule on the channel at all
             (`watchPartyFloorIsClosed`). See docs/WATCH_PARTY.md. */}
         <OptionRow
+          stacked={stacked}
           label={t("watchParty.options.voice")}
           description={voiceNote}
           tone={options.voiceEnabled && busy ? "warning" : "muted"}
@@ -252,6 +269,7 @@ export function WatchPartyOptionsPanel({
         )}
 
         <OptionRow
+          stacked={stacked}
           label={t("watchParty.options.slowMode")}
           description={
             busy && options.slowModeSeconds === 0

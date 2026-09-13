@@ -546,7 +546,7 @@ describe("a host on a phone", () => {
     expect(html).not.toContain("data-watch-party-go-live");
     expect(html).toContain("data-watch-party-discard");
     expect(html).toContain("data-watch-party-share");
-    expect(html).toContain("data-watch-party-options-toggle");
+    expect(html).toContain("watch-party-options-summary");
   });
 });
 
@@ -1047,16 +1047,18 @@ describe("the setup card", () => {
     expect(html).not.toContain("watch-party-preview");
   });
 
-  it("shows the settings as a list of rows, each a door to the options dialog", () => {
-    const html = draft();
-    expect(html).toContain("watch-party-options-summary");
-    for (const key of ["voice", "chat", "reactions", "quality", "cohosts"]) {
-      expect(html).toContain(`data-watch-party-setting="${key}"`);
-    }
-    expect(html).toContain("data-watch-party-options-toggle");
-    // The two booleans people flip most carry an inline switch.
-    expect(html).toContain('data-watch-party-setting-switch="reactions"');
-    expect(html).not.toContain("Voice off · ");
+  it("draws the options form inline, with no dialog to open on the draft", () => {
+    const html = draft({ onMicInStreamChange: () => {} });
+    const card = html.slice(html.indexOf("watch-party-setup-card"));
+    expect(card).toContain("watch-party-options-summary");
+    // The same form the live dialog renders: the Voz select, the slow-mode
+    // select, the reactions switch, plus this computer's mic switch and the
+    // quality select.
+    expect(card).toContain('role="switch"');
+    expect((card.match(/<select/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(card).toContain("data-watch-party-mic-in-stream");
+    expect(card).not.toContain("data-watch-party-options-toggle");
+    expect(html).not.toContain("watch-party-options-drawer");
   });
 
   it("offers a time on the draft, off by default, when the app can schedule", () => {

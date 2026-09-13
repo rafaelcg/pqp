@@ -432,6 +432,7 @@ import {
 } from "@/lib/screen-share-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { effectiveRoleIds } from "@/lib/member-groups";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -2244,16 +2245,40 @@ function MainAppContent({
    * what the rest of this server calls that person and a picker that disagreed
    * with the member list would be a second name for the same face.
    */
-  const cohostCandidates = useMemo(
-    () =>
-      serverMembers.map((member) => ({
+  const cohostCandidates = useMemo(() => {
+    // STAFF FIRST, THEN FRIENDS, THEN EVERYBODY (2026-09-13, Rafael). The
+    // same ladder the member sidebar hoists by: cargos with `hoist`, highest
+    // position first, a person landing on the first one they hold. Friends
+    // take the tier after the last cargo. The rest carry no priority and
+    // sort by name inside `WatchPartyCohosts`.
+    const hoisted = [...serverRoles]
+      .filter((role) => role.hoist && !role.isEveryone)
+      .sort((a, b) => b.position - a.position);
+    const adminRoleId =
+      serverRoles.find((role) => role.systemKey === "admin")?.id ?? null;
+    const ownerRoleId =
+      serverRoles.find((role) => role.systemKey === "owner")?.id ?? null;
+    const friendTier = hoisted.length;
+    return serverMembers.map((member) => {
+      const held = new Set(effectiveRoleIds(member, adminRoleId, ownerRoleId));
+      const cargo = hoisted.findIndex((role) => held.has(role.id));
+      const priority =
+        member.role === "owner"
+          ? 0
+          : cargo >= 0
+            ? cargo
+            : memberSidebarFriendIds.has(member.id)
+              ? friendTier
+              : undefined;
+      return {
         userId: member.id,
         displayName: memberDisplayName(member),
         avatarUrl: member.avatarUrl,
         isCharacter: member.isCharacter,
-      })),
-    [serverMembers],
-  );
+        priority,
+      };
+    });
+  }, [serverMembers, serverRoles, memberSidebarFriendIds]);
 
   /**
    * What the profile card may do to somebody, in the server it was opened in.

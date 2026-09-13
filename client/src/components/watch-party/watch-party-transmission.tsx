@@ -602,10 +602,13 @@ const STREAM_QUALITY_KEYS: Record<WatchPartyStreamQuality, MessageKey> = {
 export function StreamQualityControl({
   userId = null,
   onQualityChange,
+  stacked = false,
 }: {
   userId?: string | null;
   /** Told on every change, including the one this control makes to itself. */
   onQualityChange?: (quality: WatchPartyStreamQuality) => void;
+  /** Label above the select, no box of its own: for the setup card's column. */
+  stacked?: boolean;
 } = {}) {
   const { t } = useTranslation();
   const selectId = useId();
@@ -615,23 +618,39 @@ export function StreamQualityControl({
   return (
     <div
       data-testid="watch-party-tx-stream-quality"
-      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-0 px-2.5 py-1.5"
+      className={cn(
+        stacked
+          ? "flex flex-col gap-1.5 px-3 py-2.5"
+          : "flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-0 px-2.5 py-1.5",
+      )}
     >
       <label
         htmlFor={selectId}
-        className="min-w-0 flex flex-col text-[11px] text-paper-muted"
+        className={cn(
+          "min-w-0 flex flex-col",
+          stacked ? "text-sm" : "text-[11px] text-paper-muted",
+        )}
       >
-        <span className="font-semibold uppercase tracking-wider text-text-tertiary">
+        <span
+          className={
+            stacked
+              ? "text-text"
+              : "font-semibold uppercase tracking-wider text-text-tertiary"
+          }
+        >
           {t("watchParty.tx.streamQuality")}
         </span>
-        <span className="text-text-tertiary">
+        <span className={cn("text-text-tertiary", stacked && "mt-0.5 text-xs")}>
           {t("watchParty.tx.streamQualityHint")}
         </span>
       </label>
       <select
         id={selectId}
         data-testid="watch-party-tx-stream-quality-select"
-        className="h-[var(--control-sm)] shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+        className={cn(
+          "h-[var(--control-sm)] shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
+          stacked && "w-full",
+        )}
         value={quality}
         onChange={(event) => {
           const next = event.target.value as WatchPartyStreamQuality;
