@@ -1523,6 +1523,17 @@ function LiveSurface(
   const [liveQuality, setLiveQuality] = useState<WatchPartyStreamQuality>(
     () => readWatchPartyStreamQuality(props.currentUserId ?? null),
   );
+  // RE-READ ON A USER CHANGE, not just at mount. The lazy initializer above
+  // only ever runs once; on a shared machine where `pqp:dev-user-suffix`
+  // (or a real sign-out/sign-in) swaps `currentUserId` while this panel
+  // stays mounted, `liveQuality` would otherwise keep showing whichever
+  // account's preference happened to be in state when the FIRST account
+  // was live, checklist and all (Farol, 2026-09-13). `writeWatchPartyStreamQuality`
+  // already scopes the storage key by user, so the fix is reading it again
+  // whenever the id this reads for actually changes.
+  useEffect(() => {
+    setLiveQuality(readWatchPartyStreamQuality(props.currentUserId ?? null));
+  }, [props.currentUserId]);
   const liveChecklistItems = useMemo(
     () =>
       goLiveChecklist({

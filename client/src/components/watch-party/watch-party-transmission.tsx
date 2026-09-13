@@ -1,4 +1,11 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -102,13 +109,20 @@ function useOutputSilenceWarning(
   readerRef.current = outputLevelDb;
   const hasReader = outputLevelDb !== undefined;
 
-  useEffect(() => {
-    // Cleared synchronously, on EVERY run of this effect (a new session
-    // included) rather than only when there is no reader at all: the
-    // interval below has not sampled anything yet on its first tick, up to
-    // `OUTPUT_LEVEL_POLL_MS` away, and a stale `warning === true` from the
-    // broadcast this session just replaced must not still be on screen for
-    // that gap.
+  // `useLayoutEffect`, not `useEffect`: an ordinary effect runs AFTER the
+  // browser has already painted the render that triggered it, so clearing
+  // `warning` there can still show one true frame of the OLD broadcast's
+  // warning on top of the NEW session before the reset lands (Farol,
+  // 2026-09-13, sharpening the earlier fix below). The layout effect runs
+  // synchronously before paint, so the reset in the same commit that
+  // changed `sessionKey` is what the audience ever sees — never a flash of
+  // stale state in between.
+  useLayoutEffect(() => {
+    // Cleared on EVERY run of this effect (a new session included) rather
+    // than only when there is no reader at all: the interval below has not
+    // sampled anything yet on its first tick, up to `OUTPUT_LEVEL_POLL_MS`
+    // away, and a stale `warning === true` from the broadcast this session
+    // just replaced must not still be on screen for that gap.
     setWarning(false);
     if (!hasReader) {
       return;
