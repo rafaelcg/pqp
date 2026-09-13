@@ -1,0 +1,240 @@
+{
+  "_comment": [
+    "Grafana Alerting file-provisioning format (apiVersion 1), for the four",
+    "event-window rules in docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md",
+    "item A4: readiness false 60s, /ready postgres ms > 200 for 2m, pool",
+    "queued > 20 for 60s, HLS rung deaths > 3 in 5m. Everything else in this",
+    "repo's Grafana stack is managed by hand in the UI (docs/MONITORING.md",
+    "says so explicitly: 'the UI is the source of truth'), so treat this file",
+    "the same way -- as the thing to paste into Alerting > Alert rules >",
+    "'Import from file' (or POST to /api/v1/provisioning/alert-rules), not as",
+    "something CI applies. Two placeholders MUST be replaced before import:",
+    "  <PROMETHEUS_DATASOURCE_UID>  Administration > Data sources, the Grafana",
+    "                                Cloud Prometheus stack already used by the",
+    "                                pqp-sfu-box dashboard.",
+    "  <LOKI_DATASOURCE_UID>        Same page, datasource name",
+    "                                'grafanacloud-logs' per docs/MONITORING.md.",
+    "The first two rules read the textfile exporter in this directory",
+    "(pqp-api-metrics-exporter.py); install it before enabling them or they",
+    "sit on 'no data'. The last two read existing pqp-api log lines and need",
+    "nothing new deployed.",
+    "",
+    "These are NOT meant to run silently forever the way pqp-api-logs and",
+    "pqp-sfu-box do. 'API restarts' fires on every ordinary deploy too, which",
+    "is exactly the point during a frozen event (A6) and exactly the noise you",
+    "do not want the rest of the time. Import this group before an event,",
+    "delete or pause it after (Alerting > Alert rules > pqp > pqp-event-guardrails),",
+    "and see docs/EVENT_RUNBOOK.md 'During' for what each one means when it fires."
+  ],
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "pqp-event-guardrails",
+      "folder": "pqp",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "pqp-event-readiness-false",
+          "title": "Readiness false for 60s",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 300, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "min_over_time(pqp_api_ready_ok[1m])",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "lt", "params": [1] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "Alerting",
+          "execErrState": "Alerting",
+          "for": "1m",
+          "labels": { "severity": "critical", "area": "event" },
+          "annotations": {
+            "summary": "GET /ready has reported ok:false continuously for at least a minute.",
+            "description": "min_over_time(pqp_api_ready_ok[1m]) < 1: every sample in the last minute was 0. Check GET https://api.pqp.gg/ready for which check is failing (postgres, pool, livekit, storage, liveHls). No data means the exporter (tools/monitoring/pqp-api-metrics-exporter.py) is not running or cannot reach the API -- treat that the same as failing, do not assume health.",
+            "runbook": "docs/EVENT_RUNBOOK.md#during"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        },
+        {
+          "uid": "pqp-event-postgres-ms",
+          "title": "/ready postgres ms > 200 for 2m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 300, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "min_over_time(pqp_api_ready_postgres_ms[1m])",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [200] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "Alerting",
+          "execErrState": "Alerting",
+          "for": "2m",
+          "labels": { "severity": "warning", "area": "event" },
+          "annotations": {
+            "summary": "The SELECT 1 behind GET /ready has taken more than 200ms for at least 2 minutes.",
+            "description": "This is the earliest honest signal of the 2026-09-05/09-12 shape: Postgres is still answering but slower than normal, well before the pool backs up or /ready flips to false. Read the DB plan and consider the stop-API-then-resize recipe in docs/DB_RUNBOOK.md if it keeps climbing -- never resize the cluster live, per that doc.",
+            "runbook": "docs/EVENT_RUNBOOK.md#during"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        },
+        {
+          "uid": "pqp-event-pool-queued",
+          "title": "Pool queued > 20 for 60s",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 300, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "min_over_time(pqp_api_ready_pool_queued[1m])",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [20] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "Alerting",
+          "execErrState": "Alerting",
+          "for": "1m",
+          "labels": { "severity": "critical", "area": "event" },
+          "annotations": {
+            "summary": "Requests have been queued for a Postgres connection (>20) continuously for a minute.",
+            "description": "The 2026-09-12 collapse shape: chat and voice write pressure exceeds PG_POOL_MAX and callers stand in line. GET /ready's own pool check trips at queued continuously for 10s / inUse==max for 30s, so this rule firing means the operator dashboard's runtime tile has already been red for a while. See A2 in the postmortem for the write-budget fixes this is meant to catch a regression of.",
+            "runbook": "docs/EVENT_RUNBOOK.md#during"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        },
+        {
+          "uid": "pqp-event-hls-rung-deaths",
+          "title": "HLS rung deaths > 3 in 5m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<LOKI_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 300, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "sum(count_over_time({fly_app_name=\"pqp-api\"} |= \"voice.hlsRungDied\" [5m]))",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [3] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Alerting",
+          "for": "0m",
+          "labels": { "severity": "warning", "area": "event" },
+          "annotations": {
+            "summary": "More than 3 HLS rungs died in the last 5 minutes.",
+            "description": "voice.hlsRungDied fires once per rendition lost (server/src/voice/hls-egress.ts). One is a transcode hiccup that scheduleRestart already recovers from; a burst is the media box or LiveKit egress struggling. Cross-check the egress box CPU panel on the Event dashboard. noDataState is OK here (not Alerting) because zero rung deaths is the normal state of an idle instance, unlike the three Prometheus rules above which need their exporter to be alive to say so.",
+            "runbook": "docs/EVENT_RUNBOOK.md#during"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        },
+        {
+          "uid": "pqp-event-api-restarts",
+          "title": "API process restarted",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<LOKI_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 300, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "sum(count_over_time({fly_app_name=\"pqp-api\"} |= \"pqp server listening on\" [5m]))",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [0] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Alerting",
+          "for": "0m",
+          "labels": { "severity": "warning", "area": "event" },
+          "annotations": {
+            "summary": "The API process restarted (boot line seen in the last 5 minutes).",
+            "description": "Every restart replaces the single machine and drops every /ws (CLAUDE.md pitfall 11). During an event this should only ever be YOU, deliberately, with the freeze off. If DEPLOY_FREEZE=1 was set (see A6, .github/workflows/deploy-api-fly.yml) and this still fires, something restarted the machine outside a merge -- a crash, an OOM, or a manual fly deploy/restart -- and the drain in server/src/lib/drain.ts did not get a chance to run cleanly.",
+            "runbook": "docs/EVENT_RUNBOOK.md#during"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        }
+      ]
+    }
+  ]
+}

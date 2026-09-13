@@ -1,0 +1,9 @@
+[Unit]
+Description=Scrape GET /api/admin/metrics into a node_exporter textfile
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/pqp-api-metrics.env
+ExecStart=/usr/local/bin/pqp-api-metrics-exporter
+Nice=10

@@ -290,3 +290,72 @@ a file for `--tokens`); `crypto` is a Node global, no import needed:
 ```sh
 fly ssh console -a pqp-api-staging -C "node -e \"import('/app/server/dist/voice/hls-viewer-token.js').then(m=>{for(let i=0;i<500;i++)console.log(m.mintHlsViewerToken({userId:crypto.randomUUID(),channelId:'<channelId>',startedAt:<startedAt>}))})\""
 ```
+
+## Seat churn (`src/seat-churn.ts`)
+
+A third, standalone script (own `main`, no shared state with `index.ts` or
+`hls-audience.ts`) for the load shape that actually took production down on
+2026-09-12: not the presenter's media (`index.ts`), not the HLS audience
+polling the playlist (`hls-audience.ts`), but **people continuously joining
+and leaving the voice call** while all of that runs — the write path
+`docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md` item A3 says "every
+earlier test hit the playlist route or WS joins on staging's DB; the write
+path was never measured."
+
+It reads the manifest `index.ts prepare` already wrote (any `--participants`
+value is fine — seat-churn does not reuse `index.ts`'s 500-person RTC
+contract, only the manifest's server/channel/invite), ramps `--seats`
+accounts up to a steady seated population, then:
+
+- every seat sends `set-voice-state` (mute/unmute) on its own clock
+  (`--presence-every-ms`), exercising the roster-broadcast path;
+- a churn scheduler picks one currently-seated slot at random every
+  `60_000 / --churn-per-minute` ms, has it leave for real
+  (`leave-voice-room`, not a resume), waits a short random "stepped away"
+  gap, then rejoins as a fresh seat — the seated population stays near
+  `--seats` while the join/leave write rate stays at the configured rate;
+- optionally (`--speaking-publishers N`, needs `PQP_LOAD_SFU_HOST`), the
+  first N seats mint a LiveKit token and publish a continuous speech-shaped
+  audio track so the SFU's real active-speaker detection fires — these seats
+  never churn. "Speaking" is deliberately not a WS message the client can
+  send (`packages/shared/src/signaling.ts` explains why), so audio is the
+  only honest way to produce it;
+- every `--ready-sample-seconds` (default 10s) it polls the deployment's own
+  `GET /ready` (no auth needed — CLAUDE.md pitfall 8) and records
+  `checks.postgres.ms` and `checks.pool.queued`/`inUse`/`max`, independently
+  of anything the seats themselves see.
+
+**Staging only, and not configurable to be otherwise.** `PQP_LOAD_TARGET`
+must be exactly `staging`; there is no local or production path in this file
+at all, unlike `index.ts`. `--speaking-publishers > 0` needs the same
+non-production `PQP_LOAD_SFU_HOST` guard as `index.ts`.
+
+```sh
+cd tools/watch-party-load && pnpm install
+
+TEST_RUN_ID=wpsc-01 PQP_LOAD_TARGET=staging LOAD_TEST_TOKEN=... \
+pnpm exec tsx src/seat-churn.ts --manifest /tmp/wp-event.json --out /tmp/seat-churn-report.json \
+  --seats 80 --churn-per-minute 5 --duration-seconds 1800 --speaking-publishers 6
+# only if --speaking-publishers > 0:
+PQP_LOAD_SFU_HOST=staging-sfu.example.test
+```
+
+### The recommended event rehearsal
+
+Run all three at once against the same manifest, on staging:
+
+1. `index.ts shard --manifest wp-event.json --shard-index 0 --shard-count 1 --presenter-only --hold-seconds 1800 --start-at-ms <T+60s>` — the presenter's share.
+2. `seat-churn.ts --manifest wp-event.json --seats 80 --churn-per-minute 5 --duration-seconds 1800` — 60 to 100 seated, churning at 5 joins/min, for 30 minutes (the postmortem's own event shape).
+3. `hls-audience.ts --url <the channel's playlist URL> --tokens 300-tokens.txt --viewers 300 --seconds 1800 --ramp-seconds 120` — 300 watchers.
+
+**Pass criteria** (seat-churn's own report already judges itself against
+these and sets `passed`/`verdict`; the numbers mirror
+`tools/monitoring/grafana-alert-rules-event.json` exactly, because a load
+rehearsal that cannot fail the same rules an event will be watched by proves
+nothing new): `GET /ready` never reports `ok:false` for 60 continuous
+seconds, `checks.postgres.ms` never stays above 200 for 2 continuous
+minutes, `checks.pool.queued` never stays above 20 for 60 continuous
+seconds, and seat-churn's own join/leave failure rate stays under 1%. A
+failed `hls-audience.ts` run judges itself by its own existing
+window-miss/stuck-event numbers (see above); there is no combined verdict
+across all three processes, read each report on its own.

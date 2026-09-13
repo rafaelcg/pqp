@@ -20,6 +20,15 @@ name: Deploy API (Fly)
 # including its lesson: a green deploy step only proves the platform accepted a
 # build. What we actually care about is whether the running process serves this
 # commit.
+#
+# EVENT MERGE FREEZE (docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md A6):
+#   freeze:   gh variable set DEPLOY_FREEZE --body 1
+#   unfreeze: gh variable set DEPLOY_FREEZE --body 0
+# While set, "Does the API need this commit?" below skips the deploy with a
+# loud ::warning:: annotation and does NOT fail the run — a frozen deploy is a
+# deliberate skip, not a malfunction. A PR carrying the `freeze` label gets a
+# comment from the `checks` job in ci.yml saying the same thing. See
+# docs/EVENT_RUNBOOK.md.
 on:
   workflow_run:
     workflows: [CI]
@@ -90,12 +99,31 @@ jobs:
         id: relevant
         env:
           HEALTH_URL: https://api.pqp.gg/health
+          DEPLOY_FREEZE: ${{ vars.DEPLOY_FREEZE }}
         run: |
           set -uo pipefail
           decide() {
             echo "needed=$1" >> "$GITHUB_OUTPUT"
             echo "::notice::API deploy needed=$1 ($2)"
           }
+
+          # Event guardrail (docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md
+          # A6): a deploy replaces the single machine and drops every /ws
+          # (CLAUDE.md pitfall 11), which is exactly what a live event cannot
+          # afford. This checks BEFORE the relevance script so a frozen repo
+          # never even diffs against production, and it never fails the run --
+          # the freeze is a deliberate skip, not a malfunction, so it gets the
+          # same loud ::warning:: annotation whether or not this commit would
+          # otherwise have deployed.
+          #   set:   gh variable set DEPLOY_FREEZE --body 1
+          #   unset: gh variable set DEPLOY_FREEZE --body 0
+          # (or delete it: gh variable delete DEPLOY_FREEZE)
+          # See docs/EVENT_RUNBOOK.md.
+          if [ "$DEPLOY_FREEZE" = "1" ]; then
+            echo "::warning::server deploys are frozen for an event (DEPLOY_FREEZE=1); skipping. Unset with: gh variable set DEPLOY_FREEZE --body 0"
+            decide false "DEPLOY_FREEZE=1"
+            exit 0
+          fi
 
           body=$(curl -fsS --max-time 15 "$HEALTH_URL" 2>/dev/null) || {
             decide true "could not reach $HEALTH_URL, failing open"; exit 0; }
