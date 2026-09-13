@@ -13,7 +13,6 @@ import {
   Menu,
   Phone,
   Pin,
-  Rows2,
   Settings,
   Users,
   Video,
@@ -453,6 +452,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
 import { WatchPartyPresenterStage } from "@/components/watch-party/presenter-stage";
+import { slowModeKey } from "@/components/watch-party/watch-party-options";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -6572,50 +6572,9 @@ function MainAppContent({
                 </>
               );
             })()}
-          {/* The arrangement of the two panes, next to the roster toggle that
-              is already a layout control, and only while there is a picture to
-              arrange around. Unlike the channel list's switch, which moved to
-              the left of this row because it is furniture, this one really is
-              a call control: with no stage there is nothing to put beside the
-              chat, and `CallSplit` would refuse the arrangement anyway. */}
-          {splitState.canSideBySide && (
-            <Tooltip
-              label={
-                effectiveOrientation(callSplit, splitKind) === "side-by-side"
-                  ? t(
-                      isWatchPartySplit
-                        ? "call.split.stackStream"
-                        : "call.split.stack",
-                    )
-                  : t(
-                      isWatchPartySplit
-                        ? "call.split.sideBySideStream"
-                        : "call.split.sideBySide",
-                    )
-              }
-              detail={t("call.split.orientationHint")}
-            >
-              <button
-                type="button"
-                data-call-split-toggle=""
-                aria-pressed={
-                  effectiveOrientation(callSplit, splitKind) === "side-by-side"
-                }
-                className={cn(
-                  HEADER_ACTION_TILE,
-                  effectiveOrientation(callSplit, splitKind) === "side-by-side" &&
-                    "text-paper",
-                )}
-                onClick={() => toggleSplitOrientation(splitKind)}
-              >
-                {effectiveOrientation(callSplit, splitKind) === "side-by-side" ? (
-                  <Rows2 className="h-4 w-4" />
-                ) : (
-                  <Columns2 className="h-4 w-4" />
-                )}
-              </button>
-            </Tooltip>
-          )}
+          {/* The side-by-side / stacked switch moved into the chat pane's
+              own header (2026-09-13), beside the hide controls it belongs
+              with. */}
           {isChannelSessionScheduleEnabled() &&
             canManageChannels &&
             selectedChannel.kind === "server" &&
@@ -6902,6 +6861,34 @@ function MainAppContent({
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
+        chatHeader={{
+          title: t("chat.paneTitle"),
+          meta:
+            splitKind === "watch"
+              ? t("watchParty.live.viewers", {
+                  count: watchAudienceCount(
+                    voiceState.channelLive[selectedChannel.id],
+                    voiceState.occupancy[selectedChannel.id],
+                  ),
+                })
+              : undefined,
+          badge: (() => {
+            const seconds =
+              splitKind === "watch"
+                ? (watchParties.byChannel[selectedChannel.id]?.options
+                    .slowModeSeconds ?? 0)
+                : 0;
+            return seconds > 0
+              ? t("watchParty.summary.slow", { value: t(slowModeKey(seconds)) })
+              : undefined;
+          })(),
+          orientation: {
+            sideBySide:
+              effectiveOrientation(callSplit, splitKind) === "side-by-side",
+            canToggle: splitState.canSideBySide,
+            onToggle: () => toggleSplitOrientation(splitKind),
+          },
+        }}
         stage={
           <>
       {/* The conversation's call surface: invisible until a call exists, a
