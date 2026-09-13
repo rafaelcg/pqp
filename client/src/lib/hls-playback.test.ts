@@ -6,6 +6,7 @@ import {
   hlsSessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
+  nextFreshPlaylistUrl,
   recordHlsRebuild,
   resetHlsRebuildCountForTest,
   resolveHlsUrl,
@@ -182,6 +183,34 @@ describe("shouldAdoptHlsSource", () => {
     const later =
       "https://api.example.test/api/voice/hls-playlist/ch-1/1788963814707?t=aaa";
     expect(shouldAdoptHlsSource(attached, later)).toBe(true);
+  });
+});
+
+/**
+ * THE BUG THIS EXISTS FOR (Farol review, PR 570). A same-session `src`
+ * restamp (the server refreshes `?t=` on every audience keyframe) must not
+ * re-attach hls.js, but it still has to reach the loader some way -- the
+ * first cut of the ladder rework just returned on that branch and dropped
+ * the fresher token on the floor until `reconnect()`'s own poll happened to
+ * pick it up.
+ */
+describe("nextFreshPlaylistUrl", () => {
+  const SESSION =
+    "https://api.example.test/api/voice/hls-playlist/ch-1/1788962552321";
+
+  it("is null on an attach -- nothing to restamp, the caller re-attaches instead", () => {
+    expect(nextFreshPlaylistUrl(null, `${SESSION}?t=aaa`)).toBeNull();
+    const later =
+      "https://api.example.test/api/voice/hls-playlist/ch-1/1788963814707?t=aaa";
+    const attached = hlsSessionKey(`${SESSION}?t=aaa`);
+    expect(nextFreshPlaylistUrl(attached, later)).toBeNull();
+  });
+
+  it("hands back a same-session restamp, for the loader token ref", () => {
+    const attached = hlsSessionKey(`${SESSION}?t=aaa`);
+    expect(nextFreshPlaylistUrl(attached, `${SESSION}?t=bbb`)).toBe(
+      `${SESSION}?t=bbb`,
+    );
   });
 });
 

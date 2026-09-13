@@ -93,6 +93,32 @@ export function shouldAdoptHlsSource(
 }
 
 /**
+ * What a same-session `src` prop change should do to the loader's freshest
+ * known playlist token, without ever touching `activeSrc` or re-attaching
+ * hls.js. `null` means "this is an attach, not a restamp" -- the caller's
+ * own adopt branch handles that case, including resetting the ref to the
+ * new `activeSrc` itself.
+ *
+ * THE BUG THIS EXISTS FOR (Farol review, PR 570). The server restamps a
+ * playlist's `?t=` on every audience keyframe, and that restamped URL
+ * arrives here as a same-session `src` prop change -- `shouldAdoptHlsSource`
+ * correctly says not to re-attach for it, but the effect used to just
+ * return on that branch without doing anything else, so the fresher token
+ * was silently dropped. It reached the loader only when `reconnect()`'s own
+ * `fetchChannelLive` poll happened to run in between, which left the token
+ * stale for as long as the stream stayed healthy and quiet.
+ */
+export function nextFreshPlaylistUrl(
+  attachedSessionKey: string | null,
+  incomingUrl: string,
+): string | null {
+  if (shouldAdoptHlsSource(attachedSessionKey, incomingUrl)) {
+    return null;
+  }
+  return incomingUrl;
+}
+
+/**
  * Whether a playlist URL already carries its own per-viewer capability.
  *
  * The one question `xhrSetup` has to ask before attaching a Bearer header. A

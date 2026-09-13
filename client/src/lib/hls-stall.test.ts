@@ -90,7 +90,7 @@ describe("HlsStallWatch", () => {
   });
 
   describe("sequence-stuck (a dead egress, live playlist)", () => {
-    it("walks its own three-step in-place ladder, then only ever asks to reconnect", () => {
+    it("walks its own three-step in-place ladder, then asks to reconnect on a backoff", () => {
       // Segments are 4 s, so the sequence legitimately advances only every
       // 4 s; 20 s is comfortably above two segments of ordinary jitter.
       const watch = new HlsStallWatch();
@@ -104,11 +104,39 @@ describe("HlsStallWatch", () => {
       expect(watch.tick(T0 + 22_000)).toBe("reload-level");
       // The in-place ladder is spent; a client rebuild cannot invent
       // segments the server never wrote, so this asks to check the server
-      // instead of rebuilding blind, and keeps asking for as long as the
-      // egress stays stuck -- never "dead" on its own.
+      // instead of rebuilding blind on the same dead source.
       expect(watch.tick(T0 + 23_000)).toBe("reconnect");
-      expect(watch.tick(T0 + 24_000)).toBe("reconnect");
-      expect(watch.tick(T0 + 5 * 60_000)).toBe("reconnect");
+      // Bounded (Farol review, PR 570): the very next tick does NOT ask
+      // again -- it backs off (2 s the first time) rather than firing once
+      // per tick for as long as the stall lasts.
+      expect(watch.tick(T0 + 24_000)).toBe("none");
+      expect(watch.tick(T0 + 24_999)).toBe("none");
+      expect(watch.tick(T0 + 25_000)).toBe("reconnect");
+      // The backoff doubles each time (4 s next), not a flat retry.
+      expect(watch.tick(T0 + 26_000)).toBe("none");
+      expect(watch.tick(T0 + 29_000)).toBe("reconnect");
+    });
+
+    it("gives up and reports dead once the reconnect budget is spent", () => {
+      // A short budget so the test does not have to simulate minutes of
+      // ticks: two checks, a 1 s base backoff, capped at 2 s.
+      const watch = new HlsStallWatch({
+        maxReconnects: 2,
+        reconnectBackoffMs: 1_000,
+        reconnectBackoffMaxMs: 2_000,
+      });
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onMediaSequence(40, T0);
+      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+      expect(watch.tick(T0 + 20_100)).toBe("restart-load");
+      expect(watch.tick(T0 + 20_200)).toBe("reload-level");
+      expect(watch.tick(T0 + 20_300)).toBe("reconnect"); // attempt 1, 1 s backoff
+      expect(watch.tick(T0 + 21_300)).toBe("reconnect"); // attempt 2, 2 s backoff (capped)
+      expect(watch.tick(T0 + 22_000)).toBe("none"); // still waiting out attempt 2's backoff
+      expect(watch.tick(T0 + 23_300)).toBe("dead"); // budget spent, still stuck
+      // A person's own "try again" is the only way out from here.
+      expect(watch.tick(T0 + 90_000)).toBe("dead");
     });
 
     it("resolves cleanly once the sequence actually moves again", () => {
@@ -120,6 +148,32 @@ describe("HlsStallWatch", () => {
       // The egress watchdog restarted things and the playlist moved on.
       watch.onMediaSequence(41, T0 + 21_000);
       expect(watch.tick(T0 + 21_500)).toBe("none");
+    });
+
+    it("a genuine reattach resets the reconnect budget for the new session", () => {
+      const watch = new HlsStallWatch({
+        maxReconnects: 1,
+        reconnectBackoffMs: 1_000,
+      });
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onMediaSequence(40, T0);
+      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+      expect(watch.tick(T0 + 20_100)).toBe("restart-load");
+      expect(watch.tick(T0 + 20_200)).toBe("reload-level");
+      expect(watch.tick(T0 + 20_300)).toBe("reconnect"); // the one allowed attempt
+      expect(watch.tick(T0 + 21_300)).toBe("dead"); // budget of 1 spent
+
+      // A new session actually showed up (the player adopted it): a fresh
+      // episode gets a fresh budget rather than inheriting the exhausted one.
+      const T1 = T0 + 30_000;
+      watch.onSourceChanged(T1);
+      watch.onPlaying();
+      watch.onMediaSequence(50, T1);
+      expect(watch.tick(T1 + 20_000)).toBe("start-load");
+      expect(watch.tick(T1 + 20_100)).toBe("restart-load");
+      expect(watch.tick(T1 + 20_200)).toBe("reload-level");
+      expect(watch.tick(T1 + 20_300)).toBe("reconnect");
     });
   });
 
@@ -186,19 +240,36 @@ describe("HlsStallWatch", () => {
       expect(decision).toBe("rebuild");
     });
 
-    it("sequence-stuck never reaches dead, however long it repeats", () => {
-      const watch = new HlsStallWatch({ maxRebuilds: 1, windowMs: 10_000 });
+    it("sequence-stuck ignores the rebuild gate but is bounded by its own reconnect budget", () => {
+      // `maxRebuilds: 1` would declare a fatal/stall episode dead almost
+      // immediately; sequence-stuck never rebuilds at all, so that gate
+      // does not apply to it -- but it is still bounded, by
+      // `maxReconnects`/backoff instead (Farol review, PR 570), not left to
+      // repeat forever.
+      const watch = new HlsStallWatch({
+        maxRebuilds: 1,
+        windowMs: 10_000,
+        maxReconnects: 3,
+        reconnectBackoffMs: 1_000,
+        reconnectBackoffMaxMs: 1_000,
+      });
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.onMediaSequence(1, T0);
       let now = T0;
       let decision: HlsStallDecision = "none";
+      const decisions: HlsStallDecision[] = [];
       for (let i = 0; i < 40; i += 1) {
         now += 1_000;
         decision = watch.tick(now);
+        decisions.push(decision);
       }
-      expect(decision).toBe("reconnect");
-      expect(decision).not.toBe("dead");
+      // Reaches "dead" well before 40 ticks (three bounded attempts, not an
+      // endless "reconnect"), and never "rebuild" -- a client rebuild
+      // cannot invent segments the server never wrote.
+      expect(decisions).toContain("dead");
+      expect(decisions).not.toContain("rebuild");
+      expect(decision).toBe("dead");
     });
   });
 });

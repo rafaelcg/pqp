@@ -24,6 +24,7 @@ import {
   mediaSeekableEnd,
   reloadHlsLevelPlaylist,
   resolveLiveEdge,
+  secondsBehindCatchUpTarget,
   secondsBehindLive,
   type HlsRecoveryHandle,
 } from "./hls-live-edge";
@@ -126,6 +127,47 @@ describe("secondsBehindLive", () => {
 
   it("is the gap when behind", () => {
     expect(secondsBehindLive(0, 15)).toBe(15);
+  });
+});
+
+/**
+ * THE BUG THIS EXISTS FOR (Farol review, PR 570). The player sits
+ * `HLS_PLAYER_CUSHION_SECONDS` (~20 s) behind the live edge ON PURPOSE, so
+ * `catchUpPlaybackRate(secondsBehindLive(...))` flagged every ordinary
+ * viewer sitting exactly where the design put them -- `> 6 s` is 1.2x on
+ * that curve, and an untouched viewer's raw distance from the edge is ~20 s.
+ * `secondsBehindCatchUpTarget` measures from the cushioned target instead,
+ * so only genuine drift PAST the cushion is ever non-zero.
+ */
+describe("secondsBehindCatchUpTarget", () => {
+  it("is zero for a viewer sitting exactly at the player's own cushion", () => {
+    // The common case this bug broke: liveEdge=100, cushion=20 -> target=80.
+    // A viewer sitting right at 80 has not drifted at all.
+    expect(secondsBehindCatchUpTarget(80, 100, HLS_PLAYER_CUSHION_SECONDS)).toBe(
+      0,
+    );
+    expect(catchUpPlaybackRate(secondsBehindCatchUpTarget(80, 100))).toBe(1);
+  });
+
+  it("is zero for a viewer sitting closer to live than the cushion", () => {
+    expect(secondsBehindCatchUpTarget(95, 100)).toBe(0);
+  });
+
+  it("is the drift PAST the cushioned target when a viewer falls behind it", () => {
+    // target = 100 - 20 = 80; sitting at 74 is 6 s past the intended point.
+    expect(secondsBehindCatchUpTarget(74, 100)).toBe(6);
+    expect(catchUpPlaybackRate(secondsBehindCatchUpTarget(74, 100))).toBe(1.1);
+  });
+
+  it("honors a custom cushion, not just the player's default", () => {
+    // cushion 5 -> target = 95.
+    expect(secondsBehindCatchUpTarget(95, 100, 5)).toBe(0);
+    expect(secondsBehindCatchUpTarget(85, 100, 5)).toBe(10);
+  });
+
+  it("is zero on garbage input rather than a negative or NaN rate", () => {
+    expect(secondsBehindCatchUpTarget(Number.NaN, 100)).toBe(0);
+    expect(secondsBehindCatchUpTarget(50, Number.NaN)).toBe(0);
   });
 });
 

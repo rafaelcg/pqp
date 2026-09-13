@@ -37,10 +37,19 @@
  *   watchdog is already restarting the egress, and a client rebuild cannot
  *   invent segments the server never wrote, so this reason never reaches
  *   `"rebuild"` on its own. Once its ladder is spent it instead asks to
- *   `"reconnect"`: check whether the session has actually moved on, and
- *   adopt it if so. That check repeats for as long as the stall does and
- *   never counts toward `"dead"` — only a person's own "try again" can end a
- *   sequence-stuck stream that outlasts the server's own restart.
+ *   `"reconnect"`: check whether the session has actually moved on.
+ *   `"reconnect"` checks back off (doubling, capped at
+ *   `reconnectBackoffMaxMs`) instead of firing on every tick, and after
+ *   `maxReconnects` of them with no session change the stream is declared
+ *   `"dead"` too -- a stuck egress the server's own watchdog cannot revive
+ *   inside that budget is no longer this player's problem to keep polling
+ *   for, and a person still has "try again" (`reset()`) for a clean slate.
+ *
+ *   FIXED (Farol review, PR 570). The first cut asked again on every tick
+ *   for as long as the stall lasted, with no ceiling at all: a stuck egress
+ *   turned into roughly one `fetchChannelLive` per viewer per second for the
+ *   whole outage, worse once the API itself was the slow part and requests
+ *   started overlapping.
  *
  * `"fatal"`/`"stall"` repeat their ladder for up to three full cycles before
  * declaring `"rebuild"` ("no recovery after three attempts"); every
@@ -53,6 +62,12 @@ export interface HlsStallOptions {
   sequenceStuckMs?: number;
   maxRebuilds?: number;
   windowMs?: number;
+  /** First wait before a `"sequence-stuck"` reconnect check repeats. */
+  reconnectBackoffMs?: number;
+  /** Ceiling the doubling reconnect backoff above never exceeds. */
+  reconnectBackoffMaxMs?: number;
+  /** Reconnect checks (post-ladder) before a stuck egress is `"dead"`. */
+  maxReconnects?: number;
 }
 
 export type HlsStallDecision =
@@ -88,12 +103,19 @@ export class HlsStallWatch {
   private readonly sequenceStuckMs: number;
   private readonly maxRebuilds: number;
   private readonly windowMs: number;
+  private readonly reconnectBackoffMs: number;
+  private readonly reconnectBackoffMaxMs: number;
+  private readonly maxReconnects: number;
 
   private waitingSince: number | null = null;
   private lastSequence: number | null = null;
   private sequenceSeenAt: number | null = null;
   /** Timestamps of past `"rebuild"` decisions, for the `"dead"` gate. */
   private rebuilds: number[] = [];
+  /** How many `"reconnect"` checks this episode has already asked for. */
+  private reconnectAttempts = 0;
+  /** Earliest time the next `"reconnect"` may fire; null means "now". */
+  private nextReconnectAt: number | null = null;
 
   private pendingFatal = false;
   private pendingDecodeError = false;
@@ -105,6 +127,9 @@ export class HlsStallWatch {
     this.sequenceStuckMs = options.sequenceStuckMs ?? 20_000;
     this.maxRebuilds = options.maxRebuilds ?? 3;
     this.windowMs = options.windowMs ?? 5 * 60_000;
+    this.reconnectBackoffMs = options.reconnectBackoffMs ?? 2_000;
+    this.reconnectBackoffMaxMs = options.reconnectBackoffMaxMs ?? 20_000;
+    this.maxReconnects = options.maxReconnects ?? 8;
   }
 
   /** The element started or resumed rendering: the current episode is over. */
@@ -113,6 +138,8 @@ export class HlsStallWatch {
     this.pendingFatal = false;
     this.pendingDecodeError = false;
     this.ladderStep = 0;
+    this.reconnectAttempts = 0;
+    this.nextReconnectAt = null;
   }
 
   onWaiting(now: number): void {
@@ -158,6 +185,11 @@ export class HlsStallWatch {
     this.pendingFatal = false;
     this.pendingDecodeError = false;
     this.ladderStep = 0;
+    // A genuine re-attach (a session that actually moved on) is the
+    // recovery a stuck egress's reconnect budget exists to find -- reset it
+    // along with the rest of the episode's state.
+    this.reconnectAttempts = 0;
+    this.nextReconnectAt = null;
     // `rebuilds` deliberately survives a mere re-attach: repeated instance
     // churn inside the dead-window is exactly what should end in `"dead"`
     // rather than another rebuild, and a rebuild is the only thing that
@@ -204,6 +236,8 @@ export class HlsStallWatch {
       // milder one (a fatal error arriving mid-"stall"): either way the
       // ladder that applies changed, so start it over.
       this.ladderStep = 0;
+      this.reconnectAttempts = 0;
+      this.nextReconnectAt = null;
     }
     this.lastReason = reason;
     this.ladderStep += 1;
@@ -221,10 +255,9 @@ export class HlsStallWatch {
       }
       // The in-place ladder is spent and the egress is still not producing.
       // Ask whether the session moved on rather than rebuilding blind onto
-      // the same dead source; repeat for as long as this lasts. Never
-      // reaches `"dead"` on its own — that gate is the fatal/stall path's.
+      // the same dead source -- but bounded, not on every tick.
       this.ladderStep = SEQUENCE_STUCK_LADDER.length;
-      return "reconnect";
+      return this.gateReconnect(now);
     }
 
     const ladder = reason === "fatal" ? FATAL_LADDER : STALL_LADDER;
@@ -248,6 +281,36 @@ export class HlsStallWatch {
     // starts here again, reaching this gate roughly once per cycle.
     this.ladderStep = 0;
     return "rebuild";
+  }
+
+  /**
+   * Bounded, backed-off `"sequence-stuck"` reconnect checks (Farol review,
+   * PR 570). Without this a stuck egress produced one `fetchChannelLive`
+   * per tick (`STALL_TICK_MS`, ~1 s) for as long as it stayed stuck, with no
+   * ceiling and no gap between overlapping requests once the API itself
+   * slowed down. `"none"` in between checks is deliberate: the caller only
+   * treats a non-`"none"` decision as new work, so a spaced-out wait must
+   * not look like an in-place recovery step firing again.
+   */
+  private gateReconnect(now: number): HlsStallDecision {
+    if (this.nextReconnectAt !== null && now < this.nextReconnectAt) {
+      return "none";
+    }
+    if (this.reconnectAttempts >= this.maxReconnects) {
+      // The server's own egress watchdog has had its budget and then some
+      // -- including the last attempt's own backoff, just waited out above
+      // -- so still stuck is no longer a "keep polling" condition. A
+      // person's own "try again" (`reset()`) is the only thing that reopens
+      // it.
+      return "dead";
+    }
+    this.reconnectAttempts += 1;
+    const backoff = Math.min(
+      this.reconnectBackoffMaxMs,
+      this.reconnectBackoffMs * 2 ** (this.reconnectAttempts - 1),
+    );
+    this.nextReconnectAt = now + backoff;
+    return "reconnect";
   }
 }
 

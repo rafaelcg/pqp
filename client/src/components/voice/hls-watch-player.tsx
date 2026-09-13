@@ -34,12 +34,12 @@ import {
   hlsSessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
+  nextFreshPlaylistUrl,
   recordHlsRebuild,
   resolveHlsUrl,
   sameHlsSession,
   sampleVideoPlaybackQuality,
   setHlsPlaybackStats,
-  shouldAdoptHlsSource,
   withFreshHlsToken,
 } from "@/lib/hls-playback";
 import {
@@ -55,7 +55,7 @@ import {
   liveSeekTarget,
   mediaSeekableEnd,
   resolveLiveEdge,
-  secondsBehindLive,
+  secondsBehindCatchUpTarget,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { drainJitterMs } from "@/lib/reconnect-jitter";
@@ -379,8 +379,26 @@ export function HlsWatchPlayer({
    * platform missing a guard.
    */
   const sessionRef = useRef<string | null>(null);
+  // The freshest playlist URL known for the CURRENT session, kept a token
+  // ahead of `activeSrc` without ever being a rebuild trigger itself
+  // (`BROADCAST_PIPELINE.md` B1.3, item 3): `xhrSetup` below rewrites every
+  // outgoing playlist request onto this ref, so a routine token restamp
+  // reaches hls.js through the loader rather than through tearing the
+  // instance down for it. Reset to `activeSrc` at the top of every real
+  // attach (new session, or an actual rebuild), so a stale ref can never
+  // outlive the instance it was rewriting requests for.
+  const freshPlaylistUrlRef = useRef(activeSrc);
   useEffect(() => {
-    if (!shouldAdoptHlsSource(sessionRef.current, src)) {
+    // Same session: the server restamps `?t=` on every audience keyframe
+    // (`hls-playback.ts`), and that restamped `src` prop is the ONLY door
+    // this ref sees between one `reconnect()` poll and the next -- without
+    // this, the loader token only refreshes when the watchdog happens to
+    // ask, and can go stale for as long as the stream stays healthy and
+    // quiet in between (Farol review, PR 570; see `nextFreshPlaylistUrl`).
+    // Never touches `activeSrc`, so this can never re-attach hls.js.
+    const fresh = nextFreshPlaylistUrl(sessionRef.current, src);
+    if (fresh !== null) {
+      freshPlaylistUrlRef.current = fresh;
       return;
     }
     sessionRef.current = hlsSessionKey(src);
@@ -419,29 +437,60 @@ export function HlsWatchPlayer({
     }
   }, [activeSrc, attempt, clearAuthGraceTimer]);
 
-  // The freshest playlist URL known for the CURRENT session, kept a token
-  // ahead of `activeSrc` without ever being a rebuild trigger itself
-  // (`BROADCAST_PIPELINE.md` B1.3, item 3): `xhrSetup` below rewrites every
-  // outgoing playlist request onto this ref, so a routine token restamp
-  // reaches hls.js through the loader rather than through tearing the
-  // instance down for it. Reset to `activeSrc` at the top of every real
-  // attach (new session, or an actual rebuild), so a stale ref can never
-  // outlive the instance it was rewriting requests for.
-  const freshPlaylistUrlRef = useRef(activeSrc);
+  // Kept a render ahead of the closure `reconnect` captures, so an
+  // in-flight call can tell -- once its `await` returns -- whether the
+  // player has already moved on to a different source in the meantime.
+  const activeSrcRef = useRef(activeSrc);
+  activeSrcRef.current = activeSrc;
+  // Guards only the automatic path (see `reconnect` below): a stuck egress
+  // must never have two `fetchChannelLive` calls in flight at once.
+  const reconnectInFlightRef = useRef(false);
 
   const reconnect = useCallback(
     async (options: { forceRebuild?: boolean } = {}) => {
+      // Only the automatic path (the watchdog's own "sequence-stuck"
+      // reconnect checks) is guarded against overlap: a stuck egress could
+      // otherwise stack one `fetchChannelLive` per tick with nothing to stop
+      // two of them being in flight at once, and an earlier response
+      // arriving after a later one had already moved the player on is
+      // exactly the stale-write Farol flagged (PR 570). A person's own "try
+      // again" always runs -- it is a single explicit action, not a loop.
+      if (!options.forceRebuild && reconnectInFlightRef.current) {
+        return;
+      }
+      // This call's own view of "the source we're checking on behalf of",
+      // fixed at the moment it started. Compared against the live ref below
+      // once the await returns, so a response this call receives is only
+      // ever applied to the source it was actually asked about.
+      const requestedSrc = activeSrc;
+      if (!options.forceRebuild) {
+        reconnectInFlightRef.current = true;
+      }
       setPhase("reconnecting");
       const channelId = channelIdFromHlsUrl(activeSrc);
       let next: string | null = null;
-      if (channelId) {
-        try {
-          const live = await fetchChannelLive(channelId);
-          next = live.stream ? resolveHlsUrl(live.stream.hlsUrl) : null;
-        } catch {
-          // The API is the thing that is down, or we lost access. Nothing to
-          // adopt; fall through to the "nothing new" branch below.
+      try {
+        if (channelId) {
+          try {
+            const live = await fetchChannelLive(channelId);
+            next = live.stream ? resolveHlsUrl(live.stream.hlsUrl) : null;
+          } catch {
+            // The API is the thing that is down, or we lost access. Nothing
+            // to adopt; fall through to the "nothing new" branch below.
+          }
         }
+      } finally {
+        if (!options.forceRebuild) {
+          reconnectInFlightRef.current = false;
+        }
+      }
+      if (activeSrcRef.current !== requestedSrc) {
+        // Something else -- a genuinely different session this same check
+        // already adopted, a person's own "try again", or another reconnect
+        // that resolved first -- already moved the player on while this
+        // request was in flight. Applying a response for the source we
+        // asked about would be the stale write Farol flagged; drop it.
+        return;
       }
       if (next && !sameHlsSession(next, activeSrc)) {
         // A genuinely different session: follow it, and remember it so the
@@ -590,20 +639,38 @@ export function HlsWatchPlayer({
       );
       if (liveEdge === null) {
         setBehindLive(false);
+        // A recovery step (`startLoad`/`stopLoad`) can transiently leave
+        // both clocks unreadable. Never leave an earlier tick's catch-up
+        // rate stuck on the element through that gap (Farol review, PR
+        // 570) -- the next `check()` re-applies the real curve once the
+        // edge is knowable again.
+        video.playbackRate = 1;
         return;
       }
-      const distance = secondsBehindLive(video.currentTime, liveEdge);
       setBehindLive(isBehindLive(video.currentTime, liveEdge));
+      if (video.paused) {
+        // Nothing to chase without a running clock, and the pause path
+        // already re-seeks to the edge on resume -- but a rate set by an
+        // earlier tick must not survive into the paused state either.
+        video.playbackRate = 1;
+        return;
+      }
       // Move the target smoothly rather than seeking: a small, continuous
       // playback-rate nudge closes ordinary drift over several seconds
       // instead of a jump-cut. `maxLiveSyncPlaybackRate` stays fixed at 1
       // (see the comment where the player is constructed) so hls.js's own
-      // flat catch-up never fights this curve. Left alone while paused --
-      // there is nothing to chase without a running clock, and the pause
-      // path already re-seeks to the edge on resume.
-      if (!video.paused) {
-        video.playbackRate = catchUpPlaybackRate(distance);
-      }
+      // flat catch-up never fights this curve.
+      //
+      // Distance is measured from the player's INTENDED sync point
+      // (`liveEdge` minus its ~20 s cushion), not the raw edge: the player
+      // sits behind live ON PURPOSE (`HLS_PLAYER_CUSHION_SECONDS`), so an
+      // ordinary viewer sitting exactly where the design put them is 0 s
+      // behind target, not ~20 s behind the edge. Passing the raw edge
+      // distance here pitched every viewer's audio for the whole party
+      // (Farol review, PR 570) -- `secondsBehindLive`/`isBehindLive` above
+      // stay edge-relative on purpose, for the "jump to live" badge only.
+      const distance = secondsBehindCatchUpTarget(video.currentTime, liveEdge);
+      video.playbackRate = catchUpPlaybackRate(distance);
     };
     video.addEventListener("timeupdate", check);
     check();
@@ -1018,14 +1085,15 @@ export function HlsWatchPlayer({
         // so the token has to be in hand already.
         //
         // B1.3, item 3: also the loader-level fix for a routine token
-        // restamp. `freshPlaylistUrlRef` holds the newest `?t=` `reconnect()`
-        // has seen for this SAME session; every request against our own
-        // proxy is rewritten onto it here before anything else runs, so a
-        // stale token reaches hls.js through the URL it fetches rather than
-        // through a rebuilt instance. `xhr.open` is called again
-        // deliberately: hls.js already opened the request against the OLD
-        // url before this function ran, and re-opening (still before
-        // `send()`) is the only way to redirect it.
+        // restamp. `freshPlaylistUrlRef` holds the newest `?t=` seen for
+        // this SAME session, from either `reconnect()`'s own poll or a
+        // restamped `src` prop (`nextFreshPlaylistUrl`); every request
+        // against our own proxy is rewritten onto it here before anything
+        // else runs, so a stale token reaches hls.js through the URL it
+        // fetches rather than through a rebuilt instance. `xhr.open` is
+        // called again deliberately: hls.js already opened the request
+        // against the OLD url before this function ran, and re-opening
+        // (still before `send()`) is the only way to redirect it.
         xhrSetup: (xhr, url) => {
           let effectiveUrl = url;
           if (isOwnHlsPlaylistProxyUrl(url)) {

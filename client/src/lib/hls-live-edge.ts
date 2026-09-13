@@ -261,6 +261,36 @@ export function isBehindLive(
 export const HLS_CATCH_UP_MAX_PLAYBACK_RATE = 1.2;
 
 /**
+ * How far behind the player's INTENDED sync point the playhead sits, for
+ * `catchUpPlaybackRate` below.
+ *
+ * THE BUG THIS EXISTS FOR (Farol review, PR 570). The player sits
+ * `cushionSeconds` behind the live edge ON PURPOSE
+ * (`HLS_PLAYER_CUSHION_SECONDS`, ~20 s), so passing `secondsBehindLive`'s raw
+ * edge distance straight to `catchUpPlaybackRate` flagged every ordinary
+ * viewer sitting exactly where the design put them: `> 6` on that curve is
+ * `1.2x`, and an untouched viewer's distance from the edge is ~20 s, so the
+ * common path ran at the curve's fastest rate continuously, raced everyone
+ * toward the actual edge, and pitched the presenter's audio for the whole
+ * party -- the cushion this player exists to hold, defeated by its own
+ * catch-up logic. Distance here is measured from `liveEdge - cushionSeconds`,
+ * the point hls.js is actually aiming to hold, so only genuine drift PAST
+ * that cushion is ever non-zero. `secondsBehindLive`/`isBehindLive` stay
+ * edge-relative on purpose -- that pair only feeds the "jump to live" badge,
+ * which is deliberately about the real edge, not the cushioned target.
+ */
+export function secondsBehindCatchUpTarget(
+  currentTime: number,
+  liveEdge: number,
+  cushionSeconds: number = HLS_PLAYER_CUSHION_SECONDS,
+): number {
+  if (!Number.isFinite(currentTime) || !Number.isFinite(liveEdge)) {
+    return 0;
+  }
+  return Math.max(0, liveEdge - cushionSeconds - currentTime);
+}
+
+/**
  * A gentle catch-up curve, not the flat multiplier the review re-proposed.
  *
  * WHY A CURVE, AND WHY IT STAYS LOW. `maxLiveSyncPlaybackRate: 1.5` was
