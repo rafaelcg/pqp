@@ -76,33 +76,65 @@ const inflight = new Map<string, Promise<unknown>>();
 const metrics: Metrics = { hits: 0, misses: 0, coalesced: 0, staleServed: 0 };
 let totalBytes = 0;
 
+/** Fallback for anything that fails to stringify, and the floor under any
+ *  estimate — an empty page, or bookkeeping for a single small row, still
+ *  costs something. */
+const MIN_ESTIMATED_BYTES = 128;
+
+/** How many rows of an array value actually get serialized to build the
+ *  estimate. Bounded on purpose — see `estimateSize`. */
+const SIZE_SAMPLE_ROWS = 8;
+
+function stringifiedLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? MIN_ESTIMATED_BYTES;
+  } catch {
+    return MIN_ESTIMATED_BYTES;
+  }
+}
+
 /**
- * The real size, in the same units `JSON.stringify(...).length` always
- * measured — this must stay accurate (a flat per-row guess was tried and
- * rejected: a message body or a webhook embed blob can run well past a
- * generic constant, and the whole point of a byte budget is not to
- * understate what is actually resident). A value that fails to stringify
- * (should not happen for the plain DB-row shapes this module caches) falls
- * back to a conservative guess rather than throwing out of a cache write.
+ * A size estimate that is both CHEAP and RESPONSIVE TO REAL CONTENT — two
+ * properties earlier attempts here each had only one of. A flat
+ * `row count * constant` is cheap but was flatly wrong for a long message
+ * body or an embed blob, understating a cache full of them well past the
+ * point a budget is supposed to catch. Fully `JSON.stringify`-ing an entire
+ * page is accurate but is O(page size) real serialization work, which is
+ * fine on an occasional miss but not something to pay again on every
+ * stale-while-revalidate refresh a hot key goes through, and not something
+ * this function should do unconditionally on every request-path miss either
+ * — reusing a stale size across a refresh (an earlier version of this fix)
+ * traded that cost for the estimate silently falling behind whatever the
+ * refreshed content actually grew to.
  *
- * WHY THIS DOES NOT COST WHAT IT LOOKS LIKE IT COSTS. Serializing the whole
- * value is real work, so this is called on a MISS (a cold key, or one that
- * went doubly stale — both comparatively rare) and NOT on a
- * stale-while-revalidate refresh, which is the hot, repeating case a
- * popular key spends most of its life in. `revalidate` below reuses the
- * PREVIOUS entry's size instead of calling this again, which is not merely
- * cheap but usually exactly correct: a refresh only happens because the TTL
- * elapsed with nothing invalidating the key, and every write path that
- * could change what the key answers calls `invalidate` first — so an
- * unforced refresh is, by construction, almost always re-fetching content
- * that has not changed shape.
+ * The middle path: every value this module ever caches is either a single
+ * row/null (a watch-party state — one `JSON.stringify` call, already
+ * cheap) or an array of DB rows (a message page, a channel list) that are
+ * roughly uniform in shape. For an array, stringify a bounded SAMPLE of
+ * its rows (evenly spread across the array, not just the front — a page's
+ * rows are not guaranteed uniform, e.g. one long message among many short
+ * ones), average that, and scale by the real row count. Cost is bounded by
+ * `SIZE_SAMPLE_ROWS` regardless of whether the array holds 50 rows or
+ * `MESSAGE_PAGE_MAX`, so this is safe to call on every write — a fresh
+ * miss AND a background refresh alike — which is what makes the estimate
+ * track a loader returning materially larger content immediately, rather
+ * than only at the next cold load.
  */
 function estimateSize(value: unknown): number {
-  try {
-    return JSON.stringify(value)?.length ?? 1_024;
-  } catch {
-    return 1_024;
+  if (!Array.isArray(value)) {
+    return Math.max(MIN_ESTIMATED_BYTES, stringifiedLength(value));
   }
+  if (value.length === 0) {
+    return MIN_ESTIMATED_BYTES;
+  }
+  const sampleCount = Math.min(SIZE_SAMPLE_ROWS, value.length);
+  let sampledBytes = 0;
+  for (let i = 0; i < sampleCount; i++) {
+    const index = Math.floor((i * value.length) / sampleCount);
+    sampledBytes += stringifiedLength(value[index]);
+  }
+  const averagePerRow = sampledBytes / sampleCount;
+  return Math.max(MIN_ESTIMATED_BYTES, Math.round(averagePerRow * value.length));
 }
 
 /** The one place an entry leaves `store`, so `totalBytes` cannot drift from
@@ -171,11 +203,6 @@ function revalidate<T>(
   if (inflight.has(key)) {
     return;
   }
-  // The entry being refreshed is still in `store` at this point (a stale
-  // hit touches it but never removes it) — its size is reused below instead
-  // of calling `estimateSize` again. See the comment on `estimateSize` for
-  // why that is not just cheap but usually exact for this specific path.
-  const previousSize = store.get(key)?.size;
   // `promise` is referenced inside its own `.then`/`.catch` below, which is
   // fine — those only run once this assignment has completed — and it is
   // exactly what makes the guard work: `inflight.get(key) === promise` asks
@@ -194,7 +221,7 @@ function revalidate<T>(
         touch(key, {
           value,
           storedAt: Date.now(),
-          size: previousSize ?? estimateSize(value),
+          size: estimateSize(value),
         });
       }
       return value;

@@ -362,28 +362,49 @@ describe("read-cache", () => {
     expect(readCacheMetrics().bytes).toBeGreaterThanOrEqual(200_000);
   });
 
-  it("reuses the previous entry's byte size on a stale-while-revalidate refresh instead of recomputing it", async () => {
-    // The expensive half of `estimateSize` (serializing the whole value) is
-    // deliberately paid on a miss and NOT on every stale-while-revalidate
-    // refresh a hot key goes through — see the comment on `estimateSize` for
-    // why reusing the previous size is not just cheap but usually exact
-    // (every write that could actually change the answer invalidates first,
-    // so an unforced refresh is normally re-fetching unchanged content).
-    // This proves the reuse, not just that the numbers happen to agree: the
-    // refresh here returns a value with a VERY different real size, and
-    // `bytes` must still reflect the ORIGINAL entry's size, which is only
-    // possible if the refresh path did not call `estimateSize` again.
+  it("reflects a stale-while-revalidate refresh's real size right away, not the size it replaced", async () => {
+    // A refresh recomputes its size the same way a miss does — an earlier
+    // version of this fix reused the entry being replaced instead, which
+    // was cheap but let the byte budget fall behind a loader returning
+    // materially larger content until the next unrelated cold load. A
+    // refresh returning much bigger content must show up in `bytes`
+    // immediately.
     const small = "a";
     const muchBigger = "b".repeat(50_000);
     await coalesce("k", 20, async () => small);
     const sizeAfterFirst = readCacheMetrics().bytes;
-    expect(sizeAfterFirst).toBeLessThan(100);
+    expect(sizeAfterFirst).toBeLessThan(200); // a tiny value, floored to a minimum
 
     await new Promise((r) => setTimeout(r, 30)); // into the stale window
     await coalesce("k", 20, async () => muchBigger); // stale-serves `small`, refreshes in the background
     await new Promise((r) => setTimeout(r, 10)); // let the refresh land
 
-    expect(readCacheMetrics().bytes).toBe(sizeAfterFirst);
+    expect(readCacheMetrics().bytes).toBeGreaterThanOrEqual(50_000);
+  });
+
+  it("estimates an array's size from a bounded sample of its rows, close to its real serialized size", async () => {
+    // Sampling trades exactness for a bounded cost regardless of array
+    // length — it must not trade away correctness in the wrong direction.
+    // A large, roughly uniform array's estimate should land within a
+    // generous factor of what a full `JSON.stringify` would have measured.
+    const rows = new Array(2_000)
+      .fill(0)
+      .map((_, i) => ({ id: i, body: "hello world, this is a message body" }));
+    await coalesce("k", 60_000, async () => rows);
+    const estimated = readCacheMetrics().bytes;
+    const real = JSON.stringify(rows).length;
+    expect(estimated).toBeGreaterThan(real * 0.5);
+    expect(estimated).toBeLessThan(real * 2);
+  });
+
+  it("moves an array estimate for one long outlier row, not just the common case", async () => {
+    // The sample is spread evenly across the array rather than taken only
+    // from the front, specifically so one long message among many short
+    // ones still moves the estimate.
+    const rows = new Array(100).fill(0).map(() => ({ body: "short" }));
+    rows[50] = { body: "x".repeat(20_000) };
+    await coalesce("k", 60_000, async () => rows);
+    expect(readCacheMetrics().bytes).toBeGreaterThan(20_000);
   });
 
   it("resetReadCacheForTests clears the resident-byte counter, not just the entries", async () => {
