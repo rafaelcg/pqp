@@ -2265,13 +2265,34 @@ const hlsAudience = createHlsAudience({
  * that fails the check is dropped from `hlsAudience` outright, not merely
  * skipped this once, so the next remint does not re-ask the same settled
  * question for a socket that is never getting the answer back.
+ *
+ * TWO MORE THINGS an `await` per watcher makes possible that a purely
+ * synchronous loop never had to worry about, both closed here rather than
+ * left for the next incident. First, `stream` is re-read fresh from
+ * `liveHlsStreamFor` on every iteration rather than captured once before the
+ * loop: each `await` is a real suspension point, wide enough on a long
+ * watcher list for the broadcast to end or restart underneath it, and a
+ * snapshot taken before the loop would keep handing out a session that no
+ * longer exists — or worse, one a newer session has already replaced,
+ * regressing a client back to an obsolete HLS session the same way a
+ * stale, out-of-order frame would (see the `generation` guards this same
+ * remint feeds on every client). Second, this function is called from
+ * `setInterval` (`createHlsAudience`, `hls-audience.ts`) without an await or
+ * a `.catch`, which used to be safe because nothing here could reject; now
+ * that it can (a database error inside `canAccessChannelForRoster`, or `send`
+ * throwing on a socket that closed between the readyState check and the
+ * write), an uncaught rejection here would be unhandled at the interval
+ * boundary — fatal on Node configurations that treat unhandled rejections as
+ * such, and even short of that, it would abort the loop for every watcher
+ * still waiting behind the one that failed. So every watcher's own work is
+ * wrapped below: one failure is logged and skipped, never allowed to reach
+ * the caller or cost anyone else their renewal.
  */
 async function remintHlsAudienceTokens(
   channelId: string,
   watchers: readonly WebSocket[],
 ): Promise<void> {
-  const stream = liveHlsStreamFor(channelId);
-  if (!stream) {
+  if (!liveHlsStreamFor(channelId)) {
     return;
   }
   hlsTokenRemint.loops += 1;
@@ -2283,17 +2304,29 @@ async function remintHlsAudienceTokens(
     if (!user) {
       continue;
     }
-    if (!(await canAccessChannelForRoster(channelId, user.id))) {
-      hlsAudience.unsubscribe(channelId, socket);
-      continue;
+    try {
+      if (!(await canAccessChannelForRoster(channelId, user.id))) {
+        hlsAudience.unsubscribe(channelId, socket);
+        continue;
+      }
+      const stream = liveHlsStreamFor(channelId);
+      if (!stream) {
+        continue;
+      }
+      send(socket, {
+        type: "channel-live",
+        channelId,
+        stream: stampViewerStream(stream, user.id),
+        watching: hlsAudience.count(channelId),
+      });
+      hlsTokenRemint.tokens += 1;
+    } catch (error) {
+      console.error(
+        "[voice] remintHlsAudienceTokens failed for one watcher:",
+        channelId,
+        error,
+      );
     }
-    send(socket, {
-      type: "channel-live",
-      channelId,
-      stream: stampViewerStream(stream, user.id),
-      watching: hlsAudience.count(channelId),
-    });
-    hlsTokenRemint.tokens += 1;
   }
 }
 
