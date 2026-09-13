@@ -1763,31 +1763,22 @@ export async function connectLiveKit({
     // gives this publication a bit nobody else can touch, and enabling it
     // stays no-op unless the source itself is stopped.
     const publishedTrack = audioTrack.clone ? audioTrack.clone() : audioTrack;
-    published = new LocalAudioTrack(publishedTrack);
-    // A clone does not stop when the source does — only the `.enabled` bit is
-    // shared, per the comment above; `stop()` on one sibling leaves the other
-    // running (MediaStreamTrack.clone(), MDN). `stopMicPipeline` (use-voice.ts)
-    // stops the capture directly on a device swap, ahead of the
-    // `replaceTrack` call that would otherwise unpublish this clone, so tie
-    // the clone to whichever track it was made from explicitly: if the
-    // source ends (device swap, revoked permission, unplugged mic) before
-    // this publication is replaced, drop the clone rather than let LiveKit
-    // keep sending it and hold the capture pipeline's resources open.
-    const onSourceEnded = () => {
-      if (published?.mediaStreamTrack === publishedTrack) {
-        void room.localParticipant.unpublishTrack(published);
-        published = null;
-      }
-    };
-    audioTrack.addEventListener("ended", onSourceEnded, { once: true });
+    // A STABLE local handle to THIS call's track, never read through the
+    // outer `published` variable below: another `publish()`/`disconnect()`
+    // can repoint or null `published` while this one is still in flight
+    // (the source-ended race two paragraphs down is exactly that), and
+    // reading `published.mute()` at that point would either touch the
+    // WRONG publication or throw on `null`.
+    const localTrack = new LocalAudioTrack(publishedTrack);
+    published = localTrack;
     // publishTrack starts the sender live. If the capture is already
     // closed (user mute, deafen, SPEAK denied), mute the publication
     // before the first packet, then again if the library re-opened it.
     if (!audioTrack.enabled) {
-      await published.mute();
+      await localTrack.mute();
     }
     try {
-      await room.localParticipant.publishTrack(published, {
+      await room.localParticipant.publishTrack(localTrack, {
         // NOT OPTIONAL, and leaving it off was a live production bug.
         // `new LocalAudioTrack(raw)` starts at `Track.Source.Unknown` and
         // `publishTrack` only overwrites that when `source` is passed, so every
@@ -1817,12 +1808,41 @@ export async function connectLiveKit({
       // (client/src/hooks/use-voice.ts) retries this exact call up to five
       // times while a grant is still propagating, so every failed attempt
       // would otherwise abandon one more live clone. Stop it ourselves.
-      published.stop();
-      published = null;
+      localTrack.stop();
+      if (published === localTrack) {
+        published = null;
+      }
       throw err;
     }
-    if (!audioTrack.enabled && !published.isMuted) {
-      await published.mute();
+    // A clone does not stop when the source does — only the `.enabled` bit is
+    // shared, per the comment further up; `stop()` on one sibling leaves the
+    // other running (`MediaStreamTrack.clone()`, MDN). `stopMicPipeline`
+    // (use-voice.ts) stops the capture directly on a device swap, ahead of
+    // the `replaceTrack` call that would otherwise unpublish this clone, and
+    // a real device can also fail mid-call. Tie the clone to the source's
+    // lifecycle from here on, now that `publishTrack` has actually
+    // registered a publication for it — attaching this any earlier would
+    // race an in-flight `publishTrack`: an "ended" firing before it resolves
+    // would find no publication yet (`unpublishTrack` a no-op) and still
+    // null out `published`, so the moment publishTrack DID resolve above,
+    // this function would go on to leave a live, now-untracked publication
+    // in the room with nothing left holding a reference to clean it up.
+    const onSourceEnded = () => {
+      if (published === localTrack) {
+        void room.localParticipant.unpublishTrack(localTrack);
+        published = null;
+      }
+    };
+    if (audioTrack.readyState === "ended") {
+      // Ended while publishTrack was in flight, before this listener could
+      // be armed. Clean up now rather than wait for an event that already
+      // fired.
+      onSourceEnded();
+    } else {
+      audioTrack.addEventListener("ended", onSourceEnded, { once: true });
+    }
+    if (!audioTrack.enabled && !localTrack.isMuted) {
+      await localTrack.mute();
     }
   }
 
