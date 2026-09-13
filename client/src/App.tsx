@@ -5684,6 +5684,17 @@ function MainAppContent({
   // nudge is rendered only in the wide sidebar footer (`!compact` in
   // `sidebarFooter`), so a compact rail must not be able to hold the corner
   // queue's `voiceClean` slot for a card nothing mounts.
+  //
+  // `sidebarIconsOnly` is provably `!compact`'s complement for every render
+  // that can reach `VoiceCleanHint`: `sidebarFooter` has exactly three call
+  // sites, and `sidebarFooter(sidebarIconsOnly)` on `ChannelList` is the
+  // only one that can ever pass `compact={true}` — the other two
+  // (`DmList`, `WhatsNewView`) call `sidebarFooter()` with no argument, so
+  // their `compact` is always `false` regardless of `sidebarIconsOnly`.
+  // Gating `wantsVoiceCleanHint` on `!sidebarIconsOnly` is therefore never
+  // looser than the render guard for any of the three: it can only be
+  // *stricter* than necessary on the two branches where compact never
+  // applies, never looser than the one branch where it does.
   const watchingAShare =
     voiceState.status === "connected" &&
     voiceState.screenSharePeerIds.some(
