@@ -1179,8 +1179,11 @@ function MainAppContent({
           : "side-by-side";
       // A watch party keeps its own answer: flipping the film night's layout
       // must not rearrange tomorrow's work call, and the other way round.
+      // The seated surface and the audience surface share that one answer
+      // (see `isWatchPartySplit`): a person who flips it while watching
+      // should not have it flip back the moment they take a seat.
       const next: CallSplitPreference =
-        kind === "watch"
+        kind === "watch" || kind === "watch-audience"
           ? { ...previous, watchOrientation: flipped }
           : { ...previous, orientation: flipped };
       saveCallSplit(next);
@@ -5506,13 +5509,37 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
-  /** A watch party room arranges its panes like a stream; a call does not. */
+  /**
+   * A watch party room arranges its panes like a stream; a call does not.
+   *
+   * And a watch party room is two different stages depending on who is
+   * looking at it. `"watch"` is the seated surface (`VoiceChannelStage`):
+   * the host, a co-host, anyone invited up, or an audience member who took a
+   * seat — the shared, proportional split a call already uses. `"watch-audience"`
+   * is everybody else: a seatless viewer watching the HLS picture
+   * (`WatchChannelStage`), the "party has not started" card and the "it
+   * ended" card `WatchPartyPanel` draws in the same spot — all three are the
+   * same pane, so they get the same Twitch-style default, chat pinned to
+   * about 340px rather than a third of an ultrawide. See `watchAudienceSide`
+   * in `lib/call-split.ts`.
+   */
+  const inSelectedWatchPartyCall =
+    selectedChannel?.kind === "server" &&
+    voiceState.voiceChannelId === selectedChannel.id &&
+    voiceState.status !== "idle";
   const splitKind: CallSplitKind =
     selectedChannel?.kind === "server" &&
     isWatchPartyChannelType(selectedChannel.type) &&
     isWatchPartyChannelsEnabled()
-      ? "watch"
+      ? inSelectedWatchPartyCall
+        ? "watch"
+        : "watch-audience"
       : "call";
+  /** Either watch-party pane kind — the one distinction most of the chrome
+   * around the split actually cares about is "is this a watch party room at
+   * all", not which of its two surfaces is currently up. */
+  const isWatchPartySplit =
+    splitKind === "watch" || splitKind === "watch-audience";
   // Baú gating is computed above the early returns (it owns a hook); see
   // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
   const meMember = serverMembers.find((member) => member.id === user?.id);
@@ -5842,7 +5869,7 @@ function MainAppContent({
           {/* A watch party channel with a party on it has its own count on
               the bar ("N assistindo"); a second one here, of the seated
               room, says a different number about the same show. */}
-          {!(splitKind === "watch" && watchParties.byChannel[selectedChannel.id]) && (
+          {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) && (
             <p className="truncate text-[11px] text-paper-muted">
               {activeConversation
                 ? conversationSubtitle(activeConversation)
@@ -5952,8 +5979,16 @@ function MainAppContent({
             <Tooltip
               label={
                 effectiveOrientation(callSplit, splitKind) === "side-by-side"
-                  ? t("call.split.stack")
-                  : t("call.split.sideBySide")
+                  ? t(
+                      isWatchPartySplit
+                        ? "call.split.stackStream"
+                        : "call.split.stack",
+                    )
+                  : t(
+                      isWatchPartySplit
+                        ? "call.split.sideBySideStream"
+                        : "call.split.sideBySide",
+                    )
               }
               detail={t("call.split.orientationHint")}
             >
@@ -6446,8 +6481,8 @@ function MainAppContent({
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
         channelId={selectedChannel.id}
-        variant={splitKind === "watch" ? "stream" : "default"}
-        streamBadges={splitKind === "watch" ? streamBadges : null}
+        variant={isWatchPartySplit ? "stream" : "default"}
+        streamBadges={isWatchPartySplit ? streamBadges : null}
         isLoading={messagesLoading}
         hasMore={chat.hasMoreHistory()}
         hasNewer={chat.hasNewerHistory()}
@@ -6524,7 +6559,7 @@ function MainAppContent({
         />
       )}
       <MessageComposer
-        variant={splitKind === "watch" ? "stream" : "default"}
+        variant={isWatchPartySplit ? "stream" : "default"}
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.

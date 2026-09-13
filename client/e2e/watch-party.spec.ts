@@ -1889,6 +1889,19 @@ test("a watch party puts the chat beside the film, in stream shape", async ({
   await expect(stage).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('[data-call-split="side-by-side"]')).toBeVisible();
 
+  // TWITCH'S SHAPE, NOT A PROPORTION. A call's shared side-by-side fraction
+  // (62% to the stage) would leave a 1440px window well over 500px of chat.
+  // The audience's own default instead pins the chat to about 340px and
+  // hands the film everything else, so a wider monitor grows the picture
+  // rather than the column beside it.
+  const chatBox = await page.locator("[data-call-split-chat]").boundingBox();
+  expect(chatBox).not.toBeNull();
+  expect(chatBox!.width).toBeGreaterThan(300);
+  expect(chatBox!.width).toBeLessThan(400);
+  const stageBox = await page.locator("[data-call-split-stage]").boundingBox();
+  expect(stageBox).not.toBeNull();
+  expect(stageBox!.width).toBeGreaterThan(chatBox!.width * 2);
+
   // STREAM CHAT. Beside a film the transcript takes the shape every stream
   // has: no avatar, the name coloured and inline before the words.
   const composer = page.getByPlaceholder(/^Message /);

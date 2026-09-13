@@ -96,6 +96,27 @@ export interface CallSplitPreference {
    */
   side: number;
   /**
+   * The AUDIENCE's own side-by-side fraction — a seatless viewer watching a
+   * watch party's HLS picture, never a call.
+   *
+   * Kept apart from `side` on purpose. `side` is one number shared by every
+   * ordinary call AND by the in-call watch party surface, and it is a
+   * PROPORTION: a wider monitor gets a wider chat too. Twitch's chat is not a
+   * proportion, it is a column — about 340px whatever the window does — so
+   * reusing `side` here would have meant either a chat that grows past a
+   * transcript's width on an ultrawide, or reopening the argument the header
+   * toggle's shared field was never meant to reopen every time somebody
+   * joined or left the room mid-show.
+   *
+   * Null until a drag says otherwise, same as `stacked`: nobody has an
+   * opinion yet, so `watchAudienceDefaultSide` computes ~340px of chat against
+   * the CURRENT pane width on every render, rather than freezing a fraction
+   * on the first paint. Once dragged it behaves exactly like `side` from then
+   * on: a stored proportion, because a person who has already touched the
+   * divider is expressing a ratio, not asking for a fixed column back.
+   */
+  watchAudienceSide: number | null;
+  /**
    * Neither pane, by default. Shared by both orientations on purpose: "put
    * the chat away" is a wish about what somebody wants to look at, not about
    * whether the panes are stacked, and having it flip back when they rotate
@@ -109,6 +130,7 @@ export const CALL_SPLIT_DEFAULT: CallSplitPreference = {
   watchOrientation: null,
   stacked: null,
   side: 0.62,
+  watchAudienceSide: null,
   collapsed: "none",
 };
 
@@ -121,14 +143,25 @@ export const CALL_SPLIT_DEFAULT: CallSplitPreference = {
  * The two want different defaults and different minimums, and the kind is
  * how the same component tells them apart.
  */
-export type CallSplitKind = "call" | "watch";
+export type CallSplitKind = "call" | "watch" | "watch-audience";
+
+/**
+ * `"watch"` and `"watch-audience"` share the same width minimums and the
+ * same stored orientation (`watchOrientation`): both are a watch party's own
+ * room, and a person walking from "just watching" into the call, or back
+ * out, should not have the layout choice reset under them. What they do NOT
+ * share is the SIDE-BY-SIDE width default — see `watchAudienceDefaultSide`.
+ */
+function isWatchKind(kind: CallSplitKind): boolean {
+  return kind === "watch" || kind === "watch-audience";
+}
 
 /** The orientation a room of this kind starts in, unless the person chose. */
 export function effectiveOrientation(
   preference: Pick<CallSplitPreference, "orientation" | "watchOrientation">,
   kind: CallSplitKind,
 ): CallSplitOrientation {
-  if (kind === "watch") {
+  if (isWatchKind(kind)) {
     return preference.watchOrientation ?? "side-by-side";
   }
   return preference.orientation;
@@ -199,7 +232,7 @@ export function splitBounds(
   return orientation === "side-by-side"
     ? {
         minStage: MIN_STAGE_WIDTH_PX,
-        minChat: kind === "watch" ? MIN_WATCH_CHAT_WIDTH_PX : MIN_CHAT_WIDTH_PX,
+        minChat: isWatchKind(kind) ? MIN_WATCH_CHAT_WIDTH_PX : MIN_CHAT_WIDTH_PX,
       }
     : { minStage: MIN_STAGE_HEIGHT_PX, minChat: MIN_CHAT_HEIGHT_PX };
 }
@@ -229,6 +262,23 @@ function clamp01(value: number): number {
     return 0.5;
   }
   return Math.min(1, Math.max(0, value));
+}
+
+/**
+ * The audience's side-by-side default: the STAGE's share of the pane once
+ * the chat has taken exactly `MIN_WATCH_CHAT_WIDTH_PX` (about 340) and
+ * nothing more, so the film gets whatever is left rather than a fixed
+ * proportion of it. Computed fresh against the live pane width on every
+ * render — see `watchAudienceSide` on `CallSplitPreference` for why this is
+ * a function and not a stored number.
+ *
+ * A pane too narrow to spare 340px for the chat (below `splitAvailable`)
+ * never reaches this: `resolveOrientation` has already fallen back to
+ * stacked by then, which is the phone case.
+ */
+export function watchAudienceDefaultSide(container: number): number {
+  const usable = Math.max(1, container - CALL_SPLIT_DIVIDER_PX);
+  return clamp01((usable - MIN_WATCH_CHAT_WIDTH_PX) / usable);
 }
 
 /**
@@ -386,6 +436,11 @@ export function loadCallSplit(): CallSplitPreference {
         typeof value.side === "number" && Number.isFinite(value.side)
           ? clamp01(value.side)
           : CALL_SPLIT_DEFAULT.side,
+      watchAudienceSide:
+        typeof value.watchAudienceSide === "number" &&
+        Number.isFinite(value.watchAudienceSide)
+          ? clamp01(value.watchAudienceSide)
+          : null,
       // Anything this reader does not recognise, including a preference
       // written before the field existed, is "neither pane put away". Failing
       // towards two visible panes is the only safe direction: the opposite is

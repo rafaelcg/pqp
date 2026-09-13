@@ -28,6 +28,7 @@ import {
   splitAvailable,
   splitBounds,
   splitFraction,
+  watchAudienceDefaultSide,
   type CallSplitCollapsed,
   type CallSplitPreference,
   type CallStageShape,
@@ -62,7 +63,13 @@ import { cn } from "@/lib/utils";
 export interface CallSplitProps {
   /** What the stage is right now. Only `expanded` is split. */
   shape: CallStageShape;
-  /** A watch party starts side by side with a narrower chat; a call does not. */
+  /**
+   * A watch party starts side by side with a narrower chat; a call does not.
+   * `"watch"` is the in-call surface (host, co-hosts, anyone seated); `
+   * "watch-audience"` is a seatless viewer watching the HLS picture. The two
+   * share an orientation but not a width default — see `watchAudienceSide`
+   * on `CallSplitPreference`.
+   */
   kind?: CallSplitKind;
   /**
    * The whole stored preference, not a single number: the orientation this
@@ -161,10 +168,21 @@ export function CallSplit({
     kind,
   );
   const sideBySide = orientation === "side-by-side";
+  const isWatchAudience = kind === "watch-audience";
   // Same rule as the orientation, one line below it on purpose: stored is what
   // they asked for, this is what the pane can honour now.
   const collapsed = resolveCollapsed(preference.collapsed, shape);
-  const fraction = sideBySide ? preference.side : preference.stacked;
+  // The audience's own column is the one exception to "unset means the stage
+  // keeps its old sizing": nobody dragging it yet should still look like
+  // Twitch, not like whatever a video's intrinsic width happens to be. So a
+  // null `watchAudienceSide` is not "nothing chosen", it is "compute ~340px
+  // of chat against the pane RIGHT NOW" — recomputed every render until a
+  // drag freezes it into an ordinary stored fraction, same as `side`.
+  const fraction = sideBySide
+    ? isWatchAudience
+      ? (preference.watchAudienceSide ?? watchAudienceDefaultSide(width))
+      : preference.side
+    : preference.stacked;
   const container = sideBySide ? width : height;
   const bounds = splitBounds(orientation, kind);
 
@@ -178,7 +196,9 @@ export function CallSplit({
   // `sized` is "does the pane own the stage's size": only once somebody has
   // actually moved the divider. Until then the stage keeps its own height rule
   // and the transcript keeps the rest, so the minimums bound a drag rather
-  // than silently re-deciding every first render.
+  // than silently re-deciding every first render. The one exception is the
+  // watch-audience column, which is sized from the very first render — see
+  // `fraction` above.
   // A COLLAPSED PANE HAS NO DIVIDER, because there is nothing between two
   // things to drag. The minimums stop applying to the hidden pane for the
   // same reason: they exist so a DRAG cannot strand somebody with a sliver,
@@ -223,12 +243,14 @@ export function CallSplit({
     (next: number, persist: boolean) => {
       onPreferenceChange(
         sideBySide
-          ? { ...preference, side: next }
+          ? isWatchAudience
+            ? { ...preference, watchAudienceSide: next }
+            : { ...preference, side: next }
           : { ...preference, stacked: next },
         persist,
       );
     },
-    [onPreferenceChange, preference, sideBySide],
+    [onPreferenceChange, preference, sideBySide, isWatchAudience],
   );
 
   const applyPx = useCallback(

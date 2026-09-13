@@ -34,6 +34,7 @@ const {
   splitBounds,
   splitFraction,
   strongestStageShape,
+  watchAudienceDefaultSide,
 } = await import("./call-split");
 
 const STACKED = splitBounds("stacked");
@@ -210,6 +211,7 @@ describe("stored preference", () => {
       watchOrientation: "stacked",
       stacked: 0.4,
       side: 0.55,
+      watchAudienceSide: 0.7,
       collapsed: "none",
     });
     expect(loadCallSplit()).toEqual({
@@ -217,6 +219,7 @@ describe("stored preference", () => {
       watchOrientation: "stacked",
       stacked: 0.4,
       side: 0.55,
+      watchAudienceSide: 0.7,
       collapsed: "none",
     });
   });
@@ -227,11 +230,30 @@ describe("stored preference", () => {
       watchOrientation: null,
       stacked: 0.3,
       side: 0.8,
+      watchAudienceSide: null,
       collapsed: "none",
     });
     const loaded = loadCallSplit();
     expect(loaded.stacked).toBe(0.3);
     expect(loaded.side).toBe(0.8);
+  });
+
+  it("keeps the audience's own column apart from both", () => {
+    // A person who has dragged the audience chat, the call's side-by-side
+    // AND the stacked divider all keep their own numbers: three questions,
+    // three answers.
+    saveCallSplit({
+      orientation: "stacked",
+      watchOrientation: "side-by-side",
+      stacked: 0.3,
+      side: 0.8,
+      watchAudienceSide: 0.9,
+      collapsed: "none",
+    });
+    const loaded = loadCallSplit();
+    expect(loaded.stacked).toBe(0.3);
+    expect(loaded.side).toBe(0.8);
+    expect(loaded.watchAudienceSide).toBe(0.9);
   });
 
   it("ignores junk rather than rendering a broken split", () => {
@@ -247,6 +269,7 @@ describe("stored preference", () => {
       watchOrientation: null,
       stacked: CALL_SPLIT_DEFAULT.stacked,
       side: 1,
+      watchAudienceSide: null,
       collapsed: "none",
     });
   });
@@ -266,6 +289,7 @@ describe("collapsing a pane", () => {
       watchOrientation: null,
       stacked: 0.5,
       side: 0.6,
+      watchAudienceSide: null,
       collapsed: "chat",
     });
     const loaded = loadCallSplit();
@@ -372,6 +396,7 @@ describe("collapsing a pane", () => {
       watchOrientation: null,
       stacked: 0.5,
       side: 0.6,
+      watchAudienceSide: null,
       collapsed: "chat",
     });
     expect(loadCallSplit().collapsed).toBe("chat");
@@ -447,5 +472,97 @@ describe("a watch party's own layout", () => {
     expect(resolveOrientation("side-by-side", tight, "expanded", "watch")).toBe(
       "side-by-side",
     );
+  });
+});
+
+/**
+ * The AUDIENCE's own placement: a seatless viewer watching a watch party's
+ * HLS picture, drawn with `kind: "watch-audience"`. Twitch on desktop —
+ * stream wide on the left, chat pinned to about 340px on the right — stacks
+ * on a phone, and native fullscreen takes the window and leaves the chat
+ * with nothing (see the e2e fullscreen specs for the pixel-level version of
+ * that last one; `resolveOrientation` forcing "stacked" is the half of it
+ * that lives here).
+ */
+describe("the audience's watch layout", () => {
+  it("shares the watch party's own orientation choice with the seated surface", () => {
+    // A person who flips the toggle while watching should not have it flip
+    // back the moment they take a seat, or the other way round.
+    const base = { ...CALL_SPLIT_DEFAULT, orientation: "stacked" as const };
+    expect(effectiveOrientation(base, "watch-audience")).toBe("side-by-side");
+    expect(
+      effectiveOrientation(
+        { ...base, watchOrientation: "stacked" },
+        "watch-audience",
+      ),
+    ).toBe("stacked");
+  });
+
+  it("desktop: a wide pane puts the chat beside the stream", () => {
+    const width = 1440;
+    expect(resolveOrientation("side-by-side", width, "expanded", "watch-audience")).toBe(
+      "side-by-side",
+    );
+  });
+
+  it("phone: a pane too narrow for the minimums stacks instead", () => {
+    // The same width already fails a plain call's wider chat minimum; the
+    // audience's narrower one is what a phone in landscape still fails.
+    const width = 480;
+    expect(splitAvailable(width, "side-by-side", "watch-audience")).toBe(false);
+    expect(
+      resolveOrientation("side-by-side", width, "expanded", "watch-audience"),
+    ).toBe("stacked");
+  });
+
+  it("fullscreen: only `expanded` is split, so the chat loses its column", () => {
+    // Native fullscreen already takes the whole screen and the pane's other
+    // children with it; this is the half of "chat hidden" `CallSplit` itself
+    // is responsible for regardless of what the browser does.
+    expect(
+      resolveOrientation("side-by-side", 1600, "fullscreen", "watch-audience"),
+    ).toBe("stacked");
+  });
+
+  it("defaults the chat to about 340px, not a proportion of the window", () => {
+    // A call's shared `side` (0.62) would hand a 1920 window's chat more than
+    // 700px. The audience default instead gives the chat exactly its
+    // minimum, whatever the window does, so a wider monitor grows the FILM
+    // rather than the column beside it.
+    for (const width of [1024, 1440, 1920, 2560]) {
+      const usable = width - CALL_SPLIT_DIVIDER_PX;
+      const stagePx = clampSplit({
+        fraction: watchAudienceDefaultSide(width),
+        container: width,
+        ...splitBounds("side-by-side", "watch-audience"),
+      });
+      expect(usable - stagePx).toBe(MIN_WATCH_CHAT_WIDTH_PX);
+    }
+  });
+
+  it("still respects the stage minimum on a pane too narrow for a fixed 340px chat", () => {
+    // Just above `splitAvailable`'s own floor: giving the chat a flat 340px
+    // would leave the stage under its own minimum, so the default has to
+    // clamp like every other fraction does.
+    const tight = MIN_STAGE_WIDTH_PX + MIN_WATCH_CHAT_WIDTH_PX + CALL_SPLIT_DIVIDER_PX + 10;
+    const stagePx = clampSplit({
+      fraction: watchAudienceDefaultSide(tight),
+      container: tight,
+      ...splitBounds("side-by-side", "watch-audience"),
+    });
+    expect(stagePx).toBeGreaterThanOrEqual(MIN_STAGE_WIDTH_PX);
+  });
+
+  it("a dragged column behaves like an ordinary stored fraction from then on", () => {
+    // Once somebody has actually moved the divider it is a proportion again,
+    // same as `side`: `watchAudienceSide` stops being recomputed and starts
+    // being honoured, including on an ultrawide monitor.
+    const dragged = { ...CALL_SPLIT_DEFAULT, watchAudienceSide: 0.5 };
+    const stagePx = clampSplit({
+      fraction: dragged.watchAudienceSide!,
+      container: 2000,
+      ...splitBounds("side-by-side", "watch-audience"),
+    });
+    expect(stagePx).toBe(Math.round((2000 - CALL_SPLIT_DIVIDER_PX) * 0.5));
   });
 });
