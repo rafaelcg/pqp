@@ -496,10 +496,46 @@ separate one per replica to keep in sync, is deliberate; `docs/plans/
 ALWAYS_ON.md`'s A3.2 (PgBouncer) is the follow-up that raises the ceiling
 itself rather than just dividing today's number more ways.
 
-**Migrating an existing box (the very first deploy after this PR merges).**
-A box already running the old single-`api` service still has an `api`
-container when this compose file lands — `api-a`/`api-b` are new service
-names, not a rename Compose can follow on its own. `pqp-deploy.sh` passes
+**Migrating an existing box — ONE MANUAL STEP REQUIRED FIRST, before the
+first CI-driven deploy of this PR.** `/usr/local/bin/pqp-deploy` on the box
+today is whatever `provision.sh` last installed there — the deploy
+workflow only ever transfers `compose.yaml`/`Caddyfile` automatically, so
+the script itself does not update on its own... except this PR changes
+that (see "Keeping `pqp-deploy.sh` itself in sync" below), and that new
+self-update logic only exists in the NEW script. An old, pre-this-PR
+script has no code path that even looks for a staged `pqp-deploy.sh`, so
+it cannot bootstrap itself — the first deploy has to be pushed by hand.
+Skip this and the automated pipeline does not degrade gracefully: the old
+script's fixed `docker compose pull api worker` line runs against the
+NEWLY installed compose.yaml (which the old script *does* know how to
+install, since that part hasn't changed) — but that file no longer defines
+an `api` service at all, so the pull fails outright, the workflow's
+rollback re-invokes the SAME old script against the SAME already-replaced
+compose.yaml, and rollback fails the same way. Do this instead:
+
+```bash
+# From a checkout of this PR's branch (or main, once merged):
+ssh pqp@<ip> 'mkdir -p /tmp/pqp-provision'
+scp -r tools/api-host tools/db-backup pqp@<ip>:/tmp/pqp-provision/
+ssh pqp@<ip> 'sudo mv /tmp/pqp-provision/db-backup /tmp/pqp-provision/api-host/db-backup && \
+  sudo bash /tmp/pqp-provision/api-host/provision.sh'
+```
+No new secrets needed for this re-run (`provision.sh` is idempotent and
+keeps whatever it already has — see step 2 above); this only needs to
+install the updated `/usr/local/bin/pqp-deploy`. Confirm it landed:
+```bash
+ssh pqp@<ip> 'sha256sum /usr/local/bin/pqp-deploy'
+sha256sum tools/api-host/pqp-deploy.sh   # should match
+```
+Only after that does the normal CI-driven deploy pick up this PR safely.
+From that point on, this is a one-time cost: every deploy after it keeps
+`/usr/local/bin/pqp-deploy` current on its own (see below), so the next
+change to this file never needs this dance repeated.
+
+**What actually happens once the box's script is current.** A box already
+running the old single-`api` service still has an `api` container when
+this compose file lands — `api-a`/`api-b` are new service names, not a
+rename Compose can follow on its own. `pqp-deploy.sh` passes
 `--remove-orphans` on its first `up`, which stops (honouring that old
 container's own 60s `stop_grace_period`, set when it was created under the
 previous compose file) and removes it once `api-a` is confirmed healthy —
@@ -511,6 +547,19 @@ deploy to cause a one-time full drain of whatever was still connected to
 the old container — same shape as any other `restarts-api` deploy, just
 folded into adopting the two-replica layout instead of a second, separate
 step.
+
+**Keeping `pqp-deploy.sh` itself in sync.** Past that first manual step,
+the deploy workflow signs and transfers `pqp-deploy.sh` alongside
+`compose.yaml`/`Caddyfile` — same HMAC manifest, same verify-before-install
+gate — and `pqp-deploy.sh` installs a newer copy of itself into
+`/usr/local/bin/pqp-deploy` mid-run when one is staged. That is safe while
+the CURRENTLY EXECUTING copy keeps running: `install` writes the new
+content to a fresh inode and renames it into place atomically, so the
+already-open script the shell is mid-way through reading is unaffected —
+only the NEXT invocation picks up whatever was just installed. Provisioning
+drift (routine ops, below) still works the same way for everything else
+`provision.sh` owns; this is specifically about the one file that used to
+require it.
 
 **Verifying it.**
 ```bash

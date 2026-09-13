@@ -213,28 +213,52 @@ jobs:
       # runner, over the files from THIS verified checkout, before either
       # file goes anywhere near the SSH connection an attacker might also
       # hold.
-      - name: Sign compose/Caddy config
+      # Signs pqp-deploy.sh itself alongside compose.yaml/Caddyfile (three
+      # files, same manifest) since docs/plans/ALWAYS_ON.md A0.2: the
+      # rolling-update logic that makes two replicas work at all -- pull,
+      # bring up api-a, wait, only then api-b -- lives in that script, not
+      # in compose.yaml, and an installed copy that predates this PR still
+      # says `docker compose pull api worker`. Against a compose.yaml that
+      # no longer defines an `api` service at all, that is not a
+      # degraded-but-working deploy, it is a hard failure on the very next
+      # line. Before this, this workflow only ever kept compose.yaml/
+      # Caddyfile in sync automatically and left /usr/local/bin/pqp-deploy
+      # to provision.sh, run by hand -- fine while the script's own logic
+      # never depended on which services existed, not fine now. See
+      # pqp-deploy.sh's own staged-install block for how it installs a
+      # newer copy of ITSELF safely mid-run, and docs/deploy-vultr.md
+      # "Migrating an existing box" for the one manual step this still
+      # needs on a box whose installed script predates this PR entirely
+      # (it has no logic to notice a staged pqp-deploy.sh until the copy
+      # that adds this).
+      - name: Sign compose/Caddy/deploy-script config
         if: steps.relevant.outputs.needed == 'true'
         env:
           HMAC_KEY: ${{ secrets.VULTR_CONFIG_HMAC_KEY }}
         run: |
-          (cd tools/api-host && sha256sum compose.yaml Caddyfile) > "$RUNNER_TEMP/manifest.sha256"
+          (cd tools/api-host && sha256sum compose.yaml Caddyfile pqp-deploy.sh) > "$RUNNER_TEMP/manifest.sha256"
           openssl dgst -sha256 -hmac "$HMAC_KEY" -r "$RUNNER_TEMP/manifest.sha256" \
             | awk '{print $1}' > "$RUNNER_TEMP/manifest.sig"
 
-      # Copies the two files whose content actually matters at deploy time
-      # (compose.yaml, Caddyfile), plus the manifest and signature above,
-      # into pqp-deploy's own staging directory, then runs the one script
-      # that account may sudo. That script (root) verifies the signature,
-      # installs the files into /opt/pqp only if it checks out, pulls BOTH
-      # images before touching either running container (so a bad tag
-      # never leaves api and worker on different releases), brings up api
-      # + worker, and reloads Caddy from whatever Caddyfile is now in
-      # place — a Caddy-only change no longer sits copied-but-inert. It
-      # waits for both containers' own Docker healthchecks and confirms
-      # the API is actually serving this commit before exiting 0; any of
-      # that failing is a non-zero exit, which this step surfaces via
-      # `continue-on-error` so the rollback step below still gets to run.
+      # Copies the three files whose content actually matters at deploy
+      # time (compose.yaml, Caddyfile, pqp-deploy.sh itself — see the
+      # "Sign compose/Caddy/deploy-script config" step above for why the
+      # script is now part of this set), plus the manifest and signature,
+      # into pqp-deploy's own staging directory, then runs the ALREADY
+      # INSTALLED copy of that script, which that account may sudo. That
+      # script (root) verifies the signature, installs the three staged
+      # files (`/opt/pqp/compose.yaml`, `/opt/pqp/Caddyfile`,
+      # `/usr/local/bin/pqp-deploy` — see its own staged-install block for
+      # how replacing itself mid-run is safe) only if it checks out, pulls
+      # every image before touching any running container (so a bad tag
+      # never leaves api and worker on different releases), rolls the
+      # update through api-a, then api-b, then worker, and reloads Caddy
+      # from whatever Caddyfile is now in place — a Caddy-only change no
+      # longer sits copied-but-inert. It waits for every container's own
+      # Docker healthcheck and confirms each api replica is actually
+      # serving this commit before exiting 0; any of that failing is a
+      # non-zero exit, which this step surfaces via `continue-on-error` so
+      # the rollback step below still gets to run.
       #
       # stop_grace_period: 60s in compose.yaml is what gives
       # server/src/lib/drain.ts's SIGTERM handling room to finish (25s
@@ -253,27 +277,37 @@ jobs:
             ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
           scp -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
-            tools/api-host/compose.yaml tools/api-host/Caddyfile \
+            tools/api-host/compose.yaml tools/api-host/Caddyfile tools/api-host/pqp-deploy.sh \
             "$RUNNER_TEMP/manifest.sha256" "$RUNNER_TEMP/manifest.sig" \
             "pqp-deploy@$HOST:/home/pqp-deploy/incoming/"
-          # Captured (via `tee` so the log still streams live) rather than
-          # just run directly: pqp-deploy.sh prints an "api-replicas=N"
-          # line stating this run's TARGET replica count, and the
-          # "Verify the deployed commit" step below needs that number --
-          # it has no access to this box's .env (a different, more
-          # restricted SSH identity) and otherwise has no way to tell "api-b
-          # is intentionally not running (API_REPLICAS=1)" apart from "api-b
-          # crashed and should be failing this deploy". `set +e`/`set -e`
-          # bracket only this one command: under GitHub Actions' default
-          # `bash -eo pipefail`, letting a failing pipeline hit `set -e`
-          # inside an assignment would exit the step before the exit code is
-          # ever captured into $ssh_status below, which is exactly the
+          # pqp-deploy.sh prints an "api-replicas=N" line stating this
+          # run's TARGET replica count, and the "Verify the deployed
+          # commit" step below needs that number -- it has no access to
+          # this box's .env (a different, more restricted SSH identity)
+          # and otherwise has no way to tell "api-b is intentionally not
+          # running (API_REPLICAS=1)" apart from "api-b crashed and should
+          # be failing this deploy". Captured to a file rather than via
+          # `$(...)` command substitution on purpose: piping straight into
+          # a plain pipeline (`cmd | tee file`, no command substitution
+          # wrapping it) is what makes `${PIPESTATUS[0]}` an unambiguous,
+          # well-defined read of ssh_cmd's own exit status regardless of
+          # whether `pipefail` happens to be on -- wrapping the same
+          # pipeline in `$(...)` runs it in a subshell, and relying on that
+          # subshell's exit code to correctly reflect PIPESTATUS[0] back in
+          # THIS shell depends on `pipefail` propagating through the
+          # substitution, which is exactly the kind of implicit,
+          # environment-dependent assumption worth not needing at all here.
+          # `set +e`/`set -e` bracket only this one command: under GitHub
+          # Actions' default `bash -eo pipefail`, letting a failing
+          # pipeline hit `set -e` would exit the step before the exit code
+          # is ever captured into $ssh_status below, which is exactly the
           # (also failure) case this needs to still report accurately.
+          DEPLOY_LOG="$RUNNER_TEMP/deploy-output.log"
           set +e
-          deploy_output=$(ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA" | tee /dev/stderr)
+          ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA" | tee "$DEPLOY_LOG"
           ssh_status=${PIPESTATUS[0]}
           set -e
-          replicas=$(printf '%s\n' "$deploy_output" | grep -o '^api-replicas=[0-9]\+' | tail -1 | cut -d= -f2)
+          replicas=$(grep -o '^api-replicas=[0-9]\+' "$DEPLOY_LOG" | tail -1 | cut -d= -f2)
           echo "replicas=${replicas:-2}" >> "$GITHUB_OUTPUT"
           exit "$ssh_status"
 

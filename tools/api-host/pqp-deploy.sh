@@ -8,15 +8,23 @@
 # /proc/<pid>/cmdline for any other local user (including pqp-deploy
 # itself) to read. There is no `openssl dgst -hmac` in this file.
 #
-# Installed at /usr/local/bin/pqp-deploy (0755, root:root) by provision.sh.
-# The `pqp-deploy` account the deploy workflow SSHes into (cloud-init.yaml /
+# Installed at /usr/local/bin/pqp-deploy (0755, root:root) by provision.sh,
+# and kept in sync on every deploy from here on by THIS SCRIPT'S OWN
+# staged-install block below (docs/plans/ALWAYS_ON.md A0.2 needs the
+# rolling-update logic in this file to track compose.yaml's service names,
+# which the old provision.sh-only install path could not guarantee). The
+# `pqp-deploy` account the deploy workflow SSHes into (cloud-init.yaml /
 # provision.sh) is not in the docker group and has no other sudo rule, so
 # the *only* thing that key can do -- even fully compromised -- is invoke
-# this one fixed script against these fixed files. It never receives a
-# path, a compose override, an image name, or a shell fragment from the
-# caller, only a tag; there is no `docker run`, so nothing here can mount
-# `/`, read arbitrary host files, or start an unrelated container the way
-# unrestricted docker-group / sudo access could.
+# this one fixed script against these fixed files, still true now that one
+# of those files is this script's own successor: it is never installed
+# without first checking out against the same HMAC signature compose.yaml
+# and Caddyfile always have, verified below with a key pqp-deploy itself
+# never has access to. It never receives a path, a compose override, an
+# image name, or a shell fragment from the caller, only a tag; there is no
+# `docker run`, so nothing here can mount `/`, read arbitrary host files,
+# or start an unrelated container the way unrestricted docker-group / sudo
+# access could.
 #
 # Usage: sudo /usr/local/bin/pqp-deploy <image-tag>
 set -euo pipefail
@@ -34,29 +42,34 @@ STAGING=/home/pqp-deploy/incoming
 # deliberately-broken upload from a previous attempt could otherwise block
 # that rollback at the same manifest check, or get installed a second time
 # by accident.
-trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig' EXIT
+trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/pqp-deploy.sh "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig' EXIT
 
 cd "$DEST"
 
-# The deploy workflow scp's a fresh compose.yaml/Caddyfile as pqp-deploy
-# (unprivileged, cannot write into /opt/pqp) into its own home directory.
-# pqp-deploy is exactly the account VULTR_API_SSH_KEY authenticates to, so
-# a leaked key lets an attacker stage ANY compose.yaml they want there --
-# one with a host-root bind mount or a command that reads /opt/pqp/.env.
-# We are about to run that file as root; a bare `install` here would hand
-# a leaked SSH key root on the box, defeating the entire point of
-# pqp-deploy not being in the docker group.
+# The deploy workflow scp's a fresh compose.yaml/Caddyfile/pqp-deploy.sh as
+# pqp-deploy (unprivileged, cannot write into /opt/pqp or
+# /usr/local/bin) into its own home directory. pqp-deploy is exactly the
+# account VULTR_API_SSH_KEY authenticates to, so a leaked key lets an
+# attacker stage ANY of these three files they want there -- a
+# compose.yaml with a host-root bind mount, a command that reads
+# /opt/pqp/.env, or (now that this script keeps itself in sync too) an
+# entirely different pqp-deploy.sh that does whatever it likes AS ROOT the
+# next time it runs. We are about to run/install that content as root; a
+# bare `install` here would hand a leaked SSH key root on the box,
+# defeating the entire point of pqp-deploy not being in the docker group.
 #
-# So: only ever install a staged compose.yaml/Caddyfile that is
-# accompanied by a manifest of their checksums, itself signed with an
-# HMAC key pqp-deploy never has access to (/etc/pqp/deploy-hmac.key,
-# root-only, set by provision.sh from GitHub secret
-# VULTR_CONFIG_HMAC_KEY). The signature is verified against OUR copy of
-# the key, not anything the caller supplied, and the manifest is checked
-# against the files' actual bytes -- a valid signature over the wrong
-# manifest, or a manifest that does not match what is actually staged,
-# both fail closed.
-if [[ -f "$STAGING/compose.yaml" || -f "$STAGING/Caddyfile" ]]; then
+# So: only ever install staged files that come with a manifest of their
+# checksums, itself signed with an HMAC key pqp-deploy never has access to
+# (/etc/pqp/deploy-hmac.key, root-only, set by provision.sh from GitHub
+# secret VULTR_CONFIG_HMAC_KEY). The signature is verified against OUR
+# copy of the key, not anything the caller supplied, and the manifest is
+# checked against the files' actual bytes -- a valid signature over the
+# wrong manifest, or a manifest that does not match what is actually
+# staged, both fail closed. Adding pqp-deploy.sh to this same manifest
+# (rather than trusting it separately, or not at all) is what makes
+# self-updating safe: the exact same signature that has always gated
+# compose.yaml/Caddyfile now gates root code, not just root config.
+if [[ -f "$STAGING/compose.yaml" || -f "$STAGING/Caddyfile" || -f "$STAGING/pqp-deploy.sh" ]]; then
   if [[ ! -s /etc/pqp/deploy-hmac.key ]]; then
     echo "refusing staged config: /etc/pqp/deploy-hmac.key is not provisioned" >&2
     exit 1
@@ -95,6 +108,20 @@ print(hmac.new(key, data, hashlib.sha256).hexdigest())
   fi
   install -m 0644 -o pqp -g pqp "$STAGING/compose.yaml" "$DEST/compose.yaml"
   install -m 0644 -o pqp -g pqp "$STAGING/Caddyfile" "$DEST/Caddyfile"
+  # Same permissions/ownership provision.sh uses for the initial install.
+  # SAFE to do while THIS SCRIPT IS RUNNING: `install` writes the new
+  # content to a fresh inode in the destination directory and renames it
+  # into place, an atomic filesystem operation -- it does not truncate the
+  # file the currently-executing interpreter already has open. The shell
+  # that is running RIGHT NOW keeps reading the OLD content from the OLD
+  # (now unlinked-but-still-referenced) inode until it exits normally; only
+  # the NEXT invocation of `pqp-deploy` picks up whatever is installed
+  # here. Verified empirically before relying on it -- this is the same
+  # "safe self-replacing script" pattern several installers use, not a
+  # novel trick.
+  if [[ -f "$STAGING/pqp-deploy.sh" ]]; then
+    install -m 0755 -o root -g root "$STAGING/pqp-deploy.sh" /usr/local/bin/pqp-deploy
+  fi
 fi
 
 # GHCR credentials, only needed while ghcr.io/rafaelcg/pqp-api is private.
@@ -166,8 +193,20 @@ echo "api-replicas=${REPLICA_COUNT}"
 # budget".
 TOTAL_API_PG_POOL_MAX="$(grep -m1 '^PG_POOL_MAX=' "$DEST/.env" 2>/dev/null | cut -d'=' -f2- || true)"
 TOTAL_API_PG_POOL_MAX="${TOTAL_API_PG_POOL_MAX:-10}"
+# Fail closed rather than silently breaking the budget: flooring a
+# too-small division up to 1-per-replica would make the AGGREGATE exceed
+# TOTAL_API_PG_POOL_MAX (e.g. total=1, 2 replicas, floor-to-1 each = 2
+# connections against a budget of 1) -- exactly the kind of silent
+# violation this split exists to prevent. A total below the replica count
+# means there is no way to split it without either giving some replica 0
+# connections (broken) or exceeding the configured budget (the thing being
+# guarded against); either way that is a real misconfiguration the
+# operator needs to see and fix, not something to paper over.
+if (( TOTAL_API_PG_POOL_MAX < REPLICA_COUNT )); then
+  echo "PG_POOL_MAX=${TOTAL_API_PG_POOL_MAX} in .env cannot be split across ${REPLICA_COUNT} api replicas -- raise PG_POOL_MAX or set API_REPLICAS=1" >&2
+  exit 1
+fi
 API_PG_POOL_MAX_PER_REPLICA=$(( TOTAL_API_PG_POOL_MAX / REPLICA_COUNT ))
-(( API_PG_POOL_MAX_PER_REPLICA >= 1 )) || API_PG_POOL_MAX_PER_REPLICA=1
 export API_PG_POOL_MAX_PER_REPLICA
 echo "PG_POOL_MAX budget: ${TOTAL_API_PG_POOL_MAX} total / ${REPLICA_COUNT} replica(s) = ${API_PG_POOL_MAX_PER_REPLICA} each"
 
