@@ -4,6 +4,7 @@ import type { RealtimeTransport } from "@/lib/realtime";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
 import { defaultMicProcessing } from "@/lib/audio-devices";
+import { setOsCanExcludeCallAudioForTests } from "@/lib/screen-capture-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 
 /**
@@ -225,7 +226,8 @@ interface FakeCaptureTrack {
    * `displaySurface`, and older engines have no `getSettings` on a capture
    * track at all.
    */
-  getSettings?: () => { displaySurface?: string };
+  getSettings?: () => { displaySurface?: string; restrictOwnAudio?: boolean };
+  getCapabilities?: () => { restrictOwnAudio?: boolean[] };
 }
 
 interface FakeCapture {
@@ -246,6 +248,7 @@ function fakeCapture(
   id: string,
   withAudio: boolean,
   displaySurface?: string,
+  audioRestrict?: { restrictOwnAudio?: boolean; caps?: boolean[] },
 ): FakeCapture {
   let tracks: FakeCaptureTrack[] = [
     {
@@ -260,6 +263,20 @@ function fakeCapture(
       kind: "audio",
       onended: null,
       stop: () => stoppedTracks.push(`${id}:audio`),
+      ...(audioRestrict
+        ? {
+            getSettings: () => ({
+              restrictOwnAudio: audioRestrict.restrictOwnAudio,
+            }),
+            ...(audioRestrict.caps
+              ? {
+                  getCapabilities: () => ({
+                    restrictOwnAudio: audioRestrict.caps,
+                  }),
+                }
+              : {}),
+          }
+        : {}),
     });
   }
   return {
@@ -284,6 +301,7 @@ function installBrowserStubs() {
   g.cancelAnimationFrame = () => {};
   g.setInterval = () => 1;
   g.clearInterval = () => {};
+  setOsCanExcludeCallAudioForTests(true);
   const pagehideHandlers: Array<() => void> = [];
   g.window = {
     addEventListener: (type: string, handler: () => void) => {
@@ -461,6 +479,7 @@ describe("screen share audio", () => {
     expect(displayMediaCalls[0]).toMatchObject({
       audio: { echoCancellation: false, restrictOwnAudio: true },
       systemAudio: "include",
+      windowAudio: "window",
       // The anti-feedback rule: sharing the call's own tab would put the call
       // back into the call.
       selfBrowserSurface: "exclude",
@@ -483,6 +502,7 @@ describe("screen share audio", () => {
 
     expect(displayMediaCalls[0]).toMatchObject({
       systemAudio: "exclude",
+      windowAudio: "exclude",
       monitorTypeSurfaces: "exclude",
       selfBrowserSurface: "exclude",
       video: { displaySurface: "browser" },
@@ -509,6 +529,53 @@ describe("screen share audio", () => {
 
     expect(voice.getState().isSharingScreenAudio).toBe(true);
     expect(voice.getState().isSharingSystemAudio).toBe(false);
+  });
+
+  it("flags a window share that carries sound", async () => {
+    displayMedia = async () => fakeCapture("cap-win", true, "window");
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingSystemAudio).toBe(true);
+  });
+
+  it("strips mixer audio when restrictOwnAudio came back false", async () => {
+    displayMedia = async () =>
+      fakeCapture("cap-leak", true, "monitor", { restrictOwnAudio: false });
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(false);
+    expect(voice.getState().isSharingSystemAudio).toBe(false);
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      sharing: true,
+      audioStreamId: null,
+    });
+    expect(voice.getState().notice).toBeTruthy();
+  });
+
+  it("does not strip when restrictOwnAudio is omitted from settings", async () => {
+    displayMedia = async () => fakeCapture("cap-ok", true, "monitor");
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      audioStreamId: "cap-ok",
+    });
+  });
+
+  it("does not offer computer sound when this OS cannot exclude the call", async () => {
+    setOsCanExcludeCallAudioForTests(false);
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    expect(displayMediaCalls[0]).toMatchObject({
+      systemAudio: "exclude",
+      windowAudio: "exclude",
+    });
   });
 
   it("does not flag a silent whole-screen share", async () => {

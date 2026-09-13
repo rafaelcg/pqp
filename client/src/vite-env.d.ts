@@ -4,6 +4,7 @@
 import type { PqpDesktop } from "./lib/desktop";
 import type { Gtag } from "./lib/google-ads";
 import type { VoiceStatsConsole } from "./lib/voice-stats-probe";
+import type { ShareAudioProbeConsole } from "./lib/share-audio-probe";
 
 interface ImportMetaEnv {
   readonly VITE_CLERK_PUBLISHABLE_KEY: string;
@@ -81,6 +82,11 @@ declare global {
      * live call can be measured from the console instead of described.
      */
     pqpVoiceStats?: VoiceStatsConsole;
+    /**
+     * Console-only: is the call in the share-audio track? See
+     * `lib/share-audio-probe.ts` and `e2e/share-audio-echo/README.md`.
+     */
+    pqpShareAudioProbe?: ShareAudioProbeConsole;
     /**
      * Defined only by the Google tag, which is only injected on the pqp.gg
      * build. Optional here because on a self-hosted build it genuinely is not

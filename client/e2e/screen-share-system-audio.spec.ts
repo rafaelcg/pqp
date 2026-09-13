@@ -308,10 +308,12 @@ test("a share does not ask for the machine's audio, and says so when a whole scr
       .toBe(1);
     const first = (await captureRequests(page))[0]!;
 
-    // Chrome 141+ can strip this document from the tap, so `include` is how
-    // its picker shows one "Share system audio" box. The echo was `include`
-    // *without* `restrictOwnAudio`.
-    expect(first.systemAudio).toBe("include");
+    // Computer sound is Windows 11 only. CI is macOS or Linux, so the request
+    // must exclude the mixer. Audio is still REQUESTED: dropping that would
+    // silence a tab share's own sound. restrictOwnAudio stays on the request
+    // so a Win11 box that later honours it still strips this document.
+    expect(first.systemAudio).toBe("exclude");
+    expect(first.windowAudio).toBe("exclude");
     expect(first.audio).toMatchObject({ restrictOwnAudio: true });
     // Audio is still REQUESTED. Dropping the constraint would silence a tab
     // share's own sound, which is the path that never needed this opt-in.

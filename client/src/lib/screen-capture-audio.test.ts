@@ -5,7 +5,9 @@ import {
   offersBrowserSystemAudio,
   offersShellSystemAudio,
   liveScreenCaptureEnvironment,
+  osCanExcludeCallFromUa,
   screenCaptureOptions,
+  shouldStripLeakedSystemAudio,
   shareStreamHasAudio,
   shellCarriesScreenAudio,
   steersAtBrowserTab,
@@ -16,6 +18,7 @@ const browser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
   shellPlatform: null,
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: true,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -24,6 +27,17 @@ const oldBrowser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
   shellPlatform: null,
   supportsRestrictOwnAudio: false,
+  osCanExcludeCallAudio: false,
+  sharePickerOffersAudio: false,
+  shellSystemAudio: null,
+  shellRestrictOwnAudio: null,
+};
+/** Chrome on Windows 10: the constraint flag is on, exclude cannot run. */
+const win10Browser: ScreenCaptureEnvironment = {
+  isDesktopShell: false,
+  shellPlatform: null,
+  supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: false,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -33,6 +47,7 @@ const shell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: false,
+  osCanExcludeCallAudio: false,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -41,6 +56,7 @@ const newShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: true,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -49,6 +65,7 @@ const pickerShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: true,
   sharePickerOffersAudio: true,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -58,6 +75,7 @@ const capableShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: true,
   sharePickerOffersAudio: true,
   shellSystemAudio: "loopback",
   shellRestrictOwnAudio: true,
@@ -67,6 +85,7 @@ const capableMacShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "darwin",
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: false,
   sharePickerOffersAudio: false,
   shellSystemAudio: "none",
   shellRestrictOwnAudio: true,
@@ -76,6 +95,7 @@ const macShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "darwin",
   supportsRestrictOwnAudio: false,
+  osCanExcludeCallAudio: false,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -93,6 +113,28 @@ describe("screenCaptureOptions", () => {
 
   it("keeps the machine's mixer off on a browser that cannot strip the call", () => {
     expect(screenCaptureOptions(true, oldBrowser).systemAudio).toBe("exclude");
+  });
+
+  it("refuses computer sound on Windows 10 even when the constraint flag is on", () => {
+    // getSupportedConstraints().restrictOwnAudio is true on Win10. Chromium
+    // still cannot exclude this document. Offering the mixer is the echo.
+    expect(screenCaptureOptions(false, win10Browser).systemAudio).toBe(
+      "exclude",
+    );
+    expect(offersBrowserSystemAudio(win10Browser)).toBe(false);
+    expect(screenCaptureOptions(false, win10Browser).windowAudio).toBe(
+      "exclude",
+    );
+  });
+
+  it("asks Win11 Chrome for per-app window audio, not the mixer", () => {
+    expect(screenCaptureOptions(false, browser).windowAudio).toBe("window");
+  });
+
+  it("never sends windowAudio in the desktop shell", () => {
+    expect(screenCaptureOptions(false, capableShell)).not.toHaveProperty(
+      "windowAudio",
+    );
   });
 
   it("still includes when the caller also opted in", () => {
@@ -226,6 +268,7 @@ describe("screenCaptureOptions", () => {
       preferBrowserTab: true,
     });
     expect(options.systemAudio).toBe("exclude");
+    expect(options.windowAudio).toBe("exclude");
     expect(options.preferCurrentTab).toBeUndefined();
     expect(options.monitorTypeSurfaces).toBe("exclude");
     expect(options.selfBrowserSurface).toBe("exclude");
@@ -429,10 +472,12 @@ describe("capturesSystemAudio", () => {
     ).toBe(false);
   });
 
-  it("is false for a window share with sound", () => {
+  it("is true for a window share that carries sound", () => {
+    // Chrome's default windowAudio is the mixer. Electron attaches loopback
+    // to windows. This is the Pocket Bard path, and it can echo.
     expect(
       capturesSystemAudio({ displaySurface: "window", hasAudio: true }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("is false when the browser hides which surface was picked", () => {
@@ -471,6 +516,81 @@ describe("shareStreamHasAudio", () => {
     expect(
       shareStreamHasAudio([{ readyState: "ended" }, { readyState: "live" }]),
     ).toBe(true);
+  });
+});
+
+describe("osCanExcludeCallFromUa", () => {
+  it("treats UA-CH major 13+ as Windows 11", () => {
+    expect(osCanExcludeCallFromUa("Windows", "13.0.0")).toBe(true);
+    expect(osCanExcludeCallFromUa("Windows", "15.0.0")).toBe(true);
+  });
+
+  it("treats NT build 22000+ as Windows 11 if a browser thaws the version", () => {
+    expect(osCanExcludeCallFromUa("Windows", "10.0.22000")).toBe(true);
+    expect(osCanExcludeCallFromUa("Windows", "10.0.22631")).toBe(true);
+  });
+
+  it("refuses Windows 10 and Server 2022", () => {
+    expect(osCanExcludeCallFromUa("Windows", "10.0.0")).toBe(false);
+    expect(osCanExcludeCallFromUa("Windows", "10.0.19045")).toBe(false);
+    expect(osCanExcludeCallFromUa("Windows", "10.0.20348")).toBe(false);
+  });
+
+  it("refuses a missing hint, macOS, and ChromeOS", () => {
+    expect(osCanExcludeCallFromUa("Windows", undefined)).toBe(false);
+    expect(osCanExcludeCallFromUa("macOS", "13.0.0")).toBe(false);
+    expect(osCanExcludeCallFromUa("Chrome OS", "15.0.0")).toBe(false);
+  });
+});
+
+describe("shouldStripLeakedSystemAudio", () => {
+  it("strips a monitor tap when restrictOwnAudio came back false", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "monitor",
+        hasAudio: true,
+        restrictOwnAudio: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("strips a window tap the same way", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "window",
+        hasAudio: true,
+        restrictOwnAudio: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not strip when settings omit restrictOwnAudio", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "monitor",
+        hasAudio: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("strips when capabilities cannot include true", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "monitor",
+        hasAudio: true,
+        restrictOwnAudioCaps: [false],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not strip a tab share", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "browser",
+        hasAudio: true,
+        restrictOwnAudio: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -513,9 +633,13 @@ describe("liveScreenCaptureEnvironment", () => {
     expect(env.sharePickerOffersAudio).toBe(true);
     // And the whole point of reading it: a watch party there is offered the
     // machine's sound, because there is no tab to take it from.
-    expect(offersShellSystemAudio({ ...env, supportsRestrictOwnAudio: true })).toBe(
-      true,
-    );
+    expect(
+      offersShellSystemAudio({
+        ...env,
+        supportsRestrictOwnAudio: true,
+        osCanExcludeCallAudio: true,
+      }),
+    ).toBe(true);
   });
 
   it("falls back to the flags a 0.1.5 shell publishes", () => {
