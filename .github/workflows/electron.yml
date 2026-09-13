@@ -308,6 +308,7 @@ jobs:
       # Windows and Linux create the tag's draft release themselves in one
       # step; this only creates it when macOS's job happens to finish first.
       - name: Publish macOS release assets
+        id: publish-mac
         if: |
           matrix.platform == 'mac' &&
           startsWith(github.ref, 'refs/tags/v') &&
@@ -320,14 +321,41 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           tag="${GITHUB_REF#refs/tags/}"
-          gh release view "$tag" --repo rafaelcg/pqp >/dev/null 2>&1 || \
-            gh release create "$tag" --repo rafaelcg/pqp --draft --title "$tag"
+          # Windows and Linux race this: whichever of the three platform jobs
+          # gets here first creates the tag's draft release, same as
+          # electron-builder's own publisher does when it runs first. The
+          # `|| true` on create is the other half — if a sibling job wins the
+          # narrow window between this job's `view` and `create`, `create`
+          # fails on "already exists" and that failure must not stop the
+          # upload below, which is what actually needs the release to exist.
+          if ! gh release view "$tag" --repo rafaelcg/pqp >/dev/null 2>&1; then
+            gh release create "$tag" --repo rafaelcg/pqp --draft --title "$tag" || true
+          fi
           assets=(release/*.dmg release/*.zip release/*.blockmap release/*.yml)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::warning::No macOS release assets found in release/ to publish for $tag."
             exit 0
           fi
           gh release upload "$tag" "${assets[@]}" --repo rafaelcg/pqp --clobber
+
+      # This step, like "Package Electron" and "Verify" above, runs inside a
+      # job whose failure the job-level `continue-on-error` hides from the
+      # run's status — so a transient `gh` failure or a lost create-vs-upload
+      # race here would otherwise look identical to "published fine" from the
+      # outside. Say so the same way those two already do.
+      - name: Say so when publishing macOS release assets failed
+        # `always()`, because the step being reported on already failed: the
+        # implicit `success()` every `if:` otherwise carries would skip this
+        # one right along with it, which is exactly the silence this exists
+        # to fix.
+        if: |
+          always() &&
+          matrix.platform == 'mac' &&
+          startsWith(github.ref, 'refs/tags/v') &&
+          steps.publish-mac.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "::warning::Failed to publish macOS release assets for this tag. Windows and Linux artifacts are unaffected, but the draft release may be missing the macOS build. Check this job's log; the built files are still in electron/release/ via the CI artifact below if a manual upload is needed."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
