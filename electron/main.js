@@ -844,9 +844,12 @@ function showSourcePicker(labeled) {
  * The whole "which surface?" decision, from permission to callback payload.
  *
  * Order matters. macOS raises its own screen-recording prompt on the FIRST
- * `getSources` call, so the permission state is read twice: once to avoid a
- * pointless listing when we already know the answer is no, and once after,
- * because that listing is what produced whatever answer we now have. A macOS
+ * `getSources` call, so the permission state is read twice: once to skip the
+ * listing only when macOS says it can never be granted (`restricted`), and
+ * once after, because that listing is what produced whatever answer we now
+ * have. `denied` before the listing is NOT a final answer: Electron's screen
+ * preflight cannot tell "refused" from "never asked" (see `screenPermission`),
+ * and 0.1.5 to 0.1.7 treated it as one, so no Mac was ever prompted. A macOS
  * without the grant does not fail this call, which would be easy to handle. It
  * returns a plausible-looking list of nothing useful, and the only way to know
  * is to ask again.
