@@ -1,7 +1,43 @@
-# Caddy in front of the pqp API box. Reverse-proxies api.pqp.gg to the `api`
-# container, WebSocket included — Caddy's reverse_proxy handles the Upgrade
-# handshake for `/ws` automatically, no extra directive needed.
+# Caddy in front of the pqp API box. Reverse-proxies api.pqp.gg to the
+# api-a / api-b containers, WebSocket included — Caddy's reverse_proxy
+# handles the Upgrade handshake for `/ws` automatically, no extra directive
+# needed.
 #
+# TWO API CONTAINERS (docs/plans/ALWAYS_ON.md A0.2): the `upstreams` snippet
+# below load-balances across both. Active health checking (`health_uri`)
+# means a crashed or restarting replica is pulled out of rotation on its own
+# — no dependency on Compose's `depends_on`/`restart` timing, and no change
+# needed here for API_REPLICAS=1 (compose.yaml's rolling-update flip):
+# api-b simply never resolves on the compose network in that mode, its
+# health check fails every interval, and Caddy routes everything to api-a.
+# Expect periodic "upstream unhealthy"/dial-refused log lines from Caddy
+# while running single-replica; that is this mechanism working as intended,
+# not a misconfiguration — see docs/deploy-vultr.md "Two replicas on one
+# box".
+(upstreams) {
+	reverse_proxy api-a:3001 api-b:3001 {
+		lb_policy round_robin
+		# Active health checking: an upstream that fails this is excluded
+		# from selection until it passes again. Short interval so a
+		# redeploy's restart of one replica (compose.yaml's healthcheck
+		# start_period is 30s) or a crash is noticed fast relative to the
+		# reconnect-jitter window clients already tolerate (CLAUDE.md
+		# pitfall #11).
+		health_uri /health
+		health_interval 5s
+		health_timeout 3s
+		# Belt-and-braces passive check: if a request to the upstream Caddy
+		# picked still fails (a crash landing inside the active-check gap),
+		# retry against the other upstream for up to this long before
+		# giving the client an error. WebSocket upgrade requests are a
+		# single connection attempt either way — this only affects new
+		# connections, never an already-established `/ws` socket, which
+		# just drops and reconnects per the drain contract below.
+		lb_try_duration 5s
+		flush_interval -1
+	}
+}
+
 # TWO TLS MODES, because Cloudflare sits in front of this box either way
 # (api.pqp.gg is proxied, orange-cloud — see docs/deploy-vultr.md "cutover"):
 # pick ONE of the two site blocks below and delete or comment the other.
@@ -38,21 +74,11 @@ api.pqp.gg {
 	# Answer Fly's own health path the same way so the same external
 	# monitors (docs/MONITORING.md) work unmodified against this box.
 	handle /health {
-		reverse_proxy api:3001
+		import upstreams
 	}
 
 	handle {
-		reverse_proxy api:3001 {
-			# Caddy already sets X-Forwarded-For / -Proto / -Host by default;
-			# this is one hop (Caddy) in front of the app, matching fly.toml's
-			# TRUST_PROXY=true / one-hop assumption. Cloudflare is a SECOND
-			# hop in front of Caddy, but it is opaque to the app: Caddy is what
-			# clientAddress() sees, and Caddy's default forwarding already
-			# carries Cloudflare's CF-Connecting-IP chain through
-			# X-Forwarded-For correctly because Cloudflare itself sets that
-			# header before Caddy ever sees the request.
-			flush_interval -1
-		}
+		import upstreams
 	}
 
 	encode gzip zstd
@@ -64,13 +90,11 @@ api.pqp.gg {
 #
 # api.pqp.gg {
 # 	handle /health {
-# 		reverse_proxy api:3001
+# 		import upstreams
 # 	}
 #
 # 	handle {
-# 		reverse_proxy api:3001 {
-# 			flush_interval -1
-# 		}
+# 		import upstreams
 # 	}
 #
 # 	encode gzip zstd

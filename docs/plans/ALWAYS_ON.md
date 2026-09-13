@@ -58,7 +58,7 @@ which is why it can run on Fly staging today even though production is moving
 to Vultr.
 
 **A0.2 - Two API containers on ONE Vultr box, behind Caddy, as the cheap
-first step.** `tools/api-host/compose.yaml` runs one `api` service today;
+first step. Status: in PR.** `tools/api-host/compose.yaml` runs one `api` service today;
 split it into `api-a` / `api-b` on two internal ports, both reading the same
 `/opt/pqp/.env` (same `DATABASE_URL`, `CLUSTER_BUS=postgres`,
 `VOICE_REGISTRY=postgres`), with Caddy load-balancing `/api/*` and `/ws`

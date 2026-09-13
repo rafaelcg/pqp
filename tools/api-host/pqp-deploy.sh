@@ -117,26 +117,42 @@ echo "previous-tag=${PREV_TAG:-none}"
 
 export APP_IMAGE_TAG="$TAG" APP_VERSION="$TAG"
 
-# Pull BOTH images before touching either running container. A pull
-# failure here (bad tag, registry hiccup) exits non-zero with neither
-# service touched, instead of leaving one on the new tag and one on the
-# old one.
-docker compose pull api worker
+# API_REPLICAS lives in .env (NOT passed as an argument -- this script's
+# only argument is the image tag, see the header comment on why that
+# surface stays that small) so flipping it is the same "edit .env, redeploy"
+# motion docs/deploy-vultr.md already documents for rotating a secret. Unset
+# or anything other than exactly "1" means two replicas (api-a AND api-b) --
+# that is the normal, shipped state (docs/plans/ALWAYS_ON.md A0.2).
+# API_REPLICAS=1 is the one-line rollback to a single container, kept until
+# the multi-instance registry (CLUSTER_BUS=postgres / VOICE_REGISTRY=postgres,
+# both already set in this box's .env) has soaked through its own staging
+# rehearsal (A0.1/M6 in docs/plans/MULTI_INSTANCE_VOICE.md).
+API_REPLICAS="$(grep -m1 '^API_REPLICAS=' "$DEST/.env" 2>/dev/null | cut -d'=' -f2- || true)"
+if [[ "$API_REPLICAS" == "1" ]]; then
+  echo "API_REPLICAS=1: running api-a only"
+  export COMPOSE_PROFILES=""
+  API_SERVICES=(api-a)
+else
+  export COMPOSE_PROFILES="replicas"
+  API_SERVICES=(api-a api-b)
+fi
 
-docker compose up -d api worker
+# Pull every image this run will touch before touching any running
+# container. A pull failure here (bad tag, registry hiccup) exits non-zero
+# with nothing touched, instead of leaving some containers on the new tag
+# and others on the old one.
+docker compose pull "${API_SERVICES[@]}" worker
 
-# Bring Caddy up if this is the very first run on this box (no container
-# yet), then reload it unconditionally so a Caddyfile that was copied but
-# never applied doesn't sit inert -- `caddy reload` validates first and
-# only swaps in the new config if that passes.
-docker compose up -d caddy
-docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force
-
-# Wait for BOTH services' own Docker healthchecks (compose.yaml defines one
-# for each) before calling this a success -- the deploy workflow's external
-# check only ever reaches `api` through Caddy, so without this a worker
-# that fails to boot on the new image would go unnoticed here and only
-# surface later, off this pipeline entirely.
+# Rolling update, one replica at a time (docs/plans/ALWAYS_ON.md A0.2's
+# whole point): recreate api-a, confirm it is healthy AND actually serving
+# this tag, only THEN touch api-b. A container crash fails over to its
+# sibling; this makes a bad *deploy* fail over the same way -- if api-a
+# never comes up clean, api-b (and worker) are never touched and keep
+# serving the previous release. If api-b is the one that fails, api-a is
+# already confirmed healthy on the new tag and keeps serving -- either
+# order, one replica is always up. `worker` runs last and alone: it is
+# not behind Caddy and nothing fails over to it, so there is no ordering
+# constraint it needs to protect.
 wait_healthy() {
   local svc="$1" tries=0 status="unknown"
   while (( tries < 24 )); do # 24 * 5s = 120s, generous over the 30s start_period
@@ -151,19 +167,54 @@ wait_healthy() {
   echo "$svc never reported healthy (last status: $status)" >&2
   return 1
 }
-wait_healthy api
-wait_healthy worker
 
-# Belt and braces beyond the Docker healthcheck: confirm the api container
-# is actually reporting the tag this run asked for, not just "reachable".
-served="$(docker compose exec -T api node -e "fetch('http://localhost:3001/health').then(r=>r.json()).then(j=>console.log(j.version||'')).catch(()=>console.log(''))" 2>/dev/null || true)"
-if [[ "$served" != "$TAG" ]]; then
-  echo "api is healthy but /health reports version '$served', expected '$TAG'" >&2
+# Belt and braces beyond the Docker healthcheck: confirm a given api
+# container is actually reporting the tag this run asked for, not just
+# "reachable" -- same check the old single-`api` version of this script
+# did, now run per replica.
+verify_version() {
+  local svc="$1" served
+  served="$(docker compose exec -T "$svc" node -e "fetch('http://localhost:3001/health').then(r=>r.json()).then(j=>console.log(j.version||'')).catch(()=>console.log(''))" 2>/dev/null || true)"
+  if [[ "$served" != "$TAG" ]]; then
+    echo "$svc is healthy but /health reports version '$served', expected '$TAG'" >&2
+    return 1
+  fi
+  return 0
+}
+
+docker compose up -d api-a
+if ! wait_healthy api-a || ! verify_version api-a; then
+  echo "api-a failed to come up on $TAG; leaving api-b/worker on the previous release" >&2
   exit 1
 fi
 
-# Only now, with both containers healthy and api confirmed on this tag, is
-# this the box's new known-good release.
+if [[ " ${API_SERVICES[*]} " == *" api-b "* ]]; then
+  docker compose up -d api-b
+  if ! wait_healthy api-b || ! verify_version api-b; then
+    echo "api-b failed to come up on $TAG; api-a is already healthy on $TAG and keeps serving" >&2
+    exit 1
+  fi
+fi
+
+docker compose up -d worker
+if ! wait_healthy worker; then
+  echo "worker failed to come up on $TAG" >&2
+  exit 1
+fi
+
+# Bring Caddy up if this is the very first run on this box (no container
+# yet), then reload it unconditionally so a Caddyfile that was copied but
+# never applied doesn't sit inert -- `caddy reload` validates first and
+# only swaps in the new config if that passes. Caddy's own active health
+# checking (Caddyfile's `upstreams` snippet) is what actually decides
+# whether api-a/api-b are usable at request time; this reload only ever
+# needs to happen once the replica(s) we just brought up are confirmed
+# healthy above, which they are by this point.
+docker compose up -d caddy
+docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force
+
+# Only now, with every service healthy and every api replica confirmed on
+# this tag, is this the box's new known-good release.
 echo "$TAG" >"$DEST/.deployed-tag"
 chmod 0644 "$DEST/.deployed-tag"
 
