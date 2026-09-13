@@ -114,6 +114,8 @@ Browser/Electron → Clerk (auth)
 | Staging SPA | Cloudflare Pages branch `staging` of project `pqp` | https://staging.pqp-3yr.pages.dev |
 | Staging API + WS | Fly.io app `pqp-api-staging`, region `gru` | https://pqp-api-staging.fly.dev — `wss://pqp-api-staging.fly.dev/ws` |
 
+**API + WS is moving off Fly to a Vultr box in `gru`** (decision 2026-09-13, after the watch-party postmortem's cost and capacity numbers); Fly stays up as the 30-day rollback. Gated on `vars.DEPLOY_TARGET`, changes nothing until flipped. See [`docs/deploy-vultr.md`](./docs/deploy-vultr.md) and [`docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md`](./docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md) §E.
+
 CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `deploy-api-fly.yml` (API auto-deploys from `main` — a merged schema/endpoint change is live minutes later), `electron.yml`, `deploy-staging.yml` (staging web + API from the `staging` branch or `workflow_dispatch`; see `docs/STAGING.md`).
 
 **GitHub Actions secrets (names):** `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`; staging adds secret `FLY_API_TOKEN_STAGING` and repo variable `STAGING_CLERK_PUBLISHABLE_KEY`.

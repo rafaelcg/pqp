@@ -1,0 +1,120 @@
+#cloud-config
+# First-boot config for the pqp API box (Vultr, São Paulo, Ubuntu 24.04).
+#
+# This is the part that only ever runs once, at instance creation, the way
+# Vultr's "cloud-init user data" field works. Everything that has to be
+# idempotent (safe to re-run against a live box to check for drift, the way
+# tools/sfu/install.sh works) lives in provision.sh instead, which this file
+# only fetches and runs.
+#
+# Use it exactly like the SFU box's Vultr create call: paste this file's
+# contents into "User Data" when creating the instance, with SSH keys already
+# attached to the account (so `ssh_authorized_keys` below is not the only way
+# in — belt and braces, same reasoning as tools/sfu/install.sh's guard against
+# sealing yourself out).
+#
+# What it does NOT do: touch DNS, touch Cloudflare, or start the api/worker/
+# caddy containers. Those need secrets (DATABASE_URL, CLERK_SECRET_KEY, the
+# GHCR image) that do not belong in cloud-init user data, which Vultr stores
+# and which is not a secret store. See docs/deploy-vultr.md for the full
+# provisioning + cutover sequence.
+
+package_update: true
+package_upgrade: true
+
+users:
+  # A non-root account for a HUMAN to SSH into (troubleshooting, manual
+  # ops per docs/deploy-vultr.md). Kept separate from root the same way the
+  # SFU box's own hardening story assumes a key holder, not necessarily
+  # root. Note this account IS effectively root-equivalent (docker group:
+  # the Docker daemon socket can mount `/`, read any file, replace any
+  # running service) — that is acceptable for a human's own key, but it is
+  # exactly why the CI deploy key below does NOT authenticate to this
+  # account. Its authorized_keys is populated ONLY by Vultr's own "SSH
+  # Keys" instance attachment (a human's personal key), never by
+  # provision.sh or this file.
+  - name: pqp
+    groups: [docker, sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:/usr/bin/docker, /usr/bin/systemctl"]
+    lock_passwd: true
+
+  # The account the deploy workflow's GitHub secret (VULTR_API_SSH_KEY)
+  # actually authenticates to. Deliberately powerless on its own: no
+  # docker/sudo group, and (once provision.sh has run — see that script)
+  # exactly one sudo rule for one fixed, root-owned script,
+  # /usr/local/bin/pqp-deploy, which only pulls fixed images and reloads
+  # Caddy from fixed files under /opt/pqp. A fully leaked
+  # VULTR_API_SSH_KEY therefore cannot start an arbitrary container, read
+  # /opt/pqp/.env, or touch any file this script does not already touch —
+  # see tools/api-host/pqp-deploy.sh for the whole of what it can do.
+  - name: pqp-deploy
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      # Replaced at instance-creation time with the deploy key's PUBLIC half
+      # (the private half is GitHub secret VULTR_API_SSH_KEY).
+      - __PQP_DEPLOY_PUBLIC_KEY__
+
+write_files:
+  # Sorts ahead of Ubuntu's 50-cloud-init.conf, same numbering trick as
+  # tools/sfu/sshd-hardening.conf and for the same reason: sshd takes the
+  # FIRST value it sees for a keyword, and the Include of the drop-in
+  # directory is above the file that ships PasswordAuthentication yes.
+  - path: /etc/ssh/sshd_config.d/01-pqp-hardening.conf
+    permissions: "0600"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin without-password
+
+runcmd:
+  # Docker straight from Docker's own apt repo, not Ubuntu's older packaged
+  # version — same source tools/sfu/install.sh uses.
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - >
+    bash -c 'echo "deb [arch=$(dpkg --print-architecture)
+    signed-by=/etc/apt/keyrings/docker.asc]
+    https://download.docker.com/linux/ubuntu $(. /etc/os-release &&
+    echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list'
+  - apt-get update -qq
+  - apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin ufw unattended-upgrades fail2ban
+  - systemctl enable --now docker
+  - systemctl enable --now unattended-upgrades
+  # Ubuntu's shipped 50unattended-upgrades.conf leaves Automatic-Reboot
+  # commented out (false). Left alone deliberately, same call as the SFU box:
+  # a kernel patch landing a day late beats an API restart nobody scheduled.
+
+  # ufw: 22 only from the allowlist (never the world — this box holds
+  # DATABASE_URL and CLERK_SECRET_KEY, not the disposable SFU config).
+  # 80/443 are NOT opened to the world either: api.pqp.gg is proxied
+  # (orange-cloud) behind Cloudflare, so the origin only ever needs to hear
+  # from Cloudflare's edge — anyone else connecting directly would bypass
+  # Cloudflare's WAF, rate limiting and DDoS protection entirely, cert
+  # notwithstanding (a client can always disable validation). Restricted to
+  # Cloudflare's own published ranges, fetched live rather than pinned in
+  # this file, since they occasionally change; provision.sh refreshes the
+  # same rules on every re-run for a box that outlives this one boot.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - for cidr in __SSH_ALLOWLIST_CIDRS__; do ufw allow from "$cidr" to any port 22 proto tcp; done
+  - curl -fsS --max-time 10 https://www.cloudflare.com/ips-v4 -o /etc/pqp-cloudflare-ips || true
+  - curl -fsS --max-time 10 https://www.cloudflare.com/ips-v6 >>/etc/pqp-cloudflare-ips || true
+  - test -s /etc/pqp-cloudflare-ips && while read -r cidr; do [ -n "$cidr" ] && ufw allow from "$cidr" to any port 80 proto tcp && ufw allow from "$cidr" to any port 443 proto tcp; done </etc/pqp-cloudflare-ips || echo "!! could not fetch Cloudflare ranges at boot; provision.sh will retry"
+  - ufw --force enable
+
+  # Sorry-cloud-init reload, not restart, so this boot's own session survives
+  # if it happens to be an SSH one.
+  - sshd -t && systemctl reload ssh
+
+  - mkdir -p /opt/pqp
+  - chown pqp:pqp /opt/pqp
+
+  # The idempotent half. Re-running this after boot (or against a live box)
+  # is provision.sh's whole job; cloud-init's runcmd only fires once, so
+  # anything that needs to be checked again later belongs there, not here.
+  - test -f /opt/pqp/provision.sh && bash /opt/pqp/provision.sh || true
+
+final_message: "pqp API box cloud-init done after $UPTIME seconds. Next: copy tools/api-host/{compose.yaml,Caddyfile,provision.sh} to /opt/pqp and run provision.sh as documented in docs/deploy-vultr.md."

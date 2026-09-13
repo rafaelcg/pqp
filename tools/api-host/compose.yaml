@@ -1,0 +1,117 @@
+# The pqp API box, in Docker Compose. Lives at /opt/pqp/compose.yaml on the
+# box (copied there by provision.sh / the deploy workflow — see
+# docs/deploy-vultr.md). Three services: the two halves of the Fly setup
+# (pqp-api and pqp-worker, same image, different WORKER_MODE — see
+# fly.toml and fly.worker.toml, which this mirrors) plus Caddy, which Fly's
+# own edge proxy did for free and this box now has to do itself.
+#
+# Deploy sets two variables before `docker compose pull && up -d api worker`:
+#   APP_IMAGE_TAG  the commit sha, becomes part of the image reference
+#   APP_VERSION    the same sha, becomes the env var GET /health and
+#                  GET /ready report — this is what the post-deploy check
+#                  in .github/workflows/deploy-api-vultr.yml polls for, the
+#                  same "did the running process actually pick this up"
+#                  question deploy-api-fly.yml's `-e APP_VERSION=...` answers.
+# Compose reads them from the shell environment or a second --env-file
+# layered on top of .env (see the workflow); both default to `dev` so a
+# manual `docker compose up` without them still starts something recognisable
+# rather than failing to interpolate.
+#
+# .env (NOT in git — see docs/deploy-vultr.md "Secrets") carries everything
+# with a credential in it: DATABASE_URL, CLERK_SECRET_KEY, TURN/ICE vars,
+# LIVEKIT_*, S3_*, etc. Same list as Fly's `fly secrets set`, see CLAUDE.md's
+# env var table and docs/deploy-vultr.md "Secrets to copy from Fly".
+
+services:
+  api:
+    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
+    env_file:
+      - .env
+    environment:
+      # Overrides .env on purpose: this file is the one place the two
+      # processes' roles are pinned, the same reason fly.toml and
+      # fly.worker.toml each hardcode it rather than leaving it in [env].
+      - WORKER_MODE=api
+      - APP_VERSION=${APP_VERSION:-dev}
+      - PORT=3001
+    restart: unless-stopped
+    # Matches kill_timeout in fly.toml. The server's own SIGTERM handling
+    # (server/src/lib/drain.ts) budgets 25s internally (2s settle + up to
+    # 10s of batched socket closes + pool/bus teardown); 60s is slack on top
+    # so a slow pool close under load never races a SIGKILL. Compose sends
+    # SIGTERM then waits this long before SIGKILL, same contract as Fly.
+    stop_grace_period: 60s
+    stop_signal: SIGTERM
+    healthcheck:
+      # /health is unauthenticated (CLAUDE.md pitfall #8) and does a real
+      # SELECT 1, so "healthy" here means "process up AND database
+      # reachable" — the same bar fly.toml's [[http_service.checks]] sets.
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    # No `ports:` — only Caddy talks to this over the internal compose
+    # network (service name `api`, port 3001), same as fly-proxy being the
+    # one thing in front of the Fly machine.
+
+  worker:
+    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
+    env_file:
+      - .env
+    environment:
+      - WORKER_MODE=worker
+      - APP_VERSION=${APP_VERSION:-dev}
+      - PORT=3001
+      # fly.worker.toml keeps this low on purpose (batch jobs, not
+      # connection-bound); keep the two pool sizes summing under the
+      # database's max_connections the same way the Fly comment says to.
+      - PG_POOL_MAX=${WORKER_PG_POOL_MAX:-4}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    # fly.worker.toml overrides the image CMD to run worker.js directly
+    # rather than trusting WORKER_MODE alone; do the same here so `docker ps`
+    # and this file agree about what each container is, belt and braces with
+    # the env var above.
+    command: ["node", "server/dist/worker.js"]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    stop_grace_period: 10s
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      # Only present in the Origin-CA mode of the Caddyfile (see that file's
+      # header comment); harmless bind of an empty/absent dir otherwise is
+      # NOT safe with Docker (a missing host path is created as an empty
+      # dir), so provision.sh always creates it, even when unused.
+      - ./certs:/etc/caddy/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:

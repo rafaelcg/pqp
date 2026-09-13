@@ -2,6 +2,8 @@
 
 This repo deploys the **marketing site + static SPA shell** to **Cloudflare Pages**. The WebSocket/API server and Postgres are **not** on Pages — host them separately (e.g. [Railway](./deploy-railway.md)).
 
+**Production API + WS today:** Fly.io, [`deploy-fly.md`](./deploy-fly.md). **Moving to a Vultr box** (decision 2026-09-13, cost/capacity numbers in the watch-party postmortem): see [`deploy-vultr.md`](./deploy-vultr.md), gated on `vars.DEPLOY_TARGET` so it changes nothing until flipped.
+
 ## Architecture (hosted)
 
 | Piece | Where | Notes |
