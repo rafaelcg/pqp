@@ -443,8 +443,19 @@ export function HlsWatchPlayer({
   const activeSrcRef = useRef(activeSrc);
   activeSrcRef.current = activeSrc;
   // Guards only the automatic path (see `reconnect` below): a stuck egress
-  // must never have two `fetchChannelLive` calls in flight at once.
+  // must never have two `fetchChannelLive` calls in flight at once. Bounded
+  // by `apiFetch`'s own 12 s abort (`client/src/lib/api.ts`), not just the
+  // backoff above it, so a single hung request cannot block every later
+  // automatic attempt behind this flag forever (Farol review, PR 570).
   const reconnectInFlightRef = useRef(false);
+  // Bumped once per REAL attach -- inside the big `[activeSrc, attempt]`
+  // effect below, before its own async `attach()` runs -- including a
+  // same-URL rebuild (`setAttempt`, no `activeSrc` change at all). Farol
+  // review, PR 570: `activeSrcRef` alone cannot see that case, so a
+  // response for the URL a person's own "try again" just rebuilt onto could
+  // still pass the staleness check below and apply itself on top of the
+  // fresh instance. Comparing this too closes it.
+  const attachGenerationRef = useRef(0);
 
   const reconnect = useCallback(
     async (options: { forceRebuild?: boolean } = {}) => {
@@ -459,10 +470,14 @@ export function HlsWatchPlayer({
         return;
       }
       // This call's own view of "the source we're checking on behalf of",
-      // fixed at the moment it started. Compared against the live ref below
-      // once the await returns, so a response this call receives is only
-      // ever applied to the source it was actually asked about.
+      // fixed at the moment it started. Compared against the live refs
+      // below once the await returns, so a response this call receives is
+      // only ever applied to the source it was actually asked about --
+      // `requestedGeneration` catches a same-URL rebuild in between
+      // (`activeSrc` unchanged, so the URL check alone would miss it;
+      // Farol review, PR 570) as well as a genuinely different one.
       const requestedSrc = activeSrc;
+      const requestedGeneration = attachGenerationRef.current;
       if (!options.forceRebuild) {
         reconnectInFlightRef.current = true;
       }
@@ -484,9 +499,13 @@ export function HlsWatchPlayer({
           reconnectInFlightRef.current = false;
         }
       }
-      if (activeSrcRef.current !== requestedSrc) {
+      if (
+        activeSrcRef.current !== requestedSrc ||
+        attachGenerationRef.current !== requestedGeneration
+      ) {
         // Something else -- a genuinely different session this same check
-        // already adopted, a person's own "try again", or another reconnect
+        // already adopted, a person's own "try again" (even a same-URL
+        // rebuild, caught by the generation check), or another reconnect
         // that resolved first -- already moved the player on while this
         // request was in flight. Applying a response for the source we
         // asked about would be the stale write Farol flagged; drop it.
@@ -802,6 +821,9 @@ export function HlsWatchPlayer({
     let cancelled = false;
     let hls: HlsHandle | null = null;
     let hlsFragmentLoaded = false;
+    // A real attach, whether `activeSrc` changed or this is a same-URL
+    // rebuild (`attempt` alone). See `attachGenerationRef` above.
+    attachGenerationRef.current += 1;
     // A restarted egress or an API blip stalls every open viewer's playlist
     // at once, so the watchdog's "reconnect" decision below fires for the
     // whole audience in the same instant — the same thundering-herd shape as
