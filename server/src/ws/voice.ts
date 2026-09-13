@@ -5344,7 +5344,7 @@ export async function handleVoiceMessage(
     if (pickHlsSharer(getRoomPeers(peer.voiceChannelId))?.id !== peer.id) {
       return;
     }
-    setVoiceTrackSeparated(peer.voiceChannelId, payload.separated);
+    setVoiceTrackSeparated(peer.voiceChannelId, peer.id, payload.separated);
     // Same shape as `set-camera` above: fire-and-forget, `.catch` rather
     // than `await`, so this frame acks at once regardless of how the
     // transcode side is doing.

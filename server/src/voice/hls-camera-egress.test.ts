@@ -1122,7 +1122,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
   it("attaches the sharer's ordinary microphone to the camera, once the flag is on", async () => {
     enableHls();
     process.env.LIVE_HLS_VOICE_TRACK = "true";
-    setVoiceTrackSeparated(CHANNEL, true);
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
     const lk = fakeLiveKit();
     cameraTrackId = "TR_CAM";
     voiceTrackId = "TR_MIC";
@@ -1153,7 +1153,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
   it("starts an audio-only rung when the presenter has no camera but shares their voice", async () => {
     enableHls();
     process.env.LIVE_HLS_VOICE_TRACK = "true";
-    setVoiceTrackSeparated(CHANNEL, true);
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
     const lk = fakeLiveKit();
     voiceTrackId = "TR_MIC";
     install(lk);
@@ -1176,7 +1176,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
   it("costs the box the cheaper voice-only rate with no camera, not a camera's rate", async () => {
     enableHls();
     process.env.LIVE_HLS_VOICE_TRACK = "true";
-    setVoiceTrackSeparated(CHANNEL, true);
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
     const lk = fakeLiveKit();
     voiceTrackId = "TR_MIC";
     install(lk);
@@ -1260,7 +1260,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
     // The declaration arrives (the WS handler calling this after
     // set-voice-track-mode). The NEXT reconcile is what picks it up — the
     // same "next roster event" cadence set-camera already relies on.
-    setVoiceTrackSeparated(CHANNEL, true);
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     await flush();
 
@@ -1272,10 +1272,57 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
     expect(lk.start.mock.calls.length).toBe(egressCallsBeforeDeclaration + 1);
   });
 
+  /**
+   * THE SECOND FAROL FINDING: a bare per-channel boolean survives the
+   * presenter who set it. If peer-1 declares "separada" and then hands the
+   * share to peer-2 (or simply leaves) without ever sending `separated:
+   * false`, a channel-keyed flag with no owner would credit peer-2 with a
+   * choice they never made. Storing the declaring peer's id fixes it: a
+   * declaration only counts for the room's CURRENT presenter.
+   */
+  it("a new presenter's own share starts silent until THEY declare separada, even if the last presenter never did 'junto'", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    // A fresh room where the ONLY declaration on file belongs to a peer
+    // who is not the one presenting now.
+    await reconcileLiveHls(CHANNEL, "peer-2", SERVER);
+    await flush();
+
+    expect(startedWith(lk).at(-1)).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM" }),
+    );
+    expect(startedWith(lk).at(-1)!.audioTrackId).toBeUndefined();
+    expect(liveHlsStreamFor(CHANNEL)?.cameraHasVoiceAudio).toBeFalsy();
+  });
+
+  it("clears a peer's own declaration on 'junto', but never clears somebody else's", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+
+    // A different peer's "junto" must not be able to erase peer-1's own
+    // standing declaration — the setter only clears an entry it owns.
+    setVoiceTrackSeparated(CHANNEL, "peer-2", false);
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(startedWith(lk).at(-1)!.audioTrackId).toBe("TR_MIC");
+  });
+
   it("drops the mic and returns to a silent camera when the flag turns off mid-party", async () => {
     enableHls();
     process.env.LIVE_HLS_VOICE_TRACK = "true";
-    setVoiceTrackSeparated(CHANNEL, true);
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
     const lk = fakeLiveKit();
     cameraTrackId = "TR_CAM";
     voiceTrackId = "TR_MIC";
@@ -1320,7 +1367,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
     enableHls();
     process.env.LIVE_HLS_CAMERA = "false";
     process.env.LIVE_HLS_VOICE_TRACK = "true";
-    setVoiceTrackSeparated(CHANNEL, true);
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
     const lk = fakeLiveKit();
     voiceTrackId = "TR_MIC";
     install(lk);

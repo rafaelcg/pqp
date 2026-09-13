@@ -461,22 +461,42 @@ const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
  * declaration is a no-op. Cleared whenever the room's own session ends
  * (`stopRoom`) so a stale `true` from a party that is over cannot be read
  * by whatever starts the next one under the same channel id.
+ *
+ * KEYED BY PEER ID, NOT JUST A BARE BOOLEAN — a second Farol finding on top
+ * of the first. A channel-wide `true` with no owner survives the presenter
+ * who set it: they leave (or hand the share to a co-host) without ever
+ * sending `separated: false`, a NEW presenter starts sharing, and a bare
+ * boolean would credit them with a choice they never made — the exact
+ * authorization gap the presenter-only setter above exists to close, just
+ * one hop further out. Storing the declaring peer's id means a read has to
+ * match the room's CURRENT presenter to count; a handoff with no explicit
+ * disable simply reads as "not declared" for whoever presents next, which
+ * is the correct, conservative default (see `wantedAudio` in
+ * `reconcileCameraEgress`: no declaration is no attachment).
  */
-const voiceTrackSeparatedByChannel = new Map<string, boolean>();
+const voiceTrackSeparatedByChannel = new Map<string, string>();
 
 export function setVoiceTrackSeparated(
   channelId: string,
+  peerId: string,
   separated: boolean,
 ): void {
   if (separated) {
-    voiceTrackSeparatedByChannel.set(channelId, true);
-  } else {
+    voiceTrackSeparatedByChannel.set(channelId, peerId);
+  } else if (voiceTrackSeparatedByChannel.get(channelId) === peerId) {
+    // Only this peer's OWN declaration clears it. A stale "true" left by a
+    // presenter who has since gone away is not cleared here at all — it
+    // simply stops matching at read time the moment `presenterPeerId`
+    // changes, which is the check that actually matters.
     voiceTrackSeparatedByChannel.delete(channelId);
   }
 }
 
-function presenterWantsSeparatedVoice(channelId: string): boolean {
-  return voiceTrackSeparatedByChannel.get(channelId) === true;
+function presenterWantsSeparatedVoice(
+  channelId: string,
+  presenterPeerId: string,
+): boolean {
+  return voiceTrackSeparatedByChannel.get(channelId) === presenterPeerId;
 }
 /**
  * Bounded retry for a `probeScreenTracks` call that could not ask LiveKit at
@@ -3371,7 +3391,8 @@ async function reconcileCameraEgress(
   // nothing until the next reconcile finds it, rather than manufacturing an
   // id from nowhere.
   const wantedAudio =
-    liveHlsVoiceTrackEnabled() && presenterWantsSeparatedVoice(channelId)
+    liveHlsVoiceTrackEnabled() &&
+    presenterWantsSeparatedVoice(channelId, room.stream.presenterPeerId)
       ? voiceTrackId
       : null;
   const current = room.camera;

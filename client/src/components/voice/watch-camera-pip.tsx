@@ -428,14 +428,30 @@ export function WatchCameraPip({
    * leaves the affordance showing rather than throwing.
    */
   const retryFromGesture = () => {
+    // THE SESSION THIS CLICK WAS FOR, captured now — not read again inside
+    // the callback, where it would already be whatever session is playing
+    // BY THEN. A `play()` promise can resolve (or reject) after the stream
+    // has already ended, restarted under a new `startedAt`, or the
+    // component been asked to show a different source entirely; without
+    // this check that stale settle would still flip `blocked` for
+    // whichever stream happens to be showing at that later moment, not the
+    // one the click was actually about.
+    const clickedSession = sessionRef.current;
+    const stillCurrent = () => sessionRef.current === clickedSession;
     void videoRef.current
       ?.play()
-      .then(() => setBlocked(false))
+      .then(() => {
+        if (stillCurrent()) {
+          setBlocked(false);
+        }
+      })
       .catch(() => {
-        // Stays visible — the click itself was a real gesture and the
-        // browser still refused, which is worth knowing rather than
-        // quietly going back to looking like nothing is wrong.
-        setBlocked(true);
+        if (stillCurrent()) {
+          // Stays visible — the click itself was a real gesture and the
+          // browser still refused, which is worth knowing rather than
+          // quietly going back to looking like nothing is wrong.
+          setBlocked(true);
+        }
       });
   };
 
