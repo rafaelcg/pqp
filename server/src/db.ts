@@ -246,9 +246,29 @@ function shouldRejectDbCall(): boolean {
  * that from the variable's static type, not from whatever function object
  * happens to be sitting there at runtime.
  */
+/**
+ * `pg-pool` reuses the same `PoolClient` object across checkouts whenever an
+ * idle one is available (`pg-pool/index.js`'s `_pulseQueue` hands an
+ * `IdleItem`'s client straight to `_acquireClient` rather than minting a
+ * fresh one) — a second review of this change flagged that `guardedConnect`
+ * re-wrapping `client.query` on every checkout, with no way to tell "already
+ * guarded" from "fresh", nests a new closure around the last one each time a
+ * long-lived process reuses the same client, growing without bound over the
+ * life of the pool. This set is what makes `guardQueryMethod` idempotent per
+ * object: the pool itself and every `PoolClient` are wrapped exactly once,
+ * ever, however many times a client is checked out and released. A
+ * `WeakSet`, not a flag on the object, so it never fights whatever `pg`
+ * itself does with the object's own properties.
+ */
+const guardedQueryTargets = new WeakSet<object>();
+
 function guardQueryMethod(
   target: { query: (...args: unknown[]) => unknown },
 ): void {
+  if (guardedQueryTargets.has(target)) {
+    return;
+  }
+  guardedQueryTargets.add(target);
   const original = target.query.bind(target) as (
     ...args: unknown[]
   ) => Promise<unknown>;

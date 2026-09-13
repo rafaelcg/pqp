@@ -49,10 +49,11 @@ const { upsertUser } = await import("../services/users.js");
 let server: Server;
 let baseUrl: string;
 
-async function timedCall(path: string) {
+async function timedCall(path: string, init?: RequestInit) {
   const startedAt = Date.now();
   const response = await fetch(`${baseUrl}${path}`, {
-    headers: { Authorization: "Bearer test" },
+    ...init,
+    headers: { Authorization: "Bearer test", ...init?.headers },
   });
   const elapsedMs = Date.now() - startedAt;
   const text = await response.text();
@@ -123,5 +124,54 @@ describeDb("A3.1: DB breaker at the HTTP boundary", () => {
     expect((await timedCall("/api/me")).status).toBe(503);
     forceDbBreakerStateForTests("closed");
     expect((await timedCall("/api/me")).status).toBe(200);
+  });
+
+  // A Farol review of this PR flagged that the breaker guards `pool.query`
+  // but not `pool.connect()` — the path every transaction in
+  // `server/src/services/*.ts` uses. `POST /api/servers` (`createServer`)
+  // is exactly that: `BEGIN` / several `client.query` calls / `COMMIT` on a
+  // client checked out via `getPool().connect()`. It is guarded the same
+  // way `pool.query` is (`server/src/db.ts`'s `guardPoolQueries` wraps
+  // `connect()` too, and the `PoolClient` it returns), so this must answer
+  // exactly as fast and with the exact same shape as a `query()`-backed
+  // route.
+  it("a connect()/transaction-backed route (POST /api/servers) also fast-rejects while open", async () => {
+    forceDbBreakerStateForTests("open");
+    const res = await timedCall("/api/servers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Should Not Be Created" }),
+    });
+    expect(res.status).toBe(503);
+    expect(res.retryAfter).toBe("5");
+    expect(res.body).toEqual({ error: "database_unavailable" });
+    expect(res.elapsedMs).toBeLessThan(2_000);
+
+    // And nothing was actually created — connect() itself was refused
+    // before BEGIN, not rolled back after a partial write.
+    forceDbBreakerStateForTests("closed");
+    const list = await timedCall("/api/servers");
+    expect(list.status).toBe(200);
+    expect(list.body.servers).toEqual([]);
+  });
+
+  // Also flagged: that `half-open` was a wide-open door rather than the
+  // single recovery trial it is documented as. `half-open` is reached only
+  // through the breaker's own clock (a real bad probe followed by the
+  // cooldown), so this drives it there directly with the same test hook
+  // the rest of this suite uses to reach `open`.
+  it("half-open still fast-rejects ordinary requests, both query()- and connect()-backed", async () => {
+    forceDbBreakerStateForTests("half-open");
+    const getRes = await timedCall("/api/me");
+    expect(getRes.status).toBe(503);
+    expect(getRes.body).toEqual({ error: "database_unavailable" });
+
+    const postRes = await timedCall("/api/servers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Should Not Be Created Either" }),
+    });
+    expect(postRes.status).toBe(503);
+    expect(postRes.body).toEqual({ error: "database_unavailable" });
   });
 });
