@@ -1049,14 +1049,35 @@ describe("the setup card", () => {
     expect(html).not.toContain("watch-party-preview");
   });
 
-  it("shows the settings as chips that all open the options dialog", () => {
+  it("shows the settings as a list of rows, each a door to the options dialog", () => {
     const html = draft();
     expect(html).toContain("watch-party-options-summary");
-    for (const key of ["voice", "reactions", "chat", "quality", "cohosts"]) {
-      expect(html).toContain(`data-watch-party-chip="${key}"`);
+    for (const key of ["voice", "chat", "reactions", "quality", "cohosts"]) {
+      expect(html).toContain(`data-watch-party-setting="${key}"`);
     }
     expect(html).toContain("data-watch-party-options-toggle");
+    // The two booleans people flip most carry an inline switch.
+    expect(html).toContain('data-watch-party-setting-switch="reactions"');
     expect(html).not.toContain("Voice off · ");
+  });
+
+  it("offers a time on the draft, off by default, when the app can schedule", () => {
+    const html = draft({ onSchedule: async () => {} });
+    expect(html).toContain("watch-party-when");
+    expect(html).toContain("data-watch-party-when-toggle");
+    expect(html).not.toContain("data-watch-party-when-input");
+    expect(draft()).not.toContain("watch-party-when");
+  });
+
+  it("reads the checklist as a verdict: all clear, or the rows that need a hand first", () => {
+    const html = draft({ micState: "everyone" });
+    expect(html).toContain('data-watch-party-checklist="clear"');
+    const muted = draft({ micState: "muted" });
+    expect(muted).toContain('data-watch-party-checklist="attention"');
+    const list = muted.slice(muted.indexOf("watch-party-go-live-checklist"));
+    expect(list.indexOf('checklist-item="mic"')).toBeLessThan(
+      list.indexOf('checklist-item="browser"'),
+    );
   });
 
   it("draws the checklist inside the card without its own box", () => {
