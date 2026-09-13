@@ -28,12 +28,10 @@ import {
 import {
   desktopContext,
   desktopPredatesScreenShare,
-  getDesktop,
-  isDesktopApp,
 } from "@/lib/desktop";
 import {
   capturesSystemAudio,
-  screenCaptureEnvironment,
+  liveScreenCaptureEnvironment,
   screenCaptureOptions,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
@@ -4118,14 +4116,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const options = screenCaptureOptions(
         shareSystemAudio,
-        screenCaptureEnvironment(
-          isDesktopApp(),
-          getDesktop()?.platform ?? null,
-          {
-            sharePickerOffersAudio:
-              getDesktop()?.sharePickerOffersAudio === true,
-          },
-        ),
+        liveScreenCaptureEnvironment(),
         { ...intent, hideCursor },
       );
       // What was actually asked for, not what was ticked. In a browser this is

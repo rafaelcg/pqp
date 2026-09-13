@@ -6,6 +6,7 @@ import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
+const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
 
 /**
  * DOES THE DESKTOP APP ACTUALLY OPEN.
@@ -96,6 +97,29 @@ test("the desktop shell opens its window and hands the page a working bridge", a
     expect(wanted.length, "parsed no members, so this assertion proves nothing").toBeGreaterThan(10);
     const missing = wanted.filter((name) => !(name in bridge.shape));
     expect(missing, "the renderer cannot call these, so those features do nothing").toEqual([]);
+
+    // THE CAPABILITY OBJECT, READ WHERE IT IS ACTUALLY USED. The client decides
+    // what to ask a capture for from these five fields, and nothing else in this
+    // package can see them arrive: `lib/share-capabilities.test.mjs` reads the
+    // source, and a nested object is exactly the shape contextBridge can refuse
+    // to clone. This is the renderer's own copy.
+    const capabilities = await window.evaluate(() => {
+      const published = window.pqpDesktop?.capabilities;
+      return published ? { ...published } : null;
+    });
+    expect(capabilities, "the shell published no share capabilities").not.toBeNull();
+    expect(capabilities.displayMedia).toBe(true);
+    expect(typeof capabilities.restrictOwnAudio).toBe("boolean");
+    expect(typeof capabilities.pickerOffersAudio).toBe("boolean");
+    // Loopback is WASAPI. A shell promising it anywhere else is a whole capture
+    // rejected over an audio track nobody could have delivered.
+    expect(capabilities.systemAudio).toBe(
+      process.platform === "win32" ? "loopback" : "none",
+    );
+    expect(capabilities.pickerOffersAudio).toBe(process.platform === "win32");
+    // `--pqp-shell-version=` through `additionalArguments` is the only way a
+    // sandboxed preload can learn this; null means the argument never arrived.
+    expect(capabilities.version).toBe(pkg.version);
 
     expect(consoleErrors, "the renderer logged errors on a blank page").toEqual([]);
   } finally {

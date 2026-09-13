@@ -61,6 +61,11 @@
  */
 
 import {
+  desktopShareCapabilities,
+  getDesktop,
+  isDesktopApp,
+} from "./desktop";
+import {
   cursorConstraintFor,
   type CursorCaptureConstraint,
 } from "./screen-capture-cursor";
@@ -98,6 +103,12 @@ export interface ScreenCaptureOptions
  * Watch party is a tab share of the player. `preferBrowserTab` asks Chrome
  * for a tab surface and hides the whole desktop, and it never takes the
  * system-audio opt-in: that opt-in is the echo path.
+ *
+ * IN THE DESKTOP SHELL IT IS IGNORED, both halves of it. There are no tab
+ * surfaces to steer at, and Windows loopback minus our own output is the only
+ * sound a capture there can carry, so a desktop watch party takes the same
+ * audio path as any other desktop share. `steersAtBrowserTab` is the one place
+ * that decides this.
  *
  * `hideCursor` is the standing "leave my mouse out of it" preference
  * (`lib/screen-capture-cursor.ts`). It rides on the intent rather than on its
@@ -178,6 +189,25 @@ export interface ScreenCaptureEnvironment {
    * opted in somewhere the page owns.
    */
   sharePickerOffersAudio: boolean;
+  /**
+   * What the SHELL says about the machine's sound, rather than what we infer
+   * from its platform: `"loopback"` if a capture there can carry it, `"none"`
+   * if it cannot, null in a browser and in any shell built before 0.1.6.
+   *
+   * Null keeps the platform guess below (`shellPlatform === "win32"`), which is
+   * what every client did until the shell learned to answer for itself. The
+   * guess is right today and is still worth replacing: it is the page reasoning
+   * about a binary it cannot see, and the next Electron that grows a macOS
+   * loopback device would need a client deploy to be believed.
+   */
+  shellSystemAudio: "loopback" | "none" | null;
+  /**
+   * Whether the shell says it keeps this app's own playback out of that tap.
+   * Null in a browser or an old shell. False is the one value that changes
+   * anything: a shell admitting it cannot strip the call is never offered the
+   * machine's mixer, because that offer is the 23 Aug 2026 echo.
+   */
+  shellRestrictOwnAudio: boolean | null;
 }
 
 /**
@@ -189,25 +219,68 @@ export interface ScreenCaptureEnvironment {
  *
  * THE BUG THIS ANSWERS (reported 3 Sep 2026, "o picker fecha e a stream não
  * começa"). The shell being video-only is not the same as the *page* being
- * video-only. `setDisplayMediaRequestHandler` is registered with
+ * video-only. That build registered `setDisplayMediaRequestHandler` with
  * `useSystemPicker: true`, and where the OS picker is used the handler is
- * skipped, so the renderer's audio request goes straight to Chromium with
+ * skipped, so the renderer's audio request went straight to Chromium with
  * nothing in between to strip it. On macOS there is no system audio to give,
  * and an audio request that cannot be honoured rejects the WHOLE capture,
  * video included. The person ticks "share sound", picks a screen, and gets
  * nothing at all — while the same tick on Windows works.
  *
+ * 0.1.6 turns the system picker off, so the handler now answers every request
+ * and could in principle drop an audio ask on the floor. The page still does
+ * not make one, for the same reason: the handler names a source and Chromium
+ * decides what to do with a request it cannot fill, and "asked for nothing"
+ * is the only answer with no failure mode in it.
+ *
  * So the renderer has to know the platform too. Asking for audio only where it
  * can be delivered is the difference between a silent share and no share.
  */
 export function shellCarriesScreenAudio(env: ScreenCaptureEnvironment): boolean {
-  return env.isDesktopShell && env.shellPlatform === "win32";
+  if (!env.isDesktopShell) {
+    return false;
+  }
+  // The shell's own answer wins where it gave one. The platform test stays for
+  // every build that never said, which is every build before 0.1.6.
+  if (env.shellSystemAudio !== null) {
+    return env.shellSystemAudio === "loopback";
+  }
+  return env.shellPlatform === "win32";
+}
+
+/**
+ * Does this capture steer at a browser TAB?
+ *
+ * Only ever in a browser. `preferBrowserTab` is the watch party's product
+ * ("share the player tab, with its sound") and the desktop shell has no tab
+ * surfaces at all: its picker lists screens and windows, which is everything
+ * `desktopCapturer` knows about.
+ *
+ * WHY THIS IS A FUNCTION AND NOT AN `IF`. Asking the shell for a tab is not a
+ * hint that gets ignored. `displaySurface: "browser"` is a real constraint, and
+ * Chromium checks it against the surface the embedder handed back AFTER the
+ * picker closes: no tab, nothing satisfies it, the whole capture is refused
+ * with "Invalid capture constraints", and the retry in `startScreenShare` does
+ * not fire because that name is neither TypeError nor NotSupportedError. That
+ * is a presenter on the desktop app who cannot start a watch party at all,
+ * reported 13 Sep 2026, and it is why the tab steer has to be dropped rather
+ * than merely tolerated.
+ */
+export function steersAtBrowserTab(
+  env: ScreenCaptureEnvironment,
+  intent: ScreenCaptureIntent = {},
+): boolean {
+  return intent.preferBrowserTab === true && !env.isDesktopShell;
 }
 
 export function screenCaptureEnvironment(
   isDesktopShell: boolean,
   shellPlatform: string | null = null,
-  extras: { sharePickerOffersAudio?: boolean } = {},
+  extras: {
+    sharePickerOffersAudio?: boolean;
+    shellSystemAudio?: "loopback" | "none" | null;
+    shellRestrictOwnAudio?: boolean | null;
+  } = {},
 ): ScreenCaptureEnvironment {
   let supportsRestrictOwnAudio = false;
   try {
@@ -223,7 +296,34 @@ export function screenCaptureEnvironment(
     shellPlatform,
     supportsRestrictOwnAudio,
     sharePickerOffersAudio: extras.sharePickerOffersAudio === true,
+    shellSystemAudio: extras.shellSystemAudio ?? null,
+    shellRestrictOwnAudio: extras.shellRestrictOwnAudio ?? null,
   };
+}
+
+/**
+ * The environment as it really is, read off the shell bridge.
+ *
+ * ONE READER, BECAUSE FOUR WAS ALREADY A BUG. Every caller used to assemble
+ * this itself from `isDesktopApp()` plus two `getDesktop()?.` reads, and the
+ * watch party's setup surface assembled a version missing the picker flag — so
+ * the one share that most needs sound asked for none of it on a Windows desktop
+ * whose picker was sitting there ready to offer the box. A capability the page
+ * forgets to pass is a capability the shell does not have.
+ *
+ * `screenCaptureEnvironment` keeps taking its parts as arguments: that is what
+ * makes every branch in this file reachable from a Node test, which is the only
+ * place the shell's branches are ever exercised before a user hits them.
+ */
+export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
+  const capabilities = desktopShareCapabilities();
+  return screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null, {
+    sharePickerOffersAudio:
+      capabilities?.pickerOffersAudio === true ||
+      getDesktop()?.sharePickerOffersAudio === true,
+    shellSystemAudio: capabilities?.systemAudio ?? null,
+    shellRestrictOwnAudio: capabilities?.restrictOwnAudio ?? null,
+  });
 }
 
 /**
@@ -264,6 +364,13 @@ export function offersBrowserSystemAudio(
  * treated as unable: asking for audio there is how every share echoed.
  */
 export function offersShellSystemAudio(env: ScreenCaptureEnvironment): boolean {
+  // `shellRestrictOwnAudio === false` is a shell stating it cannot strip its
+  // own playback even though the renderer knows the constraint. Null is every
+  // build that never said, and those are already gated by the renderer test
+  // above: Electron 34 does not list the constraint at all.
+  if (env.shellRestrictOwnAudio === false) {
+    return false;
+  }
   return shellCarriesScreenAudio(env) && canExcludeCallFromSystemAudio(env);
 }
 
@@ -321,12 +428,21 @@ export function screenCaptureOptions(
   //    and `shareSystemAudio` is its answer. Off means `audio: false`, which
   //    is still the only lever a v0.1.3 install honours.
   //
-  // Watch party never takes the machine's mixer: it wants the player tab.
+  // In a BROWSER, a watch party never takes the machine's mixer: it wants the
+  // player tab, whose sound is the clean path.
+  //
+  // IN THE SHELL THAT RULE INVERTS, and it has to, or a desktop watch party is
+  // silent by construction. There is no tab to capture and therefore no tab
+  // audio; the only sound a capture here can carry is Windows loopback, minus
+  // this app's own output. Refusing it because the intent says "tab" left the
+  // presenter broadcasting a film nobody could hear, which is the other half of
+  // the 13 Sep 2026 report. The picker's checkbox is still the consent.
+  const tabSteer = steersAtBrowserTab(env, intent);
   const browserOffersCheckbox = offersBrowserSystemAudio(env, intent);
   const shellWantsAudio =
     offersShellSystemAudio(env) &&
     (env.sharePickerOffersAudio || shareSystemAudio) &&
-    !intent.preferBrowserTab;
+    !tabSteer;
   const carriesAudio = browserOffersCheckbox || shellWantsAudio;
   const maxFrameRate = intent.maxFrameRate === 60 ? 60 : 30;
   return {
@@ -352,7 +468,10 @@ export function screenCaptureOptions(
       // them implements it every client already asked for the right thing. The
       // promise is gated elsewhere (`canControlShareCursor`), not here.
       cursor: cursorConstraintFor(intent.hideCursor ? "hide" : "show"),
-      ...(intent.preferBrowserTab ? { displaySurface: "browser" as const } : {}),
+      // Only where a tab can be picked. In the shell this member is not a hint
+      // that gets ignored, it is a constraint nothing can satisfy, and it takes
+      // the whole capture with it. See `steersAtBrowserTab`.
+      ...(tabSteer ? { displaySurface: "browser" as const } : {}),
     },
     // In the shell, "no audio asked for" is the only way to stop it answering
     // with Windows loopback, and it costs nothing there: its picker has no tab
@@ -366,7 +485,7 @@ export function screenCaptureOptions(
     // tab is a cheaper answer than a hall of mirrors nobody can locate.
     selfBrowserSurface: "exclude",
     surfaceSwitching: "include",
-    ...(intent.preferBrowserTab
+    ...(tabSteer
       ? {
           // Tab-first picker. `preferCurrentTab` is the other Chrome hint
           // and it means "offer *this* tab", which is pqp: mutually exclusive

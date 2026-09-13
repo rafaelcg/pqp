@@ -9,9 +9,9 @@
  * Node test rather than only on a real iPhone.
  */
 
-import { desktopContext, getDesktop, isDesktopApp } from "@/lib/desktop";
+import { desktopContext } from "@/lib/desktop";
 import {
-  screenCaptureEnvironment,
+  liveScreenCaptureEnvironment,
   shellCarriesScreenAudio,
   type ScreenCaptureEnvironment,
 } from "@/lib/screen-capture-audio";
@@ -180,13 +180,7 @@ export function supportsAudioOutputRouting(probe: {
  * separate path and does not go through this.
  */
 export function canShareScreenAudio(
-  env: ScreenCaptureEnvironment = screenCaptureEnvironment(
-    isDesktopApp(),
-    getDesktop()?.platform ?? null,
-    {
-      sharePickerOffersAudio: getDesktop()?.sharePickerOffersAudio === true,
-    },
-  ),
+  env: ScreenCaptureEnvironment = liveScreenCaptureEnvironment(),
 ): boolean {
   return (
     (!env.isDesktopShell && env.supportsRestrictOwnAudio) ||

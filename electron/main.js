@@ -937,15 +937,30 @@ function configureSessionSecurity(appOrigin) {
   // reads it as "unsupported by this browser", which is a lie on desktop and
   // the one claim this product cannot afford to break.
   //
-  // `useSystemPicker` stays on and stays first. On macOS 15+ the OS picker is
-  // better than anything shipped here: it is the surface list the user already
-  // knows, it can hand over a surface without a screen-recording grant, and it
-  // keeps working when they switch windows mid-share. Electron does not call
-  // this handler at all when it takes over. Everything below is the fallback,
-  // which is where every Windows and Linux user and every macOS before 15
-  // lands, and which until now silently shared `sources[0]` of `["screen"]`:
-  // the primary display, no choice of monitor, and no way to share a single
-  // window. That is the 23 Aug 2026 report.
+  // `useSystemPicker: false`, AND THAT IS THE POINT OF THIS REGISTRATION.
+  // It used to be true, which reads as "prefer the nicer native list on macOS
+  // 15+" and actually means "on macOS, none of the code below ever runs":
+  // Electron does not call this handler at all when the OS picker takes over.
+  // So on the one platform where a share is most likely to go wrong, the
+  // screen-recording diagnosis, the settings-pane shortcut, the labelled
+  // surface list, the auto-pick and the loopback mapping were all dead code,
+  // and every test in `lib/display-sources.test.mjs` was testing a path macOS
+  // never took. Pitfall 9 and 12, the same shape twice: the flag that changes
+  // the code path was not the flag the tests exercised.
+  //
+  // It also cost real shares. With the OS picker in front, the renderer's
+  // request reaches Chromium untouched, so nothing can strip an audio ask that
+  // macOS has no device for (3 Sep 2026: "o picker fecha e a stream não
+  // começa", the whole capture refused over a track nobody could have
+  // delivered), and nothing can notice that the page asked for a surface this
+  // embedder does not have. One handler, all three platforms, is the only
+  // shape where the desktop app behaves the way its tests say it does.
+  //
+  // The trade: macOS now needs the Screen Recording grant, where the OS picker
+  // could hand over a surface without one. That is what `screenPermission` and
+  // `explainScreenPermission` are for, and they now actually run. Flipping
+  // this back to `true` is the one-line rollback if that grant turns out to be
+  // the bigger problem; `docs/DESKTOP.md` says so out loud.
   ses.setDisplayMediaRequestHandler(
     (request, callback) => {
       chooseDisplaySource(request?.audioRequested === true)
@@ -960,7 +975,7 @@ function configureSessionSecurity(appOrigin) {
           callback(null);
         });
     },
-    { useSystemPicker: true },
+    { useSystemPicker: false },
   );
 
   // Harden navigation: stay on the app origin; open others externally.
@@ -1023,6 +1038,13 @@ function createWindow(appUrl, allowedOrigin) {
       webSecurity: true,
       allowRunningInsecureContent: false,
       spellcheck: true,
+      // The shell's own version, for the renderer's capability object. A
+      // sandboxed preload may only `require("electron")`, so it cannot read
+      // package.json and cannot call `app.getVersion()`; `additionalArguments`
+      // is the documented way to hand it a build-time fact. Read back in
+      // preload.js, which treats a missing one as "unknown" rather than
+      // guessing.
+      additionalArguments: [`--pqp-shell-version=${app.getVersion()}`],
     },
   });
 

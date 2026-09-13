@@ -201,6 +201,8 @@ describe("canShareScreenAudio", () => {
         shellPlatform: "darwin",
         supportsRestrictOwnAudio: false,
         sharePickerOffersAudio: false,
+        shellSystemAudio: null,
+        shellRestrictOwnAudio: null,
       }),
     ).toBe(false);
   });
@@ -212,6 +214,8 @@ describe("canShareScreenAudio", () => {
         shellPlatform: "win32",
         supportsRestrictOwnAudio: true,
         sharePickerOffersAudio: false,
+        shellSystemAudio: null,
+        shellRestrictOwnAudio: null,
       }),
     ).toBe(true);
   });
@@ -223,6 +227,8 @@ describe("canShareScreenAudio", () => {
         shellPlatform: "win32",
         supportsRestrictOwnAudio: false,
         sharePickerOffersAudio: false,
+        shellSystemAudio: null,
+        shellRestrictOwnAudio: null,
       }),
     ).toBe(false);
   });
@@ -234,6 +240,8 @@ describe("canShareScreenAudio", () => {
         shellPlatform: null,
         supportsRestrictOwnAudio: true,
         sharePickerOffersAudio: false,
+        shellSystemAudio: null,
+        shellRestrictOwnAudio: null,
       }),
     ).toBe(true);
   });
@@ -245,6 +253,8 @@ describe("canShareScreenAudio", () => {
         shellPlatform: null,
         supportsRestrictOwnAudio: false,
         sharePickerOffersAudio: false,
+        shellSystemAudio: null,
+        shellRestrictOwnAudio: null,
       }),
     ).toBe(false);
   });

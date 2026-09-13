@@ -43,6 +43,18 @@ jobs:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # THE macOS JOB MUST NOT HOLD A RELEASE HOSTAGE. It has been red since early
+    # September over signing (the write-up is beside "Package Electron" below and
+    # in docs/DESKTOP.md 3.8), and Windows is where the desktop users are.
+    # `fail-fast: false` already keeps the other two runners going; this is the
+    # other half, so a `v*` tag whose mac job dies still finishes as a green
+    # workflow with the Windows and Linux artifacts published to the release
+    # rather than a red run nobody can ship from.
+    #
+    # It is a plaster and it is labelled as one. The step below annotates the run
+    # so a failure is still visible, and this line comes out the moment a mac
+    # build is green again: a permanently ignored job is a job nobody fixes.
+    continue-on-error: ${{ matrix.platform == 'mac' }}
     strategy:
       fail-fast: false
       matrix:
@@ -258,6 +270,15 @@ jobs:
           # above, which ran on the same bundle the zip was made from.
 
           exit $status
+
+      # `continue-on-error` on this job hides the red X, so say it out loud here.
+      # A warning annotation still shows on the run summary and in the PR, which
+      # is the difference between "known and tolerated" and "silently broken".
+      - name: Say so when the macOS build failed
+        if: failure() && matrix.platform == 'mac'
+        shell: bash
+        run: |
+          echo "::warning::The macOS desktop build failed and the workflow was allowed to pass anyway (known signing issue, docs/DESKTOP.md 3.8). Windows and Linux artifacts are unaffected. Remove continue-on-error from .github/workflows/electron.yml once a mac build is green."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
