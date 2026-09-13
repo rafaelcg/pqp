@@ -79,6 +79,16 @@ const OUTPUT_LEVEL_POLL_MS = 100;
  */
 function useOutputSilenceWarning(
   outputLevelDb: (() => number | null) | undefined,
+  /**
+   * The broadcast's own identity (`stream.startedAt`, or `null` while
+   * nothing is live) — NOT the caller's, unlike `outputLevelDb` below.
+   * Ten seconds of silence at the end of one show must not count toward
+   * the next one just because this component never unmounted between
+   * them (a host who ends a party and starts another without the panel
+   * closing): the streak is about a broadcast, and a new broadcast starts
+   * the count at zero, warning or not (Farol, 2026-09-13).
+   */
+  sessionKey: number | string | null,
 ): boolean {
   const [warning, setWarning] = useState(false);
   // A caller re-rendering (any unrelated app or voice-state update while a
@@ -86,15 +96,21 @@ function useOutputSilenceWarning(
   // streak lives in the effect below, so tracking `outputLevelDb` itself as
   // that effect's dependency would restart it — and reset a real silence
   // streak — on every such render. The ref reads the latest reading without
-  // restarting anything; only whether a meter exists at all reopens the
-  // effect.
+  // restarting anything; only whether a meter exists at all, or the session
+  // underneath it changing, reopens the effect.
   const readerRef = useRef(outputLevelDb);
   readerRef.current = outputLevelDb;
   const hasReader = outputLevelDb !== undefined;
 
   useEffect(() => {
+    // Cleared synchronously, on EVERY run of this effect (a new session
+    // included) rather than only when there is no reader at all: the
+    // interval below has not sampled anything yet on its first tick, up to
+    // `OUTPUT_LEVEL_POLL_MS` away, and a stale `warning === true` from the
+    // broadcast this session just replaced must not still be on screen for
+    // that gap.
+    setWarning(false);
     if (!hasReader) {
-      setWarning(false);
       return;
     }
     let tracked: OutputSilenceState = INITIAL_OUTPUT_SILENCE_STATE;
@@ -108,7 +124,7 @@ function useOutputSilenceWarning(
       setWarning(isOutputSilenceWarning(tracked, now));
     }, OUTPUT_LEVEL_POLL_MS);
     return () => clearInterval(interval);
-  }, [hasReader]);
+  }, [hasReader, sessionKey]);
 
   return warning;
 }
@@ -130,6 +146,7 @@ export function WatchPartyTransmission({
   outputLevelDb,
   micMuted = false,
   userId = null,
+  onStreamQualityChange,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
   stream: LiveHlsStream | null;
@@ -181,6 +198,15 @@ export function WatchPartyTransmission({
   micMuted?: boolean;
   /** For `StreamQualityControl`'s per-account preference (postmortem B7). */
   userId?: string | null;
+  /**
+   * `StreamQualityControl` keeps its own `useState` and this panel is not
+   * the only reader of the choice: the go-live checklist beside it also
+   * shows a `quality` row (`watch-party-panel.tsx`'s `LiveSurface`), read
+   * once from `localStorage` at mount. Without this callback a host who
+   * switches to 1080p mid-show keeps seeing the checklist's stale 720p
+   * "ok" row until something else remounts the panel (Farol, 2026-09-13).
+   */
+  onStreamQualityChange?: (quality: WatchPartyStreamQuality) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -190,7 +216,10 @@ export function WatchPartyTransmission({
     roomViewers,
     transport,
   );
-  const outputSilentWarning = useOutputSilenceWarning(outputLevelDb);
+  const outputSilentWarning = useOutputSilenceWarning(
+    outputLevelDb,
+    stream?.startedAt ?? null,
+  );
   const micMutedWhilePresenting =
     presenterMicWarning(isPresenting, micMuted) === "warn";
 
@@ -399,7 +428,10 @@ export function WatchPartyTransmission({
               share start — the running egress binds its source at the start
               and cannot be re-pointed in place. See
               `lib/watch-party-stream-quality.ts`. */}
-          <StreamQualityControl userId={userId} />
+          <StreamQualityControl
+            userId={userId}
+            onQualityChange={onStreamQualityChange}
+          />
           {/* THE STREAM'S OWN MIXER, next to the picture's other numbers.
               Unlike the quality picker above, both sliders change the
               RUNNING mix: the gain nodes they write are already in the
@@ -461,8 +493,11 @@ const STREAM_QUALITY_KEYS: Record<WatchPartyStreamQuality, MessageKey> = {
  */
 export function StreamQualityControl({
   userId = null,
+  onQualityChange,
 }: {
   userId?: string | null;
+  /** Told on every change, including the one this control makes to itself. */
+  onQualityChange?: (quality: WatchPartyStreamQuality) => void;
 } = {}) {
   const { t } = useTranslation();
   const selectId = useId();
@@ -494,6 +529,7 @@ export function StreamQualityControl({
           const next = event.target.value as WatchPartyStreamQuality;
           setQuality(next);
           writeWatchPartyStreamQuality(next, userId);
+          onQualityChange?.(next);
         }}
       >
         {WATCH_PARTY_STREAM_QUALITIES.map((value) => (

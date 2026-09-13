@@ -35,13 +35,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderTransmission(outputLevelDb: (() => number | null) | undefined) {
+function renderTransmission(
+  outputLevelDb: (() => number | null) | undefined,
+  startedAt = 1_757_000_000_000,
+) {
   act(() => {
     root.render(
       <WatchPartyTransmission
         stream={{
           hlsUrl: "/api/voice/hls-playlist/c/1",
-          startedAt: 1_757_000_000_000,
+          startedAt,
           presenterPeerId: "peer-1",
           delaySeconds: 10,
           topHeight: 720,
@@ -107,6 +110,40 @@ describe("the output-silence warning, live", () => {
       vi.advanceTimersByTime(200);
     });
     expect(container.querySelector('[data-testid="watch-party-tx-output-silent-pill"]')).toBeNull();
+  });
+
+  it("does not carry a warning, or a partial streak, from one broadcast into the next", () => {
+    // The component itself never unmounts between two shows (the panel
+    // stays open while the host ends one party and starts another); only
+    // `stream.startedAt` says a new broadcast began. Farol, 2026-09-13: the
+    // effect used to key only on whether a meter existed at all, so a
+    // session that had already warned kept warning, and one only partway
+    // into its own streak carried that partial count into the new show.
+    renderTransmission(() => Number.NEGATIVE_INFINITY, 1_000);
+    act(() => {
+      vi.advanceTimersByTime(10_100);
+    });
+    expect(
+      container.querySelector('[data-testid="watch-party-tx-output-silent-pill"]'),
+    ).not.toBeNull();
+
+    // A new broadcast starts, still silent from the first instant it could
+    // be sampled. The old streak (and its warning) must not survive it.
+    renderTransmission(() => Number.NEGATIVE_INFINITY, 2_000);
+    expect(container.querySelector('[data-testid="watch-party-tx-output-silent-pill"]')).toBeNull();
+
+    // And it takes a full ten seconds of THIS broadcast to warn again, not
+    // whatever was left over from the last one.
+    act(() => {
+      vi.advanceTimersByTime(9_000);
+    });
+    expect(container.querySelector('[data-testid="watch-party-tx-output-silent-pill"]')).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1_100);
+    });
+    expect(
+      container.querySelector('[data-testid="watch-party-tx-output-silent-pill"]'),
+    ).not.toBeNull();
   });
 
   it("keeps the streak when the parent hands in a new callback mid-silence", () => {

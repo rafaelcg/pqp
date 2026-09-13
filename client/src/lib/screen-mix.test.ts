@@ -348,4 +348,35 @@ describe("createScreenMix", () => {
     vi.advanceTimersByTime(200);
     expect(mix.outputLevelDb()).toBe(readAtClose);
   });
+
+  it("starts no output-meter timer at all when a later node throws", () => {
+    // Farol, 2026-09-13: the output meter used to start polling the moment
+    // its own analyser connected, before the mic branch, the ducking
+    // analyser and `setMic` had run. A throw anywhere in THAT remaining
+    // construction (a real `createMediaStreamSource` can throw on a bad or
+    // ended track) meant `createScreenMix` never returned a `ScreenMix`,
+    // so nothing could ever call `close()` — the timer this test watches
+    // for kept firing, and the half-built graph it was reading from stayed
+    // connected, for as long as the page lived.
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const outputLevel = { value: 0.5 };
+    const micLevel = { value: 0 };
+    const f = fakeContextWithTwoAnalysers({ output: outputLevel, mic: micLevel });
+    const throwingContext = {
+      ...f.context,
+      createMediaStreamSource: () => {
+        throw new Error("device gone mid-setup");
+      },
+    };
+    const display = new FakeStream([new FakeTrack("video"), new FakeTrack("audio")]);
+    const mic = new FakeStream([new FakeTrack("audio")]);
+
+    expect(() =>
+      createScreenMix(display as never, mic as never, () => throwingContext as never),
+    ).toThrow("device gone mid-setup");
+
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    setIntervalSpy.mockRestore();
+  });
 });

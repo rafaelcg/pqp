@@ -132,7 +132,7 @@ describe("endWatchParty", () => {
       expect(calls.reportError).toEqual([]);
     });
 
-    it(`leaves the call alone on a ${status} when the confirming fetch itself fails`, async () => {
+    it(`leaves the call alone but reports the failure on a ${status} when the confirming fetch itself fails`, async () => {
       const { deps, calls } = fakeDeps({
         setEnded: async () => {
           throw new ApiError(status, "gone");
@@ -148,7 +148,10 @@ describe("endWatchParty", () => {
       expect(calls.stopScreenShare).toBe(0);
       expect(calls.leaveVoice).toBe(0);
       expect(calls.applyParty).toEqual([]);
-      expect(calls.reportError).toEqual([]);
+      // But "stay put" must not also mean "say nothing": this branch used
+      // to leave the host with no feedback at all on a failed confirmation,
+      // the exact shape of the original B8 bug (Farol, 2026-09-13).
+      expect(calls.reportError).toEqual(["network down"]);
     });
   }
 

@@ -177,10 +177,25 @@ export function createScreenMix(
   // straight through, exactly as before this existed.
   let lastOutputDbfs: number | null = null;
   let outputInterval: ReturnType<typeof setInterval> | null = null;
+  // The interval itself is started at the very bottom of this function, once
+  // every remaining node is wired without throwing — see `startOutputMeter`
+  // below. Wiring the analyser into the graph happens here, alongside the
+  // compressor, because the connection order matters (Farol, 2026-09-13: an
+  // earlier version started polling right here, before the mic branch, the
+  // ducking analyser and `setMic` had run; a later throw during any of that
+  // left the timer running forever with no `ScreenMix` for anyone to call
+  // `close()` on).
   const outputAnalyser = context.createAnalyser?.();
   if (outputAnalyser) {
     compressor.connect(outputAnalyser);
     outputAnalyser.connect(destination);
+  } else {
+    compressor.connect(destination);
+  }
+  const startOutputMeter = () => {
+    if (!outputAnalyser) {
+      return;
+    }
     const outputBufferSize =
       outputAnalyser.fftSize > 0 ? outputAnalyser.fftSize : 2048;
     const outputBuffer = new Float32Array(outputBufferSize);
@@ -198,9 +213,7 @@ export function createScreenMix(
       lastOutputDbfs =
         rms > 0 ? 20 * Math.log10(rms) : Number.NEGATIVE_INFINITY;
     }, OUTPUT_LEVEL_POLL_MS);
-  } else {
-    compressor.connect(destination);
-  }
+  };
 
   const displayGainNode = context.createGain();
   let baseDisplayGain = clamp(initialLevels.displayGain, DISPLAY_GAIN_RANGE);
@@ -325,6 +338,11 @@ export function createScreenMix(
   // deployment, until an operator sets `LIVE_HLS_MIC_ARCHIVE`) must not pay
   // for a second destination node on every share.
   let archive: { stream: MediaStream } & AudioNodeLike | null = null;
+
+  // LAST, on purpose: every node above this line has already connected
+  // without throwing, so this is the first moment background work is safe
+  // to start. See the comment beside `startOutputMeter`'s definition.
+  startOutputMeter();
 
   return {
     stream,

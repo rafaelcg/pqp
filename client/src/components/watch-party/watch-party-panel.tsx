@@ -74,8 +74,14 @@ import {
   type ChecklistItem,
   type ChecklistTone,
 } from "@/lib/watch-party-go-live-checklist";
-import { readWatchPartyStreamQuality } from "@/lib/watch-party-stream-quality";
-import { presenterMicWarning } from "@/lib/watch-party-mic-warning";
+import {
+  readWatchPartyStreamQuality,
+  type WatchPartyStreamQuality,
+} from "@/lib/watch-party-stream-quality";
+import {
+  micIsInaudible,
+  presenterMicWarning,
+} from "@/lib/watch-party-mic-warning";
 import { cn } from "@/lib/utils";
 
 /**
@@ -1008,7 +1014,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         hasAudioTrack,
         quality: readWatchPartyStreamQuality(props.currentUserId ?? null),
         cameraOn: props.cameraOn ?? false,
-        micMuted: props.micState === "muted",
+        micMuted: micIsInaudible(props.micState),
       }),
     [hasAudioTrack, props.currentUserId, props.cameraOn, props.micState],
   );
@@ -1506,6 +1512,17 @@ function LiveSurface(
   // tela" (postmortem B3): the same four rows, minus tab audio, which this
   // surface has no picked capture to read yet — `onShareScreen` opens its
   // own picker inside `use-voice.ts`, invisible from here.
+  //
+  // QUALITY IS STATE HERE, NOT A DIRECT READ, because `StreamQualityControl`
+  // (`watch-party-transmission.tsx`) keeps its own and is the only thing
+  // that ever changes it: reading `localStorage` once at mount, the way the
+  // memo below used to, left this row on whatever quality was picked before
+  // the panel last mounted, showing "720p, ok" through a live switch to
+  // 1080p (Farol, 2026-09-13). `onStreamQualityChange` is how
+  // `WatchPartyTransmission` says the choice moved.
+  const [liveQuality, setLiveQuality] = useState<WatchPartyStreamQuality>(
+    () => readWatchPartyStreamQuality(props.currentUserId ?? null),
+  );
   const liveChecklistItems = useMemo(
     () =>
       goLiveChecklist({
@@ -1513,11 +1530,11 @@ function LiveSurface(
         isDesktopShell: isDesktopApp(),
         desktopSharesTabAudio: desktopSharesTabAudio(getDesktop()),
         hasAudioTrack: null,
-        quality: readWatchPartyStreamQuality(props.currentUserId ?? null),
+        quality: liveQuality,
         cameraOn: props.cameraOn ?? false,
-        micMuted: props.micState === "muted",
+        micMuted: micIsInaudible(props.micState),
       }),
-    [props.currentUserId, props.cameraOn, props.micState],
+    [liveQuality, props.cameraOn, props.micState],
   );
 
   // "SEU MIC ESTÁ MUDO: NINGUÉM TE OUVE, NEM NA TRANSMISSÃO" (2026-09-13). A
@@ -1527,7 +1544,7 @@ function LiveSurface(
   // banner, the B2 silence paragraph and the checklist's `mic` row above —
   // fed the same two facts everywhere so they cannot disagree.
   const micMutedWarning =
-    presenterMicWarning(props.isPresenting, props.micState === "muted") ===
+    presenterMicWarning(props.isPresenting, micIsInaudible(props.micState)) ===
     "warn";
 
   const viewerHint = (
@@ -1971,8 +1988,9 @@ function LiveSurface(
       onDisplayGainChange={props.onDisplayGainChange}
       micLevelDb={props.micLevelDb}
       outputLevelDb={props.outputLevelDb}
-      micMuted={props.micState === "muted"}
+      micMuted={micIsInaudible(props.micState)}
       userId={props.currentUserId ?? null}
+      onStreamQualityChange={setLiveQuality}
     />
   );
 

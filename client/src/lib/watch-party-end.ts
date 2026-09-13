@@ -84,8 +84,19 @@ export async function endWatchParty(
       let current: WatchParty | null;
       try {
         current = await deps.fetchCurrentParty(party.channelId);
-      } catch {
+      } catch (confirmError) {
+        // Unknown stays unknown: no cleanup, same as before. But silently
+        // is not the same as safely — the ORIGINAL bug this module exists
+        // to fix was a host with no feedback at all, and a failed
+        // confirmation is exactly that again if it says nothing (Farol,
+        // 2026-09-13). `refresh()` is still worth calling: it may succeed
+        // even when this one narrower fetch did not.
         deps.refresh();
+        deps.reportError(
+          confirmError instanceof Error && confirmError.message
+            ? confirmError.message
+            : deps.fallbackErrorMessage,
+        );
         return;
       }
       deps.applyParty(party.channelId, current);

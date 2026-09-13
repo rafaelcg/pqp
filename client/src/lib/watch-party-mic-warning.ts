@@ -29,3 +29,20 @@ export function presenterMicWarning(
 ): PresenterMicWarning {
   return isPresenting && isMuted ? "warn" : "none";
 }
+
+/**
+ * The room hears nothing from this mic, whether that is because it is
+ * muted or because it was never in the call at all (Farol, 2026-09-13):
+ * `micState` distinguishes "off" from "muted" for the bar's own pill, but
+ * every caller of `presenterMicWarning` and the go-live checklist's mic row
+ * asks the coarser question this warning exists for — can the room hear
+ * this person — and "off" answers it exactly like "muted" does. Feeding
+ * only `=== "muted"` into either left an OFF mic reading as fine on the
+ * checklist and silent on the persistent banner, the same failure this
+ * module was written to catch.
+ */
+export function micIsInaudible(
+  micState: "off" | "muted" | "room" | "everyone" | undefined,
+): boolean {
+  return micState === "muted" || micState === "off";
+}
