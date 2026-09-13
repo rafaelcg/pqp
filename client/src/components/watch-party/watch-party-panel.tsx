@@ -83,6 +83,7 @@ import {
   goLiveChecklist,
   isFirefoxUserAgent,
   type ChecklistItem,
+  type ChecklistItemId,
   type ChecklistTone,
 } from "@/lib/watch-party-go-live-checklist";
 import {
@@ -826,6 +827,28 @@ function checklistCopyKey(item: ChecklistItem): MessageKey {
  * a host who skimmed the list still sees why the button below it is
  * disabled.
  */
+const CHECKLIST_TITLE: Record<ChecklistItemId, MessageKey> = {
+  browser: "watchParty.checklist.browserTitle",
+  tabAudio: "watchParty.checklist.tabAudioTitle",
+  quality: "watchParty.checklist.qualityTitle",
+  camera: "watchParty.checklist.cameraTitle",
+  mic: "watchParty.checklist.micTitle",
+};
+const CHECKLIST_BODY: Record<ChecklistItemId, MessageKey> = {
+  browser: "watchParty.checklist.browserBody",
+  tabAudio: "watchParty.checklist.tabAudioBody",
+  quality: "watchParty.checklist.qualityBody",
+  camera: "watchParty.checklist.cameraBody",
+  mic: "watchParty.checklist.micBody",
+};
+const CHECKLIST_SHORT: Record<ChecklistItemId, MessageKey> = {
+  browser: "watchParty.checklist.short.browser",
+  tabAudio: "watchParty.checklist.short.tabAudio",
+  quality: "watchParty.checklist.short.quality",
+  camera: "watchParty.checklist.short.camera",
+  mic: "watchParty.checklist.short.mic",
+};
+
 function GoLiveChecklist({
   items,
   className,
@@ -833,40 +856,104 @@ function GoLiveChecklist({
 }: {
   items: readonly ChecklistItem[];
   className?: string;
-  /** Inside the setup card: no box of its own, the card is the box. */
+  /**
+   * THE STATUS BLOCK (2026-09-13). Inside the setup card the list is not a
+   * list: a blocker is one banner with a title and the way out, each hint is
+   * a card with a title and its fix, and every check that passed collapses
+   * into a single quiet line. The old shape said the Firefox sentence three
+   * times (a row, a line under the list, the state bar) and made a passing
+   * check look as loud as a failing one. Off, the plain list the live
+   * surface's empty stage still draws.
+   */
   compact?: boolean;
 }) {
   const { t } = useTranslation();
-  // A STATUS BLOCK WHEN COMPACT: the rows that need a hand first and in
-  // amber, the rest quiet under them, and the heading says the verdict
-  // ("tudo pronto") instead of the name of the list.
-  const ordered = compact
-    ? [...items].sort((a, b) => Number(a.tone === "ok") - Number(b.tone === "ok"))
-    : items;
   const allClear = items.every((item) => item.tone === "ok");
+  if (compact) {
+    const blocks = items.filter((item) => item.tone === "block");
+    const hints = items.filter((item) => item.tone === "hint");
+    const oks = items.filter((item) => item.tone === "ok");
+    return (
+      <div
+        data-testid="watch-party-go-live-checklist"
+        data-watch-party-checklist={allClear ? "clear" : "attention"}
+        className={cn("flex flex-col gap-2", className)}
+      >
+        {blocks.map((item) => (
+          <div
+            key={item.id}
+            className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-2.5 py-2 text-xs text-danger"
+            data-watch-party-checklist-item={item.id}
+            data-testid="watch-party-checklist-blocked"
+          >
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0">
+              <span className="block font-semibold">{t(CHECKLIST_TITLE[item.id])}</span>
+              <span className="block text-danger/90">{t(CHECKLIST_BODY[item.id])}</span>
+            </span>
+          </div>
+        ))}
+        {hints.map((item) => (
+          <div
+            key={item.id}
+            className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2 text-xs text-warning"
+            data-watch-party-checklist-item={item.id}
+          >
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0">
+              <span className="block font-semibold">{t(CHECKLIST_TITLE[item.id])}</span>
+              <span className="block text-paper-muted">{t(CHECKLIST_BODY[item.id])}</span>
+            </span>
+          </div>
+        ))}
+        {oks.length > 0 && (
+          <p
+            className={cn(
+              "flex items-start gap-1.5 text-xs",
+              allClear ? "text-success" : "text-text-tertiary",
+            )}
+            data-watch-party-checklist-ok
+          >
+            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>
+              {allClear
+                ? t("watchParty.checklist.allClear")
+                : t("watchParty.checklist.okPrefix")}{" "}
+              {oks.map((item, index) => (
+                <span key={item.id}>
+                  {index > 0 && ", "}
+                  <span
+                    className="text-text-tertiary"
+                    data-watch-party-checklist-item={item.id}
+                  >
+                    {t(CHECKLIST_SHORT[item.id])}
+                  </span>
+                </span>
+              ))}
+              .
+            </span>
+          </p>
+        )}
+        <p className="text-[11px] text-text-tertiary">
+          {t("watchParty.checklist.filmPlaying")}
+        </p>
+      </div>
+    );
+  }
   return (
     <div
       data-testid="watch-party-go-live-checklist"
       data-watch-party-checklist={allClear ? "clear" : "attention"}
       className={cn(
-        "flex flex-col gap-1.5",
-        !compact && "rounded-lg border border-border bg-surface-0 px-2.5 py-2",
+        "flex flex-col gap-1.5 rounded-lg border border-border bg-surface-0 px-2.5 py-2",
         className,
       )}
     >
-      <p
-        className={cn(
-          "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider",
-          compact && allClear ? "text-success" : "text-text-tertiary",
-        )}
-      >
-        {compact && allClear && <Check className="h-3 w-3" aria-hidden />}
-        {compact && allClear
-          ? t("watchParty.checklist.allClear")
-          : t("watchParty.checklist.title")}
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        {t("watchParty.checklist.title")}
       </p>
       <ul className="flex flex-col gap-1 text-xs">
-        {ordered.map((item) => (
+        {items.map((item) => (
           <ChecklistRow
             key={item.id}
             tone={item.tone}
@@ -875,11 +962,6 @@ function GoLiveChecklist({
             {t(checklistCopyKey(item))}
           </ChecklistRow>
         ))}
-        {/* One reminder with no signal to compute it from: whether the film
-            is actually playing is a fact only the host can see. The mic row
-            used to be this shape too, until 2026-09-13 gave it a real
-            signal (`micState`) and it moved into `items` above as a HARD
-            row: always shown, an opinion instead of a maybe. */}
         <ChecklistRow tone="ok">
           {t("watchParty.checklist.filmPlaying")}
         </ChecklistRow>
@@ -1148,7 +1230,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       ? "silent"
       : "ok";
   const goLiveReason = checklistBlocked
-    ? t("watchParty.checklist.blockedFirefox")
+    ? t("watchParty.checklist.blockedShort")
     : stream
       ? null
       : canPutPictureUp
@@ -1446,7 +1528,11 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                 type="button"
                 size="default"
                 disabled={busy || !stream || checklistBlocked}
-                title={goLiveReason ?? undefined}
+                title={
+                  checklistBlocked
+                    ? t("watchParty.checklist.blockedFirefox")
+                    : (goLiveReason ?? undefined)
+                }
                 onClick={() => void goLive()}
                 data-watch-party-go-live
                 className="w-full bg-danger text-paper hover:bg-danger/85"
