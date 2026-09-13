@@ -18,6 +18,7 @@ import type {
 } from "@pqp/shared";
 import { channelRoutePath, conversationRoutePath } from "@/lib/app-route";
 import { getDesktop } from "@/lib/desktop";
+import { shouldShowArrivalToast } from "@/lib/dm-toast-queue";
 import { translateMessage } from "@/lib/i18n";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { playActivitySound, playCue } from "@/lib/sounds";
@@ -49,6 +50,13 @@ export interface NotificationState {
   default: NotificationLevel;
   servers: Record<string, NotificationLevel>;
   channels: Record<string, NotificationLevel>;
+  /** The MSN-style arrival card for a conversation message. Default true. */
+  arrivalToast: boolean;
+  /**
+   * Whether the sidebar preview line and the toast's second line may show
+   * message content. Default true. Off, both fall back to a count.
+   */
+  previewInApp: boolean;
 }
 
 export type NotificationPermissionState =
@@ -62,6 +70,8 @@ const DEFAULT_STATE: NotificationState = {
   default: "all",
   servers: {},
   channels: {},
+  arrivalToast: true,
+  previewInApp: true,
 };
 
 function isLevel(value: unknown): value is NotificationLevel {
@@ -90,6 +100,8 @@ function fromPreferences(
     default: preferences.default ?? base.default,
     servers: readLevelMap(preferences.servers),
     channels: readLevelMap(preferences.channels),
+    arrivalToast: preferences.arrivalToast ?? base.arrivalToast,
+    previewInApp: preferences.previewInApp ?? base.previewInApp,
   };
 }
 
@@ -104,6 +116,8 @@ function toPreferences(current: NotificationState): NotificationPreferences {
     default: current.default,
     servers: current.servers,
     channels: current.channels,
+    arrivalToast: current.arrivalToast,
+    previewInApp: current.previewInApp,
   };
 }
 
@@ -123,6 +137,8 @@ function readStored(): NotificationState {
       default: isLevel(record.default) ? record.default : DEFAULT_STATE.default,
       servers: readLevelMap(record.servers),
       channels: readLevelMap(record.channels),
+      arrivalToast: record.arrivalToast !== false,
+      previewInApp: record.previewInApp !== false,
     };
   } catch {
     // Safari private mode throws on storage access; treat it as "no choices yet".
@@ -201,6 +217,14 @@ export function setChannelNotificationLevel(
 
 export function setDesktopNotificationsEnabled(enabled: boolean): void {
   commit({ ...state, desktop: enabled }, { sync: true });
+}
+
+export function setArrivalToastEnabled(enabled: boolean): void {
+  commit({ ...state, arrivalToast: enabled }, { sync: true });
+}
+
+export function setPreviewInAppEnabled(enabled: boolean): void {
+  commit({ ...state, previewInApp: enabled }, { sync: true });
 }
 
 /**
@@ -419,6 +443,8 @@ export function rememberServers(
 export function describeActivity(
   channelId: string,
   counts: { count: number; mentions: number },
+  /** The live frame's own redacted preview, when it carried one. */
+  preview?: { preview?: string; authorName?: string; authorId?: string },
 ): ChannelActivity {
   const known = directory.get(channelId);
   return {
@@ -433,6 +459,9 @@ export function describeActivity(
     count: counts.count,
     mentions: counts.mentions,
     kind: known?.kind ?? "server",
+    preview: preview?.preview,
+    authorName: preview?.authorName,
+    authorId: preview?.authorId,
   };
 }
 
@@ -478,6 +507,14 @@ export interface ChannelActivity {
   mentions: number;
   /** Server channel, 1:1 or group conversation. Absent means server. */
   kind?: ChannelKind;
+  /**
+   * The redacted message preview, conversation-only. Absent for a server
+   * channel, an attachment/GIF-only message, or previews turned off — see
+   * `channelActivitySchema` in `packages/shared/src/chat.ts`.
+   */
+  preview?: string;
+  authorName?: string;
+  authorId?: string;
 }
 
 /**
@@ -491,6 +528,8 @@ export interface ActivityToast {
   kind: ChannelKind;
   count: number;
   mentions: number;
+  preview?: string;
+  authorName?: string;
 }
 
 const toastListeners = new Set<(toast: ActivityToast) => void>();
@@ -504,23 +543,18 @@ export function onActivityToast(
   };
 }
 
-/** Pure: whether this activity earns an in-app card. */
-export function wantsActivityToast(
-  activity: Pick<ChannelActivity, "kind">,
-  context: ActivityContext,
-): boolean {
-  return (
-    context.documentVisible &&
-    (activity.kind === "dm" || activity.kind === "group")
-  );
-}
-
 export interface NotificationDecision {
   level: NotificationLevel;
   mention: boolean;
   channelId: string;
   selectedChannelId: string | null;
   documentVisible: boolean;
+  /**
+   * `document.hasFocus()`. Optional and defaults to `true`, which keeps every
+   * caller that predates this field on its old behaviour (visible + selected
+   * was already enough to suppress).
+   */
+  windowFocused?: boolean;
 }
 
 /**
@@ -533,10 +567,13 @@ export function shouldNotify({
   channelId,
   selectedChannelId,
   documentVisible,
+  windowFocused = true,
 }: NotificationDecision): boolean {
-  // Already on screen in front of them. Both halves matter: a background tab
-  // still has a channel selected, and a visible window can be on another one.
-  if (documentVisible && selectedChannelId === channelId) {
+  // Genuinely on screen in front of them: visible AND focused AND selected.
+  // A visible-but-blurred window on the very conversation still gets a
+  // notification (an OS banner, never a toast — see `shouldShowArrivalToast`)
+  // because "the tab is not minimised" is not "somebody is looking at it".
+  if (documentVisible && windowFocused && selectedChannelId === channelId) {
     return false;
   }
   if (level === "none") {
@@ -551,6 +588,12 @@ interface Burst {
   lastFiredAt: number;
   timer: ReturnType<typeof setTimeout> | null;
   activity: ChannelActivity;
+  /**
+   * Whether the in-app toast showed for any message folded into this burst.
+   * `documentVisible && windowFocused` is the toast's exclusive territory
+   * (§3.6/§4.2 of the spec) — when it fired, the OS banner must not also.
+   */
+  toastShownForBurst: boolean;
 }
 
 const bursts = new Map<string, Burst>();
@@ -690,17 +733,34 @@ function flush(channelId: string): void {
     // gets the quiet "message" cue (its own switch in sound settings).
     playCue("message");
   }
-  if (state.desktop && notificationPermission() === "granted") {
+  // The dedupe rule from §4.2: the OS carries it only when the window was not
+  // focused. A toast already shown for this burst means the window WAS
+  // focused and visible when it arrived, which is exactly the condition under
+  // which no OS banner belongs on screen either.
+  if (
+    state.desktop &&
+    notificationPermission() === "granted" &&
+    !burst.toastShownForBurst
+  ) {
     deliver(burst);
   }
   burst.count = 0;
   burst.mentions = 0;
+  burst.toastShownForBurst = false;
   burst.lastFiredAt = Date.now();
 }
 
 export interface ActivityContext {
   selectedChannelId: string | null;
   documentVisible: boolean;
+  /**
+   * `document.hasFocus()`. Optional and defaults to `true` for a caller that
+   * predates this field, which preserves that caller's old behaviour (toast
+   * gated on visibility alone).
+   */
+  windowFocused?: boolean;
+  /** `html[data-immersive-stage]` is set. Defaults to `false`. */
+  immersive?: boolean;
 }
 
 /**
@@ -743,6 +803,8 @@ export function notifyChannelActivity(
   }
 
   const level = resolveNotificationLevel(state, activity.serverId, activity.channelId);
+  const windowFocused = context.windowFocused ?? true;
+  const immersive = context.immersive ?? false;
   if (
     !shouldNotify({
       level,
@@ -750,18 +812,33 @@ export function notifyChannelActivity(
       channelId: activity.channelId,
       selectedChannelId: context.selectedChannelId,
       documentVisible: context.documentVisible,
+      windowFocused,
     })
   ) {
     return;
   }
 
-  if (wantsActivityToast(activity, context)) {
+  const showToast =
+    state.arrivalToast &&
+    shouldShowArrivalToast({
+      kind: activity.kind ?? "server",
+      channelId: activity.channelId,
+      selectedChannelId: context.selectedChannelId,
+      documentVisible: context.documentVisible,
+      windowFocused,
+      level,
+      doNotDisturb,
+      immersive,
+    });
+  if (showToast) {
     for (const listener of toastListeners) {
       listener({
         channelId: activity.channelId,
         kind: activity.kind ?? "server",
         count: activity.count,
         mentions: activity.mentions,
+        preview: state.previewInApp ? activity.preview : undefined,
+        authorName: activity.authorName,
       });
     }
   }
@@ -772,12 +849,14 @@ export function notifyChannelActivity(
     lastFiredAt: 0,
     timer: null,
     activity,
+    toastShownForBurst: false,
   };
   burst.activity = activity;
   burst.mentions += activity.mentions;
   // At "mentions" the plain messages are precisely what the user asked not to
   // hear about, so they must not inflate the count in the body either.
   burst.count += level === "mentions" ? activity.mentions : activity.count;
+  burst.toastShownForBurst = burst.toastShownForBurst || showToast;
   bursts.set(activity.channelId, burst);
 
   const waited = Date.now() - burst.lastFiredAt;
@@ -842,6 +921,22 @@ export function formatBadge(mentions: number): string {
  */
 export function setUnreadBadge(mentions: number): void {
   getDesktop()?.setBadgeCount?.(mentions);
+  // The installed PWA's own icon badge (Chrome Android / desktop; absent on
+  // iOS Safari and on Firefox, which is exactly why this is wrapped — a
+  // missing API must not take the tab title down with it).
+  try {
+    const badgeable = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    if (mentions > 0) {
+      void badgeable.setAppBadge?.(mentions)?.catch(() => {});
+    } else {
+      void badgeable.clearAppBadge?.()?.catch(() => {});
+    }
+  } catch {
+    // Not available in this browser, or thrown outright by a hostile one.
+  }
   if (typeof document === "undefined") {
     return;
   }

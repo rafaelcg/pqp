@@ -1,12 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activityRoutePath,
   describeActivity,
   formatBadge,
+  notifyChannelActivity,
   rememberActivityChannel,
   rememberChannels,
   rememberServers,
   resolveNotificationLevel,
+  setDesktopNotificationsEnabled,
+  setUnreadBadge,
   shouldNotify,
   unreadByServer,
   type NotificationState,
@@ -16,7 +19,15 @@ const SERVER = "11111111-1111-4111-8111-111111111111";
 const CHANNEL = "22222222-2222-4222-8222-222222222222";
 
 function stateWith(overrides: Partial<NotificationState> = {}): NotificationState {
-  return { desktop: true, default: "all", servers: {}, channels: {}, ...overrides };
+  return {
+    desktop: true,
+    default: "all",
+    servers: {},
+    channels: {},
+    arrivalToast: true,
+    previewInApp: true,
+    ...overrides,
+  };
 }
 
 describe("resolveNotificationLevel", () => {
@@ -283,18 +294,111 @@ describe("activityRoutePath", () => {
   });
 });
 
-describe("wantsActivityToast", () => {
-  it("toasts a conversation only while the tab is visible", async () => {
-    const { wantsActivityToast } = await import("./notifications");
-    const context = { selectedChannelId: null, documentVisible: true };
-    expect(wantsActivityToast({ kind: "dm" }, context)).toBe(true);
-    expect(wantsActivityToast({ kind: "group" }, context)).toBe(true);
-    // A server channel's badge is its signal; a hall would bury the screen.
-    expect(wantsActivityToast({ kind: "server" }, context)).toBe(false);
-    expect(wantsActivityToast({}, context)).toBe(false);
-    // Hidden tab: the OS banner path owns it.
-    expect(
-      wantsActivityToast({ kind: "dm" }, { ...context, documentVisible: false }),
-    ).toBe(false);
+// The full §3.6 suppression table (whether the CARD shows) is pinned in
+// `dm-toast-queue.test.ts` against the pure `shouldShowArrivalToast`, which
+// superseded this module's old `wantsActivityToast`. What is pinned here is
+// the dedupe rule in §4.2 — the OS banner and the toast never both fire for
+// the same burst — and the badge surfaces `setUnreadBadge` itself owns.
+
+function withFakeNotification(): { notify: ReturnType<typeof vi.fn> } {
+  const notify = vi.fn();
+  class FakeNotification {
+    static permission = "granted";
+    constructor(title: string, options?: unknown) {
+      notify(title, options);
+    }
+    close() {}
+    addEventListener() {}
+  }
+  vi.stubGlobal("Notification", FakeNotification);
+  vi.stubGlobal("window", { Notification: FakeNotification });
+  return { notify };
+}
+
+describe("toast / OS banner dedupe (§4.2)", () => {
+  beforeEach(() => {
+    setDesktopNotificationsEnabled(true);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("does not reach deliver() when a toast was shown for the same burst", () => {
+    const { notify } = withFakeNotification();
+    const channelId = "aaaaaaaa-0001-4aaa-8aaa-aaaaaaaaaaaa";
+    rememberChannels([{ id: channelId, serverId: null, name: "Ana", kind: "dm" }]);
+
+    // documentVisible && windowFocused && not the selected channel: exactly
+    // the toast's one territory.
+    notifyChannelActivity(describeActivity(channelId, { count: 1, mentions: 0 }), {
+      selectedChannelId: null,
+      documentVisible: true,
+      windowFocused: true,
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("still reaches deliver() when the window is blurred — no toast could have shown", () => {
+    const { notify } = withFakeNotification();
+    const channelId = "aaaaaaaa-0002-4aaa-8aaa-aaaaaaaaaaaa";
+    rememberChannels([{ id: channelId, serverId: null, name: "Bo", kind: "dm" }]);
+
+    notifyChannelActivity(describeActivity(channelId, { count: 1, mentions: 0 }), {
+      selectedChannelId: null,
+      documentVisible: true,
+      windowFocused: false,
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reaches deliver() for a server channel, which never toasts at all", () => {
+    const { notify } = withFakeNotification();
+    const channelId = "aaaaaaaa-0003-4aaa-8aaa-aaaaaaaaaaaa";
+    rememberChannels([{ id: channelId, serverId: SERVER, name: "general" }]);
+
+    notifyChannelActivity(describeActivity(channelId, { count: 1, mentions: 1 }), {
+      selectedChannelId: null,
+      documentVisible: true,
+      windowFocused: true,
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("setUnreadBadge", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("prefixes the tab title with the count the caller computed", () => {
+    const doc = { title: "pqp" };
+    vi.stubGlobal("document", doc);
+    setUnreadBadge(4);
+    expect(doc.title).toBe("(4) pqp");
+    setUnreadBadge(0);
+    expect(doc.title).toBe("pqp");
+  });
+
+  it("mirrors the same count onto the installed PWA's app badge", () => {
+    const setAppBadge = vi.fn().mockResolvedValue(undefined);
+    const clearAppBadge = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("document", { title: "pqp" });
+    vi.stubGlobal("navigator", { setAppBadge, clearAppBadge });
+
+    setUnreadBadge(3);
+    expect(setAppBadge).toHaveBeenCalledWith(3);
+
+    setUnreadBadge(0);
+    expect(clearAppBadge).toHaveBeenCalled();
+  });
+
+  it("does not throw when the badge API is absent — iOS Safari, Firefox", () => {
+    vi.stubGlobal("document", { title: "pqp" });
+    vi.stubGlobal("navigator", {});
+    expect(() => setUnreadBadge(2)).not.toThrow();
   });
 });

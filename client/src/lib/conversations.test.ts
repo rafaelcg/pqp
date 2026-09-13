@@ -5,6 +5,7 @@ import {
   conversationSubtitle,
   conversationTitle,
   conversationUnreadTotals,
+  formatMessagePreview,
   sortConversations,
   touchConversation,
   unreadFromConversations,
@@ -32,6 +33,7 @@ function summary(
     participants: [person("Ana")],
     lastMessageAt: null,
     unread: { count: 0, mentions: 0 },
+    lastMessage: null,
     ...overrides,
   };
 }
@@ -216,5 +218,84 @@ describe("conversationUnreadTotals", () => {
       count: 0,
       mentions: 0,
     });
+  });
+});
+
+describe("formatMessagePreview", () => {
+  const VIEWER = "viewer-1";
+  const OTHER = "other-1";
+
+  function message(overrides: Partial<Parameters<typeof formatMessagePreview>[0]> = {}) {
+    return {
+      authorId: OTHER,
+      authorName: "Ana Beatriz",
+      preview: "bora hoje?",
+      isAttachment: false,
+      isGif: false,
+      ...overrides,
+    };
+  }
+
+  it("a 1:1 from the other person carries no prefix", () => {
+    expect(
+      formatMessagePreview(message(), { viewerId: VIEWER, isGroup: false }),
+    ).toBe("bora hoje?");
+  });
+
+  it("the viewer's own message gets the 'você:' / 'you:' prefix", () => {
+    expect(
+      formatMessagePreview(message({ authorId: VIEWER }), {
+        viewerId: VIEWER,
+        isGroup: false,
+      }),
+    ).toBe("you: bora hoje?");
+  });
+
+  it("a group message is prefixed with the author's first name", () => {
+    expect(
+      formatMessagePreview(message(), { viewerId: VIEWER, isGroup: true }),
+    ).toBe("Ana: bora hoje?");
+  });
+
+  it("the viewer's own message in a group still uses the 'you:' prefix, not their own name", () => {
+    expect(
+      formatMessagePreview(message({ authorId: VIEWER }), {
+        viewerId: VIEWER,
+        isGroup: true,
+      }),
+    ).toBe("you: bora hoje?");
+  });
+
+  it("an attachment-only message renders the file label instead of the (empty) preview", () => {
+    expect(
+      formatMessagePreview(
+        message({ preview: "", isAttachment: true }),
+        { viewerId: VIEWER, isGroup: false },
+      ),
+    ).toBe("Sent a file");
+  });
+
+  it("a GIF-only message renders the GIF label", () => {
+    expect(
+      formatMessagePreview(
+        message({ preview: "", isAttachment: true, isGif: true }),
+        { viewerId: VIEWER, isGroup: false },
+      ),
+    ).toBe("Sent a GIF");
+  });
+
+  it("an attachment from the viewer still gets the 'you:' prefix in front of the label", () => {
+    expect(
+      formatMessagePreview(
+        message({ authorId: VIEWER, preview: "", isAttachment: true }),
+        { viewerId: VIEWER, isGroup: false },
+      ),
+    ).toBe("you: Sent a file");
+  });
+
+  it("no viewer id (signed out edge case) never matches an author", () => {
+    expect(
+      formatMessagePreview(message(), { viewerId: null, isGroup: false }),
+    ).toBe("bora hoje?");
   });
 });

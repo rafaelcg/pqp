@@ -233,5 +233,11 @@ export function resolveOwnStatus(
   if (manual === "dnd") {
     return "dnd";
   }
+  // A declaration, not a measurement: stays idle whether or not the timer
+  // would have cleared it. See `packages/shared/src/status.ts` for why this
+  // is a fourth manual value rather than a manual idle.
+  if (manual === "away") {
+    return "idle";
+  }
   return idle ? "idle" : "online";
 }
