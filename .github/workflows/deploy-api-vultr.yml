@@ -285,6 +285,19 @@ jobs:
       # version comparison itself happens back on the runner via jq, kept
       # off the box on purpose (pqp-deploy has no need for another
       # dependency, and jq's absence there was never the point of this fix).
+      # Both curls keep `-f`, same as before: without it, a 4xx/5xx
+      # response whose JSON body still happens to carry the right version
+      # string would read as a healthy deploy instead of failing the
+      # attempt.
+      #
+      # This proves Caddy → api on the box itself, not that Cloudflare's
+      # edge can still reach it (a wrong DNS record, a stale ufw allowlist,
+      # or a misrouted proxy would all pass this check and still be a real
+      # outage). That gap is intentional, not missed: the box has no
+      # Cloudflare-range vantage point to check FROM, and the outside-in
+      # half is exactly what `.github/workflows/monitor-uptime.yml` and the
+      # UptimeRobot checks in docs/MONITORING.md already watch, continuously,
+      # independent of any one deploy.
       - name: Verify the deployed commit
         id: verify
         if: steps.relevant.outputs.needed == 'true' && steps.deploy.outcome == 'success'
@@ -297,10 +310,21 @@ jobs:
           ssh_cmd() {
             ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
+          # One SSH session per attempt (not two): both curls run on the box
+          # in a single remote script, printing "<body>\t<ready-code>" for
+          # the runner to split, instead of paying a fresh handshake twice
+          # per attempt for up to 80 handshakes across the full loop.
+          remote_check=$(cat <<REMOTE
+          body=\$(curl -fsS -k --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$HEALTH_URL' 2>/dev/null) || body='{}'
+          ready=\$(curl -fsS -k -o /dev/null -w '%{http_code}' --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$READY_URL' 2>/dev/null) || ready='000'
+          printf '%s\t%s\n' "\$body" "\$ready"
+          REMOTE
+          )
           for attempt in $(seq 1 40); do
-            body=$(ssh_cmd "curl -sS -k --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$HEALTH_URL'" || echo '{}')
+            line=$(ssh_cmd "$remote_check" || printf '{}\t000')
+            body=$(printf '%s' "$line" | cut -f1)
+            ready=$(printf '%s' "$line" | cut -f2)
             got=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null || echo "")
-            ready=$(ssh_cmd "curl -sS -k -o /dev/null -w '%{http_code}' --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$READY_URL'" || echo "000")
             if [ "$got" = "$EXPECTED" ] && [ "$ready" = "200" ]; then
               echo "$HOST is serving $got, /ready is 200"
               exit 0
