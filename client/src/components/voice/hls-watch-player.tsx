@@ -369,7 +369,7 @@ export function HlsWatchPlayer({
   // clearing `stallReason`/`restartCountdown` on every attempt bump made the
   // restart-specific copy and countdown disappear the instant the reconnect
   // it was announcing actually started, replaced by the generic "stalled"
-  // copy until the new attach's `onPlaying` fires (Farol, PR #529).
+  // copy until the new attach's `onPlaying` fires (Farol review, PR 529).
   const prevActiveSrcRef = useRef(activeSrc);
   useEffect(() => {
     setHasFrame(false);
