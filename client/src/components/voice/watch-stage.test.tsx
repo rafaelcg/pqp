@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot, type Root } from "react-dom/client";
@@ -154,6 +156,38 @@ describe("WatchStage draws only the controls it was given", () => {
     expect(html).toContain("data-watch-chrome");
     expect(html).toMatch(/data-watch-chrome=""[^>]*\bz-50\b/);
     expect(html).toContain('data-testid="watch-stage-fullscreen"');
+  });
+});
+
+/**
+ * THE STAGE NEVER OFFERS A CALL ON A WATCH PARTY, IN ANY OF ITS THREE
+ * STATES (2026-09-13, Rafael's "the audience never joins a call" decision).
+ * `WatchStage.onJoin` is a plain optional prop — the component itself has no
+ * idea whether the channel is a watch party or whether Voz is on, which is
+ * exactly what `WatchStage draws only the controls it was given` above
+ * already pins for the prop's absence. What that leaves to check is the one
+ * caller that decides the prop at all: `App.tsx`'s mount of
+ * `WatchChannelStage` must pass no `onJoin` for a watch party channel
+ * unconditionally, not "unless voice is on" — voice off, voice on, and the
+ * host's own view all go through the same `isWatchParty ? undefined : ...`,
+ * because the party bar owns the one way in, in every state.
+ */
+describe("a watch party channel gets no onJoin from App, in any state", () => {
+  it("is unconditional on the party's own options, not just on the flag", () => {
+    // `import.meta.url` is not a `file://` URL under the jsdom environment
+    // this file otherwise needs (for `createRoot`), so resolve from the
+    // process's own cwd (the `client/` package root vitest runs from)
+    // rather than the `new URL(..., import.meta.url)` pattern this repo's
+    // node-environment source-scanning tests use.
+    const source = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
+    const mount = source.slice(
+      source.indexOf("<WatchChannelStage"),
+      source.indexOf("onLeaveParty={"),
+    );
+    expect(mount).toMatch(/watchDock\.session\.isWatchParty\s*\?\s*undefined/);
+    // Not gated on anything about voice or role: the ternary's condition is
+    // the flag alone.
+    expect(mount).not.toMatch(/isWatchParty\s*&&\s*voiceEnabled/);
   });
 });
 

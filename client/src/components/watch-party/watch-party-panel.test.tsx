@@ -484,14 +484,75 @@ describe("the way into the room", () => {
     ).toContain(joinControl);
   });
 
-  it("offers it to everybody once the host turns voice on", () => {
-    // The film night. Six friends watching something together genuinely want
-    // to talk over it, and one click on Voz is what that costs them.
+  it("offers a plain viewer a stage request instead, once the host turns voice on", () => {
+    // THE AUDIENCE NEVER JOINS A CALL (2026-09-13). Turning Voz on used to put
+    // this exact control in front of every viewer, which is the "Entrar na
+    // call" Rafael's decision retires: the transmission is the product, and
+    // watching it is not a lobby. A plain viewer gets "Pedir para falar"
+    // instead, and only earns `joinControl` once the host actually brings
+    // them up (see "the audience's stage request" below).
+    const html = inBar({
+      party: { ...PARTY, options: { ...PARTY.options, voiceEnabled: true } },
+    });
+    expect(html).not.toContain(joinControl);
+    expect(html).toContain("data-watch-party-raise");
+  });
+});
+
+/**
+ * "PEDIR PARA FALAR", NEVER "ENTRAR NA CALL" (2026-09-13).
+ *
+ * The audience's only affordance once a party has voice: a stage request,
+ * reusing the same raise/lower hand `docs/RAISED_HANDS.md` already has. It
+ * used to exist only for `invited` mode; it is offered for any stage mode
+ * now, because the alternative is a viewer with voice on and nothing to
+ * press at all outside that one mode.
+ */
+describe("the audience's stage request", () => {
+  const raiseControl = "data-watch-party-raise";
+  const joinControl = "data-watch-party-join-call";
+  const inBar = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({ slot: "chrome", ...over });
+  const voiceOn = (stageMode: WatchParty["options"]["stageMode"]) => ({
+    party: { ...PARTY, options: { ...PARTY.options, voiceEnabled: true, stageMode } },
+  });
+
+  it("is offered for every stage mode, not only invited", () => {
+    for (const stageMode of ["hosts_only", "invited", "everyone"] as const) {
+      const html = inBar(voiceOn(stageMode));
+      expect(html, stageMode).toContain(raiseControl);
+      expect(html, stageMode).not.toContain(joinControl);
+    }
+  });
+
+  it("is silent while voice is off", () => {
+    expect(inBar()).not.toContain(raiseControl);
+  });
+
+  it("goes quiet for the host, the co-hosts, a presenter and an invited guest", () => {
+    expect(inBar({ ...voiceOn("everyone"), party: { ...voiceOn("everyone").party, viewerRole: "host" } })).not.toContain(raiseControl);
+    expect(inBar({ ...voiceOn("everyone"), party: { ...voiceOn("everyone").party, viewerRole: "cohost" } })).not.toContain(raiseControl);
+    expect(inBar({ ...voiceOn("everyone"), canStart: true })).not.toContain(raiseControl);
+    const me = "55555555-5555-4555-8555-555555555555";
     expect(
       inBar({
-        party: { ...PARTY, options: { ...PARTY.options, voiceEnabled: true } },
+        ...voiceOn("everyone"),
+        currentUserId: me,
+        party: {
+          ...voiceOn("everyone").party,
+          stage: {
+            ...PARTY.stage,
+            invited: [{ userId: me, displayName: "Bob", avatarUrl: null }],
+          },
+        },
       }),
-    ).toContain(joinControl);
+    ).not.toContain(raiseControl);
+  });
+
+  it("switches to the stage entrance once the party is actually voiceless", () => {
+    // canStart and an invited guest still get a way in, in the party's own
+    // words, regardless of Voz — see "the way into the room" above.
+    expect(inBar({ canStart: true })).toContain(joinControl);
   });
 });
 

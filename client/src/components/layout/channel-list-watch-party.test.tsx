@@ -283,3 +283,70 @@ describe("purge from the live party card and the flag-off row", () => {
     expect(html).toContain('data-channel-type="watch_party"');
   });
 });
+
+/**
+ * THE SIDEBAR CARD NEVER OFFERS A CALL (2026-09-13, Rafael's "the audience
+ * never joins a call" decision, item 1). `LivePartyBlock` reads only the
+ * party's name, host and audience count — it has no idea whether Voz is on,
+ * whether this viewer runs the show, or who else is seated, and that is the
+ * fix: there is nothing here to gate, because a seat count and a seat list
+ * were never wired into this card in the first place. These three states
+ * pin that it stays that way as the party's own shape changes around it.
+ */
+describe("the live party card never grows a call affordance", () => {
+  const withAudience = (party: WatchParty, count: number) => (
+    <ChannelList
+      {...baseProps}
+      onWatchLiveParty={() => {}}
+      liveParties={[party]}
+      channelLive={{
+        [cinema.id]: {
+          stream: {
+            hlsUrl: "https://api.example.test/hls",
+            startedAt: 0,
+            presenterPeerId: presenter.peerId,
+          },
+          watching: count,
+        },
+      }}
+    />
+  );
+
+  it("reads assistindo/watching by count alone while the party has no voice", () => {
+    const html = renderList(withAudience(liveParty, 5));
+    expect(html).toContain("live-party-block");
+    expect(html).toContain("5 watching");
+    expect(html).not.toContain("Take the stage");
+    expect(html).not.toContain(">Join<");
+    expect(html).not.toContain("data-watch-party-join-call");
+    expect(html).not.toContain("data-watch-party-raise");
+  });
+
+  it("reads the same way once the host turns Voz on", () => {
+    // The card does not know voiceEnabled changed, and that is the point: a
+    // watch party's card is always "assistindo · N", never a seat count or a
+    // seated list, whatever the party's own options say.
+    const withVoice: WatchParty = {
+      ...liveParty,
+      options: { ...liveParty.options, voiceEnabled: true, stageMode: "everyone" },
+    };
+    const html = renderList(withAudience(withVoice, 5));
+    expect(html).toContain("5 watching");
+    expect(html).not.toContain("Take the stage");
+    expect(html).not.toContain("Pedir");
+    expect(html).not.toContain("data-watch-party-join-call");
+    expect(html).not.toContain("data-watch-party-raise");
+  });
+
+  it("stays the same for the host's own view of it too", () => {
+    // viewerRole is a fact about the party the card never reads: the host's
+    // controls live in the channel itself (the bar, the options dialog),
+    // never in this sidebar card.
+    const asHost: WatchParty = { ...liveParty, viewerRole: "host" };
+    const html = renderList(withAudience(asHost, 5));
+    expect(html).toContain("5 watching");
+    expect(html).not.toContain("data-watch-party-end");
+    expect(html).not.toContain("data-watch-party-options-toggle");
+    expect(html).not.toContain("data-watch-party-join-call");
+  });
+});

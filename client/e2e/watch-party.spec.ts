@@ -1671,6 +1671,13 @@ test("a party has no voice until the host turns it on, and the audience follows 
    * change; five hundred people watching a presentation pay zero clicks for
    * the thing they want. That is why it is one select and not a switch plus a
    * stage picker.
+   *
+   * WHAT APPEARS IS "PEDIR PARA FALAR", NOT A SEAT (2026-09-13). The
+   * audience never joins a call: turning Voz on offers a plain guest a stage
+   * REQUEST, the same raise-hand button `invited` mode already had, now for
+   * every stage mode. `data-watch-party-join-call` stays at zero for this
+   * guest the whole test; only the host's own way back into the room uses
+   * that control.
    */
   const shared = await seedServer("wp-voz-host", "wp-voz-guest");
   const party = await createParty("wp-voz-host", shared.serverId, "Cinemoon");
@@ -1688,6 +1695,7 @@ test("a party has no voice until the host turns it on, and the audience follows 
   // move, and without it an appearing control proves nothing.
   expect(await joinOffers(guest)).toHaveLength(0);
   await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0);
+  await expect(guest.locator("[data-watch-party-raise]")).toHaveCount(0);
 
   const hostClient = await secondClient(browser);
   try {
@@ -1711,18 +1719,22 @@ test("a party has no voice until the host turns it on, and the audience follows 
     await voice.selectOption("everyone");
 
     // THE GUEST'S PAGE HAS NOT RELOADED. This appearing is the PATCH, the
-    // broadcast and the affordance, in a client that was already open.
-    await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(1, {
+    // broadcast and the affordance, in a client that was already open — and
+    // it is "Pedir para falar", never a seat: `join-call` stays at zero for
+    // this plain guest even though `join-voice-room` would let them in.
+    await expect(guest.locator("[data-watch-party-raise]")).toHaveCount(1, {
       timeout: 20_000,
     });
+    await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0);
 
     // And back off again, which is the path that also has to lift whatever
     // the party wrote on the channel (`watch-party-options.test.ts` owns that
     // half; this owns the affordance following it).
     await voice.selectOption("off");
-    await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0, {
+    await expect(guest.locator("[data-watch-party-raise]")).toHaveCount(0, {
       timeout: 20_000,
     });
+    await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0);
     expect(await joinOffers(guest)).toHaveLength(0);
 
     // The stage mode was remembered rather than reset, so a host who changes

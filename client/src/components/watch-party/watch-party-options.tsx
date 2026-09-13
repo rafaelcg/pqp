@@ -192,11 +192,19 @@ export function WatchPartyOptionsPanel({
   const voiceId = useId();
   const slowId = useId();
 
+  /**
+   * THE ONE-LINE SUMMARY UNDER "VOZ" (2026-09-13, Rafael): a plain sentence
+   * for whichever of the two states the select is in, ahead of the busy-room
+   * warning that already existed for `everyone`. Distinct keys from the
+   * older `watchParty.options.voiceOffBody` on purpose — a parallel PR
+   * (presenter guardrails, B4) touches this same row's copy, and two PRs
+   * writing different English into one key is a worse merge than two keys.
+   */
   const voiceNote = !options.voiceEnabled
-    ? t("watchParty.options.voiceOffBody")
+    ? t("watchParty.options.voiceOffSummary")
     : options.stageMode === "everyone" && busy
       ? t("watchParty.options.stageWarnEveryone")
-      : undefined;
+      : t("watchParty.options.voiceOnSummary");
 
   return (
     <div className="flex flex-col gap-4" data-watch-party-options>
