@@ -14,13 +14,25 @@ const BASE: GoLiveChecklistInput = {
   hasAudioTrack: null,
   quality: "720p",
   cameraOn: false,
+  micMuted: false,
 };
 
 describe("goLiveChecklist", () => {
-  it("is all-clear on Chrome with nothing picked yet, 720p, no camera", () => {
+  it("is all-clear on Chrome with nothing picked yet, 720p, no camera, mic open", () => {
     const items = goLiveChecklist(BASE);
-    expect(items.map((item) => item.id)).toEqual(["browser", "quality", "camera"]);
+    expect(items.map((item) => item.id)).toEqual([
+      "browser",
+      "quality",
+      "camera",
+      "mic",
+    ]);
     expect(items.every((item) => item.tone === "ok")).toBe(true);
+    expect(blocksGoLive(items)).toBe(false);
+  });
+
+  it("hints when the mic is muted, without blocking anything (2026-09-13)", () => {
+    const items = goLiveChecklist({ ...BASE, micMuted: true });
+    expect(items.find((item) => item.id === "mic")?.tone).toBe("hint");
     expect(blocksGoLive(items)).toBe(false);
   });
 
@@ -81,6 +93,7 @@ describe("goLiveChecklist", () => {
       hasAudioTrack: false,
       quality: "1080p",
       cameraOn: true,
+      micMuted: true,
     });
     expect(items.every((item) => item.tone !== "block")).toBe(true);
     expect(blocksGoLive(items)).toBe(false);

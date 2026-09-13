@@ -473,6 +473,58 @@ describe("the go-live checklist (postmortem B3)", () => {
     const html = render(draft);
     expect(html).not.toContain("watch-party-checklist-blocked");
   });
+
+  it("shows a mic hint, never a block, once the room mic is muted (2026-09-13)", () => {
+    const html = render({ ...draft, micState: "muted" });
+    expect(html).toMatch(
+      /class="[^"]*text-warning[^"]*"\s+data-watch-party-checklist-item="mic"/,
+    );
+    expect(html).not.toContain("watch-party-checklist-blocked");
+  });
+
+  it("shows the mic row as ok while the mic is open", () => {
+    const html = render({ ...draft, micState: "everyone" });
+    expect(html).toMatch(
+      /class="[^"]*text-text-tertiary[^"]*"\s+data-watch-party-checklist-item="mic"/,
+    );
+  });
+});
+
+/**
+ * "Seu mic está mudo: ninguém te ouve, nem na transmissão" — the addition
+ * this postmortem asked for after a recording lost the host's voice for an
+ * hour with only the small bar pill to notice by. `LiveSurface` renders both
+ * slots for a live party, so `slot: "chrome"` reaches the bar without
+ * needing a picture on screen.
+ */
+describe("the persistent mic-muted warning (2026-09-13)", () => {
+  const live = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({
+      party: { ...PARTY, viewerRole: "host" },
+      slot: "chrome",
+      onToggleMute: () => {},
+      ...over,
+    });
+
+  it("warns, with an Ativar mic button, while presenting with the mic muted", () => {
+    const html = live({ isPresenting: true, micState: "muted" });
+    expect(html).toContain("watch-party-mic-muted-warning");
+    expect(html).toContain("data-watch-party-activate-mic");
+  });
+
+  it("says nothing while not presenting, muted or not", () => {
+    expect(
+      live({ isPresenting: false, micState: "muted" }),
+    ).not.toContain("watch-party-mic-muted-warning");
+    expect(
+      live({ isPresenting: false, micState: "everyone" }),
+    ).not.toContain("watch-party-mic-muted-warning");
+  });
+
+  it("says nothing while presenting with the mic open", () => {
+    const html = live({ isPresenting: true, micState: "everyone" });
+    expect(html).not.toContain("watch-party-mic-muted-warning");
+  });
 });
 
 describe("a host on a phone", () => {

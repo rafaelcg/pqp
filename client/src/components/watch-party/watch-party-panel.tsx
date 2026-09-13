@@ -75,6 +75,7 @@ import {
   type ChecklistTone,
 } from "@/lib/watch-party-go-live-checklist";
 import { readWatchPartyStreamQuality } from "@/lib/watch-party-stream-quality";
+import { presenterMicWarning } from "@/lib/watch-party-mic-warning";
 import { cn } from "@/lib/utils";
 
 /**
@@ -831,6 +832,10 @@ const CHECKLIST_COPY: Record<ChecklistItem["id"], Partial<Record<ChecklistTone, 
     ok: "watchParty.checklist.cameraOk",
     hint: "watchParty.checklist.cameraHint",
   },
+  mic: {
+    ok: "watchParty.checklist.micOk",
+    hint: "watchParty.checklist.micHint",
+  },
 };
 
 function checklistCopyKey(item: ChecklistItem): MessageKey {
@@ -877,14 +882,13 @@ function GoLiveChecklist({
             {t(checklistCopyKey(item))}
           </ChecklistRow>
         ))}
-        {/* Two reminders with no signal to compute them from: whether the
-            film is actually playing, and whether the mic is unmuted, are
-            both facts only the host can see. Always shown, never a hint. */}
+        {/* One reminder with no signal to compute it from: whether the film
+            is actually playing is a fact only the host can see. The mic row
+            used to be this shape too, until 2026-09-13 gave it a real
+            signal (`micState`) and it moved into `items` above as a HARD
+            row: always shown, an opinion instead of a maybe. */}
         <ChecklistRow tone="ok">
           {t("watchParty.checklist.filmPlaying")}
-        </ChecklistRow>
-        <ChecklistRow tone="ok">
-          {t("watchParty.checklist.micUnmuted")}
         </ChecklistRow>
       </ul>
       {blocksGoLive(items) && (
@@ -1004,8 +1008,9 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         hasAudioTrack,
         quality: readWatchPartyStreamQuality(props.currentUserId ?? null),
         cameraOn: props.cameraOn ?? false,
+        micMuted: props.micState === "muted",
       }),
-    [hasAudioTrack, props.currentUserId, props.cameraOn],
+    [hasAudioTrack, props.currentUserId, props.cameraOn, props.micState],
   );
   // FIREFOX IS THE ONE ROW THAT BLOCKS. Everything else on this list is a
   // hint a host may ignore; there is no signal-safe watch party on Firefox
@@ -1497,9 +1502,20 @@ function LiveSurface(
         hasAudioTrack: null,
         quality: readWatchPartyStreamQuality(props.currentUserId ?? null),
         cameraOn: props.cameraOn ?? false,
+        micMuted: props.micState === "muted",
       }),
-    [props.currentUserId, props.cameraOn],
+    [props.currentUserId, props.cameraOn, props.micState],
   );
+
+  // "SEU MIC ESTÁ MUDO: NINGUÉM TE OUVE, NEM NA TRANSMISSÃO" (2026-09-13). A
+  // recording lost the host's voice for an hour because her mic stayed
+  // muted through the whole show and the only hint anywhere was the small
+  // pill in the bar. `presenterMicWarning` is the one rule behind this
+  // banner, the B2 silence paragraph and the checklist's `mic` row above —
+  // fed the same two facts everywhere so they cannot disagree.
+  const micMutedWarning =
+    presenterMicWarning(props.isPresenting, props.micState === "muted") ===
+    "warn";
 
   const viewerHint = (
     <div className="pointer-events-none absolute right-3 top-14 z-10 [&>*]:pointer-events-auto">
@@ -1942,6 +1958,7 @@ function LiveSurface(
       onDisplayGainChange={props.onDisplayGainChange}
       micLevelDb={props.micLevelDb}
       outputLevelDb={props.outputLevelDb}
+      micMuted={props.micState === "muted"}
       userId={props.currentUserId ?? null}
     />
   );
@@ -1986,12 +2003,42 @@ function LiveSurface(
     </div>
   );
 
+  // "SEU MIC ESTÁ MUDO", ABOVE THE FOLD. Unlike the bar's own mic pill (a
+  // small, easy-to-miss badge among several), this is a full-width row that
+  // cannot be collapsed away and cannot be confused with an ordinary "not
+  // talking right now" mute: it exists only in the exact state a recording
+  // was lost to (`presenterMicWarning`). The button is the fix in one click.
+  const micMutedBanner = micMutedWarning && (
+    <div
+      data-testid="watch-party-mic-muted-warning"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-danger/40 bg-danger/15 px-3 py-1.5 text-xs text-danger"
+    >
+      <MicOff className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 font-semibold">
+        {t("watchParty.live.micMutedWarning")}
+      </span>
+      {props.onToggleMute && (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={props.onToggleMute}
+          data-watch-party-activate-mic
+        >
+          <Mic className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("watchParty.live.activateMic")}
+        </Button>
+      )}
+    </div>
+  );
+
   // THE CHROME HALF: the party's controls, drawn above the split so that
   // collapsing the video cannot take Encerrar with it.
   if (props.slot === "chrome") {
     return (
       <div className="relative shrink-0">
         {bar}
+        {micMutedBanner}
         {transmission}
         {/* Portalled by `Dialog`, so it takes no room in this column and the
             split below it never moves. */}

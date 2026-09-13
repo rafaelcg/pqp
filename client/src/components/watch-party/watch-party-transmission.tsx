@@ -18,6 +18,7 @@ import {
   nextOutputSilenceState,
   type OutputSilenceState,
 } from "@/lib/watch-party-output-silence";
+import { presenterMicWarning } from "@/lib/watch-party-mic-warning";
 import {
   DISPLAY_GAIN_RANGE,
   formatGainDb,
@@ -113,6 +114,7 @@ export function WatchPartyTransmission({
   onDisplayGainChange,
   micLevelDb,
   outputLevelDb,
+  micMuted = false,
   userId = null,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
@@ -153,6 +155,16 @@ export function WatchPartyTransmission({
    * `watch-party-output-silence.ts`.
    */
   outputLevelDb?: () => number | null;
+  /**
+   * The ROOM microphone (`micState === "muted"`), not `micInStream` above
+   * (whether an OPEN mic is folded into the share's audio). Combined with
+   * `isPresenting` via `presenterMicWarning` to fold "seu mic está mudo"
+   * into the B2 silence warning when both are true at once: a persistent
+   * banner already says this on its own in the party bar
+   * (`watch-party-panel.tsx`), so this panel only needs to say it again
+   * where the silence warning is already being read (postmortem, 2026-09-13).
+   */
+  micMuted?: boolean;
   /** For `StreamQualityControl`'s per-account preference (postmortem B7). */
   userId?: string | null;
 }) {
@@ -165,6 +177,8 @@ export function WatchPartyTransmission({
     transport,
   );
   const outputSilentWarning = useOutputSilenceWarning(outputLevelDb);
+  const micMutedWhilePresenting =
+    presenterMicWarning(isPresenting, micMuted) === "warn";
 
   const height = stream?.topHeight ?? null;
   /**
@@ -351,7 +365,15 @@ export function WatchPartyTransmission({
               className="flex items-start gap-1.5 text-[11px] text-warning"
             >
               <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-              {t("watchParty.tx.outputSilentWarning")}
+              {/* WHEN THE SILENCE AND A MUTED MIC COINCIDE, say the mic
+                  fact too, in the same breath: a host reading "your
+                  broadcast has no sound" who then finds their mic muted has
+                  found the whole explanation, not half of it, and the
+                  persistent bar banner (`watch-party-panel.tsx`) may not be
+                  in view while this panel is open. */}
+              {micMutedWhilePresenting
+                ? `${t("watchParty.tx.outputSilentWarning")} ${t("watchParty.live.micMutedWarning")}`
+                : t("watchParty.tx.outputSilentWarning")}
             </p>
           )}
           {/* THE HOST'S ONE ENCODER LEVER, and why it is here rather than on

@@ -3,11 +3,11 @@
  * said before it happens rather than diagnosed after the room is already
  * confused (postmortem B3).
  *
- * SIX ROWS, TWO WORTH COMPUTING. "The film is playing" and "unmute if you
- * want to talk" have no signal this app can read — they are reminders, drawn
- * as plain copy by the caller, never through this module. The four rows here
- * (browser, tab audio, quality, camera) are the ones an actual state exists
- * for, and each maps to one failure from the night:
+ * SEVEN ROWS, ONE WORTH SAYING BUT NEVER COMPUTING. "The film is playing"
+ * has no signal this app can read — it is a reminder, drawn as plain copy by
+ * the caller, never through this module. The five rows here (browser, tab
+ * audio, quality, camera, mic) are the ones an actual state exists for, and
+ * each maps to one failure:
  *
  *  - BROWSER. Firefox has neither `restrictOwnAudio` nor `preferCurrentTab`
  *    (`screen-capture-audio.ts`), so a Firefox share is a whole-screen share
@@ -32,18 +32,31 @@
  *    audience (the transcode carries only the tab and its own audio) and
  *    spends uplink the tab share needed. `romulo910`-shaped confusion aside,
  *    it is a cost with no benefit, so it is a hint, not a block.
+ *  - MIC (2026-09-13). A recording lost the host's voice for an hour because
+ *    her mic stayed muted through the whole show; this is the same fact the
+ *    checklist can already see (`micState`), stated as a real row instead of
+ *    an unmuting reminder nobody could act on before the fact. A HARD row,
+ *    not a soft one: always shown, an opinion rather than a maybe. Still a
+ *    hint, not a block — a host who genuinely does not intend to talk (music
+ *    only, reading chat) has done nothing wrong either.
  *
  * NON-BLOCKING EXCEPT ONE. `blocksGoLive` is true only when the browser row
  * is Firefox. Every other row may sit on "hint" for the whole show: a host
- * on 1080p who knows their uplink, or one with the camera on for a
- * co-presenter the room can see, has not done anything wrong.
+ * on 1080p who knows their uplink, one with the camera on for a
+ * co-presenter the room can see, or one with the mic deliberately muted, has
+ * not done anything wrong.
  */
 
 import type { WatchPartyStreamQuality } from "./watch-party-stream-quality";
 
 export type ChecklistTone = "ok" | "hint" | "block";
 
-export type ChecklistItemId = "browser" | "tabAudio" | "quality" | "camera";
+export type ChecklistItemId =
+  | "browser"
+  | "tabAudio"
+  | "quality"
+  | "camera"
+  | "mic";
 
 export interface ChecklistItem {
   id: ChecklistItemId;
@@ -59,6 +72,8 @@ export interface GoLiveChecklistInput {
   hasAudioTrack: boolean | null;
   quality: WatchPartyStreamQuality;
   cameraOn: boolean;
+  /** The ROOM microphone, not `hasAudioTrack` (the share's own audio). */
+  micMuted: boolean;
 }
 
 export function goLiveChecklist(
@@ -80,6 +95,10 @@ export function goLiveChecklist(
     {
       id: "camera",
       tone: input.cameraOn ? "hint" : "ok",
+    },
+    {
+      id: "mic",
+      tone: input.micMuted ? "hint" : "ok",
     },
   ];
   if (input.hasAudioTrack !== null) {

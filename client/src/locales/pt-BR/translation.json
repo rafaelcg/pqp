@@ -2994,6 +2994,8 @@
   "watchParty.tx.carriesWithMic": "Pra fora da sala vai a janela compartilhada, o áudio dela e o seu mic. Câmera fica só com quem está na sala.",
   "watchParty.live.micOff": "Mic fora da call",
   "watchParty.live.micMuted": "Mic mutado",
+  "watchParty.live.micMutedWarning": "Seu mic está mudo: ninguém te ouve, nem na transmissão.",
+  "watchParty.live.activateMic": "Ativar mic",
   "watchParty.live.hostedBy": "com {name}",
   "watchParty.live.rename": "Renomear",
   "watchParty.live.renameLabel": "Nome da watch party",
@@ -3139,8 +3141,9 @@
   "watchParty.checklist.qualityHint": "1080p: só se você souber que seu upload aguenta. Uma conexão fraca estraga a imagem pra todo mundo.",
   "watchParty.checklist.cameraOk": "Câmera desligada: quem assiste só vê a aba compartilhada.",
   "watchParty.checklist.cameraHint": "Câmera ligada: quem assiste não vê ela, só a sala. Ela ainda gasta o seu upload.",
+  "watchParty.checklist.micOk": "Mic ligado: a sala te ouve se você falar.",
+  "watchParty.checklist.micHint": "Mic mudo: ninguém vai te ouvir até você ativar.",
   "watchParty.checklist.filmPlaying": "Confere se o filme já tá tocando antes de ir ao vivo.",
-  "watchParty.checklist.micUnmuted": "Tira o mudo do mic se você quiser falar com a sala.",
   "watchParty.checklist.blockedFirefox": "O Firefox não consegue ir ao vivo aqui: troca pro Chrome (ou outro navegador Chromium) primeiro.",
   "watchParty.live.endFailed": "Não deu pra encerrar a watch party."
 }

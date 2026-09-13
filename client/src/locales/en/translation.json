@@ -2994,6 +2994,8 @@
   "watchParty.tx.carriesWithMic": "What leaves the room is the shared window, its own audio and your mic. Cameras stay with the people in the room.",
   "watchParty.live.micOff": "Mic not in the call",
   "watchParty.live.micMuted": "Mic muted",
+  "watchParty.live.micMutedWarning": "Your mic is muted: nobody can hear you, not even in the broadcast.",
+  "watchParty.live.activateMic": "Turn mic on",
   "watchParty.live.hostedBy": "with {name}",
   "watchParty.live.rename": "Rename",
   "watchParty.live.renameLabel": "Watch party name",
@@ -3139,8 +3141,9 @@
   "watchParty.checklist.qualityHint": "1080p: only if you know your upload can take it. A weak link corrupts the picture for everyone.",
   "watchParty.checklist.cameraOk": "Camera off: the audience only sees the shared tab.",
   "watchParty.checklist.cameraHint": "Camera on: the audience will not see it, only the room will. It still spends your upload.",
+  "watchParty.checklist.micOk": "Mic on: the room can hear you if you talk.",
+  "watchParty.checklist.micHint": "Mic muted: nobody will hear you until you turn it on.",
   "watchParty.checklist.filmPlaying": "Make sure the film is actually playing before you go live.",
-  "watchParty.checklist.micUnmuted": "Unmute your mic if you want to talk to the room.",
   "watchParty.checklist.blockedFirefox": "Firefox cannot go live here: switch to Chrome (or another Chromium browser) first.",
   "watchParty.live.endFailed": "Could not end the watch party."
 }

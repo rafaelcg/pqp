@@ -117,3 +117,77 @@ describe("the output-silence warning, live", () => {
     expect(container.querySelector('[data-testid="watch-party-tx-output-silent-pill"]')).toBeNull();
   });
 });
+
+/**
+ * "Seu mic está mudo" folded into the B2 silence paragraph when both are
+ * true at once (2026-09-13 addition). `isPresenting` has to be true here,
+ * which also starts `useShareUplinkStrain`'s own sampler
+ * (`shouldMeasureUplink` keys only on `isSharing`); that sampler reads an
+ * empty stats registry in this environment and settles quietly, so it does
+ * not interfere with what this test is checking.
+ */
+describe("the mic-muted line folded into the silence warning", () => {
+  function renderPresenting(micMuted: boolean) {
+    act(() => {
+      root.render(
+        <WatchPartyTransmission
+          stream={{
+            hlsUrl: "/api/voice/hls-playlist/c/1",
+            startedAt: 1_757_000_000_000,
+            presenterPeerId: "peer-1",
+            delaySeconds: 10,
+            topHeight: 720,
+            hasAudio: true,
+          }}
+          wentLiveAt="2026-09-09T12:00:00.000Z"
+          audienceCount={137}
+          isPresenting
+          quality="auto"
+          roomViewers={4}
+          transport="livekit"
+          now={new Date("2026-09-09T12:20:00.000Z")}
+          outputLevelDb={() => Number.NEGATIVE_INFINITY}
+          micMuted={micMuted}
+        />,
+      );
+    });
+  }
+
+  it("says the mic is muted too, once the silence warning is already showing", () => {
+    renderPresenting(true);
+    act(() => {
+      vi.advanceTimersByTime(10_100);
+    });
+    // The panel is collapsed, so open it to read the expanded paragraph —
+    // the toggle button is the same one every other transmission test uses.
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[data-testid="watch-party-tx-toggle"]',
+    );
+    act(() => {
+      toggle?.click();
+    });
+    const paragraph = container.querySelector(
+      '[data-testid="watch-party-tx-output-silent"]',
+    );
+    expect(paragraph?.textContent).toContain("no sound");
+    expect(paragraph?.textContent).toContain("Your mic is muted");
+  });
+
+  it("says only the silence line when the mic is open", () => {
+    renderPresenting(false);
+    act(() => {
+      vi.advanceTimersByTime(10_100);
+    });
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[data-testid="watch-party-tx-toggle"]',
+    );
+    act(() => {
+      toggle?.click();
+    });
+    const paragraph = container.querySelector(
+      '[data-testid="watch-party-tx-output-silent"]',
+    );
+    expect(paragraph?.textContent).toContain("no sound");
+    expect(paragraph?.textContent).not.toContain("mic is muted");
+  });
+});
