@@ -30,6 +30,7 @@ vi.mock("livekit-server-sdk", async (importOriginal) => {
 });
 
 const {
+  cancelSfuPrivateResweep,
   evictSfuRoom,
   evictSfuUser,
   evictSfuUsersExcept,
@@ -231,6 +232,65 @@ describe("SFU eviction", () => {
         "peer-revoked",
         "peer-unknown",
       ]);
+    });
+
+    /**
+     * Live production evidence, 2026-09-12: a channel's own HLS egress got
+     * evicted every 5 s by the resweep a permission save scheduled, because
+     * an egress has no `userId` and "fails closed" (the test above) means
+     * exactly that participant is who this sweep removes by default.
+     */
+    it("never evicts the room's own HLS egress from a channel-private sweep", async () => {
+      const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+      lk.listParticipants.mockResolvedValue([
+        participant("peer-allowed", "user-1"),
+        participant("EG_transcoder-1"),
+      ]);
+
+      await evictSfuUsersExcept("voice-a", new Set(["user-1"]), new Map());
+      await settleSfuEvictions();
+
+      expect(removedIdentities()).toEqual([]);
+      const lines = logged.mock.calls.map((call) => String(call[0]));
+      expect(
+        lines.some(
+          (line) =>
+            line.startsWith("[pqp] voice.sfuEvictSkippedEgress") &&
+            line.includes("voice-a") &&
+            line.includes("EG_transcoder-1"),
+        ),
+      ).toBe(true);
+    });
+
+    /**
+     * A full room deletion (the channel or its server is gone) is the one
+     * sweep that legitimately takes the transcoder down with it — there is
+     * no channel left for it to composite.
+     */
+    it("does evict an EG_ identity when the whole room is torn down", async () => {
+      lk.listParticipants.mockResolvedValue([participant("EG_transcoder-1")]);
+
+      await evictSfuRoom("voice-a");
+      await settleSfuEvictions();
+
+      expect(removedIdentities()).toEqual(["EG_transcoder-1"]);
+    });
+
+    it("cancels an outstanding channel-private resweep once the channel goes public", async () => {
+      vi.useFakeTimers();
+      lk.listRooms.mockResolvedValue(rooms("voice-a"));
+      lk.listParticipants.mockResolvedValue([participant("peer-unknown")]);
+
+      await evictSfuUsersExcept("voice-a", new Set(["user-1"]), new Map());
+      await settleSfuEvictions();
+      expect(removedIdentities()).toEqual(["peer-unknown"]);
+      lk.removeParticipant.mockClear();
+
+      await cancelSfuPrivateResweep("voice-a");
+
+      await vi.advanceTimersByTimeAsync(5_000 * 3);
+
+      expect(removedIdentities()).toEqual([]);
     });
 
     /**

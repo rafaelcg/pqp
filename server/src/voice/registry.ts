@@ -1388,6 +1388,15 @@ export async function claimVoiceResweeps(): Promise<VoiceResweepRow[]> {
   }));
 }
 
+/**
+ * Cancel one re-sweep outright — the restriction it exists for is gone (a
+ * private channel just went public, or its `@everyone` overwrite regained
+ * VIEW). Idempotent: deleting a key with no row is a no-op, not an error.
+ */
+export async function deleteVoiceResweep(key: string): Promise<void> {
+  await getPool().query(`DELETE FROM voice_resweeps WHERE key = $1`, [key]);
+}
+
 /** Whether any re-sweep is still inside its window (the process ticker stops when none is). */
 export async function hasLiveVoiceResweeps(): Promise<boolean> {
   const result = await getPool().query(

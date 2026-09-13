@@ -152,6 +152,7 @@ import {
   applyManualStatus,
   broadcastProfileUpdate,
   broadcastToChannel,
+  cancelPrivateVoiceResweep,
   evictChannelViewers,
   evictUserFromChannels,
   evictVoiceChannel,
@@ -4300,6 +4301,15 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
       evictChannelViewers(threadId, { exceptUserIds: [...allowed] });
     }
   }
+  // The reverse: a channel that just went public needs nobody kept out
+  // anymore, so any channel-private re-sweep still running for it (from an
+  // earlier ban, or from an overwrite save while it was still private) is
+  // cancelled rather than left to spend its window evicting people — and,
+  // while the registry is off, the room's own HLS egress — who have every
+  // right to be there now.
+  if (!updated.is_private && channel.is_private) {
+    void cancelPrivateVoiceResweep(channelId!);
+  }
   if (body.isPrivate !== undefined && body.isPrivate !== channel.is_private) {
     pingPermissions(channel.server_id);
   }
@@ -5958,7 +5968,29 @@ router.delete(
   },
 );
 
+/**
+ * Every overwrite save cancels any outstanding channel-private re-sweep for
+ * the room before recomputing who belongs. `evictVoiceUsersExcept` below
+ * schedules a fresh one keyed to the audience this call just read whenever
+ * the room still needs one, so cancelling first never leaves a still-private
+ * channel unprotected — it only ever removes a sweep this call is about to
+ * either replace with a current one or make unnecessary. That matters
+ * because `is_private` alone does not tell us access just widened: it stays
+ * true across an overwrite PUT/DELETE that restores `@everyone` VIEW or
+ * grants a role access, and per `cancelSfuPrivateResweep`'s own contract,
+ * callers are expected to call it unconditionally rather than infer in
+ * advance whether a resweep is actually live.
+ *
+ * The cancellation is AWAITED, not fired and forgotten: `cancelSfuPrivateResweep`
+ * deletes the `voice_resweeps` row (with a retry, so it can take a moment),
+ * and `evictVoiceUsersExcept` below can write a replacement row for the same
+ * key when the room still needs one. Racing those two — a delete still in
+ * flight when the fresh upsert lands — would let the delete land second and
+ * erase the replacement, leaving a still-private room with no cluster
+ * resweep at all. Finishing the delete first makes that ordering impossible.
+ */
 async function evictViewersOutsideAudience(channelId: string): Promise<void> {
+  await cancelPrivateVoiceResweep(channelId);
   const audience = await getChannelAudience(channelId);
   if (!audience) {
     return;

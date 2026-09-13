@@ -48,12 +48,14 @@ vi.mock("../services/servers.js", () => ({
 }));
 
 vi.mock("../voice/admin.js", () => ({
+  cancelSfuPrivateResweep: vi.fn(() => Promise.resolve()),
   evictSfuRoom: vi.fn(() => Promise.resolve()),
   evictSfuUser: vi.fn(() => Promise.resolve()),
   evictSfuUsersExcept: vi.fn(() => Promise.resolve()),
 }));
 
 const {
+  cancelPrivateVoiceResweep,
   evictVoiceChannel,
   evictVoiceUser,
   evictVoiceUsersExcept,
@@ -61,9 +63,8 @@ const {
   resetVoicePeers,
   resetVoiceRateLimits,
 } = await import("./voice.js");
-const { evictSfuRoom, evictSfuUser, evictSfuUsersExcept } = await import(
-  "../voice/admin.js"
-);
+const { cancelSfuPrivateResweep, evictSfuRoom, evictSfuUser, evictSfuUsersExcept } =
+  await import("../voice/admin.js");
 
 // The join schema requires channel ids to be UUIDs.
 const VOICE_A = randomUUID();
@@ -124,6 +125,7 @@ describe("voice eviction pairs mesh with SFU", () => {
     vi.mocked(evictSfuRoom).mockClear();
     vi.mocked(evictSfuUser).mockClear();
     vi.mocked(evictSfuUsersExcept).mockClear();
+    vi.mocked(cancelSfuPrivateResweep).mockClear();
   });
 
   function track(rec: Recorder): Recorder {
@@ -201,6 +203,24 @@ describe("voice eviction pairs mesh with SFU", () => {
         [revokedPeerId, "outsider"],
       ]),
     );
+  });
+
+  /**
+   * The API layer calls this once a channel's `is_private` flips to false, or
+   * its `@everyone` overwrite regains VIEW (`server/src/api/index.ts`). Real
+   * incident, 2026-09-12: `evictSfuUsersExcept` schedules a channel-private
+   * resweep on every call regardless of whether the channel is still private,
+   * so a public channel's permission saves left 15-minute sweeps running
+   * against a room nobody needed kept out of — and each one spent its ticks
+   * evicting the room's own HLS egress (see `isEgressIdentity` in
+   * `voice/admin.ts`). This is the wiring test; the resweep itself (the
+   * in-process timer, and the `voice_resweeps` row) is covered directly in
+   * `voice/admin.test.ts`.
+   */
+  it("cancels the SFU channel-private resweep when a channel's access widens", () => {
+    cancelPrivateVoiceResweep(VOICE_A);
+
+    expect(cancelSfuPrivateResweep).toHaveBeenCalledWith(VOICE_A);
   });
 
   it("does not touch the SFU when a peer simply leaves", async () => {

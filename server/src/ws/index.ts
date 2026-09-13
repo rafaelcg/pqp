@@ -48,6 +48,7 @@ export {
   startClusterStatusRefresh,
 } from "./status.js";
 export {
+  cancelPrivateVoiceResweep,
   evictVoiceChannel,
   evictVoiceUser,
   evictVoiceUsersExcept,
