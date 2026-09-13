@@ -38,6 +38,7 @@ const {
   screenPermission,
   captureResponse,
 } = require("./lib/display-sources");
+const { displayRequestAllowed } = require("./lib/display-origin.js");
 const {
   isAcceptableAccelerator,
   createHoldTracker,
@@ -982,8 +983,10 @@ function configureSessionSecurity(appOrigin) {
       // those pages, or one compromised, could ask for the desktop and this
       // handler would hand it over exactly as if the request came from pqp.
       // `request.securityOrigin` is Chromium's own read of the requesting
-      // frame, not a value the page can spoof.
-      if (!allowedOrigin || request?.securityOrigin !== allowedOrigin) {
+      // frame, not a value the page can spoof. Chromium serialises it WITH a
+      // trailing slash, so compare origins through `URL`, never by string
+      // equality (0.1.6 refused every pqp share this way).
+      if (!displayRequestAllowed(request, allowedOrigin)) {
         console.warn(
           "[pqp] refused a display-media request from an untrusted origin:",
           request?.securityOrigin ?? "(unknown)",
