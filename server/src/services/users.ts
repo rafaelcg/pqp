@@ -24,6 +24,7 @@ import { getPreferences } from "./preferences.js";
 import { invalidateServerAudience } from "./servers.js";
 import { bumpPermissionsVersion } from "./permissions.js";
 import { stampTurma1000 } from "./badges.js";
+import { isBusEnabled, publishToCluster, subscribeToCluster } from "../lib/bus.js";
 import {
   coalesce,
   invalidate as invalidateReadCache,
@@ -945,14 +946,55 @@ function channelAccessCacheKey(channelId: string, userId: string): string {
 }
 
 /**
+ * The bus topic for the two functions below. `channel-access` is the one
+ * read-cache entry that is a straight authorization answer (`canAccessChannel`)
+ * rather than presentation data, so unlike the member-list/age-gate caches
+ * (deliberately left local-only — see the round-1 Farol fix commit: stale
+ * *display* data for one TTL is a cosmetic bug, not a security one), it must
+ * not depend on every caller routing through `servers.ts`'s audience
+ * chokepoint to reach other processes. `services/dms.ts`'s hide/restore does
+ * not: a conversation has no server, so `invalidateServerAudience`'s
+ * chokepoint never runs for it, and its two call sites (`restoreDmParticipants`,
+ * `removeChannelMember`-for-DMs) called this cache's invalidation directly and
+ * only locally — a second API process kept a hidden-then-restored DM
+ * answering "no access", or a left group still answering "yes", for up to
+ * `CHANNEL_ACCESS_TTL_MS` after the write that was supposed to change it.
+ * Publishing here closes that regardless of which write path reaches it,
+ * rather than requiring every future caller to remember the chokepoint.
+ *
+ * `servers.ts`'s own audience chokepoint also calls these two functions, so
+ * a join/leave/kick/ban/role/overwrite change now publishes twice in a
+ * multi-process deployment (once as `AUDIENCE_TOPIC`/`PERMISSIONS_TOPIC`,
+ * once here) — harmless, fire-and-forget, and rare next to the per-request
+ * reads this cache exists to avoid.
+ */
+const CHANNEL_ACCESS_BUS_TOPIC = "cache.channel-access.invalidate";
+
+type ChannelAccessInvalidation =
+  | { scope: "channel"; channelId: string }
+  | { scope: "server" };
+
+function invalidateChannelAccessForChannelLocally(channelId: string): void {
+  invalidateReadCache(channelAccessCacheKeyPrefix(channelId));
+}
+
+function invalidateChannelAccessForServerLocally(): void {
+  invalidateReadCache("channel-access:");
+}
+
+/**
  * Drop one channel's cached access answers, for every viewer at once — same
  * blunt shape as `invalidateServerMemberRoles` above, and for the same
  * reason: a `channel_members` or privacy change on one channel can move the
  * answer for any of its would-be viewers, not just one. Call after any write
- * to that channel's own membership or privacy.
+ * to that channel's own membership or privacy. Cross-process: see the bus
+ * topic doc comment above.
  */
 export function invalidateChannelAccessForChannel(channelId: string): void {
-  invalidateReadCache(channelAccessCacheKeyPrefix(channelId));
+  invalidateChannelAccessForChannelLocally(channelId);
+  if (isBusEnabled()) {
+    publishToCluster(CHANNEL_ACCESS_BUS_TOPIC, { scope: "channel", channelId });
+  }
 }
 
 /**
@@ -962,10 +1004,30 @@ export function invalidateChannelAccessForChannel(channelId: string): void {
  * are rare, so a full clear costs one extra query burst rather than a second
  * index nothing else here needs), so a server-scoped write — a role change,
  * a kick, a ban, a join, an overwrite change — clears the whole thing.
+ * Cross-process: see the bus topic doc comment above.
  */
 export function invalidateChannelAccessForServer(): void {
-  invalidateReadCache("channel-access:");
+  invalidateChannelAccessForServerLocally();
+  if (isBusEnabled()) {
+    publishToCluster(CHANNEL_ACCESS_BUS_TOPIC, { scope: "server" });
+  }
 }
+
+subscribeToCluster(CHANNEL_ACCESS_BUS_TOPIC, (data) => {
+  const event = data as Partial<ChannelAccessInvalidation> | null;
+  if (!event || typeof event.scope !== "string") {
+    return;
+  }
+  if (event.scope === "channel") {
+    if (typeof event.channelId === "string" && event.channelId.length > 0) {
+      invalidateChannelAccessForChannelLocally(event.channelId);
+    }
+    return;
+  }
+  if (event.scope === "server") {
+    invalidateChannelAccessForServerLocally();
+  }
+});
 
 export async function canAccessChannel(
   channelId: string,
