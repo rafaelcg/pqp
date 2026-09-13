@@ -22,8 +22,6 @@ Web, iPhone Safari and the iPhone app. In the app, the whole phone becomes the s
 
 ## Viewers know what they are seeing
 
-A fixed badge on the player: **Live · ~Xs delay**. That is the stream's normal delay, everyone sees the same thing together.
-
 The waiting screen now says why: reconnecting, restarting (with a countdown), or the host has not shared yet.
 
 Rooms above 10 people mute their join and leave sounds on their own. One button brings them back.
