@@ -311,9 +311,16 @@ jobs:
       # access at all. api-b's port intentionally refuses connections when
       # this box is running with `API_REPLICAS=1` (compose.yaml's
       # `replicas` profile is inactive, so the container never starts) —
-      # that is a valid, expected state, not a failure, so this step
-      # treats "connection refused on :3012" as "api-b not running" and
-      # only requires the deployed sha from replicas that ARE running.
+      # that is a valid, expected state, not a failure. The distinction
+      # that matters is curl's OWN exit code, not just "did we get a
+      # body": exit 7 is "couldn't connect at all" (nothing listening on
+      # :3012, i.e. api-b genuinely isn't running), which is the only
+      # case this step treats as acceptably absent. Any other failure —
+      # a timeout, a non-2xx from `-f`, a reset mid-response — means
+      # something IS listening on :3012 but unhealthy, and that must
+      # still fail the check; api-b existing in a broken state is not the
+      # same thing as api-b not existing, and conflating the two would
+      # let a genuinely degraded two-replica deploy pass as clean.
       - name: Verify the deployed commit
         id: verify
         if: steps.relevant.outputs.needed == 'true' && steps.deploy.outcome == 'success'
@@ -326,45 +333,67 @@ jobs:
           ssh_cmd() {
             ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
-          # One SSH session per attempt (not four): every curl runs on the
-          # box in a single remote script, printing
-          # "<api-a>\t<api-b>\t<caddy>\t<ready-code>" for the runner to
-          # split, instead of paying a fresh handshake per check per
-          # attempt across the full loop. api-b's curl has no `-f` so a
-          # connection-refused (container not running, API_REPLICAS=1)
-          # comes back as an empty body rather than aborting the whole
-          # remote script — the runner tells that apart from "running but
-          # wrong version" below.
+          # One SSH session per attempt (not four), and all four curls
+          # launched CONCURRENTLY inside it (not chained) — with four
+          # sequential 10s-max-time curls, a single hung endpoint could
+          # cost ~40s per attempt before the 15s sleep, and 40 attempts of
+          # that risks running past this job's own 30-minute timeout
+          # before ever reaching the rollback step. Running them in
+          # parallel bounds one attempt to roughly the slowest single
+          # curl (≤10s) plus the sleep, not the sum of all four.
+          # api-b's curl has no `-f`, so a connection-refused comes back
+          # as an empty body with a distinguishable exit code (captured
+          # separately below) rather than aborting the remote script.
           remote_check=$(cat <<REMOTE
-          body_a=\$(curl -fsS --max-time 10 'http://127.0.0.1:3011/health' 2>/dev/null) || body_a='{}'
-          body_b=\$(curl -fsS --max-time 10 'http://127.0.0.1:3012/health' 2>/dev/null) || body_b=''
-          body_caddy=\$(curl -fsS -k --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$HEALTH_URL' 2>/dev/null) || body_caddy='{}'
-          ready=\$(curl -fsS -k -o /dev/null -w '%{http_code}' --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$READY_URL' 2>/dev/null) || ready='000'
-          printf '%s\t%s\t%s\t%s\n' "\$body_a" "\$body_b" "\$body_caddy" "\$ready"
+          ta=\$(mktemp); tb=\$(mktemp); tc=\$(mktemp); tr=\$(mktemp)
+          curl -fsS --max-time 10 'http://127.0.0.1:3011/health' >"\$ta" 2>/dev/null & pa=\$!
+          curl -sS --max-time 10 'http://127.0.0.1:3012/health' >"\$tb" 2>/dev/null & pb=\$!
+          curl -fsS -k --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$HEALTH_URL' >"\$tc" 2>/dev/null & pc=\$!
+          curl -fsS -k -o /dev/null -w '%{http_code}' --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$READY_URL' >"\$tr" 2>/dev/null & pr=\$!
+          wait \$pa; ra=\$?
+          wait \$pb; rb=\$?
+          wait \$pc; rc=\$?
+          wait \$pr || true
+          ready=\$(cat "\$tr" 2>/dev/null)
+          [ -n "\$ready" ] || ready='000'
+          body_a=\$(cat "\$ta" 2>/dev/null); [ \$ra -eq 0 ] || body_a='{}'
+          body_b=\$(cat "\$tb" 2>/dev/null)
+          body_caddy=\$(cat "\$tc" 2>/dev/null); [ \$rc -eq 0 ] || body_caddy='{}'
+          rm -f "\$ta" "\$tb" "\$tc" "\$tr"
+          printf '%s\t%s\t%s\t%s\t%s\n' "\$body_a" "\$rb" "\$body_b" "\$body_caddy" "\$ready"
           REMOTE
           )
           for attempt in $(seq 1 40); do
-            line=$(ssh_cmd "$remote_check" || printf '{}\t\t{}\t000')
+            line=$(ssh_cmd "$remote_check" || printf '{}\t1\t\t{}\t000')
             body_a=$(printf '%s' "$line" | cut -f1)
-            body_b=$(printf '%s' "$line" | cut -f2)
-            body_caddy=$(printf '%s' "$line" | cut -f3)
-            ready=$(printf '%s' "$line" | cut -f4)
+            rc_b=$(printf '%s' "$line" | cut -f2)
+            body_b=$(printf '%s' "$line" | cut -f3)
+            body_caddy=$(printf '%s' "$line" | cut -f4)
+            ready=$(printf '%s' "$line" | cut -f5)
 
             got_a=$(printf '%s' "$body_a" | jq -r '.version // empty' 2>/dev/null || echo "")
             got_caddy=$(printf '%s' "$body_caddy" | jq -r '.version // empty' 2>/dev/null || echo "")
 
-            if [ -z "$body_b" ]; then
-              # api-b did not answer at all: either API_REPLICAS=1 (expected,
-              # not a failure) or it is still starting up. Either way, do not
-              # require a version from it — just don't call the deploy done
-              # until api-a and Caddy both confirm the new sha.
-              b_status="not running"
-              b_ok=true
-            else
-              got_b=$(printf '%s' "$body_b" | jq -r '.version // empty' 2>/dev/null || echo "")
-              b_status="${got_b:-unknown}"
-              [ "$got_b" = "$EXPECTED" ] && b_ok=true || b_ok=false
-            fi
+            case "$rc_b" in
+              0)
+                got_b=$(printf '%s' "$body_b" | jq -r '.version // empty' 2>/dev/null || echo "")
+                b_status="${got_b:-unknown}"
+                [ "$got_b" = "$EXPECTED" ] && b_ok=true || b_ok=false
+                ;;
+              7)
+                # Connection refused: nothing listening on :3012 at all —
+                # the expected, non-failure shape of API_REPLICAS=1.
+                b_status="not running"
+                b_ok=true
+                ;;
+              *)
+                # Reachable-but-broken (timeout, reset, non-2xx, ...): a
+                # real api-b exists and is unhealthy. Must fail, not be
+                # waved through as "absent".
+                b_status="unhealthy (curl exit $rc_b)"
+                b_ok=false
+                ;;
+            esac
 
             if [ "$got_a" = "$EXPECTED" ] && [ "$b_ok" = "true" ] && [ "$got_caddy" = "$EXPECTED" ] && [ "$ready" = "200" ]; then
               echo "$HOST: api-a=$got_a api-b=$b_status caddy=$got_caddy ready=$ready"

@@ -182,7 +182,22 @@ verify_version() {
   return 0
 }
 
-docker compose up -d api-a
+# --remove-orphans here (and only here -- once per run is enough, orphan
+# detection compares the WHOLE project's containers against the WHOLE
+# current file, not just the services named on this line) is what retires
+# a container from a service that no longer exists in this compose.yaml at
+# all. The one case that matters today: the very first deploy after this
+# PR lands still has a lone `api` container running (the pre-split
+# service name) on a box that has never seen api-a/api-b -- without this
+# flag it would keep running forever under `restart: unless-stopped`,
+# unmanaged, still holding a database connection and a cluster-bus
+# identity, invisible to Caddy (which only ever pointed at `api`, not
+# `api-a`) and to every check in this script. `docker compose` gives it
+# the same stop treatment as a normal `down` (SIGTERM, honouring the
+# 60s stop_grace_period baked into that old container at creation time,
+# then remove) -- expect a one-time full drain of whatever was still
+# connected to it, same shape as any other `restarts-api` deploy.
+docker compose up -d --remove-orphans api-a
 if ! wait_healthy api-a || ! verify_version api-a; then
   echo "api-a failed to come up on $TAG; leaving api-b/worker on the previous release" >&2
   exit 1
@@ -193,6 +208,24 @@ if [[ " ${API_SERVICES[*]} " == *" api-b "* ]]; then
   if ! wait_healthy api-b || ! verify_version api-b; then
     echo "api-b failed to come up on $TAG; api-a is already healthy on $TAG and keeps serving" >&2
     exit 1
+  fi
+else
+  # API_REPLICAS=1: api-a is confirmed healthy above, so it's now safe to
+  # retire an api-b left over from a box that was previously running with
+  # two replicas. Compose does not do this on its own -- disabling a
+  # profile only stops FUTURE `up`/`pull` from touching that service, it
+  # does not stop or remove a container the profile already created, so
+  # without this an old api-b would keep running, keep taking a share of
+  # Caddy's round-robin (Caddyfile's upstream list is static, not
+  # profile-aware), and keep failing this script's own version check on
+  # the NEXT deploy once it drifts onto a stale tag. `--profile replicas`
+  # on this one invocation is what lets `stop`/`rm` address a service this
+  # run's own COMPOSE_PROFILES has deliberately left deactivated.
+  existing_api_b="$(docker compose --profile replicas ps -q api-b 2>/dev/null || true)"
+  if [[ -n "$existing_api_b" ]]; then
+    echo "API_REPLICAS=1: stopping and removing existing api-b"
+    docker compose --profile replicas stop api-b
+    docker compose --profile replicas rm -f api-b
   fi
 fi
 

@@ -458,11 +458,45 @@ ssh pqp@<ip> 'sudo /usr/local/bin/pqp-deploy $(cat /opt/pqp/.deployed-tag)'
 re-running a deploy (the same tag, or a new one) is what applies a change —
 there is no separate switch to flip in CI or in `compose.yaml` itself.
 Setting it back to unset (or any value other than `1`) and re-deploying
-restores both replicas. `api-b`'s container is not merely stopped in
-single-replica mode, it is never created (`compose.yaml` gates it behind
-the `replicas` Compose profile, which the script activates via
-`COMPOSE_PROFILES` based on this same variable) — so a bare `docker compose
-ps` on the box while single-replica correctly shows only `api-a`.
+restores both replicas. `compose.yaml` gates `api-b` behind the `replicas`
+Compose profile, which the script activates via `COMPOSE_PROFILES` based on
+this same variable, so a fresh box that has never run two replicas never
+creates `api-b` at all. A box that WAS running two replicas and is being
+switched down to one is different: Compose does not remove a container
+just because its profile went inactive, so `pqp-deploy.sh` explicitly
+`stop`s and `rm`s an existing `api-b` (once `api-a` is confirmed healthy on
+the new tag) as part of applying `API_REPLICAS=1` — without that step a
+stale `api-b` would keep running, keep taking a share of Caddy's
+round-robin, and keep drifting further from whatever tag `api-a` is on.
+Either way, once the transition is applied, a bare `docker compose ps` on
+the box correctly shows only `api-a`.
+
+**Database connection budget.** `api-a` and `api-b` each keep their own
+independent Postgres pool, both sized off the same `PG_POOL_MAX` in
+`.env` — enabling the `replicas` profile doubles the API side's worst-case
+connection count against the small managed Postgres tier, on top of
+`worker`'s own (already-separate) `WORKER_PG_POOL_MAX`. Check that doubled
+number against `docs/DB_RUNBOOK.md` §3's connection budget before relying
+on two replicas in production, and lower `.env`'s `PG_POOL_MAX` first if it
+doesn't fit — this compose file does not do that sizing for you, on
+purpose, since `docs/plans/ALWAYS_ON.md`'s A3.2 (PgBouncer) is the
+dedicated fix for connection pressure and this PR predates it.
+
+**Migrating an existing box (the very first deploy after this PR merges).**
+A box already running the old single-`api` service still has an `api`
+container when this compose file lands — `api-a`/`api-b` are new service
+names, not a rename Compose can follow on its own. `pqp-deploy.sh` passes
+`--remove-orphans` on its first `up`, which stops (honouring that old
+container's own 60s `stop_grace_period`, set when it was created under the
+previous compose file) and removes it once `api-a` is confirmed healthy —
+without that flag the old `api` container would keep running forever under
+`restart: unless-stopped`, invisible to Caddy (which only ever pointed at
+`api`, never `api-a`) and to every check in this script, still holding a
+database connection and a cluster-bus identity. Expect this one migration
+deploy to cause a one-time full drain of whatever was still connected to
+the old container — same shape as any other `restarts-api` deploy, just
+folded into adopting the two-replica layout instead of a second, separate
+step.
 
 **Verifying it.**
 ```bash
