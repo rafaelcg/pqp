@@ -602,6 +602,14 @@ export interface LiveHlsConfig {
    * the room for nothing.
    */
   micArchive?: boolean;
+  /**
+   * Whether this deployment can carry the presenter's voice as its own
+   * playlist, separately from the film (`LIVE_HLS_VOICE_TRACK`). Absent on a
+   * server that predates the field or has it off, which is exactly the
+   * "junto" behaviour every deployment has always had — the host panel only
+   * offers the "separada" choice when this is true.
+   */
+  voiceTrack?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>

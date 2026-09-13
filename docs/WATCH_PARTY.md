@@ -2239,6 +2239,28 @@ in place. Raise the `WATCH_PARTY_MAX_PUBLISH_HEIGHT` default once the egress
 moves closer to the presenter (a regional media box) or an OBS/RTMP ingest path
 exists.
 
+### The presenter's camera is held at 360p while the party is on air
+
+Measured on staging, 2026-09-12. A presenter turned their webcam on during a
+live party: VP8 720p with three simulcast layers up to 1.5 Mbit/s, beside a
+3.5 Mbit/s H.264 share. The client raised "your upload is not keeping up" and
+the share collapsed to 640x360 at 17 fps. The two leave the same machine on
+the same uplink and bid against the same bandwidth estimate.
+
+So while this client's share is what a live egress is transcoding, the camera
+is held at the **360p profile** — 640x360, 30 fps, 400 kbit/s, which also
+matches `CAMERA_RUNG` in `server/src/voice/hls-ladder.ts` (the camera egress
+itself transcodes at 360p30, so publishing anything bigger spends uplink the
+HLS audience never sees). `effectiveCameraQuality` in
+`client/src/lib/video-quality.ts` is the whole decision, pure, fed from the
+same three facts `hlsSourceFor` already reads (a live egress on this channel,
+this machine sharing into it, the SFU); `use-voice.ts` reads them from one
+place (`applyWatchPartyCameraCap`) so the two halves cannot disagree about who
+is presenting. It is a cap, not a setting — the chosen quality is stored
+untouched and comes back the moment the session ends — and it never raises
+somebody who already picked smaller. Client-only: a tab that has not reloaded
+keeps the old behaviour.
+
 ### The restart that should not happen at all: swapping the share in place
 
 Rafael's framing, and it is a better fix than surviving the restart: in a watch

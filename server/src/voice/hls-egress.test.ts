@@ -160,6 +160,9 @@ describe("live HLS egress", () => {
       // `LIVE_HLS_MIC_ARCHIVE` is unset, which is every deployment: the host's
       // browser is told not to publish the extra track.
       micArchive: false,
+      // `LIVE_HLS_VOICE_TRACK` is unset too: the client offers no "voz
+      // separada" choice, so the screen mix keeps folding the mic in.
+      voiceTrack: false,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -468,6 +471,7 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -475,6 +479,7 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -482,6 +487,7 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
       });
     });
 
@@ -2147,6 +2153,7 @@ describe("the mic archive picker", () => {
       videoTrackId: "TR_screen",
       audioTrackId: undefined,
       micArchiveTrackId: "TR_mic_archive",
+      micTrackId: "TR_mic",
     });
   });
 
@@ -2157,7 +2164,11 @@ describe("the mic archive picker", () => {
     const picked = pickScreenTracks([
       { identity: "peer-host", tracks: [MIC, SCREEN] },
     ]);
-    expect(picked).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+    expect(picked).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+      micTrackId: "TR_mic",
+    });
     expect("micArchiveTrackId" in picked!).toBe(false);
   });
 
@@ -2176,7 +2187,11 @@ describe("the mic archive picker", () => {
         ],
         "peer-host",
       ),
-    ).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+      micTrackId: "TR_mic",
+    });
   });
 
   it("does not mistake it for the share's audio", () => {

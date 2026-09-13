@@ -32,6 +32,8 @@ import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
 export function WatchStage({
   hlsUrl,
   cameraHlsUrl = null,
+  cameraHasVideo = true,
+  cameraHasVoiceAudio = false,
   delaySeconds,
   audienceCount,
   ended,
@@ -56,6 +58,21 @@ export function WatchStage({
    * the film".
    */
   cameraHlsUrl?: string | null;
+  /**
+   * Whether `cameraHlsUrl` actually carries a picture. False is
+   * `LIVE_HLS_VOICE_TRACK`'s "separada" mode with no camera published: the
+   * playlist is audio-only, and the corner box should not render a black
+   * video frame for it. Defaults true, the shape every camera ever had
+   * before that flag.
+   */
+  cameraHasVideo?: boolean;
+  /**
+   * Whether `cameraHlsUrl` carries the presenter's MICROPHONE, separately
+   * from the film (`LIVE_HLS_VOICE_TRACK`, "separada" — see
+   * `docs/plans/WATCH_PARTY_SEPARATE_TRACKS.md`). Defaults false, which
+   * keeps every camera before that flag silent, exactly as it always was.
+   */
+  cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
   /** Everybody watching, seated or not, presenter excluded. */
   audienceCount: number;
@@ -180,6 +197,8 @@ export function WatchStage({
         <HlsWatchPlayer
           src={hlsUrl}
           cameraSrc={cameraHlsUrl}
+          cameraHasVideo={cameraHasVideo}
+          cameraHasVoiceAudio={cameraHasVoiceAudio}
           delaySeconds={delaySeconds}
           mediaTitle={mediaTitle}
           communityName={communityName}
@@ -511,6 +530,8 @@ export function WatchChannelStage({
       <WatchStage
         hlsUrl={stream?.hlsUrl ?? null}
         cameraHlsUrl={stream?.cameraHlsUrl ?? null}
+        cameraHasVideo={stream?.cameraHasVideo ?? true}
+        cameraHasVoiceAudio={stream?.cameraHasVoiceAudio ?? false}
         delaySeconds={stream?.delaySeconds}
         audienceCount={watchAudienceCount(
           live,

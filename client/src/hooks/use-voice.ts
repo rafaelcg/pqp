@@ -46,6 +46,11 @@ import { createScreenMix, type ScreenMix } from "@/lib/screen-mix";
 import { loadLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { writeStreamMixLevels } from "@/lib/stream-mix-levels";
 import { getMicInStream, saveMicInStream } from "@/lib/mic-in-stream";
+import {
+  getVoiceTrackMode,
+  saveVoiceTrackMode,
+  type VoiceTrackMode,
+} from "@/lib/voice-track-mode";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
   buildAudioConstraints,
@@ -90,6 +95,7 @@ import {
   cameraBitrateFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  effectiveCameraQuality,
   type VideoQuality,
 } from "@/lib/video-quality";
 import {
@@ -384,6 +390,16 @@ export interface VoiceState {
   isSharingMic: boolean;
   /** The standing preference behind `isSharingMic` (`lib/mic-in-stream.ts`). */
   micInStream: boolean;
+  /**
+   * Whether the mic riding the stream ("junto") is FOLDED INTO the film's own
+   * audio track, or kept apart so it rides its own rung instead
+   * (`liveStream.cameraHlsUrl` with `cameraHasVoiceAudio`, "separada"). Only
+   * meaningful while `isSharingMic` is true; the standing preference behind
+   * it lives in `lib/voice-track-mode.ts`. A host panel offers the choice
+   * only once `useLiveHlsConfig` says this deployment's `voiceTrack` flag is
+   * on — see `docs/plans/WATCH_PARTY_SEPARATE_TRACKS.md`.
+   */
+  voiceTrackMode: VoiceTrackMode;
   /** peerIds currently sharing, in roster order. */
   screenSharePeerIds: string[];
   /**
@@ -1096,6 +1112,50 @@ export function createVoiceController(transport: RealtimeTransport) {
    * sampler, which is the reading this reuses.
    */
   let hlsSourceTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Hold the camera at 360p while this machine's share is the ladder's source,
+   * and give the chosen quality back the moment it stops being.
+   *
+   * SAFE IN BOTH DIRECTIONS, MID-CALL, which is the same promise
+   * `setVideoQuality` makes and for the same reasons: nothing here re-captures,
+   * so the track on the wire is the same track throughout;
+   * `applyCameraQuality` never rejects (it falls back to the size the camera
+   * already had); `setCameraMaxBitrate` swallows an encoder that refuses its
+   * parameters; and `reconcileCameraLadder` only republishes when the set of
+   * simulcast rungs actually changed. The worst outcome available is a camera
+   * that stayed the size it already was.
+   *
+   * A CLOSED CAMERA STILL MOVES THE FLAG. `toggleCamera` reads
+   * `currentCameraQuality()` when it opens, so a camera switched on later in
+   * the party is captured small rather than captured big and shrunk.
+   */
+  async function applyWatchPartyCameraCap(presenting: boolean): Promise<void> {
+    if (presenting === watchPartyCameraCapped) {
+      return;
+    }
+    const before = currentCameraQuality();
+    watchPartyCameraCapped = presenting;
+    const applied = currentCameraQuality();
+    // A FLAG THAT MOVED IS NOT A PICTURE THAT MOVED. Somebody who already
+    // picked 360p is exactly where the cap wants them, and re-applying it
+    // would re-run `setParameters` and `applyConstraints` on a live camera and
+    // possibly republish the simulcast ladder, which every viewer of that
+    // camera sees as a stutter, for no change at all.
+    if (applied === before) {
+      return;
+    }
+    const maxBitrate = cameraBitrateFor(applied);
+    manager?.setCameraMaxBitrate(maxBitrate);
+    await sfu?.setCameraMaxBitrate(maxBitrate);
+    const track = cameraCaptureStream?.getVideoTracks()[0];
+    if (!track) {
+      return;
+    }
+    await applyCameraQuality(track, applied);
+    // The capture is a different size now and, on the SFU, the simulcast
+    // ladder was solved against the size it used to be.
+    await sfu?.reconcileCameraLadder();
+  }
   async function refreshHlsSource(): Promise<void> {
     const wanted = hlsSourceFor({
       streamTopHeight: state.liveStream?.topHeight,
@@ -1103,6 +1163,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       usingSfu: state.usingSfu,
       uplinkBps: null,
     });
+    // The same three facts decide the camera cap: a live egress on this
+    // channel, this machine sharing into it, and the SFU. Read from one
+    // function so the two halves can never disagree about who is presenting.
+    await applyWatchPartyCameraCap(wanted !== null);
     if (!wanted) {
       if (hlsSourceTimer !== null) {
         clearInterval(hlsSourceTimer);
@@ -1236,6 +1300,21 @@ export function createVoiceController(transport: RealtimeTransport) {
    * `toggleCamera` will ask the hardware for.
    */
   let videoQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
+  /**
+   * This machine's share is what a live watch party is transcoding from, so
+   * the camera is held at `WATCH_PARTY_PRESENTER_CAMERA_QUALITY`.
+   *
+   * SEPARATE FROM `videoQuality` ON PURPOSE. The chosen quality is a user
+   * preference and this is a ceiling the room imposes on it, exactly the way
+   * `isLargeRoomCapped` is; keeping them apart is what lets the choice come
+   * back untouched when the share ends, without the menu ever having appeared
+   * to move on its own.
+   */
+  let watchPartyCameraCapped = false;
+  /** The camera quality actually in force: the choice, under the cap. */
+  function currentCameraQuality(): VideoQuality {
+    return effectiveCameraQuality(videoQuality, watchPartyCameraCapped);
+  }
   /** Webcam id for the next capture. Empty means the browser default. */
   let cameraDeviceId = "";
   let state: VoiceState = {
@@ -1270,6 +1349,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isSharingScreen: false,
     isSharingMic: false,
     micInStream: getMicInStream(),
+    voiceTrackMode: getVoiceTrackMode(),
     screenSharePeerIds: [],
     liveStream: null,
     channelLive: {},
@@ -1811,8 +1891,12 @@ export function createVoiceController(transport: RealtimeTransport) {
     // The mic is already in the share's audio track: publishing it a second
     // time would have every seated listener hear the host twice, out of two
     // jitter buffers, which is flanging. Moderation still reaches the mix
-    // (`muteSfuUser` walks `type === AUDIO`).
-    if (screenMix && state.isSharingMic) {
+    // (`muteSfuUser` walks `type === AUDIO`). NOT while "separada"
+    // (`voiceTrackMode`): there the mic is deliberately kept OUT of the mix
+    // (`screenMix.setMic(null)`, see `setMicInStream`/`startScreenShare`), so
+    // this publication is the only place the room — and the camera/voice
+    // egress reading the same track — ever hears the presenter at all.
+    if (screenMix && state.isSharingMic && state.voiceTrackMode !== "separada") {
       return true;
     }
     if (state.inputMode === "voice-activity") {
@@ -1941,8 +2025,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       // The stream mix follows the room, not the other way round: only once
       // the room is on the new microphone does the audience get it too, so
       // a failed replacement never leaves the two on different devices.
+      // `micForScreenMix` returns null while "separada": the mix's mic branch
+      // stays disconnected there on purpose, and `sfu.replaceTrack` above
+      // already carried the new device onto the publication the voice rung
+      // (and the room) actually hear.
       if (screenMix && state.isSharingMic) {
-        screenMix.setMic(pipeline.processedStream);
+        screenMix.setMic(micForScreenMix());
       }
       emit();
     } catch (err) {
@@ -1951,7 +2039,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       state.error = err instanceof Error ? err.message : failureMessage;
       if (screenMix && state.isSharingMic && pipeline) {
-        screenMix.setMic(pipeline.processedStream);
+        screenMix.setMic(micForScreenMix());
       }
       emit();
     }
@@ -2293,6 +2381,21 @@ export function createVoiceController(transport: RealtimeTransport) {
   let screenCaptureSource: MediaStream | null = null;
   /** The running share was started for a watch party (`intent.watchParty`). */
   let screenCaptureIsWatchParty = false;
+  /**
+   * What `ScreenMix.setMic`/`createScreenMix` should be handed for the mic
+   * branch, given `voiceTrackMode`. `null` in "separada": the film's own
+   * audio stays mic-free on purpose, and the presenter's ordinary mic
+   * publication (unmuted for exactly this reason — see
+   * `publicationShouldBeMuted`) is what the room and the camera/voice egress
+   * hear instead. One function so every call site that feeds the mix — the
+   * initial share, a late "meu mic vai no stream", a device swap — agrees.
+   */
+  function micForScreenMix(): MediaStream | null {
+    if (state.voiceTrackMode === "separada" || !pipeline) {
+      return null;
+    }
+    return pipeline.processedStream;
+  }
 
   /**
    * Hand the SFU session the host's watch-party publish ceiling before a share
@@ -2763,7 +2866,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // reconnect is republished at the chosen quality. Without this a session
       // rebuilt after a WS drop silently reverted both to the defaults, and
       // nothing recomputed them until the user next touched the menu.
-      await sfu.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
+      await sfu.setCameraMaxBitrate(cameraBitrateFor(currentCameraQuality()));
       await sfu.setScreenQuality(videoQuality);
       // The viewer's half: the largest layer this device wants, remembered
       // per device. Applied before anything is subscribed so the first frame
@@ -2856,7 +2959,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     manager = createPeerConnectionManager(peerId, sendRelay, iceServers);
     // Before any track is published, so a camera carried across a reconnect
     // gets the chosen ceiling on its first tune rather than the default one.
-    manager.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
+    manager.setCameraMaxBitrate(cameraBitrateFor(currentCameraQuality()));
     // Same reason, for the screen: a share carried across a reconnect must be
     // rebuilt at the chosen quality, not at the default one.
     manager.setScreenQuality(videoQuality);
@@ -2980,6 +3083,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isSharingScreen: false,
       isSharingMic: false,
       micInStream: state.micInStream,
+      voiceTrackMode: state.voiceTrackMode,
       screenSharePeerIds: [],
       liveStream: null,
       // Channel-level, not room-level: hanging up does not make the sidebar
@@ -4212,8 +4316,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       saveMicInStream(on);
       state.micInStream = on;
       if (screenMix && pipeline) {
-        // A mix is up: connect or drop the mic branch in place.
-        screenMix.setMic(on ? pipeline.processedStream : null);
+        // A mix is up: connect or drop the mic branch in place. `on` alone
+        // decides whether the mic reaches the audience AT ALL; `micForScreenMix`
+        // is what decides whether it goes in THIS bus or stays out for the
+        // voice rung — see `voiceTrackMode`.
+        screenMix.setMic(on ? micForScreenMix() : null);
         state.isSharingMic = on;
         sfuPublicationMuted = null;
         void applyPublicationMute();
@@ -4227,10 +4334,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         // The share started with the switch off: build the mix now and put
         // the mixed stream on the wire. The SFU republishes the share when
         // audio appears, which a running HLS egress rebinds to; a few
-        // seconds of picture, and then the host is heard.
+        // seconds of picture, and then the host is heard. `micForScreenMix()`
+        // is null in "separada", so the mix carries the film alone and the
+        // ordinary mic publication (unmuted below, via `applyPublicationMute`)
+        // is what reaches the room and the voice rung.
         try {
           const source = screenCaptureStream;
-          screenMix = createScreenMix(source, pipeline.processedStream);
+          screenMix = createScreenMix(source, micForScreenMix());
           screenCaptureSource = source;
           screenCaptureStream = screenMix.stream;
           state.localScreenStream = screenMix.stream;
@@ -4253,6 +4363,32 @@ export function createVoiceController(transport: RealtimeTransport) {
           screenMix = null;
           screenCaptureSource = null;
         }
+      }
+      emit();
+    },
+
+    /**
+     * "Voz: junto com o filme / separada". Takes effect on the running mix
+     * at once, the same shape as `setMicInStream`: the film's own audio
+     * either gets the mic folded in or does not, and the presenter's
+     * ordinary mic publication is muted or unmuted to match — never both
+     * carrying the voice, which is the doubling `publicationShouldBeMuted`
+     * exists to prevent.
+     *
+     * A no-op call (same mode) still persists, harmlessly: the caller is the
+     * host panel's own toggle, which only ever calls this with a value that
+     * changed.
+     */
+    setVoiceTrackMode(mode: VoiceTrackMode) {
+      saveVoiceTrackMode(mode);
+      if (state.voiceTrackMode === mode) {
+        return;
+      }
+      state.voiceTrackMode = mode;
+      if (screenMix && state.isSharingMic) {
+        screenMix.setMic(micForScreenMix());
+        sfuPublicationMuted = null;
+        void applyPublicationMute();
       }
       emit();
     },
@@ -4498,12 +4634,17 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.micInStream
       ) {
         try {
-          screenMix = createScreenMix(stream, pipeline.processedStream);
+          screenMix = createScreenMix(stream, micForScreenMix());
           screenCaptureSource = stream;
           stream = screenMix.stream;
           state.isSharingMic = true;
-          // The mic is in the share now: the separate publication goes quiet
-          // at once, not on the next mute toggle.
+          // "Junto": the mic is in the share now, so the separate publication
+          // goes quiet at once, not on the next mute toggle. "Separada": the
+          // film's own audio stays mic-free and this is the opposite move —
+          // that same publication is what carries the voice, so it unmutes
+          // instead. `applyPublicationMute` reads `voiceTrackMode` to tell
+          // the two apart; this call is what makes either happen immediately
+          // rather than waiting for the next mute toggle.
           sfuPublicationMuted = null;
           void applyPublicationMute();
         } catch (err) {
@@ -4768,7 +4909,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         // product was capped at 640x480.
         stream = await captureCamera(
           (constraints) => navigator.mediaDevices.getUserMedia(constraints),
-          videoQuality,
+          // The EFFECTIVE quality, not the chosen one: a camera opened in the
+          // middle of a watch party this machine is feeding must be captured
+          // small, not captured at 720p and shrunk a tick later.
+          currentCameraQuality(),
           cameraDeviceId || undefined,
         );
       } catch (err) {
@@ -4850,7 +4994,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       videoQuality = next;
-      const maxBitrate = cameraBitrateFor(next);
+      // The CHOICE is stored above; what goes on the wire is the choice under
+      // the watch-party cap, so picking 1080p mid-party stores 1080p and keeps
+      // publishing 360p until the share ends.
+      const applied = currentCameraQuality();
+      const maxBitrate = cameraBitrateFor(applied);
       manager?.setCameraMaxBitrate(maxBitrate);
       await sfu?.setCameraMaxBitrate(maxBitrate);
       // The screen half, on both transports, and unconditionally: the mesh
@@ -4860,7 +5008,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       await sfu?.setScreenQuality(next);
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
-        await applyCameraQuality(track, next);
+        await applyCameraQuality(track, applied);
         // The capture is a different size now, and on the SFU the simulcast
         // ladder was solved against the size it used to be. This republishes
         // only when the set of rungs actually changed; see the session.

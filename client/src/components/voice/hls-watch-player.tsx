@@ -164,6 +164,9 @@ function VolumeGlyph({ volume, muted }: { volume: number; muted: boolean }) {
 export function HlsWatchPlayer({
   src,
   cameraSrc = null,
+  cameraHasVideo = true,
+  cameraHasVoiceAudio = false,
+  delaySeconds = 20,
   className,
   videoRef,
   onDoubleClick,
@@ -189,6 +192,20 @@ export function HlsWatchPlayer({
    * or the docked mini player is a picture in a picture in a picture.
    */
   cameraSrc?: string | null;
+  /**
+   * Whether `cameraSrc` carries a picture. False is `LIVE_HLS_VOICE_TRACK`'s
+   * "separada" mode with no camera published — an audio-only rung riding the
+   * same playlist. Defaults true, the shape every camera ever had before
+   * that flag. See `WatchCameraPip`.
+   */
+  cameraHasVideo?: boolean;
+  /**
+   * Whether `cameraSrc` carries the presenter's MICROPHONE, separately from
+   * this player's own (muted) audio. `LIVE_HLS_VOICE_TRACK`, "separada" — see
+   * `docs/plans/WATCH_PARTY_SEPARATE_TRACKS.md`. Defaults false, which keeps
+   * every camera before that flag silent, exactly as it always was.
+   */
+  cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
   className?: string;
   videoRef?: RefObject<HTMLVideoElement | null>;
@@ -1192,6 +1209,8 @@ export function HlsWatchPlayer({
       {cameraMounted && cameraSrc ? (
         <WatchCameraPip
           src={cameraSrc}
+          hasVideo={cameraHasVideo}
+          hasVoiceAudio={cameraHasVoiceAudio}
           className={cn(boxes.camera ?? "", videoFitClass("cover"))}
           onFrame={setCameraFrame}
         />

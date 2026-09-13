@@ -182,6 +182,58 @@ export const CAMERA_RUNG: LadderRung = {
 };
 
 /**
+ * The same camera rung, WITH the presenter's microphone attached.
+ *
+ * `LIVE_HLS_VOICE_TRACK`, dark by default: `reconcileCameraEgress` in
+ * `hls-egress.ts` picks this over `CAMERA_RUNG` exactly when the flag is on
+ * and the sharer's ordinary (non-archive) microphone publication is found
+ * beside their camera. Same `name` as `CAMERA_RUNG` ON PURPOSE — it is the
+ * same slot, same object prefix, same playlist URL, just carrying a second
+ * track this time — so nothing that looks the rung up by name (the health
+ * monitor, the box-budget ghost filter, the retention sweep) needs to know
+ * which of the two variants is running underneath it.
+ *
+ * 64 kbit/s Opus-in-AAC is a voice track, not a music one: small enough that
+ * it barely moves `HLS_CAMERA_MBPS`'s own estimate, which is why the box cost
+ * below is not repriced for it.
+ */
+export const CAMERA_RUNG_WITH_VOICE: LadderRung = {
+  ...CAMERA_RUNG,
+  audioKbps: 64,
+  codecs: `${H264_MAIN_L30},${AAC_LC}`,
+};
+
+/**
+ * The presenter's voice ALONE, no camera published.
+ *
+ * `LIVE_HLS_VOICE_TRACK`'s other half: a presenter who turned "separada" on
+ * but has no webcam still owes the audience a way to hear them apart from the
+ * film, so `reconcileCameraEgress` starts a Track Composite with an audio
+ * track and no video one at all — legal per the protocol (both fields are
+ * optional; a share picked with no audio of its own already starts one with
+ * no `audioTrackId` in production, the mirror case). `width`/`height`/
+ * `framerate`/`videoKbps` are all zero because there is no video to encode;
+ * `rungEncodingOptions` is still called with this so the audio bitrate has
+ * somewhere to come from, and a zeroed `EncodingOptions.width`/`height` on a
+ * request that carries no video track is untested against the pinned egress
+ * image — the honest caveat `HLS_CAMERA_MBPS`'s own comment already sets the
+ * tone for.
+ *
+ * SAME NAME AS `CAMERA_RUNG_NAME`, for the same reason `CAMERA_RUNG_WITH_VOICE`
+ * shares it: one slot, one prefix, one playlist path, whichever of the three
+ * shapes happens to be running.
+ */
+export const VOICE_RUNG: LadderRung = {
+  name: CAMERA_RUNG_NAME,
+  width: 0,
+  height: 0,
+  framerate: 0,
+  videoKbps: 0,
+  audioKbps: 32,
+  codecs: AAC_LC,
+};
+
+/**
  * The default ladder. One 720p30 rung: 1080p30 tiled HLS hit RTP gaps and
  * egress CPU on the media box, so watch party ships at 720p30. Named 1080
  * and 60 fps rungs stay in `LADDER_RUNGS` for an operator who wants them
@@ -464,6 +516,18 @@ export function decideLadder(input: LadderDecisionInput): RungDecision[] {
  */
 export const HLS_CAMERA_MBPS = HLS_RUNG_MBPS * 0.3;
 
+/**
+ * What the presenter's VOICE ALONE costs the box, when `LIVE_HLS_VOICE_TRACK`
+ * starts a Track Composite with no video track at all (`VOICE_RUNG`).
+ *
+ * A TENTH OF A CAMERA'S OWN ESTIMATE, and stated as an estimate the same way
+ * `HLS_CAMERA_MBPS` is: nobody has measured an audio-only Track Composite on
+ * this box. What is not a guess is the shape of the saving — there is no
+ * frame to encode, so whatever a camera's 0.2 to 0.3 of a core is mostly
+ * spending it on is exactly the part this rung skips.
+ */
+export const HLS_VOICE_ONLY_MBPS = HLS_RUNG_MBPS * 0.03;
+
 export interface CameraEgressDecision {
   start: boolean;
   /** Null when it starts. `box-budget` is the only way it does not. */
@@ -492,9 +556,16 @@ export function decideCameraEgress(input: {
   /** What `estimateSfuLoadMbps` says the WebRTC side already costs. */
   sfuLoadMbps: number;
   boxBudgetMbps: number;
+  /**
+   * Whether this slot has a camera video track. Default true, which is every
+   * caller before `LIVE_HLS_VOICE_TRACK`: the cost was always a camera's.
+   * False prices it as `HLS_VOICE_ONLY_MBPS` instead — the audio-alone rung,
+   * `VOICE_RUNG`, which has no frame to encode.
+   */
+  hasVideo?: boolean;
 }): CameraEgressDecision {
-  const boxMbps =
-    input.runningRungs * HLS_RUNG_MBPS + HLS_CAMERA_MBPS + input.sfuLoadMbps;
+  const ownCost = input.hasVideo === false ? HLS_VOICE_ONLY_MBPS : HLS_CAMERA_MBPS;
+  const boxMbps = input.runningRungs * HLS_RUNG_MBPS + ownCost + input.sfuLoadMbps;
   return boxMbps > input.boxBudgetMbps
     ? { start: false, refusal: "box-budget", boxMbps }
     : { start: true, refusal: null, boxMbps };

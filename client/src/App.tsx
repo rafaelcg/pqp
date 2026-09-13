@@ -6524,6 +6524,9 @@ function MainAppContent({
             }
             micInStream={voiceState.micInStream}
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
+            voiceTrackMode={voiceState.voiceTrackMode}
+            onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
+            voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -6644,6 +6647,9 @@ function MainAppContent({
             }
             micInStream={voiceState.micInStream}
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
+            voiceTrackMode={voiceState.voiceTrackMode}
+            onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
+            voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
