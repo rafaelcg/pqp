@@ -28,6 +28,9 @@ export interface HlsStallOptions {
 
 export type HlsStallDecision = "none" | "recover" | "reconnect" | "dead";
 
+/** Why the watchdog last asked for a reconnect. See `HlsStallWatch.lastReason`. */
+export type HlsStallReason = "fatal" | "stall" | "sequence-stuck" | null;
+
 export class HlsStallWatch {
   private readonly stallMs: number;
   private readonly sequenceStuckMs: number;
@@ -91,7 +94,7 @@ export class HlsStallWatch {
   }
 
   /** Why the last `tick` asked for a reconnect, for the console. */
-  lastReason: "fatal" | "stall" | "sequence-stuck" | null = null;
+  lastReason: HlsStallReason = null;
 
   tick(now: number): HlsStallDecision {
     let reason: typeof this.lastReason = null;

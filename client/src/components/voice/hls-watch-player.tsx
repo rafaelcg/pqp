@@ -25,6 +25,7 @@ import {
   Volume1,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -55,7 +56,20 @@ import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
-import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
+import {
+  HlsStallWatch,
+  channelIdFromHlsUrl,
+  type HlsStallReason,
+} from "@/lib/hls-stall";
+import {
+  AUTH_GRACE_MS,
+  RESTART_COUNTDOWN_SECONDS,
+  resolveHoldingScreenReason,
+} from "@/lib/watch-holding-screen";
+import {
+  hasSeenWatchDelayExplainer,
+  markWatchDelayExplainerSeen,
+} from "@/lib/watch-delay-explainer";
 import { browserConnection, hlsStartPlan } from "@/lib/hls-slow-start";
 import {
   AUTO_HLS_QUALITY,
@@ -227,6 +241,47 @@ export function HlsWatchPlayer({
   const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useState<StreamPhase>("playing");
   const watchRef = useRef<HlsStallWatch>(new HlsStallWatch());
+  // C3 (post-mortem, `watch-holding-screen.ts`): which of the watchdog's
+  // reasons is behind the current stall, so the holding screen can say why
+  // instead of just "loading". Mirrors `watchRef.current.lastReason`, which
+  // is not itself reactive.
+  const [stallReason, setStallReason] = useState<HlsStallReason>(null);
+  // Pitfall 16 (CLAUDE.md): a dead Clerk JWT can 401 a perfectly good
+  // playlist request for a few seconds around its refresh window, and the
+  // player recovers on its own almost immediately. True for `AUTH_GRACE_MS`
+  // after the last such 401, so the holding screen can stay quiet about a
+  // failure the person never needs to know happened.
+  const [authGraceActive, setAuthGraceActive] = useState(false);
+  const authGraceTimerRef = useRef<number | null>(null);
+  const clearAuthGraceTimer = useCallback(() => {
+    if (authGraceTimerRef.current !== null) {
+      window.clearTimeout(authGraceTimerRef.current);
+      authGraceTimerRef.current = null;
+    }
+  }, []);
+  const triggerAuthGrace = useCallback(() => {
+    setAuthGraceActive(true);
+    clearAuthGraceTimer();
+    authGraceTimerRef.current = window.setTimeout(() => {
+      setAuthGraceActive(false);
+      authGraceTimerRef.current = null;
+    }, AUTH_GRACE_MS);
+  }, [clearAuthGraceTimer]);
+  useEffect(() => clearAuthGraceTimer, [clearAuthGraceTimer]);
+  // Held in a ref for the same reason `reconnectRef` is below: the attach
+  // effect's deps are deliberately just `[activeSrc, attempt]`, so anything
+  // it calls whose identity could otherwise change has to come through one.
+  const triggerAuthGraceRef = useRef(triggerAuthGrace);
+  triggerAuthGraceRef.current = triggerAuthGrace;
+  const clearAuthGraceTimerRef = useRef(clearAuthGraceTimer);
+  clearAuthGraceTimerRef.current = clearAuthGraceTimer;
+  // The "transmissão reiniciou, volta em ~10s" countdown. Counts down on the
+  // stall tick (1/s) while the reason is `restarting`; a static number would
+  // have been fine too, but a moving one is what tells a person it is not
+  // just frozen text.
+  const [restartCountdown, setRestartCountdown] = useState(
+    RESTART_COUNTDOWN_SECONDS,
+  );
   // The viewer's own level for the broadcast, remembered per browser. Read
   // once, then held in a ref as well so the attach effect can apply it to a
   // fresh element without listing it as a dependency: that effect tears down
@@ -318,7 +373,11 @@ export function HlsWatchPlayer({
     setLevels([]);
     setAutoHeight(null);
     setQualityOpen(false);
-  }, [activeSrc, attempt]);
+    setStallReason(null);
+    setAuthGraceActive(false);
+    clearAuthGraceTimer();
+    setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+  }, [activeSrc, attempt, clearAuthGraceTimer]);
 
   const reconnect = useCallback(async () => {
     setPhase("reconnecting");
@@ -592,6 +651,11 @@ export function HlsWatchPlayer({
     // request already went out. Kept fresh by polling well inside a Clerk
     // token's usual lifetime; a request that lands right after an unnoticed
     // expiry gets a 401 and the manifest retry policy above tries again.
+    // Local to this attach, not React state: whether the countdown on the
+    // "restarting" holding screen should keep ticking. Cheaper than reading
+    // `watch.lastReason` on every tick, which stays "sequence-stuck" long
+    // after recovery (`HlsStallWatch` never resets it on `onPlaying`).
+    let restarting = false;
     let authToken: string | null = null;
     const refreshAuthToken = () => {
       void getAuthToken().then((token) => {
@@ -624,6 +688,11 @@ export function HlsWatchPlayer({
       if (!cancelled) {
         setHasFrame(true);
         setPhase("playing");
+        setStallReason(null);
+        setAuthGraceActive(false);
+        clearAuthGraceTimerRef.current();
+        restarting = false;
+        setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
         watch.onPlaying();
         reportSize();
       }
@@ -647,7 +716,17 @@ export function HlsWatchPlayer({
       }
       const decision = watch.tick(Date.now());
       if (decision === "none") {
+        // Still restarting: count the copy's countdown down rather than
+        // freeze it at 10 forever.
+        if (restarting) {
+          setRestartCountdown((seconds) => Math.max(0, seconds - 1));
+        }
         return;
+      }
+      restarting = watch.lastReason === "sequence-stuck";
+      setStallReason(watch.lastReason);
+      if (!restarting) {
+        setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
       }
       if (decision === "dead") {
         setPhase("dead");
@@ -786,6 +865,15 @@ export function HlsWatchPlayer({
         // Fatal network/media errors: hls.js has given up on this source;
         // non-fatal ones it retries on its own and the watchdog only notes.
         watch.onError({ fatal: Boolean(data.fatal) });
+        // Pitfall 16 (CLAUDE.md): a 401 on our own playlist proxy is almost
+        // always a Clerk JWT that went stale a few seconds before its
+        // refresh, not a real access failure — the `?t=` capability in the
+        // URL is still good, and the very next attempt usually 200s. Say
+        // nothing about it for a few seconds rather than flashing a stall
+        // overlay over a failure the person never needs to know happened.
+        if (!cancelled && data.response?.code === 401) {
+          triggerAuthGraceRef.current();
+        }
       });
       player.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         // What Auto actually settled on, so the button can say
@@ -922,6 +1010,33 @@ export function HlsWatchPlayer({
   const cinema = layout === "cinema";
   const mini = layout === "mini";
 
+  // C3 (post-mortem item, `lib/watch-holding-screen.ts`): what the overlay
+  // over the picture says, mapped from `phase` and the stall watchdog's own
+  // reason rather than a single generic "loading" for every cause.
+  const holdingReason = resolveHoldingScreenReason({
+    phase,
+    hasFrame,
+    stallReason,
+    authGraceActive,
+  });
+  const holdingCaption =
+    holdingReason === "restarting"
+      ? t("voice.hls.restarting", { seconds: restartCountdown })
+      : holdingReason === "reconnecting"
+        ? t("voice.hls.stalled")
+        : undefined;
+
+  // C1 (post-mortem item, `lib/watch-delay-explainer.ts`): said once, in
+  // words, the first time this browser watches a stream. The persistent
+  // badge below says the number every time; this says it is on purpose.
+  const [showDelayExplainer, setShowDelayExplainer] = useState(
+    () => cinema && !hasSeenWatchDelayExplainer(),
+  );
+  const dismissDelayExplainer = useCallback(() => {
+    markWatchDelayExplainerSeen();
+    setShowDelayExplainer(false);
+  }, []);
+
   return (
     <div
       className={cn(
@@ -971,7 +1086,7 @@ export function HlsWatchPlayer({
         playsInline
         onDoubleClick={onDoubleClick}
       />
-      {phase === "dead" ? (
+      {holdingReason === "dead" ? (
         <div
           data-testid="hls-dead"
           className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper"
@@ -985,18 +1100,66 @@ export function HlsWatchPlayer({
             {t("voice.hls.retry")}
           </button>
         </div>
-      ) : phase === "reconnecting" || !hasFrame ? (
+      ) : holdingReason === "silent" ? (
+        // Pitfall 16: a fresh, likely self-resolving auth failure. Showing
+        // NOTHING is the point here — the last frame stays on screen rather
+        // than flashing a stall overlay over a hiccup nobody needs to know
+        // about. Past `AUTH_GRACE_MS` this falls through to the branch below.
+        null
+      ) : holdingReason !== null ? (
         <div
           data-testid={
-            phase === "reconnecting" ? "hls-reconnecting" : "hls-buffering"
+            holdingReason === "restarting"
+              ? "hls-restarting"
+              : phase === "reconnecting"
+                ? "hls-reconnecting"
+                : "hls-buffering"
           }
           className="pointer-events-none absolute inset-0 z-10"
         >
-          <StreamStartingSoon
-            caption={
-              phase === "reconnecting" ? t("voice.hls.stalled") : undefined
-            }
-          />
+          <StreamStartingSoon caption={holdingCaption} />
+        </div>
+      ) : null}
+      {cinema && hasFrame ? (
+        // C1: the delay reads as normal, not as lag, only if it is always on
+        // screen. Deliberately OUTSIDE `chromeClass` below: that bar fades
+        // on idle (Twitch-style autohide), and a badge that vanishes the
+        // moment the pointer rests is the "hover-only" shape this replaces.
+        <div className="pointer-events-none absolute left-2 top-2 z-40 flex flex-col items-start gap-1">
+          <Tooltip
+            label={t("voice.hls.delayBadgeHint")}
+            side="bottom"
+            align="start"
+          >
+            <span
+              data-testid="hls-delay-badge"
+              className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/70 px-2 py-1 text-[11px] font-semibold text-paper"
+            >
+              <span
+                aria-hidden="true"
+                className="h-1.5 w-1.5 rounded-full bg-danger"
+              />
+              {t("voice.hls.delayBadge", { seconds: delaySeconds })}
+            </span>
+          </Tooltip>
+          {showDelayExplainer ? (
+            <p
+              data-testid="hls-delay-explainer"
+              className="pointer-events-auto flex max-w-[16rem] items-start gap-1.5 rounded-md bg-black/80 px-2 py-1.5 text-[11px] text-paper-muted"
+            >
+              <span>
+                {t("voice.hls.delayExplainer", { seconds: delaySeconds })}
+              </span>
+              <button
+                type="button"
+                aria-label={t("common.close")}
+                className="shrink-0 rounded-full p-0.5 text-paper hover:bg-paper/15"
+                onClick={dismissDelayExplainer}
+              >
+                <X className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </p>
+          ) : null}
         </div>
       ) : null}
       {cinema ? (

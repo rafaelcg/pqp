@@ -1,4 +1,6 @@
 import {
+  Bell,
+  BellOff,
   ChevronDown,
   ChevronUp,
   Crop,
@@ -54,6 +56,10 @@ import {
   setHideScreenPreview,
   useHideScreenPreview,
 } from "@/lib/screen-preview-pref";
+import {
+  setJoinLeaveAutoMuteEnabled,
+  useJoinLeaveAutoMuteEnabled,
+} from "@/lib/large-room-sounds";
 import {
   canShareScreenAudio,
   detectFullscreenMode,
@@ -2075,6 +2081,7 @@ export function CallControls({
   // nowhere today: see `lib/screen-capture-cursor.ts`.
   const shareCursor = useShareCursor();
   const hidePreviewPref = useHideScreenPreview();
+  const joinLeaveAutoMute = useJoinLeaveAutoMuteEnabled();
   const cursorLiveControl = useMemo(() => canControlShareCursor(), []);
   const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
   const [shareHint, setShareHint] = useState<string | null>(null);
@@ -2632,6 +2639,36 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
+      {/* C2, docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md: a room past
+          `LARGE_ROOM_SOUND_THRESHOLD` auto-mutes join/leave cues on its own
+          (`lib/large-room-sounds.ts`); this is the visible way back to the
+          cues for whoever wants them anyway. Always shown, not only in a
+          large room, so the setting is findable before the room gets loud. */}
+      <Tooltip
+        label={
+          joinLeaveAutoMute
+            ? t("voice.control.enableJoinLeaveSounds")
+            : t("voice.control.disableJoinLeaveSounds")
+        }
+        detail={t("voice.control.joinLeaveAutoMuteHint")}
+      >
+        <button
+          type="button"
+          data-testid="join-leave-auto-mute-toggle"
+          aria-pressed={joinLeaveAutoMute}
+          className={cn(
+            "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
+            size,
+          )}
+          onClick={() => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute)}
+        >
+          {joinLeaveAutoMute ? (
+            <Bell className={iconSize} />
+          ) : (
+            <BellOff className={iconSize} />
+          )}
+        </button>
+      </Tooltip>
       <span
         aria-hidden="true"
         className={cn("mx-0.5 w-px self-stretch bg-ink-4/70", collapsed ? "my-1" : "my-1.5")}

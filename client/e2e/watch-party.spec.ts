@@ -1233,6 +1233,79 @@ test("a reload on the party channel stays on it", async ({ browser }) => {
   }
 });
 
+/**
+ * C9, `docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md`: "if refresh screen
+ * gets extra buggy", and viewers were told to F5 all night. The test above
+ * pins that the reload lands ON the right channel; this one pins that it
+ * lands with exactly ONE of everything a duplicate mount would double —
+ * the sidebar's party card, the dock host `watch-dock.tsx` creates once at
+ * the app root, and the player inside `watch-channel-stage`. A count of two
+ * anywhere here is the "stacked surfaces" the report described, whether the
+ * cause turns out to be `watch-dock.tsx`'s host creation, `WatchStageOutlet`,
+ * or an idle/ended surface in `App.tsx` racing the live one on a cold boot.
+ */
+test("a reload with a live share lands with exactly one of everything", async ({
+  browser,
+}) => {
+  const shared = await seedServer("wp-reload-one", "wp-reload-one-guest");
+  const party = await createParty(
+    "wp-reload-one",
+    shared.serverId,
+    "Cinemoon",
+  );
+  await setPartyState("wp-reload-one", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-reload-one-guest",
+    );
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(viewer.getByTestId("watch-stage-live")).toBeVisible();
+
+    await viewer.reload();
+
+    // The stage is back, on a real frame, before any of the counts below are
+    // asked for — a page that never got this far would pass every "toHaveCount(1)"
+    // by having nothing rendered at all.
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(viewer.getByTestId("watch-stage-live")).toBeVisible();
+
+    // ONE party card in the sidebar. Two would mean the channel list rendered
+    // the live block twice, one of them likely stale.
+    await expect(viewer.getByTestId("live-party-block")).toHaveCount(1);
+    // ONE dock host at the app root (`useWatchDockHost` in `watch-dock.tsx`
+    // creates exactly one element for the life of the app).
+    await expect(viewer.getByTestId("watch-dock-root")).toHaveCount(1);
+    // ONE watch stage, not the channel's live stage stacked with a stray
+    // docked mini-player or an ended/idle card left over from the cold boot.
+    await expect(viewer.getByTestId("watch-channel-stage")).toHaveCount(1);
+    await expect(viewer.getByTestId("watch-stage")).toHaveCount(1);
+    // ONE player: the real film, not the film plus a leftover bubble-loop
+    // mount or a second `<video>` from a stage that never tore down.
+    await expect(
+      viewer
+        .getByTestId("watch-channel-stage")
+        .locator("video:not([data-decorative])"),
+    ).toHaveCount(1);
+    // And nothing from the ended/idle surfaces `App.tsx` also owns: a live
+    // party that just reloaded is not also "the stream ended" or "pick a
+    // channel".
+    await expect(viewer.getByTestId("watch-stage-ended")).toHaveCount(0);
+    await expect(viewer.getByText("Pick a channel")).toHaveCount(0);
+  } finally {
+    await second.context.close();
+  }
+});
+
 // --------------------------------------------- what a viewer is offered, and how loudly
 
 /**

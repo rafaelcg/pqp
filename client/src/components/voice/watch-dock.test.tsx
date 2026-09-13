@@ -185,6 +185,139 @@ describe("the docked surface is moved, not remounted", () => {
   });
 });
 
+/**
+ * C9, `docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md`: "if refresh screen
+ * gets extra buggy". A reload is a cold mount: `useWatchDock`'s `session`
+ * starts `null` (its `useState` has no initializer from storage), and the
+ * candidate only exists once the channel list has loaded, which on a real
+ * boot is a render or more after the app root mounts. This wires the same
+ * three pieces `App.tsx` does — `useWatchDock`, the always-mounted dock
+ * anchor, and `WatchStageOutlet` — and drives that exact sequence: nothing
+ * loaded, then the candidate arriving, the way a real reload's channel fetch
+ * resolves after the first paint. No jsdom Playwright browser needed for
+ * this half; see `e2e/watch-party.spec.ts` ("a reload with a live share
+ * lands with exactly one of everything") for the same invariant against a
+ * real server and a real socket.
+ */
+describe("a cold reload never doubles the surface", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  const liveChannel: VoiceState["channelLive"] = {
+    [SESSION.channelId]: {
+      stream: {
+        hlsUrl: "https://api.test/api/voice/hls-playlist/c/1?t=tok",
+        delaySeconds: 20,
+      },
+      watching: 3,
+    } as VoiceState["channelLive"][string],
+  };
+
+  /** The exact wiring `App.tsx` uses: outlet in the pane, anchor at the
+   *  root, and the player portalled into whichever one the dock currently
+   *  holds `host` in. */
+  function Harness({
+    selectedChannelId,
+    candidate,
+  }: {
+    selectedChannelId: string | null;
+    candidate: WatchDockSession | null;
+  }) {
+    const dock = useWatchDock({
+      selectedChannelId,
+      candidate,
+      channelLive: liveChannel,
+      inCallChannelId: null,
+    });
+    return (
+      <>
+        <div data-testid="pane">
+          {dock.placement === "stage" ? (
+            <WatchStageOutlet host={dock.host} home={dock.dockRef} />
+          ) : null}
+        </div>
+        <div ref={dock.dockRef} data-testid="dock" />
+        {dock.session
+          ? createPortal(<video data-testid="film" />, dock.host)
+          : null}
+      </>
+    );
+  }
+
+  const films = () => container.querySelectorAll('[data-testid="film"]');
+  const inside = (testid: string) =>
+    Array.from(films()).filter((node) =>
+      Boolean(node.closest(`[data-testid="${testid}"]`)),
+    ).length;
+
+  it("goes from nothing loaded to one stage, never through two", () => {
+    // Before the channel list has answered: no candidate yet. Nothing to
+    // show, and critically nothing DOUBLE to show.
+    act(() =>
+      root.render(<Harness selectedChannelId={null} candidate={null} />),
+    );
+    expect(films().length).toBe(0);
+
+    // The channel list resolves and the URL names this room's channel, in
+    // the same render a real `selectChannel`/route-restore would produce —
+    // candidate and selection arrive together.
+    act(() =>
+      root.render(
+        <Harness
+          selectedChannelId={SESSION.channelId}
+          candidate={SESSION}
+        />,
+      ),
+    );
+    expect(films().length).toBe(1);
+    expect(inside("pane")).toBe(1);
+    expect(inside("dock")).toBe(0);
+
+    // A second render with the same props (a re-render the rest of the app
+    // causes, not a new mount) must not spawn a second player.
+    act(() =>
+      root.render(
+        <Harness
+          selectedChannelId={SESSION.channelId}
+          candidate={SESSION}
+        />,
+      ),
+    );
+    expect(films().length).toBe(1);
+    expect(inside("pane")).toBe(1);
+  });
+
+  it("never shows the stage and the dock at once", () => {
+    act(() =>
+      root.render(
+        <Harness selectedChannelId={SESSION.channelId} candidate={SESSION} />,
+      ),
+    );
+    expect(inside("pane")).toBe(1);
+    expect(inside("dock")).toBe(0);
+
+    // Walk away to another channel: the same one player moves to the dock,
+    // never duplicates into both.
+    act(() =>
+      root.render(<Harness selectedChannelId="chan-text" candidate={null} />),
+    );
+    expect(films().length).toBe(1);
+    expect(inside("dock")).toBe(1);
+    expect(inside("pane")).toBe(0);
+  });
+});
+
 describe("useWatchDock", () => {
   let container: HTMLDivElement;
   let root: Root;

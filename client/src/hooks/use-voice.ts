@@ -102,6 +102,10 @@ import {
   SPEAKING_THRESHOLD,
 } from "@/lib/voice-audio";
 import { playCue, stopAllSoundLoops, whenCueSettled } from "@/lib/sounds";
+import {
+  joinLeaveAutoMuteEnabled,
+  shouldSuppressJoinLeaveSound,
+} from "@/lib/large-room-sounds";
 
 export type VoiceStatus = "idle" | "joining" | "connected";
 
@@ -992,6 +996,13 @@ export function createVoiceController(transport: RealtimeTransport) {
   // is dropped so a stray/cross-room offer can never open a mic connection.
   const knownPeerIds = new Set<string>();
   /**
+   * Said once per call, the first time this room's traffic actually gets
+   * quiet because of it — not on every join/leave afterward, and not just
+   * because the toggle is on while the room is small. Reset alongside
+   * `knownPeerIds` wherever this controller starts a fresh room.
+   */
+  let joinLeaveAutoMuteAnnounced = false;
+  /**
    * channelId -> the roster sequence this client has applied up to.
    *
    * 0, or absent, means "no baseline", which is also what an empty room
@@ -1311,6 +1322,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     intendedChannelId = null;
     ringOnWelcomeChannelId = null;
     knownPeerIds.clear();
+    joinLeaveAutoMuteAnnounced = false;
     stopSpeakingLoop();
     disposeRemoteAnalysers();
     manager?.dispose();
@@ -2583,6 +2595,34 @@ export function createVoiceController(transport: RealtimeTransport) {
    * longer lists it. Healthy or connecting PCs stay: that peer may still
    * be reconstructing inside the 90s window.
    */
+  /** Room size for the join/leave auto-mute gate, self included. */
+  function roomSizeForSoundGate(): number {
+    return knownPeerIds.size + 1;
+  }
+
+  /**
+   * The join/leave cue for somebody ELSE arriving or leaving. Never called
+   * for this person's own join/leave, which stays audible regardless of room
+   * size — muting your own hangup sound reads as a bug, not a feature. See
+   * `lib/large-room-sounds.ts` for the threshold and the persisted toggle.
+   */
+  function playRosterSoundCue(cue: "voiceJoin" | "voiceLeave"): void {
+    if (
+      shouldSuppressJoinLeaveSound(
+        roomSizeForSoundGate(),
+        joinLeaveAutoMuteEnabled(),
+      )
+    ) {
+      if (!joinLeaveAutoMuteAnnounced) {
+        joinLeaveAutoMuteAnnounced = true;
+        state.notice = translateMessage("voice.notice.joinLeaveAutoMuted");
+        emit();
+      }
+      return;
+    }
+    playCue(cue);
+  }
+
   function pruneFailedGhostPeers(): void {
     if (holdingMedia || !manager) {
       return;
@@ -2600,7 +2640,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         remoteAnalysers.delete(peer.peerId);
       }
       manager.removePeer(peer.peerId);
-      playCue("voiceLeave");
+      playRosterSoundCue("voiceLeave");
     }
   }
 
@@ -2683,6 +2723,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     intendedChannelId = null;
     ringOnWelcomeChannelId = null;
     knownPeerIds.clear();
+    joinLeaveAutoMuteAnnounced = false;
     stopSpeakingLoop();
     const closingAnalysers = [...remoteAnalysers.values()];
     remoteAnalysers.clear();
@@ -3021,6 +3062,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.status = "joining";
         }
         knownPeerIds.clear();
+        joinLeaveAutoMuteAnnounced = false;
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
         state.canManageMusic = message.canManageMusic ?? true;
@@ -3289,7 +3331,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         );
         applyPeerServerMute(message.peer);
         if (!alreadyKnown) {
-          playCue("voiceJoin");
+          playRosterSoundCue("voiceJoin");
         }
         break;
       }
@@ -3334,7 +3376,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             remoteAnalysers.delete(message.peerId);
           }
         }
-        playCue("voiceLeave");
+        playRosterSoundCue("voiceLeave");
         break;
       case "offer":
         if (!knownPeerIds.has(message.from)) {
@@ -3833,6 +3875,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         holdingMedia = false;
         resumeToken = null;
         knownPeerIds.clear();
+        joinLeaveAutoMuteAnnounced = false;
         stopSpeakingLoop();
         const closingAnalysers = [...remoteAnalysers.values()];
         remoteAnalysers.clear();
