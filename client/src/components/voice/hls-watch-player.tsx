@@ -26,7 +26,6 @@ import {
   Volume1,
   Volume2,
   VolumeX,
-  X,
 } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -67,10 +66,6 @@ import {
   RESTART_COUNTDOWN_SECONDS,
   resolveHoldingScreenReason,
 } from "@/lib/watch-holding-screen";
-import {
-  hasSeenWatchDelayExplainer,
-  markWatchDelayExplainerSeen,
-} from "@/lib/watch-delay-explainer";
 import { browserConnection, hlsStartPlan } from "@/lib/hls-slow-start";
 import {
   AUTO_HLS_QUALITY,
@@ -157,14 +152,17 @@ function VolumeGlyph({ volume, muted }: { volume: number; muted: boolean }) {
  * Safari plays MPEG-TS natively. Everyone else uses hls.js. The picture is
  * ~20 s behind the presenter (the player's own cushion on 4 s segments,
  * `HLS_LIVE_SYNC_DURATION_COUNT` in `hls-live-edge.ts`, on top of whatever
- * the pipeline itself adds); that is the product, not a bug, and the badge
- * says so. `delaySeconds` below is only the fallback before the wire value
- * (`LIVE_HLS_DELAY_SECONDS`, a pipeline figure the server sends) arrives.
+ * the pipeline itself adds); that is the product, not a bug. The live badge
+ * used to print that figure (2026-09-09 postmortem, C1) — it read as broken
+ * more often than informative, since it was a constant off the wire config
+ * rather than the stream's actual distance from live, so it is plain "Ao
+ * vivo"/"Live" now (2026-09-13) and nothing here reads `delaySeconds` for
+ * display. The prop stays on the type below for API compatibility with every
+ * caller that still resolves one from the stream.
  */
 export function HlsWatchPlayer({
   src,
   cameraSrc = null,
-  delaySeconds = 20,
   className,
   videoRef,
   onDoubleClick,
@@ -1067,17 +1065,6 @@ export function HlsWatchPlayer({
         ? t("voice.hls.stalled")
         : undefined;
 
-  // C1 (post-mortem item, `lib/watch-delay-explainer.ts`): said once, in
-  // words, the first time this browser watches a stream. The persistent
-  // badge below says the number every time; this says it is on purpose.
-  const [showDelayExplainer, setShowDelayExplainer] = useState(
-    () => cinema && !hasSeenWatchDelayExplainer(),
-  );
-  const dismissDelayExplainer = useCallback(() => {
-    markWatchDelayExplainerSeen();
-    setShowDelayExplainer(false);
-  }, []);
-
   /**
    * THE PRESENTER'S CAMERA, FLOATING OVER THEIR FILM.
    *
@@ -1239,45 +1226,24 @@ export function HlsWatchPlayer({
         </div>
       ) : null}
       {cinema && hasFrame ? (
-        // C1: the delay reads as normal, not as lag, only if it is always on
-        // screen. Deliberately OUTSIDE `chromeClass` below: that bar fades
-        // on idle (Twitch-style autohide), and a badge that vanishes the
-        // moment the pointer rests is the "hover-only" shape this replaces.
+        // Plain and permanent, deliberately OUTSIDE `chromeClass` below: that
+        // bar fades on idle (Twitch-style autohide), and a badge that
+        // vanishes the moment the pointer rests is the "hover-only" shape
+        // this replaces. No delay figure and no hover explanation here — see
+        // `voice.hls.live` below: "how far behind" used to be printed as a
+        // constant read off the wire config rather than the stream's actual
+        // distance from live, which was worse than saying nothing.
         <div className="pointer-events-none absolute left-2 top-2 z-40 flex flex-col items-start gap-1">
-          <Tooltip
-            label={t("voice.hls.delayBadgeHint")}
-            side="bottom"
-            align="start"
+          <span
+            data-testid="hls-delay-badge"
+            className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/70 px-2 py-1 text-[11px] font-semibold text-paper"
           >
             <span
-              data-testid="hls-delay-badge"
-              className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/70 px-2 py-1 text-[11px] font-semibold text-paper"
-            >
-              <span
-                aria-hidden="true"
-                className="h-1.5 w-1.5 rounded-full bg-danger"
-              />
-              {t("voice.hls.delayBadge", { seconds: delaySeconds })}
-            </span>
-          </Tooltip>
-          {showDelayExplainer ? (
-            <p
-              data-testid="hls-delay-explainer"
-              className="pointer-events-auto flex max-w-[16rem] items-start gap-1.5 rounded-md bg-black/80 px-2 py-1.5 text-[11px] text-paper-muted"
-            >
-              <span>
-                {t("voice.hls.delayExplainer", { seconds: delaySeconds })}
-              </span>
-              <button
-                type="button"
-                aria-label={t("common.close")}
-                className="shrink-0 rounded-full p-0.5 text-paper hover:bg-paper/15"
-                onClick={dismissDelayExplainer}
-              >
-                <X className="h-3 w-3" aria-hidden="true" />
-              </button>
-            </p>
-          ) : null}
+              aria-hidden="true"
+              className="h-1.5 w-1.5 rounded-full bg-danger"
+            />
+            {t("voice.hls.live")}
+          </span>
         </div>
       ) : null}
       {cinema ? (
@@ -1295,14 +1261,11 @@ export function HlsWatchPlayer({
         onBlurCapture={onBarBlur}
       >
         <div
-          className="pointer-events-auto flex items-start justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 pb-8 pt-3"
+          className="pointer-events-auto flex items-start justify-end gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 pb-8 pt-3"
           onPointerDown={swallowPressWhileHidden}
           onPointerEnter={() => setBarHovered(true)}
           onPointerLeave={() => setBarHovered(false)}
         >
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {meta}
-          </div>
       {slowStartNotice && hasFrame ? (
         <p
           data-testid="hls-slow-start"
@@ -1315,9 +1278,18 @@ export function HlsWatchPlayer({
           })}
         </p>
       ) : null}
-          {actions ? (
-            <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
-          ) : null}
+          {/* The badge above is anchored top-LEFT and stays there; everything
+              else in this bar reads top-RIGHT so the two never sit on top of
+              each other, at any width. Narrower than `sm` stacks the pill
+              above the actions instead of squeezing both into one row. */}
+          <div className="flex min-w-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center">
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+              {meta}
+            </div>
+            {actions ? (
+              <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
+            ) : null}
+          </div>
         </div>
         <div
           data-testid="watch-player-bar"
@@ -1407,9 +1379,6 @@ export function HlsWatchPlayer({
                 {t("voice.hls.live")}
               </span>
             )}
-            <span className="hidden text-[11px] font-medium text-paper/70 sm:inline">
-              {t("voice.hls.delay", { seconds: delaySeconds })}
-            </span>
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
             {hasFrame ? (
@@ -1626,9 +1595,6 @@ export function HlsWatchPlayer({
                 {t("voice.hls.live")}
               </span>
             )}
-            <span className="rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-paper">
-              {t("voice.hls.delay", { seconds: delaySeconds })}
-            </span>
           </div>
           {pipAvailable && hasFrame ? (
             <button

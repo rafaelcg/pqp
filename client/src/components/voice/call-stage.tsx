@@ -108,6 +108,7 @@ import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
 import { shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
+  resolveScreenTileSources,
   type ScreenShareTile,
 } from "@/components/voice/screen-stage";
 import {
@@ -908,12 +909,19 @@ function ActiveCall({
       .map((tile) => tile.hlsUrl)
       .filter((url): url is string => Boolean(url)),
   );
-  // Keep WebRTC on the tile until the playlist is a live window. A 404 or
-  // the previous share's ENDLIST is a black video, not a watch party.
-  const screenTiles = advertisedTiles.map((tile) =>
-    tile.hlsUrl && readyHlsUrls.has(tile.hlsUrl)
-      ? tile
-      : { ...tile, hlsUrl: null },
+  // `resolveScreenTileSources` (`screen-stage.tsx`) is the other half of
+  // PR 551 ("the SFU screen share is the one and only picture once a seat is
+  // held"): that fix stopped a seated participant's OWN room from landing in
+  // cinema mode, but this is the same room's ordinary grid, and a peer's
+  // tile here carried `hlsUrl` regardless of anyone's seat. Once seated in
+  // this watch party, every tile plays over the real WebRTC connection, so
+  // the HLS viewer chrome (the live badge, the quality menu, the holding
+  // screen) never mounts without one: it only ever ships inside the same
+  // `HlsWatchPlayer`, so refusing the HLS source here refuses the chrome too.
+  const screenTiles = resolveScreenTileSources(
+    advertisedTiles,
+    readyHlsUrls,
+    watchPartyChrome,
   );
   const watchingHls = screenTiles.some((tile) => Boolean(tile.hlsUrl));
   const focusedTile =
