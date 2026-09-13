@@ -33,6 +33,12 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  *    substitution CONSTANT across both halves and moves only the seat, so it
  *    cannot pass by the stub failing to arrive: the picture has to appear,
  *    then go when the seat is taken, then come back when it is given up.
+ *    That same test also asserts the seated call surface never shows the
+ *    in-call cinema player (2026-09-13: a second, independent HLS instance
+ *    that used to double the picture and the soundtrack the moment a seat
+ *    landed) — CI has no real presenter to make that tile exist at all, so
+ *    the rule it is guarding is pinned properly at the unit level in
+ *    `client/src/lib/cinema-layout.test.ts`, and this is the outer contract.
  * 2. `withLiveHlsConfig`: `GET /api/live-hls/config`, the operator's
  *    per-server `LIVE_HLS_SERVER_ALLOWLIST` answer. `openAs` sets it to
  *    `enabled: true`, because the create control now follows it as well as
@@ -676,6 +682,20 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     await viewer.locator("[data-watch-party-join-call]").click();
     await expect(stage).toHaveCount(0, { timeout: 20_000 });
     await expect(viewer.getByTestId("watch-stage-live")).toHaveCount(0);
+
+    // 2026-09-13 (Saturday's report): the seatless stage disappearing is only
+    // half the rule. `CallStage` used to land a freshly seated participant
+    // straight into its OWN cinema view — a second, independent HLS player
+    // beside the one that had just correctly unmounted above — so the video
+    // duplicated and the audio doubled at two different delays. CI has no
+    // real presenter (no LiveKit, no egress, and nobody in this room is
+    // actually publishing a screen over WebRTC), so `cinemaTile` can never
+    // populate here regardless of the fix; the rule itself
+    // (`shouldShowCinema`'s `isWatchParty` gate, in
+    // `client/src/lib/cinema-layout.test.ts`) is pinned at the unit level.
+    // This assertion is the outer contract: whatever the roster ever looks
+    // like, a watch party's own room never shows this surface once seated.
+    await expect(viewer.getByTestId("call-stage-cinema")).toHaveCount(0);
 
     // The seat's exit is on the party bar, in the party's words; the call
     // strip and its Leave are not drawn in a watch party channel.

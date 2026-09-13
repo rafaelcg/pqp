@@ -978,10 +978,13 @@ function ActiveCall({
   const [pinnedTileId, setPinnedTileId] = useState(() =>
     stagePinnedKey(channelId),
   );
-  // Cinema is the landing view for a watch party: full-bleed picture, no
-  // roster or mic controls, until this person explicitly asks to join the
-  // call. Resets to audience whenever a stream goes live again, so leaving
-  // one party and walking into the next does not carry the choice over.
+  // `audienceMode` used to be a landing view for a watch party's own seated
+  // call: full-bleed HLS, no roster or mic controls. `shouldShowCinema`
+  // refuses it outright once `watchPartyChrome` says this IS that party's own
+  // room (see `isWatchParty` there for the 2026-09-13 incident it caused —
+  // two pictures, two soundtracks, two delays). The state and its effect stay
+  // in case a non-watch-party room ever wants this landing view; they are
+  // inert wherever `watchPartyChrome` is true.
   const [audienceMode, setAudienceMode] = useState(watchingHls);
   useEffect(() => {
     if (watchingHls) {
@@ -992,6 +995,7 @@ function ActiveCall({
   const showCinema = shouldShowCinema({
     live: Boolean(cinemaTile),
     audience: audienceMode,
+    isWatchParty: watchPartyChrome,
   });
   const presenterPeerId = voiceState.liveStream?.presenterPeerId ?? null;
   const cinemaStagePeople = allPeople.map((person) => ({
