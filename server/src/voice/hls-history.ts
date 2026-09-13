@@ -95,6 +95,11 @@ export interface WatchPartyHistoryEntry {
    * across the list/patch/replay routes -- it is the same value `hls-egress.ts`
    * already uses to name the session in the live playlist URL. */
   sessionId: string;
+  /** The party's own title (`channel_sessions.title` at the time of this
+   * broadcast), falling back to the channel's name when no `channel_sessions`
+   * row matches -- see the presenter join's comment below for why that can
+   * happen. Never empty: the channel name always exists. */
+  title: string;
   startedAt: string;
   /** Null while the broadcast is still live (at least one rung has not ended). */
   endedAt: string | null;
@@ -112,6 +117,7 @@ interface HistoryRow {
   replay_available: boolean;
   presenter_user_id: string | null;
   presenter_display_name: string | null;
+  title: string;
 }
 
 /** Newest first, capped by `limit`. */
@@ -145,10 +151,12 @@ export async function listWatchPartyHistory(
        s.keep_replay,
        (s.all_ended AND s.fully_available) AS replay_available,
        presenter.user_id AS presenter_user_id,
-       presenter.display_name AS presenter_display_name
+       presenter.display_name AS presenter_display_name,
+       COALESCE(presenter.title, c.name) AS title
      FROM sessions s
+     JOIN channels c ON c.id = s.channel_id
      LEFT JOIN LATERAL (
-       SELECT cs.host_user_id AS user_id, u.display_name
+       SELECT cs.host_user_id AS user_id, u.display_name, cs.title
        FROM channel_sessions cs
        JOIN users u ON u.id = cs.host_user_id
        WHERE cs.channel_id = s.channel_id
@@ -163,6 +171,7 @@ export async function listWatchPartyHistory(
   );
   return result.rows.map((row) => ({
     sessionId: String(Number(row.started_at_ms)),
+    title: row.title,
     startedAt: row.started_at.toISOString(),
     endedAt: row.ended_at ? row.ended_at.toISOString() : null,
     durationSeconds: row.ended_at

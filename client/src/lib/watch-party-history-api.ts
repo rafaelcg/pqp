@@ -12,6 +12,8 @@ import { apiFetch } from "./api";
  */
 export interface WatchPartyHistoryEntry {
   sessionId: string;
+  /** The party's own title, falling back to the channel's name server-side. */
+  title: string;
   startedAt: string;
   /** Null while the broadcast is still live. */
   endedAt: string | null;

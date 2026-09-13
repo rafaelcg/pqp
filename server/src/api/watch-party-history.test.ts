@@ -383,6 +383,48 @@ describeDb("watch party history", () => {
         "1700000000000",
       ]);
     });
+
+    /**
+     * `title` is `channel_sessions.title` at the time of the broadcast when a
+     * party row matches (the same lateral join the presenter already uses),
+     * falling back to the channel's own name when it does not -- a broadcast
+     * pre-dating scheduled parties, or started without one.
+     */
+    it("uses the party's title when one matches, and falls back to the channel name otherwise", async () => {
+      // Well BEFORE the party's own `went_live_at` (started_at - 1 minute,
+      // `seedBroadcast`'s default), so the presenter/title lateral join --
+      // "the most recent channel_sessions row whose went_live_at is at or
+      // before this broadcast's started_at" -- has nothing in range and
+      // genuinely falls through to the channel name, rather than picking up
+      // the other broadcast's party the way an adjacent timestamp would.
+      await seedBroadcast({
+        startedAt: 1_700_000_000_000,
+        endedMinutesAgo: 5,
+      });
+      await seedBroadcast({
+        startedAt: 1_700_000_100_000,
+        endedMinutesAgo: 5,
+        presenterId: member.id,
+      });
+      const channelName = (
+        await getPool().query<{ name: string }>(
+          `SELECT name FROM channels WHERE id = $1`,
+          [channelId],
+        )
+      ).rows[0]!.name;
+
+      const res = await call<{
+        broadcasts: Array<{ sessionId: string; title: string }>;
+      }>(owner, "GET", historyPath());
+      const withoutParty = res.body.broadcasts.find(
+        (b) => b.sessionId === "1700000000000",
+      )!;
+      const withParty = res.body.broadcasts.find(
+        (b) => b.sessionId === "1700000100000",
+      )!;
+      expect(withParty.title).toBe("Party");
+      expect(withoutParty.title).toBe(channelName);
+    });
   });
 
   describe("PATCH history/:sessionId", () => {
@@ -598,6 +640,39 @@ describeDb("watch party history", () => {
       expect(rendition.status).toBe(200);
       expect(rendition.text).toContain("#EXTM3U");
       expect(rendition.text).toContain("s3.example.test");
+    });
+
+    /**
+     * REPLAY IS VOD, NOT THE LIVE SLIDING WINDOW. The rendition is built
+     * from the accumulated `<startedAt>-<rung>-index.m3u8` object -- the one
+     * LiveKit's `SegmentedFileOutput.playlistName` keeps growing for the
+     * whole run and terminates with `#EXT-X-ENDLIST` when the egress ends
+     * (`hls-egress.ts`'s `segmentOutput`) -- never the rolling
+     * `livePlaylistName` the live proxy serves. The upstream fixture
+     * (`beforeEach` above) already returns a fixed, ended playlist; this
+     * pins that the replay path passes that shape straight through rather
+     * than routing through anything that strips it, so a player attaching
+     * to it sees a finished VOD manifest and never the live watchdog's
+     * "still going" read of the same bytes.
+     */
+    it("serves a VOD playlist -- every segment, ending in #EXT-X-ENDLIST", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_019_000, endedMinutesAgo: 5 });
+      const minted = await call<{ hlsUrl: string }>(
+        owner,
+        "GET",
+        `${historyPath()}/1700000019000/replay`,
+      );
+      const master = await getRaw(minted.body.hlsUrl, null);
+      const variantLine = master.text
+        .split("\n")
+        .find((line) => line.includes("/api/voice/hls-replay/"))!;
+      const rendition = await getRaw(variantLine, null);
+      expect(rendition.status).toBe(200);
+      expect(rendition.text.trimEnd().endsWith("#EXT-X-ENDLIST")).toBe(true);
+      // The one segment the upstream fixture carries survived the rewrite
+      // as a presigned bucket URL, not our own live playlist proxy.
+      expect(rendition.text).toContain("s3.example.test");
+      expect(rendition.text).not.toContain("/api/voice/hls-playlist/");
     });
 
     it("a still-live session is not servable as a replay", async () => {
