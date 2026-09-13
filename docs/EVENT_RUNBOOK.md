@@ -23,12 +23,14 @@ actually explains the thing.
       triggered the 2026-09-05 incident that doc exists to describe).
 - [ ] **Freeze on.**
       ```bash
-      gh variable set DEPLOY_FREEZE --body 1
+      gh variable set DEPLOY_FREEZE --body true
       ```
-      Confirms in `.github/workflows/deploy-api-fly.yml`'s next CI run as a
-      loud `::warning::`, not a failure. Announce it (`#moderacao` or
-      wherever the team reads) so nobody is surprised a merged PR did not
-      deploy. See "Merge freeze" below for what it does and does not cover.
+      One variable gates both `deploy-api-fly.yml` and `deploy-api-vultr.yml`
+      (whichever `DEPLOY_TARGET` is live). Confirms on the next CI run as
+      that workflow's `deploy` job showing **skipped**, not a failure.
+      Announce it (`#moderacao` or wherever the team reads) so nobody is
+      surprised a merged PR did not deploy. See "Merge freeze" below for
+      what it does and does not cover.
 - [ ] **Disk.** `fly mpg status <production-cluster-id> --json` (id from
       `fly mpg list --org personal`; see `docs/DB_RUNBOOK.md`) for Postgres
       volume headroom, and glance at the SFU box's root filesystem panel on
@@ -206,11 +208,25 @@ later with no warning.
       was mirrored from.
 - [ ] **Unfreeze.**
       ```bash
-      gh variable set DEPLOY_FREEZE --body 0
+      gh variable set DEPLOY_FREEZE --body false
       ```
-      Queued PRs auto-deploy on the next CI run once this lands — expect a
-      short burst of `restarts-api` activity if several piled up during the
-      freeze. Pick a quiet moment to unfreeze if you can, the same way any
+      Flipping the variable does **not**, by itself, deploy anything: a
+      commit whose CI run already completed *while frozen* only becomes
+      "needed" the next time the deploy workflow actually runs, and nothing
+      reruns it automatically just because the variable changed. If nobody
+      merges again soon, whatever piled up during the freeze sits undeployed
+      indefinitely — contrary to what the old wording here implied. So kick
+      a reconciliation run explicitly, right after unfreezing:
+      ```bash
+      gh workflow run "Deploy API (Fly)"       # or "Deploy API (Vultr)",
+                                                # whichever vars.DEPLOY_TARGET
+                                                # is live
+      ```
+      That dispatch diffs `main` against whatever commit `/health` says is
+      actually deployed (not just the last merge), so it picks up every
+      commit skipped during the freeze in one pass, however many piled up.
+      Expect a short burst of `restarts-api` activity if several did. Pick a
+      quiet moment to unfreeze and dispatch if you can, the same way any
       other API-restarting merge waits for a traffic trough rather than
       going out mid-event.
 - [ ] **Retention back down.** If `LIVE_HLS_RETENTION_MINUTES` was raised at
@@ -234,28 +250,40 @@ later with no warning.
 
 ## Reference: merge freeze
 
-`DEPLOY_FREEZE` is a GitHub repo variable read by
-`.github/workflows/deploy-api-fly.yml`. While it is `1`, the workflow's
-relevance check skips the deploy with a loud `::warning::` annotation and
-does **not** fail the run — a frozen deploy is a deliberate skip, not a
-malfunction, so it does not open a red X anybody has to explain later.
+`DEPLOY_FREEZE` is a single GitHub repo variable read by **both**
+`.github/workflows/deploy-api-fly.yml` and
+`.github/workflows/deploy-api-vultr.yml`, so it stops whichever one
+`vars.DEPLOY_TARGET` currently points at without needing to know which that
+is. While it is `true`, each workflow's `deploy` job's own top-level `if`
+condition is false, so the job shows **skipped** rather than run — a frozen
+deploy is a deliberate skip, not a malfunction, so it does not open a red X
+anybody has to explain later. Because the check sits in the job's `if`
+rather than inside a step, it applies to a manual `workflow_dispatch` the
+same as it applies to the automatic post-CI trigger — there is no path
+through either workflow that deploys while the variable is `true`.
 
 ```bash
-gh variable set DEPLOY_FREEZE --body 1   # freeze
-gh variable set DEPLOY_FREEZE --body 0   # unfreeze
-gh variable list                          # confirm what is set right now
+gh variable set DEPLOY_FREEZE --body true    # freeze
+gh variable set DEPLOY_FREEZE --body false   # unfreeze
+gh variable list                              # confirm what is set right now
 ```
 
 Labeling a pull request `freeze` makes the `announce-freeze` job in
 `.github/workflows/ci.yml` comment "server deploys are frozen for an event"
 on that PR, so a contributor who was not in the room when the freeze went on
 still finds out before wondering why their merge did not deploy. The label
-only announces; it does not itself do anything to `deploy-api-fly.yml` — the
-repo variable is the actual gate, and it applies to every PR, labeled or not.
+only announces; it does not itself do anything to either deploy workflow —
+the repo variable is the actual gate, and it applies to every PR, labeled or
+not.
 
-The freeze covers the automated Fly deploy workflow only. It does not stop a
-manual `fly deploy`, a platform-initiated machine restart, or a crash — see
-"During" above for what to check if "API restarts" fires anyway.
+The freeze covers the automated deploy workflows only. It does not stop a
+manual `fly deploy` / SSH deploy, a platform-initiated machine restart, or a
+crash — see "During" above for what to check if "API restarts" fires
+anyway.
+
+Unfreezing does not itself deploy anything skipped during the freeze; the
+"Unfreeze" step above covers the explicit `gh workflow run` reconciliation
+dispatch that does.
 
 ## Reference: what's in `tools/monitoring/`
 

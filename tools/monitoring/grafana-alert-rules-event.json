@@ -229,7 +229,7 @@
           "labels": { "severity": "warning", "area": "event" },
           "annotations": {
             "summary": "The API process restarted (boot line seen in the last 5 minutes).",
-            "description": "Every restart replaces the single machine and drops every /ws (CLAUDE.md pitfall 11). During an event this should only ever be YOU, deliberately, with the freeze off. If DEPLOY_FREEZE=1 was set (see A6, .github/workflows/deploy-api-fly.yml) and this still fires, something restarted the machine outside a merge -- a crash, an OOM, or a manual fly deploy/restart -- and the drain in server/src/lib/drain.ts did not get a chance to run cleanly.",
+            "description": "Every restart replaces the single machine and drops every /ws (CLAUDE.md pitfall 11). During an event this should only ever be YOU, deliberately, with the freeze off. If DEPLOY_FREEZE=true was set (see A6, .github/workflows/deploy-api-fly.yml and deploy-api-vultr.yml) and this still fires, something restarted the machine outside a merge -- a crash, an OOM, or a manual fly deploy/restart -- and the drain in server/src/lib/drain.ts did not get a chance to run cleanly.",
             "runbook": "docs/EVENT_RUNBOOK.md#during"
           },
           "notification_settings": { "receiver": "rafael-email" }

@@ -185,7 +185,7 @@
           "legendFormat": "restarts"
         }
       ],
-      "description": "One line per process boot. During a frozen event (DEPLOY_FREEZE=1, see A6) this should read flat zero; any bump is an unplanned restart (crash, OOM, manual fly deploy/restart)."
+      "description": "One line per process boot. During a frozen event (DEPLOY_FREEZE=true, see A6) this should read flat zero; any bump is an unplanned restart (crash, OOM, manual fly deploy/restart)."
     },
     {
       "id": 9,

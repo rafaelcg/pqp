@@ -33,14 +33,33 @@ own liveness.
 
 ```bash
 scp -r tools/monitoring root@216.238.114.79:/opt/
-ssh root@216.238.114.79 'ADMIN_METRICS_TOKEN=<the Fly secret value> bash /opt/monitoring/install.sh'
+ssh root@216.238.114.79 'bash /opt/monitoring/install.sh'
+# paste the token at the hidden prompt -- it is never typed on a command line
 ```
+
+Do **not** run `ADMIN_METRICS_TOKEN=<value> bash install.sh`, over SSH or
+locally: an env var set inline on a command like that lands in the local
+shell's history and, on the remote box, is visible to anyone else on it via
+`ps` for as long as the process runs. `install.sh` instead prompts for the
+token with echo off when it has a real TTY, so pasting it interactively is
+the normal path. Scripting the install non-interactively (no TTY to prompt
+on) pipes the token over stdin instead, which keeps it out of argv on both
+ends:
+
+```bash
+printf '%s\n' "$ADMIN_METRICS_TOKEN" | ssh root@216.238.114.79 'bash /opt/monitoring/install.sh'
+```
+
+(`$ADMIN_METRICS_TOKEN` there is a local shell variable read once from a
+secrets manager or an already-hidden prompt, not typed as part of this
+command.) A pre-created `/etc/pqp-api-metrics.env` (mode `0600`, see below)
+works too and skips the prompt entirely.
 
 `ADMIN_METRICS_TOKEN` is the same value set as a Fly secret on `pqp-api` (see
 CLAUDE.md's env var table and `tools/admin-dashboard/README.md`) — this
 script is a second, read-only consumer of that one token, not a new secret.
-Needed only on first install or to rotate; a re-run with it unset leaves the
-existing `/etc/pqp-api-metrics.env` alone.
+Needed only on first install or to rotate; leaving the prompt blank (or
+piping an empty line) leaves the existing `/etc/pqp-api-metrics.env` alone.
 
 Check it is working:
 

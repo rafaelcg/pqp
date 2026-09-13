@@ -249,9 +249,22 @@ async function joinSeat(safe: Safe, manifest: Manifest, token: string): Promise<
   await api(safe.apiUrl, token, "POST", `/api/invites/${manifest.inviteCode}/join`);
   return await new Promise<AppSession>((resolve, reject) => {
     const socket = new WebSocket(safe.wsUrl, { perMessageDeflate: true });
-    const timer = setTimeout(() => {
+    // Every path out of this promise other than a successful `welcome` must
+    // close this socket itself: a refusal frame or a welcome timeout used to
+    // reject the promise and leave the (still open, still authenticated)
+    // socket behind, so a run heavy on refusals -- exactly the overloaded-
+    // staging case this harness exists to rehearse -- accumulated open
+    // sockets and server-side sessions nothing here ever cleaned up.
+    let settled = false;
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       socket.close();
-      reject(new Error("no voice welcome within 12s of socket open"));
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      fail(new Error("no voice welcome within 12s of socket open"));
     }, WELCOME_TIMEOUT_MS + HTTP_TIMEOUT_MS);
     socket.on("open", () => {
       socket.send(JSON.stringify({ type: "auth", token, caps: ["voice-roster-delta", "presence-delta"] }));
@@ -275,21 +288,21 @@ async function joinSeat(safe: Safe, manifest: Manifest, token: string): Promise<
         );
       }
       if (frame.type === "welcome") {
-        clearTimeout(timer);
+        if (settled) return;
         if (!frame.peerId) {
-          reject(new Error("welcome missing peer id"));
+          fail(new Error("welcome missing peer id"));
           return;
         }
+        settled = true;
+        clearTimeout(timer);
         resolve({ socket, peerId: frame.peerId });
       }
       if (["voice-join-refused", "voice-room-full", "voice-transport-unsupported"].includes(frame.type ?? "")) {
-        clearTimeout(timer);
-        reject(new Error(frame.type));
+        fail(new Error(frame.type));
       }
     });
     socket.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      fail(error instanceof Error ? error : new Error(String(error)));
     });
   });
 }
@@ -439,6 +452,21 @@ async function run(): Promise<void> {
     try {
       const token = tokenFor(safe.runId, `${slot}-${cycle}`);
       const session = await joinSeat(safe, manifest, token);
+      // joinSeat awaits real HTTP + WS round trips, so shutdown can begin
+      // while one is still in flight. The wind-down sweep below only leaves
+      // whatever is in `sessions` when IT runs; a session inserted after
+      // that sweep has already run would sit uncounted and unclosed for the
+      // rest of the process's life. Close it immediately instead of handing
+      // it to a wind-down that already happened.
+      if (stopping) {
+        await leaveSeat(session).catch(() => {});
+        records[slot]!.events.push({
+          atMs: Date.now() - startedAt,
+          kind: "join-failed",
+          error: "joined after shutdown began; closed immediately",
+        });
+        return;
+      }
       sessions.set(slot, session);
       records[slot]!.joins += 1;
       records[slot]!.events.push({ atMs: Date.now() - startedAt, kind: "joined" });
@@ -498,46 +526,84 @@ async function run(): Promise<void> {
     }, plan.presenceEveryMs + Math.floor(Math.random() * 1000)),
   );
 
-  // 3. Churn scheduler: never touches a speaking seat.
+  // 3. Churn scheduler: never touches a speaking seat. Ticks fire on a FIXED
+  // cadence (setInterval), not chained after each cycle's leave/gap/rejoin
+  // finishes: the old scheme rescheduled the next tick only once a cycle
+  // completed, so the actual churn rate was the configured one MINUS
+  // whatever the "stepped away" gap and the rejoin's own network time cost --
+  // materially fewer than --churn-per-minute cycles per minute at the
+  // documented default. A fixed interval keeps the configured rate honest.
+  // `busyChurnSlots` keeps two overlapping ticks from grabbing the same slot
+  // mid-cycle now that ticks no longer wait on each other.
   const churnableSlots = records.filter((r) => !r.speaking).map((r) => r.slot);
   const cycleCounters = new Map<number, number>();
-  let churnTimer: ReturnType<typeof setTimeout> | undefined;
-  const scheduleChurn = (): void => {
-    if (stopping || Date.now() >= endAt || churnableSlots.length === 0) return;
+  const busyChurnSlots = new Set<number>();
+  const pendingChurns = new Set<Promise<void>>();
+  let churnTimer: ReturnType<typeof setInterval> | undefined;
+  if (churnableSlots.length > 0) {
     const gapMs = 60_000 / Math.max(0.001, plan.churnPerMinute);
-    churnTimer = setTimeout(() => {
-      void (async () => {
-        const slot = churnableSlots[Math.floor(Math.random() * churnableSlots.length)]!;
-        if (sessions.has(slot)) {
+    churnTimer = setInterval(() => {
+      if (stopping || Date.now() >= endAt) return;
+      const candidates = churnableSlots.filter((slot) => sessions.has(slot) && !busyChurnSlots.has(slot));
+      if (candidates.length === 0) return;
+      const slot = candidates[Math.floor(Math.random() * candidates.length)]!;
+      busyChurnSlots.add(slot);
+      const cycle = (cycleCounters.get(slot) ?? 0) + 1;
+      cycleCounters.set(slot, cycle);
+      const churn = (async () => {
+        try {
           await leaveOne(slot);
           await sleep(2_000 + Math.random() * 6_000); // "stepped away" gap
-          if (!stopping && Date.now() < endAt) {
-            const cycle = (cycleCounters.get(slot) ?? 0) + 1;
-            cycleCounters.set(slot, cycle);
-            await joinOne(slot, cycle);
-          }
+          // Re-check `stopping` AFTER the gap, not just before starting: the
+          // wind-down's own final sweep (below) can run entirely inside this
+          // wait, and joinOne's own `stopping` recheck is the second layer
+          // in case shutdown lands between here and that call returning.
+          if (!stopping && Date.now() < endAt) await joinOne(slot, cycle);
+        } finally {
+          busyChurnSlots.delete(slot);
         }
-        scheduleChurn();
       })();
+      pendingChurns.add(churn);
+      void churn.finally(() => pendingChurns.delete(churn));
     }, gapMs);
-  };
-  scheduleChurn();
+  }
 
-  // 4. /ready sampling, independent of the seats.
+  // 4. /ready sampling, independent of the seats. Pushed as each request
+  // resolves, so slow or overlapping /ready calls can complete out of the
+  // order they were sent in -- readySamples is sorted by `atMs` before the
+  // streak math below runs rather than trusted as already chronological.
+  // Pending requests are tracked and awaited at shutdown too, or a request
+  // still in flight when the interval is cleared would simply vanish from
+  // the report instead of contributing its sample.
   const readySamples: ReadySample[] = [];
-  const readyTimer = setInterval(() => {
-    void sampleReady(safe.apiUrl, startedAt).then((sample) => readySamples.push(sample));
-  }, plan.readySampleMs);
+  const pendingReadySamples = new Set<Promise<void>>();
+  const scheduleReadySample = (): void => {
+    const pending: Promise<void> = sampleReady(safe.apiUrl, startedAt)
+      .then((sample) => {
+        readySamples.push(sample);
+      })
+      .finally(() => pendingReadySamples.delete(pending));
+    pendingReadySamples.add(pending);
+  };
+  const readyTimer = setInterval(scheduleReadySample, plan.readySampleMs);
   readySamples.push(await sampleReady(safe.apiUrl, startedAt));
 
   await sleep(Math.max(0, endAt - Date.now()));
 
   // Wind down: no more churn, no more presence flips, hang every seat up.
   stopping = true;
-  if (churnTimer) clearTimeout(churnTimer);
+  if (churnTimer) clearInterval(churnTimer);
   for (const timer of presenceTimers) clearInterval(timer);
   clearInterval(readyTimer);
+  // Every in-flight churn cycle (leave -> gap -> rejoin) must finish before
+  // the final sweep below: joinOne's own `stopping` recheck stops it from
+  // handing that sweep a live session after the fact, but the sweep still
+  // needs to run AFTER any leaveOne a churn cycle already has in flight,
+  // not race it on the same slot.
+  await Promise.all([...pendingChurns]);
   await Promise.all(records.map((record) => leaveOne(record.slot)));
+  await Promise.all([...pendingReadySamples]);
+  readySamples.sort((a, b) => a.atMs - b.atMs);
   await dispose().catch(() => {});
 
   const endedAt = Date.now();
@@ -569,7 +635,11 @@ async function run(): Promise<void> {
   const longestNotReadySeconds = longestStreakSeconds((s) => s.ok === false);
   const longestPostgresOver200Seconds = longestStreakSeconds((s) => (s.postgresMs ?? 0) > 200);
   const longestPoolOver20Seconds = longestStreakSeconds((s) => (s.poolQueued ?? 0) > 20);
-  const totalJoinFailures = records.reduce((sum, r) => sum + r.failures, 0);
+  // `.failures` is incremented by BOTH joinOne's and leaveOne's catch blocks
+  // (kinds "join-failed" and "leave-failed"), so this is already every
+  // failure the run recorded, not joins alone -- named `totalFailures` here
+  // (it used to read `totalJoinFailures`, which underclaimed what it counts).
+  const totalFailures = records.reduce((sum, r) => sum + r.failures, 0);
   const totalJoins = records.reduce((sum, r) => sum + r.joins, 0);
   const totalLeaves = records.reduce((sum, r) => sum + r.leaves, 0);
   // Pass criteria from this package's README ("seat-churn mode"): readiness
@@ -578,7 +648,7 @@ async function run(): Promise<void> {
   // own join/leave failure rate stays under 1% -- a failure here is either
   // the API refusing load or the harness itself losing a race, and either
   // one should be looked at, not averaged away.
-  const failureRate = totalJoins + totalJoinFailures > 0 ? totalJoinFailures / (totalJoins + totalJoinFailures) : 0;
+  const failureRate = totalJoins + totalFailures > 0 ? totalFailures / (totalJoins + totalFailures) : 0;
   const verdict: string[] = [];
   if (longestNotReadySeconds >= 60) verdict.push(`GET /ready reported false for ${longestNotReadySeconds}s straight, budget 60s`);
   if (longestPostgresOver200Seconds >= 120) verdict.push(`postgres ms stayed above 200 for ${longestPostgresOver200Seconds}s straight, budget 120s`);
@@ -597,7 +667,7 @@ async function run(): Promise<void> {
       finalSeated: sessions.size,
       totalJoins,
       totalLeaves,
-      totalFailures: totalJoinFailures,
+      totalFailures,
       failureRate,
     },
     ready: {

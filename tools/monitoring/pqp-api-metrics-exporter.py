@@ -208,19 +208,51 @@ def render_failure() -> str:
 
 
 def main() -> int:
+    # fetch_admin_metrics() and render() are in the SAME try. A 200 response
+    # is not proof of a well-formed one -- `null`, `{"ready": null}`, or any
+    # other shape render() does not expect raises AttributeError/TypeError/
+    # KeyError reaching into it, and that failure must replace the textfile
+    # exactly like an unreachable API does. Getting a 200 with a body render()
+    # cannot use is not meaningfully different from not getting a response at
+    # all: either way the numbers on disk cannot be trusted, and leaving the
+    # previous (possibly stale) success metrics in place would let Grafana
+    # keep reading a confident, wrong, green number through an outage.
     try:
         payload = fetch_admin_metrics()
-    except (urllib.error.URLError, RuntimeError, ValueError, TimeoutError) as err:
-        print(f"pqp-api-metrics-exporter: fetch failed: {err}", file=sys.stderr)
+        body = render(payload)
+    except (
+        urllib.error.URLError,
+        RuntimeError,
+        ValueError,
+        TimeoutError,
+        AttributeError,
+        KeyError,
+        TypeError,
+    ) as err:
+        print(f"pqp-api-metrics-exporter: fetch/render failed: {err}", file=sys.stderr)
         try:
             write_atomic(FILENAME, render_failure())
         except OSError as write_err:
             print(f"pqp-api-metrics-exporter: write failed: {write_err}", file=sys.stderr)
         return 1
     try:
-        write_atomic(FILENAME, render(payload))
+        write_atomic(FILENAME, body)
     except OSError as err:
         print(f"pqp-api-metrics-exporter: write failed: {err}", file=sys.stderr)
+        # The rendered success body never made it to disk, so whatever
+        # pqp_api.prom already holds is a previous run's numbers -- stale the
+        # moment this run fails to replace them. Best-effort overwrite with
+        # the failure marker rather than leaving that stale success in place;
+        # if this also fails (the same OSError that just happened, most
+        # likely) the exporter still exits non-zero and the log line above
+        # already says why.
+        try:
+            write_atomic(FILENAME, render_failure())
+        except OSError as fallback_err:
+            print(
+                f"pqp-api-metrics-exporter: fallback write also failed: {fallback_err}",
+                file=sys.stderr,
+            )
         return 1
     return 0
 

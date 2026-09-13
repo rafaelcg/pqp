@@ -345,7 +345,7 @@ PQP_LOAD_SFU_HOST=staging-sfu.example.test
 Run all three at once against the same manifest, on staging:
 
 1. `index.ts shard --manifest wp-event.json --shard-index 0 --shard-count 1 --presenter-only --hold-seconds 1800 --start-at-ms <T+60s>` — the presenter's share.
-2. `seat-churn.ts --manifest wp-event.json --seats 80 --churn-per-minute 5 --duration-seconds 1800` — 60 to 100 seated, churning at 5 joins/min, for 30 minutes (the postmortem's own event shape).
+2. `seat-churn.ts --manifest wp-event.json --out seat-churn-report.json --seats 80 --churn-per-minute 5 --duration-seconds 1800` — 60 to 100 seated, churning at 5 joins/min, for 30 minutes (the postmortem's own event shape).
 3. `hls-audience.ts --url <the channel's playlist URL> --tokens 300-tokens.txt --viewers 300 --seconds 1800 --ramp-seconds 120` — 300 watchers.
 
 **Pass criteria** (seat-churn's own report already judges itself against
