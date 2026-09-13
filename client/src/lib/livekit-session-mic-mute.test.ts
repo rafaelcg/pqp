@@ -64,12 +64,18 @@ const unpublishCalls: LocalAudioTrack[] = [];
 /** Set from a test to make the next `publishTrack` reject, as an unmet grant does. */
 let failNextPublish = false;
 
+/** Set from a test to hold the next `publishTrack` call in flight until released. */
+let publishGate: Promise<void> | null = null;
+
 class FakeRoom {
   state = "connected";
   remoteParticipants = new Map<string, unknown>();
   handlers = new Map<string, (...args: unknown[]) => void>();
   localParticipant = {
     publishTrack: async (track: FakeTrack, options: { source?: string } = {}) => {
+      if (publishGate) {
+        await publishGate;
+      }
       if (failNextPublish) {
         failNextPublish = false;
         throw new Error("not allowed yet");
@@ -156,6 +162,7 @@ interface FakeTrack {
   id: string;
   enabled: boolean;
   stopped: boolean;
+  readyState: "live" | "ended";
   getConstraints: () => Record<string, never>;
   applyConstraints: () => Promise<void>;
   clone: () => FakeTrack;
@@ -176,6 +183,7 @@ function makeTrack(id: string, enabled: boolean): FakeTrack {
     id,
     enabled,
     stopped: false,
+    readyState: "live",
     getConstraints: () => ({}),
     applyConstraints: async () => {},
     // A real `MediaStreamTrack.clone()`: a new object, independent
@@ -188,6 +196,7 @@ function makeTrack(id: string, enabled: boolean): FakeTrack {
     },
     stop: () => {
       self.stopped = true;
+      self.readyState = "ended";
     },
     addEventListener: (type, listener) => {
       if (!listeners.has(type)) {
@@ -198,7 +207,12 @@ function makeTrack(id: string, enabled: boolean): FakeTrack {
     removeEventListener: (type, listener) => {
       listeners.get(type)?.delete(listener);
     },
+    // A real "ended" (device unplugged, permission revoked) sets
+    // `readyState` before the event fires, which is what lets code that
+    // checks the flag *after* the fact (rather than only listening) notice
+    // an event it missed.
     fireEnded: () => {
+      self.readyState = "ended";
       for (const listener of Array.from(listeners.get("ended") ?? [])) {
         listener();
       }
@@ -243,7 +257,17 @@ beforeEach(() => {
   unpublishCalls.length = 0;
   clones.length = 0;
   failNextPublish = false;
+  publishGate = null;
 });
+
+/** Holds the next `publishTrack` call until the returned function is called. */
+function gatePublish(): () => void {
+  let release!: () => void;
+  publishGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return release;
+}
 
 describe("the standalone microphone publication while a watch-party mix is live", () => {
   it("does not reopen when the caller re-enables its own copy of the track", async () => {
@@ -346,5 +370,31 @@ describe("the standalone microphone publication's clone lifecycle", () => {
     // A stray `setMuted` after the source has ended must not resurrect
     // anything or throw — there is no live publication left to touch.
     await expect(sfu.setMuted(true)).resolves.toBeUndefined();
+  });
+
+  it("does not strand an orphaned publication when the source ends while publishTrack is still in flight", async () => {
+    const sfu = await session();
+    const original = fakeMicTrack("mic");
+    const release = gatePublish();
+
+    const publishPromise = sfu.publish(micStream(original));
+    // The source ends before `publishTrack` has resolved and registered a
+    // publication for the clone: listening for "ended" from the very start
+    // of `publish()` would try to `unpublishTrack` a publication that does
+    // not exist yet (a no-op) and null out `published` regardless — so by
+    // the time `publishTrack` DOES resolve below, this call would have gone
+    // on to leave a live publication in the room with nothing left
+    // referencing it to ever clean it up.
+    original.fireEnded();
+    expect(unpublishCalls).toHaveLength(0);
+
+    release();
+    await publishPromise;
+
+    expect(published).toHaveLength(1);
+    // The already-ended source must be noticed and cleaned up the moment
+    // `publish()` can safely do it, not silently left running.
+    expect(unpublishCalls).toHaveLength(1);
+    expect(clones[0]!.stopped).toBe(true);
   });
 });
