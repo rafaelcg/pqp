@@ -362,6 +362,15 @@ export function HlsWatchPlayer({
     watchRef.current.reset(Date.now());
   }, [src]);
 
+  // `attempt` re-runs this effect for a same-URL reconnect (the watchdog's
+  // "sequence-stuck" recovery, `reconnect()` below), which is exactly the
+  // in-flight restart the holding screen is trying to describe. Only a
+  // genuine `activeSrc` change means the old stall is over and gone;
+  // clearing `stallReason`/`restartCountdown` on every attempt bump made the
+  // restart-specific copy and countdown disappear the instant the reconnect
+  // it was announcing actually started, replaced by the generic "stalled"
+  // copy until the new attach's `onPlaying` fires (Farol, PR #529).
+  const prevActiveSrcRef = useRef(activeSrc);
   useEffect(() => {
     setHasFrame(false);
     setNeedsUnmute(false);
@@ -373,10 +382,14 @@ export function HlsWatchPlayer({
     setLevels([]);
     setAutoHeight(null);
     setQualityOpen(false);
-    setStallReason(null);
     setAuthGraceActive(false);
     clearAuthGraceTimer();
-    setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+    const srcChanged = prevActiveSrcRef.current !== activeSrc;
+    prevActiveSrcRef.current = activeSrc;
+    if (srcChanged) {
+      setStallReason(null);
+      setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+    }
   }, [activeSrc, attempt, clearAuthGraceTimer]);
 
   const reconnect = useCallback(async () => {

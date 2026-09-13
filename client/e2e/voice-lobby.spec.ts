@@ -60,7 +60,7 @@ test.describe("voice lobby", () => {
     });
     await expect(page.getByTestId("call-stage")).toHaveCount(0);
 
-    const leave = page.getByRole("main").getByRole("button", { name: "Leave" });
+    const leave = page.getByRole("main").getByRole("button", { name: "Leave", exact: true });
     await expect(leave).toBeInViewport();
     await expect(
       page.getByRole("button", { name: "Disconnect from voice" }),
@@ -101,7 +101,7 @@ test.describe("voice lobby", () => {
       timeout: 20_000,
     });
     await expect(page.getByTestId("call-stage")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Leave" })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Leave", exact: true })).toBeInViewport();
   });
 
   test.describe("at the mesh ceiling", () => {
@@ -131,12 +131,12 @@ test.describe("voice lobby", () => {
       try {
         await expect(page.getByTestId("call-stage")).toHaveCount(0);
         await expect(
-          page.getByRole("button", { name: "Leave" }),
+          page.getByRole("button", { name: "Leave", exact: true }),
         ).toBeInViewport();
 
         await page.setViewportSize({ width: 390, height: 844 });
         await expect(
-          page.getByRole("button", { name: "Leave" }),
+          page.getByRole("button", { name: "Leave", exact: true }),
         ).toBeInViewport();
       } finally {
         for (const context of extras) {
