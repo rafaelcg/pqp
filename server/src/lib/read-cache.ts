@@ -81,60 +81,34 @@ let totalBytes = 0;
  *  costs something. */
 const MIN_ESTIMATED_BYTES = 128;
 
-/** How many rows of an array value actually get serialized to build the
- *  estimate. Bounded on purpose — see `estimateSize`. */
-const SIZE_SAMPLE_ROWS = 8;
-
-function stringifiedLength(value: unknown): number {
+/**
+ * The real size, measured exactly, every time this is called — on a fresh
+ * miss AND on a stale-while-revalidate refresh alike. Three cheaper
+ * approximations were tried here and rejected, each for the same reason:
+ * anything that does not look at every row can be made to understate the
+ * real total by whatever content lands outside what it looked at (a flat
+ * `row count * constant` ignores content entirely; reusing a stale entry's
+ * size across a refresh ignores growth between refreshes; sampling a few
+ * rows ignores whatever the sample missed). A byte BUDGET whose accounting
+ * can be made to disagree with reality is not a bound, it is a suggestion —
+ * and this cache exists to take load off Postgres during an incident, which
+ * is exactly the moment an unenforced memory bound would matter most.
+ *
+ * WHY THIS IS SAFE TO DO ON EVERY WRITE, not just a rare miss: every value
+ * this module ever caches is either a single row/null (a watch-party state)
+ * or an array bounded by the caller's own pagination — a message page tops
+ * out at `MESSAGE_PAGE_MAX` (100) rows, a server's channel list at however
+ * many channels a server actually has. Serializing at most a few hundred
+ * plain DB-row objects is real work but not unbounded work, and it is
+ * dwarfed by the Postgres round trip a cache hit or a coalesced load is
+ * there to avoid in the first place.
+ */
+function estimateSize(value: unknown): number {
   try {
-    return JSON.stringify(value)?.length ?? MIN_ESTIMATED_BYTES;
+    return Math.max(MIN_ESTIMATED_BYTES, JSON.stringify(value)?.length ?? 0);
   } catch {
     return MIN_ESTIMATED_BYTES;
   }
-}
-
-/**
- * A size estimate that is both CHEAP and RESPONSIVE TO REAL CONTENT — two
- * properties earlier attempts here each had only one of. A flat
- * `row count * constant` is cheap but was flatly wrong for a long message
- * body or an embed blob, understating a cache full of them well past the
- * point a budget is supposed to catch. Fully `JSON.stringify`-ing an entire
- * page is accurate but is O(page size) real serialization work, which is
- * fine on an occasional miss but not something to pay again on every
- * stale-while-revalidate refresh a hot key goes through, and not something
- * this function should do unconditionally on every request-path miss either
- * — reusing a stale size across a refresh (an earlier version of this fix)
- * traded that cost for the estimate silently falling behind whatever the
- * refreshed content actually grew to.
- *
- * The middle path: every value this module ever caches is either a single
- * row/null (a watch-party state — one `JSON.stringify` call, already
- * cheap) or an array of DB rows (a message page, a channel list) that are
- * roughly uniform in shape. For an array, stringify a bounded SAMPLE of
- * its rows (evenly spread across the array, not just the front — a page's
- * rows are not guaranteed uniform, e.g. one long message among many short
- * ones), average that, and scale by the real row count. Cost is bounded by
- * `SIZE_SAMPLE_ROWS` regardless of whether the array holds 50 rows or
- * `MESSAGE_PAGE_MAX`, so this is safe to call on every write — a fresh
- * miss AND a background refresh alike — which is what makes the estimate
- * track a loader returning materially larger content immediately, rather
- * than only at the next cold load.
- */
-function estimateSize(value: unknown): number {
-  if (!Array.isArray(value)) {
-    return Math.max(MIN_ESTIMATED_BYTES, stringifiedLength(value));
-  }
-  if (value.length === 0) {
-    return MIN_ESTIMATED_BYTES;
-  }
-  const sampleCount = Math.min(SIZE_SAMPLE_ROWS, value.length);
-  let sampledBytes = 0;
-  for (let i = 0; i < sampleCount; i++) {
-    const index = Math.floor((i * value.length) / sampleCount);
-    sampledBytes += stringifiedLength(value[index]);
-  }
-  const averagePerRow = sampledBytes / sampleCount;
-  return Math.max(MIN_ESTIMATED_BYTES, Math.round(averagePerRow * value.length));
 }
 
 /** The one place an entry leaves `store`, so `totalBytes` cannot drift from

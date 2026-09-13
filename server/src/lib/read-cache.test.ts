@@ -382,28 +382,27 @@ describe("read-cache", () => {
     expect(readCacheMetrics().bytes).toBeGreaterThanOrEqual(50_000);
   });
 
-  it("estimates an array's size from a bounded sample of its rows, close to its real serialized size", async () => {
-    // Sampling trades exactness for a bounded cost regardless of array
-    // length — it must not trade away correctness in the wrong direction.
-    // A large, roughly uniform array's estimate should land within a
-    // generous factor of what a full `JSON.stringify` would have measured.
-    const rows = new Array(2_000)
+  it("measures an array's size exactly, matching a full JSON.stringify", async () => {
+    // Approximations were tried here (a flat per-row constant, sampling a
+    // handful of rows) and rejected: anything that does not look at every
+    // row can be made to understate the real total by whatever content
+    // lands outside what it looked at, and a byte BUDGET that can be made
+    // to disagree with reality is not a bound. The estimate must equal the
+    // real serialized size, not merely land close to it.
+    const rows = new Array(80)
       .fill(0)
       .map((_, i) => ({ id: i, body: "hello world, this is a message body" }));
     await coalesce("k", 60_000, async () => rows);
-    const estimated = readCacheMetrics().bytes;
-    const real = JSON.stringify(rows).length;
-    expect(estimated).toBeGreaterThan(real * 0.5);
-    expect(estimated).toBeLessThan(real * 2);
+    expect(readCacheMetrics().bytes).toBe(JSON.stringify(rows).length);
   });
 
-  it("moves an array estimate for one long outlier row, not just the common case", async () => {
-    // The sample is spread evenly across the array rather than taken only
-    // from the front, specifically so one long message among many short
-    // ones still moves the estimate.
+  it("accounts for one long outlier row wherever it falls in the array", async () => {
+    // Not just at a position a sampling scheme happens to land on — every
+    // index, because nothing here samples any more.
     const rows = new Array(100).fill(0).map(() => ({ body: "short" }));
-    rows[50] = { body: "x".repeat(20_000) };
+    rows[3] = { body: "x".repeat(20_000) }; // deliberately not an evenly-spaced index
     await coalesce("k", 60_000, async () => rows);
+    expect(readCacheMetrics().bytes).toBe(JSON.stringify(rows).length);
     expect(readCacheMetrics().bytes).toBeGreaterThan(20_000);
   });
 
