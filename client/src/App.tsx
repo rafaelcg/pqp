@@ -103,6 +103,10 @@ import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { ShortcutsHint } from "@/components/layout/shortcuts-hint";
+import {
+  VoiceCleanActivatedToast,
+  VoiceCleanHint,
+} from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
@@ -124,6 +128,10 @@ import {
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
+import {
+  shouldOfferVoiceCleanNudge,
+  voiceCleanNudgeDismissedPatch,
+} from "@/lib/voice-clean";
 import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
 import {
   hasUnseenWhatsNew,
@@ -210,6 +218,7 @@ import {
   type ChannelSidebarPreference,
 } from "@/lib/channel-sidebar-preference";
 import { useMdUp } from "@/hooks/use-md-up";
+import { useSmUp } from "@/hooks/use-sm-up";
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import {
   formatBinding,
@@ -1196,6 +1205,11 @@ function MainAppContent({
   // The channel list as a strip of icons. `auto` follows the share until
   // somebody touches the toggle; after that it is theirs.
   const columnLayout = useMdUp();
+  // Voz limpa nudge: the card only shows `sm` and up (docs/ONBOARDING.md —
+  // below it the NOVO dot in Settings is the discoverability instead).
+  const voiceCleanDesktopViewport = useSmUp();
+  const [voiceCleanActivatedToast, setVoiceCleanActivatedToast] =
+    useState(false);
   const [channelSidebar, setChannelSidebar] =
     useState<ChannelSidebarPreference>("auto");
   useEffect(() => {
@@ -4866,6 +4880,73 @@ function MainAppContent({
   }, []);
 
   /**
+   * The Voz limpa nudge is put away — same shape as `settleCommunityHomeIntro`,
+   * and it is what both "Ativar" and "Depois" call: either one is an answer,
+   * so neither should leave the card able to come back.
+   */
+  const settleVoiceCleanNudge = useCallback(() => {
+    const patch = voiceCleanNudgeDismissedPatch();
+    setUser((previous) =>
+      previous
+        ? { ...previous, preferences: { ...previous.preferences, ...patch } }
+        : previous,
+    );
+    void updatePreferences(patch).catch(() => {
+      // Worst case the card is offered once more on the next qualifying call.
+    });
+  }, []);
+
+  /**
+   * "Ativar" on the Voz limpa nudge: the same live-apply path Settings uses
+   * for the noise-suppression select, so a call already in progress hears
+   * the switch the same way it would from the modal. A plain function, not a
+   * `useCallback` — it calls `handleAudioSettingsLive`, itself redefined every
+   * render, and closes over `localSettings` directly rather than chasing that
+   * identity through a dependency array.
+   */
+  async function activateVoiceClean() {
+    // Dismissing the card is "the nudge was answered" and happens either
+    // way, immediately — same as "Depois". The toast is a different claim
+    // ("it is ON"), so it waits for confirmation below, and is not shown at
+    // all when the confirmation says the request fell back.
+    settleVoiceCleanNudge();
+    const next: LocalSettings = {
+      ...localSettings,
+      micProcessing: {
+        ...localSettings.micProcessing,
+        noiseSuppression: "advanced",
+      },
+    };
+    setLocalSettings(next);
+    saveLocalSettings(next);
+    // NOT `handleAudioSettingsLive`: it fires `voice.setMicProcessing`
+    // without awaiting it, and `setMicProcessing` no-ops on a processing
+    // value that already matches `audioOptions.processing` — so calling it a
+    // second time ourselves, to await it, would see its own first call's
+    // synchronous update and return immediately without ever waiting for the
+    // real pipeline swap. One call, awaited here, is what lets this function
+    // tell a real switch from a fallback: `createMicPipeline`'s "browser
+    // cannot run RNNoise" path (used whether or not a call is live — it is a
+    // no-op pipeline swap when idle, same as every other processing change)
+    // stamps this exact notice, so seeing it right after the call settles
+    // means the request did not actually turn Voz limpa on, and the toast
+    // must not say it did — the notice banner on the call stage already says
+    // why.
+    await voice.setMicProcessing(next.micProcessing);
+    if (voice.getState().notice !== t("voice.notice.noiseSuppressionUnsupported")) {
+      setVoiceCleanActivatedToast(true);
+    }
+  }
+
+  useEffect(() => {
+    if (!voiceCleanActivatedToast) {
+      return;
+    }
+    const timer = setTimeout(() => setVoiceCleanActivatedToast(false), 3000);
+    return () => clearTimeout(timer);
+  }, [voiceCleanActivatedToast]);
+
+  /**
    * Walk in, rather than asking whether they meant to.
    *
    * WHAT THIS REPLACES. `/app/invite/<code>` used to open the join dialog with
@@ -5594,6 +5675,48 @@ function MainAppContent({
       selection.kind === "server" &&
       Boolean(selectedServerId),
   });
+  const voiceChannel =
+    voiceState.voiceChannelId
+      ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
+      : null;
+  // Hoisted above `sidebarIconsOnly`'s original spot (near the channel-list
+  // toggle further down) so the Voz limpa eligibility below can read it: the
+  // nudge is rendered only in the wide sidebar footer (`!compact` in
+  // `sidebarFooter`), so a compact rail must not be able to hold the corner
+  // queue's `voiceClean` slot for a card nothing mounts.
+  //
+  // `sidebarIconsOnly` is provably `!compact`'s complement for every render
+  // that can reach `VoiceCleanHint`: `sidebarFooter` has exactly three call
+  // sites, and `sidebarFooter(sidebarIconsOnly)` on `ChannelList` is the
+  // only one that can ever pass `compact={true}` — the other two
+  // (`DmList`, `WhatsNewView`) call `sidebarFooter()` with no argument, so
+  // their `compact` is always `false` regardless of `sidebarIconsOnly`.
+  // Gating `wantsVoiceCleanHint` on `!sidebarIconsOnly` is therefore never
+  // looser than the render guard for any of the three: it can only be
+  // *stricter* than necessary on the two branches where compact never
+  // applies, never looser than the one branch where it does.
+  const watchingAShare =
+    voiceState.status === "connected" &&
+    voiceState.screenSharePeerIds.some(
+      (peerId) => peerId !== voiceState.peerId,
+    );
+  const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
+    // A party's stream alone does NOT fold the list: the live party block
+    // lives in it, and it is the way back to the show for everybody else.
+    watchingAShare,
+    columnLayout,
+  });
+  const wantsVoiceCleanHint =
+    !sidebarIconsOnly &&
+    shouldOfferVoiceCleanNudge({
+      dismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
+      automated: isAutomatedBrowser(),
+      inCall: voiceState.status === "connected",
+      micOn: !voiceState.isMuted,
+      presentingWatchParty:
+        voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
+      isDesktopViewport: voiceCleanDesktopViewport,
+    });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
     communityHomePost: Boolean(
@@ -5601,6 +5724,7 @@ function MainAppContent({
         communityHomePostToast.serverId === selectedServerId,
     ),
     qg: qgHintWanted,
+    voiceClean: wantsVoiceCleanHint,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
     cargos:
@@ -5615,11 +5739,6 @@ function MainAppContent({
   const liveAttachedHint =
     cornerHint === null || cornerHint === "shortcuts"
       ? attachedFeatureHint
-      : null;
-
-  const voiceChannel =
-    voiceState.voiceChannelId
-      ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
       : null;
   /** The conversation the active call lives in, when it is a DM call. */
   const voiceConversation = voiceState.voiceChannelId
@@ -5658,17 +5777,9 @@ function MainAppContent({
   // Taking the list away from the one person using it, at the moment they
   // start using it, is not a saving. The viewer, who has no reason to touch
   // the channel list while watching, is who this is for.
-  const watchingAShare =
-    voiceState.status === "connected" &&
-    voiceState.screenSharePeerIds.some(
-      (peerId) => peerId !== voiceState.peerId,
-    );
-  const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
-    // A party's stream alone does NOT fold the list: the live party block
-    // lives in it, and it is the way back to the show for everybody else.
-    watchingAShare,
-    columnLayout,
-  });
+  //
+  // (`watchingAShare` / `sidebarIconsOnly` themselves moved above the Voz
+  // limpa eligibility block — same values, computed once.)
   // A plain function, not a `useCallback`: it is read below the early returns
   // that this component is full of, and nothing takes it as a dependency.
   const toggleChannelSidebar = () => {
@@ -5762,6 +5873,19 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           compact={compact}
         />
+      )}
+      {/* Anchored above the user bar, never inside the icons-only rail:
+          `layout="inline"` clamps to the parent width, and 72px has no room
+          for either the card or the toast. */}
+      {!compact && (
+        <>
+          <VoiceCleanHint
+            enabled={cornerHint === "voiceClean"}
+            onActivate={activateVoiceClean}
+            onDismiss={settleVoiceCleanNudge}
+          />
+          <VoiceCleanActivatedToast show={voiceCleanActivatedToast} />
+        </>
       )}
       <UserPanel
         compact={compact}

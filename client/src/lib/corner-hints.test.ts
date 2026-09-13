@@ -39,6 +39,23 @@ describe("winningCornerHint", () => {
     );
   });
 
+  it("puts the Voz limpa nudge after QG and before the phone beta", () => {
+    expect(
+      winningCornerHint({
+        qg: true,
+        voiceClean: true,
+        mobileBeta: true,
+      }),
+    ).toBe("qg");
+    expect(
+      winningCornerHint({
+        voiceClean: true,
+        mobileBeta: true,
+        whatsNew: true,
+      }),
+    ).toBe("voiceClean");
+  });
+
   it("a live Baú post beats first-run cards and still yields to a waiting build", () => {
     expect(
       winningCornerHint({

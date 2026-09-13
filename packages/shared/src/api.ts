@@ -339,6 +339,20 @@ export const userPreferencesSchema = z.object({
    */
   communityHomeIntroDismissedAt: z.string().optional(),
   /**
+   * When the "Voz limpa" nudge (the one-time invitation to try advanced,
+   * RNNoise-based noise suppression — see `noiseSuppression.mode` in
+   * `client/src/lib/noise-suppression.ts`) was put away, as an ISO instant.
+   * Set on either button, "Ativar" or "Depois": both are an answer.
+   *
+   * A preference and not localStorage for the same reason as
+   * `communityHomeIntroDismissedAt`: it explains the feature once per person,
+   * not once per browser. Absent means "never answered", which also gates the
+   * NOVO dot on the setting itself (Settings > Voice > noise suppression) —
+   * that dot clears on this OR on the section being opened once, whichever
+   * comes first.
+   */
+  voiceCleanNudgeDismissedAt: z.string().optional(),
+  /**
    * Personal favourite channels, keyed by server. The array is the order they
    * appear in that server's Favorites block.
    *

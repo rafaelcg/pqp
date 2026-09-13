@@ -1259,6 +1259,76 @@ describe("lobby presence sounds", () => {
     expect(voice.getState().error).toBeFalsy();
   });
 
+  it("tells the person why Voz limpa is off when the browser cannot run it", async () => {
+    // `advancedNoiseSuppressionSupportedMock` is false by default in this
+    // block: asking for "advanced" here is the "no AudioWorklet / no
+    // WebAssembly" fallback in `docs/NOISE_SUPPRESSION.md`, which used to be
+    // silent (a console.warn and nothing else). It must say so in the notice
+    // the call stage renders, in the product's own name for the feature.
+    const getUserMedia = vi.fn(async () => fakeStream("mic"));
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, {
+      processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+    });
+
+    expect(voice.getState().status).not.toBe("idle");
+    expect(voice.getState().notice).toContain("Clean voice");
+    expect(voice.getState().notice).not.toContain("RNNoise");
+  });
+
+  it("does not stamp the Voz limpa fallback notice for a join it already left", async () => {
+    // Farol review of #552: the fallback fires from inside `createMicPipeline`
+    // after `await loadRnnoiseBinary()` rejects — on the far side of an
+    // await, same as the device-retry ladder's own fallback notice just
+    // above. A `leave()` (or a second join) while that load is still pending
+    // must stop the rejection from writing into a `state` a newer, unrelated
+    // operation now owns.
+    advancedNoiseSuppressionSupportedMock.mockReturnValue(true);
+    let rejectBinary: (err: unknown) => void = () => {};
+    loadRnnoiseBinaryMock.mockImplementation(
+      () =>
+        new Promise<ArrayBuffer>((_resolve, reject) => {
+          rejectBinary = reject;
+        }),
+    );
+
+    const getUserMedia = vi.fn(async () => fakeStream("mic"));
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const joining = voice.join(CHANNEL, {
+      processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+    });
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+
+    voice.leave();
+    rejectBinary(new Error("wasm fetch failed"));
+    await joining;
+
+    // The abandoned join's own failure must not leak a notice into the idle
+    // state the leave already produced.
+    expect(voice.getState().status).toBe("idle");
+    expect(voice.getState().notice ?? "").not.toContain("Clean voice");
+  });
+
   it("falls back to a standard mic when the browser refuses a 48kHz AudioContext", async () => {
     // Farol #517: `new AudioContext({ sampleRate: 48000 })` threw outside any
     // try/catch, which aborted the whole join (or swap) instead of falling
