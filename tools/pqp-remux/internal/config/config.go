@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"time"
@@ -23,7 +24,14 @@ const (
 	DefaultRingSegments   = 6
 	DefaultKeyframePolicy = keyframe.PolicyNatural
 	DefaultPLIGateFactor  = 1.5
-	DefaultListen         = ":8089"
+	// DefaultListen binds loopback only: internal/serve is an
+	// unauthenticated local testing surface (see its package doc comment),
+	// and defaulting to every interface would turn a forgotten `LISTEN`
+	// override into an unauthenticated media disclosure endpoint the
+	// moment the box has a routable address. Set LISTEN explicitly to
+	// serve beyond localhost, and put a real access-control layer in
+	// front of it first — see the README's "Not yet".
+	DefaultListen = "127.0.0.1:8089"
 )
 
 // Config is everything the binary needs, already validated.
@@ -52,11 +60,19 @@ type Config struct {
 }
 
 // PartTicks/SegmentTicks convert PartMS/SegmentMS into the 90kHz RTP clock
-// ticks the fragmenter and ring both operate in.
-func (c Config) PartTicks() uint32    { return msToTicks(c.PartMS) }
-func (c Config) SegmentTicks() uint32 { return msToTicks(c.SegmentMS) }
+// ticks the fragmenter and ring both operate in. Validate rejects any
+// configuration whose converted tick count would not fit in uint32, so
+// these are safe to call unchecked once a Config has passed Validate.
+func (c Config) PartTicks() uint32    { return uint32(msToTicks(c.PartMS)) }
+func (c Config) SegmentTicks() uint32 { return uint32(msToTicks(c.SegmentMS)) }
 
-func msToTicks(ms int) uint32 { return uint32(ms) * h264.ClockRate / 1000 }
+// msToTicks multiplies in uint64 before dividing: PART_MS/SEGMENT_MS are
+// user-configured, and multiplying in uint32 first (ms * ClockRate) wraps
+// for any ms value at or above roughly 47721 (2^32 / 90 000), silently
+// cutting segments at the wrong times instead of failing loudly. The
+// uint32 truncation only happens in PartTicks/SegmentTicks above, after
+// Validate has already rejected anything too large to fit.
+func msToTicks(ms int) uint64 { return uint64(ms) * uint64(h264.ClockRate) / 1000 }
 
 // FromEnv reads LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, ROOM,
 // LISTEN, PART_MS, SEGMENT_MS, RING_SEGMENTS, KEYFRAME_POLICY,
@@ -125,6 +141,12 @@ func (c Config) Validate() error {
 	}
 	if c.SegmentMS < c.PartMS {
 		return fmt.Errorf("config: SEGMENT_MS (%d) must be >= PART_MS (%d)", c.SegmentMS, c.PartMS)
+	}
+	if msToTicks(c.PartMS) > math.MaxUint32 {
+		return fmt.Errorf("config: PART_MS=%d converts to more than a uint32 of 90kHz ticks; keep it under about 13.25 hours", c.PartMS)
+	}
+	if msToTicks(c.SegmentMS) > math.MaxUint32 {
+		return fmt.Errorf("config: SEGMENT_MS=%d converts to more than a uint32 of 90kHz ticks; keep it under about 13.25 hours", c.SegmentMS)
 	}
 	if c.RingSegments < 1 {
 		return fmt.Errorf("config: RING_SEGMENTS must be at least 1, got %d", c.RingSegments)

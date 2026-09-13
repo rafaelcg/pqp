@@ -49,6 +49,59 @@ func TestLogger_SubsequentLinesCarryInterval(t *testing.T) {
 	}
 }
 
+// failingWriter fails every write after allowedWrites succeed, to
+// exercise OnIDR's error path without a real full disk.
+type failingWriter struct {
+	allowedWrites int
+	writes        int
+}
+
+var errFailingWriter = errWrite("failingWriter: simulated write failure")
+
+type errWrite string
+
+func (e errWrite) Error() string { return string(e) }
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.allowedWrites {
+		return 0, errFailingWriter
+	}
+	return len(p), nil
+}
+
+// TestLogger_OnIDR_ReturnsWriteError is the regression test for the bug
+// Farol caught: a write failure used to be discarded, with the logger
+// still marking the IDR as recorded (committing state) as if the line had
+// reached the writer.
+func TestLogger_OnIDR_ReturnsWriteError(t *testing.T) {
+	w := &failingWriter{allowedWrites: 0}
+	l := New(w)
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	if err := l.OnIDR(1000, 5000, start); err == nil {
+		t.Fatal("expected an error when the writer fails on the first IDR")
+	}
+	// Because the write failed, the logger must not have committed
+	// haveFirst/prevIDR: a second call at the same "first IDR" semantics
+	// should behave as if nothing was recorded, not skip straight to
+	// interval mode with a bogus baseline. allowedWrites counts total
+	// Write() calls ever made (including the failed one above), so this
+	// lets exactly the next call through.
+	w.allowedWrites = w.writes + 1
+	if err := l.OnIDR(1000, 5000, start); err != nil {
+		t.Fatalf("expected the retried first IDR to succeed, got %v", err)
+	}
+
+	w.allowedWrites = w.writes // block the next write
+	if err := l.OnIDR(2000, 6000, start.Add(time.Second)); err == nil {
+		t.Fatal("expected an error when the writer fails on a subsequent IDR")
+	}
+	if s := l.Stats(); s.Count != 0 {
+		t.Fatalf("a failed write must not commit its interval into Stats, got Count=%d", s.Count)
+	}
+}
+
 func TestLogger_StatsBeforeAnyIDR(t *testing.T) {
 	var buf bytes.Buffer
 	l := New(&buf)

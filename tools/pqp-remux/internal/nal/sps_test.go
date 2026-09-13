@@ -163,6 +163,70 @@ func TestParseSPS_SmallDesktopCapture(t *testing.T) {
 	}
 }
 
+// TestUnescapeRBSP directly exercises the emulation-prevention stripper
+// Farol flagged as possibly leaving a second inserted 0x03 behind on
+// consecutive escapes. It does not: per ITU-T H.264 §7.3.1/7.4.1.1, an
+// encoder's own zero-counter resets to 0 the instant it inserts an escape
+// byte (it does not carry the two zero bytes it just "spent" forward into
+// a new potential match), and this decoder mirrors that exactly. Each case
+// here was verified by hand-simulating the standard encoder algorithm
+// (count consecutive raw zero bytes; on the 2nd zero followed by a byte
+// <=3, insert 0x03 and reset the counter to 0) to confirm the "encoded"
+// column really is what an encoder would produce for the "original"
+// column, so this test is checking against the spec's algorithm, not
+// against this package's own inverse of itself.
+func TestUnescapeRBSP(t *testing.T) {
+	cases := []struct {
+		name     string
+		encoded  []byte
+		original []byte
+	}{
+		{
+			name:     "no escape needed",
+			encoded:  []byte{0x01, 0x02, 0x03, 0x04},
+			original: []byte{0x01, 0x02, 0x03, 0x04},
+		},
+		{
+			name:     "single escape",
+			encoded:  []byte{0x00, 0x00, 0x03, 0x01},
+			original: []byte{0x00, 0x00, 0x01},
+		},
+		{
+			name:     "two independent escapes back to back",
+			encoded:  []byte{0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0x03},
+			original: []byte{0x00, 0x00, 0x00, 0x00, 0x03},
+		},
+		{
+			// Farol's own example: the byte immediately after a stripped
+			// escape is itself 0x03, but it is genuine data (only ONE
+			// zero — not two — precedes it), so it must survive.
+			name:     "genuine 0x03 immediately after a stripped escape",
+			encoded:  []byte{0x00, 0x00, 0x03, 0x00, 0x03, 0x00},
+			original: []byte{0x00, 0x00, 0x00, 0x03, 0x00},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := unescapeRBSP(c.encoded)
+			if !bytesEqual(got, c.original) {
+				t.Fatalf("unescapeRBSP(% X) = % X, want % X", c.encoded, got, c.original)
+			}
+		})
+	}
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestParseSPS_RejectsNonSPS(t *testing.T) {
 	if _, err := ParseSPS([]byte{byte(TypeIDR), 0, 0, 0}); err == nil {
 		t.Fatal("expected an error for a non-SPS NAL type")

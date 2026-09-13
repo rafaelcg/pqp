@@ -79,11 +79,77 @@ func TestSession_PartsReachTheRing(t *testing.T) {
 	if h.PartsWritten == 0 {
 		t.Fatal("expected at least one part to reach the ring")
 	}
-	if h.BytesServed == 0 {
-		t.Fatal("expected BytesServed to reflect the written fragment bytes")
+	if h.BytesWritten == 0 {
+		t.Fatal("expected BytesWritten to reflect the written fragment bytes")
 	}
 	if _, ok := r.Segment(0); !ok {
 		t.Fatal("expected segment 0 to exist in the ring")
+	}
+}
+
+// TestSession_FinishFlushesTrailingFragment is the regression test for the
+// bug Farol caught: when the RTP track ends between part boundaries, the
+// accumulated-but-not-yet-closed tail used to be silently dropped because
+// nothing ever called the fragmenter's Flush. Finish (wired to
+// subscriber.Handlers.OnVideoTrackEnded in main.go) must publish it.
+func TestSession_FinishFlushesTrailingFragment(t *testing.T) {
+	r := ring.New(6, 90000)
+	s := New(45000, 360000, r, nil)
+
+	s.HandleVideoPacket(videoPacket(singleNAL(7, realishSPS()[1:]), 0, false))
+	s.HandleVideoPacket(videoPacket(singleNAL(8, realishPPS()[1:]), 0, false))
+	// Just an IDR and two P-frames: nowhere near a 45000-tick part
+	// boundary, so nothing has reached the ring yet.
+	s.HandleVideoPacket(videoPacket(singleNAL(5, []byte{0xAA}), 0, true))
+	s.HandleVideoPacket(videoPacket(singleNAL(1, []byte{0xBB}), frameStep, true))
+	s.HandleVideoPacket(videoPacket(singleNAL(1, []byte{0xCC}), 2*frameStep, true))
+
+	if h := s.Health(); h.PartsWritten != 0 {
+		t.Fatalf("expected nothing published before Finish, got PartsWritten=%d", h.PartsWritten)
+	}
+
+	s.Finish()
+
+	h := s.Health()
+	if h.PartsWritten != 1 {
+		t.Fatalf("expected Finish to publish exactly the trailing partial fragment, got PartsWritten=%d", h.PartsWritten)
+	}
+	if _, ok := r.Segment(0); !ok {
+		t.Fatal("expected the flushed trailing fragment to land in segment 0")
+	}
+
+	// A second Finish with nothing pending must be a harmless no-op.
+	s.Finish()
+	if h := s.Health(); h.PartsWritten != 1 {
+		t.Fatalf("a second Finish must not publish anything new, got PartsWritten=%d", h.PartsWritten)
+	}
+}
+
+// TestSession_NoFragmentsPublishedBeforeInitSegmentExists is the
+// regression test for the bug Farol caught: fragments used to reach the
+// ring even when BuildInitSegment had never succeeded, so a client could
+// see segments/parts listed with no way to initialize a decoder for them.
+func TestSession_NoFragmentsPublishedBeforeInitSegmentExists(t *testing.T) {
+	r := ring.New(6, 90000)
+	s := New(45000, 360000, r, nil)
+
+	// An IDR with NO SPS/PPS ever provided: initSet can never become true.
+	frameIdx := int64(0)
+	for i := 0; i < 20; i++ {
+		nalType := byte(1)
+		if i == 0 {
+			nalType = 5
+		}
+		s.HandleVideoPacket(videoPacket(singleNAL(nalType, []byte{0xAA}), uint32(frameIdx*frameStep), true))
+		frameIdx++
+	}
+	s.Finish()
+
+	if _, ok := r.Init(); ok {
+		t.Fatal("no SPS/PPS was ever seen; init segment must not exist")
+	}
+	if h := s.Health(); h.PartsWritten != 0 {
+		t.Fatalf("no fragment should ever publish without a valid init segment, got PartsWritten=%d", h.PartsWritten)
 	}
 }
 

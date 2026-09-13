@@ -70,7 +70,7 @@ Read by `internal/config`.
 | `LIVEKIT_API_KEY` | — (required) | |
 | `LIVEKIT_API_SECRET` | — (required) | |
 | `ROOM` | — (required) | LiveKit room name to subscribe to |
-| `LISTEN` | `:8089` | HTTP address for the local test surface |
+| `LISTEN` | `127.0.0.1:8089` | HTTP address for the local test surface. **Loopback by default on purpose**: none of `internal/serve`'s routes authenticate a caller (see its package doc comment), so binding every interface by default would turn a forgotten override into an unauthenticated media-disclosure endpoint. Set it to a non-loopback address only deliberately, and only with a real access-control layer in front of it |
 | `PART_MS` | `500` | CMAF part target (plan §2/§6) |
 | `SEGMENT_MS` | `4000` | CMAF segment target (plan §2/§6); segments close elastically on the first IDR at or after this, never before |
 | `RING_SEGMENTS` | `6` | How many sealed segments (plus the live one) stay in memory |
@@ -165,22 +165,34 @@ synthetic access units feeding the fragmenter directly. No LiveKit
 connection, no real capture, is needed to run the suite. Notably:
 
 - `internal/h264`: RTP → access-unit reassembly (single NAL, STAP-A, FU-A),
-  timestamp unwrap across a 32-bit wraparound.
+  timestamp unwrap across a 32-bit wraparound, a lost marker packet
+  discarding the stale access unit rather than merging it into the next
+  one, and an access unit bounded at `maxAccessUnitBytes` rather than
+  growing forever when a marker never arrives.
 - `internal/nal`: the Exp-Golomb SPS parser, round-tripped against a
   bit-writer built in the test file, for both baseline and a High-profile
-  stream with an all-identity scaling matrix.
+  stream with an all-identity scaling matrix; `unescapeRBSP` directly,
+  including consecutive emulation-prevention sequences and a genuine
+  `0x03` immediately following a stripped one.
 - `internal/cmaf`: box-level structural assertions — `ftyp`/`moov` shape,
-  `avcC` bytes matching the input SPS/PPS byte for byte, `trun`
-  `sample_flags` per sample, `mfhd` sequence numbers and `tfdt` base decode
-  times increasing monotonically across fragments, `mdat` matching the
-  concatenated sample data byte for byte.
+  `avcC` bytes matching the input SPS/PPS byte for byte (chroma format and
+  bit depth included, for a 4:2:2/10-bit stream, not just the 4:2:0/8-bit
+  default), `trun` `sample_flags` per sample, `mfhd` sequence numbers and
+  `tfdt` base decode times increasing monotonically across fragments,
+  `mdat` matching the concatenated sample data byte for byte.
 - `internal/pipeline`: the part/segment boundary policy itself — parts cut
   at the target duration, a segment does **not** close on a non-IDR frame
   even past its target (elastic "Branch A"), and does close on the next
   real IDR, with the resulting fragment's first sample verified sync at the
   box level.
 - `internal/keyframe`: the gate/pace state machine against a fake clock, the
-  500ms SFU-throttle floor, and the natural-policy no-op path.
+  500ms SFU-throttle floor, the natural-policy no-op path, and concurrent
+  `OnIDR`/tick calls under `-race`.
+- `internal/session`: a trailing partial fragment is flushed and published
+  when the track ends, and nothing is ever published before a valid init
+  segment exists.
+- `internal/config`: `PART_MS`/`SEGMENT_MS` convert to 90kHz ticks without
+  overflowing for any value `Validate` accepts.
 - `internal/ring`, `internal/serve`: eviction, sealed-vs-open segments, the
   playlist body, and every HTTP route including the 404/503 edges.
 
@@ -201,9 +213,23 @@ test` and `make fmtcheck` on `go.mod`'s pinned Go version.
   flag, no start/stop/adopt lifecycle — this binary is started and stopped
   by hand (or by a load-testing harness), not by `pqp-api`.
 - **Watchdog (`L1.6`)**: `/healthz` reports raw counters
-  (`subscribed`, `partsWritten`, `bytesServed`, `lastPartAtMs`,
+  (`subscribed`, `partsWritten`, `bytesWritten`, `lastPartAtMs`,
   `lastIdrAtMs`) but nothing consumes them yet — no `PART_STUCK_MS` stall
   detector, no restart-then-demote ladder, no `voice.hlsLlDemoted`.
+  `bytesWritten` counts bytes written into the ring, not bytes an HTTP
+  client has actually read; naming it that way (rather than
+  `bytesServed`) is deliberate, not a placeholder.
+- **Presenter authorization**: `internal/subscriber` binds to the first
+  track it sees with `Source == SCREEN_SHARE` and ignores every screen
+  share after that (logged, not silently dropped) — it does not check the
+  publishing participant's identity. This matches how the conventional
+  Track Composite egress already works (`pickHlsSharer` in
+  `hls-egress.ts`: sharing state, not a server-held identity, is the
+  authorization signal throughout pqp's screen-share code), so it is a
+  deliberate consistency choice, not an oversight. A designated-presenter
+  concept, if one is ever needed, belongs in `L1.5`'s API control plane,
+  which is what would tell this process which room and which participant
+  to expect in the first place.
 - **LL playlist tags / blocking reload (`L2.x`)**: `GET /playlist.m3u8` is a
   conventional media playlist listing sealed segments. There is no
   `EXT-X-SERVER-CONTROL`, `EXT-X-PART`, `EXT-X-PRELOAD-HINT`, and no

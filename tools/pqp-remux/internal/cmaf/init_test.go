@@ -92,9 +92,9 @@ func buildTestSPS(t *testing.T, width, height uint32) []byte {
 }
 
 // buildTestHighProfileSPS writes a High-profile (100) SPS carrying the
-// chroma_format_idc/bit-depth fields and an all-identity scaling matrix,
-// the branch only High-tier profiles take (nal.hasChromaInfo).
-func buildTestHighProfileSPS(t *testing.T, width, height uint32) []byte {
+// given chroma_format_idc/bit-depth fields and an all-identity scaling
+// matrix, the branch only High-tier profiles take (nal.hasChromaInfo).
+func buildTestHighProfileSPS(t *testing.T, width, height, chromaFormatIdc, bitDepthLumaMinus8, bitDepthChromaMinus8 uint32) []byte {
 	t.Helper()
 	if width%16 != 0 || height%16 != 0 {
 		t.Fatalf("buildTestHighProfileSPS: %dx%d must be multiples of 16", width, height)
@@ -104,11 +104,11 @@ func buildTestHighProfileSPS(t *testing.T, width, height uint32) []byte {
 	w.writeBits(0, 8)
 	w.writeBits(40, 8) // level_idc
 	w.writeUE(0)       // seq_parameter_set_id
-	w.writeUE(1)       // chroma_format_idc: 4:2:0
-	w.writeUE(0)       // bit_depth_luma_minus8
-	w.writeUE(0)       // bit_depth_chroma_minus8
-	w.writeBit(0)      // qpprime_y_zero_transform_bypass_flag
-	w.writeBit(1)      // seq_scaling_matrix_present_flag
+	w.writeUE(chromaFormatIdc)
+	w.writeUE(bitDepthLumaMinus8)
+	w.writeUE(bitDepthChromaMinus8)
+	w.writeBit(0) // qpprime_y_zero_transform_bypass_flag
+	w.writeBit(1) // seq_scaling_matrix_present_flag
 	for i := 0; i < 8; i++ {
 		w.writeBit(1) // seq_scaling_list_present_flag[i]
 		size := 16
@@ -329,15 +329,15 @@ func TestBuildInitSegment_RejectsMissingSPSOrPPS(t *testing.T) {
 	}
 }
 
-func TestBuildInitSegment_HighProfileGetsAvcCExtension(t *testing.T) {
-	sps := buildTestHighProfileSPS(t, 1920, 1088)
-	pps := []byte{0x08, 0x01}
-
-	seg, err := BuildInitSegment(InitParams{Timescale: 90000, SPS: sps, PPS: pps})
+// avcCFromInitSegment walks a built init segment down to its avcC box body,
+// for tests that need to inspect the AVCDecoderConfigurationRecord bytes
+// directly.
+func avcCFromInitSegment(t *testing.T, seg []byte) parsedBox {
+	t.Helper()
+	top, err := parseBoxes(seg)
 	if err != nil {
-		t.Fatalf("BuildInitSegment: %v", err)
+		t.Fatalf("parseBoxes: %v", err)
 	}
-	top, _ := parseBoxes(seg)
 	moov, _ := findBox(top, "moov")
 	moovChildren, _ := parseBoxes(moov.Body)
 	trak, _ := findBox(moovChildren, "trak")
@@ -353,12 +353,62 @@ func TestBuildInitSegment_HighProfileGetsAvcCExtension(t *testing.T) {
 	sampleEntries, _ := parseBoxes(stsdRest[4:])
 	avc1, _ := findBox(sampleEntries, "avc1")
 	avc1Children, _ := parseBoxes(avc1.Body[78:])
-	avcC, _ := findBox(avc1Children, "avcC")
+	avcC, ok := findBox(avc1Children, "avcC")
+	if !ok {
+		t.Fatal("no avcC box found in the built init segment")
+	}
+	return avcC
+}
+
+func TestBuildInitSegment_HighProfileGetsAvcCExtension(t *testing.T) {
+	sps := buildTestHighProfileSPS(t, 1920, 1088, 1, 0, 0) // 4:2:0, 8-bit
+	pps := []byte{0x08, 0x01}
+
+	seg, err := BuildInitSegment(InitParams{Timescale: 90000, SPS: sps, PPS: pps})
+	if err != nil {
+		t.Fatalf("BuildInitSegment: %v", err)
+	}
+	avcC := avcCFromInitSegment(t, seg)
 
 	// body: 1(ver)+3(profile/compat/level)+1(lengthSize)+1(numSPS)+2+len(sps)+1(numPPS)+2+len(pps) then the 4-byte extension.
 	wantLenWithoutExt := 1 + 3 + 1 + 1 + 2 + len(sps) + 1 + 2 + len(pps)
 	if len(avcC.Body) != wantLenWithoutExt+4 {
 		t.Fatalf("High profile avcC body length = %d, want %d (extension present)", len(avcC.Body), wantLenWithoutExt+4)
+	}
+}
+
+// TestBuildInitSegment_AvcCReflectsActualChromaAndBitDepth is the
+// regression test for the bug Farol caught: buildAvcC used to hardcode
+// chroma_format=4:2:0 and bit_depth=8 into the extension regardless of
+// what the SPS actually said, so a genuinely 4:2:2 or 10-bit stream's
+// init segment would describe different decoder parameters than its own
+// SPS. This builds a High-profile SPS with 4:2:2 chroma and 10-bit luma
+// (bit_depth_luma_minus8 = 2) and asserts avcC's extension bytes carry
+// those exact values, not the 4:2:0/8-bit defaults.
+func TestBuildInitSegment_AvcCReflectsActualChromaAndBitDepth(t *testing.T) {
+	const chromaFormatIdc = 2 // 4:2:2
+	const bitDepthLumaMinus8 = 2
+	const bitDepthChromaMinus8 = 2
+	sps := buildTestHighProfileSPS(t, 1920, 1088, chromaFormatIdc, bitDepthLumaMinus8, bitDepthChromaMinus8)
+	pps := []byte{0x08, 0x01}
+
+	seg, err := BuildInitSegment(InitParams{Timescale: 90000, SPS: sps, PPS: pps})
+	if err != nil {
+		t.Fatalf("BuildInitSegment: %v", err)
+	}
+	avcC := avcCFromInitSegment(t, seg)
+
+	// Extension is the last 4 bytes: chroma_format, bit_depth_luma_minus8,
+	// bit_depth_chroma_minus8, numOfSequenceParameterSetExt.
+	ext := avcC.Body[len(avcC.Body)-4:]
+	if got := ext[0] & 0x03; got != chromaFormatIdc {
+		t.Fatalf("avcC chroma_format = %d, want %d (must match the SPS, not the 4:2:0 default)", got, chromaFormatIdc)
+	}
+	if got := ext[1] & 0x07; got != bitDepthLumaMinus8 {
+		t.Fatalf("avcC bit_depth_luma_minus8 = %d, want %d", got, bitDepthLumaMinus8)
+	}
+	if got := ext[2] & 0x07; got != bitDepthChromaMinus8 {
+		t.Fatalf("avcC bit_depth_chroma_minus8 = %d, want %d", got, bitDepthChromaMinus8)
 	}
 }
 

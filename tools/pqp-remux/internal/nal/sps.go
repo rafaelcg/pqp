@@ -1,12 +1,22 @@
 package nal
 
 // SPSInfo is the handful of fields the CMAF init segment needs out of a
-// sequence parameter set: the coded picture size, for the `avc1` sample
-// entry and the track header. Everything else in the SPS (VUI, timing,
-// HRD) is left alone; passthrough never needs it.
+// sequence parameter set: the coded picture size for the `avc1` sample
+// entry and the track header, plus the chroma/bit-depth fields `avcC`'s
+// High-profile extension must carry (ISO/IEC 14496-15 §5.3.3.1.2) so the
+// init segment never claims different decoder parameters than the SPS
+// itself describes. Everything else in the SPS (VUI, timing, HRD) is left
+// alone; passthrough never needs it.
 type SPSInfo struct {
 	Width  uint32
 	Height uint32
+	// ChromaFormatIDC, BitDepthLumaMinus8 and BitDepthChromaMinus8 default
+	// to 1, 0 and 0 (4:2:0, 8-bit) when the bitstream does not carry them
+	// at all (every profile below High) — that omission itself means
+	// 4:2:0 8-bit per spec, not "unknown".
+	ChromaFormatIDC      uint32
+	BitDepthLumaMinus8   uint32
+	BitDepthChromaMinus8 uint32
 }
 
 // ParseSPS reads a sequence parameter set (NAL header byte included, RBSP
@@ -35,14 +45,16 @@ func ParseSPS(payload []byte) (SPSInfo, error) {
 
 	profileIdc := payloadProfileIdc(payload)
 	chromaFormatIdc := uint32(1)
+	bitDepthLumaMinus8 := uint32(0)
+	bitDepthChromaMinus8 := uint32(0)
 	separateColourPlane := false
 	if hasChromaInfo(profileIdc) {
 		chromaFormatIdc = r.ue()
 		if chromaFormatIdc == 3 {
 			separateColourPlane = r.bit() == 1
 		}
-		_ = r.ue() // bit_depth_luma_minus8
-		_ = r.ue() // bit_depth_chroma_minus8
+		bitDepthLumaMinus8 = r.ue()
+		bitDepthChromaMinus8 = r.ue()
 		_ = r.bit1()
 		if r.bit() == 1 { // seq_scaling_matrix_present_flag
 			count := 8
@@ -109,7 +121,13 @@ func ParseSPS(payload []byte) (SPSInfo, error) {
 	width := (picWidthInMbsMinus1+1)*16 - subWidthC*(cropLeft+cropRight)
 	height := frameHeightInMbs*16 - subHeightC*(2-frameMbsOnly)*(cropTop+cropBottom)
 
-	return SPSInfo{Width: width, Height: height}, nil
+	return SPSInfo{
+		Width:                width,
+		Height:               height,
+		ChromaFormatIDC:      chromaFormatIdc,
+		BitDepthLumaMinus8:   bitDepthLumaMinus8,
+		BitDepthChromaMinus8: bitDepthChromaMinus8,
+	}, nil
 }
 
 func payloadProfileIdc(payload []byte) uint8 { return payload[1] }

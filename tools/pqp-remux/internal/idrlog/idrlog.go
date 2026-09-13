@@ -40,22 +40,34 @@ func New(w io.Writer) *Logger {
 
 // OnIDR records one IDR: pts is the access unit's media timestamp (ticks),
 // sizeBytes its AVCC sample size, now its wall-clock arrival time. It
-// writes one CSV line immediately: `ts_ms,pts,size_bytes,interval_ms`.
-func (l *Logger) OnIDR(pts int64, sizeBytes int, now time.Time) {
+// writes one CSV line immediately (`ts_ms,pts,size_bytes,interval_ms`) and
+// returns any error from that write.
+//
+// The write happens before any logger state is updated (haveFirst,
+// prevIDR, and — for a non-first IDR — the recorded interval): a write
+// failure must not leave Stats() claiming an interval was captured when
+// its line never reached the writer. A caller that ignores the returned
+// error gets a Logger that keeps trying on every subsequent IDR rather
+// than one that silently drifts from what its own CSV contains.
+func (l *Logger) OnIDR(pts int64, sizeBytes int, now time.Time) error {
 	if !l.haveFirst {
+		if _, err := fmt.Fprintf(l.w, "%d,%d,%d,%d\n", 0, pts, sizeBytes, 0); err != nil {
+			return fmt.Errorf("idrlog: writing the first IDR line: %w", err)
+		}
 		l.haveFirst = true
 		l.started = now
 		l.prevIDR = now
-		fmt.Fprintf(l.w, "%d,%d,%d,%d\n", 0, pts, sizeBytes, 0)
-		return
+		return nil
 	}
 
 	interval := now.Sub(l.prevIDR)
+	tsMs := now.Sub(l.started).Milliseconds()
+	if _, err := fmt.Fprintf(l.w, "%d,%d,%d,%d\n", tsMs, pts, sizeBytes, interval.Milliseconds()); err != nil {
+		return fmt.Errorf("idrlog: writing an IDR line: %w", err)
+	}
 	l.intervals = append(l.intervals, interval)
 	l.prevIDR = now
-
-	tsMs := now.Sub(l.started).Milliseconds()
-	fmt.Fprintf(l.w, "%d,%d,%d,%d\n", tsMs, pts, sizeBytes, interval.Milliseconds())
+	return nil
 }
 
 // Stats is the L0.2 distribution: every field is a duration except the

@@ -1,6 +1,7 @@
 package keyframe
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -64,6 +65,32 @@ func TestRequester_OnIDRResetsGate(t *testing.T) {
 	if sender.calls != 1 {
 		t.Fatalf("expected no new PLI right after a fresh IDR, got %d", sender.calls)
 	}
+}
+
+// TestRequester_ConcurrentOnIDRAndTick is the regression test for the data
+// race Farol caught: OnIDR (called from the depacketizer's goroutine) and
+// tick (called from Run's ticker goroutine) touch the same state. Run under
+// `go test -race` (the project's `make test` target always does), this
+// fails without the mutex in requester.go.
+func TestRequester_ConcurrentOnIDRAndTick(t *testing.T) {
+	sender := &fakeSender{}
+	r := NewRequester(Config{Policy: PolicyPLI, SegmentTargetMs: 4000, GateFactor: 1.5}, sender)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			r.OnIDR(time.Now())
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			r.tick()
+		}
+	}()
+	wg.Wait()
 }
 
 func TestRequester_NaturalPolicyNeverSends(t *testing.T) {

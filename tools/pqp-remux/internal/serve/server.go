@@ -4,6 +4,16 @@
 // /healthz split from the publicly-proxied artifact routes) — see the
 // README's "not yet" list — it exists so `ffprobe`/hls.js/curl can be
 // pointed at LISTEN directly while developing and load-testing L1.1/L1.2.
+//
+// None of these routes authenticate a caller: whoever can reach LISTEN can
+// read the presenter's screen-share media and /healthz's session counters.
+// That is why config.DefaultListen binds loopback only — the only real
+// mitigation this package can offer on its own, since access control for
+// a watch party's viewers is a room-membership question this process has
+// no way to answer (it holds one hidden LiveKit token, not a viewer
+// session). Setting LISTEN to a non-loopback address is a deliberate
+// choice a caller makes; a real access-control layer in front of it is
+// L1.5/L2.x's job, not this local test surface's.
 package serve
 
 import (
@@ -23,7 +33,7 @@ type Health struct {
 	Status       string `json:"status"`
 	Subscribed   bool   `json:"subscribed"`
 	PartsWritten uint64 `json:"partsWritten"`
-	BytesServed  uint64 `json:"bytesServed"`
+	BytesWritten uint64 `json:"bytesWritten"`
 	LastPartAtMs int64  `json:"lastPartAtMs,omitempty"`
 	LastIdrAtMs  int64  `json:"lastIdrAtMs,omitempty"`
 }

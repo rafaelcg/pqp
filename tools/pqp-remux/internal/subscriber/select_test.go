@@ -77,6 +77,14 @@ func TestBuildToken_ProducesAHiddenSubscribeOnlyGrant(t *testing.T) {
 	}
 }
 
+func TestSession_VideoSSRCAndRequestKeyframeBeforeTrackFound(t *testing.T) {
+	s := &Session{}
+	if _, ok := s.VideoSSRC(); ok {
+		t.Fatal("VideoSSRC should report not-ok before any track is bound")
+	}
+	s.RequestKeyframe() // must not panic
+}
+
 func TestRandomIdentity_Unique(t *testing.T) {
 	a, err := randomIdentity()
 	if err != nil {

@@ -39,7 +39,7 @@ func BuildInitSegment(p InitParams) ([]byte, error) {
 		return nil, errInitBadDimensions
 	}
 
-	return concat(buildFtyp(), buildMoov(p.Timescale, info.Width, info.Height, p.SPS, p.PPS)), nil
+	return concat(buildFtyp(), buildMoov(p.Timescale, info, p.SPS, p.PPS)), nil
 }
 
 func buildFtyp() []byte {
@@ -50,10 +50,10 @@ func buildFtyp() []byte {
 	return box("ftyp", body)
 }
 
-func buildMoov(timescale, width, height uint32, sps, pps []byte) []byte {
+func buildMoov(timescale uint32, info nal.SPSInfo, sps, pps []byte) []byte {
 	return box("moov", concat(
 		buildMvhd(timescale),
-		buildTrak(timescale, width, height, sps, pps),
+		buildTrak(timescale, info, sps, pps),
 		buildMvex(),
 	))
 }
@@ -73,10 +73,10 @@ func buildMvhd(timescale uint32) []byte {
 	return fullBox("mvhd", 0, 0, body)
 }
 
-func buildTrak(timescale, width, height uint32, sps, pps []byte) []byte {
+func buildTrak(timescale uint32, info nal.SPSInfo, sps, pps []byte) []byte {
 	return box("trak", concat(
-		buildTkhd(width, height),
-		buildMdia(timescale, width, height, sps, pps),
+		buildTkhd(info.Width, info.Height),
+		buildMdia(timescale, info, sps, pps),
 	))
 }
 
@@ -96,11 +96,11 @@ func buildTkhd(width, height uint32) []byte {
 	return fullBox("tkhd", 0, flagsEnabledInMovieInPreview, body)
 }
 
-func buildMdia(timescale, width, height uint32, sps, pps []byte) []byte {
+func buildMdia(timescale uint32, info nal.SPSInfo, sps, pps []byte) []byte {
 	return box("mdia", concat(
 		buildMdhd(timescale),
 		buildHdlr(),
-		buildMinf(width, height, sps, pps),
+		buildMinf(info, sps, pps),
 	))
 }
 
@@ -127,11 +127,11 @@ func buildHdlr() []byte {
 	return fullBox("hdlr", 0, 0, body)
 }
 
-func buildMinf(width, height uint32, sps, pps []byte) []byte {
+func buildMinf(info nal.SPSInfo, sps, pps []byte) []byte {
 	return box("minf", concat(
 		buildVmhd(),
 		buildDinf(),
-		buildStbl(width, height, sps, pps),
+		buildStbl(info, sps, pps),
 	))
 }
 
@@ -148,9 +148,9 @@ func buildDinf() []byte {
 	return box("dinf", dref)
 }
 
-func buildStbl(width, height uint32, sps, pps []byte) []byte {
+func buildStbl(info nal.SPSInfo, sps, pps []byte) []byte {
 	return box("stbl", concat(
-		buildStsd(width, height, sps, pps),
+		buildStsd(info, sps, pps),
 		fullBox("stts", 0, 0, u32(0)), // entry_count = 0: samples live in trun
 		fullBox("stsc", 0, 0, u32(0)),
 		fullBox("stsz", 0, 0, concat(u32(0), u32(0))), // sample_size, sample_count
@@ -158,34 +158,38 @@ func buildStbl(width, height uint32, sps, pps []byte) []byte {
 	))
 }
 
-func buildStsd(width, height uint32, sps, pps []byte) []byte {
-	entry := buildAvc1(width, height, sps, pps)
+func buildStsd(info nal.SPSInfo, sps, pps []byte) []byte {
+	entry := buildAvc1(info, sps, pps)
 	return fullBox("stsd", 0, 0, concat(u32(1), entry))
 }
 
-func buildAvc1(width, height uint32, sps, pps []byte) []byte {
+func buildAvc1(info nal.SPSInfo, sps, pps []byte) []byte {
 	compressorName := make([]byte, 32) // length-prefixed Pascal string, empty
 	body := concat(
 		u32(0), u16(0), // reserved(6 bytes) split as u32+u16
 		u16(1),         // data_reference_index
 		u16(0), u16(0), // pre_defined, reserved
 		u32(0), u32(0), u32(0), // pre_defined[3]
-		u16(uint16(width)), u16(uint16(height)),
+		u16(uint16(info.Width)), u16(uint16(info.Height)),
 		u32(0x00480000), u32(0x00480000), // h/v resolution, 72dpi
 		u32(0), // reserved
 		u16(1), // frame_count
 		compressorName,
 		u16(0x0018), // depth
 		i16(-1),     // pre_defined
-		buildAvcC(sps, pps),
+		buildAvcC(info, sps, pps),
 	)
 	return box("avc1", body)
 }
 
 // buildAvcC writes the AVCDecoderConfigurationRecord (ISO/IEC 14496-15
 // §5.3.3.1) a player needs to configure its H.264 decoder before it can
-// touch a single sample.
-func buildAvcC(sps, pps []byte) []byte {
+// touch a single sample. The High-profile extension fields are read from
+// the actual parsed SPS (info), never assumed: a High 4:2:2 or 10-bit
+// stream must not be described here as 4:2:0 8-bit, or a player configures
+// its decoder from a lie and either rejects the stream or decodes it
+// wrong.
+func buildAvcC(info nal.SPSInfo, sps, pps []byte) []byte {
 	profileIdc := sps[1]
 	profileCompat := sps[2]
 	levelIdc := sps[3]
@@ -205,10 +209,10 @@ func buildAvcC(sps, pps []byte) []byte {
 	body = append(body, pps...)
 
 	if needsAvcCHighProfileExt(profileIdc) {
-		body = append(body, 0xFC|1) // reserved(6), chroma_format=4:2:0
-		body = append(body, 0xF8)   // reserved(5), bit_depth_luma_minus8=0
-		body = append(body, 0xF8)   // reserved(5), bit_depth_chroma_minus8=0
-		body = append(body, 0)      // numOfSequenceParameterSetExt
+		body = append(body, byte(0xFC|(info.ChromaFormatIDC&0x03)))
+		body = append(body, byte(0xF8|(info.BitDepthLumaMinus8&0x07)))
+		body = append(body, byte(0xF8|(info.BitDepthChromaMinus8&0x07)))
+		body = append(body, 0) // numOfSequenceParameterSetExt
 	}
 
 	return box("avcC", body)

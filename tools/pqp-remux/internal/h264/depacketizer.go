@@ -51,6 +51,27 @@ func (au *AccessUnit) Bytes() int { return len(au.AVCC) }
 
 var errNoPackets = errors.New("h264: Push called with an empty RTP payload")
 
+// errTimestampChangedMidAU is returned when a packet's RTP timestamp
+// differs from the access unit currently open: the previous AU's marker
+// packet was lost, so that AU is discarded (see Push's doc comment) rather
+// than having this packet's data merged into it.
+var errTimestampChangedMidAU = errors.New("h264: RTP timestamp changed before a marker packet closed the access unit; it was discarded")
+
+// errAccessUnitTooLarge is returned (and the offending AU discarded, never
+// merged into the next one) when an access unit's accumulated bytes exceed
+// maxAccessUnitBytes without a marker packet ever arriving. A legitimate
+// WebRTC screen-share frame, even a 4K IDR split across many slices, comes
+// nowhere close to this; hitting it means either a stuck FU-A fragment or a
+// publisher withholding the marker bit, and the alternative — appending
+// forever — is unbounded memory growth from remote input.
+var errAccessUnitTooLarge = errors.New("h264: access unit exceeded the size bound with no marker packet; discarded")
+
+// maxAccessUnitBytes bounds how much a single access unit may accumulate
+// before Push gives up on it. 8 MiB is generous: pqp's screen-share
+// pipeline runs well under 4K, and even a very large keyframe is a small
+// fraction of this.
+const maxAccessUnitBytes = 8 << 20
+
 // Depacketizer reassembles access units from a single H.264 RTP stream. It
 // is not safe for concurrent use; one instance per subscribed track.
 type Depacketizer struct {
@@ -85,9 +106,27 @@ func NewDepacketizer() *Depacketizer {
 // A malformed packet (a truncated FU-A, an unsupported NAL type) returns an
 // error and drops only that packet's contribution; the depacketizer keeps
 // accumulating so one bad packet does not wedge the stream.
+//
+// Two recovery rules protect the AU boundary itself, both signaled by a
+// returned error with a nil AccessUnit (never by silently merging data
+// across a boundary that should not have been crossed):
+//
+//   - If this packet's timestamp differs from the AU currently open, the
+//     previous AU's marker packet was lost. The incomplete AU is discarded
+//     (not flushed, and never merged with this packet's data) before this
+//     packet starts a new one — merging would produce one CMAF sample
+//     spanning two pictures, stamped with the first picture's PTS.
+//   - If an AU's accumulated bytes exceed maxAccessUnitBytes with no
+//     marker ever arriving, it is discarded rather than grown forever.
 func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) (*AccessUnit, error) {
 	if len(payload) == 0 {
 		return nil, errNoPackets
+	}
+
+	var timestampErr error
+	if d.auStarted && d.haveTimestamp && rtpTimestamp != d.lastRaw {
+		d.discardIncompleteAU()
+		timestampErr = errTimestampChangedMidAU
 	}
 
 	d.advanceClock(rtpTimestamp)
@@ -101,7 +140,7 @@ func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) (*
 		// Keep the AU open: a single dropped/malformed packet should not
 		// discard everything already assembled for this frame.
 		if !marker {
-			return nil, err
+			return nil, firstErr(timestampErr, err)
 		}
 		// Fall through so a marker packet still closes and emits whatever
 		// was assembled before the bad packet, rather than wedging the
@@ -122,14 +161,40 @@ func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) (*
 			d.units = append(d.units, units...)
 		}
 		d.buf = append(d.buf, out...)
+
+		if len(d.buf) > maxAccessUnitBytes {
+			d.discardIncompleteAU()
+			return nil, firstErr(timestampErr, errAccessUnitTooLarge)
+		}
 	}
 
 	if !marker {
-		return nil, err
+		return nil, firstErr(timestampErr, err)
 	}
 
 	au := d.flush()
-	return au, err
+	return au, firstErr(timestampErr, err)
+}
+
+// discardIncompleteAU drops whatever has been accumulated for the
+// currently-open access unit without emitting it. pendingSPS/pendingPPS
+// are session-level state, not tied to one AU, and survive.
+func (d *Depacketizer) discardIncompleteAU() {
+	d.buf = nil
+	d.units = nil
+	d.auStarted = false
+}
+
+// firstErr returns the first non-nil error, so a caller sees the boundary
+// recovery error (timestamp change / oversized AU) even when the
+// underlying Unmarshal also failed on the same packet.
+func firstErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
 }
 
 // pendingSPS/pendingPPS survive across access units: SPS/PPS are typically

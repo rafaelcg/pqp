@@ -119,6 +119,38 @@ func TestFromEnv_RejectsNonPositivePLIGateFactor(t *testing.T) {
 	}
 }
 
+// TestFromEnv_PartTicksDoesNotOverflow is the regression test for the bug
+// Farol caught: msToTicks used to multiply in uint32 before dividing, so
+// SEGMENT_MS=60000 (a full minute, a value Validate happily accepted)
+// wrapped 5.4 billion ticks down to a small, wrong duration instead of the
+// correct 5 400 000 ticks.
+func TestFromEnv_PartTicksDoesNotOverflow(t *testing.T) {
+	env := baseEnv()
+	env["SEGMENT_MS"] = "60000"
+	env["PART_MS"] = "500"
+	var c Config
+	var err error
+	withEnv(t, env, func() { c, err = FromEnv() })
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if got, want := c.SegmentTicks(), uint32(5_400_000); got != want {
+		t.Fatalf("SegmentTicks() = %d, want %d (60000ms @ 90kHz)", got, want)
+	}
+}
+
+func TestFromEnv_RejectsDurationTooLargeToFitTicksInUint32(t *testing.T) {
+	env := baseEnv()
+	// math.MaxUint32 ticks / 90000 * 1000 ~= 47721000ms; go one segment
+	// past it so the converted tick count exceeds uint32.
+	env["SEGMENT_MS"] = "50000000"
+	var err error
+	withEnv(t, env, func() { _, err = FromEnv() })
+	if err == nil {
+		t.Fatal("expected an error when SEGMENT_MS converts to more ticks than fit in a uint32")
+	}
+}
+
 func TestFromEnv_RejectsNonIntegerEnv(t *testing.T) {
 	env := baseEnv()
 	env["RING_SEGMENTS"] = "six"

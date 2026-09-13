@@ -197,6 +197,76 @@ func TestDepacketizer_MultipleAccessUnitsAdvancePTS(t *testing.T) {
 	}
 }
 
+// TestDepacketizer_LostMarkerDoesNotMergeFrames is the regression test for
+// the bug Farol caught: a lost marker packet used to leave the next
+// frame's NALs appended onto the previous (still-open, stale-PTS) access
+// unit instead of splitting the boundary, producing one CMAF sample that
+// silently spanned two pictures. Frame two's own packet here both closes
+// the recovery (discarding frame one) and, since it carries marker=true
+// itself, completes standalone in the same call.
+func TestDepacketizer_LostMarkerDoesNotMergeFrames(t *testing.T) {
+	d := NewDepacketizer()
+
+	// Frame one's marker is "lost": push its only packet with marker=false.
+	if au, err := d.Push(singleNALPacket(nal.TypeIDR, 3, []byte{0x11, 0x22}), 1000, false); au != nil {
+		t.Fatalf("expected no AU yet (marker withheld), got %v (err=%v)", au, err)
+	}
+
+	// Frame two arrives at a new timestamp while frame one is still open,
+	// and itself carries marker=true. This must discard frame one and
+	// complete frame two standalone, not merge the two.
+	au, err := d.Push(singleNALPacket(nal.TypeSlice, 2, []byte{0x33, 0x44}), 2000, true)
+	if err != errTimestampChangedMidAU {
+		t.Fatalf("expected errTimestampChangedMidAU, got %v", err)
+	}
+	if au == nil {
+		t.Fatal("frame two's own packet carries marker=true and must complete, even though it also had to discard frame one")
+	}
+	units := mustParseUnits(t, au.AVCC)
+	if len(units) != 1 || !units[0].IsSlice() {
+		t.Fatalf("frame two must contain exactly its own NAL, got %d units (frame one's bytes leaked forward)", len(units))
+	}
+	if !bytes.Equal(units[0].Payload[1:], []byte{0x33, 0x44}) {
+		t.Fatal("frame two's payload must be its own bytes, not frame one's")
+	}
+
+	// A clean frame three afterward proves the discard did not wedge the
+	// depacketizer.
+	au3, err := d.Push(singleNALPacket(nal.TypeSlice, 2, []byte{0x55}), 3000, true)
+	if err != nil {
+		t.Fatalf("frame three: %v", err)
+	}
+	if au3 == nil {
+		t.Fatal("expected a completed AU for frame three")
+	}
+	if units := mustParseUnits(t, au3.AVCC); len(units) != 1 {
+		t.Fatalf("frame three must contain exactly its own NAL, got %d units", len(units))
+	}
+}
+
+func TestDepacketizer_AccessUnitTooLargeIsDiscarded(t *testing.T) {
+	d := NewDepacketizer()
+	big := bytes.Repeat([]byte{0xAB}, maxAccessUnitBytes+1)
+
+	au, err := d.Push(singleNALPacket(nal.TypeIDR, 3, big), 5000, false)
+	if err != errAccessUnitTooLarge {
+		t.Fatalf("expected errAccessUnitTooLarge, got %v", err)
+	}
+	if au != nil {
+		t.Fatal("an oversized AU must not be returned")
+	}
+
+	// The depacketizer must recover: a fresh, small AU at a new timestamp
+	// completes normally afterward.
+	au2, err := d.Push(singleNALPacket(nal.TypeSlice, 2, []byte{0x01}), 6000, true)
+	if err != nil {
+		t.Fatalf("recovery frame: %v", err)
+	}
+	if au2 == nil || len(au2.AVCC) == 0 {
+		t.Fatal("expected a normal AU after recovering from an oversized one")
+	}
+}
+
 func TestDepacketizer_TimestampUnwrapAcrossWraparound(t *testing.T) {
 	d := NewDepacketizer()
 

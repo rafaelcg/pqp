@@ -10,6 +10,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtp"
@@ -47,23 +49,56 @@ type Handlers struct {
 	// gets the participant + track handle it needs.
 	OnVideoTrackFound func(s *Session)
 	OnAudioTrackFound func(s *Session)
+	// OnVideoTrackEnded fires once the screen-share video track's RTP read
+	// loop returns (the publisher stopped sharing, or the room
+	// disconnected): the caller's only signal to flush a trailing partial
+	// CMAF fragment (session.Session.Finish exists for exactly this).
+	// There is no audio equivalent since nothing buffers audio yet (L1.3).
+	OnVideoTrackEnded func()
+}
+
+// videoBinding is the presenter's participant and screen-share publication,
+// always updated together: reading one without the other (a torn read)
+// would let RequestKeyframe send a PLI on a stale SSRC for a participant
+// that no longer matches it, so both live behind one atomic.Pointer rather
+// than two separately-synchronized fields.
+type videoBinding struct {
+	participant *lksdk.RemoteParticipant
+	pub         *lksdk.RemoteTrackPublication
 }
 
 // Session is a live hidden-subscriber connection to one room.
 type Session struct {
-	room        *lksdk.Room
-	participant *lksdk.RemoteParticipant
-	videoPub    *lksdk.RemoteTrackPublication
+	room *lksdk.Room
+
+	// video is set exactly once, by whichever screen-share video track is
+	// subscribed first (see Connect's OnTrackSubscribed): a second
+	// concurrent screen share in the same room must not be allowed to
+	// rebind it, since Session.HandleVideoPacket's depacketizer/fragmenter
+	// pair assumes a single RTP source (interleaving two streams into one
+	// depacketizer produces invalid fragments). This matches how the
+	// conventional Track Composite egress already picks a presenter
+	// (`pickHlsSharer` in hls-egress.ts: sharing state, not a
+	// server-held identity, is the authorization signal throughout pqp's
+	// screen-share code) — L1.5's API control plane is where a
+	// designated-presenter concept, if ever needed, would be added.
+	video atomic.Pointer[videoBinding]
+
+	// audioBound guards the same single-track invariant for the
+	// screen-share audio track, so two concurrent audio publications
+	// cannot both start a reader against the caller's OnAudioPacket.
+	audioBound atomic.Bool
 }
 
 // VideoSSRC returns the subscribed screen-share video track's SSRC, for a
 // caller that wants to send a PLI directly (see RequestKeyframe, which does
 // this for you); ok is false before the track is found.
 func (s *Session) VideoSSRC() (webrtc.SSRC, bool) {
-	if s.videoPub == nil {
+	b := s.video.Load()
+	if b == nil || b.pub == nil {
 		return 0, false
 	}
-	track := s.videoPub.TrackRemote()
+	track := b.pub.TrackRemote()
 	if track == nil {
 		return 0, false
 	}
@@ -74,11 +109,15 @@ func (s *Session) VideoSSRC() (webrtc.SSRC, bool) {
 // track: the only lever section 3 of the plan found for asking a WebRTC
 // publisher for an IDR. A no-op before the track is found.
 func (s *Session) RequestKeyframe() {
-	ssrc, ok := s.VideoSSRC()
-	if !ok || s.participant == nil {
+	b := s.video.Load()
+	if b == nil || b.participant == nil {
 		return
 	}
-	s.participant.WritePLI(ssrc)
+	ssrc, ok := s.VideoSSRC()
+	if !ok {
+		return
+	}
+	b.participant.WritePLI(ssrc)
 }
 
 // Close disconnects from the room. Safe to call more than once.
@@ -112,17 +151,24 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 		switch {
 		case isScreenShareVideo(pub):
-			sess.participant = rp
-			sess.videoPub = pub
+			bound := sess.video.CompareAndSwap(nil, &videoBinding{participant: rp, pub: pub})
+			if !bound {
+				log.Printf("subscriber: ignoring an additional screen-share video track from %q in room %q; already bound to a presenter", rp.Identity(), cfg.Room)
+				return
+			}
 			if h.OnVideoTrackFound != nil {
 				h.OnVideoTrackFound(sess)
 			}
-			readRTP(track, h.OnVideoPacket)
+			readRTP(track, h.OnVideoPacket, h.OnVideoTrackEnded)
 		case isScreenShareAudio(pub):
+			if !sess.audioBound.CompareAndSwap(false, true) {
+				log.Printf("subscriber: ignoring an additional screen-share audio track from %q in room %q; already bound", rp.Identity(), cfg.Room)
+				return
+			}
 			if h.OnAudioTrackFound != nil {
 				h.OnAudioTrackFound(sess)
 			}
-			readRTP(track, h.OnAudioPacket)
+			readRTP(track, h.OnAudioPacket, nil)
 		}
 	}
 
@@ -136,20 +182,24 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 
 // readRTP blocks reading RTP packets off track and forwards each to cb,
 // until the track ends (the publisher stopped sharing, or the session
-// disconnected). It is meant to run in its own goroutine, one per
-// subscribed track; Connect starts it directly rather than handing the
-// caller a raw *webrtc.TrackRemote; a nil cb still drains the track so a
-// caller that only wants the video (no OnAudioPacket set) does not leave a
-// buffer filling up unread.
-func readRTP(track *webrtc.TrackRemote, cb func(*rtp.Packet)) {
+// disconnected), then calls onEnded exactly once if it is non-nil. It is
+// meant to run in its own goroutine, one per subscribed track; Connect
+// starts it directly rather than handing the caller a raw
+// *webrtc.TrackRemote; a nil cb still drains the track so a caller that
+// only wants the video (no OnAudioPacket set) does not leave a buffer
+// filling up unread.
+func readRTP(track *webrtc.TrackRemote, cb func(*rtp.Packet), onEnded func()) {
 	for {
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
-			return
+			break
 		}
 		if cb != nil {
 			cb(pkt)
 		}
+	}
+	if onEnded != nil {
+		onEnded()
 	}
 }
 

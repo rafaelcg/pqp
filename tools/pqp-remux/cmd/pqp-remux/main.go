@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -74,6 +75,11 @@ func runServer(cfg config.Config) error {
 		OnVideoTrackFound: func(*subscriber.Session) { sess.MarkSubscribed() },
 		OnVideoPacket:     sess.HandleVideoPacket,
 		OnAudioPacket:     sess.HandleAudioPacket,
+		// The track ending (presenter stopped sharing, or the room
+		// disconnected) is the only signal that a trailing partial
+		// fragment needs flushing; without this, whatever accumulated
+		// since the last part boundary is silently lost.
+		OnVideoTrackEnded: sess.Finish,
 	})
 	if err != nil {
 		return fmt.Errorf("connecting to %s room %q: %w", cfg.LiveKitURL, cfg.Room, err)
@@ -119,20 +125,30 @@ func runServer(cfg config.Config) error {
 // function never constructs a keyframe.Requester at all, which is what
 // L0.1 result item 4 means by "passive by construction"), log every IDR,
 // then print a summary and exit after cfg.Duration.
-func runIDRLog(cfg config.Config) error {
+//
+// A write failure along the way (a full disk, a closed stdout) is
+// reported by returning a non-nil error even though every IDR was
+// otherwise observed correctly: the whole point of this mode is the CSV
+// it produces, so main() must exit non-zero rather than print a summary
+// and claim success over data that never reached the file.
+func runIDRLog(cfg config.Config) (err error) {
 	out := os.Stdout
 	if cfg.IDRLogPath != "-" && cfg.IDRLogPath != "" {
-		f, err := os.Create(cfg.IDRLogPath)
-		if err != nil {
-			return fmt.Errorf("creating %s: %w", cfg.IDRLogPath, err)
+		f, ferr := os.Create(cfg.IDRLogPath)
+		if ferr != nil {
+			return fmt.Errorf("creating %s: %w", cfg.IDRLogPath, ferr)
 		}
-		defer f.Close()
+		defer func() {
+			if cerr := f.Close(); cerr != nil && err == nil {
+				err = fmt.Errorf("closing %s: %w", cfg.IDRLogPath, cerr)
+			}
+		}()
 		out = f
 	}
 
 	scanner := newAccessUnitScanner(idrlog.New(out))
 
-	sub, err := subscriber.Connect(subscriber.Config{
+	sub, connErr := subscriber.Connect(subscriber.Config{
 		URL:       cfg.LiveKitURL,
 		APIKey:    cfg.LiveKitAPIKey,
 		APISecret: cfg.LiveKitAPISec,
@@ -140,8 +156,8 @@ func runIDRLog(cfg config.Config) error {
 	}, subscriber.Handlers{
 		OnVideoPacket: scanner.push,
 	})
-	if err != nil {
-		return fmt.Errorf("connecting to %s room %q: %w", cfg.LiveKitURL, cfg.Room, err)
+	if connErr != nil {
+		return fmt.Errorf("connecting to %s room %q: %w", cfg.LiveKitURL, cfg.Room, connErr)
 	}
 	defer sub.Close()
 
@@ -149,6 +165,10 @@ func runIDRLog(cfg config.Config) error {
 	time.Sleep(cfg.Duration)
 
 	fmt.Fprintln(os.Stderr, scanner.logger.Stats().Summary())
+
+	if writeErr := scanner.writeError(); writeErr != nil {
+		return fmt.Errorf("idr-log: the CSV is incomplete, at least one write failed: %w", writeErr)
+	}
 	return nil
 }
 
@@ -160,6 +180,9 @@ func runIDRLog(cfg config.Config) error {
 type accessUnitScanner struct {
 	dep    *h264.Depacketizer
 	logger *idrlog.Logger
+
+	errOnce  sync.Once
+	firstErr error
 }
 
 func newAccessUnitScanner(logger *idrlog.Logger) *accessUnitScanner {
@@ -172,6 +195,14 @@ func (a *accessUnitScanner) push(pkt *rtp.Packet) {
 		log.Printf("pqp-remux: idr-log depacketize: %v", err)
 	}
 	if au != nil && au.IsIDR {
-		a.logger.OnIDR(au.PTS, au.Bytes(), time.Now())
+		if werr := a.logger.OnIDR(au.PTS, au.Bytes(), time.Now()); werr != nil {
+			log.Printf("pqp-remux: idr-log: %v", werr)
+			a.errOnce.Do(func() { a.firstErr = werr })
+		}
 	}
 }
+
+// writeError returns the first CSV write failure seen, if any. Reading
+// after the run has stopped (the only time runIDRLog calls it) needs no
+// extra synchronization beyond errOnce's own.
+func (a *accessUnitScanner) writeError() error { return a.firstErr }

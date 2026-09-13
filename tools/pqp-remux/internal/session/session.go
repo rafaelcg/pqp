@@ -126,6 +126,38 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	if frag == nil {
 		return
 	}
+	s.publish(frag)
+}
+
+// Finish flushes any partial fragment still open in the fragmenter and
+// publishes it, exactly as HandleVideoPacket would for a fragment closed
+// by a part/segment boundary. Call it once, when the subscribed video
+// track ends (subscriber.Handlers.OnVideoTrackEnded): without it, whatever
+// was accumulated since the last part boundary is silently lost, and a
+// stream that ends between parts never exposes its true tail through
+// /part-*.m4s or the segment it belongs to.
+func (s *Session) Finish() {
+	frag, err := s.frag.Flush()
+	if err != nil {
+		log.Printf("pqp-remux: flushing the trailing fragment: %v", err)
+		return
+	}
+	if frag == nil {
+		return
+	}
+	s.publish(frag)
+}
+
+// publish is HandleVideoPacket and Finish's shared tail: a fragment is
+// only written into the ring once a valid init segment exists. Publishing
+// media the very first client can never initialize is worse than briefly
+// holding a fragment back — and since SPS/PPS repeat on (at least) every
+// IDR, initSet reliably becomes true on the session's first keyframe in
+// practice, so this is not a real availability cost.
+func (s *Session) publish(frag *pipeline.Fragment) {
+	if !s.initSet.Load() {
+		return
+	}
 	s.ring.Push(frag)
 	s.partsWritten.Add(1)
 	s.bytesWritten.Add(uint64(len(frag.Bytes)))
@@ -153,7 +185,7 @@ func (s *Session) Health() serve.Health {
 		Status:       status,
 		Subscribed:   s.subscribed.Load(),
 		PartsWritten: s.partsWritten.Load(),
-		BytesServed:  s.bytesWritten.Load(),
+		BytesWritten: s.bytesWritten.Load(),
 		LastPartAtMs: s.lastPartAtMs.Load(),
 		LastIdrAtMs:  s.lastIdrAtMs.Load(),
 	}
