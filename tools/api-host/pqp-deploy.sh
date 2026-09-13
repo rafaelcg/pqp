@@ -64,10 +64,15 @@ if [[ -f "$STAGING/compose.yaml" || -f "$STAGING/Caddyfile" ]]; then
   # VULTR_API_SSH_KEY reaches) via `ps` or /proc/<pid>/cmdline for as long
   # as the command runs. python3 opens the key file itself, root-only
   # (0600), and the key never appears as an argument to anything.
+  # No .strip()/whitespace-trimming here: provision.sh writes this file
+  # with `printf '%s'` (no trailing newline added), the same exact bytes
+  # GitHub hands the runner as the secret, so trimming would silently
+  # accept a key that does not match what was actually provisioned instead
+  # of failing closed on the mismatch.
   expected="$(python3 -c '
 import hashlib, hmac, sys
 with open("/etc/pqp/deploy-hmac.key", "rb") as f:
-    key = f.read().strip()
+    key = f.read()
 with open(sys.argv[1], "rb") as f:
     data = f.read()
 print(hmac.new(key, data, hashlib.sha256).hexdigest())
