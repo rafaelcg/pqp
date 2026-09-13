@@ -3,6 +3,7 @@ import {
   coalesce,
   invalidate,
   MAX_BYTES,
+  MAX_CACHEABLE_ROWS,
   MAX_ENTRIES,
   readCacheEnabled,
   readCacheMetrics,
@@ -318,96 +319,136 @@ describe("read-cache", () => {
     expect(reloadedLast).toBe(false);
   }, 20_000);
 
+  it("estimates an array's size as row count times a flat per-row guess, not content", async () => {
+    // The decision, after measuring exactly was tried and found too costly
+    // on the write path: estimate cheaply from row count alone and accept
+    // that it is an ESTIMATE, NOT AN UPPER BOUND — content size (a long
+    // body, an embed blob) does not move it at all. This pins that
+    // explicitly: two arrays of the same length but wildly different real
+    // content must get the identical estimate.
+    const plain = new Array(10).fill(0).map(() => ({ body: "short" }));
+    const heavy = new Array(10).fill(0).map(() => ({ body: "x".repeat(50_000) }));
+
+    await coalesce("plain", 60_000, async () => plain);
+    const plainBytes = readCacheMetrics().bytes;
+    resetReadCacheForTests();
+    await coalesce("heavy", 60_000, async () => heavy);
+    const heavyBytes = readCacheMetrics().bytes;
+
+    expect(plainBytes).toBe(heavyBytes);
+    expect(plainBytes).toBe(10 * 512);
+  });
+
+  it("estimates a single row or null with a flat constant", async () => {
+    await coalesce("row", 60_000, async () => ({ id: "x" }));
+    expect(readCacheMetrics().bytes).toBe(256);
+
+    resetReadCacheForTests();
+    await coalesce("null", 60_000, async () => null);
+    expect(readCacheMetrics().bytes).toBe(256);
+  });
+
+  it("recomputes the row-count estimate on a stale-while-revalidate refresh", async () => {
+    const ten = new Array(10).fill(0);
+    const fifty = new Array(50).fill(0);
+    await coalesce("k", 20, async () => ten);
+    expect(readCacheMetrics().bytes).toBe(10 * 512);
+
+    await new Promise((r) => setTimeout(r, 30)); // into the stale window
+    await coalesce("k", 20, async () => fifty); // stale-serves `ten`, refreshes in the background
+    await new Promise((r) => setTimeout(r, 10)); // let the refresh land
+
+    expect(readCacheMetrics().bytes).toBe(50 * 512);
+  });
+
   it("evicts the oldest entry once the byte budget is exceeded, well under the entry cap", async () => {
-    // A handful of large entries, each a fraction of MAX_BYTES, should start
-    // evicting long before MAX_ENTRIES is anywhere close — the count cap
-    // alone would happily hold thousands of these. `estimateSize` measures
-    // the real serialized size on a miss (see its doc comment), so a plain
-    // string's length maps directly to its accounted size here.
-    const chunk = "x".repeat(Math.floor(MAX_BYTES / 4));
-    await coalesce("big0", 60_000, async () => chunk);
-    await coalesce("big1", 60_000, async () => chunk);
-    await coalesce("big2", 60_000, async () => chunk);
-    expect(readCacheMetrics().size).toBe(3);
+    // Every entry here sits right at MAX_CACHEABLE_ROWS (the largest a
+    // single entry is ever allowed to be), so this needs enough of them to
+    // cross MAX_BYTES on its own — comfortably fewer than MAX_ENTRIES, so
+    // only the byte trigger can be responsible for what gets evicted.
+    const maxRows = new Array(MAX_CACHEABLE_ROWS).fill(0);
+    const perEntryBytes = MAX_CACHEABLE_ROWS * 512;
+    const entriesNeeded = Math.ceil(MAX_BYTES / perEntryBytes) + 2;
+    expect(entriesNeeded).toBeLessThan(MAX_ENTRIES);
 
-    // A fourth entry of the same size pushes total bytes over budget, so
-    // the oldest-touched one (`big0`) must go.
-    await coalesce("big3", 60_000, async () => chunk);
+    for (let i = 0; i < entriesNeeded; i++) {
+      await coalesce(`big${i}`, 60_000, async () => maxRows);
+    }
     expect(readCacheMetrics().bytes).toBeLessThanOrEqual(MAX_BYTES);
+    expect(readCacheMetrics().size).toBeLessThan(entriesNeeded);
 
-    let reloaded = false;
+    // The oldest-touched entry is gone; the most recent is still cached.
+    let reloadedFirst = false;
     await coalesce("big0", 60_000, async () => {
-      reloaded = true;
-      return chunk;
+      reloadedFirst = true;
+      return maxRows;
     });
-    expect(reloaded).toBe(true);
+    expect(reloadedFirst).toBe(true);
 
     let reloadedLast = false;
-    await coalesce("big3", 60_000, async () => {
+    await coalesce(`big${entriesNeeded - 1}`, 60_000, async () => {
       reloadedLast = true;
-      return chunk;
+      return maxRows;
     });
     expect(reloadedLast).toBe(false);
   });
 
-  it("measures a cold load's real size accurately, not a flat per-row guess", async () => {
-    // The estimator was tried as a flat `row count * constant` guess and
-    // rejected: a message body or an embed blob can run well past a generic
-    // per-row constant, which would let the byte budget understate what is
-    // actually resident. A single very large value (bigger than a
-    // thousand-row page ever would be at a constant-per-row rate) must be
-    // measured close to its real size, not rounded down to a small guess.
-    const bigValue = "y".repeat(200_000);
-    await coalesce("k", 60_000, async () => bigValue);
-    expect(readCacheMetrics().bytes).toBeGreaterThanOrEqual(200_000);
+  it("refuses to cache a value over MAX_CACHEABLE_ROWS, but still answers every caller", async () => {
+    const tooBig = new Array(MAX_CACHEABLE_ROWS + 1).fill(0);
+    let calls = 0;
+    const load = async () => {
+      calls += 1;
+      return tooBig;
+    };
+
+    // Concurrent callers of the SAME oversized load still coalesce onto one
+    // in-flight query and all get the answer...
+    const [a, b] = await Promise.all([
+      coalesce("huge", 60_000, load),
+      coalesce("huge", 60_000, load),
+    ]);
+    expect(a).toBe(tooBig);
+    expect(b).toBe(tooBig);
+    expect(calls).toBe(1);
+    // ...but nothing was written to the cache, so bytes/size stay at zero
+    // and the next call is a fresh miss.
+    expect(readCacheMetrics()).toMatchObject({ size: 0, bytes: 0 });
+
+    await coalesce("huge", 60_000, load);
+    expect(calls).toBe(2);
   });
 
-  it("reflects a stale-while-revalidate refresh's real size right away, not the size it replaced", async () => {
-    // A refresh recomputes its size the same way a miss does — an earlier
-    // version of this fix reused the entry being replaced instead, which
-    // was cheap but let the byte budget fall behind a loader returning
-    // materially larger content until the next unrelated cold load. A
-    // refresh returning much bigger content must show up in `bytes`
-    // immediately.
-    const small = "a";
-    const muchBigger = "b".repeat(50_000);
+  it("still caches a value at exactly MAX_CACHEABLE_ROWS", async () => {
+    const atLimit = new Array(MAX_CACHEABLE_ROWS).fill(0);
+    let calls = 0;
+    const load = async () => {
+      calls += 1;
+      return atLimit;
+    };
+    await coalesce("k", 60_000, load);
+    await coalesce("k", 60_000, load);
+    expect(calls).toBe(1);
+    expect(readCacheMetrics().size).toBe(1);
+  });
+
+  it("a stale-while-revalidate refresh that grows past MAX_CACHEABLE_ROWS keeps serving the stale entry", async () => {
+    const small = new Array(10).fill(0);
+    const tooBig = new Array(MAX_CACHEABLE_ROWS + 1).fill(0);
     await coalesce("k", 20, async () => small);
-    const sizeAfterFirst = readCacheMetrics().bytes;
-    expect(sizeAfterFirst).toBeLessThan(200); // a tiny value, floored to a minimum
+    expect(readCacheMetrics().size).toBe(1);
 
     await new Promise((r) => setTimeout(r, 30)); // into the stale window
-    await coalesce("k", 20, async () => muchBigger); // stale-serves `small`, refreshes in the background
-    await new Promise((r) => setTimeout(r, 10)); // let the refresh land
+    const stale = await coalesce("k", 20, async () => tooBig);
+    expect(stale).toBe(small); // still the old, cached value
+    await new Promise((r) => setTimeout(r, 10)); // let the refresh land, uncached
 
-    expect(readCacheMetrics().bytes).toBeGreaterThanOrEqual(50_000);
-  });
-
-  it("measures an array's size exactly, matching a full JSON.stringify", async () => {
-    // Approximations were tried here (a flat per-row constant, sampling a
-    // handful of rows) and rejected: anything that does not look at every
-    // row can be made to understate the real total by whatever content
-    // lands outside what it looked at, and a byte BUDGET that can be made
-    // to disagree with reality is not a bound. The estimate must equal the
-    // real serialized size, not merely land close to it.
-    const rows = new Array(80)
-      .fill(0)
-      .map((_, i) => ({ id: i, body: "hello world, this is a message body" }));
-    await coalesce("k", 60_000, async () => rows);
-    expect(readCacheMetrics().bytes).toBe(JSON.stringify(rows).length);
-  });
-
-  it("accounts for one long outlier row wherever it falls in the array", async () => {
-    // Not just at a position a sampling scheme happens to land on — every
-    // index, because nothing here samples any more.
-    const rows = new Array(100).fill(0).map(() => ({ body: "short" }));
-    rows[3] = { body: "x".repeat(20_000) }; // deliberately not an evenly-spaced index
-    await coalesce("k", 60_000, async () => rows);
-    expect(readCacheMetrics().bytes).toBe(JSON.stringify(rows).length);
-    expect(readCacheMetrics().bytes).toBeGreaterThan(20_000);
+    // The stale entry is untouched by the refusal — still there, still small.
+    expect(readCacheMetrics().size).toBe(1);
+    expect(readCacheMetrics().bytes).toBe(10 * 512);
   });
 
   it("resetReadCacheForTests clears the resident-byte counter, not just the entries", async () => {
-    await coalesce("k", 60_000, async () => "x".repeat(1_000));
+    await coalesce("k", 60_000, async () => new Array(20).fill(0));
     const sizeBefore = readCacheMetrics().bytes;
     expect(sizeBefore).toBeGreaterThan(0);
 
@@ -424,7 +465,7 @@ describe("read-cache", () => {
 
     // And the counter tracks a fresh write correctly afterward, rather than
     // starting from whatever it silently carried over.
-    await coalesce("k2", 60_000, async () => "x".repeat(1_000));
+    await coalesce("k2", 60_000, async () => new Array(20).fill(0));
     expect(readCacheMetrics().bytes).toBe(sizeBefore);
   });
 });

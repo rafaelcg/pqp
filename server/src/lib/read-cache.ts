@@ -38,29 +38,32 @@
 
 const DEFAULT_TTL_MS = 2_000;
 
-/** Cap on distinct keys, same reasoning as `ROSTER_ACCESS_MAX_ENTRIES`: a
- *  cache with no cap grows with the number of distinct channels/servers ever
- *  asked about, not with how many are hot right now. LRU by touch order.
- *  Exported for the eviction test in `read-cache.test.ts`. */
+/** THE PRIMARY BOUND: cap on distinct keys, same reasoning as
+ *  `ROSTER_ACCESS_MAX_ENTRIES`: a cache with no cap grows with the number of
+ *  distinct channels/servers ever asked about, not with how many are hot
+ *  right now. LRU by touch order. Exported for the eviction test in
+ *  `read-cache.test.ts`. */
 export const MAX_ENTRIES = 5_000;
 
 /**
- * A count cap alone bounds how many DISTINCT KEYS live here, not how much a
- * single one costs — a message page can hold up to `MESSAGE_PAGE_MAX` full
- * rows with bodies, so 5,000 of the biggest possible entries is not a small
- * number of bytes. This is a second, independent eviction trigger: `touch`
- * evicts oldest-first until BOTH the count and the byte budget are back
- * under their caps, so a cache full of large message pages gives up entries
- * sooner than one full of small watch-party rows would. 50 MB is generous
- * for a process whose real job is holding WebSocket connections open, not
- * caching query results.
+ * THE SECONDARY BOUND. A count cap alone bounds how many DISTINCT KEYS live
+ * here, not how much a single one costs, so `touch` evicts oldest-first
+ * until BOTH caps are satisfied — a cache full of large message pages gives
+ * up entries sooner than one full of small watch-party rows would. This is
+ * a backstop on top of `MAX_ENTRIES`, not a precise budget: see
+ * `PER_ROW_ESTIMATE_BYTES` for why `totalBytes` is an estimate rather than
+ * a measurement, and `MAX_CACHEABLE_ROWS` for what actually bounds the
+ * worst case a single entry can cost. 50 MB is generous for a process
+ * whose real job is holding WebSocket connections open, not caching query
+ * results.
  */
 export const MAX_BYTES = 50 * 1024 * 1024;
 
 interface Entry<T> {
   value: T;
   storedAt: number;
-  /** Approximate serialized size in bytes, computed once at write time. */
+  /** Estimated byte cost, computed once at write time — see
+   *  `PER_ROW_ESTIMATE_BYTES`; not a measurement of the real value. */
   size: number;
 }
 
@@ -76,39 +79,57 @@ const inflight = new Map<string, Promise<unknown>>();
 const metrics: Metrics = { hits: 0, misses: 0, coalesced: 0, staleServed: 0 };
 let totalBytes = 0;
 
-/** Fallback for anything that fails to stringify, and the floor under any
- *  estimate — an empty page, or bookkeeping for a single small row, still
- *  costs something. */
-const MIN_ESTIMATED_BYTES = 128;
+/**
+ * Per-row byte guess for an array value (a message page, a channel list).
+ * Deliberately not measured: after three attempts at measuring this exactly
+ * or approximately from real content (a flat constant tried and rejected
+ * for underestimating a long body, reusing a stale size across a refresh,
+ * sampling a handful of rows), the decision landed on NOT serializing on
+ * the write path at all. `totalBytes` is therefore an ESTIMATE, NOT AN
+ * UPPER BOUND — it will not notice a channel list whose rows happen to
+ * carry unusually large fields. What keeps the actual worst case bounded
+ * is `MAX_CACHEABLE_ROWS` below, not this number: the byte budget is the
+ * SECONDARY trigger, `MAX_ENTRIES` (the key-count LRU) is the primary one,
+ * and neither has to be exact to do its job of giving up the coldest
+ * entries first once either cap is crossed.
+ */
+const PER_ROW_ESTIMATE_BYTES = 512;
+
+/** Flat estimate for a single row or `null` (a watch-party state) — never
+ *  an array, so there is no row count to multiply. */
+const SINGLE_VALUE_ESTIMATE_BYTES = 256;
 
 /**
- * The real size, measured exactly, every time this is called — on a fresh
- * miss AND on a stale-while-revalidate refresh alike. Three cheaper
- * approximations were tried here and rejected, each for the same reason:
- * anything that does not look at every row can be made to understate the
- * real total by whatever content lands outside what it looked at (a flat
- * `row count * constant` ignores content entirely; reusing a stale entry's
- * size across a refresh ignores growth between refreshes; sampling a few
- * rows ignores whatever the sample missed). A byte BUDGET whose accounting
- * can be made to disagree with reality is not a bound, it is a suggestion —
- * and this cache exists to take load off Postgres during an incident, which
- * is exactly the moment an unenforced memory bound would matter most.
- *
- * WHY THIS IS SAFE TO DO ON EVERY WRITE, not just a rare miss: every value
- * this module ever caches is either a single row/null (a watch-party state)
- * or an array bounded by the caller's own pagination — a message page tops
- * out at `MESSAGE_PAGE_MAX` (100) rows, a server's channel list at however
- * many channels a server actually has. Serializing at most a few hundred
- * plain DB-row objects is real work but not unbounded work, and it is
- * dwarfed by the Postgres round trip a cache hit or a coalesced load is
- * there to avoid in the first place.
+ * Rows above which a value is not cached at all (see `isCacheable`), which
+ * is what actually bounds the worst case: `estimateSize` below is cheap
+ * specifically because it never looks at the content, so nothing here
+ * would notice a pathologically large row inflating the real size past
+ * what `rows * PER_ROW_ESTIMATE_BYTES` says. Refusing to cache anything
+ * over 2,000 rows means the estimate is only ever wrong by content, never
+ * by row count, and a value this large was never the "500 identical
+ * callers" case this module exists for anyway — the caller still gets its
+ * data, it (and everyone racing it) just each pay for their own query.
+ */
+export const MAX_CACHEABLE_ROWS = 2_000;
+
+/** Whether `value` is small enough to be worth caching at all. Only arrays
+ *  have a row count; a single row or `null` is always cacheable. */
+function isCacheable(value: unknown): boolean {
+  return !Array.isArray(value) || value.length <= MAX_CACHEABLE_ROWS;
+}
+
+/**
+ * `rows * PER_ROW_ESTIMATE_BYTES` for an array, a flat constant for
+ * anything else — an estimate, not a measurement. See the comment on
+ * `PER_ROW_ESTIMATE_BYTES` for why this module deliberately does not
+ * serialize a value to size it, and `isCacheable` for what actually bounds
+ * the worst case instead.
  */
 function estimateSize(value: unknown): number {
-  try {
-    return Math.max(MIN_ESTIMATED_BYTES, JSON.stringify(value)?.length ?? 0);
-  } catch {
-    return MIN_ESTIMATED_BYTES;
+  if (Array.isArray(value)) {
+    return value.length * PER_ROW_ESTIMATE_BYTES;
   }
+  return SINGLE_VALUE_ESTIMATE_BYTES;
 }
 
 /** The one place an entry leaves `store`, so `totalBytes` cannot drift from
@@ -192,11 +213,17 @@ function revalidate<T>(
     .then((value) => {
       if (inflight.get(key) === promise) {
         inflight.delete(key);
-        touch(key, {
-          value,
-          storedAt: Date.now(),
-          size: estimateSize(value),
-        });
+        // A refresh that grew past `MAX_CACHEABLE_ROWS` is not written
+        // back — the stale entry already in `store` keeps answering hits
+        // until it ages into the doubly-stale miss path, same as any
+        // other refresh failure.
+        if (isCacheable(value)) {
+          touch(key, {
+            value,
+            storedAt: Date.now(),
+            size: estimateSize(value),
+          });
+        }
       }
       return value;
     })
@@ -278,7 +305,12 @@ export async function coalesce<T>(
     .then((value) => {
       if (inflight.get(key) === promise) {
         inflight.delete(key);
-        touch(key, { value, storedAt: Date.now(), size: estimateSize(value) });
+        // Over `MAX_CACHEABLE_ROWS`: every current and coalesced caller
+        // still gets this answer (the `.then` return below), it is simply
+        // never written to `store` — the next call is a fresh miss again.
+        if (isCacheable(value)) {
+          touch(key, { value, storedAt: Date.now(), size: estimateSize(value) });
+        }
       }
       return value;
     })
