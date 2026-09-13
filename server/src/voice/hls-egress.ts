@@ -373,9 +373,9 @@ const loggedGhostEgressIds = new Set<string>();
 const cameraCooldownUntil = new Map<string, number>();
 const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
 /**
- * Bounded, ONE-SHOT retry for a `probeScreenTracks` call that could not ask
- * LiveKit at all — a momentary hiccup, not "no camera" (see where this is
- * scheduled, in `reconcileLiveHlsNow`).
+ * Bounded retry for a `probeScreenTracks` call that could not ask LiveKit at
+ * all — a momentary hiccup, not "no camera" (see where this is scheduled, in
+ * `reconcileLiveHlsNow`).
  *
  * WHY IT HAS TO EXIST. That call is deliberately a silent no-op: tearing a
  * running transcode down because one `listParticipants` timed out would be
@@ -385,23 +385,45 @@ const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
  * happened to trigger another push — which on a quiet two-person watch party
  * can be a long wait, and looks exactly like the feature not working.
  *
- * ONE RETRY, NOT A LADDER, and deliberately NOT the film's own
- * `restartHistory` budget: a camera probe hiccup must never spend the
- * restarts that exist to bring the FILM back. At most one pending retry per
- * channel — a second push while one is already scheduled does not stack
- * another.
+ * BACKOFF WITH A CEILING, NOT A FIXED THREE SECONDS FOREVER. A flat interval
+ * turns a prolonged LiveKit or database outage into a permanent poll — every
+ * presenting room in the deployment, one `listParticipants` every three
+ * seconds, for as long as the outage lasts. `CAMERA_PROBE_RETRY_STEPS_MS`
+ * spaces attempts out and `clearCameraProbeRetry` stops them after the last
+ * step: a probe that still cannot be answered after that is not going to
+ * start answering on this channel's own schedule, and this mechanism only
+ * ever existed to cover the ONE push with no other trigger. Every other path
+ * — a roster event, the presenter's next `set-camera` — reaches
+ * `reconcileLiveHlsNow` on its own regardless of whether this gave up.
+ *
+ * Deliberately NOT the film's own `restartHistory` budget: a camera probe
+ * hiccup must never spend the restarts that exist to bring the FILM back. At
+ * most one pending retry per channel — a second push while one is already
+ * scheduled does not stack another.
  */
 const cameraProbeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const CAMERA_PROBE_RETRY_MS = 3_000;
+/** Attempts made since the last success, per channel. Reset by `clearCameraProbeRetry`. */
+const cameraProbeRetryAttempts = new Map<string, number>();
+const CAMERA_PROBE_RETRY_STEPS_MS = [3_000, 10_000, 30_000, 60_000] as const;
 
 function scheduleCameraProbeRetry(channelId: string): void {
   if (cameraProbeRetryTimers.has(channelId)) {
     return;
   }
+  const attempt = cameraProbeRetryAttempts.get(channelId) ?? 0;
+  if (attempt >= CAMERA_PROBE_RETRY_STEPS_MS.length) {
+    // Given up for this run of failures. Not silent: this is exactly the
+    // situation `voice.hlsTrackProbeFailed` (logged inside `probeScreenTracks`
+    // itself) already narrates on every attempt, so an outage this long is
+    // already on the log without this adding a repeating line of its own.
+    return;
+  }
+  const delay = CAMERA_PROBE_RETRY_STEPS_MS[attempt]!;
+  cameraProbeRetryAttempts.set(channelId, attempt + 1);
   const timer = setTimeout(() => {
     cameraProbeRetryTimers.delete(channelId);
     notifyChanged(channelId, "camera-probe-retry");
-  }, CAMERA_PROBE_RETRY_MS);
+  }, delay);
   timer.unref?.();
   cameraProbeRetryTimers.set(channelId, timer);
 }
@@ -412,6 +434,7 @@ function clearCameraProbeRetry(channelId: string): void {
     clearTimeout(timer);
     cameraProbeRetryTimers.delete(channelId);
   }
+  cameraProbeRetryAttempts.delete(channelId);
 }
 let changeListener: LiveHlsChangeListener | null = null;
 let sfuLoadReader: LiveHlsSfuLoadReader | null = null;
@@ -699,7 +722,7 @@ async function recordSessionStarted(
   presenterPeerId: string,
   videoTrackId: string,
   reopen = false,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await getPool().query(
       `INSERT INTO hls_sessions
@@ -726,6 +749,7 @@ async function recordSessionStarted(
         videoTrackId,
       ],
     );
+    return true;
   } catch (error) {
     logEvent("voice.hlsSessionRecordFailed", {
       channelId,
@@ -733,6 +757,7 @@ async function recordSessionStarted(
       rung,
       error: error instanceof Error ? error.message : String(error),
     });
+    return false;
   }
 }
 
@@ -1113,6 +1138,7 @@ export function resetLiveHlsForTests(): void {
     clearTimeout(timer);
   }
   cameraProbeRetryTimers.clear();
+  cameraProbeRetryAttempts.clear();
   changeListener = null;
   sfuLoadReader = null;
   stopLiveHlsMonitor();
@@ -2240,6 +2266,27 @@ function adoptCameraEgress(input: {
     });
     return null;
   }
+  // A DUPLICATE, NOT A REPLACEMENT. `hls_sessions.object_prefix` is unique, so
+  // there is only ever one row for this session's camera, but the row's
+  // `egress_id` and what LiveKit is actually running can disagree: a stop
+  // issued right before a deploy can fail silently or not be confirmed yet,
+  // leaving the OLD egress still ACTIVE on the box while the row (and this
+  // adoption) already point at a newer one. Overwriting `room.camera` without
+  // stopping the one it replaces would leave that old egress owned by nobody
+  // — not `room.camera` (just overwritten), not the orphan sweep (its id was
+  // never unrecognised, `reapForeignEgresses` treats whatever `room.camera`
+  // holds as ours) — consuming an encoder until something else notices.
+  // Fire-and-forget: `stopEgressById` has its own retry/backoff, and this
+  // adoption must not block on it.
+  if (room.camera && room.camera.egressId !== input.egressId) {
+    const staleEgressId = room.camera.egressId;
+    logEvent("voice.hlsCameraDuplicateAdopted", {
+      channelId: input.channelId,
+      keptEgressId: input.egressId,
+      stoppedEgressId: staleEgressId,
+    });
+    void stopEgressById(staleEgressId, input.channelId);
+  }
   room.camera = {
     rung: CAMERA_RUNG,
     egressId: input.egressId,
@@ -3135,15 +3182,15 @@ async function reconcileCameraEgress(
     await stopEgressById(egressId, channelId);
     return;
   }
-  room.camera = {
-    rung: CAMERA_RUNG,
-    egressId,
-    startedAtMs: Date.now(),
-    progress: null,
-    cameraTrackId: wanted,
-  };
-  room.stream = withCameraUrl(room.stream, channelId);
-  await recordSessionStarted(
+  // THE ROW BEFORE THE STATE, and its success is part of starting the camera,
+  // not an afterthought. Everything that reads this camera back from outside
+  // this process's memory — deploy adoption, the box-budget ghost filter, a
+  // human looking at `hls_sessions` — goes through the row, not `room.camera`.
+  // Advertising `cameraHlsUrl` before the row exists would hand viewers a
+  // playlist path `renderSignedPlaylist` 404s (no session to be found) while
+  // the transcode goes on consuming an encoder with nothing here to reclaim
+  // it once this process exits.
+  const recorded = await recordSessionStarted(
     channelId,
     startedAt,
     egressId,
@@ -3154,6 +3201,24 @@ async function reconcileCameraEgress(
     // session, so the second time round it lands on a row it already ended.
     true,
   );
+  if (!recorded) {
+    await stopEgressById(egressId, channelId);
+    return;
+  }
+  // The room may have moved on again while that write was in flight.
+  const afterWrite = rooms.get(channelId);
+  if (!afterWrite || afterWrite !== room || afterWrite.stream.startedAt !== startedAt) {
+    await stopEgressById(egressId, channelId);
+    return;
+  }
+  room.camera = {
+    rung: CAMERA_RUNG,
+    egressId,
+    startedAtMs: Date.now(),
+    progress: null,
+    cameraTrackId: wanted,
+  };
+  room.stream = withCameraUrl(room.stream, channelId);
   logEvent("voice.hlsCameraStarted", {
     channelId,
     egressId,
@@ -3397,11 +3462,28 @@ async function startRoom(
     }
     return null;
   }
-  // AFTER the film is proven, and additively. The returned stream is read back
-  // off the room rather than the local `stream`, because this is what stamps
-  // `cameraHlsUrl` onto it.
-  await reconcileCameraEgress(channelId, tracks.cameraTrackId ?? null);
-  return rooms.get(channelId)?.stream ?? stream;
+  // AFTER the film is proven, and IN THE BACKGROUND from here. Awaiting this
+  // used to delay every caller's film URL on a camera-specific LiveKit RPC,
+  // the box-budget probe and the session-row write: a camera dependency
+  // stalling could hold up or abort the primary result even though the film
+  // egress is already healthy and playing. The film is what this function
+  // exists to hand back, so it is handed back the moment it is ready, and the
+  // camera settles on its own — `notifyChanged` below is what tells the room
+  // once it does, since starting it here rather than from `reconcileLiveHls`
+  // means nothing else is waiting on this promise to know to look again.
+  void reconcileCameraEgress(channelId, tracks.cameraTrackId ?? null)
+    .then(() => {
+      if (rooms.get(channelId)?.stream.cameraHlsUrl) {
+        notifyChanged(channelId, "camera-started");
+      }
+    })
+    .catch((error) => {
+      logEvent("voice.hlsCameraReconcileFailed", {
+        channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  return stream;
 }
 
 /**

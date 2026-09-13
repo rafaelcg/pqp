@@ -174,6 +174,24 @@ function playlistNames(lk: ReturnType<typeof fakeLiveKit>) {
   );
 }
 
+/**
+ * Drain pending microtasks.
+ *
+ * `startRoom` no longer awaits the camera before returning the film's own
+ * stream (a camera-specific hang must never delay or abort the primary
+ * result — see `voice.hlsCameraReconcileFailed` and the comment on
+ * `reconcileCameraEgress`'s call site), so a brand-new room whose presenter
+ * already has a camera on settles it a few microtask ticks AFTER
+ * `reconcileLiveHls` resolves, not within the same tick. This is that wait,
+ * for the tests that care what the camera ends up doing rather than only
+ * what the film's own return value said at the instant it resolved.
+ */
+async function flush(): Promise<void> {
+  for (let tick = 0; tick < 20; tick += 1) {
+    await Promise.resolve();
+  }
+}
+
 beforeEach(() => {
   resetLiveHlsForTests();
   disableHls();
@@ -195,8 +213,15 @@ describe("the presenter's camera, beside the ladder", () => {
     cameraTrackId = "TR_CAM";
     install(lk);
 
-    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    const started = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera is deliberately NOT part of this return value: `startRoom`
+    // hands the film back the moment it is ready rather than waiting on a
+    // camera-specific LiveKit RPC, box-budget probe and session-row write
+    // that could hang. It settles a few microtask ticks later.
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
 
+    expect(stream?.startedAt).toBe(started?.startedAt);
     expect(stream?.cameraHlsUrl).toBe(
       `/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}/${CAMERA_RUNG_NAME}`,
     );
@@ -376,7 +401,9 @@ describe("the presenter's camera, beside the ladder", () => {
     cameraTrackId = "TR_CAM";
     install(lk);
 
-    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
 
     expect(stream?.cameraHlsUrl).toBeDefined();
     expect(stream?.cameraHlsUrl).toContain("https://bucket.example.test");
@@ -394,6 +421,7 @@ describe("the presenter's camera, beside the ladder", () => {
     install(lk);
 
     const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
 
     expect(stream).not.toBeNull();
     expect(stream?.cameraHlsUrl).toBeUndefined();
@@ -448,6 +476,9 @@ describe("the camera and the machinery that stops things", () => {
     cameraTrackId = "TR_CAM";
     install(lk);
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera settles a few microtask ticks after the film's own return
+    // value, on purpose: see `flush`.
+    await advance(0);
     expect(lk.start).toHaveBeenCalledTimes(2);
 
     await advance(20_000);
@@ -490,6 +521,11 @@ describe("the camera and the machinery that stops things", () => {
     cameraTrackId = "TR_CAM";
     install(lk);
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera settles a few microtask ticks after the film's own return
+    // value, on purpose: see `flush`. Waiting for it here (rather than
+    // killing an egress id that does not exist yet) is what makes the kill
+    // below land on the camera this call actually started.
+    await advance(0);
     expect(lk.start).toHaveBeenCalledTimes(2);
 
     lk.kill("EG_2");
@@ -535,6 +571,11 @@ describe("the camera and the machinery that stops things", () => {
     cameraTrackId = "TR_CAM";
     install(lk);
     const before = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    // The camera settles a few microtask ticks after the film's own return
+    // value, on purpose: see `flush`. Waiting for it here (rather than
+    // killing an egress id that does not exist yet) is what makes the kill
+    // below land on the camera this call actually started.
+    await advance(0);
 
     lk.kill("EG_2");
     await advance(20_000);
@@ -725,8 +766,11 @@ describe("box budget: a camera must never be priced twice", () => {
     install(lk);
 
     // CHANNEL: one ladder rung plus one camera, under whatever the default
-    // budget is. Two active egresses, ONE real ladder rendition.
+    // budget is. Two active egresses, ONE real ladder rendition. The camera
+    // settles a few microtask ticks after the film's own return value, on
+    // purpose: see `flush`.
     await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
     expect(liveHlsActivity()).toMatchObject({ rungs: 1, cameraSessions: 1 });
 
     // The budget a SECOND party's camera is decided against: enough for both
@@ -741,7 +785,9 @@ describe("box budget: a camera must never be priced twice", () => {
 
     // A second party, a second camera. Refused here would mean CHANNEL's
     // camera got charged twice.
-    const stream = await reconcileLiveHls(OTHER_CHANNEL, "peer-2", SERVER);
+    await reconcileLiveHls(OTHER_CHANNEL, "peer-2", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(OTHER_CHANNEL);
 
     expect(stream?.cameraHlsUrl).toContain(CAMERA_RUNG_NAME);
     expect(liveHlsActivity().cameraSessions).toBe(2);

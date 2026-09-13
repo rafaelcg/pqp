@@ -72,6 +72,57 @@ export function WatchCameraPip({
    */
   const [activeSrc, setActiveSrc] = useState(src);
   const sessionRef = useRef<string | null>(hlsSessionKey(src));
+
+  // The live hls.js instance, reachable outside the attach effect so a plain
+  // token refresh (below) can hand it a fresh URL without tearing it down.
+  const hlsPlayerRef = useRef<{
+    loadSource: (url: string) => void;
+    destroy: () => void;
+  } | null>(null);
+  // The latest `src`, including its current token, for the same reason: the
+  // heavy attach effect only reruns on a genuine session change, but a
+  // same-session token refresh still needs the freshest URL on hand.
+  const latestSrcRef = useRef(src);
+  latestSrcRef.current = src;
+
+  /**
+   * TOKEN REFRESHES ARE APPLIED IN PLACE, NEVER BY REATTACHING. This runs
+   * BEFORE the session-adopt effect below (declaration order is commit
+   * order), so it reads `sessionRef.current` before that effect has a chance
+   * to move it: on a genuine session change both effects see the OLD session
+   * here, this one correctly does nothing, and the one below does the (one)
+   * real reattach. On a same-session token restamp this is the whole fix —
+   * the RUNNING instance still needs the fresh token before the old one
+   * expires (`HLS_VIEWER_TOKEN_TTL_MS` is an hour, comfortably shorter than a
+   * long party) — and `loadSource` reloads the manifest against the new URL
+   * without detaching the `<video>` or losing anything `onFrame` already
+   * reported, a world apart from destroying and recreating the whole player.
+   * Native Safari has no equivalent call and is left alone: it is the
+   * fallback path, not the common one, and forcing a reload there would
+   * itself interrupt playback.
+   */
+  useEffect(() => {
+    if (!hlsPlayerRef.current) {
+      return;
+    }
+    if (!shouldAdoptHlsSource(sessionRef.current, src)) {
+      // Not a session-changing URL, but the token portion may have moved:
+      // that IS what this effect exists to apply.
+      hlsPlayerRef.current.loadSource(src);
+    }
+  }, [src]);
+
+  /**
+   * A RESTAMPED TOKEN IS NOT A NEW SESSION, and this is the same rule
+   * `hls-watch-player.tsx` needed for the film after every seatless viewer
+   * rebuffered twice a minute on it (CLAUDE.md pitfall 16's sibling bug). The
+   * server restamps `cameraHlsUrl`'s `?t=` on the same audience-keyframe
+   * cadence it restamps the film's, so `src` changes about every 30s for a
+   * camera transcode that has not moved at all. Adopting every change as a
+   * full reattach would tear hls.js down, drop the buffer and hide the PiP on
+   * that cadence for the whole party. Only the path (`hlsSessionKey`, which
+   * strips the query) changing means the camera egress actually restarted.
+   */
   useEffect(() => {
     if (!shouldAdoptHlsSource(sessionRef.current, src)) {
       return;
@@ -86,23 +137,41 @@ export function WatchCameraPip({
       return;
     }
     let cancelled = false;
-    let hls: { destroy: () => void } | null = null;
     onFrameRef.current(false);
 
     // Same rule as the film's player: the header is only for our own proxy,
     // only when the URL carries no `?t=`, and never on the presigned bucket
     // URLs the playlist's segment lines point at. See CLAUDE.md pitfall 16 for
     // what attaching it unconditionally cost.
+    //
+    // SKIPPED ENTIRELY when the active URL already carries its own viewer
+    // token, or is not our proxy at all (a public bucket URL, unsigned mode):
+    // neither ever reads a Bearer header, so polling `getAuthToken()` for one
+    // is pure waste at watch-party scale — hundreds of viewers, each an
+    // immediate lookup plus one every 30s, for a header nothing will send.
+    const needsAuthToken =
+      isOwnHlsPlaylistProxyUrl(activeSrc) && !hasHlsViewerToken(activeSrc);
     let authToken: string | null = null;
-    const refreshAuthToken = () => {
-      void getAuthToken().then((token) => {
-        if (!cancelled) {
-          authToken = token;
-        }
-      });
-    };
-    refreshAuthToken();
-    const authTokenTimer = window.setInterval(refreshAuthToken, 30_000);
+    let authTokenTimer: ReturnType<typeof setInterval> | null = null;
+    if (needsAuthToken) {
+      const refreshAuthToken = () => {
+        getAuthToken().then(
+          (token) => {
+            if (!cancelled) {
+              authToken = token;
+            }
+          },
+          () => {
+            // Keep whatever token we already had rather than clearing it: a
+            // transient refresh failure must not undo an otherwise-working
+            // header, and this catch's only job is to stop the rejection
+            // from going unhandled.
+          },
+        );
+      };
+      refreshAuthToken();
+      authTokenTimer = setInterval(refreshAuthToken, 30_000);
+    }
 
     const onPlaying = () => {
       if (!cancelled) {
@@ -118,7 +187,7 @@ export function WatchCameraPip({
     video.addEventListener("error", onFailed);
     video.addEventListener("emptied", onFailed);
 
-    async function attach() {
+    async function attachOnce() {
       const { default: Hls } = await import("hls.js");
       if (cancelled || !video) {
         return;
@@ -129,7 +198,7 @@ export function WatchCameraPip({
         // browser with neither simply never produces a frame and the corner
         // stays empty.
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          video.src = activeSrc;
+          video.src = latestSrcRef.current;
           void video.play().catch(() => {
             // Muted autoplay is allowed everywhere; if it still refused, the
             // camera stays hidden and the film is untouched.
@@ -156,8 +225,15 @@ export function WatchCameraPip({
           }
         },
       });
-      hls = player as unknown as { destroy: () => void };
-      player.loadSource(activeSrc);
+      hlsPlayerRef.current = player as unknown as {
+        loadSource: (url: string) => void;
+        destroy: () => void;
+      };
+      // The freshest URL on hand, not the value this effect closed over: a
+      // token refresh that landed between mount and this async resolution
+      // (the dynamic import is one microtask, but still one) must not attach
+      // with an already-stale one.
+      player.loadSource(latestSrcRef.current);
       player.attachMedia(video);
       player.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal && !cancelled) {
@@ -175,14 +251,53 @@ export function WatchCameraPip({
       });
     }
 
-    void attach();
+    // BOUNDED RETRY ON THE IMPORT/ATTACH ITSELF, separate from the silent
+    // give-up on a fatal playback error above. A chunk-loading failure (an
+    // offline browser, a CDN hiccup) is exactly the kind of thing that
+    // resolves on its own a few seconds later, and `void attachOnce()` with no
+    // handler at all would both leave the camera invisible forever AND surface
+    // as an unhandled rejection. Two retries, then the same silent give-up
+    // every other failure in this file gets: the camera is not what anybody
+    // came for, and it must never do more than log for itself.
+    const ATTACH_RETRY_DELAYS_MS = [2_000, 5_000];
+    const retryTimers: ReturnType<typeof setTimeout>[] = [];
+    function attachWithRetry(attempt: number): void {
+      attachOnce().catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        console.error(
+          `[watch-camera-pip] attach failed (attempt ${attempt + 1}):`,
+          error,
+        );
+        onFrameRef.current(false);
+        const delay = ATTACH_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) {
+          return;
+        }
+        const timer = setTimeout(() => {
+          if (!cancelled) {
+            attachWithRetry(attempt + 1);
+          }
+        }, delay);
+        retryTimers.push(timer);
+      });
+    }
+    attachWithRetry(0);
+
     return () => {
       cancelled = true;
-      window.clearInterval(authTokenTimer);
+      if (authTokenTimer !== null) {
+        clearInterval(authTokenTimer);
+      }
+      for (const timer of retryTimers) {
+        clearTimeout(timer);
+      }
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("error", onFailed);
       video.removeEventListener("emptied", onFailed);
-      hls?.destroy();
+      hlsPlayerRef.current?.destroy();
+      hlsPlayerRef.current = null;
       video.removeAttribute("src");
       video.load();
       onFrameRef.current(false);

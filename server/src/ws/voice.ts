@@ -5305,7 +5305,21 @@ export async function handleVoiceMessage(
     // unrelated roster event. Cheap and fire-and-forget: the reconcile is
     // serialised per channel and returns without an RPC in every room that is
     // not transcoding.
-    void pushLiveHls(peer.voiceChannelId);
+    //
+    // `.catch` rather than `await`, on purpose: `set-camera` must ack the
+    // sender at once regardless of how the transcode side is doing, the same
+    // way every other call site of this function treats it. Most of what can
+    // go wrong in there is already self-healing (the health monitor, the
+    // camera's own probe retry, the next roster event), so this exists only
+    // to keep a truly unexpected throw from becoming an unhandled rejection
+    // rather than to add a retry of its own.
+    void pushLiveHls(peer.voiceChannelId).catch((error: unknown) => {
+      console.error(
+        "[voice] pushLiveHls failed after set-camera:",
+        peer.voiceChannelId,
+        error,
+      );
+    });
     return;
   }
 
