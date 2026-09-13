@@ -696,6 +696,16 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     // This assertion is the outer contract: whatever the roster ever looks
     // like, a watch party's own room never shows this surface once seated.
     await expect(viewer.getByTestId("call-stage-cinema")).toHaveCount(0);
+    // 2026-09-13 (Rafael's live report, as host): "Na call · em watch-party"
+    // in the user panel, and the stage STILL offering "Entrar na chamada"
+    // beside it — two affordances for one state. `watchPartyChrome` (party
+    // `live` AND seated) can lag a fresh seat by a render because it comes
+    // off `watchParties.byChannel`'s own fetch/socket; `isWatchPartyChannel`
+    // (the channel's own `type`) cannot, and now gates the same button
+    // (`seatedInWatchPartyRoom`, `client/src/lib/cinema-layout.ts`). Implied
+    // by `call-stage-cinema` above once seated, but named so a regression
+    // says which control came back rather than only that the stage did.
+    await expect(viewer.getByTestId("cinema-stage-join")).toHaveCount(0);
 
     // The seat's exit is on the party bar, in the party's words; the call
     // strip and its Leave are not drawn in a watch party channel.

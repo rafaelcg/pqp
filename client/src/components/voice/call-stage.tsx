@@ -105,7 +105,7 @@ import {
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { CinemaStage } from "@/components/voice/cinema-stage";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
-import { shouldShowCinema } from "@/lib/cinema-layout";
+import { seatedInWatchPartyRoom, shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
   type ScreenShareTile,
@@ -595,12 +595,30 @@ export interface CallStageProps {
    * goes. See docs/plans/WATCH_PARTY_SETUP_UX.md section 10.
    */
   watchPartyChrome?: boolean;
+  /**
+   * This channel IS a watch party channel, full stop — the channel's own
+   * `type`, not whether its party is currently `live`. `watchPartyChrome`
+   * answers a narrower question (party live AND seated) and is what hides
+   * the ordinary call controls, so it is deliberately allowed to lag behind
+   * a fresh seat by a render: `watchParties.byChannel[id]?.state` comes off
+   * its own fetch/socket, independent of the voice join.
+   *
+   * The cinema landing view has no such excuse to wait. `CallStage` mounts
+   * (`VoiceChannelStage`'s `inThisCall` gate) ONLY once this account already
+   * holds the seat, so "audience view with a join button" can never be true
+   * for a watch party room the instant this component exists — the join
+   * already happened. Gating that specifically on the channel's own type
+   * removes the party-store race entirely: see the second half of the
+   * 2026-09-13 incident in `cinema-layout.ts`.
+   */
+  isWatchPartyChannel?: boolean;
 }
 
 export function CallStage({
   channelId,
   title,
   watchPartyChrome = false,
+  isWatchPartyChannel = false,
   serverName = null,
   serverIconUrl = null,
   currentUser,
@@ -657,6 +675,7 @@ export function CallStage({
       channelId={channelId}
       title={title}
       watchPartyChrome={watchPartyChrome}
+      isWatchPartyChannel={isWatchPartyChannel}
       serverName={serverName}
       serverIconUrl={serverIconUrl}
       currentUser={currentUser}
@@ -705,6 +724,7 @@ function ActiveCall({
   channelId,
   title,
   watchPartyChrome = false,
+  isWatchPartyChannel = false,
   serverName = null,
   serverIconUrl = null,
   currentUser,
@@ -746,6 +766,7 @@ function ActiveCall({
   channelId: string;
   title: string;
   watchPartyChrome?: boolean;
+  isWatchPartyChannel?: boolean;
   serverName?: string | null;
   serverIconUrl?: string | null;
   currentUser: CallStageProps["currentUser"];
@@ -980,11 +1001,11 @@ function ActiveCall({
   );
   // `audienceMode` used to be a landing view for a watch party's own seated
   // call: full-bleed HLS, no roster or mic controls. `shouldShowCinema`
-  // refuses it outright once `watchPartyChrome` says this IS that party's own
-  // room (see `isWatchParty` there for the 2026-09-13 incident it caused —
-  // two pictures, two soundtracks, two delays). The state and its effect stay
-  // in case a non-watch-party room ever wants this landing view; they are
-  // inert wherever `watchPartyChrome` is true.
+  // refuses it outright once this IS that party's own room (see
+  // `isWatchParty` there for the 2026-09-13 incident it caused — two
+  // pictures, two soundtracks, two delays). The state and its effect stay in
+  // case a non-watch-party room ever wants this landing view; they are inert
+  // wherever a watch party channel is involved.
   const [audienceMode, setAudienceMode] = useState(watchingHls);
   useEffect(() => {
     if (watchingHls) {
@@ -995,7 +1016,11 @@ function ActiveCall({
   const showCinema = shouldShowCinema({
     live: Boolean(cinemaTile),
     audience: audienceMode,
-    isWatchParty: watchPartyChrome,
+    // See `seatedInWatchPartyRoom` and `isWatchPartyChannel`'s doc on
+    // `CallStageProps`: `watchPartyChrome` alone can lag a fresh seat by a
+    // render and briefly reopen "Entrar na chamada" for someone the party
+    // bar's "Entrar no palco" already seated.
+    isWatchParty: seatedInWatchPartyRoom(watchPartyChrome, isWatchPartyChannel),
   });
   const presenterPeerId = voiceState.liveStream?.presenterPeerId ?? null;
   const cinemaStagePeople = allPeople.map((person) => ({

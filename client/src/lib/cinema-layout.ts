@@ -54,6 +54,34 @@ export function shouldShowCinema({
   return live && audience;
 }
 
+/**
+ * The `isWatchParty` `shouldShowCinema` should see for a channel `CallStage`
+ * currently has mounted — THE SECOND HALF OF THE 2026-09-13 INCIDENT.
+ *
+ * `watchPartyChrome` (this channel's party is `live` AND we are seated) is
+ * what hides the ordinary call controls in favour of the party bar, and it
+ * is allowed to lag a fresh seat by a render: `watchParties.byChannel[id]`
+ * comes off its own fetch/socket, entirely independent of the voice join
+ * that just landed the seat. A host who presses "Entrar no palco" is seated
+ * the instant `voiceState.voiceChannelId` updates; the party store can still
+ * be catching up on that exact render.
+ *
+ * `isWatchPartyChannel` — the channel's own `type` — cannot lag, because
+ * `CallStage` never mounts before this account already holds the seat
+ * (`VoiceChannelStage`'s `inThisCall` gate): there is no render of a watch
+ * party's `CallStage` in which "channel is a watch party" is unknown or
+ * pending. So either source saying so is enough; a momentarily-false
+ * `watchPartyChrome` must never reopen the "Entrar na chamada" button
+ * `isWatchPartyChannel` already closed — that reopening is exactly what put
+ * a second join affordance beside "Na call · em watch-party".
+ */
+export function seatedInWatchPartyRoom(
+  watchPartyChrome: boolean,
+  isWatchPartyChannel: boolean,
+): boolean {
+  return watchPartyChrome || isWatchPartyChannel;
+}
+
 export type CinemaOrientation = "phone" | "desktop";
 
 /** Reuses the same `lg` breakpoint every other split in the app measures against. */

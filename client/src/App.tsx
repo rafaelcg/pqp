@@ -6546,6 +6546,11 @@ function MainAppContent({
               splitKind === "watch" &&
               watchParties.byChannel[selectedChannel.id]?.state === "live"
             }
+            // The channel's own type, not `watchParties.byChannel[...]?.state`:
+            // that store's own fetch/socket can still be catching up the
+            // instant a seat lands, and `VoiceChannelStage` never mounts
+            // `CallStage` before the seat does. See `CallStage.isWatchPartyChannel`.
+            isWatchPartyChannel={isWatchPartySplit}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
