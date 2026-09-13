@@ -53,6 +53,9 @@ function fakeDeps(over: Partial<WatchPartyEndDeps> = {}): {
     refresh: () => {
       calls.refresh++;
     },
+    // Nothing active there any more by default: the common case behind a
+    // 404/409 in these tests is "this exact end already landed".
+    fetchCurrentParty: async () => null,
     reportError: (message) => calls.reportError.push(message),
     isSharingScreen: () => false,
     stopScreenShare: () => {
@@ -92,16 +95,56 @@ describe("endWatchParty", () => {
   });
 
   for (const status of [404, 409]) {
-    it(`refreshes instead of guessing on a ${status} (already ended / stale id)`, async () => {
+    it(`confirms the channel is empty and cleans up on a ${status} (this end already landed)`, async () => {
       const { deps, calls } = fakeDeps({
         setEnded: async () => {
           throw new ApiError(status, "gone");
         },
+        isSharingScreen: () => true,
+        // Default fetchCurrentParty resolves null: nothing active there.
       });
       await endWatchParty(PARTY, deps);
       expect(calls.refresh).toBe(1);
-      // Never a side-effect leave/share-stop on this branch: the request
-      // never confirmed the party ended.
+      expect(calls.applyParty).toEqual([[PARTY.channelId, null]]);
+      // The fetch confirmed this exact party is gone, so the same cleanup
+      // as a confirmed success runs even though `setEnded` itself failed.
+      expect(calls.stopScreenShare).toBe(1);
+      expect(calls.leaveVoice).toBe(1);
+      expect(calls.reportError).toEqual([]);
+    });
+
+    it(`leaves the call alone on a ${status} when a replacement party is now active in the channel`, async () => {
+      const replacement: WatchParty = { ...PARTY, id: "99999999-9999-4999-8999-999999999999" };
+      const { deps, calls } = fakeDeps({
+        setEnded: async () => {
+          throw new ApiError(status, "gone");
+        },
+        isSharingScreen: () => true,
+        fetchCurrentParty: async () => replacement,
+      });
+      await endWatchParty(PARTY, deps);
+      expect(calls.refresh).toBe(1);
+      expect(calls.applyParty).toEqual([[PARTY.channelId, replacement]]);
+      // A stale request must not tear down a call or share that may belong
+      // to whatever replaced this party.
+      expect(calls.stopScreenShare).toBe(0);
+      expect(calls.leaveVoice).toBe(0);
+      expect(calls.reportError).toEqual([]);
+    });
+
+    it(`leaves the call alone on a ${status} when the confirming fetch itself fails`, async () => {
+      const { deps, calls } = fakeDeps({
+        setEnded: async () => {
+          throw new ApiError(status, "gone");
+        },
+        isSharingScreen: () => true,
+        fetchCurrentParty: async () => {
+          throw new Error("network down");
+        },
+      });
+      await endWatchParty(PARTY, deps);
+      expect(calls.refresh).toBe(1);
+      // Unknown is not a confirmed end: same "stay put" fallback as before.
       expect(calls.stopScreenShare).toBe(0);
       expect(calls.leaveVoice).toBe(0);
       expect(calls.applyParty).toEqual([]);

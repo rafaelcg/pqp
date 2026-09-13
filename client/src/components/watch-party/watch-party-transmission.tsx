@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -81,20 +81,34 @@ function useOutputSilenceWarning(
   outputLevelDb: (() => number | null) | undefined,
 ): boolean {
   const [warning, setWarning] = useState(false);
+  // A caller re-rendering (any unrelated app or voice-state update while a
+  // party is live) can hand this a new function with the same behavior. The
+  // streak lives in the effect below, so tracking `outputLevelDb` itself as
+  // that effect's dependency would restart it — and reset a real silence
+  // streak — on every such render. The ref reads the latest reading without
+  // restarting anything; only whether a meter exists at all reopens the
+  // effect.
+  const readerRef = useRef(outputLevelDb);
+  readerRef.current = outputLevelDb;
+  const hasReader = outputLevelDb !== undefined;
 
   useEffect(() => {
-    if (!outputLevelDb) {
+    if (!hasReader) {
       setWarning(false);
       return;
     }
     let tracked: OutputSilenceState = INITIAL_OUTPUT_SILENCE_STATE;
     const interval = setInterval(() => {
       const now = Date.now();
-      tracked = nextOutputSilenceState(tracked, outputLevelDb(), now);
+      tracked = nextOutputSilenceState(
+        tracked,
+        readerRef.current?.() ?? null,
+        now,
+      );
       setWarning(isOutputSilenceWarning(tracked, now));
     }, OUTPUT_LEVEL_POLL_MS);
     return () => clearInterval(interval);
-  }, [outputLevelDb]);
+  }, [hasReader]);
 
   return warning;
 }

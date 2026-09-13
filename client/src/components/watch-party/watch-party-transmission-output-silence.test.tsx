@@ -109,6 +109,24 @@ describe("the output-silence warning, live", () => {
     expect(container.querySelector('[data-testid="watch-party-tx-output-silent-pill"]')).toBeNull();
   });
 
+  it("keeps the streak when the parent hands in a new callback mid-silence", () => {
+    // The parent (`App.tsx`) passes `outputLevelDb` as its own prop, whose
+    // identity can change on an unrelated rerender even though the reading
+    // it produces has not. A fresh closure each time, same value, is exactly
+    // that: it must not restart the ten-second streak (Farol, 2026-09-13).
+    renderTransmission(() => Number.NEGATIVE_INFINITY);
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
+    renderTransmission(() => Number.NEGATIVE_INFINITY);
+    act(() => {
+      vi.advanceTimersByTime(4_100);
+    });
+    expect(
+      container.querySelector('[data-testid="watch-party-tx-output-silent-pill"]'),
+    ).not.toBeNull();
+  });
+
   it("never warns when no output meter is available at all", () => {
     renderTransmission(undefined);
     act(() => {

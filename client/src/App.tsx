@@ -167,6 +167,7 @@ import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createServerWatchParty as apiCreateServerWatchParty,
+  fetchChannelWatchParty as apiFetchChannelWatchParty,
   setWatchPartyCohost as apiSetWatchPartyCohost,
   setWatchPartyStage,
   setWatchPartyState as apiSetWatchPartyState,
@@ -4132,6 +4133,8 @@ function MainAppContent({
       setEnded: (partyId) => apiSetWatchPartyState(partyId, "ended"),
       applyParty: (channelId, next) => watchParties.apply(channelId, next),
       refresh: watchParties.refresh,
+      fetchCurrentParty: (channelId) =>
+        apiFetchChannelWatchParty(channelId).then((answer) => answer.party),
       reportError: (message) => setAppError(message),
       isSharingScreen: () => voice.getState().isSharingScreen,
       stopScreenShare: () => voice.stopScreenShare(),
@@ -6184,8 +6187,8 @@ function MainAppContent({
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
-            micLevelDb={() => voice.micLevelDb()}
-            outputLevelDb={() => voice.outputLevelDb()}
+            micLevelDb={voice.micLevelDb}
+            outputLevelDb={voice.outputLevelDb}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={shareMaxFrameRate()}
@@ -6304,8 +6307,8 @@ function MainAppContent({
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
-            micLevelDb={() => voice.micLevelDb()}
-            outputLevelDb={() => voice.outputLevelDb()}
+            micLevelDb={voice.micLevelDb}
+            outputLevelDb={voice.outputLevelDb}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={shareMaxFrameRate()}

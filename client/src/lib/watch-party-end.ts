@@ -20,12 +20,17 @@ import { ApiError } from "./api";
  *     leave the room — the "End + leave" coupling this codebase already
  *     relies on, kept ONLY here.
  *  2. 404 or 409 (already ended, or a stale id this tab was holding): the
- *     party is not what this client thinks it is. Refetching
- *     (`deps.refresh`, `GET /api/servers/:id/watch-parties`) is the honest
- *     move rather than guessing — a party that already replaced this one in
- *     the same channel exists and must not be blown away by a stale card
- *     clearing itself. The room is left untouched: a request that never
- *     reached "ended" must not silently end the call as a side effect.
+ *     party is not what this client thinks it is. `deps.fetchCurrentParty`
+ *     asks the channel directly what is actually true rather than guessing
+ *     — a party that already replaced this one in the same channel exists
+ *     and must not be blown away, or have ITS call ended, by a stale card
+ *     clearing itself. Only when that fetch confirms nothing is active
+ *     there any more does this run the same cleanup as branch 1: that is
+ *     this exact end having actually landed, just without an answer this
+ *     request could see (2026-09-13 addition, Farol review of #532 — the
+ *     first cut of B8 refreshed and stopped there, so a confirmed
+ *     server-side end whose response got lost left the presenter connected
+ *     and transmitting to a party that no longer existed).
  *  3. Anything else (network blip, 500): say so. `deps.reportError`, not
  *     nothing — the whole bug above was "nothing" dressed as "it must have
  *     worked".
@@ -43,6 +48,14 @@ export interface WatchPartyEndDeps {
   applyParty: (channelId: string, party: WatchParty | null) => void;
   /** Refetch this server's parties from `GET /api/servers/:id/watch-parties`. */
   refresh: () => void;
+  /**
+   * The channel's active party right now, from
+   * `GET /api/channels/:id/watch-party` — `null` when nothing is active
+   * there. The authoritative check behind branch 2: whether THIS exact
+   * party actually ended, or something else (a replacement, a still-active
+   * session) is what a 404/409 actually meant.
+   */
+  fetchCurrentParty: (channelId: string) => Promise<WatchParty | null>;
   /** The error toast. */
   reportError: (message: string) => void;
   isSharingScreen: () => boolean;
@@ -62,10 +75,33 @@ export async function endWatchParty(
     answer = await deps.setEnded(party.id);
   } catch (error) {
     if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
-      // Already ended, or a stale id: ask the server what is actually true
-      // rather than assuming this client's own guess (clearing the card, or
-      // leaving it as is) is the right one.
+      // Already ended, or a stale id: ask the channel directly what is
+      // actually true rather than assuming this client's own guess
+      // (clearing the card, or leaving it as is) is the right one. A
+      // failure here (this fetch has its own network to cross) means the
+      // answer stays unknown, and unknown is not a confirmed end: fall back
+      // to the old "leave it alone" behavior rather than guess.
+      let current: WatchParty | null;
+      try {
+        current = await deps.fetchCurrentParty(party.channelId);
+      } catch {
+        deps.refresh();
+        return;
+      }
+      deps.applyParty(party.channelId, current);
       deps.refresh();
+      if (current !== null) {
+        // Something is still active in this channel — this exact party
+        // (the fetch and the failed request raced), or a replacement that
+        // has nothing to do with the request that just failed. Either way
+        // it is not this client's place to end a call or share it never
+        // confirmed belongs to a dead session.
+        return;
+      }
+      // Nothing is active here any more: this exact end DID land, this
+      // request just never saw the answer. Finish the same cleanup the
+      // success path below would have.
+      endLocalPresence(party, deps);
       return;
     }
     deps.reportError(
@@ -78,9 +114,20 @@ export async function endWatchParty(
   deps.applyParty(party.channelId, answer.party ?? null);
   // Encerrar is the end of the LiveKit pipe, not "stay in the room without a
   // picture". Leave so the host does not keep leave-voice chrome after the
-  // show — but ONLY on confirmed success; the two branches above return
-  // before this so a failed or ambiguous end never ejects anyone as a side
-  // effect.
+  // show — but ONLY on confirmed success (including the confirmed-by-fetch
+  // case above); the network-failure branch returns before this so a failed
+  // or ambiguous end never ejects anyone as a side effect.
+  endLocalPresence(party, deps);
+}
+
+/** Stop presenting and leave the room — the "End + leave" coupling. */
+function endLocalPresence(
+  party: WatchParty,
+  deps: Pick<
+    WatchPartyEndDeps,
+    "isSharingScreen" | "stopScreenShare" | "currentVoiceChannelId" | "leaveVoice"
+  >,
+): void {
   if (deps.isSharingScreen()) {
     deps.stopScreenShare();
   }
