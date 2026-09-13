@@ -35,6 +35,11 @@ on:
       - "tools/log-shipper/**"
   pull_request:
     branches: [main]
+    # `labeled` is here ONLY so a `freeze` label can trigger the announcement
+    # comment below (docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md A6); the
+    # step itself is gated to that one action so adding any other label does
+    # not run the rest of this job again.
+    types: [opened, synchronize, reopened, labeled]
     paths-ignore:
       - "docs/**"
       - "android/**"
@@ -61,6 +66,12 @@ concurrency:
 
 jobs:
   checks:
+    # A `labeled` event only exists here so `announce-freeze` below can react
+    # to the `freeze` label (docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md
+    # A6). Skip the full suite for that action rather than re-running it for
+    # an unrelated label add; `push` and `workflow_dispatch` carry no `.action`
+    # at all, so this is a no-op for them.
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -231,6 +242,9 @@ jobs:
   # only @pqp/shared needs a build here.
   e2e:
     name: e2e (${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }})
+    # See the same guard on `checks` above: a `labeled` event exists only for
+    # `announce-freeze` below and must not re-run the e2e matrix.
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -340,3 +354,27 @@ jobs:
             client/test-results
             client/e2e-results.json
           retention-days: 7
+
+  # docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md A6: the other half of the
+  # merge freeze in deploy-api-fly.yml. That workflow enforces the freeze;
+  # this job only announces it on the PR itself, the moment someone reaches
+  # for the label, so nobody has to already know to go read a workflow file
+  # to find out a merge won't actually deploy. Deliberately its own job
+  # rather than a step glued onto `checks`: it needs none of that job's setup
+  # and must run even when `checks` itself is skipped for this same event
+  # (see the `if:` on `checks` above).
+  announce-freeze:
+    name: Announce merge freeze
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'freeze'
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment that server deploys are frozen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "server deploys are frozen for an event"

@@ -6,6 +6,7 @@
     "run": "tsx src/index.ts",
     "wp": "tsx src/index.ts",
     "hls-audience": "tsx src/hls-audience.ts",
+    "seat-churn": "tsx src/seat-churn.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

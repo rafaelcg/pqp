@@ -1,0 +1,208 @@
+{
+  "_comment": [
+    "One 'Event' dashboard for a watch party, per docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md item D2.",
+    "Standard Grafana dashboard JSON model: Dashboards > New > Import, paste this file.",
+    "Replace <PROMETHEUS_DATASOURCE_UID> (the Grafana Cloud Prometheus stack the pqp-sfu-box",
+    "dashboard already uses) and <LOKI_DATASOURCE_UID> (datasource 'grafanacloud-logs')",
+    "with the real UIDs from Administration > Data sources on import; Grafana's own",
+    "import dialog also offers to remap them for you.",
+    "The Sockets/Seated/Pool/DB-latency/Rungs panels need tools/monitoring/pqp-api-metrics-exporter.py",
+    "installed and running (see this directory's README) -- without it they read 'No data',",
+    "which is the honest state, not a broken panel. Egress box CPU reuses the existing",
+    "pqp-sfu-box metrics (tools/sfu-monitoring), already live. There is no server-side",
+    "count of concurrent HLS viewers anywhere in pqp today (the proxy is a stateless,",
+    "unauthenticated-per-request pull with no per-request logging) -- see the Watching",
+    "panel's own text for what to look at instead. Not provisioned from the repo, same",
+    "posture as every other dashboard in docs/MONITORING.md: the UI is the source of truth",
+    "once this is imported, and this file is a starting point, not a synced copy."
+  ],
+  "title": "pqp Event",
+  "uid": "pqp-event",
+  "tags": ["pqp", "event"],
+  "timezone": "utc",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-3h", "to": "now" },
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Sockets",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_sockets",
+          "legendFormat": "open sockets"
+        }
+      ],
+      "description": "Open WebSocket connections on the API process (runtime.sockets). Every signed-in client, seated or not, holds one for the session."
+    },
+    {
+      "id": 2,
+      "title": "Seated",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_participants",
+          "legendFormat": "seated (voice.participants)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_active_rooms",
+          "legendFormat": "active rooms"
+        }
+      ],
+      "description": "People holding a voice seat across the deployment (voice.participants on GET /api/admin/metrics), and how many rooms they are spread across."
+    },
+    {
+      "id": 3,
+      "title": "Watching",
+      "type": "text",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "**pqp does not count concurrent HLS viewers server-side.** The playlist proxy (`server/src/voice/hls-playlist-proxy.ts`) is a stateless, unauthenticated-per-request pull with no per-request access log, so there is no 'watching' gauge to graph here without adding one (out of scope for this dashboard, which only reads what already exists).\n\nDuring the event, read audience size from wherever the stream itself is watched (Twitch/YouTube viewer count, same source the 2026-09-12 postmortem's ~200-watching figure came from), not from pqp.\n\nDuring a **rehearsal** with `tools/watch-party-load/src/hls-audience.ts`, that harness's own 10s progress line (active viewers, req/s, latency, window misses) is the closest thing to this number, and its final JSON summary is the authoritative one -- see the load-test doc in `tools/watch-party-load/README.md` and the seat-churn run recipe in `docs/EVENT_RUNBOOK.md`."
+      }
+    },
+    {
+      "id": 4,
+      "title": "Pool in-use / queued",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 20, "color": "red" }] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_ready_pool_in_use",
+          "legendFormat": "in use"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_ready_pool_queued",
+          "legendFormat": "queued"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_ready_pool_max",
+          "legendFormat": "PG_POOL_MAX"
+        }
+      ],
+      "description": "checks.pool from GET /ready. A queue above zero is the earliest honest warning -- see docs/MONITORING.md 'GET /ready'."
+    },
+    {
+      "id": 5,
+      "title": "DB latency (postgres ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_ready_postgres_ms",
+          "legendFormat": "SELECT 1 round-trip"
+        }
+      ],
+      "description": "checks.postgres.ms from GET /ready. The 2s timeout is the ceiling; sustained growth above ~200ms is the alert."
+    },
+    {
+      "id": 6,
+      "title": "Egress box CPU (SFU box)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"sfu-pqp\",mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "CPU busy %"
+        }
+      ],
+      "description": "Same box that runs LiveKit AND the watch-party transcode (tools/sfu-monitoring). This is the number that actually costs a party: rungHealth restarts and stalls correlate with this saturating, not with API pool pressure."
+    },
+    {
+      "id": 7,
+      "title": "HLS rungs / sessions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_hls_rungs",
+          "legendFormat": "rungs (renditions)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_hls_sessions",
+          "legendFormat": "sessions"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_hls_orphans_stopped_total",
+          "legendFormat": "orphans stopped (belongs at 0)"
+        }
+      ],
+      "description": "liveHls.rungs / liveHls.sessions / liveHls.orphansStopped from GET /api/admin/metrics. A rung count that drops without a matching voice.hlsRungDied log line, or climbing orphans, is pitfall 15."
+    },
+    {
+      "id": 8,
+      "title": "API restarts",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "loki", "uid": "<LOKI_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "<LOKI_DATASOURCE_UID>" },
+          "expr": "sum(count_over_time({fly_app_name=\"pqp-api\"} |= \"pqp server listening on\" [$__interval]))",
+          "legendFormat": "restarts"
+        }
+      ],
+      "description": "One line per process boot. During a frozen event (DEPLOY_FREEZE=true, see A6) this should read flat zero; any bump is an unplanned restart (crash, OOM, manual fly deploy/restart)."
+    },
+    {
+      "id": 9,
+      "title": "HLS rung deaths",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "datasource": { "type": "loki", "uid": "<LOKI_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "<LOKI_DATASOURCE_UID>" },
+          "expr": "sum(count_over_time({fly_app_name=\"pqp-api\"} |= \"voice.hlsRungDied\" [$__interval]))",
+          "legendFormat": "rung deaths"
+        }
+      ],
+      "description": "voice.hlsRungDied per bucket. One is a hiccup scheduleRestart absorbs; a cluster is the egress box or LiveKit struggling -- cross-reference the Egress box CPU panel."
+    }
+  ]
+}

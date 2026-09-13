@@ -20,6 +20,23 @@ name: Deploy API (Fly)
 # including its lesson: a green deploy step only proves the platform accepted a
 # build. What we actually care about is whether the running process serves this
 # commit.
+#
+# EVENT MERGE FREEZE (docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md A6):
+#   freeze:   gh variable set DEPLOY_FREEZE --body true
+#   unfreeze: gh variable set DEPLOY_FREEZE --body false
+# One repo variable gates every API deploy path, Fly and Vultr alike
+# (deploy-api-vultr.yml checks the identical `vars.DEPLOY_FREEZE != 'true'`)
+# so there is exactly one switch to remember during an event. It sits in the
+# job-level `if` below, next to the same-ref restriction on workflow_dispatch,
+# so a manual dispatch from a non-main branch can neither deploy unreviewed
+# code nor slip past the freeze: whichever event fired, the whole job is
+# skipped (not failed — a frozen deploy is a deliberate skip, not a
+# malfunction) while the variable is `true`. A PR carrying the `freeze` label
+# gets a comment from the `checks` job in ci.yml saying the same thing.
+# Unfreezing does NOT retroactively deploy commits that were skipped while
+# frozen — nothing reruns on its own just because the variable flipped. See
+# docs/EVENT_RUNBOOK.md's "Unfreeze" step for the manual reconciliation
+# dispatch that covers that gap.
 on:
   workflow_run:
     workflows: [CI]
@@ -42,8 +59,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Same gate as deploy-api.yml, AND the DEPLOY_TARGET switch: exactly one of
-    # the two deploy workflows may be live at a time.
-    if: ${{ (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) && vars.DEPLOY_TARGET == 'fly' }}
+    # the two deploy workflows may be live at a time. A manual dispatch is
+    # only trusted when it runs FROM main (same reasoning as
+    # deploy-api-vultr.yml: an arbitrary branch could otherwise carry a
+    # modified fly.toml or deploy step straight to production), and
+    # DEPLOY_FREEZE is checked here rather than only inside a step so a
+    # frozen event can't be worked around by any of this job's trigger paths.
+    if: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) && vars.DEPLOY_TARGET == 'fly' && vars.DEPLOY_FREEZE != 'true' }}
     permissions:
       contents: read
 
@@ -96,6 +118,13 @@ jobs:
             echo "needed=$1" >> "$GITHUB_OUTPUT"
             echo "::notice::API deploy needed=$1 ($2)"
           }
+
+          # DEPLOY_FREEZE (docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md A6)
+          # is checked in this job's top-level `if`, not here: a deploy
+          # replaces the single machine and drops every /ws (CLAUDE.md
+          # pitfall 11), so while frozen the whole job is skipped before any
+          # of these steps — including this one — ever runs, for every
+          # trigger this workflow accepts. See docs/EVENT_RUNBOOK.md.
 
           body=$(curl -fsS --max-time 15 "$HEALTH_URL" 2>/dev/null) || {
             decide true "could not reach $HEALTH_URL, failing open"; exit 0; }

@@ -1,0 +1,10 @@
+[Unit]
+Description=Scrape GET /api/admin/metrics every 20s (readiness/pool/postgres-ms need to be sampled well inside the 60s-2min alert windows)
+
+[Timer]
+OnBootSec=20
+OnUnitActiveSec=20
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
