@@ -105,6 +105,7 @@ function disableHls() {
     "VOICE_PROMOTION_MAX_SFU_MBPS",
     "LIVE_HLS_SIGNED_URLS",
     "LIVE_HLS_PUBLIC_BASE_URL",
+    "LIVE_HLS_PLAYLIST_BASE_URL",
   ]) {
     delete process.env[name];
   }
@@ -248,6 +249,25 @@ describe("the presenter's camera, beside the ladder", () => {
       `${stream!.startedAt}-${CAMERA_RUNG_NAME}.m3u8`,
     );
     expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
+  it("points the camera playlist at the edge host too, when LIVE_HLS_PLAYLIST_BASE_URL is set", async () => {
+    enableHls();
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    install(lk);
+
+    const started = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
+
+    expect(stream?.hlsUrl).toBe(
+      `https://hls.pqp.gg/api/voice/hls-playlist/${CHANNEL}/${started?.startedAt}`,
+    );
+    expect(stream?.cameraHlsUrl).toBe(
+      `https://hls.pqp.gg/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}/${CAMERA_RUNG_NAME}`,
+    );
   });
 
   it("reopens its own session row when the host turns the webcam back on", async () => {

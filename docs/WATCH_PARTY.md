@@ -2690,6 +2690,88 @@ client flag can stay on: with the API answering `enabled: false` the create
 surface still appears but nothing can broadcast, so unset
 `VITE_WATCH_PARTY_CHANNELS` and redeploy web if the surface itself should go.
 
+## Playlists at the edge
+
+Every viewer's player polls the playlist proxy every 2 to 4 seconds for as
+long as they watch, and the playlist body is identical for every viewer of a
+given rendition at a given moment. At party scale that is hundreds of
+identical requests a second landing on the API process that also owns the
+Postgres pool. `tools/hls-edge/` is a Cloudflare Worker that sits in front of
+that route, validates the viewer token itself and shares one origin fetch per
+rendition per 2 seconds across every viewer instead of taking one request per
+viewer. The numbers, and where this sits in a longer list of fixes for the
+same underlying cost, are in
+[`docs/plans/RELOAD_STORM.md`](./plans/RELOAD_STORM.md); the Worker's own
+design (why only the rendition route is cached, why the token check stays
+authoritative at the edge, the secret it holds and the one it deliberately
+does not) is in [`tools/hls-edge/README.md`](../tools/hls-edge/README.md).
+
+### Deploying the Worker
+
+```sh
+cd tools/hls-edge
+npm install
+npx wrangler login                                 # once
+npx wrangler secret put HLS_VIEWER_TOKEN_SECRET     # see README.md for the value -- NOT CLERK_SECRET_KEY
+npx wrangler deploy
+```
+
+Then in the Cloudflare dashboard add the DNS record: a proxied CNAME (or
+A/AAAA, matching however the rest of `pqp.gg` is routed) for the proposed
+`hls.pqp.gg` pointed at this Worker. `ORIGIN_BASE` in `wrangler.jsonc` already
+points at `https://api.pqp.gg`; only the DNS record and the secret are
+per-deploy setup.
+
+### Turning it on: `LIVE_HLS_PLAYLIST_BASE_URL`
+
+`restarts-api`. Unset (every deployment today) hands out the API-relative
+playlist path exactly as before, untouched by anything in this section. Set
+to the edge host (`https://hls.pqp.gg`), `viewerPlaylistUrl` /
+`cameraPlaylistUrl` in `server/src/voice/hls-egress.ts` prepend it to the SAME
+path a viewer's client already requests — no client rebuild, because
+`resolveHlsUrl` in `client/src/lib/hls-playback.ts` already passes an absolute
+URL through untouched (it exists for `LIVE_HLS_SIGNED_URLS=false`'s raw bucket
+URLs, which are absolute the same way), and a master playlist's rung lines are
+written as absolute PATHS that a player resolves against whichever host
+actually served the master.
+
+```sh
+fly secrets set LIVE_HLS_PLAYLIST_BASE_URL=https://hls.pqp.gg -a pqp-api
+```
+
+Only affects SESSIONS THAT START after the deploy: `viewerPlaylistUrl` is read
+once, when a session's `LiveHlsStream` is built, not on every playlist
+request, so a party already underway keeps the URLs it was handed until it
+restarts (a presenter reconnect, a ladder-restart) or a viewer reloads and
+re-joins.
+
+**Rollback**: `fly secrets unset LIVE_HLS_PLAYLIST_BASE_URL -a pqp-api`. The
+next session started goes straight back to API-relative URLs. The Worker
+itself needs no rollback of its own — with the flag unset, nothing ever points
+at it, and it can be left deployed and idle.
+
+### What to watch
+
+`voice.hlsPlaylistRejected` (the API's own counter) stays exactly what it was:
+it only ever fires on a request that reached the origin, which with the edge
+in front means a cache MISS whose token the origin re-checked, or a request
+against the session/master route (always forwarded, never cached — see the
+Worker README for why). It should read close to zero regardless of viewer
+count, same as before.
+
+The Worker has no counterpart to that pipeline — its own stdout is
+Cloudflare's, read from the dashboard's Logs tab (Real-time Logs, or wire up
+Logpush) or `wrangler tail --config tools/hls-edge/wrangler.jsonc`, not from
+this repo's Grafana Loki. It logs three structured lines to watch there:
+`hlsEdge.originFetch` (one per real origin round trip -- this is the number
+that should stay flat as viewer count grows, since it no longer scales with
+viewers, only with rungs × colos), `hlsEdge.cacheHits` (a periodic summary,
+not per-request -- this is what SHOULD scale with viewer count, and is the
+Worker doing its job), and `hlsEdge.playlistRejected` (a bad token at the
+edge, rate-limited the same shape as the API's own rejection log). See
+`tools/hls-edge/README.md` "Load shape" for what one Worker invocation costs
+and what the numbers should look like at party scale.
+
 ## Client flag
 
 `VITE_WATCH_PARTY_CHANNELS=true` turns on the create affordance and the

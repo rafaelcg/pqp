@@ -461,6 +461,36 @@ function publicBaseUrl(): string | null {
   return raw.replace(/\/+$/, "");
 }
 
+/**
+ * `LIVE_HLS_PLAYLIST_BASE_URL`: where a viewer's playlist URLs point.
+ *
+ * Unset (every deployment today): `viewerPlaylistUrl` / `cameraPlaylistUrl`
+ * hand out the API-relative path they always have, and hls.js/native players
+ * poll it on the API process — see `docs/plans/RELOAD_STORM.md` for why that
+ * does not scale past a few hundred concurrent viewers.
+ *
+ * Set to an edge host (`tools/hls-edge/`, proposed `hls.pqp.gg`): the SAME
+ * path, with this base prepended, so the request shape a client makes is
+ * unchanged and only the host differs. This is safe to flip with no client
+ * change because `resolveHlsUrl` in `client/src/lib/hls-playback.ts` already
+ * passes an absolute URL through untouched (it exists to handle
+ * `LIVE_HLS_SIGNED_URLS=false`'s raw bucket URLs, which are absolute the same
+ * way) and the master playlist's own rung URIs are written as absolute PATHS
+ * (`buildMasterPlaylistFor` in `hls-playlist-proxy.ts`), which a player
+ * resolves against whatever host actually served the master — the edge host,
+ * once this is set — with no code path needing to know the base URL exists.
+ *
+ * Only meaningful in signed mode; `LIVE_HLS_SIGNED_URLS=false` keeps handing
+ * out the raw bucket URL regardless, same as today.
+ */
+function playlistBaseUrl(): string | null {
+  const raw = process.env.LIVE_HLS_PLAYLIST_BASE_URL?.trim();
+  if (!raw) {
+    return null;
+  }
+  return raw.replace(/\/+$/, "");
+}
+
 function delaySeconds(): number {
   const raw = Number(process.env.LIVE_HLS_DELAY_SECONDS);
   return Number.isFinite(raw) && raw > 0
@@ -2666,10 +2696,17 @@ function viewerPlaylistUrl(channelId: string, startedAt: number): string {
   if (!hlsSignedUrlsEnabled()) {
     return rawPlaylistUrl(channelId, startedAt);
   }
+  const path = `/api/voice/hls-playlist/${channelId}/${startedAt}`;
+  const edge = playlistBaseUrl();
+  if (edge) {
+    // Absolute, at the edge host: see `playlistBaseUrl()`'s doc comment for
+    // why this needs no client change.
+    return `${edge}${path}`;
+  }
   // API-relative: the client prefixes this with its own API base URL and
   // (for hls.js) attaches its Bearer token via xhrSetup. See
   // `hls-playlist-proxy.ts` for the proxy that answers this route.
-  return `/api/voice/hls-playlist/${channelId}/${startedAt}`;
+  return path;
 }
 
 /**
@@ -2687,7 +2724,9 @@ function cameraPlaylistUrl(channelId: string, startedAt: number): string {
   if (!hlsSignedUrlsEnabled()) {
     return rawPlaylistUrl(channelId, startedAt, CAMERA_RUNG_NAME);
   }
-  return `/api/voice/hls-playlist/${channelId}/${startedAt}/${CAMERA_RUNG_NAME}`;
+  const path = `/api/voice/hls-playlist/${channelId}/${startedAt}/${CAMERA_RUNG_NAME}`;
+  const edge = playlistBaseUrl();
+  return edge ? `${edge}${path}` : path;
 }
 
 /** The same stream, now advertising a camera. */
