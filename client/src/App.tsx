@@ -2653,6 +2653,13 @@ function MainAppContent({
     }
 
     function scheduleReconnectMessagesRefetch(channelId: string) {
+      // Guards the `.finally()` retry path too (below): a fetch that was
+      // still in flight when this effect tore down must not schedule a
+      // fresh timer after the fact — cleanup already ran and nothing will
+      // ever clear that new one.
+      if (cancelled) {
+        return;
+      }
       const state = getReconnectMessagesRefetchState(channelId);
       if (state.inFlight) {
         state.again = true;
@@ -2679,6 +2686,10 @@ function MainAppContent({
       state: { inFlight: boolean; again: boolean },
     ) {
       if (cancelled || selectedChannelIdRef.current !== channelId) {
+        // Nothing left for this channel's entry — drop it rather than keep a
+        // tiny idle record for every channel a long session ever reconnected
+        // on (Farol review: the map otherwise grows unbounded).
+        reconnectMessagesRefetchState.delete(channelId);
         return;
       }
       state.inFlight = true;
@@ -2699,6 +2710,9 @@ function MainAppContent({
           if (state.again) {
             state.again = false;
             scheduleReconnectMessagesRefetch(channelId);
+          } else {
+            // Fully idle: no timer, not in flight, nothing else queued.
+            reconnectMessagesRefetchState.delete(channelId);
           }
         });
     }
