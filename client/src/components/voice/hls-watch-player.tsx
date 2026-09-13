@@ -747,7 +747,7 @@ export function HlsWatchPlayer({
         // The stream recovered on its own (or the "recover" branch's seek
         // worked) before a jittered reconnect from an earlier tick fired.
         // That reconnect is now stale — cancel it rather than reloading a
-        // player that just came back (Farol review, PR #558).
+        // player that just came back (Farol review).
         clearPendingReconnect();
       }
     };
@@ -818,7 +818,7 @@ export function HlsWatchPlayer({
         // the SAME ongoing stall — let it run rather than stacking another
         // (each tick re-evaluates the same "sequence-stuck" condition until
         // it resolves, so without this guard a persistent stall would queue
-        // one reconnect per tick — Farol review, PR #558).
+        // one reconnect per tick — Farol review).
         return;
       }
       console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
