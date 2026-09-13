@@ -1887,7 +1887,11 @@ function ActiveCall({
                 {t("call.panel.declined", { name })}
               </span>
             ))}
-            {presenterName && screenStream && (
+            {/* NOT FOR A WATCH PARTY (2026-09-13): the presenter dock one row
+                up already says Trocar / Parar de compartilhar, which is this
+                sentence as buttons. Duplicate status on a fading overlay is
+                what the presenter-UI plan set out to remove. */}
+            {presenterName && screenStream && !watchPartyChrome && (
               <span className="ml-2 text-signal">
                 {focusedIsLocal
                   ? t("voice.share.youPresenting")

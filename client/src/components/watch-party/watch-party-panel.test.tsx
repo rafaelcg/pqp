@@ -508,10 +508,14 @@ describe("the persistent mic-muted warning (2026-09-13)", () => {
       ...over,
     });
 
-  it("warns, with an Ativar mic button, while presenting with the mic muted", () => {
+  it("warns while presenting with the mic muted; the dock's mic pill is the fix", () => {
+    // The banner used to carry its own Ativar mic button. Since the dock
+    // (2026-09-13) the mute toggle is the pill one row down, so the banner
+    // is a sentence and the pill is the only mute control on the surface.
     const html = live({ isPresenting: true, micState: "muted" });
     expect(html).toContain("watch-party-mic-muted-warning");
-    expect(html).toContain("data-watch-party-activate-mic");
+    expect(html).not.toContain("data-watch-party-activate-mic");
+    expect(html).toContain('data-watch-party-mic="muted"');
   });
 
   it("says nothing while not presenting, muted or not", () => {
@@ -894,5 +898,106 @@ describe("visibleRaisedHands", () => {
   it("hides nothing at exactly the cap", () => {
     const hands = Array.from({ length: 20 }, (_, i) => hand(i));
     expect(visibleRaisedHands(hands).hiddenCount).toBe(0);
+  });
+});
+
+/**
+ * TWO BARS (2026-09-13). Moonkase's party came back with "separate the
+ * streamer UI from the spectator UI" and "we need volume controls for the
+ * streamer and the film". The mixer already existed, inside a disclosure
+ * that defaults closed; the audience bar was the presenter's bar with most
+ * of it hidden. These pin the split and the mixer's new front door.
+ */
+describe("the live bar, by who is behind it", () => {
+  const chrome = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live" },
+      onToggleMute: () => {},
+      ...over,
+    });
+
+  it("gives the host a presenter bar with the audio mixer one press away", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "host" } });
+    expect(html).toContain('data-watch-party-bar="presenter"');
+    expect(html).toContain("data-watch-party-mixer-toggle");
+    expect(html).toContain("data-watch-party-options-toggle");
+    expect(html).toContain("data-watch-party-end");
+  });
+
+  it("gives a co-host the same presenter bar", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "cohost" } });
+    expect(html).toContain('data-watch-party-bar="presenter"');
+    expect(html).toContain("data-watch-party-mixer-toggle");
+  });
+
+  it("gives a viewer an audience bar: the party, the link, and nothing of the presenter's", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "viewer" } });
+    expect(html).toContain('data-watch-party-bar="audience"');
+    expect(html).toContain("data-watch-party-share");
+    expect(html).not.toContain("data-watch-party-mixer-toggle");
+    expect(html).not.toContain("data-watch-party-options-toggle");
+    expect(html).not.toContain("data-watch-party-bar-share");
+    expect(html).not.toContain("data-watch-party-end");
+    expect(html).not.toContain("watch-party-tx-toggle");
+  });
+
+  it("puts the presenter's output controls on the dock, not the header", () => {
+    const html = chrome({
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      micState: "everyone",
+      onShareScreen: async () => {},
+    });
+    const dockAt = html.indexOf('data-testid="watch-party-dock"');
+    const barAt = html.indexOf('data-watch-party-bar="presenter"');
+    expect(dockAt).toBeGreaterThan(barAt);
+    // On the dock: mic pill, share, mixer.
+    const dock = html.slice(dockAt);
+    expect(dock).toContain("data-watch-party-mic=");
+    expect(dock).toContain("data-watch-party-bar-share");
+    expect(dock).toContain("data-watch-party-mixer-toggle");
+    // On the header: link, gear, Encerrar, and not the output controls.
+    const bar = html.slice(barAt, dockAt);
+    expect(bar).toContain("data-watch-party-share");
+    expect(bar).toContain("data-watch-party-options-toggle");
+    expect(bar).toContain("data-watch-party-end");
+    expect(bar).not.toContain("data-watch-party-bar-share");
+    expect(bar).not.toContain("data-watch-party-mixer-toggle");
+    expect(bar).not.toContain("data-watch-party-mic=");
+  });
+
+  it("draws the transmission as a status line with a health dot, details in a dialog", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "host" } });
+    expect(html).toContain("watch-party-tx-health");
+    expect(html).toContain('data-tx-health="idle"');
+    expect(html).not.toContain("watch-party-tx-mixer-summary");
+  });
+
+  it("gives a viewer no dock", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "viewer" } });
+    expect(html).not.toContain("watch-party-dock");
+  });
+
+  it("keeps the checklist on the empty stage and drops its second share button", () => {
+    const html = render({
+      slot: "surface",
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      canStart: true,
+      onShareScreen: async () => {},
+    });
+    expect(html).toContain("watch-party-waiting");
+    expect(html).not.toContain("data-watch-party-share-screen");
+  });
+
+  it("keeps the mixer's sliders out of the chrome: the dialog owns them", () => {
+    // The transmission details render closed here, so the summary row is
+    // pinned in `watch-party-transmission.test.tsx` instead. What this
+    // guards is that nothing inline draws the sliders any more.
+    const html = chrome({
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      isPresenting: true,
+    });
+    expect(html).toContain("watch-party-transmission");
+    expect(html).not.toContain("watch-party-tx-mic-gain-slider");
   });
 });
