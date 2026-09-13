@@ -15,6 +15,7 @@ Adding one means adding a row here.
 | Baú post | `components/community-home/community-home-post-hint.tsx` | Corner card | a publish in the open server while looking at another channel (unread went up; not the author) | CTA opens Baú; X / Escape / 8 s. Not a campaign: no `lib/hints.ts` key |
 | Update ready | `components/layout/update-prompt.tsx` | Corner card, and a rail icon while a build waits | a new build is waiting | Reload. Later snoozes 20 min; Escape does not touch it |
 | QG invite | `components/layout/qg-hint.tsx` | Corner card with hero | QG is listed and not joined | `pqp:qg-hint-…` (impression) |
+| Voz limpa nudge | `components/voice/voice-clean-hint.tsx` | Inline CornerCard above the user bar | first voice call with the mic on since ship, desktop (≥640px), not presenting a watch party | `voiceCleanNudgeDismissedAt` (preference — "Ativar" or "Depois" both count). Narrower than 640px: no card, a NOVO dot on the Settings noise-suppression row instead |
 | Mobile beta | `components/layout/mobile-beta-hint.tsx` | Corner card | phone browser, not the native app | `pqp:mobile-beta-hint-…` (impression) |
 | What's new (corner) | `components/layout/whats-new-prompt.tsx` | Corner card | pack id unseen | `pqp:whats-new` (impression) |
 | What's New (rail) | `components/layout/whats-new-view.tsx` + sparkle on `server-rail.tsx` | Rail icon, lime pip | newest `/blog` slug unseen | `pqp:whats-new-feed` (opening the feed) |
@@ -32,8 +33,11 @@ Adding one means adding a row here.
 
 **One corner at a time.** Every corner card renders through
 `components/layout/corner-card.tsx` and is arbitrated by
-`lib/corner-hints.ts` (`CORNER_HINT_ORDER`: update, communityHomePost, qg, mobileBeta, whatsNew,
-cargos, shortcuts). The update prompt is mounted in `main.tsx` outside `App`;
+`lib/corner-hints.ts` (`CORNER_HINT_ORDER`: update, communityHomePost, qg, voiceClean,
+mobileBeta, whatsNew, cargos, shortcuts — `voiceClean` is the one entry that
+does not paint in the bottom-right corner; it shares the list because "never
+two cards at once" is the rule, not the position). The update prompt is
+mounted in `main.tsx` outside `App`;
 it reports through `lib/update-prompt-state.ts` so the queue in `App` yields
 to it. Two cards in the same corner is a stack, and the one underneath records
 its impression without ever being seen. Being in the order is not enough:

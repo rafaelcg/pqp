@@ -1,8 +1,16 @@
 # Noise suppression
 
 The microphone has three settings instead of a tick box: **Desligada**,
-**Padrão (navegador)** and **Avançada (RNNoise)**. Client-only, in
+**Padrão (navegador)** and **Voz limpa** (`"advanced"` in code and in
+`preferences`/`localStorage` — the row was RNNoise's technical name in the UI
+until the one-time nudge shipped; see `docs/ONBOARDING.md`). Client-only, in
 `client/src/lib/noise-suppression.ts`.
+
+RNNoise itself is never named in the product outside the one Settings
+description that carries it in parentheses (`settings.voice.processing.noise.advancedHint`)
+— everywhere else, including the one-time nudge card above the user bar
+(`components/voice/voice-clean-hint.tsx`, `lib/voice-clean.ts`), it is "Voz
+limpa" / "Clean voice".
 
 `Padrão` is the default and is what every account already has. **Nothing about
 this feature runs until somebody picks `Avançada`** — no wasm is fetched, no
@@ -77,9 +85,15 @@ Nothing here is allowed to break a microphone.
    without it and `applyConstraints({ noiseSuppression: true })` asks the
    browser to take over on the live track, best effort.
 
-All three log `console.warn("[mic] advanced noise suppression unavailable", err)`
-and are otherwise silent. The setting stays where the user put it: the failure
-may be this device, this build or this minute.
+All three log `console.warn("[mic] advanced noise suppression unavailable", err)`.
+The setting stays where the user put it: the failure may be this device, this
+build or this minute. Cases 1 and 2 also set `voiceState.notice`, which the
+call stage renders, to `voice.notice.noiseSuppressionUnsupported` ("O teu
+navegador não suporta a Voz limpa ainda; a supressão padrão continua ligada.")
+— those two are known-before-capture and worth a sentence; case 3 stays
+silent, because it means the chain was already open and playing on the
+standard suppressor by the time it happens, and a mid-call notice about a
+node nobody asked about a second time would be noise of its own.
 
 ## Measuring it
 

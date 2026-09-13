@@ -103,6 +103,10 @@ import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { ShortcutsHint } from "@/components/layout/shortcuts-hint";
+import {
+  VoiceCleanActivatedToast,
+  VoiceCleanHint,
+} from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
@@ -124,6 +128,10 @@ import {
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
+import {
+  shouldOfferVoiceCleanNudge,
+  voiceCleanNudgeDismissedPatch,
+} from "@/lib/voice-clean";
 import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
 import {
   hasUnseenWhatsNew,
@@ -210,6 +218,7 @@ import {
   type ChannelSidebarPreference,
 } from "@/lib/channel-sidebar-preference";
 import { useMdUp } from "@/hooks/use-md-up";
+import { useSmUp } from "@/hooks/use-sm-up";
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import {
   formatBinding,
@@ -1196,6 +1205,11 @@ function MainAppContent({
   // The channel list as a strip of icons. `auto` follows the share until
   // somebody touches the toggle; after that it is theirs.
   const columnLayout = useMdUp();
+  // Voz limpa nudge: the card only shows `sm` and up (docs/ONBOARDING.md —
+  // below it the NOVO dot in Settings is the discoverability instead).
+  const voiceCleanDesktopViewport = useSmUp();
+  const [voiceCleanActivatedToast, setVoiceCleanActivatedToast] =
+    useState(false);
   const [channelSidebar, setChannelSidebar] =
     useState<ChannelSidebarPreference>("auto");
   useEffect(() => {
@@ -4866,6 +4880,51 @@ function MainAppContent({
   }, []);
 
   /**
+   * The Voz limpa nudge is put away — same shape as `settleCommunityHomeIntro`,
+   * and it is what both "Ativar" and "Depois" call: either one is an answer,
+   * so neither should leave the card able to come back.
+   */
+  const settleVoiceCleanNudge = useCallback(() => {
+    const patch = voiceCleanNudgeDismissedPatch();
+    setUser((previous) =>
+      previous
+        ? { ...previous, preferences: { ...previous.preferences, ...patch } }
+        : previous,
+    );
+    void updatePreferences(patch).catch(() => {
+      // Worst case the card is offered once more on the next qualifying call.
+    });
+  }, []);
+
+  /**
+   * "Ativar" on the Voz limpa nudge: the same live-apply path Settings uses
+   * for the noise-suppression select, so a call already in progress hears
+   * the switch the same way it would from the modal. A plain function, not a
+   * `useCallback` — it calls `handleAudioSettingsLive`, itself redefined every
+   * render, and closes over `localSettings` directly rather than chasing that
+   * identity through a dependency array.
+   */
+  function activateVoiceClean() {
+    settleVoiceCleanNudge();
+    handleAudioSettingsLive({
+      ...localSettings,
+      micProcessing: {
+        ...localSettings.micProcessing,
+        noiseSuppression: "advanced",
+      },
+    });
+    setVoiceCleanActivatedToast(true);
+  }
+
+  useEffect(() => {
+    if (!voiceCleanActivatedToast) {
+      return;
+    }
+    const timer = setTimeout(() => setVoiceCleanActivatedToast(false), 3000);
+    return () => clearTimeout(timer);
+  }, [voiceCleanActivatedToast]);
+
+  /**
    * Walk in, rather than asking whether they meant to.
    *
    * WHAT THIS REPLACES. `/app/invite/<code>` used to open the join dialog with
@@ -5594,6 +5653,19 @@ function MainAppContent({
       selection.kind === "server" &&
       Boolean(selectedServerId),
   });
+  const voiceChannel =
+    voiceState.voiceChannelId
+      ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
+      : null;
+  const wantsVoiceCleanHint = shouldOfferVoiceCleanNudge({
+    dismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
+    automated: isAutomatedBrowser(),
+    inCall: voiceState.status === "connected",
+    micOn: !voiceState.isMuted,
+    presentingWatchParty:
+      voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
+    isDesktopViewport: voiceCleanDesktopViewport,
+  });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
     communityHomePost: Boolean(
@@ -5601,6 +5673,7 @@ function MainAppContent({
         communityHomePostToast.serverId === selectedServerId,
     ),
     qg: qgHintWanted,
+    voiceClean: wantsVoiceCleanHint,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
     cargos:
@@ -5615,11 +5688,6 @@ function MainAppContent({
   const liveAttachedHint =
     cornerHint === null || cornerHint === "shortcuts"
       ? attachedFeatureHint
-      : null;
-
-  const voiceChannel =
-    voiceState.voiceChannelId
-      ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
       : null;
   /** The conversation the active call lives in, when it is a DM call. */
   const voiceConversation = voiceState.voiceChannelId
@@ -5762,6 +5830,19 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           compact={compact}
         />
+      )}
+      {/* Anchored above the user bar, never inside the icons-only rail:
+          `layout="inline"` clamps to the parent width, and 72px has no room
+          for either the card or the toast. */}
+      {!compact && (
+        <>
+          <VoiceCleanHint
+            enabled={cornerHint === "voiceClean"}
+            onActivate={activateVoiceClean}
+            onDismiss={settleVoiceCleanNudge}
+          />
+          <VoiceCleanActivatedToast show={voiceCleanActivatedToast} />
+        </>
       )}
       <UserPanel
         compact={compact}

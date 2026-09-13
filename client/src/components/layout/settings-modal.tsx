@@ -99,6 +99,11 @@ import {
 import { desktopContext, getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
+  isVoiceCleanSettingsSeen,
+  markVoiceCleanSettingsSeen,
+  shouldShowVoiceCleanSettingsBadge,
+} from "@/lib/voice-clean";
+import {
   SUPPORTED_LOCALES,
   setLocalePreference,
   type Locale,
@@ -890,6 +895,7 @@ function VoiceSection({
   devicesError,
   voiceAnalyser,
   metering,
+  showVoiceCleanBadge,
 }: {
   draftLocal: LocalSettings;
   patchLocal: (partial: Partial<LocalSettings>) => void;
@@ -900,6 +906,8 @@ function VoiceSection({
   devicesError: string | null;
   voiceAnalyser: AnalyserNode | null;
   metering: boolean;
+  /** NOVO dot on the noise-suppression row; see `lib/voice-clean.ts`. */
+  showVoiceCleanBadge: boolean;
 }) {
   const { t } = useTranslation();
   const canSelectOutput = supportsAudioOutputSelection();
@@ -1080,8 +1088,13 @@ function VoiceSection({
           </label>
         ))}
         <label className="block">
-          <span className="mb-1 block text-sm">
+          <span className="mb-1 flex items-center gap-2 text-sm">
             {t("settings.voice.processing.noise")}
+            {showVoiceCleanBadge && (
+              <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
+                {t("voiceClean.badge")}
+              </span>
+            )}
           </span>
           <select
             value={draftLocal.micProcessing.noiseSuppression}
@@ -3407,6 +3420,26 @@ export function SettingsModal({
   // actually on screen. Under the old single column, merely opening settings to
   // change a display name prompted for the mic.
   const voiceVisible = settingsOpen && section === "voice";
+  // The NOVO dot on the noise-suppression row: owed until this section has
+  // been opened once, or the Voz limpa nudge card was acted on — whichever
+  // comes first (`lib/voice-clean.ts`).
+  const [showVoiceCleanBadge, setShowVoiceCleanBadge] = useState(() =>
+    shouldShowVoiceCleanSettingsBadge({
+      settingsSeen: isVoiceCleanSettingsSeen(),
+      nudgeDismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
+    }),
+  );
+  useEffect(() => {
+    if (voiceVisible) {
+      markVoiceCleanSettingsSeen();
+      setShowVoiceCleanBadge(false);
+    }
+  }, [voiceVisible]);
+  useEffect(() => {
+    if (user?.preferences?.voiceCleanNudgeDismissedAt) {
+      setShowVoiceCleanBadge(false);
+    }
+  }, [user?.preferences?.voiceCleanNudgeDismissedAt]);
 
   useEffect(() => {
     if (!open) {
@@ -3625,6 +3658,7 @@ export function SettingsModal({
                 devicesError={devicesError}
                 voiceAnalyser={voiceAnalyser}
                 metering={voiceVisible}
+                showVoiceCleanBadge={showVoiceCleanBadge}
               />
             )}
 

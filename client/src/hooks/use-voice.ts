@@ -687,6 +687,7 @@ async function createMicPipeline(
   onDeviceGone?: () => void,
   onFallback?: (label: string | null) => void,
   isCancelled?: () => boolean,
+  onNoiseSuppressionFallback?: () => void,
 ): Promise<MicPipeline> {
   // Resolve the advanced path BEFORE the microphone is opened, because the
   // answer changes what `getUserMedia` is asked for: advanced mode wants the
@@ -702,12 +703,14 @@ async function createMicPipeline(
         new Error("AudioWorklet or WebAssembly missing"),
       );
       mode = "browser";
+      onNoiseSuppressionFallback?.();
     } else {
       try {
         rnnoiseBinary = await loadRnnoiseBinary();
       } catch (err) {
         console.warn("[mic] advanced noise suppression unavailable", err);
         mode = "browser";
+        onNoiseSuppressionFallback?.();
       }
     }
   }
@@ -1895,6 +1898,11 @@ export function createVoiceController(transport: RealtimeTransport) {
             : translateMessage("voice.notice.micFallbackUnnamed");
         },
         () => generation !== joinGeneration,
+        () => {
+          state.notice = translateMessage(
+            "voice.notice.noiseSuppressionUnsupported",
+          );
+        },
       );
       if (generation !== joinGeneration) {
         // Superseded while the new mic was being set up (left, rejoined, or
@@ -3948,6 +3956,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           // or the permission prompt was pending: never open (or keep open)
           // a mic for a join nobody is waiting on.
           () => generation !== joinGeneration,
+          () => {
+            state.notice = translateMessage(
+              "voice.notice.noiseSuppressionUnsupported",
+            );
+          },
         );
 
         if (generation !== joinGeneration) {
