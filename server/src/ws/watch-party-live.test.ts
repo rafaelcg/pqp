@@ -28,6 +28,7 @@ const rows = vi.hoisted(() => ({
 
 vi.mock("../services/watch-parties.js", () => ({
   getWatchPartyRow: async () => rows.current,
+  invalidateActiveWatchParty: () => {},
   loadCohostRows: async () => [],
   mapWatchParty: () => null,
   markWatchPartyHostBack: async () => {},

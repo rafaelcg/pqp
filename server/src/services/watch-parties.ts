@@ -19,6 +19,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { logEvent } from "../lib/log.js";
+import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { getEveryoneRoleId } from "./permissions.js";
 import {
   deleteChannelOverwrite,
@@ -246,7 +247,39 @@ export async function getWatchPartyRow(
   return result.rows[0] ?? null;
 }
 
+const WATCH_PARTY_ACTIVE_TTL_MS = 2_000;
+
+function activeWatchPartyCacheKey(channelId: string): string {
+  return `watch-party:active:${channelId}`;
+}
+
+/** Drop the cached active-party row for a channel. `broadcastWatchParty`
+ *  (`ws/watch-party-events.ts`) is "THE ONE PLACE THAT SEES EVERY STATE
+ *  CHANGE" per its own comment, so calling this from there covers every
+ *  mutation — draft, go-live, stage changes, voice toggle, end — with one
+ *  hook rather than one at each of the seven write call sites. */
+export function invalidateActiveWatchParty(channelId: string): void {
+  invalidateReadCache(activeWatchPartyCacheKey(channelId));
+}
+
+/**
+ * The channel's active party row, before any per-viewer shaping
+ * (`watchPartyActor`, `presentWatchParty`) — identical for every caller with
+ * access to the channel, and exactly what `GET
+ * /api/channels/:channelId/watch-party` and a reconnecting sidebar ask for
+ * repeatedly during a reload storm. Cached; see `invalidateActiveWatchParty`.
+ */
 export async function getActiveWatchPartyRow(
+  channelId: string,
+): Promise<WatchPartyRow | null> {
+  return coalesce(
+    activeWatchPartyCacheKey(channelId),
+    WATCH_PARTY_ACTIVE_TTL_MS,
+    () => fetchActiveWatchPartyRow(channelId),
+  );
+}
+
+async function fetchActiveWatchPartyRow(
   channelId: string,
 ): Promise<WatchPartyRow | null> {
   const result = await getPool().query<WatchPartyRow>(

@@ -520,9 +520,15 @@ describeDb("watch party ownership", () => {
     expect(early.ended).toEqual([]);
     expect((await readChannelParty(member)).body.party?.state).toBe("live");
 
-    // With no grace at all the same row is past its deadline.
+    // With no grace at all the same row is past its deadline. `jobs.ts`'s
+    // real sweep tick calls `broadcastWatchParty` for each ended session
+    // right after this — that is what invalidates the cached "party is
+    // live" answer for the channel, same as every other party mutation.
     const late = await sweepWatchPartyHosts(Date.now(), 0);
     expect(late.ended.map((e) => e.sessionId)).toEqual([party.id]);
+    await Promise.all(
+      late.ended.map((e) => watchPartyEvents.broadcastWatchParty(e.sessionId)),
+    );
     expect((await readChannelParty(member)).body.party).toBeNull();
 
     // A host who comes back clears the clock, and the sweep leaves the party

@@ -24,6 +24,7 @@ import {
   type RetentionReport,
 } from "./acquisition.js";
 import { dbTxByPath } from "../lib/db-tx-metrics.js";
+import { readCacheMetrics } from "../lib/read-cache.js";
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
@@ -147,6 +148,26 @@ export interface AdminMetrics {
    */
   dbTx: {
     byPath: Record<string, number>;
+  };
+  /**
+   * `read-cache.ts`'s counters, cumulative since boot: `coalesce` calls that
+   * found a fresh entry (`hits`), that had to run the loader (`misses`),
+   * that joined an already-running load instead of starting a second one
+   * (`coalesced` — the number that collapses during a reload storm), and
+   * that were served a stale-but-within-window value while a background
+   * refresh ran (`staleServed`). `size` is the current entry count, bounded
+   * by the module's LRU cap. Born from the same 2026-09-12 postmortem (A2)
+   * as `dbTx` above: this is the read side of that fix, caching the latest
+   * message page, a server's channel list, and a channel's watch-party
+   * state. Off (falling back to `misses` for everything) when
+   * `READ_CACHE=off`.
+   */
+  readCache: {
+    hits: number;
+    misses: number;
+    coalesced: number;
+    staleServed: number;
+    size: number;
   };
   /**
    * What the channel-presence fan-out is doing since the last deploy: frames
@@ -953,6 +974,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     activeTextChannels24h: Number(m?.active_text_channels ?? 0),
     channels: channelCounts,
     dbTx: { byPath: dbTxByPath() },
+    readCache: readCacheMetrics(),
     presence: getPresenceFanoutStats(),
     voice: {
       activeRooms: voice.activeRooms,

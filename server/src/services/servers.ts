@@ -9,6 +9,7 @@ import {
   publishToCluster,
   subscribeToCluster,
 } from "../lib/bus.js";
+import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { deleteObject, isStorageConfigured } from "../lib/s3.js";
 import {
   applyPrivateChannelOverwrites,
@@ -216,22 +217,72 @@ export async function createServer(
   }
 }
 
+const CHANNEL_LIST_TTL_MS = 2_000;
+
+function channelListCacheKey(serverId: string): string {
+  return `channels:server:${serverId}`;
+}
+
+/** Drop a server's cached raw channel list. Call after any write that
+ *  changes the set, order, or column data of its channels: create, delete,
+ *  move/reorder, an update (rename, privacy toggle, topic, ...), or a
+ *  permission overwrite change (`notifyPermissionsUpdate` in `ws/chat.ts`
+ *  calls this too, even though today's cached columns don't encode
+ *  visibility, so a future change that folds visibility in stays correct
+ *  without a second audit of every invalidation site). */
+export function invalidateServerChannelList(serverId: string): void {
+  invalidateReadCache(channelListCacheKey(serverId));
+}
+
+/**
+ * Every non-thread channel of a server, unfiltered by who is asking. This is
+ * the half of `listChannels` that is identical for every member — the
+ * columns, the positions, which channels exist at all — and it is what a
+ * reload storm repeats hundreds of times per server. Cached; see
+ * `invalidateServerChannelList` for what drops it.
+ */
+async function fetchAllServerChannels(serverId: string): Promise<ChannelRow[]> {
+  const result = await getPool().query<ChannelRow>(
+    `SELECT ${CHANNEL_COLUMNS} FROM channels
+      WHERE server_id = $1 AND type <> 'thread'
+      ORDER BY position ASC`,
+    [serverId],
+  );
+  return result.rows;
+}
+
 export async function listChannels(
   serverId: string,
   userId: string,
 ): Promise<ChannelRow[]> {
-  const result = await getPool().query<ChannelRow>(
-    `SELECT c.id, c.server_id, c.name, c.type, c.position, c.is_private, c.kind,
-            c.topic, c.image_url, c.parent_id, c.slowmode_seconds, c.voice_transport
-     FROM channels c
-     JOIN server_members sm ON sm.server_id = c.server_id
-     WHERE c.server_id = $1 AND sm.user_id = $2
-       AND c.type <> 'thread'
-       AND ${channelVisibleSql("$2")}
-     ORDER BY c.position ASC`,
+  const all = await coalesce(
+    channelListCacheKey(serverId),
+    CHANNEL_LIST_TTL_MS,
+    () => fetchAllServerChannels(serverId),
+  );
+  if (all.length === 0) {
+    return all;
+  }
+
+  // Per-viewer authorization, run fresh on every call — never cached, never
+  // shared, and the exact predicate this function always used: server
+  // membership, then `channelVisibleSql`, which folds in privacy and every
+  // per-channel permission overwrite. Only the column list changed (`id`
+  // alone, since the rest came from the cached fetch above); a non-member of
+  // `serverId` matches no row here regardless of what the cache holds, and
+  // gets back the same `[]` as before this cache existed.
+  const visible = await getPool().query<{ id: string }>(
+    `SELECT c.id
+       FROM channels c
+       JOIN server_members sm ON sm.server_id = c.server_id
+       WHERE c.server_id = $1 AND sm.user_id = $2
+         AND c.type <> 'thread'
+         AND ${channelVisibleSql("$2")}`,
     [serverId, userId],
   );
-  return result.rows;
+  const visibleIds = new Set(visible.rows.map((row) => row.id));
+  // `all` is already position-ordered; `filter` preserves that order.
+  return all.filter((channel) => visibleIds.has(channel.id));
 }
 
 export async function createChannel(
@@ -271,6 +322,7 @@ export async function createChannel(
     );
     await bumpPermissionsVersion(serverId);
   }
+  invalidateServerChannelList(serverId);
   return channel;
 }
 
@@ -392,6 +444,7 @@ export async function moveChannel(
     }
 
     await client.query("COMMIT");
+    invalidateServerChannelList(serverId);
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
@@ -460,6 +513,9 @@ export async function updateChannel(
   // one wasted query on a rename and the difference between correct and not on
   // the flip.
   invalidateChannelAudience(channelId);
+  if (updated?.server_id) {
+    invalidateServerChannelList(updated.server_id);
+  }
   return updated;
 }
 
@@ -562,6 +618,9 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
     // some other request is still using, must not have its objects removed.
     if (deleted) {
       invalidateChannelAudience(channelId);
+      if (serverId) {
+        invalidateServerChannelList(serverId);
+      }
       // --- threads --- the child threads went in the same transaction.
       for (const threadId of threadIds) {
         invalidateChannelAudience(threadId);
@@ -596,6 +655,7 @@ export async function deleteServer(serverId: string): Promise<boolean> {
     // The channels cascaded away, so every one of their cached audiences is
     // now an answer about a channel that does not exist.
     invalidateServerAudience(serverId);
+    invalidateServerChannelList(serverId);
     deleteObjectsInBackground(keys);
   }
   return deleted;

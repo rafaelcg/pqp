@@ -48,7 +48,11 @@ import {
   type ActiveTimeout,
 } from "../services/sanctions.js";
 import { pushChannelActivity } from "../services/push.js";
-import { getChannel, getChannelAudience } from "../services/servers.js";
+import {
+  getChannel,
+  getChannelAudience,
+  invalidateServerChannelList,
+} from "../services/servers.js";
 import {
   bumpPermissionsVersion,
   computeMemberPermissions,
@@ -857,6 +861,14 @@ export async function notifyPermissionsUpdate(
 ): Promise<void> {
   const version = await bumpPermissionsVersion(serverId);
   const memberIds = await listServerMemberIds(serverId);
+  // An overwrite change can move `listChannels`' per-viewer answer without
+  // touching the `channels` table row itself, so nothing in `servers.ts`'s
+  // own write paths would otherwise catch it. Read-cache.ts's cached columns
+  // don't currently encode visibility, so this is a no-op query saved rather
+  // than a correctness fix today — but it keeps the invalidation table
+  // honest if that ever changes, and it costs one Map scan on an
+  // already-rare event.
+  invalidateServerChannelList(serverId);
   deliverPermissionsUpdate(serverId, version, memberIds);
   if (isBusEnabled()) {
     publishToCluster(PERMISSIONS_TOPIC, {

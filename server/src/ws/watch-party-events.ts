@@ -5,6 +5,7 @@ import {
 } from "@pqp/shared";
 import {
   getWatchPartyRow,
+  invalidateActiveWatchParty,
   loadCohostRows,
   mapWatchParty,
   markWatchPartyHostBack,
@@ -89,6 +90,12 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
   } else {
     invalidateWatchPartySeat(row.channel_id);
   }
+  // Same reasoning as the seat cache just above: this is the one place every
+  // party mutation passes through, so one call here covers `getActiveWatchPartyRow`'s
+  // read-cache entry for every caller (the HTTP read and the reconnect
+  // announcer both go through it) rather than one invalidation per write
+  // call site in `services/watch-parties.ts`.
+  invalidateActiveWatchParty(row.channel_id);
   const audience = await getChannelAudience(row.channel_id).catch(() => null);
   if (!audience) {
     return;
