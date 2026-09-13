@@ -30,7 +30,50 @@ const BANNER_RETRY_MS = 20_000;
  * absent for the rest of this mount; a fresh mount (navigating away and
  * back, or a reload) gets its own five tries.
  */
-const BANNER_MAX_RETRIES = 5;
+export const BANNER_MAX_RETRIES = 5;
+
+/** What `nextBannerRetryState` remembers between one failure and the next. */
+export interface BannerRetryState {
+  trackedUrl: string | null;
+  attempts: number;
+}
+
+export const INITIAL_BANNER_RETRY_STATE: BannerRetryState = {
+  trackedUrl: null,
+  attempts: 0,
+};
+
+/**
+ * Pure retry decision for one failed load, factored out of the hook below so
+ * the counting itself — not React's timer and effect plumbing around it —
+ * is what a test can pin directly, with no DOM, no fake timers, no mounted
+ * component.
+ *
+ * Counts scheduled retries FOR THE URL CURRENTLY FAILING, resetting only
+ * when a *different* URL starts failing — never when the hook clears
+ * `failedUrl` to give the current one another try. That distinction is
+ * load-bearing: clearing the failure to retry and clearing it because the
+ * retry succeeded look identical from the hook's own state (`failedUrl`
+ * goes back to `null` either way), so a version that reset the count on
+ * every null erased the count the instant it was written and the cap never
+ * bound — shipped first, caught only on a second, closer read after a
+ * review flagged the retry as unbounded. `server-identity.test.tsx` pins
+ * exactly that sequence: the same URL failing more than `BANNER_MAX_RETRIES`
+ * times in a row must eventually stop asking for another retry.
+ */
+export function nextBannerRetryState(
+  state: BannerRetryState,
+  failedUrl: string,
+): { state: BannerRetryState; shouldRetry: boolean } {
+  const attempts = failedUrl === state.trackedUrl ? state.attempts : 0;
+  if (attempts >= BANNER_MAX_RETRIES) {
+    return { state: { trackedUrl: failedUrl, attempts }, shouldRetry: false };
+  }
+  return {
+    state: { trackedUrl: failedUrl, attempts: attempts + 1 },
+    shouldRetry: true,
+  };
+}
 
 /**
  * The failed-URL bit `ServerBannerStrip` keeps, with the retry built in: once
@@ -39,26 +82,26 @@ const BANNER_MAX_RETRIES = 5;
  * right back and the timer restarts, up to `BANNER_MAX_RETRIES` times — a
  * transient blip recovers within a couple of intervals with no remount and
  * no reload required, and a permanently dead URL stops generating periodic
- * work instead of retrying forever.
+ * work instead of retrying forever. See `nextBannerRetryState` for the
+ * counting itself.
  */
 function useRetryableImageFailure(): [string | null, (url: string) => void] {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const attemptsRef = useRef(0);
+  const retryStateRef = useRef<BannerRetryState>(INITIAL_BANNER_RETRY_STATE);
 
   useEffect(() => {
     if (!failedUrl) {
-      // A clean slate: either nothing has failed yet, or the last attempt
-      // just succeeded. Either way the next failure starts counting fresh.
-      attemptsRef.current = 0;
       return;
     }
-    if (attemptsRef.current >= BANNER_MAX_RETRIES) {
+    const { state, shouldRetry } = nextBannerRetryState(
+      retryStateRef.current,
+      failedUrl,
+    );
+    retryStateRef.current = state;
+    if (!shouldRetry) {
       return;
     }
-    const timer = setTimeout(() => {
-      attemptsRef.current += 1;
-      setFailedUrl(null);
-    }, BANNER_RETRY_MS);
+    const timer = setTimeout(() => setFailedUrl(null), BANNER_RETRY_MS);
     return () => clearTimeout(timer);
   }, [failedUrl]);
 
