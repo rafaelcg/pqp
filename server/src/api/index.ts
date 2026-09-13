@@ -7786,11 +7786,21 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
   recordHlsTelemetryBatchAccepted();
   // One structured line per batch (not per sample): a live party's worth of
   // these is meant to be readable by a human during an event, not a second
-  // copy of the histogram in the log shipper.
+  // copy of the histogram in the log shipper. `medianLatencyMs` is a numeric
+  // field so Loki's `quantile_over_time` can chart a live trend
+  // (`docs/MONITORING.md` B0.6); it is the median of THIS batch's own
+  // samples, not the rung's real p50 across every viewer -- that number,
+  // correctly bucketed per rung, is `GET /api/admin/metrics`'s
+  // `liveHls.latency.byRung`, which this line is a rough live preview of and
+  // not a replacement for.
+  const sortedLatencies = batch.samples
+    .map((sample) => sample.latencyMs)
+    .sort((a, b) => a - b);
   logEvent("voice.hlsTelemetryBatch", {
     sessionId: batch.sessionId,
     samples: batch.samples.length,
     rungs: [...new Set(batch.samples.map((sample) => sample.rung))],
+    medianLatencyMs: sortedLatencies[Math.floor(sortedLatencies.length / 2)],
   });
   return { ok: true };
 });

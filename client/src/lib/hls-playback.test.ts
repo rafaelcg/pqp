@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   chooseHlsEngine,
+  createHlsTelemetryQueue,
+  encodeToPaintLatencyMs,
   getHlsRebuildCount,
   hasHlsViewerToken,
+  hlsRungFromPlaylistUrl,
   hlsSessionKey,
+  hlsTelemetryIdentityFromToken,
+  hlsTelemetrySessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
   nextFreshPlaylistUrl,
@@ -13,6 +18,7 @@ import {
   resolveLiveHlsStream,
   sameHlsSession,
   sampleVideoPlaybackQuality,
+  sendHlsTelemetryBatch,
   shouldAdoptHlsSource,
   withFreshHlsToken,
 } from "./hls-playback";
@@ -386,5 +392,260 @@ describe("the hls rebuild counter", () => {
   it("resets cleanly for the next test file's run", () => {
     resetHlsRebuildCountForTest();
     expect(getHlsRebuildCount()).toBe(0);
+describe("hlsTelemetrySessionKey", () => {
+  it("extracts channel and startedAt from a media playlist URL", () => {
+    expect(
+      hlsTelemetrySessionKey(
+        "https://api.example.test/api/voice/hls-playlist/chan-1/1700000000000/720p30?t=abc",
+      ),
+    ).toBe("chan-1:1700000000000");
+  });
+
+  it("extracts channel and startedAt from a master (no-rung) playlist URL", () => {
+    expect(
+      hlsTelemetrySessionKey(
+        "https://api.example.test/api/voice/hls-playlist/chan-1/1700000000000?t=abc",
+      ),
+    ).toBe("chan-1:1700000000000");
+  });
+
+  it("is null for a URL that is not the playlist proxy", () => {
+    expect(hlsTelemetrySessionKey("https://live.example.test/a.m3u8")).toBeNull();
+  });
+});
+
+describe("hlsRungFromPlaylistUrl", () => {
+  it("extracts the rung path segment", () => {
+    expect(
+      hlsRungFromPlaylistUrl(
+        "https://api.example.test/api/voice/hls-playlist/chan-1/1700000000000/720p30",
+      ),
+    ).toBe("720p30");
+  });
+
+  it("is null for a master (no-rung) URL", () => {
+    expect(
+      hlsRungFromPlaylistUrl(
+        "https://api.example.test/api/voice/hls-playlist/chan-1/1700000000000",
+      ),
+    ).toBeNull();
+  });
+
+  it("is null for null, undefined or an unrelated URL", () => {
+    expect(hlsRungFromPlaylistUrl(null)).toBeNull();
+    expect(hlsRungFromPlaylistUrl(undefined)).toBeNull();
+    expect(hlsRungFromPlaylistUrl("https://live.example.test/a.ts")).toBeNull();
+  });
+});
+
+describe("hlsTelemetryIdentityFromToken", () => {
+  it("reads the sub claim out of a JWT-shaped token, unverified", () => {
+    const payload = btoa(JSON.stringify({ sub: "user_abc123" }))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+    const token = `header.${payload}.signature`;
+    expect(hlsTelemetryIdentityFromToken(token)).toBe("user_abc123");
+  });
+
+  it("falls back to the raw token when it does not look like a JWT", () => {
+    expect(hlsTelemetryIdentityFromToken("dev-local-token")).toBe(
+      "dev-local-token",
+    );
+    expect(hlsTelemetryIdentityFromToken("dev-local-token:bob")).toBe(
+      "dev-local-token:bob",
+    );
+  });
+
+  it("falls back to the raw token when the JWT-shaped string has no readable sub", () => {
+    const payload = btoa(JSON.stringify({ nope: true }));
+    const token = `header.${payload}.signature`;
+    expect(hlsTelemetryIdentityFromToken(token)).toBe(token);
+  });
+
+  it("is null for a null token", () => {
+    expect(hlsTelemetryIdentityFromToken(null)).toBeNull();
+  });
+
+  it("is deterministic for the same token", () => {
+    const token = "dev-local-token:alice";
+    expect(hlsTelemetryIdentityFromToken(token)).toBe(
+      hlsTelemetryIdentityFromToken(token),
+    );
+  });
+});
+
+describe("encodeToPaintLatencyMs", () => {
+  it("computes latency from a fragment's PDT and the painted media time", () => {
+    const frag = { programDateTimeMs: 1_000_000, startSeconds: 10 };
+    // The painted frame is 2s into this fragment, so its own wall clock is
+    // 1_000_000 + 2000 = 1_002_000. "Now" is 1_010_000, so latency is 8_000.
+    expect(encodeToPaintLatencyMs(frag, 12, 1_010_000)).toBe(8_000);
+  });
+
+  it("is null when the fragment carries no usable PDT", () => {
+    expect(encodeToPaintLatencyMs({ programDateTimeMs: 0, startSeconds: 0 }, 5, 1_000)).toBeNull();
+    expect(
+      encodeToPaintLatencyMs({ programDateTimeMs: NaN, startSeconds: 0 }, 5, 1_000),
+    ).toBeNull();
+  });
+
+  it("floors a negative result (clock skew) at zero rather than reporting it", () => {
+    const frag = { programDateTimeMs: 1_000_000, startSeconds: 0 };
+    // The painted media time's own wall clock (1_005_000) is AFTER "now"
+    // (1_000_000): impossible without clock skew between browser and egress.
+    expect(encodeToPaintLatencyMs(frag, 5, 1_000_000)).toBe(0);
+  });
+
+  it("defaults `now` to the real clock when not given", () => {
+    const frag = { programDateTimeMs: Date.now() - 5_000, startSeconds: 0 };
+    const latency = encodeToPaintLatencyMs(frag, 0);
+    expect(latency).not.toBeNull();
+    expect(latency!).toBeGreaterThan(4_000);
+    expect(latency!).toBeLessThan(6_000);
+  });
+});
+
+describe("createHlsTelemetryQueue", () => {
+  let tick: (() => void) | null = null;
+
+  function fakeTimers() {
+    return {
+      setInterval: ((fn: () => void) => {
+        tick = fn;
+        return 1 as unknown as ReturnType<typeof window.setInterval>;
+      }) as typeof window.setInterval,
+      clearInterval: (() => {
+        tick = null;
+      }) as typeof window.clearInterval,
+    };
+  }
+
+  beforeEach(() => {
+    tick = null;
+  });
+
+  it("does not send anything on push -- only the timer flushes", () => {
+    const send = vi.fn();
+    const queue = createHlsTelemetryQueue({ sessionId: "s1", send, ...fakeTimers() });
+    queue.push({ rung: "720p30", latencyMs: 1_000 });
+    expect(send).not.toHaveBeenCalled();
+    queue.stop();
+  });
+
+  it("flushes the buffered batch on the interval and clears it after", () => {
+    const send = vi.fn();
+    const queue = createHlsTelemetryQueue({ sessionId: "s1", send, ...fakeTimers() });
+    queue.push({ rung: "720p30", latencyMs: 1_000 });
+    queue.push({ rung: "720p30", latencyMs: 2_000 });
+    tick!();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith({
+      sessionId: "s1",
+      samples: [
+        { rung: "720p30", latencyMs: 1_000 },
+        { rung: "720p30", latencyMs: 2_000 },
+      ],
+    });
+    // The buffer was cleared: a second tick with nothing new sends nothing.
+    tick!();
+    expect(send).toHaveBeenCalledTimes(1);
+    queue.stop();
+  });
+
+  it("an empty buffer never sends an empty batch", () => {
+    const send = vi.fn();
+    const queue = createHlsTelemetryQueue({ sessionId: "s1", send, ...fakeTimers() });
+    tick!();
+    expect(send).not.toHaveBeenCalled();
+    queue.stop();
+  });
+
+  it("manual flush() bypasses the timer, for an unmount", () => {
+    const send = vi.fn();
+    const queue = createHlsTelemetryQueue({ sessionId: "s1", send, ...fakeTimers() });
+    queue.push({ rung: "720p30", latencyMs: 1_000 });
+    queue.flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    queue.stop();
+  });
+
+  it("stop() clears the timer and drops anything still buffered", () => {
+    const clearInterval = vi.fn();
+    const send = vi.fn();
+    const queue = createHlsTelemetryQueue({
+      sessionId: "s1",
+      send,
+      setInterval: fakeTimers().setInterval,
+      clearInterval,
+    });
+    queue.push({ rung: "720p30", latencyMs: 1_000 });
+    queue.stop();
+    expect(clearInterval).toHaveBeenCalled();
+    // Nothing left to flush even if something called flush() after stop.
+    queue.flush();
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendHlsTelemetryBatch", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs to the telemetry endpoint with a Bearer token when one is available", async () => {
+    const fetchMock = vi.fn(
+      async (_url?: string | URL | Request, _init?: RequestInit) =>
+        new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    sendHlsTelemetryBatch(
+      { sessionId: "s1", samples: [{ rung: "720p30", latencyMs: 1_000 }] },
+      async () => "token-abc",
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toContain("/api/live-hls/telemetry");
+    expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).headers).toMatchObject({
+      Authorization: "Bearer token-abc",
+    });
+  });
+
+  it("never throws when the token lookup or the fetch itself fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url?: string | URL | Request, _init?: RequestInit) => {
+        throw new Error("network down");
+      }),
+    );
+    expect(() =>
+      sendHlsTelemetryBatch(
+        { sessionId: "s1", samples: [{ rung: "720p30", latencyMs: 1_000 }] },
+        async () => {
+          throw new Error("no token");
+        },
+      ),
+    ).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  it("omits the Authorization header entirely when there is no token", async () => {
+    const fetchMock = vi.fn(
+      async (_url?: string | URL | Request, _init?: RequestInit) =>
+        new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    sendHlsTelemetryBatch(
+      { sessionId: "s1", samples: [{ rung: "720p30", latencyMs: 1_000 }] },
+      async () => null,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect((init as RequestInit).headers).not.toHaveProperty("Authorization");
   });
 });

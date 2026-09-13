@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/utils";
+import {
+  LIVE_HLS_TELEMETRY_FLUSH_MS,
+  type LiveHlsTelemetryBatch,
+  type LiveHlsTelemetrySample,
+} from "@pqp/shared";
 
 const HLS_PLAYLIST_PROXY_PATH = "/api/voice/hls-playlist/";
 
@@ -332,4 +337,219 @@ export function isAutoplayRefusal(error: unknown): boolean {
     "name" in error &&
     (error as { name: unknown }).name === "NotAllowedError"
   );
+}
+
+// ---------------------------------------------------------------------------
+// BROADCAST_PIPELINE B0.3/B0.5: encode-to-paint latency and its telemetry.
+// ---------------------------------------------------------------------------
+
+/**
+ * A `#EXT-X-PQP-SESSION`-carrying `hls_sessions.id` would be the honest join
+ * key for a telemetry batch (the same id `voice.hls*` log lines carry, since
+ * B0.4), but hls.js's manifest parser does not expose our own custom comment
+ * tags anywhere on the events this player already listens to, and reaching it
+ * would mean either a second, redundant playlist fetch on this component's
+ * own initiative or a new prop threaded through every caller of
+ * `HlsWatchPlayer` -- including one in `components/watch-party/`, which this
+ * change does not touch. So this is the fallback the schema's `sessionId`
+ * field allows (`z.string().min(1).max(64)`, no format requirement): the
+ * channel and `startedAt` the player is actually attached to, which is
+ * EXACTLY what names one party session everywhere else in this codebase
+ * predates B0.4 (`sessionPrefixPattern`, every cache key in
+ * `hls-playlist-proxy.ts`). It groups a viewer's samples by party correctly;
+ * it is just not literally the same string as the DB row id. Wiring the real
+ * id through requires a `LiveHlsStream.sessionId` field and a prop on every
+ * caller, left for a follow-up.
+ */
+const HLS_PLAYLIST_SESSION_KEY_RE =
+  /\/api\/voice\/hls-playlist\/([^/?]+)\/(\d+)(?:\/[^/?]+)?/;
+
+export function hlsTelemetrySessionKey(url: string): string | null {
+  const match = HLS_PLAYLIST_SESSION_KEY_RE.exec(url);
+  if (!match) {
+    return null;
+  }
+  return `${match[1]}:${match[2]}`;
+}
+
+/**
+ * Which rung a media playlist URL names, e.g. `720p30` -- the same path
+ * segment `hls-playlist-proxy.ts` reads on the server. Null for a master
+ * (no-rung) URL or anything that is not this proxy at all.
+ */
+const HLS_PLAYLIST_RUNG_RE =
+  /\/api\/voice\/hls-playlist\/[^/?]+\/\d+\/([^/?]+)/;
+
+export function hlsRungFromPlaylistUrl(url: string | null | undefined): string | null {
+  if (!url) {
+    return null;
+  }
+  const match = HLS_PLAYLIST_RUNG_RE.exec(url);
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
+/**
+ * The sampling identity for `isSampledForHlsTelemetry`, read off whatever
+ * `getAuthToken()` already resolved -- so this needs no Clerk hook of its
+ * own, which matters because `HlsWatchPlayer` renders under the dev-auth
+ * bypass too, where there is no `ClerkProvider` in the tree at all and a
+ * direct `useAuth()` call would throw.
+ *
+ * A Clerk JWT's middle segment carries a `sub` claim (the Clerk user id);
+ * read UNVERIFIED, because this is a client-side sampling coin flip, not an
+ * access decision, and the worst a forged token buys is landing on the wrong
+ * side of a 10% split. The dev-auth bypass token (`dev-local-token[:suffix]`)
+ * is not a JWT at all and is used as-is: stable per browser/suffix, which is
+ * all sampling needs, and it is how `alice`/`bob`/`carol` in local dev land
+ * on different sides of the split for testing.
+ */
+export function hlsTelemetryIdentityFromToken(token: string | null): string | null {
+  if (!token) {
+    return null;
+  }
+  const parts = token.split(".");
+  if (parts.length === 3) {
+    try {
+      const base64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
+      const payload = JSON.parse(atob(base64)) as { sub?: unknown };
+      if (typeof payload.sub === "string" && payload.sub) {
+        return payload.sub;
+      }
+    } catch {
+      // Not a JWT this can read, or no `sub` claim. Fall through.
+    }
+  }
+  return token;
+}
+
+/**
+ * One fragment's wall clock, from `#EXT-X-PROGRAM-DATE-TIME` as hls.js parses
+ * it: `programDateTimeMs` is the epoch millisecond the fragment STARTS at,
+ * `startSeconds` is the same fragment's start on the playlist's own time
+ * axis. Together they let a later media time on the same axis be converted
+ * back to a wall clock.
+ */
+export interface FragPdtInfo {
+  programDateTimeMs: number;
+  startSeconds: number;
+}
+
+/**
+ * Encode-to-paint latency, milliseconds (BROADCAST_PIPELINE B0.3, the T4-T8
+ * span): wall clock now, minus the wall clock of the media time that was
+ * just painted, computed from the currently active fragment's own PDT.
+ *
+ * `paintedMediaTimeSeconds` is `video.currentTime` (a periodic fallback) or,
+ * where the browser has it, the `mediaTime` a
+ * `video.requestVideoFrameCallback` callback reports for the frame it was
+ * just called for -- the more precise of the two, since `currentTime` can
+ * run slightly ahead of what is actually on screen.
+ *
+ * NEVER folds in capture-to-encode (T0-T4): that half is a separate,
+ * unstamped ESTIMATE (see `docs/plans/BROADCAST_PIPELINE.md` B0.3's table)
+ * and must be reported alongside this number, never added into it, so a
+ * server aggregating this value never silently mixes a measurement with a
+ * guess.
+ *
+ * Null when the active fragment carries no usable PDT at all (a source this
+ * player was never meant to see: not our proxy, or a build old enough to
+ * predate B0.2's synthesis). Floored at 0: a negative result is clock skew
+ * between this browser and the egress box, not a real negative latency, and
+ * reporting the raw negative number would let one skewed clock drag a whole
+ * rung's p50 into something that reads as "impossibly fast" instead of
+ * "encode-to-paint is one to two orders of magnitude smaller than clock
+ * skew usually is, so treat this reading as unreliable and move on".
+ */
+export function encodeToPaintLatencyMs(
+  frag: FragPdtInfo,
+  paintedMediaTimeSeconds: number,
+  nowMs: number = Date.now(),
+): number | null {
+  if (!Number.isFinite(frag.programDateTimeMs) || frag.programDateTimeMs <= 0) {
+    return null;
+  }
+  const frameWallClockMs =
+    frag.programDateTimeMs +
+    (paintedMediaTimeSeconds - frag.startSeconds) * 1000;
+  const latencyMs = nowMs - frameWallClockMs;
+  return latencyMs < 0 ? 0 : latencyMs;
+}
+
+/**
+ * A per-viewing-session batching queue (BROADCAST_PIPELINE B0.5): buffers
+ * samples in memory and flushes them on an interval, never on push. An empty
+ * buffer costs nothing -- `flush` is a no-op rather than an empty POST -- so
+ * a sampled viewer sitting on a paused, buffered stream sends nothing until
+ * playback (and therefore a fresh sample) resumes.
+ */
+export interface HlsTelemetryQueue {
+  push(sample: LiveHlsTelemetrySample): void;
+  /** Flush now, bypassing the timer. Used on unmount so the last window is not lost. */
+  flush(): void;
+  stop(): void;
+}
+
+export function createHlsTelemetryQueue(input: {
+  sessionId: string;
+  send: (batch: LiveHlsTelemetryBatch) => void;
+  flushMs?: number;
+  setInterval?: typeof window.setInterval;
+  clearInterval?: typeof window.clearInterval;
+}): HlsTelemetryQueue {
+  const setIntervalFn = input.setInterval ?? window.setInterval.bind(window);
+  const clearIntervalFn = input.clearInterval ?? window.clearInterval.bind(window);
+  let buffer: LiveHlsTelemetrySample[] = [];
+  function flush() {
+    if (buffer.length === 0) {
+      return;
+    }
+    const samples = buffer;
+    buffer = [];
+    input.send({ sessionId: input.sessionId, samples });
+  }
+  const timer = setIntervalFn(flush, input.flushMs ?? LIVE_HLS_TELEMETRY_FLUSH_MS);
+  return {
+    push(sample) {
+      buffer.push(sample);
+    },
+    flush,
+    stop() {
+      clearIntervalFn(timer);
+      buffer = [];
+    },
+  };
+}
+
+/**
+ * The one POST this feature makes. Fire-and-forget by design: a rejected or
+ * failed batch is a no-op the caller never retries (see
+ * `POST /api/live-hls/telemetry`'s own doc comment on the server) -- this is
+ * a measurement, not an event anything downstream is waiting on.
+ */
+export function sendHlsTelemetryBatch(
+  batch: LiveHlsTelemetryBatch,
+  getToken: () => Promise<string | null>,
+): void {
+  void (async () => {
+    let token: string | null = null;
+    try {
+      token = await getToken();
+    } catch {
+      // No token: still worth trying, in case this deployment has no
+      // Bearer requirement configured (it does, in practice, but this
+      // function does not need to know that).
+    }
+    try {
+      await fetch(`${getApiBaseUrl()}/api/live-hls/telemetry`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(batch),
+      });
+    } catch {
+      // Dropped. See the doc comment above.
+    }
+  })();
 }
