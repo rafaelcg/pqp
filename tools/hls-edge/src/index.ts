@@ -92,6 +92,7 @@ import { parsePlaylistPath } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
+import { handleBlockingReload, parseBlockingReloadParams } from "./hls-blocking-reload.js";
 
 export interface Env {
   /** The API origin this Worker fetches playlists from, e.g. https://api.pqp.gg (a var). */
@@ -279,6 +280,22 @@ async function handlePlaylistRequest(
     return text(503, "Origin not configured");
   }
 
+  // LL-HLS blocking playlist reload (RFC 8216bis 6.2.5.2, `_HLS_msn` /
+  // `_HLS_part` — docs/plans/LL_HLS.md task L2.1, hls-blocking-reload.js). A
+  // request that carries neither parameter gets `{ kind: "none" }` and falls
+  // straight through to the existing cache-or-forward logic below,
+  // unchanged. Validated here, before the rung branch, because a malformed
+  // directive is a malformed request on EITHER route.
+  const blockingReload = parseBlockingReloadParams(url);
+  if (blockingReload.kind === "invalid") {
+    logEvent("hlsEdge.blockingReloadRejected", {
+      channelId,
+      rung: rung ?? null,
+      reason: blockingReload.reason,
+    });
+    return json(400, { error: "Bad Request", reason: blockingReload.reason });
+  }
+
   // The session/master URL: see the module doc comment for why this route is
   // always forwarded with the caller's OWN token and never cached.
   if (!rung) {
@@ -299,6 +316,26 @@ async function handlePlaylistRequest(
       status: originResponse.status,
       headers,
     });
+  }
+
+  // A rendition request carrying a directive skips the 2 s cache entirely —
+  // see hls-blocking-reload.js's module doc comment for why a hold is not a
+  // cache entry — and shares its origin fetches with the coalesced fetcher
+  // below via the injected closure, rather than a second in-flight map.
+  if (blockingReload.kind === "directives") {
+    return handleBlockingReload(
+      cacheKeyRequest(request).url,
+      blockingReload.value,
+      () =>
+        fetchRenditionCoalesced(cacheKeyRequest(request).url, origin, {
+          channelId,
+          startedAt,
+          rung,
+          token: token!,
+        }),
+      logEvent,
+      { channelId, rung },
+    );
   }
 
   const cache = caches.default;
