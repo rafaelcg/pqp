@@ -350,3 +350,94 @@ describe("the live party card never grows a call affordance", () => {
     expect(html).not.toContain("data-watch-party-join-call");
   });
 });
+
+/**
+ * "Transmissões anteriores" reachable with no party running.
+ *
+ * An idle `watch_party` channel has no row in this list (the describe block
+ * above this one is the reason why) and therefore no header icon either —
+ * that icon lives in the chat pane, which only mounts for a *selected*
+ * channel. `watchPartyHistoryChannels` is the sidebar's own way back to a
+ * channel's past broadcasts without selecting it, appearing beside whatever
+ * `LivePartyBlock` would otherwise draw for the idle state.
+ */
+describe("watch party history entry point (no party running)", () => {
+  const historyChannels = [{ id: cinema.id, name: cinema.name }];
+
+  it("adds nothing when there is no history to show", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        onWatchLiveParty={() => {}}
+        canStartWatchParty
+        onCreateWatchParty={() => {}}
+      />,
+    );
+    expect(html).not.toContain("live-party-history");
+    expect(html).not.toContain("Past broadcasts");
+  });
+
+  it("adds nothing when the viewer has no permission, even with history elsewhere", () => {
+    const html = renderList(
+      <ChannelList {...baseProps} onWatchLiveParty={() => {}} />,
+    );
+    expect(html).not.toContain("live-party-history");
+  });
+
+  it("draws a link beside the create card for somebody who may start one", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        onWatchLiveParty={() => {}}
+        canStartWatchParty
+        onCreateWatchParty={() => {}}
+        watchPartyHistoryChannels={historyChannels}
+        onOpenWatchPartyHistory={() => {}}
+      />,
+    );
+    expect(html).toContain("live-party-create");
+    expect(html).toContain("live-party-history-links");
+    expect(html).toContain("Past broadcasts");
+  });
+
+  it("draws the link on its own for a moderator who may not start a party", () => {
+    // MANAGE_CHANNELS without START_WATCH_PARTY: no create control, but the
+    // channel's history is still theirs to administer.
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        onWatchLiveParty={() => {}}
+        watchPartyHistoryChannels={historyChannels}
+        onOpenWatchPartyHistory={() => {}}
+      />,
+    );
+    expect(html).not.toContain("live-party-create");
+    expect(html).toContain("live-party-history-only");
+    expect(html).toContain("live-party-history-links");
+    expect(html).toContain("Past broadcasts");
+  });
+
+  it("names each link once there is more than one candidate channel", () => {
+    const secondCinema: Channel = {
+      ...cinema,
+      id: "99999999-9999-4999-8999-999999999999",
+      name: "sala 2",
+    };
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        channels={[cinema, secondCinema, lobby]}
+        onWatchLiveParty={() => {}}
+        canStartWatchParty
+        onCreateWatchParty={() => {}}
+        watchPartyHistoryChannels={[
+          { id: cinema.id, name: cinema.name },
+          { id: secondCinema.id, name: secondCinema.name },
+        ]}
+        onOpenWatchPartyHistory={() => {}}
+      />,
+    );
+    expect(html).toContain(`Past broadcasts · ${cinema.name}`);
+    expect(html).toContain(`Past broadcasts · ${secondCinema.name}`);
+  });
+});

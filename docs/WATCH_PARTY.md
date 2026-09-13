@@ -2397,6 +2397,24 @@ component the live path uses, with no chat overlay and no join/leave
 wiring, so watching a replay never touches presence or the live watch-party
 state machine.
 
+**Reachable with no party running.** The history icon above lives in the
+chat pane's header, which only mounts for a *selected* channel -- and an
+idle `watch_party` channel (no live or pending party) is filtered out of
+the sidebar entirely (see the big comment on `listed` in
+`channel-list.tsx`), so it can never be selected. The moment a show ends
+and nobody still has the channel open, the icon becomes unreachable for
+everybody, permission included. Two more entry points fix that without
+touching the listing rule: a small "Transmissões anteriores" link beside
+`LivePartyBlock`'s create/pending card (and on its own, for a
+`MANAGE_CHANNELS` moderator who may not start a party), and an item in the
+server header's own context menu. Both are populated by
+`watchPartyHistoryCandidates` (`client/src/lib/watch-party-history-access.ts`,
+the same START_WATCH_PARTY-or-MANAGE_CHANNELS check as the icon, per
+channel) narrowed by `useWatchPartyHistoryAvailability`
+(`client/src/lib/use-watch-party-history-availability.ts`, a `limit=1` read
+of the same history endpoint) so an entry never opens on an empty dialog.
+Client-only; no new server route.
+
 ## How you know it is running
 
 The whole of the above can be deployed, configured and doing nothing, and for

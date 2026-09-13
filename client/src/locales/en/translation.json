@@ -1907,6 +1907,7 @@
   "chrome.pins": "Pins",
   "chrome.channelSettings": "Channel settings",
   "chrome.watchPartyHistory": "Past broadcasts",
+  "chrome.watchPartyHistoryNamed": "Past broadcasts · {name}",
   "chrome.searchMessages": "Search messages",
   "chrome.invitePeople": "Invite people",
   "chrome.members": "Members",

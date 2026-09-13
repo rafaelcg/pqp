@@ -25,9 +25,13 @@ export interface WatchPartyHistoryEntry {
 export function fetchWatchPartyHistory(
   channelId: string,
   limit?: number,
+  signal?: AbortSignal,
 ): Promise<{ broadcasts: WatchPartyHistoryEntry[] }> {
   const query = limit ? `?limit=${limit}` : "";
-  return apiFetch(`/api/channels/${channelId}/watch-party/history${query}`);
+  return apiFetch(
+    `/api/channels/${channelId}/watch-party/history${query}`,
+    signal ? { signal } : {},
+  );
 }
 
 /**

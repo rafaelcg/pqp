@@ -10,6 +10,7 @@ import {
   FolderMinus,
   FolderPlus,
   Hand,
+  History,
   Lock,
   Mic,
   MicOff,
@@ -201,6 +202,21 @@ interface ChannelListProps {
   canStartWatchParty?: boolean;
   /** Opens the setup flow. Absent for anyone who may not start one. */
   onCreateWatchParty?: () => void;
+  /**
+   * `watch_party` channels on this server that this person may see the
+   * history of AND that have a broadcast to show (`watchPartyHistoryCandidates`
+   * + `useWatchPartyHistoryAvailability` in `App.tsx`) -- START_WATCH_PARTY
+   * or MANAGE_CHANNELS, same rule the server enforces.
+   *
+   * An idle `watch_party` channel is filtered out of `listed` below and
+   * never gets a row, so this is threaded to two places that do NOT depend
+   * on the channel being selected: the server header's own context menu,
+   * and a secondary link beside `LivePartyBlock`'s create/pending card. Both
+   * are absent whenever this is empty -- nothing to show, nothing to click.
+   */
+  watchPartyHistoryChannels?: readonly { id: string; name: string }[];
+  /** Opens `WatchPartyHistoryDialog` on the given channel. */
+  onOpenWatchPartyHistory?: (channelId: string) => void;
   /** The signed-in account, for self-drag and "mute for me". */
   currentUserId?: string | null;
   /** Seats with a move in flight: no second drag. */
@@ -334,6 +350,8 @@ export function ChannelList({
   onWatchLiveParty,
   canStartWatchParty,
   onCreateWatchParty,
+  watchPartyHistoryChannels = [],
+  onOpenWatchPartyHistory,
   currentUserId = null,
   pendingMoveUserIds = [],
   peerVolumes = {},
@@ -1181,6 +1199,29 @@ export function ChannelList({
               },
             ]
           : []),
+        /**
+         * "Transmissões anteriores", reachable from the server itself rather
+         * than from a channel row -- the whole reason it lives here. See
+         * `watchPartyHistoryChannels` above: never shown for a server with
+         * no watch_party channel this viewer may manage, or with no past
+         * broadcast to find.
+         */
+        ...(onOpenWatchPartyHistory && watchPartyHistoryChannels.length > 0
+          ? [
+              { id: "sep-history", label: "", separator: true },
+              ...watchPartyHistoryChannels.map((channel) => ({
+                id: `watch-party-history-${channel.id}`,
+                label:
+                  watchPartyHistoryChannels.length > 1
+                    ? t("chrome.watchPartyHistoryNamed", {
+                        name: channel.name,
+                      })
+                    : t("chrome.watchPartyHistory"),
+                icon: History,
+                onSelect: () => onOpenWatchPartyHistory(channel.id),
+              })),
+            ]
+          : []),
       ]
     : [];
 
@@ -1415,7 +1456,12 @@ export function ChannelList({
                 party is an event and it goes at the top of the room. When
                 none is running this is the button that starts one, for the
                 people who may, and nothing at all for everybody else. There
-                is no section, no row and no empty state. */}
+                is no section, no row and no empty state -- except a small
+                "Transmissões anteriores" link beside the create/pending card,
+                which IS the empty state's one job: the idle channel this
+                block replaces is the only place a moderator could otherwise
+                never reach the show that already happened. See
+                `historyChannels` on `LivePartyBlock`. */}
             {watchPartyOn && onWatchLiveParty && (
               <LivePartyBlock
                 parties={liveParties ?? []}
@@ -1449,6 +1495,8 @@ export function ChannelList({
                     ? (channelId, name) => onPurgeChannel({ id: channelId, name })
                     : undefined
                 }
+                historyChannels={watchPartyHistoryChannels}
+                onOpenHistory={onOpenWatchPartyHistory}
               />
             )}
 
