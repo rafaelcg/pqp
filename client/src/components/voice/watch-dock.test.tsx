@@ -88,6 +88,24 @@ describe("resolveWatchPlacement", () => {
   it("leaves the picture to the call once a seat is taken", () => {
     expect(resolveWatchPlacement({ ...base, inCall: true })).toBe("gone");
   });
+
+  // 2026-09-13 (watch party seat handoff): the outlet itself stays put while
+  // the party's own channel is open — `selectedChannelId === session.channelId`
+  // wins first, deliberately, so re-opening a dismissed channel brings the
+  // picture straight back rather than needing a second click. It is
+  // `WatchChannelStage`'s OWN `inThisCall` gate (`watch-stage.tsx`) that
+  // stops rendering a player into this outlet once seated, not a different
+  // placement here. Pinned so nobody "fixes" the ordering above and makes a
+  // seated viewer's dismissed-and-reopened channel show nothing at all.
+  it("keeps the stage outlet even once seated in the room being watched", () => {
+    expect(
+      resolveWatchPlacement({
+        ...base,
+        selectedChannelId: SESSION.channelId,
+        inCall: true,
+      }),
+    ).toBe("stage");
+  });
 });
 
 describe("shouldConfirmVoiceJoin", () => {

@@ -983,6 +983,12 @@ export function HlsWatchPlayer({
       }
       hls?.destroy();
       hlsRef.current = null;
+      // Belt and braces against a lingering soundtrack (2026-09-13: a watch
+      // party seat handoff left two hls.js instances alive at once for a
+      // beat, each with its own audio). `destroy()` should already stop
+      // decoding, but an explicit pause before detaching the source means
+      // this element can never keep making sound while it is torn down.
+      video.pause();
       video.removeAttribute("src");
       video.load();
       setHlsPlaybackStats(null);

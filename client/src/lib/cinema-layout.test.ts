@@ -22,6 +22,32 @@ describe("shouldShowCinema", () => {
   it("stays off with neither condition", () => {
     expect(shouldShowCinema({ live: false, audience: false })).toBe(false);
   });
+
+  // 2026-09-13: a viewer watching a watch party over HLS pressed Entrar and
+  // got two pictures at two delays, two soundtracks. `WatchChannelStage`
+  // correctly unmounted its own HLS player the instant the seat landed;
+  // `CallStage` was the second, independent source, defaulting a freshly
+  // seated participant straight into this same cinema view. Once seated in a
+  // watch party's own room, the SFU screen share is the one and only
+  // picture, never HLS again — no combination of `live`/`audience` may
+  // override it.
+  it("never shows cinema once seated in a watch party's own room", () => {
+    expect(
+      shouldShowCinema({ live: true, audience: true, isWatchParty: true }),
+    ).toBe(false);
+    expect(
+      shouldShowCinema({ live: true, audience: false, isWatchParty: true }),
+    ).toBe(false);
+    expect(
+      shouldShowCinema({ live: false, audience: true, isWatchParty: true }),
+    ).toBe(false);
+  });
+
+  it("keeps the ordinary rule when isWatchParty is left unset", () => {
+    // Same defaults as before this flag existed: nothing about a plain call
+    // or a watch-party-disabled build moves.
+    expect(shouldShowCinema({ live: true, audience: true })).toBe(true);
+  });
 });
 
 describe("cinemaOrientation", () => {
