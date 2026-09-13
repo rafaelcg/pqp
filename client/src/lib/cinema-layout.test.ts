@@ -3,6 +3,7 @@ import { translateMessage } from "@/lib/i18n/instance";
 import {
   cinemaOrientation,
   presenceAvatars,
+  seatedInWatchPartyRoom,
   shouldShowCinema,
 } from "./cinema-layout";
 
@@ -47,6 +48,30 @@ describe("shouldShowCinema", () => {
     // Same defaults as before this flag existed: nothing about a plain call
     // or a watch-party-disabled build moves.
     expect(shouldShowCinema({ live: true, audience: true })).toBe(true);
+  });
+});
+
+describe("seatedInWatchPartyRoom", () => {
+  it("is true once the party store has caught up", () => {
+    expect(seatedInWatchPartyRoom(true, true)).toBe(true);
+  });
+
+  // THE SECOND HALF OF THE 2026-09-13 INCIDENT. A host presses "Entrar no
+  // palco"; `voiceState.voiceChannelId` updates and the seat is real before
+  // `watchParties.byChannel[id]?.state` (its own fetch/socket) has caught up
+  // to "live". `watchPartyChrome` reads false on that render, but this
+  // account is already seated in a watch party channel, so the join button
+  // must still stay off.
+  it("is true from the channel's own type even while watchPartyChrome lags", () => {
+    expect(seatedInWatchPartyRoom(false, true)).toBe(true);
+  });
+
+  it("is true when only watchPartyChrome says so (defence in depth)", () => {
+    expect(seatedInWatchPartyRoom(true, false)).toBe(true);
+  });
+
+  it("is false for an ordinary, non-watch-party voice channel", () => {
+    expect(seatedInWatchPartyRoom(false, false)).toBe(false);
   });
 });
 

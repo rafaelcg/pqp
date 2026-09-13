@@ -106,6 +106,7 @@ export function CinemaStage({
           canJoin ? (
             <button
               type="button"
+              data-testid="cinema-stage-join"
               className="flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-paper/20 px-2.5 py-1.5 text-xs font-medium text-paper/80 hover:bg-paper/15 hover:text-paper"
               onClick={onJoin}
             >
