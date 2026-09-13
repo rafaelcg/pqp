@@ -277,7 +277,13 @@ export function createPostgresBusTransport(
     if (isBatchEnvelope(parsed)) {
       for (const item of parsed.batch) {
         if (isFrame(item)) {
-          handler?.(item);
+          // Same delivery call single frames use below, one item at a time,
+          // in array order — a batch is already delivered from inside one
+          // link of `dispatchChain` (see `enqueue`), so nothing else on the
+          // bus can interleave with it. Isolated per item: one handler
+          // throwing must not cost the rest of the batch its delivery, the
+          // same guarantee a run of individual frames already has.
+          deliver(item);
         } else {
           logEvent("bus.badFrame", { bytes: payload.length });
         }
@@ -289,7 +295,16 @@ export function createPostgresBusTransport(
       logEvent("bus.badFrame", { bytes: payload.length });
       return;
     }
-    handler?.(parsed);
+    deliver(parsed);
+  }
+
+  /** The one place a frame reaches `handler`, single or batched. */
+  function deliver(frame: BusFrame): void {
+    try {
+      handler?.(frame);
+    } catch (error) {
+      console.error("[bus] frame handler failed:", error);
+    }
   }
 
   function onPublishError(error: Error): void {

@@ -3277,7 +3277,7 @@ export function resetVoicePeers(): void {
   remoteTransports.clear();
   roomServerMutes.clear();
   roomRaisedHands.clear();
-  rosterAccessCache.clear();
+  rosterAccessInvalidateAll();
   resetMusicForTests();
 }
 
@@ -3320,37 +3320,166 @@ export function isSocketInVoice(socket: WebSocket): boolean {
 // bound that does not depend on this list being complete.
 const ROSTER_ACCESS_TTL_MS = 30_000;
 const ROSTER_ACCESS_JITTER_MS = 5_000;
+/**
+ * Global cap on distinct (channel, user) pairs. Without one, a sustained
+ * multi-room reconnect/auth workload grows this map without bound — every
+ * miss (including a denied one) adds an entry, and the TTL only bounds how
+ * long an entry survives, not how many can pile up before it expires. LRU by
+ * touch order (see `rosterAccessGet`/`rosterAccessSet`): the entries evicted
+ * first are the ones nobody has asked about recently.
+ */
+export const ROSTER_ACCESS_MAX_ENTRIES = 20_000;
 
 interface RosterAccessEntry {
   allowed: boolean;
   expiresAt: number;
 }
 
-const rosterAccessCache = new Map<string, Map<string, RosterAccessEntry>>();
+/**
+ * `Map` iteration order is insertion order, which is what makes this an LRU:
+ * a "touch" (hit or fresh write) deletes-then-reinserts the key so it moves
+ * to the end, and eviction always takes from the front (oldest-touched).
+ * Keyed on a colon-joined composite; channel and user ids are UUIDs, which
+ * never contain one.
+ */
+const rosterAccessCache = new Map<string, RosterAccessEntry>();
+/** channelId -> the composite keys living in `rosterAccessCache` for it, so a
+ *  channel-scoped invalidation doesn't have to scan the whole cache. */
+const rosterAccessChannelIndex = new Map<string, Set<string>>();
+/**
+ * Bumped per-channel on a channel-scoped invalidation. A query that started
+ * before the bump and resolves after it must not repopulate the cache with
+ * what it saw — see the generation check in `canAccessChannelForRoster`.
+ */
+const rosterAccessGeneration = new Map<string, number>();
+/** Bumped on any invalidation that clears the whole cache (no channelId
+ *  travels with those events), so an in-flight query racing one of those
+ *  can't repopulate it either. */
+let rosterAccessEpoch = 0;
+/** Coalesces concurrent misses for the same pair — a reconnect storm asks
+ *  the same question from N sockets at once; only the first actually queries
+ *  Postgres, the rest await its result. */
+const rosterAccessInFlight = new Map<string, Promise<boolean>>();
+
+function rosterAccessKey(channelId: string, userId: string): string {
+  return `${channelId}:${userId}`;
+}
+
+function rosterAccessGet(
+  channelId: string,
+  userId: string,
+  now: number,
+): boolean | undefined {
+  const key = rosterAccessKey(channelId, userId);
+  const entry = rosterAccessCache.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  if (entry.expiresAt <= now) {
+    rosterAccessCache.delete(key);
+    rosterAccessChannelIndex.get(channelId)?.delete(key);
+    return undefined;
+  }
+  // Touch: move to the end so a hot pair survives LRU eviction.
+  rosterAccessCache.delete(key);
+  rosterAccessCache.set(key, entry);
+  return entry.allowed;
+}
+
+function rosterAccessSet(
+  channelId: string,
+  userId: string,
+  allowed: boolean,
+  now: number,
+): void {
+  const key = rosterAccessKey(channelId, userId);
+  rosterAccessCache.delete(key);
+  rosterAccessCache.set(key, {
+    allowed,
+    expiresAt:
+      now + ROSTER_ACCESS_TTL_MS - Math.random() * ROSTER_ACCESS_JITTER_MS,
+  });
+  let bucket = rosterAccessChannelIndex.get(channelId);
+  if (!bucket) {
+    bucket = new Set();
+    rosterAccessChannelIndex.set(channelId, bucket);
+  }
+  bucket.add(key);
+  while (rosterAccessCache.size > ROSTER_ACCESS_MAX_ENTRIES) {
+    const oldestKey = rosterAccessCache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    rosterAccessCache.delete(oldestKey);
+    const sep = oldestKey.indexOf(":");
+    const oldestChannel = sep === -1 ? oldestKey : oldestKey.slice(0, sep);
+    rosterAccessChannelIndex.get(oldestChannel)?.delete(oldestKey);
+  }
+}
+
+/** Drops one channel's entries and bumps its generation so an in-flight
+ *  query started before this call can't repopulate what it just cleared. */
+function rosterAccessInvalidateChannel(channelId: string): void {
+  const bucket = rosterAccessChannelIndex.get(channelId);
+  if (bucket) {
+    for (const key of bucket) {
+      rosterAccessCache.delete(key);
+    }
+    rosterAccessChannelIndex.delete(channelId);
+  }
+  rosterAccessGeneration.set(
+    channelId,
+    (rosterAccessGeneration.get(channelId) ?? 0) + 1,
+  );
+}
+
+/** Drops everything and bumps the epoch, for invalidations that carry no
+ *  channelId (server-scoped, permissions update) and for test resets. */
+function rosterAccessInvalidateAll(): void {
+  rosterAccessCache.clear();
+  rosterAccessChannelIndex.clear();
+  rosterAccessInFlight.clear();
+  rosterAccessEpoch += 1;
+}
 
 async function canAccessChannelForRoster(
   channelId: string,
   userId: string,
 ): Promise<boolean> {
   const now = Date.now();
-  const cached = rosterAccessCache.get(channelId)?.get(userId);
-  if (cached && cached.expiresAt > now) {
-    return cached.allowed;
+  const cached = rosterAccessGet(channelId, userId, now);
+  if (cached !== undefined) {
+    return cached;
   }
 
-  const allowed = await canAccessChannel(channelId, userId);
-
-  let bucket = rosterAccessCache.get(channelId);
-  if (!bucket) {
-    bucket = new Map();
-    rosterAccessCache.set(channelId, bucket);
+  const key = rosterAccessKey(channelId, userId);
+  const inFlight = rosterAccessInFlight.get(key);
+  if (inFlight) {
+    return inFlight;
   }
-  bucket.set(userId, {
-    allowed,
-    expiresAt:
-      now + ROSTER_ACCESS_TTL_MS - Math.random() * ROSTER_ACCESS_JITTER_MS,
-  });
-  return allowed;
+
+  // Captured before the query starts: if either counter moves while it is
+  // in flight, membership or a permission moved out from under it and the
+  // answer it comes back with must not be cached.
+  const generationAtStart = rosterAccessGeneration.get(channelId) ?? 0;
+  const epochAtStart = rosterAccessEpoch;
+
+  const promise = canAccessChannel(channelId, userId)
+    .then((allowed) => {
+      const stillCurrent =
+        epochAtStart === rosterAccessEpoch &&
+        generationAtStart === (rosterAccessGeneration.get(channelId) ?? 0);
+      if (stillCurrent) {
+        rosterAccessSet(channelId, userId, allowed, Date.now());
+      }
+      return allowed;
+    })
+    .finally(() => {
+      rosterAccessInFlight.delete(key);
+    });
+
+  rosterAccessInFlight.set(key, promise);
+  return promise;
 }
 
 // Guarded, not a bare call: a couple dozen suites in this file's own test
@@ -3364,14 +3493,14 @@ async function canAccessChannelForRoster(
 try {
   onAudienceInvalidated(({ channelId, serverId }) => {
     if (channelId) {
-      rosterAccessCache.delete(channelId);
+      rosterAccessInvalidateChannel(channelId);
       return;
     }
     if (serverId) {
       // No per-entry server id kept (see the block comment above): the whole
       // cache is small, so a server-scoped invalidation clears all of it
       // rather than tracking a channel→server index nothing else here needs.
-      rosterAccessCache.clear();
+      rosterAccessInvalidateAll();
     }
   });
 } catch {
@@ -3381,19 +3510,22 @@ try {
 onPermissionsUpdate(() => {
   // An overwrite change: same reasoning, no channelId travels with this
   // event, so the whole cache clears.
-  rosterAccessCache.clear();
+  rosterAccessInvalidateAll();
 });
 
 /** Drop expired entries. Called from the same 60s sweep as the audience cache. */
 export function sweepVoiceChannelAccessCache(now = Date.now()): void {
-  for (const [channelId, bucket] of rosterAccessCache) {
-    for (const [userId, entry] of bucket) {
-      if (entry.expiresAt <= now) {
-        bucket.delete(userId);
-      }
+  for (const [key, entry] of rosterAccessCache) {
+    if (entry.expiresAt <= now) {
+      rosterAccessCache.delete(key);
+      const sep = key.indexOf(":");
+      const channelId = sep === -1 ? key : key.slice(0, sep);
+      rosterAccessChannelIndex.get(channelId)?.delete(key);
     }
+  }
+  for (const [channelId, bucket] of rosterAccessChannelIndex) {
     if (bucket.size === 0) {
-      rosterAccessCache.delete(channelId);
+      rosterAccessChannelIndex.delete(channelId);
     }
   }
 }
@@ -3403,11 +3535,10 @@ export function voiceChannelAccessCacheStats(): {
   channels: number;
   entries: number;
 } {
-  let entries = 0;
-  for (const bucket of rosterAccessCache.values()) {
-    entries += bucket.size;
-  }
-  return { channels: rosterAccessCache.size, entries };
+  return {
+    channels: rosterAccessChannelIndex.size,
+    entries: rosterAccessCache.size,
+  };
 }
 
 /**

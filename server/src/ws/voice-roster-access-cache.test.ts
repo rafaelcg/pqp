@@ -97,6 +97,7 @@ const {
   sendAllVoiceRosters,
   voiceChannelAccessCacheStats,
   sweepVoiceChannelAccessCache,
+  ROSTER_ACCESS_MAX_ENTRIES,
 } = await import("./voice.js");
 
 function fakeSocket(): WebSocket {
@@ -231,4 +232,115 @@ describe("canAccessChannelForRoster (via sendAllVoiceRosters)", () => {
     sweepVoiceChannelAccessCache(Date.now() + 60_000); // past the 30s TTL
     expect(voiceChannelAccessCacheStats()).toEqual({ channels: 0, entries: 0 });
   });
+
+  it("coalesces concurrent misses for the same pair into one query", async () => {
+    const host = { socket: fakeSocket(), user: fakeUser() };
+    const { handleVoiceMessage } = await import("./voice.js");
+    await handleVoiceMessage(host, {
+      type: "join-voice-room",
+      voiceChannelId: channelId,
+      transports: ["mesh", "livekit"],
+    });
+
+    // The join above already made its own (unrelated) canAccessChannel call
+    // via the default mock; count from here, not from zero.
+    const callsBeforeStorm = canAccessChannelMock.mock.calls.length;
+
+    // Hold the query open so every concurrent caller below observes a miss
+    // before any of them resolves — the reconnect-storm shape this cache
+    // exists for.
+    let resolveQuery!: (allowed: boolean) => void;
+    canAccessChannelMock.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (resolveQuery = resolve)),
+    );
+
+    // Launched one at a time with microtask flushes in between, not all in
+    // one `Promise.all` — `sendAllVoiceRosters` runs a few awaits of its own
+    // before it ever reaches the access check, and starting all three in the
+    // same tick just races those against each other instead of proving
+    // anything about the cache. What a reconnect storm actually guarantees is
+    // weaker and easier to test directly: caller 2 and 3 arrive while
+    // caller 1's query is still unresolved, in-flight or not.
+    const viewer = fakeUser();
+    const first = sendAllVoiceRosters(fakeSocket(), viewer);
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+    const second = sendAllVoiceRosters(fakeSocket(), viewer);
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+    const third = sendAllVoiceRosters(fakeSocket(), viewer);
+
+    resolveQuery(true);
+    await Promise.all([first, second, third]);
+
+    expect(canAccessChannelMock.mock.calls.length - callsBeforeStorm).toBe(1);
+  });
+
+  it("does not cache a query's answer if the channel was invalidated while it was in flight", async () => {
+    const host = { socket: fakeSocket(), user: fakeUser() };
+    const { handleVoiceMessage } = await import("./voice.js");
+    await handleVoiceMessage(host, {
+      type: "join-voice-room",
+      voiceChannelId: channelId,
+      transports: ["mesh", "livekit"],
+    });
+
+    let resolveQuery!: (allowed: boolean) => void;
+    canAccessChannelMock.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (resolveQuery = resolve)),
+    );
+
+    const viewer = fakeUser();
+    const inFlight = sendAllVoiceRosters(fakeSocket(), viewer);
+    // Let the query start and register as in-flight.
+    for (let i = 0; i < 10; i++) {
+      await Promise.resolve();
+    }
+
+    // Membership is revoked while the query above is still pending.
+    fireAudienceInvalidated({ channelId });
+
+    // The stale query resolves ALLOWED after the revocation.
+    resolveQuery(true);
+    await inFlight;
+
+    const callsAfterRace = canAccessChannelMock.mock.calls.length;
+    // A racy `true` must not have been cached: the next call is a fresh miss,
+    // not a hit on a permission that no longer holds.
+    await sendAllVoiceRosters(fakeSocket(), viewer);
+    expect(canAccessChannelMock.mock.calls.length).toBeGreaterThan(callsAfterRace);
+  });
+
+  it("bounds the cache to ROSTER_ACCESS_MAX_ENTRIES via LRU eviction", async () => {
+    const host = { socket: fakeSocket(), user: fakeUser() };
+    const { handleVoiceMessage } = await import("./voice.js");
+    await handleVoiceMessage(host, {
+      type: "join-voice-room",
+      voiceChannelId: channelId,
+      transports: ["mesh", "livekit"],
+    });
+
+    const overflow = 5;
+    const firstViewer = fakeUser();
+    await sendAllVoiceRosters(fakeSocket(), firstViewer);
+    expect(voiceChannelAccessCacheStats().entries).toBe(1);
+
+    for (let i = 0; i < ROSTER_ACCESS_MAX_ENTRIES + overflow - 1; i++) {
+      await sendAllVoiceRosters(fakeSocket(), fakeUser());
+    }
+
+    // Never above the cap, no matter how many distinct pairs were asked
+    // about.
+    expect(voiceChannelAccessCacheStats().entries).toBeLessThanOrEqual(
+      ROSTER_ACCESS_MAX_ENTRIES,
+    );
+
+    // The first viewer, never touched again, was the oldest entry and is
+    // the one LRU eviction should have dropped first.
+    const callsBefore = canAccessChannelMock.mock.calls.length;
+    await sendAllVoiceRosters(fakeSocket(), firstViewer);
+    expect(canAccessChannelMock.mock.calls.length).toBeGreaterThan(callsBefore);
+  }, 30_000);
 });

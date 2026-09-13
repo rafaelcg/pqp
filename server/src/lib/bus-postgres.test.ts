@@ -169,4 +169,78 @@ describeDb("postgres cluster bus", () => {
     expect(publishCalls + batchCalls).toBeLessThan(n);
     expect(batchCalls).toBeGreaterThanOrEqual(1);
   });
+
+  it("spills a batch envelope that itself exceeds the inline cap, and delivers every item", async () => {
+    // Same burst shape as the test above, but each frame is fat enough that
+    // the whole `{batch:[...]}` envelope blows past MAX_INLINE_BYTES (7000):
+    // this must take the spill path exactly as a single oversize frame does,
+    // and the receiver's isBatchEnvelope check runs on the *fetched* payload,
+    // not just the inline notification, so every item still arrives.
+    resetDbTxMetrics();
+    const spilledBefore = (
+      await getPool().query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM cluster_bus_payloads`,
+      )
+    ).rows[0]?.count;
+    const before = onBeta.length;
+    // The first NOTIFY_BATCH_THRESHOLD (20) frames in the window still go out
+    // individually; only what crosses the threshold rides in the batch. 50
+    // frames leaves ~30 of them in the batched tail, comfortably enough at
+    // this body size to push the envelope itself past MAX_INLINE_BYTES (7000).
+    const n = 50;
+    const body = "y".repeat(400);
+    for (let i = 0; i < n; i++) {
+      alpha.publish({ origin: "instance-alpha", topic, data: { n: i, body } });
+    }
+
+    await waitFor(() => onBeta.length >= before + n, 2_000);
+    const received = onBeta.slice(-n).map((f) => (f.data as { n: number }).n);
+    expect(received).toEqual(Array.from({ length: n }, (_, i) => i));
+
+    const spilledAfter = (
+      await getPool().query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM cluster_bus_payloads`,
+      )
+    ).rows[0]?.count;
+    expect(Number(spilledAfter)).toBeGreaterThan(Number(spilledBefore ?? 0));
+  });
+
+  it("keeps delivering the rest of a batch when one item's handler throws", async () => {
+    // A batch is delivered item-by-item through the same call a single frame
+    // uses, which isolates a throwing handler exactly like `bus.ts`'s own
+    // dispatch does for ordinary frames — one bad item must not cost its
+    // neighbours their delivery. A dedicated transport pair with its own
+    // (deliberately misbehaving) handler, so this doesn't disturb `beta`'s
+    // handler shared by every other test in this file.
+    const gamma = createPostgresBusTransport(DATABASE_URL);
+    const delta = createPostgresBusTransport(DATABASE_URL);
+    const badTopic = `test.bad.${randomUUID()}`;
+    const seen: number[] = [];
+    delta.onFrame((frame) => {
+      if (frame.topic !== badTopic) {
+        return;
+      }
+      const n = (frame.data as { n: number }).n;
+      seen.push(n);
+      if (n === 15) {
+        throw new Error("boom");
+      }
+    });
+
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+      await Promise.all([gamma.whenConnected(), delta.whenConnected()]);
+      const n = 30;
+      for (let i = 0; i < n; i++) {
+        gamma.publish({ origin: "instance-gamma", topic: badTopic, data: { n: i } });
+      }
+      await waitFor(() => seen.length >= n, 2_000);
+      expect(seen).toEqual(Array.from({ length: n }, (_, i) => i));
+    } finally {
+      console.error = consoleError;
+      await gamma.close();
+      await delta.close();
+    }
+  });
 });
