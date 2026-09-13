@@ -1,0 +1,606 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+/**
+ * `GET/PATCH /api/channels/:channelId/watch-party/history[/:sessionId]` and
+ * the replay it mints (`GET .../replay`, served by
+ * `/api/voice/hls-replay/...`).
+ *
+ * Three things this file exists to pin, beyond the ordinary route shape:
+ *
+ *  - Only START_WATCH_PARTY or MANAGE_CHANNELS may see or touch the list --
+ *    an ordinary member with VIEW_CHANNEL gets 403/404, never a peek at who
+ *    presented.
+ *  - `keepReplay` on `PATCH` writes EVERY row of the broadcast (every ladder
+ *    rung, not just one), so a companion rendition is not silently dropped
+ *    from retention while the "primary" one survives.
+ *  - The retention interaction: setting `keepReplay: true` on a session that
+ *    is past the plain retention window but still holds `cleaned_at IS
+ *    NULL` rows is what stops `sweepHlsSessions` from deleting it on the
+ *    very next tick.
+ */
+
+const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const describeDb = DATABASE_URL ? describe : describe.skip;
+
+if (DATABASE_URL) {
+  process.env.DATABASE_URL = DATABASE_URL;
+}
+
+let actor: { id: string; clerk_id: string } | null = null;
+
+vi.mock("../auth/clerk.js", () => ({
+  DEV_AUTH_TOKEN: "dev-local-token",
+  isDevAuthBypassEnabled: () => false,
+  assertAuthConfig: () => {},
+  invalidateUserCache: () => {},
+  clearAuthCaches: () => {},
+  resolveAuthUser: async () => (actor ? { user: actor } : null),
+  resolveAuthSession: async (header: string | undefined) =>
+    header && actor ? { user: actor, ageGate: "passed" as const } : null,
+  verifyAuthHeader: async () => null,
+}));
+
+const { handleApi, resetApiRateLimits } = await import("./index.js");
+const { getPool, initDb, closePool } = await import("../db.js");
+const { upsertUser } = await import("../services/users.js");
+const { Permission } = await import("@pqp/shared");
+const { sweepHlsSessions, resetHlsSweepWarningsForTests } = await import(
+  "../voice/hls-cleanup.js"
+);
+const { setLiveHlsTestHooks, resetLiveHlsForTests } = await import(
+  "../voice/hls-egress.js"
+);
+const { mintHlsViewerToken } = await import("../voice/hls-viewer-token.js");
+
+let server: Server;
+let baseUrl: string;
+const realFetch = globalThis.fetch;
+
+interface ApiResult<T = unknown> {
+  status: number;
+  body: T;
+}
+
+async function call<T = Record<string, unknown>>(
+  as: { id: string; clerk_id: string } | null,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<ApiResult<T>> {
+  actor = as;
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer test",
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const text = await response.text();
+  return {
+    status: response.status,
+    body: (text ? JSON.parse(text) : {}) as T,
+  };
+}
+
+async function getRaw(
+  path: string,
+  as: { id: string; clerk_id: string } | null,
+): Promise<{ status: number; text: string; contentType: string | null }> {
+  actor = as;
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: as ? { Authorization: "Bearer test" } : {},
+  });
+  return {
+    status: response.status,
+    text: await response.text(),
+    contentType: response.headers.get("content-type"),
+  };
+}
+
+describeDb("watch party history", () => {
+  let owner: { id: string; clerk_id: string };
+  let moderator: { id: string; clerk_id: string };
+  let member: { id: string; clerk_id: string };
+  let serverId: string;
+  let channelId: string;
+
+  beforeAll(async () => {
+    await initDb();
+    server = createServer((req, res) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      void handleApi(req, res, pathname);
+    });
+    await new Promise<void>((done) => server.listen(0, done));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((done) => server.close(() => done()));
+    await closePool();
+  });
+
+  beforeEach(async () => {
+    resetApiRateLimits();
+    resetHlsSweepWarningsForTests();
+    resetLiveHlsForTests();
+    delete process.env.LIVE_HLS_RETENTION_MINUTES;
+    delete process.env.LIVE_HLS_REPLAY_HOURS;
+    process.env.LIVE_HLS_S3_BUCKET = "pqp-live-test";
+    process.env.LIVE_HLS_S3_ACCESS_KEY_ID = "ak";
+    process.env.LIVE_HLS_S3_SECRET_ACCESS_KEY = "sk";
+    process.env.LIVE_HLS_S3_ENDPOINT = "https://s3.example.test";
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: async () => ({ egressId: "unused" }),
+        stopEgress: async () => {},
+        listEgress: async () => [],
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (url.includes("s3.example.test/")) {
+          return new Response(
+            ["#EXTM3U", "#EXT-X-TARGETDURATION:2", "#EXTINF:2.0,", "seg_00000.ts", "#EXT-X-ENDLIST"].join("\n"),
+            { status: 200 },
+          );
+        }
+        return realFetch(input, init);
+      }),
+    );
+    await getPool().query(
+      `TRUNCATE users, user_preferences, servers, channels,
+                server_members, channel_sessions, hls_sessions
+       RESTART IDENTITY CASCADE`,
+    );
+
+    owner = await upsertUser({
+      clerkId: "clerk_owner",
+      displayName: "Owner",
+      avatarUrl: null,
+    });
+    moderator = await upsertUser({
+      clerkId: "clerk_mod",
+      displayName: "Mod",
+      avatarUrl: null,
+    });
+    member = await upsertUser({
+      clerkId: "clerk_member",
+      displayName: "Member",
+      avatarUrl: null,
+    });
+
+    actor = owner;
+    const created = await call<{
+      server: { id: string };
+      channels: { id: string; type: string }[];
+    }>(owner, "POST", "/api/servers", { name: "Watch party history" });
+    expect(created.status).toBe(201);
+    serverId = created.body.server.id;
+    channelId = created.body.channels.find((c) => c.type === "voice")!.id;
+
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [serverId, moderator.id],
+    );
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [serverId, member.id],
+    );
+    // A moderator here is a plain member granted the channel's
+    // START_WATCH_PARTY bit through an overwrite, the same shape a real
+    // "Manage Server" role assignment produces -- not the `admin` role,
+    // which would also pass via ADMINISTRATOR and prove nothing about the
+    // OR of the two bits this route actually checks.
+    await getPool().query(
+      `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+       VALUES ($1, 'member', $2, $3, 0)`,
+      [channelId, moderator.id, Permission.START_WATCH_PARTY.toString()],
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.LIVE_HLS_S3_BUCKET;
+    delete process.env.LIVE_HLS_S3_ACCESS_KEY_ID;
+    delete process.env.LIVE_HLS_S3_SECRET_ACCESS_KEY;
+    delete process.env.LIVE_HLS_S3_ENDPOINT;
+  });
+
+  function historyPath(id = channelId) {
+    return `/api/channels/${id}/watch-party/history`;
+  }
+
+  async function seedBroadcast(options: {
+    startedAt: number;
+    endedMinutesAgo: number | null;
+    keepReplay?: boolean;
+    rungs?: string[];
+    presenterId?: string;
+    wentLiveMinutesBeforeStart?: number;
+  }): Promise<void> {
+    const startedAt = options.startedAt;
+    const endedAt =
+      options.endedMinutesAgo === null
+        ? null
+        : new Date(Date.now() - options.endedMinutesAgo * 60_000);
+    for (const rung of options.rungs ?? ["720p30"]) {
+      await getPool().query(
+        `INSERT INTO hls_sessions
+           (channel_id, object_prefix, started_at, ended_at, keep_replay, rung)
+         VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6)`,
+        [
+          channelId,
+          `live/${channelId}/${startedAt}-${rung}`,
+          startedAt,
+          endedAt,
+          options.keepReplay ?? false,
+          rung,
+        ],
+      );
+    }
+    if (options.presenterId) {
+      const wentLiveAt = new Date(
+        startedAt - (options.wentLiveMinutesBeforeStart ?? 1) * 60_000,
+      );
+      await getPool().query(
+        `INSERT INTO channel_sessions
+           (channel_id, server_id, title, starts_at, status, created_by,
+            host_user_id, went_live_at, ended_at)
+         VALUES ($1, $2, 'Party', $3, 'ended', $4, $4, $3, $5)`,
+        [
+          channelId,
+          serverId,
+          wentLiveAt,
+          options.presenterId,
+          endedAt,
+        ],
+      );
+    }
+  }
+
+  describe("GET history", () => {
+    it("403s a plain member", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_000_000, endedMinutesAgo: 5 });
+      const res = await call(member, "GET", historyPath());
+      expect(res.status).toBe(403);
+    });
+
+    it("401s with no session at all", async () => {
+      const res = await call(null, "GET", historyPath());
+      expect(res.status).toBe(401);
+    });
+
+    it("lists broadcasts for the owner and for a moderator via an overwrite", async () => {
+      await seedBroadcast({
+        startedAt: 1_700_000_000_000,
+        endedMinutesAgo: 5,
+        presenterId: member.id,
+        rungs: ["1080p30", "720p30"],
+      });
+      for (const as of [owner, moderator]) {
+        const res = await call<{
+          broadcasts: Array<Record<string, unknown>>;
+        }>(as, "GET", historyPath());
+        expect(res.status).toBe(200);
+        expect(res.body.broadcasts).toHaveLength(1);
+        const entry = res.body.broadcasts[0]!;
+        expect(entry.sessionId).toBe("1700000000000");
+        expect(entry.endedAt).not.toBeNull();
+        expect(entry.durationSeconds).toBeGreaterThanOrEqual(0);
+        expect(entry.replayAvailable).toBe(true);
+        expect(entry.keepReplay).toBe(false);
+        expect(entry.presenter).toMatchObject({
+          userId: member.id,
+          displayName: "Member",
+        });
+        // One entry per BROADCAST, not one per rung.
+        expect(res.body.broadcasts).toHaveLength(1);
+      }
+    });
+
+    it("omits a peak-viewer field entirely (nothing durable to report)", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_000_000, endedMinutesAgo: 5 });
+      const res = await call<{ broadcasts: Array<Record<string, unknown>> }>(
+        owner,
+        "GET",
+        historyPath(),
+      );
+      expect("peakViewers" in res.body.broadcasts[0]!).toBe(false);
+    });
+
+    it("a still-live broadcast has endedAt null and is not replayable", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_001_000, endedMinutesAgo: null });
+      const res = await call<{ broadcasts: Array<Record<string, unknown>> }>(
+        owner,
+        "GET",
+        historyPath(),
+      );
+      const entry = res.body.broadcasts[0]!;
+      expect(entry.endedAt).toBeNull();
+      expect(entry.durationSeconds).toBeNull();
+      expect(entry.replayAvailable).toBe(false);
+    });
+
+    it("a broadcast past the retention window with no keepReplay is not replayable", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await seedBroadcast({
+        startedAt: 1_700_000_002_000,
+        endedMinutesAgo: 20,
+      });
+      const res = await call<{ broadcasts: Array<Record<string, unknown>> }>(
+        owner,
+        "GET",
+        historyPath(),
+      );
+      expect(res.body.broadcasts[0]!.replayAvailable).toBe(false);
+    });
+
+    it("with keepReplay it survives past the plain retention window", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      process.env.LIVE_HLS_REPLAY_HOURS = "24";
+      await seedBroadcast({
+        startedAt: 1_700_000_003_000,
+        endedMinutesAgo: 30,
+        keepReplay: true,
+      });
+      const res = await call<{ broadcasts: Array<Record<string, unknown>> }>(
+        owner,
+        "GET",
+        historyPath(),
+      );
+      expect(res.body.broadcasts[0]!.keepReplay).toBe(true);
+      expect(res.body.broadcasts[0]!.replayAvailable).toBe(true);
+    });
+
+    it("newest first, across several broadcasts", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_000_000, endedMinutesAgo: 5 });
+      await seedBroadcast({ startedAt: 1_700_000_100_000, endedMinutesAgo: 3 });
+      const res = await call<{ broadcasts: Array<{ sessionId: string }> }>(
+        owner,
+        "GET",
+        historyPath(),
+      );
+      expect(res.body.broadcasts.map((b) => b.sessionId)).toEqual([
+        "1700000100000",
+        "1700000000000",
+      ]);
+    });
+  });
+
+  describe("PATCH history/:sessionId", () => {
+    it("403s a plain member", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_000_000, endedMinutesAgo: 5 });
+      const res = await call(member, "PATCH", `${historyPath()}/1700000000000`, {
+        keepReplay: true,
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("404s an unknown session id", async () => {
+      const res = await call(owner, "PATCH", `${historyPath()}/1700000000000`, {
+        keepReplay: true,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("409s once the segments are already gone", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await seedBroadcast({
+        startedAt: 1_700_000_004_000,
+        endedMinutesAgo: 20,
+      });
+      const res = await call(owner, "PATCH", `${historyPath()}/1700000004000`, {
+        keepReplay: true,
+      });
+      expect(res.status).toBe(409);
+    });
+
+    it("flips keep_replay on EVERY rung of the broadcast, not just one", async () => {
+      await seedBroadcast({
+        startedAt: 1_700_000_005_000,
+        endedMinutesAgo: 5,
+        rungs: ["1080p30", "720p30", "mic"],
+      });
+      const res = await call<{
+        broadcasts: Array<{ keepReplay: boolean }>;
+      }>(owner, "PATCH", `${historyPath()}/1700000005000`, {
+        keepReplay: true,
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.broadcasts[0]!.keepReplay).toBe(true);
+      const rows = await getPool().query<{ keep_replay: boolean; rung: string }>(
+        `SELECT keep_replay, rung FROM hls_sessions
+         WHERE channel_id = $1 AND started_at = to_timestamp(1700000005000 / 1000.0)`,
+        [channelId],
+      );
+      expect(rows.rows).toHaveLength(3);
+      expect(rows.rows.every((r) => r.keep_replay === true)).toBe(true);
+    });
+
+    /**
+     * THE RETENTION INTERACTION. A broadcast old enough to be swept under
+     * the plain window must NOT be swept once `keepReplay` is set, on the
+     * very next sweep tick -- this is the whole point of the feature.
+     */
+    it("stops the retention sweep from deleting the broadcast", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      process.env.LIVE_HLS_REPLAY_HOURS = "24";
+      // Seeded fresh -- still inside the default 10-minute window, which is
+      // the realistic moment a moderator acts: shortly after the broadcast
+      // ends, before it would otherwise be swept.
+      await seedBroadcast({
+        startedAt: 1_700_000_006_000,
+        endedMinutesAgo: 3,
+      });
+
+      const patched = await call(
+        owner,
+        "PATCH",
+        `${historyPath()}/1700000006000`,
+        { keepReplay: true },
+      );
+      expect(patched.status).toBe(200);
+
+      // Time passes: now well past the PLAIN 10-minute window, still inside
+      // the 24h replay one `keepReplay` unlocked.
+      await getPool().query(
+        `UPDATE hls_sessions SET ended_at = NOW() - interval '30 minutes'
+         WHERE channel_id = $1 AND started_at = to_timestamp(1700000006000 / 1000.0)`,
+        [channelId],
+      );
+
+      const cleaned = await sweepHlsSessions();
+      expect(cleaned).toBe(0);
+      const rows = await getPool().query<{ cleaned_at: Date | null }>(
+        `SELECT cleaned_at FROM hls_sessions
+         WHERE channel_id = $1 AND started_at = to_timestamp(1700000006000 / 1000.0)`,
+        [channelId],
+      );
+      expect(rows.rows[0]!.cleaned_at).toBeNull();
+    });
+
+    it("turning it back off makes it due again on the next sweep", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      process.env.LIVE_HLS_REPLAY_HOURS = "24";
+      await seedBroadcast({
+        startedAt: 1_700_000_007_000,
+        endedMinutesAgo: 30,
+        keepReplay: true,
+      });
+      const off = await call(owner, "PATCH", `${historyPath()}/1700000007000`, {
+        keepReplay: false,
+      });
+      expect(off.status).toBe(200);
+      const cleaned = await sweepHlsSessions();
+      expect(cleaned).toBe(1);
+    });
+  });
+
+  describe("GET history/:sessionId/replay", () => {
+    it("403s a plain member", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_000_000, endedMinutesAgo: 5 });
+      const res = await call(
+        member,
+        "GET",
+        `${historyPath()}/1700000000000/replay`,
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("404s an unknown session id", async () => {
+      const res = await call(
+        owner,
+        "GET",
+        `${historyPath()}/1700000000000/replay`,
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("409s once the segments are already gone", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await seedBroadcast({ startedAt: 1_700_000_008_000, endedMinutesAgo: 20 });
+      const res = await call(
+        owner,
+        "GET",
+        `${historyPath()}/1700000008000/replay`,
+      );
+      expect(res.status).toBe(409);
+    });
+
+    it("mints a playable master playlist URL, carrying a viewer token", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_009_000, endedMinutesAgo: 5 });
+      const res = await call<{ hlsUrl: string }>(
+        owner,
+        "GET",
+        `${historyPath()}/1700000009000/replay`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.hlsUrl).toMatch(
+        /^\/api\/voice\/hls-replay\/[^/]+\/1700000009000\?t=/,
+      );
+
+      const playlist = await getRaw(res.body.hlsUrl, owner);
+      expect(playlist.status).toBe(200);
+      expect(playlist.contentType).toBe("application/vnd.apple.mpegurl");
+      expect(playlist.text).toContain("#EXT-X-STREAM-INF");
+      expect(playlist.text).toContain("/api/voice/hls-replay/");
+    });
+  });
+
+  describe("GET /api/voice/hls-replay/:channelId/:startedAt(/:rung)", () => {
+    it("a valid token with NO Authorization header is served (hls.js's real shape)", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_010_000, endedMinutesAgo: 5 });
+      const minted = await call<{ hlsUrl: string }>(
+        owner,
+        "GET",
+        `${historyPath()}/1700000010000/replay`,
+      );
+      expect(minted.status).toBe(200);
+      const r = await getRaw(minted.body.hlsUrl, null);
+      expect(r.status).toBe(200);
+
+      // Follow the master into one rendition, still with no header.
+      const variantLine = r.text
+        .split("\n")
+        .find((line) => line.includes("/api/voice/hls-replay/"))!;
+      const rendition = await getRaw(variantLine, null);
+      expect(rendition.status).toBe(200);
+      expect(rendition.text).toContain("#EXTM3U");
+      expect(rendition.text).toContain("s3.example.test");
+    });
+
+    it("a still-live session is not servable as a replay", async () => {
+      await seedBroadcast({
+        startedAt: 1_700_000_011_000,
+        endedMinutesAgo: null,
+      });
+      const t = mintHlsViewerToken({
+        userId: owner.id,
+        channelId,
+        startedAt: 1_700_000_011_000,
+      });
+      const r = await getRaw(
+        `/api/voice/hls-replay/${channelId}/1700000011000?t=${t}`,
+        null,
+      );
+      expect(r.status).toBe(404);
+    });
+
+    it("no header and no token is 401", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_012_000, endedMinutesAgo: 5 });
+      const r = await getRaw(
+        `/api/voice/hls-replay/${channelId}/1700000012000`,
+        null,
+      );
+      expect(r.status).toBe(401);
+    });
+
+    it("a token for a different channel is refused", async () => {
+      await seedBroadcast({ startedAt: 1_700_000_013_000, endedMinutesAgo: 5 });
+      const t = mintHlsViewerToken({
+        userId: owner.id,
+        channelId: "00000000-0000-4000-8000-000000000000",
+        startedAt: 1_700_000_013_000,
+      });
+      const r = await getRaw(
+        `/api/voice/hls-replay/${channelId}/1700000013000?t=${t}`,
+        null,
+      );
+      expect(r.status).toBe(401);
+    });
+  });
+});

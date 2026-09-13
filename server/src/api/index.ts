@@ -132,6 +132,13 @@ import {
 } from "../voice/backends.js";
 import { liveHlsConfigForServer } from "../voice/hls-egress.js";
 import {
+  buildReplayMasterPlaylist,
+  buildReplaySignedPlaylist,
+  checkWatchPartyReplayAccess,
+  listWatchPartyHistory,
+  setWatchPartyKeepReplay,
+} from "../voice/hls-history.js";
+import {
   buildMasterPlaylistFor,
   buildSignedPlaylist,
   HlsPlaylistNotFound,
@@ -142,6 +149,7 @@ import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
 import {
   describeHlsViewerToken,
   HLS_VIEWER_TOKEN_PARAM,
+  mintHlsViewerToken,
   stampViewerStream,
 } from "../voice/hls-viewer-token.js";
 import {
@@ -5036,6 +5044,293 @@ router.post(
   },
 );
 
+// ------------------------------------------- watch party history (replay)
+/**
+ * "Transmissões anteriores": past broadcasts for a watch-party channel, for
+ * the owner and moderators to find yesterday's stream. Gated on the
+ * channel's START_WATCH_PARTY (whoever can go live) or MANAGE_CHANNELS
+ * (whoever administers the room), the same pair `docs/WATCH_PARTY.md`
+ * already treats as "runs this room". `hls-history.ts` has the retention
+ * and grouping reasoning; this is just the HTTP surface over it.
+ */
+async function requireWatchPartyHistoryAccess(
+  channel: { server_id: string; id: string },
+  userId: string,
+): Promise<void> {
+  await requireServerMember(channel.server_id, userId);
+  const allowed =
+    (await memberHasPermission(
+      channel.server_id,
+      userId,
+      Permission.START_WATCH_PARTY,
+      channel.id,
+    )) ||
+    (await memberHasPermission(
+      channel.server_id,
+      userId,
+      Permission.MANAGE_CHANNELS,
+      channel.id,
+    ));
+  if (!allowed) {
+    throw new Forbidden("You do not have permission to do that");
+  }
+}
+
+/**
+ * The path segment is `:sessionAt` rather than `:sessionId` -- it carries the
+ * broadcast's `started_at` in epoch ms (see `hls-history.ts`'s
+ * `WatchPartyHistoryEntry.sessionId`, which is the same value, just named
+ * for the response body rather than the route). `router.ts` requires any
+ * param ending in `Id` to be a UUID and 404s otherwise, which a timestamp
+ * never is; naming it `sessionId` here would 404 every request before this
+ * function ever ran.
+ */
+function parseWatchPartyHistorySessionAt(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!raw || !/^\d{1,20}$/.test(raw) || !Number.isFinite(parsed)) {
+    throw new NotFound("Broadcast not found");
+  }
+  return parsed;
+}
+
+const HISTORY_PAGE_SIZE = 20;
+const HISTORY_PAGE_MAX = 50;
+
+router.get(
+  "/api/channels/:channelId/watch-party/history",
+  async ({ user, url }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const limit = clampLimit(
+      url.searchParams.get("limit"),
+      HISTORY_PAGE_SIZE,
+      HISTORY_PAGE_MAX,
+    );
+    return { broadcasts: await listWatchPartyHistory(channelId!, limit) };
+  },
+);
+
+const watchPartyHistoryPatchSchema = z.object({ keepReplay: z.boolean() });
+
+router.patch(
+  "/api/channels/:channelId/watch-party/history/:sessionAt",
+  async ({ req, user }, { channelId, sessionAt }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    const body = watchPartyHistoryPatchSchema.parse(await readJsonBody(req));
+    const result = await setWatchPartyKeepReplay(
+      channelId!,
+      startedAtMs,
+      body.keepReplay,
+    );
+    if (result === "not-found") {
+      throw new NotFound("Broadcast not found");
+    }
+    if (result === "unavailable") {
+      throw new HttpError(
+        409,
+        "This broadcast's recording is no longer available",
+      );
+    }
+    return {
+      broadcasts: await listWatchPartyHistory(channelId!, HISTORY_PAGE_MAX),
+    };
+  },
+);
+
+router.get(
+  "/api/channels/:channelId/watch-party/history/:sessionAt/replay",
+  async ({ user }, { channelId, sessionAt }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    const access = await checkWatchPartyReplayAccess(channelId!, startedAtMs);
+    if (access === "not-found") {
+      throw new NotFound("Broadcast not found");
+    }
+    if (access === "unavailable") {
+      throw new HttpError(
+        409,
+        "This broadcast's recording is no longer available",
+      );
+    }
+    const token = mintHlsViewerToken({
+      userId: user.id,
+      channelId: channelId!,
+      startedAt: startedAtMs,
+    });
+    const query = token
+      ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(token)}`
+      : "";
+    return {
+      hlsUrl: `/api/voice/hls-replay/${encodeURIComponent(channelId!)}/${startedAtMs}${query}`,
+    };
+  },
+);
+
+/**
+ * The replay playlist proxy: the same rewrite-segments-into-signed-URLs job
+ * as the live one (`hlsPlaylistResponse` above), pointed at
+ * `hls-history.ts`'s replay builders instead. Kept as its own path rather
+ * than a mode on the live route on purpose -- see that file's header comment.
+ */
+async function hlsReplayResponse(
+  res: ServerResponse,
+  channelId: string,
+  startedAt: string,
+  userId: string,
+  tokenIssuedAt: number | null,
+  options: { rung?: string; token?: string | null } = {},
+): Promise<RawResponse> {
+  if (tokenIssuedAt === null) {
+    await requireChannelAccess(channelId, userId);
+  } else if (isHlsAccessRevoked(userId, channelId, tokenIssuedAt)) {
+    throw new NotFound("Channel not found");
+  }
+  const parsedStartedAt = Number(startedAt);
+  if (!Number.isFinite(parsedStartedAt)) {
+    throw new NotFound("No replay for this channel");
+  }
+  if (!options.rung) {
+    const master = await buildReplayMasterPlaylist({
+      channelId,
+      startedAt: parsedStartedAt,
+      token: options.token,
+    });
+    if (master !== null) {
+      res.setHeader("Cache-Control", "private, max-age=30");
+      res.setHeader("Vary", "Authorization");
+      return new RawResponse(master, "application/vnd.apple.mpegurl");
+    }
+  }
+  let body: string;
+  try {
+    body = await buildReplaySignedPlaylist(
+      channelId,
+      parsedStartedAt,
+      options.rung,
+    );
+  } catch (error) {
+    if (error instanceof HlsPlaylistNotFound) {
+      throw new NotFound("No replay for this channel");
+    }
+    if (error instanceof HlsPlaylistUnavailable) {
+      throw new HttpError(503, "Live HLS storage unavailable");
+    }
+    throw error;
+  }
+  res.setHeader("Cache-Control", "private, max-age=30");
+  res.setHeader("Vary", "Authorization");
+  return new RawResponse(body, "application/vnd.apple.mpegurl");
+}
+
+router.get(
+  "/api/voice/hls-replay/:channelId/:startedAt",
+  async ({ user, res, url }, { channelId, startedAt }) =>
+    hlsReplayRouteResponse(res, url, user.id, channelId!, startedAt!),
+);
+
+router.get(
+  "/api/voice/hls-replay/:channelId/:startedAt/:rung",
+  async ({ user, res, url }, { channelId, startedAt, rung }) =>
+    hlsReplayRouteResponse(res, url, user.id, channelId!, startedAt!, rung!),
+);
+
+function hlsReplayRouteResponse(
+  res: ServerResponse,
+  url: URL,
+  bearerUserId: string,
+  channelId: string,
+  startedAt: string,
+  rung?: string,
+): Promise<RawResponse> {
+  const token = url.searchParams.get(HLS_VIEWER_TOKEN_PARAM);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId,
+    token,
+    channelId,
+    startedAt: Number(startedAt),
+  });
+  return hlsReplayResponse(
+    res,
+    channelId,
+    startedAt,
+    viewer?.userId ?? bearerUserId,
+    viewer?.issuedAt ?? null,
+    { rung, token },
+  );
+}
+
+// The rung is optional: without it the path names the broadcast (the master
+// playlist), with it one rendition. Mirrors `HLS_PLAYLIST_PATH` above.
+const HLS_REPLAY_PATH =
+  /^\/api\/voice\/hls-replay\/([^/]{1,64})\/(\d{1,20})(?:\/([A-Za-z0-9]{1,16}))?$/;
+
+/**
+ * The header-less door for a replay URL: our own client never attaches a
+ * Bearer header to one of these (the URL already carries `?t=`, and
+ * `isOwnHlsPlaylistProxyUrl` on the client only matches the live path
+ * anyway), so this door is the ONLY way a replay request is ever served, not
+ * a fallback. Mirrors `tryHlsCapabilityDoor`.
+ */
+async function tryHlsReplayCapabilityDoor(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): Promise<boolean> {
+  const match = HLS_REPLAY_PATH.exec(pathname);
+  if (!match) {
+    return false;
+  }
+  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+    HLS_VIEWER_TOKEN_PARAM,
+  );
+  const channelId = match[1]!;
+  const startedAt = Number(match[2]);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId: null,
+    token,
+    channelId,
+    startedAt,
+  });
+  if (!viewer) {
+    return false;
+  }
+  if (!apiLimiter.take(`user:${viewer.userId}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(apiLimiter.retryAfter(`user:${viewer.userId}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return true;
+  }
+  try {
+    const result = await hlsReplayResponse(
+      res,
+      channelId,
+      match[2]!,
+      viewer.userId,
+      viewer.issuedAt ?? 0,
+      { rung: match[3], token },
+    );
+    res.writeHead(200, {
+      "content-type": result.contentType,
+      ...SECURITY_HEADERS,
+      ...corsHeaders(req),
+    });
+    res.end(result.body);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      sendError(res, error.status, error.message, req);
+      return true;
+    }
+    console.error("[voice] hls replay (token) failed:", error);
+    sendError(res, 500, "Internal server error", req);
+  }
+  return true;
+}
+
 // -------------------------------------------------------------- webhooks
 
 function mapWebhook(w: DbWebhook) {
@@ -7925,6 +8220,9 @@ export async function handleApi(
     if (await tryHlsCapabilityDoor(req, res, pathname)) {
       return;
     }
+    if (await tryHlsReplayCapabilityDoor(req, res, pathname)) {
+      return;
+    }
   }
 
   // The operator dashboard's machine token, for exactly two GETs and nothing
@@ -8007,6 +8305,12 @@ export async function handleApi(
     // strongest evidence available. Revocation is still checked against its
     // own issue time.
     if (req.method === "GET" && (await tryHlsCapabilityDoor(req, res, pathname))) {
+      return;
+    }
+    if (
+      req.method === "GET" &&
+      (await tryHlsReplayCapabilityDoor(req, res, pathname))
+    ) {
       return;
     }
     // The metrics route answers 404 to everybody it refuses, whether that is a

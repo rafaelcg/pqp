@@ -2287,6 +2287,92 @@ reconstructed client republishes with a new sid. Do it with the reason field
 above in hand: one party's log now says which resume kind is actually
 happening, which is the fact this reasoning is missing.
 
+## Past broadcasts (replay)
+
+"Transmissões anteriores": the owner and moderators of a `watch_party`
+channel (whoever holds `START_WATCH_PARTY` or `MANAGE_CHANNELS` on it, same
+OR the client's history icon and the server routes both check) can list what
+already aired and watch a finished one back, without touching
+`watch-party-panel.tsx` at all.
+
+**The entity is a broadcast, not an `hls_sessions` row.** One broadcast is
+every ladder rung (plus a `mic` archive and `cam360p30` camera pip row, when
+those ran) that share a `(channel_id, started_at)` pair -- `hls-history.ts`
+groups by that pair, the same mental model the rest of this file already
+uses for "a session". `keep_replay` is written to EVERY row of the group at
+once, so retention keeps or drops the whole broadcast together rather than
+leaving, say, the audio-only mic file behind after the picture is gone.
+
+**The presenter is a best-effort join, not a stored fact.** `hls_sessions`
+carries only an ephemeral `presenter_peer_id`, and the schema comment on the
+table says reconciling it with `channel_sessions` (the party/event row,
+which does have `host_user_id`) is future work. So the presenter shown is
+the `channel_sessions` row whose `went_live_at` is the latest one at or
+before the broadcast's `started_at` -- the host, not necessarily whoever
+happened to be on stage. No match (old data, or a mismatch) is `presenter:
+null`, never a guess.
+
+**No peak-viewer count**, on purpose: the live viewer count is derived from
+the roster at request time and never written anywhere, so there is nothing
+durable to read back. The field is left off the response rather than
+invented.
+
+**Availability mirrors the retention sweep exactly**, not `cleaned_at IS
+NULL` alone. A broadcast is `replayAvailable` when none of its rows are
+cleaned AND either `keep_replay` is off and `ended_at` is within
+`LIVE_HLS_RETENTION_MINUTES`, or it is on and `ended_at` is within
+`LIVE_HLS_REPLAY_HOURS` -- the exact negation of `dueSessions`' WHERE clause
+in `hls-cleanup.ts`. Approximating with `cleaned_at IS NULL` alone would
+repeat "A finished session went on answering as if it were live" above:
+`cleaned_at` lags the real window by up to one sweep tick.
+
+**Three routes**, all behind the same permission check
+(`requireWatchPartyHistoryAccess`):
+
+- `GET /api/channels/:channelId/watch-party/history` -- newest first, each
+  entry's `sessionId` is the broadcast's `started_at` in epoch ms as a
+  string (opaque to the client, just the value `hls-egress.ts` already uses
+  to name a live session's URL).
+- `PATCH /api/channels/:channelId/watch-party/history/:sessionAt` --
+  `{ keepReplay: boolean }`. 409s once the segments are already gone, in
+  either direction: there is nothing left to keep, and nothing left to stop
+  keeping. (The path param is named `sessionAt`, not `sessionId` --
+  `router.ts` requires anything ending in `Id` to be a UUID, and a timestamp
+  never is.)
+- `GET /api/channels/:channelId/watch-party/history/:sessionAt/replay` --
+  mints a master playlist URL for an ended, still-available broadcast, with
+  the SAME viewer-token machinery as a live stream (`hls-viewer-token.ts`,
+  60-minute TTL). 404 unknown, 409 gone.
+
+**Replay is served on its own path, not a mode on the live one.** LiveKit's
+`SegmentedFileOutput` already writes two playlists per rung: the rolling
+`livePlaylistName` the live proxy serves, which deliberately refuses
+anything with `ended_at` set (see "A finished session went on answering as
+if it were live" above -- that guard is a fix for a real incident and this
+feature does not loosen it), and a second, ever-growing `playlistName`
+(`<prefix>-index.m3u8`) that accumulates every segment for the whole run.
+Replay just rewrites that existing object's segment lines into signed URLs,
+under `GET /api/voice/hls-replay/:channelId/:startedAt(/:rung)`
+(`hls-history.ts`'s `buildReplayMasterPlaylist` / `buildReplaySignedPlaylist`),
+guarded by its own headerless capability door
+(`tryHlsReplayCapabilityDoor`) mirroring `tryHlsCapabilityDoor` -- the
+client's `HlsWatchPlayer` never attaches a header to a URL that already
+carries `?t=`, so for a replay URL that door is the only way a request is
+ever served, not a fallback.
+
+**Client.** `WatchPartyHistoryDialog`
+(`client/src/components/watch-party/watch-party-history-dialog.tsx`) is its
+own mount, opened from a history icon next to the channel-settings gear
+(shown only for a `watch_party` channel and only with the permission
+above -- deliberately independent of `ChannelSettingsDialog`, which is
+`MANAGE_CHANNELS` / `MANAGE_ROLES` only and would otherwise hide this from a
+mod who holds `START_WATCH_PARTY` alone). Each row shows the date, duration,
+presenter, a "Manter gravação" toggle and an "Assistir" button that mounts
+`HlsWatchPlayer` with the minted replay URL -- the same read-only player
+component the live path uses, with no chat overlay and no join/leave
+wiring, so watching a replay never touches presence or the live watch-party
+state machine.
+
 ## How you know it is running
 
 The whole of the above can be deployed, configured and doing nothing, and for
