@@ -191,13 +191,44 @@ const FAST_PATH_FRESHNESS_MS = 2_000;
  * `sweepIdlePollStates` handles the ordinary case (idle entries expiring),
  * this handles a sustained flood of genuinely distinct, still-fresh keys.
  * Same shape as `REJECTION_LOG_MAX_ENTRIES` in `index.ts`.
+ *
+ * WHAT HAPPENS AT THE CEILING. `insertPollState` only ever evicts an IDLE
+ * entry (no waiters, no running loop) to make room — never an active one.
+ * Evicting an active rendition would split its waiters across two
+ * independent states: the ones already registered on the evicted entry would
+ * be orphaned (nothing left polls or settles them, since the loop closure
+ * still points at the old, now-unreachable `state` object), and the very
+ * next waiter for that same key would start a SECOND poll loop for the
+ * identical rendition, exactly the duplicate-loop failure "ORIGIN
+ * DISCIPLINE" above exists to prevent. So when the map is full and every
+ * entry is active, a brand-new rendition key gets NO entry at all —
+ * `awaitBlockingReload` returns `{ kind: "capacity-fallback" }` and the
+ * caller (`handleBlockingReload` / `index.ts`) serves that one request
+ * through the plain non-blocking cache-or-forward path instead. This is
+ * correct RFC 8216bis behaviour on its own terms: §6.2.5.2 says a server MAY
+ * ignore a Playlist Delivery Directive it does not want to honour, and a
+ * saturated isolate declining to open one more hold is exactly that.
  */
-const MAX_POLL_STATE_ENTRIES = 500;
+export const MAX_POLL_STATE_ENTRIES = 500;
 
 /** How often the opportunistic idle sweep is allowed to run a full scan. Same shape as `index.ts`'s `REJECTION_LOG_SWEEP_INTERVAL_MS`. */
 const POLL_STATE_SWEEP_INTERVAL_MS = 10_000;
 
 let pollStatesLastSweptAt = 0;
+
+/**
+ * Throttle for the "poll-state map is saturated with active renditions" log
+ * line (`hlsEdge.blockingReloadCapacityFallback`) — a client that keeps
+ * requesting distinct rungs while the map is full would otherwise turn every
+ * one of those requests into its own log write, the same write-amplifier
+ * shape pitfall 16 in `CLAUDE.md` warns about. Real wall-clock time on
+ * purpose: this fires from `handleBlockingReload`, which (unlike
+ * `awaitBlockingReload`) has no injected fake clock to be deterministic
+ * against in tests, and the exact cadence of this log line is not something
+ * any test needs to pin to the microsecond.
+ */
+const CAPACITY_FALLBACK_LOG_INTERVAL_MS = 60_000;
+let capacityFallbackLastLoggedAt = 0;
 
 /**
  * @typedef {{ msn: number, part?: number }} BlockingReloadDirectives
@@ -372,7 +403,8 @@ export function isMsnTooFarAhead(edge, requested) {
  *   { kind: "timeout", playlist: FetchedPlaylist } |
  *   { kind: "too-far-ahead" } |
  *   { kind: "origin-error", playlist: FetchedPlaylist } |
- *   { kind: "aborted" }
+ *   { kind: "aborted" } |
+ *   { kind: "capacity-fallback" }
  * } BlockingReloadOutcome
  */
 
@@ -457,13 +489,23 @@ function sweepIdlePollStates(nowMs) {
 
 /**
  * Inserts a new poll-state entry, evicting one first if `pollStates` is at
- * `MAX_POLL_STATE_ENTRIES` — an idle entry if one exists (never a rendition
- * with a live loop or waiter), else the oldest by insertion order, the same
- * approximation-of-LRU trade-off `index.ts`'s `rejectionLog` already makes
- * for a hostile-traffic ceiling.
+ * `MAX_POLL_STATE_ENTRIES` — but ONLY an idle entry (no waiters, no running
+ * loop). Never evicts a rendition with a live loop or waiter: doing so would
+ * orphan whatever waiters were already registered on the evicted state (its
+ * loop closure still points at that now-unreachable object, so nothing would
+ * ever poll or settle them again) and would start a SECOND, duplicate poll
+ * loop for the same rendition the moment its next request arrives — see the
+ * module doc comment on `MAX_POLL_STATE_ENTRIES`.
+ *
+ * Returns `false`, without inserting anything, when the map is already at
+ * capacity and every entry is active. The caller (`awaitBlockingReload`)
+ * treats that as "no room for this rendition right now" and falls back to
+ * serving the request without a hold at all, rather than picking some other
+ * active entry to sacrifice.
  *
  * @param {string} key
  * @param {RenditionPollState} state
+ * @returns {boolean}
  */
 function insertPollState(key, state) {
   if (pollStates.size >= MAX_POLL_STATE_ENTRIES) {
@@ -476,13 +518,11 @@ function insertPollState(key, state) {
       }
     }
     if (!evictedIdle) {
-      const oldestKey = pollStates.keys().next().value;
-      if (oldestKey !== undefined) {
-        pollStates.delete(oldestKey);
-      }
+      return false;
     }
   }
   pollStates.set(key, state);
+  return true;
 }
 
 /**
@@ -506,12 +546,33 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
   const signal = deps.signal;
   const nowMs = now();
 
+  // An already-gone caller gets the same outcome, checked BEFORE anything
+  // else -- including the retained-state fast path just below. Farol's
+  // 2026-09-14 finding: that fast path used to answer (or reject) straight
+  // from `state.lastEdge`/`state.lastPlaylist` with no abort check at all, so
+  // a request whose signal was already aborted before this function even ran
+  // could still come back "available" or "too-far-ahead" instead of
+  // "aborted" -- serving a body nothing was left to read. Checking here,
+  // before the fast path AND before touching `pollStates` at all, means an
+  // aborted caller never contends for capacity or a fetch either.
+  if (signal && signal.aborted) {
+    return { kind: "aborted" };
+  }
+
   sweepIdlePollStates(nowMs);
 
   let state = pollStates.get(renditionKey);
   if (!state) {
-    state = { waiters: new Set(), lastPlaylist: null, lastEdge: null, lastFetchedAt: 0, polling: false };
-    insertPollState(renditionKey, state);
+    const candidate = { waiters: new Set(), lastPlaylist: null, lastEdge: null, lastFetchedAt: 0, polling: false };
+    if (!insertPollState(renditionKey, candidate)) {
+      // The map is full and every entry is active -- see `insertPollState`
+      // and the module doc comment on `MAX_POLL_STATE_ENTRIES`. Rather than
+      // evict a live rendition (which would orphan its waiters and spawn a
+      // duplicate loop the next time it's asked for), this ONE request goes
+      // unheld: the caller falls back to its own plain, non-blocking fetch.
+      return { kind: "capacity-fallback" };
+    }
+    state = candidate;
   }
 
   // Fast path: this isolate already knows enough, from a recent fetch on
@@ -797,6 +858,7 @@ async function runPollLoop(renditionKey, state, deps, now, sleep) {
 export function resetBlockingReloadStateForTests() {
   pollStates.clear();
   pollStatesLastSweptAt = 0;
+  capacityFallbackLastLoggedAt = 0;
 }
 
 /**
@@ -806,13 +868,19 @@ export function resetBlockingReloadStateForTests() {
  * diff for this task is just "recognize a directive, call this" — see this
  * module's doc comment, "FOUR THINGS THIS FILE DOES".
  *
+ * Returns `null`, not a `Response`, for `{ kind: "capacity-fallback" }` (see
+ * `MAX_POLL_STATE_ENTRIES`): that is the caller's signal to serve THIS
+ * request through its own pre-existing non-blocking cache-or-forward path
+ * instead, exactly as it would a request with no directive at all, rather
+ * than this module inventing a second implementation of that path here.
+ *
  * @param {string} renditionKey - Same cache-key URL `index.ts` already uses for the non-blocking path (path only, no query).
  * @param {BlockingReloadDirectives} directives
  * @param {() => Promise<FetchedPlaylist>} fetchRendition - Caller's existing single-flight origin fetch (`fetchRenditionCoalesced`).
  * @param {(event: string, fields?: Record<string, unknown>) => void} logEvent
  * @param {{ channelId: string, rung: string }} context
  * @param {AbortSignal} [signal] - The incoming request's signal, so a disconnected viewer's hold does not outlive the connection.
- * @returns {Promise<Response>}
+ * @returns {Promise<Response | null>}
  */
 export async function handleBlockingReload(renditionKey, directives, fetchRendition, logEvent, context, signal) {
   let outcome;
@@ -824,6 +892,22 @@ export async function handleBlockingReload(renditionKey, directives, fetchRendit
       status: 502,
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
+  }
+
+  if (outcome.kind === "capacity-fallback") {
+    // Rate-limited on purpose -- see `CAPACITY_FALLBACK_LOG_INTERVAL_MS` --
+    // so a client that keeps cycling through distinct rungs while the map is
+    // saturated cannot turn every one of its own requests into a log write.
+    const loggedAt = Date.now();
+    if (loggedAt - capacityFallbackLastLoggedAt >= CAPACITY_FALLBACK_LOG_INTERVAL_MS) {
+      capacityFallbackLastLoggedAt = loggedAt;
+      logEvent("hlsEdge.blockingReloadCapacityFallback", {
+        channelId: context.channelId,
+        rung: context.rung,
+        maxEntries: MAX_POLL_STATE_ENTRIES,
+      });
+    }
+    return null;
   }
 
   if (outcome.kind === "aborted") {
