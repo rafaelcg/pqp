@@ -18,6 +18,7 @@ import {
   liveHlsLadder,
   liveHlsRungsFor,
   liveHlsServerAllowlist,
+  micArchiveObjectKey,
   resolveLiveHlsForServer,
   setLiveHlsSfuLoadReader,
   liveHlsStreamFor,
@@ -105,6 +106,7 @@ function disableHls() {
   delete process.env.LIVE_HLS_MAX_LADDER_MBPS;
   delete process.env.LIVE_HLS_MAX_SESSIONS;
   delete process.env.LIVE_HLS_REAP_ORPHANS;
+  delete process.env.LIVE_HLS_MIC_ARCHIVE;
   delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
 }
 
@@ -134,6 +136,9 @@ describe("live HLS egress", () => {
         { name: "720p30", width: 1280, height: 720, framerate: 30, videoKbps: 3200 },
       ],
       allowlisted: false,
+      // `LIVE_HLS_MIC_ARCHIVE` is unset, which is every deployment: the host's
+      // browser is told not to publish the extra track.
+      micArchive: false,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -441,19 +446,36 @@ describe("live HLS egress", () => {
         delaySeconds: 10,
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
+        micArchive: false,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
         delaySeconds: 10,
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
+        micArchive: false,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
         delaySeconds: 10,
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
+        micArchive: false,
       });
+    });
+
+    it("advertises the mic archive only to a server the egress is actually on for", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      expect((await liveHlsConfigForServer(SERVER)).micArchive).toBe(true);
+      // Same deployment, a server the operator has not listed. Telling this
+      // host to publish a second microphone would put an extra track in their
+      // room that nothing on this deployment is ever going to record.
+      expect((await liveHlsConfigForServer(OTHER_SERVER)).micArchive).toBe(false);
+      // And the master switch still wins over the feature flag.
+      delete process.env.LIVE_HLS_ENABLED;
+      expect(liveHlsConfig().micArchive).toBe(false);
     });
 
     it("reconcile does not start an egress for an unlisted server, and stops one that was running", async () => {
@@ -1859,6 +1881,367 @@ describe("pickScreenTracks", () => {
  * seatless audience, who have no way to say so. So the server states it on the
  * stream, logs it, and counts it.
  */
+/**
+ * THE HOST'S VOICE AS ITS OWN FILE (`LIVE_HLS_MIC_ARCHIVE`).
+ *
+ * Two halves, and both are silent when broken. The picker has to find a
+ * publication by NAME beside one that is identical in every other respect
+ * (both are `MICROPHONE`, because a grant is an allowlist of sources and an
+ * invented one would be refused — pitfall 14). And the request has to be a
+ * Track Egress to a `.ogg` under the session's own prefix, or the retention
+ * sweep either misses the file forever or the archive is written where the
+ * master playlist can see it.
+ */
+describe("the mic archive picker", () => {
+  const SCREEN = { source: TrackSource.SCREEN_SHARE, sid: "TR_screen" };
+  /** What the host's ordinary microphone looks like on the wire. */
+  const MIC = { source: TrackSource.MICROPHONE, sid: "TR_mic", name: "mic" };
+  /** The second publication, which differs from it ONLY by name. */
+  const ARCHIVE = {
+    source: TrackSource.MICROPHONE,
+    sid: "TR_mic_archive",
+    name: "mic-archive",
+  };
+
+  it("picks the publication named mic-archive, not the microphone beside it", () => {
+    expect(
+      pickScreenTracks([
+        { identity: "peer-host", tracks: [MIC, SCREEN, ARCHIVE] },
+      ]),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+      micArchiveTrackId: "TR_mic_archive",
+    });
+  });
+
+  it("leaves the field off entirely when the host publishes no such track", () => {
+    // Every host on a bundle older than this feature, and every host with the
+    // flag off. Absent, not null: a field that is there and empty reads like a
+    // failed lookup rather than a client that was never asked.
+    const picked = pickScreenTracks([
+      { identity: "peer-host", tracks: [MIC, SCREEN] },
+    ]);
+    expect(picked).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+    expect("micArchiveTrackId" in picked!).toBe(false);
+  });
+
+  /**
+   * The archive must come from the SAME participant the transcode is bound to.
+   * A party with co-hosts has two people holding START_WATCH_PARTY, and
+   * recording the voice of the one who is not presenting, against a file named
+   * after the presenter's session, is worse than recording nothing.
+   */
+  it("never takes the archive from a participant who is not the sharer", () => {
+    expect(
+      pickScreenTracks(
+        [
+          { identity: "peer-host", tracks: [MIC, SCREEN] },
+          { identity: "peer-cohost", tracks: [ARCHIVE] },
+        ],
+        "peer-host",
+      ),
+    ).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+  });
+
+  it("does not mistake it for the share's audio", () => {
+    // The archive is a microphone. If it ever won the Track Composite's one
+    // audio sid, the HLS audience would get the host's bare voice instead of
+    // the film, which is the loudest possible version of this bug.
+    expect(
+      pickScreenTracks([
+        {
+          identity: "peer-host",
+          tracks: [
+            ARCHIVE,
+            SCREEN,
+            { source: TrackSource.SCREEN_SHARE_AUDIO, sid: "TR_screen_audio" },
+          ],
+        },
+      ]),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: "TR_screen_audio",
+      micArchiveTrackId: "TR_mic_archive",
+    });
+  });
+});
+
+describe("LIVE_HLS_MIC_ARCHIVE", () => {
+  function fakeLiveKit() {
+    let n = 0;
+    const statuses = new Map<string, EgressStatus>();
+    const startComposite = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+      async () => {
+        const egressId = `EG_${(n += 1)}`;
+        statuses.set(egressId, EgressStatus.EGRESS_ACTIVE);
+        return { egressId };
+      },
+    );
+    const startTrack = vi.fn<NonNullable<LiveHlsEgressApi["startTrackEgress"]>>(
+      async () => {
+        const egressId = `MIC_${(n += 1)}`;
+        statuses.set(egressId, EgressStatus.EGRESS_ACTIVE);
+        return { egressId };
+      },
+    );
+    const stop = vi.fn(async (egressId: string) => {
+      statuses.set(egressId, EgressStatus.EGRESS_COMPLETE);
+    });
+    const list = vi.fn(
+      async (opts: { egressId?: string; roomName?: string; active?: boolean }) =>
+        [...statuses.entries()]
+          .filter(([id]) => !opts.egressId || id === opts.egressId)
+          .filter(([, status]) =>
+            opts.active ? status === EgressStatus.EGRESS_ACTIVE : true,
+          )
+          .map(([egressId, status]) => ({
+            egressId,
+            status,
+            roomName: CHANNEL,
+          })),
+    );
+    return {
+      api: {
+        startTrackCompositeEgress: startComposite,
+        startTrackEgress: startTrack,
+        stopEgress: stop,
+        listEgress: list,
+      } satisfies LiveHlsEgressApi,
+      startTrack,
+      stop,
+      kill(egressId: string) {
+        statuses.set(egressId, EgressStatus.EGRESS_FAILED);
+      },
+      isActive(egressId: string) {
+        return statuses.get(egressId) === EgressStatus.EGRESS_ACTIVE;
+      },
+    };
+  }
+
+  it("records nothing at all while the flag is unset", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    setLiveHlsTestHooks({
+      egress: lk.api,
+      findTracks: async () => ({
+        videoTrackId: "TR_V",
+        micArchiveTrackId: "TR_M",
+      }),
+    });
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    // The track is right there and is deliberately ignored: dark means dark.
+    expect(lk.startTrack).not.toHaveBeenCalled();
+    expect(liveHlsActivity().micArchives).toBe(0);
+  });
+
+  it("starts a Track Egress to the session's own .ogg when the track is already up", async () => {
+    enableHls();
+    process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+    const lk = fakeLiveKit();
+    setLiveHlsTestHooks({
+      egress: lk.api,
+      findTracks: async () => ({
+        videoTrackId: "TR_V",
+        micArchiveTrackId: "TR_M",
+      }),
+    });
+
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    const [roomName, output, trackId] = lk.startTrack.mock.calls[0]!;
+    expect(roomName).toBe(CHANNEL);
+    expect(output).toBeDefined();
+    expect(trackId).toBe("TR_M");
+    // UNDER THE SESSION'S PREFIX, which is the whole of what makes retention
+    // and `keep_replay` work on it without a line of new cleanup code.
+    expect(output!.filepath).toBe(
+      `live/${CHANNEL}/${stream!.startedAt}-mic.ogg`,
+    );
+    expect(output!.filepath).toBe(micArchiveObjectKey(CHANNEL, stream!.startedAt));
+    // Opus into OGG, and the same bucket as the segments.
+    expect(output!.filepath.endsWith(".ogg")).toBe(true);
+    expect(output!.output.case).toBe("s3");
+    expect(liveHlsActivity().micArchives).toBe(1);
+  });
+
+  it("does not put the archive on the master playlist", async () => {
+    enableHls();
+    process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+    setLiveHlsTestHooks({
+      egress: fakeLiveKit().api,
+      findTracks: async () => ({
+        videoTrackId: "TR_V",
+        micArchiveTrackId: "TR_M",
+      }),
+    });
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+    // `liveHlsRungsFor` is what the room and the config report; the proxy
+    // filters the rows to names in LADDER_RUNGS, which "mic" is not.
+    expect(liveHlsRungsFor(CHANNEL).map((rung) => rung.name)).toEqual([
+      "720p30",
+    ]);
+  });
+
+  describe("the track that shows up late", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-12T20:00:00Z"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /**
+     * THE NORMAL CASE, not an edge. The browser publishes the archive only
+     * once the mix is running, which is after the share is published, which is
+     * the frame that starts the session. So the first look misses it almost
+     * every time and the monitor is what actually starts the recording.
+     */
+    it("is picked up by the monitor, once, and not hunted for after the window closes", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      let published = false;
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () =>
+          published
+            ? { videoTrackId: "TR_V", micArchiveTrackId: "TR_M" }
+            : { videoTrackId: "TR_V" },
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      expect(lk.startTrack).not.toHaveBeenCalled();
+
+      // Past the health grace period, still nothing published: no archive,
+      // and no session torn down over it either.
+      await vi.advanceTimersByTimeAsync(20_000);
+      await checkLiveHlsHealth();
+      expect(lk.startTrack).not.toHaveBeenCalled();
+      expect(liveHlsStreamFor(CHANNEL)).not.toBeNull();
+
+      published = true;
+      await checkLiveHlsHealth();
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+
+      // And it is not started a second time on every tick thereafter.
+      await checkLiveHlsHealth();
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives up after 60 s rather than listing participants for the whole film", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      let published = false;
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () =>
+          published
+            ? { videoTrackId: "TR_V", micArchiveTrackId: "TR_M" }
+            : { videoTrackId: "TR_V" },
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(61_000);
+      published = true;
+      await checkLiveHlsHealth();
+
+      // A host on an older bundle costs one probe per tick for a minute, not
+      // for three hours.
+      expect(lk.startTrack).not.toHaveBeenCalled();
+    });
+
+    it("does not count the archive as a leftover transcode to reap", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: "TR_M",
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      const micEgressId = (await lk.startTrack.mock.results[0]!.value).egressId;
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      // `reapForeignEgresses` stops every ACTIVE egress on a room we are
+      // presenting that is not one of our rungs. The archive is exactly that
+      // and is exactly not a leftover.
+      await checkLiveHlsHealth();
+
+      expect(lk.isActive(micEgressId)).toBe(true);
+      expect(liveHlsActivity().orphansStopped).toBe(0);
+      expect(liveHlsActivity().micArchives).toBe(1);
+    });
+
+    it("stops when the share ends", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: "TR_M",
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      const micEgressId = (await lk.startTrack.mock.results[0]!.value).egressId;
+      lk.stop.mockClear();
+
+      await reconcileLiveHls(CHANNEL, null, SERVER);
+
+      // Or it writes into a file whose retention row has just been closed.
+      expect(lk.stop).toHaveBeenCalledWith(micEgressId);
+      expect(liveHlsActivity().micArchives).toBe(0);
+    });
+
+    it("stops when the flag goes off, and does not start a second one if it comes back", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({
+          videoTrackId: "TR_V",
+          micArchiveTrackId: "TR_M",
+        }),
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      const micEgressId = (await lk.startTrack.mock.results[0]!.value).egressId;
+
+      delete process.env.LIVE_HLS_MIC_ARCHIVE;
+      await vi.advanceTimersByTimeAsync(20_000);
+      await checkLiveHlsHealth();
+
+      expect(lk.stop).toHaveBeenCalledWith(micEgressId);
+      // The party is untouched: this switch is about a side recording.
+      expect(liveHlsStreamFor(CHANNEL)).not.toBeNull();
+      expect(liveHlsActivity().micArchives).toBe(0);
+
+      // AND IT STAYS STOPPED for this session. The file is named after the
+      // session's `startedAt`, so a second Track Egress would write to the
+      // same key and overwrite the half already recorded. A session records
+      // once or not at all; the next share gets its own name.
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      await checkLiveHlsHealth();
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
 describe("whether the transcode carries any audio", () => {
   it("says so on the stream and in the log when it does", async () => {
     enableHls();

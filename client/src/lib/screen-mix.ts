@@ -105,6 +105,24 @@ export interface ScreenMix {
    * when there is no analyser (guarded context) or no mic in the mix.
    */
   micLevelDb(): number | null;
+  /**
+   * A SECOND stream carrying the mic branch alone, for the watch-party
+   * archive (`LIVE_HLS_MIC_ARCHIVE`). Null when this context cannot build one.
+   *
+   * Tapped at `micGain`, which is deliberate on both counts. Post-gain, so
+   * what is recorded is what went into the mix rather than a quieter twin
+   * nobody would be able to line up with it. And downstream of the pipeline,
+   * whose output is already past the mute gate, so the host's mute button
+   * mutes the recording exactly as it mutes the stream — there is no second
+   * switch to forget.
+   *
+   * NOT the compressor's output: that bus carries the film as well, and the
+   * entire point of the archive is a voice track with no film on it.
+   *
+   * Idempotent: the same stream comes back on every call, so a caller that
+   * asks twice publishes one track rather than two.
+   */
+  micArchiveStream(): MediaStream | null;
   close(): void;
 }
 
@@ -246,6 +264,11 @@ export function createScreenMix(
     ...destination.stream.getAudioTracks(),
   ]);
 
+  // Built on demand, not up front: a deployment with the archive off (every
+  // deployment, until an operator sets `LIVE_HLS_MIC_ARCHIVE`) must not pay
+  // for a second destination node on every share.
+  let archive: { stream: MediaStream } & AudioNodeLike | null = null;
+
   return {
     stream,
     setMic,
@@ -259,6 +282,20 @@ export function createScreenMix(
     },
     micLevelDb: () =>
       lastMicDbfs !== null && Number.isFinite(lastMicDbfs) ? lastMicDbfs : null,
+    micArchiveStream: () => {
+      if (!archive) {
+        try {
+          archive = context.createMediaStreamDestination();
+          micGainNode.connect(archive);
+        } catch {
+          // No second destination available here. The share and the stream
+          // mix are unaffected; there is simply nothing to record.
+          archive = null;
+          return null;
+        }
+      }
+      return archive.stream;
+    },
     close: () => {
       if (duckInterval !== null) {
         clearInterval(duckInterval);
@@ -266,6 +303,13 @@ export function createScreenMix(
       }
       micSource?.disconnect();
       displaySource?.disconnect();
+      if (archive) {
+        for (const track of archive.stream.getAudioTracks()) {
+          track.stop();
+        }
+        archive.disconnect();
+        archive = null;
+      }
       micGainNode.disconnect();
       displayGainNode.disconnect();
       compressor.disconnect();

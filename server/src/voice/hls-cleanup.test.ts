@@ -65,6 +65,7 @@ const {
   resetLiveHlsForTests,
   setLiveHlsTestHooks,
   liveHlsStreamFor,
+  liveHlsActivity,
   liveHlsRungsFor,
 } =
   await import("./hls-egress.js");
@@ -512,6 +513,74 @@ describeDb("sweepHlsSessions", () => {
         "1080p30",
       ]);
       expect(stream?.topHeight).toBe(1080);
+    });
+
+    /**
+     * THE MIC ARCHIVE (`LIVE_HLS_MIC_ARCHIVE`) IS NOT A RENDITION, and the way
+     * it could break is silent. Its row's `rung` is `mic`, which is not a name
+     * in `LADDER_RUNGS`, and `adoptLiveHlsSession` falls back to `720p30` for
+     * a rung it does not recognise. Put through that path it would join the
+     * room as a fake 720p rendition and be served to viewers as a playlist
+     * that is really an Opus file. So it goes through `adoptLiveHlsMicArchive`
+     * instead, in a second pass, after the rungs have rebuilt the room.
+     */
+    it("adopts a mic archive onto the session's room without making it a rung", async () => {
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8300-720p30`,
+        endedMinutesAgo: 0,
+        egressId: "EG_720p30",
+        presenterPeerId: "peer-1",
+        videoTrackId: "TR_V",
+        rung: "720p30",
+      });
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8300-mic`,
+        endedMinutesAgo: 0,
+        egressId: "MIC_1",
+        presenterPeerId: "peer-1",
+        videoTrackId: "TR_V",
+        rung: "mic",
+      });
+      // The archive FIRST in the listing, which is the order that would break
+      // a single pass: there is no room to attach it to yet.
+      const { stop } = mediaServer([
+        { egressId: "MIC_1", roomName: channelA },
+        { egressId: "EG_720p30", roomName: channelA },
+      ]);
+
+      const result = await reconcileStaleHlsSessions();
+
+      expect(stop).not.toHaveBeenCalled();
+      expect(result.adopted).toBe(2);
+      expect(result.stopped).toBe(0);
+      // One rendition, not two: the archive is not on the ladder.
+      expect(liveHlsRungsFor(channelA).map((r) => r.name)).toEqual(["720p30"]);
+      expect(liveHlsStreamFor(channelA)?.topHeight).toBe(720);
+      expect(liveHlsActivity().micArchives).toBe(1);
+    });
+
+    it("stops a mic archive whose session did not come back", async () => {
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8400-mic`,
+        endedMinutesAgo: 0,
+        egressId: "MIC_2",
+        presenterPeerId: "peer-1",
+        videoTrackId: "TR_V",
+        rung: "mic",
+      });
+      // Its rungs are gone: the share is over and this handler is writing into
+      // a file whose row is about to be closed for retention.
+      const { stop } = mediaServer([{ egressId: "MIC_2", roomName: channelA }]);
+
+      const result = await reconcileStaleHlsSessions();
+
+      expect(stop).toHaveBeenCalledWith("MIC_2");
+      expect(result.stopped).toBe(1);
+      expect(result.adopted).toBe(0);
+      expect(liveHlsStreamFor(channelA)).toBeNull();
     });
 
     it("STOPS an egress no session row owns", async () => {

@@ -45,6 +45,7 @@ import {
   type ShareCursor,
 } from "@/lib/screen-capture-cursor";
 import { createScreenMix, type ScreenMix } from "@/lib/screen-mix";
+import { loadLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { writeStreamMixLevels } from "@/lib/stream-mix-levels";
 import { getMicInStream, saveMicInStream } from "@/lib/mic-in-stream";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
@@ -2093,6 +2094,49 @@ export function createVoiceController(transport: RealtimeTransport) {
     );
   }
 
+  /**
+   * THE HOST'S VOICE AS ITS OWN FILE, when the server says it is recording.
+   *
+   * A second publication of the SAME processed microphone that is already in
+   * the stream mix, tapped post-gain and post-mute-gate, so the recording says
+   * exactly what the stream said and the mute button gates both. The HLS
+   * audience is unaffected: the transcode is still bound to the share's audio
+   * track, which already carries the mixed voice. What this buys is a clip cut
+   * later with the film and the voice on separate tracks.
+   *
+   * GATED ON THE SERVER'S ANSWER, never on a build flag. The bucket, the
+   * retention row and the Track Egress are all this deployment's, and a
+   * browser that published the track at a deployment which is not recording it
+   * would put a second microphone in the room for nothing. `micArchive` is
+   * absent on an older server, which reads as off.
+   *
+   * Fire and forget: it runs after the share is already up and published, and
+   * nothing about the party depends on it. A failure is logged and dropped
+   * rather than shown, because there is no action the host could take.
+   */
+  async function publishMicArchiveIfRecording(): Promise<void> {
+    const mix = screenMix;
+    if (!mix || !sfu || !screenCaptureIsWatchParty) {
+      return;
+    }
+    try {
+      const config = await loadLiveHlsConfig();
+      // Re-read, never close over: awaiting the config is long enough for the
+      // host to have stopped sharing, and publishing a microphone into a share
+      // that is over is a track nobody withdraws.
+      if (!config.micArchive || screenMix !== mix || !sfu) {
+        return;
+      }
+      const archive = mix.micArchiveStream();
+      if (!archive) {
+        return;
+      }
+      await sfu.publishMicArchive(archive);
+    } catch (err) {
+      console.warn("[watch-party] mic archive not published", err);
+    }
+  }
+
   function releaseScreenCapture() {
     if (!screenCaptureStream) {
       return;
@@ -2107,6 +2151,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       screenCaptureSource = null;
     }
     const hadMix = screenMix !== null;
+    if (hadMix) {
+      // Before the mix is closed: the archive is a track out of its graph, and
+      // a publication left up after its source stops is a silent microphone on
+      // the roster that nothing ever takes down.
+      void sfu?.unpublishMicArchive();
+    }
     screenMix?.close();
     screenMix = null;
     screenCaptureIsWatchParty = false;
@@ -3917,6 +3967,11 @@ export function createVoiceController(transport: RealtimeTransport) {
               syncWatchPartyPublishCeiling();
               await sfu.publishScreen(screenMix!.stream);
             }
+            // The mix only exists from now, so this is the first moment there
+            // is a voice to record. Still inside the server's 60 s window if
+            // the switch was flipped promptly; after it, the stream carries
+            // the voice and the archive simply does not exist for this share.
+            await publishMicArchiveIfRecording();
           })();
         } catch {
           screenMix = null;
@@ -4238,6 +4293,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         // SCREEN_SHARE track the moment this frame lands; announcing first
         // made every staging start miss the track and fall back to WebRTC.
         announceSharing();
+        // Not awaited, on purpose: the party must not wait on a side
+        // recording, and the server polls for this track for a minute after
+        // the session starts precisely because it lands a beat late.
+        void publishMicArchiveIfRecording();
       } catch (err) {
         state.error = screenShareErrorMessage(err);
         await stopScreenShareInternal();

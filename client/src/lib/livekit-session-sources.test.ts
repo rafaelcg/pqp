@@ -41,12 +41,16 @@ import type { RemotePeer } from "./peer-connection-manager";
 interface PublishedTrack {
   track: unknown;
   source: string | undefined;
+  /** The publication name. Only `mic-archive` means anything (pitfall 14). */
+  name: string | undefined;
 }
 
 /** Every publish, in order, so "the camera replaced the screen" is visible. */
 const published: PublishedTrack[] = [];
 /** Every unpublish, in order, with the exact track object it was given. */
 const unpublished: unknown[] = [];
+/** The full option bag of every publish, for the fields only one track sets. */
+const publishOptions: Record<string, unknown>[] = [];
 
 class FakePreset {
   constructor(
@@ -103,9 +107,10 @@ class FakeRoom {
   localParticipant = {
     publishTrack: async (
       track: unknown,
-      options: { source?: string } = {},
+      options: { source?: string; name?: string; dtx?: boolean; red?: boolean } = {},
     ) => {
-      published.push({ track, source: options.source });
+      published.push({ track, source: options.source, name: options.name });
+      publishOptions.push(options);
       if (options.source) {
         publications.set(options.source, {
           track: { sender: { getParameters: () => ({}), setParameters: async () => {} } },
@@ -155,6 +160,39 @@ class FakeRoom {
     const track = {
       kind: Track.Kind.Video,
       mediaStreamTrack: { kind: "video", id: `${participant.identity}:${source}` },
+      attach: () => {},
+    };
+    this.handlers.get(RoomEvent.TrackSubscribed)?.(track, publication, participant);
+    return publication;
+  }
+
+  /**
+   * Test helper: one of their AUDIO publications is subscribed. `trackName` is
+   * what tells the host's real microphone from the watch-party archive; both
+   * arrive tagged `Microphone`, which is the whole reason this matters.
+   */
+  subscribeAudio(
+    participant: FakeRemoteParticipant,
+    source: string,
+    trackName = "",
+  ) {
+    const publication = {
+      source,
+      trackName,
+      isSubscribed: true,
+      subscribedCalls: [] as boolean[],
+      setSubscribed(subscribed: boolean) {
+        this.subscribedCalls.push(subscribed);
+        this.isSubscribed = subscribed;
+      },
+      setEnabled: () => {},
+    };
+    const track = {
+      kind: Track.Kind.Audio,
+      mediaStreamTrack: {
+        kind: "audio",
+        id: `${participant.identity}:${trackName || source}`,
+      },
       attach: () => {},
     };
     this.handlers.get(RoomEvent.TrackSubscribed)?.(track, publication, participant);
@@ -261,6 +299,7 @@ function sourcesPublished() {
 
 beforeEach(() => {
   published.length = 0;
+  publishOptions.length = 0;
   unpublished.length = 0;
   publications.clear();
   rooms.length = 0;
@@ -466,6 +505,114 @@ describe("publishing the microphone", () => {
       Track.Source.Camera,
       Track.Source.ScreenShare,
     ]);
+  });
+});
+
+/**
+ * THE ONE TRACK NOBODY PLAYS: the watch-party voice archive.
+ *
+ * A host on a deployment with `LIVE_HLS_MIC_ARCHIVE` on publishes their
+ * processed microphone a SECOND time, under the name `mic-archive`, so the
+ * server can write the voice to its own file beside the HLS segments. It is
+ * published as a `Microphone` because a publish grant is an allowlist of
+ * SOURCES (pitfall 14) and an invented one would be refused by the media
+ * server while the host's app showed it live — so the name is the only thing
+ * that tells the archive from the voice.
+ *
+ * Which makes the receive rule load-bearing rather than a saving. To every
+ * other client this looks exactly like the presenter's microphone: filed, it
+ * would OVERWRITE their real voice stream with a duplicate of the same person;
+ * left subscribed, it would cost every viewer in a 200-person party a second
+ * audio stream they can never hear. Both halves are asserted here, because
+ * both are silent when broken — the same reason the source assertions above
+ * exist at all.
+ */
+describe("the watch-party mic archive", () => {
+  it("publishes it as a microphone, named, beside the real one", async () => {
+    const sfu = await session();
+
+    await sfu.publish(audioStream("mic").stream);
+    await sfu.publishMicArchive(audioStream("mic-archive").stream);
+
+    // Two microphones on the wire, which is the point: the room hears the
+    // first, the egress records the second.
+    expect(sourcesPublished()).toEqual([
+      Track.Source.Microphone,
+      Track.Source.Microphone,
+    ]);
+    // The real mic is NOT named, so the name can never be ambiguous.
+    expect(published[0]!.name).toBeUndefined();
+    expect(published[1]!.name).toBe("mic-archive");
+    // And the first publication is not withdrawn to make room for it.
+    expect(unpublished).toEqual([]);
+  });
+
+  it("turns off the two things that make live speech cheaper and a file worse", async () => {
+    const sfu = await session();
+
+    await sfu.publishMicArchive(audioStream("mic-archive").stream);
+
+    // DTX cuts the stream during silence, which an editor lining the voice up
+    // against the film reads as drift. RED spends the host's uplink — which
+    // is already carrying the share — on redundancy for a listener who does
+    // not exist. The live microphone keeps both; this one must not.
+    expect(publishOptions[0]).toMatchObject({ dtx: false, red: false });
+  });
+
+  it("withdraws it without touching the live microphone", async () => {
+    const sfu = await session();
+    const mic = audioStream("mic");
+    const archive = audioStream("mic-archive");
+    await sfu.publish(mic.stream);
+    await sfu.publishMicArchive(archive.stream);
+
+    await sfu.unpublishMicArchive();
+
+    expect(unpublished).toHaveLength(1);
+    // The LocalAudioTrack wrapper, not the raw track: what matters is that it
+    // is the archive's and not the live mic's.
+    expect((unpublished[0] as { track: unknown }).track).toBe(archive.track);
+    // Idempotent: a share that ends twice must not throw.
+    await sfu.unpublishMicArchive();
+    expect(unpublished).toHaveLength(1);
+  });
+
+  it("never delivers a mic-archive publication, and unsubscribes from it", async () => {
+    await session();
+    const presenter = room().join("presenter-2");
+
+    const voice = room().subscribeAudio(presenter, Track.Source.Microphone);
+    const archive = room().subscribeAudio(
+      presenter,
+      Track.Source.Microphone,
+      "mic-archive",
+    );
+
+    const peer = peers.find((p) => p.peerId === "presenter-2")!;
+    // The voice that arrived FIRST is still the one on the roster: the
+    // archive did not displace it. This is the failure that would have been
+    // invisible — the presenter would still be audible, just twice.
+    expect(peer.stream).not.toBeNull();
+    expect(
+      (peer.stream!.getTracks()[0] as unknown as { id: string }).id,
+    ).toBe("presenter-2:microphone");
+    // And the bytes are refused rather than merely dropped on the floor.
+    expect(archive.subscribedCalls).toEqual([false]);
+    expect(voice.subscribedCalls).toEqual([]);
+  });
+
+  /**
+   * The order the host actually produces: the archive goes up a beat AFTER
+   * the mix, so on a viewer who joined late it can be the first of the two
+   * microphones to arrive. It must not become their voice.
+   */
+  it("does not become the presenter's voice when it arrives first", async () => {
+    await session();
+    const presenter = room().join("presenter-2");
+
+    room().subscribeAudio(presenter, Track.Source.Microphone, "mic-archive");
+
+    expect(peers.find((p) => p.peerId === "presenter-2")!.stream).toBeNull();
   });
 });
 

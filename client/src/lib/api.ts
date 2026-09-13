@@ -593,6 +593,15 @@ export interface LiveHlsConfig {
     framerate: number;
     videoKbps: number;
   }[];
+  /**
+   * Whether this deployment records the host's voice to its own file beside
+   * the stream (`LIVE_HLS_MIC_ARCHIVE`), which is what asks a watch-party host
+   * to publish the extra `mic-archive` track. Absent on a server that predates
+   * the field, which reads as off — the only safe default, since a track
+   * published at a server that is not recording it is a second microphone in
+   * the room for nothing.
+   */
+  micArchive?: boolean;
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
