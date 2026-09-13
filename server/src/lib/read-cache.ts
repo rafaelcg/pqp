@@ -77,19 +77,31 @@ const metrics: Metrics = { hits: 0, misses: 0, coalesced: 0, staleServed: 0 };
 let totalBytes = 0;
 
 /**
- * A rough size estimate, not an exact one — `JSON.stringify(...).length` is
- * close enough to bytes for mostly-ASCII rows (message bodies, names, ids)
- * to bound memory within a small constant factor, which is all an eviction
- * budget needs. A value that fails to stringify (should not happen for the
- * plain DB-row shapes this module caches) falls back to a conservative
- * guess rather than throwing out of a cache write.
+ * A conservative per-row/per-object byte guess, deliberately on the high
+ * side (a message row with a long body, embeds and reply columns can run to
+ * a few hundred bytes; this rounds well past that) — the budget only needs
+ * to be in the right ballpark to decide eviction order, not exact.
+ */
+const ESTIMATED_BYTES_PER_ROW = 1_024;
+
+/**
+ * A rough size estimate, not an exact one, and deliberately O(1) —
+ * `JSON.stringify`-ing the whole value on every write was the first cut of
+ * this, and it was wrong: `coalesce` calls this on every fresh load AND
+ * every stale-while-revalidate refresh, so a hot key (a 229-member list,
+ * say) would have its full value serialized again roughly every TTL forever,
+ * not once. Every value this module ever caches is either an array of DB
+ * rows (a message page, a channel list) or a single row/null (a watch-party
+ * state), so counting elements is enough: `value.length * a per-row guess`
+ * for an array, one row's worth for anything else. Wrong by some constant
+ * factor is fine for a budget; re-serializing a whole page every 2 seconds
+ * on every hot key is not.
  */
 function estimateSize(value: unknown): number {
-  try {
-    return JSON.stringify(value)?.length ?? 1024;
-  } catch {
-    return 1024;
+  if (Array.isArray(value)) {
+    return value.length * ESTIMATED_BYTES_PER_ROW;
   }
+  return ESTIMATED_BYTES_PER_ROW;
 }
 
 /** The one place an entry leaves `store`, so `totalBytes` cannot drift from
@@ -298,10 +310,15 @@ export function readCacheMetrics(): Metrics & { size: number; bytes: number } {
   return { ...metrics, size: store.size, bytes: totalBytes };
 }
 
-/** Test seam: wipe every entry, in-flight load and counter. */
+/** Test seam: wipe every entry, in-flight load and counter. `totalBytes` is
+ *  tracked independently of `store` (so a delete can charge the right
+ *  entry's size without a second lookup), which is exactly why clearing
+ *  `store` alone would leave it drifted — a later test would then evict
+ *  earlier than its own entries justify, or count `bytes` wrong. */
 export function resetReadCacheForTests(): void {
   store.clear();
   inflight.clear();
+  totalBytes = 0;
   metrics.hits = 0;
   metrics.misses = 0;
   metrics.coalesced = 0;

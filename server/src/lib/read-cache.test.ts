@@ -319,32 +319,78 @@ describe("read-cache", () => {
   }, 20_000);
 
   it("evicts the oldest entry once the byte budget is exceeded, well under the entry cap", async () => {
-    // A handful of large entries, each a fraction of MAX_BYTES, should start
-    // evicting long before MAX_ENTRIES is anywhere close — the count cap
-    // alone would happily hold thousands of these.
-    const chunk = "x".repeat(Math.floor(MAX_BYTES / 4));
-    await coalesce("big0", 60_000, async () => chunk);
-    await coalesce("big1", 60_000, async () => chunk);
-    await coalesce("big2", 60_000, async () => chunk);
+    // Row-array values, since the estimator counts elements rather than
+    // serializing — a plain string would be flatly under-counted. Each
+    // array is a bit over a quarter of MAX_BYTES, so three fit and a fourth
+    // does not — evicting long before MAX_ENTRIES is anywhere close, which
+    // is the whole point of a second, byte-based trigger.
+    const rowsPerChunk = Math.ceil(MAX_BYTES / 4 / 1_024) + 100;
+    const chunk = () => new Array(rowsPerChunk).fill(0);
+    await coalesce("big0", 60_000, async () => chunk());
+    await coalesce("big1", 60_000, async () => chunk());
+    await coalesce("big2", 60_000, async () => chunk());
     expect(readCacheMetrics().size).toBe(3);
 
     // A fourth entry of the same size pushes total bytes over budget, so
     // the oldest-touched one (`big0`) must go.
-    await coalesce("big3", 60_000, async () => chunk);
+    await coalesce("big3", 60_000, async () => chunk());
     expect(readCacheMetrics().bytes).toBeLessThanOrEqual(MAX_BYTES);
 
     let reloaded = false;
     await coalesce("big0", 60_000, async () => {
       reloaded = true;
-      return chunk;
+      return chunk();
     });
     expect(reloaded).toBe(true);
 
     let reloadedLast = false;
     await coalesce("big3", 60_000, async () => {
       reloadedLast = true;
-      return chunk;
+      return chunk();
     });
     expect(reloadedLast).toBe(false);
+  });
+
+  it("keeps byte accounting correct across repeated stale-while-revalidate refreshes", async () => {
+    // `estimateSize` counts elements rather than serializing precisely so a
+    // hot key refreshing every TTL is cheap (an array length read, not a
+    // full JSON.stringify of the whole page every couple of seconds). This
+    // pins the accounting side of that: three refreshes of the same-shaped
+    // 1,000-row page must leave `bytes` exactly where one such page
+    // belongs, not accumulating or drifting.
+    const rows = new Array(1_000).fill(0);
+    await coalesce("hot", 20, async () => rows);
+    const afterFirst = readCacheMetrics().bytes;
+    expect(afterFirst).toBe(1_000 * 1_024);
+
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 25)); // into the stale window
+      await coalesce("hot", 20, async () => rows); // triggers a background refresh
+      await new Promise((r) => setTimeout(r, 10)); // let it land
+    }
+
+    expect(readCacheMetrics().bytes).toBe(afterFirst);
+    expect(readCacheMetrics().size).toBe(1);
+  });
+
+  it("resetReadCacheForTests clears the resident-byte counter, not just the entries", async () => {
+    await coalesce("k", 60_000, async () => new Array(500).fill(0));
+    expect(readCacheMetrics().bytes).toBeGreaterThan(0);
+
+    resetReadCacheForTests();
+
+    expect(readCacheMetrics()).toMatchObject({
+      size: 0,
+      bytes: 0,
+      hits: 0,
+      misses: 0,
+      coalesced: 0,
+      staleServed: 0,
+    });
+
+    // And the counter tracks a fresh write correctly afterward, rather than
+    // starting from whatever it silently carried over.
+    await coalesce("k2", 60_000, async () => new Array(10).fill(0));
+    expect(readCacheMetrics().bytes).toBe(10 * 1_024);
   });
 });
