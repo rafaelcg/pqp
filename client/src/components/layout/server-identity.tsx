@@ -1,5 +1,5 @@
 import { SERVER_BANNER_HEIGHT, SERVER_BANNER_WIDTH } from "@pqp/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { cn } from "@/lib/utils";
 
@@ -9,31 +9,56 @@ import { cn } from "@/lib/utils";
  *
  * Bounded, not exponential: this is a decorative image, not a request worth
  * backing off aggressively for, and the failure this guards against is
- * ordinary — a CDN blip, a dropped connection — not a permanently dead URL,
- * which keeps failing and simply keeps retrying on this same interval. 20s is
- * long enough that a real outage does not hammer anything, short enough that
- * a viewer who leaves the header on screen sees the banner come back within
- * the same sitting rather than needing a reload.
+ * ordinary — a CDN blip, a dropped connection — not a permanently dead URL.
+ * 20s is long enough that a real outage does not hammer anything, short
+ * enough that a viewer who leaves the header on screen sees the banner come
+ * back within the same sitting rather than needing a reload.
  */
 const BANNER_RETRY_MS = 20_000;
+
+/**
+ * How many times a failed URL gets retried before this mount gives up on it
+ * for good.
+ *
+ * A CDN blip clears in one or two intervals; five (100s of retrying) is
+ * generous room for a real outage without ever becoming "unbounded". Without
+ * a cap, a banner URL that is simply gone — deleted, a bucket rotated out
+ * from under it — turns into a recurring request and image decode, every
+ * 20s, for as long as any viewer's tab stays on this server: multiplied
+ * across every viewer of a busy server, that is periodic, synchronized load
+ * for a resource that can never recover. Past the cap the strip just stays
+ * absent for the rest of this mount; a fresh mount (navigating away and
+ * back, or a reload) gets its own five tries.
+ */
+const BANNER_MAX_RETRIES = 5;
 
 /**
  * The failed-URL bit `ServerBannerStrip` keeps, with the retry built in: once
  * a URL fails, a timer clears the failure after `BANNER_RETRY_MS` so the next
  * render's `<img>` gets a fresh attempt. If it fails again `onError` sets it
- * right back and the timer restarts — a permanently dead URL just keeps
- * retrying on this interval rather than wedging shut, and a URL that recovers
- * is showing again within one interval with no remount and no reload
- * required.
+ * right back and the timer restarts, up to `BANNER_MAX_RETRIES` times — a
+ * transient blip recovers within a couple of intervals with no remount and
+ * no reload required, and a permanently dead URL stops generating periodic
+ * work instead of retrying forever.
  */
 function useRetryableImageFailure(): [string | null, (url: string) => void] {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const attemptsRef = useRef(0);
 
   useEffect(() => {
     if (!failedUrl) {
+      // A clean slate: either nothing has failed yet, or the last attempt
+      // just succeeded. Either way the next failure starts counting fresh.
+      attemptsRef.current = 0;
       return;
     }
-    const timer = setTimeout(() => setFailedUrl(null), BANNER_RETRY_MS);
+    if (attemptsRef.current >= BANNER_MAX_RETRIES) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      attemptsRef.current += 1;
+      setFailedUrl(null);
+    }, BANNER_RETRY_MS);
     return () => clearTimeout(timer);
   }, [failedUrl]);
 

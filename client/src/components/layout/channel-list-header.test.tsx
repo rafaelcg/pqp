@@ -200,7 +200,9 @@ describe("the server header", () => {
 
   it("the name is truncate/min-w-0/flex-1, never line-clamp-2", () => {
     const html = render(<ChannelList {...baseProps} />);
-    const match = /<p data-server-name="" class="([^"]*)">/.exec(html);
+    const match = /<p id="[^"]*" data-server-name="" class="([^"]*)">/.exec(
+      html,
+    );
     expect(match).not.toBeNull();
     expect(match![1]).toContain("truncate");
     expect(match![1]).toContain("min-w-0");
@@ -235,6 +237,16 @@ describe("the server header", () => {
     const html = render(<ChannelList {...baseProps} />);
     expect(html).toContain('data-server-menu-trigger=""');
     expect(html).toContain('aria-label="Server menu"');
+  });
+
+  it("the trigger has aria-describedby pointing at the name, so it is still reachable to a screen reader", () => {
+    const html = render(<ChannelList {...baseProps} />);
+    const trigger = /<button[^>]*data-server-menu-trigger=""[^>]*>/.exec(html);
+    expect(trigger).not.toBeNull();
+    const describedBy = /aria-describedby="([^"]+)"/.exec(trigger![0]);
+    expect(describedBy).not.toBeNull();
+    // The id it points at is the name paragraph's own id.
+    expect(html).toContain(`<p id="${describedBy![1]}" data-server-name=""`);
   });
 
   it("[data-server-header-actions] contains exactly two buttons", () => {

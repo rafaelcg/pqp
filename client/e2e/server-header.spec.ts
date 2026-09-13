@@ -39,18 +39,33 @@ function headersFor(suffix: string) {
   };
 }
 
+/**
+ * Every request here throws on a non-2xx response rather than pressing on —
+ * a `beforeAll` that swallows a failed age-check or preferences write leaves
+ * later tests running against a half-onboarded account, which fails in
+ * whatever the FIRST thing to touch that gap happens to be, not in
+ * `materialiseAccount` where the actual cause is.
+ */
 async function materialiseAccount(suffix: string): Promise<void> {
   const headers = headersFor(suffix);
   const me = await fetch(`${API}/api/me`, { headers });
+  if (!me.ok) {
+    throw new Error(`GET /api/me failed for suffix "${suffix}": ${me.status}`);
+  }
   const body = (await me.json()) as { ageGate?: string };
   if (body.ageGate && body.ageGate !== "passed") {
-    await fetch(`${API}/api/me/age-check`, {
+    const ageCheck = await fetch(`${API}/api/me/age-check`, {
       method: "POST",
       headers,
       body: JSON.stringify({ dateOfBirth: "1990-01-01" }),
     });
+    if (!ageCheck.ok) {
+      throw new Error(
+        `age-check failed for suffix "${suffix}": ${ageCheck.status}`,
+      );
+    }
   }
-  await fetch(`${API}/api/me/preferences`, {
+  const preferences = await fetch(`${API}/api/me/preferences`, {
     method: "PATCH",
     headers,
     body: JSON.stringify({
@@ -58,6 +73,11 @@ async function materialiseAccount(suffix: string): Promise<void> {
       firstRunDismissedAt: new Date().toISOString(),
     }),
   });
+  if (!preferences.ok) {
+    throw new Error(
+      `preferences PATCH failed for suffix "${suffix}": ${preferences.status}`,
+    );
+  }
 }
 
 async function createServer(
@@ -180,9 +200,17 @@ test.describe("server header: real truncation, one name box per width", () => {
     await expect(header).toBeVisible({ timeout: 10_000 });
     await expect(page.locator("[data-server-name]").first()).toBeVisible();
     const actions = page.locator("[data-server-header-actions]").first();
-    await expect(actions.locator("button")).toHaveCount(2);
-    // Below `md`: close (×), not collapse.
-    await expect(actions.locator("[data-channel-sidebar-toggle]")).toHaveCount(0);
+    // `:visible`, not a bare `button` count: AC #21 is about what a viewer
+    // can see, and a `hidden md:flex` collapse button sitting in the DOM
+    // below `md` would inflate a plain node count to three without ever
+    // being visible.
+    await expect(actions.locator("button:visible")).toHaveCount(2);
+    // Below `md`: close (×), not collapse — whether or not a collapse
+    // button is present in the DOM at all, it must not be one of the two
+    // visible controls.
+    await expect(
+      actions.locator("[data-channel-sidebar-toggle]:visible"),
+    ).toHaveCount(0);
   });
 });
 

@@ -36,6 +36,7 @@ import {
 import {
   forwardRef,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -1655,12 +1656,17 @@ export function ChannelList({
  *
  * The name gets a `Tooltip` only when `truncate` is actually cutting it —
  * see `useIsTruncated` — so a short name does not sprout a bubble that
- * repeats what is already on screen. Either way the full name stays
- * reachable: rendered in full when it fits, in the tooltip and in the
- * rendered text (screen readers read the DOM text regardless of the CSS
- * ellipsis) when it does not. The trigger's own `aria-label` names the
- * control's job ("Server menu") rather than repeating the server's name,
- * which is why the name has to stay reachable another way at all.
+ * repeats what is already on screen. `aria-label` on the button names its
+ * job ("Server menu") rather than the server, which is correct — the
+ * control opens a menu, it is not the name — but an explicit `aria-label`
+ * also suppresses the accessible name a browser would otherwise compute
+ * from the button's own content, so the server's name would be announced
+ * nowhere at all without `aria-describedby` pointing at `[data-server-name]`
+ * explicitly. That id is stable and always present (the tooltip wrapping
+ * the name when it overflows changes nothing about the `<p>` itself), so a
+ * screen reader always gets both: "Server menu" as the control's name and
+ * the full server name as its description, sighted or not, truncated or
+ * not.
  */
 const ServerHeaderMenuTrigger = forwardRef<
   HTMLButtonElement,
@@ -1669,10 +1675,12 @@ const ServerHeaderMenuTrigger = forwardRef<
   const { t } = useTranslation();
   const nameRef = useRef<HTMLParagraphElement | null>(null);
   const truncated = useIsTruncated(nameRef, server.name);
+  const nameId = useId();
 
   const nameNode = (
     <p
       ref={nameRef}
+      id={nameId}
       data-server-name=""
       className="min-w-0 flex-1 truncate font-display text-sm font-bold tracking-tight leading-tight text-text"
     >
@@ -1686,6 +1694,7 @@ const ServerHeaderMenuTrigger = forwardRef<
       type="button"
       data-server-menu-trigger=""
       aria-label={t("chrome.serverMenu")}
+      aria-describedby={nameId}
       // `px-1`, no `py-*`: the row's own `py-2` (§6.2) plus the 32px icon
       // already total 48px (`min-h-12`) exactly. A vertical pad here on top
       // of that pushed a live-browser render to 56px — jsdom-only static
