@@ -168,6 +168,41 @@ final class WatchModel {
         applyStream(state.stream)
     }
 
+    /**
+     `GET /api/channels/:channelId/live` again, on demand.
+
+     The recovery path for a hard playback failure (`WatchFailureRecovery`):
+     the URL `AVPlayer` just rejected may carry the very token that expired,
+     and only the server knows the fresh one — the socket's next
+     `channel-live` could be up to thirty seconds away, which is thirty
+     seconds of a dead player a viewer is staring at right now. Unlike
+     `seed`, this has no `phase == .unknown` guard, because it exists
+     precisely for the case where a phase is already established and wrong.
+
+     Applies through the same `applyStream` every other update goes through,
+     so a broadcast that genuinely ended surfaces here as `.ended` exactly
+     like it would over the socket — the caller does not need to special-case
+     that outcome, only tell it apart from a request that flat-out failed
+     (see the `nil` contract below).
+
+     Failure is silent, same posture as `seed`: a transient 500 is not a
+     verdict on the broadcast. Returns `nil` on that silent failure OR when
+     the channel changed underneath the request; a caller that cares which
+     can read `phase`, since a successful-but-empty answer already moved it
+     to `.ended` or `.idle` before returning.
+     */
+    func refreshLive() async -> LiveHlsStream? {
+        guard let channelId, let session else { return nil }
+        guard let state: ChannelLiveState =
+                try? await session.api.get("/api/channels/\(channelId)/live")
+        else { return nil }
+        guard self.channelId == channelId else { return nil }
+        participants = state.participants
+        watching = state.watching
+        applyStream(state.stream)
+        return state.stream
+    }
+
     // MARK: - Wire
 
     private func apply(_ event: RealtimeEvent) {

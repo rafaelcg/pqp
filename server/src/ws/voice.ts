@@ -142,6 +142,7 @@ import {
 import {
   countAuthenticatedSockets,
   forEachAuthenticatedSocket,
+  getSocketUser,
   socketHasCap,
   SOCKET_CAPS,
 } from "./sockets.js";
@@ -1485,6 +1486,10 @@ export interface VoiceActivitySnapshot {
     watching: number;
     /** Channels with a live stream this instance last announced. */
     liveChannels: number;
+    /** Proactive per-session token-renewal passes run since boot (`HLS_VIEWER_TOKEN_REMINT_MS`). */
+    tokenRemintLoops: number;
+    /** Fresh viewer tokens handed out by those passes since boot. */
+    tokenRemints: number;
   };
   /**
    * One entry per room that has somebody in it, largest first.
@@ -1675,6 +1680,8 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
         .liveChannels()
         .reduce((sum, id) => sum + hlsAudience.count(id), 0),
       liveChannels: hlsAudience.liveChannels().length,
+      tokenRemintLoops: hlsTokenRemint.loops,
+      tokenRemints: hlsTokenRemint.tokens,
     },
     rooms,
   };
@@ -2189,6 +2196,32 @@ const rosterFramesSent = { deltas: 0, snapshots: 0, audienceSnapshots: 0 };
 const hlsAudienceFramesSent = { frames: 0 };
 
 /**
+ * How long a live session waits between proactively re-minting its
+ * watchers' viewer tokens, independent of any change to the stream itself.
+ *
+ * `HLS_VIEWER_TOKEN_TTL_MS` (`hls-viewer-token.ts`) is 60 minutes; before
+ * this existed, a token only ever got refreshed by `broadcastChannelLive`
+ * running on a genuine change (a new session, a sharer swap) or by the
+ * 30-second audience keyframe happening to catch a socket that is also part
+ * of the DB-backed "may view this channel" audience. A viewer who never left
+ * that audience but also never triggered a change could still ride the same
+ * `?t=` for the length of a film, and on 2026-09-12 production logged
+ * exactly that: rolling waves of `hlsPlaylistRejected reason=expired`. Ten
+ * minutes of margin under the hour, matching the same number iOS
+ * (`WatchStreamSwap.renewAfter`) and Android (`WATCH_TOKEN_RENEWAL_MS`)
+ * already schedule their own client-side renewal at, so every platform
+ * converges on one number.
+ */
+export const HLS_VIEWER_TOKEN_REMINT_MS = 50 * 60 * 1000;
+
+/** `voice.hlsTokenRemint` loops and tokens sent, since boot. Belongs nonzero
+ * on any deployment carrying a watch party past the 50-minute mark: a zero
+ * here while `liveHls.watching` is nonzero is this feature not running,
+ * which is indistinguishable from working right up until an hour in (the
+ * shape pitfall 9 in CLAUDE.md warns about). */
+const hlsTokenRemint = { loops: 0, tokens: 0 };
+
+/**
  * Watch mode without a seat. `voice-stream` only reaches the room, so until
  * this path a viewer learned a stream was live by joining, and the sidebar
  * pill saw nothing but the roster. `channel-live` goes to everyone who may
@@ -2201,7 +2234,47 @@ const hlsAudience = createHlsAudience({
   broadcast: (channelId) => {
     void broadcastChannelLive(channelId);
   },
+  remintMs: HLS_VIEWER_TOKEN_REMINT_MS,
+  remint: (channelId, watchers) => {
+    remintHlsAudienceTokens(channelId, watchers);
+  },
 });
+
+/**
+ * One loop over a live session's already-known watchers (`hlsAudience`
+ * tracks the `Set<WebSocket>` in memory; no DB round trip), minting each a
+ * fresh capability and pushing it as an ordinary `channel-live` frame. Same
+ * frame shape a change or a keyframe would have sent, so the client's
+ * existing same-session token-swap path (`shouldAdoptHlsSource` on web,
+ * `WatchStreamSwap`/`watchSourceChanged` on iOS/Android) is what actually
+ * applies it — this only has to make sure a fresh one keeps arriving.
+ */
+function remintHlsAudienceTokens(
+  channelId: string,
+  watchers: readonly WebSocket[],
+): void {
+  const stream = liveHlsStreamFor(channelId);
+  if (!stream) {
+    return;
+  }
+  hlsTokenRemint.loops += 1;
+  for (const socket of watchers) {
+    if (socket.readyState !== 1 /* WebSocket.OPEN */) {
+      continue;
+    }
+    const user = getSocketUser(socket);
+    if (!user) {
+      continue;
+    }
+    send(socket, {
+      type: "channel-live",
+      channelId,
+      stream: stampViewerStream(stream, user.id),
+      watching: hlsAudience.count(channelId),
+    });
+    hlsTokenRemint.tokens += 1;
+  }
+}
 
 /**
  * What the cluster bus is carrying for voice, since boot, on this instance.
@@ -2258,6 +2331,8 @@ export function resetRosterSequences(): void {
   rosterFramesSent.snapshots = 0;
   rosterFramesSent.audienceSnapshots = 0;
   hlsAudienceFramesSent.frames = 0;
+  hlsTokenRemint.loops = 0;
+  hlsTokenRemint.tokens = 0;
   clusterFrames.relayed = 0;
   clusterFrames.received = 0;
 }

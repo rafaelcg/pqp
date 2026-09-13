@@ -27,6 +27,29 @@ fun watchSourceChanged(current: LiveStream?, next: LiveStream?): Boolean =
     current?.startedAt != next?.startedAt
 
 /**
+ * What the watchdog's reconnect path should attach to, given a refetch that
+ * just finished.
+ *
+ * `refreshNow()` (`GET /api/channels/:id/live`) can come back three ways, and
+ * only one of them means "nothing new": a stream whose `startedAt` differs
+ * (the presenter's share died and came back, a genuinely new session); a
+ * stream with the SAME `startedAt` (the ordinary case, a token expiring
+ * mid-film); or null, because the request threw or the channel has nothing
+ * live right now. The first two both hand back fresher information than
+ * whatever is already attached — a fresh same-session result still carries a
+ * token that has not just failed, which is exactly what a reconnect needs.
+ * Discarding it because only the first case *looked* like a change is the bug
+ * this function exists to prevent: it reproduces the "hammering with the same
+ * expired token" symptom, because the caller falls back to whatever the
+ * socket last delivered, which can be the very token that just 401'd.
+ *
+ * Only the null case has nothing to offer, so the caller keeps what it
+ * already had and leans on the attempt counter to retry with that.
+ */
+fun reconnectAttachment(fresh: LiveStream?, attached: LiveStream?): LiveStream? =
+    fresh ?: attached
+
+/**
  * What the pane is saying at this moment.
  *
  * Ordered by how much the person needs to be told, and derived rather than set,

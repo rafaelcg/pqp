@@ -39,6 +39,51 @@ class WatchSourceTest {
         assertFalse(watchSourceChanged(null, null))
     }
 
+    // --- what a reconnect's refetch should actually attach to ------------
+
+    /**
+     * The bug this guards against threw the refetch away for exactly the
+     * ORDINARY case: a token expiring mid-film is the same session, not a
+     * new broadcast, so `fresh.startedAt == attached.startedAt` and the old
+     * code read that as "nothing changed" and discarded the one thing that
+     * could replace an expired token. A fresh result is fresher information
+     * regardless of whether the session moved.
+     */
+    @Test
+    fun `a same-session fresh result is adopted, not discarded`() {
+        val attached = stream(100, "expired")
+        val fresh = stream(100, "renewed")
+        assertEquals(fresh, reconnectAttachment(fresh, attached))
+    }
+
+    /**
+     * The pre-existing, already-correct behaviour: a new egress session
+     * always wins, because the URL held for the old one names a presenter
+     * peer and a proxy path that no longer exist.
+     */
+    @Test
+    fun `a session-changed fresh result is adopted`() {
+        val attached = stream(100, "a")
+        val fresh = stream(200, "b")
+        assertEquals(fresh, reconnectAttachment(fresh, attached))
+    }
+
+    /**
+     * `refreshNow()` throws or the channel has nothing live right now: there
+     * is nothing new to offer, so the caller keeps what it already held and
+     * leans on the attempt counter to retry with that.
+     */
+    @Test
+    fun `a null refresh falls back to whatever was already attached`() {
+        val attached = stream(100, "a")
+        assertEquals(attached, reconnectAttachment(null, attached))
+    }
+
+    @Test
+    fun `a null refresh with nothing attached yet stays null`() {
+        assertEquals(null, reconnectAttachment(null, null))
+    }
+
     @Test
     fun `nothing live and never was says nothing at all`() {
         assertEquals(

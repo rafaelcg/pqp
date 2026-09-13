@@ -43,6 +43,9 @@ struct WatchStageView: View {
     @State private var attached: AttachedStream?
     @State private var stall = WatchStallWatch()
     @State private var edge = WatchLiveEdge()
+    /// Bounded automatic recovery from a hard `AVPlayerItem` failure. See
+    /// `WatchFailureRecovery`.
+    @State private var recovery = WatchFailureRecovery()
     @State private var isMinimised = false
 
     /// What the master playlist advertised for THIS broadcast, and how far
@@ -201,9 +204,7 @@ struct WatchStageView: View {
             guard let player, attached != nil else { continue }
             guard let item = player.currentItem else { continue }
             if item.status == .failed {
-                model.playbackFailed(
-                    String(localized: "The connection to the stream dropped.")
-                )
+                await recoverFromFailure()
                 continue
             }
             let now = Date()
@@ -257,6 +258,46 @@ struct WatchStageView: View {
                 now: now
             )
             if stalled { reconcile(force: true) }
+        }
+    }
+
+    /**
+     A hard `AVPlayerItem` failure, with one bounded attempt to fix it before
+     the viewer sees a card.
+
+     The dead end this replaces was calling `model.playbackFailed` on the
+     spot, which never once asked the server for anything: if the failure was
+     an expired token — the common case, since the token this player is
+     holding can be up to `WatchStreamSwap.renewAfter` stale, or far staler
+     than that if the socket has been quiet — the freshest thing available
+     locally is the same dead URL. `refreshLive` asks the server what is
+     actually true right now; `WatchFailureRecovery` is what stops that
+     becoming an unbounded refetch loop against a stream that is genuinely
+     gone.
+     */
+    private func recoverFromFailure() async {
+        switch recovery.onFailure(now: Date()) {
+        case .giveUp:
+            model.playbackFailed(
+                String(localized: "The connection to the stream dropped.")
+            )
+        case .refetch:
+            if await model.refreshLive() != nil {
+                // A fresh stream came back: reattach to it regardless of how
+                // old `attached` is, the same way a stall or a manual retry
+                // does.
+                reconcile(force: true)
+            } else if model.phase == .live {
+                // The refetch itself failed (network), so `phase` was never
+                // touched by it and is still `.live` from before this
+                // failure. Nothing better is available: show the card. A
+                // successful refetch that came back empty already moved
+                // `phase` to `.ended` or `.idle` inside `refreshLive`, and
+                // that sentence is truer than "the connection dropped".
+                model.playbackFailed(
+                    String(localized: "The connection to the stream dropped.")
+                )
+            }
         }
     }
 
@@ -567,7 +608,11 @@ struct WatchStageView: View {
             }
             Spacer()
             if retry {
-                Button("Try again") { model.retry(); reconcile(force: true) }
+                Button("Try again") {
+                    recovery.reset()
+                    model.retry()
+                    reconcile(force: true)
+                }
                     .font(Typography.callout)
                     .foregroundStyle(Palette.signal)
             }
@@ -636,6 +681,7 @@ struct WatchStageView: View {
         attached = AttachedStream(startedAt: stream.startedAt, attachedAt: Date())
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
+        recovery.reset()
         behindLive = false
         delaySeconds = nil
         effectiveLines = nil
@@ -858,6 +904,7 @@ struct WatchStageView: View {
         attached = nil
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
+        recovery.reset()
         ladder = .empty
         behindLive = false
         delaySeconds = nil

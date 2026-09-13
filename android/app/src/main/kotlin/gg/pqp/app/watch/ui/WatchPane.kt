@@ -67,6 +67,7 @@ import gg.pqp.app.watch.LiveStream
 import gg.pqp.app.watch.WatchPhase
 import gg.pqp.app.watch.WATCH_TOKEN_RENEWAL_MS
 import gg.pqp.app.watch.WatchdogDecision
+import gg.pqp.app.watch.reconnectAttachment
 import gg.pqp.app.watch.watchPhaseOf
 import gg.pqp.app.watch.watchSourceChanged
 import kotlinx.coroutines.delay
@@ -158,6 +159,23 @@ fun WatchPane(
     var attached by remember { mutableStateOf<LiveStream?>(null) }
     val newest by rememberUpdatedState(live.stream)
     val refreshNow by rememberUpdatedState(refresh)
+
+    // Set for exactly the one reattach that follows a completed refetch in
+    // the Reconnect branch below, and consumed (reset to false) the instant
+    // that reattach reads it. That URL was minted moments ago by a direct
+    // `GET /api/channels/:id/live`, which cannot be staler than `newest` —
+    // and in the one scenario that sends the watchdog down this path at all
+    // (the socket has not delivered a fresher keyframe in a while, or the
+    // playing token was simply wrong), `newest` can be exactly the same
+    // stale value that just failed. Without this, the attach effect's own
+    // `newest?.takeIf { it.startedAt == stream.startedAt } ?: stream` would
+    // still pick `newest` over the freshly-fetched `stream` whenever the
+    // session matches, which it always does here, silently undoing the
+    // refetch and reproducing the "same expired token" symptom this exists
+    // to fix. Every other reattach — a scheduled renewal, the retry button,
+    // a refetch that itself failed — has no fresher value of its own and is
+    // untouched: it keeps trusting `newest` exactly as before.
+    var trustFreshRefetch by remember { mutableStateOf(false) }
 
     LaunchedEffect(live.stream?.startedAt) {
         val next = newest
@@ -289,8 +307,18 @@ fun WatchPane(
         val stream = attached ?: return@LaunchedEffect
         // The newest URL rather than the one this session was first announced
         // with: a reconnect wants the freshest token, and by the time a retry
-        // runs the keyframe has usually already handed one over.
-        val url = (newest?.takeIf { it.startedAt == stream.startedAt } ?: stream).hlsUrl
+        // runs the keyframe has usually already handed one over. That
+        // assumption only holds when nothing has already fetched a fresher
+        // one directly — `trustFreshRefetch` overrides it for the one
+        // reattach that follows a completed refetch, since `newest` here can
+        // be the exact stale token that refetch was sent to replace. Consumed
+        // immediately so it never leaks into a later, unrelated reattach.
+        val url = if (trustFreshRefetch) {
+            stream.hlsUrl
+        } else {
+            (newest?.takeIf { it.startedAt == stream.startedAt } ?: stream).hlsUrl
+        }
+        trustFreshRefetch = false
         // The real `#EXT-X-TARGETDURATION` is not known until the manifest
         // loads, so the join itself carries `HlsLiveEdge.ASSUMED_TARGET_DURATION_MS`
         // (production's segment length today) rather than no configuration
@@ -378,14 +406,25 @@ fun WatchPane(
                     hasFrame = false
                     // A share that died and came back has a new session, so the
                     // URL we hold is gone and only the API knows the new one.
-                    // A failure here is not fatal: the attempt bump re-attaches
-                    // what we have and the watchdog judges that on its own.
+                    // But the ordinary case is the SAME session with a token
+                    // that just expired, and a fresh refetch is exactly what
+                    // that wants too — `reconnectAttachment` is what makes
+                    // sure that result is not thrown away just because
+                    // `startedAt` did not change. A failure here is not
+                    // fatal: the attempt bump re-attaches what we already
+                    // have and the watchdog judges that on its own.
                     val fresh = runCatching { refreshNow() }.getOrNull()
-                    if (fresh != null && fresh.startedAt != attached?.startedAt) {
-                        attached = fresh
-                    } else {
-                        attempt += 1
-                    }
+                    attached = reconnectAttachment(fresh, attached)
+                    // A successful refetch is trusted over `newest` for the
+                    // next reattach — see `trustFreshRefetch` above.
+                    trustFreshRefetch = fresh != null
+                    // Always bumped: when the session changed, `startedAt`
+                    // alone already reruns the keyed attach effect below, so
+                    // this is a no-op key change riding along with it; when
+                    // it did not, `attached` is a new object with the SAME
+                    // `startedAt`, and this is the only thing that makes the
+                    // effect re-run and read the token `attached` now holds.
+                    attempt += 1
                     return@LaunchedEffect
                 }
                 WatchdogDecision.Dead -> {
