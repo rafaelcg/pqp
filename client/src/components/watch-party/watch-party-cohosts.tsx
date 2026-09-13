@@ -47,6 +47,25 @@ export interface CohostCandidate {
   avatarUrl: string | null;
   /** Character accounts cannot run a party, so they are never offered. */
   isCharacter?: boolean;
+  /**
+   * WHO COMES FIRST (2026-09-13, Rafael): staff by cargo, then friends, then
+   * everybody else, the same order the member sidebar uses. Lower is
+   * earlier; absent is "everybody else". The caller computes it, because the
+   * cargo ladder and the friend list are the app's, not this component's.
+   */
+  priority?: number;
+}
+
+/** Staff by cargo first, then friends, then the rest; names within a tier. */
+export function compareCandidates(a: CohostCandidate, b: CohostCandidate): number {
+  const pa = a.priority ?? Number.POSITIVE_INFINITY;
+  const pb = b.priority ?? Number.POSITIVE_INFINITY;
+  if (pa !== pb) {
+    return pa < pb ? -1 : 1;
+  }
+  return a.displayName.localeCompare(b.displayName, undefined, {
+    sensitivity: "base",
+  });
 }
 
 /** Above this many candidates, reading the list stops being realistic. */
@@ -113,14 +132,16 @@ export function WatchPartyCohosts({
 
   const offered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return candidates.filter(
-      (one) =>
-        one.userId !== party.hostUserId &&
-        !cohostIds.has(one.userId) &&
-        one.isCharacter !== true &&
-        (needle.length === 0 ||
-          one.displayName.toLowerCase().includes(needle)),
-    );
+    return candidates
+      .filter(
+        (one) =>
+          one.userId !== party.hostUserId &&
+          !cohostIds.has(one.userId) &&
+          one.isCharacter !== true &&
+          (needle.length === 0 ||
+            one.displayName.toLowerCase().includes(needle)),
+      )
+      .sort(compareCandidates);
   }, [candidates, cohostIds, party.hostUserId, query]);
 
   if (!mayPromote) {

@@ -7,17 +7,13 @@ import {
   type ReactNode,
 } from "react";
 import {
-  AudioLines,
   Bell,
   BellOff,
   CalendarClock,
-  ChevronRight,
   Check,
   Clapperboard,
-  Gauge,
   Lock,
   Crown,
-  MessageSquare,
   Hand,
   Mic,
   MicOff,
@@ -27,11 +23,9 @@ import {
   Radio,
   Settings2,
   Share2,
-  Smile,
   Square,
   TriangleAlert,
   Undo2,
-  Users,
   Volume2,
 } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
@@ -47,7 +41,6 @@ import {
 import {
   OptionGroup,
   WatchPartyOptionsPanel,
-  slowModeKey,
 } from "@/components/watch-party/watch-party-options";
 import {
   canAppointCohosts,
@@ -67,6 +60,7 @@ import { shareWatchParty, watchPartyShareUrl } from "@/lib/share-watch-party";
 import {
   MicLevelMeterBar,
   StreamMixControl,
+  StreamQualityControl,
   WatchPartyTransmission,
 } from "@/components/watch-party/watch-party-transmission";
 import { VoiceTrackModeToggle } from "@/components/watch-party/voice-track-mode-toggle";
@@ -983,143 +977,6 @@ function SetupStep({
   );
 }
 
-/**
- * The settings as a list, one row per setting: icon, label, the value on the
- * right, a chevron. Every row opens the options dialog, which stays the one
- * panel used before and during the show; the two booleans people flip most
- * (reactions, the mic in the stream) also carry an inline switch so the
- * common case needs no dialog. Replaces both the dotted summary string and
- * the chips that followed it: a chip reads as a tag, a row reads as a
- * setting.
- */
-function WatchPartySettingsList({
-  party,
-  micInStream,
-  quality,
-  onOpen,
-  onReactionsChange,
-  onMicInStreamChange,
-}: {
-  party: WatchParty;
-  micInStream?: boolean;
-  quality: WatchPartyStreamQuality;
-  onOpen: () => void;
-  onReactionsChange: (on: boolean) => void;
-  onMicInStreamChange?: (on: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  const { options } = party;
-  const rows: {
-    key: string;
-    icon: ReactNode;
-    label: string;
-    value: string;
-    on?: boolean;
-    onToggle?: (on: boolean) => void;
-  }[] = [
-    {
-      key: "voice",
-      icon: <Mic className="h-3.5 w-3.5" aria-hidden />,
-      label: t("watchParty.setup.settings.voice"),
-      value: options.voiceEnabled
-        ? t("watchParty.setup.settings.on")
-        : t("watchParty.setup.settings.off"),
-    },
-    {
-      key: "chat",
-      icon: <MessageSquare className="h-3.5 w-3.5" aria-hidden />,
-      label: t("watchParty.setup.settings.chat"),
-      value:
-        options.slowModeSeconds > 0
-          ? t("watchParty.setup.settings.chatSlow", {
-              value: t(slowModeKey(options.slowModeSeconds)),
-            })
-          : t("watchParty.setup.settings.chatNormal"),
-    },
-    {
-      key: "reactions",
-      icon: <Smile className="h-3.5 w-3.5" aria-hidden />,
-      label: t("watchParty.setup.settings.reactions"),
-      value: options.reactionsEnabled
-        ? t("watchParty.setup.settings.on")
-        : t("watchParty.setup.settings.off"),
-      on: options.reactionsEnabled,
-      onToggle: onReactionsChange,
-    },
-    {
-      key: "quality",
-      icon: <Gauge className="h-3.5 w-3.5" aria-hidden />,
-      label: t("watchParty.setup.settings.quality"),
-      value: quality,
-    },
-    {
-      key: "cohosts",
-      icon: <Users className="h-3.5 w-3.5" aria-hidden />,
-      label: t("watchParty.setup.settings.cohosts"),
-      value:
-        party.cohosts.length > 0
-          ? t("watchParty.summary.cohosts", { count: party.cohosts.length })
-          : t("watchParty.setup.settings.none"),
-    },
-    ...(micInStream === undefined
-      ? []
-      : [
-          {
-            key: "mic",
-            icon: <AudioLines className="h-3.5 w-3.5" aria-hidden />,
-            label: t("watchParty.setup.settings.mic"),
-            value: micInStream
-              ? t("watchParty.setup.settings.on")
-              : t("watchParty.setup.settings.off"),
-            on: micInStream,
-            onToggle: onMicInStreamChange,
-          },
-        ]),
-  ];
-  return (
-    <div
-      data-testid="watch-party-options-summary"
-      className="overflow-hidden rounded-md border border-ink-4/60 bg-surface-0"
-    >
-      {rows.map((row, index) => (
-        <div
-          key={row.key}
-          data-watch-party-setting={row.key}
-          className={cn(
-            "flex items-center gap-2 px-2.5 py-1.5 text-xs",
-            index > 0 && "border-t border-ink-4/40",
-          )}
-        >
-          <button
-            type="button"
-            onClick={onOpen}
-            data-watch-party-options-toggle={index === 0 ? "" : undefined}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
-          >
-            <span className="shrink-0 text-paper-muted">{row.icon}</span>
-            <span className="min-w-0 flex-1 truncate text-paper">{row.label}</span>
-            <span className="shrink-0 text-paper-muted">{row.value}</span>
-            {!row.onToggle && (
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-tertiary" aria-hidden />
-            )}
-          </button>
-          {row.onToggle && (
-            <span data-watch-party-setting-switch={row.key} className="shrink-0">
-              <Switch
-                label={row.label}
-                hideLabel
-                checked={row.on === true}
-                onCheckedChange={row.onToggle}
-                className="w-auto px-0 py-0 hover:bg-transparent"
-              />
-            </span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // -------------------------------------------------------- the draft, setting up
 
 /**
@@ -1152,8 +1009,13 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const [busy, setBusy] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const [optionsOpen, setOptionsOpen] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  // The quality select sits in the card now, so the checklist's quality row
+  // follows it live instead of reading storage once at mount (same fix the
+  // live surface needed on 2026-09-13).
+  const [quality, setQuality] = useState<WatchPartyStreamQuality>(() =>
+    readWatchPartyStreamQuality(props.currentUserId ?? null),
+  );
   const [whenValue, setWhenValue] = useState("");
   const thumbRef = useRef<HTMLVideoElement>(null);
   // A PHONE CANNOT PUT A PICTURE UP. `getDisplayMedia` does not exist on iOS
@@ -1195,11 +1057,11 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         isDesktopShell: isDesktopApp(),
         desktopSharesTabAudio: desktopSharesTabAudio(getDesktop()),
         hasAudioTrack,
-        quality: readWatchPartyStreamQuality(props.currentUserId ?? null),
+        quality,
         cameraOn: props.cameraOn ?? false,
         micMuted: micIsInaudible(props.micState),
       }),
-    [hasAudioTrack, props.currentUserId, props.cameraOn, props.micState],
+    [hasAudioTrack, quality, props.cameraOn, props.micState],
   );
   // FIREFOX IS THE ONE ROW THAT BLOCKS. Everything else on this list is a
   // hint a host may ignore; there is no signal-safe watch party on Firefox
@@ -1531,21 +1393,47 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               </div>
             </SetupStep>
 
+            {/* THE SETTINGS, INLINE (2026-09-13). The rows used to be doors
+                to the options dialog, every one of them to the same dialog,
+                which made the chevrons a promise nothing kept. The dialog's
+                own form (`WatchPartyOptionsPanel`) renders here instead:
+                same selects, same switches, same handlers, one place to
+                change them. The dialog stays for the live stage, where the
+                picture must not move. */}
             <SetupStep number={3} label={t("watchParty.setup.stepSettings")}>
-              <WatchPartySettingsList
-                party={party}
-                micInStream={
-                  props.onMicInStreamChange
-                    ? props.micInStream !== false
-                    : undefined
-                }
-                quality={readWatchPartyStreamQuality(props.currentUserId ?? null)}
-                onOpen={() => setOptionsOpen(true)}
-                onReactionsChange={(on) =>
-                  void props.onOptionsChange({ reactionsEnabled: on })
-                }
-                onMicInStreamChange={props.onMicInStreamChange}
-              />
+              <div
+                data-testid="watch-party-options-summary"
+                className="flex flex-col gap-2"
+              >
+                <WatchPartyOptionsPanel
+                  options={party.options}
+                  audienceCount={props.audienceCount}
+                  onChange={(patch) => void props.onOptionsChange(patch)}
+                  stacked
+                />
+                {(props.onMicInStreamChange || canPutPictureUp) && (
+                  <OptionGroup title={t("watchParty.options.streamTitle")}>
+                    {props.onMicInStreamChange && (
+                      <div className="px-1 py-0.5" data-watch-party-mic-in-stream>
+                        <Switch
+                          label={t("watchParty.options.micInStream")}
+                          description={t("watchParty.options.micInStreamBody")}
+                          checked={props.micInStream !== false}
+                          onCheckedChange={(on) => props.onMicInStreamChange?.(on)}
+                        />
+                      </div>
+                    )}
+                    {canPutPictureUp && (
+                      <StreamQualityControl
+                        userId={props.currentUserId ?? null}
+                        onQualityChange={setQuality}
+                        stacked
+                      />
+                    )}
+                  </OptionGroup>
+                )}
+              </div>
+              {cohostSection(props, party, "pt-1")}
             </SetupStep>
 
             {/* THE GO-LIVE CHECKLIST (postmortem B3), now inside the card and
@@ -1602,14 +1490,6 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           </div>
         </aside>
       </div>
-
-      <WatchPartyOptionsDialog
-        props={props}
-        party={party}
-        open={optionsOpen}
-        onClose={() => setOptionsOpen(false)}
-        stage={false}
-      />
 
       <ConfirmDialog
         open={confirmDiscard}
