@@ -3034,6 +3034,121 @@ applies to `VITE_WATCH_PARTY_SCHEDULE` (the sidebar's next-session hint) and
 (`deploy-staging.yml`), which is why a thing can look shipped there and be
 invisible in production.
 
+## Convidados
+
+Full plan: `docs/plans/WATCH_PARTY_GUESTS.md`. Steps 1-3 (the setting, the
+client surfaces, the audio) shipped in PR #554; steps 4-5 (faces — canvas
+tiles on the stage rung — and the fullscreen/viewer-stage-box changes) are
+**pending**.
+
+**The stage is gone, replaced by guests.** A watch party used to be a voice
+room with an audience bolted on: `voiceEnabled` plus a `stageMode` decided who
+could speak, and a plain viewer could take a silent seat in the room,
+indistinguishable from someone the host had actually put up. Convidados
+collapses that into one per-party setting, off by default, and the model
+changes with it: **nobody but the presenter and accepted guests is ever in the
+room.** A viewer never acquires a seat and never sees a seat count.
+
+**The setting**, first in the options list, above slow mode
+(`WatchPartyGuestsSetting`, mounted from `watch-party-options.tsx` — not one of
+the two files frozen ahead of PR #538's rewrite):
+
+| `guests` | pt-BR | what happens |
+|---|---|---|
+| `off` (default) | Ninguém, só assistem | No requests, no invites, no seats. |
+| `invite` | Só quem eu chamar | The host and co-hosts call people up by name. |
+| `request` | Podem pedir pra falar | A viewer may ask; the host accepts or passes. |
+
+**Migration, read time only.** `channel_sessions.options` is JSONB, so there is
+no column migration — `withDerivedWatchPartyGuests` (`packages/shared`) maps
+the old `voiceEnabled`/`stageMode`/`raiseHand` triple to `guests` on every read
+that lacks the key, and the server writes back a derived triple so a stale tab
+or a native app that has not shipped `guests` yet keeps parsing a party it
+understands. `everyone` has **no** replacement — it is retired outright,
+mapped to `request` (which, unlike `everyone`, closes the floor) — because it
+is what let the 2026-09-05 spike turn a 200-person room into an open
+microphone in twenty minutes.
+
+**A guest's lifecycle** is `channel_session_stage_invites` (still that table,
+comment renamed to "the guests table"), with a new `accepted_at`:
+`invited` (called up, or approved off the request queue — `accepted_at NULL`)
+→ `join`, run by the invited person on themselves → `onAir` (`accepted_at`
+set). `WATCH_PARTY_MAX_GUESTS = 3` bounds the **accepted** rows only; an
+unanswered invitation never holds a slot, and the cap is enforced
+transactionally on `join` (`joinWatchPartyGuestSlot`), which is the one
+operation two people can race for the last one. The request queue is
+`channel_session_raised_hands` with a new `declined_at`: a decline survives
+the row (for `GUEST_REQUEST_COOLDOWN_MS`, five minutes) rather than deleting
+it; a withdraw still deletes outright, no cooldown for changing your own mind.
+
+**The route**: `POST /api/watch-parties/:id/guests` (`/stage` is kept as a URL
+alias for one release, same handler, same eight-action body — see
+`watchPartyGuestsRequestSchema`). `invite`/`accept`/`decline`/`remove` need the
+new `manageGuests` permission-table action (host and co-host, deliberately
+**not** a manager — the roster is the show's own call). `request`/`withdraw`
+need only the ability to see the party, rate-limited, and refused unless
+`guests === "request"`. `join`/`leave` are the invited person's own row.
+
+**The publish grant's third axis.** `liveKitPublishGrant` gained
+`canShowFace`: an accepted guest gets `canPublish: true, canPublishSources:
+[microphone, camera]` and nothing else — never a screen share, so a guest can
+never confuse `pickHlsSharer`. Resolved in the one place SPEAK/STREAM already
+were, `resolveVoicePublish` (`server/src/voice/speak.ts`), so the WS join, the
+SFU token mint and the live re-check after a permission change cannot
+disagree about it. A seatless viewer's grant is structurally `{canPublish:
+false}` — the token carries no microphone source for them, whatever a patched
+client tries.
+
+**The audio (step 3, what makes guests audible): the presenter's browser is
+the mixer.** The audience never joins the room, so the only way a guest's
+microphone reaches the stream is through the browser that is already hearing
+them. `client/src/lib/stage-mix.ts` sums the presenter's own processed
+microphone plus every accepted guest's subscribed mic stream (through a
+limiter, the same reasoning `screen-mix.ts` uses for its own bus) and publishes
+the result under the LiveKit track name `stage-mix`
+(`STAGE_MIX_TRACK_NAME`, both in `client/src/lib/livekit-session.ts` and
+`server/src/voice/hls-egress.ts`) — a second `Microphone` source, told apart
+by name the same way `mic-archive` and `voice-track` already are (pitfall 14).
+It **replaces** `voice-track`, never both at once: `pickScreenTracks` prefers
+`stage-mix` when both happen to exist, and the client publishes one or the
+other depending on `guests !== "off"`, wired through the existing
+`syncVoiceTrackPublication`/`effectiveVoiceSeparated` machinery from PR #544 —
+guests on forces "separada" the moment the party goes live, independent of the
+host's own standing preference, so the stage rung exists from the first
+second rather than switching mid-show. `pickScreenTracks` and
+`reconcileCameraEgress` needed no other change: the slot, the rung name
+(`cam360p30`) and the adoption path are exactly #544's.
+
+**Out of scope for PR #554, i.e. what step 4-5 still owe:**
+- **Faces.** `stage-tiles.ts` (a canvas composite of the presenter's and every
+  guest's camera, published under `Track.Source.Camera` name `stage-tiles`)
+  does not exist yet. Today's stage rung carries voice only; a party with
+  guests but no presenter camera runs the same audio-only shape #544 already
+  built (`VOICE_RUNG`).
+- **The viewer's stage box.** Fullscreen still unmounts `WatchCameraPip`, the
+  "hide" collapse, and the drift corrector between the stage rung and the
+  film are all still open. §5.5 of the plan has the design.
+- **The presenter's own tile preview and the activity feed's "{name} entrou/
+  saiu no ar" rows** (§3.7) — tied to faces, deferred with them.
+- **Retirement of the old stage keys and code paths.** `watch-party-panel.tsx`
+  and `watch-party-transmission.tsx` are frozen ahead of PR #538's rewrite, so
+  `mayTakeWatchPartySeat`, `watchPartySpeakAffordance`,
+  `watchPartyStageRequestSchema`, `lib/watch-party-seat.ts` and the retired
+  translation keys (`watchParty.live.joinCall`, `watchParty.stage.*`, …) are
+  all still present, deliberately, as fossils that file still calls. They come
+  out with #538, not before.
+
+**Where the new client UI lives.** Nothing was added to
+`watch-party-panel.tsx` or `watch-party-transmission.tsx` beyond what was
+already there: every new control (`client/src/components/watch-party/
+guests/`) is mounted from `App.tsx` as an independent overlay
+(`WatchPartyGuestsOverlay`) rather than threaded through either frozen file —
+the request button, the guest panel, the invitation dialog, the on-air strip,
+and the header avatars all live there. `App.tsx` also owns
+`voice.setWatchPartyGuests(mode, onAirUserIds)`, the one call that tells
+`use-voice.ts`'s mixer what to carry, fired from an effect keyed on whichever
+party this browser is presenting.
+
 ## Native apps
 
 Both decode `type` as a plain string, so the new type never fails a parse.
@@ -3273,27 +3388,22 @@ stream rather than a named event with a host and a state machine. See
 `docs/ANDROID.md`, section "Watch party, the HLS path", for what is and is not
 verified.
 
-## Two hand-raises, and how they reconcile
+## Two hand-raises, settled
+
+This used to be an open question — whether the party's queue should fold into
+the general voice one. Settled by `docs/plans/WATCH_PARTY_GUESTS.md` §3.1: **it
+should not.** They answer different questions for different people.
 
 `docs/RAISED_HANDS.md` is a **general** raise-hand: any voice call, no party,
 no session row. It is `voice_raised_hands (channel_id, user_id, raised_at)`,
 carried on the roster as `handRaisedAt`, cleared when the person leaves, and
-visible to everyone in the room.
+visible to everyone already seated in the room — a seated participant's public
+gesture inside a call.
 
-The unmerged `feat/watch-party-journey` branch has a different one under the
-same words: `raiseHand` is a party OPTION, the rows are
-`channel_session_raised_hands` keyed on `session_id`, the queue is shown only
-to the people running the party, and the whole thing is coupled to
-`stageMode: "invited"` and to granting SPEAK to one person at a time. That is a
-stage door, not a queue, which is why it was not lifted and a general one was
-built instead.
-
-**When that branch lands**, the two should be reconciled rather than left side
-by side, and the cheapest shape is probably: keep the party's `raiseHand`
-option as the switch that turns the STAGE DOOR on (who gets promoted, and by
-whom), and make the queue underneath it the general one, so a person's hand is
-one hand wherever they raised it and the host is reading the same order the
-room is. The general implementation already has the pieces that costs the most
-to write twice: the server-stamped order, the roster field, the cluster path,
-and lowering on speaking and on leaving.
+The party's own queue (`channel_session_raised_hands`, now the CONVIDADOS
+request queue — see "Convidados" above) is a **seatless viewer** asking for
+something they do not have. A viewer has no roster row to carry a timestamp
+on, so it keeps its own table and borrows only the ordering rule from
+`packages/shared/src/raised-hands.ts` (`guestRequestQueue`, oldest first, tied
+on `userId`) rather than a second comparator.
 
