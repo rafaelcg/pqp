@@ -61,6 +61,27 @@ describe("defaults", () => {
     });
   });
 
+  it("binds openNewDm to Shift+N, not Shift+M — that chord is already toggleMute", () => {
+    // The spec this ships against asked for Cmd/Ctrl+Shift+M, but that chord
+    // was already `toggleMute` (and Electron's own app-menu accelerator), so
+    // a second action on the same default chord would never fire: `matchShortcut`
+    // only ever returns the first match, `toggleMute`. Shift+N is the fix.
+    expect(MAC.openNewDm).toMatchObject({
+      code: "KeyN",
+      meta: true,
+      ctrl: false,
+      shift: true,
+    });
+    expect(WIN.openNewDm).toMatchObject({
+      code: "KeyN",
+      meta: false,
+      ctrl: true,
+      shift: true,
+    });
+    expect(findBindingConflict(MAC, "openNewDm", MAC.openNewDm)).toBeNull();
+    expect(bindingsEqual(MAC.openNewDm, MAC.toggleMute)).toBe(false);
+  });
+
   it("uses Alt arrows for channel motion, Shift for unread", () => {
     expect(MAC.previousChannel).toMatchObject({
       code: "ArrowUp",
