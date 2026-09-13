@@ -254,7 +254,14 @@ function EndedWatchStage({
           // the player shows once it has a URL to buffer, so a viewer who
           // opens the channel before the egress has one sees the same "on
           // its way" screen rather than a bare loading sentence.
-          <StreamStartingSoon />
+          //
+          // C3 (post-mortem item): the rotating lines are deliberately vague
+          // ("hang tight, it's coming") because this state covers both a
+          // few-second egress warm-up AND a presenter who has not pressed
+          // share yet, which can last indefinitely. The caption underneath
+          // says the second half in words, so a long wait here reads as "the
+          // show has not started" rather than as something stuck.
+          <StreamStartingSoon caption={t("voice.watch.notStartedCaption")} />
         )}
       </div>
       <div className="flex shrink-0 items-center justify-between gap-3 px-3 py-2">
