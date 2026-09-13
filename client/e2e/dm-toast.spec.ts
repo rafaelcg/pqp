@@ -85,17 +85,25 @@ test("a new DM toasts, badges the row, and opens on click", async ({ browser }) 
   await biaPage.getByPlaceholder(/Message/).fill("bora terça?");
   await biaPage.keyboard.press("Enter");
 
-  // Ana, still on #general, sees the card.
+  // Ana, still on #general, sees the card. Previews default on, so the body
+  // is the message itself, not the old "1 new message" count fallback.
   const toast = anaPage.locator(`[data-dm-toast="${conversation.channelId}"]`);
   await expect(toast).toBeVisible({ timeout: 15_000 });
   await expect(toast).toContainText("Bia");
-  await expect(toast).toContainText("1 new message");
+  await expect(toast).toContainText("bora terça?");
+  // Right-anchored on desktop, directly under where an incoming-call card
+  // would sit (criterion 14/§3.1) — within 24px of the viewport's right edge.
+  const box = await toast.boundingBox();
+  const viewport = anaPage.viewportSize();
+  if (box && viewport) {
+    expect(viewport.width - (box.x + box.width)).toBeLessThan(24);
+  }
   if (process.env.SHOT_DIR) {
     await anaPage.screenshot({ path: `${process.env.SHOT_DIR}/dm-toast.png` });
   }
 
-  // Opening it lands in the conversation and retires the card.
-  await toast.getByRole("button", { name: /Bia/ }).click();
+  // Opening it lands in the conversation and retires the card (criterion 16).
+  await toast.click();
   await expect(anaPage).toHaveURL(new RegExp(`/app/dm/${conversation.channelId}`));
   await expect(anaPage.getByText("bora terça?")).toBeVisible({ timeout: 10_000 });
   await expect(toast).toHaveCount(0);
@@ -107,4 +115,83 @@ test("a new DM toasts, badges the row, and opens on click", async ({ browser }) 
 
   await anaContext.close();
   await biaContext.close();
+});
+
+test("the X dismisses only that card, and a card disappears on its own after about 6 seconds", async ({
+  browser,
+}) => {
+  test.setTimeout(90_000);
+  const stamp = Date.now().toString(36);
+  const ana = `toast-x-ana-${stamp}`;
+  const bia = `toast-x-bia-${stamp}`;
+  const cid = `toast-x-cid-${stamp}`;
+  await person(ana, "Ana");
+  const biaId = await person(bia, "Bia");
+  const cidId = await person(cid, "Cid");
+
+  const { server } = (await (
+    await fetch(`${API}/api/servers`, {
+      method: "POST",
+      headers: headers(ana),
+      body: JSON.stringify({ name: `Mesa X ${stamp}` }),
+    })
+  ).json()) as { server: { id: string } };
+  const { invite } = (await (
+    await fetch(`${API}/api/servers/${server.id}/invites`, {
+      method: "POST",
+      headers: headers(ana),
+      body: JSON.stringify({}),
+    })
+  ).json()) as { invite: { code: string } };
+  await fetch(`${API}/api/invites/${invite.code}/join`, { method: "POST", headers: headers(bia) });
+  await fetch(`${API}/api/invites/${invite.code}/join`, { method: "POST", headers: headers(cid) });
+  const { conversation: convBia } = (await (
+    await fetch(`${API}/api/dms`, {
+      method: "POST",
+      headers: headers(ana),
+      body: JSON.stringify({ userIds: [biaId] }),
+    })
+  ).json()) as { conversation: { channelId: string } };
+  const { conversation: convCid } = (await (
+    await fetch(`${API}/api/dms`, {
+      method: "POST",
+      headers: headers(ana),
+      body: JSON.stringify({ userIds: [cidId] }),
+    })
+  ).json()) as { conversation: { channelId: string } };
+
+  const anaContext = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const anaPage = await anaContext.newPage();
+  await anaPage.addInitScript((s) => localStorage.setItem("pqp:dev-user-suffix", s), ana);
+  await anaPage.goto(`/app/server/${server.id}?lang=en`);
+  await expect(anaPage.getByRole("button", { name: "Send" })).toBeVisible({ timeout: 20_000 });
+
+  async function sendFrom(suffix: string, channelId: string, body: string) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.addInitScript((s) => localStorage.setItem("pqp:dev-user-suffix", s), suffix);
+    await page.goto(`/app/dm/${channelId}?lang=en`);
+    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({ timeout: 20_000 });
+    await page.getByPlaceholder(/Message/).fill(body);
+    await page.keyboard.press("Enter");
+    await context.close();
+  }
+
+  await sendFrom(bia, convBia.channelId, "oi da bia");
+  const toastBia = anaPage.locator(`[data-dm-toast="${convBia.channelId}"]`);
+  await expect(toastBia).toBeVisible({ timeout: 15_000 });
+
+  await sendFrom(cid, convCid.channelId, "oi do cid");
+  const toastCid = anaPage.locator(`[data-dm-toast="${convCid.channelId}"]`);
+  await expect(toastCid).toBeVisible({ timeout: 15_000 });
+
+  // The X on Cid's card dismisses only that one.
+  await toastCid.getByRole("button", { name: "Dismiss" }).click();
+  await expect(toastCid).toHaveCount(0, { timeout: 3_000 });
+  await expect(toastBia).toBeVisible();
+
+  // Bia's card is left alone and goes on its own around 6s later.
+  await expect(toastBia).toHaveCount(0, { timeout: 10_000 });
+
+  await anaContext.close();
 });
