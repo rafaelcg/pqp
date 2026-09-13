@@ -54,6 +54,6 @@ Qualquer call de voz agora tem uma fila de música: cola um link do YouTube ou d
 - Redução de ruído avançada: Configurações, Voz e vídeo, Processamento do microfone, **Avançada (RNNoise)**. Tira teclado, cachorro e eco de sala, usa um pouco mais de CPU. Desligada por padrão. Só na web por enquanto.
 - Rascunho da mensagem fica salvo por canal. Troca de canal e volta, o que você tava escrevendo continua lá.
 
-## Ainda não
+## No app do PC também
 
-Apresentar uma watch party pelo app do PC: o código já faz, falta só cortar uma versão nova. A de hoje ainda é a 0.1.5.
+Saiu a 0.1.6 do app do PC: dá pra apresentar uma watch party direto do app, escolhendo tela ou janela no seletor do sistema. No Windows 11 o áudio do computador vai junto, sem a tua voz duplicada. Quem tem a 0.1.5 recebe a atualização sozinho; quem não tem, baixa em pqp.gg/download.

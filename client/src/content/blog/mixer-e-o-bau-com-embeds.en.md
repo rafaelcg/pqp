@@ -54,6 +54,6 @@ Any voice call now has a music queue: paste a YouTube or Spotify link (a song, a
 - Advanced noise suppression: Settings, Voice & Video, Microphone processing, **Advanced (RNNoise)**. Cuts keyboard, dog and room echo, costs a bit more CPU. Off by default. Web only for now.
 - Your draft is saved per channel. Switch channels and come back, what you were writing is still there.
 
-## Not yet
+## On the desktop app too
 
-Presenting a watch party from the desktop app: the code already does it, it just needs a new build cut. Today's download is still 0.1.5.
+Desktop 0.1.6 is out: you can present a watch party straight from the app, picking a screen or window in the system picker. On Windows 11 the computer's audio comes along without doubling your own voice. 0.1.5 installs update on their own; everyone else downloads at pqp.gg/download.
