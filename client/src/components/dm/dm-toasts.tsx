@@ -134,18 +134,26 @@ export function DmToasts({
     }
     expireTimer.current = setTimeout(() => {
       const now = Date.now();
-      const due: Array<{ channelId: string; token: number }> = [];
+      // Computed from the ref, not collected as a side effect inside the
+      // `setCards` updater: a functional updater is not guaranteed to run
+      // synchronously the moment it is queued (this timer fires outside any
+      // React event, exactly where that guarantee is weakest), and relying
+      // on it left `due` empty when the loop below ran — every expired card
+      // got marked leaving with no removal ever scheduled, stuck on screen
+      // forever mid-exit-animation.
+      const due = cardsRef.current.filter(
+        (card) =>
+          !card.leaving &&
+          card.pausedRemainingMs === null &&
+          card.expiresAt <= now,
+      );
+      if (due.length === 0) {
+        return;
+      }
       setCards((previous) => {
         let next: DisplayCard[] = previous;
-        for (const card of previous) {
-          if (
-            !card.leaving &&
-            card.pausedRemainingMs === null &&
-            card.expiresAt <= now
-          ) {
-            next = markToastLeaving(next, card.channelId, card.token) as DisplayCard[];
-            due.push({ channelId: card.channelId, token: card.token });
-          }
+        for (const card of due) {
+          next = markToastLeaving(next, card.channelId, card.token) as DisplayCard[];
         }
         return next;
       });
@@ -478,6 +486,12 @@ function useSwipeDismiss(onDismiss: () => void): {
     startX.current = event.clientX;
     startY.current = event.clientY;
     cancelled.current = false;
+    // A fresh gesture starting is also the right moment to clear a stale
+    // `didDrag` from the previous one — a vertical-cancel can leave it set
+    // with no click ever following to consume it (a cancelled gesture is a
+    // scroll, not a tap, so no compatibility click fires), which would
+    // otherwise silently swallow the very next legitimate tap.
+    didDrag.current = false;
     setSpringing(false);
   }, []);
 
