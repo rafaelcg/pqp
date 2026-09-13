@@ -427,8 +427,15 @@ describe("the presenter's camera, beside the ladder", () => {
     install(lk);
 
     let releaseWrite: (() => void) | undefined;
-    const original = query.getMockImplementation();
-    query.mockImplementation(async (sql: unknown, ...rest: unknown[]) => {
+    // The shared `query` mock is typed for the happy path; this test needs
+    // to intercept one statement, so widen it locally.
+    type LooseQuery = {
+      getMockImplementation(): ((...args: unknown[]) => Promise<unknown>) | undefined;
+      mockImplementation(fn: (...args: unknown[]) => Promise<unknown>): unknown;
+    };
+    const looseQuery = query as unknown as LooseQuery;
+    const original = looseQuery.getMockImplementation();
+    looseQuery.mockImplementation(async (sql: unknown, ...rest: unknown[]) => {
       if (typeof sql === "string" && sql.includes("DO UPDATE")) {
         await new Promise<void>((resolve) => {
           releaseWrite = resolve;
@@ -450,7 +457,7 @@ describe("the presenter's camera, beside the ladder", () => {
       await flush();
     } finally {
       // Restore the shared mock for every test that runs after this one.
-      query.mockImplementation(original!);
+      looseQuery.mockImplementation(original!);
     }
 
     const stream = liveHlsStreamFor(CHANNEL);
