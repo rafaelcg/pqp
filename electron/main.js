@@ -915,6 +915,19 @@ async function chooseDisplaySource(audioRequested) {
 function configureSessionSecurity(appOrigin) {
   const ses = session.defaultSession;
 
+  // Computed up front, not after `setDisplayMediaRequestHandler` below: that
+  // handler's callback is a closure over this binding, and the origin check
+  // it runs has to have a real value to compare against by the time a page
+  // actually calls `getDisplayMedia`, which is well after this function
+  // returns. Keeping the two together, in order, is what makes that obvious
+  // on read rather than merely true at runtime.
+  let allowedOrigin = null;
+  try {
+    allowedOrigin = new URL(appOrigin).origin;
+  } catch {
+    allowedOrigin = null;
+  }
+
   // Voice / media permissions for Discord-like UX.
   ses.setPermissionRequestHandler(async (_wc, permission, callback, details) => {
     if (!ALLOWED_PERMISSIONS.has(permission)) {
@@ -963,6 +976,21 @@ function configureSessionSecurity(appOrigin) {
   // the bigger problem; `docs/DESKTOP.md` says so out loud.
   ses.setDisplayMediaRequestHandler(
     (request, callback) => {
+      // The shell intentionally keeps some third-party pages in-window (game
+      // OAuth: Steam, Battle.net, Twitch), and this handler answers ANY frame
+      // that calls `getDisplayMedia`, not just ours. Without this check one of
+      // those pages, or one compromised, could ask for the desktop and this
+      // handler would hand it over exactly as if the request came from pqp.
+      // `request.securityOrigin` is Chromium's own read of the requesting
+      // frame, not a value the page can spoof.
+      if (!allowedOrigin || request?.securityOrigin !== allowedOrigin) {
+        console.warn(
+          "[pqp] refused a display-media request from an untrusted origin:",
+          request?.securityOrigin ?? "(unknown)",
+        );
+        callback(null);
+        return;
+      }
       chooseDisplaySource(request?.audioRequested === true)
         .then((response) => {
           // `null` cancels. Chromium turns that into a NotAllowedError, which
@@ -979,13 +1007,7 @@ function configureSessionSecurity(appOrigin) {
   );
 
   // Harden navigation: stay on the app origin; open others externally.
-  let allowedOrigin = null;
-  try {
-    allowedOrigin = new URL(appOrigin).origin;
-  } catch {
-    allowedOrigin = null;
-  }
-
+  // (`allowedOrigin` is computed once, above, before it is first needed.)
   ses.webRequest.onHeadersReceived((details, callback) => {
     // Do not override remote CSP; only ensure nosniff on our local static origin.
     if (allowedOrigin && details.url.startsWith(allowedOrigin)) {

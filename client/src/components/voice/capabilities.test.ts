@@ -258,4 +258,22 @@ describe("canShareScreenAudio", () => {
       }),
     ).toBe(false);
   });
+
+  it("is false in a shell that carries loopback but admits it cannot strip its own playback, even when the renderer supports the constraint", () => {
+    // The shell's own word wins over what the renderer merely knows how to
+    // ask for. `shellRestrictOwnAudio: false` is the shell stating outright
+    // that a capture here still carries this app's own call, which is the
+    // 23 Aug 2026 echo — offering the toggle here would be a lie regardless
+    // of `supportsRestrictOwnAudio`.
+    expect(
+      canShareScreenAudio({
+        isDesktopShell: true,
+        shellPlatform: "win32",
+        supportsRestrictOwnAudio: true,
+        sharePickerOffersAudio: false,
+        shellSystemAudio: "loopback",
+        shellRestrictOwnAudio: false,
+      }),
+    ).toBe(false);
+  });
 });

@@ -12,7 +12,7 @@
 import { desktopContext } from "@/lib/desktop";
 import {
   liveScreenCaptureEnvironment,
-  shellCarriesScreenAudio,
+  offersShellSystemAudio,
   type ScreenCaptureEnvironment,
 } from "@/lib/screen-capture-audio";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
@@ -184,6 +184,6 @@ export function canShareScreenAudio(
 ): boolean {
   return (
     (!env.isDesktopShell && env.supportsRestrictOwnAudio) ||
-    (shellCarriesScreenAudio(env) && env.supportsRestrictOwnAudio)
+    offersShellSystemAudio(env)
   );
 }
