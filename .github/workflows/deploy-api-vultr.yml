@@ -52,9 +52,15 @@ jobs:
     # arbitrary branch, which would otherwise let anyone who can run
     # workflows (not necessarily anyone who can merge to main) build and
     # deploy unreviewed code (a modified Dockerfile or compose/Caddy file)
-    # straight to production. workflow_run already only fires for a run of
-    # main; this closes the same door on the workflow_dispatch side.
-    if: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) && vars.DEPLOY_TARGET == 'vultr' && vars.DEPLOY_FREEZE != 'true' }}
+    # straight to production.
+    #
+    # The workflow_run half needs its OWN check beyond head_branch == main:
+    # `head_branch` is just a string a fork controls (a fork can have its
+    # own branch literally named "main"), so without pinning
+    # head_repository too, a CI run completing on a fork's "main" would
+    # satisfy this condition and hand it that fork's head_sha, Dockerfile
+    # and compose/Caddy files to build and deploy with production secrets.
+    if: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)) && vars.DEPLOY_TARGET == 'vultr' && vars.DEPLOY_FREEZE != 'true' }}
     permissions:
       contents: read
       packages: write
@@ -133,6 +139,7 @@ jobs:
           missing=""
           [ -n "${{ secrets.VULTR_API_HOST }}" ] || missing="$missing VULTR_API_HOST"
           [ -n "${{ secrets.VULTR_API_SSH_KEY }}" ] || missing="$missing VULTR_API_SSH_KEY"
+          [ -n "${{ secrets.VULTR_CONFIG_HMAC_KEY }}" ] || missing="$missing VULTR_CONFIG_HMAC_KEY"
           if [ -n "$missing" ]; then
             echo "::error::Missing secret(s):$missing. See docs/deploy-vultr.md."
             exit 1
@@ -197,18 +204,37 @@ jobs:
           echo "tag=${tag:-}" >> "$GITHUB_OUTPUT"
           echo "Previously deployed tag: ${tag:-none (first deploy on this box)}"
 
+      # pqp-deploy (the account VULTR_API_SSH_KEY authenticates to) can
+      # stage whatever bytes it likes in its own home directory -- that is
+      # the account a leaked key gives an attacker. Root only installs a
+      # staged compose.yaml/Caddyfile if it comes with a manifest signed by
+      # VULTR_CONFIG_HMAC_KEY, a SECOND secret pqp-deploy itself never has
+      # (see tools/api-host/pqp-deploy.sh). Signing happens here, on the
+      # runner, over the files from THIS verified checkout, before either
+      # file goes anywhere near the SSH connection an attacker might also
+      # hold.
+      - name: Sign compose/Caddy config
+        if: steps.relevant.outputs.needed == 'true'
+        env:
+          HMAC_KEY: ${{ secrets.VULTR_CONFIG_HMAC_KEY }}
+        run: |
+          (cd tools/api-host && sha256sum compose.yaml Caddyfile) > "$RUNNER_TEMP/manifest.sha256"
+          openssl dgst -sha256 -hmac "$HMAC_KEY" -r "$RUNNER_TEMP/manifest.sha256" \
+            | awk '{print $1}' > "$RUNNER_TEMP/manifest.sig"
+
       # Copies the two files whose content actually matters at deploy time
-      # (compose.yaml, Caddyfile) into pqp-deploy's own staging directory,
-      # then runs the one script that account may sudo. That script (root)
-      # installs them into /opt/pqp, pulls BOTH images before touching
-      # either running container (so a bad tag never leaves api and worker
-      # on different releases), brings up api + worker, and reloads Caddy
-      # from whatever Caddyfile is now in place — a Caddy-only change no
-      # longer sits copied-but-inert. It waits for both containers' own
-      # Docker healthchecks and confirms the API is actually serving this
-      # commit before exiting 0; any of that failing is a non-zero exit,
-      # which this step surfaces via `continue-on-error` so the rollback
-      # step below still gets to run.
+      # (compose.yaml, Caddyfile), plus the manifest and signature above,
+      # into pqp-deploy's own staging directory, then runs the one script
+      # that account may sudo. That script (root) verifies the signature,
+      # installs the files into /opt/pqp only if it checks out, pulls BOTH
+      # images before touching either running container (so a bad tag
+      # never leaves api and worker on different releases), brings up api
+      # + worker, and reloads Caddy from whatever Caddyfile is now in
+      # place — a Caddy-only change no longer sits copied-but-inert. It
+      # waits for both containers' own Docker healthchecks and confirms
+      # the API is actually serving this commit before exiting 0; any of
+      # that failing is a non-zero exit, which this step surfaces via
+      # `continue-on-error` so the rollback step below still gets to run.
       #
       # stop_grace_period: 60s in compose.yaml is what gives
       # server/src/lib/drain.ts's SIGTERM handling room to finish (25s
@@ -228,6 +254,7 @@ jobs:
           }
           scp -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
             tools/api-host/compose.yaml tools/api-host/Caddyfile \
+            "$RUNNER_TEMP/manifest.sha256" "$RUNNER_TEMP/manifest.sig" \
             "pqp-deploy@$HOST:/home/pqp-deploy/incoming/"
           ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA"
 

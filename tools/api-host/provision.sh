@@ -107,6 +107,30 @@ SUDOERS
 chmod 0440 /etc/sudoers.d/91-pqp-deploy
 visudo -cf /etc/sudoers.d/91-pqp-deploy
 
+echo "== deploy config signing key"
+# The one thing pqp-deploy (the unprivileged CI account) is never allowed
+# to hold. VULTR_API_SSH_KEY authenticates the SSH connection -- if it
+# leaks, whoever holds it can still stage any compose.yaml/Caddyfile they
+# want in pqp-deploy's own home. What stops the root-owned pqp-deploy
+# script from installing THAT file is this key: the GitHub Actions runner
+# signs a manifest of the two files' checksums with it (secret
+# VULTR_CONFIG_HMAC_KEY, never exposed to pqp-deploy), and the script
+# refuses to install anything whose signature does not verify against this
+# copy. Root-only (0600); an attacker with just the SSH key cannot forge a
+# valid signature without this file too.
+mkdir -p /etc/pqp
+if [[ -n "${VULTR_CONFIG_HMAC_KEY:-}" ]]; then
+  umask 077
+  printf '%s' "$VULTR_CONFIG_HMAC_KEY" >/etc/pqp/deploy-hmac.key
+  chmod 0600 /etc/pqp/deploy-hmac.key
+fi
+if [[ ! -s /etc/pqp/deploy-hmac.key ]]; then
+  echo "   !! /etc/pqp/deploy-hmac.key is missing or empty; the deploy workflow"
+  echo "   !! CANNOT ship a compose.yaml/Caddyfile change until this is set."
+  echo "   !! Re-run with VULTR_CONFIG_HMAC_KEY=<the same value as the GitHub"
+  echo "   !! secret> set (generate one with 'openssl rand -hex 32')."
+fi
+
 echo "== GHCR credentials (only needed while the image is private)"
 mkdir -p /etc/pqp
 if [[ -n "${GHCR_USER:-}${GHCR_TOKEN:-}" ]]; then

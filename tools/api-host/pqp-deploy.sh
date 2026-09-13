@@ -22,15 +22,47 @@ cd "$DEST"
 
 # The deploy workflow scp's a fresh compose.yaml/Caddyfile as pqp-deploy
 # (unprivileged, cannot write into /opt/pqp) into its own home directory.
-# Adopt them here, as root, before touching any container -- this is the
-# step that actually APPLIES a copied compose/Caddy change instead of
-# leaving it on disk unread.
-if [[ -f "$STAGING/compose.yaml" ]]; then
+# pqp-deploy is exactly the account VULTR_API_SSH_KEY authenticates to, so
+# a leaked key lets an attacker stage ANY compose.yaml they want there --
+# one with a host-root bind mount or a command that reads /opt/pqp/.env.
+# We are about to run that file as root; a bare `install` here would hand
+# a leaked SSH key root on the box, defeating the entire point of
+# pqp-deploy not being in the docker group.
+#
+# So: only ever install a staged compose.yaml/Caddyfile that is
+# accompanied by a manifest of their checksums, itself signed with an
+# HMAC key pqp-deploy never has access to (/etc/pqp/deploy-hmac.key,
+# root-only, set by provision.sh from GitHub secret
+# VULTR_CONFIG_HMAC_KEY). The signature is verified against OUR copy of
+# the key, not anything the caller supplied, and the manifest is checked
+# against the files' actual bytes -- a valid signature over the wrong
+# manifest, or a manifest that does not match what is actually staged,
+# both fail closed.
+if [[ -f "$STAGING/compose.yaml" || -f "$STAGING/Caddyfile" ]]; then
+  if [[ ! -s /etc/pqp/deploy-hmac.key ]]; then
+    echo "refusing staged config: /etc/pqp/deploy-hmac.key is not provisioned" >&2
+    exit 1
+  fi
+  if [[ ! -f "$STAGING/manifest.sha256" || ! -f "$STAGING/manifest.sig" ]]; then
+    echo "refusing staged config: missing manifest.sha256/manifest.sig" >&2
+    exit 1
+  fi
+  expected="$(openssl dgst -sha256 -hmac "$(cat /etc/pqp/deploy-hmac.key)" -r "$STAGING/manifest.sha256" | awk '{print $1}')"
+  got="$(tr -d '[:space:]' <"$STAGING/manifest.sig")"
+  if [[ -z "$expected" || "$expected" != "$got" ]]; then
+    echo "refusing staged config: manifest signature does not verify" >&2
+    exit 1
+  fi
+  if ! (cd "$STAGING" && sha256sum -c manifest.sha256 --quiet); then
+    echo "refusing staged config: staged files do not match the signed manifest" >&2
+    exit 1
+  fi
   install -m 0644 -o pqp -g pqp "$STAGING/compose.yaml" "$DEST/compose.yaml"
-fi
-if [[ -f "$STAGING/Caddyfile" ]]; then
   install -m 0644 -o pqp -g pqp "$STAGING/Caddyfile" "$DEST/Caddyfile"
 fi
+# Consumed (or rejected) -- never leave a signed manifest lying around for
+# a later, unrelated invocation to accidentally satisfy.
+rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig
 
 # GHCR credentials, only needed while ghcr.io/rafaelcg/pqp-api is private.
 # See docs/deploy-vultr.md "GHCR pull on the host" -- the alternative is

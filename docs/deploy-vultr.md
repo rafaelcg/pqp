@@ -78,6 +78,16 @@ mount `/`, or read `/opt/pqp/.env` — the Docker socket a docker-group
 account has is root-equivalent, which is exactly what a CI secret must
 never be handed.
 
+One more secret closes the loop on that: `pqp-deploy` can still stage
+*any* `compose.yaml`/`Caddyfile` it wants in its own home directory (that
+is exactly what an attacker holding `VULTR_API_SSH_KEY` could do), but the
+root script only installs a staged file when it comes with a checksum
+manifest signed using `VULTR_CONFIG_HMAC_KEY` — a second secret that
+never touches the SSH connection or the `pqp-deploy` account, only the
+GitHub Actions runner (which signs) and `/etc/pqp/deploy-hmac.key` on the
+box (which verifies). A key leak on its own can no longer make the root
+script apply arbitrary Compose configuration.
+
 **80/443 are not open to the world.** `api.pqp.gg` is proxied (orange
 cloud) behind Cloudflare — see "Cutover" below — so cloud-init and
 `provision.sh` both restrict 80/443 to Cloudflare's own published IP
@@ -101,6 +111,7 @@ scp -r tools/api-host tools/db-backup pqp@<new-ip>:/tmp/pqp-provision/
 ssh pqp@<new-ip> 'sudo mv /tmp/pqp-provision/db-backup /tmp/pqp-provision/api-host/db-backup && \
   sudo SSH_ALLOWLIST_CIDRS="<your CIDRs>" \
     PQP_DEPLOY_PUBLIC_KEY="$(cat deploy_vultr_api.pub)" \
+    VULTR_CONFIG_HMAC_KEY=<same value as the GitHub secret, see step 4> \
     GHCR_USER=<gh username> GHCR_TOKEN=<PAT scoped to read:packages only> \
     GC_PROM_USER=<grafana cloud prom user> GC_PROM_TOKEN=<metrics:write token> \
     LOKI_URL=<grafanacloud loki push url> LOKI_USERNAME=<loki user> LOKI_PASSWORD=<logs:write token> \
@@ -193,7 +204,14 @@ ssh pqp@<ip> 'sudo chown pqp:pqp /opt/pqp/certs/* && chmod 600 /opt/pqp/certs/*'
 ```bash
 gh secret set VULTR_API_HOST --body '<box public IP or hostname>'
 gh secret set VULTR_API_SSH_KEY < deploy_vultr_api   # the PRIVATE half from step 1
+gh secret set VULTR_CONFIG_HMAC_KEY --body "$(openssl rand -hex 32)"
 ```
+
+Keep the exact value `VULTR_CONFIG_HMAC_KEY` prints out — step 2's
+`provision.sh` call needs the same string in `/etc/pqp/deploy-hmac.key` on
+the box (see "Two accounts" above for what it protects). GitHub never
+shows a secret's value back, so save it somewhere (a password manager, not
+git) before moving on, the same as the deploy key's private half.
 
 `GITHUB_TOKEN` already has what it needs to push to
 `ghcr.io/rafaelcg/pqp-api` (the workflow requests `packages: write`); no
