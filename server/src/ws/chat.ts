@@ -41,7 +41,9 @@ import {
   toggleReaction,
 } from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
+import { buildMessagePreview, type MessagePreview } from "../services/dm-preview.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
+import { getPreferences } from "../services/preferences.js";
 import {
   findTimeoutForChannel,
   timeoutMessage,
@@ -1082,6 +1084,15 @@ async function notifyChannelActivity(
     webPush?: boolean;
     mentionEveryone?: boolean;
     mentionHereUserIds?: readonly string[];
+    /**
+     * The redacted preview of the message that caused this activity, for a
+     * conversation only. Null/absent for a server channel, an
+     * attachment-only message, or a message this instance has no preview
+     * for (the cluster-bus relay, when it does not carry one). Whether an
+     * individual recipient actually sees it is still gated per-recipient
+     * below, on their own `notifications.previewInApp`.
+     */
+    preview?: { authorId: string; authorName: string } & MessagePreview;
   },
 ): Promise<void> {
   const [audience, blockers] = await Promise.all([
@@ -1098,6 +1109,30 @@ async function notifyChannelActivity(
   // be both larger and slower.
   const mentioned = new Set(mentions);
   const hereIds = new Set(options?.mentionHereUserIds ?? []);
+
+  // A conversation is small (at most nine other people), so a preference read
+  // per recipient here is a handful of queries on the rare frame that carries
+  // a preview — never the server-channel path, which never reaches this.
+  const canShowPreview =
+    options?.preview != null &&
+    !options.preview.isAttachment &&
+    (audience.kind === "dm" || audience.kind === "group");
+  const previewWantedBy = canShowPreview
+    ? new Set(
+        (
+          await Promise.all(
+            audience.userIds
+              .filter((id) => id !== authorId)
+              .map(async (id) => {
+                const preferences = await getPreferences(id);
+                return preferences.notifications?.previewInApp !== false
+                  ? id
+                  : null;
+              }),
+          )
+        ).filter((id): id is string => id !== null),
+      )
+    : null;
 
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState !== 1 || user.id === authorId) {
@@ -1136,6 +1171,13 @@ async function notifyChannelActivity(
           Boolean(user.username && mentioned.has(user.username)) ||
           options?.mentionEveryone === true ||
           hereIds.has(user.id),
+        ...(previewWantedBy?.has(user.id)
+          ? {
+              preview: options!.preview!.preview,
+              authorName: options!.preview!.authorName,
+              authorId: options!.preview!.authorId,
+            }
+          : {}),
       }),
     );
   });
@@ -1477,6 +1519,21 @@ export async function postChannelMessage(
   );
 
   const mentions = extractMentionUsernames(input.body);
+  // Only a conversation's toast/preview reads message content — a server
+  // channel's `channel-activity` frame stays exactly the notification it
+  // always was (see the schema comment on `channelActivitySchema`).
+  const preview =
+    channel?.kind === "dm" || channel?.kind === "group"
+      ? {
+          authorId: input.author.id,
+          authorName: message.authorName,
+          ...buildMessagePreview({
+            body: message.body,
+            hasAttachments: (message.attachments?.length ?? 0) > 0,
+            isGifAttachment: message.attachments?.[0]?.contentType === "image/gif",
+          }),
+        }
+      : undefined;
   if (isBusEnabled()) {
     publishToCluster(ACTIVITY_TOPIC, {
       channelId: input.channelId,
@@ -1485,6 +1542,7 @@ export async function postChannelMessage(
       repliedToUserId: parent?.author_id ?? null,
       mentionEveryone,
       mentionHereUserIds: hereUserIds,
+      preview: preview ?? null,
     });
   }
   await notifyChannelActivity(
@@ -1492,7 +1550,7 @@ export async function postChannelMessage(
     input.author.id,
     mentions,
     parent?.author_id ?? null,
-    { mentionEveryone, mentionHereUserIds: hereUserIds },
+    { mentionEveryone, mentionHereUserIds: hereUserIds, preview },
   );
 
   const threadInfo = await getThreadInfo(input.channelId);
@@ -1896,6 +1954,33 @@ function asStringArray(value: unknown): string[] | undefined {
   return value.filter((entry): entry is string => typeof entry === "string");
 }
 
+/**
+ * The redacted preview as it crossed `CLUSTER_BUS`. Absent or malformed reads
+ * as "no preview" rather than a partial one — a frame from an instance that
+ * predates this field carries none at all.
+ */
+function asMessagePreview(
+  value: unknown,
+): ({ authorId: string; authorName: string } & MessagePreview) | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const authorId = asString(record.authorId);
+  const authorName = asString(record.authorName);
+  const preview = asString(record.preview);
+  if (authorId === null || authorName === null || preview === null) {
+    return undefined;
+  }
+  return {
+    authorId,
+    authorName,
+    preview,
+    isAttachment: record.isAttachment === true,
+    isGif: record.isGif === true,
+  };
+}
+
 function asPresenceUsers(value: unknown): PresenceUser[] | null {
   if (!Array.isArray(value)) {
     return null;
@@ -2014,6 +2099,7 @@ subscribeToCluster(ACTIVITY_TOPIC, (data) => {
       webPush: false,
       mentionEveryone: frame?.mentionEveryone === true,
       mentionHereUserIds,
+      preview: asMessagePreview(frame?.preview),
     },
   ).catch((error) => {
     console.error("[chat] cluster activity fan-out failed:", error);

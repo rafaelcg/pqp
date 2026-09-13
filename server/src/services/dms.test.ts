@@ -357,6 +357,43 @@ describeDb("conversations", () => {
     expect(afterRead?.unread).toEqual({ count: 0, mentions: 0 });
   });
 
+  // ----------------------------------------------------------- lastMessage
+
+  it("lastMessage is the newest message, not the first", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    await say(channelId, bob.id, "one");
+    await say(channelId, bob.id, "two");
+    await say(channelId, bob.id, "three");
+
+    const [summary] = await listConversations(alice.id);
+    expect(summary?.lastMessage).toMatchObject({
+      authorId: bob.id,
+      preview: "three",
+      isAttachment: false,
+      isGif: false,
+    });
+  });
+
+  it("is null for a conversation nobody has spoken in yet", async () => {
+    await openConversation(alice.id, [bob.id]);
+    const [summary] = await listConversations(alice.id);
+    expect(summary?.lastMessage).toBeNull();
+  });
+
+  it("is null for every conversation when the viewer turned previews off", async () => {
+    const { mergePreferences } = await import("./preferences.js");
+    await mergePreferences(alice.id, {
+      notifications: { previewInApp: false },
+    });
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    await say(channelId, bob.id, "bora hoje?");
+
+    const [summary] = await listConversations(alice.id);
+    expect(summary?.lastMessage).toBeNull();
+    // The unread count is untouched — only the preview text is gated.
+    expect(summary?.unread.count).toBe(1);
+  });
+
   it("does not carry a clerk id into a participant list", async () => {
     const { channelId } = await openConversation(alice.id, [bob.id]);
     const [summary] = await listConversations(alice.id);

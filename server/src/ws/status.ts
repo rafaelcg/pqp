@@ -119,6 +119,13 @@ function strongerManual(a: ManualStatus, b: ManualStatus): ManualStatus {
   if (a === "dnd" || b === "dnd") {
     return "dnd";
   }
+  // `away` is a declaration too, same reasoning as `dnd`: a socket that has
+  // not reported anything of its own defaults to `online`, and letting that
+  // default outrun a real choice on another device would silently undo it
+  // for exactly the window between the change and the frame announcing it.
+  if (a === "away" || b === "away") {
+    return "away";
+  }
   return "online";
 }
 
@@ -147,6 +154,11 @@ function externalStatus(merged: Merged | undefined): UserStatus {
     // Ahead of idle on purpose: "do not interrupt me" is something the person
     // said, and an inactivity timer must not overwrite it with a guess.
     return "dnd";
+  }
+  if (merged.manual === "away") {
+    // A declaration, not a measurement — see `packages/shared/src/status.ts`.
+    // Sticky regardless of `merged.idle`, unlike the derived case below.
+    return "idle";
   }
   return merged.idle ? "idle" : "online";
 }

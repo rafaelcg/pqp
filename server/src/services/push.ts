@@ -3,6 +3,11 @@ import { z } from "zod";
 import type { ChannelKind, UserPreferences } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { getPreferences, mergePreferences } from "./preferences.js";
+import {
+  buildConversationPushCopy,
+  resolvePushLocale,
+  type PushLocale,
+} from "./push-copy.js";
 import { isInvisible, resolveStatus } from "../ws/status.js";
 import {
   type ApnsConfig,
@@ -569,6 +574,11 @@ export interface PushPayloadInput {
   channelName: string | null;
   serverName: string | null;
   authorName: string | null;
+  /**
+   * This recipient's `settings.locale`. Conversation copy only — a server
+   * mention/reply push stays English, unchanged by this field.
+   */
+  locale: PushLocale;
 }
 
 export interface PushPayload {
@@ -614,29 +624,16 @@ export function buildPushPayload(input: PushPayloadInput): PushPayload {
   }
 
   const path = `/app/dm/${input.channelId}`;
-  if (!input.dmDetails) {
-    return {
-      title: "pqp",
-      body:
-        input.channelKind === "group"
-          ? "New group message"
-          : "New direct message",
-      path,
-      tag,
-    };
-  }
-  const author = input.authorName ? truncateLabel(input.authorName) : "Someone";
-  return {
-    title: author,
-    body:
-      input.channelKind === "group"
-        ? "New message in a group chat"
-        : input.mention || input.reply
-          ? "Mentioned you in a direct message"
-          : "Sent you a direct message",
-    path,
-    tag,
-  };
+  const copy = buildConversationPushCopy({
+    locale: input.locale,
+    // `channelKind` is narrowed to "dm" | "group" by the `=== "server"` branch
+    // above having already returned.
+    channelKind: input.channelKind as "dm" | "group",
+    dmDetails: input.dmDetails,
+    mentionOrReply: input.mention || input.reply,
+    authorName: input.authorName ? truncateLabel(input.authorName) : null,
+  });
+  return { title: copy.title, body: copy.body, path, tag };
 }
 
 // ---------------------------------------------------------------- fan-out
@@ -814,6 +811,7 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
         channelName: names.channel_name,
         serverName: names.server_name,
         authorName: names.author_name,
+        locale: resolvePushLocale((settings as { locale?: unknown } | null)?.locale),
       }),
     );
   }

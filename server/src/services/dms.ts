@@ -7,7 +7,9 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { noBlockBetweenSql, notBlockedSql } from "./blocks.js";
+import { buildMessagePreview } from "./dm-preview.js";
 import { areFriendsSql } from "./friends.js";
+import { getPreferences } from "./preferences.js";
 import { toPublicUserSummary } from "./users.js";
 
 /**
@@ -375,6 +377,12 @@ interface DmRow {
   last_message_at: Date | null;
   count: string;
   mentions: string;
+  last_message_id: string | null;
+  last_message_body: string | null;
+  last_message_author_id: string | null;
+  last_message_author_name: string | null;
+  last_message_has_attachments: boolean | null;
+  last_message_first_attachment_type: string | null;
 }
 
 /**
@@ -396,33 +404,65 @@ export async function listConversations(
   userId: string,
   onlyChannelId?: string,
 ): Promise<DmSummary[]> {
-  const rows = await getPool().query<DmRow>(
-    `SELECT c.id AS channel_id,
-            c.kind,
-            (SELECT MAX(created_at) FROM messages any_m
-              WHERE any_m.channel_id = c.id) AS last_message_at,
-            COUNT(m.id)::text AS count,
-            COUNT(mm.user_id)::text AS mentions
-     FROM channel_members me
-     JOIN channels c ON c.id = me.channel_id AND c.kind <> 'server'
-     LEFT JOIN channel_reads cr
-       ON cr.channel_id = c.id AND cr.user_id = $1
-     LEFT JOIN messages m
-       ON m.channel_id = c.id
-      AND m.author_id <> $1
-      AND m.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
-      AND ${notBlockedSql("$1", "m.author_id")}
-     LEFT JOIN message_mentions mm
-       ON mm.message_id = m.id AND mm.user_id = $1
-     WHERE me.user_id = $1
-       AND ($2::uuid IS NULL OR c.id = $2)
-     GROUP BY c.id, c.kind
-     ORDER BY last_message_at DESC NULLS LAST, c.id`,
-    [userId, onlyChannelId ?? null],
-  );
+  const [rows, preferences] = await Promise.all([
+    getPool().query<DmRow>(
+      `SELECT c.id AS channel_id,
+              c.kind,
+              (SELECT MAX(created_at) FROM messages any_m
+                WHERE any_m.channel_id = c.id) AS last_message_at,
+              COUNT(m.id)::text AS count,
+              COUNT(mm.user_id)::text AS mentions,
+              lastmsg.id AS last_message_id,
+              lastmsg.body AS last_message_body,
+              lastmsg.author_id AS last_message_author_id,
+              lastmsg.author_name AS last_message_author_name,
+              lastmsg.has_attachments AS last_message_has_attachments,
+              lastmsg.first_attachment_type AS last_message_first_attachment_type
+       FROM channel_members me
+       JOIN channels c ON c.id = me.channel_id AND c.kind <> 'server'
+       LEFT JOIN channel_reads cr
+         ON cr.channel_id = c.id AND cr.user_id = $1
+       LEFT JOIN messages m
+         ON m.channel_id = c.id
+        AND m.author_id <> $1
+        AND m.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
+        AND ${notBlockedSql("$1", "m.author_id")}
+       LEFT JOIN message_mentions mm
+         ON mm.message_id = m.id AND mm.user_id = $1
+       LEFT JOIN LATERAL (
+         SELECT lm.id, lm.body, lm.author_id, u2.display_name AS author_name,
+                EXISTS (
+                  SELECT 1 FROM message_attachments ma
+                  WHERE ma.message_id = lm.id
+                ) AS has_attachments,
+                (
+                  SELECT ma2.content_type FROM message_attachments ma2
+                  WHERE ma2.message_id = lm.id
+                  ORDER BY ma2.position ASC, ma2.created_at ASC
+                  LIMIT 1
+                ) AS first_attachment_type
+         FROM messages lm
+         JOIN users u2 ON u2.id = lm.author_id
+         WHERE lm.channel_id = c.id
+         ORDER BY lm.created_at DESC
+         LIMIT 1
+       ) lastmsg ON true
+       WHERE me.user_id = $1
+         AND ($2::uuid IS NULL OR c.id = $2)
+       GROUP BY c.id, c.kind, lastmsg.id, lastmsg.body, lastmsg.author_id,
+                lastmsg.author_name, lastmsg.has_attachments,
+                lastmsg.first_attachment_type
+       ORDER BY last_message_at DESC NULLS LAST, c.id`,
+      [userId, onlyChannelId ?? null],
+    ),
+    getPreferences(userId),
+  ]);
 
   const channelIds = rows.rows.map((row) => row.channel_id);
   const participants = await listParticipants(channelIds, userId);
+  // Default true: previews are on until the reader turns them off in
+  // Settings → Notificações → Mensagens diretas.
+  const previewsOn = preferences.notifications?.previewInApp !== false;
 
   return rows.rows.map((row) => ({
     channelId: row.channel_id,
@@ -430,6 +470,18 @@ export async function listConversations(
     participants: participants.get(row.channel_id) ?? [],
     lastMessageAt: row.last_message_at?.toISOString() ?? null,
     unread: { count: Number(row.count), mentions: Number(row.mentions) },
+    lastMessage:
+      previewsOn && row.last_message_id && row.last_message_author_id
+        ? {
+            authorId: row.last_message_author_id,
+            authorName: row.last_message_author_name ?? "",
+            ...buildMessagePreview({
+              body: row.last_message_body ?? "",
+              hasAttachments: row.last_message_has_attachments === true,
+              isGifAttachment: row.last_message_first_attachment_type === "image/gif",
+            }),
+          }
+        : null,
   }));
 }
 

@@ -198,6 +198,22 @@ describe("resolving a status", () => {
     expect(resolveStatus(userId)).toBe("dnd");
   });
 
+  it("away resolves to idle whether or not the socket also reports idle", async () => {
+    const userId = randomUUID();
+    const tab = recordingSocket();
+    await registerStatusSocket(tab.socket, userId);
+    applyManualStatus(userId, "away");
+    expect(resolveStatus(userId)).toBe("idle");
+
+    // A declaration, not a measurement: activity never clears it, so the
+    // socket reporting itself active changes nothing about the reading.
+    await handleChatMessage(
+      { socket: tab.socket, user: asUser(userId) },
+      { type: "set-idle", idle: false },
+    );
+    expect(resolveStatus(userId)).toBe("idle");
+  });
+
   it("resolves a whole member list in one pass", async () => {
     const [here, away, never] = [randomUUID(), randomUUID(), randomUUID()];
     const hereTab = recordingSocket();

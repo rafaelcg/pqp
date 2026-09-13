@@ -33,6 +33,7 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
 const { createServer } = await import("./servers.js");
 const { openConversation } = await import("./dms.js");
+const { mergePreferences } = await import("./preferences.js");
 const {
   CALL_PUSH_TTL_SECONDS,
   MAX_PUSH_SUBSCRIPTIONS_PER_USER,
@@ -236,6 +237,7 @@ describe("buildPushPayload / truncation", () => {
   const base = {
     channelId: "22222222-2222-2222-2222-222222222222",
     serverId: "11111111-1111-1111-1111-111111111111",
+    locale: "en" as const,
   };
 
   it("names channel, server and author for a server mention — no message text", () => {
@@ -324,6 +326,158 @@ describe("buildPushPayload / truncation", () => {
     // Both halves of the title truncated independently, plus the separator.
     expect(payload.title.length).toBeLessThanOrEqual(64 + 64 + 4);
     expect(payload.body.length).toBeLessThanOrEqual(64 + 20);
+  });
+});
+
+describe("buildPushPayload / conversation copy table (§4.3)", () => {
+  const base = {
+    channelId: "22222222-2222-2222-2222-222222222222",
+    serverId: null,
+    channelName: null,
+    serverName: null,
+    mention: false,
+    reply: false,
+  };
+
+  it("DM, details off: pqp / Mensagem nova (pt-BR) vs New direct message (en)", () => {
+    const pt = buildPushPayload({
+      ...base,
+      channelKind: "dm",
+      dmDetails: false,
+      authorName: "Ana",
+      locale: "pt-BR",
+    });
+    expect(pt).toMatchObject({ title: "pqp", body: "Mensagem nova" });
+    const en = buildPushPayload({
+      ...base,
+      channelKind: "dm",
+      dmDetails: false,
+      authorName: "Ana",
+      locale: "en",
+    });
+    expect(en).toMatchObject({ title: "pqp", body: "New direct message" });
+  });
+
+  it("Group, details off: pqp / Mensagem nova em um grupo vs New group message", () => {
+    const pt = buildPushPayload({
+      ...base,
+      channelKind: "group",
+      dmDetails: false,
+      authorName: "Ana",
+      locale: "pt-BR",
+    });
+    expect(pt).toMatchObject({
+      title: "pqp",
+      body: "Mensagem nova em um grupo",
+    });
+    const en = buildPushPayload({
+      ...base,
+      channelKind: "group",
+      dmDetails: false,
+      authorName: "Ana",
+      locale: "en",
+    });
+    expect(en).toMatchObject({ title: "pqp", body: "New group message" });
+  });
+
+  it("DM, details on: {author} / Te mandou uma mensagem vs Sent you a direct message", () => {
+    const pt = buildPushPayload({
+      ...base,
+      channelKind: "dm",
+      dmDetails: true,
+      authorName: "Ana",
+      locale: "pt-BR",
+    });
+    expect(pt).toMatchObject({
+      title: "Ana",
+      body: "Te mandou uma mensagem",
+    });
+    const en = buildPushPayload({
+      ...base,
+      channelKind: "dm",
+      dmDetails: true,
+      authorName: "Ana",
+      locale: "en",
+    });
+    expect(en).toMatchObject({
+      title: "Ana",
+      body: "Sent you a direct message",
+    });
+  });
+
+  it("DM mention/reply, details on: Te citou em uma mensagem vs Mentioned you", () => {
+    const pt = buildPushPayload({
+      ...base,
+      channelKind: "dm",
+      dmDetails: true,
+      mention: true,
+      authorName: "Ana",
+      locale: "pt-BR",
+    });
+    expect(pt.body).toBe("Te citou em uma mensagem");
+    const en = buildPushPayload({
+      ...base,
+      channelKind: "dm",
+      dmDetails: true,
+      reply: true,
+      authorName: "Ana",
+      locale: "en",
+    });
+    expect(en.body).toBe("Mentioned you in a direct message");
+  });
+
+  it("Group, details on: Mensagem nova em um grupo vs New message in a group chat", () => {
+    const pt = buildPushPayload({
+      ...base,
+      channelKind: "group",
+      dmDetails: true,
+      authorName: "Ana",
+      locale: "pt-BR",
+    });
+    expect(pt).toMatchObject({
+      title: "Ana",
+      body: "Mensagem nova em um grupo",
+    });
+    const en = buildPushPayload({
+      ...base,
+      channelKind: "group",
+      dmDetails: true,
+      authorName: "Ana",
+      locale: "en",
+    });
+    expect(en).toMatchObject({
+      title: "Ana",
+      body: "New message in a group chat",
+    });
+  });
+
+  it("a server mention/reply stays English regardless of locale", () => {
+    const payload = buildPushPayload({
+      ...base,
+      channelId: "22222222-2222-2222-2222-222222222222",
+      serverId: "11111111-1111-1111-1111-111111111111",
+      channelKind: "server",
+      mention: true,
+      dmDetails: false,
+      channelName: "general",
+      serverName: "Friends",
+      authorName: "Ana",
+      locale: "pt-BR",
+    });
+    expect(payload.body).toBe("Ana mentioned you");
+  });
+
+  it("never puts message content in the payload, in either locale", () => {
+    for (const locale of ["pt-BR", "en"] as const) {
+      const payload = buildPushPayload({
+        ...base,
+        channelKind: "dm",
+        dmDetails: true,
+        authorName: "Ana",
+        locale,
+      });
+      expect(JSON.stringify(payload)).not.toContain("segredo");
+    }
   });
 });
 
@@ -603,6 +757,9 @@ describeDb("web push fan-out", () => {
   it("pushes a DM to its offline recipient, content-free by default", async () => {
     const conversation = await openConversation(ana.id, [bea.id]);
     await subscribe(bea.id);
+    // English pinned explicitly: the default when no locale is stored is
+    // pt-BR (below), which is a different, dedicated test.
+    await mergePreferences(bea.id, { locale: "en" });
 
     await sendChannelPush({
       channelId: conversation.channelId,
@@ -630,6 +787,7 @@ describeDb("web push fan-out", () => {
     const conversation = await openConversation(ana.id, [bea.id]);
     await subscribe(bea.id);
     await savePushSettings(bea.id, { dmDetails: true });
+    await mergePreferences(bea.id, { locale: "en" });
 
     await sendChannelPush({
       channelId: conversation.channelId,
@@ -642,6 +800,42 @@ describeDb("web push fan-out", () => {
 
     expect(sent[0]!.payload.title).toBe("ana");
     expect(sent[0]!.payload.body).toBe("Sent you a direct message");
+  });
+
+  it("defaults to pt-BR — the instance's own default, not the browser's — when locale was never stored", async () => {
+    const conversation = await openConversation(ana.id, [bea.id]);
+    await subscribe(bea.id);
+
+    await sendChannelPush({
+      channelId: conversation.channelId,
+      audience: audienceOf("dm", [ana.id, bea.id]),
+      authorId: ana.id,
+      mentionedUsernames: [],
+      repliedToUserId: null,
+      blockerIds: new Set(),
+    });
+
+    expect(sent[0]!.payload.title).toBe("pqp");
+    expect(sent[0]!.payload.body).toBe("Mensagem nova");
+  });
+
+  it("reads settings.locale for the §4.3 copy table (pt-BR, dmDetails on)", async () => {
+    const conversation = await openConversation(ana.id, [bea.id]);
+    await subscribe(bea.id);
+    await savePushSettings(bea.id, { dmDetails: true });
+    await mergePreferences(bea.id, { locale: "pt-BR" });
+
+    await sendChannelPush({
+      channelId: conversation.channelId,
+      audience: audienceOf("dm", [ana.id, bea.id]),
+      authorId: ana.id,
+      mentionedUsernames: [],
+      repliedToUserId: null,
+      blockerIds: new Set(),
+    });
+
+    expect(sent[0]!.payload.title).toBe("ana");
+    expect(sent[0]!.payload.body).toBe("Te mandou uma mensagem");
   });
 
   it("a DM turned down to 'mentions' stays quiet for plain messages", async () => {
@@ -940,6 +1134,7 @@ describeDb("web push fan-out", () => {
   it("says nothing about a DM by default, exactly as the browser leg does", async () => {
     const conversation = await openConversation(ana.id, [bea.id]);
     await registerPhone(bea.id);
+    await mergePreferences(bea.id, { locale: "en" });
 
     await sendChannelPush({
       channelId: conversation.channelId,
