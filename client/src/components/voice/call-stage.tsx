@@ -2643,7 +2643,19 @@ export function CallControls({
           `LARGE_ROOM_SOUND_THRESHOLD` auto-mutes join/leave cues on its own
           (`lib/large-room-sounds.ts`); this is the visible way back to the
           cues for whoever wants them anyway. Always shown, not only in a
-          large room, so the setting is findable before the room gets loud. */}
+          large room, so the setting is findable before the room gets loud —
+          except below `sm`. The slim bar's own row (`OccupantFaces`, the
+          status line, the raised-hand queue, the music dock and this whole
+          control cluster) does not wrap, and at the mesh ceiling (8 faces
+          capped to 3, a longer "N people" status) it was already close to a
+          phone's width; this control was the one that tipped it past 390px
+          and pushed the hang-up button itself off the visible page
+          (`voice-lobby.spec.ts` "at the mesh ceiling"). A phone screen that
+          size is exactly where "findable before it gets loud" matters least
+          in practice: the setting is still one tap from the expanded stage
+          (this same block, unconditional there) or a wider window, and a
+          person cannot use "the way back to the cues" from a bar they cannot
+          reach the hang-up button on either. */}
       <Tooltip
         label={
           joinLeaveAutoMute
@@ -2657,7 +2669,7 @@ export function CallControls({
           data-testid="join-leave-auto-mute-toggle"
           aria-pressed={joinLeaveAutoMute}
           className={cn(
-            "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
+            "hidden items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 sm:flex",
             size,
           )}
           onClick={() => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute)}
@@ -2671,7 +2683,10 @@ export function CallControls({
       </Tooltip>
       <span
         aria-hidden="true"
-        className={cn("mx-0.5 w-px self-stretch bg-ink-4/70", collapsed ? "my-1" : "my-1.5")}
+        className={cn(
+          "hidden mx-0.5 w-px self-stretch bg-ink-4/70 sm:block",
+          collapsed ? "my-1" : "my-1.5",
+        )}
       />
       <Tooltip label={t("call.panel.leave")}>
         <button
