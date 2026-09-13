@@ -2474,6 +2474,22 @@ export function createVoiceController(transport: RealtimeTransport) {
     return pipeline.processedStream;
   }
   /**
+   * Bumped on every `syncVoiceTrackPublication` call, and serialized on
+   * `voiceTrackSyncChain` below it — a state machine, not a fire-and-forget
+   * side effect, and a Farol review on the first version of this feature
+   * asked for exactly that: an enable racing a disable (a mode flip right
+   * after "meu mic vai no stream" turns off, say) must never let the SLOWER
+   * of the two land last and leave a publication active — or a room hearing
+   * silence — that the presenter's own most recent choice already undid.
+   *
+   * `voiceTrackSyncChain` makes every call wait for the previous one's own
+   * network round trip to finish before starting its; `generation` is what a
+   * call queued behind a since-superseded one uses to skip its turn instead
+   * of publishing (or unpublishing) a decision nobody wants any more.
+   */
+  let voiceTrackGeneration = 0;
+  let voiceTrackSyncChain: Promise<void> = Promise.resolve();
+  /**
    * Publish or withdraw the `voice-track` copy of the mic — the unambiguous
    * signal `reconcileCameraEgress` needs (see `VOICE_TRACK_NAME`'s own doc):
    * the server must never infer "separada" from the deployment flag plus the
@@ -2482,16 +2498,49 @@ export function createVoiceController(transport: RealtimeTransport) {
    * room right now. Safe to call whenever the surrounding state might have
    * changed — mode flips, "meu mic vai no stream" flips, a device swap, the
    * share starting or ending — it is a no-op when nothing needs to move.
+   *
+   * `set-voice-track-mode` goes to the server in the SAME turn as the
+   * publish/unpublish it describes, after the SFU call actually lands: the
+   * server's own `presenterWantsSeparatedVoice` is the second signal
+   * `reconcileCameraEgress` requires alongside the track itself
+   * (`docs/plans/WATCH_PARTY_SEPARATE_TRACKS.md`), so the two must never say
+   * different things for longer than one round trip.
    */
-  async function syncVoiceTrackPublication(): Promise<void> {
-    if (!sfu) {
-      return;
-    }
-    if (!screenMix || !state.isSharingMic || !effectiveVoiceSeparated() || !pipeline) {
-      await sfu.unpublishVoiceTrack();
-      return;
-    }
-    await sfu.publishVoiceTrack(pipeline.processedStream);
+  function syncVoiceTrackPublication(): Promise<void> {
+    const generation = ++voiceTrackGeneration;
+    const next = voiceTrackSyncChain.catch(() => undefined).then(async () => {
+      if (generation !== voiceTrackGeneration) {
+        // Superseded before its turn came up: a later call already knows
+        // better than this one did, and has already queued (or finished)
+        // the network calls that reflect it.
+        return;
+      }
+      if (!sfu) {
+        return;
+      }
+      const wantsSeparated =
+        screenMix !== null &&
+        state.isSharingMic &&
+        effectiveVoiceSeparated() &&
+        pipeline !== null;
+      try {
+        if (wantsSeparated && pipeline) {
+          await sfu.publishVoiceTrack(pipeline.processedStream);
+        } else {
+          await sfu.unpublishVoiceTrack();
+        }
+        if (generation === voiceTrackGeneration) {
+          transport.sendVoice({
+            type: "set-voice-track-mode",
+            separated: wantsSeparated,
+          });
+        }
+      } catch (err) {
+        console.warn("[watch-party] voice-track sync failed", err);
+      }
+    });
+    voiceTrackSyncChain = next;
+    return next;
   }
 
   /**
@@ -2576,7 +2625,15 @@ export function createVoiceController(transport: RealtimeTransport) {
       // is not tied to the mix's graph at all (it taps `pipeline` directly),
       // but the share ending is exactly the end of its own reason to exist.
       void sfu?.unpublishMicArchive();
-      void sfu?.unpublishVoiceTrack();
+      // Through the generation-guarded sync, not a direct call: bumping the
+      // generation here is what makes any publish/unpublish still queued
+      // BEHIND this one (a mode flip that landed a tick before the share
+      // ended, say) skip its own turn instead of resurrecting the
+      // publication right after this call withdraws it. `screenMix` is
+      // nulled two lines below, synchronously, before this call's queued
+      // work ever runs — so by the time it checks, it already reads "no
+      // mix" and unpublishes, the same outcome the old direct call gave.
+      void syncVoiceTrackPublication();
     }
     screenMix?.close();
     screenMix = null;
@@ -4491,6 +4548,20 @@ export function createVoiceController(transport: RealtimeTransport) {
      * changed.
      */
     async setVoiceTrackMode(mode: VoiceTrackMode) {
+      if (mode === "separada" && !pipeline) {
+        // No microphone this session can publish at all (an audience seat, a
+        // mic that never opened): "separada" would mean nobody hears the
+        // host, on the stream OR in the room, since there is nothing to
+        // exclude from the mix and nothing to unmute either. Stay on
+        // "junto" and say why — every time this is asked, not only on an
+        // actual transition, or a click that visibly does nothing reads as
+        // the control being broken rather than refused.
+        saveVoiceTrackMode("junto");
+        state.voiceTrackMode = "junto";
+        state.notice = translateMessage("voice.notice.voiceTrackNeedsMic");
+        emit();
+        return;
+      }
       saveVoiceTrackMode(mode);
       if (state.voiceTrackMode === mode) {
         return;

@@ -439,6 +439,45 @@ const loggedGhostEgressIds = new Set<string>();
  */
 const cameraCooldownUntil = new Map<string, number>();
 const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
+
+/**
+ * Per channel: has the CURRENT presenter declared "separada"
+ * (`set-voice-track-mode`, `server/src/ws/voice.ts`)?
+ *
+ * A SECOND SIGNAL, DELIBERATELY, ALONGSIDE THE `voice-track` PUBLICATION
+ * `pickScreenTracks` already finds. A Farol review on the first version of
+ * this feature pointed out that a publication is a fact about LiveKit's
+ * state, not a fact about the presenter's CURRENT choice — it can outlive a
+ * mode the presenter has since turned off (a pending `unpublishVoiceTrack`
+ * still in flight, a dropped frame) or exist on a session with no chance to
+ * declare it at all (a bare LiveKit room a load test or a future client
+ * talks to directly). `reconcileCameraEgress` attaches the mic only when
+ * BOTH agree — the track exists AND this map says so — so neither on its
+ * own is trusted to carry the whole decision.
+ *
+ * `voice.ts` only calls the setter for the message's sender when they are
+ * the room's CURRENT `pickHlsSharer` (the same authority `pushLiveHls`
+ * already defers to for who is presenting at all); anybody else's
+ * declaration is a no-op. Cleared whenever the room's own session ends
+ * (`stopRoom`) so a stale `true` from a party that is over cannot be read
+ * by whatever starts the next one under the same channel id.
+ */
+const voiceTrackSeparatedByChannel = new Map<string, boolean>();
+
+export function setVoiceTrackSeparated(
+  channelId: string,
+  separated: boolean,
+): void {
+  if (separated) {
+    voiceTrackSeparatedByChannel.set(channelId, true);
+  } else {
+    voiceTrackSeparatedByChannel.delete(channelId);
+  }
+}
+
+function presenterWantsSeparatedVoice(channelId: string): boolean {
+  return voiceTrackSeparatedByChannel.get(channelId) === true;
+}
 /**
  * Bounded retry for a `probeScreenTracks` call that could not ask LiveKit at
  * all — a momentary hiccup, not "no camera" (see where this is scheduled, in
@@ -1241,6 +1280,7 @@ export function resetLiveHlsForTests(): void {
   orphansStopped = 0;
   loggedGhostEgressIds.clear();
   cameraCooldownUntil.clear();
+  voiceTrackSeparatedByChannel.clear();
   for (const timer of cameraProbeRetryTimers.values()) {
     clearTimeout(timer);
   }
@@ -3175,6 +3215,7 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
   }
   rooms.delete(channelId);
   cameraCooldownUntil.delete(channelId);
+  voiceTrackSeparatedByChannel.delete(channelId);
   clearCameraProbeRetry(channelId);
   logEvent("voice.hlsStopped", {
     channelId,
@@ -3319,10 +3360,20 @@ async function reconcileCameraEgress(
     return;
   }
   const wantedVideo = liveHlsCameraEnabled() ? cameraTrackId : null;
-  // `LIVE_HLS_VOICE_TRACK` gates the audio half independently of the video
-  // one: the flag off must reproduce the pre-2026-09-13 shape exactly (a
-  // camera, silent, `CAMERA_RUNG`), whatever `voiceTrackId` says.
-  const wantedAudio = liveHlsVoiceTrackEnabled() ? voiceTrackId : null;
+  // THREE THINGS HAVE TO AGREE before the mic is attached: the deployment
+  // flag, the presenter's OWN word that they chose "separada"
+  // (`presenterWantsSeparatedVoice` — see its doc), and the named `voice-
+  // track` publication actually being there to attach (`voiceTrackId`). The
+  // flag off must reproduce the pre-2026-09-13 shape exactly (a camera,
+  // silent, `CAMERA_RUNG`), whatever the other two say; the mode off must
+  // never attach a track that merely happens to still be published; and a
+  // mode that is on with no publication yet (mid-transition) attaches
+  // nothing until the next reconcile finds it, rather than manufacturing an
+  // id from nowhere.
+  const wantedAudio =
+    liveHlsVoiceTrackEnabled() && presenterWantsSeparatedVoice(channelId)
+      ? voiceTrackId
+      : null;
   const current = room.camera;
   if (
     current &&

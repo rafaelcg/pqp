@@ -83,6 +83,20 @@ const mutedCalls: boolean[] = [];
 
 /** Every `publishVoiceTrack`/`unpublishVoiceTrack` call, in order. */
 const voiceTrackCalls: ("publish" | "unpublish")[] = [];
+/**
+ * One-shot gate: when set, the NEXT `publishVoiceTrack`/`unpublishVoiceTrack`
+ * call hangs on it before resolving, so a test can hold one call's SFU round
+ * trip open while a later, overlapping call runs to completion — the race
+ * `voiceTrackGeneration` exists to resolve.
+ */
+let voiceTrackGate: Promise<void> | null = null;
+async function holdNextVoiceTrackCall(): Promise<void> {
+  const gate = voiceTrackGate;
+  voiceTrackGate = null;
+  if (gate) {
+    await gate;
+  }
+}
 
 vi.mock("@/lib/livekit-session", () => ({
   connectLiveKit: vi.fn(async () => ({
@@ -98,9 +112,11 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishMicArchive: async () => {},
     publishVoiceTrack: async () => {
       voiceTrackCalls.push("publish");
+      await holdNextVoiceTrackCall();
     },
     unpublishVoiceTrack: async () => {
       voiceTrackCalls.push("unpublish");
+      await holdNextVoiceTrackCall();
     },
     publishCamera: async () => {},
     unpublishCamera: async () => {},
@@ -238,12 +254,19 @@ function welcome(): VoiceSignalingMessage {
   } as VoiceSignalingMessage;
 }
 
+/** Every `set-voice-track-mode` frame sent, in order. */
+const voiceTrackModeFrames: { separated: boolean }[] = [];
+
 function createTransport() {
   const transport: RealtimeTransport = {
     connect: () => {},
     disconnect: () => {},
     sendChat: () => {},
-    sendVoice: () => {},
+    sendVoice: (message) => {
+      if (message.type === "set-voice-track-mode") {
+        voiceTrackModeFrames.push({ separated: message.separated });
+      }
+    },
     onMessage: () => {},
     onReady: () => {},
     onError: () => {},
@@ -285,7 +308,9 @@ beforeEach(() => {
   screenMixInstances.length = 0;
   mutedCalls.length = 0;
   voiceTrackCalls.length = 0;
+  voiceTrackModeFrames.length = 0;
   voiceTrackServerSupport = true;
+  voiceTrackGate = null;
 });
 
 describe("voiceTrackMode defaults", () => {
@@ -469,5 +494,109 @@ describe("a persisted 'separada' preference on a deployment that cannot carry it
 
     expect(screenMixInstances[0]!.setMic).toHaveBeenLastCalledWith(null);
     expect(mutedCalls.at(-1)).toBe(false);
+  });
+});
+
+describe("set-voice-track-mode reaches the server alongside the publication", () => {
+  it("sends separated: true the moment voice-track is published", async () => {
+    const voice = await joinedHost();
+    voice.setVoiceTrackMode("separada");
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+
+    expect(voiceTrackModeFrames.at(-1)).toEqual({ separated: true });
+  });
+
+  it("sends separated: false the moment voice-track is withdrawn", async () => {
+    const voice = await joinedHost();
+    voice.setVoiceTrackMode("separada");
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+    voiceTrackModeFrames.length = 0;
+
+    voice.setVoiceTrackMode("junto");
+    await settle();
+
+    expect(voiceTrackModeFrames.at(-1)).toEqual({ separated: false });
+  });
+});
+
+/**
+ * THE FIRE-AND-FORGET BUG A FAROL REVIEW CAUGHT: two overlapping
+ * `syncVoiceTrackPublication` calls — one enabling, one right behind it
+ * disabling — could previously interleave their own SFU round trips so the
+ * SLOWER (enabling) call resumed and published AFTER the faster (disabling)
+ * one had already unpublished, leaving a stale microphone exposed to the
+ * HLS audience after the presenter had already turned "separada" back off.
+ * `voiceTrackGeneration` plus the serialized `voiceTrackSyncChain` exist to
+ * stop exactly that: a superseded call must skip its own turn rather than
+ * apply a decision nobody wants any more.
+ */
+describe("disabling separada while its own publish is still in flight", () => {
+  it("a slow publish never tells the server separated:true once a fast disable has superseded it", async () => {
+    const voice = await joinedHost();
+    voice.setVoiceTrackMode("separada");
+
+    let releaseGate: () => void = () => {};
+    voiceTrackGate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+
+    // The share starts "separada": this call's publishVoiceTrack hangs on
+    // the gate, so its own generation check and set-voice-track-mode send
+    // have not run yet either.
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+    expect(voiceTrackCalls).toEqual(["publish"]);
+    expect(voiceTrackModeFrames).toEqual([]);
+
+    // The presenter flips back to "junto" before the stuck publish resumes.
+    // SERIALIZED, not concurrent: this call's own unpublishVoiceTrack cannot
+    // run yet either — it is queued behind the still-in-flight publish, on
+    // the same voiceTrackSyncChain.
+    voice.setVoiceTrackMode("junto");
+    await settle();
+    expect(voiceTrackCalls).toEqual(["publish"]);
+    expect(voiceTrackModeFrames).toEqual([]);
+
+    // Now the stuck publish resumes. Without the generation guard it would
+    // tell the server separated: true here — a decision "junto" already
+    // superseded before this call ever got to announce it. With the guard,
+    // it recognises it is stale and says nothing; the queue then moves on
+    // to the "junto" call, which unpublishes and announces separated: false.
+    releaseGate();
+    await settle();
+    await settle();
+
+    expect(voiceTrackCalls).toEqual(["publish", "unpublish"]);
+    // NEVER separated: true. The server's own `presenterWantsSeparatedVoice`
+    // (`hls-egress.ts`) never once agreed with a publication the presenter
+    // had already withdrawn their choice on.
+    expect(voiceTrackModeFrames).toEqual([{ separated: false }]);
+  });
+});
+
+describe("'separada' with no microphone to publish at all", () => {
+  it("falls back to junto and says why, rather than storing an inert choice", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => ({
+      backend: "livekit" as const,
+      url: "ws://sfu",
+      token: "t",
+      room: CHANNEL,
+      identity: PEER,
+    }));
+    // The audience seat: no mic pipeline opens at all.
+    await voice.join(CHANNEL, { audienceOnly: true });
+    voice.handleSignaling(welcome());
+    await settle();
+    await settle();
+
+    voice.setVoiceTrackMode("separada");
+    await settle();
+
+    expect(voice.getState().voiceTrackMode).toBe("junto");
+    expect(voice.getState().notice).toBeTruthy();
   });
 });

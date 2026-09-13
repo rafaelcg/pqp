@@ -296,17 +296,19 @@ export function WatchCameraPip({
       // fallback cannot drift from which failure it is actually for. Muted
       // autoplay is allowed everywhere, so a rejection there is never the
       // autoplay policy and stays silently swallowed exactly as before.
-      // Unmuted autoplay ("separada"'s voice) CAN be refused with no prior
-      // gesture on this document, and that refusal must not just vanish —
-      // `blocked` drives the retry affordance below.
+      //
+      // ANY rejection while `hasVoiceAudio` is true shows the affordance,
+      // not only `NotAllowedError` specifically: the autoplay-policy
+      // rejection is the expected case, but different engines have not all
+      // agreed on one error name for it over the years, and a version that
+      // throws something else must not silently drop the retry path along
+      // with it — the cost of over-showing the button once in a great while
+      // (a genuinely transient failure that would have recovered on its
+      // own) is far smaller than a viewer stuck permanently and silently
+      // muted with nothing on screen explaining why.
       const attemptPlay = () => {
-        void video.play().catch((err: unknown) => {
-          if (
-            !cancelled &&
-            hasVoiceAudioRef.current &&
-            err instanceof Error &&
-            err.name === "NotAllowedError"
-          ) {
+        void video.play().catch(() => {
+          if (!cancelled && hasVoiceAudioRef.current) {
             setBlocked(true);
           }
         });
@@ -426,7 +428,15 @@ export function WatchCameraPip({
    * leaves the affordance showing rather than throwing.
    */
   const retryFromGesture = () => {
-    void videoRef.current?.play().catch(() => {});
+    void videoRef.current
+      ?.play()
+      .then(() => setBlocked(false))
+      .catch(() => {
+        // Stays visible — the click itself was a real gesture and the
+        // browser still refused, which is worth knowing rather than
+        // quietly going back to looking like nothing is wrong.
+        setBlocked(true);
+      });
   };
 
   return (

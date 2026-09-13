@@ -11,6 +11,7 @@ import {
   resetLiveHlsForTests,
   setLiveHlsChangeListener,
   setLiveHlsTestHooks,
+  setVoiceTrackSeparated,
 } from "./hls-egress.js";
 import {
   CAMERA_RUNG_NAME,
@@ -1121,6 +1122,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
   it("attaches the sharer's ordinary microphone to the camera, once the flag is on", async () => {
     enableHls();
     process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, true);
     const lk = fakeLiveKit();
     cameraTrackId = "TR_CAM";
     voiceTrackId = "TR_MIC";
@@ -1151,6 +1153,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
   it("starts an audio-only rung when the presenter has no camera but shares their voice", async () => {
     enableHls();
     process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, true);
     const lk = fakeLiveKit();
     voiceTrackId = "TR_MIC";
     install(lk);
@@ -1173,6 +1176,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
   it("costs the box the cheaper voice-only rate with no camera, not a camera's rate", async () => {
     enableHls();
     process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, true);
     const lk = fakeLiveKit();
     voiceTrackId = "TR_MIC";
     install(lk);
@@ -1206,9 +1210,72 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
     expect(liveHlsStreamFor(CHANNEL)?.cameraHlsUrl).toBeUndefined();
   });
 
+  /**
+   * THE BUG A FAROL REVIEW CAUGHT: `wantedAudio` used to be derived from
+   * `LIVE_HLS_VOICE_TRACK` and the track's mere presence alone. Since the
+   * ordinary microphone publication (and, at the time, even the picker
+   * itself) does not know or care which mode the host is actually in, every
+   * flagged host with a mic got attached regardless of choosing "junto".
+   * `presenterWantsSeparatedVoice` (`setVoiceTrackSeparated`, sent by
+   * `set-voice-track-mode`) is the fix: the flag and the track existing are
+   * necessary but not sufficient — the presenter's OWN declaration has to
+   * agree too.
+   */
+  it("never attaches the mic on the flag and the track alone: the presenter's own declaration is required", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+    // Deliberately NOT calling setVoiceTrackSeparated: the flag is on and
+    // the named track exists (as it would if a publish raced a mode flip
+    // back to "junto"), but the presenter never said "separada".
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
+
+    expect(startedWith(lk)[1]).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM" }),
+    );
+    expect(startedWith(lk)[1]!.audioTrackId).toBeUndefined();
+    expect(stream?.cameraHasVoiceAudio).toBeFalsy();
+  });
+
+  it("attaches the mic once the presenter's declaration arrives, without restarting for the track alone", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    // First reconcile: the track exists, the declaration does not yet.
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(startedWith(lk)[1]!.audioTrackId).toBeUndefined();
+    const egressCallsBeforeDeclaration = lk.start.mock.calls.length;
+
+    // The declaration arrives (the WS handler calling this after
+    // set-voice-track-mode). The NEXT reconcile is what picks it up — the
+    // same "next roster event" cadence set-camera already relies on.
+    setVoiceTrackSeparated(CHANNEL, true);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(startedWith(lk).at(-1)).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM", audioTrackId: "TR_MIC" }),
+    );
+    // Exactly one restart of the slot for the declaration landing — not the
+    // film's own ladder rung, which never had a reason to move.
+    expect(lk.start.mock.calls.length).toBe(egressCallsBeforeDeclaration + 1);
+  });
+
   it("drops the mic and returns to a silent camera when the flag turns off mid-party", async () => {
     enableHls();
     process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, true);
     const lk = fakeLiveKit();
     cameraTrackId = "TR_CAM";
     voiceTrackId = "TR_MIC";
@@ -1253,6 +1320,7 @@ describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot",
     enableHls();
     process.env.LIVE_HLS_CAMERA = "false";
     process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, true);
     const lk = fakeLiveKit();
     voiceTrackId = "TR_MIC";
     install(lk);
