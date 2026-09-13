@@ -1181,6 +1181,8 @@
   "call.split.value": "The call has {percent}% of the space",
   "call.split.sideBySide": "Chat beside the call",
   "call.split.stack": "Chat below the call",
+  "call.split.sideBySideStream": "Chat beside the stream",
+  "call.split.stackStream": "Chat below the stream",
   "call.split.orientationHint": "Stays this way on this device only.",
   "call.split.collapseStage": "Hide the video",
   "call.split.collapseChat": "Hide the chat",

@@ -1181,6 +1181,8 @@
   "call.split.value": "A call está com {percent}% do espaço",
   "call.split.sideBySide": "Chat do lado da call",
   "call.split.stack": "Chat embaixo da call",
+  "call.split.sideBySideStream": "Chat do lado da transmissão",
+  "call.split.stackStream": "Chat embaixo da transmissão",
   "call.split.orientationHint": "Fica assim só neste computador.",
   "call.split.collapseStage": "Esconder o vídeo",
   "call.split.collapseChat": "Esconder o chat",

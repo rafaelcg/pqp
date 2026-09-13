@@ -6,6 +6,7 @@ import {
   CALL_SPLIT_DIVIDER_PX,
   MIN_CHAT_HEIGHT_PX,
   MIN_STAGE_HEIGHT_PX,
+  MIN_WATCH_CHAT_WIDTH_PX,
   type CallSplitPreference,
   type CallStageShape,
 } from "@/lib/call-split";
@@ -69,14 +70,17 @@ function split({
   shape: stageShape = "expanded" as CallStageShape,
   preference = DRAGGED as CallSplitPreference,
   paneSize = TALL,
+  kind,
 }: {
   shape?: CallStageShape;
   preference?: CallSplitPreference;
   paneSize?: { width: number; height: number };
+  kind?: "call" | "watch" | "watch-audience";
 } = {}) {
   return render(
     <CallSplit
       shape={stageShape}
+      kind={kind}
       preference={preference}
       onPreferenceChange={() => {}}
       paneSize={paneSize}
@@ -484,4 +488,86 @@ describe("the collapse controls are findable without hovering", () => {
       expect(tag).toMatch(/before:-inset-[xy]-2/);
     });
   }
+});
+
+/**
+ * THE AUDIENCE'S OWN COLUMN. A seatless viewer watching a watch party's HLS
+ * picture (`kind="watch-audience"`) gets a chat about 340px wide from the
+ * very first render — before anybody has dragged anything — rather than the
+ * shared `side` proportion a call and the in-call watch surface use.
+ */
+describe("CallSplit sizes the audience's chat as a column, not a proportion", () => {
+  it("gives the chat ~340px on a wide pane, straight away, unsized", () => {
+    const html = split({
+      kind: "watch-audience",
+      preference: CALL_SPLIT_DEFAULT,
+      paneSize: { width: 1800, height: 900 },
+    });
+    expect(html).toContain('data-call-split="side-by-side"');
+    expect(html).toContain("data-call-split-sized");
+    const match = /data-call-split-stage[^>]*style="width:\s*(\d+)px/.exec(
+      html,
+    );
+    expect(match).not.toBeNull();
+    const stagePx = Number(match![1]);
+    const usable = 1800 - CALL_SPLIT_DIVIDER_PX;
+    expect(usable - stagePx).toBe(MIN_WATCH_CHAT_WIDTH_PX);
+  });
+
+  it("grows the film, not the chat, on a wider pane", () => {
+    const narrow = split({
+      kind: "watch-audience",
+      preference: CALL_SPLIT_DEFAULT,
+      paneSize: { width: 1200, height: 900 },
+    });
+    const wide = split({
+      kind: "watch-audience",
+      preference: CALL_SPLIT_DEFAULT,
+      paneSize: { width: 2400, height: 900 },
+    });
+    const stagePx = (html: string) =>
+      Number(
+        /data-call-split-stage[^>]*style="width:\s*(\d+)px/.exec(html)![1],
+      );
+    // A call's shared 0.62 default would have made both the stage AND the
+    // chat grow with the window. Here only the stage does.
+    expect(stagePx(wide) - stagePx(narrow)).toBe(2400 - 1200);
+  });
+
+  it("leaves an ordinary call's shared column alone", () => {
+    const html = split({
+      kind: "call",
+      preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" },
+      paneSize: { width: 1800, height: 900 },
+    });
+    const stagePx = Number(
+      /data-call-split-stage[^>]*style="width:\s*(\d+)px/.exec(html)![1],
+    );
+    const usable = 1800 - CALL_SPLIT_DIVIDER_PX;
+    // The shared `side` fraction (0.62), not the audience's fixed column.
+    expect(usable - stagePx).not.toBe(MIN_WATCH_CHAT_WIDTH_PX);
+    expect(stagePx).toBe(Math.round(usable * 0.62));
+  });
+
+  it("stacks on a phone-width pane instead of shrinking the chat below its floor", () => {
+    const html = split({
+      kind: "watch-audience",
+      preference: CALL_SPLIT_DEFAULT,
+      paneSize: { width: 480, height: 900 },
+    });
+    expect(html).toContain('data-call-split="stacked"');
+  });
+
+  it("honours a drag: once stored, the column is an ordinary fraction again", () => {
+    const html = split({
+      kind: "watch-audience",
+      preference: { ...CALL_SPLIT_DEFAULT, watchAudienceSide: 0.5 },
+      paneSize: { width: 2000, height: 900 },
+    });
+    const stagePx = Number(
+      /data-call-split-stage[^>]*style="width:\s*(\d+)px/.exec(html)![1],
+    );
+    const usable = 2000 - CALL_SPLIT_DIVIDER_PX;
+    expect(stagePx).toBe(Math.round(usable * 0.5));
+  });
 });

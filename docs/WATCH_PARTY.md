@@ -854,6 +854,30 @@ identity line where it is information rather than an action, and the identity
 carries a real minimum width so the actions wrap to their own row instead of
 the party's name truncating away to nothing.
 
+**The AUDIENCE's column is not the same number any more, and that reverses a
+decision recorded above.** The shared `side` fraction (0.62) is what a call
+and the seated watch-party surface both use, and it is a *proportion*: on an
+ultrawide monitor a 38% chat column is well past 700px, which is nobody's
+idea of Twitch. A seatless viewer — `WatchChannelStage`'s picture, and the
+"has not started" / "it ended" cards `WatchPartyPanel` draws in the same
+slot — now gets its own default, `watchAudienceSide` on
+`CallSplitPreference`: the chat is pinned to `MIN_WATCH_CHAT_WIDTH_PX`
+(340px), computed fresh against the live pane width
+(`watchAudienceDefaultSide` in `lib/call-split.ts`) rather than frozen into a
+stored fraction, so widening the window grows the FILM and not the column
+beside it. `kind: "watch-audience"` is the new third `CallSplitKind`,
+alongside `"watch"` (the seated surface, unchanged) and `"call"`; the two
+watch kinds still share one stored orientation (`watchOrientation`, and the
+header's side-by-side/stacked toggle), so a person who flips it while
+watching does not have it flip back the moment they take a seat, or the
+other way round. Once a viewer actually drags the divider,
+`watchAudienceSide` behaves exactly like `side` from then on: a stored
+proportion, because dragging is expressing a ratio rather than asking for the
+fixed column back. On phones the pane still falls back to stacked exactly as
+before — `MIN_WATCH_CHAT_WIDTH_PX` is the floor `splitAvailable` tests
+against either way — and native fullscreen still empties the chat's column
+entirely (§"Fullscreen, cinema not a chat column"), unaffected by any of this.
+
 ### Knowing you are not live yet
 
 On 12 Sep 2026 a host on production told a room he was live while the server
