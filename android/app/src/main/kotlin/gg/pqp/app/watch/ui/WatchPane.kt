@@ -178,6 +178,29 @@ fun WatchPane(
     // untouched: it keeps trusting `newest` exactly as before.
     var trustFreshRefetch by remember { mutableStateOf(false) }
 
+    // One "latest wins" counter, bumped by every event that can supersede an
+    // in-flight refetch in the Reconnect branch below: a socket-delivered
+    // `live.stream` update (any change, not only a new session — a
+    // token-only restamp counts), AND the start of every refetch itself.
+    // The Reconnect branch snapshots the value right after bumping it for
+    // its own call, and only trusts its response if the snapshot still
+    // equals the live counter when the response comes back.
+    //
+    // That single comparison covers both ways a response can go stale: a
+    // socket delivers a fresher token strictly faster than an HTTP
+    // round-trip this same server serves, so if an update landed while the
+    // request was in flight the socket has already said something newer;
+    // and two reconnect attempts can overlap over the network even though
+    // only one is ever started here at a time — the token-renewal timer
+    // below can bump `attempt` while a reconnect fetch is still in the air,
+    // which cancels that fetch's `LaunchedEffect`, and the only thing
+    // standing between a cancelled coroutine and it running to completion
+    // anyway is `refresh` rethrowing `CancellationException` rather than
+    // swallowing it (see `WatchChannelPane`). This counter is the second
+    // line of defence for that race: even if a cancelled call's response
+    // somehow still lands, it can no longer win.
+    var generation by remember { mutableIntStateOf(0) }
+
     LaunchedEffect(live.stream?.startedAt) {
         val next = newest
         if (watchSourceChanged(attached, next)) {
@@ -187,6 +210,12 @@ fun WatchPane(
             hasFrame = false
         }
     }
+
+    // Bumped on every socket-delivered update to this channel's stream,
+    // keyed on the full value rather than just `startedAt` so a same-session
+    // token restamp counts too — the case the comment on `generation` above
+    // calls out explicitly.
+    LaunchedEffect(live.stream) { generation++ }
 
     val phase = watchPhaseOf(
         live = attached != null,
@@ -415,16 +444,19 @@ fun WatchPane(
                     // fatal: the attempt bump re-attaches what we already
                     // have and the watchdog judges that on its own.
                     //
-                    // `beforeFetch` captures `newest` before the request, so
-                    // a same-session keyframe that lands WHILE the request
-                    // is in flight can be told apart from one that did not.
-                    // `runCatching` would also catch this coroutine's own
-                    // cancellation (the pane leaving composition, a reattach
-                    // elsewhere) and read it as an ordinary failed refetch,
-                    // which then goes on to mutate `attached`/`attempt` for
-                    // a watchdog loop that should already be dead, so only
-                    // network and decoding failures are swallowed here.
-                    val beforeFetch = newest
+                    // Claim the next number before the GET goes out. If a
+                    // socket-delivered update lands, or a different
+                    // reconnect attempt starts, while this one is in flight,
+                    // that event bumps `generation` past this snapshot and
+                    // the response below is discarded outright rather than
+                    // being allowed to win a race against whatever is now
+                    // current. `refresh` rethrows `CancellationException`
+                    // (see `WatchChannelPane`) rather than swallowing it, so
+                    // only network and decoding failures are caught here —
+                    // this coroutine's own cancellation (the pane leaving
+                    // composition, a reattach elsewhere) propagates and
+                    // never reaches the lines below at all.
+                    val requestedGeneration = ++generation
                     val fresh = try {
                         refreshNow()
                     } catch (e: CancellationException) {
@@ -432,22 +464,24 @@ fun WatchPane(
                     } catch (e: Exception) {
                         null
                     }
-                    attached = reconnectAttachment(fresh, attached)
-                    // A successful refetch is trusted over `newest` for the
-                    // next reattach — see `trustFreshRefetch` above — but
-                    // only when nothing fresher arrived over the socket
-                    // while the fetch was in flight. A same-session keyframe
-                    // changes only the token, not `startedAt`, so it would
-                    // not otherwise show up here at all: without this check
-                    // the fetch's own (now stale) token would win over a
-                    // token the socket had already delivered.
-                    trustFreshRefetch = fresh != null && newest == beforeFetch
+                    if (generation == requestedGeneration) {
+                        attached = reconnectAttachment(fresh, attached)
+                        // A successful refetch is trusted over `newest` for
+                        // the next reattach — see `trustFreshRefetch` above
+                        // — now that the generation check above has already
+                        // confirmed nothing fresher arrived while the fetch
+                        // was in flight.
+                        trustFreshRefetch = fresh != null
+                    }
                     // Always bumped: when the session changed, `startedAt`
                     // alone already reruns the keyed attach effect below, so
                     // this is a no-op key change riding along with it; when
                     // it did not, `attached` is a new object with the SAME
                     // `startedAt`, and this is the only thing that makes the
                     // effect re-run and read the token `attached` now holds.
+                    // Bumped even when the response above was discarded as
+                    // stale: something newer already exists to reattach to,
+                    // and the watchdog will judge the result on its own.
                     attempt += 1
                     return@LaunchedEffect
                 }

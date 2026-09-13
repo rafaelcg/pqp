@@ -60,11 +60,19 @@ struct WatchStageView: View {
     /// flicker (ready for one second, failed the next) never accumulates
     /// toward the threshold across two different unhealthy stretches.
     @State private var healthyPlaybackTicks = 0
-    /// Straight seconds of confirmed playback before the recovery budget is
-    /// considered proven, not merely started. Three ticks: long enough that
-    /// a replacement item still holding together after a couple of seconds
-    /// is actually different from the one that just failed, short enough
-    /// that a real recovery is not made to look slower than it is.
+    /// The playhead position read on the previous watchdog tick, so this
+    /// tick can tell "reported playing" from "actually advancing". A stuck
+    /// item can sit at `.readyToPlay` with `rate > 0` and a `timeControlStatus`
+    /// of `.playing` while the decoder itself has wedged; none of those
+    /// three are proof by themselves. `nil` right after an attach, so the
+    /// very first tick of a new item never counts as advancing — there is
+    /// nothing yet to compare it against.
+    @State private var lastHealthCheckPosition: Double?
+    /// Straight seconds of confirmed, ADVANCING playback before the recovery
+    /// budget is considered proven, not merely started. Three ticks: long
+    /// enough that a replacement item still holding together after a couple
+    /// of seconds is actually different from the one that just failed, short
+    /// enough that a real recovery is not made to look slower than it is.
     private static let recoveryConfirmTicks = 3
     @State private var isMinimised = false
 
@@ -240,14 +248,21 @@ struct WatchStageView: View {
             isPlaying = status == .playing || player.rate > 0
             chrome.tick(playing: isPlaying, at: now)
             // The budget clears only once THIS attach has held
-            // `.readyToPlay` and `.playing` for `recoveryConfirmTicks`
-            // straight seconds, not on attach itself and not on the first
-            // healthy-looking tick: a replacement item that fails again a
-            // second later must still spend from the same budget as the
-            // failure that produced it, or the three-attempt cap is never
-            // reached. Any tick that is not confirmed healthy resets the
+            // `.readyToPlay`, `.playing` AND an advancing playhead for
+            // `recoveryConfirmTicks` straight seconds, not on attach itself
+            // and not on the first healthy-looking tick: a replacement item
+            // that fails again a second later must still spend from the
+            // same budget as the failure that produced it, or the
+            // three-attempt cap is never reached. `.readyToPlay` plus
+            // `rate > 0` is not proof on its own — a decoder can wedge while
+            // still reporting both — so a tick only counts when the
+            // position this tick is strictly ahead of the position last
+            // tick. Any tick that is not confirmed advancing resets the
             // streak, so two short healthy stretches never add up.
-            let confirmedHealthyTick = item.status == .readyToPlay && isPlaying
+            let advanced = lastHealthCheckPosition.map { position > $0 } ?? false
+            let confirmedHealthyTick =
+                item.status == .readyToPlay && isPlaying && player.rate > 0 && advanced
+            lastHealthCheckPosition = position
             healthyPlaybackTicks = confirmedHealthyTick ? healthyPlaybackTicks + 1 : 0
             if let attached,
                healthyPlaybackTicks >= Self.recoveryConfirmTicks,
@@ -730,6 +745,7 @@ struct WatchStageView: View {
         // NOT `recovery.reset()` here: this attach is unproven until the
         // watchdog confirms it. See `recoveryClearedAttachedAt`.
         healthyPlaybackTicks = 0
+        lastHealthCheckPosition = nil
         behindLive = false
         delaySeconds = nil
         effectiveLines = nil
@@ -955,6 +971,7 @@ struct WatchStageView: View {
         recovery.reset()
         recoveryClearedAttachedAt = nil
         healthyPlaybackTicks = 0
+        lastHealthCheckPosition = nil
         ladder = .empty
         behindLive = false
         delaySeconds = nil

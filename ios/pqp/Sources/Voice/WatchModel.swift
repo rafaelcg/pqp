@@ -108,14 +108,28 @@ final class WatchModel {
     /// Whether a stream has been seen at all during this visit. What separates
     /// `idle` from `ended`.
     private var sawStream = false
-    /// Bumped on every socket-delivered stream frame (`channel-live`,
-    /// `voice-stream`) — and ONLY those, never on `refreshLive`'s own write.
-    /// `refreshLive` snapshots this before its GET and compares after: a
+    /// One "latest wins" counter, bumped by every event that can supersede
+    /// an in-flight `refreshLive()` response: a socket-delivered stream
+    /// frame (`channel-live`, `voice-stream`), AND the start of every
+    /// `refreshLive()` call itself. `refreshLive` snapshots the value right
+    /// after bumping it for its own call, and only applies its response if
+    /// the snapshot still equals the live counter when the response comes
+    /// back.
+    ///
+    /// That single comparison covers both ways a response can go stale: a
     /// socket delivers a fresher token strictly faster than an HTTP
-    /// round-trip this server itself serves, so if the count moved while the
-    /// GET was in flight, the socket already said something newer and the
-    /// GET's answer is discarded rather than overwriting it.
-    private var socketGeneration = 0
+    /// round-trip this same server serves, so if a frame landed while the
+    /// GET was in flight the socket has already said something newer; and
+    /// two overlapping `refreshLive()` calls (two watchdog reconnect
+    /// attempts in flight together) are themselves unordered against each
+    /// other over the network, so whichever call started LAST claims the
+    /// highest number and is the only one whose response can still apply,
+    /// regardless of which one's HTTP response actually lands first. There
+    /// used to be a split here — a socket-only counter plus separate
+    /// reasoning for overlapping refetches — which is exactly the gap that
+    /// let one stale HTTP response overwrite a fresher one from another
+    /// in-flight `refreshLive()` call. One counter, one comparison.
+    private var generation = 0
 
     // MARK: - Lifecycle
 
@@ -201,7 +215,12 @@ final class WatchModel {
      */
     func refreshLive() async throws -> LiveHlsStream? {
         guard let channelId, let session else { return nil }
-        let requestedGeneration = socketGeneration
+        // Claim the next number before the GET goes out. If another
+        // `refreshLive()` call is already in flight, this bump is what
+        // demotes it: its captured snapshot is now behind `generation`, so
+        // its response — however the two land — can no longer win.
+        generation &+= 1
+        let requestedGeneration = generation
         let state: ChannelLiveState
         do {
             state = try await session.api.get("/api/channels/\(channelId)/live")
@@ -216,11 +235,15 @@ final class WatchModel {
             return nil
         }
         guard self.channelId == channelId else { return nil }
-        // A socket frame landed while this request was in flight and is
-        // necessarily fresher than a response an HTTP request started
-        // before it. Drop this one rather than reattaching a token, or an
-        // "ended", the socket has already superseded.
-        guard requestedGeneration == socketGeneration else { return nil }
+        // Either a socket frame landed while this request was in flight
+        // (necessarily fresher than a response an HTTP request started
+        // before it), or a NEWER `refreshLive()` call started after this one
+        // and has already claimed a higher number — including one whose own
+        // response already landed and applied. Either way, something more
+        // recent than this call now speaks for the stream; drop this
+        // response rather than reattaching a token, or an "ended", that has
+        // been superseded.
+        guard requestedGeneration == generation else { return nil }
         participants = state.participants
         watching = state.watching
         applyStream(state.stream)
@@ -234,7 +257,7 @@ final class WatchModel {
         case .channelLive(let id, let stream, let watching):
             guard id == channelId else { return }
             self.watching = watching
-            socketGeneration &+= 1
+            generation &+= 1
             applyStream(stream)
 
         // The room's own copy. Only reaches a socket with a seat, so it is
@@ -242,7 +265,7 @@ final class WatchModel {
         // and the model is still alive; it carries no headcount.
         case .voiceStream(let id, let stream):
             guard id == channelId else { return }
-            socketGeneration &+= 1
+            generation &+= 1
             applyStream(stream)
 
         // A NEW SOCKET KNOWS NOTHING ABOUT THIS VIEWER. The audience is a set

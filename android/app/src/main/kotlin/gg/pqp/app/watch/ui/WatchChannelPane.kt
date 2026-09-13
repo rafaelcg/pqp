@@ -10,6 +10,7 @@ import gg.pqp.app.core.SessionStore
 import gg.pqp.app.watch.ChannelLive
 import gg.pqp.app.watch.WatchLiveStore
 import gg.pqp.app.watch.resolve
+import kotlinx.coroutines.CancellationException
 
 /**
  * The mount: when the picture is on screen, and who the server thinks is
@@ -57,8 +58,27 @@ fun WatchChannelPane(
         // The player's own way out of a dead session. A share that stopped and
         // came back has a different `startedAt`, so the URL this pane holds is
         // gone and only the API can say what replaced it.
+        //
+        // NOT `runCatching`: it also catches `CancellationException`, which
+        // `WatchPane`'s own reconnect handler explicitly rethrows to tell a
+        // torn-down watchdog task apart from a genuinely failed refetch. A
+        // `runCatching` here would swallow that signal one layer down —
+        // `refreshNow()` would return `null` instead of throwing, the
+        // caller's cancellation branch would never run, and a coroutine
+        // Compose already cancelled (a key change mid-flight, e.g. the
+        // token-renewal timer bumping `attempt` while this request is still
+        // in the air) would carry on past the point it was cancelled and
+        // mutate state for an attempt that is no longer current — the exact
+        // "older response overwrites a newer one" race the generation check
+        // in `WatchPane` exists to close.
         refresh = {
-            runCatching { session.api.channelLive(channelId).stream?.resolve() }.getOrNull()
+            try {
+                session.api.channelLive(channelId).stream?.resolve()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
         },
         modifier = modifier,
     )
