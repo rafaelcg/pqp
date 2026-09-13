@@ -1,7 +1,7 @@
 # DM list and notification polish, with the arrival toast
 
 > Spec, not code. Written 2026-09-13 against `main` (`c67bf0b9`). A Sonnet
-> implementer builds exactly what is written here; a QA agent runs §8.
+> implementer builds exactly what is written here; a QA agent runs §9.
 > Everything below was read in the tree, not guessed: the file and line
 > references are the current state, and where a thing already exists this says
 > so rather than describing it as new.
@@ -130,7 +130,7 @@ is correct and stays. Three changes:
 |---|---|---|---|
 | No conversations, has friends | **Nenhuma conversa ainda.** / Comece uma com alguém da sua lista. | **No conversations yet.** / Start one with someone on your list. | `dm.empty`, new `dm.empty.body` |
 | No conversations, no friends | **Nenhuma conversa ainda.** / Adicione alguém primeiro. | **No conversations yet.** / Add someone first. | `dm.empty`, new `dm.empty.noFriends` |
-| Filtered to nothing (future search) | out of scope, §9 | | |
+| Filtered to nothing (future search) | out of scope, §10 | | |
 
 Both render the existing `dm.messageSomeone` link button below, and the
 no-friends variant points at Amigos instead of the new-DM dialog.
@@ -462,7 +462,7 @@ changes on the Amigos row; nothing else about the number moves.
 |---|---|
 | Opening a conversation | that conversation's row badge, its toast card, its burst, and its share of every roll-up. Already wired through `selectConversation`. |
 | Reading with the window blurred | nothing. The read cursor only moves on a focused window; a background tab that happens to have a conversation selected keeps the badge. |
-| Marking all read (future) | out of scope, §9 |
+| Marking all read (future) | out of scope, §10 |
 | Muting a conversation | the badge stops rendering (already: `muted` zeroes it), the count is **not** deleted. Unmuting shows it again. |
 | Accepting or declining a request | the request counter, everywhere, on the next `friend-activity` frame |
 
@@ -501,7 +501,7 @@ Order inside the section, top to bottom:
 
 **Do Not Disturb is not here.** It is a status, set from the user panel's
 status menu (`components/layout/user-panel.tsx`, `use-status.ts:95`), and
-duplicating it in Settings gives "leave me alone" two homes. The section gets
+duplicating it in Settings gives "leave me alone" two homes. That menu is §8. The section gets
 one sentence pointing at it: `settings.notifications.dndHint` — `Não Perturbe
 fica no seu status, embaixo à esquerda. Ele silencia tudo isto.` / `Do Not
 Disturb lives in your status, bottom left. It silences all of this.`
@@ -551,7 +551,153 @@ or they take the others with them.
 
 ---
 
-## 8. Acceptance criteria
+## 8. The user bar: status and Não perturbe
+
+The bottom-left user bar (avatar, name, `@handle`, mic, headphones, gear) is
+`client/src/components/layout/user-panel.tsx`. Most of what this section asks
+for is already built there and the delta is small; what follows says exactly
+which parts are new, because half of this spec being "keep it" is the useful
+half.
+
+### 8.1 What already exists
+
+- The avatar is already a `<button aria-haspopup="menu" aria-expanded>` that
+  opens a popover anchored `bottom-full left-0`, 256px wide.
+- That popover already holds, in order: **Mudar nome e foto**, a separator, the
+  recado field, a separator, the status choices, a separator, **Enviar
+  feedback** and **Baixar o app**.
+- The choices are already `role="menuitemradio"` with `aria-checked`, a
+  `StatusDot` per row, a hint line under the ones that need one, and a `Check`
+  on the selected row.
+- `StatusDot` (`components/user/status-dot.tsx`) already draws green
+  (`text-success`), amber crescent (`text-warning`), red **with a horizontal
+  dash cut out of it** (`text-danger`, `<rect x=2 y=5 w=8 h=2>`) and a hollow
+  ring (`text-text-muted`). Colour is never the only channel: each state has its
+  own shape, cut with an SVG mask, for the one reader in twelve who cannot tell
+  the first three apart by hue. **Do not add a colour or a shape; the tokens the
+  addendum asks for are the ones already drawn.**
+- Escape already closes the popover, through
+  `lib/escape-unless-overlay.ts` so a dialog opened on top keeps the key.
+- The choice is already persisted **per account, server-side**: `setManual` in
+  `hooks/use-status.ts` writes `updatePreferences({ status })`, the server
+  stores it at `user_preferences.settings.status`, and `server/src/ws/status.ts`
+  reads it once per socket. It is the one preference in the app written
+  optimistically **and rolled back with a visible error**, because "I clicked
+  invisible, the write failed, nobody told me" is somebody believing they are
+  hidden while they are not.
+
+### 8.2 The delta
+
+**Three changes. Nothing else in this file moves.**
+
+**(a) A fourth choice, `away`.** The menu ships Online / Não perturbe /
+Invisível. The addendum asks for Online / Ausente / Não perturbe.
+
+> `packages/shared/src/status.ts` argues at length against a *manual* idle, and
+> the argument is right as stated: "idle" is a measurement, and asserting a
+> measurement needs a rule for whether real activity clears it, where both
+> answers are wrong. The rule that dissolves it is that **manual `away` is not
+> idle**. It is a declaration, it is sticky, and activity never clears it —
+> exactly like `dnd`, which nobody expects typing to cancel. What was rejected
+> was a manual value that shares storage and semantics with the derived one;
+> what this adds is a fourth manual value that outranks the timer.
+
+- `manualStatusSchema` gains `"away"`: `["online", "away", "dnd", "invisible"]`.
+- `userStatusSchema` does **not** change. Manual `away` resolves to `idle` on
+  the wire, so every reader (member list, profile card, iOS, Android) renders
+  the amber crescent it already renders and no client needs a release.
+- `resolveOwnStatus` (`use-status.ts`) and `externalStatus`
+  (`server/src/ws/status.ts`) both gain one line, in the same order:
+  `invisible → offline`, `dnd → dnd`, **`away → idle`**, else `idle ? idle :
+  online`. The existing test that pins the client table against the server
+  table covers the new row for free.
+- The timer is untouched: a person on `online` still goes derived-idle after
+  `IDLE_AFTER_MS`, and coming back clears it. A person on `away` stays away.
+- `away` is **presence only**. It suppresses nothing: no toast rule, no sound
+  rule, no push rule reads it. `shouldPush` keys on `dnd` and must not learn
+  about `away`.
+
+**(b) Invisível stays, and the menu has four rows, not three.** Removing it
+would delete a shipped privacy control whose guarantee is enforced by the type
+system (`invisible` is deliberately absent from `userStatusSchema`, so a
+function returning `UserStatus` cannot leak it). The order is:
+
+| Row | pt-BR | en | Pip | Hint |
+|---|---|---|---|---|
+| 1 | **Online** | **Online** | green, filled | none |
+| 2 | **Ausente** | **Away** | amber crescent | `status.awayHint`: `Fica assim até você mudar. Nada é silenciado.` / `Stays until you change it. Nothing is silenced.` |
+| 3 | **Não perturbe** | **Do not disturb** | red with a dash | existing `status.dndHint` |
+| 4 | **Invisível** | **Invisible** | hollow ring | existing `status.invisibleHint` |
+
+Copy keys: `status.online`, `status.dnd`, `status.invisible` and their hints all
+exist. Reuse **`status.idle`** for row 2 rather than adding a key: its pt-BR is
+already `Ausente`, and its **en changes from `Idle` to `Away`** so the two
+languages name the same pip the same way. New key: `status.awayHint` only.
+
+**(c) A discreet DND indicator, with a way out.** Today Não perturbe shows as a
+red pip on a 12px avatar corner and nothing else, so somebody who set it three
+hours ago has no way to notice that is why the app has gone quiet.
+
+Add one chip in the user bar, immediately left of the gear:
+
+- `h-8 w-8` ghost button, `BellOff` at `h-4 w-4`, `text-danger`.
+- Rendered only when `manualStatus === "dnd"`.
+- `Tooltip` with `label` `status.dnd` and `detail` `status.dndClear`
+  (`Clique para voltar ao Online.` / `Click to go back to Online.`); the tooltip
+  sets the accessible name, so no separate `aria-label`.
+- Clicking it calls `onSetStatus("online")` directly. One click out of a mode is
+  the whole reason the indicator earns its 32px.
+- On `compact` (the 72px icons-only sidebar) it stacks with the other three
+  controls exactly as they already stack.
+
+**Not** on the second line under the name. That line is one identity string
+(`@handle`, else the tag), and the file carries a comment about what happened
+last time status words were put there: `dev_us… O…`. `invisible` is the single
+exception, because there the pip itself lies.
+
+### 8.3 Keyboard and screen reader
+
+- The avatar is a `<button>` with `aria-haspopup="menu"` and `aria-expanded`.
+  Enter or Space opens; focus moves to the first row.
+- **The status rows are `role="menuitemradio"` inside a `role="group"` with
+  `aria-label` `status.change`, not a listbox.** The container is a menu that
+  also holds Mudar nome e foto, the recado field, Enviar feedback and Baixar o
+  app; a `listbox` may only contain `option` children, so a listbox here would
+  be invalid ARIA and screen readers would read the menu's other rows out of
+  their container. The behaviour the addendum asks for is what changes:
+  `menuitemradio` already carries single-select semantics, and the rows gain
+  **roving arrow-key focus** (`ArrowDown` / `ArrowUp` wrap within the group,
+  `Home` / `End` jump), which the popover does not have today.
+- `Tab` leaves the group and continues through the menu's other items;
+  `Shift+Tab` goes back.
+- `Escape` closes and returns focus to the avatar button. Already wired, and
+  already correctly deferential to an overlay opened on top.
+- A click outside closes. Already wired.
+- The pip's `aria-label` is the state's own word, already set by `StatusDot`,
+  and the own-account pip says **Invisível** where everyone else's says
+  **Offline** — two genuinely different facts, and the existing `label`
+  override is how that is said. `away` needs no override: the person's own row
+  and everyone else's pip mean the same thing.
+
+### 8.4 Phone
+
+The same menu, from the same avatar, in the drawer footer. `UserPanel` is
+already passed as the `footer` prop of both `DmList` and `ChannelList`, so the
+sidebar drawer at `< md` already carries it; nothing is rebuilt for the phone.
+
+- The popover is 256px wide and anchored `bottom-full left-0` inside a drawer
+  that is `min(100% - 72px, 16rem)`, so at 390px it fits with 6px to spare.
+  Verify it does not clip: if it does, the fix is `left-0 right-0 w-auto` below
+  `sm`, not a second component.
+- The chip in (c) is a 32px target in a row of 32px targets and needs no phone
+  variant.
+- Tooltips are inert on touch, so the chip's meaning has to survive without
+  one: the red `BellOff` beside a red pip is the redundancy, and tapping it is
+  recoverable (it sets Online, which the pip confirms immediately).
+
+---
+
+## 9. Acceptance criteria
 
 Run with the dev bypass and two identities (`CLAUDE.md` §A second local user):
 window A is the default Dev User, window B sets
@@ -646,6 +792,47 @@ window A is the default Dev User, window B sets
        `Te mandou uma mensagem`.
 43. [ ] No push payload ever contains message text, with any setting.
 
+### User bar: status and Não perturbe
+
+47. [ ] Clicking the avatar in the bottom-left bar opens the menu; clicking it
+       again, or pressing `Escape`, closes it and returns focus to the avatar.
+48. [ ] The menu lists four states in order: **Online**, **Ausente**, **Não
+       perturbe**, **Invisível** (en: Online, Away, Do not disturb, Invisible).
+49. [ ] Each row carries its own pip **shape**, not only its colour: filled
+       green, amber crescent, red with a horizontal dash, hollow ring.
+50. [ ] The selected row shows a check, and the pip on the avatar changes to
+       match it immediately.
+51. [ ] `ArrowDown` / `ArrowUp` move between the four states and wrap; `Home`
+       and `End` jump to the first and last; `Tab` leaves the group and reaches
+       **Enviar feedback**.
+52. [ ] A screen reader announces the group as "Mudar o seu status" and each row
+       as a radio item with its checked state. Nothing is announced as a
+       listbox.
+53. [ ] Choosing **Ausente** turns the avatar pip amber, and it is **still
+       amber after typing, clicking and moving the pointer** for a minute.
+54. [ ] Choosing **Ausente** silences nothing: a DM from window B still toasts,
+       still pings, and still badges.
+55. [ ] In window B, the person who chose **Ausente** appears in the member list
+       with the amber crescent, indistinguishable from someone who went idle on
+       the timer.
+56. [ ] Choosing **Não perturbe** suppresses the toast, the sound and the OS
+       banner (criterion 26), and leaves the unread pill incrementing.
+57. [ ] With **Não perturbe** on, a red `BellOff` chip appears in the user bar
+       immediately left of the gear; hovering it explains what it is; clicking
+       it sets Online and the chip disappears.
+58. [ ] The chip is absent for Online, Ausente and Invisível.
+59. [ ] The second line under the display name still reads `@handle` (or the
+       tag) in every state except **Invisível**, which still reads "Invisível".
+60. [ ] Choosing a state, reloading, and reopening the menu shows the same state
+       selected; opening window B's app on the same account shows it too
+       (server-side, `user_preferences.settings.status`).
+61. [ ] Killing the network and choosing a state rolls the selection back and
+       shows the `status.saveFailed` line inside the menu.
+62. [ ] At 390px, the menu opens inside the sidebar drawer's footer, fits the
+       viewport with no horizontal clipping, and every row is at least 36px
+       tall.
+63. [ ] No bell or inbox icon was added anywhere.
+
 ### Design system
 
 44. [ ] `rg -n "ink-|paper|signal|bg-channel" client/src/components/dm/
@@ -666,6 +853,8 @@ window A is the default Dev User, window B sets
 | `client/src/lib/conversations.test.ts` | preview prefixing (`você:`, group author, none for a 1:1), attachment and GIF fallbacks, 140-char truncation. |
 | `server/src/services/dm-preview.test.ts` (new) | markdown stripped, mentions resolved, newlines collapsed, 140 cap, attachment-only yields empty + `isAttachment`. |
 | `server/src/services/push.test.ts` | the §4.3 copy table in both locales; no payload contains message text; `dmDetails` default false. |
+| `packages/shared/src/status.test.ts` | `manualStatusSchema` accepts `away` and still refuses anything else; `userStatusSchema` is unchanged and still has no `invisible`; `externalStatus` maps `away → idle`. |
+| `client/src/hooks/use-status.test.ts` | `resolveOwnStatus` for all four manual values crossed with idle true/false, pinned against the server table as it already is; activity does **not** clear `away`; `setDoNotDisturb` fires for `dnd` only and never for `away`. |
 | `packages/shared/src/dm.test.ts` | `lastMessage` nullable and capped; `channel-activity` with `preview` parses for `dm`/`group` and a frame **without** it still parses (old servers). |
 
 **Playwright**
@@ -674,6 +863,7 @@ window A is the default Dev User, window B sets
 |---|---|
 | `client/e2e/dm-toast.spec.ts` (exists, extend) | criteria 14, 16, 17, 19, 21, 23; the card is right-anchored (`boundingBox().x + width` within 24px of the viewport's right edge). |
 | `client/e2e/dm-toast-suppression.spec.ts` (new) | criteria 26, 27, 33, 34 by flipping preferences over the API before loading. |
+| `client/e2e/user-status-menu.spec.ts` (new) | criteria 47-53, 57, 58, 60 in one browser context; criterion 55 needs the second context the DM specs already build. |
 | `client/e2e/dm-list-polish.spec.ts` (new) | criteria 5, 6, 10, 11, 12, and 13 at 390x844. |
 
 `dm-toast.spec.ts` already builds two accounts over the API with
@@ -682,7 +872,7 @@ one.
 
 ---
 
-## 9. Out of scope
+## 10. Out of scope
 
 Deliberately not in this change. Each is a separate PR.
 
@@ -700,6 +890,9 @@ Deliberately not in this change. Each is a separate PR.
 - **Grouping the list into Fixadas / Recentes.** Pinning already exists on the
   rail (`lib/pinned-conversations.ts`); a second grouping in the sidebar is a
   design question of its own.
+- **A bell or inbox in the chrome.** Mentions and friend requests missed while
+  away have no catch-up surface, and adding one is a feature with its own read
+  model, not a control on the user bar.
 - **Notification scheduling ("quiet hours").** DND covers the manual case.
 - **Native Android and iOS parity for the toast.** Both have their own
   notification surfaces; this spec changes the server copy they read (§4.3) and
