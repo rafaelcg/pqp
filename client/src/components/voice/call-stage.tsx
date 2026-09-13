@@ -1354,6 +1354,7 @@ function ActiveCall({
       >
         <CinemaStage
           hlsUrl={cinemaTile.hlsUrl}
+          cameraHlsUrl={cinemaTile.cameraHlsUrl ?? null}
           delaySeconds={cinemaTile.delaySeconds ?? voiceState.liveStream?.delaySeconds}
           mediaTitle={title}
           communityName={serverName}

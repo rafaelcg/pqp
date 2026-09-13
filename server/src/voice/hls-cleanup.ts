@@ -34,6 +34,7 @@ import {
   stopEgressById,
   MIC_ARCHIVE_RUNG,
 } from "./hls-egress.js";
+import { CAMERA_RUNG_NAME } from "./hls-ladder.js";
 
 const SWEEP_BATCH = 25;
 
@@ -257,22 +258,29 @@ export async function reconcileStaleHlsSessions(): Promise<{
   let stopped = 0;
   const adoptedIds = new Set<string>();
 
-  // TWO PASSES, AND THE ORDER IS THE POINT. The host's voice archive
-  // (`rung = 'mic'`) is not a rendition: it attaches to a room that already
-  // exists rather than creating one, so it can only be adopted after the
-  // rungs of its session have rebuilt that room. `active` arrives in whatever
-  // order LiveKit answers in, so a single pass would attach it about half the
-  // time. See `adoptLiveHlsMicArchive` for why it cannot go through
-  // `adoptLiveHlsSession` at all.
+  // THREE PASSES, AND THE ORDER IS THE POINT. Both siblings here attach to a
+  // room that a LADDER RUNG creates rather than creating one themselves, so
+  // each can only be adopted after the rungs of its own session have
+  // rebuilt that room. `active` arrives in whatever order LiveKit answers
+  // in, so a single pass would attach either about half the time.
+  //
+  //   - the camera (`rung = 'cam360p30'`) still goes through
+  //     `adoptLiveHlsSession`, which special-cases that name internally
+  //     (`adoptCameraEgress`) rather than falling back to a fake 720p rung.
+  //   - the host's voice archive (`rung = 'mic'`) cannot go through
+  //     `adoptLiveHlsSession` at all — see `adoptLiveHlsMicArchive` for why —
+  //     so it gets its own dedicated call.
+  //
+  // Ownership (no row, no session, no presenter) is decided up front, before
+  // either deferral, so a camera or archive row with no owner is stopped
+  // exactly like an orphaned rung rather than queued for a pass that would
+  // just refuse it a second later.
+  const cameras: { info: (typeof active)[number]; row: StaleSession }[] = [];
   const micArchives: { info: (typeof active)[number]; row: StaleSession }[] = [];
 
   for (const info of active) {
     const row = byEgressId.get(info.egressId);
     const session = row ? sessionFromPrefix(row.object_prefix) : null;
-    if (row && session !== null && row.rung === MIC_ARCHIVE_RUNG) {
-      micArchives.push({ info, row });
-      continue;
-    }
     if (!row || session === null || !row.presenter_peer_id) {
       // Nobody owns this transcode: no session row, or one we cannot rebuild
       // a room from. Left running it burns a core of the media box forever.
@@ -287,8 +295,17 @@ export async function reconcileStaleHlsSessions(): Promise<{
       }
       continue;
     }
+    if (row.rung === MIC_ARCHIVE_RUNG) {
+      micArchives.push({ info, row });
+      continue;
+    }
+    if (row.rung === CAMERA_RUNG_NAME) {
+      cameras.push({ info, row });
+      continue;
+    }
     // Still running and still ours: take it back rather than killing a live
-    // watch party because the API happened to restart.
+    // watch party because the API happened to restart. An ordinary rung
+    // never answers null here — only the deferred camera pass below can.
     adoptLiveHlsSession({
       channelId: row.channel_id,
       egressId: info.egressId,
@@ -297,6 +314,30 @@ export async function reconcileStaleHlsSessions(): Promise<{
       videoTrackId: row.video_track_id ?? "",
       rung: row.rung ?? session.rung,
     });
+    adoptedIds.add(row.id);
+    adopted += 1;
+  }
+
+  for (const { info, row } of cameras) {
+    const session = sessionFromPrefix(row.object_prefix)!;
+    const stream = adoptLiveHlsSession({
+      channelId: row.channel_id,
+      egressId: info.egressId,
+      startedAt: session.startedAt,
+      presenterPeerId: row.presenter_peer_id!,
+      videoTrackId: row.video_track_id ?? "",
+      rung: row.rung ?? session.rung,
+    });
+    if (stream === null) {
+      // Only a camera answers null, and only when the session it was filming
+      // did not come back. A transcode with no room is a core of the media box
+      // spent on a webcam nobody can reach.
+      const wasStopped = await stopEgressById(info.egressId, info.roomName);
+      if (wasStopped) {
+        stopped += 1;
+      }
+      continue;
+    }
     adoptedIds.add(row.id);
     adopted += 1;
   }

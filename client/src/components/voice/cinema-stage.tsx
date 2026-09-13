@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
  */
 export function CinemaStage({
   hlsUrl,
+  cameraHlsUrl = null,
   delaySeconds,
   mediaTitle,
   communityName,
@@ -31,6 +32,8 @@ export function CinemaStage({
   className,
 }: {
   hlsUrl: string;
+  /** The presenter's camera, floated in a corner of the film. */
+  cameraHlsUrl?: string | null;
   delaySeconds?: number;
   mediaTitle?: string;
   communityName?: string | null;
@@ -60,6 +63,7 @@ export function CinemaStage({
     <div className={cn("relative h-full w-full bg-black", className)}>
       <HlsWatchPlayer
         src={hlsUrl}
+        cameraSrc={cameraHlsUrl}
         delaySeconds={delaySeconds}
         mediaTitle={mediaTitle}
         communityName={communityName}
