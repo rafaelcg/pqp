@@ -1764,33 +1764,63 @@ export async function connectLiveKit({
     // stays no-op unless the source itself is stopped.
     const publishedTrack = audioTrack.clone ? audioTrack.clone() : audioTrack;
     published = new LocalAudioTrack(publishedTrack);
+    // A clone does not stop when the source does — only the `.enabled` bit is
+    // shared, per the comment above; `stop()` on one sibling leaves the other
+    // running (MediaStreamTrack.clone(), MDN). `stopMicPipeline` (use-voice.ts)
+    // stops the capture directly on a device swap, ahead of the
+    // `replaceTrack` call that would otherwise unpublish this clone, so tie
+    // the clone to whichever track it was made from explicitly: if the
+    // source ends (device swap, revoked permission, unplugged mic) before
+    // this publication is replaced, drop the clone rather than let LiveKit
+    // keep sending it and hold the capture pipeline's resources open.
+    const onSourceEnded = () => {
+      if (published?.mediaStreamTrack === publishedTrack) {
+        void room.localParticipant.unpublishTrack(published);
+        published = null;
+      }
+    };
+    audioTrack.addEventListener("ended", onSourceEnded, { once: true });
     // publishTrack starts the sender live. If the capture is already
     // closed (user mute, deafen, SPEAK denied), mute the publication
     // before the first packet, then again if the library re-opened it.
     if (!audioTrack.enabled) {
       await published.mute();
     }
-    await room.localParticipant.publishTrack(published, {
-      // NOT OPTIONAL, and leaving it off was a live production bug.
-      // `new LocalAudioTrack(raw)` starts at `Track.Source.Unknown` and
-      // `publishTrack` only overwrites that when `source` is passed, so every
-      // microphone this client ever published reached the SFU tagged
-      // `SOURCE_UNKNOWN`. The camera and the screen share were always tagged,
-      // which is why nothing looked wrong.
-      //
-      // What that broke: `liveKitPublishGrant` (server/src/voice/backends.ts)
-      // sends `canPublishSources: ["microphone"]` for a member who holds SPEAK
-      // and not STREAM, and LiveKit refuses any publish whose source is not in
-      // that list (`VideoGrant.GetCanPublishSource`: a non-empty list is an
-      // allowlist and UNKNOWN is not in it). In a `watch_party` channel the
-      // stream bit is START_WATCH_PARTY, which no ordinary member holds, so
-      // exactly that grant is what an invited speaker gets: the microphone was
-      // refused by the media server and the app showed a live, unmuted person
-      // nobody could hear.
-      source: Track.Source.Microphone,
-      dtx: true,
-      red: true,
-    });
+    try {
+      await room.localParticipant.publishTrack(published, {
+        // NOT OPTIONAL, and leaving it off was a live production bug.
+        // `new LocalAudioTrack(raw)` starts at `Track.Source.Unknown` and
+        // `publishTrack` only overwrites that when `source` is passed, so every
+        // microphone this client ever published reached the SFU tagged
+        // `SOURCE_UNKNOWN`. The camera and the screen share were always tagged,
+        // which is why nothing looked wrong.
+        //
+        // What that broke: `liveKitPublishGrant` (server/src/voice/backends.ts)
+        // sends `canPublishSources: ["microphone"]` for a member who holds SPEAK
+        // and not STREAM, and LiveKit refuses any publish whose source is not in
+        // that list (`VideoGrant.GetCanPublishSource`: a non-empty list is an
+        // allowlist and UNKNOWN is not in it). In a `watch_party` channel the
+        // stream bit is START_WATCH_PARTY, which no ordinary member holds, so
+        // exactly that grant is what an invited speaker gets: the microphone was
+        // refused by the media server and the app showed a live, unmuted person
+        // nobody could hear.
+        source: Track.Source.Microphone,
+        dtx: true,
+        red: true,
+      });
+    } catch (err) {
+      // publishTrack never took ownership of this clone: LiveKit only
+      // registers a publication once the call succeeds, so a later
+      // `unpublishTrack(published)` above finds no publication for it, logs
+      // a warning, and returns without stopping anything — the clone (and
+      // the capture it holds a reference to) leaks. `publishMicWhenAllowed`
+      // (client/src/hooks/use-voice.ts) retries this exact call up to five
+      // times while a grant is still propagating, so every failed attempt
+      // would otherwise abandon one more live clone. Stop it ourselves.
+      published.stop();
+      published = null;
+      throw err;
+    }
     if (!audioTrack.enabled && !published.isMuted) {
       await published.mute();
     }

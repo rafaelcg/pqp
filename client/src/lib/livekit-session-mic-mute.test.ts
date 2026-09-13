@@ -58,15 +58,31 @@ const RoomEvent = {
 /** Every publish the fake room's `localParticipant` was asked for, in order. */
 const published: { track: FakeTrack; source: string | undefined }[] = [];
 
+/** Every `unpublishTrack` call, in order — the real SDK stops the track by default. */
+const unpublishCalls: LocalAudioTrack[] = [];
+
+/** Set from a test to make the next `publishTrack` reject, as an unmet grant does. */
+let failNextPublish = false;
+
 class FakeRoom {
   state = "connected";
   remoteParticipants = new Map<string, unknown>();
   handlers = new Map<string, (...args: unknown[]) => void>();
   localParticipant = {
     publishTrack: async (track: FakeTrack, options: { source?: string } = {}) => {
+      if (failNextPublish) {
+        failNextPublish = false;
+        throw new Error("not allowed yet");
+      }
       published.push({ track, source: options.source });
     },
-    unpublishTrack: async () => {},
+    unpublishTrack: async (track: LocalAudioTrack) => {
+      unpublishCalls.push(track);
+      // The real `unpublishTrack` stops the track by default
+      // (`stopOnUnpublish` defaults to true) whenever it finds a live
+      // publication for it.
+      track.stop();
+    },
     getTrackPublication: () => undefined,
   };
   on(event: string, handler: (...args: unknown[]) => void) {
@@ -87,6 +103,9 @@ class FakeRoom {
  */
 class LocalAudioTrack {
   constructor(public track: FakeTrack) {}
+  get mediaStreamTrack() {
+    return this.track;
+  }
   get isMuted() {
     return !this.track.enabled;
   }
@@ -95,6 +114,9 @@ class LocalAudioTrack {
   }
   async unmute() {
     this.track.enabled = true;
+  }
+  stop() {
+    this.track.stop();
   }
 }
 
@@ -133,27 +155,61 @@ interface FakeTrack {
   kind: "audio";
   id: string;
   enabled: boolean;
+  stopped: boolean;
   getConstraints: () => Record<string, never>;
   applyConstraints: () => Promise<void>;
   clone: () => FakeTrack;
+  stop: () => void;
+  addEventListener: (type: string, listener: () => void) => void;
+  removeEventListener: (type: string, listener: () => void) => void;
+  /** Test hook: simulate the browser firing `ended` on this exact track object. */
+  fireEnded: () => void;
+}
+
+/** Every clone `fakeMicTrack`'s tracks produced, in creation order. */
+const clones: FakeTrack[] = [];
+
+function makeTrack(id: string, enabled: boolean): FakeTrack {
+  const listeners = new Map<string, Set<() => void>>();
+  const self: FakeTrack = {
+    kind: "audio",
+    id,
+    enabled,
+    stopped: false,
+    getConstraints: () => ({}),
+    applyConstraints: async () => {},
+    // A real `MediaStreamTrack.clone()`: a new object, independent
+    // `.enabled`/`.stopped`/listeners from the moment it is made, same
+    // starting value, and stopping one sibling never touches the other.
+    clone: () => {
+      const clone = makeTrack(`${id}-clone-${clones.length}`, self.enabled);
+      clones.push(clone);
+      return clone;
+    },
+    stop: () => {
+      self.stopped = true;
+    },
+    addEventListener: (type, listener) => {
+      if (!listeners.has(type)) {
+        listeners.set(type, new Set());
+      }
+      listeners.get(type)!.add(listener);
+    },
+    removeEventListener: (type, listener) => {
+      listeners.get(type)?.delete(listener);
+    },
+    fireEnded: () => {
+      for (const listener of Array.from(listeners.get("ended") ?? [])) {
+        listener();
+      }
+    },
+  };
+  return self;
 }
 
 /** A microphone track exactly like `pipeline.processedStream`'s: clonable. */
 function fakeMicTrack(id: string): FakeTrack {
-  const self: FakeTrack = {
-    kind: "audio",
-    id,
-    enabled: true,
-    getConstraints: () => ({}),
-    applyConstraints: async () => {},
-    // A real `MediaStreamTrack.clone()`: a new object, independent
-    // `.enabled` from the moment it is made, same starting value.
-    clone: () => {
-      const clone: FakeTrack = { ...self, clone: () => clone };
-      return clone;
-    },
-  };
-  return self;
+  return makeTrack(id, true);
 }
 
 function micStream(track: FakeTrack): MediaStream {
@@ -184,6 +240,9 @@ async function session() {
 
 beforeEach(() => {
   published.length = 0;
+  unpublishCalls.length = 0;
+  clones.length = 0;
+  failNextPublish = false;
 });
 
 describe("the standalone microphone publication while a watch-party mix is live", () => {
@@ -234,5 +293,58 @@ describe("the standalone microphone publication while a watch-party mix is live"
     await sfu.setMuted(true);
     original.enabled = false;
     expect(wrapped.enabled).toBe(false);
+  });
+});
+
+/**
+ * Farol review on #528: a clone does not share the source's lifecycle, only
+ * its starting `.enabled` value (deliberately — see the block comment atop
+ * `publish()` in `livekit-session.ts`). Two gaps that leaves: a clone that
+ * `publishTrack` never registers (so `unpublishTrack` cannot find and stop
+ * it later) and a clone that keeps running after its source track ends
+ * outside `publish()`'s own replace/mute/disconnect paths.
+ */
+describe("the standalone microphone publication's clone lifecycle", () => {
+  it("stops the clone if publishTrack rejects, so a retried publish cannot leak it", async () => {
+    const sfu = await session();
+    const original = fakeMicTrack("mic");
+    failNextPublish = true;
+
+    await expect(sfu.publish(micStream(original))).rejects.toThrow();
+
+    // publishTrack never registered a publication for this clone, so
+    // `unpublishTrack` would have found nothing to stop — `publish()` has to
+    // stop it itself.
+    expect(clones).toHaveLength(1);
+    expect(clones[0]!.stopped).toBe(true);
+    expect(published).toHaveLength(0);
+
+    // `publishMicWhenAllowed` (use-voice.ts) retries this exact call up to
+    // five times while a grant is still propagating; the retry must succeed
+    // cleanly rather than trip over the dead clone from the first attempt.
+    await sfu.publish(micStream(original));
+    expect(published).toHaveLength(1);
+    expect(clones).toHaveLength(2);
+    expect(clones[1]!.stopped).toBe(false);
+  });
+
+  it("drops the clone when the source track ends before a replacement publishes", async () => {
+    const sfu = await session();
+    const original = fakeMicTrack("mic");
+    await sfu.publish(micStream(original));
+    const clone = clones[0]!;
+    expect(clone.stopped).toBe(false);
+
+    // `stopMicPipeline` (use-voice.ts) stops the raw capture directly on a
+    // device swap, ahead of the `replaceTrack` call that would otherwise
+    // unpublish this clone through the normal path.
+    original.fireEnded();
+
+    expect(unpublishCalls).toHaveLength(1);
+    expect(clone.stopped).toBe(true);
+
+    // A stray `setMuted` after the source has ended must not resurrect
+    // anything or throw — there is no live publication left to touch.
+    await expect(sfu.setMuted(true)).resolves.toBeUndefined();
   });
 });
