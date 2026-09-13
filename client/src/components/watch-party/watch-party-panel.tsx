@@ -7,12 +7,17 @@ import {
   type ReactNode,
 } from "react";
 import {
+  AudioLines,
   Bell,
   BellOff,
+  CalendarClock,
+  ChevronRight,
   Check,
   Clapperboard,
+  Gauge,
   Lock,
   Crown,
+  MessageSquare,
   Hand,
   Mic,
   MicOff,
@@ -22,10 +27,11 @@ import {
   Radio,
   Settings2,
   Share2,
-  SlidersHorizontal,
+  Smile,
   Square,
   TriangleAlert,
   Undo2,
+  Users,
   Volume2,
 } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
@@ -50,6 +56,7 @@ import {
 } from "@/components/watch-party/watch-party-cohosts";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -63,7 +70,11 @@ import {
   WatchPartyTransmission,
 } from "@/components/watch-party/watch-party-transmission";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
-import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
+import {
+  browserTimezone,
+  formatSessionRelativeTime,
+  toLocalInputValue,
+} from "@/lib/channel-session-schedule";
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -146,6 +157,13 @@ export interface WatchPartyPanelProps {
   onDiscard: () => Promise<void>;
   onOptionsChange: (options: Partial<WatchPartyOptions>) => Promise<void>;
   onRename: (name: string) => Promise<void>;
+  /**
+   * Set or clear the party's time from the setup card. The server moves a
+   * draft to `scheduled` when a time arrives and back when it is cleared;
+   * this surface then hands over to the scheduled screen. Optional because
+   * only the card offers it.
+   */
+  onSchedule?: (startsAt: string | null) => Promise<void>;
   onClaimHost: () => Promise<void>;
   /**
    * "Me avisa quando começar" on the scheduled screen, bound to the party's
@@ -825,20 +843,36 @@ function GoLiveChecklist({
   compact?: boolean;
 }) {
   const { t } = useTranslation();
+  // A STATUS BLOCK WHEN COMPACT: the rows that need a hand first and in
+  // amber, the rest quiet under them, and the heading says the verdict
+  // ("tudo pronto") instead of the name of the list.
+  const ordered = compact
+    ? [...items].sort((a, b) => Number(a.tone === "ok") - Number(b.tone === "ok"))
+    : items;
+  const allClear = items.every((item) => item.tone === "ok");
   return (
     <div
       data-testid="watch-party-go-live-checklist"
+      data-watch-party-checklist={allClear ? "clear" : "attention"}
       className={cn(
         "flex flex-col gap-1.5",
         !compact && "rounded-lg border border-border bg-surface-0 px-2.5 py-2",
         className,
       )}
     >
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-        {t("watchParty.checklist.title")}
+      <p
+        className={cn(
+          "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider",
+          compact && allClear ? "text-success" : "text-text-tertiary",
+        )}
+      >
+        {compact && allClear && <Check className="h-3 w-3" aria-hidden />}
+        {compact && allClear
+          ? t("watchParty.checklist.allClear")
+          : t("watchParty.checklist.title")}
       </p>
       <ul className="flex flex-col gap-1 text-xs">
-        {items.map((item) => (
+        {ordered.map((item) => (
           <ChecklistRow
             key={item.id}
             tone={item.tone}
@@ -931,101 +965,138 @@ function SetupStep({
 }
 
 /**
- * The settings as chips, replacing the dotted summary string. Each chip is
- * a fact and a door: tapping any of them opens the options dialog, which is
- * where every one of these is changed. Same values the summary had, plus
- * the stream quality, which lives with the encoder numbers when live and
- * has no other home before that.
+ * The settings as a list, one row per setting: icon, label, the value on the
+ * right, a chevron. Every row opens the options dialog, which stays the one
+ * panel used before and during the show; the two booleans people flip most
+ * (reactions, the mic in the stream) also carry an inline switch so the
+ * common case needs no dialog. Replaces both the dotted summary string and
+ * the chips that followed it: a chip reads as a tag, a row reads as a
+ * setting.
  */
-function WatchPartyOptionsChips({
+function WatchPartySettingsList({
   party,
   micInStream,
   quality,
   onOpen,
+  onReactionsChange,
+  onMicInStreamChange,
 }: {
   party: WatchParty;
   micInStream?: boolean;
   quality: WatchPartyStreamQuality;
   onOpen: () => void;
+  onReactionsChange: (on: boolean) => void;
+  onMicInStreamChange?: (on: boolean) => void;
 }) {
   const { t } = useTranslation();
   const { options } = party;
-  const chips: { key: string; label: string; on: boolean }[] = [
+  const rows: {
+    key: string;
+    icon: ReactNode;
+    label: string;
+    value: string;
+    on?: boolean;
+    onToggle?: (on: boolean) => void;
+  }[] = [
     {
       key: "voice",
-      label: options.voiceEnabled
-        ? t("watchParty.summary.voiceOn")
-        : t("watchParty.summary.voiceOff"),
-      on: options.voiceEnabled,
-    },
-    {
-      key: "reactions",
-      label: options.reactionsEnabled
-        ? t("watchParty.summary.reactionsOn")
-        : t("watchParty.summary.reactionsOff"),
-      on: options.reactionsEnabled,
+      icon: <Mic className="h-3.5 w-3.5" aria-hidden />,
+      label: t("watchParty.setup.settings.voice"),
+      value: options.voiceEnabled
+        ? t("watchParty.setup.settings.on")
+        : t("watchParty.setup.settings.off"),
     },
     {
       key: "chat",
-      label:
+      icon: <MessageSquare className="h-3.5 w-3.5" aria-hidden />,
+      label: t("watchParty.setup.settings.chat"),
+      value:
         options.slowModeSeconds > 0
-          ? t("watchParty.summary.slow", {
+          ? t("watchParty.setup.settings.chatSlow", {
               value: t(slowModeKey(options.slowModeSeconds)),
             })
-          : t("watchParty.summary.chatNormal"),
-      on: options.slowModeSeconds > 0,
+          : t("watchParty.setup.settings.chatNormal"),
     },
-    { key: "quality", label: quality, on: false },
+    {
+      key: "reactions",
+      icon: <Smile className="h-3.5 w-3.5" aria-hidden />,
+      label: t("watchParty.setup.settings.reactions"),
+      value: options.reactionsEnabled
+        ? t("watchParty.setup.settings.on")
+        : t("watchParty.setup.settings.off"),
+      on: options.reactionsEnabled,
+      onToggle: onReactionsChange,
+    },
+    {
+      key: "quality",
+      icon: <Gauge className="h-3.5 w-3.5" aria-hidden />,
+      label: t("watchParty.setup.settings.quality"),
+      value: quality,
+    },
     {
       key: "cohosts",
-      label:
+      icon: <Users className="h-3.5 w-3.5" aria-hidden />,
+      label: t("watchParty.setup.settings.cohosts"),
+      value:
         party.cohosts.length > 0
           ? t("watchParty.summary.cohosts", { count: party.cohosts.length })
-          : t("watchParty.summary.noCohost"),
-      on: party.cohosts.length > 0,
+          : t("watchParty.setup.settings.none"),
     },
     ...(micInStream === undefined
       ? []
       : [
           {
             key: "mic",
-            label: micInStream
-              ? t("watchParty.summary.micInStream")
-              : t("watchParty.summary.micRoomOnly"),
+            icon: <AudioLines className="h-3.5 w-3.5" aria-hidden />,
+            label: t("watchParty.setup.settings.mic"),
+            value: micInStream
+              ? t("watchParty.setup.settings.on")
+              : t("watchParty.setup.settings.off"),
             on: micInStream,
+            onToggle: onMicInStreamChange,
           },
         ]),
   ];
   return (
     <div
       data-testid="watch-party-options-summary"
-      className="flex flex-wrap items-center gap-1.5"
+      className="overflow-hidden rounded-md border border-ink-4/60 bg-surface-0"
     >
-      {chips.map((chip) => (
-        <button
-          key={chip.key}
-          type="button"
-          onClick={onOpen}
-          data-watch-party-chip={chip.key}
+      {rows.map((row, index) => (
+        <div
+          key={row.key}
+          data-watch-party-setting={row.key}
           className={cn(
-            "rounded-full border px-2 py-0.5 text-[11px] transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
-            chip.on
-              ? "border-signal/40 bg-signal/10 text-paper"
-              : "border-border bg-surface-0 text-paper-muted",
+            "flex items-center gap-2 px-2.5 py-1.5 text-xs",
+            index > 0 && "border-t border-ink-4/40",
           )}
         >
-          {chip.label}
-        </button>
+          <button
+            type="button"
+            onClick={onOpen}
+            data-watch-party-options-toggle={index === 0 ? "" : undefined}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+          >
+            <span className="shrink-0 text-paper-muted">{row.icon}</span>
+            <span className="min-w-0 flex-1 truncate text-paper">{row.label}</span>
+            <span className="shrink-0 text-paper-muted">{row.value}</span>
+            {!row.onToggle && (
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-tertiary" aria-hidden />
+            )}
+          </button>
+          {row.onToggle && (
+            <span data-watch-party-setting-switch={row.key} className="shrink-0">
+              <Switch
+                label={row.label}
+                hideLabel
+                checked={row.on === true}
+                onCheckedChange={row.onToggle}
+                className="w-auto px-0 py-0 hover:bg-transparent"
+              />
+            </span>
+          )}
+        </div>
       ))}
-      <button
-        type="button"
-        onClick={onOpen}
-        data-watch-party-options-toggle
-        className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-signal hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
-      >
-        <SlidersHorizontal className="h-3 w-3" aria-hidden />
-        {t("watchParty.summary.adjust")}
-      </button>
     </div>
   );
 }
@@ -1063,6 +1134,9 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const [pickError, setPickError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [whenValue, setWhenValue] = useState("");
+  const thumbRef = useRef<HTMLVideoElement>(null);
   // A PHONE CANNOT PUT A PICTURE UP. `getDisplayMedia` does not exist on iOS
   // Safari at all and is refused on Android Chrome, so the empty state says
   // where to go instead of offering a button that opens nothing, and the
@@ -1133,6 +1207,13 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
     const video = videoRef.current;
     if (video && video.srcObject !== stream) {
       video.srcObject = stream;
+    }
+    // The Fonte row's thumbnail is the same stream on a second element, so
+    // step 2 reads as done without looking left. Two sinks on one track is
+    // free; the capture is not duplicated.
+    const thumb = thumbRef.current;
+    if (thumb && thumb.srcObject !== stream) {
+      thumb.srcObject = stream;
     }
   }, [stream]);
 
@@ -1296,7 +1377,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           className="flex w-full shrink-0 flex-col border-t border-ink-4/60 bg-ink-2 md:w-80 md:border-l md:border-t-0"
         >
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
-            <SetupStep number={1} label={t("watchParty.setup.nameLabel")}>
+            <SetupStep number={1} label={t("watchParty.setup.stepNameWhen")}>
               <input
                 type="text"
                 maxLength={120}
@@ -1312,6 +1393,72 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                 }}
                 data-watch-party-name
               />
+              {/* QUANDO. The create dialog could set a time and nothing after
+                  it could; the update API always accepted one. "Agora" is the
+                  draft; a time hands this surface over to the scheduled
+                  screen (the server does the state move), where the time can
+                  be taken back. */}
+              {props.onSchedule && (
+                <div
+                  data-testid="watch-party-when"
+                  className="flex flex-col gap-1.5 rounded-md border border-ink-4/60 bg-surface-0 px-2.5 py-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="flex min-w-0 items-center gap-1.5 text-paper">
+                      <CalendarClock className="h-3.5 w-3.5 shrink-0 text-paper-muted" aria-hidden />
+                      <span className="truncate">
+                        {scheduling
+                          ? t("watchParty.setup.whenSet")
+                          : t("watchParty.setup.whenNow")}
+                      </span>
+                    </span>
+                    <span data-watch-party-when-toggle className="shrink-0">
+                    <Switch
+                      label={t("watchParty.setup.whenSet")}
+                      hideLabel
+                      checked={scheduling}
+                      onCheckedChange={(on) => {
+                        setScheduling(on);
+                        if (on && whenValue === "") {
+                          const soon = new Date(Date.now() + 60 * 60 * 1000);
+                          soon.setMinutes(0, 0, 0);
+                          setWhenValue(toLocalInputValue(soon));
+                        }
+                      }}
+                      className="w-auto px-0 py-0 hover:bg-transparent"
+                    />
+                    </span>
+                  </div>
+                  {scheduling && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Input
+                        type="datetime-local"
+                        aria-label={t("watchParty.setup.when")}
+                        className="h-[var(--control-sm)] w-auto bg-surface-2 text-xs"
+                        value={whenValue}
+                        min={toLocalInputValue(new Date())}
+                        onChange={(event) => setWhenValue(event.target.value)}
+                        data-watch-party-when-input
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        disabled={whenValue === "" || Number.isNaN(Date.parse(whenValue))}
+                        onClick={() =>
+                          void props.onSchedule?.(new Date(whenValue).toISOString())
+                        }
+                        data-watch-party-when-save
+                      >
+                        {t("watchParty.setup.whenSave")}
+                      </Button>
+                      <span className="text-[11px] text-text-tertiary">
+                        {browserTimezone()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
             </SetupStep>
 
             <SetupStep
@@ -1324,9 +1471,20 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                 data-watch-party-source={sourceState}
                 className="flex items-center justify-between gap-2 rounded-md border border-ink-4/60 bg-surface-0 px-2.5 py-1.5 text-xs"
               >
+                {stream && (
+                  <video
+                    ref={thumbRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    aria-hidden
+                    className="h-7 w-12 shrink-0 rounded-sm bg-black object-cover"
+                    data-testid="watch-party-source-thumb"
+                  />
+                )}
                 <span
                   className={cn(
-                    "min-w-0 truncate",
+                    "min-w-0 flex-1 truncate",
                     sourceState === "ok" && "text-paper",
                     sourceState === "silent" && "text-warning",
                     sourceState === "none" && "text-paper-muted",
@@ -1355,7 +1513,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             </SetupStep>
 
             <SetupStep number={3} label={t("watchParty.setup.stepSettings")}>
-              <WatchPartyOptionsChips
+              <WatchPartySettingsList
                 party={party}
                 micInStream={
                   props.onMicInStreamChange
@@ -1364,6 +1522,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                 }
                 quality={readWatchPartyStreamQuality(props.currentUserId ?? null)}
                 onOpen={() => setOptionsOpen(true)}
+                onReactionsChange={(on) =>
+                  void props.onOptionsChange({ reactionsEnabled: on })
+                }
+                onMicInStreamChange={props.onMicInStreamChange}
               />
             </SetupStep>
 

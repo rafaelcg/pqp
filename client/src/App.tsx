@@ -4179,6 +4179,24 @@ function MainAppContent({
   }
 
   /**
+   * Give a draft a time, or take it away. The server does the state move
+   * (`draft -> scheduled` on a time, `scheduled -> draft` on null), so this
+   * is the same PATCH as a rename with a different field. The setup card's
+   * "Quando" row is the only caller; the create dialog still sets a time at
+   * creation the way it always did.
+   */
+  async function handleWatchPartySchedule(startsAt: string | null) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await apiUpdateWatchParty(party.id, { startsAt });
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  /**
    * Take a seat in a watch party's room WITHOUT a microphone.
    *
    * The default for anybody who is not running the show. `audienceOnly` opens
@@ -6170,6 +6188,7 @@ function MainAppContent({
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
+            onSchedule={handleWatchPartySchedule}
             onClaimHost={handleWatchPartyClaimHost}
             onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
@@ -6290,6 +6309,7 @@ function MainAppContent({
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
+            onSchedule={handleWatchPartySchedule}
             onClaimHost={handleWatchPartyClaimHost}
             onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
