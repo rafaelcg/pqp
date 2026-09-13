@@ -77,31 +77,32 @@ const metrics: Metrics = { hits: 0, misses: 0, coalesced: 0, staleServed: 0 };
 let totalBytes = 0;
 
 /**
- * A conservative per-row/per-object byte guess, deliberately on the high
- * side (a message row with a long body, embeds and reply columns can run to
- * a few hundred bytes; this rounds well past that) — the budget only needs
- * to be in the right ballpark to decide eviction order, not exact.
- */
-const ESTIMATED_BYTES_PER_ROW = 1_024;
-
-/**
- * A rough size estimate, not an exact one, and deliberately O(1) —
- * `JSON.stringify`-ing the whole value on every write was the first cut of
- * this, and it was wrong: `coalesce` calls this on every fresh load AND
- * every stale-while-revalidate refresh, so a hot key (a 229-member list,
- * say) would have its full value serialized again roughly every TTL forever,
- * not once. Every value this module ever caches is either an array of DB
- * rows (a message page, a channel list) or a single row/null (a watch-party
- * state), so counting elements is enough: `value.length * a per-row guess`
- * for an array, one row's worth for anything else. Wrong by some constant
- * factor is fine for a budget; re-serializing a whole page every 2 seconds
- * on every hot key is not.
+ * The real size, in the same units `JSON.stringify(...).length` always
+ * measured — this must stay accurate (a flat per-row guess was tried and
+ * rejected: a message body or a webhook embed blob can run well past a
+ * generic constant, and the whole point of a byte budget is not to
+ * understate what is actually resident). A value that fails to stringify
+ * (should not happen for the plain DB-row shapes this module caches) falls
+ * back to a conservative guess rather than throwing out of a cache write.
+ *
+ * WHY THIS DOES NOT COST WHAT IT LOOKS LIKE IT COSTS. Serializing the whole
+ * value is real work, so this is called on a MISS (a cold key, or one that
+ * went doubly stale — both comparatively rare) and NOT on a
+ * stale-while-revalidate refresh, which is the hot, repeating case a
+ * popular key spends most of its life in. `revalidate` below reuses the
+ * PREVIOUS entry's size instead of calling this again, which is not merely
+ * cheap but usually exactly correct: a refresh only happens because the TTL
+ * elapsed with nothing invalidating the key, and every write path that
+ * could change what the key answers calls `invalidate` first — so an
+ * unforced refresh is, by construction, almost always re-fetching content
+ * that has not changed shape.
  */
 function estimateSize(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.length * ESTIMATED_BYTES_PER_ROW;
+  try {
+    return JSON.stringify(value)?.length ?? 1_024;
+  } catch {
+    return 1_024;
   }
-  return ESTIMATED_BYTES_PER_ROW;
 }
 
 /** The one place an entry leaves `store`, so `totalBytes` cannot drift from
@@ -170,6 +171,11 @@ function revalidate<T>(
   if (inflight.has(key)) {
     return;
   }
+  // The entry being refreshed is still in `store` at this point (a stale
+  // hit touches it but never removes it) — its size is reused below instead
+  // of calling `estimateSize` again. See the comment on `estimateSize` for
+  // why that is not just cheap but usually exact for this specific path.
+  const previousSize = store.get(key)?.size;
   // `promise` is referenced inside its own `.then`/`.catch` below, which is
   // fine — those only run once this assignment has completed — and it is
   // exactly what makes the guard work: `inflight.get(key) === promise` asks
@@ -185,7 +191,11 @@ function revalidate<T>(
     .then((value) => {
       if (inflight.get(key) === promise) {
         inflight.delete(key);
-        touch(key, { value, storedAt: Date.now(), size: estimateSize(value) });
+        touch(key, {
+          value,
+          storedAt: Date.now(),
+          size: previousSize ?? estimateSize(value),
+        });
       }
       return value;
     })
