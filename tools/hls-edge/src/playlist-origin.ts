@@ -83,7 +83,17 @@ export class ApiPlaylistOrigin implements PlaylistOrigin {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      return await fetch(url, { signal: controller.signal });
+      const response = await fetch(url, { signal: controller.signal });
+      // `fetch()` resolving only means the RESPONSE HEADERS arrived — a
+      // slow-drip or stalled body would otherwise be read with no timeout at
+      // all once the timer below is cleared, since `finally` would already
+      // have run. Buffering the body HERE, still inside the same
+      // AbortController's window, means one timeout covers the whole
+      // exchange (playlists are a few KB of text, so buffering costs
+      // nothing); `Response.body` re-derives a fresh stream from the buffer
+      // for whichever caller in index.ts passes it straight through.
+      const body = await response.arrayBuffer();
+      return new Response(body, { status: response.status, headers: response.headers });
     } finally {
       clearTimeout(timer);
     }

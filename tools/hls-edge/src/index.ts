@@ -111,8 +111,23 @@ const CACHE_TTL_SECONDS = 2;
 
 const UPSTREAM_TIMEOUT_MS = 8_000;
 
-/** `X-HLS-Edge-Cache: 401`-shaped rejections are rate-limited the same way `logHlsPlaylistRejection` is on the origin, so a broken client cannot turn its own bug into a log write amplifier. */
+/**
+ * `X-HLS-Edge-Cache: 401`-shaped rejections are rate-limited the same way
+ * `logHlsPlaylistRejection` is on the origin, so a broken client cannot turn
+ * its own bug into a log write amplifier.
+ *
+ * `channelId` is an attacker-controlled path segment (up to 64 characters,
+ * `playlist-route.ts`'s own bound, not this map's), so an attacker cycling
+ * through distinct channel ids on every request would otherwise grow this
+ * map forever — nothing ever deleted an entry, only added or updated one.
+ * `REJECTION_LOG_MAX_ENTRIES` bounds it: once full, the OLDEST entry (by
+ * insertion order, which a `Map` preserves) is evicted before a new key is
+ * added. That is an approximation of LRU, not a precise one — good enough
+ * for a hostile-traffic bound on a log dedupe table, not a cache whose
+ * eviction policy anyone depends on.
+ */
 const REJECTION_LOG_WINDOW_MS = 30_000;
+const REJECTION_LOG_MAX_ENTRIES = 1_000;
 const rejectionLog = new Map<string, { at: number; suppressed: number }>();
 
 function logRejection(
@@ -133,6 +148,12 @@ function logRejection(
     reason,
     suppressed: seen?.suppressed ?? 0,
   });
+  if (!seen && rejectionLog.size >= REJECTION_LOG_MAX_ENTRIES) {
+    const oldestKey = rejectionLog.keys().next().value;
+    if (oldestKey !== undefined) {
+      rejectionLog.delete(oldestKey);
+    }
+  }
   rejectionLog.set(key, { at: now, suppressed: 0 });
 }
 
