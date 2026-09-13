@@ -319,13 +319,7 @@ describe("read-cache", () => {
     expect(reloadedLast).toBe(false);
   }, 20_000);
 
-  it("estimates an array's size as row count times a flat per-row guess, not content", async () => {
-    // The decision, after measuring exactly was tried and found too costly
-    // on the write path: estimate cheaply from row count alone and accept
-    // that it is an ESTIMATE, NOT AN UPPER BOUND — content size (a long
-    // body, an embed blob) does not move it at all. This pins that
-    // explicitly: two arrays of the same length but wildly different real
-    // content must get the identical estimate.
+  it("measures an entry's real serialised size, so content counts against the budget", async () => {
     const plain = new Array(10).fill(0).map(() => ({ body: "short" }));
     const heavy = new Array(10).fill(0).map(() => ({ body: "x".repeat(50_000) }));
 
@@ -335,30 +329,45 @@ describe("read-cache", () => {
     await coalesce("heavy", 60_000, async () => heavy);
     const heavyBytes = readCacheMetrics().bytes;
 
-    expect(plainBytes).toBe(heavyBytes);
-    expect(plainBytes).toBe(10 * 512);
+    expect(plainBytes).toBe(Buffer.byteLength(JSON.stringify(plain), "utf8"));
+    expect(heavyBytes).toBe(Buffer.byteLength(JSON.stringify(heavy), "utf8"));
+    expect(heavyBytes).toBeGreaterThan(plainBytes * 100);
   });
 
-  it("estimates a single row or null with a flat constant", async () => {
+  it("measures a single row or null too", async () => {
     await coalesce("row", 60_000, async () => ({ id: "x" }));
-    expect(readCacheMetrics().bytes).toBe(256);
+    expect(readCacheMetrics().bytes).toBe(Buffer.byteLength(JSON.stringify({ id: "x" }), "utf8"));
 
     resetReadCacheForTests();
     await coalesce("null", 60_000, async () => null);
-    expect(readCacheMetrics().bytes).toBe(256);
+    expect(readCacheMetrics().bytes).toBe(Buffer.byteLength("null", "utf8"));
   });
 
-  it("recomputes the row-count estimate on a stale-while-revalidate refresh", async () => {
+  it("re-measures on a stale-while-revalidate refresh", async () => {
     const ten = new Array(10).fill(0);
     const fifty = new Array(50).fill(0);
     await coalesce("k", 20, async () => ten);
-    expect(readCacheMetrics().bytes).toBe(10 * 512);
+    expect(readCacheMetrics().bytes).toBe(Buffer.byteLength(JSON.stringify(ten), "utf8"));
 
     await new Promise((r) => setTimeout(r, 30)); // into the stale window
     await coalesce("k", 20, async () => fifty); // stale-serves `ten`, refreshes in the background
     await new Promise((r) => setTimeout(r, 10)); // let the refresh land
 
-    expect(readCacheMetrics().bytes).toBe(50 * 512);
+    expect(readCacheMetrics().bytes).toBe(Buffer.byteLength(JSON.stringify(fifty), "utf8"));
+  });
+
+  it("drops the stale entry when a refresh grows past the row cap, instead of refreshing it forever", async () => {
+    const small = new Array(10).fill(0);
+    const huge = new Array(MAX_CACHEABLE_ROWS + 1).fill(0);
+    await coalesce("grow", 20, async () => small);
+    expect(readCacheMetrics().size).toBe(1);
+
+    await new Promise((r) => setTimeout(r, 30)); // stale
+    await coalesce("grow", 20, async () => huge); // stale-serves, refresh comes back oversized
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(readCacheMetrics().size).toBe(0);
+    expect(readCacheMetrics().bytes).toBe(0);
   });
 
   it("evicts the oldest entry once the byte budget is exceeded, well under the entry cap", async () => {
@@ -366,8 +375,8 @@ describe("read-cache", () => {
     // single entry is ever allowed to be), so this needs enough of them to
     // cross MAX_BYTES on its own — comfortably fewer than MAX_ENTRIES, so
     // only the byte trigger can be responsible for what gets evicted.
-    const maxRows = new Array(MAX_CACHEABLE_ROWS).fill(0);
-    const perEntryBytes = MAX_CACHEABLE_ROWS * 512;
+    const maxRows = new Array(MAX_CACHEABLE_ROWS).fill(0).map(() => ({ body: "x".repeat(1024) }));
+    const perEntryBytes = Buffer.byteLength(JSON.stringify(maxRows), "utf8");
     const entriesNeeded = Math.ceil(MAX_BYTES / perEntryBytes) + 2;
     expect(entriesNeeded).toBeLessThan(MAX_ENTRIES);
 
@@ -429,22 +438,6 @@ describe("read-cache", () => {
     await coalesce("k", 60_000, load);
     expect(calls).toBe(1);
     expect(readCacheMetrics().size).toBe(1);
-  });
-
-  it("a stale-while-revalidate refresh that grows past MAX_CACHEABLE_ROWS keeps serving the stale entry", async () => {
-    const small = new Array(10).fill(0);
-    const tooBig = new Array(MAX_CACHEABLE_ROWS + 1).fill(0);
-    await coalesce("k", 20, async () => small);
-    expect(readCacheMetrics().size).toBe(1);
-
-    await new Promise((r) => setTimeout(r, 30)); // into the stale window
-    const stale = await coalesce("k", 20, async () => tooBig);
-    expect(stale).toBe(small); // still the old, cached value
-    await new Promise((r) => setTimeout(r, 10)); // let the refresh land, uncached
-
-    // The stale entry is untouched by the refusal — still there, still small.
-    expect(readCacheMetrics().size).toBe(1);
-    expect(readCacheMetrics().bytes).toBe(10 * 512);
   });
 
   it("resetReadCacheForTests clears the resident-byte counter, not just the entries", async () => {

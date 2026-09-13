@@ -93,10 +93,8 @@ let totalBytes = 0;
  * and neither has to be exact to do its job of giving up the coldest
  * entries first once either cap is crossed.
  */
-const PER_ROW_ESTIMATE_BYTES = 512;
-
-/** Flat estimate for a single row or `null` (a watch-party state) — never
- *  an array, so there is no row count to multiply. */
+/** Fallback when a value cannot be serialised (circular, BigInt); real
+ *  entries are measured by `estimateSize`. */
 const SINGLE_VALUE_ESTIMATE_BYTES = 256;
 
 /**
@@ -126,10 +124,16 @@ function isCacheable(value: unknown): boolean {
  * the worst case instead.
  */
 function estimateSize(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.length * PER_ROW_ESTIMATE_BYTES;
+  // Measured, not guessed. `MAX_CACHEABLE_ROWS` bounds how much this ever
+  // serialises (a 2,000-row list is a few ms), and measuring is what makes
+  // `MAX_BYTES` a real ceiling on resident memory rather than a nominal
+  // one: a 100-row page of long bodies must count as what it weighs.
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? SINGLE_VALUE_ESTIMATE_BYTES : Buffer.byteLength(json, "utf8");
+  } catch {
+    return SINGLE_VALUE_ESTIMATE_BYTES;
   }
-  return SINGLE_VALUE_ESTIMATE_BYTES;
 }
 
 /** The one place an entry leaves `store`, so `totalBytes` cannot drift from
@@ -223,6 +227,11 @@ function revalidate<T>(
             storedAt: Date.now(),
             size: estimateSize(value),
           });
+        } else {
+          // The stale entry must not keep answering hits and relaunching a
+          // refresh every TTL for a value that will never be admitted:
+          // drop it, and let callers load uncached until it shrinks.
+          removeEntry(key);
         }
       }
       return value;
