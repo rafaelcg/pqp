@@ -1,29 +1,62 @@
 # The pqp API box, in Docker Compose. Lives at /opt/pqp/compose.yaml on the
 # box (copied there by provision.sh / the deploy workflow — see
-# docs/deploy-vultr.md). Three services: the two halves of the Fly setup
-# (pqp-api and pqp-worker, same image, different WORKER_MODE — see
-# fly.toml and fly.worker.toml, which this mirrors) plus Caddy, which Fly's
-# own edge proxy did for free and this box now has to do itself.
+# docs/deploy-vultr.md). Four services: two copies of the API half of the
+# Fly setup (`api-a` / `api-b`, same image, same env, WORKER_MODE=api on
+# both — see fly.toml, which ran exactly one machine per role), one
+# `worker` (mirrors fly.worker.toml — batch jobs only, stays single, never
+# duplicated), plus Caddy, which Fly's own edge proxy did for free and this
+# box now has to do itself, including load-balancing between api-a/api-b.
 #
-# Deploy sets two variables before `docker compose pull && up -d api worker`:
-#   APP_IMAGE_TAG  the commit sha, becomes part of the image reference
-#   APP_VERSION    the same sha, becomes the env var GET /health and
-#                  GET /ready report — this is what the post-deploy check
-#                  in .github/workflows/deploy-api-vultr.yml polls for, the
-#                  same "did the running process actually pick this up"
-#                  question deploy-api-fly.yml's `-e APP_VERSION=...` answers.
+# WHY TWO API CONTAINERS (docs/plans/ALWAYS_ON.md A0.2): one box is still
+# one box — losing the box is still full downtime — but a redeploy no
+# longer has to take every WebSocket down at once, and a single container
+# crash fails over to its sibling instead of 502ing every request until
+# Docker restarts it. This works ONLY because the multi-instance server
+# work (M1-M5, docs/plans/MULTI_INSTANCE_VOICE.md) is landed and
+# CLUSTER_BUS=postgres / VOICE_REGISTRY=postgres are set in .env — two
+# processes sharing chat fan-out and the voice peer map through Postgres is
+# what makes running two of them correct rather than just "two islands".
+# Each process picks its own random instance id at boot
+# (server/src/lib/bus.ts's INSTANCE_ID, `randomUUID()`, deliberately not
+# configurable — see that file's comment) so api-a and api-b are already
+# distinct rows in the voice registry with zero wiring here; nothing in
+# this compose file needs to invent or pass one.
+#
+# Deploy sets three variables before `docker compose pull && up -d`:
+#   APP_IMAGE_TAG                the commit sha, becomes part of the image
+#                                 reference
+#   APP_VERSION                  the same sha, becomes the env var GET
+#                                 /health and GET /ready report — this is
+#                                 what the post-deploy check in
+#                                 .github/workflows/deploy-api-vultr.yml
+#                                 polls for, the same "did the running
+#                                 process actually pick this up" question
+#                                 deploy-api-fly.yml's `-e APP_VERSION=...`
+#                                 answers.
+#   API_PG_POOL_MAX_PER_REPLICA   .env's PG_POOL_MAX divided by however
+#                                 many api replicas this run starts — see
+#                                 api-a/api-b's PG_POOL_MAX override below.
 # Compose reads them from the shell environment or a second --env-file
-# layered on top of .env (see the workflow); both default to `dev` so a
-# manual `docker compose up` without them still starts something recognisable
-# rather than failing to interpolate.
+# layered on top of .env (see the workflow); APP_IMAGE_TAG/APP_VERSION
+# default to `dev` and API_PG_POOL_MAX_PER_REPLICA to `10` so a manual
+# `docker compose up` without any of them still starts something
+# recognisable rather than failing to interpolate.
 #
 # .env (NOT in git — see docs/deploy-vultr.md "Secrets") carries everything
 # with a credential in it: DATABASE_URL, CLERK_SECRET_KEY, TURN/ICE vars,
 # LIVEKIT_*, S3_*, etc. Same list as Fly's `fly secrets set`, see CLAUDE.md's
-# env var table and docs/deploy-vultr.md "Secrets to copy from Fly".
+# env var table and docs/deploy-vultr.md "Secrets to copy from Fly". It also
+# carries the one operational knob this file adds: API_REPLICAS. Unset (or
+# any value other than "1") runs both api-a and api-b — that is the normal,
+# shipped state. API_REPLICAS=1 in .env, followed by re-running
+# tools/api-host/pqp-deploy.sh (which reads it from .env on every
+# invocation), runs api-a alone — the one-line rollback to the old
+# single-container shape, kept until docs/plans/ALWAYS_ON.md's A0.1/M6
+# staging rehearsal of the multi-instance registry has soaked. See
+# docs/deploy-vultr.md "Two replicas on one box".
 
 services:
-  api:
+  api-a:
     image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
     env_file:
       - .env
@@ -34,6 +67,20 @@ services:
       - WORKER_MODE=api
       - APP_VERSION=${APP_VERSION:-dev}
       - PORT=3001
+      # DATABASE CONNECTION BUDGET: .env's PG_POOL_MAX is read by
+      # pqp-deploy.sh as the TOTAL budget for the api-a/api-b side, then
+      # divided evenly by however many replicas are actually running
+      # (API_PG_POOL_MAX_PER_REPLICA, exported right before `docker
+      # compose` runs — see that script). This override is what makes
+      # that split take effect instead of both containers getting .env's
+      # raw, undivided number and doubling the API side's worst-case
+      # Postgres connection count. The `:-10` fallback only matters for a
+      # manual `docker compose up` run outside pqp-deploy.sh, matching
+      # server/src/db.ts's own hard-coded default. Same independent-pool
+      # caveat as worker's PG_POOL_MAX below applies here too: this is a
+      # per-container pool, not a shared one. See docs/deploy-vultr.md
+      # "Two replicas on one box" -> "Database connection budget".
+      - PG_POOL_MAX=${API_PG_POOL_MAX_PER_REPLICA:-10}
     restart: unless-stopped
     # Matches kill_timeout in fly.toml. The server's own SIGTERM handling
     # (server/src/lib/drain.ts) budgets 25s internally (2s settle + up to
@@ -56,9 +103,61 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
-    # No `ports:` — only Caddy talks to this over the internal compose
-    # network (service name `api`, port 3001), same as fly-proxy being the
-    # one thing in front of the Fly machine.
+    ports:
+      # Loopback-only, deliberately not a public bind (no host IP given, so
+      # this never touches the public interface and needs no ufw rule — see
+      # provision.sh's ufw allowlist, which this does not appear in). This
+      # exists solely so the deploy workflow's verify step, running as the
+      # unprivileged `pqp-deploy` account over SSH (no docker group, no
+      # `docker compose exec` access — see pqp-deploy.sh's header comment),
+      # can confirm THIS SPECIFIC container's own /health and version
+      # without going through Caddy's load balancing, which by design does
+      # not let a caller address one replica over another.
+      - "127.0.0.1:3011:3001"
+    # Only Caddy and the workflow's own loopback curl talk to this container
+    # — Caddy over the compose network (service name `api-a`, port 3001),
+    # same as the single-`api` setup this replaces.
+
+  api-b:
+    image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
+    env_file:
+      - .env
+    environment:
+      - WORKER_MODE=api
+      - APP_VERSION=${APP_VERSION:-dev}
+      - PORT=3001
+      # Same split as api-a above, same variable — pqp-deploy.sh computes
+      # ONE per-replica number off the current replica count and both
+      # containers get that same value, which is what keeps the two
+      # independent pools summing back to .env's PG_POOL_MAX instead of
+      # each taking the full amount.
+      - PG_POOL_MAX=${API_PG_POOL_MAX_PER_REPLICA:-10}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    ports:
+      - "127.0.0.1:3012:3001"
+    # Gated by the `replicas` Compose profile: `docker compose up`/`pull`
+    # with no explicit service list skips anything profiled unless
+    # COMPOSE_PROFILES names it. pqp-deploy.sh is the only caller that
+    # matters in production and it exports COMPOSE_PROFILES=replicas
+    # unless .env sets API_REPLICAS=1 — see that script and this file's
+    # header comment. `docker compose -f compose.yaml config` still parses
+    # and shows this service regardless of the profile; the profile only
+    # affects `up`/`pull`/`start`, not config validation.
+    profiles:
+      - replicas
 
   worker:
     image: ghcr.io/rafaelcg/pqp-api:${APP_IMAGE_TAG:-latest}
@@ -89,7 +188,9 @@ services:
     # fly.worker.toml overrides the image CMD to run worker.js directly
     # rather than trusting WORKER_MODE alone; do the same here so `docker ps`
     # and this file agree about what each container is, belt and braces with
-    # the env var above.
+    # the env var above. Stays single on purpose — batch jobs are not
+    # connection-bound the way api-a/api-b are, and running two would just
+    # be two processes racing the same cron-shaped work.
     command: ["node", "server/dist/worker.js"]
 
   caddy:
@@ -109,7 +210,14 @@ services:
       # dir), so provision.sh always creates it, even when unused.
       - ./certs:/etc/caddy/certs:ro
     depends_on:
-      api:
+      # api-a only, deliberately: api-b is profile-gated (API_REPLICAS=1
+      # means it never starts at all), and Caddy's own active health
+      # checking (see Caddyfile) is what actually decides whether either
+      # upstream is usable — a hard `depends_on` on a profile-gated service
+      # is a Compose footgun (the dependency can refuse to resolve when the
+      # profile is inactive) for a guarantee Caddy's health checker already
+      # gives us at the routing layer.
+      api-a:
         condition: service_healthy
 
 volumes:
