@@ -14,6 +14,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { HttpError } from "../lib/http.js";
+import { notifyOutgoingWebhookEnqueued } from "./outgoing-webhook-poller.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import {
   parseHttpUrl,
@@ -619,6 +620,12 @@ export async function enqueueOutgoingMessageCreated(input: {
     void deliverDueOutgoingWebhooks().catch((error: unknown) => {
       console.error("[outgoing-webhooks] delivery kick failed:", error);
     });
+    // The in-process kick above is the fast path on the common, single-
+    // machine deployment. The NOTIFY is for the process that ISN'T this one
+    // — a separate `pqp-worker` running `deliverDueOutgoingWebhooks`'s own
+    // adaptive poll loop (`outgoing-webhook-poller.ts`) — so it does not sit
+    // out its current backoff window before seeing this row.
+    void notifyOutgoingWebhookEnqueued(getPool());
   }
   return inserted;
 }

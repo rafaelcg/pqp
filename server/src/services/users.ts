@@ -24,6 +24,7 @@ import { getPreferences } from "./preferences.js";
 import { invalidateServerAudience } from "./servers.js";
 import { bumpPermissionsVersion } from "./permissions.js";
 import { stampTurma1000 } from "./badges.js";
+import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
 const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at, banner_url, banner_key, custom_status`;
@@ -455,15 +456,35 @@ export async function upsertUser(auth: AuthUser): Promise<DbUser> {
     // Clerk. `email_domains` is the exception — it is not user-editable, and it
     // is overwritten rather than merged so that *un*verifying or removing an
     // address actually revokes the access it granted.
-    const result = await getPool().query<DbUser>(
-      `UPDATE users SET
-         avatar_url = COALESCE(avatar_url, $2),
-         email_domains = $3
-       WHERE clerk_id = $1
-       RETURNING ${DB_USER_COLUMNS}`,
-      [auth.clerkId, auth.avatarUrl, auth.emailDomains ?? []],
-    );
-    const user = result.rows[0]!;
+    const current = existing.rows[0];
+    const nextEmailDomains = auth.emailDomains ?? [];
+    const currentEmailDomains = current.email_domains ?? [];
+    // Mirrors exactly what the UPDATE below would change, so a row this call
+    // would leave untouched skips the write entirely. This is called on
+    // every authenticated request or socket (`resolveDbUser` in
+    // auth/clerk.ts caches the result, but a cache miss still lands here),
+    // and for the overwhelming majority of those the Clerk profile has not
+    // moved since the last time it ran: 53k UPDATEs in 16.5h of the
+    // 2026-09-13 Vultr cutover, almost all of them writing back the same
+    // values that were already there.
+    const avatarWouldChange = current.avatar_url === null && auth.avatarUrl !== null;
+    const emailDomainsWouldChange =
+      currentEmailDomains.length !== nextEmailDomains.length ||
+      currentEmailDomains.some((domain, i) => domain !== nextEmailDomains[i]);
+
+    const user =
+      avatarWouldChange || emailDomainsWouldChange
+        ? (
+            await getPool().query<DbUser>(
+              `UPDATE users SET
+                 avatar_url = COALESCE(avatar_url, $2),
+                 email_domains = $3
+               WHERE clerk_id = $1
+               RETURNING ${DB_USER_COLUMNS}`,
+              [auth.clerkId, auth.avatarUrl, nextEmailDomains],
+            )
+          ).rows[0]!
+        : current;
     if (!user.username || !user.discriminator) {
       return ensureUsername(user);
     }
@@ -764,15 +785,46 @@ async function writeProfile(
   return result.rows[0]!;
 }
 
+const MEMBER_ROLE_TTL_MS = 30_000;
+
+function memberRoleCacheKeyPrefix(serverId: string): string {
+  return `member-role:${serverId}:`;
+}
+
+function memberRoleCacheKey(serverId: string, userId: string): string {
+  return `${memberRoleCacheKeyPrefix(serverId)}${userId}`;
+}
+
+/**
+ * Drop every cached role for one server — every member at once, not just
+ * one. There is no per-entry userId to target precisely when the write is a
+ * demotion/promotion, a kick or a ban (all single-member events) alongside a
+ * bulk one (the server itself going away), so this is deliberately as blunt
+ * as `invalidateServerMemberList` right above: a prefix clear on the whole
+ * server, same as the roster access cache does for a server-scoped audience
+ * invalidation (`ws/voice.ts`, #534).
+ */
+export function invalidateServerMemberRoles(serverId: string): void {
+  invalidateReadCache(memberRoleCacheKeyPrefix(serverId));
+}
+
 export async function getMemberRole(
   serverId: string,
   userId: string,
 ): Promise<"owner" | "admin" | "member" | null> {
-  const result = await getPool().query<{ role: "owner" | "admin" | "member" }>(
-    `SELECT role FROM server_members WHERE server_id = $1 AND user_id = $2`,
-    [serverId, userId],
+  return coalesce(
+    memberRoleCacheKey(serverId, userId),
+    MEMBER_ROLE_TTL_MS,
+    async () => {
+      const result = await getPool().query<{
+        role: "owner" | "admin" | "member";
+      }>(
+        `SELECT role FROM server_members WHERE server_id = $1 AND user_id = $2`,
+        [serverId, userId],
+      );
+      return result.rows[0]?.role ?? null;
+    },
   );
-  return result.rows[0]?.role ?? null;
 }
 
 export async function isServerMember(
@@ -878,20 +930,59 @@ export function channelVisibleSql(viewer: string): string {
  * an inner join drops the row before the predicate is ever evaluated, which
  * would read as "no such channel" for every DM in the instance.
  */
+const CHANNEL_ACCESS_TTL_MS = 30_000;
+
+function channelAccessCacheKeyPrefix(channelId: string): string {
+  return `channel-access:${channelId}:`;
+}
+
+function channelAccessCacheKey(channelId: string, userId: string): string {
+  return `${channelAccessCacheKeyPrefix(channelId)}${userId}`;
+}
+
+/**
+ * Drop one channel's cached access answers, for every viewer at once — same
+ * blunt shape as `invalidateServerMemberRoles` above, and for the same
+ * reason: a `channel_members` or privacy change on one channel can move the
+ * answer for any of its would-be viewers, not just one. Call after any write
+ * to that channel's own membership or privacy.
+ */
+export function invalidateChannelAccessForChannel(channelId: string): void {
+  invalidateReadCache(channelAccessCacheKeyPrefix(channelId));
+}
+
+/**
+ * Drop every cached access answer for every channel of a server. There is no
+ * per-entry serverId kept on this cache (mirroring the roster access cache's
+ * own reasoning, `ws/voice.ts` #534: the cache is small and invalidations
+ * are rare, so a full clear costs one extra query burst rather than a second
+ * index nothing else here needs), so a server-scoped write — a role change,
+ * a kick, a ban, a join, an overwrite change — clears the whole thing.
+ */
+export function invalidateChannelAccessForServer(): void {
+  invalidateReadCache("channel-access:");
+}
+
 export async function canAccessChannel(
   channelId: string,
   userId: string,
 ): Promise<boolean> {
-  const result = await countedQuery(
-    getPool(),
-    "users.canAccessChannel",
-    `SELECT 1 FROM channels c
-     LEFT JOIN server_members sm
-       ON sm.server_id = c.server_id AND sm.user_id = $2
-     WHERE c.id = $1 AND ${channelVisibleSql("$2")}`,
-    [channelId, userId],
+  return coalesce(
+    channelAccessCacheKey(channelId, userId),
+    CHANNEL_ACCESS_TTL_MS,
+    async () => {
+      const result = await countedQuery(
+        getPool(),
+        "users.canAccessChannel",
+        `SELECT 1 FROM channels c
+         LEFT JOIN server_members sm
+           ON sm.server_id = c.server_id AND sm.user_id = $2
+         WHERE c.id = $1 AND ${channelVisibleSql("$2")}`,
+        [channelId, userId],
+      );
+      return result.rows.length > 0;
+    },
   );
-  return result.rows.length > 0;
 }
 
 /**
@@ -901,20 +992,65 @@ export async function canAccessChannel(
  */
 export const isChannelMember = canAccessChannel;
 
-export async function listServerMembers(serverId: string) {
-  const result = await getPool().query<{
-    id: string;
-    display_name: string;
-    username: string | null;
-    discriminator: string | null;
-    avatar_url: string | null;
-    role: "owner" | "admin" | "member";
-    nickname: string | null;
-    role_ids: string[];
-    is_character: boolean;
-    handle: string | null;
-    custom_status: string | null;
-  }>(
+interface ServerMemberRow {
+  id: string;
+  display_name: string;
+  username: string | null;
+  discriminator: string | null;
+  avatar_url: string | null;
+  role: "owner" | "admin" | "member";
+  nickname: string | null;
+  role_ids: string[];
+  is_character: boolean;
+  handle: string | null;
+  custom_status: string | null;
+}
+
+const MEMBER_LIST_TTL_MS = 30_000;
+
+function memberListCacheKey(serverId: string): string {
+  return `members:server:${serverId}`;
+}
+
+/**
+ * Drop a server's cached member list. Call after any write that changes who
+ * is in it or how they are labelled there: join, leave, kick, ban, a role
+ * grant/revoke, or a nickname change — every one of those already runs
+ * through `invalidateServerAudience`'s two call sites (`servers.ts`'s
+ * `invalidateServerAudienceLocally`, and the direct nickname write below),
+ * so this rides that existing chokepoint rather than adding a second list
+ * of write paths to keep in sync.
+ */
+export function invalidateServerMemberList(serverId: string): void {
+  invalidateReadCache(memberListCacheKey(serverId));
+}
+
+/**
+ * Drop the cached member list of every server this user belongs to.
+ *
+ * Called from `announceProfile` (api/index.ts) — the one chokepoint every
+ * display-name, avatar, handle and custom_status write already passes
+ * through to broadcast `profile-update` — rather than a per-user index kept
+ * in sync on every join/leave: a profile edit is rare enough that one extra
+ * `server_members` query on the write path costs nothing next to the reload
+ * storms this whole cache exists to collapse, and it can never drift out of
+ * date the way a hand-maintained index could. `server/src/api/api.test.ts`
+ * ("carries a claimed public handle...") pins that a handle claimed this
+ * request shows up in a member list read the very next request, not up to
+ * 30s later.
+ */
+export async function invalidateMemberListsForUser(userId: string): Promise<void> {
+  const result = await getPool().query<{ server_id: string }>(
+    `SELECT server_id FROM server_members WHERE user_id = $1`,
+    [userId],
+  );
+  for (const row of result.rows) {
+    invalidateServerMemberList(row.server_id);
+  }
+}
+
+async function fetchServerMembers(serverId: string): Promise<ServerMemberRow[]> {
+  const result = await getPool().query<ServerMemberRow>(
     `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url, sm.role,
             sm.nickname, u.handle, u.custom_status,
             COALESCE(u.is_character, FALSE) AS is_character,
@@ -942,7 +1078,22 @@ export async function listServerMembers(serverId: string) {
        COALESCE(sm.nickname, u.display_name) ASC`,
     [serverId],
   );
-  return result.rows.map((row) => ({
+  return result.rows;
+}
+
+/**
+ * Every member of a server: the answer every viewer of that server's member
+ * list sees identically, which is exactly the shape a reload storm repeats —
+ * 143k calls in 16.5h of the 2026-09-13 Vultr cutover, averaging 229 rows
+ * each. Cached; see `invalidateServerMemberList` for what drops it.
+ */
+export async function listServerMembers(serverId: string) {
+  const rows = await coalesce(
+    memberListCacheKey(serverId),
+    MEMBER_LIST_TTL_MS,
+    () => fetchServerMembers(serverId),
+  );
+  return rows.map((row) => ({
     id: row.id,
     displayName: row.display_name,
     username: row.username,
@@ -1038,6 +1189,10 @@ export async function setMemberNickname(
       WHERE server_id = $1 AND user_id = $2`,
     [serverId, userId, nickname],
   );
+  // The one member-list-affecting write that does not run through
+  // `invalidateServerAudience` — a nickname does not change who can see
+  // anything, only how they are labelled.
+  invalidateServerMemberList(serverId);
 }
 
 /** Remove all membership rows for a user in one server. */

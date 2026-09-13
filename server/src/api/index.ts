@@ -251,6 +251,7 @@ import {
   limitFromEnv,
 } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
+import { runWithRoute } from "../lib/route-context.js";
 import {
   buildPersonalExport,
   deleteAccount,
@@ -569,6 +570,7 @@ import {
   findUserByTag,
   getMemberRole,
   getUserById,
+  invalidateMemberListsForUser,
   isServerMember,
   leaveServer,
   listServerMembers,
@@ -1259,7 +1261,7 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
     customStatus: body.customStatus,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
+  await announceProfile(updated);
   return { ...(await toOwnUser(updated)), ageGate };
 });
 
@@ -1334,7 +1336,7 @@ router.post("/api/me/avatar/claim", async ({ req, user }) => {
     avatarKey: body.key,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
+  await announceProfile(updated);
   return { user: await toOwnUser(updated) };
 });
 
@@ -1353,7 +1355,7 @@ router.delete("/api/me/avatar", async ({ user }) => {
     avatarKey: null,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
+  await announceProfile(updated);
   return { user: await toOwnUser(updated) };
 });
 
@@ -1462,7 +1464,11 @@ router.delete("/api/me/banner", async ({ user }) => {
  * the onboarding backfill call, and a broadcast belongs to a request somebody
  * made — not to every write of the row.
  */
-function announceProfile(updated: DbUser): void {
+async function announceProfile(updated: DbUser): Promise<void> {
+  // Awaited, not fire-and-forget: a member-list read that lands right after
+  // this request must see the new handle/name/avatar/status, not whatever
+  // was cached before it (`services/users.ts`'s `invalidateMemberListsForUser`).
+  await invalidateMemberListsForUser(updated.id);
   broadcastProfileUpdate({
     type: "profile-update",
     userId: updated.id,
@@ -8878,7 +8884,9 @@ export async function handleApi(
     }
 
     const ctx: RequestContext = { req, res, url, user, ageGate: resolved.ageGate };
-    const result = await matched.handler(ctx, matched.params);
+    const result = await runWithRoute(`${method} ${matched.routePath}`, () =>
+      matched.handler(ctx, matched.params),
+    );
     // Conditional reads. Deliberately *here*, downstream of everything above:
     // the Bearer token has been resolved, the age gate and timeout gate have
     // run, the route matched, and the handler has finished — which means its

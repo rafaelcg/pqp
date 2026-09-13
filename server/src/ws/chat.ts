@@ -70,7 +70,10 @@ import {
 import { listServerChannelIds } from "../services/servers.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
-import { canAccessChannel } from "../services/users.js";
+import {
+  canAccessChannel,
+  invalidateChannelAccessForServer,
+} from "../services/users.js";
 import {
   revokeHlsAccess,
   revokeHlsAccessForUser,
@@ -872,6 +875,11 @@ export async function notifyPermissionsUpdate(
   // honest if that ever changes, and it costs one Map scan on an
   // already-rare event.
   invalidateServerChannelList(serverId);
+  // An overwrite change moves `canAccessChannel`'s answer too, without
+  // touching `channel_members` or `is_private` — the one write this cache
+  // needs a hook for that `servers.ts`'s own invalidation chokepoints do not
+  // already cover (see `services/users.ts`).
+  invalidateChannelAccessForServer();
   deliverPermissionsUpdate(serverId, version, memberIds);
   if (isBusEnabled()) {
     publishToCluster(PERMISSIONS_TOPIC, {
