@@ -172,6 +172,8 @@ import {
   setWatchPartyState as apiSetWatchPartyState,
   updateWatchParty as apiUpdateWatchParty,
 } from "@/lib/watch-parties-api";
+import { endWatchParty } from "@/lib/watch-party-end";
+import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
 import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
 import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
 import { ChannelSessionToasts } from "@/components/voice/channel-session-toasts";
@@ -3966,6 +3968,11 @@ function MainAppContent({
       // co-hosts and this client is the host: applying the answer now is what
       // makes the setup surface appear on the same click.
       watchParties.put(party);
+      // B7 (2026-09-12 postmortem): a stale 1080p opt-in from a PREVIOUS
+      // party must not silently reapply to this one. Scoped to this account
+      // (`watch-party-stream-quality.ts`), so it never touches another
+      // account sharing the same browser.
+      resetWatchPartyStreamQualityForNewParty(user?.id ?? null);
     }
     // The room may have just been created, so it has to go into the channel
     // list before it can be selected, even though the sidebar will not draw
@@ -4111,22 +4118,27 @@ function MainAppContent({
     await handleWatchPartyShareScreen();
   }
 
+  /**
+   * Encerrar. The decision itself lives in `endWatchParty`
+   * (`lib/watch-party-end.ts`, B8 of the 2026-09-12 postmortem) so it is
+   * testable without mounting this component; this is only the wiring.
+   */
   async function handleWatchPartyEnd() {
     const party = currentWatchParty();
     if (!party) {
       return;
     }
-    const answer = await apiSetWatchPartyState(party.id, "ended");
-    watchParties.apply(party.channelId, answer.party ?? null);
-    if (voice.getState().isSharingScreen) {
-      voice.stopScreenShare();
-    }
-    // Encerrar is the end of the LiveKit pipe, not "stay in the room
-    // without a picture". Leave so the host does not keep leave-voice
-    // chrome after the show.
-    if (voice.getState().voiceChannelId === party.channelId) {
-      voice.leave();
-    }
+    await endWatchParty(party, {
+      setEnded: (partyId) => apiSetWatchPartyState(partyId, "ended"),
+      applyParty: (channelId, next) => watchParties.apply(channelId, next),
+      refresh: watchParties.refresh,
+      reportError: (message) => setAppError(message),
+      isSharingScreen: () => voice.getState().isSharingScreen,
+      stopScreenShare: () => voice.stopScreenShare(),
+      currentVoiceChannelId: () => voice.getState().voiceChannelId,
+      leaveVoice: () => voice.leave(),
+      fallbackErrorMessage: t("watchParty.live.endFailed"),
+    });
   }
 
   async function handleWatchPartyDiscard() {
@@ -6173,6 +6185,7 @@ function MainAppContent({
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={() => voice.micLevelDb()}
+            outputLevelDb={() => voice.outputLevelDb()}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={shareMaxFrameRate()}
@@ -6184,6 +6197,7 @@ function MainAppContent({
               (voiceState.occupancy[selectedChannel.id] ?? []).length
             }
             transport={voiceState.roomTransport}
+            cameraOn={voiceState.isCameraOn}
             slot="chrome"
           />
         )}
@@ -6291,6 +6305,7 @@ function MainAppContent({
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={() => voice.micLevelDb()}
+            outputLevelDb={() => voice.outputLevelDb()}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={shareMaxFrameRate()}
@@ -6302,6 +6317,7 @@ function MainAppContent({
               (voiceState.occupancy[selectedChannel.id] ?? []).length
             }
             transport={voiceState.roomTransport}
+            cameraOn={voiceState.isCameraOn}
             slot="surface"
             /* The pane owns this surface's height, exactly as it owns
                `WatchChannelStage`'s and `VoiceChannelStage`'s below. This

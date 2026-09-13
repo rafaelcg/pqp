@@ -27,6 +27,17 @@
  * stop — a talking host should be heard over the film, not fighting it.
  *
  * The AudioContext is injectable so the mix is testable in Node.
+ *
+ * THE OUTPUT METER (2026-09-13, postmortem B2). Three silent stretches on
+ * 2026-09-12 had the host panel reading "the window's + your mic" while -91
+ * dB actually left the machine: `hasAudio` only knows a track exists, never
+ * whether it is carrying anything, and nothing else in either the host's or
+ * the room's own experience can see a track that publishes and then goes
+ * quiet. `outputLevelDb` taps the bus AFTER the limiter, at the exact point
+ * the egress subscribes to, with its OWN analyser rather than the ducking one
+ * above: the two answer different questions from different points in the
+ * graph (one branch's level vs. the whole mix's), and summing them onto one
+ * node's input would corrupt both readings.
  */
 
 import {
@@ -83,6 +94,8 @@ const DUCK_RELEASE_SECONDS = 0.4;
 /** How long the mic must be quiet before the display branch comes back up. */
 const DUCK_RELEASE_HOLD_MS = 600;
 const DUCK_POLL_MS = 50;
+/** How often the output meter samples the bus, in ms. Same cadence as ducking. */
+const OUTPUT_LEVEL_POLL_MS = 50;
 
 function clamp(value: number, range: { min: number; max: number }): number {
   return Math.min(range.max, Math.max(range.min, value));
@@ -123,6 +136,16 @@ export interface ScreenMix {
    * asks twice publishes one track rather than two.
    */
   micArchiveStream(): MediaStream | null;
+  /**
+   * The MIXED BUS's live level in dBFS, post-limiter — what actually leaves
+   * on the wire, not what any one branch is contributing. `null` while there
+   * is no analyser (guarded context) or nothing has been sampled yet; a real
+   * reading can be `-Infinity` (true digital silence), which callers must NOT
+   * fold into `null` the way `micLevelDb`'s meter does — collapsing the two
+   * is exactly the bug this exists to catch. See the module doc and
+   * `watch-party-output-silence.ts`.
+   */
+  outputLevelDb(): number | null;
   close(): void;
 }
 
@@ -143,7 +166,41 @@ export function createScreenMix(
   compressor.ratio.value = 12;
   compressor.attack.value = 0.003;
   compressor.release.value = 0.25;
-  compressor.connect(destination);
+
+  // OUTPUT METER. A second, independent analyser at the point the egress
+  // actually subscribes to: post-limiter, pre-destination. IN-LINE for the
+  // same reason as the ducking analyser below: only a node in the path that
+  // reaches `destination` is guaranteed a pull every render quantum, so this
+  // sits directly in the bus rather than hanging off to one side. It is a
+  // pass-through node, so this changes nothing about what the audience
+  // hears. A context that cannot build one just connects the compressor
+  // straight through, exactly as before this existed.
+  let lastOutputDbfs: number | null = null;
+  let outputInterval: ReturnType<typeof setInterval> | null = null;
+  const outputAnalyser = context.createAnalyser?.();
+  if (outputAnalyser) {
+    compressor.connect(outputAnalyser);
+    outputAnalyser.connect(destination);
+    const outputBufferSize =
+      outputAnalyser.fftSize > 0 ? outputAnalyser.fftSize : 2048;
+    const outputBuffer = new Float32Array(outputBufferSize);
+    outputInterval = setInterval(() => {
+      outputAnalyser.getFloatTimeDomainData(outputBuffer);
+      let sumSquares = 0;
+      for (let i = 0; i < outputBuffer.length; i++) {
+        sumSquares += outputBuffer[i] * outputBuffer[i];
+      }
+      const rms = Math.sqrt(sumSquares / outputBuffer.length);
+      // Deliberately NOT folded to `null` on `-Infinity` the way the mic
+      // meter folds its own reading: true digital silence is exactly the
+      // fact this exists to report, and collapsing it into "nothing
+      // measured" would erase the one signal that matters.
+      lastOutputDbfs =
+        rms > 0 ? 20 * Math.log10(rms) : Number.NEGATIVE_INFINITY;
+    }, OUTPUT_LEVEL_POLL_MS);
+  } else {
+    compressor.connect(destination);
+  }
 
   const displayGainNode = context.createGain();
   let baseDisplayGain = clamp(initialLevels.displayGain, DISPLAY_GAIN_RANGE);
@@ -296,10 +353,15 @@ export function createScreenMix(
       }
       return archive.stream;
     },
+    outputLevelDb: () => lastOutputDbfs,
     close: () => {
       if (duckInterval !== null) {
         clearInterval(duckInterval);
         duckInterval = null;
+      }
+      if (outputInterval !== null) {
+        clearInterval(outputInterval);
+        outputInterval = null;
       }
       micSource?.disconnect();
       displaySource?.disconnect();
@@ -314,6 +376,7 @@ export function createScreenMix(
       displayGainNode.disconnect();
       compressor.disconnect();
       analyser?.disconnect();
+      outputAnalyser?.disconnect();
       micSource = null;
       displaySource = null;
       for (const track of destination.stream.getAudioTracks()) {

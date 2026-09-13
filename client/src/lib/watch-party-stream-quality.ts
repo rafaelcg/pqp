@@ -31,9 +31,22 @@ import { WATCH_PARTY_MAX_PUBLISH_HEIGHT } from "@/lib/video-quality";
  * not the running one. `use-voice.ts` reads this the moment a watch-party
  * share starts; the selector only writes it.
  *
- * Per browser, like the viewer's `pqp:hls-quality` beside it: nothing here is
- * worth a round trip, and one host's choice must not follow them to another
- * machine or bind the room.
+ * PER BROWSER *AND* PER ACCOUNT (2026-09-13, postmortem B7). Still nothing
+ * worth a round trip, so still `localStorage` rather than a server column —
+ * but a shared computer with `pqp:dev-user-suffix`-style separate accounts,
+ * or two people signed into the same browser profile at different times,
+ * used to hand the second host whatever the first had picked. She came back
+ * on 1080p three times on 2026-09-12 for exactly this reason: the key carried
+ * no identity, so the previous host's opt-in outlived the previous host. The
+ * storage key now carries the account id (`storageKey` below); `userId: null`
+ * (signed out, or a caller with none to give) falls back to the old bare key
+ * so the function never throws for want of one.
+ *
+ * RESET ON EVERY NEW PARTY (`resetWatchPartyStreamQualityForNewParty`). The
+ * opt-in is scoped to the share that earned it — a host who confirmed their
+ * uplink survives 1080p once must confirm it again for the next show, rather
+ * than a stale preference silently reappearing on a worse connection or a
+ * different machine's session cache.
  */
 
 export const WATCH_PARTY_STREAM_QUALITIES = ["720p", "1080p"] as const;
@@ -66,10 +79,17 @@ export function parseWatchPartyStreamQuality(
     : DEFAULT_WATCH_PARTY_STREAM_QUALITY;
 }
 
-export function readWatchPartyStreamQuality(): WatchPartyStreamQuality {
+/** The account-scoped key, or the old bare one when there is no account to scope it to. */
+function storageKey(userId: string | null): string {
+  return userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY;
+}
+
+export function readWatchPartyStreamQuality(
+  userId: string | null = null,
+): WatchPartyStreamQuality {
   try {
     return parseWatchPartyStreamQuality(
-      window.localStorage.getItem(STORAGE_KEY),
+      window.localStorage.getItem(storageKey(userId)),
     );
   } catch {
     // Private mode, or storage disabled. The default is a safe share.
@@ -79,10 +99,21 @@ export function readWatchPartyStreamQuality(): WatchPartyStreamQuality {
 
 export function writeWatchPartyStreamQuality(
   quality: WatchPartyStreamQuality,
+  userId: string | null = null,
 ): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, quality);
+    window.localStorage.setItem(storageKey(userId), quality);
   } catch {
     // Nothing to do: the control still works for this session.
   }
+}
+
+/**
+ * A fresh party starts back at the safe default, whatever this account chose
+ * last time. Called once, from `handleCreateWatchParty`.
+ */
+export function resetWatchPartyStreamQualityForNewParty(
+  userId: string | null,
+): void {
+  writeWatchPartyStreamQuality(DEFAULT_WATCH_PARTY_STREAM_QUALITY, userId);
 }

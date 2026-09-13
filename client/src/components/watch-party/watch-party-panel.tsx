@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import {
   Bell,
   BellOff,
@@ -16,6 +23,7 @@ import {
   Share2,
   SlidersHorizontal,
   Square,
+  TriangleAlert,
   Undo2,
 } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
@@ -51,13 +59,22 @@ import { WatchPartyTransmission } from "@/components/watch-party/watch-party-tra
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { supportsScreenShare } from "@/components/voice/capabilities";
-import { isDesktopApp } from "@/lib/desktop";
-import { useTranslation } from "@/lib/i18n";
+import { getDesktop, isDesktopApp } from "@/lib/desktop";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   liveScreenCaptureEnvironment,
   offersShellSystemAudio,
   screenCaptureOptions,
 } from "@/lib/screen-capture-audio";
+import {
+  blocksGoLive,
+  desktopSharesTabAudio,
+  goLiveChecklist,
+  isFirefoxUserAgent,
+  type ChecklistItem,
+  type ChecklistTone,
+} from "@/lib/watch-party-go-live-checklist";
+import { readWatchPartyStreamQuality } from "@/lib/watch-party-stream-quality";
 import { cn } from "@/lib/utils";
 
 /**
@@ -180,6 +197,8 @@ export interface WatchPartyPanelProps {
   onDisplayGainChange?: (value: number) => void;
   /** The mic's live level in the running mix, for the mixer's meter. */
   micLevelDb?: () => number | null;
+  /** The mixed bus's live level, for the "no sound is leaving" warning. */
+  outputLevelDb?: () => number | null;
   /** The pill on the bar mutes and unmutes when this is given. */
   onToggleMute?: () => void;
   /** Give the seat back, in the party's words: Sair do palco. */
@@ -190,6 +209,8 @@ export interface WatchPartyPanelProps {
   onReplaceShare?: () => Promise<void>;
   /** 60 when this server's HLS ladder names a 60 fps rung. */
   hlsMaxFrameRate?: 30 | 60;
+  /** This person's camera, for the go-live checklist's "camera off" row. */
+  cameraOn?: boolean;
   onShapeChange?: (shape: "expanded" | "none") => void;
   /**
    * WHICH HALF OF THE PANEL TO DRAW, and it is rendered twice.
@@ -779,6 +800,136 @@ function NoPermissionStage(props: WatchPartyPanelProps) {
   );
 }
 
+// -------------------------------------------------------- the go-live checklist
+
+/**
+ * The two live globals `goLiveChecklist` needs, read defensively: a Node
+ * test's `navigator` has a UA that names no browser at all and no
+ * `window.pqpDesktop`, which reads as an ordinary Chrome tab here — the same
+ * "all clear" a real one gets.
+ */
+function currentUserAgent(): string {
+  return typeof navigator === "undefined" ? "" : navigator.userAgent;
+}
+
+/** One line of copy per row, chosen by id and tone. */
+const CHECKLIST_COPY: Record<ChecklistItem["id"], Partial<Record<ChecklistTone, MessageKey>>> = {
+  browser: {
+    ok: "watchParty.checklist.browserOk",
+    hint: "watchParty.checklist.browserHintDesktop",
+    block: "watchParty.checklist.browserBlockFirefox",
+  },
+  tabAudio: {
+    ok: "watchParty.checklist.tabAudioOk",
+    hint: "watchParty.checklist.tabAudioHint",
+  },
+  quality: {
+    ok: "watchParty.checklist.qualityOk",
+    hint: "watchParty.checklist.qualityHint",
+  },
+  camera: {
+    ok: "watchParty.checklist.cameraOk",
+    hint: "watchParty.checklist.cameraHint",
+  },
+};
+
+function checklistCopyKey(item: ChecklistItem): MessageKey {
+  return CHECKLIST_COPY[item.id][item.tone] ?? "watchParty.checklist.browserOk";
+}
+
+/**
+ * The go-live checklist itself: everything from postmortem B3, said before
+ * a share goes out rather than diagnosed after the room is confused. Shown
+ * in the setup surface and beside "Compartilhar tela" — the two moments a
+ * host is about to publish a capture with no way yet to see what went wrong.
+ *
+ * NON-BLOCKING EXCEPT ONE ROW. Every hint here is exactly that; only Firefox
+ * (`blocksGoLive`) gets the harder red line, spelled out again on its own so
+ * a host who skimmed the list still sees why the button below it is
+ * disabled.
+ */
+function GoLiveChecklist({
+  items,
+  className,
+}: {
+  items: readonly ChecklistItem[];
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid="watch-party-go-live-checklist"
+      className={cn(
+        "flex flex-col gap-1.5 rounded-lg border border-border bg-surface-0 px-2.5 py-2",
+        className,
+      )}
+    >
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        {t("watchParty.checklist.title")}
+      </p>
+      <ul className="flex flex-col gap-1 text-xs">
+        {items.map((item) => (
+          <ChecklistRow
+            key={item.id}
+            tone={item.tone}
+            data-watch-party-checklist-item={item.id}
+          >
+            {t(checklistCopyKey(item))}
+          </ChecklistRow>
+        ))}
+        {/* Two reminders with no signal to compute them from: whether the
+            film is actually playing, and whether the mic is unmuted, are
+            both facts only the host can see. Always shown, never a hint. */}
+        <ChecklistRow tone="ok">
+          {t("watchParty.checklist.filmPlaying")}
+        </ChecklistRow>
+        <ChecklistRow tone="ok">
+          {t("watchParty.checklist.micUnmuted")}
+        </ChecklistRow>
+      </ul>
+      {blocksGoLive(items) && (
+        <p
+          data-testid="watch-party-checklist-blocked"
+          className="flex items-start gap-1.5 text-xs text-danger"
+        >
+          <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+          {t("watchParty.checklist.blockedFirefox")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ChecklistRow({
+  tone,
+  children,
+  ...rest
+}: {
+  tone: ChecklistTone;
+  children: ReactNode;
+} & Record<`data-${string}`, string>) {
+  return (
+    <li
+      className={cn(
+        "flex items-start gap-1.5",
+        tone === "block"
+          ? "text-danger"
+          : tone === "hint"
+            ? "text-warning"
+            : "text-text-tertiary",
+      )}
+      {...rest}
+    >
+      {tone === "ok" ? (
+        <Check className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+      ) : (
+        <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+      )}
+      <span>{children}</span>
+    </li>
+  );
+}
+
 // -------------------------------------------------------- the draft, setting up
 
 /**
@@ -842,6 +993,25 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
     : offersShellSystemAudio(captureEnv) && captureEnv.sharePickerOffersAudio
       ? { context: "desktop" }
       : { context: "desktopSilent" };
+  const hasAudioTrack =
+    stream === null ? null : stream.getAudioTracks().length > 0;
+  const checklistItems = useMemo(
+    () =>
+      goLiveChecklist({
+        isFirefox: isFirefoxUserAgent(currentUserAgent()),
+        isDesktopShell: isDesktopApp(),
+        desktopSharesTabAudio: desktopSharesTabAudio(getDesktop()),
+        hasAudioTrack,
+        quality: readWatchPartyStreamQuality(props.currentUserId ?? null),
+        cameraOn: props.cameraOn ?? false,
+      }),
+    [hasAudioTrack, props.currentUserId, props.cameraOn],
+  );
+  // FIREFOX IS THE ONE ROW THAT BLOCKS. Everything else on this list is a
+  // hint a host may ignore; there is no signal-safe watch party on Firefox
+  // at all (no `restrictOwnAudio`, no `preferCurrentTab`), so `onGoLive` must
+  // not run there even with a picture already picked.
+  const checklistBlocked = blocksGoLive(checklistItems);
 
   useEffect(() => setName(party.name), [party.id, party.name]);
 
@@ -1005,6 +1175,18 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         onOpen={() => setOptionsOpen(true)}
       />
 
+      {/* THE GO-LIVE CHECKLIST (postmortem B3). Every failure mode on
+          2026-09-12 was on this list before it happened: the wrong browser,
+          a tab picked with no tab audio, 1080p over a long path, a camera
+          left on next to the share. Shown here, in setup, because this is
+          the one moment a host can still act on all four without having
+          told a room anything yet. */}
+      {canPutPictureUp && (
+        <div className="px-3 pt-2">
+          <GoLiveChecklist items={checklistItems} />
+        </div>
+      )}
+
       {/* A STATE BAR, NOT A FOOTER, and that is the whole of the third fix.
           A host on production picked a window, watched his own preview and
           told a room he was live while nothing at all was being sent. The
@@ -1038,11 +1220,13 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               {t("watchParty.setup.heading")}
             </span>{" "}
             <span className="text-text-tertiary">
-              {stream
-                ? t("watchParty.setup.goLiveHint")
-                : canPutPictureUp
-                  ? t("watchParty.setup.pickFirst")
-                  : t("watchParty.setup.phoneHint")}
+              {checklistBlocked
+                ? t("watchParty.checklist.blockedFirefox")
+                : stream
+                  ? t("watchParty.setup.goLiveHint")
+                  : canPutPictureUp
+                    ? t("watchParty.setup.pickFirst")
+                    : t("watchParty.setup.phoneHint")}
             </span>
           </p>
         </div>
@@ -1068,8 +1252,14 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           {canPutPictureUp && (
             <Button
               type="button"
-              disabled={busy || !stream}
-              title={stream ? undefined : t("watchParty.setup.pickFirst")}
+              disabled={busy || !stream || checklistBlocked}
+              title={
+                checklistBlocked
+                  ? t("watchParty.checklist.blockedFirefox")
+                  : stream
+                    ? undefined
+                    : t("watchParty.setup.pickFirst")
+              }
               onClick={() => void goLive()}
               data-watch-party-go-live
               className="bg-danger text-paper hover:bg-danger/85"
@@ -1293,6 +1483,23 @@ function LiveSurface(
     });
   const runningTheShow =
     party.viewerRole === "host" || party.viewerRole === "cohost";
+
+  // THE GO-LIVE CHECKLIST, reused from the setup surface for "Compartilhar
+  // tela" (postmortem B3): the same four rows, minus tab audio, which this
+  // surface has no picked capture to read yet — `onShareScreen` opens its
+  // own picker inside `use-voice.ts`, invisible from here.
+  const liveChecklistItems = useMemo(
+    () =>
+      goLiveChecklist({
+        isFirefox: isFirefoxUserAgent(currentUserAgent()),
+        isDesktopShell: isDesktopApp(),
+        desktopSharesTabAudio: desktopSharesTabAudio(getDesktop()),
+        hasAudioTrack: null,
+        quality: readWatchPartyStreamQuality(props.currentUserId ?? null),
+        cameraOn: props.cameraOn ?? false,
+      }),
+    [props.currentUserId, props.cameraOn],
+  );
 
   const viewerHint = (
     <div className="pointer-events-none absolute right-3 top-14 z-10 [&>*]:pointer-events-auto">
@@ -1734,6 +1941,8 @@ function LiveSurface(
       onMicGainChange={props.onMicGainChange}
       onDisplayGainChange={props.onDisplayGainChange}
       micLevelDb={props.micLevelDb}
+      outputLevelDb={props.outputLevelDb}
+      userId={props.currentUserId ?? null}
     />
   );
 
@@ -1845,15 +2054,27 @@ function LiveSurface(
                       })}
               </p>
               {hostSide && !preparing && props.onShareScreen && (
-                <Button
-                  type="button"
-                  className="mt-2"
-                  onClick={() => void props.onShareScreen?.()}
-                  data-watch-party-share-screen
-                >
-                  <MonitorPlay className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                  {t("watchParty.live.shareScreen")}
-                </Button>
+                <>
+                  <GoLiveChecklist
+                    items={liveChecklistItems}
+                    className="mt-2 max-w-sm text-left"
+                  />
+                  <Button
+                    type="button"
+                    className="mt-2"
+                    disabled={blocksGoLive(liveChecklistItems)}
+                    title={
+                      blocksGoLive(liveChecklistItems)
+                        ? t("watchParty.checklist.blockedFirefox")
+                        : undefined
+                    }
+                    onClick={() => void props.onShareScreen?.()}
+                    data-watch-party-share-screen
+                  >
+                    <MonitorPlay className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                    {t("watchParty.live.shareScreen")}
+                  </Button>
+                </>
               )}
             </div>
           </StreamStartingSoon>

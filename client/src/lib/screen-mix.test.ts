@@ -120,6 +120,48 @@ function fakeContextWithAnalyser(level: { value: number }) {
   };
 }
 
+/**
+ * Two INDEPENDENT analysers, one per `createAnalyser()` call — the output
+ * meter is wired up first (a tap on the bus, before the ducking section), so
+ * the first call controls it and the second controls the mic ducking
+ * analyser. A single shared fake (`fakeContextWithAnalyser` above) is fine
+ * for the ducking tests, which never read `outputLevelDb`, but the output
+ * meter needs a level nothing else is driving.
+ */
+function fakeContextWithTwoAnalysers(levels: {
+  output: { value: number };
+  mic: { value: number };
+}) {
+  const base = fakeContext();
+  let call = 0;
+  const make = (
+    name: string,
+    level: { value: number },
+  ): AnalyserNodeLike & { name: string } => ({
+    name,
+    fftSize: 32,
+    connect: () => {},
+    disconnect: () => {},
+    getFloatTimeDomainData: (buffer: Float32Array) => {
+      buffer.fill(level.value);
+    },
+  });
+  return {
+    ...base,
+    context: {
+      ...base.context,
+      createAnalyser: () => {
+        const analyser =
+          call === 0
+            ? make("outputAnalyser", levels.output)
+            : make("micAnalyser", levels.mic);
+        call++;
+        return analyser;
+      },
+    },
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -249,5 +291,61 @@ describe("createScreenMix", () => {
     expect(displayGainNode.gain.value).toBeCloseTo(base);
 
     mix.close();
+  });
+
+  it("draws no output level when the context cannot build an analyser", () => {
+    const f = fakeContext();
+    const display = new FakeStream([new FakeTrack("video"), new FakeTrack("audio")]);
+    const mix = createScreenMix(display as never, null, () => f.context as never);
+    expect(mix.outputLevelDb()).toBeNull();
+  });
+
+  it("reports the bus's own level, independent of the mic branch", () => {
+    vi.useFakeTimers();
+    const outputLevel = { value: 0.5 };
+    const micLevel = { value: 0 };
+    const f = fakeContextWithTwoAnalysers({ output: outputLevel, mic: micLevel });
+    const display = new FakeStream([new FakeTrack("video"), new FakeTrack("audio")]);
+    const mic = new FakeStream([new FakeTrack("audio")]);
+    const mix = createScreenMix(display as never, mic as never, () => f.context as never);
+
+    vi.advanceTimersByTime(50);
+    // 0.5 amplitude RMS is about -6 dBFS; the mic branch is silent (0) and
+    // must not leak into this reading.
+    expect(mix.outputLevelDb()).toBeCloseTo(20 * Math.log10(0.5), 1);
+
+    mix.close();
+  });
+
+  it("reports true digital silence as -Infinity, NOT null", () => {
+    // The whole point of this meter: a track that is open and carrying
+    // nothing must read as measurably silent, not as "nothing to report" —
+    // collapsing the two is the bug the 2026-09-12 postmortem (B2) found.
+    vi.useFakeTimers();
+    const outputLevel = { value: 0 };
+    const micLevel = { value: 0 };
+    const f = fakeContextWithTwoAnalysers({ output: outputLevel, mic: micLevel });
+    const display = new FakeStream([new FakeTrack("video"), new FakeTrack("audio")]);
+    const mix = createScreenMix(display as never, null, () => f.context as never);
+
+    vi.advanceTimersByTime(50);
+    expect(mix.outputLevelDb()).toBe(Number.NEGATIVE_INFINITY);
+
+    mix.close();
+  });
+
+  it("stops sampling once closed", () => {
+    vi.useFakeTimers();
+    const outputLevel = { value: 0.5 };
+    const micLevel = { value: 0 };
+    const f = fakeContextWithTwoAnalysers({ output: outputLevel, mic: micLevel });
+    const display = new FakeStream([new FakeTrack("video"), new FakeTrack("audio")]);
+    const mix = createScreenMix(display as never, null, () => f.context as never);
+    vi.advanceTimersByTime(50);
+    const readAtClose = mix.outputLevelDb();
+    mix.close();
+    outputLevel.value = 0.9;
+    vi.advanceTimersByTime(200);
+    expect(mix.outputLevelDb()).toBe(readAtClose);
   });
 });

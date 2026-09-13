@@ -2271,7 +2271,9 @@ export function createVoiceController(transport: RealtimeTransport) {
   function syncWatchPartyPublishCeiling() {
     sfu?.setScreenHlsPublishHeight(
       screenCaptureIsWatchParty
-        ? watchPartyPublishCeilingHeight(readWatchPartyStreamQuality())
+        ? watchPartyPublishCeilingHeight(
+            readWatchPartyStreamQuality(state.self?.userId ?? null),
+          )
         : null,
     );
   }
@@ -4109,6 +4111,19 @@ export function createVoiceController(transport: RealtimeTransport) {
      */
     micLevelDb(): number | null {
       return screenMix?.micLevelDb() ?? null;
+    },
+
+    /**
+     * The MIXED BUS's live level, in dBFS, for the "your broadcast has no
+     * sound" warning (`WatchPartyTransmission`, `watch-party-output-
+     * silence.ts`). A different question from `micLevelDb`: that one reads
+     * the mic branch alone, this one reads what the egress is actually about
+     * to receive, post-limiter. `null` while there is no mix at all (no
+     * share, or the mic is not in it) — the same "nothing to report" the mic
+     * meter uses.
+     */
+    outputLevelDb(): number | null {
+      return screenMix?.outputLevelDb() ?? null;
     },
 
     /**
