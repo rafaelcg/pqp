@@ -50,10 +50,10 @@ async function bootInstance(
 const CHANNEL = "22222222-2222-4222-8222-222222222222";
 
 const voiceOn = {
-  voiceEnabled: true,
+  guests: "invite" as const,
   hostUserId: "host",
   cohostIds: ["cohost"],
-  invitedIds: ["guest"],
+  acceptedGuestIds: ["guest"],
 };
 
 describe("watch-party seat cache across two instances", () => {
