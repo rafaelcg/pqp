@@ -4488,17 +4488,31 @@ async function welcomeVoicePeer(
   const byId = new Map<string, VoiceParticipant>();
   let party = getWatchPartyState(peer.voiceChannelId);
   if (registryOn()) {
-    // The room's other instances' peers, and the party the room holds. One
-    // read each, both best effort: a failed read leaves the local view,
-    // which is what a single machine would have shown. The raised hand is
-    // folded into this roster (the LEFT JOIN on `voice_raised_hands`): after
-    // the peer row exists there is no second round trip for it.
+    // The room's other instances' peers, the party the room holds and the
+    // queue it is playing. One read each, all best effort: a failed read
+    // leaves the local view, which is what a single machine would have
+    // shown. The raised hand is folded into this roster (the LEFT JOIN on
+    // `voice_raised_hands`): after the peer row exists there is no second
+    // round trip for it.
+    //
+    // THE MUSIC READ CATCHES ITS OWN FAILURE rather than riding the `try`
+    // below. All three are in one `Promise.all` to keep the join to a single
+    // round trip, but a rejection there would abandon the other two results
+    // — and a socket seated with no roster and no watch party because the
+    // music query hiccuped would be a far worse trade than a silent player.
+    // `undefined` is already "no row to adopt" on this path.
     try {
       await settledRowWrites(peer.voiceChannelId);
       const [room, held, heldMusic] = await Promise.all([
         listVoiceRoster(peer.voiceChannelId),
         readWatchParty(peer.voiceChannelId),
-        readMusic(peer.voiceChannelId),
+        readMusic(peer.voiceChannelId).catch((error: unknown) => {
+          logEvent("voice.registryReadFailed", {
+            op: "welcomeMusic",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return undefined;
+        }),
       ]);
       if (heldMusic !== undefined) {
         adoptMusicFromRow(peer.voiceChannelId, heldMusic, peer.id);
