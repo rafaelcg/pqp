@@ -80,10 +80,13 @@ vi.mock("../services/dms.js", () => ({
   resolveRingableConversation: async () => null,
 }));
 
+/** "voice" for every channel unless the TOCTOU test below marks one a `watch_party`. */
+const channelTypes = vi.hoisted(() => ({ byId: new Map<string, string>() }));
+
 vi.mock("../services/servers.js", () => ({
-  getChannel: async () => ({
+  getChannel: async (channelId: string) => ({
     kind: "server",
-    type: "voice",
+    type: channelTypes.byId.get(channelId) ?? "voice",
     server_id: "11111111-1111-4111-8111-111111111111",
   }),
   getChannelAudience: async () => ({
@@ -93,8 +96,19 @@ vi.mock("../services/servers.js", () => ({
   }),
 }));
 
+/**
+ * `pending`, when set, is what every instance's `listActiveWatchPartyStatusesByChannel`
+ * awaits instead of answering — the TOCTOU test below stalls it on purpose
+ * to open a window between instance A's occupancy snapshot and its actual
+ * disconnect decision, wide enough to let instance B's own join land in it.
+ */
+const watchPartyStatus = vi.hoisted(() => ({
+  pending: null as Promise<Map<string, string>> | null,
+}));
+
 vi.mock("../services/watch-parties.js", () => ({
-  getActiveWatchPartyRow: async () => null,
+  listActiveWatchPartyStatusesByChannel: async () =>
+    watchPartyStatus.pending ?? new Map<string, string>(),
   loadWatchPartySeat: async () => null,
 }));
 
@@ -249,6 +263,8 @@ describeDb("the idle hangup across two instances", () => {
     } else {
       process.env.VOICE_IDLE_ALONE_MINUTES = previousLimit;
     }
+    channelTypes.byId.clear();
+    watchPartyStatus.pending = null;
     vi.restoreAllMocks();
   });
 
@@ -351,5 +367,62 @@ describeDb("the idle hangup across two instances", () => {
     await a.voice.sweepIdleAloneSeats(T0 + 10 * MINUTE);
     expect(warnings(alice)).toHaveLength(0);
     expect(hangups(alice)).toHaveLength(0);
+  });
+
+  /**
+   * Farol's reliability finding on the first version of this fix: the
+   * sweep computed occupancy ONCE per tick and used that cached number all
+   * the way through to the actual `disconnectVoiceUser` call, with real
+   * awaits (a watch-party read, here stalled on purpose) in between. On a
+   * cluster, a join can land on the OTHER instance in exactly that window,
+   * and the stale snapshot has no way to see it. `isStillAloneRightNow` is
+   * the fix: a fresh, un-cached re-check immediately before the seat is
+   * actually cut.
+   *
+   * The window here is real, not simulated: alice's occupancy snapshot on A
+   * is taken while she is genuinely alone; Bob's join on B, and the
+   * registry write it produces, both happen strictly AFTER that snapshot
+   * and strictly BEFORE A's disconnect decision, because the stalled
+   * watch-party read is what is holding A's sweep open across the exact
+   * middle of that window.
+   */
+  it("(b) TOCTOU: a join on the OTHER instance during the sweep's own tick is honored, not the stale snapshot", async () => {
+    const channel = randomUUID();
+    const T0 = Date.now();
+    channelTypes.byId.set(channel, "watch_party");
+
+    const a = await bootInstance();
+    const b = await bootInstance();
+
+    const aliceId = randomUUID();
+    const alice = await join(a, aliceId, channel);
+    await settle();
+
+    await a.voice.sweepIdleAloneSeats(T0); // alice's clock starts, genuinely alone
+
+    let release: (() => void) | undefined;
+    watchPartyStatus.pending = new Promise<Map<string, string>>((resolve) => {
+      release = () => resolve(new Map()); // not live: the exemption does not apply
+    });
+
+    // Not awaited yet: this suspends inside `computeLiveWatchPartyRooms`,
+    // which runs once for the whole tick, BEFORE any room's disconnect
+    // decision — including alice's, whose elapsed time already exceeds the
+    // limit at this timestamp.
+    const sweep = a.voice.sweepIdleAloneSeats(T0 + 10 * MINUTE);
+
+    // Bob joins the SAME room on instance B, and his row settles, entirely
+    // inside A's suspended sweep.
+    const bobId = randomUUID();
+    const bob = await join(b, bobId, channel);
+    await settle();
+
+    release?.();
+    await sweep;
+
+    // The snapshot A's tick started with said "alone"; the fresh re-check
+    // immediately before the cut saw Bob's row and refused it.
+    expect(hangups(alice)).toHaveLength(0);
+    expect(hangups(bob)).toHaveLength(0);
   });
 });

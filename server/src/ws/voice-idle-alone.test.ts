@@ -67,20 +67,33 @@ vi.mock("../services/servers.js", () => ({
 }));
 
 /**
- * `getActiveWatchPartyRow` is the idle sweep's cluster-safe signal that a
- * lone seat is presenting to an audience (see `isPresentingLiveWatchParty`
- * in `voice.ts`). Real `channel_sessions` access needs a database this file
- * runs without, so it is mocked here like every other service dependency;
- * the watch-party group below drives it with `watchPartyRow.current`.
+ * `listActiveWatchPartyStatusesByChannel` is the idle sweep's cluster-safe,
+ * batched signal that a lone seat is presenting to an audience (see
+ * `computeLiveWatchPartyRooms` in `voice.ts`). Real `channel_sessions`
+ * access needs a database this file runs without, so it is mocked here like
+ * every other service dependency; the watch-party group below drives it
+ * with `watchPartyStatus.current`, keyed by channel id.
  */
-const watchPartyRow = vi.hoisted(() => ({
-  current: null as { status: string } | null,
+const watchPartyStatus = vi.hoisted(() => ({
+  current: new Map<string, string>(),
   /** Set by the overlap-guard test to hold one read open on purpose. */
-  pending: null as Promise<{ status: string } | null> | null,
+  pending: null as Promise<Map<string, string>> | null,
 }));
 
 vi.mock("../services/watch-parties.js", () => ({
-  getActiveWatchPartyRow: async () => watchPartyRow.pending ?? watchPartyRow.current,
+  listActiveWatchPartyStatusesByChannel: async (channelIds: readonly string[]) => {
+    if (watchPartyStatus.pending) {
+      return watchPartyStatus.pending;
+    }
+    const statuses = new Map<string, string>();
+    for (const id of channelIds) {
+      const status = watchPartyStatus.current.get(id);
+      if (status !== undefined) {
+        statuses.set(id, status);
+      }
+    }
+    return statuses;
+  },
   loadWatchPartySeat: async () => null,
 }));
 
@@ -165,8 +178,8 @@ afterEach(() => {
   resetVoicePeers();
   vi.useRealTimers();
   channelTypes.byId.clear();
-  watchPartyRow.current = null;
-  watchPartyRow.pending = null;
+  watchPartyStatus.current.clear();
+  watchPartyStatus.pending = null;
 });
 
 async function join(userId: string, channel: string): Promise<Recorder> {
@@ -304,6 +317,13 @@ describe("idle hangup", () => {
 
     const bobId = randomUUID();
     const b = await join(bobId, channel);
+    // The join hook clears the warning SYNCHRONOUSLY (no sweep needed) and
+    // tells alice's client so explicitly, rather than leaving her banner to
+    // go stale until a roster update happens to imply it — the client-side
+    // gap a Farol review found on the original version of this fix.
+    expect(
+      a.frames.filter((f) => f.type === "voice-idle-warning-cancelled"),
+    ).toHaveLength(1);
     await sweepIdleAloneSeats(T0 + 10 * MINUTE);
     await sweepIdleAloneSeats(T0 + 30 * MINUTE);
     expect(hangups(a)).toHaveLength(0);
@@ -398,16 +418,17 @@ describe("idle hangup", () => {
    * Requirement (d) of the multi-instance rebase: a watch-party presenter
    * alone in the voice room is not "alone" while an audience is watching
    * HLS without a seat (see `docs/WATCH_PARTY.md`, "The stream") —
-   * `isPresentingLiveWatchParty` reads `channel_sessions` (mocked here as
-   * `getActiveWatchPartyRow`) rather than a per-process egress map, because
-   * the host's socket and the instance running the HLS egress are not
-   * guaranteed to be the same machine.
+   * `computeLiveWatchPartyRooms` reads `channel_sessions` (mocked here as
+   * `listActiveWatchPartyStatusesByChannel`, batched for the whole tick)
+   * rather than a per-process egress map, because the host's socket and the
+   * instance running the HLS egress are not guaranteed to be the same
+   * machine.
    */
   describe("watch-party presenter exemption", () => {
     it("never disconnects the lone presenter of a live watch party", async () => {
       const channel = randomUUID();
       channelTypes.byId.set(channel, "watch_party");
-      watchPartyRow.current = { status: "live" };
+      watchPartyStatus.current.set(channel, "live");
       const host = randomUUID();
       const a = await join(host, channel);
 
@@ -424,7 +445,7 @@ describe("idle hangup", () => {
       channelTypes.byId.set(channel, "watch_party");
       // Scheduled but not yet on air, or already ended — either way not
       // "live", so an empty seat is exactly as alone as an ordinary room.
-      watchPartyRow.current = { status: "ended" };
+      watchPartyStatus.current.set(channel, "ended");
       const host = randomUUID();
       const a = await join(host, channel);
 
@@ -432,6 +453,53 @@ describe("idle hangup", () => {
       await sweepIdleAloneSeats(T0 + 9 * MINUTE);
       expect(warnings(a)).toHaveLength(1);
       await sweepIdleAloneSeats(T0 + 10 * MINUTE);
+      expect(hangups(a)).toHaveLength(1);
+    });
+
+    /**
+     * Farol's correctness finding: the exemption used to `continue` without
+     * touching `aloneSince` / `idleWarnedAt`, so a clock that started before
+     * the party went live kept running underneath the exemption. The
+     * moment the party ended, the very next sweep saw the pre-party elapsed
+     * time and could disconnect the presenter immediately — no fresh
+     * warning, no fresh window, despite them having just finished
+     * presenting to a room full of people. Fixed by clearing the marks
+     * (and, since a warning had gone out, notifying the client) the instant
+     * the exemption applies; this pins that the post-party clock starts
+     * over from zero rather than continuing a pre-party count.
+     */
+    it("a clock running before the party goes live does not survive it: the post-party window starts fresh", async () => {
+      const channel = randomUUID();
+      channelTypes.byId.set(channel, "watch_party");
+      const host = randomUUID();
+      const a = await join(host, channel);
+
+      // Alone and warned BEFORE anybody presses "go live".
+      await sweepIdleAloneSeats(T0);
+      await sweepIdleAloneSeats(T0 + 9 * MINUTE);
+      expect(warnings(a)).toHaveLength(1);
+
+      // The party goes live with one minute left on the pre-party clock.
+      watchPartyStatus.current.set(channel, "live");
+      await sweepIdleAloneSeats(T0 + 9.5 * MINUTE);
+      // The stale warning is taken back the moment the exemption applies.
+      expect(a.frames.filter((f) => f.type === "voice-idle-warning-cancelled")).toHaveLength(1);
+
+      // The OLD ten-minute mark passes while still live: no hangup, because
+      // presenting was never "alone" and the clock was cleared, not merely
+      // paused mid-count.
+      await sweepIdleAloneSeats(T0 + 10 * MINUTE);
+      expect(hangups(a)).toHaveLength(0);
+
+      // The party ends. If the pre-party elapsed time had survived, this
+      // very next tick would disconnect immediately; instead alice gets a
+      // full fresh ten minutes.
+      watchPartyStatus.current.set(channel, "ended");
+      await sweepIdleAloneSeats(T0 + 10.5 * MINUTE); // fresh clock starts
+      expect(hangups(a)).toHaveLength(0);
+      await sweepIdleAloneSeats(T0 + 19.5 * MINUTE); // 9 min later: warned
+      expect(warnings(a)).toHaveLength(2);
+      await sweepIdleAloneSeats(T0 + 20.5 * MINUTE); // 10 min later: gone
       expect(hangups(a)).toHaveLength(1);
     });
   });
@@ -452,8 +520,8 @@ describe("idle hangup", () => {
     await join(host, channel);
 
     let release: (() => void) | undefined;
-    watchPartyRow.pending = new Promise<null>((resolve) => {
-      release = () => resolve(null);
+    watchPartyStatus.pending = new Promise<Map<string, string>>((resolve) => {
+      release = () => resolve(new Map());
     });
 
     const first = sweepIdleAloneSeats(T0);

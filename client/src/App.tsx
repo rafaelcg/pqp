@@ -3371,6 +3371,21 @@ function MainAppContent({
             return;
           }
 
+          // The server itself took the warning back: somebody else joined,
+          // a live watch party started, or our own "still here" (or any
+          // other self-initiated frame) reached it and reset the clock.
+          // This, not the click that sent `voice-still-here`, is what
+          // clears the banner — see the schema note on
+          // `voiceIdleWarningCancelledMessageSchema` for why the
+          // confirmation has to come from the server rather than being
+          // assumed the moment the button is pressed.
+          if (message.type === "voice-idle-warning-cancelled") {
+            setIdleWarning((current) =>
+              current?.voiceChannelId === message.voiceChannelId ? null : current,
+            );
+            return;
+          }
+
           // The watch party event object changed. Handled here and NOT passed
           // on: `voice.handleSignaling` types its input as a voice frame, and
           // this one is a chat frame that happens to be routed per socket.
@@ -7701,8 +7716,15 @@ function MainAppContent({
               type="button"
               className="shrink-0 text-xs underline underline-offset-2"
               onClick={() => {
+                // Send and wait: the banner clears on the server's
+                // `voice-idle-warning-cancelled` confirmation, not on this
+                // click. A socket that is closed or mid-reconnect can drop
+                // this frame; clearing here regardless would tell the
+                // person they are safe while the server still counts down
+                // to the original deadline. Pressing again if nothing
+                // happens is harmless — the server treats a repeat
+                // `voice-still-here` exactly like the first one.
                 transport.sendVoice({ type: "voice-still-here" });
-                setIdleWarning(null);
               }}
             >
               {t("voice.idle.stillHere")}

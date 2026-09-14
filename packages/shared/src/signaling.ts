@@ -603,6 +603,30 @@ export type VoiceIdleWarningMessage = z.infer<
   typeof voiceIdleWarningMessageSchema
 >;
 
+/**
+ * Server → one participant's sockets: the pending `voice-idle-warning` for
+ * this room no longer applies — clear the banner. Sent from exactly one
+ * place, the moment the server itself clears its own `idleWarnedAt` for a
+ * peer that had one: somebody else joined the room, the presenter's watch
+ * party went live, or the peer's own `voice-still-here` (or any other
+ * self-initiated frame) reset the clock.
+ *
+ * THIS IS THE CONFIRMATION, NOT THE CLICK. A client that clears its banner
+ * the instant the person presses the button is trusting a frame that may
+ * never have reached a closed or reconnecting socket — the server would
+ * then still hang up at the original deadline while the screen swore it was
+ * fine. Waiting for this frame instead means the banner is wrong for at
+ * most as long as delivery takes, never wrong forever, and never silently.
+ */
+export const voiceIdleWarningCancelledMessageSchema = z.object({
+  type: z.literal("voice-idle-warning-cancelled"),
+  voiceChannelId: z.string(),
+});
+
+export type VoiceIdleWarningCancelledMessage = z.infer<
+  typeof voiceIdleWarningCancelledMessageSchema
+>;
+
 export type VoiceSpeakChangedMessage = z.infer<
   typeof voiceSpeakChangedMessageSchema
 >;
@@ -633,6 +657,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   voiceModerationMessageSchema,
   voiceSpeakChangedMessageSchema,
   voiceIdleWarningMessageSchema,
+  voiceIdleWarningCancelledMessageSchema,
   // --- watch party ---
   watchPartyMessageSchema,
   // --- music queue --- see packages/shared/src/music.ts

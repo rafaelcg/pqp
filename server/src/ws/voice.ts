@@ -68,7 +68,7 @@ import { resolveMemberChannelPermissions } from "../services/permissions.js";
  * acyclic, so the seat gate below costs no lazy import on the join path.
  */
 import {
-  getActiveWatchPartyRow,
+  listActiveWatchPartyStatusesByChannel,
   loadWatchPartySeat,
 } from "../services/watch-parties.js";
 import { canAccessChannel, resolveMemberName } from "../services/users.js";
@@ -3534,24 +3534,110 @@ async function computeRoomOccupancy(
  * host's socket and the instance actually running the HLS egress are not
  * guaranteed to be the same machine.
  *
- * Only asked when it might matter (a `watch_party` channel already down to
- * one local occupant), and fails toward NOT disconnecting: a read error
- * means "skip this room's decision this tick", the same rule
- * `computeRoomOccupancy` uses for its own registry read.
+ * ONE QUERY FOR THE WHOLE TICK, not one per room. The naive version awaited
+ * `getActiveWatchPartyRow` inside the per-room loop — W qualifying rooms,
+ * every `IDLE_ALONE_SWEEP_MS`, W sequential reads (Farol's N+1 finding).
+ * Every room that could possibly need the answer this tick (occupants <= 1
+ * and at least one seat is in a `watch_party` channel) is collected first,
+ * then asked in one `listActiveWatchPartyStatusesByChannel` call.
+ *
+ * Fails toward NOT disconnecting: a read error treats every candidate as
+ * presenting live for this tick — the same direction `computeRoomOccupancy`
+ * fails in for its own registry read, and for the same reason (a DB hiccup
+ * must never manufacture a disconnect).
  */
-async function isPresentingLiveWatchParty(
-  voiceChannelId: string,
-  roomPeers: readonly VoicePeer[],
-): Promise<boolean> {
-  if (!roomPeers.some((peer) => peer.watchParty)) {
-    return false;
+async function computeLiveWatchPartyRooms(
+  byRoom: ReadonlyMap<string, VoicePeer[]>,
+  occupancy: ReadonlyMap<string, number | null>,
+): Promise<Set<string>> {
+  const candidates: string[] = [];
+  for (const [voiceChannelId, roomPeers] of byRoom) {
+    const occupants = occupancy.get(voiceChannelId);
+    if (
+      occupants !== null &&
+      occupants !== undefined &&
+      occupants <= 1 &&
+      roomPeers.some((peer) => peer.watchParty)
+    ) {
+      candidates.push(voiceChannelId);
+    }
+  }
+  if (candidates.length === 0) {
+    return new Set();
   }
   try {
-    const row = await getActiveWatchPartyRow(voiceChannelId);
-    return row?.status === "live";
+    const statuses = await listActiveWatchPartyStatusesByChannel(candidates);
+    const live = new Set<string>();
+    for (const [voiceChannelId, status] of statuses) {
+      if (status === "live") {
+        live.add(voiceChannelId);
+      }
+    }
+    return live;
   } catch (error) {
     console.error("[voice] idle sweep: watch-party read failed:", error);
-    return true;
+    return new Set(candidates);
+  }
+}
+
+/**
+ * Clears a peer's idle-alone marks and, only when there was actually a
+ * pending warning to take back, tells the client so — `voice-idle-warning-
+ * cancelled`. Every place `aloneSince` / `idleWarnedAt` get reset to
+ * "nothing happening" goes through here, so the client's banner is driven
+ * by an explicit server confirmation instead of guessing from a roster diff
+ * (a peer joining the same channel) or clearing itself optimistically on a
+ * click that may never have reached the server (the two client-side gaps a
+ * Farol review found on this PR: the banner outliving a joiner, and
+ * "I'm still here" clearing state before the frame is confirmed delivered).
+ */
+function clearIdleAloneMarks(peer: VoicePeer, voiceChannelId: string): void {
+  if (peer.idleWarnedAt !== undefined) {
+    send(peer.socket, {
+      type: "voice-idle-warning-cancelled",
+      voiceChannelId,
+    });
+  }
+  peer.aloneSince = undefined;
+  peer.idleWarnedAt = undefined;
+}
+
+/**
+ * The very last check before a peer is actually cut, reading fresh rather
+ * than the tick's cached `computeRoomOccupancy` snapshot. That snapshot is
+ * read once per tick and the loop below can spend real time — other rooms'
+ * awaits, including this same function for a different room — before this
+ * room's turn to act on it comes up; on a cluster, a join can also land on
+ * the OTHER instance in exactly that window, which the batched snapshot has
+ * no way to see since it was never asked again (Farol's finding: a stale
+ * snapshot must never be what a destructive disconnect is decided on).
+ * Fails toward NOT disconnecting: a read error here means "not confirmed
+ * alone", and the seat is left for the next tick rather than cut on a
+ * guess.
+ */
+async function isStillAloneRightNow(voiceChannelId: string): Promise<boolean> {
+  const localUsers = new Set<string>();
+  for (const peer of peers.values()) {
+    if (peer.voiceChannelId === voiceChannelId && !isEgressIdentity(peer.userId)) {
+      localUsers.add(peer.userId);
+    }
+  }
+  if (localUsers.size > 1) {
+    return false;
+  }
+  if (!registryOn()) {
+    return localUsers.size <= 1;
+  }
+  try {
+    const registryCounts = await countVoicePeerUsersByChannel([voiceChannelId]);
+    const count = Math.max(localUsers.size, registryCounts.get(voiceChannelId) ?? 0);
+    return count <= 1;
+  } catch (error) {
+    console.error(
+      "[voice] idle sweep: pre-disconnect occupancy re-check failed:",
+      error,
+    );
+    return false;
   }
 }
 
@@ -3608,6 +3694,7 @@ export async function sweepIdleAloneSeats(now = Date.now()): Promise<void> {
       byRoom.set(peer.voiceChannelId, list);
     }
     const occupancy = await computeRoomOccupancy(byRoom);
+    const liveWatchPartyRooms = await computeLiveWatchPartyRooms(byRoom, occupancy);
     for (const [voiceChannelId, roomPeers] of byRoom) {
       const occupants = occupancy.get(voiceChannelId);
       // null: the registry read for this room failed this tick. undefined
@@ -3622,7 +3709,15 @@ export async function sweepIdleAloneSeats(now = Date.now()): Promise<void> {
       if (candidates.length === 0) {
         continue;
       }
-      if (occupants <= 1 && (await isPresentingLiveWatchParty(voiceChannelId, roomPeers))) {
+      if (occupants <= 1 && liveWatchPartyRooms.has(voiceChannelId)) {
+        // Presenting, not alone. Clear the clock rather than merely
+        // skipping it: a warning issued before the party went live must not
+        // survive the party, or the very next tick after it ends could
+        // disconnect the presenter on pre-party elapsed time instead of
+        // starting a fresh window now that they are genuinely alone again.
+        for (const peer of candidates) {
+          clearIdleAloneMarks(peer, voiceChannelId);
+        }
         continue;
       }
       for (const peer of candidates) {
@@ -3631,8 +3726,7 @@ export async function sweepIdleAloneSeats(now = Date.now()): Promise<void> {
           continue;
         }
         if (occupants > 1) {
-          peer.aloneSince = undefined;
-          peer.idleWarnedAt = undefined;
+          clearIdleAloneMarks(peer, voiceChannelId);
           continue;
         }
         if (peer.aloneSince === undefined) {
@@ -3641,6 +3735,16 @@ export async function sweepIdleAloneSeats(now = Date.now()): Promise<void> {
         }
         const elapsed = now - peer.aloneSince;
         if (elapsed >= limit) {
+          // LAST CHECK, FRESH READ: the tick's occupancy snapshot can be
+          // stale by the time execution reaches this specific peer (other
+          // rooms' awaits ran first), and on a cluster a join can land on
+          // the OTHER instance in that same window. A destructive
+          // disconnect is decided on the room's state right now, never on
+          // the cached `occupants` above.
+          if (!(await isStillAloneRightNow(voiceChannelId))) {
+            clearIdleAloneMarks(peer, voiceChannelId);
+            continue;
+          }
           idleAloneDisconnected += 1;
           const aloneMinutes = Math.round(limit / 60_000);
           logEvent("voice.idleAloneDisconnected", {
@@ -4383,6 +4487,19 @@ export async function handleVoiceMessage(
   if (existingPeerId && SELF_INITIATED_VOICE_FRAMES.has(payload.type)) {
     const peer = peers.get(existingPeerId);
     if (peer?.aloneSince !== undefined) {
+      // Restart, not stop: still alone, just did something on purpose. If a
+      // warning was pending, the client's banner is cleared by an explicit
+      // confirmation rather than by the click itself — see
+      // `clearIdleAloneMarks`'s doc comment for why: a `voice-still-here`
+      // that never reached the server (a closing or reconnecting socket)
+      // must not have already cleared a banner the deadline behind it is
+      // still counting down to.
+      if (peer.idleWarnedAt !== undefined) {
+        send(peer.socket, {
+          type: "voice-idle-warning-cancelled",
+          voiceChannelId: peer.voiceChannelId,
+        });
+      }
       peer.aloneSince = Date.now();
       peer.idleWarnedAt = undefined;
     }
@@ -5212,8 +5329,7 @@ export async function handleVoiceMessage(
     // peer through the next sweep's registry read, bounded by one tick.
     for (const other of getRoomPeers(payload.voiceChannelId)) {
       if (other.id !== peerId) {
-        other.aloneSince = undefined;
-        other.idleWarnedAt = undefined;
+        clearIdleAloneMarks(other, payload.voiceChannelId);
       }
     }
     if (!canSpeak) {
