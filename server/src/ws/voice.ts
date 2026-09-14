@@ -2055,6 +2055,14 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     if (!changed) {
       return;
     }
+    // STAMPED HERE, BEFORE THE FAN-OUT'S AWAITS. `publishChannelLive` used to
+    // read the clock when it ran, which is after this function has awaited
+    // the audience: a start and a stop reconciling at once could then publish
+    // out of order, the stop first and the stale start behind it with the
+    // LATER number, and the other machine would accept the start and hold an
+    // ended playlist. The number is now the moment this process accepted the
+    // reconcile's answer, which is the order the answers actually happened in.
+    const at = Date.now();
     // Per peer rather than `broadcastToRoom`: the playlist URL carries a
     // token bound to the recipient, so there is no one frame for the room.
     for (const peer of getRoomPeers(voiceChannelId)) {
@@ -2070,7 +2078,7 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     // than resolving again: a `null` here is the session this process just
     // ended, which is as certain as it gets.
     await broadcastChannelLive(voiceChannelId, { stream: next, known: true });
-    publishChannelLive(voiceChannelId, next, prev);
+    publishChannelLive(voiceChannelId, next, prev, at);
   } catch (error) {
     logEvent("voice.hlsReconcileFailed", {
       channelId: voiceChannelId,
@@ -2424,6 +2432,8 @@ function publishChannelLive(
   channelId: string,
   stream: LiveHlsStream | null,
   prev: LiveHlsStream | null,
+  /** When this process accepted the reconcile, not when this ran. See above. */
+  at: number,
 ): void {
   if (!isBusEnabled()) {
     return;
@@ -2433,7 +2443,7 @@ function publishChannelLive(
     channelId,
     stream,
     endsStartedAt: stream ? null : (prev?.startedAt ?? null),
-    at: Date.now(),
+    at,
   } satisfies VoiceLiveFrame);
 }
 
@@ -2709,6 +2719,24 @@ const hlsTokenRemint = { loops: 0, tokens: 0 };
  * changes and on the audience keyframe cadence while it is live or watched.
  * Never per subscribe: see `createHlsAudience`.
  */
+/**
+ * How many quiet watched channels may reach `hls_sessions` on one keyframe
+ * tick, across the whole process. Small on purpose: this is the recovery path
+ * for a bus frame that was lost, not a source of truth, and every other way
+ * into the same answer (the welcome, `watch-live`, `GET /live`) is triggered
+ * by a person and bounded by them.
+ */
+const HLS_CONVERGENCE_PER_TICK = 8;
+let convergenceBudget = HLS_CONVERGENCE_PER_TICK;
+/**
+ * The budget refills on its own clock rather than per tick, because each
+ * channel keeps its own keyframe timer: there is no one moment when "the
+ * tick" happens.
+ */
+setInterval(() => {
+  convergenceBudget = HLS_CONVERGENCE_PER_TICK;
+}, ROSTER_AUDIENCE_KEYFRAME_MS).unref?.();
+
 const hlsAudience = createHlsAudience({
   keyframeMs: ROSTER_AUDIENCE_KEYFRAME_MS,
   broadcast: (channelId) => {
@@ -2716,16 +2744,28 @@ const hlsAudience = createHlsAudience({
     // is restated from memory and costs nothing. A channel that is merely
     // WATCHED and holds no stream is the case where a `voice.live` frame may
     // simply have been lost -- the bus is best-effort by design -- and
-    // nothing else would ever tell this machine's viewers, so the resolve
-    // runs. It is not polling: a row read that finds nothing is memoised for
-    // `HLS_DB_STREAM_MISS_MEMO_MS` (a minute), well over the tick, so the
-    // cost is one indexed query per open-but-dead channel per minute and a
-    // lost frame costs a viewer at most that long.
+    // nothing else would ever tell this machine's viewers, so a resolve has
+    // to happen somewhere.
+    //
+    // BOUNDED BY THE TICK, NOT BY THE CHANNEL COUNT. One resolve per quiet
+    // watched channel per tick is a query rate that grows with how many
+    // channels people happen to have open, which at ten thousand of them is
+    // a sustained load nobody asked for. Instead each tick spends a small
+    // budget of resolves, taken round-robin, so the cost is flat
+    // (`HLS_CONVERGENCE_PER_TICK` queries per tick, ever) and the worst case
+    // is that a lost frame takes a few more ticks to be noticed.
     const held = hlsAudience.stream(channelId);
-    void broadcastChannelLive(
-      channelId,
-      held ? { stream: held, known: true } : undefined,
-    );
+    if (held) {
+      void broadcastChannelLive(channelId, { stream: held, known: true });
+      return;
+    }
+    if (convergenceBudget > 0) {
+      convergenceBudget -= 1;
+      void broadcastChannelLive(channelId);
+      return;
+    }
+    // Out of budget this tick: restate what we have, ask nothing.
+    void broadcastChannelLive(channelId, { stream: null, known: false });
   },
   remintMs: HLS_VIEWER_TOKEN_REMINT_MS,
   remint: (channelId, watchers) => {

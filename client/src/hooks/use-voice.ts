@@ -6152,7 +6152,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       channelId: string,
       live: { stream: LiveHlsStream | null; watching: number; ended?: boolean },
     ) {
-      if (state.channelLive[channelId]) {
+      const previous = state.channelLive[channelId];
+      // An entry we hold only because of a null the server could not vouch
+      // for is not an answer, and the route's is: let it through. Anything
+      // else stands, because the socket is the live source and this seed is
+      // the one-time catch-up behind it.
+      if (previous && (previous.stream !== null || previous.streamEnded)) {
         return;
       }
       state.channelLive = {

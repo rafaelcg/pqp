@@ -172,8 +172,15 @@ export function resetWatchPartyStateFrameCountersForTests(): void {
  * it could read the row at all (an absent row is an answer, an unreadable one
  * is not), and an unreadable one is retried a few times with a widening gap.
  */
-const WATCH_PARTY_RELAY_ATTEMPTS = 4;
+/**
+ * Long enough to outlive a dependency blip, because there is no second
+ * notice: four tries over a couple of seconds meant a Postgres hiccup that
+ * lasted five left this machine's audience on the old party until somebody
+ * else changed something. Exponential, capped per attempt, ~3 minutes in all.
+ */
+const WATCH_PARTY_RELAY_ATTEMPTS = 12;
 const WATCH_PARTY_RELAY_BACKOFF_MS = 500;
+const WATCH_PARTY_RELAY_BACKOFF_MAX_MS = 20_000;
 
 /**
  * ONE WALK PER SESSION AT A TIME, plus at most one waiting behind it. A burst
@@ -220,7 +227,10 @@ function runRelayedWatchPartyWalk(
     }
     setTimeout(
       () => applyRelayedWatchPartyState(sessionId, attempt + 1),
-      WATCH_PARTY_RELAY_BACKOFF_MS * attempt,
+      Math.min(
+        WATCH_PARTY_RELAY_BACKOFF_MS * 2 ** (attempt - 1),
+        WATCH_PARTY_RELAY_BACKOFF_MAX_MS,
+      ),
     ).unref?.();
   };
   void broadcastWatchParty(sessionId, { fromBus: true })

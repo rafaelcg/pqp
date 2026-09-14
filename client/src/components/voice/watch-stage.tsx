@@ -412,7 +412,13 @@ export function WatchChannelStage({
   const inThisCall =
     voiceState.voiceChannelId === channelId && voiceState.status !== "idle";
   const live = voiceState.channelLive[channelId];
-  const known = live !== undefined;
+  // DESCRIBED, not merely present. An entry whose null the server could not
+  // vouch for is "we have not been told" (`streamEnded`), and cancelling the
+  // one-time GET on it would throw away the only authoritative answer this
+  // pane is ever going to get: the viewer would sit on "Preparando" until
+  // some later frame happened along.
+  const known =
+    live !== undefined && (live.stream !== null || live.streamEnded === true);
   const stream = inThisCall ? null : (live?.stream ?? null);
   const hasStream = stream !== null;
   const dualDeviceWarning = isSeatedOnAnotherDevice(
