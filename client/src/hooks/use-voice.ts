@@ -6148,7 +6148,10 @@ export function createVoiceController(transport: RealtimeTransport) {
      * has already been told: the frame is newer than the request by
      * definition, and the seed is only there to cover the gap before it.
      */
-    seedChannelLive(channelId: string, live: ChannelLive) {
+    seedChannelLive(
+      channelId: string,
+      live: { stream: LiveHlsStream | null; watching: number; ended?: boolean },
+    ) {
       if (state.channelLive[channelId]) {
         return;
       }
@@ -6157,9 +6160,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         [channelId]: {
           stream: live.stream ? resolveLiveHlsStream(live.stream) : null,
           watching: live.watching,
-          // The route asked the server outright (and, since PR 598, the
-          // database behind it), so a null here is an answer, not silence.
-          streamEnded: live.stream == null,
+          // ONLY WHEN THE SERVER VOUCHED FOR IT. The route asks the session
+          // table (PR 598) and says `ended` when it got an answer; a null
+          // WITHOUT it is a query that failed, not a party that is over, and
+          // reading it as an end is what hangs a viewer up. Same contract as
+          // the `channel-live` frame.
+          streamEnded: live.stream == null && live.ended === true,
         },
       };
       emit();

@@ -175,10 +175,47 @@ export function resetWatchPartyStateFrameCountersForTests(): void {
 const WATCH_PARTY_RELAY_ATTEMPTS = 4;
 const WATCH_PARTY_RELAY_BACKOFF_MS = 500;
 
+/**
+ * ONE WALK PER SESSION AT A TIME, plus at most one waiting behind it. A burst
+ * of changes to the same party (a guest accepted, the stage changed, the host
+ * went live) publishes a frame each, and each frame is a full audience walk
+ * with a permission read per recipient; run concurrently they multiply that
+ * cost for an answer every one of them re-reads from the same row anyway. The
+ * pending one is not a queue: the row it will read is whatever the row is
+ * when it runs, which is exactly the coalescing the roster already does.
+ */
+const relayedWalks = new Map<string, { pending: boolean }>();
+
 function applyRelayedWatchPartyState(sessionId: string, attempt: number): void {
-  const again = (why: string) => {
+  const running = relayedWalks.get(sessionId);
+  if (running) {
+    running.pending = true;
+    return;
+  }
+  const entry = { pending: false };
+  relayedWalks.set(sessionId, entry);
+  runRelayedWatchPartyWalk(sessionId, attempt, entry);
+}
+
+function runRelayedWatchPartyWalk(
+  sessionId: string,
+  attempt: number,
+  entry: { pending: boolean },
+): void {
+  const done = (retry: string | null) => {
+    relayedWalks.delete(sessionId);
+    if (entry.pending) {
+      // Something changed while this walk was running: one more walk, from
+      // the top, which re-reads the row and so covers every frame that
+      // arrived in the meantime.
+      applyRelayedWatchPartyState(sessionId, 1);
+      return;
+    }
+    if (retry === null) {
+      return;
+    }
     if (attempt >= WATCH_PARTY_RELAY_ATTEMPTS) {
-      console.error("[watch-party] relayed state dropped:", sessionId, why);
+      console.error("[watch-party] relayed state dropped:", sessionId, retry);
       return;
     }
     setTimeout(
@@ -188,9 +225,7 @@ function applyRelayedWatchPartyState(sessionId: string, attempt: number): void {
   };
   void broadcastWatchParty(sessionId, { fromBus: true })
     .then((told) => {
-      if (!told) {
-        again("row or audience unreadable");
-      }
+      done(told ? null : "row or audience unreadable");
     })
     // A REJECTION IS A FAILED WALK TOO. `broadcastWatchParty` reports the two
     // failures it expects, but the permission and cohost reads inside it can
@@ -198,7 +233,7 @@ function applyRelayedWatchPartyState(sessionId: string, attempt: number): void {
     // only notice of the party exactly as a swallowed `false` would.
     .catch((error: unknown) => {
       console.error("[watch-party] relayed state broadcast failed:", error);
-      again("broadcast threw");
+      done("broadcast threw");
     });
 }
 

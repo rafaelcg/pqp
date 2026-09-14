@@ -2065,7 +2065,7 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       });
     }
     hlsAudience.setStream(voiceChannelId, next);
-    rememberChannelStream(voiceChannelId, next);
+    rememberChannelStream(voiceChannelId, next, prev?.startedAt ?? null);
     // `next` is the reconcile's own answer, so the frame carries it rather
     // than resolving again: a `null` here is the session this process just
     // ended, which is as certain as it gets.
@@ -2148,6 +2148,15 @@ function channelStreamFor(channelId: string): LiveHlsStream | null {
  * that one.
  */
 const HLS_DB_STREAM_MEMO_MS = 5_000;
+/**
+ * A row read that found NOTHING is held longer than one that found a stream.
+ * A positive is short-lived because it is a guess that an authoritative frame
+ * should replace within seconds; a negative is the answer for a channel with
+ * no party at all, and the keyframe below asks for it once a tick for as long
+ * as anybody has such a channel open. One query a minute per channel is the
+ * price of converging after a lost bus frame; one per tick would be polling.
+ */
+const HLS_DB_STREAM_MISS_MEMO_MS = 60_000;
 const dbStreamMemo = new Map<
   string,
   { at: number; stream: LiveHlsStream | null }
@@ -2181,6 +2190,14 @@ const dbStreamInFlight = new Map<
 function rememberChannelStream(
   channelId: string,
   stream: LiveHlsStream | null,
+  /**
+   * The `startedAt` of the session a local stop just ended. Recorded as a
+   * fence: a `voice.live` frame that crossed while this process was stopping
+   * carries that same session, and adopting it would put the stream back on
+   * the machine that had just taken it down, with no `liveHlsStreamFor` and
+   * no held stream left for the handler's lineage checks to catch it with.
+   */
+  endedStartedAt?: number | null,
 ): void {
   // Bumped BEFORE the write, so a query already in flight can see that it has
   // been overtaken (`readChannelStreamFromDb`). Without it the losing race is
@@ -2190,8 +2207,15 @@ function rememberChannelStream(
   streamGeneration.set(channelId, (streamGeneration.get(channelId) ?? 0) + 1);
   if (stream) {
     dbStreamMemo.set(channelId, { at: Date.now(), stream });
+    locallyEndedAt.delete(channelId);
   } else {
     dbStreamMemo.delete(channelId);
+    if (endedStartedAt != null) {
+      locallyEndedAt.set(
+        channelId,
+        Math.max(locallyEndedAt.get(channelId) ?? 0, endedStartedAt),
+      );
+    }
   }
   pruneLiveChannelState();
 }
@@ -2202,6 +2226,9 @@ function rememberChannelStream(
  * nothing.
  */
 const streamGeneration = new Map<string, number>();
+
+/** The newest session THIS process has stopped, per channel. See above. */
+const locallyEndedAt = new Map<string, number>();
 
 /**
  * Both per-channel maps are keyed by every channel that has ever gone live or
@@ -2218,7 +2245,7 @@ function pruneLiveChannelState(): void {
   const now = Date.now();
   if (dbStreamMemo.size > LIVE_CHANNEL_STATE_SWEEP_AT) {
     for (const [channelId, memo] of dbStreamMemo) {
-      if (now - memo.at > HLS_DB_STREAM_MEMO_MS) {
+      if (now - memo.at > HLS_DB_STREAM_MISS_MEMO_MS) {
         dbStreamMemo.delete(channelId);
       }
     }
@@ -2228,6 +2255,7 @@ function pruneLiveChannelState(): void {
       if (now - at > RELAYED_LIVE_AT_MAX_AGE_MS && !hlsAudience.stream(channelId)) {
         relayedLiveAt.delete(channelId);
         streamGeneration.delete(channelId);
+        locallyEndedAt.delete(channelId);
       }
     }
   }
@@ -2241,7 +2269,11 @@ async function resolveChannelStream(
     return { stream: local, known: true };
   }
   const memo = dbStreamMemo.get(channelId);
-  if (memo && Date.now() - memo.at < HLS_DB_STREAM_MEMO_MS) {
+  if (
+    memo &&
+    Date.now() - memo.at <
+      (memo.stream ? HLS_DB_STREAM_MEMO_MS : HLS_DB_STREAM_MISS_MEMO_MS)
+  ) {
     return { stream: memo.stream, known: true };
   }
   const inFlight = dbStreamInFlight.get(channelId);
@@ -2412,6 +2444,14 @@ function publishChannelLive(
  */
 export async function getChannelLiveState(channelId: string): Promise<{
   stream: LiveHlsStream | null;
+  /**
+   * The server can vouch for a `stream: null` (its maps and the session table
+   * agree there is nothing live). False when the table could not be asked at
+   * all: the route must then say "I do not know", because the client treats
+   * this answer as authoritative and would otherwise mark a live party ended
+   * on the strength of one failed query.
+   */
+  known: boolean;
   watching: number;
   participants: number;
 }> {
@@ -2441,9 +2481,10 @@ export async function getChannelLiveState(channelId: string): Promise<{
   // Postgres round trip, only paid when the other three already came up
   // empty (which is never the case on the instance actually running the
   // egress -- this read never touches the database there).
-  const { stream } = await resolveChannelStream(channelId);
+  const { stream, known } = await resolveChannelStream(channelId);
   return {
     stream,
+    known,
     watching: hlsAudience.count(channelId),
     participants: getRoomPeers(channelId).length,
   };
@@ -2456,6 +2497,7 @@ export function resetHlsAudience(): void {
   dbStreamMemo.clear();
   dbStreamInFlight.clear();
   streamGeneration.clear();
+  locallyEndedAt.clear();
 }
 
 /**
@@ -2670,15 +2712,20 @@ const hlsTokenRemint = { loops: 0, tokens: 0 };
 const hlsAudience = createHlsAudience({
   keyframeMs: ROSTER_AUDIENCE_KEYFRAME_MS,
   broadcast: (channelId) => {
-    // THE KEYFRAME RESTATES, IT DOES NOT DISCOVER. This clock also ticks for
-    // a channel that merely has a watcher and no stream at all, so resolving
-    // here would put one `hls_sessions` query per such channel behind a
-    // 30-second timer for as long as somebody has the channel open. What the
-    // audience is holding is exactly what the keyframe is for; discovery
-    // belongs to the paths a person triggers (the welcome, `watch-live`,
-    // `GET /live`), which are bounded by their own caller.
-    const stream = hlsAudience.stream(channelId);
-    void broadcastChannelLive(channelId, { stream, known: stream !== null });
+    // THE KEYFRAME IS ALSO THE CONVERGENCE TICK. A stream this machine holds
+    // is restated from memory and costs nothing. A channel that is merely
+    // WATCHED and holds no stream is the case where a `voice.live` frame may
+    // simply have been lost -- the bus is best-effort by design -- and
+    // nothing else would ever tell this machine's viewers, so the resolve
+    // runs. It is not polling: a row read that finds nothing is memoised for
+    // `HLS_DB_STREAM_MISS_MEMO_MS` (a minute), well over the tick, so the
+    // cost is one indexed query per open-but-dead channel per minute and a
+    // lost frame costs a viewer at most that long.
+    const held = hlsAudience.stream(channelId);
+    void broadcastChannelLive(
+      channelId,
+      held ? { stream: held, known: true } : undefined,
+    );
   },
   remintMs: HLS_VIEWER_TOKEN_REMINT_MS,
   remint: (channelId, watchers) => {
@@ -8552,6 +8599,17 @@ subscribeToCluster(VOICE_LIVE_TOPIC, (data) => {
   if (frame.at < lastAt) {
     return;
   }
+  // THE LOCAL STOP FENCE. `liveHlsStreamFor` and `hlsAudience` are both empty
+  // the moment this process ends a session, so neither guard below can catch
+  // the frame that was already in flight for it.
+  const endedHere = locallyEndedAt.get(frame.channelId);
+  if (
+    endedHere !== undefined &&
+    frame.stream &&
+    frame.stream.startedAt <= endedHere
+  ) {
+    return;
+  }
   const held = hlsAudience.stream(frame.channelId);
   if (held) {
     // Lineage: a stream older than the one held, or a stop that names an
@@ -8576,7 +8634,11 @@ subscribeToCluster(VOICE_LIVE_TOPIC, (data) => {
   hlsAudience.setStream(frame.channelId, frame.stream);
   // And the memo, so a stop cannot be undone by a row this process read
   // seconds earlier (`rememberChannelStream`).
-  rememberChannelStream(frame.channelId, frame.stream);
+  rememberChannelStream(
+    frame.channelId,
+    frame.stream,
+    frame.endsStartedAt ?? held?.startedAt ?? null,
+  );
   hlsAudienceFramesSent.fromBus += 1;
   // The room's own frame too, for the seats this instance holds in it: a
   // room spans machines (M2), and `pushLiveHls` only ever reached the

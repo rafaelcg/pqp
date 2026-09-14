@@ -3662,9 +3662,16 @@ describe("watch mode without a seat", () => {
     });
     expect(voice.getState().channelLive[WATCHED]?.streamEnded).toBe(false);
 
+    // The route's null is an END only when it says so: `ended` is absent when
+    // the server could not reach the session table, and a failed query must
+    // not hang a viewer up.
     const OTHER = "00000000-0000-4000-8000-0000000000ef";
-    voice.seedChannelLive(OTHER, { stream: null, watching: 0 });
+    voice.seedChannelLive(OTHER, { stream: null, watching: 0, ended: true });
     expect(voice.getState().channelLive[OTHER]?.streamEnded).toBe(true);
+
+    const UNSURE = "00000000-0000-4000-8000-0000000000ee";
+    voice.seedChannelLive(UNSURE, { stream: null, watching: 0 });
+    expect(voice.getState().channelLive[UNSURE]?.streamEnded).toBe(false);
   });
 
   it("says watch-live once, takes it back once, and repeats neither", () => {

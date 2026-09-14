@@ -4716,6 +4716,10 @@ router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
   const state = await getChannelLiveState(channelId!);
   return {
     stream: state.stream ? stampViewerStream(state.stream, user.id) : null,
+    // Absent on a null the server could not vouch for (the session table was
+    // unreachable), so the client holds what it has instead of reading one
+    // failed query as the party being over. Same contract as `channel-live`.
+    ...(state.stream === null && state.known ? { ended: true } : {}),
     watching: state.watching,
     participants: state.participants,
   };
