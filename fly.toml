@@ -11,30 +11,50 @@
 # This server keeps WebSocket connection state, presence, voice-room membership
 # and rate-limit buckets in process memory (server/src/ws/,
 # server/src/lib/rate-limit.ts) and shares what has to be shared through
-# Postgres (docs/plans/MULTI_INSTANCE_VOICE.md). More than one machine needs
-# all of these, and all of them are set on pqp-api today (2026-09-07):
+# Postgres (docs/plans/MULTI_INSTANCE_VOICE.md). THIS FILE IS PINNED FOR TWO
+# MACHINES (M6 of docs/plans/MULTI_INSTANCE_VOICE.md) — `min_machines_running`
+# below is 2, and the flip that makes the live app match it is a deliberate
+# manual step, not a side effect of merging: docs/deploy-fly.md "Two machines
+# in production" is the exact command order, gated on a green staging matrix
+# at N machines (docs/plans/M6_REHEARSAL_2026-09-14.md) and run in a quiet
+# window. Until that flip runs, `fly machines list` may still show one. Once
+# it runs, every one of these is load-bearing, not aspirational, and all of
+# them are now set in THIS FILE's [env] block below rather than only as Fly
+# secrets:
 #   * CLUSTER_BUS=postgres      chat, presence and voice hints cross instances
 #                               over LISTEN/NOTIFY; the boot self-echo proves it
 #   * VOICE_REGISTRY=postgres   rooms, seats and transport pins live in Postgres
-#   * LIVEKIT_* set             a mesh room is relayed by one process and cannot
+#   * LIVEKIT_* set (Fly secret, credentialed, not in this file)
+#                               a mesh room is relayed by one process and cannot
 #                               span two; with two live instances the server
-#                               sends new rooms to the SFU, and REFUSES a mesh
-#                               join into a room pinned on the other process,
-#                               or any mesh join with no SFU (the M5 guard)
+#                               sends new rooms to the SFU, and adopts (never
+#                               refuses, since 2026-09-08) a mesh join into a
+#                               room pinned on the other process
 #   * DATABASE_URL session-mode (LISTEN never delivers through a transaction
 #                               pooler; the boot self-echo check says so loudly)
+#   * WORKER_MODE=api           batch sweeps (server/src/jobs.ts) run ONCE, on
+#                               pqp-worker, not once per API machine. Without
+#                               this, N machines run N synchronized copies of
+#                               every sweep and flap the DB circuit breaker
+#                               (docs/plans/M6_REHEARSAL_2026-09-14.md finding;
+#                               pqp-worker already exists and answers /health)
 # Unset the bus or the registry with two machines up and you have two chat
 # servers behind one hostname. That is a misconfiguration to avoid, not what
 # happened on 2026-09-07: that window ran two machines with all four in
 # force, chat and LiveKit rooms crossed machines fine, and what bit was the
-# guard hanging up peer-to-peer joins. See `min_machines_running` below.
+# guard hanging up peer-to-peer joins (fixed 2026-09-08). See
+# `min_machines_running` below.
 #
 # The invariant CI asserts after every deploy (deploy-api-fly.yml): the number
 # of started machines equals `min_machines_running` below (or the repo variable
 # PQP_API_MACHINES, which overrides it while a flip is in progress), all in
-# gru. Machine count itself is NOT expressible here; it is `fly scale count N
-# --region gru`, a deliberate manual step recorded in docs/deploy-fly.md.
-# Deploys pass --ha=false so they never add a machine on their own.
+# gru, AND every started machine answers the deployed commit on ITS OWN
+# `/health` (via `fly-force-instance-id`, not just the load-balanced hostname,
+# which could pass by luck hitting only one machine). Machine count itself is
+# NOT expressible here; it is `fly scale count N --region gru`, a deliberate
+# manual step recorded in docs/deploy-fly.md. Deploys pass --ha=false so they
+# never add a machine on their own; the rolling strategy below replaces them
+# one at a time.
 #
 # AN AUTO-STOPPED MACHINE DROPS EVERY LIVE WEBSOCKET at once, which client-side
 # looks exactly like the "Realtime connection closed" incident this codebase
@@ -86,18 +106,57 @@ kill_timeout = 30
   # (e.g. Cloudflare proxied DNS) in front of Fly.
   TRUST_PROXY = "true"
 
-  # pg pool ceiling per process. There is one process, so this is the app's
-  # entire connection footprint against Postgres. Keep it comfortably under the
-  # database's max_connections, together with fly.worker.toml's PG_POOL_MAX
-  # when the worker exists (until WORKER_MODE=api is set on this app, the
-  # batch sweeps in server/src/jobs.ts share this pool too).
-  PG_POOL_MAX = "10"
+  # pg pool ceiling PER MACHINE. With min_machines_running = 2 below, the
+  # app's total connection footprint is roughly 2 x (PG_POOL_MAX + 2) — the
+  # +2 is CLUSTER_BUS's dedicated LISTEN session plus a second, separate
+  # LISTEN session the outgoing-webhook poller holds per machine, both
+  # outside the pool (confirmed live in pg_stat_activity by
+  # docs/plans/M6_REHEARSAL_2026-09-14.md, a detail the M1/M2
+  # MULTI_INSTANCE_VOICE plan's "one LISTEN session per machine" framing
+  # undercounts).
+  #
+  # THE FORMULA (docs/deploy-fly.md "Two machines in production" walks this
+  # with live numbers): total budget, minus the worker's own pool
+  # (fly.worker.toml PG_POOL_MAX=4) and the nightly backup's one transient
+  # connection, minus a small reserve for admin/platform sessions, divided by
+  # the machine count, minus 2 for this machine's own LISTEN sessions.
+  #
+  # Production Postgres today is Vultr Managed PostgreSQL (2 dedicated vCPU /
+  # 4 GB, single node — docs/plans/ALWAYS_ON.md §5), which replaced the Fly
+  # Managed Postgres cluster docs/DB_RUNBOOK.md §3's connection-budget table
+  # was written against. That table stops at a 2 GB row, so the number below
+  # extends that table's own 1 GB->~30 / 2 GB->~50 progression by the same
+  # +20-per-GB step to a ~90-backend ceiling at 4 GB. TREAT 90 AS AN ESTIMATE
+  # TO CONFIRM against `SHOW max_connections` on the live cluster before the
+  # flip runs, not as a measured fact — this PR does not touch production and
+  # cannot run that query. (90 - worker 4 - backup 1 - admin/platform 5) / 2
+  # machines - 2 LISTEN = 38. The single-machine live value today is
+  # PG_POOL_MAX=70 against that same ~90 estimate, which is the sanity check
+  # for the estimate: one machine already uses most of the budget alone.
+  PG_POOL_MAX = "38"
 
-  # WORKER_MODE is deliberately NOT here. Unset means this process runs the
-  # batch jobs itself, which is correct until pqp-worker exists. The flip to
-  # `api` is a one-time `fly secrets set` in docs/deploy-fly.md §7f, done only
-  # after the worker answers /health; move it into this file afterwards if
-  # you prefer it reviewable.
+  # Batch sweeps (server/src/jobs.ts: attachment/quarantine sweeps, audit /
+  # report / timeout prunes, retention, interrupted-account deletion, the
+  # outgoing-webhook outbox, the Community Home media sweep) run on
+  # pqp-worker ONLY. Required at two machines, not merely preferred: unset,
+  # each API machine runs its own copy of every sweep on its own local
+  # setInterval, and two machines that boot within seconds of each other (a
+  # `fly scale count` or a rolling deploy) fire them in near-synchronized
+  # bursts that flap the DB circuit breaker (server/src/db.ts) even though
+  # steady-state Postgres load is fine — reproduced at three machines in
+  # docs/plans/M6_REHEARSAL_2026-09-14.md, not theoretical. pqp-worker already
+  # exists and answers /health (docs/deploy-fly.md §7f), so this is safe to
+  # set here rather than as a separate `fly secrets set` step.
+  WORKER_MODE = "api"
+
+  # Cross-instance chat/presence fan-out over Postgres LISTEN/NOTIFY. See the
+  # file banner above and docs/plans/MULTI_INSTANCE_VOICE.md (M1).
+  CLUSTER_BUS = "postgres"
+
+  # Voice rooms, seats and transport pins live in Postgres so a join can land
+  # on either machine and find the room's state. See the file banner above
+  # and docs/plans/MULTI_INSTANCE_VOICE.md (M2).
+  VOICE_REGISTRY = "postgres"
 
 [http_service]
   internal_port = 3001
@@ -118,24 +177,29 @@ kill_timeout = 30
   # you investigate rather than a latency spike you never notice.
   auto_start_machines = false
 
-  # ONE machine, by choice, for now. Not a limit of the code: the bus, the
-  # registry and LiveKit are live (banner above), and on 2026-09-07 production
-  # ran two machines from 13:20Z to 15:59Z with chat, presence and six
-  # LiveKit rooms crossing them for up to 80 minutes, one cross-machine
-  # resume adopted, zero app-level errors and zero user reports. What did not
-  # survive it: the mesh guard refused a peer-to-peer join when the room's
-  # pin lived on the other process (four times, each one a hung-up call, one
-  # of them ending a two-person call), fixed 2026-09-08 (the pin is adopted
-  # and mesh signaling crosses the bus); and two proxy-side 1001 close bursts
-  # are still unexplained. The runbook, what the window showed and what is
-  # left before two machines again (a staging rehearsal with LIVEKIT_* set):
-  # docs/deploy-fly.md 6a-bis.
+  # TWO machines, gru, rolling deploys. On 2026-09-07 production first ran
+  # two machines from 13:20Z to 15:59Z with chat, presence and six LiveKit
+  # rooms crossing them for up to 80 minutes, one cross-machine resume
+  # adopted, zero app-level errors and zero user reports; the one thing that
+  # did not survive it (the mesh guard refusing a peer-to-peer join when the
+  # room's pin lived on the other process, four times, once ending a
+  # two-person call) was fixed 2026-09-08 — the pin is adopted and mesh
+  # signaling crosses the bus instead. `docs/plans/M6_REHEARSAL_2026-09-14.md`
+  # then rehearsed the full production shape on staging at three machines
+  # with `LIVEKIT_*` set, real LiveKit media, a rolling deploy under load and
+  # a 3->2->3 scale test, and closed the WORKER_MODE finding folded into this
+  # file's [env] block above. The flip that makes a live `pqp-api` match this
+  # file (this PR changes no running infrastructure by itself) is
+  # `docs/deploy-fly.md` "Two machines in production", gated on that staging
+  # matrix passing green and run in a quiet window.
   #
   # With auto-stop off this is not a lever Fly pulls; it is the number CI
   # asserts after a deploy (or PQP_API_MACHINES while a flip is in progress)
-  # and the number `fly scale count` has to match, in gru. Raising it here
-  # and merging is one step of the flip; `fly scale count 2` is the other.
-  min_machines_running = 1
+  # and the number `fly scale count` has to match, in gru. Merging this file
+  # is one step of the flip; `fly scale count 2` is the other, and CI's
+  # per-machine `/health` check (deploy-api-fly.yml) is what confirms both
+  # sides agree.
+  min_machines_running = 2
 
   processes = ["app"]
 
@@ -157,14 +221,16 @@ kill_timeout = 30
     #
     # Sized from measurements (server/scripts/README.md, "What compression
     # was worth"): with compression on, peak RSS was 365 MB at 400 sockets
-    # and 609 MB at 800, under 1 MB a socket, so 2000 sockets is under 2 GB
-    # of this 4 GB machine with room left for the heap and for a reconnect
-    # storm, when a closing socket and its replacement both count for a few
-    # seconds. A 500-person watch party plus an ordinary evening (a few
-    # hundred sockets) is about 1000, the soft limit, which with one machine
-    # is only a marker. Outbound bandwidth gives out first anyway (measured
-    # floor 350 in one room, projected 650 to 700 after the presence deltas),
-    # so the proxy is never the first to say no.
+    # and 609 MB at 800, under 1 MB a socket, so 2000 sockets is under 2 GB —
+    # this now sizes to THIS machine's 2048mb ([[vm]] above, downsized from
+    # 4gb with the move to two machines), with less headroom per machine than
+    # before for the heap and a reconnect storm, when a closing socket and
+    # its replacement both count for a few seconds. A 500-person watch party
+    # plus an ordinary evening (a few hundred sockets) is about 1000, the
+    # soft limit — now split across two machines rather than carried by one,
+    # which is the point of the flip. Outbound bandwidth gives out first
+    # anyway (measured floor 350 in one room, projected 650 to 700 after the
+    # presence deltas), so the proxy is never the first to say no.
     type = "connections"
     soft_limit = 1000
     hard_limit = 2000
@@ -183,10 +249,10 @@ kill_timeout = 30
   #
   # This means `/health` no longer proves a broken release can reach
   # Postgres at all, so it no longer alone gates a deploy against that class
-  # of failure — deploy-api-fly.yml's "Verify the deployed commit" step
-  # additionally curls `/ready` before declaring the release done, so routing
-  # health and deploy safety are two different checks instead of one
-  # overloaded one.
+  # of failure — deploy-api-fly.yml's separate "Verify the release is ready
+  # (Postgres reachable)" step additionally curls `/ready` before declaring
+  # the release done, so routing health and deploy safety are two different
+  # checks instead of one overloaded one.
   #
   # It also answers 503 from the moment the process gets SIGTERM
   # (server/src/lib/drain.ts), which is how a rolling deploy hands the
@@ -220,10 +286,24 @@ kill_timeout = 30
   # LiveKit in SFU mode, so this process never touches audio. Even so, the
   # shared-cpu-1x / 1GB size saturated on 2026-09-05 at ~370 open sockets and
   # a 50-person SFU room: root requests took >10s, the health check flapped and
-  # Clerk tokens expired while queued. Scaled live to this size and the API
-  # answered in 0.3s again. Keep it here; a deploy reverts to whatever this says.
-  size = "performance-2x"
-  memory = "4gb"
+  # Clerk tokens expired while queued. Scaled live to performance-2x/4gb (one
+  # machine) and the API answered in 0.3s again.
+  #
+  # DOWNSIZED to performance-1x / 2048mb with the move to TWO machines
+  # (Rafael's brief, 2026-09-14: "two performance-1x 2 GB machines... scalable
+  # from/to 2...n"). This is a real size change, not assumed safe by the M6
+  # rehearsal, which ran staging at a different size class entirely
+  # (shared-cpu-1x/1gb through shared-cpu-2x/1gb boxes) — it rehearsed the
+  # cluster mechanics (bus, registry, drain, resume, rolling deploy), not this
+  # exact machine size under production's own peak. Production's own measured
+  # peak on the current performance-2x/4gb machine is modest (~156 MB RSS,
+  # ~1 core, 185 sockets), which is why two smaller machines are expected to
+  # carry it with headroom to spare rather than being a downsize taken on
+  # faith — but watch RSS and CPU on both machines for the first real day at
+  # this size (docs/deploy-fly.md "what to watch for a day") and revert to
+  # performance-2x/4gb (one line here) if either machine runs hot alone.
+  size = "performance-1x"
+  memory = "2048mb"
 
 [deploy]
   # rolling + max_unavailable = 1 (an integer: one machine at a time). With

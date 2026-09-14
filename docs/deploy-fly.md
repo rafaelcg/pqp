@@ -4,7 +4,7 @@ Runbook for moving the pqp API and WebSocket server from Railway to **Fly.io, re
 
 Only the API moves. The SPA stays on Cloudflare Pages; Fly serves `/api/*`, `/health`, `/status.json` and the `/ws` upgrade. Config lives in [`fly.toml`](../fly.toml) — read the header comment there before changing anything, because it explains the one constraint that governs this whole document:
 
-> **The machine count is a decision, not a side effect.** WebSocket connections, presence and voice-room membership live in process memory and cross machines through Postgres (`CLUSTER_BUS=postgres`, `VOICE_REGISTRY=postgres`, both on in production) and the SFU. Production runs one machine by choice right now; section 6a-bis says why, what the two-machine window of 2026-09-07 showed, and what has to land before two again. One region, `gru`, always.
+> **The machine count is a decision, not a side effect.** WebSocket connections, presence and voice-room membership live in process memory and cross machines through Postgres (`CLUSTER_BUS=postgres`, `VOICE_REGISTRY=postgres`, both in `fly.toml`'s `[env]`) and the SFU. `fly.toml` is pinned for two machines; section 6a-bis is the flip runbook — what the 2026-09-07 and M6 rehearsal windows showed, the exact command order, the shadow-secret trap, rollback, and how to scale past two. One region, `gru`, always.
 
 `railway.toml` and `.github/workflows/deploy-api.yml` are deliberately left in place. They are the rollback path.
 
@@ -442,48 +442,178 @@ Then assert it, every time, because the failure is silent:
 
 ```bash
 fly machines list --app pqp-api
-# expect exactly min_machines_running rows (fly.toml; 1 today), all state
-# "started", all region "gru". CI checks the same thing after every deploy
-# and also that every started machine runs the same image.
+# expect exactly min_machines_running rows (fly.toml; 2 today, per 6a-bis —
+# a self-host that does not need two machines can leave min_machines_running
+# at 1 and skip 6a-bis entirely), all state "started", all region "gru". CI
+# checks the same thing after every deploy and also that every started
+# machine runs the same image.
 
-# if the count is off:
+# if the count is off (fresh bring-up before the two-machine flip):
 fly scale count 1 --region gru --app pqp-api
 ```
 
-### 6a-bis. Running two machines (M5 of `docs/plans/MULTI_INSTANCE_VOICE.md`)
+### 6a-bis. Two machines in production (M6 of `docs/plans/MULTI_INSTANCE_VOICE.md`)
 
-**Production is one machine by choice, as of 2026-09-07.** `fly.toml` says `min_machines_running = 1` and live matches. The reason is narrow and specific, so read it before "fixing" the count in either direction.
+**Status: prepared, not flipped.** `fly.toml` on this branch is pinned for two machines (`min_machines_running = 2`, `performance-1x`/2048mb, `WORKER_MODE=api`, `CLUSTER_BUS=postgres`, `VOICE_REGISTRY=postgres`, `PG_POOL_MAX` recomputed — see that file's own comments for the reasoning behind each number). Merging it does not, by itself, add a machine or change what is running: the flip is the manual command sequence below, gated on a green staging matrix and run in a quiet window, per Rafael's brief for the 2026-09-19 party.
 
-**What the two-machine window showed (2026-09-07, 13:20Z to 15:59Z).** Two machines ran in `gru` with `CLUSTER_BUS=postgres`, `VOICE_REGISTRY=postgres` and `LIVEKIT_*` all live on both. There was no split of the userbase: the bus self-echo passed on both machines, six LiveKit rooms spanned both machines and worked for up to 80 minutes, one cross-machine voice resume was adopted live, zero app-level errors, zero user reports. What was two-machine-specific: exactly four `voice.meshRefusedMultiInstance` refusals (loud, the client hangs up; one two-person call ended on it), and two proxy-side 1001 close bursts that are still unexplained. The refusal is the mesh guard doing what it was written to do, and it is why one machine is the choice until the guard adopts the pin instead of refusing.
+#### Background: why one machine, then why two again
 
-**Before two machines again, in this order** (1 to 3 landed 2026-09-08, PR `fix/two-machine-prereqs`; they are dormant on one machine):
+**What the first two-machine window showed (2026-09-07, 13:20Z–15:59Z).** Two machines ran in `gru` with `CLUSTER_BUS=postgres`, `VOICE_REGISTRY=postgres` and `LIVEKIT_*` all live on both. There was no split of the userbase: the bus self-echo passed on both machines, six LiveKit rooms spanned both machines and worked for up to 80 minutes, one cross-machine voice resume was adopted live, zero app-level errors, zero user reports. What was two-machine-specific: exactly four `voice.meshRefusedMultiInstance` refusals (loud, the client hangs up; one two-person call ended on it), and two proxy-side 1001 close bursts that are still unexplained. The refusal was the mesh guard doing what it was written to do, and it is why production stayed at one machine until the guard adopted the pin instead of refusing.
 
-1. Done: the mesh guard adopts the pin. A join or resume into a room pinned on the other instance lands on that room's transport, and mesh signaling for a peer held elsewhere crosses on `voice.signal` (`voice.meshPinAdopted` in the log is the number that used to be a refusal; `voice.meshRefusedMultiInstance` no longer exists).
-2. Done: `voice.cluster.framesRelayed` and `voice.cluster.framesReceived` in `GET /api/admin/metrics`, so "the bus is carrying voice" is a number you read. Both zero on one machine; both climbing within a minute of two machines sharing a room.
-3. Done: moderator server mutes are `voice_server_mutes` rows plus a `voice.serverMute` frame, so a mute applied on one machine holds on the other and survives a resume or a rejoin anywhere.
-4. A staging rehearsal with `LIVEKIT_*` set (`docs/STAGING.md`, "Rehearsing two machines", written as a checklist an agent can execute).
-5. The flip below: `min_machines_running = 2` merged, `fly scale count 2`, and afterwards `voice.cluster.framesReceived` climbing on both machines and zero `voice-join-refused` in the logs.
+**Landed since (all done, all dormant on one machine until the flip):**
 
-Since M5 the server can run on two machines (rolling deploys one at a time, `/health` polled every 10 s). What makes it safe, all of it required:
+1. The mesh guard adopts the pin (2026-09-08). A join or resume into a room pinned on the other instance lands on that room's transport, and mesh signaling for a peer held elsewhere crosses on `voice.signal` (`voice.meshPinAdopted` in the log is the number that used to be a refusal; `voice.meshRefusedMultiInstance` no longer exists).
+2. `voice.cluster.framesRelayed` and `voice.cluster.framesReceived` in `GET /api/admin/metrics`, so "the bus is carrying voice" is a number you read, per machine, via `fly-force-instance-id` — not an assumption from the config existing (CLAUDE.md pitfall #12: production ran with the registry on for days while the delta path that mattered was never exercised by a test that also had it on).
+3. Moderator server mutes are `voice_server_mutes` rows plus a `voice.serverMute` frame, so a mute applied on one machine holds on the other and survives a resume or a rejoin anywhere.
+4. A staging rehearsal with `LIVEKIT_*` set, first at two machines, signaling-only (`docs/plans/M6_REHEARSAL_2026-09-13.md`), then at three machines with real LiveKit media, a rolling deploy under load and a 3→2→3 scale test (`docs/plans/M6_REHEARSAL_2026-09-14.md`). The second rehearsal is the one that matters for this flip: it found and closed the `WORKER_MODE` finding baked into `fly.toml` above (batch jobs must run on `pqp-worker` only — unset, N machines run N synchronized copies of every sweep and flap the DB circuit breaker), proved rings, mute and eviction with real media, and left two items genuinely unresolved (attachments and watch-party-start delivery to a third machine, and a 200-seat join failure rate under concurrent account creation) — see that doc's "Blockers before production" before treating this flip as risk-free.
 
-- `CLUSTER_BUS=postgres` and `VOICE_REGISTRY=postgres` set on the app, and `DATABASE_URL` in session mode (the `direct.` MPG host; LISTEN never delivers through a transaction pooler, and the boot self-echo check logs `bus.selfEchoMissing` if it does not).
-- `LIVEKIT_*` set, exactly as on one machine: the machine count does not change what a room opens on. A room nobody has pinned gets the transport policy's answer (`server/src/voice/transport-policy.ts`: DMs and servers under ten members mesh, communities and larger servers LiveKit, the per-channel override first) and pins it atomically in `voice_rooms`; a room already pinned is adopted by whichever machine the join lands on (`voice.meshPinAdopted` when it is mesh), with offer, answer and ICE crossing the bus on `voice.signal`. Nothing is refused for being mesh, and nothing is sent to the SFU for being on two machines: the guard that did that (`voice.meshGuardForcedSfu`, until 2026-09-08) would have put every small room of a busy night on the one media box.
-- The drain (`server/src/lib/drain.ts`). On SIGTERM the machine flips `/health` to 503 so the proxy stops routing to it, withdraws its voice lease so the other machine stops counting it, waits 2 s, then closes its sockets with 1001 in batches of 50 every 100 to 150 ms (`ws.drainBatch`, `ws.drained` in the log). The clients reconnect to the machine that stayed up and resume their voice seat by id (M3). `/up`, the external monitor, does not go red on a drain: a deploy is not an incident.
+What makes two machines safe at all, all of it required and all of it now literal in `fly.toml`'s `[env]` rather than only a Fly secret:
 
-The flip itself, once, by hand (M6), after the list above:
+- `CLUSTER_BUS=postgres` and `VOICE_REGISTRY=postgres`, and `DATABASE_URL` in session mode (LISTEN never delivers through a transaction pooler; the boot self-echo check logs `bus.selfEchoMissing` if it does not — confirm `bus.selfEcho` with a **matching `configHash`** on every machine, not just that it fires).
+- `WORKER_MODE=api`, confirmed against a **healthy** `pqp-worker` first (§7f) — see the flip order below; this is new since the 2026-09-07 window, which ran without it and got away with it only because that window was two hours, not a standing configuration.
+- `LIVEKIT_*` set, exactly as on one machine: the machine count does not change what a room opens on. A room nobody has pinned gets the transport policy's answer (`server/src/voice/transport-policy.ts`) and pins it atomically in `voice_rooms`; a room already pinned is adopted by whichever machine the join lands on, with offer, answer and ICE crossing the bus on `voice.signal`.
+- The drain (`server/src/lib/drain.ts`). On SIGTERM the machine flips `/health` to 503 so the proxy stops routing to it, withdraws its voice lease, waits 2 s, then closes its sockets with 1001 in batches of 50 every 100–150 ms (`ws.drainBatch`, `ws.drained` in the log). Clients reconnect to the machine that stayed up and resume their voice seat by id (M3). `/up`, the external monitor, does not go red on a drain: a deploy is not an incident.
+- `PG_POOL_MAX` sized so `N × (PG_POOL_MAX + 2)` (the `+2` is CLUSTER_BUS's `LISTEN` session plus the outgoing-webhook poller's, both per machine, both outside the pool) stays under the database's real ceiling — see the formula below.
+
+#### The flip, in order
+
+Production Postgres today is **Vultr Managed PostgreSQL** (2 dedicated vCPU / 4 GB, single node — `docs/plans/ALWAYS_ON.md` §5), reached the same way regardless of which platform runs the API. The API itself stays on Fly for this flip (Rafael, 2026-09-14: settle on Vultr for the API later, once its account limit clears; do the two-machine work on Fly now since M6 already passed there).
 
 ```bash
-fly secrets list --app pqp-api             # CLUSTER_BUS, VOICE_REGISTRY, LIVEKIT_* are already there (since 2026-09-07)
-gh variable set PQP_API_MACHINES --body 2  # keeps the CI assertion true between the scale and the merge
+# 0. Confirm the worker first. It already exists (§7f) and already answers
+#    /health; this is a read, not a change.
+fly status --app pqp-worker
+fly ssh console --app pqp-worker -C "wget -qO- http://localhost:3001/health"
+# {"ok":true,"role":"worker",...}
+
+# 1. WORKER_MODE=api FIRST, alone, before machine count or size changes.
+#    One restart, still one machine. Confirm the log line, not just that the
+#    command returned — this is the exact finding
+#    docs/plans/M6_REHEARSAL_2026-09-14.md filed: unset, N machines flap the
+#    DB breaker within seconds of coming up.
+fly secrets set WORKER_MODE=api --app pqp-api
+fly logs --app pqp-api | grep '\[role\]'
+# "[role] WORKER_MODE=api: batch jobs left to the worker process"
+
+# 2. Resize the (still single) machine. One variable at a time: this is a
+#    real downsize (performance-2x/4gb -> performance-1x/2048mb), not
+#    bundled with adding a machine, so if it alone causes trouble it is
+#    unambiguous which change did it.
+fly scale vm performance-1x --memory 2048 --region gru --app pqp-api
+
+# 3. Keep CI's post-deploy machine-count assertion honest while fly.toml
+#    (still 1 on main until this PR merges) and the live app (about to be 2)
+#    disagree.
+gh variable set PQP_API_MACHINES --body 2
+
+# 4. Scale to two.
 fly scale count 2 --region gru --app pqp-api
-fly machines list --app pqp-api            # two rows, both started, both gru
-# merge min_machines_running = 2 in fly.toml, then:
+fly machines list --app pqp-api
+# two rows, "started", region "gru", performance-1x / 2048mb
+
+# 5. Confirm BOTH machines independently. The load-balanced hostname can
+#    answer from the same machine twice in a row and miss a problem on the
+#    other one entirely — this is exactly what the new "Verify the deployed
+#    commit on every machine" step in deploy-api-fly.yml checks after every
+#    CI deploy from here on; do it by hand once now too.
+for id in $(fly machines list --app pqp-api --json | jq -r '.[].id'); do
+  echo "== $id =="
+  curl -s -H "fly-force-instance-id: $id" https://api.pqp.gg/health | jq .
+done
+
+# 6. Confirm the bus and registry are carrying real traffic on both, not
+#    merely configured on both (CLAUDE.md pitfall #12 again: a flag that
+#    changes the code path is not proven by a flag that merely exists).
+#    Join a voice channel from two accounts, one pinned to each machine if
+#    you can arrange it, then:
+for id in $(fly machines list --app pqp-api --json | jq -r '.[].id'); do
+  echo "== $id =="
+  curl -s -H "fly-force-instance-id: $id" \
+    -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
+    https://api.pqp.gg/api/admin/metrics | jq .voice.cluster
+done
+# voice.cluster.framesRelayed / framesReceived > 0 on BOTH within a minute
+# of any voice room spanning them.
+
+# 7. Merge this PR. fly.toml now carries WORKER_MODE, CLUSTER_BUS,
+#    VOICE_REGISTRY, PG_POOL_MAX and min_machines_running=2 as literal
+#    config, matching what steps 1-4 just set live by hand. The resulting
+#    CI deploy is an ordinary rolling deploy of the SAME two machines
+#    (--ha=false; it replaces them one at a time, it does not add a third),
+#    and its post-deploy checks (machine count, per-machine /health, /ready)
+#    now run at two machines for the first time on production.
+
+# 8. THE SHADOW-SECRET TRAP. fly.toml's own banner warns about this in
+#    general; it is not hypothetical here. CLUSTER_BUS, VOICE_REGISTRY and
+#    PG_POOL_MAX have all been live Fly SECRETS on pqp-api at one point or
+#    another (CLUSTER_BUS/VOICE_REGISTRY since 2026-09-07; PG_POOL_MAX=70
+#    since the 2026-09-12 Vultr DB migration, still live today per
+#    docs/DB_RUNBOOK.md's connection-budget section and the prod-db-access
+#    notes). A secret of the same name SHADOWS [env] silently — merging this
+#    PR does NOT change what the app actually uses for any name that still
+#    has a live secret sitting on top of it. Check, then clear whichever of
+#    these `fly secrets list` still shows:
+fly secrets list --app pqp-api
+fly secrets unset CLUSTER_BUS VOICE_REGISTRY PG_POOL_MAX --app pqp-api
+# (unsetting a name that was never set is a harmless no-op restart, not an
+# error — but check with `fly secrets list` first so you know which restart
+# you are about to cause and why)
+
+# 9. Re-confirm PG_POOL_MAX actually reads the new per-machine number now,
+#    not the old secret's 70 (which alone, times two machines, would ask
+#    the database for well more than its estimated ~90-backend ceiling):
+for id in $(fly machines list --app pqp-api --json | jq -r '.[].id'); do
+  curl -s -H "fly-force-instance-id: $id" \
+    -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
+    https://api.pqp.gg/api/admin/metrics | jq .runtime.pool
+done
+
+# 10. Clean up the CI override now that the file and the app agree.
 gh variable delete PQP_API_MACHINES
 ```
 
-Rollback at any point: `fly scale count 1 --region gru --app pqp-api`, and `PQP_API_MACHINES=1` until `fly.toml` says 1 again. The CI assertion reads `min_machines_running` (or `PQP_API_MACHINES` when set), so the file and the app have to agree at every deploy; the variable exists for the minutes in between. Rehearse on staging first: `docs/STAGING.md`, "Rehearsing two machines".
+`-e APP_VERSION=...` (already in the CI deploy step) is what makes `/health` report the running commit. Without it `/health` says `"version":"dev"`, which is how you tell a hand-rolled deploy from a CI one.
 
-`-e APP_VERSION=...` is what makes `/health` report the running commit. Without it `/health` says `"version":"dev"`, which is how you tell a hand-rolled deploy from a CI one.
+#### Rollback
+
+```bash
+fly scale count 1 --region gru --app pqp-api
+gh variable set PQP_API_MACHINES --body 1   # or revert fly.toml's min_machines_running to 1 and skip this
+fly secrets unset WORKER_MODE --app pqp-api # batch jobs resume on pqp-api itself; skip this line if you
+                                             # only want fewer API machines and pqp-worker stays healthy —
+                                             # WORKER_MODE=api at one machine is still correct, just no
+                                             # longer necessary to avoid the breaker-flap finding
+```
+
+Optionally revert the machine size (`fly scale vm performance-2x --memory 4096 --region gru --app pqp-api`) if the downsize itself is suspected; do this as its own step, not bundled with the count rollback, for the same "one variable at a time" reason as the flip.
+
+#### Scaling to n machines later
+
+Repeat the same formula this PR's `fly.toml` comment documents, re-derived for the database's tier **at the time**, never assumed unchanged:
+
+```
+PG_POOL_MAX = floor((budget − worker_reservation − backup_reservation − admin_reservation) / n) − 2
+```
+
+where `budget` comes from `docs/DB_RUNBOOK.md` §3's RAM-tier table (re-derive it for whatever tier the cluster is actually on — Vultr or otherwise — by the same reasoning `docs/plans/M6_REHEARSAL_2026-09-14.md` used for its own staging box, not by copying this PR's number forward), `worker_reservation` is `fly.worker.toml`'s `PG_POOL_MAX` (4 today), `backup_reservation` is 1 (the nightly dump, transient), `admin_reservation` is a small constant for human sessions and platform overhead (5 here), and the trailing `− 2` is each machine's own `CLUSTER_BUS` + outgoing-webhook `LISTEN` sessions, which sit outside the pool and are easy to forget (the M1/M2 `MULTI_INSTANCE_VOICE.md` plan's "one `LISTEN` session per machine" framing undercounts by exactly one).
+
+```bash
+gh variable set PQP_API_MACHINES --body n
+fly scale count n --region gru --app pqp-api
+# update fly.toml: min_machines_running = n, PG_POOL_MAX = <recomputed>, merge
+gh variable delete PQP_API_MACHINES
+```
+
+Confirm `WORKER_MODE=api` is still set before adding a machine — a new machine unsets nothing, but a manual secrets rollback elsewhere could have, and the breaker-flap finding is unconditional in mechanism regardless of database size (only the safety margin changes).
+
+#### What to watch for a day, per machine (`fly-force-instance-id`) and in aggregate
+
+- **Pool `waiting`** (`GET /api/admin/metrics` → `runtime.pool`): non-zero **and** `total == max` sustained is the pool being the bottleneck, not a blip. `docs/DB_RUNBOOK.md` §3.
+- **DB breaker state** (`runtime.db.breaker.state` / `.opened`, CLAUDE.md pitfall #17): should stay `closed` with `opened: 0`. Any flap right after the flip is the batch-job finding recurring — check `WORKER_MODE` actually landed on both machines, not just one.
+- **`ws.authFail`** in `fly logs`, per machine: the M6R2 rehearsal's root-caused failure mode (a per-process cache of *mutable* state — the age-gate pending status — reads stale on the machine that did not receive the invalidation). Watch this specifically around new account creation.
+- **Roster deltas per instance** (`voice.roster.deltas`, CLAUDE.md pitfall #12): should climb on whichever machine actually has peers in the changed room, not just one machine always.
+- **Cluster bus publish failures / self-echo**: `bus.connectFailed`, `bus.selfEchoMissing`, `voice.configDrift` in `fly logs` on both machines — all should read zero for the whole day.
+- **Sweeps running once, not twice**: grep `fly logs --app pqp-worker` for the batch-job log lines (attachment sweep, retention, outgoing-webhook outbox, etc.) and confirm they do **not** also appear in `fly logs --app pqp-api` — if they do, `WORKER_MODE=api` did not take on one machine (check for the shadow-secret trap in step 8 above having only partially applied, or a machine that restarted onto a stale secret).
 
 ### 6b. Stop writes on Railway (real cutover only)
 
@@ -627,7 +757,9 @@ Update the hosted-deploy table in `CLAUDE.md`, `docs/DEPLOY.md` and `docs/HANDOV
 
 The batch jobs (attachment and quarantine sweeps, audit / report / timeout prunes, message retention, interrupted account deletions, the outgoing-webhook outbox, the Community Home media sweep) can run on a second, private machine so they never compete with voice signalling for `pqp-api`'s one CPU. Inventory and reasoning: [`plans/COLD_PATHS.md`](./plans/COLD_PATHS.md). Config: `fly.worker.toml`. Switch: `WORKER_MODE` (`server/src/lib/process-role.ts`).
 
-**Without this section, nothing changes.** `WORKER_MODE` unset means the API runs every job itself, exactly as before. A self-host never needs a worker.
+**Without this section, nothing changes.** `WORKER_MODE` unset means the API runs every job itself, exactly as before. A self-host running one API machine never needs a worker.
+
+**At two or more `pqp-api` machines, this section is no longer optional.** `WORKER_MODE` unset with N machines means N independent copies of every sweep, on N independent `setInterval` timers that boot within seconds of each other on a scale-up or a rolling deploy — `docs/plans/M6_REHEARSAL_2026-09-14.md` reproduced this flapping the DB circuit breaker within seconds of a third staging machine coming up, on steady-state load the database otherwise handled fine. See §6a-bis for the two-machine flip order, which sets `WORKER_MODE=api` first, before touching machine count or size.
 
 **Order matters.** The API keeps running the jobs until you tell it to stop, and telling it before the worker exists stops them everywhere. So: create, deploy, verify, and only then flip the API.
 
