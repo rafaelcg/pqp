@@ -27,6 +27,7 @@ lands on the same Worker, so the code is already split along that line:
 | `src/hls-viewer-token.js` | Is the caller allowed to see this playlist | No — the token check is unrelated to where the bytes come from |
 | `src/playlist-route.ts` | Is this even a playlist request, and for what | No — the shape a viewer's client requests never changes |
 | `src/playlist-origin.ts` | Where the playlist's BYTES actually come from | **Yes** — gets a second implementation |
+| `src/hls-blocking-reload.js` | LL-HLS blocking playlist reload (`_HLS_msn`/`_HLS_part`, see below) | No — it holds a request open until the origin's answer advances, regardless of where that answer eventually comes from |
 | `src/index.ts` | Routing, the cache-or-forward decision, CORS, logging | No, or minimally — it is written against the `PlaylistOrigin` interface, not against "the API" |
 
 `playlist-origin.ts` today has exactly one implementation, `ApiPlaylistOrigin`
@@ -67,6 +68,140 @@ path shape the API's own playlist route uses:
 
 Segment bytes are untouched by any of this: they were already presigned R2
 URLs the browser fetches directly, and stay that way.
+
+## Blocking reload (L2.1)
+
+LL-HLS players (hls.js 1.7, AVPlayer, Media3) reload a rendition's media
+playlist by adding `_HLS_msn` (and, once a specific part is what's missing,
+`_HLS_part`) to the SAME request shape this Worker already answers — RFC
+8216bis §6.2.5.2, "Playlist Delivery Directives". A conventional reload gets
+whatever the playlist currently says and comes back later; a blocking reload
+asks the server to **hold the request open** until the answer is actually
+different, which is what turns "poll every 2-4 s and hope" into "the response
+lands the instant the part exists." `src/hls-blocking-reload.js` is the
+implementation; `src/index.ts` recognizes a request that carries a directive
+and hands it off, otherwise falling straight through to the cache-or-forward
+path above **completely unchanged** — a request with neither `_HLS_msn` nor
+`_HLS_part` never touches this code at all.
+
+**What a directive means here:**
+
+- `_HLS_msn` alone: hold until the named Media Sequence Number's segment is
+  **complete**.
+- `_HLS_msn` + `_HLS_part`: hold until that many parts of that segment have
+  been published (a part number is 0-indexed, so `_HLS_part=1` needs at least
+  2 parts).
+- An MSN already published (complete, or — for the segment currently being
+  assembled — with enough parts already in) answers **immediately**, no hold
+  at all.
+- `_HLS_part` without `_HLS_msn`, a non-integer, or a negative value on
+  either parameter: **400**, checked before anything else runs.
+- An `_HLS_msn` more than two segments past the live edge: **400**, per the
+  RFC's own "SHOULD respond with 400" rule — the server can already tell this
+  request can never be satisfied by anything short of a much longer wait than
+  the timeout below allows, so it says so immediately rather than holding it.
+
+**The timeout.** A hold gives up after **3 x the target part duration** and
+returns whatever the current playlist is — the RFC's own fallback, not an
+error. The part duration comes from the playlist's own
+`EXT-X-PART-INF:PART-TARGET=...` once a fetch has revealed it; before that
+(a cold rendition this isolate has not polled yet) it falls back to a
+configured default, `DEFAULT_PART_TARGET_SECONDS` (0.5 s, matching
+`docs/plans/LL_HLS.md`'s 500 ms part target). `EXT-X-SERVER-CONTROL`
+emission — actually advertising `CAN-BLOCK-RELOAD=YES` on the playlist body
+this Worker forwards — is task **L2.2**, not this one: this module only ever
+reacts to a client that already sends a directive, so nothing about the
+playlist a non-LL client sees changes.
+
+**The coalescing design, and its per-colo limit.** Many viewers can be
+holding on the same rendition (channel + session + rung) at once, each
+having arrived at a different moment and so asking for a different exact
+`_HLS_msn`/`_HLS_part` — that is the normal case, not an edge case. All of
+them share **one poll loop per rendition per Worker isolate**: the first
+waiter to arrive for a cold rendition starts the loop, every later arrival
+just joins the same waiter set (resolved immediately, with no fetch, if the
+loop's last-known state already satisfies it), and the loop stops polling
+the instant no one is left waiting. The loop never polls faster than once
+per part duration, and it does not reimplement the origin fetch itself —
+each poll tick calls back into `index.ts`'s existing single-flight
+`fetchRenditionCoalesced`, the same de-duplication the non-blocking cache
+path already uses, so a poll tick and an ordinary cache-miss fetch for the
+same rendition happening at the same instant still collapse into one real
+request to the API. Nothing here adds a second persistent cache: a held
+response is never written to `caches.default` (see the header comment on
+`handleBlockingReload` for why — an LL playlist body is stale in well under
+a second, which isn't a thing worth caching with any TTL).
+
+The honest limit: `pollStates` in `hls-blocking-reload.js` is in-memory,
+scoped to one Worker isolate. Cloudflare runs a busy Worker across more than
+one isolate — generally one per colo a request enters through, never shared
+across colos — so "one poll loop per rendition" is a per-isolate guarantee
+that reads in practice as roughly "per colo", the same shape the
+non-blocking cache above already documents for `caches.default` (see "Load
+shape" below). An audience spread across N colos still produces on the order
+of N concurrent poll loops for the same rendition, not one truly global
+loop. A durable, cross-colo version would need the Durable Object seam
+`playlist-origin.ts` already reserves for the always-on work (task A1.x) —
+deliberately not reached for here, since standing up a Durable Object is
+its own deploy-time commitment and this task's job is the blocking-reload
+**protocol**, not new durable infrastructure.
+
+**Retained state is bounded, both in time and in size.** The loop's
+last-known `lastEdge`/`lastPlaylist` answer a NEW waiter's fast path only
+while younger than 2 s — the same order of staleness the non-blocking cache
+above already tolerates — so a rendition this isolate has not heard from
+recently always falls through to a real fetch instead of trusting long-stale
+content for an availability, too-far-ahead, OR revocation-adjacent decision
+(a Farol review of this file's first draft, 2026-09-13, flagged all three as
+the same underlying gap: retained state with no freshness bound). The map
+itself is capped (`MAX_POLL_STATE_ENTRIES`) and opportunistically swept of
+idle, stale entries, the same shape `index.ts`'s own `rejectionLog` already
+uses for a hostile-traffic ceiling. Two further hardenings from that same
+review: a poll tick's fetch is raced against the soonest waiter's own
+deadline once there is a fallback playlist to use, so a stalled origin
+cannot silently hold every waiter past the 3x-part-target promise this
+module makes; and a disconnected viewer's `AbortSignal` (threaded through
+from `index.ts`) removes their waiter immediately instead of polling on
+their behalf until the timeout. See `src/hls-blocking-reload.js`'s module
+doc comment for the full detail on each.
+
+**Three ceilings, not one, and a second review round (2026-09-14) that
+closed the gaps between them.** `MAX_POLL_STATE_ENTRIES` (500) bounds how
+many DISTINCT renditions this isolate retains; it says nothing about how
+many waiters pile onto ONE of them, or how many have a poll loop actually
+RUNNING at once. `MAX_WAITERS_PER_RENDITION` (2,000) caps the former — one
+valid viewer credential could otherwise open unbounded concurrent holds on
+the SAME rendition, which the 500-entry cap does nothing to stop.
+`MAX_ACTIVE_POLL_LOOPS` (64) caps the latter — every active loop is its own
+independent origin poller, so origin-request volume scales with how many
+renditions are simultaneously HELD OPEN, not with how many are merely
+retained; at party scale, traffic spanning hundreds of renditions would
+otherwise mean hundreds of independent sub-second pollers. Past either
+ceiling, a request is served the plain non-blocking way instead — the newest
+renditions lose their hold first, existing ones keep polling uninterrupted.
+The same review also closed a related gap in the deadline race above: it
+previously only raced a poll tick once a `lastPlaylist` existed to fall back
+to, so a COLD rendition's very first tick — the first waiter this isolate
+has ever seen for it — was awaited directly with no deadline at all. A
+stalled or non-settling origin could hold that first waiter (and everyone
+who joined it) for the origin's own much longer timeout, or forever, and an
+abort landing while that unbounded fetch was in flight left the loop's
+`polling` flag stuck true — unswept, unevictable, joined by every later
+request for the same key — until the origin eventually answered or never
+did. Every tick is now raced against its deadline, including the first;
+with nothing to fall back to yet, a first-tick deadline win is a distinct
+`cold-timeout` outcome (a 504) rather than a fabricated empty playlist. See
+`src/hls-blocking-reload.js`'s module doc comment, "TWO MORE CEILINGS" and
+"A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN DEADLINE, NOT EVEN ON THE FIRST
+TICK", for the full detail.
+
+**Deferred to later L2 tasks** (`docs/plans/LL_HLS.md` §7):
+`EXT-X-SERVER-CONTROL`/`EXT-X-PART-INF`/`EXT-X-PART`/`EXT-X-PRELOAD-HINT`
+emission on the playlist body (L2.2), and proxying PART byte ranges
+themselves through this Worker (L2.3). Until L2.2 ships, no production
+playlist advertises `CAN-BLOCK-RELOAD=YES`, so no real player sends these
+directives yet — this task is the server half landing first, tested directly
+rather than through a client that cannot exercise it yet.
 
 ## Why the cache key drops the token
 

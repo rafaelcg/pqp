@@ -101,6 +101,7 @@ import { parsePlaylistPath } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
+import { handleBlockingReload, parseBlockingReloadParams } from "./hls-blocking-reload.js";
 
 export interface Env {
   /** The API origin this Worker fetches playlists from, e.g. https://api.pqp.gg (a var). */
@@ -389,6 +390,22 @@ async function handlePlaylistRequest(
     return text(503, "Origin not configured");
   }
 
+  // LL-HLS blocking playlist reload (RFC 8216bis 6.2.5.2, `_HLS_msn` /
+  // `_HLS_part` — docs/plans/LL_HLS.md task L2.1, hls-blocking-reload.js). A
+  // request that carries neither parameter gets `{ kind: "none" }` and falls
+  // straight through to the existing cache-or-forward logic below,
+  // unchanged. Validated here, before the rung branch, because a malformed
+  // directive is a malformed request on EITHER route.
+  const blockingReload = parseBlockingReloadParams(url);
+  if (blockingReload.kind === "invalid") {
+    logEvent("hlsEdge.blockingReloadRejected", {
+      channelId,
+      rung: rung ?? null,
+      reason: blockingReload.reason,
+    });
+    return json(400, { error: "Bad Request", reason: blockingReload.reason });
+  }
+
   // The session/master URL: see the module doc comment for why this route is
   // always forwarded with the caller's OWN token and never cached. Gated on
   // `verified` above, which for this branch can only ever have come from
@@ -419,11 +436,14 @@ async function handlePlaylistRequest(
   // above, before `verified` was ever set -- this covers the OTHER case, a
   // still-fresh `?t=` token, which previously went straight to the cache
   // lookup below with no revocation check at all once the signature itself
-  // verified. Running it HERE, before `cache.match`, closes the gap for
-  // both credential kinds the same way: a cache HIT can no longer outlive a
-  // revocation by more than `PARTY_PASS_REVOCATION_CACHE_TTL_MS` (30 s) once
-  // `HLS_REVOKED_USERS` is bound. Cheap when it is not: `check()` returns
-  // immediately on an unbound KV, same as before this existed.
+  // verified. Running it HERE, before the blocking-reload hold AND before
+  // `cache.match`, closes the gap for both credential kinds the same way: a
+  // cache HIT (or a long poll) can no longer outlive a revocation by more
+  // than `PARTY_PASS_REVOCATION_CACHE_TTL_MS` (30 s) once `HLS_REVOKED_USERS`
+  // is bound. Cheap when it is not: `check()` returns immediately on an
+  // unbound KV, same as before this existed. Ordered ahead of the blocking
+  // reload below on purpose -- a revoked viewer must not get a long hold
+  // open on the origin before being rejected.
   if (!usedPartyPass) {
     const { revoked, kvError } = await partyPassRevocationGate.check(
       env.HLS_REVOKED_USERS,
@@ -437,6 +457,42 @@ async function handlePlaylistRequest(
     if (revoked) {
       logRejection(channelId, rung, "revoked");
       return json(statusForRejection("revoked"), { error: "Unauthorized", reason: "revoked" });
+    }
+  }
+
+  // A rendition request carrying a directive skips the 2 s cache entirely —
+  // see hls-blocking-reload.js's module doc comment for why a hold is not a
+  // cache entry — and shares its origin fetches with the coalesced fetcher
+  // below via the injected closure, rather than a second in-flight map.
+  // `request.signal` lets the hold notice a disconnected viewer instead of
+  // polling on their behalf until the timeout (see that module's doc
+  // comment, "DISCONNECTED VIEWERS DO NOT KEEP A LOOP ALIVE").
+  if (blockingReload.kind === "directives") {
+    const blockingResponse = await handleBlockingReload(
+      cacheKeyRequest(request).url,
+      blockingReload.value,
+      () =>
+        fetchRenditionCoalesced(cacheKeyRequest(request).url, origin, {
+          channelId,
+          startedAt,
+          rung,
+          token: token!,
+        }),
+      logEvent,
+      { channelId, rung },
+      request.signal,
+    );
+    // `null` is the fallback signal (`hls-blocking-reload.js`): this
+    // isolate declined to hold THIS request open, for one of three reasons
+    // (`MAX_POLL_STATE_ENTRIES` -- the retained-rendition map is full of
+    // OTHER active renditions; `MAX_WAITERS_PER_RENDITION` -- this
+    // rendition already has as many holds open as it gets; or
+    // `MAX_ACTIVE_POLL_LOOPS` -- this isolate is already running as many
+    // independent poll loops as it starts at once), so this one request is
+    // served the ordinary way below -- the non-blocking cache-or-forward
+    // path -- rather than evicting or starving something already active.
+    if (blockingResponse) {
+      return blockingResponse;
     }
   }
 
