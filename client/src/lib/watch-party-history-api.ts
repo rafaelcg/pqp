@@ -79,3 +79,63 @@ export async function fetchWatchPartyHistoryReplay(
   );
   return { hlsUrl: resolveHlsUrl(res.hlsUrl) };
 }
+
+/** The three files a past broadcast can yield. Mirrors
+ * `WatchPartyDownloadKind` in `server/src/voice/hls-history.ts`. */
+export type WatchPartyDownloadKind = "film" | "camera" | "voice";
+
+export const WATCH_PARTY_DOWNLOAD_KINDS: readonly WatchPartyDownloadKind[] = [
+  "film",
+  "camera",
+  "voice",
+];
+
+export interface WatchPartyDownload {
+  /** Approximate: the sum of what the bucket reports for the objects this
+   * download concatenates. Null when the server could not price it. */
+  bytes: number | null;
+  /** Absolute, and already carrying the `?t=` capability. Feed it straight
+   * to an `<a href download>`; see the dialog for why it is a link and not
+   * a `fetch`. */
+  url: string;
+}
+
+export type WatchPartyDownloads = Record<
+  WatchPartyDownloadKind,
+  WatchPartyDownload | null
+>;
+
+/**
+ * What can be downloaded for one broadcast, and how big each piece is.
+ *
+ * ASKED PER BROADCAST, NOT FOLDED INTO THE HISTORY LIST. Pricing a download
+ * is a bucket listing per file on the server, so a history load that carried
+ * sizes for twenty broadcasts would be sixty round-trips to storage for a
+ * dialog that usually downloads none of them. The dialog asks when somebody
+ * opens the download panel on a row.
+ *
+ * URLs are resolved against the API origin for the same reason
+ * `fetchWatchPartyHistoryReplay` resolves the replay URL: the server answers
+ * an API-relative path and the SPA does not live on the API origin, so an
+ * unresolved one downloads Pages' `index.html`.
+ */
+export async function fetchWatchPartyHistoryDownloads(
+  channelId: string,
+  sessionId: string,
+): Promise<WatchPartyDownloads> {
+  const res = await apiFetch<{ downloads: WatchPartyDownloads }>(
+    `/api/channels/${channelId}/watch-party/history/${sessionId}/download`,
+  );
+  const downloads: WatchPartyDownloads = {
+    film: null,
+    camera: null,
+    voice: null,
+  };
+  for (const kind of WATCH_PARTY_DOWNLOAD_KINDS) {
+    const item = res.downloads?.[kind];
+    if (item) {
+      downloads[kind] = { bytes: item.bytes, url: resolveHlsUrl(item.url) };
+    }
+  }
+  return downloads;
+}

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  WatchPartyDownloadPanel,
   WatchPartyHistoryList,
 } from "./watch-party-history-dialog";
 import type { WatchPartyHistoryEntry } from "@/lib/watch-party-history-api";
@@ -59,6 +60,15 @@ describe("WatchPartyHistoryList", () => {
     expect(html).not.toContain("no longer available");
     // Not in the folded accordion.
     expect(html).not.toContain("Older recordings");
+  });
+
+  it("offers the download toggle on an available broadcast, and not on a folded one", () => {
+    expect(render([ENDED])).toContain(
+      'data-testid="watch-party-history-download-toggle"',
+    );
+    expect(render([{ ...ENDED, replayAvailable: false }])).not.toContain(
+      'data-testid="watch-party-history-download-toggle"',
+    );
   });
 
   it("folds an unavailable broadcast under the collapsed 'Older recordings' accordion, hides its Watch button and says why", () => {
@@ -120,5 +130,73 @@ describe("WatchPartyHistoryList", () => {
       { ...ENDED, sessionId: "3", durationSeconds: 5 },
     ]);
     expect(html).toContain("Older recordings (2)");
+  });
+});
+
+/**
+ * The download panel's three states, rendered on their own because the panel
+ * only mounts after a click and this file renders static markup.
+ *
+ * What matters here is that an ABSENT file reads as a fact about the night
+ * ("camera not used", "voice recording was off") rather than as an error or
+ * a dead link: a moderator who never turned the camera on should not be left
+ * wondering whether the download is broken.
+ */
+describe("WatchPartyDownloadPanel", () => {
+  it("says it is working while the sizes are being fetched", () => {
+    expect(
+      renderToStaticMarkup(<WatchPartyDownloadPanel state={undefined} />),
+    ).toContain("Loading");
+  });
+
+  it("surfaces a failure to list the files", () => {
+    const html = renderToStaticMarkup(
+      <WatchPartyDownloadPanel
+        state={{ status: "error", message: "Could not list the files." }}
+      />,
+    );
+    expect(html).toContain("Could not list the files.");
+    expect(html).not.toContain("<a");
+  });
+
+  it("offers a plain download link with a size for each file that exists", () => {
+    const html = renderToStaticMarkup(
+      <WatchPartyDownloadPanel
+        state={{
+          status: "ready",
+          downloads: {
+            film: { bytes: 2_400_000_000, url: "https://api.test/film?t=abc" },
+            camera: { bytes: 38_000_000, url: "https://api.test/camera?t=abc" },
+            voice: { bytes: 12_000, url: "https://api.test/voice?t=abc" },
+          },
+        }}
+      />,
+    );
+    expect(html).toContain('href="https://api.test/film?t=abc"');
+    // A navigation, not a scripted save: the attribute has to be there.
+    expect(html).toContain("download=");
+    expect(html).toContain("2.4 GB");
+    expect(html).toContain("38 MB");
+    expect(html).toContain("12 kB");
+    expect(html).toContain("ffmpeg -i file.ts -c copy file.mp4");
+  });
+
+  it("greys out a file the broadcast never wrote, and says which fact it was", () => {
+    const html = renderToStaticMarkup(
+      <WatchPartyDownloadPanel
+        state={{
+          status: "ready",
+          downloads: {
+            film: { bytes: 1_000_000, url: "https://api.test/film?t=abc" },
+            camera: null,
+            voice: null,
+          },
+        }}
+      />,
+    );
+    expect(html).toContain("camera not used");
+    expect(html).toContain("voice recording was off");
+    expect(html).not.toContain('href="https://api.test/camera');
+    expect(html).toContain('data-testid="watch-party-history-download-voice-missing"');
   });
 });

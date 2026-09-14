@@ -62,9 +62,11 @@ const { setLiveHlsTestHooks, resetLiveHlsForTests } = await import(
   "../voice/hls-egress.js"
 );
 const { mintHlsViewerToken } = await import("../voice/hls-viewer-token.js");
-const { resetHlsReplayCachesForTests } = await import(
-  "../voice/hls-history.js"
-);
+const { CAMERA_RUNG_NAME } = await import("../voice/hls-ladder.js");
+const {
+  resetHlsReplayCachesForTests,
+  resetWatchPartyDownloadCacheForTests,
+} = await import("../voice/hls-history.js");
 
 let server: Server;
 let baseUrl: string;
@@ -139,6 +141,7 @@ describeDb("watch party history", () => {
     resetHlsSweepWarningsForTests();
     resetLiveHlsForTests();
     resetHlsReplayCachesForTests();
+    resetWatchPartyDownloadCacheForTests();
     delete process.env.LIVE_HLS_RETENTION_MINUTES;
     delete process.env.LIVE_HLS_REPLAY_HOURS;
     process.env.LIVE_HLS_S3_BUCKET = "pqp-live-test";
@@ -826,6 +829,277 @@ describeDb("watch party history", () => {
         null,
       );
       expect(r.status).toBe(401);
+    });
+  });
+
+  /**
+   * `GET .../download` and `GET .../download/:kind`.
+   *
+   * The two things worth pinning beyond the route shape:
+   *
+   *  - The film is the segments of the TOP available rung, concatenated in
+   *    PLAYLIST order. The fixture's playlist deliberately lists its segments
+   *    out of lexicographic order, because that is the difference between
+   *    reading the playlist (right) and trusting the bucket listing (wrong,
+   *    and wrong in a way that still plays for the first few seconds).
+   *  - A kind the broadcast never wrote is a 404, not an empty file: no
+   *    camera, or the voice archive switched off.
+   */
+  describe("download", () => {
+    /** The whole bucket, key -> body. Sizes are the bodies' lengths. */
+    let objects: Map<string, string>;
+
+    beforeEach(() => {
+      objects = new Map();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input instanceof Request ? input.url : input);
+          if (!url.includes("s3.example.test")) {
+            return realFetch(input, init);
+          }
+          const parsed = new URL(url);
+          if (parsed.searchParams.get("list-type") === "2") {
+            const prefix = parsed.searchParams.get("prefix") ?? "";
+            const contents = [...objects]
+              .filter(([key]) => key.startsWith(prefix))
+              .map(
+                ([key, body]) =>
+                  `<Contents><Key>${key}</Key><Size>${body.length}</Size></Contents>`,
+              )
+              .join("");
+            return new Response(
+              `<?xml version="1.0"?><ListBucketResult>${contents}</ListBucketResult>`,
+              { status: 200 },
+            );
+          }
+          const key = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+          const body = objects.get(key);
+          return body === undefined
+            ? new Response("no such key", { status: 404 })
+            : new Response(body, { status: 200 });
+        }),
+      );
+    });
+
+    /** A rung's two segments plus the accumulated playlist that names them,
+     * deliberately NOT in lexicographic order. */
+    function seedRungObjects(startedAt: number, rung: string): string {
+      const prefix = `live/${channelId}/${startedAt}-${rung}`;
+      objects.set(`${prefix}_00001.ts`, `[${rung}-second]`);
+      objects.set(`${prefix}_00000.ts`, `[${rung}-first]`);
+      objects.set(
+        `${prefix}-index.m3u8`,
+        [
+          "#EXTM3U",
+          "#EXT-X-TARGETDURATION:2",
+          "#EXTINF:2.0,",
+          `${startedAt}-${rung}_00001.ts`,
+          "#EXTINF:2.0,",
+          `${startedAt}-${rung}_00000.ts`,
+          "#EXT-X-ENDLIST",
+        ].join("\n"),
+      );
+      return prefix;
+    }
+
+    function downloadPath(startedAt: number, kind: string): string {
+      return `${historyPath()}/${startedAt}/download/${kind}`;
+    }
+
+    /** The whole `Response`, for the tests that read headers off it. */
+    async function download(
+      path: string,
+      as: { id: string; clerk_id: string } | null,
+    ): Promise<Response> {
+      actor = as;
+      return realFetch(`${baseUrl}${path}`, {
+        headers: as ? { Authorization: "Bearer test" } : {},
+      });
+    }
+
+    it("lists what exists, with sizes, and hides what does not", async () => {
+      const startedAt = 1_700_000_030_000;
+      await seedBroadcast({
+        startedAt,
+        endedMinutesAgo: 5,
+        rungs: ["480p30", "1080p30", CAMERA_RUNG_NAME],
+      });
+      seedRungObjects(startedAt, "1080p30");
+      seedRungObjects(startedAt, "480p30");
+      seedRungObjects(startedAt, CAMERA_RUNG_NAME);
+
+      const res = await call<{
+        downloads: Record<string, { bytes: number; url: string } | null>;
+      }>(owner, "GET", `${historyPath()}/${startedAt}/download`);
+      expect(res.status).toBe(200);
+      expect(res.body.downloads.film?.bytes).toBe(
+        "[1080p30-first]".length + "[1080p30-second]".length,
+      );
+      expect(res.body.downloads.camera?.bytes).toBeGreaterThan(0);
+      // No mic row was seeded, so the voice archive is simply not there.
+      expect(res.body.downloads.voice).toBeNull();
+      // The URL carries the capability, because the browser navigates to it.
+      expect(res.body.downloads.film?.url).toContain("t=");
+    });
+
+    it("403s a plain member", async () => {
+      const startedAt = 1_700_000_031_000;
+      await seedBroadcast({ startedAt, endedMinutesAgo: 5 });
+      seedRungObjects(startedAt, "720p30");
+      expect(
+        (await call(member, "GET", `${historyPath()}/${startedAt}/download`))
+          .status,
+      ).toBe(403);
+      expect((await getRaw(downloadPath(startedAt, "film"), member)).status).toBe(
+        403,
+      );
+    });
+
+    it("409s once the recording is gone", async () => {
+      const startedAt = 1_700_000_032_000;
+      await seedBroadcast({ startedAt, endedMinutesAgo: 5 });
+      seedRungObjects(startedAt, "720p30");
+      await getPool().query(
+        `UPDATE hls_sessions SET cleaned_at = NOW() WHERE channel_id = $1`,
+        [channelId],
+      );
+      resetHlsReplayCachesForTests();
+      resetWatchPartyDownloadCacheForTests();
+      expect(
+        (await call(owner, "GET", `${historyPath()}/${startedAt}/download`))
+          .status,
+      ).toBe(409);
+      expect((await getRaw(downloadPath(startedAt, "film"), owner)).status).toBe(
+        409,
+      );
+    });
+
+    it("concatenates the TOP rung's segments in playlist order", async () => {
+      const startedAt = 1_700_000_033_000;
+      await seedBroadcast({
+        startedAt,
+        endedMinutesAgo: 5,
+        rungs: ["480p30", "1080p30"],
+      });
+      seedRungObjects(startedAt, "1080p30");
+      seedRungObjects(startedAt, "480p30");
+
+      const res = await download(downloadPath(startedAt, "film"), owner);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("video/mp2t");
+      expect(res.headers.get("content-disposition")).toMatch(
+        /^attachment; filename="[a-z0-9-]+\.ts"$/,
+      );
+      // Playlist order, which is the REVERSE of the key order here.
+      expect(await res.text()).toBe("[1080p30-second][1080p30-first]");
+    });
+
+    it("serves the camera pip and the voice archive as their own files", async () => {
+      const startedAt = 1_700_000_034_000;
+      await seedBroadcast({
+        startedAt,
+        endedMinutesAgo: 5,
+        rungs: ["720p30", CAMERA_RUNG_NAME, "mic"],
+      });
+      seedRungObjects(startedAt, "720p30");
+      seedRungObjects(startedAt, CAMERA_RUNG_NAME);
+      objects.set(`live/${channelId}/${startedAt}-mic.ogg`, "[opus]");
+
+      const camera = await getRaw(downloadPath(startedAt, "camera"), owner);
+      expect(camera.status).toBe(200);
+      expect(camera.text).toBe(
+        `[${CAMERA_RUNG_NAME}-second][${CAMERA_RUNG_NAME}-first]`,
+      );
+
+      const voice = await download(downloadPath(startedAt, "voice"), owner);
+      expect(voice.status).toBe(200);
+      expect(voice.headers.get("content-type")).toBe("audio/ogg");
+      expect(voice.headers.get("content-disposition")).toContain("-voice.ogg");
+      expect(await voice.text()).toBe("[opus]");
+    });
+
+    it("404s a kind this broadcast never wrote", async () => {
+      const startedAt = 1_700_000_035_000;
+      await seedBroadcast({ startedAt, endedMinutesAgo: 5 });
+      seedRungObjects(startedAt, "720p30");
+      expect(
+        (await getRaw(downloadPath(startedAt, "voice"), owner)).status,
+      ).toBe(404);
+      expect(
+        (await getRaw(downloadPath(startedAt, "camera"), owner)).status,
+      ).toBe(404);
+      expect((await getRaw(downloadPath(startedAt, "banana"), owner)).status)
+        .toBe(404);
+    });
+
+    it("503s when storage will not answer, rather than saying the files are not there", async () => {
+      const startedAt = 1_700_000_037_000;
+      await seedBroadcast({
+        startedAt,
+        endedMinutesAgo: 5,
+        rungs: ["720p30", CAMERA_RUNG_NAME],
+      });
+      seedRungObjects(startedAt, "720p30");
+      seedRungObjects(startedAt, CAMERA_RUNG_NAME);
+      // The bucket is up enough to answer, and answers 500.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input instanceof Request ? input.url : input);
+          return url.includes("s3.example.test")
+            ? new Response("boom", { status: 500 })
+            : realFetch(input, init);
+        }),
+      );
+      // "Could not list" is not "camera not used": the dialog has to be able
+      // to tell an outage from a fact about the night.
+      expect(
+        (await call(owner, "GET", `${historyPath()}/${startedAt}/download`))
+          .status,
+      ).toBe(503);
+    });
+
+    it("409s a half-swept recording instead of streaming a truncated file", async () => {
+      const startedAt = 1_700_000_038_000;
+      await seedBroadcast({ startedAt, endedMinutesAgo: 5 });
+      seedRungObjects(startedAt, "720p30");
+      // The playlist still names both segments; one of the objects is gone.
+      objects.delete(`live/${channelId}/${startedAt}-720p30_00000.ts`);
+      const res = await download(downloadPath(startedAt, "film"), owner);
+      expect(res.status).toBe(409);
+      // And nothing of the file was written before the refusal.
+      expect(res.headers.get("content-disposition")).toBeNull();
+    });
+
+    it("serves a header-less request carrying only the capability", async () => {
+      const startedAt = 1_700_000_036_000;
+      await seedBroadcast({ startedAt, endedMinutesAgo: 5 });
+      seedRungObjects(startedAt, "720p30");
+      const token = mintHlsViewerToken({
+        userId: owner.id,
+        channelId,
+        startedAt,
+        purpose: "replay",
+      });
+      const res = await getRaw(
+        `${downloadPath(startedAt, "film")}?t=${token}`,
+        null,
+      );
+      expect(res.status).toBe(200);
+      expect(res.text).toBe("[720p30-second][720p30-first]");
+
+      // A token minted for another channel is nobody's capability here.
+      const wrong = mintHlsViewerToken({
+        userId: owner.id,
+        channelId: "00000000-0000-4000-8000-000000000000",
+        startedAt,
+        purpose: "replay",
+      });
+      expect(
+        (await getRaw(`${downloadPath(startedAt, "film")}?t=${wrong}`, null))
+          .status,
+      ).toBe(401);
     });
   });
 });

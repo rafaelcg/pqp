@@ -52,16 +52,26 @@
  * in that gap would keep being served after the history API already reports
  * the broadcast gone.
  */
+import { Readable, Transform, type Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { getPool } from "../db.js";
-import { signRequest } from "../lib/s3.js";
+import { listObjects, signRequest } from "../lib/s3.js";
 import {
   hlsObjectPrefix,
   hlsReplayHours,
   hlsRetentionMinutes,
   hlsUrlTtlSeconds,
   liveHlsStorageConfig,
+  micArchiveObjectKey,
+  MIC_ARCHIVE_RUNG,
 } from "./hls-egress.js";
-import { buildMasterPlaylist, LADDER_RUNGS, type MasterVariant } from "./hls-ladder.js";
+import {
+  buildMasterPlaylist,
+  CAMERA_RUNG_NAME,
+  LADDER_RUNGS,
+  type MasterVariant,
+} from "./hls-ladder.js";
 import { HlsPlaylistNotFound, HlsPlaylistUnavailable } from "./hls-playlist-proxy.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 
@@ -465,6 +475,42 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/** The accumulated `-index.m3u8` for one rendition, fetched from storage.
+ * Shared by the replay rewrite below and by the download builder further
+ * down, which needs the same object read for the same reason -- it is the
+ * only record of what segments this run wrote AND in what order. */
+async function fetchReplayPlaylistBody(
+  config: NonNullable<ReturnType<typeof liveHlsStorageConfig>>,
+  channelId: string,
+  startedAt: number,
+  rung: string | undefined,
+): Promise<string> {
+  const playlistUrl = signRequest({
+    method: "GET",
+    key: replayObjectKey(channelId, startedAt, rung),
+    ttlSeconds: 60,
+    forRead: false,
+    config,
+  }).url;
+  let response: Response;
+  try {
+    response = await fetch(playlistUrl, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new HlsPlaylistUnavailable(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  }
+  if (!response.ok) {
+    throw new HlsPlaylistUnavailable(
+      `Storage returned HTTP ${response.status} for the replay playlist`,
+    );
+  }
+  return response.text();
+}
+
 /** One rendition of a replay: the accumulated `-index.m3u8`, segment lines
  * rewritten into presigned URLs. Throws `HlsPlaylistNotFound` when this
  * broadcast never ended, was swept, fell outside its retention window, or
@@ -499,30 +545,7 @@ export async function buildReplaySignedPlaylist(
       `No replay ${objectPrefix} for channel ${channelId}`,
     );
   }
-  const playlistUrl = signRequest({
-    method: "GET",
-    key: replayObjectKey(channelId, startedAt, rung),
-    ttlSeconds: 60,
-    forRead: false,
-    config,
-  }).url;
-  let response: Response;
-  try {
-    response = await fetch(playlistUrl, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    throw new HlsPlaylistUnavailable(
-      error instanceof Error ? error.message : "Storage unreachable",
-    );
-  }
-  if (!response.ok) {
-    throw new HlsPlaylistUnavailable(
-      `Storage returned HTTP ${response.status} for the replay playlist`,
-    );
-  }
-  const body = await response.text();
+  const body = await fetchReplayPlaylistBody(config, channelId, startedAt, rung);
   const ttl = hlsUrlTtlSeconds();
   const signedAt = new Date(now);
   const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
@@ -552,4 +575,496 @@ export async function buildReplaySignedPlaylist(
   pruneStale(replayBodyCache, now);
   replayBodyCache.set(cacheKey, { body: rewritten, at: now });
   return rewritten;
+}
+
+// --------------------------------------------------------------------------
+// Downloading a past broadcast.
+//
+// WHAT A DOWNLOAD IS HERE: the objects the egress already wrote, handed back
+// verbatim and in order. Nothing is transcoded, remuxed or muxed together on
+// the API. Three separate files rather than one muxed deliverable, for the
+// same reason `LIVE_HLS_MIC_ARCHIVE` writes a second object at all
+// (`docs/WATCH_PARTY.md`, "The host's voice as its own file"): the picture,
+// the host's camera and the host's voice are useful as separate tracks in an
+// editor, and welding them together would mean an ffmpeg process per
+// download on a box that is running a chat API.
+//
+// WHY CONCATENATED MPEG-TS IS A REAL FILE. A rung's segments are MPEG-TS,
+// and MPEG-TS is a stream format: 188-byte packets carrying their own PAT/PMT
+// and timestamps, with no header at the front and no index at the back. Byte
+// concatenation in playlist order is therefore exactly what a player would
+// have seen had it played the playlist, which is why `cat *.ts > out.ts`
+// works and why the same trick does NOT work for fragmented MP4. A viewer
+// plays the result directly (VLC, mpv, ffmpeg); for something an editor or a
+// browser likes better, `ffmpeg -i out.ts -c copy out.mp4` remuxes it without
+// re-encoding. The dialog says as much, and so does `docs/WATCH_PARTY.md`.
+//
+// ORDER COMES FROM THE PLAYLIST, NOT FROM THE LISTING. `ListObjectsV2`
+// answers in lexicographic key order, which matches segment order only while
+// the numbering stays the same width -- one roll from `_00999` to `_01000` is
+// fine, but nothing in the egress promises that, and a broadcast reassembled
+// in the wrong order is a corrupt file that still plays for its first few
+// seconds. The accumulated `-index.m3u8` is the run's own record of what it
+// wrote and when, so that is what is read.
+// --------------------------------------------------------------------------
+
+/** The three files a broadcast can yield. `film` is the top available ladder
+ * rung (the picture the audience watched), `camera` the presenter's pip, and
+ * `voice` the host's microphone archive. */
+export type WatchPartyDownloadKind = "film" | "camera" | "voice";
+
+export const WATCH_PARTY_DOWNLOAD_KINDS: readonly WatchPartyDownloadKind[] = [
+  "film",
+  "camera",
+  "voice",
+];
+
+export function isWatchPartyDownloadKind(
+  value: string,
+): value is WatchPartyDownloadKind {
+  return (WATCH_PARTY_DOWNLOAD_KINDS as readonly string[]).includes(value);
+}
+
+/** What one kind weighs, or null when this broadcast has no such file. */
+export interface WatchPartyDownloadSizes {
+  film: number | null;
+  camera: number | null;
+  voice: number | null;
+}
+
+/** Everything the byte route needs: which objects, in what order, and how
+ * big the concatenation is. */
+export interface WatchPartyDownloadPlan {
+  kind: WatchPartyDownloadKind;
+  contentType: string;
+  /** Appended to the caller's filename stem. */
+  extension: "ts" | "ogg";
+  keys: string[];
+  /** Exact: every object the download concatenates was priced by the same
+   * listing that proved it is there, so this is a `Content-Length` the
+   * browser can hold us to. */
+  bytes: number;
+}
+
+const DOWNLOAD_CONTENT_TYPE: Record<WatchPartyDownloadKind, string> = {
+  film: "video/mp2t",
+  camera: "video/mp2t",
+  voice: "audio/ogg",
+};
+
+/**
+ * Per-object signature lifetime while streaming. Generous on purpose: a
+ * download is consumed at the CLIENT's pace, and the signed GET is only
+ * issued when its turn comes, so the relevant clock is "how long one object
+ * takes on a slow link", not "how long the whole file takes".
+ */
+const DOWNLOAD_OBJECT_TTL_SECONDS = 900;
+
+/**
+ * How long a download may make NO progress before it is abandoned, and
+ * progress means bytes the client actually took.
+ *
+ * Idle, not elapsed: a body is drained at the client's pace, so an hour of
+ * film down a slow link is a completely healthy transfer and a deadline on
+ * the object would kill exactly the downloads that need the most patience.
+ * But "the destination is backpressured" is NOT a reason to keep waiting
+ * either -- a reader that stops reading altogether would then hold a storage
+ * connection and a server pipeline open forever. So the clock is restarted by
+ * a chunk arriving from storage AND by the socket draining what it was handed,
+ * and by nothing else: a slow client keeps draining, a dead one does not.
+ */
+const DOWNLOAD_OBJECT_IDLE_MS = 120_000;
+
+/** How often the clock above is examined. */
+const DOWNLOAD_PROGRESS_TICK_MS = 5_000;
+
+/**
+ * The absolute ceiling on one download, whatever it is doing. Six hours is
+ * far past any real broadcast down any real link, and exists so a pathological
+ * client that dribbles one byte every two minutes forever still ends.
+ */
+const DOWNLOAD_MAX_MS = 6 * 60 * 60 * 1000;
+
+/** A `ListObjectsV2` per rung prefix, memoised because two different
+ * requests want the same answer: the panel opening (to price the files) and,
+ * moments later, the download itself (to set `Content-Length` and to know
+ * every segment is really there). A finished broadcast's objects never
+ * change, so one listing serves both. This is also why sizes are NOT folded
+ * into `listWatchPartyHistory`: twenty broadcasts would be sixty bucket
+ * round-trips for a dialog that usually downloads none of them.
+ *
+ * THIRTY SECONDS, NOT THE FIVE MINUTES A FINISHED BROADCAST'S OBJECTS ARE
+ * ACTUALLY STABLE FOR. The window that matters is the gap between opening the
+ * panel and clicking a link, which is seconds; holding the listing longer only
+ * widens the one case where it is wrong -- the retention sweep deleting
+ * objects underneath a plan that has already been priced and checked, which
+ * ends in a truncated attachment because the head is out by then.
+ *
+ * FAILURES ARE NEVER CACHED, and never returned as an empty listing: "the
+ * bucket did not answer" and "that file was never written" are different
+ * facts, and conflating them tells a moderator the camera was off when
+ * storage was merely down. A failure throws. */
+const DOWNLOAD_LISTING_TTL_MS = 30_000;
+
+/** How many rung prefixes the memo may hold. One entry is every key and size
+ * of one rendition of one broadcast, which for a three-hour film is thousands
+ * of strings -- so this is a real memory bound, not a tidiness rule. Oldest
+ * insertion first, which is also least-recently-listed: each entry is written
+ * once and read for its 30 seconds. */
+const DOWNLOAD_LISTING_MAX_ENTRIES = 32;
+const objectListingCache = new Map<
+  string,
+  { sizes: Map<string, number>; at: number }
+>();
+
+export function resetWatchPartyDownloadCacheForTests(): void {
+  objectListingCache.clear();
+}
+
+interface BroadcastRungRow {
+  rung: string | null;
+  available: boolean;
+}
+
+/** Every row of this broadcast with its own availability, by the same
+ * predicate the replay paths use. */
+async function broadcastRungRows(
+  channelId: string,
+  startedAtMs: number,
+): Promise<BroadcastRungRow[]> {
+  const result = await getPool().query<BroadcastRungRow>(
+    `SELECT rung, (${availablePredicate(3, 4)}) AS available
+     FROM hls_sessions
+     WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)`,
+    [channelId, startedAtMs, hlsRetentionMinutes(), hlsReplayHours()],
+  );
+  return result.rows;
+}
+
+/**
+ * The rung whose file is "the stream": the tallest available ladder rendition,
+ * bitrate breaking a tie. The audience saw whichever rung their link could
+ * carry, but the archive should be the best copy that exists -- picking the
+ * lowest would hand a moderator a 480p file of a 1080p night.
+ */
+function topLadderRung(rows: BroadcastRungRow[]): string | null {
+  let best: { rung: string; height: number; kbps: number } | null = null;
+  for (const row of rows) {
+    if (!row.available || row.rung === null) {
+      continue;
+    }
+    const ladder = LADDER_RUNGS[row.rung];
+    if (!ladder) {
+      continue;
+    }
+    if (
+      !best ||
+      ladder.height > best.height ||
+      (ladder.height === best.height && ladder.videoKbps > best.kbps)
+    ) {
+      best = { rung: row.rung, height: ladder.height, kbps: ladder.videoKbps };
+    }
+  }
+  return best?.rung ?? null;
+}
+
+function hasAvailableRung(rows: BroadcastRungRow[], rung: string): boolean {
+  return rows.some((row) => row.rung === rung && row.available);
+}
+
+/** Which rung (if any) backs each kind for this broadcast. */
+function downloadRungs(rows: BroadcastRungRow[]): Record<
+  WatchPartyDownloadKind,
+  string | null
+> {
+  return {
+    film: topLadderRung(rows),
+    camera: hasAvailableRung(rows, CAMERA_RUNG_NAME) ? CAMERA_RUNG_NAME : null,
+    voice: hasAvailableRung(rows, MIC_ARCHIVE_RUNG) ? MIC_ARCHIVE_RUNG : null,
+  };
+}
+
+async function objectSizes(
+  prefix: string,
+  config: NonNullable<ReturnType<typeof liveHlsStorageConfig>>,
+  now = Date.now(),
+): Promise<Map<string, number>> {
+  const cached = objectListingCache.get(prefix);
+  if (cached && now - cached.at < DOWNLOAD_LISTING_TTL_MS) {
+    return cached.sizes;
+  }
+  const sizes = new Map<string, number>();
+  let listing: Awaited<ReturnType<typeof listObjects>>;
+  try {
+    listing = await listObjects(prefix, config);
+  } catch (error) {
+    throw new HlsPlaylistUnavailable(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  }
+  for (const object of listing) {
+    sizes.set(object.key, object.size);
+  }
+  pruneStale(objectListingCache, now);
+  objectListingCache.set(prefix, { sizes, at: now });
+  while (objectListingCache.size > DOWNLOAD_LISTING_MAX_ENTRIES) {
+    const oldest = objectListingCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    objectListingCache.delete(oldest.value);
+  }
+  return sizes;
+}
+
+/** Where one kind's objects live: the mic archive is a single object, every
+ * other kind is a rung's prefix. */
+function downloadPrefix(
+  channelId: string,
+  startedAtMs: number,
+  kind: WatchPartyDownloadKind,
+  rung: string,
+): string {
+  return kind === "voice"
+    ? micArchiveObjectKey(channelId, startedAtMs)
+    : hlsObjectPrefix(channelId, startedAtMs, rung);
+}
+
+/**
+ * How big each of the three files is, or null for one this broadcast never
+ * wrote. Sizes are approximate by contract -- what the bucket reports for the
+ * objects the download concatenates -- and belong on a button, not in a
+ * promise.
+ *
+ * Throws `HlsPlaylistUnavailable` when storage is unset or will not answer,
+ * rather than reporting every kind as absent: a caller that cannot tell the
+ * two apart shows "câmera não usada" during an outage.
+ */
+export async function watchPartyDownloadSizes(
+  channelId: string,
+  startedAtMs: number,
+): Promise<WatchPartyDownloadSizes> {
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
+  }
+  const sizes: WatchPartyDownloadSizes = {
+    film: null,
+    camera: null,
+    voice: null,
+  };
+  const rungs = downloadRungs(await broadcastRungRows(channelId, startedAtMs));
+  for (const kind of WATCH_PARTY_DOWNLOAD_KINDS) {
+    const rung = rungs[kind];
+    if (!rung) {
+      continue;
+    }
+    let total = 0;
+    for (const [key, size] of await objectSizes(
+      downloadPrefix(channelId, startedAtMs, kind, rung),
+      config,
+    )) {
+      // Playlists are a rounding error next to the segments, but counting
+      // them would make the number disagree with what is actually sent.
+      if (kind === "voice" || key.endsWith(".ts")) {
+        total += size;
+      }
+    }
+    sizes[kind] = total > 0 ? total : null;
+  }
+  return sizes;
+}
+
+/** Segment keys in playlist order. Relative lines are resolved against the
+ * rung's own directory, exactly as `buildReplaySignedPlaylist` does. */
+function playlistKeys(body: string, objectPrefix: string): string[] {
+  const prefixDir = `${objectPrefix.split("/").slice(0, -1).join("/")}/`;
+  const keys: string[] = [];
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      continue;
+    }
+    keys.push(trimmed.includes("/") ? trimmed : `${prefixDir}${trimmed}`);
+  }
+  return keys;
+}
+
+/**
+ * What to stream for one kind, or null when this broadcast has no such file.
+ * Throws `HlsPlaylistUnavailable` when storage is not configured or cannot be
+ * read, and `HlsPlaylistNotFound` when the playlist names an object the
+ * bucket does not have -- a half-swept recording, which the route answers
+ * with the same 409 as a fully swept one. Discovering that mid-stream is not
+ * an option: the head is out by then and the moderator is left with a file
+ * that looks complete and is not.
+ */
+export async function buildWatchPartyDownloadPlan(
+  channelId: string,
+  startedAtMs: number,
+  kind: WatchPartyDownloadKind,
+): Promise<WatchPartyDownloadPlan | null> {
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
+  }
+  const rung = downloadRungs(await broadcastRungRows(channelId, startedAtMs))[
+    kind
+  ];
+  if (!rung) {
+    return null;
+  }
+  const prefix = downloadPrefix(channelId, startedAtMs, kind, rung);
+  // The same listing the panel already paid for, memoised: opening the panel
+  // and then downloading from it must not scan the prefix twice.
+  const sizes = await objectSizes(prefix, config);
+  if (kind === "voice") {
+    const size = sizes.get(prefix);
+    if (size === undefined) {
+      return null;
+    }
+    return {
+      kind,
+      contentType: DOWNLOAD_CONTENT_TYPE[kind],
+      extension: "ogg",
+      keys: [prefix],
+      bytes: size,
+    };
+  }
+  const keys = playlistKeys(
+    await fetchReplayPlaylistBody(config, channelId, startedAtMs, rung),
+    prefix,
+  );
+  if (keys.length === 0) {
+    return null;
+  }
+  let total = 0;
+  for (const key of keys) {
+    const size = sizes.get(key);
+    if (size === undefined) {
+      throw new HlsPlaylistNotFound(
+        `Replay ${prefix} is missing ${key}, which its playlist names`,
+      );
+    }
+    total += size;
+  }
+  return {
+    kind,
+    contentType: DOWNLOAD_CONTENT_TYPE[kind],
+    extension: "ts",
+    keys,
+    bytes: total,
+  };
+}
+
+/**
+ * Pipes the plan's objects into `target`, one after another, with
+ * backpressure: `pipeline` only pulls the next chunk out of storage when the
+ * socket has taken the last one, so a three-hour broadcast never exists in
+ * this process's memory. `{ end: false }` keeps the response open between
+ * objects; the caller ends it.
+ *
+ * ONE `AbortSignal` DRIVES BOTH HALVES. It is handed to the storage `fetch`
+ * and to `pipeline`, because either half can be the one that stops: storage
+ * going quiet, or a client that stops reading with the body already buffered
+ * (aborting only the fetch there does nothing at all -- the fetch has
+ * finished). Firing it tears the whole chain down, which is the only way to
+ * be sure a stalled download stops costing a connection and a socket buffer.
+ *
+ * Once the first byte is out there is no way to turn the answer into an HTTP
+ * error, so a failure mid-stream can only destroy the response and let the
+ * client see a truncated download -- which is why the plan is built (and
+ * every "is this still there" question answered) BEFORE the head is written.
+ *
+ * `idleMs` / `maxMs` are the tests' way in; nothing in production passes them.
+ */
+export async function streamWatchPartyDownload(
+  plan: WatchPartyDownloadPlan,
+  target: Writable,
+  options: { idleMs?: number; maxMs?: number } = {},
+): Promise<void> {
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
+  }
+  const idleMs = options.idleMs ?? DOWNLOAD_OBJECT_IDLE_MS;
+  const maxMs = options.maxMs ?? DOWNLOAD_MAX_MS;
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  const noteProgress = (): void => {
+    lastProgressAt = Date.now();
+  };
+  // The socket taking what it was handed is the only proof the client is
+  // still there; a chunk arriving from storage is the proof for the other
+  // half. Nothing else counts as progress.
+  target.on("drain", noteProgress);
+  try {
+    for (const key of plan.keys) {
+      // Checked between objects as well as on the tick below: a download of
+      // many small segments can finish each one inside a single tick and
+      // never be examined at all.
+      if (Date.now() - startedAt >= maxMs) {
+        throw new HlsPlaylistUnavailable(
+          `Download of ${plan.kind} outlived its ceiling`,
+        );
+      }
+      const url = signRequest({
+        method: "GET",
+        key,
+        ttlSeconds: DOWNLOAD_OBJECT_TTL_SECONDS,
+        forRead: true,
+        config,
+      }).url;
+      const controller = new AbortController();
+      const watchdog = setInterval(
+        () => {
+          const now = Date.now();
+          if (now - lastProgressAt >= idleMs || now - startedAt >= maxMs) {
+            controller.abort();
+          }
+        },
+        Math.max(250, Math.min(DOWNLOAD_PROGRESS_TICK_MS, idleMs, maxMs)),
+      );
+      try {
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+        } catch (error) {
+          throw new HlsPlaylistUnavailable(
+            error instanceof Error ? error.message : "Storage unreachable",
+          );
+        }
+        if (!response.ok || !response.body) {
+          throw new HlsPlaylistUnavailable(
+            `Storage returned HTTP ${response.status} for ${key}`,
+          );
+        }
+        noteProgress();
+        await pipeline(
+          // `fetch`'s body is typed as the DOM `ReadableStream`,
+          // `Readable.fromWeb` takes the `node:stream/web` one; they are the
+          // same object at runtime and differ only in how the two lib
+          // definitions spell it.
+          Readable.fromWeb(
+            response.body as unknown as NodeReadableStream<Uint8Array>,
+          ),
+          new Transform({
+            transform(chunk, _encoding, done) {
+              noteProgress();
+              done(null, chunk);
+            },
+          }),
+          target,
+          { end: false, signal: controller.signal },
+        );
+      } finally {
+        clearInterval(watchdog);
+      }
+    }
+  } finally {
+    target.off("drain", noteProgress);
+  }
 }
