@@ -466,6 +466,17 @@ export async function reconcileStaleHlsSessions(): Promise<{
     ended = result.rowCount ?? 0;
   }
 
+  // A SKIP IS NOT A DECISION FOR EVER. The owner was alive when this pass read
+  // the leases; if that machine dies a minute later its rows stay open and its
+  // egresses unmanaged, and on a single machine the boot pass was the only
+  // thing that ever looked. So a pass that skipped anything asks to be run
+  // again, and `reconcileSkippedHlsSessions` on the health monitor's tick does
+  // exactly that until a pass skips nothing.
+  revisitSkipped = skippedIds.size > 0;
+  // The clock starts HERE, so the first revisit is one interval after the pass
+  // that skipped rather than on the very next monitor tick: the owner was
+  // alive a moment ago and its heartbeat TTL has not even had time to lapse.
+  lastRevisitAt = Date.now();
   logEvent("voice.hlsBootReconciled", {
     adopted,
     ended,
@@ -473,6 +484,35 @@ export async function reconcileStaleHlsSessions(): Promise<{
     skippedOwnedElsewhere: skippedIds.size,
   });
   return { adopted, ended, stopped };
+}
+
+/** Whether the last pass left rows to somebody else, and when we last re-ran. */
+let revisitSkipped = false;
+let lastRevisitAt = 0;
+/** Not more than once a minute: the owner's heartbeat TTL is 45 s. */
+const REVISIT_INTERVAL_MS = 60_000;
+
+/** Test hook: forget that a pass skipped anything. */
+export function resetHlsReconcileRevisitForTests(): void {
+  revisitSkipped = false;
+  lastRevisitAt = 0;
+}
+
+/**
+ * Re-run the boot reconcile while, and only while, the last one left rows to
+ * an instance that was alive at the time. Called from the health monitor's
+ * tick; a no-op on the overwhelming majority of them, because a pass that
+ * skipped nothing sets nothing to do.
+ */
+export async function reconcileSkippedHlsSessions(
+  now = Date.now(),
+): Promise<boolean> {
+  if (!revisitSkipped || now - lastRevisitAt < REVISIT_INTERVAL_MS) {
+    return false;
+  }
+  lastRevisitAt = now;
+  await reconcileStaleHlsSessions();
+  return true;
 }
 
 /**

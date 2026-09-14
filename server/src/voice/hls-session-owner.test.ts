@@ -41,7 +41,11 @@ vi.mock("../lib/log.js", async (importOriginal) => {
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
-const { reconcileStaleHlsSessions } = await import("./hls-cleanup.js");
+const {
+  reconcileSkippedHlsSessions,
+  reconcileStaleHlsSessions,
+  resetHlsReconcileRevisitForTests,
+} = await import("./hls-cleanup.js");
 const {
   activeBoxEgressCount,
   checkLiveHlsHealth,
@@ -79,6 +83,7 @@ describeDb("hls_sessions ownership across two API machines", () => {
     );
     logEvent.mockClear();
     resetLiveHlsForTests();
+    resetHlsReconcileRevisitForTests();
     process.env.VOICE_REGISTRY = "postgres";
     machineA = randomUUID();
 
@@ -543,6 +548,57 @@ describeDb("hls_sessions ownership across two API machines", () => {
     expect((await rowById(old)).ended_at).not.toBeNull();
     expect((await rowById(fresh)).ended_at).toBeNull();
     expect((await rowById(fresh)).instance_id).toBe(hlsOwnerInstanceId());
+  });
+
+  it("revisits a row it skipped once the owner that was alive stops answering", async () => {
+    // A SKIP IS NOT A DECISION FOR EVER. The boot pass reads the leases once;
+    // if that machine dies a minute later, nothing would ever look at its rows
+    // again, and on one machine the boot pass was the only thing that did.
+    await heartbeat(machineA, 2);
+    const id = await makeSession({
+      prefix: `live/${channelA}/9970`,
+      egressId: "EG_owner-dies",
+      instanceId: machineA,
+    });
+    mediaServer([{ egressId: "EG_owner-dies", roomName: channelA }]);
+
+    expect(await reconcileStaleHlsSessions()).toEqual({
+      adopted: 0,
+      ended: 0,
+      stopped: 0,
+    });
+    // Too soon: the owner is alive and the interval has not passed.
+    expect(await reconcileSkippedHlsSessions()).toBe(false);
+
+    // The other machine stops answering.
+    await heartbeat(machineA, 300);
+    expect(await reconcileSkippedHlsSessions(Date.now() + 61_000)).toBe(true);
+
+    const row = await rowById(id);
+    expect(row.instance_id).toBe(hlsOwnerInstanceId());
+    expect(row.ended_at).toBeNull();
+    expect(liveHlsStreamFor(channelA)?.startedAt).toBe(9970);
+  });
+
+  it("refuses a claim on a row a live machine has taken, rather than overwriting the stamp", async () => {
+    // Two processes booting inside one heartbeat TTL can both read the same
+    // owner as expired. The row itself is the arbiter now: the second stamp
+    // does not land, and says so.
+    await heartbeat(machineA, 2);
+    const id = await makeSession({
+      prefix: `live/${channelA}/9980`,
+      egressId: "EG_contended",
+      instanceId: machineA,
+    });
+    logEvent.mockClear();
+
+    expect(await claimHlsSessionRows([id], { reopen: true })).toBe(true);
+
+    expect((await rowById(id)).instance_id).toBe(machineA);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsSessionClaimRefused",
+      expect.objectContaining({ refused: 1 }),
+    );
   });
 
   it("(d) the ghost filter still writes off a record nobody owns", async () => {

@@ -2321,6 +2321,27 @@ async function reapForeignEgresses(
  * interval. Returns the channels it restarted or failed, for the log and
  * the test.
  */
+/**
+ * A boot pass that left rows to another live machine asks to be run again, in
+ * case that machine has since died: on one machine the boot pass was the only
+ * thing that ever adopted or ended an abandoned session, and a skip must not
+ * turn "not yet" into "never".
+ *
+ * IMPORTED LAZILY because `hls-cleanup.ts` imports this module: a static
+ * import here would close the cycle. Failures are swallowed on purpose — this
+ * is a best-effort repair on a monitor tick, not part of presenting anything.
+ */
+async function revisitSkippedHlsSessions(): Promise<void> {
+  try {
+    const { reconcileSkippedHlsSessions } = await import("./hls-cleanup.js");
+    await reconcileSkippedHlsSessions();
+  } catch (error) {
+    logEvent("voice.hlsReconcileRevisitFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function retryDeferredStops(now = Date.now()): Promise<void> {
   for (const [egressId, entry] of [...deferredStops]) {
     if (
@@ -2414,6 +2435,7 @@ export async function checkLiveHlsHealth(
   // repairs of writes that did not land, and neither depends on this process
   // still presenting anything.
   await retryPendingHlsSessionClaims();
+  await revisitSkippedHlsSessions();
   const egress = getEgress();
   if (!egress) {
     return [];
