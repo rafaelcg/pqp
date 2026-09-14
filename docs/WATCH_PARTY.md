@@ -2545,7 +2545,11 @@ play for its first few seconds, which is the worst way for this to be wrong.
 - `GET /api/channels/:channelId/watch-party/history/:sessionAt/download` --
   what exists and roughly how big, plus a ready-to-use URL per kind carrying
   the `?t=` capability. Sizes are a bucket listing per rung prefix, memoised
-  for five minutes, which is why the history LIST does not carry them: twenty
+  for thirty seconds (long enough to cover the gap between opening the panel
+  and clicking a link, short enough that the retention sweep cannot delete
+  objects out from under an already-priced plan), bounded to a handful of
+  prefixes because one entry is every key of one rendition. That listing is
+  why the history LIST does not carry sizes: twenty
   broadcasts would be sixty round-trips to storage for a dialog that usually
   downloads none of them. The client asks when somebody opens the panel on a
   row, and the download that follows reuses the same listing rather than

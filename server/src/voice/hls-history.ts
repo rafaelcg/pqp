@@ -679,11 +679,25 @@ const DOWNLOAD_OBJECT_IDLE_MS = 120_000;
  * into `listWatchPartyHistory`: twenty broadcasts would be sixty bucket
  * round-trips for a dialog that usually downloads none of them.
  *
+ * THIRTY SECONDS, NOT THE FIVE MINUTES A FINISHED BROADCAST'S OBJECTS ARE
+ * ACTUALLY STABLE FOR. The window that matters is the gap between opening the
+ * panel and clicking a link, which is seconds; holding the listing longer only
+ * widens the one case where it is wrong -- the retention sweep deleting
+ * objects underneath a plan that has already been priced and checked, which
+ * ends in a truncated attachment because the head is out by then.
+ *
  * FAILURES ARE NEVER CACHED, and never returned as an empty listing: "the
  * bucket did not answer" and "that file was never written" are different
  * facts, and conflating them tells a moderator the camera was off when
  * storage was merely down. A failure throws. */
-const DOWNLOAD_LISTING_TTL_MS = 300_000;
+const DOWNLOAD_LISTING_TTL_MS = 30_000;
+
+/** How many rung prefixes the memo may hold. One entry is every key and size
+ * of one rendition of one broadcast, which for a three-hour film is thousands
+ * of strings -- so this is a real memory bound, not a tidiness rule. Oldest
+ * insertion first, which is also least-recently-listed: each entry is written
+ * once and read for its 30 seconds. */
+const DOWNLOAD_LISTING_MAX_ENTRIES = 32;
 const objectListingCache = new Map<
   string,
   { sizes: Map<string, number>; at: number }
@@ -779,6 +793,13 @@ async function objectSizes(
   }
   pruneStale(objectListingCache, now);
   objectListingCache.set(prefix, { sizes, at: now });
+  while (objectListingCache.size > DOWNLOAD_LISTING_MAX_ENTRIES) {
+    const oldest = objectListingCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    objectListingCache.delete(oldest.value);
+  }
   return sizes;
 }
 
@@ -936,7 +957,7 @@ export async function buildWatchPartyDownloadPlan(
  */
 export async function streamWatchPartyDownload(
   plan: WatchPartyDownloadPlan,
-  target: NodeJS.WritableStream,
+  target: NodeJS.WritableStream & { writableNeedDrain?: boolean },
 ): Promise<void> {
   const config = liveHlsStorageConfig();
   if (!config) {
@@ -951,14 +972,26 @@ export async function streamWatchPartyDownload(
       config,
     }).url;
     const controller = new AbortController();
-    let idle: NodeJS.Timeout = setTimeout(
-      () => controller.abort(),
-      DOWNLOAD_OBJECT_IDLE_MS,
-    );
+    let idle: NodeJS.Timeout;
+    const onIdle = (): void => {
+      // NOTHING HAS ARRIVED, AND THAT IS ONLY STORAGE'S FAULT IF STORAGE IS
+      // THE HALF WE ARE WAITING ON. Under backpressure the pipeline stops
+      // pulling, so no chunk reaches the guard below however healthy the
+      // transfer is: a viewer on a slow link, or one who paused the download,
+      // would otherwise be cut off for being slow. A destination that has not
+      // drained what it was already handed is that case exactly, so the clock
+      // simply starts again.
+      if (target.writableNeedDrain) {
+        restartIdleClock();
+        return;
+      }
+      controller.abort();
+    };
     const restartIdleClock = (): void => {
       clearTimeout(idle);
-      idle = setTimeout(() => controller.abort(), DOWNLOAD_OBJECT_IDLE_MS);
+      idle = setTimeout(onIdle, DOWNLOAD_OBJECT_IDLE_MS);
     };
+    idle = setTimeout(onIdle, DOWNLOAD_OBJECT_IDLE_MS);
     try {
       let response: Response;
       try {
