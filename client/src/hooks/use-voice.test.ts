@@ -2854,30 +2854,95 @@ describe("voice roster deltas", () => {
    * A moderator's drag-and-drop move (`moveOccupantSeat` in
    * `voice-occupant-dnd.ts`) paints the destination channel optimistically
    * with the person's CURRENT peer id, because it cannot know the fresh one
-   * their reconnect will mint. If a stale entry like that survives past the
-   * real `joined` for the same person, `byId.size` never agrees with the
-   * server's count and every delta is refused (a wrong badge "for a few
-   * seconds" that, moved-and-back, becomes forever) — which is the reported
-   * bug: the sidebar keeps reading the abandoned peer id, `speakingPeerIds`
-   * only ever names the live one, and that person's ring never lights again.
+   * their reconnect will mint — and tags that entry `isOptimisticVoiceEntry`
+   * so the delta merge knows it is this client's own guess, not the room's
+   * word. If a stale entry like that survives past the real `joined` for the
+   * same person, `byId.size` never agrees with the server's count and every
+   * delta is refused (a wrong badge "for a few seconds" that, moved-and-back,
+   * becomes forever) — which is the reported bug: the sidebar keeps reading
+   * the abandoned peer id, `speakingPeerIds` only ever names the live one,
+   * and that person's ring never lights again.
    */
-  it("collapses a stale entry for the same user under a different peer id, so a delta converges instead of waiting on the next keyframe", () => {
+  it("collapses an OPTIMISTIC entry for the same user under a different peer id, so a delta converges instead of waiting on the next keyframe", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const channelB = "00000000-0000-4000-8000-0000000000bb";
+
+    // Friend starts seated in A, then the mover drags them to B: the
+    // optimistic paint carries the CURRENT ("stale-to-be") peer id into B,
+    // marked, exactly what a real drag does.
+    voice.handleSignaling(
+      snapshot(1, [person("stale", { userId: "user-friend" })], CHANNEL),
+    );
+    const moved = moveOccupantSeat(
+      voice.getState().occupancy,
+      "user-friend",
+      channelB,
+    );
+    voice.replaceOccupancy(moved.next);
+
+    // The room's real word: the same person, freshly reconnected into B
+    // under a different peer id — exactly what a moderator's move produces.
+    voice.handleSignaling(
+      delta(1, 1, { joined: [person("fresh", { userId: "user-friend" })] }, channelB),
+    );
+
+    expect(
+      (voice.getState().occupancy[channelB] ?? []).map((p) => p.peerId),
+    ).toEqual(["fresh"]);
+  });
+
+  /**
+   * Farol's catch on the first version of this fix: collapsing by user id
+   * ALONE would also swallow a second genuine session of the same person —
+   * two tabs, or a phone and a desktop, both seated in the same call at once
+   * is one user id legitimately holding two different peer ids. Neither
+   * entry here is `moveOccupantSeat`'s optimistic guess — both are the
+   * server's own word — so both must survive every delta untouched.
+   */
+  it("keeps both sessions when the same user id is legitimately seated under two peer ids at once", () => {
     const { transport } = createTransport();
     const voice = createVoiceController(transport);
 
-    // Stands in for the optimistic paint: this channel already lists
-    // "friend" under a peer id the room has since moved on from.
     voice.handleSignaling(
-      snapshot(1, [person("stale", { userId: "user-friend" })]),
+      snapshot(1, [person("tab-1", { userId: "user-two-tabs" })]),
     );
-
-    // The room's real word: the same person, freshly reconnected under a
-    // different peer id — exactly a moderator move and move-back.
+    // A second real session for the same person joins — never routed through
+    // `moveOccupantSeat`, so never marked optimistic.
     voice.handleSignaling(
-      delta(2, 1, { joined: [person("fresh", { userId: "user-friend" })] }),
+      delta(2, 2, { joined: [person("tab-2", { userId: "user-two-tabs" })] }),
     );
+    expect(idsIn(voice)).toEqual(["tab-1", "tab-2"]);
 
-    expect(idsIn(voice)).toEqual(["fresh"]);
+    // A later, unrelated delta (someone else present) must not disturb
+    // either session of the two-tab user.
+    voice.handleSignaling(
+      delta(3, 3, { joined: [person("someone-else")] }),
+    );
+    expect(idsIn(voice)).toEqual(["someone-else", "tab-1", "tab-2"]);
+
+    // And an `updated` for one of the two sessions (a mute toggle, say) must
+    // land on that session only, leaving the other alone.
+    voice.handleSignaling(
+      delta(
+        4,
+        3,
+        {
+          updated: [
+            person("tab-1", { userId: "user-two-tabs", muted: true }),
+          ],
+        },
+      ),
+    );
+    expect(idsIn(voice)).toEqual(["someone-else", "tab-1", "tab-2"]);
+    expect(
+      voice.getState().occupancy[CHANNEL]?.find((p) => p.peerId === "tab-1")
+        ?.muted,
+    ).toBe(true);
+    expect(
+      voice.getState().occupancy[CHANNEL]?.find((p) => p.peerId === "tab-2")
+        ?.muted,
+    ).toBe(false);
   });
 
   /**

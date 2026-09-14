@@ -66,7 +66,10 @@ import {
   createRnnoiseNode,
   loadRnnoiseBinary,
 } from "../lib/noise-suppression";
-import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
+import {
+  isOptimisticVoiceEntry,
+  moveOccupantSeat,
+} from "@/lib/voice-occupant-dnd";
 import {
   connectLiveKit,
   type LiveKitIdentity,
@@ -3392,12 +3395,36 @@ export function createVoiceController(transport: RealtimeTransport) {
             participant,
           ]),
         );
+        // A user id -> peer ids index, built once per delta rather than
+        // rescanned per participant, so `mergeParticipant` below stays O(D)
+        // (D = joined.length + updated.length) instead of O(D * room size).
+        // A user practically holds at most a couple of concurrent sessions,
+        // so the inner loop it drives is small regardless of room size.
+        const peerIdsByUserId = new Map<string, Set<string>>();
+        for (const [peerId, participant] of byId) {
+          let ids = peerIdsByUserId.get(participant.userId);
+          if (!ids) {
+            ids = new Set();
+            peerIdsByUserId.set(participant.userId, ids);
+          }
+          ids.add(peerId);
+        }
+        function indexParticipant(participant: VoiceParticipant) {
+          let ids = peerIdsByUserId.get(participant.userId);
+          if (!ids) {
+            ids = new Set();
+            peerIdsByUserId.set(participant.userId, ids);
+          }
+          ids.add(participant.peerId);
+        }
         // In order, and every entry an absolute statement about one peer, so
         // replaying one that a snapshot already folded in changes nothing.
         //
         // `mergeParticipant` drops a STALE entry for the same user under a
-        // DIFFERENT peer id before keying the fresh one in. Without it, one
-        // lingers whenever this client's view of a user's peer id fell
+        // DIFFERENT peer id before keying the fresh one in — but ONLY an
+        // entry `isOptimisticVoiceEntry` marks as this client's own guess,
+        // never one the server itself sent. Without the drop at all, a stale
+        // guess lingers whenever this client's view of a user's peer id fell
         // behind the room's — most reliably the moderator who just dragged
         // them to another channel: `moveOccupantSeat` paints the move
         // optimistically by carrying the person's CURRENT peer id into the
@@ -3407,20 +3434,29 @@ export function createVoiceController(transport: RealtimeTransport) {
         // `message.size`, and the whole delta is refused below — leaving the
         // sidebar pinned to the abandoned peer id. `speakingPeerIds` only
         // ever names the live one, so the ring for that person can never
-        // light again until an unrelated keyframe happens to repair it. Any
-        // other way this client's roster could fall behind by one peer id
-        // hits the identical failure, so the fix belongs here rather than in
-        // the drag code that merely triggers it most often.
+        // light again until an unrelated keyframe happens to repair it.
+        //
+        // Without the `isOptimisticVoiceEntry` guard, this would also
+        // collapse a genuine SECOND session of the same person — two tabs,
+        // or a phone and a desktop both in the same call — which is one user
+        // id legitimately holding two different peer ids at once and must
+        // never be treated as staleness.
         function mergeParticipant(participant: VoiceParticipant) {
-          for (const [peerId, existing] of byId) {
-            if (
-              peerId !== participant.peerId &&
-              existing.userId === participant.userId
-            ) {
-              byId.delete(peerId);
+          const sameUserPeerIds = peerIdsByUserId.get(participant.userId);
+          if (sameUserPeerIds) {
+            for (const peerId of sameUserPeerIds) {
+              if (peerId === participant.peerId) {
+                continue;
+              }
+              const existing = byId.get(peerId);
+              if (existing && isOptimisticVoiceEntry(existing)) {
+                byId.delete(peerId);
+                sameUserPeerIds.delete(peerId);
+              }
             }
           }
           byId.set(participant.peerId, participant);
+          indexParticipant(participant);
         }
         for (const participant of message.joined ?? []) {
           mergeParticipant(participant);
