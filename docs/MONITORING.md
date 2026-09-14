@@ -63,9 +63,9 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 
 | Check | Passes when | Why it exists |
 |---|---|---|
-| `api-health` | `https://api.pqp.gg/health` returns 200 with `ok:true` | The endpoint does a real `SELECT 1`, so a 200 means process **and** database. The reported `version` is the deployed commit. |
+| `api-health` | `https://api.pqp.gg/health` returns 200 with `ok:true` | As of A3.1 (`docs/plans/ALWAYS_ON.md`, CLAUDE.md pitfall #17) this is **process liveness only** — no database call. A 200 means the process is up and not draining; it does NOT mean the database is reachable, which is `/ready`'s job below. The reported `version` is still the deployed commit. |
 | `web-app` | `https://pqp.gg` returns 200 | The SPA on Cloudflare Pages. |
-| `websocket` | `wss://api.pqp.gg/ws` upgrades (101) and answers an invalid auth frame with close code 4401 | **The one a plain HTTP check misses.** Chat, presence and voice signalling all ride this socket; `/health` can be green while every WebSocket is dead. That is CLAUDE.md pitfall #9, verbatim. Needs no credential — an invalid token is enough to prove the upgrade, the message loop and the Clerk call all work. |
+| `websocket` | `wss://api.pqp.gg/ws` upgrades (101) and answers an invalid auth frame with close code 4401 | **The one a plain HTTP check misses.** Chat, presence and voice signalling all ride this socket; `/health` can be green while every WebSocket is dead. That is CLAUDE.md pitfall #9, verbatim, and more true than ever now that `/health` is liveness-only (A3.1) rather than a proxy for "the process can still do useful work". Needs no credential — an invalid token is enough to prove the upgrade, the message loop and the Clerk call all work. |
 | `fly-machines` | exactly **1** machine, `started`, in `gru` | The machine count is a decision (`fly.toml` `min_machines_running`, `docs/deploy-fly.md` 6a-bis), and this is the continuous half of asserting it: the deploy workflow checks the number at release time, this checks it between deploys, because a stray `fly scale count 2` or a machine Fly recreates after a host failure never goes through a deploy. One today by choice, until the two-machine rehearsal in `docs/STAGING.md` passes with `LIVEKIT_*` set; the code can share state (the bus and the registry are on, and mesh crosses the bus since 2026-09-08). When the flip lands, raise the count in `scripts/monitor/availability.mjs` in the same PR as `fly.toml`. |
 | `worker-image-drift` | `pqp-worker`'s started machine(s) run the same image as `pqp-api`'s | **Added 2026-09-08**, after the gap it would have caught: the deploy workflow's "Deploy the worker (same image)" step started failing silently (`FLY_API_TOKEN_WORKER` could not pull the API's image ref — an app-scoped token cannot read another app's registry), CI stayed red on a step everyone had learned to ignore, and `pqp-worker` sat on a two-day-old image while `pqp-api` redeployed two dozen times. Every job merged in that window — watch-party session reminders, the HLS retention sweep, voice occupancy sampling — was shipped and simply not running anywhere. Needs `FLY_ORG_TOKEN` to list a second app; skips (not fails) without it, and skips cleanly on a fork with no `pqp-worker`. |
 | `live-hls` | `/ready`'s `checks.liveHls` is ok, or the feature is off | The **watch-party** bucket (`LIVE_HLS_S3_*`), which nothing else here watches: `api-health` reads the shallow `/health`, and `status-components`' `storage` probe is the **attachment** bucket (`S3_*`). Two buckets, two key pairs, and one being green has never implied the other; production ran a week with the HLS secrets deployed and every check above green. `skip` while `LIVE_HLS_ENABLED` is off, which is the state it merges in, so it opens nothing until somebody flips the flag and starts watching by itself the moment they do. When it fails, no segment can be written and every watch party is a blank pane. Runbook: `docs/WATCH_PARTY.md`, "Turning it on in production". |
@@ -83,12 +83,18 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 
 Why it exists: on 2026-09-05 at 22:20Z production Postgres started cutting
 established connections and every database-backed request failed for about
-half an hour. Nothing fired. `/health` opens a fresh connection for its
-`SELECT 1`, which kept succeeding; `/status.json` answers 200 whatever it
-reports; Fly's machine check stayed green for the same reason `/health` did.
-What was actually broken was the **pool**: checked-out clients died
-mid-query, callers queued behind a full pool, and the queue never drained. A
-probe that only asks "can one more query be answered?" cannot see that.
+half an hour. Nothing fired. `/health` (at the time) opened a fresh
+connection for its own `SELECT 1`, which kept succeeding; `/status.json`
+answers 200 whatever it reports; Fly's machine check stayed green for the
+same reason `/health` did. What was actually broken was the **pool**:
+checked-out clients died mid-query, callers queued behind a full pool, and
+the queue never drained. A probe that only asks "can one more query be
+answered?" cannot see that — the same lesson a second incident (2026-09-12)
+taught from the other side: coupling `/health` to the database at all meant
+a real Postgres collapse failed the *routing* check too and took down
+WebSockets and everything else with it. Since A3.1 (CLAUDE.md pitfall #17)
+`/health` runs no query at all; this is the one endpoint that watches the
+database, unconditionally.
 
 `/ready` is the check that can. It answers `200` only when **every** check is
 ok and `503` otherwise, with a JSON body that names the failing one:
@@ -163,7 +169,7 @@ third-party monitor:
 
 | Endpoint | Why not |
 |---|---|
-| `/health` | **Fly's own health check** (`fly.toml`, 30s/5s), and it gates every release. Its semantics belong to the deploy, not to us. It also returns `version` — the deployed commit — which is fine for the platform and is not something to hand an anonymous poller forever. |
+| `/health` | **Fly's own health check** (`fly.toml`, 30s/5s), and it gates every release. Its semantics belong to the deploy, not to us — and since A3.1 those semantics are liveness only, no database call at all, so it answers a narrower question than `/up` or `/ready` even before the "not for a third party" reasoning below. It also returns `version` — the deployed commit — which is fine for the platform and is not something to hand an anonymous poller forever. |
 | `/status.json` | **Returns 200 while reporting components as down.** The state is in the JSON body, so a status-code monitor never fires. Our own GitHub check reads the body (`status-components` above), which is exactly why nobody noticed. |
 | `latencyMs` on `/status.json` | **Absent is not zero, and a missing field is not a fast probe.** A component whose health is inferred rather than measured omits the field entirely: the API cannot time its own round trip from inside itself, and mesh voice has no server-side media to time. A monitor that reads a missing `latencyMs` as `0` will report the fastest dependency on the instance. Read presence first. |
 
@@ -273,9 +279,10 @@ on a body change.
 **Why this group exists.** Everything in the availability group is
 *availability-shaped*: `/health` answers, the WebSocket upgrades, the app's own
 component probes are green. All of that can be true **while the API throws on
-every third request** — `/health` does a `SELECT 1` and returns 200; it does not
-know a route has been 500ing for an hour. Nothing read the logs, so nothing
-would have said so.
+every third request** — `/health` (liveness only since A3.1) has no way to see
+that, and did not know it even back when it ran a `SELECT 1`, since a 500 in a
+route is not a database failure. Nothing read the logs, so nothing would have
+said so.
 
 | Check | Passes when | Why it exists |
 |---|---|---|

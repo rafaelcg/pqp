@@ -1,4 +1,4 @@
-import { getPool } from "../db.js";
+import { getPool, DatabaseUnavailableError } from "../db.js";
 import { signRequest } from "../lib/s3.js";
 import { verifyHlsViewerToken } from "./hls-viewer-token.js";
 import {
@@ -149,6 +149,28 @@ function segmentMemoFor(key: string): Map<string, MemoisedSegmentUrl> {
  * for a segment the playlist has not admitted exists yet.
  */
 export const HLS_PLAYLIST_CACHE_TTL_MS = 1_000;
+
+/**
+ * A3.1's stale-while-the-breaker-is-open fallback (`renderCachedPlaylist`,
+ * `sessionRungs` below) is bounded to this long past the last render that
+ * actually confirmed the session live, and it exists for exactly one
+ * security reason: `DatabaseUnavailableError` means the `ended_at IS NULL`
+ * liveness/authorization check could not run, not that it ran and passed. A
+ * session can legitimately end (the write commits, `renderSignedPlaylist`
+ * would now 404) and the breaker can then open for an unrelated reason on
+ * the very next poll; without a bound, that poll would keep re-serving the
+ * pre-end body forever, and a viewer who should have lost access the moment
+ * the session ended keeps a working stream for as long as the outage lasts
+ * and their presigned segment URLs remain valid — minutes, on this
+ * deployment's own TTLs. Bounding it to 30s (this codebase's own live-window
+ * size — see `EGRESS_LIVE_WINDOW_SEGMENTS`/`hls-live-window.ts`) rides out
+ * the pool-queue and single-slow-probe blips this breaker is tuned to
+ * recover from within its own grace/cooldown windows, while a real,
+ * sustained outage degrades to the honest `database_unavailable` response
+ * within half a minute rather than serving a possibly-revoked stream
+ * indefinitely.
+ */
+export const STALE_ON_BREAKER_MAX_MS = 30_000;
 
 interface CachedPlaylist {
   /** Resolved body, once the render finished. */
@@ -303,6 +325,30 @@ async function renderCachedPlaylist(
       return body;
     })
     .catch((error: unknown) => {
+      // A3.1 (docs/plans/ALWAYS_ON.md): the DB breaker is open, so the
+      // `ended_at IS NULL` liveness check inside `renderSignedPlaylist`
+      // fast-rejected instead of confirming the session either way. Rather
+      // than fail every viewer's next poll, keep answering with the last
+      // body this session actually rendered — the party survives a DB blip
+      // on whatever window it already had, same as `perf/read-cache`'s
+      // stale-while-revalidate for everything else. Scoped to exactly this
+      // error: a real `HlsPlaylistNotFound` (the session legitimately
+      // ended) must still 404, or a stale window would go on being served
+      // for a stream that is actually over — the one behaviour the comment
+      // on `buildSignedPlaylist` above promises callers.
+      if (
+        error instanceof DatabaseUnavailableError &&
+        cached?.body !== undefined &&
+        now - cached.at <= STALE_ON_BREAKER_MAX_MS
+      ) {
+        // Left at the cached `at`, not refreshed to `now`: the entry still
+        // reads as stale, so the very next poll tries a fresh render rather
+        // than being stuck on this fallback until the TTL logic forgets it
+        // was ever a fallback, and the `STALE_ON_BREAKER_MAX_MS` bound above
+        // still measures from the same, real last-confirmed-live instant.
+        playlistCache.set(key, { body: cached.body, at: cached.at });
+        return cached.body;
+      }
       // A failed render is not cached: the next viewer should retry rather
       // than inherit a 404 from a session that was mid-cleanup.
       playlistCache.delete(key);
@@ -655,6 +701,20 @@ async function sessionRungs(
       return rungs;
     })
     .catch((error: unknown) => {
+      // A3.1: the breaker is open. Same reasoning as `renderCachedPlaylist`'s
+      // fallback — the rung list rarely changes mid-party, so the last list
+      // this process read is still almost certainly right, and serving it
+      // keeps the master playlist (and therefore every rendition it points
+      // at) answering through a DB blip instead of 503ing viewers who are
+      // mid-ladder-switch.
+      if (
+        error instanceof DatabaseUnavailableError &&
+        cached?.rungs !== undefined &&
+        now - cached.at <= STALE_ON_BREAKER_MAX_MS
+      ) {
+        rungCache.set(key, { rungs: cached.rungs, at: cached.at });
+        return cached.rungs;
+      }
       // Same rule as the playlist cache: a failed read is not remembered.
       rungCache.delete(key);
       throw error;

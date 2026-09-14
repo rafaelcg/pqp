@@ -92,7 +92,7 @@ vi.mock("../services/polls.js", () => ({
 // proved against a real database in services/threads.test.ts and
 // api/threads.test.ts.
 vi.mock("../services/threads.js", () => ({
-  getThreadInfo: async () => null,
+  getThreadInfo: vi.fn(async () => null),
 }));
 
 /**
@@ -627,6 +627,38 @@ describe("message-rejected", () => {
       body: "oi",
     });
     expect(posted).toEqual({ ok: false, reason: "cannot-send" });
+  });
+
+  it("A3.1: a DatabaseUnavailableError before the message is created becomes a database-unavailable rejection, not an unhandled rejection", async () => {
+    const { DatabaseUnavailableError } = await import("../db.js");
+    vi.mocked(canAccessChannel).mockRejectedValueOnce(new DatabaseUnavailableError());
+    const posted = await postChannelMessage({
+      author: asUser("user-a"),
+      channelId: nextChannelId(),
+      body: "hello",
+    });
+    expect(posted).toEqual({ ok: false, reason: "database-unavailable" });
+  });
+
+  it("A3.1: a DatabaseUnavailableError AFTER the message is created propagates instead of being reported as a retriable rejection", async () => {
+    // A first review of this change caught the double-post risk this test
+    // pins: if the breaker's error were translated no matter where it came
+    // from, a failure in a post-creation step (here, the thread-chip lookup)
+    // would tell an already-successful sender to retry, and a retry
+    // double-posts. It must propagate as a real error instead — the caller
+    // (`handleChatMessage`, and above it `onMessage` in ws/index.ts) already
+    // has to survive an uncaught rejection from this same function for any
+    // other reason, so nothing new is asked of them.
+    const { DatabaseUnavailableError } = await import("../db.js");
+    const { getThreadInfo } = await import("../services/threads.js");
+    vi.mocked(getThreadInfo).mockRejectedValueOnce(new DatabaseUnavailableError());
+    await expect(
+      postChannelMessage({
+        author: asUser("user-a"),
+        channelId: nextChannelId(),
+        body: "hello",
+      }),
+    ).rejects.toBeInstanceOf(DatabaseUnavailableError);
   });
 
   it("restores a closed 1:1 from the shared send path", async () => {

@@ -58,6 +58,14 @@ enum class MessageRejectReason(val wire: String) {
     SlowMode("slow-mode"),
     /** A server AutoMod rule refused the body. The frame may carry the rule's own copy. */
     Automod("automod"),
+    /**
+     * A3.1 (docs/plans/ALWAYS_ON.md): the server's DB circuit breaker was
+     * open. Unlike every reason above it, no decision was made about this
+     * message at all, so it is retriable the moment the database is back —
+     * no wait timer (see `onRejected`'s `else -> 0L`), not treated as
+     * wait-shaped in `hold()`.
+     */
+    DatabaseUnavailable("database-unavailable"),
     ;
 
     companion object {

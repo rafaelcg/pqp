@@ -17,6 +17,7 @@ import {
   type ProfileUpdate,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
+import { DatabaseUnavailableError } from "../db.js";
 import {
   isBusEnabled,
   publishToCluster,
@@ -1297,8 +1298,41 @@ export type PostChannelMessageResult =
       automodMessage?: string;
     };
 
+/**
+ * A3.1: the DB breaker is open, so hand the sender a specific, immediate
+ * `database-unavailable` rejection (client copy: retry, not "gone forever")
+ * instead of leaving the optimistic bubble to time out after 10s with no
+ * information at all, or an unhandled rejection to reach the generic
+ * catch-and-log in `ws/index.ts`'s `onMessage`.
+ *
+ * ONLY translates a `DatabaseUnavailableError` thrown BEFORE `createMessage`
+ * commits. A first review of this change correctly flagged that wrapping the
+ * whole function meant a failure in a post-creation step (recording
+ * mentions, the thread-chip update) also came back as `database-unavailable`
+ * — which the client treats as retriable — even though the message had
+ * already landed, so a retry would double-post. `created` is the boundary:
+ * `postChannelMessageAttempt` fills it in the instant `createMessage`
+ * returns a row, and everything after that point is a real bug to fix on
+ * its own terms (idempotency, a distinct non-retriable signal), not
+ * something this catch may quietly relabel as "nothing happened yet".
+ */
 export async function postChannelMessage(
   input: PostChannelMessageInput,
+): Promise<PostChannelMessageResult> {
+  const created: { id?: string } = {};
+  try {
+    return await postChannelMessageAttempt(input, created);
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError && !created.id) {
+      return { ok: false, reason: "database-unavailable" };
+    }
+    throw error;
+  }
+}
+
+async function postChannelMessageAttempt(
+  input: PostChannelMessageInput,
+  created: { id?: string },
 ): Promise<PostChannelMessageResult> {
   if (!(await canAccessChannel(input.channelId, input.author.id))) {
     return { ok: false, reason: "no-access" };
@@ -1453,6 +1487,10 @@ export async function postChannelMessage(
     }
     return { ok: false, reason: "empty" };
   }
+  // The boundary `postChannelMessage`'s catch reads: a `DatabaseUnavailableError`
+  // from here on is a bug in a post-creation step, not "nothing happened yet",
+  // and must not come back as the retriable `database-unavailable` rejection.
+  created.id = dbMessage.id;
 
   try {
     await enqueueOutgoingMessageCreated({

@@ -43,9 +43,12 @@ services:
     stop_grace_period: 60s
     stop_signal: SIGTERM
     healthcheck:
-      # /health is unauthenticated (CLAUDE.md pitfall #8) and does a real
-      # SELECT 1, so "healthy" here means "process up AND database
-      # reachable" — the same bar fly.toml's [[http_service.checks]] sets.
+      # /health is unauthenticated (CLAUDE.md pitfall #8) and, as of A3.1
+      # (docs/plans/ALWAYS_ON.md), is process liveness only — no database
+      # call. "healthy" here means "process up and not draining", the same
+      # bar fly.toml's [[http_service.checks]] sets; database health is
+      # /ready's job (GET /ready, checked out of band, not by this container
+      # healthcheck), so a Postgres blip does not restart this container.
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s

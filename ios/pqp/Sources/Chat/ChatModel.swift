@@ -368,6 +368,7 @@ final class ChatModel {
         case "undeliverable": String(localized: "This message wasn't delivered")
         case "slow-mode": String(localized: "Slow mode is on.")
         case "automod": String(localized: "AutoMod blocked this message.")
+        case "database-unavailable": String(localized: "Service is temporarily unavailable. Try again in a moment.")
         default: String(localized: "This message wasn't sent.")
         }
     }

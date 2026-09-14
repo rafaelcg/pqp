@@ -72,6 +72,7 @@
     <string name="chat_reject_undeliverable">This message wasn\'t delivered</string>
     <string name="chat_reject_slow_mode">Slow mode is on.</string>
     <string name="chat_reject_automod">AutoMod blocked this message.</string>
+    <string name="chat_reject_database_unavailable">Service is temporarily unavailable. Try again in a moment.</string>
     <string name="chat_reject_generic">Failed to send</string>
     <string name="chat_slow_mode_wait">Slow mode. You can send again in %1$ds.</string>
     <!-- The row between two calendar days. Older days are formatted dates. -->

@@ -2196,6 +2196,7 @@
   "chat.reject.undeliverable": "This message wasn't delivered",
   "chat.reject.slowMode": "Slow mode is on.",
   "chat.reject.automod": "AutoMod blocked this message.",
+  "chat.reject.databaseUnavailable": "Service is temporarily unavailable. Try again in a moment.",
   "automod.loading": "Loading AutoMod…",
   "automod.loadFailed": "Could not load AutoMod rules.",
   "automod.saveFailed": "Could not save the rule.",
