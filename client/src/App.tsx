@@ -1057,6 +1057,37 @@ function MainAppContent({
       }),
     [],
   );
+  /**
+   * A convenience deep link from the operator dashboard's "fila de
+   * denúncias" card: `?modAllReports=1` opens Settings straight on the
+   * moderation section. Deliberately its own tiny effect rather than folded
+   * into the arrival-intents handling further down — this is not an intent
+   * that needs to survive a signed-out round trip through Clerk, just a
+   * shortcut for an account that is already signed in. The section itself
+   * gates on `GET /api/reports/all`, so this silently does nothing for
+   * anyone who is not an instance moderator; there is nothing here worth
+   * guarding twice.
+   */
+  const modAllReportsLinkHandled = useRef(false);
+  useEffect(() => {
+    if (modAllReportsLinkHandled.current) {
+      return;
+    }
+    modAllReportsLinkHandled.current = true;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get("modAllReports")) {
+      return;
+    }
+    params.delete("modAllReports");
+    const rest = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`,
+    );
+    setSettingsSection("moderation");
+    setSettingsOpen(true);
+  }, []);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);

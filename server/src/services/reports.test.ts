@@ -67,6 +67,7 @@ const { createServer: createChatServer, createChannel } = await import(
 const { createMessage, deleteMessage } = await import("./messages.js");
 const { openConversation } = await import("./dms.js");
 const {
+  createAutomatedReport,
   createReport,
   isInstanceModerator,
   listInstanceReports,
@@ -648,5 +649,255 @@ describeDb("reports", () => {
     expect((await call(owner, "PATCH", "/api/reports/nonsense", {})).status).toBe(
       404,
     );
+  });
+
+  // ------------------------------------------------------- /api/reports/all
+
+  it("gates the all-reports queue on isInstanceModerator, same as the instance one", async () => {
+    for (const person of [owner, admin, member, outsider]) {
+      expect((await call(person, "GET", "/api/reports/all")).status).toBe(404);
+    }
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+    expect((await call(operator, "GET", "/api/reports/all")).status).toBe(200);
+  });
+
+  it("shows an instance moderator a server's own queue, with the server named — the gap that motivated it", async () => {
+    // A report filed into ONE server's queue, reachable today only by that
+    // server's own owner/admins through GET /api/servers/:id/reports.
+    const messageId = await say(channelId, nuisance.id, "buy followers");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: member.id,
+      messageId,
+      reason: "spam",
+    });
+    // And one instance-queue report, so both shapes are in the same read.
+    const dmMessageId = await say(dmChannelId, nuisance.id, "leave me alone");
+    const { report: dmReport } = await createReport({
+      subjectType: "message",
+      reporterId: member.id,
+      messageId: dmMessageId,
+      reason: "harassment",
+    });
+
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+    const res = await call<{
+      reports: Array<{
+        id: string;
+        serverId: string | null;
+        serverName: string | null;
+      }>;
+    }>(operator, "GET", "/api/reports/all");
+    expect(res.status).toBe(200);
+
+    const byId = new Map(res.body.reports.map((r) => [r.id, r]));
+    expect(byId.get(report.id)).toMatchObject({
+      serverId,
+      serverName: "Reports",
+    });
+    expect(byId.get(dmReport.id)).toMatchObject({
+      serverId: null,
+      serverName: null,
+    });
+
+    // A plain server manager still cannot reach this route at all — the
+    // union is instance-moderator-only, not a wider grant to every manager.
+    expect((await call(owner, "GET", "/api/reports/all")).status).toBe(404);
+  });
+
+  it("carries the attachment scanner's evidence on an automated report", async () => {
+    const attachment = await getPool().query<{ id: string }>(
+      `INSERT INTO message_attachments
+         (channel_id, uploader_id, storage_key, filename, content_type,
+          byte_size, scan_status, scan_provider, scan_score, scan_labels,
+          scanned_at, quarantined_at)
+       VALUES ($1, $2, 'evidence/1.png', 'evidence.png', 'image/png', 1024,
+               'rejected', 'openai', 0.97, '["gore"]'::jsonb, NOW(), NOW())
+       RETURNING id::text AS id`,
+      [channelId, nuisance.id],
+    );
+    const attachmentId = attachment.rows[0]!.id;
+    const escalated = await createAutomatedReport({
+      reportedUserId: nuisance.id,
+      channelId,
+      reason: "violence",
+      details:
+        `Automated image scan (openai) returned rejected for attachment ` +
+        `${attachmentId}: gore (score 0.97). The file was refused and never ` +
+        `posted; it is held in quarantine.`,
+    });
+    expect(escalated).toBe(true);
+
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+    const res = await call<{
+      reports: Array<{
+        reportedUserId: string;
+        reporterId: string | null;
+        scan: {
+          status: string;
+          score: number;
+          labels: string[];
+          provider: string;
+          contentType: string;
+          stillAttached: boolean;
+        } | null;
+      }>;
+    }>(operator, "GET", "/api/reports/all");
+    expect(res.status).toBe(200);
+
+    const row = res.body.reports.find(
+      (r) => r.reporterId === null && r.reportedUserId === nuisance.id,
+    );
+    expect(row?.scan).toEqual({
+      status: "rejected",
+      score: 0.97,
+      labels: ["gore"],
+      provider: "openai",
+      contentType: "image/png",
+      // Rejected: never claimed by a message, so nothing is still attached.
+      stillAttached: false,
+    });
+  });
+
+  it("lets an instance moderator resolve a server's report with no standing there at all", async () => {
+    const messageId = await say(channelId, nuisance.id, "buy followers");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: member.id,
+      messageId,
+      reason: "spam",
+    });
+
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+    // `operator` is not a member of `serverId` at all.
+    const res = await call(operator, "PATCH", `/api/reports/${report.id}`, {
+      status: "dismissed",
+      note: "handled centrally",
+    });
+    expect(res.status).toBe(200);
+
+    // But a timeout on that server's member is still refused: resolving is
+    // instance-wide, sanctioning stays server rank.
+    const messageId2 = await say(channelId, nuisance.id, "buy followers again");
+    const { report: report2 } = await createReport({
+      subjectType: "message",
+      reporterId: member.id,
+      messageId: messageId2,
+      reason: "spam",
+    });
+    const withTimeout = await call(
+      operator,
+      "PATCH",
+      `/api/reports/${report2.id}`,
+      { status: "actioned", timeoutMinutes: 30 },
+    );
+    expect(withTimeout.status).toBe(403);
+  });
+
+  // --------------------------------------------------------- remove-message
+
+  it("removes a flagged message, sweeps its attachment and logs the operator line", async () => {
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const messageId = await say(channelId, nuisance.id, "look at this");
+      const { report } = await createReport({
+        subjectType: "message",
+        reporterId: member.id,
+        messageId,
+        reason: "violence",
+      });
+
+      process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+      const res = await call(
+        operator,
+        "POST",
+        `/api/reports/${report.id}/remove-message`,
+      );
+      expect(res.status).toBe(200);
+
+      const gone = await getPool().query(
+        `SELECT 1 FROM messages WHERE id = $1`,
+        [messageId],
+      );
+      expect(gone.rows).toEqual([]);
+
+      const audit = await getPool().query<{ action: string; target_id: string }>(
+        `SELECT action, target_id FROM audit_log WHERE action = 'message.delete'`,
+      );
+      expect(audit.rows).toEqual([
+        { action: "message.delete", target_id: messageId },
+      ]);
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `[moderation] operator removed message — report ${report.id}, ` +
+            `message ${messageId}, moderator ${operator.id}`,
+        ),
+      );
+
+      // Second call: the report's own snapshot still names the message, but
+      // it is gone from `messages` — refused rather than a 500.
+      const again = await call(
+        operator,
+        "POST",
+        `/api/reports/${report.id}/remove-message`,
+      );
+      expect(again.status).toBe(400);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it("refuses remove-message for a report with no message to remove", async () => {
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+    const { report } = await createReport({
+      subjectType: "user",
+      reporterId: member.id,
+      userId: nuisance.id,
+      serverId,
+      reason: "harassment",
+    });
+
+    const res = await call(
+      operator,
+      "POST",
+      `/api/reports/${report.id}/remove-message`,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("lets a plain server manager remove a message too, without instance-moderator status", async () => {
+    const messageId = await say(channelId, nuisance.id, "look at this");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: member.id,
+      messageId,
+      reason: "violence",
+    });
+
+    const res = await call(
+      admin,
+      "POST",
+      `/api/reports/${report.id}/remove-message`,
+    );
+    expect(res.status).toBe(200);
+
+    // A plain member with no management permission still cannot.
+    const messageId2 = await say(channelId, nuisance.id, "look at this too");
+    const { report: report2 } = await createReport({
+      subjectType: "message",
+      reporterId: owner.id,
+      messageId: messageId2,
+      reason: "violence",
+    });
+    expect(
+      (
+        await call(
+          member,
+          "POST",
+          `/api/reports/${report2.id}/remove-message`,
+        )
+      ).status,
+    ).toBe(403);
   });
 });
