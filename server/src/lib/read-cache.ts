@@ -147,22 +147,6 @@ function removeEntry(key: string): void {
 }
 
 /**
- * Bumped on every `invalidate()` call, regardless of prefix — the same
- * single-counter shape `ws/voice.ts`'s roster access cache uses for the
- * same reason (#534). Without this, a load that was already in flight when
- * a write invalidated its key could still land afterward and write the
- * pre-write value back into `store`, undoing the invalidation: a member
- * kicked mid-request, or a message edited mid-reload, would keep answering
- * with the stale value until the TTL caught up on its own. Every write path
- * into `store` below captures `epoch` before starting its load and only
- * commits if it has not moved since — over-broad (an unrelated invalidation
- * also discards an in-flight write elsewhere), which is fine: the cost is
- * one extra cache miss, and this codebase treats a cross-request stale
- * *permission* answer as the class of bug worth paying that for.
- */
-let epoch = 0;
-
-/**
  * `READ_CACHE=off` (or `false`/`0`) disables it. Anything else, including
  * unset, leaves it on — same convention as `WS_COMPRESSION`.
  */
