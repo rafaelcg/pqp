@@ -477,6 +477,8 @@ What makes two machines safe at all, all of it required and all of it now litera
 
 #### The flip, in order (blue-green machine clone — Rafael's choice, 2026-09-14)
 
+> **EXECUTED 2026-09-14 13:46–13:49 UTC**, exactly as blue-green below: clones `7811075a66e128` and `48e779db2904e8` (`performance-1x`, 2 GB), each verified individually before the old machine was touched; old machine `e827949ad1e6e8` stopped at 13:49Z — its drain moved **34 sockets** onto the two new machines with **zero proxy gap** (no 5xx, no dropped request during the cutover). `PQP_API_MACHINES=2` is set live (step 6). This PR must merge before the next `pqp-api` deploy so `fly.toml` matches the shape already running — otherwise the next ordinary merge diffs a file that still says `min_machines_running = 1` against two live machines the deploy didn't create.
+
 Production Postgres today is **Vultr Managed PostgreSQL** (2 dedicated vCPU / 4 GB, single node — `docs/plans/ALWAYS_ON.md` §5), reached the same way regardless of which platform runs the API. The API itself stays on Fly for this flip (Rafael, 2026-09-14: settle on Vultr for the API later, once its account limit clears; do the two-machine work on Fly now since M6 already passed there).
 
 **Why blue-green over the scale-in-place order this section used to document** (that order is now the appendix below, kept as an alternative, not deleted): cloning two new, correctly-sized machines and only then stopping the old one means the old machine keeps serving every live connection for the entire time the new machines are being built and verified — there is never a window where the fleet is down to fewer machines than it started with, and rollback for the first 60 minutes is one `fly machine start` away rather than a `fly scale vm`/`fly scale count` combination that also has to be reasoned about in reverse. The trade is a brief three-machine window (old + two new, all billed, all holding a DB pool) instead of the scale-in-place order's brief *single*-machine window at the new, smaller size — see "DB budget during the three-machine window" below for why that trade is safe here.
@@ -492,32 +494,33 @@ fly status --app pqp-worker
 fly ssh console --app pqp-worker -C "wget -qO- http://localhost:3001/health"
 # {"ok":true,"role":"worker",...}
 
-# 2. Clone the current machine TWICE, at the new size, with WORKER_MODE=api
-#    set per-machine. `fly machine clone` has NO --env flag (verified via
-#    `fly machine clone --help`) — machine-level env has to be applied
-#    with a separate `fly machine update --env` call right after each
-#    clone. This is not a workaround for a missing app-secret override:
-#    WORKER_MODE is not a live app secret at any point in this flow (unlike
-#    CLUSTER_BUS/VOICE_REGISTRY/PG_POOL_MAX below, which already are), so
-#    there is nothing for the machine-level env to shadow or conflict with
-#    here — it simply adds a var that only these two machines have, until
-#    step 6 bakes it into the image's own [env] for everyone.
+# 2. Clone the current machine TWICE, at the new size. `fly machine clone`
+#    has NO --env flag (verified via `fly machine clone --help`) — if a
+#    value needed to be added machine-level, it would need a separate `fly
+#    machine update --env` call right after each clone. IT WASN'T NEEDED
+#    HERE: WORKER_MODE, CLUSTER_BUS, VOICE_REGISTRY and PG_POOL_MAX are ALL
+#    already live Fly secrets on pqp-api (confirmed via `printenv` on a
+#    running machine during the actual flip), and a Fly secret applies to
+#    every machine of the app uniformly — clone included. Both new
+#    machines therefore inherited role `api` and the rest automatically,
+#    with no per-machine env step at all. Keep the `fly machine update
+#    --env` pattern in mind for a value that is NOT already covered by an
+#    app secret (a self-host bringing WORKER_MODE up for the first time,
+#    for instance, where it would need to go live as a secret first or be
+#    applied per-machine exactly as originally drafted here).
 current_id=$(fly machines list --app pqp-api --json | jq -r '.[0].id')
 
 new1=$(fly machine clone "$current_id" --app pqp-api --region gru \
   --vm-size performance-1x --vm-memory 2048 | grep -oE '[0-9a-f]{14}' | head -1)
-fly machine update "$new1" --app pqp-api --env WORKER_MODE=api --yes
 
 new2=$(fly machine clone "$current_id" --app pqp-api --region gru \
   --vm-size performance-1x --vm-memory 2048 | grep -oE '[0-9a-f]{14}' | head -1)
-fly machine update "$new2" --app pqp-api --env WORKER_MODE=api --yes
 
 fly machines list --app pqp-api
 # three rows now: current_id (performance-2x/4gb, started), new1 and new2
-# (performance-1x/2048mb, started) — CLUSTER_BUS/VOICE_REGISTRY/PG_POOL_MAX
-# are already live app secrets (since 2026-09-07 / 2026-09-12), so both
-# clones get them automatically at boot; only WORKER_MODE needed the
-# explicit per-machine step above.
+# (performance-1x/2048mb, started) — WORKER_MODE/CLUSTER_BUS/VOICE_REGISTRY/
+# PG_POOL_MAX are all live app secrets, so both clones inherit every one of
+# them automatically at boot; nothing further to set per-machine.
 ```
 
 **DB budget during the three-machine window.** Three `pqp-api` machines are alive briefly, each with `PG_POOL_MAX=70` (the clones inherit the app secret; nothing raised it). At realistic load each pool holds roughly 20 connections idle-to-light, not its ceiling — `3 × ~20 = ~60`, comfortably under the 187-connection usable budget (`docs/DB_RUNBOOK.md` §3) and the cluster's measured 200 `max_connections`. **This is a real, not theoretical, reason to keep the window short (minutes, not hours):** the formal ceiling if all three pools ever actually saturated at once is `3 × (70 + 2 LISTEN) = 216`, which *would* exceed the 187/197 budget — the safety margin here comes from the window being brief and load being ordinary, not from the ceiling itself being safe indefinitely. Do not linger at three machines waiting on something unrelated; verify (step 3) and stop the old one (step 4) promptly. **Only the old machine runs batch-job sweeps among the three during this window** — the two new clones have `WORKER_MODE=api` from step 2 and skip `jobs.ts` entirely; the old machine still has it unset and runs sweeps itself, duplicating (safely — every job claims its rows in SQL) whatever `pqp-worker` is already doing independently. No third copy is running.
@@ -544,8 +547,9 @@ for id in "$new1" "$new2"; do
     -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
     https://api.pqp.gg/api/admin/metrics | jq .runtime.pool
 
-  # The [role] log line for the WORKER_MODE=api branch — confirms step 2's
-  # machine-level env actually took, not just that the command exited 0.
+  # The [role] log line for the WORKER_MODE=api branch — confirms the
+  # inherited secret actually resolved to "api" on THIS machine, not just
+  # that the clone command exited 0.
   fly logs --app pqp-api --machine "$id" --no-tail | grep '\[role\]'
   # "[role] WORKER_MODE=api: batch jobs left to the worker process"
 done
@@ -628,23 +632,22 @@ gh variable delete PQP_API_MACHINES   # once the deploy is green
 ```
 
 ```bash
-# 7. THE SHADOW-SECRET TRAP — narrower here than the scale-in-place
-#    order's version, because WORKER_MODE was never an app secret in this
-#    flow (only ever a per-machine override, superseded by step 6's
-#    image). CLUSTER_BUS, VOICE_REGISTRY and PG_POOL_MAX=70 ARE still live
-#    Fly secrets, though (CLUSTER_BUS/VOICE_REGISTRY since 2026-09-07;
-#    PG_POOL_MAX since the 2026-09-12 Vultr migration), and now that
-#    fly.toml also states them in [env], the live secrets are pure
-#    duplication that will silently swallow any FUTURE edit to those
-#    three names in fly.toml. Clear them — and use --stage + an explicit
-#    `fly secrets deploy`, not a plain unset: a rehearsal found `fly
-#    secrets unset` can report success and have `fly secrets list` show
-#    the name gone while an ALREADY-RUNNING machine keeps the old value
-#    live in its own process environment, because a plain unset does not
-#    reliably force the restart that actually applies the change on every
-#    machine, only on whichever one happens to cycle next:
+# 7. THE SHADOW-SECRET TRAP. WORKER_MODE, CLUSTER_BUS, VOICE_REGISTRY and
+#    PG_POOL_MAX=70 are ALL live Fly secrets on pqp-api at this point --
+#    step 2's clones ran on exactly these secrets, which is WHY no
+#    per-machine env step was needed. Now that fly.toml ALSO states all
+#    four in [env] (this PR), the live secrets are pure duplication that
+#    will silently swallow any FUTURE edit to any of these four names in
+#    fly.toml, per the file's own banner warning. Clear them — and use
+#    --stage + an explicit `fly secrets deploy`, not a plain unset: a
+#    rehearsal found `fly secrets unset` can report success and have `fly
+#    secrets list` show the name gone while an ALREADY-RUNNING machine
+#    keeps the old value live in its own process environment, because a
+#    plain unset does not reliably force the restart that actually
+#    applies the change on every machine, only on whichever one happens
+#    to cycle next:
 fly secrets list --app pqp-api
-fly secrets unset --stage CLUSTER_BUS VOICE_REGISTRY PG_POOL_MAX --app pqp-api
+fly secrets unset --stage CLUSTER_BUS VOICE_REGISTRY PG_POOL_MAX WORKER_MODE --app pqp-api
 fly secrets deploy --app pqp-api
 # (unsetting a name that was never set is a harmless no-op restart, not an
 # error — but check with `fly secrets list` first so you know which
