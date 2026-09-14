@@ -139,6 +139,25 @@ func TestFromEnv_PartTicksDoesNotOverflow(t *testing.T) {
 	}
 }
 
+// TestFromEnv_RejectsExtremeDurationThatWouldOverflowTheBoundsCheckItself
+// is the regression test for the second overflow Farol caught: the first
+// fix compared msToTicks(ms) against math.MaxUint32, but msToTicks itself
+// multiplies ms by 90000 in uint64, which silently wraps for a
+// sufficiently large (still-valid-int64) ms — so a large enough SEGMENT_MS
+// could wrap all the way back down to a small tick count and pass
+// validation, exactly the class of bug the check exists to catch.
+func TestFromEnv_RejectsExtremeDurationThatWouldOverflowTheBoundsCheckItself(t *testing.T) {
+	env := baseEnv()
+	// Chosen so that ms * 90000 overflows uint64 (uint64 max ~1.8e19;
+	// this ms is ~2e17, so ms*90000 ~= 1.8e22, wrapping many times over).
+	env["SEGMENT_MS"] = "200000000000000000"
+	var err error
+	withEnv(t, env, func() { _, err = FromEnv() })
+	if err == nil {
+		t.Fatal("expected an error for a SEGMENT_MS large enough to overflow the tick conversion itself, not just its result")
+	}
+}
+
 func TestFromEnv_RejectsDurationTooLargeToFitTicksInUint32(t *testing.T) {
 	env := baseEnv()
 	// math.MaxUint32 ticks / 90000 * 1000 ~= 47721000ms; go one segment

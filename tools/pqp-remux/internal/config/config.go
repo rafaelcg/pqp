@@ -69,10 +69,31 @@ func (c Config) SegmentTicks() uint32 { return uint32(msToTicks(c.SegmentMS)) }
 // msToTicks multiplies in uint64 before dividing: PART_MS/SEGMENT_MS are
 // user-configured, and multiplying in uint32 first (ms * ClockRate) wraps
 // for any ms value at or above roughly 47721 (2^32 / 90 000), silently
-// cutting segments at the wrong times instead of failing loudly. The
-// uint32 truncation only happens in PartTicks/SegmentTicks above, after
-// Validate has already rejected anything too large to fit.
+// cutting segments at the wrong times instead of failing loudly.
+//
+// This alone is not sufficient for an arbitrarily large ms: on a 64-bit
+// platform strconv.Atoi accepts values up to roughly 9.2e18, and
+// multiplying that by 90000 overflows uint64 too (uint64's own max is
+// about 1.8e19), silently wrapping again — Farol caught exactly this on
+// the first fix. maxTicksSafeMs (below) is checked by Validate BEFORE this
+// function ever multiplies, so by the time PartTicks/SegmentTicks call it
+// unchecked, ms is already known small enough that uint64(ms)*ClockRate
+// cannot overflow.
 func msToTicks(ms int) uint64 { return uint64(ms) * uint64(h264.ClockRate) / 1000 }
+
+// maxTicksSafeMs is the largest millisecond value whose conversion to
+// 90kHz ticks still fits in a uint32, computed so that computing the bound
+// itself cannot overflow: math.MaxUint32 (~4.3e9) times 1000 is ~4.3e12,
+// far inside uint64's ~1.8e19 range, unlike ms*ClockRate for an
+// attacker-chosen ms.
+var maxTicksSafeMs = uint64(math.MaxUint32) * 1000 / uint64(h264.ClockRate)
+
+// exceedsTicksBound reports whether ms would overflow a uint32 once
+// converted to ticks — checked against the ms value directly, never
+// against msToTicks's own (potentially already-wrapped) result.
+func exceedsTicksBound(ms int) bool {
+	return ms < 0 || uint64(ms) > maxTicksSafeMs
+}
 
 // FromEnv reads LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, ROOM,
 // LISTEN, PART_MS, SEGMENT_MS, RING_SEGMENTS, KEYFRAME_POLICY,
@@ -142,10 +163,10 @@ func (c Config) Validate() error {
 	if c.SegmentMS < c.PartMS {
 		return fmt.Errorf("config: SEGMENT_MS (%d) must be >= PART_MS (%d)", c.SegmentMS, c.PartMS)
 	}
-	if msToTicks(c.PartMS) > math.MaxUint32 {
+	if exceedsTicksBound(c.PartMS) {
 		return fmt.Errorf("config: PART_MS=%d converts to more than a uint32 of 90kHz ticks; keep it under about 13.25 hours", c.PartMS)
 	}
-	if msToTicks(c.SegmentMS) > math.MaxUint32 {
+	if exceedsTicksBound(c.SegmentMS) {
 		return fmt.Errorf("config: SEGMENT_MS=%d converts to more than a uint32 of 90kHz ticks; keep it under about 13.25 hours", c.SegmentMS)
 	}
 	if c.RingSegments < 1 {

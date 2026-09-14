@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -148,21 +148,43 @@ func runIDRLog(cfg config.Config) (err error) {
 
 	scanner := newAccessUnitScanner(idrlog.New(out))
 
+	// readerDone closes when the RTP reader goroutine has fully stopped
+	// (subscriber's readRTP calls this after its loop returns, which is
+	// strictly after any packet still in flight has already reached
+	// scanner.push and, in turn, any OnIDR call has already returned).
+	// Waiting on it before reading scanner.writeError() below is what
+	// makes that read genuinely synchronized with the writer, not merely
+	// "probably done by now" — this is the caller-side half of the fix;
+	// accessUnitScanner.firstErr being an atomic.Pointer is the other
+	// half, guarding the field itself.
+	readerDone := make(chan struct{})
+
 	sub, connErr := subscriber.Connect(subscriber.Config{
 		URL:       cfg.LiveKitURL,
 		APIKey:    cfg.LiveKitAPIKey,
 		APISecret: cfg.LiveKitAPISec,
 		Room:      cfg.Room,
 	}, subscriber.Handlers{
-		OnVideoPacket: scanner.push,
+		OnVideoPacket:     scanner.push,
+		OnVideoTrackEnded: func() { close(readerDone) },
 	})
 	if connErr != nil {
 		return fmt.Errorf("connecting to %s room %q: %w", cfg.LiveKitURL, cfg.Room, connErr)
 	}
-	defer sub.Close()
 
 	log.Printf("pqp-remux: idr-log running against room %q for %s", cfg.Room, cfg.Duration)
 	time.Sleep(cfg.Duration)
+
+	sub.Close()
+	select {
+	case <-readerDone:
+	case <-time.After(2 * time.Second):
+		// No video track was ever found (readRTP, and so
+		// OnVideoTrackEnded, never started), or teardown is unusually
+		// slow. Either way, wait no longer than this: the summary and
+		// error check below still run, just without the same guarantee.
+		log.Print("pqp-remux: idr-log: timed out waiting for the RTP reader to stop; the summary below may not reflect the very last IDR")
+	}
 
 	fmt.Fprintln(os.Stderr, scanner.logger.Stats().Summary())
 
@@ -181,8 +203,13 @@ type accessUnitScanner struct {
 	dep    *h264.Depacketizer
 	logger *idrlog.Logger
 
-	errOnce  sync.Once
-	firstErr error
+	// firstErr is written from the RTP reader's goroutine (push, below)
+	// and read from runIDRLog's goroutine after waiting on readerDone. An
+	// atomic.Pointer (rather than a plain field, even one guarded by
+	// sync.Once) is what makes that cross-goroutine read well-defined: a
+	// bare field read racing a Once-guarded write is not automatically
+	// synchronized by the Once itself unless the reader also calls Do.
+	firstErr atomic.Pointer[error]
 }
 
 func newAccessUnitScanner(logger *idrlog.Logger) *accessUnitScanner {
@@ -197,12 +224,18 @@ func (a *accessUnitScanner) push(pkt *rtp.Packet) {
 	if au != nil && au.IsIDR {
 		if werr := a.logger.OnIDR(au.PTS, au.Bytes(), time.Now()); werr != nil {
 			log.Printf("pqp-remux: idr-log: %v", werr)
-			a.errOnce.Do(func() { a.firstErr = werr })
+			a.firstErr.CompareAndSwap(nil, &werr)
 		}
 	}
 }
 
-// writeError returns the first CSV write failure seen, if any. Reading
-// after the run has stopped (the only time runIDRLog calls it) needs no
-// extra synchronization beyond errOnce's own.
-func (a *accessUnitScanner) writeError() error { return a.firstErr }
+// writeError returns the first CSV write failure seen, if any. Call it
+// only after readerDone has closed (see runIDRLog): that ordering, plus
+// firstErr's own atomicity, is what makes this read see every write the
+// reader goroutine ever made, not a possibly-stale snapshot.
+func (a *accessUnitScanner) writeError() error {
+	if p := a.firstErr.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
