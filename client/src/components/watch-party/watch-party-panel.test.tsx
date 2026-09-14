@@ -1054,11 +1054,12 @@ describe("the setup card", () => {
     const html = draft({ onMicInStreamChange: () => {} });
     const card = html.slice(html.indexOf("watch-party-setup-card"));
     expect(card).toContain("watch-party-options-summary");
-    // The same form the live dialog renders: the Voz select, the slow-mode
-    // select, the reactions switch, plus this computer's mic switch and the
-    // quality select.
+    // The same form the live dialog renders: the Convidados radio group, the
+    // slow-mode select, the reactions switch, plus this computer's mic
+    // switch and the quality select.
+    expect(card).toContain("data-watch-party-guests-setting");
     expect(card).toContain('role="switch"');
-    expect((card.match(/<select/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect((card.match(/<select/g) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(card).toContain("data-watch-party-mic-in-stream");
     expect(card).not.toContain("data-watch-party-options-toggle");
     expect(html).not.toContain("watch-party-options-drawer");

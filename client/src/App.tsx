@@ -7,7 +7,6 @@ import {
 } from "@clerk/clerk-react";
 import {
   CalendarClock,
-  Columns2,
   History,
   Lock,
   Menu,
