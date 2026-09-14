@@ -4674,7 +4674,7 @@ router.post(
  */
 router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
   await requireChannelAccess(channelId!, user.id);
-  const state = getChannelLiveState(channelId!);
+  const state = await getChannelLiveState(channelId!);
   return {
     stream: state.stream ? stampViewerStream(state.stream, user.id) : null,
     watching: state.watching,

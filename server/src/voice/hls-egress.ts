@@ -1365,6 +1365,74 @@ export function liveHlsStreamFor(channelId: string): LiveHlsStream | null {
   return rooms.get(channelId)?.stream ?? null;
 }
 
+/**
+ * The last resort `getChannelLiveState` (`server/src/ws/voice.ts`) reaches
+ * for when this process never ran the egress itself: `rooms`, `llStreamFor`
+ * and `hlsAudience.stream` are every one of them in-process maps, populated
+ * only on the instance that actually started or adopted the session, with no
+ * bus fanout for "a party went live" the way chat and roster have. On one
+ * machine that gap is invisible. On two it is not: a viewer whose HTTP
+ * request or WS session lands on the OTHER instance from the one running the
+ * transcode reads `stream: null` for a party that is, in fact, live, because
+ * nothing ever told this process it exists.
+ *
+ * `hls_sessions` is the one piece of this feature that was already durable
+ * and shared (`adoptLiveHlsSession` reads it after a restart for exactly
+ * this reason), so it is what a second instance can lean on without waiting
+ * for a bus topic this feature does not have yet. Reconstructs only the
+ * fields a viewer's `GET /live` actually needs to start watching: the master
+ * playlist URL, `startedAt` (from the row's own timestamp, which is the same
+ * millisecond value baked into `object_prefix` at session start) and the
+ * presenter's peer id. Everything else `LiveHlsStream` can carry
+ * (`cameraHlsUrl`, `topHeight`, `hasAudio`, ...) is optional and absent here
+ * on purpose — this is the same degraded shape the schema already documents
+ * for "a session this process adopted after a restart rather than started",
+ * not a new one, and a client already knows how to render it.
+ *
+ * Does not adopt the session (no local `rooms` entry, no health monitor
+ * started on this instance) — that is `adoptLiveHlsSession`'s job at boot,
+ * and doing it lazily from a read path would mean two instances racing to
+ * monitor the same egress. This only answers a read.
+ */
+export async function liveHlsStreamFromDb(
+  channelId: string,
+): Promise<LiveHlsStream | null> {
+  let row:
+    | { started_at: Date; presenter_peer_id: string | null; mode: string }
+    | undefined;
+  try {
+    const result = await getPool().query<{
+      started_at: Date;
+      presenter_peer_id: string | null;
+      mode: string;
+    }>(
+      `SELECT started_at, presenter_peer_id, mode
+         FROM hls_sessions
+        WHERE channel_id = $1 AND ended_at IS NULL AND cleaned_at IS NULL
+        ORDER BY started_at DESC
+        LIMIT 1`,
+      [channelId],
+    );
+    row = result.rows[0];
+  } catch (error) {
+    logEvent("voice.hlsLiveStreamDbFallbackFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+  if (!row || !row.presenter_peer_id) {
+    return null;
+  }
+  const startedAt = row.started_at.getTime();
+  return {
+    hlsUrl: viewerPlaylistUrl(channelId, startedAt),
+    startedAt,
+    presenterPeerId: row.presenter_peer_id,
+    ...(row.mode === "ll" ? { mode: "ll" as const } : {}),
+  };
+}
+
 /** Tests inject fakes; production leaves both null. */
 export function setLiveHlsTestHooks(hooks: {
   egress?: LiveHlsEgressApi | null;
@@ -3006,7 +3074,7 @@ export function rawPlaylistUrl(
  * URL: `reconcileLiveHls`'s track-replace restart needs viewers to reload,
  * and a stable per-channel URL would not carry that signal on its own.
  */
-function viewerPlaylistUrl(channelId: string, startedAt: number): string {
+export function viewerPlaylistUrl(channelId: string, startedAt: number): string {
   if (!hlsSignedUrlsEnabled()) {
     return rawPlaylistUrl(channelId, startedAt);
   }

@@ -87,6 +87,7 @@ import {
 import {
   isLiveHlsEnabledForServer,
   liveHlsStreamFor,
+  liveHlsStreamFromDb,
   reconcileLiveHls,
   setLiveHlsChangeListener,
   setLiveHlsSfuLoadReader,
@@ -2014,29 +2015,41 @@ async function broadcastChannelLive(channelId: string): Promise<void> {
  * route stamps it for the caller), watchers without a seat, and seats. For a
  * client that opened the channel before its socket was up.
  */
-export function getChannelLiveState(channelId: string): {
+export async function getChannelLiveState(channelId: string): Promise<{
   stream: LiveHlsStream | null;
   watching: number;
   participants: number;
-} {
+}> {
+  // Three in-process sources, tried in order, because no single one always
+  // has the answer. `liveHlsStreamFor` only ever knows about the conventional
+  // ladder (its `rooms` map, `hls-egress.ts`). `llStreamFor` is the LL
+  // driver's own room map (`hls-remux.ts`), populated by both a live
+  // reconcile AND boot adoption -- checking it directly, rather than only
+  // through `hlsAudience`, is what makes an adopted-but-not-yet-pushed LL
+  // session visible right after a restart (a Farol finding on PR #580:
+  // adoption never called `hlsAudience.setStream`, so this route answered
+  // null for a session that was, in fact, still running). `hlsAudience.stream`
+  // is next: what `pushLiveHls` most recently told the audience, which is the
+  // only source when the caller wants a stream adoption itself does not
+  // populate (a mid-party camera or mic-archive change is layered onto the
+  // conventional stream this way today, and the conventional answer is tried
+  // first regardless, so the two agree for every conventional session).
+  //
+  // ALL THREE ARE IN-PROCESS MAPS, with no bus fanout for "a party went
+  // live" the way chat and roster have -- invisible on one machine, not on
+  // two. A viewer whose request lands on the instance that did not start or
+  // adopt this session finds nothing here even though the party is live, so
+  // `liveHlsStreamFromDb` is a fourth, LAST resort: one Postgres round trip,
+  // only paid when the other three already came up empty (which is the
+  // ordinary case on the instance actually running the egress -- this read
+  // never touches the database there).
+  const stream =
+    liveHlsStreamFor(channelId) ??
+    llStreamFor(channelId) ??
+    hlsAudience.stream(channelId) ??
+    (await liveHlsStreamFromDb(channelId));
   return {
-    // Three sources, tried in order, because no single one always has the
-    // answer. `liveHlsStreamFor` only ever knows about the conventional
-    // ladder (its `rooms` map, `hls-egress.ts`). `llStreamFor` is the LL
-    // driver's own room map (`hls-remux.ts`), populated by both a live
-    // reconcile AND boot adoption -- checking it directly, rather than only
-    // through `hlsAudience`, is what makes an adopted-but-not-yet-pushed LL
-    // session visible right after a restart (a Farol finding on PR #580:
-    // adoption never called `hlsAudience.setStream`, so this route answered
-    // null for a session that was, in fact, still running). `hlsAudience.stream`
-    // is the last resort: what `pushLiveHls` most recently told the
-    // audience, which is the only source when the caller wants a stream
-    // adoption itself does not populate (a mid-party camera or mic-archive
-    // change is layered onto the conventional stream this way today, and the
-    // conventional answer is tried first regardless, so the two agree for
-    // every conventional session).
-    stream:
-      liveHlsStreamFor(channelId) ?? llStreamFor(channelId) ?? hlsAudience.stream(channelId),
+    stream,
     watching: hlsAudience.count(channelId),
     participants: getRoomPeers(channelId).length,
   };

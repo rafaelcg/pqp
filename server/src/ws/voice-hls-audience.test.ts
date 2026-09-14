@@ -628,7 +628,7 @@ describe("live HLS reaches the channel", () => {
 
     await watchLive(outsider, "outsider", true);
     expect(outsider.frames).toHaveLength(0);
-    expect(getChannelLiveState(CINEMA).watching).toBe(0);
+    expect((await getChannelLiveState(CINEMA)).watching).toBe(0);
   });
 
   it("watch-live counts a socket without a seat, answers it alone, and the audience hears the count on the keyframe", async () => {
@@ -651,7 +651,7 @@ describe("live HLS reaches the channel", () => {
     // Nobody else heard about it: no frame per subscribe.
     expect(frames(bia, "channel-live")).toHaveLength(1);
     expect(frames(host, "channel-live")).toHaveLength(1);
-    expect(getChannelLiveState(CINEMA)).toMatchObject({
+    expect(await getChannelLiveState(CINEMA)).toMatchObject({
       watching: 1,
       participants: 1,
     });
@@ -764,21 +764,21 @@ describe("live HLS reaches the channel", () => {
     await goLive();
     await watchLive(ana, "ana", true);
     await watchLive(bia, "bia", true);
-    expect(getChannelLiveState(CINEMA).watching).toBe(2);
+    expect((await getChannelLiveState(CINEMA)).watching).toBe(2);
 
     // Ana's tab closed: the ws close path, which runs for sockets without a peer.
     removeVoicePeerBySocket(ana.socket);
-    expect(getChannelLiveState(CINEMA).watching).toBe(1);
+    expect((await getChannelLiveState(CINEMA)).watching).toBe(1);
 
     // Bia pressed Entrar: the roster counts her now.
     await join(bia, "bia", CINEMA);
-    expect(getChannelLiveState(CINEMA)).toMatchObject({
+    expect(await getChannelLiveState(CINEMA)).toMatchObject({
       watching: 0,
       participants: 2,
     });
     // A seat that sends watch-live is not double counted.
     await watchLive(bia, "bia", true);
-    expect(getChannelLiveState(CINEMA).watching).toBe(0);
+    expect((await getChannelLiveState(CINEMA)).watching).toBe(0);
   });
 
   it("the join-time voice-stream and the socket-auth push are stamped for the recipient", async () => {
