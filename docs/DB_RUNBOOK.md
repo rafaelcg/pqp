@@ -395,25 +395,37 @@ Then update this file's cluster ids, `docs/STAGING.md`, `docs/deploy-fly.md` whe
 
 ## 3. Connection budget (`PG_POOL_MAX`)
 
-Managed Postgres ships with **`max_connections = 100`**, but that is not the number that matters; memory is. Each Postgres backend costs several MB of RAM and the shared buffers and OS need the rest. The comfortable ceiling for total backends:
+Managed Postgres ships with **`max_connections = 100`**, but that is not the number that matters on its own; memory and reservations are. Each Postgres backend costs several MB of RAM and the shared buffers and OS need the rest. Two generations of this table now:
 
-| Cluster RAM | Keep total backends under |
-|---|---|
-| 1 GB | ~30 |
-| 2 GB | ~50 |
+| Cluster | `max_connections` | Keep total backends under |
+|---|---|---|
+| Fly Managed Postgres, 1 GB (retired) | 100 | ~30 (estimated from RAM, never measured directly) |
+| Fly Managed Postgres, 2 GB (retired) | 100 | ~50 (estimated from RAM, never measured directly) |
+| **Vultr Managed PostgreSQL, `pqp` cluster (production since 2026-09-13)** | **200 (measured)** | **187 — see below** |
+
+The first two rows describe a retired Fly Managed Postgres cluster and are kept only as a reference for a self-host still on that platform, where they were sized by RAM alone because nobody had read the real `max_connections` off the cluster. **The current row is a measurement, not an estimate**: read 2026-09-14 with the read-only `pqp_ro` role against the live cluster (`SHOW max_connections; SHOW superuser_reserved_connections;`):
+
+```
+max_connections = 200
+superuser_reserved_connections = 3
+```
+
+No other platform-level reservation showed up in `pg_stat_activity` beyond the ordinary consumers in the table below (re-check if Vultr's own monitoring or HA tooling ever shows up there). `200 − 3 (superuser-reserved) = 197` non-superuser connections are available at all; **187** is that figure after also setting aside the fixed, machine-count-independent reservations below (worker 4, backup 1, admin/platform headroom 5 — `197 − 4 − 1 − 5 = 187`), which is the number `fly.toml` and `docs/deploy-fly.md` §6a-bis's formula actually divides by machine count.
 
 "Total backends" is everything holding a connection at once:
 
 | Consumer | Connections |
 |---|---|
-| `pqp-api` pool (`PG_POOL_MAX`, one process, one machine) | up to `PG_POOL_MAX` |
-| `pqp-api` `LISTEN` session outside the pool, if enabled | 1 |
-| `pqp-api-staging` pool (`PG_POOL_MAX` there, default 10) | up to 10 |
-| Fly's own health checks, Patroni, replication slot | a few |
-| Humans in `fly mpg connect` or a GUI | 1 each, and they forget to close them |
-| The nightly backup, while it runs | 1 |
+| `pqp-api` pool (`PG_POOL_MAX`, per machine) | up to `PG_POOL_MAX`, **times the machine count** |
+| `pqp-api`'s `CLUSTER_BUS` `LISTEN` session, per machine | 1 per machine, outside the pool |
+| `pqp-api`'s outgoing-webhook poller `LISTEN` session, per machine | 1 per machine, outside the pool (a second, separate `LISTEN` connection — easy to undercount if you only remember the bus's) |
+| `pqp-worker` pool (`PG_POOL_MAX` there, `fly.worker.toml`) | up to 4, fixed regardless of API machine count |
+| `pqp-api-staging` pool | separate cluster (`pqp-db-staging-lite`) as of 2026-09-08 — does not compete with production's budget any more |
+| Superuser-reserved (Postgres platform reservation) | 3, already carved out of `max_connections` above, never available to the app |
+| Humans in a `psql`/GUI session against the cluster, and anything else transient | budgeted as part of the 5-connection admin/platform reserve above |
+| The nightly backup, while it runs | 1, fixed regardless of API machine count |
 
-So on **2 GB**, `PG_POOL_MAX=40` on production plus staging's 10 plus a couple of admin sessions is right at the ~50 line; do not go higher without also lowering staging (`fly secrets set -a pqp-api-staging PG_POOL_MAX=5` is fine, staging never needs more). On **1 GB**, production `PG_POOL_MAX=20` is the sensible ceiling with staging at 5. The server code reads `PG_POOL_MAX` once at boot (`server/src/db.ts`, default 10) and exposes `max / total / idle / waiting` through the operator dashboard's `runtime.pool` block; if `waiting` is regularly non-zero **and** `total == max`, the pool is the bottleneck and you raise it within this budget, not past it.
+**The formula:** `PG_POOL_MAX = floor(187 / n) − 2`, where the `− 2` is each machine's own pair of `LISTEN` sessions (bus + outgoing-webhook poller), applied per machine, not once overall. At `n = 2`: `floor(187 / 2) − 2 = 93 − 2 = 91`. This PR ships `PG_POOL_MAX = "70"` per machine at two machines — today's live value, left unchanged rather than raised to 91, since 70 already sits comfortably inside the budget (`2 × (70 + 2) + 4 (worker) + 1 (backup) = 149`, well under 187) and there is no live-traffic evidence yet that more than 70 is needed. At `n = 3`: `floor(187 / 3) − 2 = 62 − 2 = 60` per machine. See `docs/deploy-fly.md` §6a-bis "Scaling to n machines later" for the general runbook. The server code reads `PG_POOL_MAX` once at boot (`server/src/db.ts`, default 10) and exposes `max / total / idle / waiting` through the operator dashboard's `runtime.pool` block; if `waiting` is regularly non-zero **and** `total == max`, the pool is the bottleneck and you raise it within this budget, not past it.
 
 When a query storm hits and backends approach `max_connections`, Postgres refuses new ones with `FATAL: too many connections` and the API's health check (`SELECT 1` on `/health`) fails, which takes the single machine out of the proxy. The budget above is what keeps that from ever being the failure mode.
 
