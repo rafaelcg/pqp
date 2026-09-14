@@ -776,6 +776,42 @@ async function sessionRungs(
 }
 
 /**
+ * The canonical `hls_sessions.id` for a channel/`startedAt` pair -- the SAME
+ * string the master playlist's `#EXT-X-PQP-SESSION` tag carries
+ * (`buildMasterPlaylistFor` below reads it off this same `sessionRungs`) and
+ * `voice.hlsStarted` logs as `sessionId` (`primary.sessionId` in
+ * `hls-egress.ts`, the lowest-bitrate rung -- the same tiebreak this
+ * function's own sort uses). `hls-latency-metrics.ts`'s telemetry route
+ * calls this so an accepted batch's recorded session id is the one a human
+ * can actually join against the egress log by equality, rather than a
+ * `channelId:startedAt` pair that reads the same to a person but is a
+ * different string (a Farol finding, 2026-09-14). Null when the session has
+ * no known rungs right now -- ended, not yet recorded, or an operator
+ * downgraded past what this build's ladder knows -- in which case the
+ * caller falls back to its own opaque label rather than losing the batch.
+ *
+ * Shares `sessionRungs`'s cache, so this is a fresh query only on a cache
+ * miss: in practice never, because the same session's own viewers are
+ * already polling the master playlist (and so keeping the cache warm) at
+ * the same time they are sampled for telemetry.
+ */
+export async function resolveHlsSessionId(
+  channelId: string,
+  startedAt: number,
+  now: number = Date.now(),
+): Promise<string | null> {
+  try {
+    const { sessionId } = await sessionRungs(channelId, startedAt, now);
+    return sessionId;
+  } catch {
+    // A failed lookup (the pool is unhappy, say) must not turn a telemetry
+    // batch into a 500 -- this is a measurement, not a critical path. The
+    // caller's own fallback label covers it.
+    return null;
+  }
+}
+
+/**
  * The master playlist a viewer is handed: one variant per rendition that
  * actually started, so hls.js and native players pick per viewer and switch
  * as the link changes.

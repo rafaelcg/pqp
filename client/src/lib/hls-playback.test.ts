@@ -591,13 +591,16 @@ describe("createHlsTelemetryQueue", () => {
     queue.push({ rung: "720p30", latencyMs: 2_000 });
     tick!();
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send).toHaveBeenCalledWith({
-      sessionId: "s1",
-      samples: [
-        { rung: "720p30", latencyMs: 1_000 },
-        { rung: "720p30", latencyMs: 2_000 },
-      ],
-    });
+    expect(send).toHaveBeenCalledWith(
+      {
+        sessionId: "s1",
+        samples: [
+          { rung: "720p30", latencyMs: 1_000 },
+          { rung: "720p30", latencyMs: 2_000 },
+        ],
+      },
+      null,
+    );
     // The buffer was cleared: a second tick with nothing new sends nothing.
     tick!();
     expect(send).toHaveBeenCalledTimes(1);
@@ -648,11 +651,14 @@ describe("createHlsTelemetryQueue", () => {
     });
     queue.push({ rung: "720p30", latencyMs: 1_000 });
     tick!();
-    expect(send).toHaveBeenCalledWith({
-      sessionId: "s1",
-      sessionToken: "abc.def",
-      samples: [{ rung: "720p30", latencyMs: 1_000 }],
-    });
+    expect(send).toHaveBeenCalledWith(
+      {
+        sessionId: "s1",
+        sessionToken: "abc.def",
+        samples: [{ rung: "720p30", latencyMs: 1_000 }],
+      },
+      null,
+    );
     queue.stop();
   });
 
@@ -670,6 +676,65 @@ describe("createHlsTelemetryQueue", () => {
     expect(sent).not.toHaveProperty("sessionToken");
     queue.stop();
   });
+
+  /**
+   * Farol finding, 2026-09-14: the unmount flush used to await an async
+   * token getter before calling `fetch`, which a page that is unloading is
+   * not guaranteed to resume -- the final samples were silently lost. The
+   * queue now caches a plain token value and reads it synchronously.
+   */
+  describe("token caching", () => {
+    it("sends the token given at creation, with no async lookup", () => {
+      const send = vi.fn();
+      const queue = createHlsTelemetryQueue({
+        sessionId: "s1",
+        token: "token-at-creation",
+        send,
+        ...fakeTimers(),
+      });
+      queue.push({ rung: "720p30", latencyMs: 1_000 });
+      tick!();
+      expect(send).toHaveBeenCalledWith(expect.anything(), "token-at-creation");
+      queue.stop();
+    });
+
+    it("sends null when no token was given and none was set", () => {
+      const send = vi.fn();
+      const queue = createHlsTelemetryQueue({ sessionId: "s1", send, ...fakeTimers() });
+      queue.push({ rung: "720p30", latencyMs: 1_000 });
+      tick!();
+      expect(send).toHaveBeenCalledWith(expect.anything(), null);
+      queue.stop();
+    });
+
+    it("setToken updates what the NEXT flush sends, without touching an already-buffered flush", () => {
+      const send = vi.fn();
+      const queue = createHlsTelemetryQueue({
+        sessionId: "s1",
+        token: "old-token",
+        send,
+        ...fakeTimers(),
+      });
+      queue.push({ rung: "720p30", latencyMs: 1_000 });
+      queue.setToken("fresh-token");
+      tick!();
+      expect(send).toHaveBeenCalledWith(expect.anything(), "fresh-token");
+      queue.stop();
+    });
+
+    it("flush() (the unmount path) also uses the cached token synchronously", () => {
+      const send = vi.fn();
+      const queue = createHlsTelemetryQueue({
+        sessionId: "s1",
+        token: "unmount-token",
+        send,
+        ...fakeTimers(),
+      });
+      queue.push({ rung: "720p30", latencyMs: 1_000 });
+      queue.flush();
+      expect(send).toHaveBeenCalledWith(expect.anything(), "unmount-token");
+    });
+  });
 });
 
 describe("sendHlsTelemetryBatch", () => {
@@ -685,10 +750,8 @@ describe("sendHlsTelemetryBatch", () => {
     vi.stubGlobal("fetch", fetchMock);
     sendHlsTelemetryBatch(
       { sessionId: "s1", samples: [{ rung: "720p30", latencyMs: 1_000 }] },
-      async () => "token-abc",
+      "token-abc",
     );
-    await Promise.resolve();
-    await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain("/api/live-hls/telemetry");
@@ -698,19 +761,34 @@ describe("sendHlsTelemetryBatch", () => {
     });
   });
 
-  it("never throws when the token lookup or the fetch itself fails", async () => {
+  it("calls fetch synchronously -- nothing is awaited before it, so an unmount flush is not lost", () => {
+    // Farol finding, 2026-09-14: this used to take an async token getter and
+    // await it before calling fetch, which a page unloading between the
+    // await and the fetch is free to never resume. `token` is now a plain
+    // value, and this test's whole point is that `fetch` has already been
+    // called by the time this line runs, with no `await` in between.
+    const fetchMock = vi.fn(
+      async () => new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    sendHlsTelemetryBatch(
+      { sessionId: "s1", samples: [{ rung: "720p30", latencyMs: 1_000 }] },
+      "token-abc",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never throws when the fetch itself fails", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_url?: string | URL | Request, _init?: RequestInit) => {
+      vi.fn(async () => {
         throw new Error("network down");
       }),
     );
     expect(() =>
       sendHlsTelemetryBatch(
         { sessionId: "s1", samples: [{ rung: "720p30", latencyMs: 1_000 }] },
-        async () => {
-          throw new Error("no token");
-        },
+        "token-abc",
       ),
     ).not.toThrow();
     await Promise.resolve();
@@ -726,10 +804,8 @@ describe("sendHlsTelemetryBatch", () => {
     vi.stubGlobal("fetch", fetchMock);
     sendHlsTelemetryBatch(
       { sessionId: "s1", samples: [{ rung: "720p30", latencyMs: 1_000 }] },
-      async () => null,
+      null,
     );
-    await Promise.resolve();
-    await Promise.resolve();
     const [, init] = fetchMock.mock.calls[0]!;
     expect((init as RequestInit).headers).not.toHaveProperty("Authorization");
   });

@@ -533,6 +533,15 @@ export interface HlsTelemetryQueue {
   /** Flush now, bypassing the timer. Used on unmount so the last window is not lost. */
   flush(): void;
   stop(): void;
+  /**
+   * Update the cached Bearer token a future flush sends. The caller (this
+   * queue has no Clerk hook of its own) already polls a fresh token on an
+   * interval for the `xhrSetup` path (`hls-watch-player.tsx`'s
+   * `refreshAuthToken`); calling this alongside that keeps the SAME token in
+   * hand here, so a flush never has to go fetch one itself -- see `flush`'s
+   * own comment on why that matters.
+   */
+  setToken(token: string | null): void;
 }
 
 export function createHlsTelemetryQueue(input: {
@@ -546,7 +555,13 @@ export function createHlsTelemetryQueue(input: {
    * token at all; that batch is still sent, on `sessionId` alone.
    */
   sessionToken?: string | null;
-  send: (batch: LiveHlsTelemetryBatch) => void;
+  /**
+   * The Bearer token to send with the FIRST flush, cached rather than
+   * fetched -- see `flush`'s own comment. `setToken` on the returned queue
+   * updates it as the caller's own token refresh resolves.
+   */
+  token?: string | null;
+  send: (batch: LiveHlsTelemetryBatch, token: string | null) => void;
   flushMs?: number;
   setInterval?: typeof window.setInterval;
   clearInterval?: typeof window.clearInterval;
@@ -554,17 +569,30 @@ export function createHlsTelemetryQueue(input: {
   const setIntervalFn = input.setInterval ?? window.setInterval.bind(window);
   const clearIntervalFn = input.clearInterval ?? window.clearInterval.bind(window);
   let buffer: LiveHlsTelemetrySample[] = [];
+  let token: string | null = input.token ?? null;
   function flush() {
     if (buffer.length === 0) {
       return;
     }
     const samples = buffer;
     buffer = [];
-    input.send({
-      sessionId: input.sessionId,
-      ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
-      samples,
-    });
+    // The token is READ, never fetched, here -- no `await` runs before
+    // `input.send` (and, inside it, `fetch`) is called. The unmount flush
+    // (`HlsWatchPlayer`'s cleanup) fires this same path on a navigate-away,
+    // and a page that is unloading is not guaranteed to run any code after
+    // an `await` at all: a batch that looked async-but-fine in every manual
+    // test silently lost its samples on a real tab close (a Farol finding,
+    // 2026-09-14). `keepalive: true` on the `fetch` itself (in `send`) is
+    // what actually keeps the request alive past unload; this only makes
+    // sure nothing delays ISSUING it.
+    input.send(
+      {
+        sessionId: input.sessionId,
+        ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
+        samples,
+      },
+      token,
+    );
   }
   const timer = setIntervalFn(flush, input.flushMs ?? LIVE_HLS_TELEMETRY_FLUSH_MS);
   return {
@@ -576,6 +604,9 @@ export function createHlsTelemetryQueue(input: {
       clearIntervalFn(timer);
       buffer = [];
     },
+    setToken(next) {
+      token = next;
+    },
   };
 }
 
@@ -584,41 +615,41 @@ export function createHlsTelemetryQueue(input: {
  * failed batch is a no-op the caller never retries (see
  * `POST /api/live-hls/telemetry`'s own doc comment on the server) -- this is
  * a measurement, not an event anything downstream is waiting on.
+ *
+ * `token` is a plain, already-resolved value, NOT fetched here. It used to
+ * be `getToken: () => Promise<string | null>`, awaited before `fetch` ran --
+ * which meant the unmount flush (`HlsWatchPlayer`'s cleanup, on a
+ * navigate-away) awaited an async token lookup before issuing a request that
+ * itself depends on the page still being around to run that continuation.
+ * `keepalive: true` keeps a request ALIVE past unload; it does nothing for
+ * one that was never issued because the tab closed between the `await` and
+ * the `fetch`. Measured against a real tab close on 2026-09-14: the final
+ * batch was silently lost every time (a Farol finding). The caller
+ * (`HlsTelemetryQueue`) now caches the last resolved token itself, so this
+ * function has one left to read synchronously and calls `fetch` with
+ * nothing awaited first.
  */
 export function sendHlsTelemetryBatch(
   batch: LiveHlsTelemetryBatch,
-  getToken: () => Promise<string | null>,
+  token: string | null,
 ): void {
-  void (async () => {
-    let token: string | null = null;
-    try {
-      token = await getToken();
-    } catch {
-      // No token: still worth trying, in case this deployment has no
-      // Bearer requirement configured (it does, in practice, but this
-      // function does not need to know that).
-    }
-    try {
-      await fetch(`${getApiBaseUrl()}/api/live-hls/telemetry`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(batch),
-        // The unmount flush (`HlsWatchPlayer`'s cleanup) fires this same
-        // path on a navigate-away, and an ordinary fetch is exactly the
-        // request class the browser is free to abort once the document
-        // starts unloading (a Farol finding, 2026-09-13). `keepalive` is
-        // the documented escape hatch for "send this even if the page is
-        // going away" and, unlike `navigator.sendBeacon`, still allows the
-        // Authorization header this route requires. The body is a handful
-        // of samples -- nowhere near the ~64 KiB keepalive budget browsers
-        // share across all such requests.
-        keepalive: true,
-      });
-    } catch {
-      // Dropped. See the doc comment above.
-    }
-  })();
+  fetch(`${getApiBaseUrl()}/api/live-hls/telemetry`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(batch),
+    // The unmount flush (`HlsWatchPlayer`'s cleanup) fires this same path on
+    // a navigate-away, and an ordinary fetch is exactly the request class
+    // the browser is free to abort once the document starts unloading (a
+    // Farol finding, 2026-09-13). `keepalive` is the documented escape hatch
+    // for "send this even if the page is going away" and, unlike
+    // `navigator.sendBeacon`, still allows the Authorization header this
+    // route requires. The body is a handful of samples -- nowhere near the
+    // ~64 KiB keepalive budget browsers share across all such requests.
+    keepalive: true,
+  }).catch(() => {
+    // Dropped. See the doc comment above.
+  });
 }

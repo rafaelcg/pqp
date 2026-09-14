@@ -146,6 +146,7 @@ import {
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
+  resolveHlsSessionId,
 } from "../voice/hls-playlist-proxy.js";
 import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
 import {
@@ -7788,12 +7789,24 @@ function feedbackIdParam(value: string | undefined): string {
  * client typed. A token that does not verify, or that names a user other
  * than the one this request authenticated as, is rejected outright: a wrong
  * token is a stronger signal of a caller lying about its session than
- * omitting one. Omitting `sessionToken` entirely is still accepted on
- * `sessionId` alone -- `LIVE_HLS_SIGNED_URLS=false` mints no such token at
- * all (`stampViewerStream`), and that configuration is fully supported -- but
- * that `sessionId` stays exactly what it always was: an opaque, unverified
- * label that never becomes a metrics key on its own (only `rung` does, and
- * that is validated below).
+ * omitting one. The verified `channelId`/`startedAt` is then resolved to the
+ * ACTUAL `hls_sessions.id` (`resolveHlsSessionId`, sharing the playlist
+ * proxy's own cache) so the id this route records is the identical string
+ * the master playlist's `#EXT-X-PQP-SESSION` tag carries and `voice.hlsStarted`
+ * logs -- a p95 per session can join against the egress log by equality (a
+ * second Farol finding, 2026-09-14: the earlier `channelId:startedAt` pair
+ * read the same to a human but was never the same string).
+ *
+ * NO SESSION LABEL AT ALL WITHOUT A TOKEN (a third Farol finding,
+ * 2026-09-14). `LIVE_HLS_SIGNED_URLS=false` mints no viewer token
+ * (`stampViewerStream`) and that configuration is fully supported, but a
+ * batch with no token to verify gets no session identity either: `sessionId`
+ * is recorded as the literal string `"unsigned"`, and the per-session rate
+ * limit below is skipped entirely (the per-USER limit above already bounds
+ * this caller). Anything else -- accepting the client's own `sessionId` as a
+ * label, or as a rate-limit key -- reopens the exact unbounded,
+ * attacker-controlled key space the `rung` whitelist (3dde4d4a) closed on
+ * the histogram side of this same route.
  *
  * A REJECTED BATCH IS A NO-OP THE CLIENT NEVER RETRIES (see
  * `client/src/lib/hls-playback.ts`'s telemetry queue): this is a measurement,
@@ -7815,11 +7828,10 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
     throw error;
   }
   // `sessionVerified` says whether `sessionId` below is this server's own
-  // signed claim (trustworthy for the log line, and the key the per-session
-  // rate limit uses) or the client's own unverified string (still logged,
-  // just not something a reader — human or alert rule — should treat as
-  // proven).
-  let sessionId = batch.sessionId;
+  // resolved, signature-backed identity (trustworthy for the log line, and
+  // the key the per-session rate limit uses) or the fixed `"unsigned"`
+  // bucket a tokenless batch gets instead of a caller-chosen label.
+  let sessionId = "unsigned";
   let sessionVerified = false;
   if (batch.sessionToken !== undefined) {
     const claims = decodeHlsViewerToken(batch.sessionToken);
@@ -7827,17 +7839,29 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
       recordHlsTelemetryBatchRejectedSession();
       throw new HttpError(400, "Invalid session token");
     }
-    sessionId = `${claims.channelId}:${claims.startedAt}`;
+    const canonical = await resolveHlsSessionId(
+      claims.channelId,
+      claims.startedAt,
+    );
+    // A resolution miss (the session just ended, or its rung rows have not
+    // landed yet) still deserves a batch that JOINS on repetition, even if
+    // it cannot join against the egress log for this one -- so this falls
+    // back to the composite pair rather than the shared `"unsigned"` bucket,
+    // which would wrongly lump a real, verified session in with every
+    // tokenless one.
+    sessionId = canonical ?? `${claims.channelId}:${claims.startedAt}`;
     sessionVerified = true;
   }
-  const sessionKey = `session:${sessionId}`;
-  if (!liveHlsTelemetrySessionLimiter.take(sessionKey)) {
-    recordHlsTelemetryBatchRejectedRateLimit();
-    res.setHeader(
-      "Retry-After",
-      String(liveHlsTelemetrySessionLimiter.retryAfter(sessionKey)),
-    );
-    throw new HttpError(429, "Slow down");
+  if (sessionVerified) {
+    const sessionKey = `session:${sessionId}`;
+    if (!liveHlsTelemetrySessionLimiter.take(sessionKey)) {
+      recordHlsTelemetryBatchRejectedRateLimit();
+      res.setHeader(
+        "Retry-After",
+        String(liveHlsTelemetrySessionLimiter.retryAfter(sessionKey)),
+      );
+      throw new HttpError(429, "Slow down");
+    }
   }
   // `recordHlsLatencySample` refuses a rung it does not recognise on its
   // own (a caller-independent guard against an authenticated account

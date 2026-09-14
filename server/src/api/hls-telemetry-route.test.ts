@@ -50,6 +50,10 @@ const { hlsTelemetryActivity, resetHlsLatencyMetricsForTests } = await import(
   "../voice/hls-latency-metrics.js"
 );
 const { mintHlsViewerToken } = await import("../voice/hls-viewer-token.js");
+const { hlsObjectPrefix } = await import("../voice/hls-egress.js");
+const { resetHlsPlaylistCacheForTests } = await import(
+  "../voice/hls-playlist-proxy.js"
+);
 
 const TOKEN_CHANNEL = "00000000-0000-4000-8000-0000000000cc";
 const TOKEN_STARTED_AT = 1_700_000_000_000;
@@ -106,6 +110,7 @@ describeDb("POST /api/live-hls/telemetry", () => {
   beforeEach(() => {
     resetApiRateLimits();
     resetHlsLatencyMetricsForTests();
+    resetHlsPlaylistCacheForTests();
     logEvent.mockClear();
   });
 
@@ -144,7 +149,11 @@ describeDb("POST /api/live-hls/telemetry", () => {
     expect(activity.byRung[0]!.count).toBe(2);
   });
 
-  it("logs exactly one structured line per accepted batch, naming the session", async () => {
+  it("logs exactly one structured line per accepted batch, naming the (unsigned) session", async () => {
+    // No sessionToken here (the config under test throughout most of this
+    // file), so the client's own `sessionId` is not trusted as a label --
+    // see the "sessionToken binding" describe block below for the literal
+    // "unsigned" bucket this batch is recorded under instead.
     await post(
       {
         sessionId: "session-xyz",
@@ -159,7 +168,8 @@ describeDb("POST /api/live-hls/telemetry", () => {
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsTelemetryBatch",
       expect.objectContaining({
-        sessionId: "session-xyz",
+        sessionId: "unsigned",
+        sessionVerified: false,
         samples: 2,
         rungs: expect.arrayContaining(["720p30", "1080p30"]),
       }),
@@ -267,10 +277,10 @@ describeDb("POST /api/live-hls/telemetry", () => {
       );
     });
 
-    it("logs sessionVerified: false and the client's own sessionId when no token is sent", async () => {
+    it("records the literal 'unsigned' bucket when no token is sent, ignoring the client's own sessionId (Farol finding, 2026-09-14)", async () => {
       const result = await post(
         {
-          sessionId: "unverified-session-label",
+          sessionId: "an-attacker-could-put-anything-here",
           samples: [{ rung: "720p30", latencyMs: 1_000 }],
         },
         viewer,
@@ -279,7 +289,7 @@ describeDb("POST /api/live-hls/telemetry", () => {
       expect(logEvent).toHaveBeenCalledWith(
         "voice.hlsTelemetryBatch",
         expect.objectContaining({
-          sessionId: "unverified-session-label",
+          sessionId: "unsigned",
           sessionVerified: false,
         }),
       );
@@ -341,6 +351,88 @@ describeDb("POST /api/live-hls/telemetry", () => {
       );
       expect(result.status).toBe(400);
       expect(hlsTelemetryActivity().batchesRejectedSession).toBe(1);
+    });
+
+    /**
+     * Farol finding, 2026-09-14: the recorded session id used to be the
+     * verified `channelId:startedAt` PAIR, which reads the same to a human
+     * as the `hls_sessions.id` the playlist tag and the egress log carry,
+     * but is never the same STRING -- so nothing could actually join a p95
+     * against `voice.hlsStarted` by equality. This proves the two match.
+     */
+    it("resolves the verified token to the real hls_sessions row id -- the same string the playlist tag and the egress log use", async () => {
+      const server = await getPool().query<{ id: string }>(
+        `INSERT INTO servers (name, owner_id) VALUES ('canon-test', $1) RETURNING id`,
+        [viewer.id],
+      );
+      const channel = await getPool().query<{ id: string }>(
+        `INSERT INTO channels (server_id, name, type, position)
+         VALUES ($1, 'cinema', 'watch_party', 0) RETURNING id`,
+        [server.rows[0]!.id],
+      );
+      const channelId = channel.rows[0]!.id;
+      const startedAt = 1_701_000_000_000;
+      const session = await getPool().query<{ id: string }>(
+        `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, rung)
+         VALUES ($1, $2, NOW(), '720p30') RETURNING id`,
+        [channelId, hlsObjectPrefix(channelId, startedAt, "720p30")],
+      );
+      const canonicalSessionId = session.rows[0]!.id;
+      const token = mintHlsViewerToken({
+        userId: viewer.id,
+        channelId,
+        startedAt,
+      })!;
+      const result = await post(
+        {
+          sessionId: "client-typed-label-must-not-win",
+          sessionToken: token,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(result.status).toBe(200);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsTelemetryBatch",
+        expect.objectContaining({
+          sessionId: canonicalSessionId,
+          sessionVerified: true,
+        }),
+      );
+    });
+  });
+
+  /**
+   * Farol finding, 2026-09-14: a batch with no token to verify used to still
+   * accept the client's OWN `sessionId` as a label and a rate-limit key --
+   * exactly the unbounded, attacker-controlled key space the `rung`
+   * whitelist (3dde4d4a) closed on the histogram side of this route.
+   * `LIVE_HLS_SIGNED_URLS=false` mints no token at all and is fully
+   * supported, so this is the shape every one of ITS batches takes.
+   */
+  describe("no session label at all without a token", () => {
+    it("never lets the client's sessionId reach the per-session rate limiter -- many accounts, one 'unsigned' bucket, none of them 429", async () => {
+      let lastStatus = 200;
+      for (let i = 0; i < 130; i++) {
+        const fakeViewer = {
+          id: `unsigned-user-${i}`,
+          clerk_id: `unsigned-user-${i}`,
+        };
+        const result = await post(
+          {
+            sessionId: `attacker-chosen-label-${i}`,
+            samples: [{ rung: "720p30", latencyMs: 1_000 }],
+          },
+          fakeViewer,
+        );
+        lastStatus = result.status;
+      }
+      // Each of these 130 accounts made exactly one request -- well inside
+      // its OWN per-user budget -- and none of them share a session-level
+      // bucket to exhaust, because there is no session-level bucket in this
+      // mode at all.
+      expect(lastStatus).toBe(200);
+      expect(hlsTelemetryActivity().batchesAccepted).toBeGreaterThanOrEqual(130);
     });
   });
 

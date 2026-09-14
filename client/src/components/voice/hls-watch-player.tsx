@@ -914,6 +914,11 @@ export function HlsWatchPlayer({
       void getAuthToken().then((token) => {
         if (!cancelled) {
           authToken = token;
+          // Keeps the queue's own cached copy current too, so a flush --
+          // including the unmount one -- reads a token synchronously rather
+          // than fetching one (Farol finding, 2026-09-14; see
+          // `sendHlsTelemetryBatch`'s doc comment).
+          telemetryQueue?.setToken(token);
         }
       });
     };
@@ -948,7 +953,12 @@ export function HlsWatchPlayer({
         // 2026-09-13). Null on the `LIVE_HLS_SIGNED_URLS=false` config,
         // which mints no such token; the batch still goes out on `sessionId`.
         sessionToken: hlsViewerTokenFromUrl(activeSrc),
-        send: (batch) => sendHlsTelemetryBatch(batch, getAuthToken),
+        // Seeded from the closure variable this function already required to
+        // be non-null (`identity` above comes off it) -- kept current after
+        // this by `refreshAuthToken`'s own `telemetryQueue?.setToken` call,
+        // not by fetching one at flush time (Farol finding, 2026-09-14).
+        token: authToken,
+        send: sendHlsTelemetryBatch,
       });
     }
     function pushTelemetrySample(paintedMediaTimeSeconds: number): void {

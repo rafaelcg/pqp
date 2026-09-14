@@ -88,6 +88,7 @@ const {
   HLS_KEEP_WARM_IDLE_MS,
   hlsKeepWarmLoopsActive,
   hlsKeepWarmRenders,
+  resolveHlsSessionId,
 } = await import("./hls-playlist-proxy.js");
 const { mintHlsViewerToken } = await import("./hls-viewer-token.js");
 const { playlistLooksLive } = await import("@pqp/shared");
@@ -819,6 +820,67 @@ describe("buildMasterPlaylistFor", () => {
       clock + HLS_PLAYLIST_CACHE_TTL_MS + 2,
     );
     expect(recovered).toContain("/360p30");
+  });
+});
+
+/**
+ * BROADCAST_PIPELINE B0.6: the telemetry route's own session identity, so an
+ * accepted batch's `sessionId` is the SAME string `buildMasterPlaylistFor`
+ * puts in `#EXT-X-PQP-SESSION` (both read it off this same `sessionRungs`
+ * call, sharing its cache) rather than a `channelId:startedAt` pair that
+ * reads the same to a human but never joins by equality against
+ * `voice.hlsStarted` (a Farol finding, 2026-09-14).
+ */
+describe("resolveHlsSessionId", () => {
+  beforeEach(() => {
+    resetHlsPlaylistCacheForTests();
+    pool.query.mockReset();
+  });
+
+  afterEach(() => {
+    resetHlsPlaylistCacheForTests();
+    pool.query.mockReset();
+  });
+
+  it("returns the lowest-bitrate rung's row id -- the same one buildMasterPlaylistFor tags", async () => {
+    pool.query.mockImplementation(async () => ({
+      rowCount: 2,
+      rows: [
+        { id: "row-1080", rung: "1080p30" },
+        { id: "row-720", rung: "720p30" },
+      ],
+    }));
+    await expect(
+      resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
+    ).resolves.toBe("row-720");
+  });
+
+  it("is null when the session has no known rungs right now", async () => {
+    pool.query.mockImplementation(async () => ({ rowCount: 0, rows: [] }));
+    await expect(
+      resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
+    ).resolves.toBeNull();
+  });
+
+  it("is null, never throws, when the lookup itself fails", async () => {
+    pool.query.mockImplementation(async () => {
+      throw new Error("pool exhausted");
+    });
+    await expect(
+      resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
+    ).resolves.toBeNull();
+  });
+
+  it("shares sessionRungs' cache with buildMasterPlaylistFor -- one query serves both", async () => {
+    pool.query.mockImplementation(async () => ({
+      rowCount: 1,
+      rows: [{ id: "row-720", rung: "720p30" }],
+    }));
+    await buildMasterPlaylistFor({ channelId: CHANNEL, startedAt: STARTED_AT, now: 1_000 });
+    await expect(
+      resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
+    ).resolves.toBe("row-720");
+    expect(pool.query).toHaveBeenCalledTimes(1);
   });
 });
 
