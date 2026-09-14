@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -116,6 +117,18 @@ type Session struct {
 	// screen-share audio track, so two concurrent audio publications
 	// cannot both start a reader against the caller's OnAudioPacket.
 	audioBound atomic.Bool
+
+	// videoWG is held for the video track's entire readRTP call: Add(1)
+	// runs synchronously in OnTrackSubscribed's video case, strictly
+	// before that case starts readRTP, and Done() runs only after
+	// readRTP returns -- which itself only happens after it has already
+	// called Handlers.OnVideoTrackEnded (session.Session.Finish in
+	// production). Close waits on it after disconnecting, which is what
+	// makes "the video track has fully ended, including its caller
+	// callback" something Close's RETURN can be trusted to mean, instead
+	// of merely "disconnect was requested" -- see Close's own doc
+	// comment for the race this closes (Farol review, PR #584).
+	videoWG sync.WaitGroup
 }
 
 // VideoSSRC returns the subscribed screen-share video track's SSRC, for a
@@ -148,11 +161,39 @@ func (s *Session) RequestKeyframe() {
 	b.participant.WritePLI(ssrc)
 }
 
-// Close disconnects from the room. Safe to call more than once.
+// Close disconnects from the room and waits for the video track's readRTP
+// goroutine to fully finish -- including having already called
+// Handlers.OnVideoTrackEnded -- before returning. Safe to call more than
+// once (the second call's Wait returns immediately: videoWG's counter is
+// already back at zero).
+//
+// This closes a real race Farol caught in review (PR #584): a caller that
+// tears an old pipeline down and then immediately reads its Health() (see
+// managed_session.go's restart, which does exactly this to compute the
+// replacement's starting segment index) used to be able to observe
+// session.Session's fragmenter mid-flush. Disconnect makes the room's
+// track end, but the goroutine that notices that and calls
+// OnVideoTrackEnded is the LiveKit SDK's own track-subscription dispatch
+// goroutine (see readRTP's doc comment: it "blocks reading RTP packets...
+// until the track ends... then calls onEnded"), which this call was never
+// joined with before -- Disconnect returning said nothing about whether
+// that goroutine, and the Session.Finish it runs, had reached its own end
+// yet. A slow or merely-not-yet-scheduled Finish could still be flushing
+// the trailing fragment (advancing the very segment index restart() was
+// about to read) after Close had already returned. videoWG makes "Close
+// returned" and "the video track's own teardown, callback included, is
+// fully done" the same fact: Wait cannot return before Done does, and
+// Done runs only after OnVideoTrackEnded has already returned.
+//
+// A video track that never bound at all (e.g. Close called on a session
+// still in its StateWaiting phase, before any presenter ever shared) means
+// videoWG's counter was never incremented, so Wait returns immediately --
+// this never blocks callers with nothing to wait for.
 func (s *Session) Close() {
 	if s.room != nil {
 		s.room.Disconnect()
 	}
+	s.videoWG.Wait()
 }
 
 var errMissingConfig = errors.New("subscriber: URL, APIKey, APISecret and Room are all required")
@@ -187,6 +228,15 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 			if h.OnVideoTrackFound != nil {
 				h.OnVideoTrackFound(sess)
 			}
+			// Add BEFORE readRTP starts (never concurrently with a
+			// Close that could be racing in from another goroutine
+			// right now): this case runs at most once per Session
+			// (guarded by the CompareAndSwap above), so this is the
+			// only place that ever calls videoWG.Add, and it happens
+			// strictly before the Done below -- see Close's own doc
+			// comment for what this pairing guarantees callers.
+			sess.videoWG.Add(1)
+			defer sess.videoWG.Done()
 			readRTP(track, h.OnVideoPacket, h.OnVideoTrackEnded)
 		case isScreenShareAudio(pub):
 			if !sess.audioBound.CompareAndSwap(false, true) {

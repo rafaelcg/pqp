@@ -197,6 +197,16 @@ func (p *remuxPipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) { p.sr
 // sess.Close() (drain the encoder and flush the final segments, enqueuing
 // their uploads), then r2Writer.Close() LAST, so those final uploads get a
 // chance to actually run before the writer stops accepting work.
+//
+// sub.Close() (internal/subscriber.Session.Close) now blocks until the
+// video track's own async teardown -- including the OnVideoTrackEnded
+// call that runs session.Session.Finish -- has fully completed (Farol
+// review, PR #584), not merely until disconnect was requested. That is
+// what makes it safe for restart() (managed_session.go) to read this
+// pipeline's Health() immediately after Close returns: Finish is what
+// flushes the trailing fragment and can advance the fragmenter's segment
+// index, and it used to be able to still be running, on a goroutine this
+// method never waited for, after Close had already returned.
 func (p *remuxPipeline) Close() {
 	p.sub.Close()
 	p.cancel()

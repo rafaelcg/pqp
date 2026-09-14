@@ -324,6 +324,130 @@ func (p *sealsOneMoreSegmentOnClose) Close() {
 // 3000-tick frames = 15 frames per rollover" arithmetic.
 const restartTestFramesPerSegment = 15
 
+// asyncSealsOneMoreSegmentOnClose is sealsOneMoreSegmentOnClose's genuinely
+// concurrent sibling: where that type does its extra rollover and Finish
+// synchronously, in-line inside Close (deliberately, so THAT test does not
+// depend on goroutine scheduling), this one runs them on a real goroutine
+// with an artificial delay, gated behind a sync.WaitGroup Close joins
+// before returning -- exactly the shape internal/subscriber.Session's real
+// fix now uses for the actual production race (Add before the async work
+// starts, Done when it finishes calling session.Session.Finish, Close
+// waits). TestManagedSession_RestartWaitsForAsyncFinish uses this to prove
+// restart()'s Health() read (managed_session.go) is quiescent by
+// construction, not merely "usually fast enough": the delay here (well
+// past evaluateWatchdog's own tick and any reasonable scheduling jitter)
+// would turn a missing join into a reliable, not flaky, test failure --
+// see that test's own doc comment.
+type asyncSealsOneMoreSegmentOnClose struct {
+	*realSessionPipeline
+	extraFrameStart int
+	delay           time.Duration
+	wg              sync.WaitGroup
+}
+
+func (p *asyncSealsOneMoreSegmentOnClose) start() {
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		time.Sleep(p.delay)
+		p.pushIDRFrames(p.extraFrameStart, restartTestFramesPerSegment, restartTestFrameStep)
+		p.sess.Finish()
+	}()
+}
+
+func (p *asyncSealsOneMoreSegmentOnClose) Close() {
+	p.wg.Wait() // the join under test: without it, Health() below can race the goroutine above
+	p.realSessionPipeline.Close()
+}
+
+// TestManagedSession_RestartWaitsForAsyncFinish is the -race regression
+// test for the exact bug Farol caught in review on PR #584: managed_session.
+// go's restart() calls old.Close() and, immediately after, reads
+// old.Health() to compute the replacement pipeline's starting segment
+// index (see restart's own doc comment) -- and in production, "the video
+// track's teardown is done" and "Close returned" used to be two different
+// moments, because the goroutine that calls session.Session.Finish (via
+// subscriber.Handlers.OnVideoTrackEnded) runs on the LiveKit SDK's own
+// track-dispatch goroutine, joined with nothing.
+// internal/subscriber.Session.Close now waits for that goroutine
+// (videoWG.Wait, see its own doc comment); this test proves the same
+// contract end to end, against a REAL asynchronous goroutine racing
+// restart()'s Health() read, using the identical Add-before/Wait-in-Close
+// pairing the real fix uses -- not the synchronous stand-in
+// TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown uses for
+// its own, different purpose (proving the segment-index ARITHMETIC, "plus
+// one from the FINAL index", independent of timing).
+//
+// Run under -race (make test always does): a Close that returned WITHOUT
+// waiting on the goroutine below would let restart() read Health() while
+// pushIDRFrames is still writing into the fragmenter that same Health()
+// call reads from -- a genuine concurrent read/write the race detector
+// catches directly, on top of the index-arithmetic assertion below.
+func TestManagedSession_RestartWaitsForAsyncFinish(t *testing.T) {
+	uploader := newKeyTrackingUploader()
+	writer := r2.NewWriter(uploader, r2.WriterConfig{Workers: 4})
+	defer writer.Close()
+
+	baseFactory := newRealSessionPipelineFactory(writer)
+	var generation int
+	var asyncP *asyncSealsOneMoreSegmentOnClose
+	factory := func(cfg PipelineConfig) (Pipeline, error) {
+		p, err := baseFactory(cfg)
+		if err != nil {
+			return nil, err
+		}
+		rp := p.(*realSessionPipeline)
+		generation++
+		if generation == 1 {
+			asyncP = &asyncSealsOneMoreSegmentOnClose{
+				realSessionPipeline: rp,
+				extraFrameStart:     framesPerGenerationForTest,
+				delay:               150 * time.Millisecond, // well past any reasonable scheduling jitter
+			}
+			return asyncP, nil
+		}
+		return rp, nil
+	}
+
+	req := testStartReq(sessA, chanA, chanA)
+	req.PartMs = 500
+	req.SegmentMs = 500
+
+	ms, err := newManagedSession(req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
+	if err != nil {
+		t.Fatalf("unexpected error starting session: %v", err)
+	}
+
+	p1 := ms.currentPipelineForTest().(*asyncSealsOneMoreSegmentOnClose)
+	p1.pushSPSPPS(0)
+	p1.pushIDRFrames(0, framesPerGenerationForTest, restartTestFrameStep)
+
+	preRestartIndex := p1.sess.CurrentVideoSegmentIndex()
+	if preRestartIndex < 2 {
+		t.Fatalf("expected the first pipeline to have rolled over at least two segments before the simulated restart, got index %d", preRestartIndex)
+	}
+
+	// Fire the "OnVideoTrackEnded happens on another goroutine, with real
+	// delay" simulation BEFORE calling restart(), exactly as a real
+	// disconnect races the SDK's own dispatch goroutine against whatever
+	// called subscriber.Session.Close -- restart() (via old.Close()) must
+	// still observe its effects, not race ahead of them.
+	asyncP.start()
+
+	ms.restart()
+
+	finalOldIndex := preRestartIndex + 1
+	wantReplacementStart := finalOldIndex + 1
+
+	p2 := ms.currentPipelineForTest().(*realSessionPipeline)
+	if p2 == p1.realSessionPipeline {
+		t.Fatal("expected restart to build a new pipeline instance")
+	}
+	if got := p2.sess.CurrentVideoSegmentIndex(); got != wantReplacementStart {
+		t.Fatalf("expected the replacement to continue numbering at %d (final old index %d, plus one), got %d -- restart() read Health() before the async Finish goroutine finished", wantReplacementStart, finalOldIndex, got)
+	}
+}
+
 // TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown is the
 // test Farol's review on PR #584 specifically asked for: "the replacement
 // never reuses a key even if the old pipeline seals one more segment
