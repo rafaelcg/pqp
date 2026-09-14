@@ -106,6 +106,7 @@ vi.mock("../voice/admin.js", () => ({
 
 const {
   handleVoiceMessage,
+  removeVoicePeerBySocket,
   resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
@@ -182,13 +183,23 @@ afterEach(() => {
   watchPartyStatus.pending = null;
 });
 
-async function join(userId: string, channel: string): Promise<Recorder> {
+async function join(
+  userId: string,
+  channel: string,
+  extra?: { resumePeerId?: string; resumeToken?: string },
+): Promise<Recorder> {
   const rec = recorder();
   const user = asUser(userId);
   setAuthenticatedSocket(rec.socket, user);
   await handleVoiceMessage(
     { socket: rec.socket, user },
-    { type: "join-voice-room", voiceChannelId: channel, resume: true },
+    {
+      type: "join-voice-room",
+      voiceChannelId: channel,
+      resume: true,
+      ...(extra?.resumePeerId ? { resumePeerId: extra.resumePeerId } : {}),
+      ...(extra?.resumeToken ? { resumeToken: extra.resumeToken } : {}),
+    },
   );
   if (!rec.frames.some((f) => f.type === "welcome")) {
     throw new Error(`join refused: ${JSON.stringify(rec.frames)}`);
@@ -304,6 +315,64 @@ describe("idle hangup", () => {
     await sweepIdleAloneSeats(T0 + 10 * MINUTE);
     expect(warnings(a)).toHaveLength(0);
     expect(hangups(a)).toHaveLength(0);
+  });
+
+  /**
+   * Independent-review finding on the multi-instance rebase:
+   * `removeVoicePeerBySocket` set `orphanedAt` but left `aloneSince` /
+   * `idleWarnedAt` exactly where they were, and `reattachVoicePeer`'s
+   * `cancelOrphan` cleared only `orphanedAt`. A tab dropped by an API
+   * deploy while genuinely alone (already warned, even) came back to a
+   * clock that had kept running the whole time it was orphaned: the very
+   * next sweep tick read `elapsed >= limit` and disconnected the resumed
+   * seat immediately, with the warning check unreachable behind that
+   * branch — no `voice-idle-warning` ever reached the tab that just
+   * reconnected, only the hangup. Fixed by clearing both marks inside
+   * `cancelOrphan` itself, which every orphan-state transition already
+   * runs through.
+   */
+  it("a resumed seat gets its full window and its warning again, not the remainder of a clock that ran while orphaned", async () => {
+    const channel = randomUUID();
+    const alice = randomUUID();
+    const a = await join(alice, channel);
+    const welcome = a.frames.find((f) => f.type === "welcome");
+    const peerId = welcome?.peerId as string;
+    const token = welcome?.resumeToken as string;
+    expect(peerId).toBeTruthy();
+    expect(token).toBeTruthy();
+
+    await sweepIdleAloneSeats(T0); // alone, clock starts
+    await sweepIdleAloneSeats(T0 + 9 * MINUTE);
+    expect(warnings(a)).toHaveLength(1);
+
+    // An API deploy drops her socket at the 9.5-minute mark — already
+    // warned, still alone.
+    vi.setSystemTime(T0 + 9.5 * MINUTE);
+    removeVoicePeerBySocket(a.socket);
+
+    // The tab reconnects past what WOULD have been the original ten-minute
+    // mark.
+    vi.setSystemTime(T0 + 10.2 * MINUTE);
+    const resumed = await join(alice, channel, {
+      resumePeerId: peerId,
+      resumeToken: token,
+    });
+    expect(resumed.frames.find((f) => f.type === "welcome")?.resumed).toBe(
+      true,
+    );
+
+    // The bug: this tick would disconnect her immediately on pre-orphan
+    // elapsed time, silently, with no warning reaching the resumed tab.
+    await sweepIdleAloneSeats(T0 + 10.2 * MINUTE);
+    expect(hangups(resumed)).toHaveLength(0);
+    expect(warnings(resumed)).toHaveLength(0);
+
+    // A full fresh ten minutes, counted from the sweep that seated her
+    // again — and the warning fires on the RESUMED tab, not the dead one.
+    await sweepIdleAloneSeats(T0 + 19.2 * MINUTE); // 9 min later: warned
+    expect(warnings(resumed)).toHaveLength(1);
+    await sweepIdleAloneSeats(T0 + 20.2 * MINUTE); // 10 min later: gone
+    expect(hangups(resumed)).toHaveLength(1);
   });
 
   it("forgets a pending warning when somebody joins", async () => {

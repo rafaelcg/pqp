@@ -1243,12 +1243,30 @@ function getLiveRoomPeers(voiceChannelId: string): VoicePeer[] {
   return getRoomPeers(voiceChannelId).filter((p) => p.orphanedAt === undefined);
 }
 
+/**
+ * Clears the orphan timer (and, with it, `orphanedAt`). Every caller is one
+ * of three transitions, and the idle-alone marks must not survive any of
+ * them: `removeVoicePeerBySocket` calls this to clear a STALE timer right
+ * before starting a fresh orphan period (so a clock left running from
+ * before the socket dropped cannot carry into it); `reattachVoicePeer`
+ * calls this to end that period when the same seat comes back; and
+ * `removePeer` / `dropVoicePeerSilently` call this right before discarding
+ * the peer object entirely, where it is moot either way. Skipping this on
+ * reattach was a real bug: a resumed tab (an API deploy, say) got the
+ * remainder of a clock that started before the disconnect, immediately
+ * eligible for a disconnect the sweep's very next tick, with the warning
+ * check unreachable behind it — no `voice-idle-warning` ever reached the
+ * resumed tab, only the hangup. A reattach must get the same full window
+ * and warning eligibility a person who was never orphaned gets.
+ */
 function cancelOrphan(peer: VoicePeer): void {
   if (peer.orphanTimer) {
     clearTimeout(peer.orphanTimer);
     peer.orphanTimer = undefined;
   }
   peer.orphanedAt = undefined;
+  peer.aloneSince = undefined;
+  peer.idleWarnedAt = undefined;
 }
 
 function retirePeerId(peerId: string, voiceChannelId: string): void {
@@ -3665,11 +3683,20 @@ let idleAloneSweepRunning = false;
  * `pqp-api` machine: each instance disconnects only its own seats, and the
  * registry (`countVoicePeerUsersByChannel`) is what tells an instance
  * holding a lone local seat whether a second person is seated on some other
- * machine before it acts. `WORKER_MODE=worker` never reaches this code at
- * all (`main()` in `server/src/index.ts` hands off to `worker.js` before the
- * `setInterval` that calls this is ever created), so a batch worker process
- * never runs it — it is a per-socket timer in the process that holds the
- * sockets, exactly the shape `WORKER_MODE=api` requires.
+ * machine before it acts.
+ *
+ * WORKER_MODE: `fly.worker.toml` runs the production worker as
+ * `node server/dist/worker.js`, a separate entry point that never imports
+ * this file at all — `voice-idle-alone.test.ts`'s "the idle sweep's reach"
+ * group reads that file's imports directly rather than assuming so. The
+ * `setInterval` in `server/src/index.ts` that calls this IS still created
+ * at module scope even under `WORKER_MODE=worker node dist/index.js` (the
+ * secondary, non-Fly way to run a worker on this same entry point), the
+ * same as several sibling sweeps beside it — nothing in that file gates
+ * sweep creation on the role. Harmless there in practice, because a
+ * process running that way never accepts a `/ws` connection and `peers`
+ * stays permanently empty, so every tick is a no-op walk of nothing; it is
+ * a per-socket timer with no sockets, not a batch job that needed guarding.
  *
  * Exported for the tests and for `server/src/index.ts`, which runs it every
  * `IDLE_ALONE_SWEEP_MS`. `now` is a parameter so a test can move the clock.
