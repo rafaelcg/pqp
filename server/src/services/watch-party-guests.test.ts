@@ -527,7 +527,7 @@ describeDb("watch party guests", () => {
     }
   });
 
-  it("broadcasting to 500 sockets loads the guest rows a fixed number of times, not once per recipient", async () => {
+  it("broadcasting to 500 sockets loads the guest rows exactly once, not once per recipient", async () => {
     // SATURDAY'S PARTY IS THE REASON FOR THIS TEST. `broadcastWatchParty`
     // loads `channel_session_stage_invites`/`channel_session_raised_hands`
     // ONCE per fan-out and reshapes the same rows per recipient
@@ -535,14 +535,47 @@ describeDb("watch party guests", () => {
     // own) -- this pins that the query count does not scale with the
     // audience, which nothing short of an actual 500-socket broadcast can
     // prove.
+    //
+    // DETERMINISTIC, NOT TIMED. The original version of this test drove the
+    // broadcast through the HTTP `guests()` action, which fires
+    // `broadcastWatchParty` fire-and-forget, and used `setTimeout` waits to
+    // let it (and `liveParty`'s own two background broadcasts) settle before
+    // counting -- correct on a lightly loaded laptop and flaky on a busier
+    // CI runner, where a slower event loop let some of that background work
+    // land inside the counting window (observed on 2026-09-14: 4 queries
+    // counted instead of the expected <=2). Awaiting `broadcastWatchParty`
+    // directly instead of going through the fire-and-forget route removes
+    // the wait for that ONE call, but `liveParty`'s own two HTTP round trips
+    // (draft, then live) each ALSO fire their own un-awaited
+    // `void broadcastWatchParty(...)` from inside the route handler, on the
+    // SAME session id -- the HTTP response returns before that background
+    // work necessarily finishes, so it can still be mid-flight, indifferent
+    // to any `await` on the test's side, when the test's own direct call
+    // starts (observed: exactly 2 loads for what should be 1, the lingering
+    // setup broadcast plus this test's own). Stubbing `broadcastWatchParty`
+    // itself for the whole setup phase removes the source of the race
+    // rather than out-timing it: nothing fires during setup, so there is
+    // nothing left running when the real implementation is measured.
+    //
+    // Also spies on the exact function (`loadWatchPartyGuestRows`) rather
+    // than matching raw SQL text, which is exact by construction rather
+    // than by resemblance.
+    const watchPartyEvents = await import("../ws/watch-party-events.js");
+    const watchPartiesModule = await import("./watch-parties.js");
+    const loadSpy = vi.spyOn(watchPartiesModule, "loadWatchPartyGuestRows");
+    const realBroadcast = watchPartyEvents.broadcastWatchParty;
+    const broadcastStub = vi
+      .spyOn(watchPartyEvents, "broadcastWatchParty")
+      .mockImplementation(async () => {});
+
     // 500 real, distinct server members, each with a fake socket watching —
     // bulk-inserted rather than 500 round trips through `upsertUser`/
     // `createRole`-style helpers, which this scale test has no need of.
     // BEFORE the party goes live: `getChannelAudience` caches its answer on
     // the first read, which going live already triggers, so a member
     // inserted afterwards needs its own cache invalidation to be seen — this
-    // test is about the guest query, not the audience cache, so it sidesteps
-    // that entirely by existing first.
+    // test is about the guest query, not the audience cache, so it
+    // sidesteps that entirely by existing first.
     const scaleUserIds = Array.from({ length: 500 }, () => randomUUID());
     const userValues = scaleUserIds
       .map((id, i) => `('${id}', 'clerk_scale_${i}', 'scale-${i}', NULL)`)
@@ -557,13 +590,16 @@ describeDb("watch party guests", () => {
       `INSERT INTO server_members (server_id, user_id, role) VALUES ${memberValues}`,
     );
 
+    // `liveParty`'s draft + live writes: their own broadcasts are the stub
+    // above, so nothing runs from them at all -- no query, no send, nothing
+    // to race against what follows.
     const party = await liveParty({ guests: "request" });
-    // `liveParty`'s own two writes (draft, then live) each fire their own
-    // `void broadcastWatchParty(...)` in the background; let those finish
-    // before the spy below attaches, or their still-in-flight queries would
-    // be counted alongside the one broadcast this test is actually about.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    broadcastStub.mockRestore();
 
+    // The fake transport every recipient is driven through: a plain object
+    // matching the two fields `broadcastWatchParty` reads off a socket
+    // (`readyState`, `send`), registered synchronously and never touched by
+    // a timer.
     const sent: unknown[] = [];
     const scaleSockets = scaleUserIds.map((id) => {
       const socket: FakeSocket = {
@@ -578,34 +614,27 @@ describeDb("watch party guests", () => {
       return socket;
     });
 
-    const pool = getPool();
-    const querySpy = vi.spyOn(pool, "query");
     try {
-      const requested = await guests(viewer, party.id, { action: "request" });
-      expect(requested.status).toBe(200);
-      // 500 sockets, 500 permission resolutions and 500 sends: give the
-      // fire-and-forget broadcast real time to walk all of them.
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Reset AFTER all of the setup above (which never touched guest rows,
+      // real or stubbed) so the count below is exclusively this one, real,
+      // directly awaited call's own work.
+      loadSpy.mockClear();
+      await realBroadcast(party.id);
 
-      const guestRowQueries = querySpy.mock.calls.filter(([text]) =>
-        typeof text === "string" &&
-        text.includes("channel_session_stage_invites") &&
-        text.includes("i.invited_at"),
-      );
-      // At most two: the actor's own HTTP response (`presentWatchParty`) and
-      // the broadcast fan-out (`loadGuestRowsForBroadcast`) each load the
-      // rows once. Neither scales with the 500 recipients that follow.
-      expect(guestRowQueries.length).toBeLessThanOrEqual(2);
-      expect(guestRowQueries.length).toBeGreaterThan(0);
+      expect(loadSpy).toHaveBeenCalledTimes(1);
 
       const updates = sent.filter(
         (frame) => (frame as { type?: string }).type === "watch-party-update",
       );
-      // Every recipient actually got a frame — the query count above is not
+      // Every recipient actually got a frame — the single load above is not
       // low because the fan-out silently skipped people.
       expect(updates.length).toBe(500);
     } finally {
-      querySpy.mockRestore();
+      loadSpy.mockRestore();
+      // Idempotent if `liveParty` above already restored it; a safety net
+      // for the case where it threw before reaching that line, which would
+      // otherwise leave every later test in this file broadcasting nothing.
+      broadcastStub.mockRestore();
       for (const socket of scaleSockets) {
         deleteAuthenticatedSocket(socket as unknown as WebSocket);
       }
