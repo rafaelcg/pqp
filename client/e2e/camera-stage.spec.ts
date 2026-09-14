@@ -71,13 +71,32 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
   await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("call-stage-collapsed")).toHaveCount(0);
 
-  const video = page.getByLabel("Your camera");
+  // Scoped to the stage grid, not `page.getByLabel` at large: alone in the
+  // room our camera is also briefly a match inside the floating self-preview
+  // pip (`stage-layout.ts`'s `selfPreview`, a few dozen px² at this
+  // viewport) the instant the stream attaches and before `planStage`
+  // settles on the solo tile taking the whole grid. `stage-grid` only
+  // exists once `planStage` has put a tile on the big stage, so scoping here
+  // rules that element out rather than racing it.
+  const stageGrid = page.getByTestId("stage-grid");
+  await expect(stageGrid).toBeVisible({ timeout: 20_000 });
+  const video = stageGrid.getByLabel("Your camera");
   await expect(video).toBeVisible({ timeout: 20_000 });
   const viewport = page.viewportSize()!;
-  const box = (await video.boundingBox())!;
-  expect(box.width * box.height).toBeGreaterThan(
-    viewport.width * viewport.height * 0.15,
-  );
+  // The tile is already the right element; what is still settling is its
+  // layout box (the stage's own height class lands in the same React commit,
+  // but the browser's layout pass and this poll are two different clocks).
+  // Poll instead of reading `boundingBox()` once so the assertion waits for
+  // the box to actually reach the expanded size instead of racing it.
+  await expect
+    .poll(
+      async () => {
+        const box = await video.boundingBox();
+        return box ? box.width * box.height : 0;
+      },
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(viewport.width * viewport.height * 0.15);
 
   await expect(page.getByTestId("camera-fullscreen")).toBeVisible();
   await video.dblclick();
