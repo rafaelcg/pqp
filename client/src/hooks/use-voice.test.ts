@@ -1474,7 +1474,7 @@ describe("lobby presence sounds", () => {
     expect(getUserMedia).toHaveBeenCalledTimes(2);
     expect(voice.getState().status).not.toBe("idle");
     expect(voice.getState().error).toBeNull();
-    expect(voice.getState().notice).toContain("MacBook Pro Microphone");
+    expect(voice.getState().micFallback?.label).toBe("MacBook Pro Microphone");
   });
 
   it("walks the other microphones when the default will not start either", async () => {
@@ -1517,7 +1517,198 @@ describe("lobby presence sounds", () => {
     expect(asked).toEqual(["busy-headset", "default", "usb-interface"]);
     expect(voice.getState().status).not.toBe("idle");
     expect(voice.getState().error).toBeNull();
-    expect(voice.getState().notice).toBeTruthy();
+    expect(voice.getState().micFallback).toBeTruthy();
+  });
+
+  /**
+   * `voiceState.micFallback`'s whole lifecycle: reported 2026-09-14 as a
+   * notice that stayed up long after the saved microphone (NVIDIA Broadcast)
+   * came back, with no way to close it. `use-voice.ts`'s `setMicFallbackNotice`
+   * / `clearMicFallbackNotice` / `tryRecoverPreferredMic` /
+   * `dismissMicFallbackNotice` are the whole fix; these are the state
+   * transitions, independent of `MicFallbackNotice`'s rendering.
+   */
+  describe("the fallback-microphone notice", () => {
+    const BROADCAST_ID = "nvidia-broadcast";
+    const gone = Object.assign(new Error("Requested device not found"), {
+      name: "NotFoundError",
+    });
+
+    /**
+     * `getUserMedia` for the report's exact shape: a virtual device
+     * (NVIDIA Broadcast) that is only sometimes there, falling back to a
+     * physical one (fifine) when it is not.
+     */
+    function mediaDevicesForBroadcastMic() {
+      let broadcastAvailable = false;
+      const deviceChangeHandlers: Array<() => void> = [];
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === BROADCAST_ID) {
+          if (!broadcastAvailable) {
+            throw gone;
+          }
+          return fakeStream("NVIDIA Broadcast");
+        }
+        const stream = fakeStream("mic");
+        Object.defineProperty(stream.getAudioTracks()[0]!, "label", {
+          value: "fifine Microphone",
+        });
+        return stream;
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () =>
+            broadcastAvailable
+              ? [
+                  {
+                    kind: "audioinput",
+                    deviceId: BROADCAST_ID,
+                    label: "NVIDIA Broadcast",
+                  },
+                ]
+              : [],
+          addEventListener: (type: string, handler: () => void) => {
+            if (type === "devicechange") {
+              deviceChangeHandlers.push(handler);
+            }
+          },
+          removeEventListener: () => {},
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+      return {
+        getUserMedia,
+        setBroadcastAvailable: (next: boolean) => {
+          broadcastAvailable = next;
+        },
+        fireDeviceChange: () => {
+          for (const handler of deviceChangeHandlers) {
+            handler();
+          }
+        },
+      };
+    }
+
+    it("clears itself once the saved device is reachable again", async () => {
+      const { setBroadcastAvailable, fireDeviceChange } =
+        mediaDevicesForBroadcastMic();
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback?.label).toBe("fifine Microphone");
+
+      // NVIDIA Broadcast reopens. The OS tells every tab a device changed;
+      // this is the one signal that the saved mic might be back.
+      setBroadcastAvailable(true);
+      fireDeviceChange();
+      await settle();
+
+      expect(voice.getState().micFallback).toBeNull();
+    });
+
+    it("does not adopt an unrelated device that merely appears", async () => {
+      // A devicechange for something else entirely (a webcam's mic, a
+      // different headset) must not be read as "the saved mic is back":
+      // `tryRecoverPreferredMic` only ever asks for the exact device id the
+      // fallback remembers.
+      const { fireDeviceChange } = mediaDevicesForBroadcastMic();
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback).toBeTruthy();
+
+      fireDeviceChange();
+      await settle();
+
+      // Still there: `enumerateDevices` never listed the broadcast id.
+      expect(voice.getState().micFallback?.label).toBe("fifine Microphone");
+    });
+
+    it("clears when the person picks a device by hand", async () => {
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === "busy-headset") {
+          throw gone;
+        }
+        return fakeStream("mic");
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () => [],
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+
+      await voice.join(CHANNEL, { inputDeviceId: "busy-headset" });
+      expect(voice.getState().micFallback).toBeTruthy();
+
+      // A device that just opens clean, asked for on purpose in Settings or
+      // the call bar: nothing left to explain.
+      await voice.setInputDevice("usb-interface");
+      expect(voice.getState().micFallback).toBeNull();
+    });
+
+    it("stays closed through a reconnect's recapture of the same fallback", async () => {
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      // Always refused, so every attempt at BROADCAST_ID falls back to the
+      // same default microphone with the same label.
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === BROADCAST_ID) {
+          throw gone;
+        }
+        const stream = fakeStream("mic");
+        Object.defineProperty(stream.getAudioTracks()[0]!, "label", {
+          value: "fifine Microphone",
+        });
+        return stream;
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () => [],
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback).toBeTruthy();
+
+      voice.dismissMicFallbackNotice();
+      expect(voice.getState().micFallback).toBeNull();
+
+      // A reconnect recaptures the mic on the same saved id. Same device
+      // asked for, same device that answered: the person already closed
+      // this exact notice, so it does not reopen.
+      await voice.setInputDevice(BROADCAST_ID);
+      expect(voice.getState().micFallback).toBeNull();
+
+      // A new call is not "the rest of the call" any more: it can show the
+      // notice again.
+      await voice.leave();
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback?.label).toBe("fifine Microphone");
+    });
   });
 
   it("names the fix when no microphone will start, and marks the error as a mic error", async () => {

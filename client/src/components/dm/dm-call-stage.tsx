@@ -29,6 +29,7 @@ export function DmCallStage({
   onJoinCall,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -53,6 +54,7 @@ export function DmCallStage({
   onJoinCall: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -132,6 +134,7 @@ export function DmCallStage({
       playOutgoingRingtone
       onLeave={onLeave}
       onToggleMute={onToggleMute}
+      onDismissMicFallbackNotice={onDismissMicFallbackNotice}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}

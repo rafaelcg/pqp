@@ -6794,6 +6794,7 @@ function MainAppContent({
             screenFrameRate={localSettings.screenFrameRate}
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
+            onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -6849,6 +6850,7 @@ function MainAppContent({
           }
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
+          onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onScreenFrameRateChange={handleScreenFrameRateChange}

@@ -77,6 +77,7 @@ import {
 } from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
+import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import { MusicDock } from "@/components/voice/music-dock";
 import { MusicBarButton } from "@/components/voice/music-bar-button";
@@ -529,6 +530,11 @@ export interface CallStageProps {
   playOutgoingRingtone?: boolean;
   onLeave: () => void;
   onToggleMute: () => void;
+  /**
+   * The close (x) on `voiceState.micFallback`'s corner card. See
+   * `use-voice.ts`'s `dismissMicFallbackNotice` for the whole lifecycle.
+   */
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -631,6 +637,7 @@ export function CallStage({
   playOutgoingRingtone = false,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -694,6 +701,7 @@ export function CallStage({
       }}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
+      onDismissMicFallbackNotice={onDismissMicFallbackNotice}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}
@@ -740,6 +748,7 @@ function ActiveCall({
   onSetCollapsed,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -782,6 +791,7 @@ function ActiveCall({
   onSetCollapsed: (collapsed: boolean) => void;
   onLeave: () => void;
   onToggleMute: () => void;
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -1965,6 +1975,11 @@ function ActiveCall({
         onFocusCapture={() => setBarFocused(true)}
         onBlurCapture={onBarBlur}
       >
+        <MicFallbackNotice
+          micFallback={voiceState.micFallback}
+          visible={!chrome.hidden}
+          onDismiss={onDismissMicFallbackNotice}
+        />
         <CapacityNotice
           voiceChannelId={voiceState.voiceChannelId}
           transport={voiceState.roomTransport}
