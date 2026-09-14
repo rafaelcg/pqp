@@ -1580,6 +1580,16 @@ function MainAppContent({
     [transport],
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
+  // `useMemo` has no cleanup of its own, so a `transport` that ever changes
+  // (or the future reconnect path this is future-proofing for) would leave
+  // the OLD controller's `devicechange` listener firing forever, against a
+  // `pipeline` it can never touch again. `voice.dispose()` is idempotent, so
+  // this is free the vast majority of the time `transport` never changes.
+  useEffect(() => {
+    return () => {
+      voice.dispose();
+    };
+  }, [voice]);
   const [voiceState, setVoiceState] = useState(voice.getState());
   /**
    * Somebody watching a live party without a seat is looking at a film. The

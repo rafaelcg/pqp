@@ -671,6 +671,24 @@ function micLabel(stream: MediaStream): string | null {
   return label ? label : null;
 }
 
+/**
+ * The device id actually behind a live stream, off `getSettings()` rather
+ * than off whatever id was asked for.
+ *
+ * This is the one fact a label cannot stand in for: a label can repeat
+ * across two different ports, go generic ("Default - Microphone") under a
+ * permission state that hides real names, or simply not change even though
+ * the underlying device did. Every fallback comparison in this file — is the
+ * open device the one we actually prefer, is this the same substitute as
+ * last time — has to be answered in ids, never in the words a track happens
+ * to be labelled with.
+ */
+function micDeviceId(stream: MediaStream): string | null {
+  const track = stream.getAudioTracks()[0];
+  const deviceId = track?.getSettings?.().deviceId;
+  return deviceId ? deviceId : null;
+}
+
 function stopStreamTracks(stream: MediaStream): void {
   for (const track of stream.getTracks()) {
     track.stop();
@@ -1133,10 +1151,20 @@ export function createVoiceController(transport: RealtimeTransport) {
   // every test double for `mediaDevices` implements `EventTarget`, and a
   // production browser without `mediaDevices` at all (an insecure origin)
   // has nothing to listen to either.
+  //
+  // OWNED BY THIS CONTROLLER, NOT THE PAGE. A stray global listener with no
+  // way to remove it is a leak for good the day `createVoiceController` is
+  // ever called more than once for a page's lifetime (`transport` changing
+  // under `App`'s `useMemo`, a future controller-replacing reconnect path):
+  // every controller that ever existed would still fire `tryRecoverPreferredMic`
+  // against its own long-dead `pipeline`. The handle is kept so `dispose()`
+  // can remove exactly this listener, and nothing else's.
+  let deviceChangeHandler: (() => void) | null = null;
   if (typeof navigator.mediaDevices?.addEventListener === "function") {
-    navigator.mediaDevices.addEventListener("devicechange", () => {
+    deviceChangeHandler = () => {
       void tryRecoverPreferredMic();
-    });
+    };
+    navigator.mediaDevices.addEventListener("devicechange", deviceChangeHandler);
   }
   /**
    * The presenter's own picture while a watch party is transcoding from it.
@@ -1341,23 +1369,58 @@ export function createVoiceController(transport: RealtimeTransport) {
     processing: defaultMicProcessing,
   };
   /**
-   * The fallback `state.micFallback` is currently describing, kept even
-   * after `forgetInputDevice()` blanks `audioOptions.inputDeviceId`, so a
-   * `devicechange` can recognise the exact device that failed coming back
-   * (`tryRecoverPreferredMic`) and so a dismissal has something to key on.
+   * The fallback `state.micFallback` is currently describing, in device ids
+   * rather than labels — a label can repeat, go generic, or simply not move
+   * when the device behind it did, and every comparison here has to survive
+   * that. `preferredDeviceId` is kept even after `forgetInputDevice()` blanks
+   * `audioOptions.inputDeviceId`, so a `devicechange` can recognise the exact
+   * device that failed coming back (`tryRecoverPreferredMic`), and so a plain
+   * reconnect's recapture — which asks for nothing in particular once the id
+   * is forgotten — can be told apart from that device actually answering.
+   * `openedDeviceId` is the substitute actually in use, off `getSettings()`,
+   * for the dismissal key; `label` is display text only and settles nothing.
    * Null whenever nothing fell back.
    */
-  let activeMicFallback: { deviceId: string; label: string | null } | null =
-    null;
+  let activeMicFallback: {
+    preferredDeviceId: string;
+    openedDeviceId: string | null;
+    label: string | null;
+  } | null = null;
   /**
    * The fallback the person already closed this call, so a reconnect's mic
-   * recapture — same device asked for, same device that answered — does not
-   * reopen a notice they dismissed. A different pairing on either side (the
-   * fallback itself landing on a different mic, or a fresh attempt on a
-   * different saved device) is a new occurrence and is shown again. Reset
-   * to null wherever a fresh call starts.
+   * recapture — same preferred device, same substitute that answered — does
+   * not reopen a notice they dismissed. A different pairing on either side
+   * (the fallback landing on a different substitute, or a fresh attempt on a
+   * different preferred device) is a new occurrence and is shown again.
+   * Reset to null wherever a fresh call starts. Device ids, never labels —
+   * see `activeMicFallback`.
    */
   let dismissedMicFallbackKey: string | null = null;
+  /**
+   * Bumped by `tryRecoverPreferredMic` for its own attempt, and by every
+   * manual device pick (`setInputDevice`) to invalidate whichever recovery
+   * attempt is already parked mid-flight when the pick starts — the more
+   * likely of the two shapes this race takes, since recovery runs on its own
+   * schedule (a `devicechange` can fire at any time) while a manual pick is
+   * a deliberate, comparatively rare act.
+   */
+  let micRecoveryGeneration = 0;
+  /**
+   * How many manual device picks (`setInputDevice`) are currently between
+   * their own `getUserMedia` call and its answer.
+   *
+   * `micRecoveryGeneration` alone catches a recovery attempt that was
+   * ALREADY waiting on `listAudioDevices()` when a pick starts, because the
+   * pick bumps the token before recovery wakes up. It does not catch the
+   * mirror ordering — a pick already open when `devicechange` fires — because
+   * recovery would capture a token that already reflects the pick's bump and
+   * see no further change while the pick is still working. This counter
+   * closes exactly that gap: recovery refuses to start, or to act once it
+   * has enumerated, while any pick is in flight, so a person's own choice
+   * wins whichever of the two orderings actually happens, not only the one
+   * the generation check alone would have covered.
+   */
+  let manualMicPicksInFlight = 0;
   /**
    * True only while the push-to-talk key or button is physically down.
    *
@@ -2041,26 +2104,35 @@ export function createVoiceController(transport: RealtimeTransport) {
     audioOptions.inputDeviceId = "";
   }
 
-  /** Identifies one exact fallback: this device asked for, this one answered. */
-  function micFallbackKey(deviceId: string, label: string | null): string {
-    return JSON.stringify([deviceId, label]);
+  /**
+   * Identifies one exact fallback: this device preferred, this one answered
+   * — both by id, per `activeMicFallback`'s reasoning.
+   */
+  function micFallbackKey(
+    preferredDeviceId: string,
+    openedDeviceId: string | null,
+  ): string {
+    return JSON.stringify([preferredDeviceId, openedDeviceId]);
   }
 
   /**
    * The saved microphone did not start; a substitute is already open and
-   * this says so. Called from `createMicPipeline`'s `onFallback`, which only
-   * fires once the substitute is live — the call is already on it by the
-   * time anyone reads this notice.
+   * this says so. Called once a fallback attempt's substitute is live — the
+   * call is already on it by the time anyone reads this notice.
    *
    * Silent when this is the exact fallback the person already closed this
    * call: a reconnect recaptures the mic on every resume, and without this
    * check the notice would reopen itself on the next `/ws` blip regardless
    * of the close button.
    */
-  function setMicFallbackNotice(deviceId: string, label: string | null) {
-    activeMicFallback = { deviceId, label };
+  function setMicFallbackNotice(
+    preferredDeviceId: string,
+    openedDeviceId: string | null,
+    label: string | null,
+  ) {
+    activeMicFallback = { preferredDeviceId, openedDeviceId, label };
     state.micFallback =
-      dismissedMicFallbackKey === micFallbackKey(deviceId, label)
+      dismissedMicFallbackKey === micFallbackKey(preferredDeviceId, openedDeviceId)
         ? null
         : { label };
   }
@@ -2076,6 +2148,43 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
+   * After `createMicPipeline` resolves successfully, decide what
+   * `state.micFallback` should say now. Shared by the join path and
+   * `swapPipeline` so the two can never drift on what "recovered" means.
+   *
+   * Compares device ids only, never `onFallback`'s label. Two cases clear
+   * the notice: an EXPLICIT ask (a real, non-empty `requestedDeviceId`) that
+   * opened with no substitution, which covers a manual pick in Settings or
+   * the call bar and `tryRecoverPreferredMic`'s own retry alike; or the
+   * device that actually opened — read off `getSettings()`, not off what was
+   * asked — turning out to be the preferred device regardless. That second
+   * case is what a plain reconnect needs: `forgetInputDevice` blanks
+   * `audioOptions.inputDeviceId` the moment a fallback happens, so the next
+   * recapture asks for nothing in particular and its request is never
+   * "explicit" — landing back on the SAME substitute must not read as
+   * success just because nothing failed this time, and only comparing the
+   * opened id against the preferred one tells the two apart.
+   */
+  function resolveMicFallback(
+    requestedDeviceId: string,
+    fellBack: boolean,
+    fellBackLabel: string | null,
+    openedStream: MediaStream,
+  ) {
+    const openedDeviceId = micDeviceId(openedStream);
+    const explicitRequestSucceeded = !fellBack && requestedDeviceId !== "";
+    const preferredDeviceRecovered =
+      activeMicFallback !== null &&
+      openedDeviceId !== null &&
+      openedDeviceId === activeMicFallback.preferredDeviceId;
+    if (explicitRequestSucceeded || preferredDeviceRecovered) {
+      clearMicFallbackNotice();
+    } else if (fellBack) {
+      setMicFallbackNotice(requestedDeviceId, openedDeviceId, fellBackLabel);
+    }
+  }
+
+  /**
    * A device was plugged in, unplugged, or otherwise changed. If that is the
    * exact microphone this call fell back FROM, and it is reachable again,
    * quietly swap back onto it — the fix for the fallback is the fallback no
@@ -2086,32 +2195,64 @@ export function createVoiceController(transport: RealtimeTransport) {
    * Scoped tightly on purpose: this never adopts a DIFFERENT microphone that
    * merely appeared, only the one the ladder already knows we wanted and
    * could not have. `swapPipeline` clears the notice itself once the device
-   * opens clean (no second `onFallback`), so recovering here is just asking
-   * it to try again.
+   * opens clean (no second fallback), so recovering here is just asking it
+   * to try again.
+   *
+   * A PERSON'S OWN CHOICE ALWAYS WINS, however the two orderings happen:
+   *
+   *  - A manual pick starts while this attempt is already parked on
+   *    `listAudioDevices()`: `setInputDevice` bumps `micRecoveryGeneration`
+   *    the instant it is called, before touching anything else, and this
+   *    attempt notices the mismatch below and quietly gives up before it
+   *    ever calls `swapPipeline` — so it never bumps `joinGeneration` and
+   *    can never outrun a pick that started earlier but resolves later.
+   *  - This attempt starts (a `devicechange` fires) while a manual pick is
+   *    already open, still awaiting its own `getUserMedia`: the generation
+   *    token alone would miss this, because it only detects a change made
+   *    AFTER this attempt captured it, and the pick's own bump already
+   *    happened before that. `manualMicPicksInFlight`, checked both here and
+   *    below, is what actually closes it.
+   *
+   * A manual pick that starts AFTER this attempt has already called
+   * `swapPipeline` is caught by that function's own `joinGeneration`, the
+   * same way any second attempt supersedes a first — nothing special is
+   * needed there.
    */
   async function tryRecoverPreferredMic() {
     const target = activeMicFallback;
-    if (!target?.deviceId || !pipeline || state.status === "idle") {
+    if (
+      !target?.preferredDeviceId ||
+      !pipeline ||
+      state.status === "idle" ||
+      manualMicPicksInFlight > 0
+    ) {
       return;
     }
+    const recoveryGeneration = ++micRecoveryGeneration;
     let inputs: Awaited<ReturnType<typeof listAudioDevices>>["inputs"];
     try {
       ({ inputs } = await listAudioDevices());
     } catch {
       return;
     }
-    if (!inputs.some((input) => input.deviceId === target.deviceId)) {
+    if (!inputs.some((input) => input.deviceId === target.preferredDeviceId)) {
       return;
     }
     // Nothing raced ahead while enumerating: still the same fallback, still
-    // in a call with a pipeline to swap. `swapPipeline` re-checks status
-    // and generation itself, so this is only about whether there is still a
-    // point in asking it to.
-    const stillTheSameFallback = activeMicFallback === target && pipeline;
-    if (!stillTheSameFallback) {
+    // this attempt's turn (a manual pick already parked would have bumped
+    // the token; one that started meanwhile is caught by the flight count),
+    // still in a call with a pipeline to swap. `swapPipeline` re-checks
+    // status and `joinGeneration` itself once called, so this is only about
+    // whether there is still a point in calling it.
+    const stillCurrent =
+      activeMicFallback === target &&
+      micRecoveryGeneration === recoveryGeneration &&
+      manualMicPicksInFlight === 0 &&
+      pipeline !== null;
+    if (!stillCurrent) {
       return;
     }
-    audioOptions.inputDeviceId = target.deviceId;
+    audioOptions.inputDeviceId = target.preferredDeviceId;
     await swapPipeline("Failed to switch microphone");
   }
 
@@ -2132,6 +2273,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     // before this attempt is even done.
     const requestedDeviceId = audioOptions.inputDeviceId;
     let fellBack = false;
+    let fellBackLabel: string | null = null;
     try {
       const next = await createMicPipeline(
         audioOptions.inputDeviceId || undefined,
@@ -2147,7 +2289,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             return;
           }
           fellBack = true;
-          setMicFallbackNotice(requestedDeviceId, label);
+          fellBackLabel = label;
         },
         () => generation !== joinGeneration,
         () => {
@@ -2169,12 +2311,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         stopMicPipeline(next);
         return;
       }
-      // Opened exactly what was asked for this time — the saved device came
-      // back, or the person picked this one by hand. Either way, whatever
-      // fallback notice was up no longer describes the call.
-      if (!fellBack) {
-        clearMicFallbackNotice();
-      }
+      resolveMicFallback(requestedDeviceId, fellBack, fellBackLabel, next.rawStream);
       stopMicPipeline(pipeline);
       pipeline = next;
       // Carries mute, deafen and the push-to-talk gate onto the new track: a
@@ -4170,6 +4307,32 @@ export function createVoiceController(transport: RealtimeTransport) {
       return pipeline?.analyser ?? null;
     },
 
+    /**
+     * Releases what this controller registered on shared, page-lifetime
+     * objects rather than owning them itself — today that is exactly the
+     * `devicechange` listener behind the fallback-microphone notice's
+     * recovery. Idempotent: safe to call more than once, and safe to call
+     * on a controller that never registered anything (no `mediaDevices`, an
+     * old test double).
+     *
+     * Nothing calls this today (`App`'s `useMemo(() => createVoiceController(...),
+     * [transport])` has never actually replaced a controller in production),
+     * which is exactly why it has to be here rather than assumed: the first
+     * time something does replace one — a future reconnect path, a `transport`
+     * that changes — every controller that ever existed keeps its listener
+     * firing against its own long-dead `pipeline` forever unless there is
+     * somewhere for that replacement to call this.
+     */
+    dispose() {
+      if (deviceChangeHandler) {
+        navigator.mediaDevices?.removeEventListener?.(
+          "devicechange",
+          deviceChangeHandler,
+        );
+        deviceChangeHandler = null;
+      }
+    },
+
     handleSignaling,
 
     /**
@@ -4365,6 +4528,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         // (`forgetInputDevice`) before this attempt finishes.
         const requestedDeviceId = audioOptions.inputDeviceId;
         let fellBack = false;
+        let fellBackLabel: string | null = null;
         const next: MicPipeline = await createMicPipeline(
           audioOptions.inputDeviceId || undefined,
           audioOptions.inputVolume,
@@ -4375,7 +4539,7 @@ export function createVoiceController(transport: RealtimeTransport) {
               return;
             }
             fellBack = true;
-            setMicFallbackNotice(requestedDeviceId, label);
+            fellBackLabel = label;
           },
           // Abandoned (left, timed out, or superseded) while the WASM load
           // or the permission prompt was pending: never open (or keep open)
@@ -4400,9 +4564,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
 
-        if (!fellBack) {
-          clearMicFallbackNotice();
-        }
+        resolveMicFallback(requestedDeviceId, fellBack, fellBackLabel, next.rawStream);
         pipeline = next;
         applyMuteToPipeline();
         sendJoin(voiceChannelId);
@@ -5539,8 +5701,20 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (previousDeviceId === deviceId) {
         return;
       }
+      // A person picking a device outranks the automatic recovery a
+      // `devicechange` may have started, however the two race — see
+      // `tryRecoverPreferredMic`'s two cases. The token invalidates a
+      // recovery attempt already parked; the flight count (held for the
+      // whole pick, not just its start) is what stops one that begins while
+      // THIS is still working.
+      micRecoveryGeneration += 1;
+      manualMicPicksInFlight += 1;
       audioOptions.inputDeviceId = deviceId;
-      await swapPipeline("Failed to switch microphone");
+      try {
+        await swapPipeline("Failed to switch microphone");
+      } finally {
+        manualMicPicksInFlight -= 1;
+      }
     },
 
     /**
@@ -5558,8 +5732,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       if (activeMicFallback) {
         dismissedMicFallbackKey = micFallbackKey(
-          activeMicFallback.deviceId,
-          activeMicFallback.label,
+          activeMicFallback.preferredDeviceId,
+          activeMicFallback.openedDeviceId,
         );
       }
       state.micFallback = null;
