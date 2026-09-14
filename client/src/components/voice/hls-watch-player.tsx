@@ -84,6 +84,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import {
+  HLS_WATCH_PLAYER_STALL_MS,
   HlsStallWatch,
   channelIdFromHlsUrl,
   type HlsStallReason,
@@ -377,7 +378,9 @@ export function HlsWatchPlayer({
   const [activeSrc, setActiveSrc] = useState(src);
   const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useState<StreamPhase>("playing");
-  const watchRef = useRef<HlsStallWatch>(new HlsStallWatch());
+  const watchRef = useRef<HlsStallWatch>(
+    new HlsStallWatch({ stallMs: HLS_WATCH_PLAYER_STALL_MS }),
+  );
   // L2.4: two part-load errors inside 10 s pin this viewing session to
   // conventional-style targeting for the rest of it (`docs/plans/LL_HLS.md`
   // §4, `shouldPinToConventionalRung`). The master playlist itself has no

@@ -11,6 +11,7 @@ import {
   HLS_LIVE_WINDOW_SECONDS,
   HLS_MAX_BUFFER_LENGTH_SECONDS,
   HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
+  HLS_NUDGE_MAX_RETRY,
   HLS_PLAYER_CUSHION_SECONDS,
   LL_HLS_BACK_BUFFER_SECONDS,
   LL_HLS_DEFAULT_PART_TARGET_MS,
@@ -66,6 +67,17 @@ describe("hlsLivePlayerConfig", () => {
     expect(HLS_ABR_DEFAULT_ESTIMATE_BPS).toBeGreaterThanOrEqual(2_500_000);
   });
 
+  it("gives hls.js's own nudge/gap-skip loop more than the library default before it gives up", () => {
+    // hls.js defaults `nudgeMaxRetry` to 3 (~6-8 s of its own 0.1 s-scale
+    // nudges at `highBufferWatchdogPeriod: 2 s`) before declaring the source
+    // fatal, which hands the stall to `HlsStallWatch`'s heavier
+    // `reload-level` step -- the one that visibly re-buffers. A CPU-bound
+    // egress that is merely slow, not dead, deserves longer than that.
+    const config = hlsLivePlayerConfig();
+    expect(config.nudgeMaxRetry).toBe(HLS_NUDGE_MAX_RETRY);
+    expect(config.nudgeMaxRetry).toBeGreaterThan(3);
+  });
+
   it("leaves a segment of slack on the egress's native five-segment window", () => {
     // The egress itself always keeps five segments (LiveKit's fixed
     // `defaultLivePlaylistWindow`), which at 4 s is a 20 s window. The raw
@@ -86,6 +98,7 @@ describe("hlsLivePlayerConfig", () => {
         maxMaxBufferLength: 10,
         backBufferLength: 10,
         startLevel: 0,
+        nudgeMaxRetry: HLS_NUDGE_MAX_RETRY,
       }),
     ).toBe(false);
   });
@@ -579,8 +592,10 @@ describe("llHlsConfig", () => {
 
 describe("hlsLivePlayerConfig (conventional, byte-identical)", () => {
   it("is unchanged by LL-HLS existing at all", () => {
-    // The exact snapshot this function returned before task L2.4 -- any
-    // diff here means the conventional path stopped being byte-identical.
+    // The exact snapshot this function returned before task L2.4, PLUS
+    // `nudgeMaxRetry` (2026-09-14, the CPU-bound-egress repeat-on-stall
+    // fix) -- any OTHER diff here means the conventional path stopped
+    // being byte-identical for an unrelated reason.
     expect(hlsLivePlayerConfig()).toEqual({
       liveSyncDurationCount: HLS_LIVE_SYNC_DURATION_COUNT,
       liveMaxLatencyDurationCount: HLS_LIVE_MAX_LATENCY_DURATION_COUNT,
@@ -588,6 +603,7 @@ describe("hlsLivePlayerConfig (conventional, byte-identical)", () => {
       maxMaxBufferLength: HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
       backBufferLength: HLS_BACK_BUFFER_LENGTH_SECONDS,
       startLevel: -1,
+      nudgeMaxRetry: HLS_NUDGE_MAX_RETRY,
     });
   });
 });

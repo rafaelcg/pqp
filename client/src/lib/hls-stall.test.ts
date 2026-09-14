@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { HlsStallWatch, channelIdFromHlsUrl, type HlsStallDecision } from "./hls-stall";
+import {
+  HLS_WATCH_PLAYER_STALL_MS,
+  HlsStallWatch,
+  channelIdFromHlsUrl,
+  type HlsStallDecision,
+} from "./hls-stall";
 import { resolveHoldingScreenReason } from "./watch-holding-screen";
 
 const T0 = 1_000_000;
@@ -14,6 +19,35 @@ describe("HlsStallWatch", () => {
     watch.onMediaSequence(12, T0 + 4_000);
     expect(watch.tick(T0 + 5_000)).toBe("none");
     expect(watch.tick(T0 + 14_000)).toBe("none");
+  });
+
+  describe("the watch player's stallMs", () => {
+    it("gives a merely-slow source longer than the class default before reload-level fires", () => {
+      // 2026-09-14: a CPU-saturated egress fell behind for stretches short
+      // enough to self-recover, and the class default (8 s) escalated to
+      // `HlsStallWatch`'s heavier `reload-level` step before it had the
+      // chance -- the visible "stream repeats itself for a few seconds"
+      // report. `HLS_WATCH_PLAYER_STALL_MS` is what `hls-watch-player.tsx`
+      // actually constructs the watchdog with; this pins that it is wider
+      // than the class default rather than accidentally matching it, and
+      // that a stall which resolves inside that widened window never
+      // reaches the ladder at all.
+      const now = T0 + HLS_WATCH_PLAYER_STALL_MS - 1;
+      const defaultWatch = new HlsStallWatch();
+      defaultWatch.onSourceChanged(T0);
+      defaultWatch.onWaiting(T0);
+      expect(defaultWatch.tick(now)).not.toBe("none");
+
+      const widened = new HlsStallWatch({ stallMs: HLS_WATCH_PLAYER_STALL_MS });
+      widened.onSourceChanged(T0);
+      widened.onWaiting(T0);
+      expect(widened.tick(now)).toBe("none");
+
+      // Recovers cleanly once playback resumes inside the wider window --
+      // no leftover ladder state to trip a later, unrelated stall.
+      widened.onPlaying();
+      expect(widened.tick(now + 1)).toBe("none");
+    });
   });
 
   describe("the fatal ladder", () => {

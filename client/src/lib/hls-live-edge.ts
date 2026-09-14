@@ -102,6 +102,33 @@ export const HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 40;
  */
 export const HLS_BACK_BUFFER_LENGTH_SECONDS = 12;
 
+/**
+ * hls.js's own default (`nudgeMaxRetry: 3`) times out its gap-skip/nudge
+ * loop (`GapController`, `highBufferWatchdogPeriod: 2 s` between attempts)
+ * after roughly 6-8 s and declares the source fatal, which is what hands
+ * the stall to `HlsStallWatch`'s heavier ladder (`start-load` /
+ * `reload-level`) -- the step that forces hls.js to re-fetch and
+ * re-append the level, and is what makes a transient egress hiccup look
+ * like a few seconds of the stream repeating rather than a brief pause.
+ *
+ * A CPU-saturated egress (2026-09-14 party: ~94% on the transcode
+ * container) that falls behind for several seconds but is still alive is
+ * exactly the case hls.js's own tiny (0.1 s-scale) nudges are built to ride
+ * out on their own, without ever reaching for the level reload -- they just
+ * need longer than hls.js's default budget to do it. Raised from 3 to 8:
+ * roughly 16-18 s of hls.js's own quiet retries before it gives up and
+ * escalates, instead of ~6-8 s.
+ *
+ * TRADE-OFF: a source that is genuinely dead now takes that much longer to
+ * reach the holding screen / rebuild path, in exchange for far fewer
+ * visible repeats on the transient hiccups this was tuned against. Paired
+ * with a matching bump to `HlsStallWatch`'s own `stallMs` where the player
+ * constructs it -- that timer is independent of hls.js's internal fatal
+ * declaration and would otherwise still fire the same ladder on its own
+ * schedule.
+ */
+export const HLS_NUDGE_MAX_RETRY = 8;
+
 export interface HlsLivePlayerConfig {
   liveSyncDurationCount: number;
   liveMaxLatencyDurationCount: number;
@@ -110,6 +137,8 @@ export interface HlsLivePlayerConfig {
   backBufferLength: number;
   /** Auto: ABR picks from the seed, which is the 720p60@3200 rung. */
   startLevel: number;
+  /** hls.js's own gap-skip/nudge retry budget; see `HLS_NUDGE_MAX_RETRY`. */
+  nudgeMaxRetry: number;
 }
 
 export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
@@ -120,6 +149,7 @@ export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
     maxMaxBufferLength: HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
     backBufferLength: HLS_BACK_BUFFER_LENGTH_SECONDS,
     startLevel: -1,
+    nudgeMaxRetry: HLS_NUDGE_MAX_RETRY,
   };
 }
 

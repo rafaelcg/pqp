@@ -97,6 +97,20 @@ export type HlsStallReason =
   | "part-stuck"
   | null;
 
+/**
+ * The `stallMs` the watch player actually constructs `HlsStallWatch` with —
+ * raised from the class default (8 s) so the ladder's `reload-level` step
+ * (the one that visibly re-buffers and can look like a few seconds of the
+ * stream repeating) is not the first thing tried for a `waiting` spell a
+ * CPU-saturated-but-alive egress could still recover from on its own. Paired
+ * with `HLS_NUDGE_MAX_RETRY` (`hls-live-edge.ts`), which delays hls.js's own
+ * `"fatal"` declaration for the same reason — this timer fires independently
+ * of that one, so raising only one of the two still lets the other trip the
+ * ladder early. See that constant's comment for the full reasoning and the
+ * 2026-09-14 watch party this was tuned against.
+ */
+export const HLS_WATCH_PLAYER_STALL_MS = 15_000;
+
 const FATAL_LADDER: readonly HlsStallDecision[] = [
   "recover-media-error",
   "start-load",
