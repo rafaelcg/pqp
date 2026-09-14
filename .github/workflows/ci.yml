@@ -6,8 +6,9 @@ name: CI
 # The two lists are duplicated: GitHub does not expand YAML anchors (an
 # alias here becomes an empty filter and the workflow runs on everything).
 # Do not add tools/support-bot or scripts/monitor — those have tests here.
-# Do not add tools/admin-dashboard or tools/ambient — root `eslint .` lints both,
-# and admin-dashboard has a `node --test` step of its own below.
+# Do not add tools/admin-dashboard, tools/hls-edge or tools/ambient — root
+# `eslint .` lints all three, and admin-dashboard and hls-edge each have a
+# `node --test` step of their own below.
 # Do not add **/*.md — blog/What's New markdown lives under client/.
 # If branch protection later requires `checks` / `e2e`, a skipped paths-ignore
 # run is treated as pending forever. Do not require those checks without a
@@ -182,6 +183,18 @@ jobs:
       # DOM and no fetch, and this runs it.
       - name: Test dashboard insights
         run: node --test tools/admin-dashboard/test/*.test.js
+
+      # `tools/hls-edge` is outside the workspace too, same reasons as
+      # admin-dashboard above. Its Worker logic (routing, caching, CORS) is
+      # markup-free but Workers-runtime-specific and not worth a Miniflare
+      # dependency here; what IS worth pinning in CI is the token check, since
+      # a drift from `server/src/voice/hls-viewer-token.ts`'s HMAC scheme
+      # fails open as "every viewer sees 401" during a party. It is plain Web
+      # Crypto JS for exactly this reason — the same module runs under
+      # `node --test` and inside the Worker unmodified. See
+      # `tools/hls-edge/README.md` "Why a port, and why plain JS".
+      - name: Test HLS edge playlist token check
+        run: node --test tools/hls-edge/test/*.test.mjs
 
       # The one test that opens the desktop app.
       #

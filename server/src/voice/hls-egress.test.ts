@@ -128,6 +128,7 @@ function disableHls() {
   delete process.env.LIVE_HLS_REAP_ORPHANS;
   delete process.env.LIVE_HLS_MIC_ARCHIVE;
   delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+  delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
 }
 
 describe("live HLS egress", () => {
@@ -188,6 +189,47 @@ describe("live HLS egress", () => {
     expect(internal.host).toBe("pqp-live-test.s3.example.test");
     expect(internal.pathname).toBe(`/live/${CHANNEL}/${stream!.startedAt}.m3u8`);
     expect(internal.searchParams.get("X-Amz-Signature")).toBeTruthy();
+  });
+
+  it("never edge-prefixes the channel-wide stream itself, even when LIVE_HLS_PLAYLIST_BASE_URL is set", async () => {
+    // `viewerPlaylistUrl` builds the stream `liveHlsStreamFor` shares across
+    // every viewer -- the edge host goes on later, per recipient, in
+    // `stampViewerStream` (hls-viewer-token.ts), AFTER that function mints
+    // the `?t=` token. Prepending it here instead once made every viewer's
+    // URL absolute-but-tokenless: `stampViewerStream`'s "already absolute,
+    // leave it alone" check (correct for the raw-bucket case below) treated
+    // it the same way and skipped minting a token entirely, so the edge
+    // Worker 401'd "missing" on every request. See `hls-viewer-token.test.ts`
+    // for the per-recipient stamping this test deliberately does NOT cover.
+    enableHls();
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: vi.fn(async () => ({ egressId: "EG_1" })),
+        stopEgress: vi.fn(),
+      },
+      findTracks: async () => ({ videoTrackId: "TR_V" }),
+    });
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stream?.hlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}`,
+    );
+  });
+
+  it("does not point the raw public bucket URL at the edge host (LIVE_HLS_SIGNED_URLS=false wins)", async () => {
+    enableHls();
+    process.env.LIVE_HLS_SIGNED_URLS = "false";
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: vi.fn(async () => ({ egressId: "EG_1" })),
+        stopEgress: vi.fn(),
+      },
+      findTracks: async () => ({ videoTrackId: "TR_V" }),
+    });
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stream?.hlsUrl).toMatch(/^https:\/\/live\.example\.test\//);
+    delete process.env.LIVE_HLS_SIGNED_URLS;
   });
 
   it("is off without a public base only when LIVE_HLS_SIGNED_URLS=false", () => {
