@@ -165,6 +165,36 @@ from `index.ts`) removes their waiter immediately instead of polling on
 their behalf until the timeout. See `src/hls-blocking-reload.js`'s module
 doc comment for the full detail on each.
 
+**Three ceilings, not one, and a second review round (2026-09-14) that
+closed the gaps between them.** `MAX_POLL_STATE_ENTRIES` (500) bounds how
+many DISTINCT renditions this isolate retains; it says nothing about how
+many waiters pile onto ONE of them, or how many have a poll loop actually
+RUNNING at once. `MAX_WAITERS_PER_RENDITION` (2,000) caps the former — one
+valid viewer credential could otherwise open unbounded concurrent holds on
+the SAME rendition, which the 500-entry cap does nothing to stop.
+`MAX_ACTIVE_POLL_LOOPS` (64) caps the latter — every active loop is its own
+independent origin poller, so origin-request volume scales with how many
+renditions are simultaneously HELD OPEN, not with how many are merely
+retained; at party scale, traffic spanning hundreds of renditions would
+otherwise mean hundreds of independent sub-second pollers. Past either
+ceiling, a request is served the plain non-blocking way instead — the newest
+renditions lose their hold first, existing ones keep polling uninterrupted.
+The same review also closed a related gap in the deadline race above: it
+previously only raced a poll tick once a `lastPlaylist` existed to fall back
+to, so a COLD rendition's very first tick — the first waiter this isolate
+has ever seen for it — was awaited directly with no deadline at all. A
+stalled or non-settling origin could hold that first waiter (and everyone
+who joined it) for the origin's own much longer timeout, or forever, and an
+abort landing while that unbounded fetch was in flight left the loop's
+`polling` flag stuck true — unswept, unevictable, joined by every later
+request for the same key — until the origin eventually answered or never
+did. Every tick is now raced against its deadline, including the first;
+with nothing to fall back to yet, a first-tick deadline win is a distinct
+`cold-timeout` outcome (a 504) rather than a fabricated empty playlist. See
+`src/hls-blocking-reload.js`'s module doc comment, "TWO MORE CEILINGS" and
+"A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN DEADLINE, NOT EVEN ON THE FIRST
+TICK", for the full detail.
+
 **Deferred to later L2 tasks** (`docs/plans/LL_HLS.md` §7):
 `EXT-X-SERVER-CONTROL`/`EXT-X-PART-INF`/`EXT-X-PART`/`EXT-X-PRELOAD-HINT`
 emission on the playlist body (L2.2), and proxying PART byte ranges

@@ -340,11 +340,15 @@ async function handlePlaylistRequest(
       { channelId, rung },
       request.signal,
     );
-    // `null` is the capacity-fallback signal (`hls-blocking-reload.js`,
-    // `MAX_POLL_STATE_ENTRIES`): this isolate's poll-state map is full of
-    // OTHER active renditions, so this one request is served the ordinary
-    // way below -- the non-blocking cache-or-forward path -- rather than
-    // evicting one of those active holds to make room for it.
+    // `null` is the fallback signal (`hls-blocking-reload.js`): this
+    // isolate declined to hold THIS request open, for one of three reasons
+    // (`MAX_POLL_STATE_ENTRIES` -- the retained-rendition map is full of
+    // OTHER active renditions; `MAX_WAITERS_PER_RENDITION` -- this
+    // rendition already has as many holds open as it gets; or
+    // `MAX_ACTIVE_POLL_LOOPS` -- this isolate is already running as many
+    // independent poll loops as it starts at once), so this one request is
+    // served the ordinary way below -- the non-blocking cache-or-forward
+    // path -- rather than evicting or starving something already active.
     if (blockingResponse) {
       return blockingResponse;
     }

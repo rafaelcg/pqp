@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   HLS_MSN_PARAM,
   HLS_PART_PARAM,
+  MAX_ACTIVE_POLL_LOOPS,
   MAX_POLL_STATE_ENTRIES,
+  MAX_WAITERS_PER_RENDITION,
   awaitBlockingReload,
   handleBlockingReload,
   isMsnPartAvailable,
@@ -713,31 +715,47 @@ function neverSettlingFetch(calls, key) {
   };
 }
 
-test("insertPollState: an active rendition survives eviction pressure at a full map", async () => {
+// `MAX_ACTIVE_POLL_LOOPS` (64) is far smaller than `MAX_POLL_STATE_ENTRIES`
+// (500) on purpose -- see that constant's doc comment -- so a map genuinely
+// full of 500 SIMULTANEOUSLY ACTIVE loops is not a reachable state any more.
+// These two tests fill the map with a mix instead: one loop kept alive for
+// the whole test (the survivor) plus enough entries that resolve and go
+// idle immediately (awaited one at a time, so no two are ever concurrently
+// active) to reach capacity -- still proving `insertPollState` picks an
+// IDLE entry to evict and never the active survivor.
+test("insertPollState: an active rendition survives eviction pressure at a full map of mostly-idle entries", async () => {
   resetBlockingReloadStateForTests();
   const calls = new Map();
 
+  // Deliberately the REAL clock (no `now`/`sleep` override): a fake clock's
+  // `sleep` resolves its deadline via a microtask regardless of the `ms`
+  // argument, which would fast-forward this survivor's own hold straight
+  // into `cold-timeout` instead of keeping it open for the test's duration.
+  // A never-settling fetch against the REAL ~1.5s default deadline stays
+  // "active" for as long as this synchronous-ish test actually takes to run
+  // (single-digit milliseconds), which is exactly the property this test
+  // needs.
   const survivorKey = "capacity-survivor";
-  // Registered first so it is an early entry in insertion order -- exactly
-  // the entry the OLD "evict the oldest" fallback would have sacrificed.
   void awaitBlockingReload(survivorKey, { msn: 1 }, { fetchRendition: neverSettlingFetch(calls, survivorKey) });
   assert.equal(calls.get(survivorKey), 1, "the survivor's loop should have started immediately");
 
-  // Fill the rest of the map with other equally-active renditions.
+  // Fill the rest of the map, one at a time, with renditions whose first
+  // fetch already satisfies the request -- each one's loop starts and
+  // finishes (back to idle) before the next is even issued, so the
+  // survivor is the only loop ever concurrently active here.
   for (let i = 0; i < MAX_POLL_STATE_ENTRIES - 1; i += 1) {
     const key = `capacity-filler-${i}`;
-    void awaitBlockingReload(key, { msn: 1 }, { fetchRendition: neverSettlingFetch(calls, key) });
+    const outcome = await awaitBlockingReload(key, { msn: 1 }, { fetchRendition: async () => toFetched(PLAYLIST_A) });
+    assert.equal(outcome.kind, "available");
   }
 
-  // The map is now completely full and every entry is active (a live loop,
-  // a live waiter). One more distinct key must NOT evict any of them.
-  const overflow = await awaitBlockingReload(
-    "capacity-overflow",
-    { msn: 1 },
-    { fetchRendition: neverSettlingFetch(calls, "capacity-overflow") },
-  );
-  assert.deepEqual(overflow, { kind: "capacity-fallback" });
-  assert.equal(calls.get("capacity-overflow"), undefined, "a fallback must never start its own loop");
+  // The map is now completely full (the survivor plus 499 idle fillers).
+  // One more distinct key must evict one of the IDLE fillers, never the
+  // active survivor.
+  const overflow = await awaitBlockingReload("capacity-overflow", { msn: 1 }, {
+    fetchRendition: async () => toFetched(PLAYLIST_A),
+  });
+  assert.equal(overflow.kind, "available", "an idle filler must have been evicted to make room, not the survivor");
 
   // The survivor must still be the SAME retained state: a second request for
   // its key joins the existing waiter set of the SAME loop rather than
@@ -747,23 +765,55 @@ test("insertPollState: an active rendition survives eviction pressure at a full 
   assert.equal(calls.get(survivorKey), 1, "the survivor's loop must not have been restarted");
 });
 
-test("handleBlockingReload: a full map of active renditions falls back to the plain fetch instead of a hold", async () => {
+// ---------------------------------------------------------------------------
+// MAX_ACTIVE_POLL_LOOPS: a ceiling on renditions with a loop actually
+// RUNNING, orthogonal to MAX_POLL_STATE_ENTRIES's ceiling on how many are
+// merely RETAINED. Farol 2026-09-14: "hundreds of independent sub-second
+// origin pollers when traffic spans many renditions."
+// ---------------------------------------------------------------------------
+
+test("awaitBlockingReload: MAX_ACTIVE_POLL_LOOPS caps concurrently active loops well below MAX_POLL_STATE_ENTRIES", async () => {
+  resetBlockingReloadStateForTests();
+  const calls = new Map();
+
+  // MAX_ACTIVE_POLL_LOOPS (64) genuinely concurrent renditions, all issued
+  // in the same synchronous burst -- a real traffic spike's shape.
+  for (let i = 0; i < MAX_ACTIVE_POLL_LOOPS; i += 1) {
+    const key = `loop-cap-filler-${i}`;
+    void awaitBlockingReload(key, { msn: 1 }, { fetchRendition: neverSettlingFetch(calls, key) });
+  }
+  for (let i = 0; i < MAX_ACTIVE_POLL_LOOPS; i += 1) {
+    assert.equal(calls.get(`loop-cap-filler-${i}`), 1, `loop-cap-filler-${i} should have started its own loop`);
+  }
+
+  // Only 64 of the 500 map slots are used -- this is specifically the
+  // active-loop ceiling, not a map-capacity problem.
+  const overflow = await awaitBlockingReload(
+    "loop-cap-overflow",
+    { msn: 1 },
+    { fetchRendition: neverSettlingFetch(calls, "loop-cap-overflow") },
+  );
+  assert.deepEqual(overflow, { kind: "loop-cap-fallback" });
+  assert.equal(calls.get("loop-cap-overflow"), undefined, "a loop-cap fallback must never start its own loop");
+});
+
+test("handleBlockingReload: MAX_ACTIVE_POLL_LOOPS active renditions fall back to the plain fetch for a new one", async () => {
   resetBlockingReloadStateForTests();
   const calls = new Map();
   const events = [];
 
-  for (let i = 0; i < MAX_POLL_STATE_ENTRIES; i += 1) {
-    const key = `h-capacity-filler-${i}`;
+  for (let i = 0; i < MAX_ACTIVE_POLL_LOOPS; i += 1) {
+    const key = `h-loop-cap-filler-${i}`;
     void awaitBlockingReload(key, { msn: 1 }, { fetchRendition: neverSettlingFetch(calls, key) });
   }
 
   let plainFetchCalls = 0;
   const response = await handleBlockingReload(
-    "h-capacity-overflow",
+    "h-loop-cap-overflow",
     { msn: 1 },
     async () => {
       // Represents the CALLER's own plain, non-blocking fetch -- this must
-      // never be reached, because a capacity-fallback outcome is a `null`
+      // never be reached, because a loop-cap-fallback outcome is a `null`
       // Response, not a call into the hold machinery's own fetch closure.
       plainFetchCalls += 1;
       return toFetched(PLAYLIST_A);
@@ -773,11 +823,163 @@ test("handleBlockingReload: a full map of active renditions falls back to the pl
   );
 
   assert.equal(response, null, "the caller must fall back to its own non-blocking path");
-  assert.equal(plainFetchCalls, 0, "handleBlockingReload's own fetch closure must not run on a capacity fallback");
+  assert.equal(plainFetchCalls, 0, "handleBlockingReload's own fetch closure must not run on a loop-cap fallback");
   assert.ok(
-    events.some((e) => e.event === "hlsEdge.blockingReloadCapacityFallback"),
+    events.some((e) => e.event === "hlsEdge.blockingReloadLoopCapFallback"),
     "the fallback must be logged",
   );
+});
+
+test("awaitBlockingReload: an aborted last waiter on a cold rendition frees its active-loop slot", async () => {
+  resetBlockingReloadStateForTests();
+  const clock = makeClock();
+  const calls = new Map();
+  const abortedKey = "rendition-abort-frees-slot";
+  const controller = new AbortController();
+
+  const pending = awaitBlockingReload(abortedKey, { msn: 5 }, {
+    // A stalled/dead origin, exactly what Farol's finding describes: before
+    // the fix, this never resolving meant nothing could ever notice the
+    // waiter set had gone empty.
+    fetchRendition: neverSettlingFetch(calls, abortedKey),
+    now: clock.now,
+    sleep: clock.sleep,
+    signal: controller.signal,
+  });
+  controller.abort();
+  assert.deepEqual(await pending, { kind: "aborted" });
+  assert.equal(calls.get(abortedKey), 1);
+
+  // Let the abandoned loop's own deadline race (the fake clock resolves it
+  // via a microtask, no real delay) finish running and mark the entry idle
+  // again -- a real macrotask boundary so every microtask from the burst
+  // above has already drained, regardless of exactly how many hops the
+  // Promise.race needed internally.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // Fill exactly MAX_ACTIVE_POLL_LOOPS brand-new, genuinely concurrent
+  // renditions. If the aborted rendition above still occupied a phantom
+  // "active" slot (the bug this fixes), one of these would be refused a
+  // loop it should otherwise get.
+  for (let i = 0; i < MAX_ACTIVE_POLL_LOOPS; i += 1) {
+    const key = `rendition-fresh-${i}`;
+    void awaitBlockingReload(key, { msn: 1 }, {
+      fetchRendition: neverSettlingFetch(calls, key),
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+  }
+  for (let i = 0; i < MAX_ACTIVE_POLL_LOOPS; i += 1) {
+    assert.equal(
+      calls.get(`rendition-fresh-${i}`),
+      1,
+      `rendition-fresh-${i} should have started its own loop -- the aborted rendition must not still be counted active`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// MAX_WAITERS_PER_RENDITION: a ceiling on waiters piled onto ONE rendition,
+// orthogonal to both caps above. Farol 2026-09-14: "one valid viewer
+// credential to create an unbounded number of long-lived holds."
+// ---------------------------------------------------------------------------
+
+test("awaitBlockingReload: MAX_WAITERS_PER_RENDITION caps waiters on a single rendition", async () => {
+  resetBlockingReloadStateForTests();
+  const calls = new Map();
+  const key = "waiter-cap-rendition";
+
+  // All MAX_WAITERS_PER_RENDITION requests share the SAME rendition key, so
+  // this is exactly one active loop -- nowhere near MAX_ACTIVE_POLL_LOOPS.
+  for (let i = 0; i < MAX_WAITERS_PER_RENDITION; i += 1) {
+    void awaitBlockingReload(key, { msn: i }, { fetchRendition: neverSettlingFetch(calls, key) });
+  }
+  assert.equal(calls.get(key), 1, "every waiter after the first joins the SAME loop, no extra fetch");
+
+  const overflow = await awaitBlockingReload(
+    key,
+    { msn: 999_999 },
+    { fetchRendition: neverSettlingFetch(calls, key) },
+  );
+  assert.deepEqual(overflow, { kind: "waiter-cap-fallback" });
+});
+
+test("handleBlockingReload: MAX_WAITERS_PER_RENDITION waiters on one rendition fall back to the plain fetch for the next", async () => {
+  resetBlockingReloadStateForTests();
+  const calls = new Map();
+  const events = [];
+  const key = "h-waiter-cap-rendition";
+
+  for (let i = 0; i < MAX_WAITERS_PER_RENDITION; i += 1) {
+    void awaitBlockingReload(key, { msn: i }, { fetchRendition: neverSettlingFetch(calls, key) });
+  }
+
+  let plainFetchCalls = 0;
+  const response = await handleBlockingReload(
+    key,
+    { msn: 999_999 },
+    async () => {
+      plainFetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    (event, fields) => events.push({ event, fields }),
+    { channelId: "chan-1", rung: "720p30" },
+  );
+
+  assert.equal(response, null, "the caller must fall back to its own non-blocking path");
+  assert.equal(plainFetchCalls, 0, "handleBlockingReload's own fetch closure must not run on a waiter-cap fallback");
+  assert.ok(
+    events.some((e) => e.event === "hlsEdge.blockingWaiterCapHit"),
+    "the fallback must be logged",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Cold-start deadline race: a rendition's very FIRST poll tick (no
+// `lastPlaylist` yet) must be bounded exactly like every later one. Farol
+// 2026-09-14: "the first origin call stalls, the request can remain open
+// until the upstream's much longer timeout (or indefinitely for a
+// non-settling fetch)."
+// ---------------------------------------------------------------------------
+
+test("awaitBlockingReload: a cold rendition's first tick is bounded by its own deadline, not the origin's", async () => {
+  resetBlockingReloadStateForTests();
+  const clock = makeClock();
+  let fetchCalls = 0;
+  const deps = {
+    // Never settles -- the "dead origin" case: with the pre-fix code, the
+    // very first tick was awaited directly (no race at all) whenever
+    // `state.lastPlaylist` was still null, so this would hang forever.
+    fetchRendition: async () => {
+      fetchCalls += 1;
+      return new Promise(() => {});
+    },
+    now: clock.now,
+    sleep: clock.sleep,
+  };
+
+  const outcome = await awaitBlockingReload("rendition-cold-timeout", { msn: 5 }, deps);
+  assert.deepEqual(outcome, { kind: "cold-timeout" });
+  assert.equal(fetchCalls, 1);
+});
+
+test("handleBlockingReload: a cold rendition's first tick times out as a 504, logged, not a 200 with an empty body", async () => {
+  resetBlockingReloadStateForTests();
+  const events = [];
+  // No `now`/`sleep` override, matching how `index.ts` actually calls this
+  // (real timers) -- the default provisional budget is ~1.5s, same order of
+  // magnitude as the existing real-timer `timeout` test just above.
+  const response = await handleBlockingReload(
+    "rendition-h-cold-timeout",
+    { msn: 5 },
+    () => new Promise(() => {}),
+    (event, fields) => events.push({ event, fields }),
+    { channelId: "chan-1", rung: "720p30" },
+  );
+  assert.equal(response.status, 504);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.deepEqual(await response.json(), { error: "Gateway Timeout", reason: "origin-did-not-respond" });
+  assert.ok(events.some((e) => e.event === "hlsEdge.blockingReloadColdTimeout"));
 });
 
 test("awaitBlockingReload: an aborted signal wins even when retained state could answer instantly", async () => {

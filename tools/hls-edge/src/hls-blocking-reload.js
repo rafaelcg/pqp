@@ -99,19 +99,46 @@
  * does not change mid-session, so a slightly stale value is still the right
  * value, which is why this is a SEPARATE rule from the freshness gate above.
  *
- * A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN DEADLINE. `runPollLoop` used
- * to simply `await` each poll tick's fetch before checking any deadline, so
- * an origin that stalled (up to `index.ts`'s own `UPSTREAM_TIMEOUT_MS`)
- * could hold every current waiter well past the 3x-part-target promise this
- * module makes. Once there is a `lastPlaylist` to fall back to,
- * `fetchWithDeadlineRace` races that tick's fetch against a timer for the
+ * A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN DEADLINE, NOT EVEN ON THE
+ * FIRST TICK. `runPollLoop` used to simply `await` each poll tick's fetch
+ * before checking any deadline, so an origin that stalled (up to
+ * `index.ts`'s own `UPSTREAM_TIMEOUT_MS`) could hold every current waiter
+ * well past the 3x-part-target promise this module makes.
+ * `fetchWithDeadlineRace` races every tick's fetch against a timer for the
  * soonest waiter's own deadline; if the deadline wins, waiters already due
- * are settled with the last KNOWN playlist without waiting on the slow
- * fetch further (see "origin discipline" above for why abandoning it here
- * costs nothing). Before any playlist has ever been fetched for this
- * rendition there is nothing to fall back to, so the very first tick is
- * never raced — RFC 8216bis's timeout fallback is "return the current
- * playlist", which does not exist yet.
+ * are settled without waiting on the slow fetch further (see "origin
+ * discipline" above for why abandoning it here costs nothing). An earlier
+ * version of this race only applied once `state.lastPlaylist` existed —
+ * "there is nothing to fall back to yet" for the very first tick — which
+ * Farol's 2026-09-14 review named as two faces of the same gap: a cold
+ * rendition's first waiter could be held for the FULL upstream timeout
+ * instead of the documented ~1.5 s hold, and an abort landing while that
+ * unbounded first fetch was still in flight left `state.polling` stuck true
+ * — unswept, unevictable, joined by every later request for the same key —
+ * until the origin eventually answered or never did. The fix is the same
+ * for both: race the first tick too. There is genuinely no PLAYLIST to fall
+ * back to yet, so a first-tick deadline win settles due waiters with
+ * `{ kind: "cold-timeout" }` instead of a timeout-with-a-body (see
+ * `settleDueWaiters`), but the request is bounded either way, and so is how
+ * long `state.polling` can stay stuck for an abandoned cold rendition —
+ * never past that same waiter's own deadline.
+ *
+ * TWO MORE CEILINGS, ORTHOGONAL TO `MAX_POLL_STATE_ENTRIES`. That cap bounds
+ * how many DISTINCT renditions this isolate retains; it says nothing about
+ * how many WAITERS pile up on one of them, or how many of them have a poll
+ * loop actually RUNNING at once. `MAX_WAITERS_PER_RENDITION` (2,000) caps
+ * the former — one popular or attacked rendition otherwise accumulates
+ * unbounded concurrent holds under the SAME map entry, which the 500-entry
+ * cap does nothing to stop (Farol 2026-09-14: "one valid viewer credential
+ * to create an unbounded number of long-lived holds"). `MAX_ACTIVE_POLL_LOOPS`
+ * (64) caps the latter — every active loop is its own independent origin
+ * poller, so origin-request volume scales with how many renditions are
+ * SIMULTANEOUSLY being held open, not with how many are merely retained
+ * (Farol 2026-09-14: "hundreds of independent sub-second origin pollers when
+ * traffic spans many renditions"). Both are declined with a fallback to the
+ * plain non-blocking path, exactly like `MAX_POLL_STATE_ENTRIES`'s own
+ * `capacity-fallback` — see `MAX_WAITERS_PER_RENDITION` and
+ * `MAX_ACTIVE_POLL_LOOPS`'s own doc comments for the mechanics of each.
  *
  * NON-2XX NEVER POISONS THE RETAINED STATE. A poll tick's response updates
  * `lastPlaylist`/`lastEdge`/`lastFetchedAt` together, and ONLY on a 2xx
@@ -211,6 +238,44 @@ const FAST_PATH_FRESHNESS_MS = 2_000;
  */
 export const MAX_POLL_STATE_ENTRIES = 500;
 
+/**
+ * Ceiling on waiters a SINGLE rendition's poll-state entry will retain.
+ * `MAX_POLL_STATE_ENTRIES` bounds how many DISTINCT renditions this isolate
+ * holds at once; it does nothing to stop one popular (or attacked) rendition
+ * from accumulating unbounded waiters of its own — a caller with one
+ * otherwise-valid viewer token can open as many concurrent holds on the SAME
+ * rendition as it likes, each parked in `state.waiters` until the playlist
+ * advances, its own timeout fires, or it aborts (Farol 2026-09-14: "one
+ * valid viewer credential to create an unbounded number of long-lived
+ * holds"). Past this many LIVE waiters on one rendition, a new request for
+ * it is answered the plain, non-blocking way instead
+ * (`{ kind: "waiter-cap-fallback" }`) — it still gets a playlist, just not a
+ * hold, exactly like `MAX_POLL_STATE_ENTRIES`'s own capacity-fallback.
+ * `hlsEdge.blockingWaiterCapHit` counts how often this actually bites.
+ */
+export const MAX_WAITERS_PER_RENDITION = 2_000;
+
+/**
+ * Ceiling on renditions with a poll loop actively RUNNING (`state.polling
+ * === true`) at once, distinct from `MAX_POLL_STATE_ENTRIES` (which bounds
+ * how many renditions are RETAINED, active or idle). Every active loop polls
+ * the origin on its own schedule — Farol 2026-09-14: "hundreds of
+ * independent sub-second origin pollers when traffic spans many renditions"
+ * — so the origin-request rate this module can generate scales with the
+ * number of SIMULTANEOUSLY ACTIVE loops, not the size of the retained map. A
+ * request that would need to (re)start a loop, once this many are already
+ * running, is answered the plain, non-blocking way instead
+ * (`{ kind: "loop-cap-fallback" }`): the newest renditions lose their hold
+ * first, the existing ones keep polling uninterrupted. Deliberately computed
+ * from `pollStates` itself (`countActivePollLoops`) rather than tracked as a
+ * separately incremented/decremented counter — a manually maintained counter
+ * can only go stale (a `finally` block firing for a poll loop whose entry a
+ * test, or a future eviction path, already dropped from the map would
+ * decrement a counter nothing else agrees with), where a live scan of the
+ * map's own `polling` flags cannot.
+ */
+export const MAX_ACTIVE_POLL_LOOPS = 64;
+
 /** How often the opportunistic idle sweep is allowed to run a full scan. Same shape as `index.ts`'s `REJECTION_LOG_SWEEP_INTERVAL_MS`. */
 const POLL_STATE_SWEEP_INTERVAL_MS = 10_000;
 
@@ -229,6 +294,14 @@ let pollStatesLastSweptAt = 0;
  */
 const CAPACITY_FALLBACK_LOG_INTERVAL_MS = 60_000;
 let capacityFallbackLastLoggedAt = 0;
+
+/** Same throttling shape as `CAPACITY_FALLBACK_LOG_INTERVAL_MS`, for `hlsEdge.blockingWaiterCapHit`. */
+const WAITER_CAP_LOG_INTERVAL_MS = 60_000;
+let waiterCapFallbackLastLoggedAt = 0;
+
+/** Same throttling shape as `CAPACITY_FALLBACK_LOG_INTERVAL_MS`, for `hlsEdge.blockingReloadLoopCapFallback`. */
+const LOOP_CAP_LOG_INTERVAL_MS = 60_000;
+let loopCapFallbackLastLoggedAt = 0;
 
 /**
  * @typedef {{ msn: number, part?: number }} BlockingReloadDirectives
@@ -401,10 +474,13 @@ export function isMsnTooFarAhead(edge, requested) {
  * @typedef {
  *   { kind: "available", playlist: FetchedPlaylist } |
  *   { kind: "timeout", playlist: FetchedPlaylist } |
+ *   { kind: "cold-timeout" } |
  *   { kind: "too-far-ahead" } |
  *   { kind: "origin-error", playlist: FetchedPlaylist } |
  *   { kind: "aborted" } |
- *   { kind: "capacity-fallback" }
+ *   { kind: "capacity-fallback" } |
+ *   { kind: "waiter-cap-fallback" } |
+ *   { kind: "loop-cap-fallback" }
  * } BlockingReloadOutcome
  */
 
@@ -488,6 +564,26 @@ function sweepIdlePollStates(nowMs) {
 }
 
 /**
+ * How many renditions currently have a poll loop actually running — see the
+ * module doc comment on `MAX_ACTIVE_POLL_LOOPS` for why this is a live scan
+ * rather than a maintained counter. `pollStates` is capped at
+ * `MAX_POLL_STATE_ENTRIES` (500), so this is a cheap, bounded scan, and it
+ * only runs when a request is about to (re)start a loop — the common case
+ * (joining an already-running loop) never calls it.
+ *
+ * @returns {number}
+ */
+function countActivePollLoops() {
+  let count = 0;
+  for (const state of pollStates.values()) {
+    if (state.polling) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
  * Inserts a new poll-state entry, evicting one first if `pollStates` is at
  * `MAX_POLL_STATE_ENTRIES` — but ONLY an idle entry (no waiters, no running
  * loop). Never evicts a rendition with a live loop or waiter: doing so would
@@ -562,6 +658,7 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
   sweepIdlePollStates(nowMs);
 
   let state = pollStates.get(renditionKey);
+  let insertedNewState = false;
   if (!state) {
     const candidate = { waiters: new Set(), lastPlaylist: null, lastEdge: null, lastFetchedAt: 0, polling: false };
     if (!insertPollState(renditionKey, candidate)) {
@@ -573,6 +670,7 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
       return { kind: "capacity-fallback" };
     }
     state = candidate;
+    insertedNewState = true;
   }
 
   // Fast path: this isolate already knows enough, from a recent fetch on
@@ -589,6 +687,32 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
     if (isMsnPartAvailable(state.lastEdge, requested) && state.lastPlaylist) {
       return { kind: "available", playlist: state.lastPlaylist };
     }
+  }
+
+  // A request that would need a FRESH loop (nothing is currently polling
+  // this rendition) is declined once this isolate is already running
+  // `MAX_ACTIVE_POLL_LOOPS` of them -- see that constant's doc comment.
+  // Joining an ALREADY-running loop (the common case at party scale, many
+  // viewers on the same rendition) never reaches this: `state.polling` is
+  // true for it, so `needsNewLoop` is false and no cap applies.
+  const needsNewLoop = !state.polling;
+  if (needsNewLoop && countActivePollLoops() >= MAX_ACTIVE_POLL_LOOPS) {
+    if (insertedNewState) {
+      // Never actually going to be polled -- free the slot immediately
+      // rather than leaving an idle placeholder (it would just sit there
+      // until the next sweep anyway, but there is no reason to make some
+      // OTHER rendition wait for that sweep to get a map slot).
+      pollStates.delete(renditionKey);
+    }
+    return { kind: "loop-cap-fallback" };
+  }
+
+  // Only reachable while JOINING an already-running loop: `needsNewLoop`
+  // above already returned for a brand-new (0-waiter) state, so this can
+  // only trip for a rendition that already has waiters of its own -- see
+  // `MAX_WAITERS_PER_RENDITION`'s doc comment.
+  if (state.waiters.size >= MAX_WAITERS_PER_RENDITION) {
+    return { kind: "waiter-cap-fallback" };
   }
 
   // `partTargetSeconds`, unlike the rest of `lastEdge`, is trusted even when
@@ -702,7 +826,14 @@ function settleReadyWaiters(state, fetched, nowMs) {
  * whatever slow fetch this tick abandoned. Called only from the "the origin
  * did not answer before the soonest deadline" branch of `runPollLoop` — see
  * the module doc comment, "A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN
- * DEADLINE".
+ * DEADLINE". `state.lastPlaylist` can itself still be null here: a cold
+ * rendition's very FIRST tick is now raced against a deadline too (Farol
+ * 2026-09-14, see `fetchWithDeadlineRace`), so the deadline can win before
+ * ANY fetch has ever completed for this rendition. RFC 8216bis's own timeout
+ * fallback ("return the current playlist") has nothing to return in that
+ * case, so a due waiter with no retained playlist gets a distinct outcome,
+ * `{ kind: "cold-timeout" }`, instead of a `{ kind: "timeout", playlist: null }`
+ * that would crash whatever tries to read `.playlist.body` off it.
  *
  * @param {RenditionPollState} state
  * @param {number} nowMs
@@ -715,18 +846,36 @@ function settleDueWaiters(state, nowMs) {
     }
   }
   for (const waiter of due) {
-    waiter.settle({ kind: "timeout", playlist: state.lastPlaylist });
+    if (state.lastPlaylist) {
+      waiter.settle({ kind: "timeout", playlist: state.lastPlaylist });
+    } else {
+      waiter.settle({ kind: "cold-timeout" });
+    }
     state.waiters.delete(waiter);
   }
 }
 
 /**
  * One poll tick's fetch, raced against the soonest current waiter's own
- * deadline once there is a `lastPlaylist` to fall back to if that deadline
- * wins. Never cancels the fetch itself: a lost race just means THIS tick
+ * deadline. Never cancels the fetch itself: a lost race just means THIS tick
  * does not wait on it any further, and the SAME in-flight call is reused by
  * the next tick via the caller's own single-flight `fetchRendition` closure
  * (see the module doc comment, "ORIGIN DISCIPLINE").
+ *
+ * ALWAYS raced, including a cold rendition's very FIRST tick (`state.lastPlaylist
+ * === null`). An earlier version skipped the race in that case — "nothing to
+ * fall back to yet" — and simply awaited the origin fetch directly, which
+ * meant a stalled or non-settling first fetch held every waiter on it open
+ * until the origin's own (much longer) timeout, or forever
+ * (Farol 2026-09-14: "the first origin call stalls, the request can remain
+ * open ... instead of giving up around the configured deadline"; also the
+ * mechanism behind "an aborted waiter can leave its poll state active until
+ * the origin fetch settles" — with nothing bounding the first tick, an abort
+ * that emptied `state.waiters` left `state.polling` stuck true, unswept and
+ * unevictable, until that same unbounded fetch eventually settled). Racing
+ * unconditionally means the very first tick times out exactly like every
+ * later one -- see `settleDueWaiters` for what a deadline win means when
+ * there is still no playlist to fall back to.
  *
  * @param {BlockingReloadDeps} deps
  * @param {RenditionPollState} state
@@ -739,17 +888,18 @@ function fetchWithDeadlineRace(deps, state, now, sleep) {
     (value) => ({ kind: "fetched", value }),
     (err) => ({ kind: "error", err }),
   );
-  if (!state.lastPlaylist) {
-    // Nothing to fall back to yet -- RFC 8216bis's timeout fallback is
-    // "return the current playlist", which does not exist for this
-    // rendition yet, so there is no deadline worth racing against.
-    return outcomePromise;
-  }
   let soonestDeadline = Infinity;
   for (const waiter of state.waiters) {
     if (waiter.deadlineAt < soonestDeadline) {
       soonestDeadline = waiter.deadlineAt;
     }
+  }
+  if (soonestDeadline === Infinity) {
+    // No waiters at all. `runPollLoop`'s own `while (state.waiters.size > 0)`
+    // guard means this tick was only ever started with at least one, so this
+    // is just a defensive fallback (a deadline of "never" is exactly "await
+    // the fetch directly"), not a path normal traffic takes.
+    return outcomePromise;
   }
   const waitMs = Math.max(0, soonestDeadline - now());
   const deadlinePromise = sleep(waitMs).then(() => ({ kind: "deadline" }));
@@ -859,6 +1009,8 @@ export function resetBlockingReloadStateForTests() {
   pollStates.clear();
   pollStatesLastSweptAt = 0;
   capacityFallbackLastLoggedAt = 0;
+  waiterCapFallbackLastLoggedAt = 0;
+  loopCapFallbackLastLoggedAt = 0;
 }
 
 /**
@@ -869,10 +1021,14 @@ export function resetBlockingReloadStateForTests() {
  * module's doc comment, "FOUR THINGS THIS FILE DOES".
  *
  * Returns `null`, not a `Response`, for `{ kind: "capacity-fallback" }` (see
- * `MAX_POLL_STATE_ENTRIES`): that is the caller's signal to serve THIS
- * request through its own pre-existing non-blocking cache-or-forward path
- * instead, exactly as it would a request with no directive at all, rather
- * than this module inventing a second implementation of that path here.
+ * `MAX_POLL_STATE_ENTRIES`), `{ kind: "waiter-cap-fallback" }` (see
+ * `MAX_WAITERS_PER_RENDITION`), and `{ kind: "loop-cap-fallback" }` (see
+ * `MAX_ACTIVE_POLL_LOOPS`): all three mean the same thing to the caller —
+ * this isolate declines to hold THIS request open — for three different
+ * reasons, so `index.ts` serves it through its own pre-existing non-blocking
+ * cache-or-forward path instead, exactly as it would a request with no
+ * directive at all, rather than this module inventing a second
+ * implementation of that path here.
  *
  * @param {string} renditionKey - Same cache-key URL `index.ts` already uses for the non-blocking path (path only, no query).
  * @param {BlockingReloadDirectives} directives
@@ -908,6 +1064,58 @@ export async function handleBlockingReload(renditionKey, directives, fetchRendit
       });
     }
     return null;
+  }
+
+  if (outcome.kind === "waiter-cap-fallback") {
+    // See `MAX_WAITERS_PER_RENDITION`'s doc comment: this ONE rendition
+    // already has as many holds open as this isolate will retain for it.
+    // Same rate-limiting shape as the capacity-fallback log line above.
+    const loggedAt = Date.now();
+    if (loggedAt - waiterCapFallbackLastLoggedAt >= WAITER_CAP_LOG_INTERVAL_MS) {
+      waiterCapFallbackLastLoggedAt = loggedAt;
+      logEvent("hlsEdge.blockingWaiterCapHit", {
+        channelId: context.channelId,
+        rung: context.rung,
+        maxWaiters: MAX_WAITERS_PER_RENDITION,
+      });
+    }
+    return null;
+  }
+
+  if (outcome.kind === "loop-cap-fallback") {
+    // See `MAX_ACTIVE_POLL_LOOPS`'s doc comment: this isolate is already
+    // running as many independent poll loops as it will start at once, and
+    // this rendition needed a fresh one. Same rate-limiting shape as the
+    // capacity-fallback log line above.
+    const loggedAt = Date.now();
+    if (loggedAt - loopCapFallbackLastLoggedAt >= LOOP_CAP_LOG_INTERVAL_MS) {
+      loopCapFallbackLastLoggedAt = loggedAt;
+      logEvent("hlsEdge.blockingReloadLoopCapFallback", {
+        channelId: context.channelId,
+        rung: context.rung,
+        maxActiveLoops: MAX_ACTIVE_POLL_LOOPS,
+      });
+    }
+    return null;
+  }
+
+  if (outcome.kind === "cold-timeout") {
+    // The deadline won before ANY playlist was ever fetched for this
+    // rendition -- see `fetchWithDeadlineRace` and `settleDueWaiters`. There
+    // is no "current playlist" to fall back to the way a warm timeout has,
+    // so this is a distinct, honest failure rather than a 200 with an empty
+    // or fabricated body: the client's own reload logic retries, same as it
+    // would any other transient origin failure.
+    logEvent("hlsEdge.blockingReloadColdTimeout", {
+      channelId: context.channelId,
+      rung: context.rung,
+      msn: directives.msn,
+      part: directives.part ?? null,
+    });
+    return new Response(JSON.stringify({ error: "Gateway Timeout", reason: "origin-did-not-respond" }), {
+      status: 504,
+      headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+    });
   }
 
   if (outcome.kind === "aborted") {
