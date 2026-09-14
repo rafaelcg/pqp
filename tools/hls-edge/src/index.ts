@@ -335,7 +335,17 @@ function cacheKeyRequest(request: Request): Request {
   return new Request(url.toString(), { method: "GET" });
 }
 
-async function handlePlaylistRequest(
+/**
+ * Exported for `test/index.test.mjs` ONLY, the same convention
+ * `ll-playlist-origin.ts` documents on its own class: this function reaches
+ * `caches.default`/`ctx.waitUntil` only past the rendition route's cache
+ * lookup, so a request for the SESSION/MASTER route (`rung` unset,
+ * including the LL master added by task L2.2) never touches a Workers-only
+ * global and can run directly under `node --test` against the compiled
+ * output in `dist/` -- see that test file's header for why it is scoped to
+ * exactly that route.
+ */
+export async function handlePlaylistRequest(
   request: Request,
   origins: { api: PlaylistOrigin; ll: LlPlaylistOrigin },
   ctx: ExecutionContext,
@@ -571,13 +581,19 @@ async function handlePlaylistRequest(
     const blockingResponse = await handleBlockingReload(
       cacheKeyRequest(request).url,
       blockingReload.value,
+      // `handleBlockingReload` wants the bare `FetchedPlaylist` its own
+      // poll loop reads `status`/`headers`/`body` off of -- it never writes
+      // to `caches.default` itself (see that module's header), so
+      // `isProducer` has nothing for it to do. Unwrap `.result` here rather
+      // than changing `fetchRenditionCoalesced`'s return shape, which the
+      // non-blocking cache-or-forward path below still needs whole.
       () =>
         fetchRenditionCoalesced(cacheKeyRequest(request).url, origin, {
           channelId,
           startedAt,
           rung,
           token: token!,
-        }),
+        }).then((coalesced) => coalesced.result),
       logEvent,
       { channelId, rung },
       request.signal,

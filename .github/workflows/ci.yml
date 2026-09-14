@@ -193,6 +193,20 @@ jobs:
       # Crypto JS for exactly this reason — the same module runs under
       # `node --test` and inside the Worker unmodified. See
       # `tools/hls-edge/README.md` "Why a port, and why plain JS".
+      #
+      # A handful of tests (`ll-playlist-origin.test.mjs`, `index.test.mjs`)
+      # exercise a REAL TypeScript class/function rather than a port, and
+      # import it from the compiled `dist/` output — see either file's own
+      # header for why `.ts` source can't be imported directly under
+      # `node --test`. `npm install` + the package's own `pretest` (`tsc -p
+      # tsconfig.test-build.json`) has to run here first, or those two files
+      # fail with a bare "cannot find module ../dist/..." before a single
+      # assertion runs.
+      - name: Build HLS edge (dist/ some tests import)
+        working-directory: tools/hls-edge
+        run: |
+          npm install
+          npm run pretest
       - name: Test HLS edge playlist token check
         run: node --test tools/hls-edge/test/*.test.mjs
 
