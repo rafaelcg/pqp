@@ -161,9 +161,42 @@ func New(ctx context.Context, cfg Config) (*Encoder, error) {
 
 	cmd := exec.CommandContext(ctx, bin,
 		"-hide_banner", "-loglevel", "error", "-nostdin",
+		// -probesize 32 -analyzeduration 0: skip libavformat's generic
+		// stream-analysis phase on the input. Every parameter that phase
+		// would discover (sample rate, channel count, sample format) is
+		// already given explicitly via -f/-ar/-ac above, but
+		// avformat_find_stream_info still runs its default probe on a
+		// raw PCM demuxer, which keeps reading pipe:0 until it has
+		// accumulated its default analyzeduration (5s) or probesize
+		// (5MB) worth of data -- and since this Encoder is fed
+		// incrementally as PCM becomes available (internal/session's
+		// audio pacer, never one large write followed by an immediate
+		// Close), that read blocks for real, not just slowly: the
+		// process sits waiting for more bytes with zero AAC frames
+		// emitted, for as long as the caller's writes fall short of the
+		// probe target. This is what made
+		// TestEncoderProducesFramesFromRealFFmpeg hang for its whole
+		// timeout on Linux (Debian/Ubuntu's packaged ffmpeg) while
+		// passing locally (a newer ffmpeg on macOS apparently probes a
+		// fully-specified raw demuxer without this delay) -- a version
+		// difference in a behavior neither build documents as
+		// guaranteed, so pin it explicitly rather than rely on it.
+		// Confirmed by feeding this exact command line from a held-open
+		// pipe: zero output for 20+ seconds without this flag, versus
+		// output within the first second with it.
+		"-probesize", "32", "-analyzeduration", "0",
 		"-f", "f32le", "-ar", fmt.Sprintf("%d", SampleRate), "-ac", fmt.Sprintf("%d", Channels),
 		"-i", "pipe:0",
 		"-c:a", "aac", "-b:a", fmt.Sprintf("%dk", kbps),
+		// -flush_packets 1: force the ADTS muxer to flush its AVIO buffer
+		// to stdout after every packet instead of leaving that decision
+		// to libavformat's own per-protocol default (flush_packets -1,
+		// "auto"). Pinned explicitly for the same reason as probesize
+		// above: this package exists specifically for low-latency
+		// streaming (LL-HLS), so "whichever behavior this build's pipe
+		// protocol happens to default to" is not good enough even where
+		// it currently happens to already flush promptly.
+		"-flush_packets", "1",
 		"-f", "adts", "pipe:1",
 	)
 	stdin, err := cmd.StdinPipe()
