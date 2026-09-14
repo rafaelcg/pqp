@@ -902,6 +902,102 @@ describeDb("voice across two instances", () => {
       });
     });
 
+    it("a join on B repairs the whole of B's room after a dropped frame", async () => {
+      // The bus is fire and forget, so a dropped frame leaves everybody
+      // already in the room on B playing the old track with nothing coming
+      // to correct them. The next join reads the row, and the repair is the
+      // ROOM's rather than the joiner's alone.
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userA = randomUUID();
+      const dj = await join(a, userA, channel);
+      const listenerOnB = await join(b, randomUUID(), channel);
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(1, userA, musicTrack("fffffffffff", userA)),
+        },
+      );
+      await waitFor(() => frames(listenerOnB, "music").length === 1, "rev 1 on B");
+
+      // B goes deaf; A skips to the next song.
+      await b.bus.closeBus();
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(2, userA, musicTrack("ggggggggggg", userA)),
+        },
+      );
+      expect(frames(listenerOnB, "music")).toHaveLength(1);
+
+      const late = await join(b, randomUUID(), channel);
+
+      // The joiner is handed the row...
+      expect(frames(late, "music")[0]?.state).toMatchObject({
+        rev: 2,
+        current: { videoId: "ggggggggggg" },
+      });
+      // ...and so is the person who was already sitting there.
+      expect(frames(listenerOnB, "music")).toHaveLength(2);
+      expect(frames(listenerOnB, "music")[1]?.state).toMatchObject({
+        rev: 2,
+        current: { videoId: "ggggggggggg" },
+      });
+    });
+
+    it("the row's winner reaches the whole room, not only the loser", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userA = randomUUID();
+      const userB = randomUUID();
+      const dj = await join(a, userA, channel);
+      const writerOnB = await join(b, userB, channel);
+      const bystanderOnB = await join(b, randomUUID(), channel);
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(1, userA, musicTrack("hhhhhhhhhhh", userA)),
+        },
+      );
+      await waitFor(() => frames(writerOnB, "music").length === 1, "rev 1 on B");
+
+      await b.bus.closeBus();
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(5, userA, musicTrack("iiiiiiiiiii", userA)),
+        },
+      );
+
+      bystanderOnB.frames.length = 0;
+      await b.voice.handleVoiceMessage(
+        { socket: writerOnB.socket, user: asUser(userB) },
+        {
+          type: "set-music",
+          state: queue(3, userB, musicTrack("jjjjjjjjjjj", userB)),
+        },
+      );
+
+      // Correcting the writer alone would leave them on a different track
+      // from the person sitting next to them.
+      expect(frames(writerOnB, "music")[1]?.state).toMatchObject({
+        rev: 5,
+        current: { videoId: "iiiiiiiiiii" },
+      });
+      expect(frames(bystanderOnB, "music")).toHaveLength(1);
+      expect(frames(bystanderOnB, "music")[0]?.state).toMatchObject({
+        rev: 5,
+        current: { videoId: "iiiiiiiiiii" },
+      });
+    });
     it("refuses a write that lost in the row when B missed the frame", async () => {
       const channel = randomUUID();
       const a = await bootInstance();
@@ -941,12 +1037,18 @@ describeDb("voice across two instances", () => {
         },
       );
 
-      // The loser is handed the winner, alone; the room hears nothing.
+      // The loser is handed the winner — and so is the rest of the room,
+      // which had missed the same frame the loser did (pinned above).
       expect(frames(writerOnB, "music")[1]?.state).toMatchObject({
         rev: 5,
         current: { videoId: "ddddddddddd" },
       });
-      expect(frames(bystanderOnB, "music")).toHaveLength(0);
+      // What nobody gets is the losing write itself.
+      expect(
+        [...frames(writerOnB, "music"), ...frames(bystanderOnB, "music")].some(
+          (f) => (f.state as { rev: number } | null)?.rev === 3,
+        ),
+      ).toBe(false);
     });
   });
 

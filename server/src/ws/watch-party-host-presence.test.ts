@@ -128,6 +128,16 @@ async function makeUser(): Promise<string> {
   return result.rows[0]!.id;
 }
 
+async function waitFor(check: () => Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (!(await check())) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${what}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function disconnectedAt(channelId: string): Promise<Date | null> {
   const result = await pools[0]!.getPool().query<{
     host_disconnected_at: Date | null;
@@ -211,6 +221,38 @@ describeDb("the watch-party host's grace clock across two instances", () => {
 
     await disconnect(b, phone, hostId);
     expect(await disconnectedAt(channelId)).not.toBeNull();
+  });
+
+  it("both machines losing the host in the same instant still start the clock", async () => {
+    // THE RACE A MERGED PRESENCE VIEW INTRODUCES. Each instance withdraws its
+    // contribution over the bus, so for the length of the propagation both
+    // can have dropped their own socket and still be holding the other's.
+    // Both answer "still connected", neither stamps, and before the re-check
+    // nothing would ever ask again: the party would stay live forever.
+    const a = await bootInstance();
+    const b = await bootInstance();
+    a.events.setHostPresenceRecheckMsForTests(20);
+    b.events.setHostPresenceRecheckMsForTests(20);
+    const hostId = await makeUser();
+    const channelId = await seedLiveParty(hostId);
+
+    const laptop = await connect(a, hostId);
+    const phone = await connect(b, hostId);
+
+    // Both sockets go, neither withdrawal has crossed yet.
+    a.sockets.deleteAuthenticatedSocket(laptop);
+    b.sockets.deleteAuthenticatedSocket(phone);
+    await a.events.onHostSocketClosed(hostId).catch(() => {});
+    await b.events.onHostSocketClosed(hostId).catch(() => {});
+    expect(await disconnectedAt(channelId)).toBeNull();
+
+    // The withdrawals land, and the re-check asks the question again.
+    a.status.unregisterStatusSocket(laptop);
+    b.status.unregisterStatusSocket(phone);
+    await waitFor(
+      async () => (await disconnectedAt(channelId)) !== null,
+      "the grace clock the race swallowed",
+    );
   });
 
   it("one machine behaves exactly as it always did", async () => {

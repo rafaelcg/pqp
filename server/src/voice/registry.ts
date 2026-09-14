@@ -1177,7 +1177,7 @@ export async function readMusic(
  * concurrent-last-leave race in `deleteVoicePeer` can leave behind, so the
  * next call in the channel does not inherit a playlist nobody put on.
  */
-export function clearMusicIfEmpty(channelId: string): Promise<unknown> {
+export function clearMusicIfEmpty(channelId: string): Promise<boolean> {
   return track(
     getPool().query(
       `UPDATE voice_rooms r
@@ -1188,7 +1188,7 @@ export function clearMusicIfEmpty(channelId: string): Promise<unknown> {
       [channelId],
     ),
     "clearMusic",
-  );
+  ).then((result) => (result?.rowCount ?? 0) > 0);
 }
 
 // --- adopt ------------------------------------------------------------------

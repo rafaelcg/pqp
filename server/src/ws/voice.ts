@@ -1352,9 +1352,6 @@ function endMusicForEmptyRoom(
   notifySocket?: WebSocket,
 ): void {
   const had = endMusic(voiceChannelId);
-  if (!had) {
-    return;
-  }
   const announce = () => {
     void broadcastChannelMusic(voiceChannelId);
     if (notifySocket) {
@@ -1366,9 +1363,19 @@ function endMusicForEmptyRoom(
     }
   };
   if (!registryOn()) {
-    announce();
+    if (had) {
+      announce();
+    }
     return;
   }
+  // WHETHER THIS PROCESS HELD A CACHE ENTRY SAYS NOTHING ABOUT THE ROW, so
+  // the cleanup does not ask. An instance that missed every `voice.music`
+  // frame for a room can perfectly well be the last one out of it, and
+  // returning early on an empty cache would leave the queue on the row for
+  // the next call in the channel to inherit. `clearMusicIfEmpty` is a no-op
+  // when there is nothing to clear, and it is the statement that decides:
+  // its own `NOT EXISTS` is the second, authoritative half of the emptiness
+  // check below.
   void (async () => {
     await settledRowWrites(voiceChannelId);
     const remaining = await listVoicePeersInRoom(voiceChannelId);
@@ -1377,14 +1384,18 @@ function endMusicForEmptyRoom(
       // instance simply has nobody to play it to any more.
       return;
     }
-    await clearMusicIfEmpty(voiceChannelId);
-    announce();
+    const cleared = await clearMusicIfEmpty(voiceChannelId);
+    if (had || cleared) {
+      announce();
+    }
   })().catch((error: unknown) => {
     logEvent("voice.registryWriteFailed", {
       op: "musicEnd",
       error: error instanceof Error ? error.message : String(error),
     });
-    announce();
+    if (had) {
+      announce();
+    }
   });
 }
 
@@ -4417,38 +4428,47 @@ function planVoiceResume(
 }
 
 /**
- * What the room is playing, for the socket that has just been seated.
+ * Take the room's queue off the row on the way into a call.
  *
  * A joiner cannot ask for the queue — there is no request frame in the
- * contract — so whatever this returns is the only thing standing between them
- * and a silent player beside a room that is three minutes into a song. With
- * the registry off the local map IS the queue and this is the read it always
- * was. With it on the room can be on the other machine, where this instance's
- * map holds nothing at all, so the row is read and adopted into the cache
- * first: the same shape as the watch party's read in `welcomeVoicePeer`, kept
- * out of it so the two stay one line each. That costs one more round trip on
- * a join than folding it into that function's `Promise.all` would, on a path
- * that already does two, and buys a join handler that does not grow a fourth
- * concern. Best effort, like every registry read on this path — a failure
- * leaves the local view, which is what a single machine would have shown.
+ * contract — so the row is the only thing standing between them and a silent
+ * player beside a room three minutes into a song. But the joiner is not the
+ * only one who benefits: reaching the row is also THE RECONCILIATION for a
+ * `voice.music` frame this instance never received. The bus is fire and
+ * forget by design (`lib/bus.ts`), so a dropped frame leaves everybody
+ * already in the room here on the old queue with nothing coming to correct
+ * them. If the row turns out to be ahead of the cache, the room hears it,
+ * not only the person who just walked in.
+ *
+ * Read in the welcome's existing `Promise.all`, so it costs no extra round
+ * trip on the join path.
  */
-async function resolveJoinerMusic(
+function adoptMusicFromRow(
   voiceChannelId: string,
-): Promise<MusicState | null> {
-  if (registryOn()) {
-    try {
-      const held = await readMusic(voiceChannelId);
-      if (held !== undefined) {
-        adoptMusicState(voiceChannelId, held);
-      }
-    } catch (error) {
-      logEvent("voice.registryReadFailed", {
-        op: "welcomeMusic",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  held: MusicState | null,
+  joinerPeerId: string,
+): void {
+  const previous = getMusicState(voiceChannelId);
+  const unchanged =
+    previous === null
+      ? held === null
+      : held !== null &&
+        held.rev === previous.rev &&
+        held.actorId === previous.actorId;
+  if (unchanged || !adoptMusicState(voiceChannelId, held)) {
+    return;
   }
-  return getMusicState(voiceChannelId);
+  const before = previous?.current?.videoId ?? null;
+  // The joiner is excluded: `welcomeVoicePeer` hands it the state itself, a
+  // moment later and in the order the contract wants (after `welcome`).
+  broadcastToRoom(
+    voiceChannelId,
+    { type: "music", channelId: voiceChannelId, state: held },
+    joinerPeerId,
+  );
+  if ((held?.current?.videoId ?? null) !== before) {
+    void broadcastChannelMusic(voiceChannelId);
+  }
 }
 
 async function welcomeVoicePeer(
@@ -4475,10 +4495,14 @@ async function welcomeVoicePeer(
     // the peer row exists there is no second round trip for it.
     try {
       await settledRowWrites(peer.voiceChannelId);
-      const [room, held] = await Promise.all([
+      const [room, held, heldMusic] = await Promise.all([
         listVoiceRoster(peer.voiceChannelId),
         readWatchParty(peer.voiceChannelId),
+        readMusic(peer.voiceChannelId),
       ]);
+      if (heldMusic !== undefined) {
+        adoptMusicFromRow(peer.voiceChannelId, heldMusic, peer.id);
+      }
       noteRemoteTransport(peer.voiceChannelId, room?.transport ?? null);
       for (const row of room?.peers ?? []) {
         if (row.userId === peer.userId) {
@@ -4539,7 +4563,7 @@ async function welcomeVoicePeer(
       state: party,
     });
   }
-  const music = await resolveJoinerMusic(peer.voiceChannelId);
+  const music = getMusicState(peer.voiceChannelId);
   if (music) {
     send(peer.socket, {
       type: "music",
@@ -5912,7 +5936,14 @@ export async function handleVoiceMessage(
       }
       if (persisted?.kind === "stale") {
         adoptMusicState(peer.voiceChannelId, persisted.held);
-        send(socket, {
+        // TO THE ROOM, NOT ONLY TO THE LOSER. This instance lost in the row
+        // because it had missed the frame that put the winner there, which
+        // means every peer here is on the stale queue and not just the
+        // person who wrote. Correcting the writer alone would leave them
+        // watching a different track from the people sitting next to them.
+        // The frame is an absolute state at a higher `rev`, so a peer that
+        // somehow had it already is unaffected.
+        broadcastToRoom(peer.voiceChannelId, {
           type: "music",
           channelId: peer.voiceChannelId,
           state: persisted.held,

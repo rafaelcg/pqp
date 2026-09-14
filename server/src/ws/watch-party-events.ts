@@ -361,6 +361,10 @@ export function readHostPresenceCounters(): { heldElsewhere: number } {
 
 export function resetHostPresenceCountersForTests(): void {
   hostPresence.heldElsewhere = 0;
+  for (const timer of recheckTimers.values()) {
+    clearTimeout(timer);
+  }
+  recheckTimers.clear();
 }
 
 /**
@@ -391,6 +395,52 @@ function hostIsConnectedAnywhere(userId: string): boolean {
 }
 
 /**
+ * How long after "still connected elsewhere" to ask again.
+ *
+ * THE ONE RACE A MERGED PRESENCE VIEW INTRODUCES. Each instance's
+ * contribution reaches the others over the bus, so it is behind by the
+ * propagation delay — and if the host's last socket on A and their last
+ * socket on B close in the same instant, each process can have removed its
+ * own and still be holding the other's not-yet-withdrawn contribution. Both
+ * answer "connected", neither stamps, and nothing else in the system would
+ * ever ask again: the party stays live with no grace clock and the sweep
+ * never ends it. Asking once more, after long enough for the withdrawal to
+ * have landed, closes it. `markWatchPartyHostGone` is idempotent
+ * (`host_disconnected_at IS NULL`), so the common case — a host who really
+ * does still have a tab open — costs one presence read and writes nothing.
+ */
+let hostPresenceRecheckMs = 5_000;
+
+/** Test seam: the re-check is a clock, and a test needs it to be short. */
+export function setHostPresenceRecheckMsForTests(ms: number): void {
+  hostPresenceRecheckMs = ms;
+}
+
+/** One pending re-check per person, so N closing tabs cost one timer. */
+const recheckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleHostPresenceRecheck(userId: string): void {
+  if (recheckTimers.has(userId)) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    recheckTimers.delete(userId);
+    if (hostIsConnectedAnywhere(userId)) {
+      return;
+    }
+    void markWatchPartyHostGone(userId)
+      .then(announceChannels)
+      .catch((error: unknown) => {
+        console.error("[watch-party] host presence re-check failed:", error);
+      });
+  }, hostPresenceRecheckMs);
+  // Never a reason to keep the process alive: a shutdown drops every socket
+  // anyway, and the next instance to see this host answers the question.
+  timer.unref?.();
+  recheckTimers.set(userId, timer);
+}
+
+/**
  * A socket closed. If it was this person's LAST socket ANYWHERE and they host
  * a live party, start the grace clock.
  *
@@ -401,6 +451,7 @@ function hostIsConnectedAnywhere(userId: string): boolean {
  */
 export async function onHostSocketClosed(userId: string): Promise<void> {
   if (hostIsConnectedAnywhere(userId)) {
+    scheduleHostPresenceRecheck(userId);
     return;
   }
   const channels = await markWatchPartyHostGone(userId);
