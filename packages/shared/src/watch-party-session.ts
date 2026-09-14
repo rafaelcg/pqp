@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { hasPermission, Permission } from "./permissions.js";
+import { raisedHandQueue, type RaisedHandPerson } from "./raised-hands.js";
 
 /**
  * A watch party as an EVENT WITH A HOST, not a channel with a flag.
@@ -183,6 +184,12 @@ export const WATCH_PARTY_ACTIONS = [
   "transferHost",
   /** Become host after the host dropped and the grace clock is running. */
   "claimHost",
+  /**
+   * CONVIDADOS: invite, accept, decline or remove a guest. Host and co-hosts
+   * only, never a manager — same reasoning as `end`/`cancel` (2026-09-12): the
+   * roster of who is on air is the show's own call, not a moderation lever.
+   */
+  "manageGuests",
 ] as const;
 
 export type WatchPartyAction = (typeof WATCH_PARTY_ACTIONS)[number];
@@ -221,6 +228,7 @@ const ALLOWED: Readonly<Record<WatchPartyAction, readonly WatchPartyRole[]>> =
     demoteCohost: Object.freeze(["host"] as const),
     transferHost: Object.freeze(["host"] as const),
     claimHost: Object.freeze(["cohost"] as const),
+    manageGuests: Object.freeze(["host", "cohost"] as const),
   });
 
 /** Which states each action is legal in, before roles are considered. */
@@ -237,6 +245,7 @@ const ACTION_STATES: Readonly<
   demoteCohost: Object.freeze(["draft", "scheduled", "live"] as const),
   transferHost: Object.freeze(["draft", "scheduled", "live"] as const),
   claimHost: Object.freeze(["live"] as const),
+  manageGuests: Object.freeze(["draft", "scheduled", "live"] as const),
 });
 
 export interface WatchPartyPermissionInput {
@@ -374,6 +383,104 @@ export function stageModeClosesTheFloor(mode: WatchPartyStageMode): boolean {
   return mode !== "everyone";
 }
 
+// ---------------------------------------------------------------- guests
+
+/**
+ * CONVIDADOS: THE STAGE, REPLACED. Owner decision, 2026-09-13 (see
+ * `docs/plans/WATCH_PARTY_GUESTS.md`): a viewer never acquires a seat, is
+ * never told a seat count exists, and the old `voiceEnabled` /
+ * `stageMode` / `raiseHand` triple collapses into this one field.
+ *
+ * `off` (the default): nobody but the host and co-hosts is ever in the
+ * room. `invite`: the host calls people up by name; a viewer has no
+ * button. `request`: a viewer may ask, the host accepts or passes — this
+ * IS the old raise-hand mode, there is no separate flag for it any more.
+ *
+ * `everyone` has no replacement, on purpose: it was the mode a 2026-09-05
+ * spike turned into a two-hundred-person open microphone in minutes.
+ */
+export const WATCH_PARTY_GUESTS_MODES = ["off", "invite", "request"] as const;
+
+export type WatchPartyGuestsMode = (typeof WATCH_PARTY_GUESTS_MODES)[number];
+
+/**
+ * The migration, read-time only: `channel_sessions.options` is JSONB, so
+ * there is no column migration, only this map, run once per read alongside
+ * `withLegacyWatchPartyVoice`. See the table in
+ * `docs/plans/WATCH_PARTY_GUESTS.md` §2.2 — this function IS that table.
+ */
+export function deriveWatchPartyGuestsMode(input: {
+  voiceEnabled: boolean;
+  stageMode: WatchPartyStageMode;
+  raiseHand: boolean;
+}): WatchPartyGuestsMode {
+  if (!input.voiceEnabled) {
+    return "off";
+  }
+  if (input.stageMode === "everyone") {
+    return "request";
+  }
+  if (input.stageMode === "invited") {
+    return input.raiseHand ? "request" : "invite";
+  }
+  // hosts_only
+  return "invite";
+}
+
+/**
+ * The write-back half of the compatibility release: whatever `guests` ended
+ * up being (explicit, or derived above), this is the legacy triple the wire
+ * still carries for one release so a stale tab or a native app that has not
+ * shipped `guests` yet keeps reading a party it understands.
+ */
+export function deriveLegacyWatchPartyVoiceTriple(
+  guests: WatchPartyGuestsMode,
+): {
+  voiceEnabled: boolean;
+  stageMode: WatchPartyStageMode;
+  raiseHand: boolean;
+} {
+  switch (guests) {
+    case "off":
+      return { voiceEnabled: false, stageMode: "hosts_only", raiseHand: true };
+    case "invite":
+      return { voiceEnabled: true, stageMode: "invited", raiseHand: false };
+    case "request":
+      return { voiceEnabled: true, stageMode: "invited", raiseHand: true };
+  }
+}
+
+/**
+ * Read an options object that has no `guests` key yet: every row stored
+ * before this change, and every row a native app that has not shipped this
+ * yet still writes. Runs AFTER `withLegacyWatchPartyVoice`, so `voiceEnabled`
+ * is always present by the time this looks at it.
+ *
+ * Presence of the key is the test, same rule as `withLegacyWatchPartyVoice`:
+ * a row that already carries `guests` (written by this build) is handed back
+ * untouched.
+ */
+export function withDerivedWatchPartyGuests(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  if ("guests" in raw) {
+    return raw;
+  }
+  const obj = raw as Record<string, unknown>;
+  const voiceEnabled = obj.voiceEnabled === true;
+  const stageMode = (
+    WATCH_PARTY_STAGE_MODES as readonly string[]
+  ).includes(obj.stageMode as string)
+    ? (obj.stageMode as WatchPartyStageMode)
+    : "hosts_only";
+  const raiseHand = obj.raiseHand !== false;
+  return {
+    ...obj,
+    guests: deriveWatchPartyGuestsMode({ voiceEnabled, stageMode, raiseHand }),
+  };
+}
+
 /**
  * The settings a host decides BEFORE an audience arrives, which is the whole
  * reason the draft state exists, and may change again while the party runs.
@@ -431,8 +538,21 @@ export const watchPartyOptionsSchema = z.object({
    * A viewer may ask to come up. Meaningless when everyone may already speak,
    * and pointless when only the hosts ever will, so the panel shows it only
    * for `invited`, where it defaults on.
+   *
+   * DEPRECATED, kept for one release alongside `voiceEnabled` and `stageMode`
+   * so a stale tab or a native app that has not shipped `guests` yet keeps
+   * reading a party it understands. `guests` is the setting now; these three
+   * are always derived from it on the way out (`deriveLegacyWatchPartyVoiceTriple`)
+   * and derived INTO it on the way in when a stored row has no `guests` key
+   * (`withDerivedWatchPartyGuests`). See `docs/plans/WATCH_PARTY_GUESTS.md` §2.
    */
   raiseHand: z.boolean().default(true),
+  /**
+   * CONVIDADOS. Off by default (owner decision, 2026-09-13): a party has no
+   * guests until a host turns this on, and nobody but the host and co-hosts
+   * is ever in the room until they do. See `WATCH_PARTY_GUESTS_MODES` above.
+   */
+  guests: z.enum(WATCH_PARTY_GUESTS_MODES).default("off"),
   /**
    * Seconds between messages, 0 for off. THE CHANNEL'S OWN SLOW MODE
    * (`channels.slowmode_seconds`, enforced in `ws/chat.ts` against
@@ -451,6 +571,7 @@ export const WATCH_PARTY_DEFAULT_OPTIONS: WatchPartyOptions = Object.freeze({
   voiceEnabled: false,
   stageMode: "hosts_only",
   raiseHand: true,
+  guests: "off",
   slowModeSeconds: 0,
   reactionsEnabled: true,
 });
@@ -459,18 +580,16 @@ export const WATCH_PARTY_DEFAULT_OPTIONS: WatchPartyOptions = Object.freeze({
  * Whether this party is holding the channel's floor closed, which is the ONLY
  * question that may cause a permission rule to be written.
  *
- * Two conditions, and the first is the one that matters: a party with no
- * voice does not touch the channel's permissions, whatever its stage mode
- * says. A stored `stageMode` on a voice-off party is a preference the host
- * has not activated, not a rule, so it must not reach `channel_overwrites`.
- * That is what makes "the leak cannot happen" true rather than "the leak is
- * cleaned up": with voice off, `applyGoLiveOptions` writes nothing at all.
+ * ONE QUESTION NOW, NOT TWO: `guests !== "off"`. A party with guests off does
+ * not touch the channel's permissions, whatever it used to say. That is what
+ * makes "the leak cannot happen" true rather than "the leak is cleaned up":
+ * with guests off, `applyGoLiveOptions` writes nothing at all.
  *
  * Both sides ask this one function, so the server's writes and the client's
  * reading of them cannot disagree about when a channel is being borrowed.
  */
 export function watchPartyFloorIsClosed(options: WatchPartyOptions): boolean {
-  return options.voiceEnabled && stageModeClosesTheFloor(options.stageMode);
+  return options.guests !== "off";
 }
 
 /**
@@ -500,28 +619,27 @@ export function withLegacyWatchPartyVoice(raw: unknown): unknown {
 /**
  * Whether a seat in this party's room is this person's to take.
  *
- * THE MODEL, IN ONE FUNCTION. A watch party has an audience and it has the
- * people running it. The audience watches, which is a socket and no seat; the
- * people running it need a seat, because the HLS egress follows whoever is
- * SHARING and a screen share needs a peer in the room. With voice off there
- * is nobody in between.
+ * REWRITTEN FOR GUESTS (2026-09-13). THE MODEL NOW: nobody but the presenter
+ * and the guests is ever in a room (`docs/plans/WATCH_PARTY_GUESTS.md`
+ * principle 2). The old function let ANYONE in once `voiceEnabled` was true,
+ * which is the exact bug the guests plan retires — "taking the stage felt
+ * identical to watching" because a plain viewer could join the room, seated
+ * and silent, indistinguishable from a guest. Voice being on at all no longer
+ * seats anybody; only running the party or being an ACCEPTED guest does.
  *
- * NOT ENFORCED THROUGH PERMISSION BITS, deliberately. The obvious
- * implementation is a CONNECT deny on @everyone, and that is the same
- * mechanism as the SPEAK deny whose leak caused this change: a rule written
- * onto a channel that outlives the party which wrote it. This is a decision
- * taken at the door, on the party's own row, so it disappears when the party
- * does, by construction. The server asks it at `join-voice-room`, which is
- * the only way into a room; the client asks it to decide what to draw.
+ * NOT ENFORCED THROUGH PERMISSION BITS, deliberately, same reasoning as
+ * before: a decision taken at the door, on the party's own row, so it
+ * disappears when the party does. The server asks it at `join-voice-room`;
+ * the client asks it to decide what to draw.
  *
  * WHO IS ALWAYS LET IN, and why each:
- *  - anyone holding START_WATCH_PARTY on the channel. They run parties here,
- *    they have to be able to get into the room to present, and this covers
- *    the host on every path without a lookup;
+ *  - anyone holding START_WATCH_PARTY on the channel (covers the host and
+ *    every co-host-by-permission path without a lookup);
  *  - the host and the co-hosts by name, because a co-host is any member the
  *    host promoted and need not hold the bit;
- *  - anyone the host invited up to speak, for whom the whole point of the
- *    invitation is that they can now talk.
+ *  - an ACCEPTED guest (`accepted_at IS NOT NULL`) of a party whose `guests`
+ *    is not `off`. The `guests !== "off"` check is defence in depth against a
+ *    stale accepted row surviving a host turning guests off mid-party.
  *
  * NO ACTIVE PARTY IS NOT A CLOSED ROOM. A `watch_party` channel with nothing
  * running is an ordinary voice room and joins like one, which is exactly what
@@ -529,10 +647,42 @@ export function withLegacyWatchPartyVoice(raw: unknown): unknown {
  * party chrome at all. Refusing there would break a deployment that has the
  * channel type and not the feature.
  */
-export function mayTakeWatchPartySeat(input: {
+export function mayGoOnAir(input: {
   /** `START_WATCH_PARTY` on this channel, as the server resolved it. */
   canStartWatchParty: boolean;
   /** The channel's active party, or null when there is none. */
+  party: {
+    guests: WatchPartyGuestsMode;
+    isHost: boolean;
+    isCohost: boolean;
+    /** An ACCEPTED guest — `accepted_at IS NOT NULL`, not merely invited. */
+    isGuest: boolean;
+  } | null;
+}): boolean {
+  if (input.canStartWatchParty) {
+    return true;
+  }
+  if (!input.party) {
+    return true;
+  }
+  return (
+    input.party.isHost ||
+    input.party.isCohost ||
+    (input.party.isGuest && input.party.guests !== "off")
+  );
+}
+
+/**
+ * @deprecated Superseded by `mayGoOnAir`, which is what `join-voice-room` and
+ * every new surface consult. Kept, with its ORIGINAL 2026-09-08 behaviour,
+ * only because `watch-party-panel.tsx` still calls it under this name and
+ * this file is frozen ahead of PR #538's rewrite (see
+ * `docs/plans/WATCH_PARTY_GUESTS.md`) — that rewrite is what removes this
+ * call site, at which point this wrapper goes with it. It answers the OLD
+ * question ("is voice on at all") and must NOT be asked by anything new.
+ */
+export function mayTakeWatchPartySeat(input: {
+  canStartWatchParty: boolean;
   party: {
     voiceEnabled: boolean;
     isHost: boolean;
@@ -555,27 +705,18 @@ export function mayTakeWatchPartySeat(input: {
 }
 
 /**
- * Whether this person may take the microphone in a party with these options,
- * given what the server already says about their SPEAK bit.
- *
- * `canSpeak` is the authority and this is not a second one: the server denies
- * SPEAK to @everyone for a closed stage and grants it back per member, so
- * `canSpeak` alone is already correct. This exists so the client can show the
- * right AFFORDANCE (a Falar button, a Pedir pra falar button, or neither)
- * without each surface re-deriving the rule.
+ * @deprecated Superseded by the guest's own on-air state, which the new
+ * guest surfaces read directly off `party.guests`. Kept, with its ORIGINAL
+ * behaviour, only because `watch-party-panel.tsx` still calls it and this
+ * file is frozen ahead of PR #538's rewrite. Do not call this from anything
+ * new — see `mayTakeWatchPartySeat`'s note, same reason.
  */
 export function watchPartySpeakAffordance(input: {
   options: WatchPartyOptions;
   role: WatchPartyRole;
-  /** `welcome.canSpeak` for this room, as the server resolved it. */
   canSpeak: boolean;
 }): "speak" | "raiseHand" | "none" {
   if (input.role !== "host" && input.role !== "cohost") {
-    // A party with no voice offers the audience nothing, whatever the
-    // channel's own SPEAK bit happens to say. With no overwrite written that
-    // bit is usually the everyday default and `canSpeak` is true, so asking
-    // it first would put a Falar button on every viewer's screen in exactly
-    // the parties that are meant to have none.
     if (!input.options.voiceEnabled) {
       return "none";
     }
@@ -584,9 +725,6 @@ export function watchPartySpeakAffordance(input: {
     return "speak";
   }
   if (input.role === "host" || input.role === "cohost") {
-    // Running the party and denied SPEAK means the grant has not arrived yet
-    // (a permissions version still propagating). Offering the button is right:
-    // the server refuses it if it is genuinely wrong.
     return "speak";
   }
   if (input.options.stageMode === "invited" && input.options.raiseHand) {
@@ -620,6 +758,79 @@ export const watchPartyStageSchema = z.object({
 });
 
 export type WatchPartyStage = z.infer<typeof watchPartyStageSchema>;
+
+export const watchPartyGuestPersonSchema = watchPartyStagePersonSchema;
+
+/**
+ * Who is on air, who is invited, who is asking, sent alongside the party —
+ * resolved per recipient, same as `watchPartyStageSchema` before it.
+ *
+ * `onAir` is public: they are about to be audible, and a viewer wondering why
+ * a stranger is talking deserves the answer. `invited` and `requests` are
+ * host/co-host only: a queue an audience can read is a queue where being
+ * passed over happens in public. `requested`/`position` are always the
+ * caller's own — everyone is told their own state, because a button that
+ * cannot show whether it already fired is a button people press twice.
+ *
+ * See `docs/plans/WATCH_PARTY_GUESTS.md` §5.6.
+ */
+export const watchPartyGuestsSchema = z.object({
+  onAir: z.array(watchPartyGuestPersonSchema),
+  invited: z.array(watchPartyGuestPersonSchema),
+  requests: z.array(watchPartyGuestPersonSchema),
+  /** The real length of the queue; `requests` is capped at the list limit. */
+  requestCount: z.number().int().min(0),
+  /** Whether the caller's own request is pending. */
+  requested: z.boolean(),
+  /** The caller's own place in the queue, 1-based, or null when not asking. */
+  position: z.number().int().min(1).nullable(),
+});
+
+export type WatchPartyGuests = z.infer<typeof watchPartyGuestsSchema>;
+
+export const WATCH_PARTY_EMPTY_GUESTS: WatchPartyGuests = Object.freeze({
+  onAir: [],
+  invited: [],
+  requests: [],
+  requestCount: 0,
+  requested: false,
+  position: null,
+});
+
+/**
+ * The ceiling on air. Three tiles at 320x180 fill the 640x360 stage rung
+ * exactly, and the presenter still has to be able to run a conversation
+ * while watching a film. See §3.5.
+ */
+export const WATCH_PARTY_MAX_GUESTS = 3;
+
+/**
+ * How many names the host's queue prints before it collapses the rest into a
+ * count. The queue itself is never capped — see §3.1, borrowing the same
+ * reasoning as `RAISED_HAND_LIST_LIMIT` in `raised-hands.ts`.
+ */
+export const GUEST_REQUEST_LIST_LIMIT = 20;
+
+/**
+ * A declined request cannot ask again for five minutes. A withdrawn one, or
+ * one taken off air after being accepted, sets no cooldown at all — see §3.1.
+ */
+export const GUEST_REQUEST_COOLDOWN_MS = 5 * 60_000;
+
+/**
+ * The host's queue, oldest request first. NOT a new comparator: this borrows
+ * `raisedHandQueue`'s ordering rule exactly (§3.1: "the party queue keeps its
+ * own table and borrows only the ordering rule"), by handing it each row's
+ * `raised_at` as `handRaisedAt`. Same tie-break, same reason for it —
+ * `channel_session_raised_hands.raised_at` is a Postgres timestamp, and two
+ * `INSERT`s in the same millisecond are ordinary, so the `userId` tie-break
+ * is what keeps every screen agreeing on who is third.
+ */
+export function guestRequestQueue<T extends RaisedHandPerson>(
+  requests: readonly T[],
+): T[] {
+  return raisedHandQueue(requests);
+}
 
 export const watchPartyCohostSchema = z.object({
   userId: z.string().uuid(),
@@ -656,8 +867,18 @@ export const watchPartySchema = z.object({
   options: watchPartyOptionsSchema,
   /** The requesting user's role, resolved server side. */
   viewerRole: z.enum(WATCH_PARTY_ROLES),
-  /** Who is on the stage and who is asking. Hands are host-side only. */
+  /**
+   * DEPRECATED, kept alongside `guests` for one release so a stale tab and
+   * `watch-party-panel.tsx` (frozen ahead of PR #538's rewrite) keep parsing
+   * and driving a party they understand. Populated exactly as before,
+   * unchanged: `channel_session_stage_invites` and
+   * `channel_session_raised_hands` are the SAME tables `guests` reads, so an
+   * accepted guest still shows up here too. Delete together with
+   * `watchPartyStageSchema` once #538 lands and this field has no reader.
+   */
   stage: watchPartyStageSchema,
+  /** Convidados: who is on air, invited, and asking. See §5.6. */
+  guests: watchPartyGuestsSchema,
   /** Whether the requesting user has a reminder for this party. */
   reminding: z.boolean(),
 });
@@ -841,9 +1062,82 @@ export function isLiveWatchPartySurface(surface: WatchPartySurface): boolean {
 }
 
 /**
- * `POST /api/watch-parties/:id/stage`. The host puts somebody up, or takes
- * them down. `raise` is the viewer's own hand, which is why it needs no
- * `userId`: nobody raises a hand on anyone else's behalf.
+ * `raise`/`lower` are gone from the ACTION VOCABULARY, not from the wire: a
+ * stale tab and `watch-party-panel.tsx` (frozen ahead of PR #538, and this
+ * PR was explicitly told not to touch it beyond a mount line) still send
+ * them. They meant exactly what `request`/`withdraw` mean now — a viewer
+ * asking on themselves, self-scoped, no `userId` — so this maps the name
+ * rather than the behaviour. Both contracts answer the same question the
+ * same way: a legacy `hosts_only`/`invited`-with-`raiseHand` row derives to
+ * `guests: "request"` (`deriveWatchPartyGuestsMode`), so the 403 a `request`
+ * gets when `guests !== "request"` lands exactly where the old floor check
+ * would have. Delete alongside `watchPartyStageRequestSchema` once #538's
+ * rewrite removes the call site.
+ */
+const LEGACY_STAGE_ACTION_ALIASES: Readonly<
+  Record<string, "request" | "withdraw">
+> = { raise: "request", lower: "withdraw" };
+
+function withLegacyStageActionAlias(raw: unknown): unknown {
+  if (
+    raw !== null &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    "action" in raw &&
+    typeof (raw as { action: unknown }).action === "string" &&
+    (raw as { action: string }).action in LEGACY_STAGE_ACTION_ALIASES
+  ) {
+    return {
+      ...(raw as Record<string, unknown>),
+      action:
+        LEGACY_STAGE_ACTION_ALIASES[(raw as { action: string }).action],
+    };
+  }
+  return raw;
+}
+
+/**
+ * `POST /api/watch-parties/:id/guests` — `/stage` is kept as a URL alias for
+ * one release (§5.8), same handler, same body. Eight actions, plus the two
+ * legacy aliases above:
+ *
+ * Host/co-host, on somebody else: `invite` calls a person up (they still have
+ * to `join`), `accept`/`decline` answer a request, `remove` takes an on-air
+ * guest down. Viewer, on themselves only: `request` (`raise`) asks,
+ * `withdraw` (`lower`) gives up asking. Invited person, on themselves: `join`
+ * accepts the call-up and goes on air, `leave` goes off air. Following the
+ * rule this codebase keeps: your own state rides a socket frame in general,
+ * but a watch party's stage is small and host-moderated enough that every
+ * action here is one HTTP route, same as the raise/invite/remove stage this
+ * replaces.
+ */
+export const watchPartyGuestsRequestSchema = z.preprocess(
+  withLegacyStageActionAlias,
+  z.union([
+    z.object({
+      action: z.enum(["invite", "accept", "decline", "remove"]),
+      userId: z.string().uuid(),
+    }),
+    z.object({
+      action: z.enum(["request", "withdraw", "join", "leave"]),
+    }),
+  ]),
+);
+
+export type WatchPartyGuestsRequest = z.infer<
+  typeof watchPartyGuestsRequestSchema
+>;
+
+/**
+ * @deprecated The route now takes `watchPartyGuestsRequestSchema`'s eight
+ * actions (`invite`/`accept`/`decline`/`remove`/`request`/`withdraw`/`join`/
+ * `leave`). This is the OLD shape (`invite`/`remove`/`raise`/`lower`),
+ * exported only as a type-level fossil: nothing on the server parses against
+ * it any more, so a stale tab's `raise`/`lower` click now 400s — an accepted
+ * cost of the migration (`docs/plans/WATCH_PARTY_GUESTS.md` §2.3, `raiseHand`
+ * "is gone, replaced by `request`"). `watch-party-panel.tsx`'s own prop type
+ * is the thing actually still shaped like this; that file is frozen ahead of
+ * PR #538's rewrite, which is what removes the call site.
  */
 export const watchPartyStageRequestSchema = z.union([
   z.object({
@@ -855,5 +1149,6 @@ export const watchPartyStageRequestSchema = z.union([
   }),
 ]);
 
+/** @deprecated see `watchPartyStageRequestSchema` */
 export type WatchPartyStageRequest = z.infer<typeof watchPartyStageRequestSchema>;
 

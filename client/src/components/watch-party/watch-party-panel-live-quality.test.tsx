@@ -43,6 +43,7 @@ const PARTY: WatchParty = {
   cohosts: [],
   options: {
     voiceEnabled: false,
+    guests: "off",
     stageMode: "hosts_only",
     raiseHand: true,
     slowModeSeconds: 0,
@@ -51,6 +52,7 @@ const PARTY: WatchParty = {
   viewerRole: "host",
   reminding: false,
   stage: { invited: [], hands: [], handRaised: false },
+  guests: { onAir: [], invited: [], requests: [], requestCount: 0, requested: false, position: null },
 };
 
 let container: HTMLDivElement;

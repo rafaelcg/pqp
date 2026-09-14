@@ -10,7 +10,7 @@ import {
   updateWatchPartySchema,
   watchPartyCohostRequestSchema,
   watchPartyHostRequestSchema,
-  watchPartyStageRequestSchema,
+  watchPartyGuestsRequestSchema,
   watchPartyStateRequestSchema,
   type WatchPartyAction,
   updateChannelSessionSchema,
@@ -208,7 +208,7 @@ import {
 } from "../ws/voice.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
-import { setSfuUserMuted } from "../voice/admin.js";
+import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/admin.js";
 import {
   getVoicePeerRow,
   isVoiceRegistryEnabled,
@@ -251,7 +251,11 @@ import {
   createRateLimiter,
   limitFromEnv,
 } from "../lib/rate-limit.js";
-import { createRouter, type RequestContext } from "../lib/router.js";
+import {
+  createRouter,
+  type RequestContext,
+  type RouteHandler,
+} from "../lib/router.js";
 import { AUTH_ROUTE_LABEL, runWithRoute } from "../lib/route-context.js";
 import {
   buildPersonalExport,
@@ -336,15 +340,25 @@ import {
   getWatchPartyRow,
   listActiveWatchPartiesForServer,
   presentWatchParty,
-  inviteToWatchPartyStage,
+  acceptWatchPartyGuestRequest,
+  declineWatchPartyGuestRequest,
+  guestRequestCooldownActive,
+  inviteWatchPartyGuest,
+  isWatchPartyGuest,
+  joinWatchPartyGuestSlot,
+  leaveWatchPartyGuestSlot,
   reconcileLiveWatchPartyOptions,
-  removeFromWatchPartyStage,
+  removeWatchPartyGuest,
   removeWatchPartyCohost,
-  setWatchPartyRaisedHand,
+  requestWatchPartyGuestSlot,
   transferWatchPartyHost,
   transitionWatchParty,
   updateWatchParty,
+  watchPartyGuestDeclinedAt,
+  watchPartyOptionsOf,
+  withdrawWatchPartyGuestRequest,
   WatchPartyError,
+  WatchPartyGuestsError,
 } from "../services/watch-parties.js";
 import { broadcastWatchParty } from "../ws/watch-party-events.js";
 import { buildServerExport } from "../services/export.js";
@@ -874,6 +888,18 @@ const voiceLeaveLimiter = createRateLimiter({
   refillPerSecond: 2,
 });
 /**
+ * `request` / `withdraw` on a party's guest queue. Same shape as the mute
+ * toggle's own limiter (`stateLimiter` in `ws/voice.ts`, capacity 15,
+ * refill 3/s) per `docs/RAISED_HANDS.md`'s rule for a self-report of this
+ * kind, kept as its own bucket rather than sharing `writeLimiter` because a
+ * viewer mashing the button is a UI bug, not an attack, and should not spend
+ * the same budget a moderator's bulk delete does.
+ */
+const guestRequestLimiter = createRateLimiter({
+  capacity: 15,
+  refillPerSecond: 3,
+});
+/**
  * Bulk message delete. One call can remove a hundred rows and fan a frame out
  * to everyone in the channel, so it is the most destructive write a moderator
  * has, and the only one whose cost per request is bounded by a *cap* rather
@@ -919,6 +945,7 @@ export function resetApiRateLimits(): void {
   publicProfileLimiter.reset();
   publicCommunityLimiter.reset();
   voiceLeaveLimiter.reset();
+  guestRequestLimiter.reset();
   bulkDeleteLimiter.reset();
   liveHlsTelemetryLimiter.reset();
   liveHlsTelemetrySessionLimiter.reset();
@@ -2647,11 +2674,33 @@ router.post("/api/voice/token", async ({ req, user }) => {
   const channel = await requireChannelAccess(body.voiceChannelId, user.id);
   // Resolved at mint time, not copied from the join: a role edit between the
   // two must land in the token. The SFU only ever consults the grant.
-  const { canSpeak, canStream } = await resolveVoicePublish(
-    channel,
-    body.voiceChannelId,
-    user.id,
-  );
+  //
+  // FAIL CLOSED, EXPLICITLY. `resolveVoicePublish` reads the watch-party seat
+  // cache for `canShowFace` on a watch-party channel, and a cache miss falls
+  // through to a real query with no local retry of its own
+  // (`cachedWatchPartySeatSnapshot`'s own doc: "failures are not stored
+  // either"). Left uncaught, a transient failure here — the seat cache's own
+  // query, or `computeMemberPermissions` underneath it — would fall through
+  // to `handleApi`'s generic `catch`, which answers a plain 500 for anything
+  // that is not a recognised `HttpError`: correct in that no token is minted
+  // either way (nothing below this line runs), but it tells the caller
+  // nothing about whether trying again is the right move, and a
+  // `DatabaseUnavailableError` from the breaker is the only failure shape
+  // that already carries that signal. Converting explicitly to a 503 here
+  // makes every failure of this specific, security-sensitive resolution
+  // retryable by contract, not by accident of which error happened to be
+  // thrown.
+  let publish: { canSpeak: boolean; canStream: boolean; canShowFace: boolean };
+  try {
+    publish = await resolveVoicePublish(channel, body.voiceChannelId, user.id);
+  } catch (error) {
+    console.error("[voice] could not resolve the publish grant:", error);
+    throw new HttpError(
+      503,
+      "Could not verify voice permissions, try again",
+    );
+  }
+  const { canSpeak, canStream, canShowFace } = publish;
   const displayName = await resolveMemberName(
     channel.kind === "server" ? (channel.server_id ?? null) : null,
     user,
@@ -2675,7 +2724,7 @@ router.post("/api/voice/token", async ({ req, user }) => {
       body.peerId,
       displayName,
       user.id,
-      { canSpeak, canStream },
+      { canSpeak, canStream, canShowFace },
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);
@@ -4782,51 +4831,133 @@ router.delete(
 
 // ------------------------------------------------------- watch parties (event)
 /**
- * The stage: the host putting somebody up or taking them down, and a viewer
- * raising or lowering their own hand.
+ * CONVIDADOS: the guest queue. `docs/plans/WATCH_PARTY_GUESTS.md` §5.8.
  *
- * TWO DIFFERENT AUTHORISATIONS IN ONE ROUTE, which is why the body is a union
- * rather than one shape with an optional field. `invite` and `remove` are the
- * host's, and go through `promoteCohost`'s rule because putting somebody on
- * the stage is the same kind of act as promoting them, one show long.
- * `raise` and `lower` are the viewer's own and need nothing but the ability
- * to see the party, because a hand is a request and not a permission.
+ * `/guests` is the route's name; `/stage` is kept as an alias for one release
+ * (the compatibility window §2.2 describes) so a stale tab or a native app
+ * that has not shipped this yet keeps calling the URL it already knows,
+ * carrying the same eight-action body — `watchPartyGuestsRequestSchema` is
+ * `watchPartyStageRequestSchema`'s new name, not a new shape.
+ *
+ * THREE DIFFERENT AUTHORISATIONS, one per group of actions:
+ *  - `invite` / `accept` / `decline` / `remove` are the host's and co-hosts',
+ *    through the `manageGuests` action — host and co-host only, deliberately
+ *    NOT a manager: the roster of who is on air is the show's own call.
+ *  - `request` / `withdraw` are a viewer's own, rate-limited
+ *    (`guestRequestLimiter`) and refused unless `guests === "request"`.
+ *  - `join` / `leave` are the invited person's own, on their own row.
  */
-router.post(
-  "/api/watch-parties/:sessionId/stage",
-  async ({ req, user }, { sessionId }) => {
-    const body = watchPartyStageRequestSchema.parse(await readJsonBody(req));
-    const hostSide = body.action === "invite" || body.action === "remove";
+const handleWatchPartyGuestsAction: RouteHandler = async (
+  { req, user },
+  { sessionId },
+) => {
+    const body = watchPartyGuestsRequestSchema.parse(await readJsonBody(req));
+    const hostSide =
+      body.action === "invite" ||
+      body.action === "accept" ||
+      body.action === "decline" ||
+      body.action === "remove";
     const { row, actor } = await requireWatchParty(
       sessionId!,
       user.id,
-      hostSide ? "promoteCohost" : "view",
+      hostSide ? "manageGuests" : "view",
     );
+    const options = watchPartyOptionsOf(row);
+
     if (hostSide) {
       if (body.action === "invite") {
         if (!(await canAccessChannel(row.channel_id, body.userId))) {
           throw new HttpError(400, "That person cannot see this channel");
         }
-        await inviteToWatchPartyStage(row, body.userId, user.id);
+        await inviteWatchPartyGuest(row, body.userId, user.id);
+      } else if (body.action === "accept") {
+        try {
+          await acceptWatchPartyGuestRequest(row, body.userId, user.id);
+        } catch (error) {
+          if (error instanceof WatchPartyGuestsError) {
+            throw new HttpError(409, error.message);
+          }
+          throw error;
+        }
+      } else if (body.action === "decline") {
+        try {
+          await declineWatchPartyGuestRequest(sessionId!, body.userId);
+        } catch (error) {
+          if (error instanceof WatchPartyGuestsError) {
+            throw new HttpError(409, error.message);
+          }
+          throw error;
+        }
       } else {
-        await removeFromWatchPartyStage(row, body.userId);
+        // `remove`. VERIFY FIRST. Muting, revoking a publish grant and
+        // evicting from the room are SFU/channel actions whose blast radius
+        // is well past this feature — nothing upstream of this branch checks
+        // that `body.userId` is actually a guest of this party (`manageGuests`
+        // authorises the CALLER, not the target), so without this check a
+        // host could silence and eject anybody's live SFU session on the
+        // strength of a `userId` that was never invited at all.
+        if (!(await isWatchPartyGuest(row.id, body.userId))) {
+          throw new HttpError(404, "That person is not a guest of this party");
+        }
+        // Mute, then revoke the publish grant, then eject, THEN delete the
+        // row — in that order, per §3.6: ejecting first leaves a window
+        // where a client that has not processed the disconnect is still
+        // publishing.
+        if (getRoomTransport(row.channel_id) === "livekit") {
+          const identities = await findVoicePeerIdentities(
+            body.userId,
+            row.channel_id,
+          );
+          await setSfuUserMuted(row.channel_id, body.userId, true, identities);
+          await setSfuUserCanPublish(
+            row.channel_id,
+            body.userId,
+            { canSpeak: false, canStream: false, canShowFace: false },
+            identities,
+          );
+          await evictSfuUser(body.userId, [row.channel_id], identities);
+        }
+        await removeWatchPartyGuest(row, body.userId);
+      }
+    } else if (body.action === "request" || body.action === "withdraw") {
+      if (!guestRequestLimiter.take(user.id)) {
+        throw new HttpError(429, "Slow down");
+      }
+      if (body.action === "withdraw") {
+        await withdrawWatchPartyGuestRequest(sessionId!, user.id);
+      } else {
+        if (options.guests !== "request") {
+          throw new HttpError(403, "This party is not taking requests");
+        }
+        if (row.status !== "live") {
+          throw new HttpError(409, "This watch party is not live");
+        }
+        const declinedAt = await watchPartyGuestDeclinedAt(sessionId!, user.id);
+        if (guestRequestCooldownActive(declinedAt)) {
+          throw new HttpError(429, "Try again in a few minutes");
+        }
+        await requestWatchPartyGuestSlot(sessionId!, user.id);
+      }
+    } else if (body.action === "join") {
+      try {
+        await joinWatchPartyGuestSlot(row, user.id);
+      } catch (error) {
+        if (error instanceof WatchPartyGuestsError) {
+          throw new HttpError(error.code === "full" ? 409 : 404, error.message);
+        }
+        throw error;
       }
     } else {
-      // A hand is only meaningful while a show is running.
-      if (row.status !== "live") {
-        throw new HttpError(409, "This watch party is not live");
-      }
-      await setWatchPartyRaisedHand(
-        sessionId!,
-        user.id,
-        body.action === "raise",
-      );
+      // `leave`
+      await leaveWatchPartyGuestSlot(row, user.id);
     }
     void broadcastWatchParty(sessionId!);
     const updated = await getWatchPartyRow(sessionId!);
     return { party: updated ? await presentWatchParty(updated, actor) : null };
-  },
-);
+};
+
+router.post("/api/watch-parties/:sessionId/guests", handleWatchPartyGuestsAction);
+router.post("/api/watch-parties/:sessionId/stage", handleWatchPartyGuestsAction);
 
 
 

@@ -849,7 +849,7 @@ export async function setSfuUserMuted(
 export async function setSfuUserCanPublish(
   room: string,
   userId: string,
-  grant: { canSpeak: boolean; canStream: boolean },
+  grant: { canSpeak: boolean; canStream: boolean; canShowFace?: boolean },
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
   const client = getRoomService();

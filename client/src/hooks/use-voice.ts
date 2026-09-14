@@ -11,6 +11,7 @@ import {
   type VoiceSessionInfo,
   type VoiceSignalingMessage,
   type LiveReactionEmoji,
+  type WatchPartyGuestsMode,
 } from "@pqp/shared";
 import { publishLiveReactions } from "@/lib/live-reactions";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
@@ -43,6 +44,11 @@ import {
   type ShareCursor,
 } from "@/lib/screen-capture-cursor";
 import { createScreenMix, type ScreenMix } from "@/lib/screen-mix";
+import {
+  createStageMix,
+  stageMixInputUserIds,
+  type StageMix,
+} from "@/lib/stage-mix";
 import { loadLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { writeStreamMixLevels } from "@/lib/stream-mix-levels";
 import { getMicInStream, saveMicInStream } from "@/lib/mic-in-stream";
@@ -2719,6 +2725,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     sfuPublicationMuted = null;
     state.usingSfu = false;
     identities.clear();
+    if (stageMix) {
+      stageMix.close();
+      stageMix = null;
+      stageMixGuestIds.clear();
+    }
     if (session) {
       try {
         await session.disconnect();
@@ -2726,6 +2737,94 @@ export function createVoiceController(transport: RealtimeTransport) {
         // already gone
       }
     }
+  }
+
+  /**
+   * CONVIDADOS (`docs/plans/WATCH_PARTY_GUESTS.md` §5.2): the presenter's
+   * browser is the mixer. `stageMix` exists only while this browser is
+   * presenting a watch party whose `guests` is not `off`; `stageMixGuestIds`
+   * is which peer ids it currently holds an input for, so a peer that drops
+   * out of `watchPartyOnAirUserIds` gets its branch removed rather than
+   * silently orphaned. See `syncVoiceTrackPublication`, which this rides on:
+   * a party with guests forces "separada" the same way the standing
+   * preference does, and publishes this mix instead of the plain
+   * `voice-track` copy of the mic.
+   */
+  let stageMix: StageMix | null = null;
+  const stageMixGuestIds = new Set<string>();
+  let watchPartyGuestsMode: WatchPartyGuestsMode = "off";
+  let watchPartyOnAirUserIds: readonly string[] = [];
+  /**
+   * Which named publication is actually up on the SFU right now, so
+   * `syncVoiceTrackPublication` republishes `stage-mix` only when the SHAPE
+   * changes (nothing published, `voice-track`, or `stage-mix`) rather than
+   * every time `setWatchPartyGuests` runs — a guest joining or leaving air
+   * changes the mix's CONTENT, not which track object is publishing it, and
+   * `StageMix.stream`'s underlying `MediaStreamTrack` never changes once
+   * created. Re-publishing it anyway is a needless SFU round trip and a
+   * moment of dead air on every guest's audio.
+   */
+  let publishedVoiceShape: "none" | "voice-track" | "stage-mix" = "none";
+
+  /**
+   * Feed the mix from the current roster. Cheap and safe to call whenever
+   * either input might have changed — a guest joining or leaving air, or the
+   * SFU reporting a new set of remote peers — because `StageMix.setGuestTrack`
+   * is a no-op for a branch that already has the stream it is being handed.
+   */
+  function syncStageMixGuestBranches() {
+    if (!stageMix) {
+      return;
+    }
+    const ownUserId = state.self?.userId ?? "";
+    const wanted = new Set(
+      stageMixInputUserIds({
+        guestsMode: watchPartyGuestsMode,
+        onAirUserIds: watchPartyOnAirUserIds,
+        ownUserId,
+      }).filter((id) => id !== ownUserId),
+    );
+    for (const id of stageMixGuestIds) {
+      if (!wanted.has(id)) {
+        stageMix.setGuestTrack(id, null);
+        stageMixGuestIds.delete(id);
+      }
+    }
+    for (const id of wanted) {
+      const peer = state.remotePeers.find((p) => p.userId === id);
+      if (peer?.stream) {
+        stageMix.setGuestTrack(id, peer.stream);
+        stageMixGuestIds.add(id);
+      }
+    }
+  }
+
+  /**
+   * Told by whoever owns the party frame (`App.tsx`) whenever `guests` or
+   * `guests.onAir` changes. Not a subscription of its own — this hook has no
+   * idea a watch party exists beyond `screenCaptureIsWatchParty` — so the
+   * caller is the one source of truth for both inputs.
+   */
+  function setWatchPartyGuests(
+    mode: WatchPartyGuestsMode,
+    onAirUserIds: readonly string[],
+  ) {
+    const modeChanged = mode !== watchPartyGuestsMode;
+    watchPartyGuestsMode = mode;
+    watchPartyOnAirUserIds = onAirUserIds;
+    syncStageMixGuestBranches();
+    if (modeChanged && screenMix && state.isSharingMic) {
+      // The same reconfiguration `setVoiceTrackMode` runs on a real
+      // transition: guests turning on or off changes `effectiveVoiceSeparated()`
+      // out from under whatever mix and mute state the film mix was already
+      // in, and both have to move in the same tick this does or the mic is
+      // briefly in the film mix AND on the stage-mix bus at once (or in
+      // neither) — the doubling/silence §5.3 warns about.
+      screenMix.setMic(micForScreenMix());
+      sfuPublicationMuted = null;
+      void applyPublicationMute();
+    }
+    void syncVoiceTrackPublication();
   }
 
   /** Stops the capture tracks only — no network call, no peer teardown. */
@@ -2753,6 +2852,21 @@ export function createVoiceController(transport: RealtimeTransport) {
    */
   let voiceTrackAvailable = false;
   /**
+   * `setMicInStream`'s own generation counter, the same idiom as
+   * `cameraCapGeneration`/`voiceTrackGeneration` above: the function awaits a
+   * network round trip (`refreshVoiceTrackAvailable`) BEFORE applying its
+   * `on` argument to `state.isSharingMic` and the running mix, and that
+   * argument is a closure value captured at call time, not a re-read of
+   * `state.micInStream`. Two toggles in flight at once (on, then off, before
+   * the first's await resolves) can therefore land out of order and apply
+   * the OLDER call's `on` last, leaving the mix and the publication carrying
+   * a value the person's own last click already reversed. Bumped at the top
+   * of every call; a call whose generation has moved on by the time its
+   * await resolves is superseded and applies nothing further, exactly the
+   * `cameraCapGeneration` pattern.
+   */
+  let micInStreamGeneration = 0;
+  /**
    * Refresh `voiceTrackAvailable` from the server. Deployment-wide, not
    * per-server, the same scope `publishMicArchiveIfRecording` already checks
    * `micArchive` at — `loadLiveHlsConfig()` with no server id.
@@ -2775,7 +2889,15 @@ export function createVoiceController(transport: RealtimeTransport) {
    * THIS, never `state.voiceTrackMode` on its own.
    */
   function effectiveVoiceSeparated(): boolean {
-    return state.voiceTrackMode === "separada" && voiceTrackAvailable;
+    // CONVIDADOS forces "separada" the moment guests are on, independent of
+    // the standing preference: §5.3 requires the stage rung to exist from
+    // the first second the party goes live with guests, before the host has
+    // touched anything. The plain preference still applies once guests are
+    // off again.
+    return (
+      (state.voiceTrackMode === "separada" && voiceTrackAvailable) ||
+      watchPartyGuestsMode !== "off"
+    );
   }
   /**
    * What `ScreenMix.setMic`/`createScreenMix` should be handed for the mic
@@ -2844,10 +2966,65 @@ export function createVoiceController(transport: RealtimeTransport) {
         effectiveVoiceSeparated() &&
         pipeline !== null;
       try {
-        if (wantsSeparated && pipeline) {
-          await sfu.publishVoiceTrack(pipeline.processedStream);
+        if (wantsSeparated && pipeline && watchPartyGuestsMode !== "off") {
+          // Guests on: publish the mix (presenter's mic plus every accepted
+          // guest's), never the plain `voice-track` copy — the two are
+          // mutually exclusive shapes of the same slot (§5.2). The mix
+          // persists across calls so a guest joining mid-show is an input
+          // added to a bus already running, not a fresh one starting.
+          const isNew = !stageMix;
+          if (!stageMix) {
+            stageMix = createStageMix(pipeline.processedStream);
+          } else {
+            stageMix.setOwnMic(pipeline.processedStream);
+          }
+          syncStageMixGuestBranches();
+          // Only touch the SFU when the PUBLISHED SHAPE is actually
+          // changing: `stageMix.stream`'s track is the same object for the
+          // life of this mix, so a guest joining or leaving (which already
+          // reached the room through `syncStageMixGuestBranches` above)
+          // needs no republish at all.
+          if (publishedVoiceShape !== "stage-mix") {
+            if (publishedVoiceShape === "voice-track") {
+              await sfu.unpublishVoiceTrack();
+            }
+            await sfu.publishStageMix(stageMix.stream);
+            publishedVoiceShape = "stage-mix";
+          } else if (isNew) {
+            // Should not happen (a fresh mix implies the shape was not
+            // already "stage-mix"), but never leave a freshly built mix
+            // unpublished if the flag and reality ever disagree.
+            await sfu.publishStageMix(stageMix.stream);
+          }
+        } else if (wantsSeparated && pipeline) {
+          // Only ever touches `unpublishStageMix` when this browser had one
+          // running: every ordinary "separada" call site (no guests, ever)
+          // must reach exactly `publishVoiceTrack` and nothing else, unchanged
+          // from before CONVIDADOS existed.
+          if (stageMix) {
+            stageMix.close();
+            stageMix = null;
+            stageMixGuestIds.clear();
+          }
+          if (publishedVoiceShape !== "voice-track") {
+            if (publishedVoiceShape === "stage-mix") {
+              await sfu.unpublishStageMix();
+            }
+            await sfu.publishVoiceTrack(pipeline.processedStream);
+            publishedVoiceShape = "voice-track";
+          }
         } else {
-          await sfu.unpublishVoiceTrack();
+          if (stageMix) {
+            stageMix.close();
+            stageMix = null;
+            stageMixGuestIds.clear();
+          }
+          if (publishedVoiceShape === "stage-mix") {
+            await sfu.unpublishStageMix();
+          } else if (publishedVoiceShape === "voice-track") {
+            await sfu.unpublishVoiceTrack();
+          }
+          publishedVoiceShape = "none";
         }
         if (generation === voiceTrackGeneration) {
           transport.sendVoice({
@@ -3307,6 +3484,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         onPeersChanged: (remote) => {
           state.remotePeers = remote;
           syncRemoteAnalysers(remote);
+          // A guest's stream can arrive (or drop, on their own disconnect)
+          // independent of anything on this browser changing, so the mix
+          // has to be reconciled here too, not only from `setWatchPartyGuests`.
+          syncStageMixGuestBranches();
           emit();
         },
         onError: (msg) => {
@@ -4917,12 +5098,22 @@ export function createVoiceController(transport: RealtimeTransport) {
      * next one.
      */
     async setMicInStream(on: boolean) {
+      const generation = ++micInStreamGeneration;
       saveMicInStream(on);
       state.micInStream = on;
       // Freshest answer before `micForScreenMix()` is consulted below: a
       // stale "separada" from a previous, capable server must never pull the
       // mic out of the film on one that cannot carry it any other way.
       await refreshVoiceTrackAvailable();
+      if (generation !== micInStreamGeneration) {
+        // A later toggle already reset `state.micInStream`/`state.isSharingMic`
+        // to what the person actually wants now; applying this call's OWN
+        // captured `on` here would overwrite that with a stale answer. The
+        // newer call either already applied it (it started after this one's
+        // `state.micInStream = on` above) or is itself still in flight and
+        // will apply it when its own turn comes.
+        return;
+      }
       if (state.status === "idle") {
         // Left mid-await: nothing left to apply this to.
         return;
@@ -5027,6 +5218,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         void syncVoiceTrackPublication();
       }
       emit();
+    },
+    /**
+     * CONVIDADOS: told by whoever holds the party frame whenever `guests` or
+     * `guests.onAir` changes. See `setWatchPartyGuests` above (the private
+     * function this forwards to) for what it drives.
+     */
+    setWatchPartyGuests(mode: WatchPartyGuestsMode, onAirUserIds: readonly string[]) {
+      setWatchPartyGuests(mode, onAirUserIds);
     },
     setMuted(muted: boolean) {
       if (!pipeline) {

@@ -90,6 +90,7 @@ const liveParty: WatchParty = {
   cohosts: [],
   options: {
     voiceEnabled: false,
+    guests: "off",
     stageMode: "hosts_only",
     raiseHand: true,
     slowModeSeconds: 0,
@@ -98,6 +99,7 @@ const liveParty: WatchParty = {
   viewerRole: "host",
   reminding: false,
   stage: { invited: [], hands: [], handRaised: false },
+  guests: { onAir: [], invited: [], requests: [], requestCount: 0, requested: false, position: null },
 };
 
 const baseProps = {

@@ -1,13 +1,22 @@
 import {
   canStartWatchPartyStream,
   hasPermission,
+  isWatchPartyChannelType,
   Permission,
 } from "@pqp/shared";
 import { computeMemberPermissions } from "../services/permissions.js";
+import { loadWatchPartySeat } from "../services/watch-parties.js";
 
 export interface VoicePublishGrant {
   canSpeak: boolean;
   canStream: boolean;
+  /**
+   * CONVIDADOS' third axis: true for an accepted guest of a live party whose
+   * `guests` is not `off`. Only ever true alongside `canStream: false` — a
+   * co-host or the host already carries `canStream: true`, which is a
+   * superset. See `liveKitPublishGrant` in `backends.ts`.
+   */
+  canShowFace: boolean;
   /** `Permission.MANAGE_MUSIC`; true where there are no cargos. */
   canManageMusic: boolean;
 }
@@ -44,7 +53,7 @@ export async function resolveVoicePublish(
   userId: string,
 ): Promise<VoicePublishGrant> {
   if (!channel || channel.kind !== "server" || !channel.server_id) {
-    return { canSpeak: true, canStream: true, canManageMusic: true };
+    return { canSpeak: true, canStream: true, canShowFace: false, canManageMusic: true };
   }
   // Hand over the row when the caller has one. `type` and `parent_id` are the
   // only two columns the overwrite pass would otherwise re-read the channel
@@ -62,12 +71,24 @@ export async function resolveVoicePublish(
           parent_id: channel.parent_id ?? null,
         },
   );
+  const canStream = canStartWatchPartyStream({
+    channelType: channel.type ?? "voice",
+    permissions: perms,
+  });
+  // Only worth asking on a watch-party channel, and only for somebody who
+  // does not already carry STREAM (which is a superset — the host and every
+  // co-host). `loadWatchPartySeat` is the same cached snapshot
+  // `join-voice-room` already reads, so this costs nothing extra on the hot
+  // path once the cache is warm.
+  let canShowFace = false;
+  if (!canStream && isWatchPartyChannelType(channel.type ?? "")) {
+    const seat = await loadWatchPartySeat(channelId, userId);
+    canShowFace = Boolean(seat?.isGuest && seat.guests !== "off");
+  }
   return {
     canSpeak: hasPermission(perms, Permission.SPEAK),
-    canStream: canStartWatchPartyStream({
-      channelType: channel.type ?? "voice",
-      permissions: perms,
-    }),
+    canStream,
+    canShowFace,
     canManageMusic: hasPermission(perms, Permission.MANAGE_MUSIC),
   };
 }

@@ -3,6 +3,7 @@ import type {
   CreateWatchPartyInput,
   UpdateWatchPartyInput,
   WatchParty,
+  WatchPartyGuestsRequest,
   WatchPartyPhase,
 } from "@pqp/shared";
 import { apiFetch } from "./api";
@@ -113,6 +114,24 @@ export function setWatchPartyStage(
     | { action: "raise" | "lower" },
 ): Promise<{ party: WatchParty | null }> {
   return apiFetch(`/api/watch-parties/${partyId}/stage`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * CONVIDADOS: request/withdraw (viewer, on themselves), invite/accept/decline/
+ * remove (host or co-host, on somebody else), join/leave (the invited person,
+ * on themselves). One route, per `docs/plans/WATCH_PARTY_GUESTS.md` §5.8 —
+ * the server resolves which authority a given action needs. `/guests` is the
+ * route's new name; `/stage` (`setWatchPartyStage` above) still answers for
+ * one release, for a tab or a native build that has not shipped this yet.
+ */
+export function setWatchPartyGuestAction(
+  partyId: string,
+  input: WatchPartyGuestsRequest,
+): Promise<{ party: WatchParty | null }> {
+  return apiFetch(`/api/watch-parties/${partyId}/guests`, {
     method: "POST",
     body: JSON.stringify(input),
   });

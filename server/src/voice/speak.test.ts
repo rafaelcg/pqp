@@ -24,6 +24,18 @@ vi.mock("../services/permissions.js", () => ({
   },
 }));
 
+// `resolveVoicePublish`'s `canShowFace` axis only ever reads this on a
+// `watch_party` channel for someone who does not already carry STREAM (see
+// `speak.ts`). Mutable so a case can plant a seat and see it flow through,
+// without any of this file touching a real Postgres.
+const seat = vi.hoisted(() => ({
+  value: null as { guests: string; isGuest: boolean } | null,
+}));
+
+vi.mock("../services/watch-parties.js", () => ({
+  loadWatchPartySeat: async () => seat.value,
+}));
+
 const { resolveCanSpeak, resolveVoicePublish } = await import("./speak.js");
 const { Permission } = await import("@pqp/shared");
 
@@ -116,5 +128,60 @@ describe("resolveVoicePublish", () => {
         "user-1",
       ),
     ).resolves.toMatchObject({ canSpeak: true, canStream: false });
+  });
+
+  describe("canShowFace: guests' third axis", () => {
+    const stage = { kind: "server", server_id: SERVER, type: "watch_party" };
+
+    it("is true for an accepted guest, never a superset of canStream", async () => {
+      resolved.bits = Permission.SPEAK;
+      seat.value = { guests: "invite", isGuest: true };
+      await expect(
+        resolveVoicePublish(stage, CHANNEL, "guest-1"),
+      ).resolves.toMatchObject({
+        canSpeak: true,
+        canStream: false,
+        canShowFace: true,
+      });
+    });
+
+    it("is false for a plain viewer, invited-not-accepted included", async () => {
+      resolved.bits = Permission.SPEAK;
+      seat.value = { guests: "request", isGuest: false };
+      await expect(
+        resolveVoicePublish(stage, CHANNEL, "viewer-1"),
+      ).resolves.toMatchObject({ canShowFace: false });
+    });
+
+    it("is false once guests are turned off, even for a stale accepted row", async () => {
+      // Defence in depth, same reasoning as `mayGoOnAir`'s own test: a host
+      // flipping Convidados to off mid-party must not leave a stale
+      // `accepted_at` row as a way to keep publishing a camera.
+      resolved.bits = Permission.SPEAK;
+      seat.value = { guests: "off", isGuest: true };
+      await expect(
+        resolveVoicePublish(stage, CHANNEL, "guest-1"),
+      ).resolves.toMatchObject({ canShowFace: false });
+    });
+
+    it("is never asked on an ordinary voice channel", async () => {
+      resolved.bits = Permission.SPEAK;
+      seat.value = { guests: "invite", isGuest: true };
+      await expect(
+        resolveVoicePublish(
+          { kind: "server", server_id: SERVER, type: "voice" },
+          CHANNEL,
+          "guest-1",
+        ),
+      ).resolves.toMatchObject({ canShowFace: false });
+    });
+
+    it("stays false for the presenter, who already carries STREAM", async () => {
+      resolved.bits = Permission.SPEAK | Permission.START_WATCH_PARTY;
+      seat.value = { guests: "invite", isGuest: false };
+      await expect(
+        resolveVoicePublish(stage, CHANNEL, "host-1"),
+      ).resolves.toMatchObject({ canStream: true, canShowFace: false });
+    });
   });
 });

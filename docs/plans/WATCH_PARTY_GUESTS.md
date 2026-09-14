@@ -1,6 +1,14 @@
 # Convidados: guests replace the stage
 
-**Status:** specification. Nothing here is built.
+**Status:** §5.9 steps 1-3 shipped (PR #554): the setting, the migration, the
+client surfaces (request/accept/invite/on-air/panel/header avatars), and the
+audio (`stage-mix`, guests heard by everyone). **Steps 4-5 are pending**:
+faces (`stage-tiles.ts`, the canvas composite and the picker's name
+preference) and the viewer's stage box (fullscreen no longer unmounting the
+PiP, the audio-only collapse, the drift corrector). Step 6 (phones as native
+guests) is not started. See `docs/WATCH_PARTY.md` §Convidados for what
+actually shipped and what it deliberately left as a fossil (`watch-party-
+panel.tsx`/`watch-party-transmission.tsx` stay frozen ahead of PR #538).
 **Owner decision, 2026-09-13:** the stage goes away for viewers and is replaced
 by **guests**. Rafael watched his own party as a viewer that night and called it
 "diabolical": taking the stage felt identical to watching, a stray "Entrar na
