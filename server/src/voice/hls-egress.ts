@@ -34,6 +34,7 @@ import {
   type StorageConfig,
 } from "../lib/s3.js";
 import {
+  isLiveHlsLLEnabled,
   llHasRoom,
   llStreamFor,
   reconcileLlHlsNow,
@@ -4097,7 +4098,13 @@ async function reconcileLiveHlsNow(
   // byte-for-byte what it was before L1.5. `pqp-remux` finds its own screen
   // track (its README), so the LL half skips every LiveKit-specific probe
   // this function does for the ladder.
-  const requestedMode = await requestedHlsModeForChannel(channelId);
+  // With `LIVE_HLS_LL` unset there is nothing to ask the database: no LL
+  // session can exist, and a transient read failure must not be able to
+  // skip the conventional reconcile below (a Farol finding on the rebased
+  // PR #580: the lookup ran, and failed closed, even with the flag off).
+  const requestedMode = isLiveHlsLLEnabled()
+    ? await requestedHlsModeForChannel(channelId)
+    : false;
   if (requestedMode === null) {
     // FAIL CLOSED (a Farol finding on PR #580, fourth round): a database
     // read failure here must be indistinguishable from "try again later",
