@@ -1855,6 +1855,17 @@ inherit across a deploy; the 15 s health grace covers the boot window in which a
 ladder's rungs are still being adopted one at a time, and a listing it could not
 fetch is never a reason to act.
 
+**With two API machines, "not one of our rungs" also has to mean "not the other
+machine's".** Every `hls_sessions` row carries the `instance_id` of the process
+that started or adopted it, and the boot reconcile, the reaper, the teardown
+path and the ghost filter all refuse to adopt, end or stop a row whose owner is
+still answering its `voice_instances` heartbeat -- otherwise machine B booting
+on a rolling deploy would inherit and then restart machine A's live transcode,
+and end the rows for the rest. An unowned row (a self-host, or one written
+before the column existed) is adoptable exactly as before.
+`liveHls.skippedOwnedElsewhere` counts what was left alone, and belongs at zero
+on a one-machine deployment. See `server/src/voice/hls-ownership.ts`.
+
 **`liveHls.orphansStopped` belongs at zero.** It is the only evidence a leak
 ever happened, because the leak itself is silent: the box simply gets slower and
 the parties on it start stalling. This matters more than it looks:

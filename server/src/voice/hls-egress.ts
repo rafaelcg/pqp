@@ -29,6 +29,14 @@ import {
 import { logEvent } from "../lib/log.js";
 import { getPool } from "../db.js";
 import {
+  egressIdsOwnedElsewhere,
+  hlsOwnerInstanceId,
+  hlsSkippedOwnedElsewhereCount,
+  noteHlsSkippedOwnedElsewhere,
+  resetHlsOwnershipForTests,
+  sessionIdsOwnedElsewhere,
+} from "./hls-ownership.js";
+import {
   buildStorageConfig,
   signRequest,
   type StorageConfig,
@@ -996,8 +1004,8 @@ async function recordSessionStarted(
     const result = await getPool().query<{ id: string }>(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, egress_id, rung,
-          presenter_peer_id, video_track_id, audio_track_id)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7, $8)
+          presenter_peer_id, video_track_id, audio_track_id, instance_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7, $8, $9)
        ${
          reopen
            ? `ON CONFLICT (object_prefix) DO UPDATE
@@ -1005,6 +1013,7 @@ async function recordSessionStarted(
                     presenter_peer_id = EXCLUDED.presenter_peer_id,
                     video_track_id = EXCLUDED.video_track_id,
                     audio_track_id = EXCLUDED.audio_track_id,
+                    instance_id = EXCLUDED.instance_id,
                     ended_at = NULL,
                     cleaned_at = NULL`
            : "ON CONFLICT (object_prefix) DO NOTHING"
@@ -1019,6 +1028,10 @@ async function recordSessionStarted(
         presenterPeerId,
         videoTrackId,
         audioTrackId,
+        // WHICH PROCESS IS DRIVING THIS TRANSCODE. Read by every other
+        // machine's boot reconcile, reaper and ghost filter before it adopts,
+        // ends or stops anything: see `hls-ownership.ts`.
+        hlsOwnerInstanceId(),
       ],
     );
     if (result.rows[0]) {
@@ -1489,6 +1502,7 @@ export function resetLiveHlsForTests(): void {
   reconcileQueue.clear();
   orphanStopBackoff.clear();
   orphansStopped = 0;
+  resetHlsOwnershipForTests();
   loggedGhostEgressIds.clear();
   cameraCooldownUntil.clear();
   voiceTrackSeparatedByChannel.clear();
@@ -1649,6 +1663,15 @@ export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
   const liveChannels = await listChannelsWithLiveHlsSessions(roomNames);
   let count = 0;
   const currentIds = new Set(listing.map((info) => info.egressId));
+  // A RECORD THE OTHER MACHINE IS DRIVING IS NOT A GHOST. `liveChannels` is a
+  // channel-level answer and the ghost rule reads it as "nobody has a live row
+  // for this room"; a row the other instance ENDED (or is about to reopen)
+  // makes its still-running transcode look abandoned to us, and calling it a
+  // ghost discounts a rendition that is really costing the box a core. Ask by
+  // egress id instead, and take "could not ask" as "not a ghost".
+  const ownerLookup = await egressIdsOwnedElsewhere([...currentIds]);
+  const ownedElsewhere = ownerLookup ?? new Set<string>();
+  const ownerLookupFailed = ownerLookup === null;
   for (const id of loggedGhostEgressIds) {
     if (!currentIds.has(id)) {
       loggedGhostEgressIds.delete(id);
@@ -1665,6 +1688,26 @@ export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
       liveChannels !== null &&
       info.roomName !== undefined &&
       !liveChannels.has(info.roomName);
+    if (
+      noLiveSession &&
+      !withinGracePeriod &&
+      (ownerLookupFailed || ownedElsewhere.has(info.egressId))
+    ) {
+      // Owned, live, and someone else's: count it against the box budget like
+      // any other rendition rather than writing it off as a leak. A lookup we
+      // could not run lands here too, deliberately -- but is not counted as a
+      // skip, since nothing was proved about who owns it.
+      if (!ownerLookupFailed) {
+        noteHlsSkippedOwnedElsewhere({
+          site: "ghost",
+          channelId: info.roomName ?? null,
+          egressId: info.egressId,
+          now,
+        });
+      }
+      count += 1;
+      continue;
+    }
     const isGhost = noLiveSession && !withinGracePeriod;
     if (isGhost) {
       if (!loggedGhostEgressIds.has(info.egressId)) {
@@ -1772,6 +1815,16 @@ export interface LiveHlsActivity {
    * `LIVE_HLS_CAMERA=false`.
    */
   cameraSessions: number;
+  /**
+   * Rows this process left alone because another instance that is still
+   * answering its `voice_instances` heartbeat owns them: a boot adoption it
+   * did not take, a row it did not end, a transcode the reaper or the ghost
+   * filter did not stop. **Belongs at zero on a one-machine deployment** and
+   * is the number that proves the cross-machine guard runs on a two-machine
+   * one -- pitfall 12, a flag-gated path nobody could see. Zero with two
+   * machines and a party running means the `instance_id` stamp never landed.
+   */
+  skippedOwnedElsewhere: number;
 }
 
 /**
@@ -1808,6 +1861,7 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
     orphansStopped,
     micArchives,
     cameraSessions: runningCameraCount(),
+    skippedOwnedElsewhere: hlsSkippedOwnedElsewhereCount(),
   };
 }
 
@@ -2137,6 +2191,7 @@ async function reapForeignEgresses(
   if (room.camera) {
     ours.add(room.camera.egressId);
   }
+  const candidates: string[] = [];
   for (const info of listing) {
     if (ours.has(info.egressId)) {
       continue;
@@ -2156,12 +2211,35 @@ async function reapForeignEgresses(
     if (orphanStopHeld(info.egressId, now)) {
       continue;
     }
-    const stopped = await stopEgressById(info.egressId, channelId);
+    candidates.push(info.egressId);
+  }
+  if (candidates.length === 0) {
+    return;
+  }
+  // AND THE SECOND MACHINE IS NOT A LEAK. "An egress in a room I am
+  // presenting that is not one of my rungs can only be mine from before" was
+  // true while one process existed. With two, the other one can legitimately
+  // be driving a rung here -- a camera it started, a ladder it adopted -- and
+  // stopping it would be this function killing a live stream instead of
+  // tidying one up. So a candidate whose session row belongs to an instance
+  // that is still answering its heartbeat is left alone. A lookup that FAILED
+  // is not permission either: stop nothing this tick and try again on the
+  // next, the same way a listing we could not fetch is never a reason to act.
+  const ownedElsewhere = await egressIdsOwnedElsewhere(candidates);
+  if (ownedElsewhere === null) {
+    return;
+  }
+  for (const egressId of candidates) {
+    if (ownedElsewhere.has(egressId)) {
+      noteHlsSkippedOwnedElsewhere({ site: "reap", channelId, egressId, now });
+      continue;
+    }
+    const stopped = await stopEgressById(egressId, channelId);
     if (stopped) {
       orphansStopped += 1;
       logEvent("voice.hlsOrphanStopped", {
         channelId,
-        egressId: info.egressId,
+        egressId,
         ours: [...ours],
       });
     }
@@ -3432,7 +3510,16 @@ async function tendMicArchive(
   await startMicArchive(egress, channelId, room, tracks.micArchiveTrackId);
 }
 
-/** Stop these renditions' egresses, tolerating one that is already gone. */
+/**
+ * Stop these renditions' egresses, tolerating one that is already gone.
+ *
+ * ONE LAST OWNERSHIP CHECK, cheap and defensive. Every entry here came out of
+ * this process's own `rooms` map, so it is ours by construction -- unless the
+ * other machine restarted the session under us between our adoption and this
+ * teardown, in which case stopping it hangs up a stream that has a live owner.
+ * A lookup that fails falls back to stopping: an egress we believe is ours and
+ * do not stop is pitfall 15's leaked handler, which is the worse of the two.
+ */
 async function stopRungs(
   channelId: string,
   entries: readonly RunningRung[],
@@ -3441,7 +3528,19 @@ async function stopRungs(
   if (!egress) {
     return;
   }
+  const ownedElsewhere =
+    (await sessionIdsOwnedElsewhere(entries.map((entry) => entry.sessionId))) ??
+    new Set<string>();
   for (const entry of entries) {
+    if (entry.sessionId && ownedElsewhere.has(entry.sessionId)) {
+      noteHlsSkippedOwnedElsewhere({
+        site: "stop-rungs",
+        channelId,
+        egressId: entry.egressId,
+        sessionId: entry.sessionId,
+      });
+      continue;
+    }
     try {
       await egress.stopEgress(entry.egressId);
     } catch (error) {

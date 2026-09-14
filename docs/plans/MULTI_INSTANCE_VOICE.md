@@ -380,6 +380,31 @@ $2, watch_party_rev = $3 WHERE channel_id = $1 AND watch_party_rev < $3` (a
 `welcomeVoicePeer` reads the room row for the initial state. `endWatchParty`
 clears the columns when the room empties.
 
+**The HLS session rows needed an owner, and that one is done.** A watch party's
+transcode is recorded in `hls_sessions`, and until 2026-09-14 that row said
+nothing about which process started it, while `reconcileStaleHlsSessions`
+reasoned from the single-machine premise it stated out loud: "this process owns
+no session at boot, so every open row is stale by definition". On two machines
+that sentence is a promise that every rolling deploy kills a live stream --
+machine B boots, finds machine A's LIVE rows, adopts the egresses A is still
+driving (two monitors on one transcode, then a restart from whichever decides
+the playlist stalled first) and ends the rows LiveKit did not happen to list for
+it, handing a live party's segments to the retention sweep. `hls_sessions` now
+carries a nullable `instance_id`, stamped by the process that starts a session
+and re-stamped by the one that adopts it, and every guard that would adopt, end
+or stop something (`reconcileStaleHlsSessions`, `adoptLlHlsSessions`,
+`reapForeignEgresses`, the monitor's teardown path and the box-budget ghost
+filter) first asks whether the owner's `voice_instances` heartbeat is still
+fresh -- the same expiry rule `reconcileVoiceRegistry` uses to free a dead
+instance's seats. Unowned rows and rows whose owner has expired stay adoptable,
+so `VOICE_REGISTRY` off (a self-host, one process) behaves exactly as it always
+did, with no round trip. A lookup that fails is not permission: the pass does
+nothing and tries again later. `liveHls.skippedOwnedElsewhere` on
+`GET /api/admin/metrics`, and the `voice.hlsSkippedOwnedElsewhere` log line
+beside it, are how you tell from outside that the guard runs at all: zero on one
+machine, non-zero within a deploy of a party running on two. See
+`server/src/voice/hls-ownership.ts`.
+
 ### 5.8 Metrics and moderation targeting
 
 `getVoiceActivitySnapshot` rooms/participants from `voice_peers` (async; the
