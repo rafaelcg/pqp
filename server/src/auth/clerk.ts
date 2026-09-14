@@ -21,6 +21,12 @@ import {
   resolveCharacterToken,
 } from "../services/characters.js";
 import type { DbUser } from "../db.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
+import { forEachAuthenticatedSocket } from "../ws/sockets.js";
 
 const clerk = createClerkClient({
   secretKey: process.env.CLERK_SECRET_KEY,
@@ -304,13 +310,30 @@ const USER_TTL_MS = 60_000;
 const userCache = new Map<string, { user: DbUser; expiresAt: number }>();
 const userInflight = new Map<string, Promise<DbUser>>();
 
-/** Called after a profile write so the next request sees fresh data. */
+/**
+ * Called after a profile write so the next request sees fresh data.
+ *
+ * SINGLE-INSTANCE this was always enough: `userCache` lives on the process
+ * that just wrote the row. On two instances it is not — the write happens on
+ * whichever one served the request, and a sibling instance goes on serving the
+ * stale `DbUser` row (old display name, old avatar) for up to `USER_TTL_MS`
+ * with nothing on its side ever telling it to look again. So this both clears
+ * the local entry (unchanged behaviour) and, with a transport installed,
+ * relays the same invalidation to every other instance.
+ */
 export function invalidateUserCache(clerkId: string): void {
   userCache.delete(clerkId);
+  if (isBusEnabled()) {
+    publishToCluster(AUTH_INVALIDATE_TOPIC, { clerkId });
+  }
 }
 
 /**
- * Drop *every* cached trace of an identity — the DB row and the Clerk profile.
+ * Drop *every* cached trace of an identity — the DB row and the Clerk profile
+ * — ON THIS INSTANCE ONLY. See `evictUserAcrossCluster` for the version that
+ * also closes sockets and reaches every other instance; this local half is
+ * what that function (and this file's own Clerk-deletion cleanup below) build
+ * on.
  *
  * `invalidateUserCache` is not enough for a deleted account: `profileCache`
  * holds a display name and avatar for up to five minutes, and `loadProfile`
@@ -325,6 +348,119 @@ export function forgetAuthUser(clerkId: string): void {
   userCache.delete(clerkId);
   userInflight.delete(clerkId);
 }
+
+// ------------------------------------------------------------ cluster bus
+//
+// Account termination has to reach every instance, not just the one that
+// handled the HTTP request: a WebSocket authenticates once at connect and
+// never re-checks, so a socket held open on a SIBLING instance would keep
+// delivering message bodies to a deleted account until it happened to drop,
+// and that instance's own `userCache`/`profileCache` would keep authenticating
+// the identity from cache — `upsertUser` can even recreate the row `DELETE FROM
+// users` just removed. See pitfalls (1)/(2) in the audit this closes.
+//
+// Same rules as every other cluster-bus handler in this codebase (`ws/chat.ts`):
+// inert with no transport installed, subscriptions registered at import time
+// regardless, and a handler calls the *local* half only — `bus.ts`'s origin
+// guard is what stops the instance that published a frame from ever running
+// its own subscriber.
+
+const AUTH_EVICT_TOPIC = "auth.evictUser";
+const AUTH_INVALIDATE_TOPIC = "auth.invalidateUser";
+
+/**
+ * The close code + reason used everywhere an account's own sockets are torn
+ * down because the account itself is gone — one constant so the local path
+ * and the cluster relay can never drift onto different wire values.
+ */
+const ACCOUNT_TERMINATED_CLOSE_CODE = 4003;
+const ACCOUNT_TERMINATED_CLOSE_REASON = "account deleted";
+
+/** How many `auth.evictUser` / `auth.invalidateUser` frames from OTHER
+ *  instances this process has applied. Proof the relay actually runs — see
+ *  pitfall 12 in CLAUDE.md, where a cluster-gated code path shipped and was
+ *  never once exercised because nothing counted it. */
+let clusterEvictionsApplied = 0;
+let clusterInvalidationsApplied = 0;
+
+/** Test-only visibility into the counters above. */
+export function authClusterRelayCounts(): {
+  evictions: number;
+  invalidations: number;
+} {
+  return {
+    evictions: clusterEvictionsApplied,
+    invalidations: clusterInvalidationsApplied,
+  };
+}
+
+/**
+ * The half that runs on EVERY instance holding this account's sockets: drop
+ * every cache trace (same as `forgetAuthUser`) and close every socket
+ * authenticated as this user, with the same close code the local termination
+ * path has always used.
+ */
+function evictUserLocally(userId: string, clerkId: string): void {
+  forgetAuthUser(clerkId);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (user.id === userId) {
+      socket.close(ACCOUNT_TERMINATED_CLOSE_CODE, ACCOUNT_TERMINATED_CLOSE_REASON);
+    }
+  });
+}
+
+/**
+ * Terminate an account everywhere it might be holding a live connection.
+ * Call this from a termination path instead of `forgetAuthUser` plus a bare
+ * `forEachAuthenticatedSocket` loop — that pair only ever reached the instance
+ * that took the HTTP request. `reason` is for the log line below, not the
+ * wire: what the client sees over the socket is always
+ * `ACCOUNT_TERMINATED_CLOSE_REASON`, on this instance and on every other one.
+ */
+export function evictUserAcrossCluster(
+  userId: string,
+  clerkId: string,
+  reason: string,
+): void {
+  evictUserLocally(userId, clerkId);
+  if (isBusEnabled()) {
+    publishToCluster(AUTH_EVICT_TOPIC, { userId, clerkId, reason });
+  }
+}
+
+function asRecord(data: unknown): Record<string, unknown> | null {
+  return typeof data === "object" && data !== null
+    ? (data as Record<string, unknown>)
+    : null;
+}
+
+subscribeToCluster(AUTH_EVICT_TOPIC, (data) => {
+  const frame = asRecord(data);
+  const userId = frame && typeof frame.userId === "string" ? frame.userId : null;
+  const clerkId =
+    frame && typeof frame.clerkId === "string" ? frame.clerkId : null;
+  if (!userId || !clerkId) {
+    return;
+  }
+  evictUserLocally(userId, clerkId);
+  clusterEvictionsApplied += 1;
+  const reason =
+    frame && typeof frame.reason === "string" ? frame.reason : "unknown";
+  console.warn(
+    `[auth] cluster evict applied for user ${userId} (reason: ${reason})`,
+  );
+});
+
+subscribeToCluster(AUTH_INVALIDATE_TOPIC, (data) => {
+  const frame = asRecord(data);
+  const clerkId =
+    frame && typeof frame.clerkId === "string" ? frame.clerkId : null;
+  if (!clerkId) {
+    return;
+  }
+  userCache.delete(clerkId);
+  clusterInvalidationsApplied += 1;
+});
 
 /** A Clerk user id that no longer exists there — see `deleteClerkUser`. */
 export class ClerkUserGoneError extends Error {}

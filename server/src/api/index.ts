@@ -181,7 +181,6 @@ import {
   evictVoiceChannel,
   evictVoiceUser,
   evictVoiceUsersExcept,
-  forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
   applyAutomodEffects,
@@ -1755,19 +1754,13 @@ router.delete("/api/me", async ({ req, res, user }) => {
   // The account is gone from the database, but its live sockets are not: a
   // WebSocket authenticates once at connect and never re-checks, so without
   // this the deleted user keeps receiving message bodies until they happen to
-  // disconnect. `forEachAuthenticatedSocket` and `evictVoiceUser` are the
-  // already-exported handles for this; nothing here reaches into ws/.
-  //
-  // PROCESS-LOCAL. Both helpers walk this instance's own maps, so on a
-  // multi-replica deploy a socket held on *another* replica survives until it
-  // drops. Closing that gap needs a cluster-bus eviction frame, which lives in
-  // ws/chat.ts — see the note in docs/TRUST_AND_SAFETY.md §5.
+  // disconnect. `deleteAccount` (services/account.ts) already closed every
+  // chat socket for this account on this instance AND, with `CLUSTER_BUS` on,
+  // published an eviction that every other instance applies too — see
+  // `evictUserAcrossCluster` in auth/clerk.ts. Voice seats are a separate
+  // registry with its own cross-instance story (`VOICE_REGISTRY`); this call
+  // is still process-local for that part.
   evictVoiceUser(user.id);
-  forEachAuthenticatedSocket((socket, connected) => {
-    if (connected.id === user.id) {
-      socket.close(4003, "account deleted");
-    }
-  });
 
   // Nothing names these objects any more — the rows that did cascaded away with
   // the account, so the hourly orphan sweeper will never see them.
@@ -1848,13 +1841,10 @@ router.delete("/api/admin/users/:userId", async ({ user, res }, { userId }) => {
     throw error;
   }
 
-  // Same eviction and the same process-local caveat as `DELETE /api/me`.
+  // Same eviction as `DELETE /api/me` — `deleteAccount` already closed this
+  // account's chat sockets cluster-wide. Voice seats stay process-local here,
+  // same caveat as above.
   evictVoiceUser(target.id);
-  forEachAuthenticatedSocket((socket, connected) => {
-    if (connected.id === target.id) {
-      socket.close(4003, "account deleted");
-    }
-  });
   deleteObjectsInBackground(result.attachmentKeys);
 
   // No audit entry, and that is not an oversight: `audit_log` is server-scoped
