@@ -92,6 +92,7 @@ import {
   setLiveHlsSfuLoadReader,
   setVoiceTrackSeparated,
 } from "../voice/hls-egress.js";
+import { llStreamFor } from "../voice/hls-remux.js";
 import {
   liveHlsForcesSfu,
   resolveVoiceTransport,
@@ -2019,14 +2020,23 @@ export function getChannelLiveState(channelId: string): {
   participants: number;
 } {
   return {
-    // `liveHlsStreamFor` only ever knows about the conventional ladder (its
-    // `rooms` map, `hls-egress.ts`). `hlsAudience.stream` is what
-    // `pushLiveHls` last told the audience regardless of which driver built
-    // it, so it is the fallback that makes an LL session (`docs/plans/LL_HLS.md`
-    // L1.5) visible here too. The conventional answer is tried first and is
-    // unchanged: the two agree for every conventional session, since every
-    // `pushLiveHls` call sets both.
-    stream: liveHlsStreamFor(channelId) ?? hlsAudience.stream(channelId),
+    // Three sources, tried in order, because no single one always has the
+    // answer. `liveHlsStreamFor` only ever knows about the conventional
+    // ladder (its `rooms` map, `hls-egress.ts`). `llStreamFor` is the LL
+    // driver's own room map (`hls-remux.ts`), populated by both a live
+    // reconcile AND boot adoption -- checking it directly, rather than only
+    // through `hlsAudience`, is what makes an adopted-but-not-yet-pushed LL
+    // session visible right after a restart (a Farol finding on PR #580:
+    // adoption never called `hlsAudience.setStream`, so this route answered
+    // null for a session that was, in fact, still running). `hlsAudience.stream`
+    // is the last resort: what `pushLiveHls` most recently told the
+    // audience, which is the only source when the caller wants a stream
+    // adoption itself does not populate (a mid-party camera or mic-archive
+    // change is layered onto the conventional stream this way today, and the
+    // conventional answer is tried first regardless, so the two agree for
+    // every conventional session).
+    stream:
+      liveHlsStreamFor(channelId) ?? llStreamFor(channelId) ?? hlsAudience.stream(channelId),
     watching: hlsAudience.count(channelId),
     participants: getRoomPeers(channelId).length,
   };

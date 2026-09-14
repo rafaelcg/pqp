@@ -180,6 +180,8 @@ describe("config helpers", () => {
 function createFakeRemuxServer() {
   const sessions = new Map<string, ReturnType<typeof buildInfo>>();
   const calls: { method: string; path: string; headers: Headers; body: string }[] = [];
+  /** Every sessionId ever accepted by POST /sessions, in order, even after it was later stopped. */
+  const created: string[] = [];
 
   function buildInfo(sessionId: string, room: string, channelId: string) {
     return {
@@ -206,6 +208,7 @@ function createFakeRemuxServer() {
       const req = JSON.parse(body) as { sessionId: string; room: string; channelId: string };
       const info = buildInfo(req.sessionId, req.room, req.channelId);
       sessions.set(req.sessionId, info);
+      created.push(req.sessionId);
       return new Response(JSON.stringify(info), { status: 201 });
     }
     if (method === "DELETE" && pathname.startsWith("/sessions/")) {
@@ -222,7 +225,7 @@ function createFakeRemuxServer() {
     return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
   };
 
-  return { fetchImpl, sessions, calls };
+  return { fetchImpl, sessions, calls, created };
 }
 
 describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () => {
@@ -233,8 +236,10 @@ describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () =
 
     await reconcileLlHlsNow(CHANNEL, "peer-1");
 
-    expect(server.calls).toHaveLength(1);
-    const call = server.calls[0]!;
+    // A GET /sessions precedes the POST (`findExistingRemuxSession`, the
+    // retry-safety check) -- both must be signed, so this asserts the LAST
+    // call, the POST that actually starts the session.
+    const call = server.calls.at(-1)!;
     expect(call.method).toBe("POST");
     expect(call.path).toBe("/sessions");
     const timestamp = call.headers.get("x-pqp-remux-timestamp");
@@ -292,7 +297,11 @@ describe("starting and stopping a session", () => {
     expect(stream).not.toBeNull();
     expect(stream?.mode).toBe("ll");
     expect(stream?.presenterPeerId).toBe("peer-1");
-    expect(stream?.hlsUrl.startsWith(ORIGIN_URL)).toBe(true);
+    // The SAME access-controlled, signed-token path the conventional ladder
+    // uses -- never the egress box's raw origin URL. See llPlaylistUrl's own
+    // doc comment (a Farol HIGH finding on the first version of this file).
+    expect(stream?.hlsUrl.startsWith(`/api/voice/hls-playlist/${CHANNEL}/`)).toBe(true);
+    expect(stream?.hlsUrl.startsWith(ORIGIN_URL)).toBe(false);
     expect(llHasRoom(CHANNEL)).toBe(true);
     expect(llStreamFor(CHANNEL)).toEqual(stream);
     expect(llHlsActivity().sessions).toBe(1);
@@ -323,13 +332,14 @@ describe("starting and stopping a session", () => {
     const server = createFakeRemuxServer();
     setHlsRemuxTestHooks({ fetch: server.fetchImpl });
 
-    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
     const second = await reconcileLlHlsNow(CHANNEL, "peer-2");
 
     expect(second?.presenterPeerId).toBe("peer-2");
-    // A genuinely new session (new remux sessionId embedded in the URL, not
-    // the same one reused), not the old presenter's row relabelled.
-    expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+    // A genuinely new session (a second distinct sessionId was created on
+    // the box), not the old presenter's row relabelled.
+    expect(server.created).toHaveLength(2);
+    expect(server.created[0]).not.toBe(server.created[1]);
     expect(server.sessions.size).toBe(1);
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlStopped",
@@ -372,6 +382,120 @@ describe("starting and stopping a session", () => {
       "voice.hlsLlStopFailed",
       expect.anything(),
     );
+  });
+
+  it("keeps the room when the remote DELETE fails, instead of forgetting it", async () => {
+    enableLL();
+    const server = createFakeRemuxServer();
+    let failDelete = false;
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        if (failDelete && (init.method ?? "GET").toUpperCase() === "DELETE") {
+          throw new Error("ETIMEDOUT");
+        }
+        return server.fetchImpl(url, init);
+      },
+    });
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
+    failDelete = true;
+
+    await stopLlSession(CHANNEL, "test");
+
+    // Still owned: a failed stop must not be forgotten, or the next
+    // reconcile would start a second session on top of one that, for all
+    // this process knows, is still running on the box (a Farol finding on
+    // PR #580).
+    expect(llHasRoom(CHANNEL)).toBe(true);
+    expect(server.sessions.size).toBe(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlStopFailed",
+      expect.objectContaining({ channelId: CHANNEL, reason: "test" }),
+    );
+  });
+
+  it("defers a presenter switch rather than starting a second session when the old one won't stop", async () => {
+    enableLL();
+    const server = createFakeRemuxServer();
+    let failDelete = false;
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        if (failDelete && (init.method ?? "GET").toUpperCase() === "DELETE") {
+          throw new Error("ETIMEDOUT");
+        }
+        return server.fetchImpl(url, init);
+      },
+    });
+    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    failDelete = true;
+
+    const second = await reconcileLlHlsNow(CHANNEL, "peer-2");
+
+    // The old session's stop could not be confirmed, so no new one was
+    // started on top of it: the channel is still reported as peer-1's
+    // session, not a second, orphaned peer-2 session.
+    expect(second).toEqual(first);
+    expect(server.created).toHaveLength(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlSwitchDeferred",
+      expect.objectContaining({ channelId: CHANNEL, presenterPeerId: "peer-2" }),
+    );
+  });
+
+  it("reuses a session the box already holds for the room instead of starting a duplicate", async () => {
+    // Simulates a retried start after an ambiguous first POST: the box
+    // already has a session for this room (from a request whose response
+    // was lost), and this attempt must find and adopt it rather than create
+    // a second one.
+    enableLL();
+    const server = createFakeRemuxServer();
+    server.sessions.set("00000000-0000-4000-8000-0000000000e1", {
+      sessionId: "00000000-0000-4000-8000-0000000000e1",
+      room: CHANNEL,
+      channelId: CHANNEL,
+      subscribed: true,
+      startedAtMs: Date.now(),
+      lastPartAtMs: null,
+      lastIdrAtMs: null,
+      openSegmentMs: null,
+      partsWritten: 0,
+      bytesServed: 0,
+    });
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(stream).not.toBeNull();
+    expect(server.created).toHaveLength(0);
+    expect(server.sessions.size).toBe(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlStartFoundExisting",
+      expect.objectContaining({
+        channelId: CHANNEL,
+        sessionId: "00000000-0000-4000-8000-0000000000e1",
+      }),
+    );
+  });
+
+  it("stops the session it just started/found and refuses to publish when the row cannot be recorded", async () => {
+    enableLL();
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO hls_sessions")) {
+        throw new Error("connection terminated");
+      }
+      return { rowCount: 0, rows: [] };
+    });
+
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(stream).toBeNull();
+    expect(llHasRoom(CHANNEL)).toBe(false);
+    // The remux session that was started is stopped again: nothing keeps
+    // running on the box with no `hls_sessions` row behind it (a Farol
+    // finding on PR #580).
+    expect(server.sessions.size).toBe(0);
+    expect(llHlsActivity().startFailures).toBe(1);
   });
 });
 
@@ -422,6 +546,7 @@ describe("boot adoption", () => {
               id: "row-1",
               channel_id: CHANNEL,
               started_at: new Date(1_725_000_000_000).toISOString(),
+              ended_at: null,
               remux_session_id: "00000000-0000-4000-8000-0000000000c1",
               presenter_peer_id: "peer-1",
               origin_base_url: ORIGIN_URL,
@@ -438,6 +563,65 @@ describe("boot adoption", () => {
     expect(llHasRoom(CHANNEL)).toBe(true);
     expect(llStreamFor(CHANNEL)?.presenterPeerId).toBe("peer-1");
     expect(llStreamFor(CHANNEL)?.mode).toBe("ll");
+    // The go-live request is restored alongside the adopted row, or the
+    // very next reconcile (a roster event after boot) would resolve
+    // "conventional" and immediately stop the session this just adopted.
+    expect(requestedHlsModeFor(CHANNEL)).toBe(true);
+  });
+
+  it("does NOT adopt a row already marked ended, even if the box still answers with it", async () => {
+    // A failed DELETE outside `stopLlSession`'s own retry path, or a bare
+    // race with the 1-hour lookback window: the row says this process
+    // already told the party it was over. Adopting it anyway would
+    // resurrect a session someone was told had stopped (a Farol finding on
+    // PR #580).
+    enableLL();
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    server.sessions.set("00000000-0000-4000-8000-0000000000c3", {
+      sessionId: "00000000-0000-4000-8000-0000000000c3",
+      room: CHANNEL,
+      channelId: CHANNEL,
+      subscribed: true,
+      startedAtMs: Date.now(),
+      lastPartAtMs: null,
+      lastIdrAtMs: null,
+      openSegmentMs: null,
+      partsWritten: 0,
+      bytesServed: 0,
+    });
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT")) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              id: "row-ended",
+              channel_id: CHANNEL,
+              started_at: new Date(1_725_000_000_000).toISOString(),
+              ended_at: new Date().toISOString(),
+              remux_session_id: "00000000-0000-4000-8000-0000000000c3",
+              presenter_peer_id: "peer-1",
+              origin_base_url: ORIGIN_URL,
+            },
+          ],
+        };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+
+    const result = await adoptLlHlsSessions();
+
+    expect(result).toEqual({ adopted: 0, ended: 0, stopped: 1 });
+    expect(llHasRoom(CHANNEL)).toBe(false);
+    expect(server.sessions.has("00000000-0000-4000-8000-0000000000c3")).toBe(false);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlOrphanStopped",
+      expect.objectContaining({
+        sessionId: "00000000-0000-4000-8000-0000000000c3",
+        reason: "no-row",
+      }),
+    );
   });
 
   it("stops a remote session with no owning row", async () => {
@@ -482,6 +666,7 @@ describe("boot adoption", () => {
               id: "row-dead",
               channel_id: CHANNEL,
               started_at: new Date().toISOString(),
+              ended_at: null,
               remux_session_id: "remux-dead",
               presenter_peer_id: "peer-1",
               origin_base_url: ORIGIN_URL,
@@ -491,7 +676,9 @@ describe("boot adoption", () => {
       }
       if (sql.includes("UPDATE hls_sessions")) {
         updateCalled = true;
-        expect(params).toEqual(["row-dead"]);
+        // One round trip for every stale row (a batched ANY($1) call), not
+        // one UPDATE per row -- a Farol finding on PR #580.
+        expect(params).toEqual([["row-dead"]]);
       }
       return { rowCount: 1, rows: [] };
     });
@@ -500,6 +687,50 @@ describe("boot adoption", () => {
 
     expect(result).toEqual({ adopted: 0, ended: 1, stopped: 0 });
     expect(updateCalled).toBe(true);
+  });
+
+  it("stops orphan sessions in parallel, not one at a time", async () => {
+    enableLL();
+    const server = createFakeRemuxServer();
+    const stopOrder: string[] = [];
+    let concurrentInFlight = 0;
+    let maxConcurrent = 0;
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        const method = (init.method ?? "GET").toUpperCase();
+        if (method === "DELETE") {
+          concurrentInFlight += 1;
+          maxConcurrent = Math.max(maxConcurrent, concurrentInFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          stopOrder.push(new URL(url).pathname);
+          concurrentInFlight -= 1;
+        }
+        return server.fetchImpl(url, init);
+      },
+    });
+    for (const id of [
+      "00000000-0000-4000-8000-0000000000d1",
+      "00000000-0000-4000-8000-0000000000d2",
+      "00000000-0000-4000-8000-0000000000d3",
+    ]) {
+      server.sessions.set(id, {
+        sessionId: id,
+        room: OTHER_CHANNEL,
+        channelId: OTHER_CHANNEL,
+        subscribed: true,
+        startedAtMs: Date.now(),
+        lastPartAtMs: null,
+        lastIdrAtMs: null,
+        openSegmentMs: null,
+        partsWritten: 0,
+        bytesServed: 0,
+      });
+    }
+
+    const result = await adoptLlHlsSessions();
+
+    expect(result).toEqual({ adopted: 0, ended: 0, stopped: 3 });
+    expect(maxConcurrent).toBeGreaterThan(1);
   });
 });
 
