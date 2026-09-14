@@ -92,6 +92,7 @@ import {
 } from "../voice/backends.js";
 import {
   isLiveHlsEnabledForServer,
+  liveHlsOwnsChannel,
   liveHlsStreamFor,
   liveHlsStreamFromDb,
   reconcileLiveHls,
@@ -1540,6 +1541,13 @@ export interface VoiceActivitySnapshot {
      */
     musicRelayed: number;
     musicAdopted: number;
+    /**
+     * `voice.hlsReconcile`: reconcile intents this instance published for a
+     * channel whose transcode lives on the other machine, and intents it
+     * acted on for a channel it owns. See `relayHlsReconcile`.
+     */
+    hlsReconcileRelayed: number;
+    hlsReconcileApplied: number;
   };
   /**
    * `voice.registry.writesPerMinute`: registry writes actually issued
@@ -1813,6 +1821,8 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       framesReceived: clusterFrames.received,
       musicRelayed: musicCluster.relayed,
       musicAdopted: musicCluster.adopted,
+      hlsReconcileRelayed: hlsReconcileRelay.published,
+      hlsReconcileApplied: hlsReconcileRelay.applied,
     },
     registry: {
       writesPerMinute: registryOn() ? voiceRegistryWritesPerMinute() : 0,
@@ -1961,6 +1971,26 @@ function logNoSharer(voiceChannelId: string, presenterPeerId: string): void {
 async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
     return;
+  }
+  // THE RECONCILE HAS TO HAPPEN WHERE THE TRANSCODE IS.
+  //
+  // Everything below is written against this process's own maps: the peers it
+  // holds, `rooms` and `llRooms` in the two drivers. With two machines and no
+  // session affinity, a viewer's `voice.join` lands on whichever one Fly
+  // picked, and roughly half the time that is not the machine holding the
+  // presenter and the egress. `reconcileLiveHls` then runs against an empty
+  // map and does nothing whatsoever — including the mode re-check at the top
+  // of `reconcileLiveHlsNow`, which is the only thing that would notice a
+  // party that has been demoted off the LL path and owes its audience the
+  // conventional ladder. On 2026-09-14 that is exactly what happened: joins
+  // on machine A, presenter and egress on B, and the re-check never ran.
+  //
+  // So a machine that does not own the channel says so on the bus instead,
+  // and the owner does its own local half. Nothing changes on one machine
+  // (`isBusEnabled()` is false) and nothing changes on the owner, which takes
+  // the local path below exactly as it always did.
+  if (!liveHlsOwnsChannel(voiceChannelId)) {
+    relayHlsReconcile(voiceChannelId);
   }
   // THE PARTY IS THE BROADCAST, AND ENDING IT ENDS THE BROADCAST.
   // `pickHlsSharer` asks whether somebody is sharing in a watch-party room
@@ -2448,6 +2478,48 @@ function publishChannelLive(
 }
 
 /**
+ * "SOMETHING HAPPENED IN THIS CHANNEL AND I AM NOT THE ONE WHO CAN ACT ON IT."
+ *
+ * An intent, not a fact: the frame carries a channel id and nothing else, and
+ * the receiving instance decides whether it is the owner and what the right
+ * answer is by reading its own maps. That is deliberate — every other thing
+ * this topic could carry (a stream, a presenter, a mode) is something the
+ * owner already knows better than the sender does, and a frame that asserted
+ * any of it would be a rumour the owner could act on wrongly.
+ *
+ * Throttled per channel, because the event that triggers it is a join: a
+ * hundred viewers arriving on this machine in ten seconds is one frame, not a
+ * hundred. The owner's reconcile is single-flighted per channel anyway
+ * (`reconcileQueue`), so a coalesced burst loses nothing.
+ *
+ * No echo guard needed here beyond the bus's own: `subscribeToCluster` never
+ * hands a handler a frame this process published (`lib/bus.ts`).
+ */
+const RECONCILE_RELAY_THROTTLE_MS = 1_000;
+const lastReconcileRelayAt = new Map<string, number>();
+
+function relayHlsReconcile(channelId: string, now = Date.now()): void {
+  if (!isBusEnabled()) {
+    return;
+  }
+  for (const [id, at] of lastReconcileRelayAt) {
+    if (now - at > 10 * RECONCILE_RELAY_THROTTLE_MS) {
+      lastReconcileRelayAt.delete(id);
+    }
+  }
+  const last = lastReconcileRelayAt.get(channelId);
+  if (last !== undefined && now - last < RECONCILE_RELAY_THROTTLE_MS) {
+    return;
+  }
+  lastReconcileRelayAt.set(channelId, now);
+  hlsReconcileRelay.published += 1;
+  publishVoice(VOICE_HLS_RECONCILE_TOPIC, {
+    channelId,
+  } satisfies VoiceHlsReconcileFrame);
+}
+
+
+/**
  * What `GET /api/channels/:channelId/live` answers: the unstamped stream (the
  * route stamps it for the caller), watchers without a seat, and seats. For a
  * client that opened the channel before its socket was up.
@@ -2685,6 +2757,16 @@ const hlsAudienceFramesSent = {
    * the shape pitfall 12 in CLAUDE.md exists for. */
   fromBus: 0,
 };
+
+/**
+ * `voice.hlsReconcile`: reconcile intents this instance published because it
+ * does not own the channel, and intents from the bus it acted on because it
+ * does. Both zero on one machine. On two, `published` climbing while
+ * `applied` stays at zero means either nobody owns the channel (fine, and
+ * common: nothing is live) or the frames are not arriving — which is the
+ * distinction `voice.hlsReconcileFromBus` in the log makes per channel.
+ */
+const hlsReconcileRelay = { published: 0, applied: 0 };
 
 /**
  * How long a live session waits between proactively re-minting its
@@ -2991,6 +3073,9 @@ export function resetRosterSequences(): void {
   hlsAudienceFramesSent.frames = 0;
   hlsAudienceFramesSent.relayed = 0;
   hlsAudienceFramesSent.fromBus = 0;
+  hlsReconcileRelay.published = 0;
+  hlsReconcileRelay.applied = 0;
+  lastReconcileRelayAt.clear();
   relayedLiveAt.clear();
   hlsTokenRemint.loops = 0;
   hlsTokenRemint.tokens = 0;
@@ -8109,6 +8194,15 @@ export const VOICE_TRANSPORT_TOPIC = "voice.transport";
  * on the registry (see the banner above): it carries its own truth.
  */
 export const VOICE_LIVE_TOPIC = "voice.live";
+/**
+ * "Reconcile this channel's transcode, because I cannot." Published by an
+ * instance that holds sockets in a room whose session lives on the other
+ * machine; acted on only by the instance that actually owns the channel
+ * (`liveHlsOwnsChannel`). Gated on the bus alone, like `voice.live`: it
+ * points at no row and asserts nothing, so there is nothing for the registry
+ * to make true.
+ */
+export const VOICE_HLS_RECONCILE_TOPIC = "voice.hlsReconcile";
 
 const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -8174,6 +8268,12 @@ const voiceLiveFrameSchema = z.object({
   at: z.number().int(),
 });
 type VoiceLiveFrame = z.infer<typeof voiceLiveFrameSchema>;
+
+/** One channel id, and deliberately nothing else. See `relayHlsReconcile`. */
+const voiceHlsReconcileFrameSchema = z.object({
+  channelId: z.string().uuid(),
+});
+type VoiceHlsReconcileFrame = z.infer<typeof voiceHlsReconcileFrameSchema>;
 
 /**
  * The `at` of the last `voice.live` frame this instance applied, per channel.
@@ -8680,6 +8780,32 @@ subscribeToCluster(VOICE_MUSIC_TOPIC, (data) => {
   if ((state?.current?.videoId ?? null) !== before) {
     void broadcastChannelMusic(channelId);
   }
+});
+
+subscribeToCluster(VOICE_HLS_RECONCILE_TOPIC, (data) => {
+  const parsed = voiceHlsReconcileFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId } = parsed.data;
+  // ONLY THE OWNER ACTS. Every instance with a socket in the room hears this;
+  // the one holding the session is the only one whose `pushLiveHls` can
+  // change anything, and the others running it would be the no-op that the
+  // sender already established this frame exists to avoid. An intent for a
+  // channel nobody here owns is dropped in silence and costs a map lookup.
+  if (!liveHlsOwnsChannel(channelId)) {
+    return;
+  }
+  hlsReconcileRelay.applied += 1;
+  noteClusterFrameReceived();
+  logEvent("voice.hlsReconcileFromBus", { channelId });
+  void pushLiveHls(channelId).catch((error: unknown) => {
+    // The bus's own try/catch is synchronous and cannot see a rejected
+    // promise (pitfall 10: an unhandled rejection is how this server used to
+    // die). `pushLiveHls` has its own catch around the reconcile; this is the
+    // belt for anything outside it.
+    console.error("[voice] relayed hls reconcile failed:", error);
+  });
 });
 
 subscribeToCluster(VOICE_LIVE_TOPIC, (data) => {

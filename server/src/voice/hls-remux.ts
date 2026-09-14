@@ -14,7 +14,8 @@ import {
 import { logEvent } from "../lib/log.js";
 import { getPool } from "../db.js";
 import {
-  claimHlsSessionRows,
+  claimHlsSessionRow,
+  ensureHlsOwnerHeartbeat,
   forgetPendingHlsSessionClaims,
   hlsOwnerInstanceId,
   liveOtherInstances,
@@ -54,10 +55,11 @@ import {
  *    track and its own audio (per its own README, "Not yet" §
  *    "Presenter authorization") — there is nothing here for a webcam or a
  *    separate voice file to attach to.
- *  - No health polling, no stall detection, no restart-then-demote ladder.
- *    That is `L1.6`'s watchdog; `llDemoted` is exposed on the metrics
- *    surface now precisely so that task has a counter to increment into,
- *    not because anything here can produce it.
+ *  - No stall detection and no restart ladder: that is the BOX's watchdog
+ *    (`tools/pqp-remux/README.md`, "Watchdog and the demotion contract"),
+ *    which restarts a session once and then demotes it for good. This side
+ *    only has to NOTICE — `sweepLlDemotions` below — and fall the party back
+ *    to the conventional ladder.
  *  - No R2 writer. `origin_base_url` is stored because the LL playlist front
  *    (`L2.x`) needs it, not because anything here writes objects there.
  */
@@ -195,6 +197,80 @@ export async function setRequestedHlsMode(
   } catch (error) {
     logEvent("voice.hlsLlRequestedModeWriteFailed", {
       watchPartySessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * THE SAME WINDOW THE BOX USES, on this side of the wire.
+ * `DEMOTE_WINDOW_MS` in `internal/control/watchdog.go` is five minutes: a
+ * second stall inside it demotes for good, a stall further apart is a fresh
+ * episode. A demotion here means the same thing about the party, so a channel
+ * demoted inside this window does not get LL re-selected however many times
+ * the mode is re-resolved.
+ */
+const LL_DEMOTION_MEMO_MS = 5 * 60_000;
+
+/** When this channel's LL session was last demoted, per channel. */
+const llDemotedAt = new Map<string, number>();
+
+/**
+ * WHY BOTH A MEMO AND A COLUMN WRITE.
+ *
+ * `low_latency_requested` is the durable half: cleared, every reconcile on
+ * every machine resolves `conventional` for the rest of this party, and the
+ * next `goLive` writes it again unconditionally (`setRequestedHlsMode`), so a
+ * demotion never outlives the party it happened to. That is the answer that
+ * has to be right.
+ *
+ * The memo is the belt. The write can fail, and the read it feeds is a
+ * DIFFERENT query on a different tick — between the demotion and the clear
+ * landing, `requestedHlsModeForChannel` would still answer `true` and
+ * `reconcileLiveHlsNow` would start a second LL session on top of the one
+ * just given up on, which is the loop this whole fallback exists to end.
+ * Process-local and five minutes long, it costs nothing and closes that gap
+ * on the machine that did the demoting — the one that is about to reconcile.
+ */
+export function noteLlDemotion(channelId: string, now = Date.now()): void {
+  for (const [id, at] of llDemotedAt) {
+    if (now - at > LL_DEMOTION_MEMO_MS) {
+      llDemotedAt.delete(id);
+    }
+  }
+  llDemotedAt.set(channelId, now);
+}
+
+/** Read by `reconcileLiveHlsNow`'s mode branch: LL is off for this channel. */
+export function llDemotedRecently(channelId: string, now = Date.now()): boolean {
+  const at = llDemotedAt.get(channelId);
+  return at !== undefined && now - at < LL_DEMOTION_MEMO_MS;
+}
+
+/**
+ * The durable half of the fallback: this party stops asking for LL. Never a
+ * silent write — pitfall 15's rule — because a party that quietly stopped
+ * being low-latency is exactly the kind of state change nobody can explain a
+ * week later.
+ */
+async function clearRequestedHlsMode(channelId: string, reason: string): Promise<void> {
+  try {
+    const result = await getPool().query(
+      `UPDATE channel_sessions SET low_latency_requested = FALSE
+        WHERE channel_id = $1 AND status = 'live' AND low_latency_requested`,
+      [channelId],
+    );
+    logEvent("voice.hlsLlRequestCleared", {
+      channelId,
+      reason,
+      rows: result.rowCount ?? 0,
+    });
+  } catch (error) {
+    // The memo above still holds this channel for five minutes, and the next
+    // demotion sweep would clear it again. Not fatal, said out loud anyway.
+    logEvent("voice.hlsLlRequestedModeWriteFailed", {
+      channelId,
+      reason,
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -486,11 +562,12 @@ let llStartFailures = 0;
 /** A `remuxStopSession` call failed, at either the normal-stop or retry path. Belongs at zero. */
 let llStopFailures = 0;
 /**
- * Incremented by `L1.6`'s watchdog when a stalled LL session is demoted back
- * to the conventional ladder. Nothing in this file can produce that
- * transition yet — this counter exists now so the metrics surface and the
- * dashboard panel are ready for it, and belongs at zero until that task
- * ships.
+ * Sessions the box gave up on that this process fell back to the conventional
+ * ladder, since boot (`sweepLlDemotions`). Declared and reported since L1.5,
+ * and never once incremented until 2026-09-15: the box demoted a live party
+ * fourteen seconds in, said so on `GET /sessions`, and nothing on this side
+ * was asking. A counter with no writer is pitfall 12's shape, and this one
+ * sat at zero through the incident it was invented to name.
  */
 let llDemoted = 0;
 
@@ -662,6 +739,8 @@ interface OpenLlRow {
   presenterPeerId: string | null;
   stoppingAtMs: number | null;
   stopAttempts: number;
+  /** Which API process last started, resumed or adopted it. NULL = nobody's. */
+  instanceId: string | null;
 }
 
 /**
@@ -687,8 +766,10 @@ async function findOpenLlRow(
       presenter_peer_id: string | null;
       stopping_at: string | null;
       stop_attempts: number;
+      instance_id: string | null;
     }>(
-      `SELECT id, started_at, remux_session_id, presenter_peer_id, stopping_at, stop_attempts
+      `SELECT id, started_at, remux_session_id, presenter_peer_id, stopping_at,
+              stop_attempts, instance_id
        FROM hls_sessions
        WHERE channel_id = $1 AND mode = 'll' AND ended_at IS NULL
        ORDER BY started_at DESC
@@ -708,6 +789,7 @@ async function findOpenLlRow(
         presenterPeerId: row.presenter_peer_id,
         stoppingAtMs: row.stopping_at ? new Date(row.stopping_at).getTime() : null,
         stopAttempts: row.stop_attempts,
+        instanceId: row.instance_id,
       },
     };
   } catch (error) {
@@ -799,6 +881,37 @@ async function startLlSession(
     return null;
   }
   let openRow = lookup.row;
+  if (openRow) {
+    // A ROW ANOTHER LIVE MACHINE OWNS IS NOT THIS PROCESS'S TO RESUME, STOP OR
+    // END. `claimHlsSessionRow` is a conditional UPDATE, so this is a
+    // compare-and-set rather than a read-then-act: two machines booting three
+    // seconds apart (2026-09-14) both read the same open row, stamped with the
+    // pre-restart instance that is not answering any more, and both acted --
+    // one resumed the remux session, the other stopped it as an orphan.
+    // Exactly one of them can win this UPDATE.
+    //
+    // `failed` is treated like `refused` on purpose: a database we could not
+    // ask is not permission, it is the absence of an answer, and the fail-
+    // closed rule this whole file is built on (see `findOpenLlRow`) says do
+    // nothing and let the next reconcile try.
+    const claim = await claimHlsSessionRow(openRow.id);
+    if (claim !== "claimed") {
+      llStartFailures += 1;
+      if (claim === "refused") {
+        noteHlsSkippedOwnedElsewhere({
+          site: "ll-start",
+          channelId,
+          sessionId: openRow.id,
+          ownerInstanceId: openRow.instanceId,
+        });
+      }
+      logEvent("voice.hlsLlStartFailed", {
+        channelId,
+        reason: claim === "refused" ? "row-owned-elsewhere" : "claim-failed",
+      });
+      return null;
+    }
+  }
   if (openRow && (openRow.stoppingAtMs !== null || openRow.presenterPeerId !== presenterPeerId)) {
     // Not this presenter's session, or already mid-teardown: finish closing
     // it before this room gets anything new. A durable version of the same
@@ -987,11 +1100,121 @@ async function reconcileLlHlsNowLocked(
 }
 
 // ---------------------------------------------------------------------------
+// The demotion contract: noticing, and falling back
+// ---------------------------------------------------------------------------
+
+/**
+ * WHAT THE BOX GAVE UP ON, AND WHAT THIS PROCESS OWES THE AUDIENCE FOR IT.
+ *
+ * `tools/pqp-remux/README.md` §"Watchdog and the demotion contract" is one
+ * half of a promise: the box restarts a stalled session once, demotes it for
+ * good on the second stall (or immediately on an IDR gap), closes the
+ * pipeline, and KEEPS the session listed with `demoted: true` so `pqp-api`
+ * can notice on its next poll. This function is the other half, and until
+ * 2026-09-15 it did not exist.
+ *
+ * What that cost, on the first real LL party in production (2026-09-14,
+ * 21:50 UTC): `pqp-remuxd` logged `demoting (idr-gap-exceeded)` fourteen
+ * seconds after the session started and dropped its LiveKit subscription.
+ * The `hls_sessions` row stayed open with `mode = 'll'`, every viewer kept
+ * being handed the LL playlist, the edge Worker logged
+ * `hlsEdge.llStateFetchFailed` twelve times over, the conventional ladder was
+ * never started — and the audience had no picture at all until an unrelated
+ * restart. Every piece of the machinery worked except the one that looks.
+ *
+ * Three states are treated as "this session is over":
+ *
+ *  - `demoted: true` — the contract's own word, with the box's `reason`.
+ *  - `state: "demoted"` — the same thing said the other way, because the box
+ *    sends both and a client that trusts only one field trusts the field it
+ *    happens to have read (pitfall 9's shape).
+ *  - not listed at all — the process on the box restarted, or somebody
+ *    `DELETE`d it. `llRooms` holding a session the box does not have is the
+ *    self-heal case the 2026-09-14 boot race left behind: machine B kept
+ *    `llSessions = 1` in memory for a session machine A had stopped.
+ *
+ * FAILS CLOSED, LOUDLY. A control API that cannot be reached answers nothing
+ * and changes nothing: demoting a healthy party because one HTTP request
+ * timed out is a rebuffer for every viewer, and the next tick is ten seconds
+ * away. Same rule as `listActiveEgresses() === null` in the conventional
+ * sweep.
+ *
+ * Returns the channels whose party now needs the conventional ladder started.
+ * It does NOT start one itself: `hls-egress.ts` owns that path, imports this
+ * module and must never be imported back (see `llObjectPrefix`).
+ */
+export async function sweepLlDemotions(): Promise<string[]> {
+  if (llRooms.size === 0) {
+    return [];
+  }
+  if (!isLiveHlsLLEnabled() || !remuxControlUrl() || !remuxControlSecret()) {
+    return [];
+  }
+  let remoteSessions: RemuxSessionInfo[];
+  try {
+    remoteSessions = await remuxListSessions();
+  } catch (error) {
+    logEvent("voice.hlsLlHealthPollFailed", {
+      sessions: llRooms.size,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+  const remoteById = new Map(remoteSessions.map((session) => [session.sessionId, session]));
+
+  const demotions: { channelId: string; reason: string }[] = [];
+  for (const [channelId, room] of [...llRooms]) {
+    const remote = remoteById.get(room.sessionId);
+    if (!remote) {
+      demotions.push({ channelId, reason: "session-gone" });
+      continue;
+    }
+    if (remote.demoted === true || remote.state === "demoted") {
+      demotions.push({
+        channelId,
+        // The box's own word for it (`idr-gap-exceeded`, `no-video`,
+        // `part-stuck`), never a word invented here: an operator reading
+        // `voice.hlsLlDemoted` and `pqp-remuxd`'s log has to see one reason.
+        reason: remote.demotedReason ?? "demoted",
+      });
+    }
+  }
+
+  const fellBack: string[] = [];
+  for (const { channelId, reason } of demotions) {
+    llDemoted += 1;
+    logEvent("voice.hlsLlDemoted", { channelId, reason });
+    // THE MEMO FIRST. `stopLlSession` and the reconcile that follows both
+    // re-resolve the mode, and a memo written after them would let the very
+    // next reconcile start a second LL session for the party just given up
+    // on. See `noteLlDemotion`.
+    noteLlDemotion(channelId);
+    await stopLlSession(channelId, `demoted:${reason}`);
+    // Belt and braces both dropped: a `DELETE` the box refused leaves the
+    // room in `llRooms` (that is `stopLlSession`'s durable-retry design), but
+    // a session the box has DEMOTED is not producing anything either way, and
+    // holding it here would keep `llHasRoom` answering yes and keep the
+    // conventional path from starting. The row stays `stopping_at`, so the
+    // retry still happens on the next start or the next boot sweep.
+    llRooms.delete(channelId);
+    await clearRequestedHlsMode(channelId, `demoted:${reason}`);
+    fellBack.push(channelId);
+  }
+  return fellBack;
+}
+
+// ---------------------------------------------------------------------------
 // Boot adoption
 // ---------------------------------------------------------------------------
 
 /** How many control-plane requests the boot sweep holds in flight at once. */
 const ORPHAN_STOP_CONCURRENCY = 4;
+
+/**
+ * `docs/plans/LL_HLS.md` §5's own grace: how long a row another process just
+ * wrote is left alone by this one's boot sweep, whatever the heartbeats say.
+ */
+const LL_BOOT_GRACE_MS = 60_000;
 
 interface StaleLlRow {
   id: string;
@@ -1014,6 +1237,7 @@ function toOpenLlRow(row: StaleLlRow): OpenLlRow {
     presenterPeerId: row.presenter_peer_id,
     stoppingAtMs: row.stopping_at ? new Date(row.stopping_at).getTime() : null,
     stopAttempts: row.stop_attempts,
+    instanceId: row.instance_id,
   };
 }
 
@@ -1085,6 +1309,11 @@ export async function adoptLlHlsSessions(): Promise<{
     logEvent("voice.hlsLlBootReconcileSkipped", { reason: "owner-lookup-failed" });
     return null;
   }
+  // BEFORE ANY CLAIM BELOW, so the claims that follow are decidable at all:
+  // two machines booting inside one heartbeat TTL with neither row written
+  // yet would each read the other as dead and take the row back in turn. See
+  // `ensureHlsOwnerHeartbeat`.
+  await ensureHlsOwnerHeartbeat();
 
   const rows = await getPool().query<StaleLlRow>(
     `SELECT id, channel_id, started_at, ended_at, remux_session_id, presenter_peer_id,
@@ -1151,7 +1380,8 @@ export async function adoptLlHlsSessions(): Promise<{
   const remoteById = new Map(remoteSessions.map((session) => [session.sessionId, session]));
 
   let adopted = 0;
-  const adoptedRowIds: string[] = [];
+  /** Rows another booting machine won the claim for. Never adopted, never stopped. */
+  let claimRefusals = 0;
   const toStop: { sessionId: string; reason: "no-presenter" | "no-row" }[] = [];
   for (const remote of remoteSessions) {
     if (remuxIdsOwnedElsewhere.has(remote.sessionId)) {
@@ -1163,6 +1393,27 @@ export async function adoptLlHlsSessions(): Promise<{
         sessionId: remote.sessionId,
         reason: row ? "no-presenter" : "no-row",
       });
+      continue;
+    }
+    // CLAIM BEFORE ADOPTING, NOT AFTER. The stamp used to be a batch write
+    // issued once the whole loop had already put every row in `llRooms`,
+    // which is a read-then-act across two machines: on 2026-09-14 B resumed a
+    // session while A, booting three seconds later, was still reading rows
+    // stamped with the instance both of them had replaced. Whoever loses this
+    // conditional UPDATE never enters the map, never starts anything and --
+    // crucially -- never falls through to `toStop` either, because a session
+    // the winner is driving is not an orphan.
+    const claim = await claimHlsSessionRow(row.id);
+    if (claim !== "claimed") {
+      if (claim === "refused") {
+        noteHlsSkippedOwnedElsewhere({
+          site: "ll-boot-adopt",
+          channelId: row.channel_id,
+          sessionId: row.id,
+          ownerInstanceId: row.instance_id,
+        });
+      }
+      claimRefusals += 1;
       continue;
     }
     const startedAt = new Date(row.started_at).getTime();
@@ -1179,16 +1430,16 @@ export async function adoptLlHlsSessions(): Promise<{
       },
     });
     adopted += 1;
-    adoptedRowIds.push(row.id);
     logEvent("voice.hlsLlSessionAdopted", {
       channelId: row.channel_id,
       sessionId: remote.sessionId,
     });
   }
-  // THIS PROCESS OWNS THEM NOW. Re-stamping is what stops the next machine to
-  // boot reading a dead instance's id and freeing a session this one is
-  // driving.
-  await claimHlsSessionRows(adoptedRowIds);
+  // The stamp already landed, per row, inside the loop above: it is what
+  // decided each adoption rather than a repair issued after the fact.
+  if (claimRefusals > 0) {
+    logEvent("voice.hlsLlAdoptClaimRefused", { count: claimRefusals });
+  }
 
   // Bounded parallel cleanup, not one round trip per orphan in a row (this
   // runs before `listen()`) and not every orphan fired at once either (an
@@ -1208,9 +1459,26 @@ export async function adoptLlHlsSessions(): Promise<{
     }
   });
 
+  // A ROW SOMEBODY ELSE WROTE SECONDS AGO IS NOT STALE, IT IS IN PROGRESS.
+  // `startLlSession` inserts the row BEFORE it POSTs the box, so there is a
+  // window where a perfectly healthy start has a row and no remote session
+  // yet. A machine booting inside that window (a rolling deploy is two boots
+  // three seconds apart) may not even see the other's `voice_instances`
+  // heartbeat yet, so `ownedElsewhere` answers false and the row looks
+  // abandoned. The plan's own 60s grace (`docs/plans/LL_HLS.md` §5, "the
+  // grace exists so an API deploy does not reap a healthy session") is the
+  // rule: a row this process did not stamp itself is left alone until it is
+  // older than that.
+  const meNow = hlsOwnerInstanceId();
+  const nowMs = Date.now();
+  const startingElsewhere = (row: StaleLlRow): boolean =>
+    row.instance_id !== null &&
+    row.instance_id !== meNow &&
+    nowMs - new Date(row.started_at).getTime() < LL_BOOT_GRACE_MS;
   const staleIds = rows.rows
     .filter((row) => row.ended_at === null && row.stopping_at === null)
     .filter((row) => !ownedElsewhere(row))
+    .filter((row) => !startingElsewhere(row))
     .filter((row) => !(row.remux_session_id && remoteById.has(row.remux_session_id)))
     .map((row) => row.id);
   await recordLlSessionsEndedByIds(staleIds);
@@ -1245,6 +1513,7 @@ export function resetHlsRemuxForTests(): void {
   llRooms.clear();
   llReconcileQueue.clear();
   lastLookupFailureLoggedAt.clear();
+  llDemotedAt.clear();
   llStartFailures = 0;
   llStopFailures = 0;
   llDemoted = 0;
