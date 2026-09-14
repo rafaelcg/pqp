@@ -228,6 +228,14 @@ export interface WatchPartyPanelProps {
   voiceTrackMode?: VoiceTrackMode;
   onVoiceTrackModeChange?: (mode: VoiceTrackMode) => void;
   voiceTrackAvailable?: boolean;
+  /**
+   * `GET /api/live-hls/config`'s `lowLatency.available` for this server
+   * (`useLiveHlsConfig(serverId)?.lowLatency?.available`), threaded down to
+   * `WatchPartyOptionsPanel` so "Baixa latência (beta)" stays out of the
+   * panel entirely on a deployment with `LIVE_HLS_LL` unset or this server
+   * off its allowlist.
+   */
+  lowLatencyAvailable?: boolean;
   /** Apply a mic-gain choice to the running mix at once. See `StreamMixControl`. */
   onMicGainChange?: (value: number) => void;
   /** Same as `onMicGainChange`, for the display (tab-audio) branch. */
@@ -571,6 +579,9 @@ function WatchPartyOptionsDialog({
           options={party.options}
           audienceCount={props.audienceCount}
           onChange={(patch) => void props.onOptionsChange(patch)}
+          isHost={party.viewerRole === "host"}
+          lowLatencyAvailable={props.lowLatencyAvailable}
+          live={party.state === "live"}
         />
         {/* THIS COMPUTER'S SWITCH, not the party's: whether the share carries
             the host's own voice to the people watching from outside. Off,
@@ -1545,6 +1556,9 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                   audienceCount={props.audienceCount}
                   onChange={(patch) => void props.onOptionsChange(patch)}
                   stacked
+                  isHost={party.viewerRole === "host"}
+                  lowLatencyAvailable={props.lowLatencyAvailable}
+                  live={party.state === "live"}
                 />
                 {(props.onMicInStreamChange || canPutPictureUp) && (
                   <OptionGroup title={t("watchParty.options.streamTitle")}>

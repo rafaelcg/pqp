@@ -38,6 +38,7 @@ const PARTY: WatchParty = {
     raiseHand: true,
     slowModeSeconds: 0,
     reactionsEnabled: true,
+    lowLatency: false,
   },
   viewerRole: "viewer",
   reminding: false,
@@ -746,6 +747,30 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     expect(goLive).toContain("startMuted: true");
     expect(goLive).not.toContain("getAudioTracks().length > 0");
 
+  });
+
+  /**
+   * LOW LATENCY IS A STANDING OPTION, NOT A ONE-OFF ASK. The switch in
+   * `watch-party-options.tsx` only ever PATCHes `party.options.lowLatency`;
+   * the one place that preference reaches the server's
+   * `channel_sessions.low_latency_requested` column is this call, because
+   * `requestedHlsModeForChannel` is only ever consulted at `goLive`
+   * (`server/src/voice/hls-remux.ts`). A go-live that forgot to forward it
+   * would leave the switch doing nothing at all — silently, since the party
+   * still goes live, just always on the conventional ladder.
+   */
+  it("forwards the party's lowLatency option on every go-live", () => {
+    const source = readFileSync(
+      new URL("../../App.tsx", import.meta.url),
+      "utf8",
+    );
+    const goLive = source.slice(
+      source.indexOf("async function handleWatchPartyGoLive"),
+      source.indexOf("async function handleWatchPartyReminder"),
+    );
+    expect(goLive).toContain("apiSetWatchPartyState(");
+    expect(goLive).toContain('"live"');
+    expect(goLive).toContain("party.options.lowLatency");
   });
 
   /**

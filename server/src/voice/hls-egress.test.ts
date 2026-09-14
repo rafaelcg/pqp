@@ -164,6 +164,8 @@ describe("live HLS egress", () => {
       // `LIVE_HLS_VOICE_TRACK` is unset too: the client offers no "voz
       // separada" choice, so the screen mix keeps folding the mic in.
       voiceTrack: false,
+      // `LIVE_HLS_LL` is unset too: the switch stays hidden.
+      lowLatency: { available: false },
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -514,6 +516,7 @@ describe("live HLS egress", () => {
         allowlisted: true,
         micArchive: false,
         voiceTrack: false,
+        lowLatency: { available: false },
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -522,6 +525,7 @@ describe("live HLS egress", () => {
         allowlisted: true,
         micArchive: false,
         voiceTrack: false,
+        lowLatency: { available: false },
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -530,6 +534,7 @@ describe("live HLS egress", () => {
         allowlisted: true,
         micArchive: false,
         voiceTrack: false,
+        lowLatency: { available: false },
       });
     });
 
@@ -545,6 +550,29 @@ describe("live HLS egress", () => {
       // And the master switch still wins over the feature flag.
       delete process.env.LIVE_HLS_ENABLED;
       expect(liveHlsConfig().micArchive).toBe(false);
+    });
+
+    it("advertises lowLatency.available independently of the ordinary allowlist above", async () => {
+      enableHls();
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      // LL-HLS has its own flag; off is off, whatever the ordinary HLS
+      // allowlist says for this same server.
+      expect((await liveHlsConfigForServer(SERVER)).lowLatency).toEqual({
+        available: false,
+      });
+
+      process.env.LIVE_HLS_LL = "true";
+      process.env.LIVE_HLS_LL_ALLOWLIST = OTHER_SERVER;
+      // On the LL flag, but this server is not on the LL allowlist -- even
+      // though it IS on the ordinary one.
+      expect((await liveHlsConfigForServer(SERVER)).lowLatency).toEqual({
+        available: false,
+      });
+      expect((await liveHlsConfigForServer(OTHER_SERVER)).lowLatency).toEqual({
+        available: true,
+      });
+      delete process.env.LIVE_HLS_LL;
+      delete process.env.LIVE_HLS_LL_ALLOWLIST;
     });
 
     it("reconcile does not start an egress for an unlisted server, and stops one that was running", async () => {

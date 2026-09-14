@@ -16,6 +16,7 @@ vi.mock("../db.js", () => ({ getPool: () => ({ query }) }));
 const {
   isLiveHlsLLEnabled,
   liveHlsLLAllowlist,
+  liveHlsLLAvailable,
   resolveHlsMode,
   requestedHlsModeForChannel,
   setRequestedHlsMode,
@@ -363,6 +364,31 @@ describe("resolveHlsMode: flag off means conventional, whatever was asked", () =
     process.env.LIVE_HLS_LL = "true";
     process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
     expect(resolveHlsMode({ serverId: null, requestedMode: true })).toBe("conventional");
+  });
+});
+
+describe("liveHlsLLAvailable: the client's gate for showing the switch at all", () => {
+  it("is false when the flag is unset, whatever the server", () => {
+    expect(liveHlsLLAvailable(SERVER)).toBe(false);
+    expect(liveHlsLLAvailable(null)).toBe(false);
+  });
+
+  it("is true for any server when the flag is on and there is no allowlist", () => {
+    process.env.LIVE_HLS_LL = "true";
+    expect(liveHlsLLAvailable(SERVER)).toBe(true);
+    expect(liveHlsLLAvailable(OTHER_SERVER)).toBe(true);
+    // The deployment-wide answer, asked before a client knows its server:
+    // no allowlist means yes, same as `resolveHlsMode` would decide once it
+    // does know.
+    expect(liveHlsLLAvailable(null)).toBe(true);
+  });
+
+  it("is true only for a server on the allowlist", () => {
+    process.env.LIVE_HLS_LL = "true";
+    process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
+    expect(liveHlsLLAvailable(SERVER)).toBe(true);
+    expect(liveHlsLLAvailable(OTHER_SERVER)).toBe(false);
+    expect(liveHlsLLAvailable(null)).toBe(false);
   });
 });
 

@@ -115,6 +115,7 @@ interface PartyBody {
     guests: string;
     slowModeSeconds: number;
     reactionsEnabled: boolean;
+    lowLatency: boolean;
   };
   stage: {
     invited: StagePerson[];
@@ -379,6 +380,7 @@ describeDb("watch party options and the stage", () => {
       guests: "off",
       slowModeSeconds: 0,
       reactionsEnabled: true,
+      lowLatency: false,
     });
     // And the same object the shared module hands the client, so the panel
     // and the row cannot disagree about what "untouched" means.

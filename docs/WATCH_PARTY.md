@@ -1557,6 +1557,23 @@ without anyone acting on it:
 Scheduling (built in parallel) attaches to the channel; the sidebar row has a
 `TODO(schedule)` where the next session time goes in the idle state.
 
+### Low latency, as a host switch
+
+LL-HLS (`docs/plans/LL_HLS.md`) is a second delivery mode a party can ask for
+instead of the conventional ~20s-behind ladder, live in production behind
+`LIVE_HLS_LL` (default off) and, once that is on, this server's own
+`LIVE_HLS_LL_ALLOWLIST`. The host's control for it is "Baixa latência (beta)"
+in the options panel (`watch-party-options.tsx`), beside reactions and slow
+mode: host-only, and present only when `GET /api/live-hls/config` says this
+server may ask at all (`lowLatency.available`), so a self-host with the flag
+off never sees a switch it cannot honour. The preference saves like any other
+option, but it only ever reaches the server at the next "Ir ao vivo" — the one
+moment `requestedHlsModeForChannel` is read (`server/src/voice/hls-remux.ts`)
+— so flipping it on a party that is already live shows its own note ("vale a
+partir da próxima transmissão") instead of silently doing nothing. The server
+still has the final word: off deployment-wide, or this server not on the
+allowlist, downgrades the request to conventional without complaint.
+
 ## What the stream carries, and what it does not
 
 **The two audiences are not watching the same event, and the host cannot tell.**

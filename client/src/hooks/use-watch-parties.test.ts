@@ -49,6 +49,7 @@ const PARTY: WatchParty = {
     raiseHand: true,
     slowModeSeconds: 0,
     reactionsEnabled: true,
+    lowLatency: false,
   },
   viewerRole: "viewer",
   reminding: false,

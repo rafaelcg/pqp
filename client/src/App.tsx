@@ -4510,7 +4510,17 @@ function MainAppContent({
       return;
     }
     try {
-      const answer = await apiSetWatchPartyState(party.id, "live");
+      // The host's standing "Baixa latência (beta)" preference
+      // (`party.options.lowLatency`, set through the options panel like any
+      // other switch) only reaches the server at THIS moment: `goLive` is
+      // the one write `requestedHlsModeForChannel` ever reads, so a party
+      // going live again always states its own request rather than
+      // inheriting whatever the last one asked for.
+      const answer = await apiSetWatchPartyState(
+        party.id,
+        "live",
+        party.options.lowLatency,
+      );
       if (answer.party) {
         watchParties.put(answer.party);
       }
@@ -6982,6 +6992,7 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
+            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -7169,6 +7180,7 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
+            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}

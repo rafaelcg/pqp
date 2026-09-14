@@ -122,6 +122,27 @@ export function resolveHlsMode(input: {
 }
 
 /**
+ * Whether THIS server may ask for LL-HLS at all -- `GET /api/live-hls/config`'s
+ * `lowLatency.available`, which is the client's only gate for showing the
+ * "Baixa latência (beta)" switch (`watch-party-options.tsx`). Same rule as
+ * `resolveHlsMode` minus the request itself: the flag has to be on, and
+ * either there is no allowlist or this server is on it. No server id (the
+ * deployment-wide answer, asked before a client knows its server) reads the
+ * flag alone and ignores the allowlist, same as `liveHlsConfig()`'s base
+ * answer for every other field here.
+ */
+export function liveHlsLLAvailable(serverId: string | null | undefined): boolean {
+  if (!isLiveHlsLLEnabled()) {
+    return false;
+  }
+  const allowlist = liveHlsLLAllowlist();
+  if (allowlist === null) {
+    return true;
+  }
+  return Boolean(serverId && allowlist.has(serverId));
+}
+
+/**
  * `voice.hlsLlLookupFailed`, rate limited to once per channel per
  * `LOOKUP_FAILURE_LOG_WINDOW_MS` regardless of which of the two durable
  * reads below hit it — a channel stuck retrying every reconcile during an

@@ -59,14 +59,24 @@ export function updateWatchParty(
  * The client names the state it wants, never the verb: the server owns the
  * transition table (`packages/shared/src/watch-party-session.ts`) and will
  * refuse a move that is not in it, so there is nothing here to keep in sync.
+ *
+ * `lowLatency` only means anything alongside `state: "live"` — the server
+ * ignores it otherwise (`watchPartyStateRequestSchema`) — and it is the ONE
+ * place the host's standing `options.lowLatency` preference actually reaches
+ * `channel_sessions.low_latency_requested`. The options PATCH
+ * (`updateWatchParty`) only ever saves the preference; this call is what
+ * turns it into the request `resolveHlsMode` reads when the egress starts.
  */
 export function setWatchPartyState(
   partyId: string,
   state: Exclude<WatchPartyPhase, "draft">,
+  lowLatency?: boolean,
 ): Promise<{ party: WatchParty | null }> {
   return apiFetch(`/api/watch-parties/${partyId}/state`, {
     method: "POST",
-    body: JSON.stringify({ state }),
+    body: JSON.stringify(
+      lowLatency !== undefined ? { state, lowLatency } : { state },
+    ),
   });
 }
 

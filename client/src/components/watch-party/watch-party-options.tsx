@@ -153,6 +153,9 @@ export function WatchPartyOptionsPanel({
   audienceCount,
   onChange,
   stacked = false,
+  isHost = false,
+  lowLatencyAvailable = false,
+  live = false,
 }: {
   options: WatchPartyOptions;
   disabled?: boolean;
@@ -161,6 +164,30 @@ export function WatchPartyOptionsPanel({
   onChange: (patch: Partial<WatchPartyOptions>) => void;
   /** See `OptionRow.stacked`: the narrow-column layout the setup card uses. */
   stacked?: boolean;
+  /**
+   * Only the host may ask for a different delivery mode, so
+   * "Baixa latência (beta)" stays out of a co-host's copy of this panel even
+   * when `lowLatencyAvailable` is true.
+   */
+  isHost?: boolean;
+  /**
+   * `GET /api/live-hls/config`'s `lowLatency.available` for this server
+   * (`useLiveHlsConfig` in `App.tsx`) -- the deployment's own answer, never
+   * a build flag. The row is absent, not disabled, when this is false: a
+   * self-host with `LIVE_HLS_LL` unset has nothing to offer, and a switch
+   * that is there but greyed out would be a promise the deployment cannot
+   * keep.
+   */
+  lowLatencyAvailable?: boolean;
+  /**
+   * Whether the party is live right now. The switch itself is always a
+   * standing preference (`options.lowLatency`, saved the moment it is
+   * flipped, same as every other row); this only decides whether the extra
+   * "vale a partir da próxima transmissão" line is worth showing, since a
+   * running broadcast never picks up the change -- `resolveHlsMode` is only
+   * consulted when a sharer's egress starts.
+   */
+  live?: boolean;
 }) {
   const { t } = useTranslation();
   // "Big" is where an open floor and an unthrottled chat stop being fine. The
@@ -220,6 +247,33 @@ export function WatchPartyOptionsPanel({
             onCheckedChange={(checked) => onChange({ reactionsEnabled: checked })}
           />
         </div>
+
+        {/* HOST-ONLY, AND ABSENT WHEN THE DEPLOYMENT HAS NOTHING TO OFFER.
+            A co-host can flip every other row here; this one stays out of
+            their copy of the panel because the request only ever reaches
+            the server through the HOST's own "Ir ao vivo" (`goLive` forwards
+            `options.lowLatency`, `requestedHlsModeForChannel` in
+            `hls-remux.ts`). NOT APPLIED TO A RUNNING BROADCAST: the mode is
+            read only when a sharer's egress starts, so flipping this while
+            already live changes nothing until the next Ir ao vivo, which the
+            hint below says in words. */}
+        {lowLatencyAvailable && isHost && (
+          <div data-watch-party-low-latency className="px-1 py-0.5">
+            <Switch
+              label={t("watchParty.options.lowLatency")}
+              description={
+                live
+                  ? `${t("watchParty.options.lowLatencyBody")} ${t(
+                      "watchParty.options.lowLatencyNextBroadcast",
+                    )}`
+                  : t("watchParty.options.lowLatencyBody")
+              }
+              checked={options.lowLatency}
+              disabled={disabled}
+              onCheckedChange={(checked) => onChange({ lowLatency: checked })}
+            />
+          </div>
+        )}
 
         {/* A fact, not a lever: who can watch follows the channel. One quiet
             row at the end of the group, with the answer under the name. */}

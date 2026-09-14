@@ -563,6 +563,22 @@ export const watchPartyOptionsSchema = z.object({
   slowModeSeconds: z.number().int().min(0).max(21600).default(0),
   /** The floating live reactions. */
   reactionsEnabled: z.boolean().default(true),
+  /**
+   * "Baixa latência (beta)" (`docs/plans/LL_HLS.md` §4/§6): the host's
+   * standing preference, saved like any other option through the same PATCH
+   * this whole schema rides on. NOT applied to a running broadcast — a party
+   * already live keeps whatever ladder it started with, because
+   * `resolveHlsMode` is only ever consulted when a sharer's egress starts.
+   * `POST /api/watch-parties/:id/state`'s own `lowLatency` field is what
+   * actually reaches the server at that moment; the caller (`handleWatchPartyGoLive`)
+   * reads it off this option so a host who turned it on once does not have to
+   * ask again on every Ir ao vivo. The server still decides the real answer
+   * (`resolveHlsMode` in `hls-remux.ts`): off deployment-wide, or this server
+   * not on `LIVE_HLS_LL_ALLOWLIST`, means `true` here is silently downgraded
+   * to the conventional ladder. Default `false` because a second delivery
+   * mode must never turn on by itself.
+   */
+  lowLatency: z.boolean().default(false),
 });
 
 export type WatchPartyOptions = z.infer<typeof watchPartyOptionsSchema>;
@@ -574,6 +590,7 @@ export const WATCH_PARTY_DEFAULT_OPTIONS: WatchPartyOptions = Object.freeze({
   guests: "off",
   slowModeSeconds: 0,
   reactionsEnabled: true,
+  lowLatency: false,
 });
 
 /**
