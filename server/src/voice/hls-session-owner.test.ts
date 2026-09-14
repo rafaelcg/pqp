@@ -504,6 +504,47 @@ describeDb("hls_sessions ownership across two API machines", () => {
     );
   });
 
+  it("judges each queued stamp against its own decided-at instant, not the batch's oldest", async () => {
+    // ONE TIMESTAMP FOR A WHOLE BATCH WAS WRONG IN EXACTLY ONE DIRECTION. The
+    // queue holds claims decided at different moments; judging a newly queued
+    // id by the OLDEST claim in the batch suppresses a valid claim for a
+    // session that was legitimately ended before that older claim existed --
+    // and, because the write "succeeded", drops it for good.
+    const old = await makeSession({
+      prefix: `live/${channelA}/9950`,
+      egressId: "EG_old-claim",
+      instanceId: machineA,
+      endedAt: new Date(Date.now() - 60_000),
+    });
+    const fresh = await makeSession({
+      prefix: `live/${channelA}/9960`,
+      egressId: "EG_fresh-claim",
+      instanceId: machineA,
+      endedAt: new Date(Date.now() - 30_000),
+    });
+    const failBoth = vi
+      .spyOn(getPool(), "query")
+      .mockRejectedValueOnce(new Error("connection terminated"))
+      .mockRejectedValueOnce(new Error("connection terminated"));
+    // Queued two minutes apart, and the FRESH one's row was ended after the
+    // old one was decided.
+    await claimHlsSessionRows([old], {
+      reopen: true,
+      claimedAt: Date.now() - 120_000,
+    });
+    await claimHlsSessionRows([fresh], { reopen: true });
+    failBoth.mockRestore();
+    expect(pendingHlsSessionClaimCount()).toBe(2);
+
+    await retryPendingHlsSessionClaims();
+
+    expect(pendingHlsSessionClaimCount()).toBe(0);
+    // The old claim loses to the teardown it raced; the fresh one still lands.
+    expect((await rowById(old)).ended_at).not.toBeNull();
+    expect((await rowById(fresh)).ended_at).toBeNull();
+    expect((await rowById(fresh)).instance_id).toBe(hlsOwnerInstanceId());
+  });
+
   it("(d) the ghost filter still writes off a record nobody owns", async () => {
     // The other half of the same rule: ownership is what spares a record,
     // not merely having a row. No owner, no live row, past the grace: a ghost.

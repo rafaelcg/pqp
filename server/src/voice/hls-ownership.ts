@@ -267,73 +267,110 @@ export async function claimHlsSessionRows(
   sessionIds: readonly string[],
   options: HlsOwnershipOptions & {
     reopen?: boolean;
-    retry?: boolean;
     /**
      * When this claim was decided, in wall-clock ms. THE WRITE IS CONDITIONAL
      * ON IT: a row whose `ended_at` is NEWER than this was torn down after the
      * claim was decided, and reopening it then would resurrect a session whose
      * egress is gone. Defaults to now, which is right for a claim issued
-     * inline; a queued retry passes the moment it was ORIGINALLY queued, so a
-     * teardown that raced the first attempt still wins minutes later.
+     * inline; a queued retry passes the moment each id was ORIGINALLY queued,
+     * so a teardown that raced the first attempt still wins minutes later.
      */
     claimedAt?: number;
   } = {},
 ): Promise<boolean> {
-  if (sessionIds.length === 0) {
+  const claimedAt = options.claimedAt ?? Date.now();
+  return writeHlsSessionClaims(
+    sessionIds.map((id) => ({
+      id,
+      reopen: Boolean(options.reopen),
+      claimedAt,
+    })),
+    options.instanceId,
+  );
+}
+
+/**
+ * The write itself, PER ID: its own `reopen` and its own decided-at instant.
+ *
+ * One timestamp for a whole batch was wrong in exactly one direction and it
+ * matters: a retry queue holds claims decided at different moments, and
+ * judging a newly queued id by the OLDEST one in the batch suppresses a valid
+ * claim for a session that was legitimately ended before that older claim
+ * existed -- and, because the write "succeeded", drops it from the queue for
+ * good. `unnest` carries the three columns together so every row is judged
+ * against its own intent, in one round trip.
+ */
+async function writeHlsSessionClaims(
+  entries: readonly { id: string; reopen: boolean; claimedAt: number }[],
+  instanceId?: string,
+): Promise<boolean> {
+  if (entries.length === 0) {
     return true;
   }
-  const me = options.instanceId ?? hlsOwnerInstanceId();
-  const claimedAt = options.claimedAt ?? Date.now();
-  // The belt to the SQL's braces: an id this process tore down since the claim
+  const me = instanceId ?? hlsOwnerInstanceId();
+  // The belt to the SQL's braces: an id this process tore down since its claim
   // was decided is dropped before the write is even issued. The conditional
   // below is what actually closes the race (a teardown can land between this
   // check and the write, and does not need to be remembered here to be safe);
   // this only saves the round trip in the ordinary case.
-  const ids = sessionIds.filter((id) => (tornDownAt.get(id) ?? 0) <= claimedAt);
-  for (const id of sessionIds) {
-    if (!ids.includes(id)) {
-      pendingClaims.delete(id);
+  const live = entries.filter(
+    (entry) => (tornDownAt.get(entry.id) ?? 0) <= entry.claimedAt,
+  );
+  const liveIds = new Set(live.map((entry) => entry.id));
+  for (const entry of entries) {
+    if (!liveIds.has(entry.id)) {
+      pendingClaims.delete(entry.id);
     }
   }
-  if (ids.length === 0) {
+  if (live.length === 0) {
     return true;
   }
   try {
     await getPool().query(
-      `UPDATE hls_sessions
-          SET instance_id = $2${options.reopen ? ", ended_at = NULL" : ""}
-        WHERE id = ANY($1::uuid[])
+      `UPDATE hls_sessions s
+          SET instance_id = $2,
+              ended_at = CASE WHEN c.reopen THEN NULL ELSE s.ended_at END
+         FROM unnest($1::uuid[], $3::bigint[], $4::boolean[])
+                AS c(id, claimed_at_ms, reopen)
+        WHERE s.id = c.id
           -- Never resurrect a swept row. On a RETRY this matters: minutes may
           -- have passed, and reopening a session whose objects are gone leaves
           -- an open row retention can never collect.
-          AND cleaned_at IS NULL
+          AND s.cleaned_at IS NULL
           -- AND NEVER RESURRECT A ROW TORN DOWN SINCE THIS CLAIM WAS DECIDED.
           -- Cancelling the queue entry is not enough on its own: a retry can
           -- already be in flight when the teardown clears it, and would land
           -- afterwards with ended_at cleared. Postgres serialises the two
           -- statements either way round and this predicate loses whichever way
           -- it is the older intent.
-          AND (ended_at IS NULL OR ended_at <= to_timestamp($3 / 1000.0))`,
-      [ids, me, claimedAt],
+          AND (s.ended_at IS NULL
+               OR s.ended_at <= to_timestamp(c.claimed_at_ms / 1000.0))`,
+      [
+        live.map((entry) => entry.id),
+        me,
+        live.map((entry) => entry.claimedAt),
+        live.map((entry) => entry.reopen),
+      ],
     );
-    for (const id of ids) {
-      pendingClaims.delete(id);
+    for (const entry of live) {
+      pendingClaims.delete(entry.id);
     }
     return true;
   } catch (error) {
     const now = Date.now();
-    for (const id of ids) {
+    for (const entry of live) {
       // The most demanding shape wins: a row that needed reopening still needs
       // it on the retry, even if a later claim for the same id did not. The
-      // clock is the ORIGINAL queueing, so a retry never renews the TTL.
-      const previous = pendingClaims.get(id);
-      pendingClaims.set(id, {
-        reopen: (previous?.reopen ?? false) || Boolean(options.reopen),
-        queuedAt: previous?.queuedAt ?? now,
+      // clock is the ORIGINAL queueing, so a retry never renews the TTL and
+      // never moves the instant the write is judged against.
+      const previous = pendingClaims.get(entry.id);
+      pendingClaims.set(entry.id, {
+        reopen: (previous?.reopen ?? false) || entry.reopen,
+        queuedAt: previous?.queuedAt ?? Math.min(entry.claimedAt, now),
       });
     }
     logEvent("voice.hlsSessionClaimFailed", {
-      count: ids.length,
+      count: live.length,
       pending: pendingClaims.size,
       error: error instanceof Error ? error.message : String(error),
     });
@@ -408,25 +445,14 @@ export async function retryPendingHlsSessionClaims(
   if (pendingClaims.size === 0) {
     return;
   }
-  // The ORIGINAL queueing time is what the write is conditional on, so each
-  // shape is batched by the oldest intent it carries: a teardown after that
-  // instant wins, however many times the retry has run since.
-  const entries = [...pendingClaims];
-  const oldest = (group: typeof entries) =>
-    group.reduce((min, [, entry]) => Math.min(min, entry.queuedAt), Infinity);
-  const reopen = entries.filter(([, entry]) => entry.reopen);
-  const plain = entries.filter(([, entry]) => !entry.reopen);
-  if (reopen.length > 0) {
-    await claimHlsSessionRows(reopen.map(([id]) => id), {
-      reopen: true,
-      retry: true,
-      claimedAt: oldest(reopen),
-    });
-  }
-  if (plain.length > 0) {
-    await claimHlsSessionRows(plain.map(([id]) => id), {
-      retry: true,
-      claimedAt: oldest(plain),
-    });
-  }
+  // EACH ID CARRIES ITS OWN decided-at instant, so one queue entry can never
+  // suppress another: a session ended before an older claim was queued is
+  // still claimable by its own newer one.
+  await writeHlsSessionClaims(
+    [...pendingClaims].map(([id, entry]) => ({
+      id,
+      reopen: entry.reopen,
+      claimedAt: entry.queuedAt,
+    })),
+  );
 }

@@ -3707,18 +3707,28 @@ async function stopRungs(
         queuedAt: Date.now(),
         attempts: 0,
       });
+      // COALESCED PER EGRESS ID ALREADY: the queue is a Map keyed by it, so a
+      // room torn down twice is one entry, not two. Past the cap the oldest
+      // entry is given up on -- memory has to be bounded somewhere -- but it
+      // is given up on LOUDLY, under its own event, because what is being
+      // dropped is a transcode that may still be running on the media box and
+      // now has nothing tracking it. `voice.hlsStopAbandoned` is the line to
+      // alert on: unlike the attempt cap, nothing here has even been tried.
       while (deferredStops.size > DEFERRED_STOP_MAX_ENTRIES) {
         const [oldest] = deferredStops.keys();
-        const dropped = oldest ? deferredStops.get(oldest) : undefined;
         if (!oldest) {
           break;
         }
+        const dropped = deferredStops.get(oldest);
         deferredStops.delete(oldest);
-        logEvent("voice.hlsStopDeferredAbandoned", {
+        logEvent("voice.hlsStopAbandoned", {
           channelId: dropped?.channelId ?? null,
           egressId: oldest,
           sessionId: dropped?.sessionId ?? null,
+          rung: dropped?.rung ?? null,
+          attempts: dropped?.attempts ?? 0,
           reason: "queue-full",
+          queued: deferredStops.size,
         });
       }
       logEvent("voice.hlsStopDeferred", {
