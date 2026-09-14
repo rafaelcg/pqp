@@ -1147,10 +1147,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   });
   // The other half of the fallback-microphone notice: the OS telling us a
   // device came or went is the only signal that the saved mic might be
-  // reachable again without the person doing anything. Guarded because not
-  // every test double for `mediaDevices` implements `EventTarget`, and a
-  // production browser without `mediaDevices` at all (an insecure origin)
-  // has nothing to listen to either.
+  // reachable again without the person doing anything.
   //
   // OWNED BY THIS CONTROLLER, NOT THE PAGE. A stray global listener with no
   // way to remove it is a leak for good the day `createVoiceController` is
@@ -1160,12 +1157,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   // against its own long-dead `pipeline`. The handle is kept so `dispose()`
   // can remove exactly this listener, and nothing else's.
   let deviceChangeHandler: (() => void) | null = null;
-  if (typeof navigator.mediaDevices?.addEventListener === "function") {
-    deviceChangeHandler = () => {
-      void tryRecoverPreferredMic();
-    };
-    navigator.mediaDevices.addEventListener("devicechange", deviceChangeHandler);
-  }
+  attachDeviceWatcher();
   /**
    * The presenter's own picture while a watch party is transcoding from it.
    * Sampled rather than computed once because the uplink is the thing that
@@ -2148,22 +2140,71 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
+   * (Re-)registers the `devicechange` listener behind mic-fallback recovery.
+   * Idempotent — a no-op while one is already attached, and a no-op where
+   * there is nothing to listen on (a test double for `mediaDevices` with no
+   * `addEventListener`, or a production browser without `mediaDevices` at
+   * all on an insecure origin) — so it is safe to call from both the
+   * constructor, below, and an effect's setup phase.
+   *
+   * THAT SECOND CALLER IS THE POINT (2026-09-14 fix round, finding #3).
+   * React StrictMode replays an effect's cleanup and setup once more on
+   * every mount specifically to catch an effect that is not idempotent. An
+   * `App`-level cleanup effect that only ever called `dispose()`, with
+   * nothing calling this again from the effect's own setup, would survive a
+   * normal mount fine and then lose the listener FOR GOOD under
+   * StrictMode's replay: mount (nothing registers, the constructor already
+   * did) -> forced cleanup (`dispose()` removes it) -> forced re-mount
+   * (still nothing registers). Invisible in production, which never replays
+   * effects, and everywhere else in dev diagnosed only as "recovery quietly
+   * stopped working" with no error to point at. Calling this again from the
+   * effect's setup closes exactly that gap.
+   */
+  function attachDeviceWatcher() {
+    if (
+      deviceChangeHandler ||
+      typeof navigator.mediaDevices?.addEventListener !== "function"
+    ) {
+      return;
+    }
+    deviceChangeHandler = () => {
+      void tryRecoverPreferredMic();
+    };
+    navigator.mediaDevices.addEventListener("devicechange", deviceChangeHandler);
+  }
+
+  /**
    * After `createMicPipeline` resolves successfully, decide what
    * `state.micFallback` should say now. Shared by the join path and
    * `swapPipeline` so the two can never drift on what "recovered" means.
    *
-   * Compares device ids only, never `onFallback`'s label. Two cases clear
-   * the notice: an EXPLICIT ask (a real, non-empty `requestedDeviceId`) that
-   * opened with no substitution, which covers a manual pick in Settings or
-   * the call bar and `tryRecoverPreferredMic`'s own retry alike; or the
-   * device that actually opened — read off `getSettings()`, not off what was
-   * asked — turning out to be the preferred device regardless. That second
-   * case is what a plain reconnect needs: `forgetInputDevice` blanks
-   * `audioOptions.inputDeviceId` the moment a fallback happens, so the next
-   * recapture asks for nothing in particular and its request is never
-   * "explicit" — landing back on the SAME substitute must not read as
-   * success just because nothing failed this time, and only comparing the
-   * opened id against the preferred one tells the two apart.
+   * Compares device ids only, never `onFallback`'s label, and always against
+   * the id that was actually being asked for on THIS open — never against
+   * `activeMicFallback.preferredDeviceId` on its own, which is a PAST
+   * occurrence's preferred device and says nothing about what this attempt
+   * wanted. Getting that backwards was a real bug (2026-09-14 fix round,
+   * finding #1): a person explicitly picking some OTHER microphone that then
+   * itself fell back, landing by coincidence on the OLD preferred device,
+   * read as "the preferred device answered" and cleared the notice — as if
+   * their new pick had worked, when what actually happened is their new pick
+   * failed too.
+   *
+   * "The id requested for this open" is one of two things:
+   *  - `requestedDeviceId` itself, when it is a real (non-empty) ask — a
+   *    manual pick in Settings or the call bar, or `tryRecoverPreferredMic`'s
+   *    own explicit retry. `fellBack` being false already means the opened
+   *    id equals this one, by construction of the ladder, so there is
+   *    nothing further to compare.
+   *  - `activeMicFallback.preferredDeviceId`, ONLY when `requestedDeviceId`
+   *    is EMPTY — nothing specific was asked, which is what a plain
+   *    reconnect's recapture does once `forgetInputDevice` has blanked the
+   *    saved id, and the standing preferred device is the only thing "the
+   *    saved preference" can mean in that case. Landing on the same
+   *    substitute again this way must not read as success just because
+   *    nothing failed this attempt.
+   *
+   * An explicit ask that itself falls back is always a fresh occurrence —
+   * SET, never cleared — whatever it happens to fall back to.
    */
   function resolveMicFallback(
     requestedDeviceId: string,
@@ -2173,11 +2214,12 @@ export function createVoiceController(transport: RealtimeTransport) {
   ) {
     const openedDeviceId = micDeviceId(openedStream);
     const explicitRequestSucceeded = !fellBack && requestedDeviceId !== "";
-    const preferredDeviceRecovered =
+    const savedPreferenceRecoveredOnItsOwn =
+      requestedDeviceId === "" &&
       activeMicFallback !== null &&
       openedDeviceId !== null &&
       openedDeviceId === activeMicFallback.preferredDeviceId;
-    if (explicitRequestSucceeded || preferredDeviceRecovered) {
+    if (explicitRequestSucceeded || savedPreferenceRecoveredOnItsOwn) {
       clearMicFallbackNotice();
     } else if (fellBack) {
       setMicFallbackNotice(requestedDeviceId, openedDeviceId, fellBackLabel);
@@ -4308,6 +4350,17 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     /**
+     * The setup half of `dispose()`. `App` calls this from the SAME effect's
+     * setup phase that calls `dispose()` from its cleanup — idempotent, so
+     * the ordinary case (the listener the constructor already attached is
+     * still there) is a no-op, and React StrictMode's replay (cleanup then
+     * setup again) correctly re-attaches what its own extra cleanup removed.
+     * See `attachDeviceWatcher`'s own comment for the failure this exists
+     * to close.
+     */
+    attachDeviceWatcher,
+
+    /**
      * Releases what this controller registered on shared, page-lifetime
      * objects rather than owning them itself — today that is exactly the
      * `devicechange` listener behind the fallback-microphone notice's
@@ -4315,13 +4368,13 @@ export function createVoiceController(transport: RealtimeTransport) {
      * on a controller that never registered anything (no `mediaDevices`, an
      * old test double).
      *
-     * Nothing calls this today (`App`'s `useMemo(() => createVoiceController(...),
-     * [transport])` has never actually replaced a controller in production),
-     * which is exactly why it has to be here rather than assumed: the first
-     * time something does replace one — a future reconnect path, a `transport`
-     * that changes — every controller that ever existed keeps its listener
-     * firing against its own long-dead `pipeline` forever unless there is
-     * somewhere for that replacement to call this.
+     * `App` calls this from a cleanup effect keyed on the controller
+     * instance, which has never actually fired in production (`transport`
+     * has never changed under `App`'s `useMemo`) — it exists for the day
+     * something does replace a controller (a future reconnect path, a
+     * `transport` that changes), so that replacement is not left with every
+     * controller that ever existed still firing `tryRecoverPreferredMic`
+     * against its own long-dead `pipeline`.
      */
     dispose() {
       if (deviceChangeHandler) {

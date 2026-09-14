@@ -1583,9 +1583,18 @@ function MainAppContent({
   // `useMemo` has no cleanup of its own, so a `transport` that ever changes
   // (or the future reconnect path this is future-proofing for) would leave
   // the OLD controller's `devicechange` listener firing forever, against a
-  // `pipeline` it can never touch again. `voice.dispose()` is idempotent, so
-  // this is free the vast majority of the time `transport` never changes.
+  // `pipeline` it can never touch again. Both calls are idempotent, so this
+  // is free the vast majority of the time `transport` never changes.
+  //
+  // BOTH, NOT JUST THE CLEANUP. React StrictMode replays this effect's
+  // cleanup and setup once more on every mount; a setup phase that did
+  // nothing would let that replay remove the listener the constructor
+  // attached and never put it back, for the rest of the controller's life —
+  // invisible here (StrictMode is dev-only), and everywhere else only ever
+  // seen as recovery quietly not working. `attachDeviceWatcher()` re-running
+  // is what makes the extra cleanup-then-setup a wash instead of a leak.
   useEffect(() => {
+    voice.attachDeviceWatcher();
     return () => {
       voice.dispose();
     };

@@ -1803,6 +1803,60 @@ describe("lobby presence sounds", () => {
     });
 
     /**
+     * Fix-round finding #1 (second pass): an explicit pick of a DIFFERENT
+     * microphone that itself falls back must be reported as its own fresh
+     * occurrence, even when the ladder happens to land on the OLD preferred
+     * device — comparing the opened id only against the standing
+     * `activeMicFallback.preferredDeviceId`, with no regard for what THIS
+     * attempt actually asked for, read that coincidence as "the preferred
+     * device answered" and silently cleared the notice, as if the person's
+     * new pick had worked instead of also failing.
+     */
+    it("does not read an explicit pick's own fallback onto the old preferred device as that device answering", async () => {
+      const OTHER_ID = "other-headset";
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === BROADCAST_ID || exact === OTHER_ID) {
+          throw gone;
+        }
+        // The ladder's un-chosen default candidate, which this test rigs to
+        // resolve to the OLD preferred device — the coincidence the bug
+        // depended on.
+        const stream = fakeStream("NVIDIA Broadcast", BROADCAST_ID);
+        Object.defineProperty(stream.getAudioTracks()[0]!, "label", {
+          value: "NVIDIA Broadcast",
+        });
+        return stream;
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () => [],
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback?.label).toBe("NVIDIA Broadcast");
+
+      // The person explicitly picks a THIRD device. It also fails, and the
+      // fallback ladder's next candidate (the plain default) happens to
+      // resolve to the OLD preferred device this time.
+      await voice.setInputDevice(OTHER_ID);
+
+      // A fresh occurrence for the NEW pick, not a cleared notice: the
+      // person's choice did not work, whatever it coincidentally opened
+      // instead.
+      expect(voice.getState().micFallback?.label).toBe("NVIDIA Broadcast");
+    });
+
+    /**
      * Fix-round finding #1: a `devicechange`-driven recovery can race a
      * device the user just selected. Two shapes, both covered:
      *  - recovery already parked on `listAudioDevices()` when the pick
@@ -1953,6 +2007,42 @@ describe("lobby presence sounds", () => {
       fireDeviceChange();
       await settle();
       expect(getUserMedia).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Fix-round finding #3 (second pass): React StrictMode replays an
+     * effect's cleanup and setup once more on every mount. `App`'s cleanup
+     * effect calls `voice.attachDeviceWatcher()` from its own setup phase
+     * and `voice.dispose()` from its cleanup — this reproduces exactly that
+     * sequence (constructor attach, effect setup, forced cleanup, forced
+     * re-setup) and checks the listener count after each step, so a future
+     * change that makes either call non-idempotent, or drops the setup
+     * call and leaves only the cleanup, fails here rather than as "recovery
+     * quietly stopped working" three weeks later.
+     */
+    it("mount, StrictMode's forced cleanup, and its re-mount leave exactly one devicechange listener", () => {
+      const { registeredDeviceChangeHandlers } = mediaDevicesForBroadcastMic();
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+
+      // The constructor already attached one.
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
+
+      // The cleanup effect's own setup phase: a no-op, one already attached.
+      voice.attachDeviceWatcher();
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
+
+      // StrictMode's forced cleanup.
+      voice.dispose();
+      expect(registeredDeviceChangeHandlers).toHaveLength(0);
+
+      // StrictMode's forced re-mount: the setup phase runs again.
+      voice.attachDeviceWatcher();
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
+
+      // Calling either again, in either order, still leaves exactly one.
+      voice.attachDeviceWatcher();
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
     });
   });
 
