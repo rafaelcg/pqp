@@ -64,6 +64,17 @@ let batchesRejectedRateLimit = 0;
  * rather than folding into either.
  */
 let batchesRejectedSession = 0;
+/**
+ * Batches refused because resolving the verified token's session to a real
+ * `hls_sessions.id` (`resolveHlsSessionId`, guarded by
+ * `hls-telemetry-session-guard.ts`) did not finish inside its bound -- a
+ * Farol finding, 2026-09-14: "telemetry requests can remain stuck on a hung
+ * session lookup". The route fails that ONE batch closed (503) rather than
+ * holding the connection or falling back silently; the guard's own
+ * negative cache is what stops every batch after it from repeating the same
+ * query for 30s. This belongs at zero outside a real database problem.
+ */
+let batchesRejectedSessionLookupTimeout = 0;
 /** Individual samples folded into a histogram, across every accepted batch. */
 let samplesRecorded = 0;
 /**
@@ -133,6 +144,11 @@ export function recordHlsTelemetryBatchRejectedSession(): void {
   batchesRejectedSession += 1;
 }
 
+/** Record one batch refused because its session lookup did not finish inside its bound. */
+export function recordHlsTelemetryBatchRejectedSessionLookupTimeout(): void {
+  batchesRejectedSessionLookupTimeout += 1;
+}
+
 /**
  * The bucket boundary at or above which `fraction` of this rung's samples
  * fall — an approximation bounded by bucket width, never worse than the gap
@@ -193,6 +209,7 @@ export interface HlsTelemetryActivity {
   batchesRejectedSchema: number;
   batchesRejectedRateLimit: number;
   batchesRejectedSession: number;
+  batchesRejectedSessionLookupTimeout: number;
   samplesRecorded: number;
   samplesRejectedUnknownRung: number;
   byRung: HlsLatencyRungSummary[];
@@ -205,6 +222,7 @@ export function hlsTelemetryActivity(): HlsTelemetryActivity {
     batchesRejectedSchema,
     batchesRejectedRateLimit,
     batchesRejectedSession,
+    batchesRejectedSessionLookupTimeout,
     samplesRecorded,
     samplesRejectedUnknownRung,
     byRung: hlsLatencySnapshot(),
@@ -217,6 +235,7 @@ export function resetHlsLatencyMetricsForTests(): void {
   batchesRejectedSchema = 0;
   batchesRejectedRateLimit = 0;
   batchesRejectedSession = 0;
+  batchesRejectedSessionLookupTimeout = 0;
   samplesRecorded = 0;
   samplesRejectedUnknownRung = 0;
 }

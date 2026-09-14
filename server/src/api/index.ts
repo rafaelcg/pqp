@@ -155,8 +155,10 @@ import {
   recordHlsTelemetryBatchRejectedRateLimit,
   recordHlsTelemetryBatchRejectedSchema,
   recordHlsTelemetryBatchRejectedSession,
+  recordHlsTelemetryBatchRejectedSessionLookupTimeout,
 } from "../voice/hls-latency-metrics.js";
 import { isKnownHlsRung } from "../voice/hls-ladder.js";
+import { createHlsSessionLookupGuard } from "../voice/hls-telemetry-session-guard.js";
 import {
   decodeHlsViewerToken,
   describeHlsViewerToken,
@@ -808,6 +810,24 @@ const liveHlsTelemetrySessionLimiter = createRateLimiter({
   refillPerSecond: 10,
 });
 /**
+ * How long a signed telemetry batch's `resolveHlsSessionId` lookup may run
+ * before the route gives up on it, and how long that session's key is then
+ * assumed still struggling before the next batch tries again -- see
+ * `hls-telemetry-session-guard.ts`'s own doc comment for the two Farol
+ * findings (2026-09-14) this closes. 500ms is generous for a warm cache hit
+ * (the common case: the session's own viewers are already polling the
+ * master playlist) and still short enough that a stuck pool costs one
+ * request, not an open connection held indefinitely. 30s is roughly the
+ * time a real outage takes a human to notice on the dashboard, not a number
+ * tuned to any specific incident.
+ */
+const HLS_SESSION_LOOKUP_TIMEOUT_MS = 500;
+const HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS = 30_000;
+const hlsSessionLookupGuard = createHlsSessionLookupGuard({
+  timeoutMs: HLS_SESSION_LOOKUP_TIMEOUT_MS,
+  negativeCacheMs: HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS,
+});
+/**
  * Post-call ratings. Roomier than feedback because this one is *asked for*:
  * somebody who genuinely has ten short calls in an evening should be able to
  * answer every prompt, and the client already refuses to ask more than once
@@ -899,6 +919,7 @@ export function resetApiRateLimits(): void {
   bulkDeleteLimiter.reset();
   liveHlsTelemetryLimiter.reset();
   liveHlsTelemetrySessionLimiter.reset();
+  hlsSessionLookupGuard.reset();
   // Keyed on the string "machine" rather than a user id, so unlike every
   // bucket above it is shared by every test in a file and would otherwise
   // drain across them.
@@ -7839,21 +7860,17 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
       recordHlsTelemetryBatchRejectedSession();
       throw new HttpError(400, "Invalid session token");
     }
-    const canonical = await resolveHlsSessionId(
-      claims.channelId,
-      claims.startedAt,
-    );
-    // A resolution miss (the session just ended, or its rung rows have not
-    // landed yet) still deserves a batch that JOINS on repetition, even if
-    // it cannot join against the egress log for this one -- so this falls
-    // back to the composite pair rather than the shared `"unsigned"` bucket,
-    // which would wrongly lump a real, verified session in with every
-    // tokenless one.
-    sessionId = canonical ?? `${claims.channelId}:${claims.startedAt}`;
+    // The verified pair, needing no query of its own: the cheap check below
+    // gates the database work, not the other way around (a Farol finding,
+    // 2026-09-14). It also outlives `resolveHlsSessionId`'s own answer, so
+    // it is what the per-session rate limit is keyed on throughout, not the
+    // resolved row id -- both name the same session, but this one is
+    // available before any lookup runs.
+    const compositeKey = `${claims.channelId}:${claims.startedAt}`;
     sessionVerified = true;
-  }
-  if (sessionVerified) {
-    const sessionKey = `session:${sessionId}`;
+    sessionId = compositeKey;
+
+    const sessionKey = `session:${compositeKey}`;
     if (!liveHlsTelemetrySessionLimiter.take(sessionKey)) {
       recordHlsTelemetryBatchRejectedRateLimit();
       res.setHeader(
@@ -7862,6 +7879,29 @@ router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
       );
       throw new HttpError(429, "Slow down");
     }
+
+    // `hlsSessionLookupGuard` bounds the query to
+    // `HLS_SESSION_LOOKUP_TIMEOUT_MS` and negatively caches a struggling key
+    // for `HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS` -- see its own doc comment
+    // for the two Farol findings this closes. A resolution miss that is NOT
+    // a timeout (the session just ended, or its rung rows have not landed
+    // yet) still deserves a batch that JOINS on repetition, even if it
+    // cannot join against the egress log for this one -- so that case falls
+    // back to `compositeKey` rather than the shared `"unsigned"` bucket,
+    // which would wrongly lump a real, verified session in with every
+    // tokenless one.
+    const lookup = await hlsSessionLookupGuard.resolve(compositeKey, () =>
+      resolveHlsSessionId(claims.channelId, claims.startedAt),
+    );
+    if (lookup.outcome === "timeout") {
+      recordHlsTelemetryBatchRejectedSessionLookupTimeout();
+      throw new HttpError(503, "Session lookup timed out");
+    }
+    if (lookup.outcome === "resolved") {
+      sessionId = lookup.sessionId ?? compositeKey;
+    }
+    // "negatively-cached": no lookup was attempted; `sessionId` stays the
+    // composite fallback already assigned above.
   }
   // `recordHlsLatencySample` refuses a rung it does not recognise on its
   // own (a caller-independent guard against an authenticated account

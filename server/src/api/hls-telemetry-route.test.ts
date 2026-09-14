@@ -43,6 +43,22 @@ vi.mock("../auth/clerk.js", () => ({
 const logEvent = vi.hoisted(() => vi.fn());
 vi.mock("../lib/log.js", () => ({ logEvent }));
 
+/**
+ * A pass-through spy on `resolveHlsSessionId`, real Postgres query and all,
+ * for every test except the one that overrides it with
+ * `mockImplementationOnce` to prove the session-lookup guard's timeout and
+ * negative cache actually reach through this route (`hls-telemetry-session-
+ * guard.test.ts` proves the guard's own logic in isolation; this proves the
+ * route wires it up).
+ */
+const resolveHlsSessionIdSpy = vi.hoisted(() => vi.fn());
+vi.mock("../voice/hls-playlist-proxy.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../voice/hls-playlist-proxy.js")>();
+  resolveHlsSessionIdSpy.mockImplementation(actual.resolveHlsSessionId);
+  return { ...actual, resolveHlsSessionId: resolveHlsSessionIdSpy };
+});
+
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
@@ -112,6 +128,7 @@ describeDb("POST /api/live-hls/telemetry", () => {
     resetHlsLatencyMetricsForTests();
     resetHlsPlaylistCacheForTests();
     logEvent.mockClear();
+    resolveHlsSessionIdSpy.mockClear();
   });
 
   afterEach(() => {
@@ -433,6 +450,94 @@ describeDb("POST /api/live-hls/telemetry", () => {
       // mode at all.
       expect(lastStatus).toBe(200);
       expect(hlsTelemetryActivity().batchesAccepted).toBeGreaterThanOrEqual(130);
+    });
+  });
+
+  /**
+   * Farol findings, 2026-09-14: "telemetry requests can remain stuck on a
+   * hung session lookup" and "telemetry batches can repeatedly retry a
+   * failed session lookup". `hls-telemetry-session-guard.test.ts` proves the
+   * guard's own timeout/negative-cache logic with fake timers and no
+   * database; this proves the ROUTE actually reaches it, with a real
+   * (never-settling) `resolveHlsSessionId` call and the real 500ms bound.
+   */
+  describe("a session lookup that never settles", () => {
+    it("fails the batch closed with 503, then skips the lookup entirely for the next batch on the same session", async () => {
+      resolveHlsSessionIdSpy.mockImplementationOnce(
+        () => new Promise<string | null>(() => {}),
+      );
+      const token = mintHlsViewerToken({
+        userId: viewer.id,
+        channelId: TOKEN_CHANNEL,
+        startedAt: TOKEN_STARTED_AT,
+      })!;
+      const stuck = await post(
+        {
+          sessionId: "irrelevant",
+          sessionToken: token,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(stuck.status).toBe(503);
+      expect(hlsTelemetryActivity().batchesRejectedSessionLookupTimeout).toBe(1);
+      expect(hlsTelemetryActivity().batchesAccepted).toBe(0);
+
+      // Same verified session, still inside the 30s negative-cache window:
+      // the lookup must not be attempted a second time, and the batch is
+      // accepted on the composite fallback instead of failing again.
+      const next = await post(
+        {
+          sessionId: "irrelevant",
+          sessionToken: token,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(next.status).toBe(200);
+      expect(resolveHlsSessionIdSpy).toHaveBeenCalledTimes(1);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsTelemetryBatch",
+        expect.objectContaining({
+          sessionId: `${TOKEN_CHANNEL}:${TOKEN_STARTED_AT}`,
+          sessionVerified: true,
+        }),
+      );
+    }, 10_000);
+
+    it("the per-session rate limiter gates the lookup -- a caller it 429s never reaches resolveHlsSessionId at all", async () => {
+      // Many different accounts (each under its OWN per-user budget, one
+      // request apiece) sharing the SAME verified session, past the
+      // per-session limiter's capacity (120). If the limiter ran AFTER the
+      // lookup, every one of these 130 would still call it before being
+      // refused; if it gates the lookup as intended, the calls that got a
+      // 429 make no call to it at all.
+      let rejected = 0;
+      for (let i = 0; i < 130; i++) {
+        const fakeViewer = {
+          id: `guard-order-user-${i}`,
+          clerk_id: `guard-order-${i}`,
+        };
+        const token = mintHlsViewerToken({
+          userId: fakeViewer.id,
+          channelId: TOKEN_CHANNEL,
+          startedAt: TOKEN_STARTED_AT,
+        })!;
+        const result = await post(
+          {
+            sessionId: "irrelevant",
+            sessionToken: token,
+            samples: [{ rung: "720p30", latencyMs: 1_000 }],
+          },
+          fakeViewer,
+        );
+        if (result.status === 429) {
+          rejected += 1;
+        }
+      }
+      expect(rejected).toBeGreaterThan(0);
+      expect(resolveHlsSessionIdSpy.mock.calls.length).toBeLessThan(130);
+      expect(resolveHlsSessionIdSpy.mock.calls.length).toBe(130 - rejected);
     });
   });
 
