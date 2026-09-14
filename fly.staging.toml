@@ -60,21 +60,20 @@ kill_timeout = 30
   internal_port = 3001
   force_https = true
 
-  # STAGING DIFFERENCE. Production says "off" here because a stopped machine
-  # terminates every live WebSocket; on staging that is an acceptable trade for
-  # not paying for an idle machine. Clients reconnect with backoff anyway
-  # (client/src/lib/realtime.ts). "stop", not "suspend": a suspended machine
-  # restores in-process presence/voice Maps from a snapshot that no longer
-  # matches any connected client.
-  auto_stop_machines = "stop"
+  # M6 REHEARSAL 2 (2026-09-14), TEMPORARY, NOT MEANT TO BE MERGED: three
+  # machines for docs/plans/M6_REHEARSAL_2026-09-14.md. auto-stop off for the
+  # same reason fly.toml keeps it off on production — a stopped machine drops
+  # every live WebSocket at once, which the rehearsal must not do to itself.
+  # Reverted at the end of the rehearsal; see that doc for the exact commands.
+  auto_stop_machines = "off"
 
   # STAGING DIFFERENCE. The proxy wakes the machine on the first request after
   # an idle stop. Note this only ever restarts the one machine that exists —
   # fly-proxy never creates machines, so this is not the second-machine risk.
   auto_start_machines = true
 
-  # STAGING DIFFERENCE. Zero: idle staging costs nothing.
-  min_machines_running = 0
+  # M6 REHEARSAL 2, TEMPORARY: three machines. See the banner above.
+  min_machines_running = 3
 
   processes = ["app"]
 
