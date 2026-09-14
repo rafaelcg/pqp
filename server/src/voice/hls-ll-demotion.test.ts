@@ -506,6 +506,79 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     expect(byId.get(partyId)).toBe(true);
   });
 
+  it("(1d-bis) still clears the request when the attribution lookup failed at start", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    // The SELECT that records which party asked failed when the session
+    // started, so the row carries NULL. That is UNKNOWN, not "there was no
+    // party": reading it the second way left `low_latency_requested` true for
+    // the very party the demotion was about, and five minutes later a
+    // reconcile started LL straight back into the same failure.
+    await getPool().query(
+      `UPDATE hls_sessions SET watch_party_session_id = NULL
+        WHERE channel_id = $1 AND mode = 'll'`,
+      [channelA],
+    );
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "idr-gap-exceeded",
+    });
+
+    await sweepLlDemotions();
+
+    expect(await requestedHlsModeForChannel(channelA)).toBe(false);
+    expect(pendingLlDemotionCount()).toBe(0);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlDemotionAttributed",
+      expect.objectContaining({ channelId: channelA, partySessionId: partyId }),
+    );
+  });
+
+  it("(1d-ter) does not attribute a demotion to a party that started after the session", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    await getPool().query(
+      `UPDATE hls_sessions SET watch_party_session_id = NULL,
+              started_at = NOW() - INTERVAL '1 hour'
+        WHERE channel_id = $1 AND mode = 'll'`,
+      [channelA],
+    );
+    // The party that could have asked is over; a brand-new one is live and
+    // has asked for LL on its own account. It was created AFTER the demoted
+    // session started, so it is not the one being demoted.
+    const owner = await getPool().query<{ id: string }>(
+      `SELECT created_by AS id FROM channel_sessions WHERE id = $1`,
+      [partyId],
+    );
+    await getPool().query(
+      `UPDATE channel_sessions SET status = 'ended',
+              created_at = NOW() - INTERVAL '2 hours' WHERE id = $1`,
+      [partyId],
+    );
+    const newer = await getPool().query<{ id: string }>(
+      `INSERT INTO channel_sessions
+         (channel_id, title, status, created_by, low_latency_requested)
+       VALUES ($1, 'Outra', 'live', $2, TRUE) RETURNING id`,
+      [channelA, owner.rows[0]!.id],
+    );
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "part-stuck",
+    });
+
+    // Three attempts is what the attribution is allowed before it gives up
+    // and fails closed; up to then the newer party is left alone.
+    await sweepLlDemotions();
+    const stillAsking = await getPool().query<{ low_latency_requested: boolean }>(
+      `SELECT low_latency_requested FROM channel_sessions WHERE id = $1`,
+      [newer.rows[0]!.id],
+    );
+    expect(stillAsking.rows[0]!.low_latency_requested).toBe(true);
+    expect(pendingLlDemotionCount()).toBe(1);
+  });
+
   it("(1e) finishes the cleanup on a later tick when the box refuses the stop", async () => {
     await reconcileLlHlsNow(channelA, "peer-1");
     const sessionId = started[0]!;

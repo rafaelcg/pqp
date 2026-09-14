@@ -293,8 +293,18 @@ interface PendingDemotion {
   sessionId: string;
   /** Its `hls_sessions` row. Re-claimed on every attempt, never assumed. */
   rowId: string;
-  /** The party that asked for LL, read off the row. NULL is "memo only". */
+  /**
+   * The party that asked for LL, read off the row. NULL is UNKNOWN, never
+   * "there was none": the lookup that would have recorded it can itself have
+   * failed at start, and treating that as "nothing to clear" leaves
+   * `low_latency_requested` true for exactly the party the demotion is about
+   * (a Farol finding on PR #618). Re-attributed lazily below.
+   */
   partySessionId: string | null;
+  /** When the demoted session started: what bounds a lazy re-attribution. */
+  startedAtMs: number;
+  /** How many times the lazy attribution has come back empty. */
+  attributionAttempts: number;
   /** The box's own word for why. Carried into every log line. */
   reason: string;
   queuedAt: number;
@@ -369,6 +379,9 @@ function queueDemotion(entry: PendingDemotion): void {
  * explain a week later.
  */
 async function clearPartyLlRequest(entry: PendingDemotion): Promise<boolean> {
+  if (entry.partySessionId === null && !(await attributeDemotion(entry))) {
+    return false;
+  }
   if (entry.partySessionId === null) {
     logEvent("voice.hlsLlRequestClearSkipped", {
       channelId: entry.channelId,
@@ -401,7 +414,80 @@ async function clearPartyLlRequest(entry: PendingDemotion): Promise<boolean> {
 }
 
 /**
- * The live party on this channel right now. Used ONLY when a session starts,
+ * WORK OUT WHICH PARTY THIS SESSION BELONGED TO, AFTER THE FACT.
+ *
+ * `watch_party_session_id` is NULL for two different reasons and the row
+ * cannot tell them apart: the session genuinely started with no live party
+ * row, or the SELECT that would have recorded one failed. Reading NULL as the
+ * first was the last hole in the fallback (a Farol finding on PR #618): the
+ * demotion found nothing to clear, said so, and `low_latency_requested`
+ * stayed true until the five-minute memo lapsed and a reconcile started LL
+ * again, into the same failure.
+ *
+ * So NULL is treated as UNKNOWN and resolved here, bounded by the session's
+ * own start: a party that was already live when the session began is one that
+ * could have asked for it, and a party created afterwards is emphatically not
+ * (that is the newer-party downgrade this whole attribution exists to avoid).
+ *
+ * FAILS CLOSED AFTER `ATTRIBUTION_MAX_ATTEMPTS`. If nothing can be attributed
+ * that way, and a party is live on the channel, its request is cleared anyway
+ * with a log that says the attribution was never established: a party
+ * downgraded to the conventional ladder it was going to be handed anyway is a
+ * smaller harm than a party looping back into a remux session that has
+ * already given up. Answers whether the caller may proceed; `false` is "ask
+ * again next tick".
+ */
+const ATTRIBUTION_MAX_ATTEMPTS = 3;
+
+async function attributeDemotion(entry: PendingDemotion): Promise<boolean> {
+  try {
+    const result = await getPool().query<{ id: string }>(
+      `SELECT id FROM channel_sessions
+        WHERE channel_id = $1 AND status = 'live'
+          AND created_at <= to_timestamp($2 / 1000.0)
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [entry.channelId, entry.startedAtMs],
+    );
+    const id = result.rows[0]?.id ?? null;
+    if (id !== null) {
+      entry.partySessionId = id;
+      logEvent("voice.hlsLlDemotionAttributed", {
+        channelId: entry.channelId,
+        partySessionId: id,
+        attempts: entry.attributionAttempts,
+      });
+      return true;
+    }
+  } catch (error) {
+    logLookupFailure(entry.channelId, "requested-mode", error);
+    return false;
+  }
+  entry.attributionAttempts += 1;
+  if (entry.attributionAttempts < ATTRIBUTION_MAX_ATTEMPTS) {
+    return false;
+  }
+  const live = await liveWatchPartyId(entry.channelId);
+  if (!live.ok) {
+    return false;
+  }
+  if (live.id === null) {
+    // Nothing live to clear at all, which is the ordinary "the party already
+    // ended" case. Proceed; the caller logs the skip.
+    return true;
+  }
+  entry.partySessionId = live.id;
+  logEvent("voice.hlsLlRequestClearUnattributed", {
+    channelId: entry.channelId,
+    partySessionId: live.id,
+    reason: entry.reason,
+    attempts: entry.attributionAttempts,
+  });
+  return true;
+}
+
+/**
+ * The live party on this channel right now. Used when a session starts,
  * to record which party asked; a demotion reads the recorded id instead (see
  * `clearPartyLlRequest`). `{ ok: false }` is a read that failed, which is NOT
  * "no party" -- the same distinction `findOpenLlRow` makes, for the same
@@ -1485,7 +1571,10 @@ export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
       rowId: row.id,
       // Off the ROW, so the clear names the party that asked for this
       // session rather than whatever happens to be live when the write runs.
+      // NULL here is UNKNOWN, not "none": `attributeDemotion` resolves it.
       partySessionId: row.watchPartySessionId,
+      startedAtMs: row.startedAtMs,
+      attributionAttempts: 0,
       reason: `demoted:${reason}`,
       queuedAt: now,
       nextAttemptAt: now,

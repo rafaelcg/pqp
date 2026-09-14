@@ -340,6 +340,17 @@ the one moment "the party that asked" and "the party that is live" are
 certainly the same), never to the channel, so a cleanup that runs late cannot
 clear a newer party's request.
 
+**A NULL attribution is unknown, not "no party".** The column is NULL for two
+different reasons a row cannot tell apart: the session genuinely started with
+no live party, or the SELECT that would have recorded one failed. Reading it
+as the first was the last hole in the fallback: the demotion found nothing to
+clear, said so, and `low_latency_requested` stayed true until the memo lapsed.
+A demotion whose party is unknown is re-attributed at cleanup time, bounded by
+the session's own start (a party live before the session began could have
+asked for it; one created afterwards emphatically could not), and after three
+empty attempts it fails closed by clearing whatever party is live, logged as
+`voice.hlsLlRequestClearUnattributed`.
+
 **A demotion is three writes and is not done until all three are.** Stopping
 the box session and ending the row, clearing the party's request, and getting
 the conventional ladder started: each can fail on its own, and doing them once
