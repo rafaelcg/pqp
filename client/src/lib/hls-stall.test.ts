@@ -319,6 +319,158 @@ describe("HlsStallWatch", () => {
       ).toBe("unavailable");
     });
   });
+
+  describe("configureForMode (LL-HLS, docs/plans/LL_HLS.md §5)", () => {
+    it("leaves the constructed default untouched when never called -- byte-identical conventional behaviour", () => {
+      // 20s (the constructed default): a sequence stuck for 19s must NOT
+      // fire, and one stuck for 20s must.
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      expect(watch.tick(T0 + 19_000)).toBe("none");
+      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+    });
+
+    it("scales the SEGMENT-based sequence-stuck threshold to 3 segments (12s at a 4s target), never to parts (Farol review)", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      // A part arrived recently, so the SEPARATE part-stuck rule (2000ms at
+      // a 500ms target) has not fired -- isolating the segment-based rule
+      // under test. A 500ms part target must NOT shrink the SEGMENT
+      // threshold to a part-scaled number (the bug this test guards
+      // against): it stays segment-paced.
+      watch.onPartAdvance("part-a", T0 + 11_000);
+      expect(watch.tick(T0 + 11_999)).toBe("none");
+      expect(watch.tick(T0 + 12_000)).toBe("start-load");
+    });
+
+    it("floors the segment-based threshold at 6s even for a tiny (hypothetical) segment target", () => {
+      // configureForMode itself does not take a segment target -- this pins
+      // that the floor exists as a constant, independent of partTargetMs.
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 50);
+      // Keep parts flowing throughout (this tiny part target's own
+      // part-stuck threshold is only 200ms) so only the segment-based rule
+      // is under test.
+      for (let t = T0; t <= T0 + 6_000; t += 150) {
+        watch.onPartAdvance(`part-${t}`, t);
+      }
+      expect(watch.tick(T0 + 5_999)).toBe("none");
+      expect(watch.tick(T0 + 6_000)).toBe("none");
+      // (The floor is 6s; the actual segment-derived value at the real 4s
+      // segment target is 12s, asserted above -- this only confirms the
+      // threshold never drops below 6s regardless of partTargetMs.)
+    });
+
+    it("restores the constructed default on conventional after an ll episode", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.configureForMode("conventional");
+      expect(watch.tick(T0 + 12_000)).toBe("none");
+      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+    });
+
+    it("defaults the part target when omitted on ll", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll");
+      // Segment-paced regardless of the (defaulted) part target: 12s. A
+      // recent part keeps the separate part-stuck rule from firing first.
+      watch.onPartAdvance("part-a", T0 + 11_000);
+      expect(watch.tick(T0 + 11_999)).toBe("none");
+      expect(watch.tick(T0 + 12_000)).toBe("start-load");
+    });
+
+    it("does not disturb an explicitly configured sequenceStuckMs's restore value", () => {
+      const watch = new HlsStallWatch({ sequenceStuckMs: 9_000 });
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.configureForMode("conventional");
+      expect(watch.tick(T0 + 8_999)).toBe("none");
+      expect(watch.tick(T0 + 9_000)).toBe("start-load");
+    });
+  });
+
+  describe("onPartAdvance / the part-stuck rule (Farol review, this PR)", () => {
+    it("is disabled on conventional -- onPartAdvance alone never fires anything", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onPartAdvance("10.0", T0);
+      // Far past any part-based threshold that would apply on LL.
+      expect(watch.tick(T0 + 60_000)).toBe("none");
+    });
+
+    it("fires exactly one start-load after 4 parts of silence on ll, then gets out of the way", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onPartAdvance("10.0", T0);
+      // 4 * 500ms = 2000ms.
+      expect(watch.tick(T0 + 1_999)).toBe("none");
+      expect(watch.tick(T0 + 2_000)).toBe("start-load");
+      // One-shot: the SAME stall episode does not fire it again, and does
+      // not escalate to a ladder of its own -- it stays "none" until the
+      // segment-based rule's own (much later) threshold takes over.
+      expect(watch.tick(T0 + 2_500)).toBe("none");
+      expect(watch.tick(T0 + 11_000)).toBe("none");
+    });
+
+    it("re-arms for a later stall episode once a part actually advances", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onPartAdvance("10.0", T0);
+      expect(watch.tick(T0 + 2_000)).toBe("start-load");
+      // A genuinely new part arrives -- the stream recovered.
+      watch.onPartAdvance("10.1", T0 + 2_100);
+      expect(watch.tick(T0 + 2_200)).toBe("none");
+      // It stalls again from this new point: the one-shot fires again.
+      expect(watch.tick(T0 + 4_099)).toBe("none");
+      expect(watch.tick(T0 + 4_100)).toBe("start-load");
+    });
+
+    it("never fires while a segment-based reason is already flagged -- it only gets a turn when nothing else is", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onPartAdvance("10.0", T0);
+      watch.onError({ fatal: true });
+      // Fatal takes priority every tick, including the one where the
+      // part-stuck threshold would otherwise have fired.
+      expect(watch.tick(T0 + 2_000)).toBe("recover-media-error");
+    });
+
+    it("repeated calls with the SAME key are not progress", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onPartAdvance("10.0", T0);
+      watch.onPartAdvance("10.0", T0 + 1_000);
+      watch.onPartAdvance("10.0", T0 + 1_900);
+      // Still counts from the FIRST time "10.0" was seen (T0), not the
+      // repeated calls -- a duplicate playlist fetch is not a new part.
+      expect(watch.tick(T0 + 2_000)).toBe("start-load");
+    });
+  });
 });
 
 describe("channelIdFromHlsUrl", () => {

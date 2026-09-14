@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { LiveReactionEmoji } from "@pqp/shared";
+import { validPartTargetMs, type HlsMode } from "@/lib/hls-live-edge";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { useLgUp } from "@/hooks/use-lg-up";
@@ -26,6 +27,10 @@ export interface ScreenShareTile {
   /** Whether `cameraHlsUrl` carries the presenter's mic (`LIVE_HLS_VOICE_TRACK`). */
   cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
+  /** `LiveHlsStream.mode` (`docs/plans/LL_HLS.md`). Absent means conventional. */
+  mode?: HlsMode;
+  /** `LiveHlsStream.partTargetMs`, read only when `mode === "ll"`. */
+  partTargetMs?: number;
   presenterName: string;
   isSelf: boolean;
   /**
@@ -56,6 +61,9 @@ export function collectScreenTiles(args: {
     cameraHasVoiceAudio?: boolean;
     presenterPeerId: string;
     delaySeconds?: number;
+    /** See `ScreenShareTile.mode`'s comment -- absent on `LiveHlsStream` today. */
+    mode?: HlsMode;
+    partTargetMs?: number;
   } | null;
 }): ScreenShareTile[] {
   return args.peerIds.map((peerId) => {
@@ -67,6 +75,13 @@ export function collectScreenTiles(args: {
             cameraHasVideo: args.liveStream.cameraHasVideo,
             cameraHasVoiceAudio: args.liveStream.cameraHasVoiceAudio,
             delaySeconds: args.liveStream.delaySeconds,
+            mode: args.liveStream.mode,
+            // Validated here, once, so every downstream reader of a tile's
+            // `partTargetMs` (the player, the stall config) already holds a
+            // sane value (Farol review, this PR) -- never the raw wire
+            // number, which nothing between the server and this map
+            // otherwise checks.
+            partTargetMs: validPartTargetMs(args.liveStream.partTargetMs),
           }
         : {
             hlsUrl: null,
@@ -74,6 +89,8 @@ export function collectScreenTiles(args: {
             cameraHasVideo: undefined,
             cameraHasVoiceAudio: undefined,
             delaySeconds: undefined,
+            mode: undefined,
+            partTargetMs: undefined,
           };
     if (peerId === args.localPeerId) {
       return {
@@ -98,6 +115,8 @@ export function collectScreenTiles(args: {
       cameraHasVideo: hls.cameraHasVideo,
       cameraHasVoiceAudio: hls.cameraHasVoiceAudio,
       delaySeconds: hls.delaySeconds,
+      mode: hls.mode,
+      partTargetMs: hls.partTargetMs,
       presenterName: remote?.displayName ?? args.fallbackName,
       isSelf: false,
       userId: remote?.userId ?? null,

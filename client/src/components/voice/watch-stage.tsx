@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Maximize2, Phone, X } from "lucide-react";
-import { liveStateFromStream } from "@pqp/shared";
+import { liveStateFromStream, type LiveHlsStream } from "@pqp/shared";
 import type { ChannelLive, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
 import { fetchChannelLive } from "@/lib/api";
+import {
+  hlsModeOf,
+  hlsPartTargetMs,
+  watchPlayerMode,
+  type HlsMode,
+  type LlHlsStreamFields,
+} from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
@@ -35,6 +42,8 @@ export function WatchStage({
   cameraHasVideo = true,
   cameraHasVoiceAudio = false,
   delaySeconds,
+  mode,
+  partTargetMs,
   audienceCount,
   ended,
   onJoin,
@@ -74,6 +83,10 @@ export function WatchStage({
    */
   cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
+  /** `LiveHlsStream.mode` (`docs/plans/LL_HLS.md`). Absent means conventional. */
+  mode?: HlsMode;
+  /** `LiveHlsStream.partTargetMs`, read only when `mode === "ll"`. */
+  partTargetMs?: number;
   /** Everybody watching, seated or not, presenter excluded. */
   audienceCount: number;
   /** The stream this person was watching went away. Said, not just blank. */
@@ -200,6 +213,8 @@ export function WatchStage({
           cameraHasVideo={cameraHasVideo}
           cameraHasVoiceAudio={cameraHasVoiceAudio}
           delaySeconds={delaySeconds}
+          mode={mode ? watchPlayerMode(mode) : undefined}
+          partTargetMs={partTargetMs}
           mediaTitle={mediaTitle}
           communityName={communityName}
           coverUrl={coverUrl}
@@ -533,6 +548,10 @@ export function WatchChannelStage({
         cameraHasVideo={stream?.cameraHasVideo ?? true}
         cameraHasVoiceAudio={stream?.cameraHasVoiceAudio ?? false}
         delaySeconds={stream?.delaySeconds}
+        mode={hlsModeOf(stream as (LiveHlsStream & LlHlsStreamFields) | null)}
+        partTargetMs={hlsPartTargetMs(
+          stream as (LiveHlsStream & LlHlsStreamFields) | null,
+        )}
         audienceCount={watchAudienceCount(
           live,
           voiceState.occupancy[channelId],

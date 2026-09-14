@@ -126,6 +126,336 @@ export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
 /** hls.js ABR seed: above the 720 peak so Auto does not start on 480p. */
 export const HLS_ABR_DEFAULT_ESTIMATE_BPS = 3_500_000;
 
+// ---------------------------------------------------------------------------
+// LL-HLS (`docs/plans/LL_HLS.md`, task L2.4). Kept apart from the conventional
+// constants above on purpose: nothing in this section is read unless a live
+// state actually says `mode: "ll"`, so the conventional path (every existing
+// number above) stays byte-for-byte what it was.
+// ---------------------------------------------------------------------------
+
+/** `mode` on a live `LiveHlsStream` -- see `LlHlsStreamFields` below. */
+export type HlsMode = "conventional" | "ll";
+
+/**
+ * `LiveHlsStream.mode` (PR 580, `feat/llhls-l1-5-control-plane`, not yet
+ * merged to `main`) and `LiveHlsStream.partTargetMs`, which does not exist
+ * on that branch's wire type EITHER as of this PR -- `hls-remux.ts` there
+ * stores `part_target_ms` on the `hls_sessions` row and never puts it on the
+ * `LiveHlsStream` it hands back. `packages/shared/src/live-hls.ts` on `main`
+ * carries neither field today.
+ *
+ * This client does not validate incoming `channel-live`/`voice-stream`
+ * frames or `GET /api/channels/:id/live` answers against the shared zod
+ * schema at all (`client/src/lib/realtime.ts`'s `JSON.parse(...) as
+ * ChatServerMessage | VoiceSignalingMessage` is a type assertion, not a
+ * parse) -- so a server that DOES send `mode`/`partTargetMs` on the wire
+ * already reaches this object at runtime; only the TypeScript type is
+ * missing them. This interface is the narrow, local fix for that: every read
+ * site casts through it rather than widening `LiveHlsStream` itself, which
+ * this task is not allowed to touch (client-only; see `CLAUDE.md`).
+ *
+ * TODO(PR 580): once `mode` (and a `partTargetMs`, once something wires it
+ * onto the wire type) land on `packages/shared/src/live-hls.ts`, delete this
+ * interface and read the fields straight off `LiveHlsStream`.
+ */
+export interface LlHlsStreamFields {
+  mode?: HlsMode;
+  /** Absent until `partTargetMs` exists on the wire type; see above. */
+  partTargetMs?: number;
+}
+
+/** `mode`, defaulting to what every stream before this field existed was. */
+export function hlsModeOf(
+  stream: LlHlsStreamFields | null | undefined,
+): HlsMode {
+  return stream?.mode ?? "conventional";
+}
+
+/**
+ * `HlsWatchPlayer.mode` is a THIRD vocabulary from this one: `"live"` /
+ * `"vod"` / `"ll"` (`hls-watch-player.tsx`, PR 573's VOD replay mode
+ * alongside this task's `"ll"`), where `HlsMode` here only ever covers a
+ * stream that IS live (`"conventional"` vs `"ll"` engine tuning) -- a
+ * replay is a separate, component-level concept this file has no notion of.
+ * Every caller that threads a live stream's wire `mode` down to the player
+ * (`watch-stage.tsx`, `cinema-stage.tsx`, `call-stage.tsx` via
+ * `screen-stage.tsx`) goes through this rather than passing `HlsMode`
+ * straight through -- `"conventional"` is not a valid `HlsWatchPlayer.mode`
+ * value, `"live"` is.
+ */
+export function watchPlayerMode(mode: HlsMode): "live" | "ll" {
+  return mode === "ll" ? "ll" : "live";
+}
+
+/**
+ * What THIS SESSION is actually behaving as, once §4's pin rule (two
+ * part-load errors inside 10s) may have moved it off LL client-side --
+ * which the server never learns about, so the `mode` prop itself keeps
+ * saying `"ll"` for the rest of the party. Every reader of "which mode is
+ * this, right now" -- the hls.js config, the watchdog, the seek offset, the
+ * live badge and, eventually, any telemetry sample -- must go through this
+ * rather than the raw prop (Farol review, this PR: the badge kept showing
+ * an LL latency reading after a session had already been pinned to
+ * conventional-style targeting).
+ */
+export function effectiveHlsMode(
+  mode: HlsMode,
+  pinnedToConventional: boolean,
+): HlsMode {
+  return pinnedToConventional ? "conventional" : mode;
+}
+
+/**
+ * `LIVE_HLS_REMUX_PART_MS`'s own default (`server/src/voice/hls-remux.ts`),
+ * mirrored client-side for the case `partTargetMs` is absent on an `ll`
+ * stream -- every deployment that has not overridden the env var runs this
+ * value today, so the fallback is honest rather than a guess.
+ */
+export const LL_HLS_DEFAULT_PART_TARGET_MS = 500;
+
+/**
+ * The sane band a real `partTargetMs` lives in. `LIVE_HLS_REMUX_PART_MS`
+ * defaults to 500 and the plan's whole latency budget (§2) assumes
+ * sub-second parts; nothing in `docs/plans/LL_HLS.md` proposes a part under
+ * 200ms (more overhead than picture) or over 2s (no longer "low latency" by
+ * any definition this feature uses).
+ */
+export const LL_HLS_MIN_PART_TARGET_MS = 200;
+export const LL_HLS_MAX_PART_TARGET_MS = 2_000;
+
+/**
+ * The ONE validity check for a raw `partTargetMs`, wherever it is read from:
+ * the live stream (`hlsPartTargetMs` below), a prop already threaded down
+ * to `HlsWatchPlayer`, `collectScreenTiles`' tile output, or the stall
+ * watchdog's `configureForMode`. Non-finite or outside
+ * [`LL_HLS_MIN_PART_TARGET_MS`, `LL_HLS_MAX_PART_TARGET_MS`] falls back to
+ * the default rather than being trusted as-is (Farol review, this PR): a
+ * value outside that band is a malformed frame or a caller bug, not a real
+ * deployment's part target, and every LL number in this file -- the config,
+ * the watchdog thresholds, the seek offset, the badge threshold -- is
+ * derived from it.
+ */
+export function validPartTargetMs(value: number | null | undefined): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < LL_HLS_MIN_PART_TARGET_MS ||
+    value > LL_HLS_MAX_PART_TARGET_MS
+  ) {
+    return LL_HLS_DEFAULT_PART_TARGET_MS;
+  }
+  return value;
+}
+
+export function hlsPartTargetMs(
+  stream: LlHlsStreamFields | null | undefined,
+): number {
+  return validPartTargetMs(stream?.partTargetMs);
+}
+
+/**
+ * §5's SEGMENT-level stall ceiling for the full escalating ladder
+ * (`sequence-stuck`: start-load, restart-load, reload-level, then
+ * reconnect/dead). Farol review, this PR: the ladder keys on
+ * `EXT-X-MEDIA-SEQUENCE` (`HlsStallWatch.onMediaSequence`, fed from hls.js's
+ * `LEVEL_UPDATED`'s `details.startSN`/`endSN`), and that number only
+ * advances once per closed SEGMENT even in LL mode -- segments still close
+ * on the elastic rule in `docs/plans/LL_HLS.md` §3, roughly every
+ * `HLS_LIVE_SEGMENT_SECONDS`, while PARTS arrive far more often. An earlier
+ * version of this constant scaled the SAME threshold to a handful of PARTS,
+ * which fired the full ladder on a perfectly healthy stream: the segment
+ * number legitimately does not move for several seconds, parts or no parts.
+ * `LL_HLS_SEQUENCE_STUCK_SEGMENTS` keeps this SEGMENT-paced -- three
+ * segments, floored at `LL_HLS_SEQUENCE_STUCK_FLOOR_MS` -- tighter than the
+ * conventional 20 s constructor default but never part-scaled. See
+ * `HlsStallWatch.configureForMode` and, separately, `LL_HLS_PART_STUCK_PARTS`
+ * below for the actual part-level signal.
+ */
+export const LL_HLS_SEQUENCE_STUCK_SEGMENTS = 3;
+export const LL_HLS_SEQUENCE_STUCK_FLOOR_MS = 6_000;
+
+/**
+ * §5's PART-level stall check, SEPARATE from the segment-based ceiling
+ * above: parts stop arriving at all, not merely "no new segment yet" (which
+ * is the ordinary, healthy case for seconds at a time). Farol review, this
+ * PR: this rule exists precisely because the segment-based ceiling above is
+ * -- correctly -- too slow to catch a dead part feed quickly, so it fires
+ * the ladder's FIRST in-place recovery step exactly once per stall episode
+ * and never escalates further on its own; a problem that persists past that
+ * one nudge is left for the segment-based ceiling's own full ladder to
+ * eventually catch. Four parts, not six: at a 500 ms target that is 2 s,
+ * comfortably inside the segment ceiling's 6 s floor.
+ */
+export const LL_HLS_PART_STUCK_PARTS = 4;
+
+/**
+ * How far behind the edge hls.js is allowed to drift before it forces a
+ * seek forward (`config.liveMaxLatencyDuration`). HLS has no manifest tag
+ * for this the way `PART-HOLD-BACK` covers the sync target, so it stays a
+ * config concern -- sized off the party's own part target, never a fixed
+ * number, per §2's "do not hardcode 20 s anywhere on this path".
+ */
+export const LL_HLS_MAX_LATENCY_PARTS = 8;
+
+/**
+ * hls.js's OWN low-latency catch-up (`config.maxLiveSyncPlaybackRate`,
+ * verified against `hls.mjs`'s `LatencyController`: it nudges
+ * `video.playbackRate` up to this ceiling whenever `lowLatencyMode` is on
+ * and the playhead trails the manifest's own hold-back). The conventional
+ * path deliberately sets this to `1` (off) and runs its OWN external curve
+ * instead (`catchUpPlaybackRate` below) -- built when the player still sat
+ * ~20 s behind live and needed a curve gentler than hls.js's flat ceiling.
+ * LL has no such history and no 20 s cushion to protect: the manifest's own
+ * hold-back IS the target, so letting hls.js's built-in controller chase it
+ * is "stop overriding the manifest" applied to catch-up too, not just to
+ * hold-back. `HlsWatchPlayer` skips its own manual `video.playbackRate`
+ * loop on the LL path for exactly this reason -- see its comment.
+ */
+export const LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE = 1.1;
+
+/** A handful of parts, not a segment: no 20 s cushion to protect here. */
+export const LL_HLS_BACK_BUFFER_SECONDS = 4;
+export const LL_HLS_MAX_BUFFER_LENGTH_SECONDS = 6;
+export const LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 10;
+
+export interface HlsLLPlayerConfig {
+  lowLatencyMode: true;
+  /**
+   * Deliberately the only live-edge-targeting field this config sets.
+   * `liveSyncDuration`/`liveSyncDurationCount` are left OUT on purpose:
+   * verified against `hls.mjs`'s `LatencyController.updateTargetLatency`,
+   * hls.js only overrides the manifest's `PART-HOLD-BACK`/`HOLD-BACK` when
+   * the constructor's OWN `userConfig` set `liveSyncDuration` or
+   * `liveSyncDurationCount` -- so omitting both here is what "defer to the
+   * manifest when one is present" (`docs/plans/LL_HLS.md` §4) actually
+   * means in hls.js terms, not just a comment. `liveMaxLatencyDuration` has
+   * no manifest equivalent to defer to (HLS states a hold-back, never a
+   * "this is too far" ceiling), so it stays an explicit, part-derived
+   * config value.
+   */
+  liveMaxLatencyDuration: number;
+  maxLiveSyncPlaybackRate: number;
+  maxBufferLength: number;
+  maxMaxBufferLength: number;
+  backBufferLength: number;
+  startLevel: number;
+}
+
+/**
+ * The LL hls.js config, pure and derived entirely from `partTargetMs` --
+ * never a hardcoded 20 s, and never `liveSyncDurationCount`/`liveSyncDuration`
+ * (see `HlsLLPlayerConfig`'s own comment on why leaving those two out is the
+ * whole point).
+ */
+export function llHlsConfig(partTargetMs: number): HlsLLPlayerConfig {
+  const partSeconds =
+    Number.isFinite(partTargetMs) && partTargetMs > 0
+      ? partTargetMs / 1000
+      : LL_HLS_DEFAULT_PART_TARGET_MS / 1000;
+  return {
+    lowLatencyMode: true,
+    liveMaxLatencyDuration: LL_HLS_MAX_LATENCY_PARTS * partSeconds,
+    maxLiveSyncPlaybackRate: LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
+    maxBufferLength: LL_HLS_MAX_BUFFER_LENGTH_SECONDS,
+    maxMaxBufferLength: LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
+    backBufferLength: LL_HLS_BACK_BUFFER_SECONDS,
+    startLevel: -1,
+  };
+}
+
+/**
+ * The "jump to live"/recovery seek offset (`jumpToLiveTime`'s
+ * `segmentSeconds` argument), mode-aware: one part behind the edge on LL
+ * instead of one whole 4 s segment, which on a 500 ms part target would
+ * throw away seven parts of an already-tiny window for nothing.
+ */
+export function liveSeekOffsetSeconds(
+  mode: HlsMode,
+  partTargetMs: number = LL_HLS_DEFAULT_PART_TARGET_MS,
+): number {
+  if (mode === "ll") {
+    return Math.max(0.05, partTargetMs) / 1000;
+  }
+  return HLS_LIVE_SEGMENT_SECONDS;
+}
+
+/**
+ * The "behind live" / "jump to live" badge threshold, mode-aware. The
+ * conventional constant (`BEHIND_LIVE_THRESHOLD_SECONDS`, 30 s) is tuned for
+ * a player that sits ~20 s behind live ON PURPOSE; on LL the whole budget is
+ * 2 to 4 s, so 30 s would never fire. Reuses `LL_HLS_MAX_LATENCY_PARTS`
+ * rather than inventing a third number: roughly where hls.js's own
+ * `liveMaxLatencyDuration` would force a seek anyway.
+ */
+export function behindLiveThresholdSeconds(
+  mode: HlsMode,
+  partTargetMs: number = LL_HLS_DEFAULT_PART_TARGET_MS,
+): number {
+  if (mode === "ll") {
+    return (LL_HLS_MAX_LATENCY_PARTS * partTargetMs) / 1000;
+  }
+  return BEHIND_LIVE_THRESHOLD_SECONDS;
+}
+
+/**
+ * §5: "a second stall inside the same window demotes the channel to the
+ * conventional ladder for the rest of the session" (L1.6's watchdog, not yet
+ * merged). True exactly for that transition on the SAME viewing session --
+ * never for a session change (that is an ordinary re-attach, handled
+ * elsewhere by `shouldAdoptHlsSource`) and never the reverse (nothing on the
+ * server promotes a live party from conventional to `ll` mid-session).
+ */
+export function isInPlaceModeDemotion(input: {
+  previousMode: HlsMode;
+  nextMode: HlsMode;
+  sameSession: boolean;
+}): boolean {
+  return (
+    input.sameSession &&
+    input.previousMode === "ll" &&
+    input.nextMode === "conventional"
+  );
+}
+
+/**
+ * §4: "two part-load errors inside 10 s pin the player to a conventional
+ * rung for the rest of the session. A viewer who cannot hold the edge should
+ * stop trying, not oscillate." `timestampsMs` is every part-load error seen
+ * so far this session, ascending; true once the last two are within
+ * `windowMs` of each other.
+ */
+export const LL_HLS_PART_ERROR_PIN_WINDOW_MS = 10_000;
+
+export function shouldPinToConventionalRung(
+  timestampsMs: readonly number[],
+  windowMs: number = LL_HLS_PART_ERROR_PIN_WINDOW_MS,
+): boolean {
+  if (timestampsMs.length < 2) {
+    return false;
+  }
+  const last = timestampsMs[timestampsMs.length - 1]!;
+  const secondLast = timestampsMs[timestampsMs.length - 2]!;
+  return last - secondLast <= windowMs;
+}
+
+/**
+ * hls.js `ERROR` detail strings that mean a fragment/part failed to load --
+ * the "part-load error" `shouldPinToConventionalRung` counts. LL parts are
+ * loaded as ordinary fragment requests in hls.js's own loader (there is no
+ * separate "part" error family), so this is the same detail set a
+ * conventional stream's network errors would use; the caller only feeds it
+ * errors seen while `mode === "ll"`.
+ */
+const PART_LOAD_ERROR_DETAILS = new Set([
+  "fragLoadError",
+  "fragLoadTimeOut",
+  "fragParsingError",
+]);
+
+export function isLlPartLoadErrorDetail(details: string): boolean {
+  return PART_LOAD_ERROR_DETAILS.has(details);
+}
+
 /**
  * Where "jump to live" should land. Seeking onto the exact live edge
  * sits inside the newest segment and often `waiting` immediately.
@@ -187,12 +517,18 @@ export function liveSeekTarget(input: {
   currentTime: number;
   liveSyncPosition: number | null | undefined;
   seekableEnd: number;
+  /**
+   * How far behind the edge to land (`jumpToLiveTime`'s own parameter).
+   * Defaults to a conventional segment; the LL path passes
+   * `liveSeekOffsetSeconds("ll", partTargetMs)` instead.
+   */
+  segmentSeconds?: number;
 }): number | null {
   const edge = resolveLiveEdge(input.liveSyncPosition, input.seekableEnd);
   if (edge === null) {
     return null;
   }
-  const target = jumpToLiveTime(edge);
+  const target = jumpToLiveTime(edge, input.segmentSeconds);
   if (
     Number.isFinite(input.currentTime) &&
     input.currentTime - target > HLS_LIVE_WINDOW_SECONDS
