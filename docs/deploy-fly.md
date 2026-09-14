@@ -544,24 +544,26 @@ done
 #    now run at two machines for the first time on production.
 
 # 8. THE SHADOW-SECRET TRAP. fly.toml's own banner warns about this in
-#    general; it is not hypothetical here. CLUSTER_BUS, VOICE_REGISTRY and
-#    PG_POOL_MAX have all been live Fly SECRETS on pqp-api at one point or
-#    another (CLUSTER_BUS/VOICE_REGISTRY since 2026-09-07; PG_POOL_MAX=70
-#    since the 2026-09-12 Vultr DB migration, still live today per
-#    docs/DB_RUNBOOK.md's connection-budget section and the prod-db-access
-#    notes). A secret of the same name SHADOWS [env] silently — merging this
-#    PR does NOT change what the app actually uses for any name that still
-#    has a live secret sitting on top of it. Check, then clear whichever of
-#    these `fly secrets list` still shows:
+#    general, and CLUSTER_BUS, VOICE_REGISTRY and PG_POOL_MAX have all been
+#    live Fly SECRETS on pqp-api at one point or another (CLUSTER_BUS/
+#    VOICE_REGISTRY since 2026-09-07; PG_POOL_MAX=70 since the 2026-09-12
+#    Vultr DB migration, still live today). A secret of the same name
+#    SHADOWS [env] silently — merging this PR does NOT change what the app
+#    actually uses for any name that still has a live secret sitting on top
+#    of it. In THIS flip the values happen to already agree (PG_POOL_MAX=70
+#    live == 70 in this PR's fly.toml, per the measured-budget recompute in
+#    docs/DB_RUNBOOK.md §3; CLUSTER_BUS/VOICE_REGISTRY are both "postgres"
+#    either way), so nothing breaks if you skip this step — but leaving a
+#    secret in place means a FUTURE edit to fly.toml silently does nothing
+#    for that name, which is the trap. Clear it now while it's free:
 fly secrets list --app pqp-api
 fly secrets unset CLUSTER_BUS VOICE_REGISTRY PG_POOL_MAX --app pqp-api
 # (unsetting a name that was never set is a harmless no-op restart, not an
 # error — but check with `fly secrets list` first so you know which restart
 # you are about to cause and why)
 
-# 9. Re-confirm PG_POOL_MAX actually reads the new per-machine number now,
-#    not the old secret's 70 (which alone, times two machines, would ask
-#    the database for well more than its estimated ~90-backend ceiling):
+# 9. Re-confirm PG_POOL_MAX reads 70 per machine from fly.toml now, not a
+#    leftover secret of some other value:
 for id in $(fly machines list --app pqp-api --json | jq -r '.[].id'); do
   curl -s -H "fly-force-instance-id: $id" \
     -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
@@ -589,13 +591,13 @@ Optionally revert the machine size (`fly scale vm performance-2x --memory 4096 -
 
 #### Scaling to n machines later
 
-Repeat the same formula this PR's `fly.toml` comment documents, re-derived for the database's tier **at the time**, never assumed unchanged:
+Repeat the same formula `docs/DB_RUNBOOK.md` §3 and this PR's `fly.toml` comment document, re-derived from the database's **measured** `max_connections` at the time, never assumed unchanged:
 
 ```
-PG_POOL_MAX = floor((budget − worker_reservation − backup_reservation − admin_reservation) / n) − 2
+PG_POOL_MAX = floor((max_connections − superuser_reserved − worker_reservation − backup_reservation − admin_reservation) / n) − 2
 ```
 
-where `budget` comes from `docs/DB_RUNBOOK.md` §3's RAM-tier table (re-derive it for whatever tier the cluster is actually on — Vultr or otherwise — by the same reasoning `docs/plans/M6_REHEARSAL_2026-09-14.md` used for its own staging box, not by copying this PR's number forward), `worker_reservation` is `fly.worker.toml`'s `PG_POOL_MAX` (4 today), `backup_reservation` is 1 (the nightly dump, transient), `admin_reservation` is a small constant for human sessions and platform overhead (5 here), and the trailing `− 2` is each machine's own `CLUSTER_BUS` + outgoing-webhook `LISTEN` sessions, which sit outside the pool and are easy to forget (the M1/M2 `MULTI_INSTANCE_VOICE.md` plan's "one `LISTEN` session per machine" framing undercounts by exactly one).
+Measured 2026-09-14 against the live Vultr `pqp` cluster via the read-only `pqp_ro` role: `max_connections = 200`, `superuser_reserved_connections = 3`. `worker_reservation` is `fly.worker.toml`'s `PG_POOL_MAX` (4 today), `backup_reservation` is 1 (the nightly dump, transient), `admin_reservation` is a small constant for human sessions and platform overhead (5 here), giving a usable budget of `200 − 3 − 4 − 1 − 5 = 187`. The trailing `− 2` is each machine's own `CLUSTER_BUS` + outgoing-webhook `LISTEN` sessions, which sit outside the pool and are easy to forget (the M1/M2 `MULTI_INSTANCE_VOICE.md` plan's "one `LISTEN` session per machine" framing undercounts by exactly one). At `n = 2`: `floor(187 / 2) − 2 = 91` — this PR ships `PG_POOL_MAX = 70` instead, today's unchanged live value, since it already fits with room to spare and there's no live evidence yet that more is needed. At `n = 3`: `floor(187 / 3) − 2 = 60` per machine. **Re-measure `max_connections` and `superuser_reserved_connections` with `pqp_ro` before trusting 187 again** — re-derive for whatever cluster is actually live at the time (a resize, a provider move, or a plan change all invalidate it), not by copying this number forward indefinitely.
 
 ```bash
 gh variable set PQP_API_MACHINES --body n

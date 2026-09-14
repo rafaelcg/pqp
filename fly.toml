@@ -115,25 +115,26 @@ kill_timeout = 30
   # MULTI_INSTANCE_VOICE plan's "one LISTEN session per machine" framing
   # undercounts).
   #
-  # THE FORMULA (docs/deploy-fly.md "Two machines in production" walks this
-  # with live numbers): total budget, minus the worker's own pool
-  # (fly.worker.toml PG_POOL_MAX=4) and the nightly backup's one transient
-  # connection, minus a small reserve for admin/platform sessions, divided by
-  # the machine count, minus 2 for this machine's own LISTEN sessions.
-  #
   # Production Postgres today is Vultr Managed PostgreSQL (2 dedicated vCPU /
   # 4 GB, single node — docs/plans/ALWAYS_ON.md §5), which replaced the Fly
   # Managed Postgres cluster docs/DB_RUNBOOK.md §3's connection-budget table
-  # was written against. That table stops at a 2 GB row, so the number below
-  # extends that table's own 1 GB->~30 / 2 GB->~50 progression by the same
-  # +20-per-GB step to a ~90-backend ceiling at 4 GB. TREAT 90 AS AN ESTIMATE
-  # TO CONFIRM against `SHOW max_connections` on the live cluster before the
-  # flip runs, not as a measured fact — this PR does not touch production and
-  # cannot run that query. (90 - worker 4 - backup 1 - admin/platform 5) / 2
-  # machines - 2 LISTEN = 38. The single-machine live value today is
-  # PG_POOL_MAX=70 against that same ~90 estimate, which is the sanity check
-  # for the estimate: one machine already uses most of the budget alone.
-  PG_POOL_MAX = "38"
+  # was originally written against. MEASURED, not estimated, 2026-09-14 via
+  # the read-only pqp_ro role: `max_connections = 200`,
+  # `superuser_reserved_connections = 3`. docs/DB_RUNBOOK.md §3 has the full
+  # table and reservation breakdown; the number that matters here:
+  #
+  #   PG_POOL_MAX = floor((200 - 3 superuser - 4 worker - 1 backup
+  #                         - 5 admin/platform) / n machines) - 2 LISTEN
+  #
+  # At n=2: floor(187 / 2) - 2 = 91. This PR keeps PG_POOL_MAX at 70 per
+  # machine instead of raising it to 91 — 70 is today's live single-machine
+  # value, unchanged, and it already sits comfortably inside the two-machine
+  # budget (2 x (70 + 2 LISTEN) + 4 worker + 1 backup = 149, well under
+  # 187), so there is no reason to move it until live traffic says
+  # otherwise. At n=3 the same formula gives floor(187 / 3) - 2 = 60 per
+  # machine — see docs/deploy-fly.md "Two machines in production" > "Scaling
+  # to n machines later".
+  PG_POOL_MAX = "70"
 
   # Batch sweeps (server/src/jobs.ts: attachment/quarantine sweeps, audit /
   # report / timeout prunes, retention, interrupted-account deletion, the
