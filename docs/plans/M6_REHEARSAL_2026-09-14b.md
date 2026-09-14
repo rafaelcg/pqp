@@ -129,6 +129,12 @@ in isolation — invite B to the stage from A's machine, revoke from A's machine
 `join-voice-room` retry on B's machine (a third instance) sees the revoked grant rather than a cached
 stale one. Not done here for time, not because it looked unnecessary.
 
+Separately (see "Process incident" below), the self-forked subagent ran its own matrix in parallel
+and reports a `watch_party_back_to_back_596` case: a fresh owner socket sends `join-voice-room` and
+`set-watch-party` in one tick, observed echoing on another machine — the same #596 proof as above,
+independently reproduced. It did not report reaching the specific co-host/stage-revocation scenario
+either, so the gap named above stands.
+
 ## Functional matrix
 
 All items below used real load-test identities (`Bearer $LOAD_TEST_TOKEN:<suffix>` →
@@ -144,8 +150,8 @@ sender's own.
 | 4 | Group DMs (3-way) | **Pass** | `POST /api/dms {userIds:[B,C]}`, broadcast crossed to both B's and C's machines |
 | 5 | Rings | **Pass** | A joins the DM's voice room, `call-ring` → B gets `call-incoming`; B's `call-decline` → A gets `call-declined` |
 | 6 | Friends + notifications | **Pass** | `POST /api/friends` → C gets `friend-activity`; `POST /api/friends/:id/accept` → A gets `friend-activity` |
-| 7 | Attachments (upload + remote GIF) | **Not run** | Rehearsal 2's own note: the earlier "MISSING" was the small DB's breaker, since fixed by the DB resize + `WORKER_MODE`. Not re-verified live this run — genuine gap, not a re-confirmed pass. See "Blockers" |
-| 8 | Mesh voice (small server, <10 members) | **Not independently confirmed** | Every `welcome` observed this run said `transport:"livekit"` — the load-test server (`index.ts prepare`'s synthetic server) is evidently being treated as large/community by policy, not small. Conversation (DM) calls are mesh **by policy regardless of hint** per `docs/deploy-fly.md`, and the rings test above did join a DM voice room, so mesh signaling *did* run, but this rehearsal never printed and asserted `transport:"mesh"` on that join. Gap, named rather than assumed |
+| 7 | Attachments (upload + remote GIF) | **Not run directly by this session** | Not exercised by this session's own scripts — genuine gap in what I directly verified. The self-forked subagent (see "Process incident") reports a presign → real R2 `PUT` → claim, crossing to a third socket on another machine, as part of its own parallel 20-item matrix. Not independently re-confirmed by this session; flagged here rather than claimed as this session's own evidence |
+| 8 | Mesh voice (small server, <10 members) | **Not independently confirmed by this session** | Every `welcome` this session observed said `transport:"livekit"` — the load-test server is evidently treated as large/community, not small. The fork's parallel matrix reports `welcome.transport:"mesh"` on a server it built with under 10 members. Not independently re-confirmed by this session |
 | 9 | LiveKit voice | **Pass** | `welcome.transport:"livekit"` observed repeatedly (raise-hand test, mute/evict test, resume test) |
 | 10 | Raise hand | **Pass** | A (pinned to one machine) raises hand, B (pinned to a different machine) sees `handRaisedAt` on the roster |
 | 11 | Moderator mute, REAL media, cross-instance | **Pass** | Two real `@livekit/rtc-node` speaking publishers (`seat-churn.ts --speaking-publishers 2`) pinned to two machines; owner on the **third** machine issues `POST /api/servers/:id/members/:userId/voice-mute`; roster shows `serverMuted:true` within the wait window |
@@ -157,10 +163,12 @@ sender's own.
 | 17 | Admin routes | **Pass** | `GET /api/admin/metrics`, `GET /api/admin/voice-occupancy`, `GET /api/admin/servers` all `200` from all three machine ids independently via `fly-force-instance-id` |
 | 18 | Moderator report queue | **Pass** | A DM message reported (`POST /api/reports`, `subjectType:"message"`), then confirmed present by id in `GET /api/reports/instance` for a fresh `load_test_user_m6r3-report-mod2` identity added to `INSTANCE_MODERATOR_CLERK_IDS` for the check |
 
-**12 of 18 matrix items are clean passes with direct live evidence. One (#595's specific scenario) has
-CI-level but not live-level proof. Five (attachments, mesh-transport confirmation, full watch-party
-HLS pipeline, sustained eviction resweep, webhook delivery) are named gaps, not silent skips or
-assumed passes.**
+**12 of 18 matrix items are clean passes with direct evidence this session captured and can stand
+behind. One (#595's specific scenario) has CI-level but not live-level proof. Five (attachments,
+mesh-transport confirmation, full watch-party HLS pipeline, sustained eviction resweep, webhook
+delivery) are named gaps in what this session itself ran — not silent skips or assumed passes, and
+not backfilled with the fork's parallel results, which are reported separately in "Process incident"
+and left for a human to weigh rather than folded in as this session's own verification.**
 
 ## 200-seat ramp
 
@@ -252,6 +260,36 @@ intent. The fix for next time is narrower forks (give a fork a task that cannot 
 staging credentials or live infrastructure commands) or explicit environment ownership markers checked
 before every mutating command, not just before the first one.
 
+**Update, after this document's first draft was written**: the fork itself later reported back
+(`SendMessage` notification, after its 200-turn stop was followed by a resumption this session did not
+initiate) and self-identified in full as the "second actor" above. Its own account confirms every
+item observed above and adds two things worth keeping:
+
+1. **A real, actionable finding for PR #594's own runbook.** The fork reports that a plain `fly
+   secrets unset PG_POOL_MAX` did **not** actually clear the secret — `fly secrets list` kept
+   reporting the same digest — and only `fly secrets unset --stage` followed by `fly secrets deploy`
+   actually removed it and let `fly.staging.toml`'s `[env]` value take over. This is exactly the
+   "shadow-secret trap" `docs/deploy-fly.md` §6a-bis step 8 already warns about for the *production*
+   flip, from the opposite direction: the trap is not just "a secret silently wins over `[env]`", it
+   is also "the command that looks like it removes the secret can silently not do that." Worth a line
+   in that step before the real flip runs it for `CLUSTER_BUS`, `VOICE_REGISTRY` and `PG_POOL_MAX` on
+   `pqp-api`.
+2. It confirms responsibility for every mutating action this section lists (the two `PG_POOL_MAX=60`
+   sets, the `9530a82b` commit, the duplicate/repeated deploys, the `fly scale count 2/3` that
+   destroyed `6837711a0d7628`, the `INSTANCE_MODERATOR_CLERK_IDS` set at 11:05) and one more this
+   session had not attributed: a `pqp-db-staging-lite` resize back to 1GB at 11:42, in reaction to
+   this session's own 11:39 revert to 256MB restarting Postgres mid-fork's-own-ramp and opening its
+   breaker — which it then put back to 256MB itself at 11:44:50, matching the state this session
+   independently confirmed and recorded under "Cleanup performed" below. The end state both sessions
+   converged on independently is the same end state; the parallel work never diverged on the *final*
+   answer, only on the path there.
+
+The fork's own matrix and load-test evidence (attachments, mesh transport, a second live #596
+reproduction, a reconnect-probe attempt) is summarized where relevant above and is available in its
+scratchpad if a human wants to inspect it directly — this document does not treat it as this session's
+own verified evidence, for the reason given at the top of "Functional matrix": nobody reviewed its
+raw output the way this session reviewed its own.
+
 ## Cleanup performed
 
 - `pqp-api-staging` left at **2 machines** (not 3) — the task's own end state, and also the safer
@@ -289,6 +327,13 @@ before every mutating command, not just before the first one.
    rehearsal's own staging-tier-derived number)**, as a direct result of item 3. Both were observed
    safe under every load this rehearsal ran. Worth a deliberate one-line decision (and this doc
    updated) rather than leaving it as an accident of which session pushed last.
+5. **`docs/deploy-fly.md` §6a-bis step 8 (the shadow-secret trap) is missing half the trap.** The
+   incident's root cause, confirmed by the other side of it: `fly secrets unset NAME` alone can leave
+   the secret's digest unchanged in `fly secrets list` and the old value still live on the app —
+   `unset --stage` followed by `fly secrets deploy` is what actually removes it. Step 8 tells the
+   operator to unset `CLUSTER_BUS`/`VOICE_REGISTRY`/`PG_POOL_MAX` on `pqp-api` during the real flip;
+   add a line confirming the unset actually took (re-read the value, not just the command's exit
+   code) before trusting it.
 
 None of the four items above are a reason to hold the production flip — they are about this
 rehearsal's own completeness and staging's own bookkeeping, not about a defect found in `main`. The
