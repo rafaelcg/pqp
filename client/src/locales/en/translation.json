@@ -3148,7 +3148,7 @@
   "watchParty.presenter.monitorOn": "See as the audience",
   "watchParty.presenter.monitorAudience": "Audience",
   "watchParty.presenter.monitorSelf": "Your screen",
-  "watchParty.presenter.selfMonitorHint": "You're already watching your own screen. Turn off to skip decoding it twice.",
+  "watchParty.presenter.selfMonitorHint": "The video you're already watching in your own tab. Off skips decoding it twice.",
   "watchParty.presenter.selfMonitorOn": "Show preview",
   "watchParty.live.micMutedShort": "Mic muted: nobody hears you",
   "watchParty.live.detailsHint": "Broadcast details",
