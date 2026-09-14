@@ -60,21 +60,21 @@ kill_timeout = 30
   internal_port = 3001
   force_https = true
 
-  # STAGING DIFFERENCE. Production says "off" here because a stopped machine
-  # terminates every live WebSocket; on staging that is an acceptable trade for
-  # not paying for an idle machine. Clients reconnect with backoff anyway
-  # (client/src/lib/realtime.ts). "stop", not "suspend": a suspended machine
-  # restores in-process presence/voice Maps from a snapshot that no longer
-  # matches any connected client.
-  auto_stop_machines = "stop"
+  # M6 REHEARSAL 3 (2026-09-14), TEMPORARY, NOT FOR MERGE: off for the
+  # duration of the three-machine rehearsal — see docs/STAGING.md "Rehearsing
+  # two machines" and docs/plans/M6_REHEARSAL_2026-09-14b.md. A stopped
+  # machine drops every live WebSocket and would count as an instance that
+  # stopped answering mid-rehearsal. Revert to "stop" at the end.
+  auto_stop_machines = "off"
 
   # STAGING DIFFERENCE. The proxy wakes the machine on the first request after
   # an idle stop. Note this only ever restarts the one machine that exists —
   # fly-proxy never creates machines, so this is not the second-machine risk.
   auto_start_machines = true
 
-  # STAGING DIFFERENCE. Zero: idle staging costs nothing.
-  min_machines_running = 0
+  # M6 REHEARSAL 3, TEMPORARY, NOT FOR MERGE: 3, matching the production
+  # switch PR's shape at n=3 for this rehearsal. Revert to 0 at the end.
+  min_machines_running = 3
 
   processes = ["app"]
 
@@ -101,10 +101,12 @@ kill_timeout = 30
     grace_period = "30s"
 
 [[vm]]
-  # Same size as prod so staging behaves like prod: signalling and chat only,
-  # media never touches this process.
-  size = "shared-cpu-1x"
-  memory = "1gb"
+  # M6 REHEARSAL 3, TEMPORARY, NOT FOR MERGE: performance-1x/2048mb, matching
+  # the production switch PR (#594) machine size exactly, so this rehearsal
+  # measures the real production shape rather than a different size class.
+  # Revert to shared-cpu-1x/1gb at the end.
+  size = "performance-1x"
+  memory = "2048mb"
 
 [deploy]
   # rolling + max_unavailable = 1 on a single machine: replace it in place.
