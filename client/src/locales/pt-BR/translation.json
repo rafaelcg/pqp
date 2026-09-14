@@ -3148,6 +3148,8 @@
   "watchParty.presenter.monitorOn": "Ver como o público",
   "watchParty.presenter.monitorAudience": "Público",
   "watchParty.presenter.monitorSelf": "Sua tela",
+  "watchParty.presenter.selfMonitorHint": "O vídeo que você já está vendo na sua própria aba. Desligado evita decodificar duas vezes.",
+  "watchParty.presenter.selfMonitorOn": "Mostrar prévia",
   "watchParty.live.micMutedShort": "Mic mudo: ninguém te ouve",
   "watchParty.live.detailsHint": "Detalhes da transmissão",
   "watchParty.live.dockShare": "Compartilhar tela",

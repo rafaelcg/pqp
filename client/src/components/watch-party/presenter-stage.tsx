@@ -13,6 +13,7 @@ import {
 } from "@/lib/watch-party-activity";
 
 const MONITOR_KEY = "pqp:watch-party-audience-monitor";
+const SELF_MONITOR_KEY = "pqp:watch-party-self-monitor";
 
 function readMonitorPref(): boolean {
   try {
@@ -24,6 +25,23 @@ function readMonitorPref(): boolean {
 function writeMonitorPref(on: boolean): void {
   try {
     localStorage.setItem(MONITOR_KEY, on ? "1" : "0");
+  } catch {
+    // ignore
+  }
+}
+
+// Self monitor defaults ON (it mirrors the old always-on preview), so unlike
+// the audience monitor the stored value is only ever "0" — absence means on.
+function readSelfMonitorPref(): boolean {
+  try {
+    return localStorage.getItem(SELF_MONITOR_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+function writeSelfMonitorPref(on: boolean): void {
+  try {
+    localStorage.setItem(SELF_MONITOR_KEY, on ? "1" : "0");
   } catch {
     // ignore
   }
@@ -57,14 +75,16 @@ export function WatchPartyPresenterStage({
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [monitorOn, setMonitorOn] = useState(readMonitorPref);
+  const [selfMonitorOn, setSelfMonitorOn] = useState(readSelfMonitorPref);
   const events = useWatchPartyActivity({ channelId, audienceCount, hands });
 
   useEffect(() => {
     const video = videoRef.current;
+    if (!selfMonitorOn) return;
     if (video && video.srcObject !== stream) {
       video.srcObject = stream;
     }
-  }, [stream]);
+  }, [stream, selfMonitorOn]);
 
   return (
     <div
@@ -72,8 +92,36 @@ export function WatchPartyPresenterStage({
       className="flex h-full min-h-0 flex-col gap-2 bg-ink p-2"
     >
       <div className="grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-2">
-        <Monitor label={t("watchParty.presenter.monitorSelf")}>
-          {stream ? (
+        <Monitor
+          label={t("watchParty.presenter.monitorSelf")}
+          action={
+            stream && (
+              <button
+                type="button"
+                aria-pressed={selfMonitorOn}
+                title={t("watchParty.presenter.selfMonitorHint")}
+                className="flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[11px] text-paper hover:bg-black/80"
+                onClick={() => {
+                  setSelfMonitorOn((on) => {
+                    writeSelfMonitorPref(!on);
+                    return !on;
+                  });
+                }}
+                data-watch-party-self-monitor
+              >
+                {selfMonitorOn ? (
+                  <EyeOff className="h-3 w-3" aria-hidden />
+                ) : (
+                  <Eye className="h-3 w-3" aria-hidden />
+                )}
+                {selfMonitorOn
+                  ? t("watchParty.presenter.monitorOff")
+                  : t("watchParty.presenter.selfMonitorOn")}
+              </button>
+            )
+          }
+        >
+          {stream && selfMonitorOn ? (
             <video
               ref={videoRef}
               autoPlay
@@ -83,8 +131,10 @@ export function WatchPartyPresenterStage({
               data-testid="watch-party-presenter-preview"
             />
           ) : (
-            <span className="text-xs text-paper-muted">
-              {t("watchParty.presenter.noPicture")}
+            <span className="max-w-[16rem] px-3 text-center text-xs text-paper-muted">
+              {stream
+                ? t("watchParty.presenter.selfMonitorHint")
+                : t("watchParty.presenter.noPicture")}
             </span>
           )}
         </Monitor>
