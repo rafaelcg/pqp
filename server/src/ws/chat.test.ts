@@ -64,6 +64,7 @@ vi.mock("../services/embeds.js", () => ({
 
 vi.mock("../services/messages.js", () => ({
   createMessage: vi.fn(async () => ({ id: "message-1" })),
+  findMessageByNonce: vi.fn(async () => null),
   getReplyParent: vi.fn(async () => null),
   mapMessage: (row: { id: string }) => ({ id: row.id, body: "hi" }),
 }));
@@ -149,7 +150,7 @@ const { isDmSendBlocked, restoreDmParticipants } = await import(
 );
 const { getChannel } = await import("../services/servers.js");
 const { computeMemberPermissions } = await import("../services/permissions.js");
-const { createMessage, getReplyParent } = await import(
+const { createMessage, findMessageByNonce, getReplyParent } = await import(
   "../services/messages.js"
 );
 
@@ -515,6 +516,8 @@ describe("message-rejected", () => {
     vi.mocked(createMessage).mockResolvedValue({
       id: "message-1",
     } as Awaited<ReturnType<typeof createMessage>>);
+    vi.mocked(findMessageByNonce).mockReset();
+    vi.mocked(findMessageByNonce).mockResolvedValue(null);
   });
 
   async function post(
@@ -739,6 +742,55 @@ describe("message-rejected", () => {
         retryAfterMs: 5000,
       },
     ]);
+  });
+
+  /**
+   * A replay of a nonce that already committed must not be judged by slow
+   * mode at all: the send it corresponds to already spent its turn (or, on
+   * the concurrent race, is about to and will be refunded on conflict), so
+   * charging or refusing it again is always wrong. Reproduces the gap Farol
+   * flagged on #599: a member on cooldown from an unrelated send whose
+   * outbox replays a nonce that is already a stored message must get that
+   * message back, never a `slow-mode` rejection that makes the client
+   * discard a delivered send as failed.
+   */
+  it("answers a nonce that is already stored even while the sender is on slow-mode cooldown", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "text",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    // Spend the channel's one slow-mode turn on an unrelated send.
+    await post(sender, "user-a", channelId, { nonce: "first" });
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    sender.received.length = 0;
+    vi.mocked(createMessage).mockClear();
+
+    // The outbox replay: a different nonce that is already a stored message
+    // (its original commit succeeded; only the broadcast back to this
+    // sender was lost). The cooldown above is still active.
+    vi.mocked(findMessageByNonce).mockResolvedValueOnce({
+      id: "message-2",
+      duplicate: true,
+    } as Awaited<ReturnType<typeof findMessageByNonce>>);
+    await post(sender, "user-a", channelId, { nonce: "already-stored" });
+
+    const toSender = framesOfType(sender.received, "message-broadcast") as Array<{
+      nonce?: string;
+    }>;
+    expect(toSender).toHaveLength(1);
+    expect(toSender[0]!.nonce).toBe("already-stored");
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    // Short-circuited before ever reaching the create path.
+    expect(createMessage).not.toHaveBeenCalled();
   });
 
   /**

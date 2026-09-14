@@ -31,6 +31,7 @@ import {
 } from "../services/embeds.js";
 import {
   createMessage,
+  findMessageByNonce,
   getReplyParent,
   mapMessage,
 } from "../services/messages.js";
@@ -1415,6 +1416,43 @@ async function postChannelMessageAttempt(
   if (!(await canAccessChannel(input.channelId, input.author.id))) {
     return { ok: false, reason: "no-access" };
   }
+
+  // An offline-outbox replay of a send whose original committed but whose
+  // broadcast never reached the sender (a dropped socket between COMMIT and
+  // the reply). Every check below this point — SEND_MESSAGES, the block
+  // guard, AutoMod, and especially slow mode's charge — exists to decide
+  // whether a NEW message may be created, and none of them apply to a nonce
+  // that already IS a message: charging slow mode for it would spend the
+  // sender's turn on a send that cost them nothing the first time, and on a
+  // channel where their cooldown is currently active for unrelated reasons,
+  // it would reject a replay of an already-delivered message outright — the
+  // client then discards the outbox row and shows a failure for a message
+  // that is sitting in the channel. `createMessage`'s own `ON CONFLICT DO
+  // NOTHING` still exists below for the narrower race where two replays (or
+  // a replay and the still-in-flight original) reach the insert concurrently;
+  // this is the far more common case, a replay that lands after the original
+  // already committed.
+  if (input.nonce) {
+    const existing = await findMessageByNonce(
+      input.channelId,
+      input.author.id,
+      input.nonce,
+    );
+    if (existing) {
+      const message = mapMessage(existing);
+      if (input.senderSocket && input.senderSocket.readyState === 1) {
+        input.senderSocket.send(
+          encode({
+            type: "message-broadcast",
+            message,
+            nonce: input.nonce,
+          }),
+        );
+      }
+      return { ok: true, message };
+    }
+  }
+
   const channel = await getChannel(input.channelId);
   let canMentionEveryone = false;
   let memberPerms = 0n;

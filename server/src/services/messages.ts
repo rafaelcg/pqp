@@ -774,7 +774,16 @@ async function insertMessage(
   }
 }
 
-async function findMessageByNonce(
+/**
+ * Exported so a caller can check a nonce BEFORE running anything that should
+ * not apply twice to the same send — slow mode's charge, chiefly (see the
+ * call in `postChannelMessageAttempt`). `createMessage` also calls this
+ * internally, on the `ON CONFLICT DO NOTHING` path, for the replay that
+ * arrives concurrently with the original still in flight; this export
+ * covers the far more common case, a replay that lands after the original
+ * already committed.
+ */
+export async function findMessageByNonce(
   channelId: string,
   authorId: string,
   nonce: string,
