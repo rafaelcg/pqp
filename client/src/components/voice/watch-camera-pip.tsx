@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Mic, Volume2 } from "lucide-react";
 import {
   hasHlsViewerToken,
   hlsSessionKey,
@@ -7,6 +8,11 @@ import {
 } from "@/lib/hls-playback";
 import { hlsLivePlayerConfig } from "@/lib/hls-live-edge";
 import { getAuthToken } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
+import {
+  getVoicePipVolume,
+  saveVoicePipVolume,
+} from "@/lib/watch-camera-voice-volume";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,12 +28,29 @@ import { cn } from "@/lib/utils";
  * can claim someone's lock screen, fight the film for the volume preference
  * and put a second "reconnecting" overlay on the stage.
  *
- * MUTED, AND NOT FROM A PREFERENCE. `muted` is set on the element and set
- * again on every attach, and no volume state reaches this file. The audience's
- * sound comes off the main stream, which is the only place it is mixed; a
- * second audio channel a second or two out of step with the first is worse
- * than silence. It is also what makes autoplay work at all — a muted element
- * is allowed to start without a gesture, everywhere.
+ * MUTED, UNLESS `hasVoiceAudio` SAYS OTHERWISE. By default `muted` is set on
+ * the element and set again on every attach, and no volume state reaches this
+ * file: the audience's sound comes off the main stream, which is the only
+ * place it is mixed, and a second audio channel a second or two out of step
+ * with the first is worse than silence. It is also what makes autoplay work
+ * at all — a muted element is allowed to start without a gesture, everywhere.
+ *
+ * `hasVoiceAudio` (`LIVE_HLS_VOICE_TRACK`, "separada" —
+ * `docs/plans/WATCH_PARTY_SEPARATE_TRACKS.md`) is the one case that changes
+ * this: THIS playlist is the only place the presenter's voice exists at all,
+ * so it unmutes, at a volume the viewer picks and this file remembers
+ * (`lib/watch-camera-voice-volume.ts`). Autoplaying it unmuted relies on the
+ * page already having a user gesture behind it — joining or opening the watch
+ * stage always does — the same assumption every WebRTC voice call on this
+ * page already makes; `video.play()`'s rejection is still swallowed, same as
+ * the muted path, so a browser that refuses it just leaves the corner silent
+ * rather than throwing.
+ *
+ * `hasVideo` is FALSE for the audio-only shape of the same flag (a presenter
+ * with no camera who still shares their voice): there is no picture to draw,
+ * so the box shows a small "voice" indicator instead of a black video frame,
+ * and the underlying `<video>` element keeps existing — hls.js needs an
+ * `HTMLMediaElement` to attach to either way — just visually hidden.
  *
  * DRIFT IS EXPECTED AND IS NOT CHASED. The two playlists are two independent
  * egresses started seconds apart, each with its own segments, so the camera
@@ -42,22 +65,48 @@ import { cn } from "@/lib/utils";
  */
 export function WatchCameraPip({
   src,
+  hasVideo = true,
+  hasVoiceAudio = false,
   className,
   onFrame,
 }: {
-  /** The camera playlist, already resolved against the API base. */
+  /** The camera/voice playlist, already resolved against the API base. */
   src: string;
+  /** Whether this playlist carries a picture. See the file doc. */
+  hasVideo?: boolean;
+  /** Whether this playlist carries the presenter's voice. See the file doc. */
+  hasVoiceAudio?: boolean;
   /** The box: a corner, the stage, or the corner plus `invisible`. */
   className: string;
   /** A frame arrived (or the source changed and there is none yet). */
   onFrame: (hasFrame: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   // Held in a ref so the attach effect does not list it as a dependency: a
   // parent re-render that changes the callback's identity must not tear a
   // playing camera down.
   const onFrameRef = useRef(onFrame);
   onFrameRef.current = onFrame;
+  // Read inside the attach effect below without being one of its
+  // dependencies: a mode flip mid-party must not reattach hls.js (the
+  // lightweight effect further down already applies it live), only change
+  // what the NEXT attach starts with.
+  const hasVoiceAudioRef = useRef(hasVoiceAudio);
+  hasVoiceAudioRef.current = hasVoiceAudio;
+
+  /**
+   * "Voz" volume, persisted per browser. Only reachable when `hasVoiceAudio`
+   * — every other case has nothing on the element to turn down.
+   */
+  const [volume, setVolumeState] = useState(getVoicePipVolume);
+  const applyVolume = (next: number) => {
+    setVolumeState(next);
+    saveVoicePipVolume(next);
+    if (videoRef.current) {
+      videoRef.current.volume = next;
+    }
+  };
 
   /**
    * A RESTAMPED TOKEN IS NOT A NEW SESSION, and this is the same rule
@@ -71,6 +120,16 @@ export function WatchCameraPip({
    * changing means the camera egress actually restarted.
    */
   const [activeSrc, setActiveSrc] = useState(src);
+  /**
+   * The browser refused unmuted autoplay (`NotAllowedError`). Only possible
+   * while `hasVoiceAudio` — a muted element is never refused, anywhere. A
+   * Farol review caught the gap this closes: without it, a viewer who opened
+   * the watch stage with no prior gesture on THIS document (a link opened
+   * straight into cinema fullscreen, say) stayed permanently silent, because
+   * nothing after the first `play()` rejection ever tried again. This state
+   * drives a small "tap to hear" affordance in the corner instead.
+   */
+  const [blocked, setBlocked] = useState(false);
   const sessionRef = useRef<string | null>(hlsSessionKey(src));
 
   // The live hls.js instance, reachable outside the attach effect so a plain
@@ -127,6 +186,24 @@ export function WatchCameraPip({
   }, [src]);
 
   /**
+   * `hasVoiceAudio` CAN CHANGE UNDER A RUNNING SESSION: the presenter is free
+   * to flip "junto"/"separada" mid-party (`voiceTrackMode`), and that never
+   * touches `cameraHlsUrl`'s path, so the attach effect above (keyed on
+   * `activeSrc`) would not rerun to notice. Applied in place, same as a token
+   * refresh — no reattach, no dropped buffer.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    video.muted = !hasVoiceAudio;
+    if (hasVoiceAudio) {
+      video.volume = volume;
+    }
+  }, [hasVoiceAudio, volume]);
+
+  /**
    * A RESTAMPED TOKEN IS NOT A NEW SESSION, and this is the same rule
    * `hls-watch-player.tsx` needed for the film after every seatless viewer
    * rebuffered twice a minute on it (CLAUDE.md pitfall 16's sibling bug). The
@@ -153,6 +230,7 @@ export function WatchCameraPip({
     let cancelled = false;
     usingNativeRef.current = false;
     onFrameRef.current(false);
+    setBlocked(false);
 
     // Same rule as the film's player: the header is only for our own proxy,
     // only when the URL carries no `?t=`, and never on the presigned bucket
@@ -191,6 +269,7 @@ export function WatchCameraPip({
     const onPlaying = () => {
       if (!cancelled) {
         onFrameRef.current(true);
+        setBlocked(false);
       }
     };
     const onFailed = () => {
@@ -207,7 +286,33 @@ export function WatchCameraPip({
       if (cancelled || !video) {
         return;
       }
-      video.muted = true;
+      // See the file doc: silent unless this playlist is the presenter's
+      // voice, in which case the viewer's remembered level applies too.
+      video.muted = !hasVoiceAudioRef.current;
+      if (hasVoiceAudioRef.current) {
+        video.volume = getVoicePipVolume();
+      }
+      // ONE PLACE BOTH `play()` CALLS GO THROUGH, so the "tap to hear"
+      // fallback cannot drift from which failure it is actually for. Muted
+      // autoplay is allowed everywhere, so a rejection there is never the
+      // autoplay policy and stays silently swallowed exactly as before.
+      //
+      // ANY rejection while `hasVoiceAudio` is true shows the affordance,
+      // not only `NotAllowedError` specifically: the autoplay-policy
+      // rejection is the expected case, but different engines have not all
+      // agreed on one error name for it over the years, and a version that
+      // throws something else must not silently drop the retry path along
+      // with it — the cost of over-showing the button once in a great while
+      // (a genuinely transient failure that would have recovered on its
+      // own) is far smaller than a viewer stuck permanently and silently
+      // muted with nothing on screen explaining why.
+      const attemptPlay = () => {
+        void video.play().catch(() => {
+          if (!cancelled && hasVoiceAudioRef.current) {
+            setBlocked(true);
+          }
+        });
+      };
       if (!Hls.isSupported()) {
         // Safari and iOS play MPEG-TS natively. No engine choice to make: a
         // browser with neither simply never produces a frame and the corner
@@ -215,10 +320,7 @@ export function WatchCameraPip({
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           usingNativeRef.current = true;
           video.src = latestSrcRef.current;
-          void video.play().catch(() => {
-            // Muted autoplay is allowed everywhere; if it still refused, the
-            // camera stays hidden and the film is untouched.
-          });
+          attemptPlay();
         }
         return;
       }
@@ -261,9 +363,7 @@ export function WatchCameraPip({
         }
       });
       player.on(Hls.Events.MANIFEST_PARSED, () => {
-        void video.play().catch(() => {
-          // See above: muted, so a refusal here is not the autoplay policy.
-        });
+        attemptPlay();
       });
     }
 
@@ -320,18 +420,114 @@ export function WatchCameraPip({
     };
   }, [activeSrc]);
 
+  /**
+   * The click IS the user gesture: a `play()` called from inside a click
+   * handler is not subject to the autoplay policy at all, so this always
+   * succeeds where the automatic attempt was refused. `onPlaying` clears
+   * `blocked`; a rejection here (element torn down mid-click, say) just
+   * leaves the affordance showing rather than throwing.
+   */
+  const retryFromGesture = () => {
+    // THE SESSION THIS CLICK WAS FOR, captured now — not read again inside
+    // the callback, where it would already be whatever session is playing
+    // BY THEN. A `play()` promise can resolve (or reject) after the stream
+    // has already ended, restarted under a new `startedAt`, or the
+    // component been asked to show a different source entirely; without
+    // this check that stale settle would still flip `blocked` for
+    // whichever stream happens to be showing at that later moment, not the
+    // one the click was actually about.
+    const clickedSession = sessionRef.current;
+    const stillCurrent = () => sessionRef.current === clickedSession;
+    void videoRef.current
+      ?.play()
+      .then(() => {
+        if (stillCurrent()) {
+          setBlocked(false);
+        }
+      })
+      .catch(() => {
+        if (stillCurrent()) {
+          // Stays visible — the click itself was a real gesture and the
+          // browser still refused, which is worth knowing rather than
+          // quietly going back to looking like nothing is wrong.
+          setBlocked(true);
+        }
+      });
+  };
+
   return (
-    <video
-      ref={videoRef}
+    <div
       data-testid="watch-camera-pip"
-      className={cn("bg-black", className)}
-      autoPlay
-      muted
-      playsInline
-      // Not a PiP candidate of its own: the browser's picture-in-picture
-      // belongs to the film, and offering it here would put a webcam in the
-      // floating window somebody opened to keep watching the film.
-      disablePictureInPicture
-    />
+      data-has-video={hasVideo ? "" : undefined}
+      data-has-voice-audio={hasVoiceAudio ? "" : undefined}
+      className={cn("relative bg-black", className)}
+    >
+      <video
+        ref={videoRef}
+        // `hasVideo === false` still needs this element mounted and playing —
+        // hls.js attaches to it either way — just drawn as nothing: `sr-only`
+        // rather than `hidden`, so playback (and therefore its audio) is
+        // never paused by the browser for being display:none.
+        className={cn(
+          "bg-black",
+          hasVideo ? "h-full w-full" : "sr-only",
+        )}
+        autoPlay
+        muted={!hasVoiceAudio}
+        playsInline
+        // Not a PiP candidate of its own: the browser's picture-in-picture
+        // belongs to the film, and offering it here would put a webcam (or,
+        // in "separada" with no camera, a blank frame) in the floating window
+        // somebody opened to keep watching the film.
+        disablePictureInPicture
+      />
+      {!hasVideo ? (
+        // THE AUDIO-ONLY SHAPE OF "SEPARADA": no camera published, so there
+        // is no picture for this box to be — just the fact that a voice is
+        // here to hear, in the same corner a webcam would have used.
+        <div className="flex h-full w-full items-center justify-center">
+          <Mic
+            aria-label={t("watchParty.camera.voiceOnly")}
+            className="h-1/3 w-1/3 text-paper/70"
+          />
+        </div>
+      ) : null}
+      {hasVoiceAudio && blocked ? (
+        // THE AUTOPLAY POLICY'S ESCAPE HATCH. Unmuted autoplay can be refused
+        // with no prior gesture on this document at all (opening the watch
+        // stage straight into cinema fullscreen, say); a click here IS that
+        // gesture, so the retry always succeeds where the automatic one
+        // could not.
+        <button
+          type="button"
+          data-testid="watch-camera-pip-tap-to-hear"
+          onClick={(event) => {
+            event.stopPropagation();
+            retryFromGesture();
+          }}
+          className="absolute inset-0 flex items-center justify-center gap-1 bg-black/50 text-xs font-medium text-paper"
+        >
+          <Volume2 className="h-4 w-4" aria-hidden />
+          {t("watchParty.camera.tapToHear")}
+        </button>
+      ) : null}
+      {hasVoiceAudio ? (
+        <input
+          type="range"
+          data-testid="watch-camera-pip-voice-volume"
+          aria-label={t("watchParty.camera.voiceVolume")}
+          aria-valuetext={t("voice.tile.volumePercent", {
+            percent: Math.round(volume * 100),
+          })}
+          min={0}
+          max={1}
+          step={0.05}
+          value={volume}
+          onChange={(event) => applyVolume(Number(event.target.value))}
+          onClick={(event) => event.stopPropagation()}
+          className="absolute inset-x-1 bottom-1 h-1 cursor-pointer accent-signal"
+        />
+      ) : null}
+    </div>
   );
 }

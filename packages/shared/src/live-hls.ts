@@ -78,10 +78,39 @@ export const liveHlsStreamSchema = z.object({
    * media box refused it for budget, or the server predates this. **Optional
    * on purpose** — iOS and Android parse the frame and ignore the field.
    *
-   * There is no audio here and there never will be: the audience's sound comes
-   * off the main stream, which is the only place it is mixed.
+   * There is no audio here and there never will be, UNLESS `cameraHasVoiceAudio`
+   * says otherwise (`LIVE_HLS_VOICE_TRACK`, see below) — with that flag off
+   * this field is exactly the video-only rendition it always was.
    */
   cameraHlsUrl: z.string().min(1).optional(),
+  /**
+   * Whether `cameraHlsUrl` actually carries a picture.
+   *
+   * Absent or true (the pre-2026-09-13 default) means the presenter's face is
+   * in it, same as always. False is the `LIVE_HLS_VOICE_TRACK` case where the
+   * presenter has no camera published but their microphone is still riding a
+   * Track Composite of its own (see `cameraHasVoiceAudio`): the rung exists,
+   * `cameraHlsUrl` is set, and there is nothing to draw — a player that
+   * ignores this field and tries to paint video from it gets a black frame
+   * from an audio-only stream, which is why the client checks it before
+   * mounting the PiP's `<video>`.
+   */
+  cameraHasVideo: z.boolean().optional(),
+  /**
+   * Whether `cameraHlsUrl` carries the presenter's MICROPHONE, separately
+   * from whatever `hlsUrl` (the film) carries.
+   *
+   * `LIVE_HLS_VOICE_TRACK`, dark by default. Off (absent/false): `cameraHlsUrl`
+   * is silent exactly as the doc above always said, and a host whose
+   * microphone reaches the audience at all does so mixed into `hlsUrl`
+   * (`lib/screen-mix.ts`, "junto"). On, and the presenter chose "separada":
+   * the screen mix stops folding the mic into the film, so `hlsUrl` carries
+   * film audio alone, and this rung carries the presenter's voice instead —
+   * beside their camera when they have one, alone (with `cameraHasVideo:
+   * false`) when they do not. A viewer who wants to hear the host levels or
+   * mutes THIS stream, independently of the film's own volume.
+   */
+  cameraHasVoiceAudio: z.boolean().optional(),
 });
 
 export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;

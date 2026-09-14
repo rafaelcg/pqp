@@ -90,6 +90,7 @@ import {
   reconcileLiveHls,
   setLiveHlsChangeListener,
   setLiveHlsSfuLoadReader,
+  setVoiceTrackSeparated,
 } from "../voice/hls-egress.js";
 import {
   liveHlsForcesSfu,
@@ -5316,6 +5317,40 @@ export async function handleVoiceMessage(
     void pushLiveHls(peer.voiceChannelId).catch((error: unknown) => {
       console.error(
         "[voice] pushLiveHls failed after set-camera:",
+        peer.voiceChannelId,
+        error,
+      );
+    });
+    return;
+  }
+
+  // `LIVE_HLS_VOICE_TRACK`'s "separada" declaration. See
+  // `setVoiceTrackSeparated` in `hls-egress.ts` for why the server wants
+  // this as its own signal rather than inferring the mode from the
+  // `voice-track` publication alone.
+  if (payload.type === "set-voice-track-mode") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    // ONLY THE ROOM'S CURRENT PRESENTER'S WORD COUNTS — the same authority
+    // `pushLiveHls` already defers to for who is presenting at all. Anybody
+    // else declaring a mode for a party they are not running is a no-op,
+    // never an error: a stale or mistaken frame from a non-presenter must
+    // not move a fact the real presenter's own client owns.
+    if (pickHlsSharer(getRoomPeers(peer.voiceChannelId))?.id !== peer.id) {
+      return;
+    }
+    setVoiceTrackSeparated(peer.voiceChannelId, peer.id, payload.separated);
+    // Same shape as `set-camera` above: fire-and-forget, `.catch` rather
+    // than `await`, so this frame acks at once regardless of how the
+    // transcode side is doing.
+    void pushLiveHls(peer.voiceChannelId).catch((error: unknown) => {
+      console.error(
+        "[voice] pushLiveHls failed after set-voice-track-mode:",
         peer.voiceChannelId,
         error,
       );

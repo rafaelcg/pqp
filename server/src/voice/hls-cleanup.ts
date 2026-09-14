@@ -91,6 +91,8 @@ interface StaleSession {
   egress_id: string | null;
   presenter_peer_id: string | null;
   video_track_id: string | null;
+  /** `LIVE_HLS_VOICE_TRACK`'s camera/voice slot: the separate audio sid. */
+  audio_track_id: string | null;
   rung: string | null;
   still_open: boolean;
 }
@@ -245,7 +247,7 @@ export async function reconcileStaleHlsSessions(): Promise<{
 
   const rows = await getPool().query<StaleSession>(
     `SELECT id, channel_id, object_prefix, egress_id, presenter_peer_id,
-            video_track_id, rung, ended_at IS NULL AS still_open
+            video_track_id, audio_track_id, rung, ended_at IS NULL AS still_open
      FROM hls_sessions
      WHERE cleaned_at IS NULL
        AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
@@ -326,6 +328,7 @@ export async function reconcileStaleHlsSessions(): Promise<{
       startedAt: session.startedAt,
       presenterPeerId: row.presenter_peer_id!,
       videoTrackId: row.video_track_id ?? "",
+      audioTrackId: row.audio_track_id,
       rung: row.rung ?? session.rung,
     });
     if (stream === null) {

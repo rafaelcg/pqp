@@ -106,6 +106,10 @@ const VOICE_MESSAGE_TYPES = new Set([
   // A viewer without a seat, counted by the voice handler because that is
   // where the stream and the room live.
   "watch-live",
+  // --- LIVE_HLS_VOICE_TRACK ---
+  // The presenter's own word for "separada", read alongside their
+  // `voice-track` publication by `reconcileCameraEgress`.
+  "set-voice-track-mode",
 ]);
 
 /**

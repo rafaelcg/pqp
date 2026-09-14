@@ -14,9 +14,12 @@ import { promotionBudgetMbps } from "./promotion.js";
 import {
   CAMERA_RUNG,
   CAMERA_RUNG_NAME,
+  CAMERA_RUNG_WITH_VOICE,
+  VOICE_RUNG,
   decideCameraEgress,
   decideLadder,
   HLS_CAMERA_MBPS,
+  HLS_VOICE_ONLY_MBPS,
   LADDER_RUNGS,
   ladderBudgetMbps,
   parseLadder,
@@ -64,6 +67,35 @@ import {
  * is told apart by `TrackInfo.name`, which no grant reads.
  */
 export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
+
+/**
+ * `LIVE_HLS_VOICE_TRACK`'s "separada" mode: a SECOND publication of the
+ * presenter's processed mic, under this name, told apart from their
+ * ordinary one for exactly `MIC_ARCHIVE_TRACK_NAME`'s reasons above (same
+ * source, same pitfall 14, the name is the only thing that distinguishes
+ * them).
+ *
+ * WHY THE PICKER USES THIS AND NOT THE ORDINARY MICROPHONE. An earlier
+ * version of this feature attached whichever non-archive, `Microphone`-
+ * sourced track it found on the sharer, gated only on the deployment flag.
+ * A Farol review caught what that misses: the ordinary publication exists
+ * for every presenter with a microphone, "separada" chosen or not, and its
+ * LiveKit mute state is not a safe proxy either — mute flips for
+ * push-to-talk, deafen and SPEAK being revoked, none of which are this
+ * decision. So with the flag on, every host with a mic got a camera+voice
+ * or voice-only egress regardless of which mode they had actually picked,
+ * which is the doubling bug this rename fixes: a "junto" host's voice was
+ * reaching the audience twice, once in the film's mix and once on the rung.
+ *
+ * A track under THIS name is unambiguous the same way the archive is: the
+ * client only ever publishes it while `voiceTrackMode` is "separada" AND
+ * the mic is meant to reach the audience at all (`isSharingMic`) AND the
+ * client's own answer from `GET /api/live-hls/config` says the deployment
+ * can carry it — see `syncVoiceTrackPublication` in `use-voice.ts`. Its
+ * presence is therefore a fact the server can trust, not an inference from
+ * a track that exists regardless of any of that.
+ */
+export const VOICE_TRACK_NAME = "voice-track";
 
 /**
  * How long after a session starts the monitor keeps looking for the archive
@@ -198,6 +230,20 @@ export interface LiveHlsScreenTracks {
    * case for a film night.
    */
   cameraTrackId?: string;
+  /**
+   * The sharer's `voice-track` publication (`VOICE_TRACK_NAME`), when they
+   * have one. `LIVE_HLS_VOICE_TRACK`'s "separada" signal: the CLIENT only
+   * ever publishes this while it has chosen "separada", is sharing its mic
+   * into the party at all, and the deployment says it can carry it — see
+   * `VOICE_TRACK_NAME`'s own doc for why this is named-picked rather than
+   * inferred from the sharer's ORDINARY microphone (an earlier version did
+   * that and doubled a "junto" host's voice). Picked in the same
+   * `listParticipants` pass as everything else here, by name for the same
+   * pitfall-14 reason `micArchiveTrackId` is, and never confused with that
+   * one: same source, different name, different purpose (this one an
+   * egress input, that one a Track Egress that never reaches the audience).
+   */
+  voiceTrackId?: string;
 }
 
 export interface LiveHlsEgressApi {
@@ -206,7 +252,13 @@ export interface LiveHlsEgressApi {
     output: SegmentedFileOutput,
     opts: {
       audioTrackId?: string;
-      videoTrackId: string;
+      /**
+       * Optional so an audio-only Track Composite (`VOICE_RUNG`, no camera
+       * published) can be requested at all: the protocol's own fields are
+       * both optional, and the real binding below passes `undefined` straight
+       * through. Every caller before `LIVE_HLS_VOICE_TRACK` always had one.
+       */
+      videoTrackId?: string;
       encodingOptions?: EncodingOptions;
     },
   ) => Promise<{ egressId: string }>;
@@ -288,7 +340,9 @@ interface RoomHls {
    */
   videoTrackId: string;
   /**
-   * The presenter's camera, transcoded beside the ladder, or null.
+   * The presenter's camera and/or voice rung, transcoded beside the ladder,
+   * or null. One slot for both, because they are the same egress: a Track
+   * Composite with a video sid, an audio sid, or one of each.
    *
    * ADDITIVE TO THE SESSION, NEVER A NEW ONE. It starts and stops inside the
    * running `startedAt`: a new one is a new playlist path, a new viewer token
@@ -298,10 +352,23 @@ interface RoomHls {
    *
    * A `RunningRung` rather than its own shape, because the health monitor,
    * `stopRungs` and `reapForeignEgresses` all want to treat it exactly like a
-   * secondary rendition. It carries `CAMERA_RUNG`, which is deliberately not
-   * in `LADDER_RUNGS`.
+   * secondary rendition. It carries `CAMERA_RUNG`, `CAMERA_RUNG_WITH_VOICE` or
+   * `VOICE_RUNG` (`LIVE_HLS_VOICE_TRACK`), none of which are in `LADDER_RUNGS`
+   * and all three of which share `CAMERA_RUNG_NAME` so the slot, its object
+   * prefix and its playlist URL never move underneath a viewer as the two
+   * booleans below change mid-party.
+   *
+   * `cameraTrackId` null means no camera video (a `VOICE_RUNG` audio-only
+   * egress, or the flag off — the only shape this ever was before
+   * 2026-09-13). `audioTrackId` null means no microphone attached (the
+   * pre-2026-09-13 `CAMERA_RUNG` shape, or a presenter not sharing their
+   * voice at all). Both null never happens — `reconcileCameraEgress` tears
+   * the slot down the moment neither is wanted, same as it always did for the
+   * camera alone.
    */
-  camera: (RunningRung & { cameraTrackId: string }) | null;
+  camera:
+    | (RunningRung & { cameraTrackId: string | null; audioTrackId: string | null })
+    | null;
   /** Wall clock when the session was requested. */
   startedAtMs: number;
   /**
@@ -372,6 +439,65 @@ const loggedGhostEgressIds = new Set<string>();
  */
 const cameraCooldownUntil = new Map<string, number>();
 const CAMERA_COOLDOWN_MS = 2 * 60 * 1000;
+
+/**
+ * Per channel: has the CURRENT presenter declared "separada"
+ * (`set-voice-track-mode`, `server/src/ws/voice.ts`)?
+ *
+ * A SECOND SIGNAL, DELIBERATELY, ALONGSIDE THE `voice-track` PUBLICATION
+ * `pickScreenTracks` already finds. A Farol review on the first version of
+ * this feature pointed out that a publication is a fact about LiveKit's
+ * state, not a fact about the presenter's CURRENT choice — it can outlive a
+ * mode the presenter has since turned off (a pending `unpublishVoiceTrack`
+ * still in flight, a dropped frame) or exist on a session with no chance to
+ * declare it at all (a bare LiveKit room a load test or a future client
+ * talks to directly). `reconcileCameraEgress` attaches the mic only when
+ * BOTH agree — the track exists AND this map says so — so neither on its
+ * own is trusted to carry the whole decision.
+ *
+ * `voice.ts` only calls the setter for the message's sender when they are
+ * the room's CURRENT `pickHlsSharer` (the same authority `pushLiveHls`
+ * already defers to for who is presenting at all); anybody else's
+ * declaration is a no-op. Cleared whenever the room's own session ends
+ * (`stopRoom`) so a stale `true` from a party that is over cannot be read
+ * by whatever starts the next one under the same channel id.
+ *
+ * KEYED BY PEER ID, NOT JUST A BARE BOOLEAN — a second Farol finding on top
+ * of the first. A channel-wide `true` with no owner survives the presenter
+ * who set it: they leave (or hand the share to a co-host) without ever
+ * sending `separated: false`, a NEW presenter starts sharing, and a bare
+ * boolean would credit them with a choice they never made — the exact
+ * authorization gap the presenter-only setter above exists to close, just
+ * one hop further out. Storing the declaring peer's id means a read has to
+ * match the room's CURRENT presenter to count; a handoff with no explicit
+ * disable simply reads as "not declared" for whoever presents next, which
+ * is the correct, conservative default (see `wantedAudio` in
+ * `reconcileCameraEgress`: no declaration is no attachment).
+ */
+const voiceTrackSeparatedByChannel = new Map<string, string>();
+
+export function setVoiceTrackSeparated(
+  channelId: string,
+  peerId: string,
+  separated: boolean,
+): void {
+  if (separated) {
+    voiceTrackSeparatedByChannel.set(channelId, peerId);
+  } else if (voiceTrackSeparatedByChannel.get(channelId) === peerId) {
+    // Only this peer's OWN declaration clears it. A stale "true" left by a
+    // presenter who has since gone away is not cleared here at all — it
+    // simply stops matching at read time the moment `presenterPeerId`
+    // changes, which is the check that actually matters.
+    voiceTrackSeparatedByChannel.delete(channelId);
+  }
+}
+
+function presenterWantsSeparatedVoice(
+  channelId: string,
+  presenterPeerId: string,
+): boolean {
+  return voiceTrackSeparatedByChannel.get(channelId) === presenterPeerId;
+}
 /**
  * Bounded retry for a `probeScreenTracks` call that could not ask LiveKit at
  * all — a momentary hiccup, not "no camera" (see where this is scheduled, in
@@ -681,6 +807,27 @@ export function liveHlsCameraEnabled(): boolean {
 }
 
 /**
+ * `LIVE_HLS_VOICE_TRACK`: **off by default**, and off is exactly the
+ * pre-2026-09-13 behaviour — `cameraHlsUrl` (when there is one at all) is
+ * silent, and a host's voice, if the audience hears it, arrives mixed into
+ * the film (`lib/screen-mix.ts`, "junto").
+ *
+ * On, two things become possible and neither is forced. The client's host
+ * panel offers "voz separada" (only once `GET /api/live-hls/config` says
+ * `voiceTrack: true` — a build must never publish an extra track against a
+ * deployment that will not carry it, the same rule `micArchive` already
+ * follows); and, when a presenter picks it, `reconcileCameraEgress` attaches
+ * their ordinary microphone publication to the camera slot — beside their
+ * camera video when they have one (`CAMERA_RUNG_WITH_VOICE`), alone when they
+ * do not (`VOICE_RUNG`). Turning it off mid-party stops the attach at the
+ * next reconcile and returns the slot to `CAMERA_RUNG` (or closes it, with no
+ * camera), the same rollback shape every other switch in this file has.
+ */
+export function liveHlsVoiceTrackEnabled(): boolean {
+  return process.env.LIVE_HLS_VOICE_TRACK === "true";
+}
+
+/**
  * Default true: a viewer gets a presigned, expiring URL rather than the raw
  * public bucket URL. Set `LIVE_HLS_SIGNED_URLS=false` to fall back to the
  * old public-base-URL behaviour (e.g. a bucket that is deliberately public).
@@ -764,19 +911,27 @@ async function recordSessionStarted(
   presenterPeerId: string,
   videoTrackId: string,
   reopen = false,
+  // The camera/voice slot's SEPARATE audio sid, when it has one
+  // (`CAMERA_RUNG_WITH_VOICE` or `VOICE_RUNG`). Null for every ladder rung
+  // and for a plain, silent `CAMERA_RUNG` — those never had two tracks to
+  // tell apart. Stored in its own column so `reconcileStaleHlsSessions` can
+  // adopt the exact shape a restart interrupted rather than guessing it
+  // back from a single id: see `adoptCameraEgress`.
+  audioTrackId: string | null = null,
 ): Promise<boolean> {
   try {
     await getPool().query(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, egress_id, rung,
-          presenter_peer_id, video_track_id)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7)
+          presenter_peer_id, video_track_id, audio_track_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7, $8)
        ${
          reopen
            ? `ON CONFLICT (object_prefix) DO UPDATE
                 SET egress_id = EXCLUDED.egress_id,
                     presenter_peer_id = EXCLUDED.presenter_peer_id,
                     video_track_id = EXCLUDED.video_track_id,
+                    audio_track_id = EXCLUDED.audio_track_id,
                     ended_at = NULL,
                     cleaned_at = NULL`
            : "ON CONFLICT (object_prefix) DO NOTHING"
@@ -789,6 +944,7 @@ async function recordSessionStarted(
         rung,
         presenterPeerId,
         videoTrackId,
+        audioTrackId,
       ],
     );
     return true;
@@ -1083,6 +1239,14 @@ export interface LiveHlsConfig {
    * not a thing that can start.
    */
   micArchive: boolean;
+  /**
+   * Whether the client may offer "voz separada" at all (`LIVE_HLS_
+   * VOICE_TRACK`). Same rule as `micArchive`: the client must never infer
+   * this from a build flag, because whether it is worth excluding the mic
+   * from the screen mix depends on whether THIS deployment's camera slot can
+   * actually carry it. False whenever HLS is off for this answer.
+   */
+  voiceTrack: boolean;
 }
 
 /**
@@ -1097,6 +1261,7 @@ export function liveHlsConfig(): LiveHlsConfig {
     delaySeconds: delaySeconds(),
     allowlisted: allowlist !== null,
     micArchive: isLiveHlsEnabled() && micArchiveEnabled(),
+    voiceTrack: isLiveHlsEnabled() && liveHlsVoiceTrackEnabled(),
     ladder: liveHlsLadder().map((rung) => ({
       name: rung.name,
       width: rung.width,
@@ -1129,6 +1294,7 @@ export async function liveHlsConfigForServer(
     // operator has switched off records nothing, so its host must not be
     // asked to publish a track for it.
     micArchive: enabled && micArchiveEnabled(),
+    voiceTrack: enabled && liveHlsVoiceTrackEnabled(),
   };
 }
 
@@ -1176,6 +1342,7 @@ export function resetLiveHlsForTests(): void {
   orphansStopped = 0;
   loggedGhostEgressIds.clear();
   cameraCooldownUntil.clear();
+  voiceTrackSeparatedByChannel.clear();
   for (const timer of cameraProbeRetryTimers.values()) {
     clearTimeout(timer);
   }
@@ -1224,8 +1391,8 @@ export function runningCameraCount(): number {
 }
 
 /**
- * What the running cameras cost the box, in the Mbit/s the ladder is priced
- * in.
+ * What the running cameras (and voice-only rungs) cost the box, in the
+ * Mbit/s the ladder is priced in.
  *
  * Added to the SFU load rather than to `runningRungs`, and the distinction is
  * deliberate. `runningRungs` counts renditions OF A SHARE and multiplies by a
@@ -1233,9 +1400,20 @@ export function runningCameraCount(): number {
  * it as one would refuse a real rendition of somebody's film to pay for a
  * webcam, which is exactly the trade `decideCameraEgress` refuses to make in
  * the other direction.
+ *
+ * PER SLOT, NOT A FLAT MULTIPLE, since `LIVE_HLS_VOICE_TRACK`: a slot with no
+ * camera video (`cameraTrackId === null`) is a `VOICE_RUNG` audio-only
+ * egress and costs `HLS_VOICE_ONLY_MBPS`, not a camera's `HLS_CAMERA_MBPS`.
  */
 export function runningCameraMbps(): number {
-  return runningCameraCount() * HLS_CAMERA_MBPS;
+  let total = 0;
+  for (const room of rooms.values()) {
+    if (!room.camera) {
+      continue;
+    }
+    total += room.camera.cameraTrackId ? HLS_CAMERA_MBPS : HLS_VOICE_ONLY_MBPS;
+  }
+  return total;
 }
 
 /**
@@ -1435,10 +1613,13 @@ export interface LiveHlsActivity {
    */
   micArchives: number;
   /**
-   * Sessions currently carrying a second, video-only transcode of the
-   * presenter's camera. Each is about 0.2 to 0.3 of a core on top of that
-   * party's ladder, so this is the number that turns "the box feels slow" into
-   * "three hosts have their webcams on". Zero when `LIVE_HLS_CAMERA=false`.
+   * Sessions currently carrying a second transcode beside the presenter's
+   * ladder: a camera, a camera with the presenter's voice attached
+   * (`LIVE_HLS_VOICE_TRACK`), or the voice alone with no camera. Each camera
+   * slot is about 0.2 to 0.3 of a core on top of that party's ladder, so this
+   * is the number that turns "the box feels slow" into "three hosts have
+   * their webcams (or their separated voice) on". Zero when
+   * `LIVE_HLS_CAMERA=false`.
    */
   cameraSessions: number;
 }
@@ -2190,6 +2371,11 @@ export function adoptLiveHlsSession(input: {
   startedAt: number;
   presenterPeerId: string;
   videoTrackId: string;
+  /**
+   * `hls_sessions.audio_track_id`. Only meaningful for the camera/voice slot
+   * (`rung === CAMERA_RUNG_NAME`) — every ladder rung ignores it.
+   */
+  audioTrackId?: string | null;
   /** Which rendition this egress is. Null is a pre-ladder single-rung row. */
   rung: string | null;
 }): LiveHlsStream | null {
@@ -2282,16 +2468,30 @@ function adoptCameraEgress(input: {
   egressId: string;
   startedAt: number;
   videoTrackId: string;
+  /** `hls_sessions.audio_track_id`. Null/absent for a silent camera row. */
+  audioTrackId?: string | null;
 }): LiveHlsStream | null {
-  // THE ROLLBACK SWITCH APPLIES ACROSS A DEPLOY TOO. Without this, a boot
-  // reconcile with `LIVE_HLS_CAMERA=false` still adopted a camera row it
-  // found running, kept its transcode alive and could go on advertising
-  // `cameraHlsUrl` — exactly the behaviour the switch exists to turn off, and
-  // the one case an operator flipping it during an incident actually needs.
-  // Null is the same "unadoptable" answer a missing session gives, so the
-  // caller (`reconcileStaleHlsSessions`) stops the egress by the same path.
-  if (!liveHlsCameraEnabled()) {
+  const audioTrackId = input.audioTrackId ?? null;
+  const hasVideo = input.videoTrackId !== "";
+  const hasAudio = audioTrackId !== null && audioTrackId !== "";
+  // THE ROLLBACK SWITCH APPLIES ACROSS A DEPLOY TOO, and now checks the
+  // shape THIS ROW actually is rather than always requiring `LIVE_HLS_
+  // CAMERA`: a boot reconcile on a deployment with the camera off but
+  // `LIVE_HLS_VOICE_TRACK` on must still adopt a voice-only row, or an
+  // operator's `LIVE_HLS_CAMERA=false` incident response would drop
+  // separated-voice parties that never had a camera in them at all. Null is
+  // the same "unadoptable" answer a missing session gives, so the caller
+  // (`reconcileStaleHlsSessions`) stops the egress by the same path.
+  if (hasVideo && !liveHlsCameraEnabled()) {
     logEvent("voice.hlsCameraAdoptionDisabled", {
+      channelId: input.channelId,
+      egressId: input.egressId,
+      startedAt: input.startedAt,
+    });
+    return null;
+  }
+  if (hasAudio && !liveHlsVoiceTrackEnabled()) {
+    logEvent("voice.hlsVoiceTrackAdoptionDisabled", {
       channelId: input.channelId,
       egressId: input.egressId,
       startedAt: input.startedAt,
@@ -2329,18 +2529,35 @@ function adoptCameraEgress(input: {
     });
     void stopEgressById(staleEgressId, input.channelId);
   }
+  // THE EXACT SHAPE, FROM THE ROW'S TWO COLUMNS — not guessed. Before
+  // `audio_track_id` existed, an adopted voice-only row had nowhere to keep
+  // its mic sid but `video_track_id`, so it came back mislabelled as a
+  // silent camera and cost one extra restart on the very next reconcile
+  // tick to self-correct. With both columns this is exact: the rung, the
+  // sids and the `cameraHasVideo`/`cameraHasVoiceAudio` flags a viewer's PiP
+  // reads all match what was actually running before the restart.
   room.camera = {
-    rung: CAMERA_RUNG,
+    rung: hasVideo
+      ? hasAudio
+        ? CAMERA_RUNG_WITH_VOICE
+        : CAMERA_RUNG
+      : VOICE_RUNG,
     egressId: input.egressId,
     startedAtMs: Date.now(),
     progress: null,
-    cameraTrackId: input.videoTrackId,
+    cameraTrackId: hasVideo ? input.videoTrackId : null,
+    audioTrackId: hasAudio ? audioTrackId : null,
   };
-  room.stream = withCameraUrl(room.stream, input.channelId);
+  room.stream = withCameraUrl(room.stream, input.channelId, {
+    hasVideo,
+    hasVoiceAudio: hasAudio,
+  });
   logEvent("voice.hlsCameraAdopted", {
     channelId: input.channelId,
     egressId: input.egressId,
     startedAt: input.startedAt,
+    hasVideo,
+    hasAudio,
   });
   return room.stream;
 }
@@ -2452,6 +2669,7 @@ export function pickScreenTracks(
   let sourceHeight: number | undefined;
   let micArchiveTrackId: string | undefined;
   let cameraTrackId: string | undefined;
+  let voiceTrackId: string | undefined;
   for (const track of sharer.tracks ?? []) {
     if (!track.sid) {
       continue;
@@ -2481,6 +2699,14 @@ export function pickScreenTracks(
     if (isTrackSource(track.source, TrackSource.CAMERA)) {
       cameraTrackId ??= track.sid;
     }
+    // BY NAME, LIKE THE ARCHIVE, AND FOR A SECOND REASON ON TOP OF PITFALL
+    // 14: the sharer's ORDINARY microphone (source `Microphone`, no special
+    // name) exists whether or not "separada" is chosen, so picking it up
+    // by source alone would attach it regardless of the host's actual mode
+    // — see `VOICE_TRACK_NAME`'s doc for the bug that shape caused.
+    if (track.name === VOICE_TRACK_NAME) {
+      voiceTrackId ??= track.sid;
+    }
   }
   return videoTrackId
     ? {
@@ -2489,6 +2715,7 @@ export function pickScreenTracks(
         ...(sourceHeight ? { sourceHeight } : {}),
         ...(micArchiveTrackId ? { micArchiveTrackId } : {}),
         ...(cameraTrackId ? { cameraTrackId } : {}),
+        ...(voiceTrackId ? { voiceTrackId } : {}),
       }
     : null;
 }
@@ -2745,20 +2972,40 @@ function cameraPlaylistUrl(channelId: string, startedAt: number): string {
   return `/api/voice/hls-playlist/${channelId}/${startedAt}/${CAMERA_RUNG_NAME}`;
 }
 
-/** The same stream, now advertising a camera. */
-function withCameraUrl(stream: LiveHlsStream, channelId: string): LiveHlsStream {
+/**
+ * The same stream, now advertising the camera/voice slot.
+ *
+ * `hasVideo`/`hasVoiceAudio` default to the pre-2026-09-13 shape (a picture,
+ * no sound) so every caller that has not been taught about
+ * `LIVE_HLS_VOICE_TRACK` keeps behaving exactly as it always did.
+ */
+function withCameraUrl(
+  stream: LiveHlsStream,
+  channelId: string,
+  shape: { hasVideo: boolean; hasVoiceAudio: boolean } = {
+    hasVideo: true,
+    hasVoiceAudio: false,
+  },
+): LiveHlsStream {
   return {
     ...stream,
     cameraHlsUrl: cameraPlaylistUrl(channelId, stream.startedAt),
+    cameraHasVideo: shape.hasVideo,
+    cameraHasVoiceAudio: shape.hasVoiceAudio,
   };
 }
 
-/** The same stream with the camera gone. Deleted, not set to undefined. */
+/** The same stream with the camera/voice slot gone. Deleted, not falsed. */
 function withoutCameraUrl(stream: LiveHlsStream): LiveHlsStream {
   if (stream.cameraHlsUrl === undefined) {
     return stream;
   }
-  const { cameraHlsUrl: _dropped, ...rest } = stream;
+  const {
+    cameraHlsUrl: _dropped,
+    cameraHasVideo: _droppedVideo,
+    cameraHasVoiceAudio: _droppedAudio,
+    ...rest
+  } = stream;
   return rest;
 }
 
@@ -3043,6 +3290,7 @@ async function stopRoom(channelId: string, reason: string): Promise<void> {
   }
   rooms.delete(channelId);
   cameraCooldownUntil.delete(channelId);
+  voiceTrackSeparatedByChannel.delete(channelId);
   clearCameraProbeRetry(channelId);
   logEvent("voice.hlsStopped", {
     channelId,
@@ -3153,12 +3401,25 @@ function cameraStillWanted(
   channelId: string,
   room: RoomHls,
   startedAt: number,
+  // WHICH FLAG GOVERNS THIS ATTEMPT, and only that one: an audio-only
+  // ("separada", no camera) start must not be judged against
+  // `LIVE_HLS_CAMERA`, or a deployment with the camera off but the voice
+  // track on would start the egress and immediately stop it again — a
+  // presenter with no webcam could never use "separada" at all. Symmetric
+  // the other way: a camera+voice attempt needs BOTH flags still on.
+  shape: { hasVideo: boolean; hasAudio: boolean },
 ): boolean {
   const current = rooms.get(channelId);
   if (!current || current !== room || current.stream.startedAt !== startedAt) {
     return false;
   }
-  if (!liveHlsCameraEnabled()) {
+  if (!shape.hasVideo && !shape.hasAudio) {
+    return false;
+  }
+  if (shape.hasVideo && !liveHlsCameraEnabled()) {
+    return false;
+  }
+  if (shape.hasAudio && !liveHlsVoiceTrackEnabled()) {
     return false;
   }
   return current.camera === null;
@@ -3167,14 +3428,34 @@ function cameraStillWanted(
 async function reconcileCameraEgress(
   channelId: string,
   cameraTrackId: string | null,
+  voiceTrackId: string | null,
 ): Promise<void> {
   const room = rooms.get(channelId);
   if (!room) {
     return;
   }
-  const wanted = liveHlsCameraEnabled() ? cameraTrackId : null;
+  const wantedVideo = liveHlsCameraEnabled() ? cameraTrackId : null;
+  // THREE THINGS HAVE TO AGREE before the mic is attached: the deployment
+  // flag, the presenter's OWN word that they chose "separada"
+  // (`presenterWantsSeparatedVoice` — see its doc), and the named `voice-
+  // track` publication actually being there to attach (`voiceTrackId`). The
+  // flag off must reproduce the pre-2026-09-13 shape exactly (a camera,
+  // silent, `CAMERA_RUNG`), whatever the other two say; the mode off must
+  // never attach a track that merely happens to still be published; and a
+  // mode that is on with no publication yet (mid-transition) attaches
+  // nothing until the next reconcile finds it, rather than manufacturing an
+  // id from nowhere.
+  const wantedAudio =
+    liveHlsVoiceTrackEnabled() &&
+    presenterWantsSeparatedVoice(channelId, room.stream.presenterPeerId)
+      ? voiceTrackId
+      : null;
   const current = room.camera;
-  if (current && current.cameraTrackId === wanted) {
+  if (
+    current &&
+    current.cameraTrackId === wantedVideo &&
+    current.audioTrackId === wantedAudio
+  ) {
     return;
   }
   if (current) {
@@ -3185,10 +3466,10 @@ async function reconcileCameraEgress(
     logEvent("voice.hlsCameraStopped", {
       channelId,
       egressId: current.egressId,
-      reason: wanted ? "track-replaced" : "no-camera",
+      reason: wantedVideo || wantedAudio ? "track-replaced" : "no-camera",
     });
   }
-  if (!wanted) {
+  if (!wantedVideo && !wantedAudio) {
     // A DELIBERATE CLOSE CLEARS THE COOLDOWN. Turning it off and on again is
     // the first thing anybody does when something looks broken, and holding
     // them out for two minutes after they did exactly the right thing would
@@ -3208,8 +3489,8 @@ async function reconcileCameraEgress(
     return;
   }
   // Priced against the WHOLE box, and never against the ladder budget: see
-  // `decideCameraEgress`. A refusal costs a face, never a rendition of the
-  // film.
+  // `decideCameraEgress`. A refusal costs a face (or a voice), never a
+  // rendition of the film.
   //
   // `activeLadderEgressCount`, NOT `activeBoxEgressCount`, for `runningRungs`:
   // every running camera (this one's neighbours included) is already added
@@ -3220,6 +3501,7 @@ async function reconcileCameraEgress(
     runningRungs: await activeLadderEgressCount(),
     sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
     boxBudgetMbps: promotionBudgetMbps(),
+    hasVideo: Boolean(wantedVideo),
   });
   if (!decision.start) {
     // THE SAME COOLDOWN, and it is what keeps this off the log. `pushLiveHls`
@@ -3239,6 +3521,14 @@ async function reconcileCameraEgress(
     return;
   }
   const startedAt = room.stream.startedAt;
+  // Which of the three shapes this attempt is. Same `CAMERA_RUNG_NAME` object
+  // prefix and playlist path for all three — see the `RoomHls.camera` doc —
+  // so nothing downstream needs to know which one is running.
+  const rung = wantedVideo
+    ? wantedAudio
+      ? CAMERA_RUNG_WITH_VOICE
+      : CAMERA_RUNG
+    : VOICE_RUNG;
   let egressId: string | null = null;
   try {
     const started = await egress.startTrackCompositeEgress(
@@ -3249,13 +3539,16 @@ async function reconcileCameraEgress(
         CAMERA_RUNG_NAME,
       ),
       {
-        videoTrackId: wanted,
-        // NO AUDIO TRACK AT ALL. The audience's sound comes off the main
-        // stream, which is the only place it is mixed, and a second audio
-        // channel two seconds out of step with the first is worse than
-        // silence. This is the same request shape a share picked without its
-        // own audio already produces in production.
-        encodingOptions: rungEncodingOptions(CAMERA_RUNG),
+        videoTrackId: wantedVideo ?? undefined,
+        // ABSENT UNLESS `LIVE_HLS_VOICE_TRACK` FOUND ONE. The pre-2026-09-13
+        // shape (`wantedAudio` null) is exactly the old "no audio track at
+        // all" request: the audience's sound comes off the main stream, and a
+        // second audio channel two seconds out of step with the first is
+        // worse than silence. With the flag on and a mic to attach, this is
+        // the presenter's OWN voice — the one thing `hlsUrl`'s film audio no
+        // longer carries once they pick "separada" — never a duplicate of it.
+        audioTrackId: wantedAudio ?? undefined,
+        encodingOptions: rungEncodingOptions(rung),
       },
     );
     egressId = started.egressId;
@@ -3273,7 +3566,12 @@ async function reconcileCameraEgress(
   // queue keeps another RECONCILE from running concurrently, but the health
   // monitor is a separate timer and is not, so this is the belt to that
   // brace.
-  if (!cameraStillWanted(channelId, room, startedAt)) {
+  if (
+    !cameraStillWanted(channelId, room, startedAt, {
+      hasVideo: Boolean(wantedVideo),
+      hasAudio: Boolean(wantedAudio),
+    })
+  ) {
     await stopEgressById(egressId, channelId);
     return;
   }
@@ -3291,38 +3589,55 @@ async function reconcileCameraEgress(
     egressId,
     CAMERA_RUNG_NAME,
     room.stream.presenterPeerId,
-    wanted,
-    // Reopen: the camera is the one rendition that starts and stops INSIDE a
+    // Both sids, in their own columns, so a restart can adopt the EXACT
+    // shape this attempt started rather than reconstructing it from one id
+    // — see `audio_track_id` in `schema.sql` and `adoptCameraEgress`.
+    // `""` for video only when this is an audio-only (`VOICE_RUNG`) slot;
+    // the column stays nullable in shape, this call site's own contract does
+    // not.
+    wantedVideo ?? "",
+    // Reopen: this slot is the one rendition that starts and stops INSIDE a
     // session, so the second time round it lands on a row it already ended.
     true,
+    wantedAudio,
   );
   if (!recorded) {
     await stopEgressById(egressId, channelId);
     return;
   }
-  // The room may have moved on again — or the camera may have been disabled,
-  // or the slot claimed by something else — while that write was in flight.
-  // THIS is the check that stops a camera turned off mid-write from being
-  // resurrected: `LIVE_HLS_CAMERA` flipping, or `room.camera` already holding
-  // something, both fail it now, where the old version only checked room and
-  // film-session identity.
-  if (!cameraStillWanted(channelId, room, startedAt)) {
+  // The room may have moved on again — or the slot may have been disabled, or
+  // claimed by something else — while that write was in flight. THIS is the
+  // check that stops a slot turned off mid-write from being resurrected:
+  // `LIVE_HLS_CAMERA` (or `LIVE_HLS_VOICE_TRACK`) flipping, or `room.camera`
+  // already holding something, both fail it now, where the old version only
+  // checked room and film-session identity.
+  if (
+    !cameraStillWanted(channelId, room, startedAt, {
+      hasVideo: Boolean(wantedVideo),
+      hasAudio: Boolean(wantedAudio),
+    })
+  ) {
     await stopEgressById(egressId, channelId);
     return;
   }
   room.camera = {
-    rung: CAMERA_RUNG,
+    rung,
     egressId,
     startedAtMs: Date.now(),
     progress: null,
-    cameraTrackId: wanted,
+    cameraTrackId: wantedVideo,
+    audioTrackId: wantedAudio,
   };
-  room.stream = withCameraUrl(room.stream, channelId);
+  room.stream = withCameraUrl(room.stream, channelId, {
+    hasVideo: Boolean(wantedVideo),
+    hasVoiceAudio: Boolean(wantedAudio),
+  });
   logEvent("voice.hlsCameraStarted", {
     channelId,
     egressId,
     startedAt,
-    cameraTrackId: wanted,
+    cameraTrackId: wantedVideo,
+    audioTrackId: wantedAudio,
     boxMbps: Math.round(decision.boxMbps),
   });
 }
@@ -3382,6 +3697,8 @@ async function readSfuLoad(reader: LiveHlsSfuLoadReader): Promise<number> {
 interface LiveHlsReconcileResult {
   stream: LiveHlsStream | null;
   cameraTrackId?: string | null;
+  /** Same optional-vs-null convention as `cameraTrackId`, for the mic. */
+  voiceTrackId?: string | null;
 }
 
 async function startRoom(
@@ -3598,7 +3915,7 @@ async function startRoom(
   // for `reconcileLiveHls` to reconcile as the NEXT link of this channel's own
   // serialisation queue: chained, so it can never overlap a later push's own
   // camera work for this channel, but never awaited by the film path either.
-  return { stream, cameraTrackId: tracks.cameraTrackId ?? null };
+  return { stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
 }
 
 /**
@@ -3641,7 +3958,11 @@ export function reconcileLiveHls(
     .then((result) =>
       result.cameraTrackId === undefined
         ? undefined
-        : reconcileCameraEgress(channelId, result.cameraTrackId),
+        : reconcileCameraEgress(
+            channelId,
+            result.cameraTrackId,
+            result.voiceTrackId ?? null,
+          ),
     )
     .catch((error: unknown) => {
       logEvent("voice.hlsCameraReconcileFailed", {
@@ -3705,7 +4026,7 @@ async function reconcileLiveHlsNow(
       // transcode. It reuses the `listParticipants` call above, so it costs
       // no extra RPC. The camera itself is reconciled by the caller, as the
       // next link of the queue — never here.
-      return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null };
+      return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
     }
     logEvent("voice.hlsTrackReplaced", {
       channelId,
@@ -3740,7 +4061,7 @@ async function reconcileLiveHlsNow(
       // The reconnect republished their camera on a fresh sid, so the running
       // camera egress is bound to a dead track. Same reasoning as the share's
       // `videoTrackId` comparison directly above; reconciled by the caller.
-      return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null };
+      return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
     }
     await stopRoom(channelId, "presenter-changed");
   }

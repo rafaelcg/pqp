@@ -3810,6 +3810,15 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_channel_prefix
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS presenter_peer_id TEXT;
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS video_track_id TEXT;
 
+-- LIVE_HLS_VOICE_TRACK: the camera/voice slot's SEPARATE audio sid, when it
+-- has one (CAMERA_RUNG_WITH_VOICE or VOICE_RUNG). NULL for every ladder rung
+-- and for a plain, silent CAMERA_RUNG. Without this column a restart could
+-- only adopt a voice-carrying slot by guessing which of its two track ids
+-- video_track_id held, which is what left an adopted VOICE_RUNG mislabelled
+-- as a silent camera row until the next reconcile forced a restart to fix
+-- it — see the comment on adoptCameraEgress in hls-egress.ts.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS audio_track_id TEXT;
+
 -- The boot reconcile looks a session up by the egress the media server reports.
 CREATE INDEX IF NOT EXISTS idx_hls_sessions_egress
   ON hls_sessions (egress_id)

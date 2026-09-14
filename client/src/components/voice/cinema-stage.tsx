@@ -19,6 +19,8 @@ import { cn } from "@/lib/utils";
 export function CinemaStage({
   hlsUrl,
   cameraHlsUrl = null,
+  cameraHasVideo = true,
+  cameraHasVoiceAudio = false,
   delaySeconds,
   mediaTitle,
   communityName,
@@ -34,6 +36,10 @@ export function CinemaStage({
   hlsUrl: string;
   /** The presenter's camera, floated in a corner of the film. */
   cameraHlsUrl?: string | null;
+  /** Whether `cameraHlsUrl` carries a picture. See `watch-stage.tsx`. */
+  cameraHasVideo?: boolean;
+  /** Whether `cameraHlsUrl` carries the presenter's mic. See `watch-stage.tsx`. */
+  cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
   mediaTitle?: string;
   communityName?: string | null;
@@ -64,6 +70,8 @@ export function CinemaStage({
       <HlsWatchPlayer
         src={hlsUrl}
         cameraSrc={cameraHlsUrl}
+        cameraHasVideo={cameraHasVideo}
+        cameraHasVoiceAudio={cameraHasVoiceAudio}
         delaySeconds={delaySeconds}
         mediaTitle={mediaTitle}
         communityName={communityName}

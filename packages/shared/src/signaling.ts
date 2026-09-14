@@ -749,6 +749,32 @@ export const setRaisedHandMessageSchema = z.object({
 
 export type SetRaisedHandMessage = z.infer<typeof setRaisedHandMessageSchema>;
 
+/**
+ * `LIVE_HLS_VOICE_TRACK`'s "separada" declaration, from the presenter to the
+ * server, the same shape `set-camera` already is for the camera.
+ *
+ * WHY THE SERVER NEEDS THIS AT ALL, RATHER THAN JUST WATCHING FOR THE
+ * `voice-track` PUBLICATION. `pickScreenTracks` finding a `voice-track`-named
+ * track is real evidence the client meant to attach it, but a Farol review
+ * asked for a second, explicit signal precisely because a publication is a
+ * fact about LiveKit's state, not a fact about the presenter's CURRENT
+ * choice — it can outlive a mode the presenter has since turned off (a
+ * pending unpublish, a dropped frame) or arrive on a session that never
+ * gets to declare it at all. This message is the presenter's own word for
+ * it, read alongside the track: `reconcileCameraEgress` attaches the mic
+ * only when BOTH say so. Sent whenever `effectiveVoiceSeparated()` changes
+ * (`syncVoiceTrackPublication` in `use-voice.ts`), paired with the publish/
+ * unpublish call on the same transition.
+ */
+export const setVoiceTrackModeMessageSchema = z.object({
+  type: z.literal("set-voice-track-mode"),
+  separated: z.boolean(),
+});
+
+export type SetVoiceTrackModeMessage = z.infer<
+  typeof setVoiceTrackModeMessageSchema
+>;
+
 export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   joinVoiceRoomMessageSchema,
   leaveVoiceRoomMessageSchema,
@@ -766,6 +792,7 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setRaisedHandMessageSchema,
   // --- watch party ---
   setWatchPartyMessageSchema,
+  setVoiceTrackModeMessageSchema,
   // --- music queue ---
   setMusicMessageSchema,
   // --- live reactions ---

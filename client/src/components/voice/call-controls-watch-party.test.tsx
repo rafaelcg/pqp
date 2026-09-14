@@ -65,6 +65,7 @@ const idle: VoiceState = {
   isSharingScreen: false,
   isSharingMic: false,
   micInStream: true,
+  voiceTrackMode: "junto",
   screenSharePeerIds: [],
   cameraPeerIds: [],
   focusedScreenPeerId: null,

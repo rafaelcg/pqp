@@ -56,6 +56,8 @@ import { LivePill } from "@/components/watch-party/live-pill";
 import { browserShareCapabilities, type ShareOutcome } from "@/lib/share-handle";
 import { shareWatchParty, watchPartyShareUrl } from "@/lib/share-watch-party";
 import { WatchPartyTransmission } from "@/components/watch-party/watch-party-transmission";
+import { VoiceTrackModeToggle } from "@/components/watch-party/voice-track-mode-toggle";
+import type { VoiceTrackMode } from "@/lib/voice-track-mode";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { supportsScreenShare } from "@/components/voice/capabilities";
@@ -198,6 +200,15 @@ export interface WatchPartyPanelProps {
   /** "Meu mic vai no stream", the standing preference, and the switch for it. */
   micInStream?: boolean;
   onMicInStreamChange?: (on: boolean) => void;
+  /**
+   * "Voz: junto com o filme / separada" (`LIVE_HLS_VOICE_TRACK`). Shown only
+   * when both are given: the mode itself and this deployment's own answer on
+   * whether the flag is on (`useLiveHlsConfig(serverId)?.voiceTrack`) — see
+   * `VoiceTrackModeToggle`.
+   */
+  voiceTrackMode?: VoiceTrackMode;
+  onVoiceTrackModeChange?: (mode: VoiceTrackMode) => void;
+  voiceTrackAvailable?: boolean;
   /** Apply a mic-gain choice to the running mix at once. See `StreamMixControl`. */
   onMicGainChange?: (value: number) => void;
   /** Same as `onMicGainChange`, for the display (tab-audio) branch. */
@@ -553,6 +564,14 @@ function WatchPartyOptionsDialog({
               />
             </div>
           </OptionGroup>
+        )}
+        {/* Mount point only — the control itself lives in its own component
+            so it survives PR 538's rewrite of this file. */}
+        {props.onVoiceTrackModeChange && props.voiceTrackAvailable && (
+          <VoiceTrackModeToggle
+            mode={props.voiceTrackMode ?? "junto"}
+            onChange={props.onVoiceTrackModeChange}
+          />
         )}
         {/* Mid-show, and it is the same control the setup surface had. A
             co-host promoted here is granted SPEAK on the spot by the server

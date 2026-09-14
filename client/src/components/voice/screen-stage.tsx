@@ -21,6 +21,10 @@ export interface ScreenShareTile {
    * it: a webcam inside a grid tile is a picture in a picture in a picture.
    */
   cameraHlsUrl?: string | null;
+  /** Whether `cameraHlsUrl` carries a picture. Defaults true when omitted. */
+  cameraHasVideo?: boolean;
+  /** Whether `cameraHlsUrl` carries the presenter's mic (`LIVE_HLS_VOICE_TRACK`). */
+  cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
   presenterName: string;
   isSelf: boolean;
@@ -48,6 +52,8 @@ export function collectScreenTiles(args: {
   liveStream?: {
     hlsUrl: string;
     cameraHlsUrl?: string;
+    cameraHasVideo?: boolean;
+    cameraHasVoiceAudio?: boolean;
     presenterPeerId: string;
     delaySeconds?: number;
   } | null;
@@ -58,9 +64,17 @@ export function collectScreenTiles(args: {
         ? {
             hlsUrl: args.liveStream.hlsUrl,
             cameraHlsUrl: args.liveStream.cameraHlsUrl ?? null,
+            cameraHasVideo: args.liveStream.cameraHasVideo,
+            cameraHasVoiceAudio: args.liveStream.cameraHasVoiceAudio,
             delaySeconds: args.liveStream.delaySeconds,
           }
-        : { hlsUrl: null, cameraHlsUrl: null, delaySeconds: undefined };
+        : {
+            hlsUrl: null,
+            cameraHlsUrl: null,
+            cameraHasVideo: undefined,
+            cameraHasVoiceAudio: undefined,
+            delaySeconds: undefined,
+          };
     if (peerId === args.localPeerId) {
       return {
         peerId,
@@ -81,6 +95,8 @@ export function collectScreenTiles(args: {
       stream: remote?.screenStream ?? null,
       hlsUrl: hls.hlsUrl,
       cameraHlsUrl: hls.cameraHlsUrl,
+      cameraHasVideo: hls.cameraHasVideo,
+      cameraHasVoiceAudio: hls.cameraHasVoiceAudio,
       delaySeconds: hls.delaySeconds,
       presenterName: remote?.displayName ?? args.fallbackName,
       isSelf: false,

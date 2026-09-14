@@ -11,11 +11,13 @@ import {
   resetLiveHlsForTests,
   setLiveHlsChangeListener,
   setLiveHlsTestHooks,
+  setVoiceTrackSeparated,
 } from "./hls-egress.js";
 import {
   CAMERA_RUNG_NAME,
   HLS_CAMERA_MBPS,
   HLS_RUNG_MBPS,
+  HLS_VOICE_ONLY_MBPS,
   LADDER_RUNGS,
 } from "./hls-ladder.js";
 
@@ -101,6 +103,7 @@ function disableHls() {
     "LIVE_HLS_S3_ENDPOINT",
     "LIVE_HLS_LADDER",
     "LIVE_HLS_CAMERA",
+    "LIVE_HLS_VOICE_TRACK",
     "LIVE_HLS_REAP_ORPHANS",
     "VOICE_PROMOTION_MAX_SFU_MBPS",
     "LIVE_HLS_SIGNED_URLS",
@@ -152,6 +155,8 @@ function fakeLiveKit() {
 
 /** What the SFU reports for the presenter, camera optional. */
 let cameraTrackId: string | null = null;
+/** The sharer's ordinary microphone, optional (`LIVE_HLS_VOICE_TRACK`). */
+let voiceTrackId: string | null = null;
 
 function install(lk: ReturnType<typeof fakeLiveKit>) {
   setLiveHlsTestHooks({
@@ -159,6 +164,7 @@ function install(lk: ReturnType<typeof fakeLiveKit>) {
     findTracks: async () => ({
       videoTrackId: "TR_SCREEN",
       ...(cameraTrackId ? { cameraTrackId } : {}),
+      ...(voiceTrackId ? { voiceTrackId } : {}),
     }),
   });
 }
@@ -197,6 +203,7 @@ beforeEach(() => {
   resetLiveHlsForTests();
   disableHls();
   cameraTrackId = null;
+  voiceTrackId = null;
   liveSessionChannelIds.ids = null;
   logEvent.mockClear();
   query.mockClear();
@@ -895,6 +902,120 @@ describe("adopting a camera across a deploy", () => {
     ).toBeNull();
     expect(liveHlsActivity().cameraSessions).toBe(0);
   });
+
+  /**
+   * BEFORE `audio_track_id` EXISTED, an adopted voice-only egress had
+   * nowhere to keep its mic sid but `video_track_id`, so it came back
+   * mislabelled as a silent camera row and cost one extra restart on the
+   * very next reconcile tick to self-correct. This is what that fix buys:
+   * the exact shape, restored, not guessed.
+   */
+  it("restores a camera+voice egress with both track ids and the right flags", () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const startedAt = 1_757_000_000_000;
+    adoptLiveHlsSession({
+      channelId: CHANNEL,
+      egressId: "EG_1",
+      startedAt,
+      presenterPeerId: "peer-1",
+      videoTrackId: "TR_SCREEN",
+      rung: "720p30",
+    });
+    const adopted = adoptLiveHlsSession({
+      channelId: CHANNEL,
+      egressId: "EG_2",
+      startedAt,
+      presenterPeerId: "peer-1",
+      videoTrackId: "TR_CAM",
+      audioTrackId: "TR_MIC",
+      rung: CAMERA_RUNG_NAME,
+    });
+
+    expect(adopted?.cameraHasVideo).toBe(true);
+    expect(adopted?.cameraHasVoiceAudio).toBe(true);
+  });
+
+  it("restores a voice-only egress as audio-only, not as a silent camera", () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const startedAt = 1_757_000_000_000;
+    adoptLiveHlsSession({
+      channelId: CHANNEL,
+      egressId: "EG_1",
+      startedAt,
+      presenterPeerId: "peer-1",
+      videoTrackId: "TR_SCREEN",
+      rung: "720p30",
+    });
+    const adopted = adoptLiveHlsSession({
+      channelId: CHANNEL,
+      egressId: "EG_2",
+      startedAt,
+      presenterPeerId: "peer-1",
+      // No camera: the row's own `video_track_id` is empty for this shape.
+      videoTrackId: "",
+      audioTrackId: "TR_MIC",
+      rung: CAMERA_RUNG_NAME,
+    });
+
+    expect(adopted?.cameraHlsUrl).toBeDefined();
+    expect(adopted?.cameraHasVideo).toBe(false);
+    expect(adopted?.cameraHasVoiceAudio).toBe(true);
+  });
+
+  it("refuses to adopt a voice-only row when LIVE_HLS_VOICE_TRACK is off, even with LIVE_HLS_CAMERA on", () => {
+    enableHls();
+    // The flag governing THIS row's shape, not the camera one — a voice-only
+    // row must be judged against LIVE_HLS_VOICE_TRACK, never LIVE_HLS_CAMERA.
+    const startedAt = 1_757_000_000_000;
+    adoptLiveHlsSession({
+      channelId: CHANNEL,
+      egressId: "EG_1",
+      startedAt,
+      presenterPeerId: "peer-1",
+      videoTrackId: "TR_SCREEN",
+      rung: "720p30",
+    });
+    expect(
+      adoptLiveHlsSession({
+        channelId: CHANNEL,
+        egressId: "EG_2",
+        startedAt,
+        presenterPeerId: "peer-1",
+        videoTrackId: "",
+        audioTrackId: "TR_MIC",
+        rung: CAMERA_RUNG_NAME,
+      }),
+    ).toBeNull();
+  });
+
+  it("can adopt a voice-only row on a deployment with the camera flag off", () => {
+    enableHls();
+    process.env.LIVE_HLS_CAMERA = "false";
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const startedAt = 1_757_000_000_000;
+    adoptLiveHlsSession({
+      channelId: CHANNEL,
+      egressId: "EG_1",
+      startedAt,
+      presenterPeerId: "peer-1",
+      videoTrackId: "TR_SCREEN",
+      rung: "720p30",
+    });
+    const adopted = adoptLiveHlsSession({
+      channelId: CHANNEL,
+      egressId: "EG_2",
+      startedAt,
+      presenterPeerId: "peer-1",
+      videoTrackId: "",
+      audioTrackId: "TR_MIC",
+      rung: CAMERA_RUNG_NAME,
+    });
+
+    expect(adopted?.cameraHasVideo).toBe(false);
+    expect(adopted?.cameraHasVoiceAudio).toBe(true);
+  });
 });
 
 describe("pickScreenTracks and the camera", () => {
@@ -987,5 +1108,303 @@ describe("box budget: a camera must never be priced twice", () => {
       "voice.hlsCameraRefused",
       expect.anything(),
     );
+  });
+});
+
+/**
+ * `LIVE_HLS_VOICE_TRACK`: THE PRESENTER'S VOICE, RIDING THE SAME SLOT.
+ *
+ * Dark by default — every case above this block already pins that a camera
+ * with a mic beside it still starts video-only when the flag is off, because
+ * `findTracks` fixtures across this whole file never set `voiceTrackId` unless
+ * a test in THIS block does. What is pinned here is the flag's own half: the
+ * mic gets attached to the camera when there is one, an audio-only rung
+ * starts when there is not, and turning the flag off mid-party tears either
+ * back down to the pre-2026-09-13 shape rather than leaving a stale audio
+ * track on a dead egress.
+ */
+describe("LIVE_HLS_VOICE_TRACK: the presenter's voice on the camera/voice slot", () => {
+  it("stays video-only, silent, exactly as before, while the flag is off", async () => {
+    enableHls();
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
+
+    expect(startedWith(lk)[1]).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM" }),
+    );
+    expect(startedWith(lk)[1]!.audioTrackId).toBeUndefined();
+    expect(stream?.cameraHasVoiceAudio).toBeFalsy();
+  });
+
+  it("attaches the sharer's ordinary microphone to the camera, once the flag is on", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
+
+    expect(startedWith(lk)[1]).toEqual(
+      expect.objectContaining({
+        videoTrackId: "TR_CAM",
+        audioTrackId: "TR_MIC",
+        encodingOptions: expect.objectContaining({ audioBitrate: expect.any(Number) }),
+      }),
+    );
+    expect(startedWith(lk)[1]!.encodingOptions!.audioBitrate).toBeGreaterThan(0);
+    // SAME SLOT, SAME URL. A viewer already holding `cameraHlsUrl` must not
+    // see it move just because the presenter's mic joined it.
+    expect(stream?.cameraHlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}/${CAMERA_RUNG_NAME}`,
+    );
+    expect(stream?.cameraHasVideo).toBe(true);
+    expect(stream?.cameraHasVoiceAudio).toBe(true);
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+  });
+
+  it("starts an audio-only rung when the presenter has no camera but shares their voice", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    const lk = fakeLiveKit();
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
+
+    expect(lk.start).toHaveBeenCalledTimes(2);
+    expect(startedWith(lk)[1]).toEqual(
+      expect.objectContaining({ audioTrackId: "TR_MIC" }),
+    );
+    // NO VIDEO TRACK AT ALL: there is no camera to bind one to.
+    expect(startedWith(lk)[1]!.videoTrackId).toBeUndefined();
+    expect(stream?.cameraHlsUrl).toBeDefined();
+    expect(stream?.cameraHasVideo).toBe(false);
+    expect(stream?.cameraHasVoiceAudio).toBe(true);
+  });
+
+  it("costs the box the cheaper voice-only rate with no camera, not a camera's rate", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    const lk = fakeLiveKit();
+    voiceTrackId = "TR_MIC";
+    install(lk);
+    // Tight enough for the ladder rung plus a voice-only slot, not for a full
+    // camera slot on top of it.
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = String(
+      Math.round(HLS_RUNG_MBPS + HLS_VOICE_ONLY_MBPS * 2),
+    );
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsCameraRefused",
+      expect.anything(),
+    );
+  });
+
+  it("does nothing when the flag is on but the presenter shares no microphone", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const lk = fakeLiveKit();
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    // No camera, no mic: nothing to run beside the ladder rung.
+    expect(lk.start).toHaveBeenCalledTimes(1);
+    expect(liveHlsStreamFor(CHANNEL)?.cameraHlsUrl).toBeUndefined();
+  });
+
+  /**
+   * THE BUG A FAROL REVIEW CAUGHT: `wantedAudio` used to be derived from
+   * `LIVE_HLS_VOICE_TRACK` and the track's mere presence alone. Since the
+   * ordinary microphone publication (and, at the time, even the picker
+   * itself) does not know or care which mode the host is actually in, every
+   * flagged host with a mic got attached regardless of choosing "junto".
+   * `presenterWantsSeparatedVoice` (`setVoiceTrackSeparated`, sent by
+   * `set-voice-track-mode`) is the fix: the flag and the track existing are
+   * necessary but not sufficient — the presenter's OWN declaration has to
+   * agree too.
+   */
+  it("never attaches the mic on the flag and the track alone: the presenter's own declaration is required", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+    // Deliberately NOT calling setVoiceTrackSeparated: the flag is on and
+    // the named track exists (as it would if a publish raced a mode flip
+    // back to "junto"), but the presenter never said "separada".
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    const stream = liveHlsStreamFor(CHANNEL);
+
+    expect(startedWith(lk)[1]).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM" }),
+    );
+    expect(startedWith(lk)[1]!.audioTrackId).toBeUndefined();
+    expect(stream?.cameraHasVoiceAudio).toBeFalsy();
+  });
+
+  it("attaches the mic once the presenter's declaration arrives, without restarting for the track alone", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    // First reconcile: the track exists, the declaration does not yet.
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(startedWith(lk)[1]!.audioTrackId).toBeUndefined();
+    const egressCallsBeforeDeclaration = lk.start.mock.calls.length;
+
+    // The declaration arrives (the WS handler calling this after
+    // set-voice-track-mode). The NEXT reconcile is what picks it up — the
+    // same "next roster event" cadence set-camera already relies on.
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(startedWith(lk).at(-1)).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM", audioTrackId: "TR_MIC" }),
+    );
+    // Exactly one restart of the slot for the declaration landing — not the
+    // film's own ladder rung, which never had a reason to move.
+    expect(lk.start.mock.calls.length).toBe(egressCallsBeforeDeclaration + 1);
+  });
+
+  /**
+   * THE SECOND FAROL FINDING: a bare per-channel boolean survives the
+   * presenter who set it. If peer-1 declares "separada" and then hands the
+   * share to peer-2 (or simply leaves) without ever sending `separated:
+   * false`, a channel-keyed flag with no owner would credit peer-2 with a
+   * choice they never made. Storing the declaring peer's id fixes it: a
+   * declaration only counts for the room's CURRENT presenter.
+   */
+  it("a new presenter's own share starts silent until THEY declare separada, even if the last presenter never did 'junto'", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    // A fresh room where the ONLY declaration on file belongs to a peer
+    // who is not the one presenting now.
+    await reconcileLiveHls(CHANNEL, "peer-2", SERVER);
+    await flush();
+
+    expect(startedWith(lk).at(-1)).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM" }),
+    );
+    expect(startedWith(lk).at(-1)!.audioTrackId).toBeUndefined();
+    expect(liveHlsStreamFor(CHANNEL)?.cameraHasVoiceAudio).toBeFalsy();
+  });
+
+  it("clears a peer's own declaration on 'junto', but never clears somebody else's", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+
+    // A different peer's "junto" must not be able to erase peer-1's own
+    // standing declaration — the setter only clears an entry it owns.
+    setVoiceTrackSeparated(CHANNEL, "peer-2", false);
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(startedWith(lk).at(-1)!.audioTrackId).toBe("TR_MIC");
+  });
+
+  it("drops the mic and returns to a silent camera when the flag turns off mid-party", async () => {
+    enableHls();
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    const lk = fakeLiveKit();
+    cameraTrackId = "TR_CAM";
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+    expect(startedWith(lk)[1]!.audioTrackId).toBe("TR_MIC");
+
+    delete process.env.LIVE_HLS_VOICE_TRACK;
+    // A roster event / set-camera frame with nothing else changed still runs
+    // the reconcile, which is what an operator flipping the switch mid-party
+    // relies on: the next tick catches it, not a restart.
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(lk.start).toHaveBeenCalledTimes(3);
+    expect(startedWith(lk)[2]).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_CAM" }),
+    );
+    expect(startedWith(lk)[2]!.audioTrackId).toBeUndefined();
+    expect(liveHlsStreamFor(CHANNEL)?.cameraHasVoiceAudio).toBeFalsy();
+  });
+
+  it("advertises the flag through GET /api/live-hls/config, dark by default", async () => {
+    enableHls();
+    const { liveHlsConfig } = await import("./hls-egress.js");
+    expect(liveHlsConfig().voiceTrack).toBe(false);
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    expect(liveHlsConfig().voiceTrack).toBe(true);
+  });
+
+  /**
+   * THE BUG: a fresh voice-only start was judged, right after starting it,
+   * against `LIVE_HLS_CAMERA` — the WRONG flag for a slot with no video at
+   * all — so it started and then immediately stopped itself, and a
+   * presenter with no webcam could never use "separada" on a deployment
+   * that happened to have the camera switch off. `cameraStillWanted` now
+   * checks only the flag(s) the actual shape needs.
+   */
+  it("starts (and keeps) an audio-only rung when LIVE_HLS_CAMERA is off but LIVE_HLS_VOICE_TRACK is on", async () => {
+    enableHls();
+    process.env.LIVE_HLS_CAMERA = "false";
+    process.env.LIVE_HLS_VOICE_TRACK = "true";
+    setVoiceTrackSeparated(CHANNEL, "peer-1", true);
+    const lk = fakeLiveKit();
+    voiceTrackId = "TR_MIC";
+    install(lk);
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    await flush();
+
+    expect(lk.start).toHaveBeenCalledTimes(2);
+    // A stop-right-after-start would show up as a second stopEgress call for
+    // the same id, or the slot vanishing from liveHlsActivity.
+    expect(lk.stop).not.toHaveBeenCalled();
+    expect(liveHlsActivity().cameraSessions).toBe(1);
+    const stream = liveHlsStreamFor(CHANNEL);
+    expect(stream?.cameraHasVideo).toBe(false);
+    expect(stream?.cameraHasVoiceAudio).toBe(true);
   });
 });

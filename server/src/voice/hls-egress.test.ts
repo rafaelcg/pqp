@@ -161,6 +161,9 @@ describe("live HLS egress", () => {
       // `LIVE_HLS_MIC_ARCHIVE` is unset, which is every deployment: the host's
       // browser is told not to publish the extra track.
       micArchive: false,
+      // `LIVE_HLS_VOICE_TRACK` is unset too: the client offers no "voz
+      // separada" choice, so the screen mix keeps folding the mic in.
+      voiceTrack: false,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -510,6 +513,7 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -517,6 +521,7 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -524,6 +529,7 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
       });
     });
 
@@ -2199,7 +2205,10 @@ describe("the mic archive picker", () => {
     const picked = pickScreenTracks([
       { identity: "peer-host", tracks: [MIC, SCREEN] },
     ]);
-    expect(picked).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+    expect(picked).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+    });
     expect("micArchiveTrackId" in picked!).toBe(false);
   });
 
@@ -2218,7 +2227,10 @@ describe("the mic archive picker", () => {
         ],
         "peer-host",
       ),
-    ).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+    });
   });
 
   it("does not mistake it for the share's audio", () => {
@@ -2240,6 +2252,85 @@ describe("the mic archive picker", () => {
       videoTrackId: "TR_screen",
       audioTrackId: "TR_screen_audio",
       micArchiveTrackId: "TR_mic_archive",
+    });
+  });
+});
+
+/**
+ * `LIVE_HLS_VOICE_TRACK`'s "separada" signal: picked BY NAME, exactly like
+ * the archive above, and for a second reason on top of pitfall 14 — the
+ * sharer's ORDINARY microphone (source `Microphone`, no special name) exists
+ * whether or not "separada" is chosen, so picking it up by source alone
+ * would attach it regardless of the host's actual mode (the bug a Farol
+ * review caught on the first version of this feature: every flagged host
+ * with a mic got a voice egress, "junto" or not).
+ */
+describe("the voice-track picker", () => {
+  const SCREEN = { source: TrackSource.SCREEN_SHARE, sid: "TR_screen" };
+  /** What the host's ordinary microphone looks like on the wire. */
+  const MIC = { source: TrackSource.MICROPHONE, sid: "TR_mic", name: "mic" };
+  /** The "separada" publication: same source, told apart by name alone. */
+  const VOICE_TRACK = {
+    source: TrackSource.MICROPHONE,
+    sid: "TR_voice_track",
+    name: "voice-track",
+  };
+
+  it("picks the publication named voice-track, not the ordinary microphone beside it", () => {
+    expect(
+      pickScreenTracks([
+        { identity: "peer-host", tracks: [MIC, SCREEN, VOICE_TRACK] },
+      ]),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+      voiceTrackId: "TR_voice_track",
+    });
+  });
+
+  it("leaves the field off entirely when the host has not chosen separada", () => {
+    // The ordinary mic is right there, unmuted or not — neither is the
+    // signal. Only the distinctly-named publication is.
+    const picked = pickScreenTracks([
+      { identity: "peer-host", tracks: [MIC, SCREEN] },
+    ]);
+    expect(picked).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+    });
+    expect("voiceTrackId" in picked!).toBe(false);
+  });
+
+  it("never takes it from a participant who is not the sharer", () => {
+    expect(
+      pickScreenTracks(
+        [
+          { identity: "peer-host", tracks: [MIC, SCREEN] },
+          { identity: "peer-cohost", tracks: [VOICE_TRACK] },
+        ],
+        "peer-host",
+      ),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+    });
+  });
+
+  it("never confuses it with the mic-archive publication", () => {
+    const ARCHIVE = {
+      source: TrackSource.MICROPHONE,
+      sid: "TR_mic_archive",
+      name: "mic-archive",
+    };
+    expect(
+      pickScreenTracks([
+        { identity: "peer-host", tracks: [SCREEN, ARCHIVE, VOICE_TRACK] },
+      ]),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+      micArchiveTrackId: "TR_mic_archive",
+      voiceTrackId: "TR_voice_track",
     });
   });
 });

@@ -3,11 +3,14 @@ import {
   buildMasterPlaylist,
   CAMERA_RUNG,
   CAMERA_RUNG_NAME,
+  CAMERA_RUNG_WITH_VOICE,
+  VOICE_RUNG,
   decideCameraEgress,
   decideLadder,
   DEFAULT_MAX_LADDER_MBPS,
   HLS_CAMERA_MBPS,
   HLS_RUNG_MBPS,
+  HLS_VOICE_ONLY_MBPS,
   LADDER_RUNGS,
   ladderBudgetMbps,
   ladderMaxFramerate,
@@ -434,6 +437,90 @@ describe("decideCameraEgress", () => {
     // core, and the top of that range is what is charged.
     expect(HLS_CAMERA_MBPS).toBeLessThan(HLS_RUNG_MBPS / 3);
     expect(HLS_CAMERA_MBPS).toBeGreaterThan(0);
+  });
+
+  it("prices a voice-only slot well under a camera's own cost", () => {
+    // LIVE_HLS_VOICE_TRACK's audio-only shape (VOICE_RUNG, no camera
+    // published) has no frame to encode at all, so it must never be charged
+    // as if it were a webcam.
+    expect(HLS_VOICE_ONLY_MBPS).toBeLessThan(HLS_CAMERA_MBPS);
+    expect(HLS_VOICE_ONLY_MBPS).toBeGreaterThan(0);
+  });
+
+  it("defaults hasVideo to a camera's cost, unchanged for every caller before the flag", () => {
+    const withDefault = decideCameraEgress({
+      runningRungs: 0,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS,
+    });
+    const explicitVideo = decideCameraEgress({
+      runningRungs: 0,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS,
+      hasVideo: true,
+    });
+    expect(withDefault.boxMbps).toBe(explicitVideo.boxMbps);
+  });
+
+  it("charges the cheaper voice-only rate when hasVideo is false", () => {
+    const camera = decideCameraEgress({
+      runningRungs: 0,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS,
+      hasVideo: true,
+    });
+    const voiceOnly = decideCameraEgress({
+      runningRungs: 0,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS,
+      hasVideo: false,
+    });
+    expect(voiceOnly.boxMbps).toBeLessThan(camera.boxMbps);
+    expect(voiceOnly.boxMbps).toBeCloseTo(HLS_VOICE_ONLY_MBPS, 6);
+  });
+
+  it("can start a voice-only slot on a box a full camera would be refused on", () => {
+    // The whole point of pricing it separately: a box too tight for a 0.3-core
+    // webcam still has room for a 0.03-core voice-only rung.
+    const budget = HLS_RUNG_MBPS * 3 + HLS_CAMERA_MBPS * 0.5;
+    expect(
+      decideCameraEgress({
+        runningRungs: 3,
+        sfuLoadMbps: 0,
+        boxBudgetMbps: budget,
+        hasVideo: true,
+      }),
+    ).toMatchObject({ start: false, refusal: "box-budget" });
+    expect(
+      decideCameraEgress({
+        runningRungs: 3,
+        sfuLoadMbps: 0,
+        boxBudgetMbps: budget,
+        hasVideo: false,
+      }),
+    ).toMatchObject({ start: true, refusal: null });
+  });
+});
+
+describe("CAMERA_RUNG_WITH_VOICE and VOICE_RUNG", () => {
+  it("share CAMERA_RUNG_NAME with CAMERA_RUNG, so the slot's object prefix and playlist URL never move", () => {
+    // `RoomHls.camera` can hold any of the three shapes across the same
+    // party (mic added, camera turned off, both on) and the viewer-facing
+    // path must not change underneath them.
+    expect(CAMERA_RUNG_WITH_VOICE.name).toBe(CAMERA_RUNG_NAME);
+    expect(VOICE_RUNG.name).toBe(CAMERA_RUNG_NAME);
+  });
+
+  it("carries the camera's own picture plus a voice-sized audio bitrate", () => {
+    expect(CAMERA_RUNG_WITH_VOICE.width).toBe(CAMERA_RUNG.width);
+    expect(CAMERA_RUNG_WITH_VOICE.height).toBe(CAMERA_RUNG.height);
+    expect(CAMERA_RUNG_WITH_VOICE.videoKbps).toBe(CAMERA_RUNG.videoKbps);
+    expect(CAMERA_RUNG_WITH_VOICE.audioKbps).toBeGreaterThan(0);
+  });
+
+  it("is audio-only: no video bitrate to spend on a picture nobody published", () => {
+    expect(VOICE_RUNG.videoKbps).toBe(0);
+    expect(VOICE_RUNG.audioKbps).toBeGreaterThan(0);
   });
 });
 
