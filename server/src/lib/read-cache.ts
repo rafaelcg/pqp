@@ -198,30 +198,40 @@ function touch<T>(key: string, entry: Entry<T>): void {
 function revalidate<T>(
   key: string,
   loader: () => Promise<T>,
+  shouldCache: (value: T) => boolean,
 ): void {
   if (inflight.has(key)) {
     return;
   }
-  // `promise` is referenced inside its own `.then`/`.catch` below, which is
-  // fine — those only run once this assignment has completed — and it is
-  // exactly what makes the guard work: `inflight.get(key) === promise` asks
-  // "is this load still the one the map points to for this key", which is
-  // false when an `invalidate()` ran while this was in flight (it deletes
-  // the map entry, so nothing points to this promise any more) and a fresh
-  // load may since have taken the slot. Skipping the write in that case is
-  // the fix for the race Farol's review caught: without this guard, an
-  // invalidated load that finishes late writes its stale answer back in —
-  // and, since `inflight.delete(key)` was unconditional, could also delete
-  // the newer load's in-flight entry out from under it.
+  // The `inflight` cleanup runs INSIDE the same `.then`/`.catch` pair that
+  // settles `promise`, in the same microtask its own rejection reaches an
+  // awaiter — not a separate `.catch().finally()` chained after it. That
+  // used to add one extra microtask hop before the cleanup ran, which was
+  // enough for a caller that awaits `coalesce`, sees it reject, and retries
+  // in the very next line to find the just-rejected promise still sitting
+  // in `inflight` and join it — reading the same stale error a second time
+  // instead of starting a fresh load. `promise` is referenced inside its own
+  // `.then`/`.catch` below, which is fine — those only run once this
+  // assignment has completed — and it is exactly what makes the guard work:
+  // `inflight.get(key) === promise` asks "is this load still the one the
+  // map points to for this key", which is false when an `invalidate()` or
+  // `invalidateExact()` ran while this was in flight (both delete the map
+  // entry, so nothing points to this promise any more) and a fresh load may
+  // since have taken the slot. Skipping the write in that case is the fix
+  // for the race Farol's review caught: without this guard, an invalidated
+  // load that finishes late writes its stale answer back in — and, since
+  // `inflight.delete(key)` was unconditional, could also delete the newer
+  // load's in-flight entry out from under it.
   const promise: Promise<T> = loader()
     .then((value) => {
       if (inflight.get(key) === promise) {
         inflight.delete(key);
-        // A refresh that grew past `MAX_CACHEABLE_ROWS` is not written
-        // back — the stale entry already in `store` keeps answering hits
-        // until it ages into the doubly-stale miss path, same as any
+        // A refresh that grew past `MAX_CACHEABLE_ROWS`, or that `shouldCache`
+        // now refuses (see `coalesce`'s doc for why a caller would), is not
+        // written back — the stale entry already in `store` keeps answering
+        // hits until it ages into the doubly-stale miss path, same as any
         // other refresh failure.
-        if (isCacheable(value)) {
+        if (isCacheable(value) && shouldCache(value)) {
           touch(key, {
             value,
             storedAt: Date.now(),
@@ -264,11 +274,37 @@ function revalidate<T>(
  * per call site without a second cache instance; it is applied at both the
  * fresh/stale boundary and the stale/expired boundary (the stale window is
  * always one more `ttlMs`).
+ *
+ * `shouldCache`, when given, is consulted on every fresh load (miss or
+ * background revalidation) before the value is written to `store`; a `false`
+ * answer means the current caller (and anyone coalesced with it) still gets
+ * the value, it is simply never cached. This is for a value that is not
+ * merely large (`isCacheable` / `MAX_CACHEABLE_ROWS` already cover that) but
+ * WRONG to cache at all on this process: an in-progress, one-shot state that
+ * is about to change and, unlike everything else this module holds, is not
+ * safe to keep answering from *this instance's* memory once another instance
+ * has moved it on — `invalidateExact` only ever clears the process that calls
+ * it, never the cluster, so a value whose staleness other instances cannot
+ * see must not be cached at all rather than cached briefly. `age-gate.ts`'s
+ * `getAgeGateStatus` passes `(status) => status !== "pending"` for exactly
+ * this reason: `"passed"`/`"blocked"` are permanent per account (the gate is
+ * one-shot, `recordAgeDeclaration`'s `WHERE age_checked_at IS NULL`) so caching
+ * them is always correct, but `"pending"` can flip to one of those on ANY
+ * instance at ANY moment, and a multi-machine deploy has no way to tell this
+ * instance's cache that it did. Caching it anyway is exactly what produced
+ * the 2026-09-14 M6 rehearsal's WS `4401`s: a fresh account's `GET /api/me`
+ * cached `"pending"` on whichever machine served it, the age declaration that
+ * followed landed on (and only invalidated) a different machine, and the `ws`
+ * auth frame — often seconds later, on yet another connection — hit the
+ * first machine again inside the 30s TTL and read the stale `"pending"`,
+ * closing a real, just-declared account's socket as unauthorized. Defaults to
+ * "always cache" so every other call site is unaffected.
  */
 export async function coalesce<T>(
   key: string,
   ttlMs: number = DEFAULT_TTL_MS,
   loader: () => Promise<T>,
+  shouldCache: (value: T) => boolean = () => true,
 ): Promise<T> {
   if (!readCacheEnabled()) {
     return loader();
@@ -286,7 +322,7 @@ export async function coalesce<T>(
     if (age < ttlMs * 2) {
       metrics.staleServed += 1;
       touch(key, entry);
-      revalidate(key, loader);
+      revalidate(key, loader, shouldCache);
       return entry.value;
     }
     // Doubly stale: treat exactly like a miss below, including sharing an
@@ -302,22 +338,23 @@ export async function coalesce<T>(
 
   metrics.misses += 1;
   // Same "am I still the load this key points to" guard as `revalidate`,
-  // and for the same reason: `invalidate()` may run while this is in
-  // flight (an edit landing mid-fetch, say), clear this key's `inflight`
-  // entry, and let a second, fresher load start and even finish before
-  // this one does. Without the guard, this one's `.then` would overwrite
-  // that fresher answer with data read before the write — exactly the
-  // pre-edit-text-survives-the-edit bug the review flagged — and its
-  // unconditional `inflight.delete` would remove the newer load's entry
-  // too, letting a THIRD caller start a third redundant query.
+  // and for the same reason: `invalidate()` / `invalidateExact()` may run
+  // while this is in flight (an edit landing mid-fetch, say), clear this
+  // key's `inflight` entry, and let a second, fresher load start and even
+  // finish before this one does. Without the guard, this one's `.then`
+  // would overwrite that fresher answer with data read before the write —
+  // exactly the pre-edit-text-survives-the-edit bug the review flagged —
+  // and its unconditional `inflight.delete` would remove the newer load's
+  // entry too, letting a THIRD caller start a third redundant query.
   const promise: Promise<T> = loader()
     .then((value) => {
       if (inflight.get(key) === promise) {
         inflight.delete(key);
-        // Over `MAX_CACHEABLE_ROWS`: every current and coalesced caller
-        // still gets this answer (the `.then` return below), it is simply
-        // never written to `store` — the next call is a fresh miss again.
-        if (isCacheable(value)) {
+        // Over `MAX_CACHEABLE_ROWS`, or refused by `shouldCache`: every
+        // current and coalesced caller still gets this answer (the `.then`
+        // return below), it is simply never written to `store` — the next
+        // call is a fresh miss again.
+        if (isCacheable(value) && shouldCache(value)) {
           touch(key, { value, storedAt: Date.now(), size: estimateSize(value) });
         }
       }
@@ -334,11 +371,26 @@ export async function coalesce<T>(
 }
 
 /**
+ * Drop one exact key (and any in-flight load for it) in O(1) — no scan.
+ * Use this whenever the caller already holds the complete key, which is the
+ * common case (one channel's message page, one server's member list, one
+ * user's age-gate status): `invalidate(prefix)` below still works for an
+ * exact key too, but it scans every entry to find matches by string prefix,
+ * which is wasted work once the key is already known in full.
+ */
+export function invalidateExact(key: string): void {
+  removeEntry(key);
+  inflight.delete(key);
+}
+
+/**
  * Drop every cached entry (and any in-flight load) whose key starts with
- * `prefix`. Pass a full key for a single-entry invalidation (the common
- * case: one channel's message page, one server's channel list) or a shared
- * prefix to drop a family of keys at once (every page-size variant of one
- * channel's latest page, say).
+ * `prefix`. For a genuine family of keys — every user's cached role in one
+ * server, every viewer's cached access to one channel, every page-size
+ * variant of one channel's latest page — this is the only option: nothing
+ * about `prefix` names which of those keys exist. Prefer `invalidateExact`
+ * above when the caller already has one complete key; this scans the whole
+ * cache (bounded by `MAX_ENTRIES`) on every call.
  */
 export function invalidate(prefix: string): void {
   for (const key of [...store.keys()]) {

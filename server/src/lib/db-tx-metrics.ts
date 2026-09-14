@@ -39,10 +39,41 @@ export function dbTxByPath(): Record<string, number> {
   return Object.fromEntries(counts);
 }
 
+// ------------------------------------------------------- db.queries.total
+//
+// `db.tx.byPath` above counts a handful of call sites this file was written
+// for. This half counts EVERY query the app issues through `getPool()`,
+// wrapped once at the pool itself (`db.ts`'s `getPool`), which is what makes
+// "did the 2026-09-13 cache work actually cut the call volume" a number
+// instead of a guess. `byRoute` breaks that same total down by the HTTP
+// route the query happened inside (`lib/route-context.ts`) — a WS handler, a
+// cold job, or anything at boot has no route and is counted under "other".
+
+let totalQueries = 0;
+const queriesByRoute = new Map<string, number>();
+
+/** Record one Postgres round trip, full stop — called from the pool wrapper
+ *  in `db.ts`, not from individual call sites. */
+export function noteDbQuery(route: string): void {
+  totalQueries += 1;
+  queriesByRoute.set(route, (queriesByRoute.get(route) ?? 0) + 1);
+}
+
+export function dbQueryTotal(): number {
+  return totalQueries;
+}
+
+/** Snapshot of every route counted so far, for `GET /api/admin/metrics`. */
+export function dbQueriesByRoute(): Record<string, number> {
+  return Object.fromEntries(queriesByRoute);
+}
+
 /** Test seam. Also the only correct answer to a raw `TRUNCATE` of nothing —
  *  there is no table here, but a suite that wants a clean slate calls this. */
 export function resetDbTxMetrics(): void {
   counts.clear();
+  totalQueries = 0;
+  queriesByRoute.clear();
 }
 
 /**

@@ -27,6 +27,7 @@ const MEDIA_FILES = [
   "viewer-video-quality.spec.ts",
   "voice-channel-slow-mode.spec.ts",
   "voice-lobby.spec.ts",
+  "voice-move-speaking-ring.spec.ts",
   "voice-state-badges.spec.ts",
 ] as const;
 

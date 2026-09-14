@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/utils";
+import {
+  LIVE_HLS_TELEMETRY_FLUSH_MS,
+  type LiveHlsTelemetryBatch,
+  type LiveHlsTelemetrySample,
+} from "@pqp/shared";
 
 const HLS_PLAYLIST_PROXY_PATH = "/api/voice/hls-playlist/";
 
@@ -186,6 +191,25 @@ export function withFreshHlsToken(url: string, freshUrl: string): string {
 }
 
 /**
+ * The `?t=` HLS viewer token a playlist URL carries, or null. This is the
+ * SAME capability `hasHlsViewerToken` above only checks for the presence of
+ * -- here it is read out so `hls-watch-player.tsx` can hand it to the
+ * telemetry route, which verifies it server-side and uses the channel/session
+ * it names instead of trusting a client-typed `sessionId` string (Farol
+ * finding, 2026-09-13: "authenticated users can submit telemetry for
+ * arbitrary sessions"). Null for a URL with no query string at all, or one
+ * whose query does not carry `t` -- the `LIVE_HLS_SIGNED_URLS=false`
+ * configuration, which mints no such token (`stampViewerStream`).
+ */
+export function hlsViewerTokenFromUrl(url: string): string | null {
+  const query = url.indexOf("?");
+  if (query === -1) {
+    return null;
+  }
+  return new URLSearchParams(url.slice(query + 1)).get("t");
+}
+
+/**
  * Whether a URL hls.js is about to fetch is our own signed playlist proxy --
  * the one request in the whole HLS pipeline that needs a Bearer header. Every
  * segment/media URL the proxy hands back is already an absolute, presigned
@@ -332,4 +356,300 @@ export function isAutoplayRefusal(error: unknown): boolean {
     "name" in error &&
     (error as { name: unknown }).name === "NotAllowedError"
   );
+}
+
+// ---------------------------------------------------------------------------
+// BROADCAST_PIPELINE B0.3/B0.5: encode-to-paint latency and its telemetry.
+// ---------------------------------------------------------------------------
+
+/**
+ * A `#EXT-X-PQP-SESSION`-carrying `hls_sessions.id` would be the honest join
+ * key for a telemetry batch (the same id `voice.hls*` log lines carry, since
+ * B0.4), but hls.js's manifest parser does not expose our own custom comment
+ * tags anywhere on the events this player already listens to, and reaching it
+ * would mean either a second, redundant playlist fetch on this component's
+ * own initiative or a new prop threaded through every caller of
+ * `HlsWatchPlayer` -- including one in `components/watch-party/`, which this
+ * change does not touch. So this is the fallback the schema's `sessionId`
+ * field allows (`z.string().min(1).max(64)`, no format requirement): the
+ * channel and `startedAt` the player is actually attached to, which is
+ * EXACTLY what names one party session everywhere else in this codebase
+ * predates B0.4 (`sessionPrefixPattern`, every cache key in
+ * `hls-playlist-proxy.ts`). It groups a viewer's samples by party correctly;
+ * it is just not literally the same string as the DB row id. Wiring the real
+ * id through requires a `LiveHlsStream.sessionId` field and a prop on every
+ * caller, left for a follow-up.
+ */
+const HLS_PLAYLIST_SESSION_KEY_RE =
+  /\/api\/voice\/hls-playlist\/([^/?]+)\/(\d+)(?:\/[^/?]+)?/;
+
+export function hlsTelemetrySessionKey(url: string): string | null {
+  const match = HLS_PLAYLIST_SESSION_KEY_RE.exec(url);
+  if (match) {
+    return `${match[1]}:${match[2]}`;
+  }
+  // Not our proxy: `LIVE_HLS_SIGNED_URLS=false` hands out the raw public
+  // bucket URL directly (a supported configuration -- see `resolveHlsUrl`),
+  // and that stream is just as worth measuring. `hlsSessionKey` already
+  // strips the query string, which is the only thing that varies on this
+  // URL shape (nothing re-signs it per viewer the way the proxy's `?t=`
+  // does), so what is left is stable for the life of the session.
+  return hlsSessionKey(url);
+}
+
+/**
+ * Which rung a media playlist URL names, e.g. `720p30` -- the same path
+ * segment `hls-playlist-proxy.ts` reads on the server. Null for a master
+ * (no-rung) URL or anything that is not this proxy at all.
+ */
+const HLS_PLAYLIST_RUNG_RE =
+  /\/api\/voice\/hls-playlist\/[^/?]+\/\d+\/([^/?]+)/;
+
+export function hlsRungFromPlaylistUrl(url: string | null | undefined): string | null {
+  if (!url) {
+    return null;
+  }
+  const match = HLS_PLAYLIST_RUNG_RE.exec(url);
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
+/**
+ * A rung label for a level whose URL is not our own proxy at all (a Farol
+ * finding, 2026-09-13: `LIVE_HLS_SIGNED_URLS=false` hands out a raw public
+ * bucket URL with no rung in its path, so `hlsRungFromPlaylistUrl` above
+ * always returns null for it and telemetry silently never had a rung to
+ * report). Built from the level's own declared resolution and framerate the
+ * same way this repo names a rung everywhere else (`hls-ladder.ts`'s
+ * `LADDER_RUNGS` keys: `<height>p<framerate>`), so a level matching a real
+ * ladder rung produces the SAME string the server already knows; one that
+ * does not is refused by the server's own rung whitelist rather than
+ * silently mislabelled, which is the safer failure for a metric.
+ */
+export function hlsFallbackRungLabel(
+  level: { height?: number; framerate?: number } | null | undefined,
+): string | null {
+  if (!level?.height || !level.framerate) {
+    return null;
+  }
+  return `${level.height}p${Math.round(level.framerate)}`;
+}
+
+/**
+ * The sampling identity for `isSampledForHlsTelemetry`, read off whatever
+ * `getAuthToken()` already resolved -- so this needs no Clerk hook of its
+ * own, which matters because `HlsWatchPlayer` renders under the dev-auth
+ * bypass too, where there is no `ClerkProvider` in the tree at all and a
+ * direct `useAuth()` call would throw.
+ *
+ * A Clerk JWT's middle segment carries a `sub` claim (the Clerk user id);
+ * read UNVERIFIED, because this is a client-side sampling coin flip, not an
+ * access decision, and the worst a forged token buys is landing on the wrong
+ * side of a 10% split. The dev-auth bypass token (`dev-local-token[:suffix]`)
+ * is not a JWT at all and is used as-is: stable per browser/suffix, which is
+ * all sampling needs, and it is how `alice`/`bob`/`carol` in local dev land
+ * on different sides of the split for testing.
+ */
+export function hlsTelemetryIdentityFromToken(token: string | null): string | null {
+  if (!token) {
+    return null;
+  }
+  const parts = token.split(".");
+  if (parts.length === 3) {
+    try {
+      const base64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
+      const payload = JSON.parse(atob(base64)) as { sub?: unknown };
+      if (typeof payload.sub === "string" && payload.sub) {
+        return payload.sub;
+      }
+    } catch {
+      // Not a JWT this can read, or no `sub` claim. Fall through.
+    }
+  }
+  return token;
+}
+
+/**
+ * One fragment's wall clock, from `#EXT-X-PROGRAM-DATE-TIME` as hls.js parses
+ * it: `programDateTimeMs` is the epoch millisecond the fragment STARTS at,
+ * `startSeconds` is the same fragment's start on the playlist's own time
+ * axis. Together they let a later media time on the same axis be converted
+ * back to a wall clock.
+ */
+export interface FragPdtInfo {
+  programDateTimeMs: number;
+  startSeconds: number;
+}
+
+/**
+ * Encode-to-paint latency, milliseconds (BROADCAST_PIPELINE B0.3, the T4-T8
+ * span): wall clock now, minus the wall clock of the media time that was
+ * just painted, computed from the currently active fragment's own PDT.
+ *
+ * `paintedMediaTimeSeconds` is `video.currentTime` (a periodic fallback) or,
+ * where the browser has it, the `mediaTime` a
+ * `video.requestVideoFrameCallback` callback reports for the frame it was
+ * just called for -- the more precise of the two, since `currentTime` can
+ * run slightly ahead of what is actually on screen.
+ *
+ * NEVER folds in capture-to-encode (T0-T4): that half is a separate,
+ * unstamped ESTIMATE (see `docs/plans/BROADCAST_PIPELINE.md` B0.3's table)
+ * and must be reported alongside this number, never added into it, so a
+ * server aggregating this value never silently mixes a measurement with a
+ * guess.
+ *
+ * Null when the active fragment carries no usable PDT at all (a source this
+ * player was never meant to see: not our proxy, or a build old enough to
+ * predate B0.2's synthesis). Floored at 0: a negative result is clock skew
+ * between this browser and the egress box, not a real negative latency, and
+ * reporting the raw negative number would let one skewed clock drag a whole
+ * rung's p50 into something that reads as "impossibly fast" instead of
+ * "encode-to-paint is one to two orders of magnitude smaller than clock
+ * skew usually is, so treat this reading as unreliable and move on".
+ */
+export function encodeToPaintLatencyMs(
+  frag: FragPdtInfo,
+  paintedMediaTimeSeconds: number,
+  nowMs: number = Date.now(),
+): number | null {
+  if (!Number.isFinite(frag.programDateTimeMs) || frag.programDateTimeMs <= 0) {
+    return null;
+  }
+  const frameWallClockMs =
+    frag.programDateTimeMs +
+    (paintedMediaTimeSeconds - frag.startSeconds) * 1000;
+  const latencyMs = nowMs - frameWallClockMs;
+  return latencyMs < 0 ? 0 : latencyMs;
+}
+
+/**
+ * A per-viewing-session batching queue (BROADCAST_PIPELINE B0.5): buffers
+ * samples in memory and flushes them on an interval, never on push. An empty
+ * buffer costs nothing -- `flush` is a no-op rather than an empty POST -- so
+ * a sampled viewer sitting on a paused, buffered stream sends nothing until
+ * playback (and therefore a fresh sample) resumes.
+ */
+export interface HlsTelemetryQueue {
+  push(sample: LiveHlsTelemetrySample): void;
+  /** Flush now, bypassing the timer. Used on unmount so the last window is not lost. */
+  flush(): void;
+  stop(): void;
+  /**
+   * Update the cached Bearer token a future flush sends. The caller (this
+   * queue has no Clerk hook of its own) already polls a fresh token on an
+   * interval for the `xhrSetup` path (`hls-watch-player.tsx`'s
+   * `refreshAuthToken`); calling this alongside that keeps the SAME token in
+   * hand here, so a flush never has to go fetch one itself -- see `flush`'s
+   * own comment on why that matters.
+   */
+  setToken(token: string | null): void;
+}
+
+export function createHlsTelemetryQueue(input: {
+  sessionId: string;
+  /**
+   * The `?t=` viewer token the playlist request carried, when there was one
+   * (`hlsViewerTokenFromUrl`) -- forwarded on every flush so the server can
+   * bind this batch to the session ITS OWN signature names, rather than
+   * trusting `sessionId` above as free text (Farol finding, 2026-09-13).
+   * Absent for the `LIVE_HLS_SIGNED_URLS=false` configuration, which mints no
+   * token at all; that batch is still sent, on `sessionId` alone.
+   */
+  sessionToken?: string | null;
+  /**
+   * The Bearer token to send with the FIRST flush, cached rather than
+   * fetched -- see `flush`'s own comment. `setToken` on the returned queue
+   * updates it as the caller's own token refresh resolves.
+   */
+  token?: string | null;
+  send: (batch: LiveHlsTelemetryBatch, token: string | null) => void;
+  flushMs?: number;
+  setInterval?: typeof window.setInterval;
+  clearInterval?: typeof window.clearInterval;
+}): HlsTelemetryQueue {
+  const setIntervalFn = input.setInterval ?? window.setInterval.bind(window);
+  const clearIntervalFn = input.clearInterval ?? window.clearInterval.bind(window);
+  let buffer: LiveHlsTelemetrySample[] = [];
+  let token: string | null = input.token ?? null;
+  function flush() {
+    if (buffer.length === 0) {
+      return;
+    }
+    const samples = buffer;
+    buffer = [];
+    // The token is READ, never fetched, here -- no `await` runs before
+    // `input.send` (and, inside it, `fetch`) is called. The unmount flush
+    // (`HlsWatchPlayer`'s cleanup) fires this same path on a navigate-away,
+    // and a page that is unloading is not guaranteed to run any code after
+    // an `await` at all: a batch that looked async-but-fine in every manual
+    // test silently lost its samples on a real tab close (a Farol finding,
+    // 2026-09-14). `keepalive: true` on the `fetch` itself (in `send`) is
+    // what actually keeps the request alive past unload; this only makes
+    // sure nothing delays ISSUING it.
+    input.send(
+      {
+        sessionId: input.sessionId,
+        ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
+        samples,
+      },
+      token,
+    );
+  }
+  const timer = setIntervalFn(flush, input.flushMs ?? LIVE_HLS_TELEMETRY_FLUSH_MS);
+  return {
+    push(sample) {
+      buffer.push(sample);
+    },
+    flush,
+    stop() {
+      clearIntervalFn(timer);
+      buffer = [];
+    },
+    setToken(next) {
+      token = next;
+    },
+  };
+}
+
+/**
+ * The one POST this feature makes. Fire-and-forget by design: a rejected or
+ * failed batch is a no-op the caller never retries (see
+ * `POST /api/live-hls/telemetry`'s own doc comment on the server) -- this is
+ * a measurement, not an event anything downstream is waiting on.
+ *
+ * `token` is a plain, already-resolved value, NOT fetched here. It used to
+ * be `getToken: () => Promise<string | null>`, awaited before `fetch` ran --
+ * which meant the unmount flush (`HlsWatchPlayer`'s cleanup, on a
+ * navigate-away) awaited an async token lookup before issuing a request that
+ * itself depends on the page still being around to run that continuation.
+ * `keepalive: true` keeps a request ALIVE past unload; it does nothing for
+ * one that was never issued because the tab closed between the `await` and
+ * the `fetch`. Measured against a real tab close on 2026-09-14: the final
+ * batch was silently lost every time (a Farol finding). The caller
+ * (`HlsTelemetryQueue`) now caches the last resolved token itself, so this
+ * function has one left to read synchronously and calls `fetch` with
+ * nothing awaited first.
+ */
+export function sendHlsTelemetryBatch(
+  batch: LiveHlsTelemetryBatch,
+  token: string | null,
+): void {
+  fetch(`${getApiBaseUrl()}/api/live-hls/telemetry`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(batch),
+    // The unmount flush (`HlsWatchPlayer`'s cleanup) fires this same path on
+    // a navigate-away, and an ordinary fetch is exactly the request class
+    // the browser is free to abort once the document starts unloading (a
+    // Farol finding, 2026-09-13). `keepalive` is the documented escape hatch
+    // for "send this even if the page is going away" and, unlike
+    // `navigator.sendBeacon`, still allows the Authorization header this
+    // route requires. The body is a handful of samples -- nowhere near the
+    // ~64 KiB keepalive budget browsers share across all such requests.
+    keepalive: true,
+  }).catch(() => {
+    // Dropped. See the doc comment above.
+  });
 }

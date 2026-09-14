@@ -3824,6 +3824,59 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_egress
   ON hls_sessions (egress_id)
   WHERE egress_id IS NOT NULL AND cleaned_at IS NULL;
 
+-- LL-HLS (docs/plans/LL_HLS.md, task L1.5). Which driver produced this row.
+-- 'conventional' is every row before this column existed, and every one this
+-- deployment will ever write while LIVE_HLS_LL is off: a `pqp-remux` session
+-- is never started unless the flag, the allowlist and the party's own
+-- request all say so (`resolveHlsMode` in `hls-remux.ts`). A 'll' row has no
+-- `egress_id` at all -- there is no LiveKit egress behind it -- and
+-- `remux_session_id` is its handle on the remux box's own control API
+-- instead (`POST/DELETE/GET /sessions`, `packages/shared/hls-remux-control.ts`).
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'conventional';
+
+DO $$
+BEGIN
+  ALTER TABLE hls_sessions DROP CONSTRAINT IF EXISTS hls_sessions_mode_check;
+  ALTER TABLE hls_sessions
+    ADD CONSTRAINT hls_sessions_mode_check
+    CHECK (mode IN ('conventional', 'll'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- The remux box's own id for the session (its `sessionId`, the idempotency
+-- key `POST /sessions` was called with). NULL for every 'conventional' row.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS remux_session_id TEXT;
+
+-- The two fields the LL playlist front (`L2.x`) will need and the ones
+-- `pqp-remux` was actually started with, stored rather than re-derived from
+-- environment at read time: an operator changing `LIVE_HLS_REMUX_ORIGIN_URL`
+-- mid-party must not rewrite the URL a viewer already has. `part_target_ms`
+-- is `PART_MS` from the start request; `origin_base_url` is where the parts
+-- and playlists this session writes are actually served from (the egress
+-- box's Caddy, `docs/plans/LL_HLS.md` §1 -- "Where the parts are served
+-- from"), distinct from `LIVE_HLS_REMUX_CONTROL_URL`, which is the control
+-- plane this row was started through and never serves media.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS part_target_ms INTEGER;
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS origin_base_url TEXT;
+
+-- The boot reconcile's LL half looks a session up by the remux box's own id,
+-- the same way the conventional half does by `egress_id`.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_remux
+  ON hls_sessions (remux_session_id)
+  WHERE remux_session_id IS NOT NULL AND cleaned_at IS NULL;
+
+-- A stop was requested but the box has not confirmed it (a failed or
+-- timed-out DELETE): the row is neither "running" nor "ended", it is
+-- "trying to end". `ended_at` stays NULL until the box actually confirms,
+-- so a row like this is never adopted as live (`hls-remux.ts` excludes it)
+-- and never silently forgotten either -- the next start attempt for the
+-- channel, or the next boot sweep, retries the DELETE, paced by
+-- `stop_attempts` (a Farol review of PR #580's third round: a failed DELETE
+-- must not just be dropped).
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stopping_at TIMESTAMPTZ;
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stop_attempts INTEGER NOT NULL DEFAULT 0;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.
@@ -3994,26 +4047,63 @@ ALTER TABLE channel_sessions
 ALTER TABLE channel_sessions
   ADD COLUMN IF NOT EXISTS stage_speak_applied BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- LL-HLS (`docs/plans/LL_HLS.md`, task L1.5): "Ir ao vivo com latência
+-- baixa", carried on the party row rather than kept in `pqp-api`'s process
+-- memory. Set by `POST /api/watch-parties/:id/state` on every `goLive`
+-- (unconditionally, so a party going live again without asking does not
+-- inherit a previous ask), read by `reconcileLiveHlsNow` once a sharer
+-- actually appears. Durable on purpose: an in-memory version of this was a
+-- Farol finding on PR #580 -- a restart mid-party made the very next
+-- reconcile resolve `conventional` and stop the LL session boot adoption had
+-- just brought back.
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS low_latency_requested BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- Who the host has personally put on the stage of a party whose floor is
--- closed (`stageMode = 'invited'`). One row per person per party; the row is
+-- closed (`guests != 'off'`). One row per person per party; the row is
 -- what makes the SPEAK allow overwrite on the channel removable again when
 -- the party ends, without having to guess which overwrites were ours.
+--
+-- CONVIDADOS (docs/plans/WATCH_PARTY_GUESTS.md §5.6): this table IS the
+-- guests table now, unchanged shape, one word wiser. `accepted_at` is what
+-- tells an "invited" row (called up, or approved off the request queue, has
+-- not confirmed) from an "onAir" one (`accepted_at IS NOT NULL`, the person
+-- pressed "Entrar no ar" and holds a slot). `WATCH_PARTY_MAX_GUESTS` bounds
+-- the accepted rows, never the invited ones — an unanswered invitation does
+-- not hold a slot.
 CREATE TABLE IF NOT EXISTS channel_session_stage_invites (
   session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   invited_by UUID REFERENCES users(id) ON DELETE SET NULL,
   invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  accepted_at TIMESTAMPTZ,
   PRIMARY KEY (session_id, user_id)
 );
 
+ALTER TABLE channel_session_stage_invites
+  ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_channel_session_stage_invites_onair
+  ON channel_session_stage_invites (session_id)
+  WHERE accepted_at IS NOT NULL;
+
 -- A viewer asking to come up. Deleted when the hand is lowered, when they are
--- put on the stage, and with the party.
+-- put on the stage, and with the party; kept (not deleted) when the host
+-- passes, so `declined_at` has a row to carry the five-minute cooldown on.
 CREATE TABLE IF NOT EXISTS channel_session_raised_hands (
   session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   raised_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (session_id, user_id)
 );
+
+-- CONVIDADOS: a declined request survives instead of being deleted, so the
+-- cooldown (`GUEST_REQUEST_COOLDOWN_MS`) has something to read. NULL means
+-- "pending or never declined"; the queue query is `WHERE declined_at IS
+-- NULL`. A withdraw still deletes the row outright — no cooldown for
+-- changing your own mind.
+ALTER TABLE channel_session_raised_hands
+  ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_channel_session_raised_hands_queue
   ON channel_session_raised_hands (session_id, raised_at);

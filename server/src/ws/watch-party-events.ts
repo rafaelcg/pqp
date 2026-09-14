@@ -6,10 +6,16 @@ import {
 import {
   getWatchPartyRow,
   invalidateActiveWatchParty,
+  legacyWatchPartyStageOf,
   loadCohostRows,
+  loadWatchPartyGuestRows,
   mapWatchParty,
   markWatchPartyHostBack,
   markWatchPartyHostGone,
+  prepareWatchPartyGuests,
+  shapeWatchPartyGuests,
+  watchPartyOptionsOf,
+  type PreparedWatchPartyGuests,
 } from "../services/watch-parties.js";
 import {
   invalidateWatchPartySeat,
@@ -40,6 +46,46 @@ import { noteWatchPartyState } from "./watch-party-live.js";
 
 /** Per-user permission answers, valid for one broadcast. */
 type PermissionCache = Map<string, bigint>;
+
+/**
+ * THE LAST GUEST SNAPSHOT THIS PROCESS SUCCESSFULLY LOADED, per session.
+ *
+ * A transient load failure (`loadWatchPartyGuestRows` catching and returning
+ * null, previously) used to fall through to `mapWatchParty`'s default
+ * parameter -- an EMPTY guests object -- and broadcast that to every
+ * recipient as if it were the truth. For a 500-viewer party mid-Saturday
+ * that reads as every guest going silent and every pending request
+ * vanishing, to everyone, on one Postgres hiccup. Keeping the last value
+ * this process actually confirmed and falling back to it on a failure is
+ * "never emit empty" made literal: a stale-but-real answer beats a fresh
+ * lie. Cleared when the party goes terminal, so a long-dead session cannot
+ * hold memory forever; a live party overwrites its entry on every
+ * successful load, so staleness is bounded by how often mutations happen,
+ * which on a running party is constantly.
+ */
+const lastKnownGuestRows = new Map<
+  string,
+  Awaited<ReturnType<typeof loadWatchPartyGuestRows>>
+>();
+
+async function loadGuestRowsForBroadcast(
+  sessionId: string,
+): Promise<Awaited<ReturnType<typeof loadWatchPartyGuestRows>> | null> {
+  try {
+    const rows = await loadWatchPartyGuestRows(sessionId);
+    lastKnownGuestRows.set(sessionId, rows);
+    return rows;
+  } catch (error) {
+    const fallback = lastKnownGuestRows.get(sessionId);
+    console.error(
+      "[watch-party] guest rows load failed for a broadcast; " +
+        (fallback ? "using the last known snapshot" : "no prior snapshot to fall back to") +
+        ":",
+      error,
+    );
+    return fallback ?? null;
+  }
+}
 
 async function permissionsFor(
   cache: PermissionCache,
@@ -97,6 +143,9 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
   // that bails must not leave the join gate holding yesterday's answer.
   if (terminal) {
     rememberWatchPartySeatSnapshot(row.channel_id, null);
+    // Nothing left to fall back to for a party that is over; hold the
+    // snapshot no longer than the party itself.
+    lastKnownGuestRows.delete(row.id);
   } else {
     invalidateWatchPartySeat(row.channel_id);
   }
@@ -124,6 +173,28 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
   const cohosts = await loadCohostRows(row.id).catch(() => []);
   const cohostIds = cohosts.map((c) => c.user_id);
   const cache: PermissionCache = new Map();
+  // ONE PAIR OF QUERIES FOR THE WHOLE FAN-OUT, not one per recipient: who is
+  // on air, invited or asking is the same two rows for every socket this
+  // broadcasts to. `prepareWatchPartyGuests` does the one sort and the one
+  // pass of person-mapping ONCE here too; `shapeWatchPartyGuests` per
+  // recipient below is then map lookups and array reuse, no query and no
+  // sort of its own.
+  //
+  // SKIPPED ENTIRELY when `guests` is `off` -- the overwhelming common case,
+  // since every ordinary voice-repurposed watch party (and every party
+  // before this feature existed at all) never turns Convidados on. An "off"
+  // party's `guests`/`stage` fields are `mapWatchParty`'s own defaults
+  // (the correct, empty answer, proven byte-identical by
+  // watch-party-options.test.ts), so there is nothing this query could add.
+  // Also skipped for a terminal party, which sends `null` and needs no
+  // guests at all.
+  const guestsOff = watchPartyOptionsOf(row).guests === "off";
+  const preparedGuests: PreparedWatchPartyGuests | null =
+    terminal || guestsOff
+      ? null
+      : await loadGuestRowsForBroadcast(row.id).then((rows) =>
+          rows ? prepareWatchPartyGuests(rows) : null,
+        );
 
   const targets: { socket: import("ws").WebSocket; userId: string }[] = [];
   forEachAuthenticatedSocket((socket, user) => {
@@ -160,7 +231,32 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
         // concerned the party has never existed.
         continue;
       }
-      party = mapWatchParty(row, cohosts, role, false);
+      // BUG THIS FIXES (2026-09-14): this call used to pass no guests
+      // argument at all, so `mapWatchParty`'s default parameter
+      // (`WATCH_PARTY_EMPTY_GUESTS`) shipped to every socket on every
+      // mutation -- a request, an accept, a join. The ACTOR of a guest
+      // action saw their own change (the HTTP response uses
+      // `presentWatchParty`, which does this correctly), and everyone else
+      // watching the same party over the open socket saw an empty queue
+      // and an empty stage until their own next unrelated action refreshed
+      // it. "The audience finds out without reloading anything" was true
+      // for exactly one person per action: the one who took it.
+      //
+      // `undefined` here (guests off, or a load failure with no prior
+      // snapshot to fall back to) triggers `mapWatchParty`'s own default,
+      // the correct empty answer for the "off" case and the least-wrong
+      // answer for the never-loaded-once case.
+      const guests = preparedGuests
+        ? shapeWatchPartyGuests(preparedGuests, role, target.userId)
+        : undefined;
+      party = mapWatchParty(
+        row,
+        cohosts,
+        role,
+        false,
+        guests && legacyWatchPartyStageOf(guests),
+        guests,
+      );
     }
     if (party === null && !terminal) {
       continue;

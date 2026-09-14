@@ -14,17 +14,17 @@ import {
  *
  * `loadWatchPartySeat` is the SQL; this is the cache in front of it. The
  * assertion that matters is that five hundred viewers against one party do
- * not become five hundred loads, and that toggling Voz drops the snapshot
- * so the next join cannot keep the old answer.
+ * not become five hundred loads, and that toggling Convidados drops the
+ * snapshot so the next join cannot keep the old answer.
  */
 
 const CHANNEL = "11111111-1111-4111-8111-111111111111";
 
-const voiceOff: Exclude<WatchPartySeatSnapshot, null> = {
-  voiceEnabled: false,
+const guestsOff: Exclude<WatchPartySeatSnapshot, null> = {
+  guests: "off",
   hostUserId: "host",
   cohostIds: ["cohost"],
-  invitedIds: ["guest"],
+  acceptedGuestIds: ["guest"],
 };
 
 afterEach(() => {
@@ -32,20 +32,20 @@ afterEach(() => {
 });
 
 describe("watchPartySeatForUser", () => {
-  it("derives host, co-host and invite from the lists, not from a per-user query", () => {
-    expect(watchPartySeatForUser(voiceOff, "host")).toEqual({
-      voiceEnabled: false,
+  it("derives host, co-host and guest from the lists, not from a per-user query", () => {
+    expect(watchPartySeatForUser(guestsOff, "host")).toEqual({
+      guests: "off",
       isHost: true,
       isCohost: false,
-      isInvited: false,
+      isGuest: false,
     });
-    expect(watchPartySeatForUser(voiceOff, "cohost")?.isCohost).toBe(true);
-    expect(watchPartySeatForUser(voiceOff, "guest")?.isInvited).toBe(true);
-    expect(watchPartySeatForUser(voiceOff, "viewer")).toEqual({
-      voiceEnabled: false,
+    expect(watchPartySeatForUser(guestsOff, "cohost")?.isCohost).toBe(true);
+    expect(watchPartySeatForUser(guestsOff, "guest")?.isGuest).toBe(true);
+    expect(watchPartySeatForUser(guestsOff, "viewer")).toEqual({
+      guests: "off",
       isHost: false,
       isCohost: false,
-      isInvited: false,
+      isGuest: false,
     });
   });
 
@@ -56,12 +56,12 @@ describe("watchPartySeatForUser", () => {
 
 describe("the seat snapshot cache", () => {
   it("does not call the loader for a second viewer of the same party", async () => {
-    const load = vi.fn(async () => voiceOff);
+    const load = vi.fn(async () => guestsOff);
     const first = await cachedWatchPartySeatSnapshot(CHANNEL, load);
     const second = await cachedWatchPartySeatSnapshot(CHANNEL, load);
     expect(load).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
-    expect(watchPartySeatForUser(second, "viewer")?.voiceEnabled).toBe(false);
+    expect(watchPartySeatForUser(second, "viewer")?.guests).toBe("off");
     expect(watchPartySeatForUser(second, "host")?.isHost).toBe(true);
   });
 
@@ -76,37 +76,37 @@ describe("the seat snapshot cache", () => {
     const a = cachedWatchPartySeatSnapshot(CHANNEL, load);
     const b = cachedWatchPartySeatSnapshot(CHANNEL, load);
     expect(load).toHaveBeenCalledTimes(1);
-    release(voiceOff);
-    expect(await a).toEqual(voiceOff);
-    expect(await b).toEqual(voiceOff);
+    release(guestsOff);
+    expect(await a).toEqual(guestsOff);
+    expect(await b).toEqual(guestsOff);
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidating Voz drops the snapshot so the next join reloads", async () => {
+  it("invalidating Convidados drops the snapshot so the next join reloads", async () => {
     const load = vi
       .fn()
-      .mockResolvedValueOnce(voiceOff)
-      .mockResolvedValueOnce({ ...voiceOff, voiceEnabled: true });
+      .mockResolvedValueOnce(guestsOff)
+      .mockResolvedValueOnce({ ...guestsOff, guests: "request" });
     expect(
-      (await cachedWatchPartySeatSnapshot(CHANNEL, load))?.voiceEnabled,
-    ).toBe(false);
+      (await cachedWatchPartySeatSnapshot(CHANNEL, load))?.guests,
+    ).toBe("off");
     invalidateWatchPartySeat(CHANNEL);
     expect(peekWatchPartySeatSnapshot(CHANNEL)).toBeUndefined();
     const next = await cachedWatchPartySeatSnapshot(CHANNEL, load);
-    expect(next?.voiceEnabled).toBe(true);
+    expect(next?.guests).toBe("request");
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache a thrown load, so a hiccup cannot stick as voice-off", async () => {
+  it("does not cache a thrown load, so a hiccup cannot stick as guests-off", async () => {
     const load = vi
       .fn()
       .mockRejectedValueOnce(new Error("the database is having a bad minute"))
-      .mockResolvedValueOnce(voiceOff);
+      .mockResolvedValueOnce(guestsOff);
     await expect(cachedWatchPartySeatSnapshot(CHANNEL, load)).rejects.toThrow(
       /bad minute/,
     );
     expect(peekWatchPartySeatSnapshot(CHANNEL)).toBeUndefined();
-    expect(await cachedWatchPartySeatSnapshot(CHANNEL, load)).toEqual(voiceOff);
+    expect(await cachedWatchPartySeatSnapshot(CHANNEL, load)).toEqual(guestsOff);
     expect(load).toHaveBeenCalledTimes(2);
   });
 
@@ -121,12 +121,12 @@ describe("the seat snapshot cache", () => {
     const pending = cachedWatchPartySeatSnapshot(CHANNEL, load);
     invalidateWatchPartySeat(CHANNEL);
     rememberWatchPartySeatSnapshot(CHANNEL, {
-      ...voiceOff,
-      voiceEnabled: true,
+      ...guestsOff,
+      guests: "request",
     });
-    release(voiceOff);
-    expect((await pending)?.voiceEnabled).toBe(true);
-    expect(peekWatchPartySeatSnapshot(CHANNEL)?.voiceEnabled).toBe(true);
+    release(guestsOff);
+    expect((await pending)?.guests).toBe("request");
+    expect(peekWatchPartySeatSnapshot(CHANNEL)?.guests).toBe("request");
     expect(load).toHaveBeenCalledTimes(1);
   });
 });

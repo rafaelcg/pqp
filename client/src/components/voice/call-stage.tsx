@@ -41,8 +41,15 @@ import {
 import { flushSync } from "react-dom";
 import {
   MESH_VOICE_WARNING,
+  type LiveHlsStream,
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
+import {
+  hlsModeOf,
+  hlsPartTargetMs,
+  watchPlayerMode,
+  type LlHlsStreamFields,
+} from "@/lib/hls-live-edge";
 import type { VideoQuality } from "@/lib/video-quality";
 import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
@@ -77,6 +84,7 @@ import {
 } from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
+import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import { MusicDock } from "@/components/voice/music-dock";
 import { MusicBarButton } from "@/components/voice/music-bar-button";
@@ -529,6 +537,11 @@ export interface CallStageProps {
   playOutgoingRingtone?: boolean;
   onLeave: () => void;
   onToggleMute: () => void;
+  /**
+   * The close (x) on `voiceState.micFallback`'s corner card. See
+   * `use-voice.ts`'s `dismissMicFallbackNotice` for the whole lifecycle.
+   */
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -631,6 +644,7 @@ export function CallStage({
   playOutgoingRingtone = false,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -694,6 +708,7 @@ export function CallStage({
       }}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
+      onDismissMicFallbackNotice={onDismissMicFallbackNotice}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}
@@ -740,6 +755,7 @@ function ActiveCall({
   onSetCollapsed,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -782,6 +798,7 @@ function ActiveCall({
   onSetCollapsed: (collapsed: boolean) => void;
   onLeave: () => void;
   onToggleMute: () => void;
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -1395,6 +1412,18 @@ function ActiveCall({
           cameraHasVideo={cinemaTile.cameraHasVideo}
           cameraHasVoiceAudio={cinemaTile.cameraHasVoiceAudio}
           delaySeconds={cinemaTile.delaySeconds ?? voiceState.liveStream?.delaySeconds}
+          mode={
+            cinemaTile.mode ??
+            hlsModeOf(
+              voiceState.liveStream as (LiveHlsStream & LlHlsStreamFields) | null,
+            )
+          }
+          partTargetMs={
+            cinemaTile.partTargetMs ??
+            hlsPartTargetMs(
+              voiceState.liveStream as (LiveHlsStream & LlHlsStreamFields) | null,
+            )
+          }
           mediaTitle={title}
           communityName={serverName}
           coverUrl={serverIconUrl}
@@ -1965,6 +1994,11 @@ function ActiveCall({
         onFocusCapture={() => setBarFocused(true)}
         onBlurCapture={onBarBlur}
       >
+        <MicFallbackNotice
+          micFallback={voiceState.micFallback}
+          visible={!chrome.hidden}
+          onDismiss={onDismissMicFallbackNotice}
+        />
         <CapacityNotice
           voiceChannelId={voiceState.voiceChannelId}
           transport={voiceState.roomTransport}
@@ -3594,6 +3628,8 @@ export function ScreenTileFrame({
         <HlsWatchPlayer
           src={tile.hlsUrl}
           delaySeconds={tile.delaySeconds}
+          mode={tile.mode ? watchPlayerMode(tile.mode) : undefined}
+          partTargetMs={tile.partTargetMs}
           videoRef={videoRef}
           onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
           className={cn("h-full w-full", videoFitClass(fit.fit))}

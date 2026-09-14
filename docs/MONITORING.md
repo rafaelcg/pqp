@@ -752,6 +752,116 @@ the other three stay at zero, which is the same "did the flag actually take"
 check pitfall 12 in `CLAUDE.md` describes for the roster delta counter: read
 the counter that proves the code path ran, not just that the flag is set.
 
+### Watch-party glass-to-glass latency (BROADCAST_PIPELINE B0.6)
+
+Where the number actually lives: `GET /api/admin/metrics`'s `liveHls.latency`
+block (`server/src/voice/hls-latency-metrics.ts`), fed by sampled client
+telemetry (`POST /api/live-hls/telemetry`, `docs/plans/BROADCAST_PIPELINE.md`
+B0.5). `byRung[].p50Ms`/`p95Ms` are correctly bucketed **per rung** from every
+sampled viewer's own readings; that is the number to trust, and it is what the
+acceptance criterion below points at. It is in-process and resets on a
+restart, the same as `voice.seats`'s counters above.
+
+Grafana has no direct line to that endpoint — it only sees log lines, the same
+constraint every other panel on this dashboard works under — so the panel
+here is a LIVE APPROXIMATION built from `voice.hlsTelemetryBatch`, one line
+per accepted batch:
+
+```
+[pqp] voice.hlsTelemetryBatch sessionId=chan-1:1700000000000 samples=4 \
+      rungs=["720p30"] medianLatencyMs=8200
+```
+
+`medianLatencyMs` is the median of THAT ONE BATCH's own samples (one viewer,
+one 30s flush window) — a coarse, batch-sized estimate, not the rung's real
+p50 across the audience. `quantile_over_time` over many batches converges
+toward the true distribution as more viewers report, but during a small party
+(few sampled viewers) it can be noisy in a way the histogram-backed number
+above is not. Use this panel to watch a live party trend in real time; use
+`GET /api/admin/metrics` for the number that goes in an incident writeup.
+
+| What | LogQL |
+|---|---|
+| Median latency trend, all rungs | `quantile_over_time(0.5, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \| logfmt \| unwrap medianLatencyMs [5m])` |
+| p95 of the batch medians (a rough upper bound) | `quantile_over_time(0.95, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \| logfmt \| unwrap medianLatencyMs [5m])` |
+| Batches accepted per minute (viewer volume, roughly `sampled viewers / 30s`) | `sum(count_over_time({fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" [1m]))` |
+| Batches refused, by reason | `sum(count_over_time({fly_app_name="pqp-api"} \|= "voice.hlsPlaylistRejected" [5m]))` for playlist auth; schema/rate-limit rejections on the telemetry route itself are not logged individually (only counted — see `liveHls.latency.batchesRejectedSchema`/`batchesRejectedRateLimit` on `/api/admin/metrics`), because a broken client retrying into a 400 wall is exactly the flood pitfall 16 warns a per-line log invites |
+| One rung's trend (720p30 example) | `quantile_over_time(0.5, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \|= "720p30" \| logfmt \| unwrap medianLatencyMs [5m])` — imprecise for a viewer who ever switched rungs mid-batch, which is rare but not impossible |
+
+Panel setup (same steps as "Adding a panel" below): a time series with the
+median-trend query above, one series per rung name filtered the same way the
+last row does, legend `{{rung}}` is not available (the rung is not a Loki
+label, it is inside the log line), so name each series by hand per rung
+instead.
+
+**Acceptance criterion for B0:** during one live party, `GET
+/api/admin/metrics`'s `liveHls.latency.byRung` shows p50 and p95
+encode-to-paint for every rung a viewer is actually watching, and the count on
+each is high enough (more than a handful) to trust the percentile rather than
+a couple of noisy readings. `voice.hlsTelemetryBatch`'s log trend should track
+the same shape, if noisier, in real time on the dashboard above.
+
+### DB call budget (2026-09-13 Vultr cutover)
+
+The cutover's first 16.5h of Postgres query stats found four repeat
+offenders totalling roughly 785k of the queries in that window — a member
+list re-fetched on every open, an auth-resolution `UPDATE` that almost
+always wrote back what was already there, a webhook poller ticking at a
+fixed 2s whether or not there was anything to send, and three per-request
+permission lookups (age gate, a member's role, channel access) run fresh on
+every call. `GET /api/admin/metrics` carries the counters that say whether
+the fixes for each are actually running:
+
+- **`dbQueries.total` / `dbQueries.byRoute`.** Every Postgres round trip this
+  process has issued since boot, and the same total broken down by the HTTP
+  route it happened inside (`GET /api/servers/:serverId/members`, the path
+  template, never an interpolated id) — a WS handler, a cold job, or
+  anything at boot has no route and is counted under `"other"`. A reserved
+  `"auth"` label sits next to those two: Bearer resolution and the age-gate
+  and timeout gates run in `handleApi` before any route has matched, and
+  folding that work into `"other"` would have hidden a real cost center (the
+  53k auth-resolution writes below) behind the same bucket used for
+  background jobs. Wrapped once at the pool itself (`db.ts`), so unlike
+  `dbTx.byPath` next to it, nothing had to remember to instrument a new call
+  site for this to see it. This is the number the 785k figure should now be
+  read against — a route whose count did not drop after this shipped is a
+  route the caching missed.
+- **`readCache.*`** (documented above) now also covers the server member
+  list (`services/users.ts`'s `listServerMembers`, 30s TTL, keyed per
+  server) and the three per-request permission lookups: the age gate
+  (`services/age-gate.ts`, 30s, keyed per user), a member's role
+  (`services/users.ts`'s `getMemberRole`, 30s, keyed per server+user), and
+  the channel access check (`canAccessChannel`, same TTL, keyed per
+  channel+user). All four share this one counter with the three read-cache.ts
+  callers PR #560 shipped, so a spike in `misses` right after a deploy that
+  touched any of these seven call sites is expected — what should NOT happen
+  is `misses` climbing steadily during ordinary traffic once the process has
+  been up a few minutes.
+- **`readCache.size`** grew a corresponding amount once these four joined —
+  still bounded by the same 5k-entry LRU either way.
+- **The webhook poller no longer has its own counter** (it is not a cache),
+  but its effect shows up as `outgoing-webhooks.*`-labelled rows almost
+  disappearing from `dbQueries.byRoute`'s `"other"` bucket once idle for a
+  while: `deliverDueOutgoingWebhooks` ticks every 2s while it finds work,
+  doubling its wait on every empty tick up to 30s, and a Postgres NOTIFY
+  (`services/outgoing-webhook-poller.ts`, its own dedicated LISTEN channel,
+  not the cluster bus) wakes it immediately on a fresh enqueue rather than
+  leaving it to wait out its current backoff. Same instant delivery on the
+  single-machine deployment this instance runs today; the adaptive interval
+  only changes how often an EMPTY outbox gets polled between real events.
+
+Security note for the three permission caches: authorization is still
+checked on every request against a value that is at most 30s old, same as
+`readCache.ts`'s own rule for the caches PR #560 shipped — nothing here
+skips the check, it only skips re-asking Postgres the same question inside
+the TTL window. A kick, a ban, or a role/overwrite change invalidates the
+relevant cache immediately rather than waiting out the TTL (see the
+invalidation comments beside `invalidateServerAudienceLocally` in
+`services/servers.ts` and `notifyPermissionsUpdate` in `ws/chat.ts`, the two
+chokepoints all three ride), so a removed member is denied on their very
+next request, warm cache or not — `server/src/services/permission-caches.test.ts`
+pins that.
+
 ### Adding a panel
 
 1. Explore, datasource `grafanacloud-logs`, get the query right there first.

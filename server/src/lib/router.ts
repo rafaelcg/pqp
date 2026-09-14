@@ -27,6 +27,10 @@ export type RouteHandler = (
 
 interface CompiledRoute {
   method: string;
+  /** The template as registered (`/api/servers/:serverId/members`), kept
+   *  alongside the compiled matcher so `match()` can hand it back as a
+   *  metrics label with no id in it — see `lib/route-context.ts`. */
+  path: string;
   regex: RegExp;
   keys: string[];
   handler: RouteHandler;
@@ -59,7 +63,7 @@ export function createRouter() {
 
   function add(method: string, path: string, handler: RouteHandler) {
     const { regex, keys } = compile(path);
-    routes.push({ method, regex, keys, handler });
+    routes.push({ method, path, regex, keys, handler });
   }
 
   return {
@@ -78,7 +82,11 @@ export function createRouter() {
     match(
       method: string,
       pathname: string,
-    ): { handler: RouteHandler; params: Record<string, string> } | null {
+    ): {
+      handler: RouteHandler;
+      params: Record<string, string>;
+      routePath: string;
+    } | null {
       let pathMatched = false;
 
       for (const route of routes) {
@@ -106,7 +114,7 @@ export function createRouter() {
           }
           params[key] = value;
         });
-        return { handler: route.handler, params };
+        return { handler: route.handler, params, routePath: route.path };
       }
 
       if (pathMatched) {

@@ -4,56 +4,60 @@ import { WATCH_PARTY_DEFAULT_OPTIONS, type WatchPartyOptions } from "@pqp/shared
 import { WatchPartyOptionsPanel } from "./watch-party-options";
 
 /**
- * THE VOZ ROW'S ONE-LINE SUMMARY (2026-09-13, Rafael's "the audience never
- * joins a call" decision, item 4). Off says the party is a broadcast; on
- * says it is a stage. Kept on distinct keys from the older
- * `watchParty.options.voiceOffBody` — see the comment beside `voiceNote` in
- * `watch-party-options.tsx` for why.
+ * CONVIDADOS REPLACED "VOZ" (`docs/plans/WATCH_PARTY_GUESTS.md` §2). The old
+ * Voz select and its one-line summary are gone from this panel; the radio
+ * group in `guests/watch-party-guests-setting.tsx` is mounted in their place,
+ * and this suite now pins the panel's own responsibilities: which of the
+ * three options is checked, and that the busy-room slow-mode nudge (a
+ * DIFFERENT row, unrelated to guests) still appears.
  */
-describe("the Voz row's summary", () => {
-  const render = (options: WatchPartyOptions) =>
+describe("the Convidados row", () => {
+  const render = (options: WatchPartyOptions, audienceCount = 0) =>
     renderToStaticMarkup(
       <WatchPartyOptionsPanel
         options={options}
-        audienceCount={0}
+        audienceCount={audienceCount}
         onChange={() => {}}
       />,
     );
 
-  it("reads as a broadcast while voice is off", () => {
+  it("checks Off by default", () => {
     const html = render(WATCH_PARTY_DEFAULT_OPTIONS);
-    expect(html).toContain("Off: everyone just watches");
+    expect(html).toContain('data-watch-party-guests-option="off"');
+    const offIndex = html.indexOf('data-watch-party-guests-option="off"');
+    const offInput = html.slice(offIndex, html.indexOf("<input", offIndex) + 200);
+    expect(offInput).toContain("checked=\"\"");
   });
 
-  it("reads as a stage once voice is on", () => {
-    const html = render({
-      ...WATCH_PARTY_DEFAULT_OPTIONS,
-      voiceEnabled: true,
-      stageMode: "hosts_only",
-    });
-    expect(html).toContain("Stage with voice: guests can speak");
-    expect(html).not.toContain("Off: everyone just watches");
+  it("checks Request when guests is request", () => {
+    const html = render({ ...WATCH_PARTY_DEFAULT_OPTIONS, guests: "request" });
+    const requestIndex = html.indexOf(
+      'data-watch-party-guests-option="request"',
+    );
+    const requestInput = html.slice(
+      requestIndex,
+      html.indexOf("<input", requestIndex) + 200,
+    );
+    expect(requestInput).toContain("checked=\"\"");
   });
 
-  it("still gives way to the busy-room warning for an open floor", () => {
-    const html = render({
-      ...WATCH_PARTY_DEFAULT_OPTIONS,
-      voiceEnabled: true,
-      stageMode: "everyone",
-    });
-    const busy = renderToStaticMarkup(
+  it("renders all three radios, every time", () => {
+    const html = render(WATCH_PARTY_DEFAULT_OPTIONS);
+    expect(html).toContain('data-watch-party-guests-option="off"');
+    expect(html).toContain('data-watch-party-guests-option="invite"');
+    expect(html).toContain('data-watch-party-guests-option="request"');
+  });
+});
+
+describe("the slow-mode nudge, unrelated to guests", () => {
+  it("still shows up for a busy room whatever guests is set to", () => {
+    const html = renderToStaticMarkup(
       <WatchPartyOptionsPanel
-        options={{
-          ...WATCH_PARTY_DEFAULT_OPTIONS,
-          voiceEnabled: true,
-          stageMode: "everyone",
-        }}
+        options={{ ...WATCH_PARTY_DEFAULT_OPTIONS, guests: "off" }}
         audienceCount={30}
         onChange={() => {}}
       />,
     );
-    expect(html).toContain("Stage with voice: guests can speak");
-    expect(busy).not.toContain("Stage with voice: guests can speak");
-    expect(busy).toContain("gets out of hand fast");
+    expect(html).toContain("already holds the flood back");
   });
 });

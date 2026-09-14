@@ -182,10 +182,15 @@ import {
   createServerWatchParty as apiCreateServerWatchParty,
   fetchChannelWatchParty as apiFetchChannelWatchParty,
   setWatchPartyCohost as apiSetWatchPartyCohost,
+  setWatchPartyGuestAction,
   setWatchPartyStage,
   setWatchPartyState as apiSetWatchPartyState,
   updateWatchParty as apiUpdateWatchParty,
 } from "@/lib/watch-parties-api";
+import {
+  WatchPartyGuestsOverlay,
+  type GuestAction,
+} from "@/components/watch-party/guests/watch-party-guests-overlay";
 import { endWatchParty } from "@/lib/watch-party-end";
 import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
 import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
@@ -1580,6 +1585,25 @@ function MainAppContent({
     [transport],
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
+  // `useMemo` has no cleanup of its own, so a `transport` that ever changes
+  // (or the future reconnect path this is future-proofing for) would leave
+  // the OLD controller's `devicechange` listener firing forever, against a
+  // `pipeline` it can never touch again. Both calls are idempotent, so this
+  // is free the vast majority of the time `transport` never changes.
+  //
+  // BOTH, NOT JUST THE CLEANUP. React StrictMode replays this effect's
+  // cleanup and setup once more on every mount; a setup phase that did
+  // nothing would let that replay remove the listener the constructor
+  // attached and never put it back, for the rest of the controller's life —
+  // invisible here (StrictMode is dev-only), and everywhere else only ever
+  // seen as recovery quietly not working. `attachDeviceWatcher()` re-running
+  // is what makes the extra cleanup-then-setup a wash instead of a leak.
+  useEffect(() => {
+    voice.attachDeviceWatcher();
+    return () => {
+      voice.dispose();
+    };
+  }, [voice]);
   const [voiceState, setVoiceState] = useState(voice.getState());
   /**
    * Somebody watching a live party without a seat is looking at a film. The
@@ -4467,6 +4491,129 @@ function MainAppContent({
   }
 
   /**
+   * CONVIDADOS: every guest action but `join`, which has its own flow right
+   * below (`handleWatchPartyGuestGoOnAir`) because going on air is not just a
+   * route call — it stops the player and opens the room first (§3.4).
+   */
+  /**
+   * `channelId` is optional and, when given, wins over the currently
+   * selected channel — the go-on-air/go-off-air flows below capture it
+   * BEFORE their own awaits (a mic prompt, a room join) specifically so a
+   * channel switch mid-flight sends the action to the party that was
+   * actually joined, not whatever the user has since navigated to.
+   */
+  async function handleWatchPartyGuestAction(
+    action: GuestAction,
+    channelId?: string,
+  ) {
+    const party = channelId
+      ? (watchParties.byChannel[channelId] ?? null)
+      : currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await setWatchPartyGuestAction(party.id, action);
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  /**
+   * `Entrar no ar`. THE SERVER SAYS YES FIRST, THEN THE ROOM. `mayGoOnAir`
+   * (both the client's read of it and `join-voice-room`'s own check) only
+   * lets an ACCEPTED guest in — `accepted_at IS NOT NULL` — and the guest
+   * `join` HTTP action is the one write that sets it, inside the transaction
+   * that also enforces `WATCH_PARTY_MAX_GUESTS`. Calling `voice.join` before
+   * that action lands asks the room to seat somebody the server does not yet
+   * consider a guest, which it correctly refuses
+   * (`voice.watchPartySeatRefused`) — every real join through this path used
+   * to fail invisibly on the very race it was written to handle (the
+   * invitation confirmed a beat after the room was asked for). So: the HTTP
+   * `join` first, which is also where the invitation-expired/cap-full errors
+   * surface with nobody's microphone open yet; only once the server has
+   * actually accepted this browser does it ask for the room.
+   *
+   * ROLLED BACK ON EITHER FAILURE. A `join` action that throws never reaches
+   * `voice.join` at all — nothing to roll back. A `voice.join` that fails
+   * AFTER the server accepted this guest (mic/camera refused, a room error)
+   * leaves the row `accepted_at`-set with nobody connected to it, so that
+   * path calls the guest `leave` action to undo it, best-effort, before the
+   * original error is re-thrown to the caller (the invite dialog keeps
+   * itself open on a failure it is told about). A `leave` that ALSO fails
+   * here is not silently dropped: the guest's own next disconnect and the
+   * ordinary voice-seat reconciliation still clear a row nobody is holding,
+   * so this is a UX rollback, not the only backstop.
+   */
+  async function handleWatchPartyGuestGoOnAir(channelId: string) {
+    await handleWatchPartyGuestAction({ action: "join" }, channelId);
+    try {
+      voiceServerIdRef.current = selectedServerId;
+      await voice.join(channelId, {
+        inputDeviceId: localSettings.inputDeviceId,
+        inputVolume: localSettings.inputVolume,
+        inputMode: localSettings.inputMode,
+        vadThreshold: localSettings.vadThreshold,
+        processing: localSettings.micProcessing,
+      });
+    } catch (err) {
+      try {
+        await handleWatchPartyGuestAction({ action: "leave" }, channelId);
+      } catch (rollbackErr) {
+        console.error(
+          "[watch-party] could not roll back an accepted guest slot after voice.join failed:",
+          rollbackErr,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * `Sair do ar`. Tell the party first, then leave — same order `onLeaveSeat`
+   * uses elsewhere — but `voice.leave()` runs in `finally`: a rejected
+   * `leave` action (a timeout, a dropped connection) must not strand the
+   * guest connected and transmitting just because the server never heard
+   * about it. The server-side row is cleaned up independently by the
+   * client's own eventual disconnect and the orphan sweep either way.
+   */
+  async function handleWatchPartyGuestGoOffAir(channelId: string) {
+    try {
+      await handleWatchPartyGuestAction({ action: "leave" }, channelId);
+    } finally {
+      voice.leave();
+    }
+  }
+
+  const presentingPartyId =
+    currentWatchParty()?.channelId === voiceState.voiceChannelId &&
+    voiceState.isSharingScreen
+      ? currentWatchParty()?.id
+      : null;
+  const presentingPartyGuests = presentingPartyId
+    ? currentWatchParty()?.options.guests
+    : undefined;
+  const presentingPartyOnAirKey = presentingPartyId
+    ? (currentWatchParty()?.guests.onAir.map((p) => p.userId).join(",") ?? "")
+    : "";
+  /**
+   * CONVIDADOS §5.2: tell `use-voice.ts`'s mixer what to carry, whenever a
+   * party's `guests` or `guests.onAir` changes for the channel THIS BROWSER
+   * IS PRESENTING. A no-op for anyone else — every other tab, every ordinary
+   * voice channel, gets `setWatchPartyGuests("off", [])`, which is what the
+   * mixer already treats as "carry nothing".
+   */
+  useEffect(() => {
+    if (!presentingPartyId || presentingPartyGuests === undefined) {
+      voice.setWatchPartyGuests("off", []);
+      return;
+    }
+    const onAirUserIds = presentingPartyOnAirKey
+      ? presentingPartyOnAirKey.split(",")
+      : [];
+    voice.setWatchPartyGuests(presentingPartyGuests, onAirUserIds);
+  }, [presentingPartyId, presentingPartyGuests, presentingPartyOnAirKey, voice]);
+
+  /**
    * Promote or demote a co-host.
    *
    * THE CALLER `setWatchPartyCohost` NEVER HAD. The route, the table and this
@@ -6621,6 +6768,41 @@ function MainAppContent({
             slot="chrome"
           />
         )}
+      {/* CONVIDADOS (docs/plans/WATCH_PARTY_GUESTS.md). One mount line: every
+          new control lives in `guests/watch-party-guests-overlay.tsx`, which
+          is mounted here rather than threaded through `watch-party-panel.tsx`
+          (frozen ahead of PR 538's rewrite). */}
+      {selectedChannel.kind === "server" &&
+        isWatchPartyChannelType(selectedChannel.type) &&
+        isWatchPartyChannelsEnabled() &&
+        user && (
+          <WatchPartyGuestsOverlay
+            party={watchParties.byChannel[selectedChannel.id] ?? null}
+            currentUserId={user.id}
+            cohostCandidates={cohostCandidates}
+            inRoom={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status === "connected"
+            }
+            micOn={!voiceState.isMuted}
+            cameraOn={voiceState.isCameraOn}
+            onToggleMic={() => voice.toggleMute()}
+            onToggleCamera={() => void voice.toggleCamera()}
+            // THE PROMISE GOES THROUGH UNCAUGHT. The overlay's own callers
+            // decide how to react to a failure now: `decline` rolls its
+            // dialog back open, everything else logs through its own
+            // `fireGuestAction` wrapper. Catching and swallowing it here,
+            // as this used to, is exactly what made a failed decline
+            // indistinguishable from a successful one three lines up the
+            // call stack.
+            onGuestAction={(action) =>
+              handleWatchPartyGuestAction(action, selectedChannel.id)
+            }
+            onGoOnAir={() => handleWatchPartyGuestGoOnAir(selectedChannel.id)}
+            onGoOffAir={() => handleWatchPartyGuestGoOffAir(selectedChannel.id)}
+            className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
+          />
+        )}
       <CallSplit
         shape={stageShape}
         kind={splitKind}
@@ -6794,6 +6976,7 @@ function MainAppContent({
             screenFrameRate={localSettings.screenFrameRate}
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
+            onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -6849,6 +7032,7 @@ function MainAppContent({
           }
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
+          onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onScreenFrameRateChange={handleScreenFrameRateChange}

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Account creation, pinned.
@@ -286,6 +286,80 @@ describeDb("account creation", () => {
 
     expect(moved.username).toBe("shared_name");
     expect(moved.discriminator).not.toBe(second.discriminator);
+  });
+
+  /**
+   * The no-op write, pinned. This is the 53k-UPDATE-in-16.5h shape from the
+   * 2026-09-13 Vultr cutover: `upsertUser` runs on every authenticated
+   * request whose cache missed, and for almost all of them Clerk's profile
+   * has not moved since the last time it ran.
+   */
+  it("does not write when the avatar and email domains have not changed", async () => {
+    const auth = {
+      clerkId: "clerk-noop",
+      displayName: "Nina",
+      avatarUrl: "https://img.example/a.png",
+      emailDomains: ["example.com"],
+    };
+    const first = await upsertUser(auth);
+    expect(first.avatar_url).toBe(auth.avatarUrl);
+
+    const spy = vi.spyOn(getPool(), "query");
+    const second = await upsertUser(auth);
+    const updates = spy.mock.calls.filter(
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("UPDATE users SET"),
+    );
+    spy.mockRestore();
+
+    expect(updates).toHaveLength(0);
+    expect(second.id).toBe(first.id);
+    expect(second.avatar_url).toBe(auth.avatarUrl);
+    expect(second.email_domains).toEqual(auth.emailDomains);
+  });
+
+  it("still writes when the avatar or email domains actually changed", async () => {
+    const auth = {
+      clerkId: "clerk-changed",
+      displayName: "Nina",
+      avatarUrl: null,
+      emailDomains: [] as string[],
+    };
+    await upsertUser(auth);
+
+    const spy = vi.spyOn(getPool(), "query");
+    const updated = await upsertUser({
+      ...auth,
+      avatarUrl: "https://img.example/new.png",
+      emailDomains: ["example.com"],
+    });
+    const updates = spy.mock.calls.filter(
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("UPDATE users SET"),
+    );
+    spy.mockRestore();
+
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updated.avatar_url).toBe("https://img.example/new.png");
+    expect(updated.email_domains).toEqual(["example.com"]);
+  });
+
+  it("never overwrites an avatar the account already has", async () => {
+    const auth = {
+      clerkId: "clerk-keep-avatar",
+      displayName: "Nina",
+      avatarUrl: "https://img.example/original.png",
+      emailDomains: [] as string[],
+    };
+    await upsertUser(auth);
+    const second = await upsertUser({
+      ...auth,
+      avatarUrl: "https://img.example/different-from-clerk.png",
+    });
+    // COALESCE(avatar_url, $2) never replaces a non-null value, so this is
+    // not one of the cases that should trigger a write either — the column
+    // could not have changed, whether or not the UPDATE ran.
+    expect(second.avatar_url).toBe(auth.avatarUrl);
   });
 });
 

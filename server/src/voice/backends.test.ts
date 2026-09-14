@@ -128,6 +128,43 @@ describe("LiveKit token minting", () => {
     expect(videoOnly.stream).toBe(true);
   });
 
+  /**
+   * CONVIDADOS' third axis. A guest gets exactly microphone and camera, never
+   * a screen share, and never both — `pickHlsSharer` scans the whole roster
+   * for `sharingScreen && canStream`, and a guest with STREAM would confuse
+   * it. This is pitfall 14's structural half for guests: the token itself
+   * lists no other source, whatever a patched client tries.
+   */
+  it("adds camera alone for a guest who may show their face but not stream", async () => {
+    const guest = await createLiveKitSession("voice-a", "peer-1", "A", "u1", {
+      canSpeak: true,
+      canStream: false,
+      canShowFace: true,
+    });
+    const video = decodeClaims(guest.token).video;
+    expect(video?.canPublish).toBe(true);
+    expect(video?.canPublishSources).toEqual(["microphone", "camera"]);
+  });
+
+  it("refuses a seatless viewer even with canShowFace unset (the default)", async () => {
+    const viewer = await createLiveKitSession("voice-a", "peer-1", "A", "u1", {
+      canSpeak: false,
+      canStream: false,
+    });
+    expect(decodeClaims(viewer.token).video?.canPublish).toBe(false);
+  });
+
+  it("ignores canShowFace once Stream is already granted — it is a subset", async () => {
+    const presenter = await createLiveKitSession("voice-a", "peer-1", "A", "u1", {
+      canSpeak: true,
+      canStream: true,
+      canShowFace: true,
+    });
+    // The old "may publish anything" shape: no `canPublishSources` at all,
+    // so a `canShowFace` bug can never narrow a presenter's own grant.
+    expect(decodeClaims(presenter.token).video?.canPublishSources).toBeUndefined();
+  });
+
   it("keeps the token short-lived so a stale one cannot be replayed for long", async () => {
     const { token } = await createLiveKitSession(
       "voice-a",

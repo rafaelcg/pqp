@@ -51,11 +51,13 @@ const { upsertUser } = await import("../services/users.js");
 const {
   buildMasterPlaylistFor,
   buildSignedPlaylist,
+  hlsPlaylistAgeMs,
   HlsPlaylistNotFound,
   resetHlsPlaylistCacheForTests,
 } = await import("./hls-playlist-proxy.js");
 
 const STARTED_AT = 1_788_962_552_321;
+const PLAYLIST_USER = "00000000-0000-4000-8000-0000000000dd";
 
 describeDb("the playlist proxy only serves a session that is still live", () => {
   let channelId: string;
@@ -103,12 +105,13 @@ describeDb("the playlist proxy only serves a session that is still live", () => 
     ended: boolean;
     cleaned?: boolean;
     startedAt?: number;
-  }): Promise<void> {
+  }): Promise<string> {
     const startedAt = options.startedAt ?? STARTED_AT;
-    await getPool().query(
+    const row = await getPool().query<{ id: string }>(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, rung, started_at, ended_at, cleaned_at)
-       VALUES ($1, $2, $3, NOW(), $4, $5)`,
+       VALUES ($1, $2, $3, NOW(), $4, $5)
+       RETURNING id`,
       [
         channelId,
         `live/${channelId}/${startedAt}-${options.rung}`,
@@ -117,6 +120,7 @@ describeDb("the playlist proxy only serves a session that is still live", () => 
         options.cleaned ? new Date() : null,
       ],
     );
+    return row.rows[0]!.id;
   }
 
   it("serves a rung of a session that is still open", async () => {
@@ -157,6 +161,7 @@ describeDb("the playlist proxy only serves a session that is still live", () => 
     const master = await buildMasterPlaylistFor({
       channelId,
       startedAt: STARTED_AT,
+      userId: PLAYLIST_USER,
     });
     expect(master).toContain("720p30");
     expect(master).toContain("1080p30");
@@ -164,7 +169,7 @@ describeDb("the playlist proxy only serves a session that is still live", () => 
     await getPool().query(`UPDATE hls_sessions SET ended_at = NOW()`);
     resetHlsPlaylistCacheForTests();
     expect(
-      await buildMasterPlaylistFor({ channelId, startedAt: STARTED_AT }),
+      await buildMasterPlaylistFor({ channelId, startedAt: STARTED_AT, userId: PLAYLIST_USER }),
     ).toBeNull();
   });
 
@@ -186,5 +191,35 @@ describeDb("the playlist proxy only serves a session that is still live", () => 
     await expect(
       buildSignedPlaylist(channelId, newer, "720p30"),
     ).resolves.toContain("#EXTM3U");
+  });
+
+  /**
+   * BROADCAST_PIPELINE B0.4: the media playlist and the master both name the
+   * `hls_sessions` row they came from, so a client's telemetry batch and this
+   * server's own `voice.hls*` logs can be stitched together on one id.
+   */
+  it("tags both the media playlist and the master with the hls_sessions row id", async () => {
+    const id720 = await session({ rung: "720p30", ended: false });
+    await session({ rung: "1080p30", ended: false });
+
+    const media = await buildSignedPlaylist(channelId, STARTED_AT, "720p30");
+    expect(media).toContain(`#EXT-X-PQP-SESSION:${id720}`);
+
+    const master = await buildMasterPlaylistFor({ channelId, startedAt: STARTED_AT, userId: PLAYLIST_USER });
+    expect(master).toMatch(/#EXT-X-PQP-SESSION:[0-9a-f-]{36}/);
+  });
+
+  /**
+   * BROADCAST_PIPELINE B0.3: `X-Pqp-Playlist-Age-Ms` reads back from the same
+   * in-process history the render just populated, so it is available right
+   * after `buildSignedPlaylist` resolves and not before.
+   */
+  it("hlsPlaylistAgeMs is null before any render and non-negative right after", async () => {
+    await session({ rung: "720p30", ended: false });
+    expect(hlsPlaylistAgeMs(channelId, STARTED_AT, "720p30")).toBeNull();
+    await buildSignedPlaylist(channelId, STARTED_AT, "720p30");
+    const age = hlsPlaylistAgeMs(channelId, STARTED_AT, "720p30");
+    expect(age).not.toBeNull();
+    expect(age!).toBeGreaterThanOrEqual(0);
   });
 });

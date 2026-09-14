@@ -13,6 +13,7 @@ import {
 import {
   Check,
   Crop,
+  Loader2,
   Maximize2,
   MessageSquare,
   Minimize2,
@@ -30,8 +31,15 @@ import {
 import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
+  createHlsTelemetryQueue,
+  encodeToPaintLatencyMs,
   hasHlsViewerToken,
+  hlsFallbackRungLabel,
+  hlsRungFromPlaylistUrl,
   hlsSessionKey,
+  hlsTelemetryIdentityFromToken,
+  hlsTelemetrySessionKey,
+  hlsViewerTokenFromUrl,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
   nextFreshPlaylistUrl,
@@ -39,26 +47,39 @@ import {
   resolveHlsUrl,
   sameHlsSession,
   sampleVideoPlaybackQuality,
+  sendHlsTelemetryBatch,
   setHlsPlaybackStats,
+  type HlsTelemetryQueue,
   withFreshHlsToken,
 } from "@/lib/hls-playback";
+import { isSampledForHlsTelemetry } from "@pqp/shared";
 import {
   applyHlsRecoveryStep,
+  behindLiveThresholdSeconds,
   buildMediaSessionMetadata,
   catchUpPlaybackRate,
+  effectiveHlsMode,
   effectiveLiveSyncDurationCount,
   hasSafariPresentationMode,
   HLS_ABR_DEFAULT_ESTIMATE_BPS,
   hlsLivePlayerConfig,
   isBehindLive,
+  isInPlaceModeDemotion,
+  isLlPartLoadErrorDetail,
   isPipAvailable,
+  liveSeekOffsetSeconds,
   liveSeekTarget,
+  llHlsConfig,
   mediaSeekableEnd,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
+  shouldPinToConventionalRung,
+  validPartTargetMs,
+  type HlsMode,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { drainJitterMs } from "@/lib/reconnect-jitter";
+import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
@@ -123,6 +144,8 @@ type StreamPhase = "playing" | "reconnecting" | "dead";
 interface HlsHandle {
   destroy: () => void;
   liveSyncPosition: number | null;
+  /** Estimated seconds behind the live edge (hls.js's own reading, LL or not). */
+  latency?: number;
   media: HTMLMediaElement | null;
   /** `-1` is Auto. Assigning flushes the buffer; use `nextLevel` mid-stream. */
   currentLevel: number;
@@ -184,6 +207,8 @@ export function HlsWatchPlayer({
   actions,
   layout = "tile",
   dualDeviceWarning = false,
+  mode = "live",
+  partTargetMs: partTargetMsProp,
 }: {
   src: string;
   /**
@@ -212,6 +237,13 @@ export function HlsWatchPlayer({
    */
   cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
+  /**
+   * `LiveHlsStream.partTargetMs`, read only when `mode === "ll"`. Defaults to
+   * `LIVE_HLS_REMUX_PART_MS`'s own default for a stream that omits it (see
+   * `LL_HLS_DEFAULT_PART_TARGET_MS`'s comment on why that field can be
+   * missing even on an `ll` stream today).
+   */
+  partTargetMs?: number;
   className?: string;
   videoRef?: RefObject<HTMLVideoElement | null>;
   onDoubleClick?: () => void;
@@ -249,12 +281,59 @@ export function HlsWatchPlayer({
    * corner player, which has no room for a second line of chrome.
    */
   dualDeviceWarning?: boolean;
+  /**
+   * `"live"` (the default) is a watch party in progress: the stall watchdog
+   * treats a playlist that stops advancing as a dead egress and reconnects
+   * to `GET /api/channels/:id/live`, the top-left corner carries a permanent
+   * "Ao vivo" badge, and "jump to live" replaces the ordinary transport row.
+   * Conventional live-sync tuning (`hlsLivePlayerConfig()`,
+   * `maxLiveSyncPlaybackRate: 1`) -- byte-identical to before `"ll"` existed.
+   *
+   * `"vod"` is a finished broadcast's replay (`watch-party-history-dialog.tsx`):
+   * the playlist is a fixed, ENDED `#EXT-X-MEDIA-SEQUENCE` that is SUPPOSED
+   * to stop advancing once fully buffered, so the live watchdog's read of
+   * that -- a dead egress, reconnect, and eventually "A transmissão caiu" --
+   * is simply wrong here and used to restart a perfectly healthy replay
+   * every ~20s until it gave up for good. This mode turns that reading off:
+   * no reconnect-via-live-fetch, no live badge, no "jump to live", no live
+   * watchdog chase, a plain buffering spinner instead of the "hold tight,
+   * it's starting" holding screen, "A gravação não está mais disponível"
+   * instead of "A transmissão caiu" if playback cannot recover, and a real
+   * seek bar in its place. Never `"ll"` -- a replay is always the
+   * conventional engine tuning above.
+   *
+   * `"ll"` is `LiveHlsStream.mode` (`docs/plans/LL_HLS.md`, task L2.4): it
+   * stops this player overriding the manifest's own hold-back -- see
+   * `llHlsConfig` and the attach effect's comments. Only ever set alongside
+   * `partTargetMs`, and only while `mode` is not `"vod"`.
+   */
+  mode?: "live" | "vod" | "ll";
 }) {
   const { t } = useTranslation();
+  const isVod = mode === "vod";
+  // `HlsMode` (hls-live-edge.ts) only distinguishes conventional-vs-LL live
+  // tuning; VOD is an orthogonal axis (`isVod`, guarded independently
+  // throughout this file) that never reaches the live-sync engine below, so
+  // it maps onto "conventional" here -- inert, since every downstream read
+  // of this value is already skipped when `isVod` is true.
+  const hlsMode: HlsMode = mode === "ll" ? "ll" : "conventional";
+  // Validated once, here, regardless of whether the caller went through
+  // `hlsPartTargetMs` (which already validates) or passed a raw number
+  // straight through -- the player is the one place every LL-HLS caller's
+  // value ultimately reaches, so this is where a bad one gets caught
+  // (Farol review, this PR).
+  const partTargetMs = validPartTargetMs(partTargetMsProp);
   const fit = useVideoFit("watch");
   const whole = fit.fit === "contain";
   const innerRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<HlsHandle | null>(null);
+  // BROADCAST_PIPELINE B0.5: how many times the attach effect below has run
+  // for this mounted player, i.e. how many times the instance has been torn
+  // down and rebuilt. Never reset across `activeSrc`/`attempt` changes within
+  // one mount -- the whole point is to see whether B1.3 (never rebuild
+  // unless unrecoverable) is working, and a counter that resets on every
+  // rebuild could never show that.
+  const rebuildCountRef = useRef(0);
   const [hasFrame, setHasFrame] = useState(false);
   // Autoplay with sound was refused (a tab that resumed the call without a
   // click, Safari's default). The picture runs muted and one tap fixes it.
@@ -272,6 +351,11 @@ export function HlsWatchPlayer({
   const [pipAvailable, setPipAvailable] = useState(false);
   const [isPip, setIsPip] = useState(false);
   const [behindLive, setBehindLive] = useState(false);
+  // A replay's own transport: `null` until `loadedmetadata` gives a real
+  // duration. Unused (and never subscribed to) outside `mode: "vod"` -- a
+  // live playlist's `duration` is `Infinity` and has nothing to scrub.
+  const [vodCurrentTime, setVodCurrentTime] = useState(0);
+  const [vodDuration, setVodDuration] = useState<number | null>(null);
   // Mirrors the element's own paused flag so the bar's play/pause button
   // agrees with hardware media keys, the lock screen and a tap on the frame.
   const [paused, setPaused] = useState(false);
@@ -284,6 +368,41 @@ export function HlsWatchPlayer({
   const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useState<StreamPhase>("playing");
   const watchRef = useRef<HlsStallWatch>(new HlsStallWatch());
+  // L2.4: two part-load errors inside 10 s pin this viewing session to
+  // conventional-style targeting for the rest of it (`docs/plans/LL_HLS.md`
+  // §4, `shouldPinToConventionalRung`). The master playlist itself has no
+  // separate "conventional rung" for this client to switch onto yet
+  // (`L2.1`/`L2.2`), so pinning means "stop asking hls.js to hold the LL
+  // edge", not "pick another level".
+  //
+  // A REF, mirrored by `pinnedToConventional` STATE below (same shape as
+  // `stallReason`/`watchRef.current.lastReason`): the ref is what the
+  // attach effect and its own event handlers read and write synchronously
+  // (a pin must take effect on the very tick it fires, before any render
+  // happens), and the state exists ONLY so a render -- the live badge, and
+  // eventually any telemetry sample -- can see it too. A Farol review of
+  // this PR found the badge kept showing an LL latency reading after a
+  // session had already been pinned, because it read the raw `mode` prop
+  // (which the server never updates for a client-only pin) with nothing to
+  // re-render on.
+  const llPartErrorTimestampsRef = useRef<number[]>([]);
+  const pinnedToConventionalRef = useRef(false);
+  const [pinnedToConventional, setPinnedToConventional] = useState(false);
+  // Which `activeSrc` the pin/error state above belongs to -- reset on a
+  // genuine new session, kept across a same-URL `attempt` rebuild (the pin
+  // itself causes one; forgetting the pin on the very rebuild that applies
+  // it would undo it immediately).
+  const pinSessionSrcRef = useRef<string | null>(null);
+  // The mode this player last actually attached with, so the demotion effect
+  // below can tell "the server changed its mind mid-party" (§5, an in-place
+  // reload) apart from "this is the first render" (nothing to reload yet).
+  const modeRef = useRef<HlsMode>(hlsMode);
+  // hls.js's own `latency` getter (LL only; native/conventional leave this
+  // null and the badge falls back to plain "Ao vivo"/"Live"). Read on the
+  // existing stall-watchdog tick rather than a dedicated timer.
+  const [llLatencySeconds, setLlLatencySeconds] = useState<number | null>(
+    null,
+  );
   // C3 (post-mortem, `watch-holding-screen.ts`): which of the watchdog's
   // reasons is behind the current stall, so the holding screen can say why
   // instead of just "loading". Mirrors `watchRef.current.lastReason`, which
@@ -498,6 +617,17 @@ export function HlsWatchPlayer({
         reconnectInFlightRef.current = true;
       }
       setPhase("reconnecting");
+      // Only the live-channel refetch is VOD-specific, and it is skipped
+      // here by construction rather than by an early return: a replay's
+      // URL (`/api/voice/hls-replay/<channel>/<startedAt>`) matches neither
+      // the live proxy nor the raw bucket shape `channelIdFromHlsUrl`
+      // knows, so `channelId` is null, `next` stays null, and every branch
+      // below runs the same for both -- a person's "try again" still falls
+      // through to `setAttempt` (a same-URL re-attach re-fetches the signed
+      // playlist proxy, which mints fresh presigned segment URLs; there is
+      // no `GET .../live` for a finished session to poll), and the
+      // overlap/generation guards above cost nothing extra since there is
+      // no network round trip for them to race against.
       const channelId = channelIdFromHlsUrl(activeSrc);
       let next: string | null = null;
       try {
@@ -617,15 +747,23 @@ export function HlsWatchPlayer({
     if (!video) {
       return;
     }
+    // §4's pin rule can have quietly moved this session onto
+    // conventional-style targeting; a seek offset sized for LL parts would
+    // undershoot a conventional segment's actual live edge.
+    const effectiveMode = effectiveHlsMode(
+      hlsMode,
+      pinnedToConventionalRef.current,
+    );
     const target = liveSeekTarget({
       currentTime: video.currentTime,
       liveSyncPosition: hlsRef.current?.liveSyncPosition ?? null,
       seekableEnd: mediaSeekableEnd(video),
+      segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
     });
     if (target !== null) {
       video.currentTime = target;
     }
-  }, [getVideo]);
+  }, [getVideo, hlsMode, partTargetMs]);
 
   useEffect(() => {
     const video = getVideo();
@@ -652,22 +790,41 @@ export function HlsWatchPlayer({
       return;
     }
     if (video.paused) {
-      jumpToLive();
+      // A replay resumes wherever it was paused -- Twitch's "back to the
+      // edge" rule is a live-only affordance. `jumpToLive` against a VOD
+      // element's `seekable` end is not "catch up", it is "skip to the
+      // final second", which is what actually happened here before this
+      // guard: `mediaSeekableEnd` reads the replay's own duration.
+      if (!isVod) {
+        jumpToLive();
+      }
       void video.play();
       return;
     }
     video.pause();
-  }, [getVideo, jumpToLive]);
+  }, [getVideo, isVod, jumpToLive]);
 
   // Behind-live polling. `timeupdate` fires roughly 4x/s, which is plenty
   // for a badge nobody needs to the millisecond, and also drives the B1.1
-  // catch-up curve below.
+  // catch-up curve below. A no-op for a replay: hls.js never sets
+  // `liveSyncPosition` on a VOD manifest, so `resolveLiveEdge` always
+  // answers null and this never flips `behindLive` true -- kept running
+  // anyway rather than special-cased, since a false negative here is
+  // exactly the state a replay wants.
   useEffect(() => {
     const video = getVideo();
     if (!video) {
       return;
     }
     const check = () => {
+      // `pinnedToConventionalRef` can flip this mid-session (§4's pin
+      // rule); reading it fresh on every tick, rather than once per effect
+      // run, is what makes the pin take effect immediately rather than
+      // after the next attach.
+      const effectiveMode = effectiveHlsMode(
+        hlsMode,
+        pinnedToConventionalRef.current,
+      );
       const liveEdge = resolveLiveEdge(
         hlsRef.current?.liveSyncPosition ?? null,
         mediaSeekableEnd(video),
@@ -682,7 +839,21 @@ export function HlsWatchPlayer({
         video.playbackRate = 1;
         return;
       }
-      setBehindLive(isBehindLive(video.currentTime, liveEdge));
+      setBehindLive(
+        isBehindLive(
+          video.currentTime,
+          liveEdge,
+          behindLiveThresholdSeconds(effectiveMode, partTargetMs),
+        ),
+      );
+      if (effectiveMode === "ll") {
+        // hls.js's own low-latency catch-up owns `video.playbackRate` on
+        // this path (`maxLiveSyncPlaybackRate`, set where the player is
+        // constructed) -- writing it here too would be two controllers
+        // fighting over the same property, the exact bug this effect's
+        // comment already warns about for the conventional path.
+        return;
+      }
       if (video.paused) {
         // Nothing to chase without a running clock, and the pause path
         // already re-seeks to the edge on resume -- but a rate set by an
@@ -713,7 +884,73 @@ export function HlsWatchPlayer({
       video.removeEventListener("timeupdate", check);
       video.playbackRate = 1;
     };
-  }, [getVideo, src]);
+  }, [getVideo, src, hlsMode, partTargetMs]);
+
+  // §5's demotion: the server flipped this SAME session from `ll` to
+  // `conventional` mid-party (L1.6's watchdog, not yet merged). Reconfigure
+  // in place rather than live-mutating the running hls.js instance: verified
+  // against `hls.mjs` that `lowLatencyMode`/`liveSyncDurationCount` are only
+  // read from the CONSTRUCTOR's `userConfig` when deciding whether to defer
+  // to the manifest, so a runtime `player.config.xyz =` assignment cannot
+  // retroactively flip that decision. Bumping `attempt` re-runs the attach
+  // effect with a freshly constructed instance carrying the new mode's
+  // config -- the established "same-URL rebuild" path this file already
+  // uses for the stall ladder's own `"rebuild"` decision -- which survives
+  // on the SAME `<video>` element, satisfying §5's "without tearing the
+  // element down". `hlsRef.current` guards against firing before the first
+  // attach has run at all (nothing to reload yet; the next attach reads the
+  // current `mode` directly).
+  useEffect(() => {
+    const previous = modeRef.current;
+    modeRef.current = hlsMode;
+    if (
+      hlsRef.current &&
+      isInPlaceModeDemotion({
+        previousMode: previous,
+        nextMode: hlsMode,
+        sameSession: true,
+      })
+    ) {
+      console.warn("[hls] LL session demoted to conventional, reconfiguring in place");
+      setAttempt((n) => n + 1);
+    }
+  }, [hlsMode]);
+
+  // The replay's own transport. Not wired at all outside `mode: "vod"`: a
+  // live element's `duration` is `Infinity` and nothing here should read it.
+  useEffect(() => {
+    if (!isVod) {
+      return;
+    }
+    const video = getVideo();
+    if (!video) {
+      return;
+    }
+    const onTimeUpdate = () => setVodCurrentTime(video.currentTime);
+    const onDuration = () => {
+      setVodDuration(Number.isFinite(video.duration) ? video.duration : null);
+    };
+    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("durationchange", onDuration);
+    video.addEventListener("loadedmetadata", onDuration);
+    onDuration();
+    return () => {
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("durationchange", onDuration);
+      video.removeEventListener("loadedmetadata", onDuration);
+    };
+  }, [getVideo, isVod, src, attempt]);
+
+  const seekTo = useCallback(
+    (seconds: number) => {
+      const video = getVideo();
+      if (!video || vodDuration === null) {
+        return;
+      }
+      video.currentTime = Math.min(Math.max(0, seconds), vodDuration);
+    },
+    [getVideo, vodDuration],
+  );
 
   // Picture-in-Picture: standard API where it exists, Safari's
   // presentation-mode fallback otherwise. Neither is relied on to
@@ -803,18 +1040,20 @@ export function HlsWatchPlayer({
     navigator.mediaSession.setActionHandler("pause", () => {
       video?.pause();
     });
-    try {
-      // Not in every TS lib.dom version; guarded by the try/catch and the
-      // `"seektolive" in` style check isn't reliable across browsers, so we
-      // just swallow an unsupported-action exception.
-      navigator.mediaSession.setActionHandler(
-        // @ts-expect-error -- "seektolive" is a valid MediaSessionAction the
-        // TS DOM lib does not list yet.
-        "seektolive",
-        jumpToLive,
-      );
-    } catch {
-      // Not supported here; the on-screen "Pular pro ao vivo" button covers it.
+    if (!isVod) {
+      try {
+        // Not in every TS lib.dom version; guarded by the try/catch and the
+        // `"seektolive" in` style check isn't reliable across browsers, so we
+        // just swallow an unsupported-action exception.
+        navigator.mediaSession.setActionHandler(
+          // @ts-expect-error -- "seektolive" is a valid MediaSessionAction the
+          // TS DOM lib does not list yet.
+          "seektolive",
+          jumpToLive,
+        );
+      } catch {
+        // Not supported here; the on-screen "Pular pro ao vivo" button covers it.
+      }
     }
     return () => {
       navigator.mediaSession.setActionHandler("play", null);
@@ -826,7 +1065,7 @@ export function HlsWatchPlayer({
         // ignore
       }
     };
-  }, [hasFrame, mediaTitle, communityName, coverUrl, getVideo, jumpToLive]);
+  }, [hasFrame, mediaTitle, communityName, coverUrl, getVideo, jumpToLive, isVod]);
 
   useEffect(() => {
     const el = videoRef?.current ?? innerRef.current;
@@ -853,6 +1092,32 @@ export function HlsWatchPlayer({
         reconnectJitterTimer = null;
       }
     };
+    // BROADCAST_PIPELINE B0.3/B0.5. Set on every `FRAG_CHANGED` so a later
+    // periodic sample can turn "what media time is painted right now" into
+    // a wall clock. `currentRung` names the rendition the same way the
+    // server does (the playlist path segment), read once alongside it.
+    let currentFrag: { programDateTimeMs: number; startSeconds: number } | null =
+      null;
+    let currentRung: string | null = null;
+    let stallsSinceLastSample = 0;
+    let startupMsPending: number | null = null;
+    // Distinct from `startupMsPending` being null, which also means "already
+    // reported": this stops a LATER `playing` event (after a stall recovers,
+    // say) from recomputing "startup" as the time since attach, minutes in.
+    let startupMsComputed = false;
+    const attachStartedAt = Date.now();
+    rebuildCountRef.current += 1;
+    const rebuildCountAtAttach = rebuildCountRef.current;
+    let telemetryQueue: HlsTelemetryQueue | null = null;
+    let telemetrySampleTimer: number | null = null;
+    // Farol finding, 2026-09-13: a naive "call requestVideoFrameCallback
+    // every 5s" schedules a NEW one even while a previous one is still
+    // outstanding (paused, backgrounded, or a stalled stream never paints a
+    // fresh frame), so callbacks pile up and all fire at once when playback
+    // resumes -- a burst of duplicate samples and a CPU/memory spike. This
+    // tracks the one outstanding handle so at most one is ever pending, and
+    // is cancelled on cleanup so a torn-down player cannot fire into it.
+    let pendingRvfcHandle: number | null = null;
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -870,11 +1135,120 @@ export function HlsWatchPlayer({
       void getAuthToken().then((token) => {
         if (!cancelled) {
           authToken = token;
+          // Keeps the queue's own cached copy current too, so a flush --
+          // including the unmount one -- reads a token synchronously rather
+          // than fetching one (Farol finding, 2026-09-14; see
+          // `sendHlsTelemetryBatch`'s doc comment).
+          telemetryQueue?.setToken(token);
         }
       });
     };
     refreshAuthToken();
     const authTokenTimer = window.setInterval(refreshAuthToken, 30_000);
+
+    // BROADCAST_PIPELINE B0.5: sampled, batched, droppable playback
+    // telemetry. The sampling decision is made once per attach, off whatever
+    // `authToken` has resolved to by the time this first runs (a few hundred
+    // ms after `refreshAuthToken()` above, well before the first segment
+    // loads) -- a viewer whose token is not ready yet on this particular
+    // tick simply never gets sampled for THIS attach, which matters far less
+    // than never blocking playback on it.
+    const TELEMETRY_SAMPLE_INTERVAL_MS = 5_000;
+    function ensureTelemetryQueue(): void {
+      if (telemetryQueue !== null || cancelled) {
+        return;
+      }
+      const identity = hlsTelemetryIdentityFromToken(authToken);
+      if (!identity || !isSampledForHlsTelemetry(identity)) {
+        return;
+      }
+      const sessionId = hlsTelemetrySessionKey(activeSrc);
+      if (!sessionId) {
+        return;
+      }
+      telemetryQueue = createHlsTelemetryQueue({
+        sessionId,
+        // The server verifies this and, when it checks out, uses the
+        // channel/session it names instead of `sessionId` above -- see the
+        // route's own comment in `server/src/api/index.ts` (Farol finding,
+        // 2026-09-13). Null on the `LIVE_HLS_SIGNED_URLS=false` config,
+        // which mints no such token; the batch still goes out on `sessionId`.
+        sessionToken: hlsViewerTokenFromUrl(activeSrc),
+        // Seeded from the closure variable this function already required to
+        // be non-null (`identity` above comes off it) -- kept current after
+        // this by `refreshAuthToken`'s own `telemetryQueue?.setToken` call,
+        // not by fetching one at flush time (Farol finding, 2026-09-14).
+        token: authToken,
+        send: sendHlsTelemetryBatch,
+      });
+    }
+    function pushTelemetrySample(paintedMediaTimeSeconds: number): void {
+      if (!telemetryQueue || !currentFrag || !currentRung) {
+        return;
+      }
+      const latencyMs = encodeToPaintLatencyMs(currentFrag, paintedMediaTimeSeconds);
+      if (latencyMs === null) {
+        return;
+      }
+      const bufferSeconds =
+        video.buffered.length > 0
+          ? Math.max(
+              0,
+              video.buffered.end(video.buffered.length - 1) - video.currentTime,
+            )
+          : undefined;
+      telemetryQueue.push({
+        rung: currentRung,
+        latencyMs: Math.round(latencyMs),
+        bufferSeconds,
+        stalls: stallsSinceLastSample,
+        startupMs: startupMsPending ?? undefined,
+        playerRebuildCount: rebuildCountAtAttach - 1,
+      });
+      stallsSinceLastSample = 0;
+      startupMsPending = null;
+    }
+    function sampleTelemetryOnce(): void {
+      ensureTelemetryQueue();
+      if (!telemetryQueue || cancelled) {
+        return;
+      }
+      // A paused (or stalled-with-no-new-frame) video is showing a static
+      // picture: "encode-to-paint" has no meaning for a frame that is not
+      // newly arriving, and the fallback path below would otherwise report a
+      // growing latency for the same painted frame for as long as the pause
+      // lasts. Resuming playback picks sampling back up on the next tick.
+      if (video.paused) {
+        return;
+      }
+      const videoWithRvfc = video as HTMLVideoElement & {
+        requestVideoFrameCallback?: (
+          callback: (now: number, metadata: { mediaTime: number }) => void,
+        ) => number;
+        cancelVideoFrameCallback?: (handle: number) => void;
+      };
+      if (typeof videoWithRvfc.requestVideoFrameCallback !== "function") {
+        pushTelemetrySample(video.currentTime);
+        return;
+      }
+      // At most one outstanding request at a time: a stalled stream that
+      // never paints a new frame would otherwise accumulate one callback per
+      // tick, all firing together (for the same frame) the moment playback
+      // recovers.
+      if (pendingRvfcHandle !== null) {
+        return;
+      }
+      pendingRvfcHandle = videoWithRvfc.requestVideoFrameCallback((_now, metadata) => {
+        pendingRvfcHandle = null;
+        if (!cancelled) {
+          pushTelemetrySample(metadata.mediaTime);
+        }
+      });
+    }
+    telemetrySampleTimer = window.setInterval(
+      sampleTelemetryOnce,
+      TELEMETRY_SAMPLE_INTERVAL_MS,
+    );
 
     const reportSize = () => {
       if (cancelled || video.videoWidth === 0 || video.videoHeight === 0) {
@@ -889,6 +1263,27 @@ export function HlsWatchPlayer({
     };
     const watch = watchRef.current;
     watch.onSourceChanged(Date.now());
+    // A genuine new session (`activeSrc` itself changed) starts the pin/error
+    // state below fresh; a same-URL `attempt` rebuild -- which the pin rule
+    // itself triggers, below -- must NOT un-pin the very attach that applies
+    // it.
+    if (pinSessionSrcRef.current !== activeSrc) {
+      pinSessionSrcRef.current = activeSrc;
+      llPartErrorTimestampsRef.current = [];
+      pinnedToConventionalRef.current = false;
+      setPinnedToConventional(false);
+    }
+    // §4's pin rule only ever forces LL DOWN to conventional-style
+    // targeting for the rest of a session; nothing promotes the reverse.
+    // Computed once per attach (this effect reruns whenever either changes,
+    // via `attempt` for a pin/demotion and via `activeSrc` for a new
+    // session), so every read below -- the hls.js config, the watchdog, the
+    // badge -- agrees for the life of this instance.
+    const effectiveMode = effectiveHlsMode(
+      hlsMode,
+      pinnedToConventionalRef.current,
+    );
+    watch.configureForMode(effectiveMode, partTargetMs);
     // This attach's own starting point for the token-swap ref (B1.3, item
     // 3): a real re-attach (this effect re-running at all) always deserves
     // the freshest URL it was actually given, never a stale ref left over
@@ -914,10 +1309,17 @@ export function HlsWatchPlayer({
         // earlier tick fired. That response is now stale -- cancel it rather
         // than reloading a player that just came back (Farol review).
         clearPendingReconnect();
+        // First real frame of this attach: report it on the NEXT telemetry
+        // sample and then forget it, rather than on every sample.
+        if (!startupMsComputed) {
+          startupMsComputed = true;
+          startupMsPending = Date.now() - attachStartedAt;
+        }
       }
     };
     const onWaiting = () => {
       watch.onWaiting(Date.now());
+      stallsSinceLastSample += 1;
     };
     const onMediaError = () => {
       // The native player (no hls.js), or an MSE decode failure that
@@ -938,6 +1340,18 @@ export function HlsWatchPlayer({
       if (cancelled) {
         return;
       }
+      // hls.js's own `latency` getter (LL badge, item 3). Read
+      // unconditionally: harmless on the conventional path (the badge only
+      // ever renders it when `effectiveHlsMode(...) === "ll"`, which a §4
+      // pin flips to `"conventional"`), and reading it here rather than
+      // gating on mode means a mid-session pin/demotion clears the number
+      // on its own next tick instead of needing its own branch.
+      const measured = hlsRef.current?.latency;
+      setLlLatencySeconds(
+        typeof measured === "number" && Number.isFinite(measured) && measured > 0
+          ? measured
+          : null,
+      );
       const decision = watch.tick(Date.now());
       if (decision === "none") {
         // Still restarting: count the copy's countdown down rather than
@@ -977,11 +1391,31 @@ export function HlsWatchPlayer({
         clearPendingReconnect();
         const hls = hlsRef.current;
         console.warn(`[hls] stream stalled (${watch.lastReason}), ${decision}`);
-        const target = liveSeekTarget({
-          currentTime: video.currentTime,
-          liveSyncPosition: hls?.liveSyncPosition ?? null,
-          seekableEnd: mediaSeekableEnd(video),
-        });
+        // Only the seek is VOD-specific -- a VOD manifest has no live edge
+        // to seek back to: `liveSyncPosition` is null (hls.js never sets it
+        // on a non-live playlist) and `mediaSeekableEnd` reads the replay's
+        // own duration, so `liveSeekTarget` would return a point near the
+        // END of the recording -- the Chrome-back-buffer jump this seek
+        // exists to correct, applied to a stall that has nothing to do with
+        // it. `applyHlsRecoveryStep` below still runs unconditionally
+        // (a decode error still wants `recoverMediaError`, a stuck fragment
+        // still wants `startLoad`, whichever the ladder picked), and this
+        // tick never decides the terminal `"rebuild"`/`"dead"` outcome --
+        // that stays entirely in `watch.tick()`'s own escalation, read at
+        // the top of this handler, so a replay whose fragments keep
+        // failing still reaches the ladder's bound the same as a live
+        // stream would. Live (conventional or LL): `segmentSeconds` is the
+        // LL-aware offset (`liveSeekOffsetSeconds`), byte-identical to
+        // before on the conventional path since `effectiveMode` there is
+        // "conventional".
+        const target = isVod
+          ? null
+          : liveSeekTarget({
+              currentTime: video.currentTime,
+              liveSyncPosition: hls?.liveSyncPosition ?? null,
+              seekableEnd: mediaSeekableEnd(video),
+              segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
+            });
         applyHlsRecoveryStep(hls, decision);
         if (target !== null) {
           video.currentTime = target;
@@ -1073,21 +1507,53 @@ export function HlsWatchPlayer({
       if (start.slowStart && !cancelled) {
         setSlowStartNotice(true);
       }
+      // Conventional (the only mode before this task): `hlsLivePlayerConfig()`,
+      // unchanged, and `maxLiveSyncPlaybackRate: 1` below -- byte-identical
+      // to before LL existed. LL: `llHlsConfig(partTargetMs)`, which
+      // deliberately leaves `liveSyncDurationCount`/`liveSyncDuration` OUT
+      // so hls.js defers to the manifest's own `PART-HOLD-BACK`
+      // (`docs/plans/LL_HLS.md` §4; see that function's own comment).
+      const llConfig =
+        effectiveMode === "ll" ? llHlsConfig(partTargetMs) : null;
       const player = new Hls({
-        ...hlsLivePlayerConfig(),
+        // `hlsLivePlayerConfig()`/`llConfig` are entirely live-sync tuning
+        // (`liveSyncDurationCount`, `liveMaxLatencyDurationCount`, buffer
+        // lengths sized to a live sliding window) -- hls.js already treats a
+        // playlist with `#EXT-X-ENDLIST` as VOD and picks its own sensible
+        // buffering for it, and `maxLiveSyncPlaybackRate` (the live catch-up
+        // speed-up) has nothing to turn off on a manifest that is not live.
+        ...(isVod ? {} : (llConfig ?? hlsLivePlayerConfig())),
         enableWorker: true,
         capLevelToPlayerSize: true,
-        // 1 = off, deliberately, and still. 1.5 sped playback up (and
-        // pitched music) whenever the playhead drifted past the sync point,
-        // which on the old 10 s window was most of the time. Catch-up now
-        // lives OUTSIDE hls.js entirely (`catchUpPlaybackRate`, the
-        // "Behind-live polling" effect below), keyed on actual distance from
-        // the target rather than a single flat multiplier hls.js applies
-        // whenever it judges itself behind; leaving this at 1 is what stops
-        // the two fighting over the same `video.playbackRate`. A viewer far
-        // enough behind that the gentle curve caps out still gets the
-        // "jump to live" affordance.
-        maxLiveSyncPlaybackRate: 1,
+        ...(isVod
+          ? {}
+          : {
+              // Conventional (`llConfig` null): 1 = off, deliberately, and
+              // still. 1.5 sped playback up (and pitched music) whenever the
+              // playhead drifted past the sync point, which on the old 10 s
+              // window was most of the time. Catch-up now lives OUTSIDE
+              // hls.js entirely (`catchUpPlaybackRate`, the "Behind-live
+              // polling" effect below), keyed on actual distance from the
+              // target rather than a single flat multiplier hls.js applies
+              // whenever it judges itself behind; leaving this at 1 is what
+              // stops the two fighting over the same `video.playbackRate`.
+              // A viewer far enough behind that the gentle curve caps out
+              // still gets the "jump to live" affordance. Not applicable to
+              // a VOD manifest at all -- there is no live sync point to
+              // drift from -- so the whole key is skipped there rather than
+              // left at a value that means nothing.
+              //
+              // LL (`llConfig` set): the reverse choice. There is no 20 s
+              // cushion to protect and the manifest's hold-back IS the
+              // target, so hls.js's OWN built-in catch-up (verified against
+              // `hls.mjs`'s `LatencyController`) does the job; the
+              // "Behind-live polling" effect skips setting
+              // `video.playbackRate` on this path for exactly the same
+              // one-writer-only reason. See `LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE`.
+              maxLiveSyncPlaybackRate: llConfig
+                ? llConfig.maxLiveSyncPlaybackRate
+                : 1,
+            }),
         startLevel: start.startLevel,
         abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
         // Playlist is written after the first 2 s segment. Retry the
@@ -1165,6 +1631,37 @@ export function HlsWatchPlayer({
         if (!cancelled && data.response?.code === 401) {
           triggerAuthGraceRef.current();
         }
+        // §4's pin rule: on LL only, two part-load errors inside 10 s stop
+        // this viewing session asking hls.js to hold the LL edge at all —
+        // "a viewer who cannot hold the edge should stop trying, not
+        // oscillate". `effectiveMode` (not the raw `mode` prop) so a
+        // session already pinned does not re-arm itself on its own errors.
+        if (
+          !cancelled &&
+          effectiveMode === "ll" &&
+          isLlPartLoadErrorDetail(data.details)
+        ) {
+          const timestamps = llPartErrorTimestampsRef.current;
+          timestamps.push(Date.now());
+          if (timestamps.length > 2) {
+            timestamps.splice(0, timestamps.length - 2);
+          }
+          if (
+            !pinnedToConventionalRef.current &&
+            shouldPinToConventionalRung(timestamps)
+          ) {
+            pinnedToConventionalRef.current = true;
+            // The render-visible mirror (Farol review, this PR): without
+            // this the live badge kept showing an LL latency reading after
+            // the session had already been pinned, since it read the raw
+            // `mode` prop, which a client-only pin never changes.
+            setPinnedToConventional(true);
+            console.warn(
+              "[hls] two LL part-load errors inside 10s, pinning to conventional for the rest of this session",
+            );
+            setAttempt((n) => n + 1);
+          }
+        }
       });
       player.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         // What Auto actually settled on, so the button can say
@@ -1175,22 +1672,92 @@ export function HlsWatchPlayer({
         }
       });
       player.on(Hls.Events.LEVEL_UPDATED, (_event, data) => {
+        // A VOD manifest's EXT-X-MEDIA-SEQUENCE is fixed the moment it loads
+        // -- it is SUPPOSED to stop advancing once the whole recording is
+        // buffered, which `watch.onMediaSequence` (and the sequence-stuck
+        // watchdog reading it) exists specifically to call a dead LIVE
+        // egress. Feeding it a replay's frozen sequence restarted a healthy
+        // recording's playback every ~20s (see the `mode` prop's doc
+        // comment). Skipping the call is enough: `HlsStallWatch` only checks
+        // `sequenceSeenAt`/`lastSequence` once `onMediaSequence` has set
+        // them, so leaving them untouched leaves that branch permanently
+        // unreachable, which is exactly the point for a replay.
+        if (isVod) {
+          return;
+        }
         // The live playlist's EXT-X-MEDIA-SEQUENCE. A dead egress leaves
         // the playlist answering but never advancing; this is how the
         // watchdog tells that apart from a slow network.
         watch.onMediaSequence(data.details.startSN, Date.now());
-        // Never sync onto the oldest listed segment: against an API that
-        // still serves the egress's raw five-segment window, a 5-count sync
-        // point is the oldest entry with no slack, so a slow poll ages it
-        // out and hls.js re-syncs or stalls. hls.js reads this live on each
-        // playlist update, so capping it here keeps one segment of slack on
-        // a short window; on the production 15-segment window it is a no-op.
-        player.config.liveSyncDurationCount = effectiveLiveSyncDurationCount(
-          data.details.fragments.length,
-        );
+        // LL only, and a SEPARATE signal from the media-sequence one above
+        // (Farol review, this PR): under LL's blocking reload, hls.js fires
+        // this same event once per PART, not only once per segment --
+        // `lastPartSn`/`lastPartIndex` are hls.js's own (segment, part)
+        // pair for the newest part it has seen (verified against `hls.mjs`:
+        // `onLevelLoaded`'s own debug log names exactly this pair). Feeding
+        // that into `onPartAdvance` is what lets the watchdog's part-stuck
+        // rule tell "no new part yet" apart from "no new segment yet",
+        // which is the normal, healthy state for several seconds at a time.
+        if (effectiveMode === "ll") {
+          watch.onPartAdvance(
+            `${data.details.lastPartSn}.${data.details.lastPartIndex}`,
+            Date.now(),
+          );
+        }
+        // Conventional only. This is exactly the override §4 warns against
+        // on an LL manifest: it fights `PART-HOLD-BACK` by giving
+        // `userConfig.liveSyncDurationCount` a truthy value at construction
+        // (`hlsLivePlayerConfig()`), which is what makes this live mutation
+        // take effect at all (see `llHlsConfig`'s own comment on why LL's
+        // config omits the field instead). Never sync onto the oldest
+        // listed segment: against an API that still serves the egress's raw
+        // five-segment window, a 5-count sync point is the oldest entry
+        // with no slack, so a slow poll ages it out and hls.js re-syncs or
+        // stalls. hls.js reads this live on each playlist update, so
+        // capping it here keeps one segment of slack on a short window; on
+        // the production 15-segment window it is a no-op.
+        if (effectiveMode !== "ll") {
+          player.config.liveSyncDurationCount = effectiveLiveSyncDurationCount(
+            data.details.fragments.length,
+          );
+        }
       });
       player.on(Hls.Events.FRAG_LOADED, () => {
         hlsFragmentLoaded = true;
+      });
+      // BROADCAST_PIPELINE B0.3: which fragment is the one about to be
+      // painted, and its own wall clock (`#EXT-X-PROGRAM-DATE-TIME`, real
+      // from the egress or synthesised by the proxy -- either way hls.js
+      // parses it onto `frag.programDateTime` the same way). `FRAG_CHANGED`
+      // fires when playback actually MOVES onto a fragment, which is closer
+      // to "this is what's on screen now" than `FRAG_LOADED`, which fires on
+      // download and can run well ahead of the playhead.
+      player.on(Hls.Events.FRAG_CHANGED, (_event, data) => {
+        const frag = data.frag as {
+          programDateTime?: number | null;
+          start: number;
+          level: number;
+        };
+        currentFrag = {
+          programDateTimeMs: frag.programDateTime ?? NaN,
+          startSeconds: frag.start,
+        };
+        const level = player.levels[frag.level] as
+          | { url?: string[] | string; height?: number; frameRate?: number }
+          | undefined;
+        const levelUrl = Array.isArray(level?.url) ? level.url[0] : level?.url;
+        // The proxy path names the rung directly; a level whose URL is not
+        // our proxy at all (a raw public bucket URL, `LIVE_HLS_SIGNED_URLS=
+        // false`) falls back to naming it from the level's own resolution
+        // and framerate instead of reporting no rung -- and therefore never
+        // sending telemetry -- for an otherwise fully supported stream.
+        currentRung =
+          hlsRungFromPlaylistUrl(levelUrl) ??
+          hlsFallbackRungLabel({
+            height: level?.height,
+            framerate: level?.frameRate,
+          }) ??
+          currentRung;
       });
       player.loadSource(activeSrc);
       player.attachMedia(video);
@@ -1226,6 +1793,22 @@ export function HlsWatchPlayer({
       if (reconnectJitterTimer !== null) {
         window.clearTimeout(reconnectJitterTimer);
       }
+      if (telemetrySampleTimer !== null) {
+        window.clearInterval(telemetrySampleTimer);
+      }
+      if (pendingRvfcHandle !== null) {
+        (
+          video as HTMLVideoElement & {
+            cancelVideoFrameCallback?: (handle: number) => void;
+          }
+        ).cancelVideoFrameCallback?.(pendingRvfcHandle);
+        pendingRvfcHandle = null;
+      }
+      // The window since the last flush is worth sending: it is the tail
+      // end of a viewer's session, exactly the part a fixed 30s timer would
+      // otherwise lose on every navigate-away.
+      telemetryQueue?.flush();
+      telemetryQueue?.stop();
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);
@@ -1252,7 +1835,7 @@ export function HlsWatchPlayer({
       video.load();
       setHlsPlaybackStats(null);
     };
-  }, [activeSrc, attempt]);
+  }, [activeSrc, attempt, isVod]);
 
   // Twitch-style chrome: sits on the picture, fades after the pointer rests,
   // comes back on move / tap. Same controller the call stage uses, so the
@@ -1318,6 +1901,11 @@ export function HlsWatchPlayer({
     hasFrame,
     stallReason,
     authGraceActive,
+    // `resolveHoldingScreenReason` only ever distinguishes VOD from
+    // everything else -- LL changes the engine's live-sync tuning, not the
+    // holding-screen vocabulary, so it collapses onto "live" here the same
+    // as conventional does.
+    mode: isVod ? "vod" : "live",
   });
   const holdingCaption =
     holdingReason === "restarting"
@@ -1352,6 +1940,26 @@ export function HlsWatchPlayer({
     setCameraPip(next);
     writeCameraPipPref(next);
   }, []);
+
+  // Item 3: the live badge shows the measured figure on LL instead of the
+  // plain "Ao vivo"/"Live" every mode used to say — LL's whole product is
+  // being fast, so a number under a couple of seconds is worth showing
+  // rather than hiding the way the conventional badge deliberately does
+  // (2026-09-09 postmortem, `hls-live-edge.ts`'s `endToEndDelaySeconds`
+  // comment). `null` (no hls.js instance yet, the native engine, or a
+  // reading not in yet) falls back to the plain label, same as always.
+  //
+  // `effectiveHlsMode` (not the raw `mode` prop) so §4's pin rule is
+  // reflected here too (Farol review, this PR): a pinned session must say
+  // conventional latency, not linger on an LL reading the server was never
+  // told to demote.
+  const displayMode = effectiveHlsMode(hlsMode, pinnedToConventional);
+  const liveBadgeText =
+    displayMode === "ll" && llLatencySeconds !== null
+      ? t("voice.hls.liveLowLatency", {
+          seconds: llLatencySeconds.toFixed(1),
+        })
+      : t("voice.hls.live");
 
   return (
     <div
@@ -1454,12 +2062,16 @@ export function HlsWatchPlayer({
           </button>
         </div>
       ) : null}
-      {holdingReason === "dead" ? (
+      {holdingReason === "dead" || holdingReason === "unavailable" ? (
         <div
-          data-testid="hls-dead"
+          data-testid={holdingReason === "unavailable" ? "hls-replay-dead" : "hls-dead"}
           className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper"
         >
-          <span>{t("voice.hls.dead")}</span>
+          <span>
+            {holdingReason === "unavailable"
+              ? t("voice.hls.replayDead")
+              : t("voice.hls.dead")}
+          </span>
           <button
             type="button"
             className="rounded-full bg-paper/15 px-3 py-1.5 font-medium text-paper hover:bg-paper/25"
@@ -1474,6 +2086,21 @@ export function HlsWatchPlayer({
         // than flashing a stall overlay over a hiccup nobody needs to know
         // about. Past `AUTH_GRACE_MS` this falls through to the branch below.
         null
+      ) : holdingReason === "buffering" ? (
+        // A replay's plain "loading" state. Deliberately NOT the live
+        // `StreamStartingSoon` holding screen: that bubbles loop and its
+        // rotating "hold tight, it's about to start" lines describe a watch
+        // party that has not gone live yet, which is never true of a
+        // finished broadcast simply buffering its next segment.
+        <div
+          data-testid="hls-vod-loading"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/40"
+        >
+          <Loader2
+            className="h-8 w-8 animate-spin text-paper/80"
+            aria-hidden="true"
+          />
+        </div>
       ) : holdingReason !== null ? (
         <div
           data-testid={
@@ -1488,7 +2115,7 @@ export function HlsWatchPlayer({
           <StreamStartingSoon caption={holdingCaption} />
         </div>
       ) : null}
-      {cinema && hasFrame ? (
+      {cinema && hasFrame && !isVod ? (
         // Plain and permanent, deliberately OUTSIDE `chromeClass` below: that
         // bar fades on idle (Twitch-style autohide), and a badge that
         // vanishes the moment the pointer rests is the "hover-only" shape
@@ -1505,7 +2132,7 @@ export function HlsWatchPlayer({
               aria-hidden="true"
               className="h-1.5 w-1.5 rounded-full bg-danger"
             />
-            {t("voice.hls.live")}
+            {liveBadgeText}
           </span>
         </div>
       ) : null}
@@ -1617,7 +2244,36 @@ export function HlsWatchPlayer({
               className="h-1 w-20 cursor-pointer accent-signal sm:w-24"
             />
             </div>
-            {behindLive || (paused && hasFrame) ? (
+            {isVod ? (
+              // A replay's real transport: no live edge to chase, a
+              // beginning and an end instead. `vodDuration` is null until
+              // `loadedmetadata` fires, which is also the only time a range
+              // input with an unknown max would be meaningless to show.
+              <div
+                data-testid="hls-vod-seek"
+                className="flex min-w-0 flex-1 items-center gap-2 pl-1"
+              >
+                <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-paper/80">
+                  {formatCallDuration(vodCurrentTime * 1000)}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={vodDuration ?? 0}
+                  step={1}
+                  value={Math.min(vodCurrentTime, vodDuration ?? 0)}
+                  disabled={vodDuration === null}
+                  aria-label={t("voice.hls.seek")}
+                  onChange={(event) => seekTo(Number(event.target.value))}
+                  className="h-1 min-w-0 flex-1 cursor-pointer accent-signal disabled:cursor-default disabled:opacity-50"
+                />
+                <span className="w-9 shrink-0 text-[11px] tabular-nums text-paper/80">
+                  {vodDuration === null
+                    ? "--:--"
+                    : formatCallDuration(vodDuration * 1000)}
+                </span>
+              </div>
+            ) : behindLive || (paused && hasFrame) ? (
               <button
                 type="button"
                 data-testid="watch-stage-jump-live"
@@ -1639,7 +2295,7 @@ export function HlsWatchPlayer({
                   aria-hidden="true"
                   className="h-2 w-2 rounded-full bg-danger"
                 />
-                {t("voice.hls.live")}
+                {liveBadgeText}
               </span>
             )}
           </div>
@@ -1855,7 +2511,7 @@ export function HlsWatchPlayer({
             ) : (
               <span className="flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-paper">
                 <Radio className="h-3 w-3 text-danger" />
-                {t("voice.hls.live")}
+                {liveBadgeText}
               </span>
             )}
           </div>

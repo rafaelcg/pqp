@@ -137,6 +137,61 @@ enum WatchStreamSwap {
     }
 }
 
+/**
+ WHAT TO DO WHEN `AVPlayer` DECLARES A HARD FAILURE, BOUNDED.
+
+ `AVPlayerItem.status == .failed` most often means the token in the attached
+ URL just expired: `WatchStreamSwap` only refreshes the URL on the NEXT frame
+ or the NEXT renewal window, and if the socket has been quiet (backgrounded,
+ reconnecting) the freshest thing this player is holding can be the very token
+ that was just rejected. Retrying it verbatim reproduces the production
+ symptom this fix exists for: a client hammering an expired token forever
+ because nothing ever asks for a new one.
+
+ So the right first move on a hard failure is always to ask the server for a
+ fresh stream (`WatchModel.refreshLive`) before giving up. But a stream that
+ is genuinely gone — the process died, the host is not coming back — must not
+ turn into an infinite refetch loop, which is its own way of hammering the
+ API. This caps it the same way `android/.../watch/HlsWatchdog.kt` caps its
+ reconnects: a small number of attempts inside a rolling window, and once
+ that is exhausted the existing "Try again" card takes over rather than
+ spinning forever. A re-buffer on a real recovery is an acceptable cost;
+ getting stuck, or never stopping, is not.
+
+ Pure and Date-driven on purpose, like `WatchStreamSwap` above: exercised in
+ tests with no `AVPlayer` and no network.
+ */
+struct WatchFailureRecovery: Sendable {
+    /// Mirrors `HlsWatchdog.maxReconnects` on Android.
+    static let maxAttempts = 3
+    /// Mirrors `HlsWatchdog.windowMs` on Android (5 minutes).
+    static let windowSeconds: TimeInterval = 5 * 60
+
+    /// What the caller should do about one hard failure.
+    enum Decision: Equatable, Sendable {
+        /// Ask the server for a fresh stream and reattach if it answers with
+        /// one. Still within budget.
+        case refetch
+        /// Budget exhausted: show the failed card instead of trying again.
+        case giveUp
+    }
+
+    private var attempts: [Date] = []
+
+    /// Record one failure and decide what to do about it.
+    mutating func onFailure(now: Date) -> Decision {
+        attempts.removeAll { now.timeIntervalSince($0) >= Self.windowSeconds }
+        if attempts.count >= Self.maxAttempts { return .giveUp }
+        attempts.append(now)
+        return .refetch
+    }
+
+    /// A clean slate: a manual retry, or a reattach that actually stuck.
+    mutating func reset() {
+        attempts.removeAll()
+    }
+}
+
 /// `GET /api/channels/:channelId/live`. The seed for a client that opened the
 /// channel before its socket delivered a frame, and the re-read after a
 /// failure. `stream` is stamped for the caller like the frames are.

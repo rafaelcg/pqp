@@ -58,6 +58,19 @@ export interface HlsAudienceOptions {
   keyframeMs: number;
   /** Tell the channel's audience the current stream and count. */
   broadcast: (channelId: string) => void;
+  /**
+   * How often a live SESSION re-mints and pushes fresh viewer tokens to its
+   * watchers, independent of `keyframeMs`. Exists for the same reason as the
+   * keyframe, and nothing like it: the keyframe restates the count to
+   * everyone who may view the channel (a DB-backed audience, cheap per call
+   * but a query per recipient's worth of work), while this walks only the
+   * bounded `watching` set this module already holds in memory, so a
+   * 500-viewer party is one loop over one `Set`, not 500 individually
+   * scheduled renewals.
+   */
+  remintMs: number;
+  /** Mint and send a fresh token to exactly these watching sockets. */
+  remint: (channelId: string, watchers: WebSocket[]) => void;
 }
 
 /**
@@ -69,6 +82,16 @@ export interface HlsAudienceOptions {
  * cost this path exists to avoid. Instead, while a channel has a live stream
  * or at least one watcher, a per-channel timer restates the count on the
  * audience keyframe cadence; the timer stops when neither holds.
+ *
+ * A second, independent timer runs per live SESSION (`setStream`'s
+ * `startedAt`): every `remintMs` it hands `options.remint` the watching
+ * sockets so a fresh viewer token reaches them well inside the token's TTL,
+ * without waiting for a genuine change to the stream. See `HLS_VIEWER_TOKEN_TTL_MS`
+ * in `hls-viewer-token.ts` for why 60 minutes is the number this has to beat,
+ * and `docs/WATCH_PARTY.md` for the incident this exists to close: a token
+ * that only ever renewed on a stream CHANGE could run a whole film on the URL
+ * it was first handed, and 2026-09-12 production showed exactly that as
+ * rolling waves of `hlsPlaylistRejected reason=expired`.
  */
 export interface HlsAudience {
   /** `watch-live { watching: true }` from a socket without a seat. */
@@ -92,6 +115,15 @@ export function createHlsAudience(options: HlsAudienceOptions): HlsAudience {
   const watching = new Map<string, Set<WebSocket>>();
   const streams = new Map<string, LiveHlsStream>();
   const timers = new Map<string, ReturnType<typeof setInterval>>();
+  /**
+   * One timer per live SESSION, not per channel: `startedAt` is what tells a
+   * restart (a new session, new token lineage) from the same broadcast
+   * ticking along, and only the latter should keep the existing schedule.
+   */
+  const remintTimers = new Map<
+    string,
+    { timer: ReturnType<typeof setInterval>; startedAt: number }
+  >();
 
   const active = (channelId: string) =>
     streams.has(channelId) || (watching.get(channelId)?.size ?? 0) > 0;
@@ -116,6 +148,44 @@ export function createHlsAudience(options: HlsAudienceOptions): HlsAudience {
       clearInterval(timer);
       timers.delete(channelId);
     }
+  };
+
+  const stopRemintTimer = (channelId: string) => {
+    const existing = remintTimers.get(channelId);
+    if (existing) {
+      clearInterval(existing.timer);
+      remintTimers.delete(channelId);
+    }
+  };
+
+  /**
+   * A stream ending stops the clock; a stream starting (or restarting under
+   * a new `startedAt`) restarts it; the SAME session ticking along leaves
+   * the existing schedule alone, which is what keeps this a renewal rather
+   * than a reset every time `setStream` is called with an unchanged stream.
+   */
+  const reconcileRemintTimer = (
+    channelId: string,
+    stream: LiveHlsStream | null,
+  ) => {
+    if (!stream) {
+      stopRemintTimer(channelId);
+      return;
+    }
+    const existing = remintTimers.get(channelId);
+    if (existing && existing.startedAt === stream.startedAt) {
+      return;
+    }
+    stopRemintTimer(channelId);
+    const handle = setInterval(() => {
+      const set = watching.get(channelId);
+      if (!set || set.size === 0) {
+        return;
+      }
+      options.remint(channelId, [...set]);
+    }, options.remintMs);
+    handle.unref?.();
+    remintTimers.set(channelId, { timer: handle, startedAt: stream.startedAt });
   };
 
   const remove = (channelId: string, socket: WebSocket) => {
@@ -153,6 +223,7 @@ export function createHlsAudience(options: HlsAudienceOptions): HlsAudience {
         streams.delete(channelId);
       }
       reconcileTimer(channelId);
+      reconcileRemintTimer(channelId, stream);
     },
     stream(channelId) {
       return streams.get(channelId) ?? null;
@@ -168,6 +239,10 @@ export function createHlsAudience(options: HlsAudienceOptions): HlsAudience {
         clearInterval(timer);
       }
       timers.clear();
+      for (const entry of remintTimers.values()) {
+        clearInterval(entry.timer);
+      }
+      remintTimers.clear();
       watching.clear();
       streams.clear();
     },

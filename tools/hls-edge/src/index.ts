@@ -63,24 +63,24 @@
  * (`./hls-viewer-token.js`) — an invalid or expired token never reaches the
  * cache or the origin.
  *
- * REVOCATION IS THE EXCEPTION, AND IT IS WEAKER THAN A SINGLE VIEWER'S OWN
- * POLL INTERVAL WOULD SUGGEST. A ban or a lost VIEW permission is enforced by
- * `hls-revocation.ts`, an in-memory set that exists ONLY on the API process —
- * this Worker has no way to consult it, and never tries to. Without the
- * cache, that gap is bounded by "the next request THIS VIEWER makes", a
- * couple of seconds. WITH the cache, it is bounded by how long the SHARED
- * cache entry for that rung stays populated, which is refreshed by ANY valid
- * viewer's request, not particularly the revoked one's. During an active
- * party on a popular rung, that is effectively "as long as the party runs":
- * a banned or kicked viewer can keep receiving a live playlist and its
- * segment URLs for as long as other viewers keep the cache warm, because a
- * cache HIT never reaches the origin at all. This is a real, deliberate
- * trade-off of collapsing N viewers into one origin fetch — there is no way
- * to keep that collapse AND re-check each individual viewer's standing on
- * every request, since the second thing is what the first thing removes.
- * Flagged for explicit sign-off before this ships to production; see
- * `docs/plans/RELOAD_STORM.md` and `README.md` "What this Worker does NOT
- * make faster".
+ * REVOCATION: SIGNED OFF 2026-09-14, BOUND TO 30 SECONDS WHEN KV IS
+ * PROVISIONED. `hls-revocation.ts`'s in-memory set exists only on the API
+ * process; this Worker cannot consult IT directly, but `server/src/voice/hls-edge-revocation.ts`
+ * writes the same eviction to a Cloudflare KV denylist (`HLS_REVOKED_USERS`)
+ * this Worker DOES consult -- `PartyPassRevocationGate` in
+ * `party-pass-revocation.js`, checked before EVERY cache lookup on the
+ * rendition route, for both a `?t=` token and a `?pp=` party pass alike (see
+ * `handlePlaylistRequest`). With the KV namespace provisioned, a revoked
+ * viewer's next request is refused within the gate's 30 s cache window
+ * regardless of how long other viewers keep a rung's shared cache entry
+ * warm. Without it, the original trade-off applies unchanged for a `?t=`
+ * token (bounded by that token's own TTL, already accepted when
+ * `LIVE_HLS_PLAYLIST_BASE_URL` first shipped in #559) -- and a party pass is
+ * refused outright once `ENVIRONMENT=production`
+ * (`partyPassRequiresKvInProduction`) rather than riding its full 6 h
+ * ceiling with nothing checking it. See README.md "Enabling in production"
+ * for the provisioning steps and `docs/plans/RELOAD_STORM.md` for the
+ * numbers this Worker exists to cut in the first place.
  */
 
 import {
@@ -88,6 +88,15 @@ import {
   describeHlsViewerToken,
   verifyHlsViewerToken,
 } from "./hls-viewer-token.js";
+import {
+  HLS_PARTY_PASS_PARAM,
+  describeHlsPartyPass,
+  verifyHlsPartyPass,
+} from "./hls-party-pass.js";
+import {
+  PartyPassRevocationGate,
+  partyPassRequiresKvInProduction,
+} from "./party-pass-revocation.js";
 import { parsePlaylistPath } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
@@ -104,6 +113,35 @@ export interface Env {
    * 401s, the same fail-closed shape `viewerSecret()` has on the origin.
    */
   HLS_VIEWER_TOKEN_SECRET?: string;
+  /**
+   * The signing secret for party passes -- a DIFFERENT derived key than
+   * `HLS_VIEWER_TOKEN_SECRET`, matching `partySecret()` in
+   * `hls-viewer-token.ts` (see that function's doc comment for why a
+   * different key, not a claim). Unset: `?pp=` is never checked and this
+   * Worker falls all the way back to gating on `?t=` alone, exactly as it
+   * did before the party pass existed.
+   */
+  HLS_PARTY_PASS_SECRET?: string;
+  /**
+   * The revocation denylist, written by `server/src/voice/hls-edge-revocation.ts`
+   * the moment a viewer is kicked, banned, or loses VIEW (`hls-revocation.ts`'s
+   * own eviction seam) -- see `party-pass-revocation.js`'s `PartyPassRevocationGate`
+   * for how this Worker reads it, and README.md "Enabling in production" for
+   * how an operator provisions it. Unbound: `HLS_REVOKED_USERS` governs
+   * nothing outside production (fails open, the pre-sign-off shape) and
+   * `partyPassRequiresKvInProduction` refuses party passes outright once
+   * `ENVIRONMENT=production`.
+   */
+  HLS_REVOKED_USERS?: KVNamespace;
+  /**
+   * `"production"` on the one real deploy (`wrangler.jsonc`'s default var).
+   * Governs exactly one thing: whether a party pass may be honored with no
+   * KV binding behind it -- see `partyPassRequiresKvInProduction`. Anything
+   * else (unset for `wrangler dev`, `"development"`, `"staging"`) keeps the
+   * pre-sign-off fail-open default, which is what local development and a
+   * self-host with no KV namespace still need to work at all.
+   */
+  ENVIRONMENT?: string;
   /** Comma-separated allowlist. Unset: every origin is echoed back (see cors.ts). */
   CORS_ALLOWED_ORIGINS?: string;
   // ALWAYS-ON (not yet built, see playlist-origin.ts and
@@ -112,6 +150,17 @@ export interface Env {
   // Nothing reads them yet — see the commented placeholders in
   // wrangler.jsonc for why they are not declared until something does.
 }
+
+/**
+ * One gate per isolate, same lifetime as the Worker instance -- see
+ * `party-pass-revocation.js` for what it checks, the fail-open/fail-closed
+ * rules, and the 30 s cache bound. Used for BOTH credential kinds on the
+ * rendition route now, not only a party pass -- see `handlePlaylistRequest`
+ * for where each call site sits relative to the cache lookup, and
+ * README.md "Enabling in production" for why that is what answers Farol's
+ * "shared rendition cache bypasses viewer revocation" finding.
+ */
+const partyPassRevocationGate = new PartyPassRevocationGate();
 
 /**
  * How long a rendition's playlist is shared across viewers. The egress
@@ -244,7 +293,12 @@ function text(status: number, body: string): Response {
 
 /** 401 for "not a valid credential at all", 403 for "valid, but not for this resource". */
 function statusForRejection(reason: string): number {
-  return reason === "wrong-channel" || reason === "wrong-session" ? 403 : 401;
+  return reason === "wrong-channel" ||
+    reason === "wrong-session" ||
+    reason === "revoked" ||
+    reason === "party-pass-kv-unconfigured"
+    ? 403
+    : 401;
 }
 
 /** The cache-key request for a rendition: path only, no query — the token never varies the body. */
@@ -258,7 +312,7 @@ async function handlePlaylistRequest(
   request: Request,
   origin: PlaylistOrigin,
   ctx: ExecutionContext,
-  env: Pick<Env, "HLS_VIEWER_TOKEN_SECRET">,
+  env: Pick<Env, "HLS_VIEWER_TOKEN_SECRET" | "HLS_PARTY_PASS_SECRET" | "HLS_REVOKED_USERS" | "ENVIRONMENT">,
   channelId: string,
   startedAt: string,
   rung: string | undefined,
@@ -268,9 +322,65 @@ async function handlePlaylistRequest(
   const secret = env.HLS_VIEWER_TOKEN_SECRET ?? null;
   const expected = { channelId, startedAt: Number(startedAt) };
 
-  const verified = await verifyHlsViewerToken(token, expected, secret);
+  let verified = await verifyHlsViewerToken(token, expected, secret);
+  // The party pass gates ONLY the rendition route (`rung` set). The
+  // session/master route below is always forwarded fresh with the caller's
+  // own token and never cached, so there is nothing for the pass's longer
+  // life to buy there -- see the module doc comment and `mintHlsPartyPass`'s
+  // in `hls-viewer-token.ts`.
+  let usedPartyPass = false;
+  // Set only on the party-pass path, so the final rejection block below can
+  // report the REAL reason a well-formed pass was refused -- without this,
+  // a revoked-but-otherwise-valid pass fell through to `describeHlsPartyPass`,
+  // which knows nothing about revocation and answered "malformed" for a
+  // pass that was not malformed at all.
+  let partyPassRejectReason: "revoked" | "party-pass-kv-unconfigured" | null = null;
+  if (!verified && rung) {
+    const partyPass = url.searchParams.get(HLS_PARTY_PASS_PARAM);
+    const partySecret = env.HLS_PARTY_PASS_SECRET ?? null;
+    const passVerified = await verifyHlsPartyPass(partyPass, expected, partySecret);
+    if (passVerified) {
+      if (partyPassRequiresKvInProduction(env)) {
+        // See README.md "Enabling in production": a party pass is a 6 h
+        // credential this Worker alone checks, and in production that is
+        // too wide a gap to accept with no KV denylist behind it at all --
+        // refuse outright rather than silently falling open.
+        partyPassRejectReason = "party-pass-kv-unconfigured";
+      } else {
+        const { revoked, kvError } = await partyPassRevocationGate.check(
+          env.HLS_REVOKED_USERS,
+          passVerified.userId,
+          channelId,
+          passVerified.issuedAt,
+        );
+        if (kvError) {
+          logEvent("hlsEdge.partyPassRevocationCheckError", { channelId });
+        }
+        if (revoked) {
+          partyPassRejectReason = "revoked";
+        }
+      }
+      if (!partyPassRejectReason) {
+        verified = passVerified;
+        usedPartyPass = true;
+      }
+    }
+  }
   if (!verified) {
-    const reason = (await describeHlsViewerToken(token, expected, secret)) ?? "malformed";
+    // Describe whichever credential was actually offered: a revoked/refused
+    // party pass reports that outcome directly (it verified fine as a
+    // signature; the KV check is what said no); otherwise the token if
+    // present (the common case, and what most rejections are about), the
+    // party pass only when the caller sent NO token at all.
+    const reason =
+      partyPassRejectReason ??
+      (token
+        ? ((await describeHlsViewerToken(token, expected, secret)) ?? "malformed")
+        : ((await describeHlsPartyPass(
+            url.searchParams.get(HLS_PARTY_PASS_PARAM),
+            expected,
+            env.HLS_PARTY_PASS_SECRET ?? null,
+          )) ?? "malformed"));
     logRejection(channelId, rung, reason);
     return json(statusForRejection(reason), { error: "Unauthorized", reason });
   }
@@ -297,7 +407,10 @@ async function handlePlaylistRequest(
   }
 
   // The session/master URL: see the module doc comment for why this route is
-  // always forwarded with the caller's OWN token and never cached.
+  // always forwarded with the caller's OWN token and never cached. Gated on
+  // `verified` above, which for this branch can only ever have come from
+  // `t` (party pass is skipped when `rung` is unset), so `token` here is
+  // never null.
   if (!rung) {
     let originResponse: Response;
     try {
@@ -316,6 +429,35 @@ async function handlePlaylistRequest(
       status: originResponse.status,
       headers,
     });
+  }
+
+  // THE FIX FOR "SHARED RENDITION CACHE BYPASSES VIEWER REVOCATION" (Farol
+  // HIGH). A party-pass-authorized request already ran this exact check
+  // above, before `verified` was ever set -- this covers the OTHER case, a
+  // still-fresh `?t=` token, which previously went straight to the cache
+  // lookup below with no revocation check at all once the signature itself
+  // verified. Running it HERE, before the blocking-reload hold AND before
+  // `cache.match`, closes the gap for both credential kinds the same way: a
+  // cache HIT (or a long poll) can no longer outlive a revocation by more
+  // than `PARTY_PASS_REVOCATION_CACHE_TTL_MS` (30 s) once `HLS_REVOKED_USERS`
+  // is bound. Cheap when it is not: `check()` returns immediately on an
+  // unbound KV, same as before this existed. Ordered ahead of the blocking
+  // reload below on purpose -- a revoked viewer must not get a long hold
+  // open on the origin before being rejected.
+  if (!usedPartyPass) {
+    const { revoked, kvError } = await partyPassRevocationGate.check(
+      env.HLS_REVOKED_USERS,
+      verified.userId,
+      channelId,
+      verified.issuedAt,
+    );
+    if (kvError) {
+      logEvent("hlsEdge.partyPassRevocationCheckError", { channelId });
+    }
+    if (revoked) {
+      logRejection(channelId, rung, "revoked");
+      return json(statusForRejection("revoked"), { error: "Unauthorized", reason: "revoked" });
+    }
   }
 
   // A rendition request carrying a directive skips the 2 s cache entirely —
@@ -364,28 +506,59 @@ async function handlePlaylistRequest(
     return new Response(cached.body, { status: cached.status, headers });
   }
 
+  // A CACHE MISS NEEDS AN ORIGIN-VERIFIABLE TOKEN, AND A PARTY PASS IS NOT
+  // ONE (`hls-viewer-token.ts`'s `verifyHlsViewerToken` cannot verify a
+  // party pass, by construction). A viewer authorised here ONLY by a party
+  // pass -- no `t` at all, OR ONE THAT HAS SINCE EXPIRED OR OTHERWISE FAILED
+  // VERIFICATION -- cannot make this Worker mint a fresh origin fetch on
+  // their own. Gated on `usedPartyPass`, NOT on `!token`: a present-but-bad
+  // token is not usable here either, and forwarding it to the coalesced
+  // fetch below would have the origin reject it (401) FOR EVERY OTHER
+  // CALLER coalesced onto the same shared promise, including ones sitting
+  // on their own still-fresh `?t=` -- one viewer's stale token would poison
+  // the shared fetch for everyone polling the same rung in the same window.
+  // `token` reaching `fetchRenditionCoalesced` below is therefore always the
+  // SAME string `verifyHlsViewerToken` just accepted a few lines up, never
+  // an unverified one. In practice this is a narrow window: the shared
+  // cache above is refilled by ANY other valid viewer of the same rung, and
+  // a live party rarely has every viewer's short-lived token expire at
+  // once. When it does, the honest answer is a retryable miss, not a 401 --
+  // the caller is not unauthorized, there is just no fresh copy this
+  // request can produce. `voice.hlsPlaylistRejected` logs "expired" from
+  // real 401s; this gets its own counter so the two are never confused when
+  // reading a dashboard.
+  if (usedPartyPass || !token) {
+    logEvent("hlsEdge.partyPassMissWithoutToken", { channelId, rung });
+    return text(503, "Playlist not cached; retry shortly");
+  }
+
   let fetched: FetchedPlaylist;
+  let isProducer: boolean;
   try {
-    fetched = await fetchRenditionCoalesced(cacheKey.url, origin, {
+    const coalesced = await fetchRenditionCoalesced(cacheKey.url, origin, {
       channelId,
       startedAt,
       rung,
-      token: token!,
+      token,
     });
+    fetched = coalesced.result;
+    isProducer = coalesced.isProducer;
   } catch {
-    logEvent("hlsEdge.originError", { channelId, rung });
+    // Already logged once, inside the shared fetch, regardless of how many
+    // callers are awaiting it -- see `fetchRenditionCoalesced`'s doc comment.
     return text(502, "Origin fetch failed");
   }
 
   if (fetched.status < 200 || fetched.status >= 300) {
-    // Never cache non-200 — a stream that has not started yet or has just
-    // ended must not get frozen into "not found" for every viewer for the
-    // rest of the cache window.
-    logEvent("hlsEdge.originRejected", {
-      channelId,
-      rung,
-      status: fetched.status,
-    });
+    // `usedPartyPass` is always false here -- a party-pass-only rider never
+    // reaches `fetchRenditionCoalesced` at all any more (see the guard
+    // above), so the token this Worker just forwarded is always the one it
+    // verified itself moments ago, and the origin refusing it would be a
+    // drift between the two implementations' HMAC checks, not an expiry
+    // race. Never cache non-200 — a stream that has not started yet or has
+    // just ended must not get frozen into "not found" for every viewer for
+    // the rest of the cache window. `hlsEdge.originRejected` is already
+    // logged once, inside the shared fetch.
     const headers = new Headers(fetched.headers);
     headers.set("X-HLS-Edge-Cache", "SKIP");
     return new Response(fetched.body, { status: fetched.status, headers });
@@ -399,8 +572,16 @@ async function handlePlaylistRequest(
   // purpose rather than failing to cache at all.
   headers.set("Cache-Control", `public, max-age=${CACHE_TTL_SECONDS}`);
 
-  const toCache = new Response(fetched.body, { status: 200, headers });
-  ctx.waitUntil(safeCachePut(cache, cacheKey, toCache.clone()));
+  // ONLY THE PRODUCER WRITES THE CACHE. Every OTHER caller sharing this
+  // coalesced fetch already got the same bytes and is about to build its own
+  // response from them below; having each of them ALSO run `cache.put` on
+  // the identical key and body was a duplicate write per waiter -- hundreds
+  // of them at a synchronized expiry -- for no benefit over the first one
+  // (Farol flagged this as a MEDIUM performance issue).
+  if (isProducer) {
+    const toCache = new Response(fetched.body, { status: 200, headers });
+    ctx.waitUntil(safeCachePut(cache, cacheKey, toCache.clone()));
+  }
 
   const response = new Response(fetched.body, { status: 200, headers: new Headers(headers) });
   response.headers.set("X-HLS-Edge-Cache", "MISS");
@@ -426,14 +607,32 @@ async function safeCacheMatch(cache: Cache, key: Request): Promise<Response | un
  * Same reasoning in the other direction: a failed `cache.put` must not
  * become an unhandled rejection under `ctx.waitUntil` (which Cloudflare
  * treats as a Worker error) when the response it was populating the cache
- * FOR has already been served successfully. Losing one write just means the
- * next request repeats the origin fetch this write would have saved it.
+ * FOR has already been served successfully.
+ *
+ * ONE RETRY, NOT ZERO. This is the producer's ONLY attempt at populating
+ * the shared cache for this window (see "ONLY THE PRODUCER WRITES THE
+ * CACHE" at the call site) — every OTHER caller sharing the coalesced fetch
+ * already has its own copy of the bytes and returns successfully to its own
+ * viewer regardless, so a bare `cache.put` failure was invisible to every
+ * individual request while still meaning NOBODY populated the shared cache
+ * for the rest of the window, undoing exactly the collapse this Worker
+ * exists for. A transient Cache API error is the common failure shape here
+ * (`cache.match` gets the identical treatment above), so one immediate
+ * retry recovers most of them; `hlsEdge.cacheWriteError` now fires only
+ * once BOTH attempts have failed, with `attempts: 2` to tell it apart from
+ * a single-attempt failure if this ever needs a third try later.
  */
 async function safeCachePut(cache: Cache, key: Request, response: Response): Promise<void> {
   try {
+    await cache.put(key, response.clone());
+    return;
+  } catch {
+    // fall through to the retry below
+  }
+  try {
     await cache.put(key, response);
   } catch {
-    logEvent("hlsEdge.cacheWriteError", {});
+    logEvent("hlsEdge.cacheWriteError", { attempts: 2 });
   }
 }
 
@@ -441,6 +640,19 @@ interface FetchedPlaylist {
   status: number;
   headers: Headers;
   body: ArrayBuffer;
+}
+
+interface CoalescedFetch {
+  result: FetchedPlaylist;
+  /**
+   * True for exactly one of the callers sharing a given cache key: the one
+   * whose call actually started the origin fetch, as opposed to one that
+   * arrived while it was already in flight and is only awaiting the same
+   * promise. `handlePlaylistRequest` uses this to decide who populates the
+   * shared cache -- see that call site for why every OTHER caller doing the
+   * same `cache.put` would be pure waste.
+   */
+  isProducer: boolean;
 }
 
 /**
@@ -459,6 +671,17 @@ interface FetchedPlaylist {
  * but that is still a real reduction and it composes with, rather than
  * replaces, the cache above.
  *
+ * ONE LOG LINE PER SHARED FETCH, NOT ONE PER WAITER. Both the success and
+ * failure logging happen INSIDE the shared promise, exactly once no matter
+ * how many callers are awaiting it -- an earlier version logged from each
+ * caller's own `try`/`catch` around `await`, which meant a synchronized
+ * expiry with hundreds of coalesced waiters produced hundreds of identical
+ * `hlsEdge.originError` / `hlsEdge.originRejected` lines for what was
+ * genuinely one origin round trip (Farol flagged this as a MEDIUM
+ * performance issue). A caller that needs to know the outcome still can --
+ * the returned/thrown value carries it -- it just does not ALSO log it
+ * again.
+ *
  * Returns a plain buffered record rather than a `Response` because a
  * `Response` body can only be read once: every awaiter needs its own copy of
  * the bytes to build its own reply and, separately, its own cache-store
@@ -470,15 +693,24 @@ async function fetchRenditionCoalesced(
   cacheKeyUrl: string,
   origin: PlaylistOrigin,
   req: { channelId: string; startedAt: string; rung: string; token: string },
-): Promise<FetchedPlaylist> {
+): Promise<CoalescedFetch> {
   const existing = inFlightRenditionFetches.get(cacheKeyUrl);
   if (existing) {
-    return existing;
+    return { result: await existing, isProducer: false };
   }
   const startTime = Date.now();
   const promise = (async (): Promise<FetchedPlaylist> => {
-    const response = await origin.fetchPlaylist(req);
-    const body = await response.arrayBuffer();
+    let response: Response;
+    let body: ArrayBuffer;
+    try {
+      response = await origin.fetchPlaylist(req);
+      body = await response.arrayBuffer();
+    } catch {
+      // Logged HERE, once, for every waiter sharing this fetch -- see the
+      // doc comment above.
+      logEvent("hlsEdge.originError", { channelId: req.channelId, rung: req.rung });
+      throw new Error("origin fetch failed");
+    }
     if (response.ok) {
       logEvent("hlsEdge.originFetch", {
         channelId: req.channelId,
@@ -486,12 +718,18 @@ async function fetchRenditionCoalesced(
         bytes: body.byteLength,
         durationMs: Date.now() - startTime,
       });
+    } else {
+      logEvent("hlsEdge.originRejected", {
+        channelId: req.channelId,
+        rung: req.rung,
+        status: response.status,
+      });
     }
     return { status: response.status, headers: response.headers, body };
   })();
   inFlightRenditionFetches.set(cacheKeyUrl, promise);
   try {
-    return await promise;
+    return { result: await promise, isProducer: true };
   } finally {
     inFlightRenditionFetches.delete(cacheKeyUrl);
   }

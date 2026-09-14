@@ -58,9 +58,15 @@ function firstUri(body: string): string | undefined {
   return body.split("\n").find((line) => line !== "" && !line.startsWith("#"));
 }
 
+// Carries its own `#EXT-X-PROGRAM-DATE-TIME`, matching what production's
+// egress actually writes (BROADCAST_PIPELINE B0.2), so this file's "two real
+// renders agree byte-for-byte" tests are not incidentally exercising the
+// proxy's synthesised-PDT fallback, whose whole point is a wall clock that
+// legitimately differs between two independent renders.
 const PLAYLIST_BODY = [
   "#EXTM3U",
   "#EXT-X-TARGETDURATION:2",
+  "#EXT-X-PROGRAM-DATE-TIME:2026-09-12T10:10:39.718Z",
   "#EXTINF:2.0,",
   `${STARTED_AT}_00000.ts`,
 ].join("\n");
@@ -219,6 +225,24 @@ describeDb("hls playlist route", () => {
   });
 
   it("no header and no token is 401", async () => {
+    expect((await get(path(channelId), null)).status).toBe(401);
+  });
+
+  it("an unsigned request to an LL-mode session's playlist is refused the same way", async () => {
+    // docs/plans/LL_HLS.md L1.5: `llPlaylistUrl` in hls-remux.ts hands a
+    // viewer this exact route (`/api/voice/hls-playlist/:channelId/:startedAt`)
+    // rather than inventing a second, unauthenticated one -- a Farol review
+    // of PR #580 flagged an earlier version that pointed straight at the
+    // egress box's raw origin instead. `mode = 'll'` on the row must not be
+    // a way around the same signed-token-or-Bearer rule every other session
+    // answers to: `handleApi` resolves auth before the router even sees
+    // which row this path names, so the row's mode cannot matter here, and
+    // this test pins that rather than assuming it.
+    await getPool().query(
+      `UPDATE hls_sessions SET mode = 'll', remux_session_id = $2
+       WHERE channel_id = $1`,
+      [channelId, "00000000-0000-4000-8000-0000000000c1"],
+    );
     expect((await get(path(channelId), null)).status).toBe(401);
   });
 

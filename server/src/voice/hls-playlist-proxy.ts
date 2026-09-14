@@ -1,22 +1,58 @@
 import { getPool, DatabaseUnavailableError } from "../db.js";
 import { signRequest } from "../lib/s3.js";
-import { verifyHlsViewerToken } from "./hls-viewer-token.js";
+import { mintHlsPartyPass, verifyHlsViewerToken } from "./hls-viewer-token.js";
 import {
   hlsObjectPrefix,
   hlsUrlTtlSeconds,
   liveHlsStorageConfig,
   internalPlaylistUrl,
+  playlistBaseUrl,
   sessionPrefixPattern,
 } from "./hls-egress.js";
 import {
   buildMasterPlaylist,
+  hlsRungVideoKbps,
   LADDER_RUNGS,
+  withPqpSessionTag,
   type MasterVariant,
 } from "./hls-ladder.js";
-import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
+import { HLS_PARTY_PASS_PARAM, HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * A MEDIA SEGMENT NEVER CHANGES ONCE THE EGRESS WRITES IT, so every fetch of
+ * one is a request for the same bytes forever -- the textbook case for
+ * `Cache-Control: immutable`. Nothing in the write path can say so today:
+ * LiveKit egress 1.14's `S3Upload` (`livekit.S3Upload` in
+ * `@livekit/protocol`) carries `metadata` (arbitrary `x-amz-meta-*` pairs,
+ * not a real HTTP header), `tagging` and `content_disposition`, and no field
+ * for `Cache-Control` at all -- confirmed against the actual PUT, not just
+ * the protobuf: `livekit/storage`'s `s3Storage.upload` (`s3.go`) builds its
+ * `s3.PutObjectInput` from exactly `Body`, `Bucket`, `ContentType`, `Key`,
+ * `Metadata` and `ContentDisposition` (defaulted to `"inline"`), nothing
+ * else. So this cannot be set at PUT time without forking egress.
+ *
+ * This proxy is a GET path, not the PUT path, but S3's `GetObject` (which R2
+ * implements) accepts a `response-cache-control` query override that
+ * controls only the header THIS response carries, independent of what (if
+ * anything) was stored on the object -- exactly the "Worker on GET" shape
+ * `docs/plans/BROADCAST_PIPELINE.md` B1.4 asks for, minus a Worker: the
+ * override rides on the presigned URL the client already fetches directly
+ * from R2, so every viewer's own repeat requests (a seek backward, a stall
+ * retry) hit their OWN browser cache instead of R2 again. It does NOT give
+ * two different viewers a shared cache entry -- their URLs differ by SigV4
+ * signature (`?X-Amz-Signature=...`), so a CDN sitting in front of the raw R2
+ * endpoint (there isn't one today) would still see distinct URLs per viewer
+ * per signing bucket. Cross-viewer sharing needs either an R2-side rule tied
+ * to a stable, unsigned path, or the edge Worker serving segment bytes itself
+ * off its own R2 credentials -- both out of scope for this change; see
+ * `docs/WATCH_PARTY.md` §"Segments at the edge" for the design and why the
+ * Worker option is the one to build when `LIVE_HLS_S3_*` credentials reach
+ * `tools/hls-edge/`.
+ */
+const SEGMENT_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 /**
  * THE CLOCK A SEGMENT URL IS SIGNED WITH, AND WHY IT IS NOT `Date.now()`.
@@ -454,7 +490,7 @@ async function runKeepWarmTick(
   try {
     let rungs: (string | undefined)[];
     try {
-      const list = await sessionRungs(channelId, startedAt, now);
+      const { rungs: list } = await sessionRungs(channelId, startedAt, now);
       // A pre-ladder session (no rung rows at all) still has one media
       // playlist to keep warm: `rung: undefined`.
       rungs = list.length > 0 ? list : [undefined];
@@ -527,8 +563,8 @@ async function renderSignedPlaylist(
   // makes that true. A 404 is what the client's watchdog wants: it refetches
   // `GET /api/channels/:id/live` and follows the current session, which is
   // machinery that already exists and already works.
-  const session = await getPool().query(
-    `SELECT 1 FROM hls_sessions
+  const session = await getPool().query<{ id: string }>(
+    `SELECT id FROM hls_sessions
      WHERE channel_id = $1
        AND object_prefix = $2
        AND ended_at IS NULL
@@ -544,6 +580,7 @@ async function renderSignedPlaylist(
       `No live HLS session ${objectPrefix} for channel ${channelId}`,
     );
   }
+  const sessionId = session.rows?.[0]?.id ?? null;
   // A presigned endpoint-form GET: the bucket can be fully private and no
   // public base is needed (production runs that way).
   const playlistUrl = internalPlaylistUrl(channelId, startedAt, rung);
@@ -569,10 +606,8 @@ async function renderSignedPlaylist(
   // listed media behind the playhead stalls on every slow poll. The widened
   // body still carries the egress's own URI lines, so the rewrite below is
   // unchanged.
-  const body = widenLivePlaylist(
-    historyFor(cacheKey(channelId, startedAt, rung)),
-    await response.text(),
-  );
+  const history = historyFor(cacheKey(channelId, startedAt, rung));
+  const body = widenLivePlaylist(history, await response.text(), undefined, now);
   const ttl = hlsUrlTtlSeconds();
   // Quantised, never `new Date()`: see `segmentSigningTime` above. A segment
   // appearing for the first time is signed at this instant; one already in
@@ -613,6 +648,7 @@ async function renderSignedPlaylist(
         forRead: true,
         config,
         now: signedAt,
+        query: { "response-cache-control": SEGMENT_CACHE_CONTROL },
       }).url;
       memo.set(key, { url, signedAtMs: signedAt.getTime() });
       return url;
@@ -627,7 +663,30 @@ async function renderSignedPlaylist(
     }
   }
 
-  return rewritten;
+  return withPqpSessionTag(rewritten, sessionId);
+}
+
+/**
+ * `X-Pqp-Playlist-Age-Ms` (BROADCAST_PIPELINE B0.3): how stale, in
+ * milliseconds, the freshest segment in this render already was when it was
+ * served -- `now` minus the wall clock this process first saw that segment
+ * listed (`LiveWindowHistory.newestFirstSeenAt`). Null when nothing has been
+ * rendered for this rendition yet (a viewer's very first request, before
+ * `buildSignedPlaylist` has populated the history), in which case the route
+ * omits the header rather than sending a lie.
+ *
+ * Reads the same in-process history `buildSignedPlaylist` just populated, so
+ * call this AFTER awaiting it, not before.
+ */
+export function hlsPlaylistAgeMs(
+  channelId: string,
+  startedAt: number,
+  rung?: string,
+  now = Date.now(),
+): number | null {
+  const history = windowHistory.get(cacheKey(channelId, startedAt, rung));
+  const firstSeenAt = history?.newestFirstSeenAt ?? null;
+  return firstSeenAt === null ? null : Math.max(0, now - firstSeenAt);
 }
 
 /**
@@ -640,9 +699,21 @@ async function renderSignedPlaylist(
  * viewer's own token and is therefore not shared. Building the string from a
  * cached list costs nothing.
  */
+interface SessionRungs {
+  rungs: string[];
+  /**
+   * One `hls_sessions.id` representing the whole party for the
+   * `#EXT-X-PQP-SESSION` tag on the master (BROADCAST_PIPELINE B0.4): the
+   * lowest-bitrate row, same tiebreak the rungs themselves are ordered by
+   * plus `id` for determinism when two rows share a `started_at`. Null only
+   * when there are no rungs at all.
+   */
+  sessionId: string | null;
+}
+
 const rungCache = new Map<
   string,
-  { rungs?: string[]; inflight?: Promise<string[]>; at: number }
+  { rungs?: SessionRungs; inflight?: Promise<SessionRungs>; at: number }
 >();
 
 /**
@@ -665,7 +736,7 @@ async function sessionRungs(
   channelId: string,
   startedAt: number,
   now: number,
-): Promise<string[]> {
+): Promise<SessionRungs> {
   const key = cacheKey(channelId, startedAt, "master");
   const cached = rungCache.get(key);
   if (cached) {
@@ -683,22 +754,38 @@ async function sessionRungs(
     }
   }
   const inflight = getPool()
-    .query<{ rung: string | null }>(
-      `SELECT rung FROM hls_sessions
+    .query<{ id: string; rung: string | null }>(
+      `SELECT id, rung FROM hls_sessions
        WHERE channel_id = $1
          AND object_prefix LIKE $2
          AND rung IS NOT NULL
          AND ended_at IS NULL
          AND cleaned_at IS NULL
-       ORDER BY started_at ASC`,
+       ORDER BY started_at ASC, id ASC`,
       [channelId, sessionPrefixPattern(channelId, startedAt)],
     )
     .then((rows) => {
-      const rungs = rows.rows
-        .map((row) => row.rung)
-        .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
-      rungCache.set(key, { rungs, at: now });
-      return rungs;
+      const known = (rows.rows ?? []).filter((row) =>
+        Boolean(row.rung && LADDER_RUNGS[row.rung]),
+      );
+      // The canonical session id is the LOWEST-bitrate rung's row -- the one
+      // `buildMasterPlaylistFor`'s callers always have a variant for and the
+      // one a viewer with no explicit pick lands on -- not whichever row this
+      // query happened to return first. `started_at, id` orders the SQL
+      // result deterministically; it says nothing about bitrate (a Farol
+      // finding, 2026-09-13: `ORDER BY started_at ASC, id ASC` was read as if
+      // it also meant "lowest bitrate first").
+      const byBitrate = [...known].sort((a, b) => {
+        const kbpsA = hlsRungVideoKbps(a.rung!) ?? Number.MAX_SAFE_INTEGER;
+        const kbpsB = hlsRungVideoKbps(b.rung!) ?? Number.MAX_SAFE_INTEGER;
+        return kbpsA !== kbpsB ? kbpsA - kbpsB : a.id.localeCompare(b.id);
+      });
+      const result: SessionRungs = {
+        rungs: known.map((row) => row.rung!),
+        sessionId: byBitrate[0]?.id ?? null,
+      };
+      rungCache.set(key, { rungs: result, at: now });
+      return result;
     })
     .catch((error: unknown) => {
       // A3.1: the breaker is open. Same reasoning as `renderCachedPlaylist`'s
@@ -724,6 +811,42 @@ async function sessionRungs(
 }
 
 /**
+ * The canonical `hls_sessions.id` for a channel/`startedAt` pair -- the SAME
+ * string the master playlist's `#EXT-X-PQP-SESSION` tag carries
+ * (`buildMasterPlaylistFor` below reads it off this same `sessionRungs`) and
+ * `voice.hlsStarted` logs as `sessionId` (`primary.sessionId` in
+ * `hls-egress.ts`, the lowest-bitrate rung -- the same tiebreak this
+ * function's own sort uses). `hls-latency-metrics.ts`'s telemetry route
+ * calls this so an accepted batch's recorded session id is the one a human
+ * can actually join against the egress log by equality, rather than a
+ * `channelId:startedAt` pair that reads the same to a person but is a
+ * different string (a Farol finding, 2026-09-14). Null when the session has
+ * no known rungs right now -- ended, not yet recorded, or an operator
+ * downgraded past what this build's ladder knows -- in which case the
+ * caller falls back to its own opaque label rather than losing the batch.
+ *
+ * Shares `sessionRungs`'s cache, so this is a fresh query only on a cache
+ * miss: in practice never, because the same session's own viewers are
+ * already polling the master playlist (and so keeping the cache warm) at
+ * the same time they are sampled for telemetry.
+ */
+export async function resolveHlsSessionId(
+  channelId: string,
+  startedAt: number,
+  now: number = Date.now(),
+): Promise<string | null> {
+  try {
+    const { sessionId } = await sessionRungs(channelId, startedAt, now);
+    return sessionId;
+  } catch {
+    // A failed lookup (the pool is unhappy, say) must not turn a telemetry
+    // batch into a 500 -- this is a measurement, not a critical path. The
+    // caller's own fallback label covers it.
+    return null;
+  }
+}
+
+/**
  * The master playlist a viewer is handed: one variant per rendition that
  * actually started, so hls.js and native players pick per viewer and switch
  * as the link changes.
@@ -734,7 +857,27 @@ async function sessionRungs(
  * header-less player (Safari's native HLS, iOS) can authorise the second
  * request; and staying on this API's own origin is what makes hls.js attach
  * the Bearer header through `isOwnHlsPlaylistProxyUrl`. An absolute bucket
- * URL here would do neither.
+ * URL here would do neither. And because the URI is root-relative, a master
+ * served THROUGH the edge Worker (`LIVE_HLS_PLAYLIST_BASE_URL`) resolves its
+ * variant lines against the EDGE host, not this API — the same "no client
+ * rebuild" trick `stampViewerStream` relies on for the session URL itself.
+ *
+ * EVERY VARIANT ALSO CARRIES A FRESH PARTY PASS, NOT JUST THE TOKEN. This
+ * was a real gap, not a cosmetic one: `stampViewerStream` stamps `?pp=` onto
+ * the SESSION url a viewer is initially handed, but once that session has
+ * run a ladder, the session url IS this master, and the URIs a player
+ * actually polls every 2-4s are the VARIANT lines below -- which, before
+ * this, carried only `?t=`. A party pass that never reaches the edge
+ * Worker's rendition route is useless there, so for any session that ever
+ * ran a ladder (the normal case), `?pp=` was live on the initial fetch and
+ * then silently dropped from every subsequent poll the moment the master
+ * was rendered. Minting fresh here (rather than trying to forward the
+ * caller's own `?pp=`, which the edge Worker deliberately never looks at on
+ * THIS route -- see its own module doc comment) needs nothing from the
+ * caller: this function already has `userId` from the same access check
+ * that authorized the request. Gated on `playlistBaseUrl()` for the same
+ * reason `stampViewerStream` gates it: a pass nobody's Worker will ever
+ * check is wasted bytes on every variant line.
  *
  * A session with no rung rows at all is a pre-ladder session: its single
  * media playlist is served directly, so an in-flight viewer from before this
@@ -743,11 +886,12 @@ async function sessionRungs(
 export async function buildMasterPlaylistFor(input: {
   channelId: string;
   startedAt: number;
+  userId: string;
   /** The `?t=` the request arrived with, stamped onto each variant. */
   token?: string | null;
   now?: number;
 }): Promise<string | null> {
-  const rungs = await sessionRungs(
+  const { rungs, sessionId } = await sessionRungs(
     input.channelId,
     input.startedAt,
     input.now ?? Date.now(),
@@ -755,14 +899,28 @@ export async function buildMasterPlaylistFor(input: {
   if (rungs.length === 0) {
     return null;
   }
-  const query = input.token
-    ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(input.token)}`
-    : "";
+  const now = input.now ?? Date.now();
+  const partyPass = playlistBaseUrl()
+    ? mintHlsPartyPass({
+        userId: input.userId,
+        channelId: input.channelId,
+        startedAt: input.startedAt,
+        now,
+      })
+    : null;
+  const params = new URLSearchParams();
+  if (input.token) {
+    params.set(HLS_VIEWER_TOKEN_PARAM, input.token);
+  }
+  if (partyPass) {
+    params.set(HLS_PARTY_PASS_PARAM, partyPass);
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const variants: MasterVariant[] = rungs.map((rung) => ({
     rung: LADDER_RUNGS[rung]!,
     uri:
       `/api/voice/hls-playlist/${encodeURIComponent(input.channelId)}` +
       `/${input.startedAt}/${encodeURIComponent(rung)}${query}`,
   }));
-  return buildMasterPlaylist(variants);
+  return buildMasterPlaylist(variants, sessionId);
 }

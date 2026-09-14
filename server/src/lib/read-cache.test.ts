@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   coalesce,
   invalidate,
+  invalidateExact,
   MAX_BYTES,
   MAX_CACHEABLE_ROWS,
   MAX_ENTRIES,
@@ -110,6 +111,35 @@ describe("read-cache", () => {
     expect(calls).toBe(2);
   });
 
+  /**
+   * The narrower timing this pins: a retry chained directly off the
+   * rejected promise itself (the earliest a caller could possibly react),
+   * not one that only runs after an extra `await` has already given any
+   * stray cleanup microtask time to finish. `inflight`'s cleanup has to
+   * happen inside the same handler that produces the rejection, not in a
+   * separate chain attached after it — see the comment on `revalidate` in
+   * read-cache.ts for why that distinction is load-bearing.
+   */
+  it("a retry chained directly off a rejection does not rejoin the just-rejected load", async () => {
+    let firstCalls = 0;
+    const first = coalesce("k", 2_000, async () => {
+      firstCalls += 1;
+      throw new Error("boom");
+    });
+
+    let secondCalls = 0;
+    const retried = first.catch(() =>
+      coalesce("k", 2_000, async () => {
+        secondCalls += 1;
+        return "fresh";
+      }),
+    );
+
+    await expect(retried).resolves.toBe("fresh");
+    expect(firstCalls).toBe(1);
+    expect(secondCalls).toBe(1);
+  });
+
   // ------------------------------------------------------------ invalidation
 
   it("invalidate(key) drops the entry so the next call reloads", async () => {
@@ -121,6 +151,44 @@ describe("read-cache", () => {
     expect(await coalesce("k", 2_000, load)).toBe(1);
     invalidate("k");
     expect(await coalesce("k", 2_000, load)).toBe(2);
+    expect(calls).toBe(2);
+  });
+
+  it("invalidateExact(key) drops only that key, with no prefix scan semantics", async () => {
+    let calls = 0;
+    const load = () => {
+      calls += 1;
+      return Promise.resolve(calls);
+    };
+    await coalesce("member-list", 2_000, load);
+    await coalesce("member-list-extra", 2_000, load);
+    expect(calls).toBe(2);
+
+    invalidateExact("member-list");
+    // The other key, which merely shares a prefix with the exact one
+    // dropped, is untouched — unlike `invalidate`, this never does a
+    // string-prefix match.
+    expect(await coalesce("member-list-extra", 2_000, load)).toBe(2);
+    expect(await coalesce("member-list", 2_000, load)).toBe(3);
+    expect(calls).toBe(3);
+  });
+
+  it("invalidateExact also cancels a matching in-flight load", async () => {
+    const gate = deferred<string>();
+    let calls = 0;
+    const firstLoad = coalesce("k", 2_000, () => {
+      calls += 1;
+      return gate.promise;
+    });
+    invalidateExact("k");
+    const secondLoad = coalesce("k", 2_000, async () => {
+      calls += 1;
+      return "second";
+    });
+    gate.resolve("first");
+
+    expect(await firstLoad).toBe("first");
+    expect(await secondLoad).toBe("second");
     expect(calls).toBe(2);
   });
 
@@ -207,6 +275,19 @@ describe("read-cache", () => {
     expect(calls).toBe(2); // only the stale and fresh loaders ever ran
   });
 
+  it("an invalidation racing a fresh miss (not a stale revalidate) is not undone when that miss lands late", async () => {
+    const gate = deferred<string>();
+    const firstLoad = coalesce("k", 2_000, () => gate.promise);
+    // No second caller joins this one — this is the plain-miss path in
+    // `coalesce` itself, not `revalidate`'s background-refresh path.
+    invalidate("k");
+    gate.resolve("first");
+    expect(await firstLoad).toBe("first");
+
+    const readBack = await coalesce("k", 2_000, async () => "second");
+    expect(readBack).toBe("second");
+  });
+
   // ------------------------------------------------------- stale-while-revalidate
 
   it("serves a stale value inside the stale window and refreshes it in the background", async () => {
@@ -249,6 +330,38 @@ describe("read-cache", () => {
     expect(calls).toBe(2);
     gate.resolve("v2");
     await new Promise((r) => setTimeout(r, 5));
+  });
+
+  it("a background refresh invalidated mid-flight does not overwrite a fresher value once it lands", async () => {
+    const gate = deferred<string>();
+    let calls = 0;
+    const load = () => {
+      calls += 1;
+      return calls === 1 ? Promise.resolve("v1") : gate.promise;
+    };
+    await coalesce("k", 20, load);
+    await new Promise((r) => setTimeout(r, 30)); // now stale
+
+    // Kicks the background refresh (`revalidate`), served from the stale
+    // value with no wait.
+    const stale = await coalesce("k", 20, load);
+    expect(stale).toBe("v1");
+    expect(calls).toBe(2);
+
+    // A write invalidates the key while that background refresh is still
+    // running, then a fresh value is loaded and cached.
+    invalidate("k");
+    const fresh = await coalesce("k", 20, async () => "fresh");
+    expect(fresh).toBe("fresh");
+
+    // NOW the stale background refresh finally resolves.
+    gate.resolve("v2 (stale, arrived late)");
+    await new Promise((r) => setTimeout(r, 5));
+
+    const readBack = await coalesce("k", 20, async () => {
+      throw new Error("should have been a cache hit, not a reload");
+    });
+    expect(readBack).toBe("fresh");
   });
 
   it("falls through to a blocking load once an entry is doubly stale", async () => {
@@ -438,6 +551,86 @@ describe("read-cache", () => {
     await coalesce("k", 60_000, load);
     expect(calls).toBe(1);
     expect(readCacheMetrics().size).toBe(1);
+  });
+
+  // ------------------------------------------------------------ shouldCache
+
+  describe("shouldCache", () => {
+    it("does not cache a value the predicate refuses, so the next call is a fresh miss", async () => {
+      let calls = 0;
+      const load = async () => {
+        calls += 1;
+        return "pending";
+      };
+      const shouldCache = (value: string) => value !== "pending";
+
+      const a = await coalesce("age-gate:u1", 60_000, load, shouldCache);
+      const b = await coalesce("age-gate:u1", 60_000, load, shouldCache);
+
+      // Both callers get the real answer...
+      expect(a).toBe("pending");
+      expect(b).toBe("pending");
+      // ...but nothing landed in the cache, so each call was a real load.
+      expect(calls).toBe(2);
+      expect(readCacheMetrics()).toMatchObject({ size: 0, bytes: 0 });
+    });
+
+    it("caches a value the predicate admits, same as no predicate at all", async () => {
+      let calls = 0;
+      const load = async () => {
+        calls += 1;
+        return "passed";
+      };
+      const shouldCache = (value: string) => value !== "pending";
+
+      await coalesce("age-gate:u1", 60_000, load, shouldCache);
+      await coalesce("age-gate:u1", 60_000, load, shouldCache);
+
+      expect(calls).toBe(1);
+      expect(readCacheMetrics().size).toBe(1);
+    });
+
+    it("defaults to always-cache when no predicate is given", async () => {
+      let calls = 0;
+      const load = async () => {
+        calls += 1;
+        return "v1";
+      };
+      await coalesce("k", 60_000, load);
+      await coalesce("k", 60_000, load);
+      expect(calls).toBe(1);
+    });
+
+    it("is the model of the cross-instance staleness bug this exists to close: a status cached by one process, changed via a different one, must never be read back stale by a third read on the first", async () => {
+      // Simulates two server instances sharing nothing but Postgres: `db`
+      // stands in for the one true answer, `instanceA`/`instanceB` for two
+      // processes each with their own in-memory `read-cache`. This module
+      // only ever models ONE process (`store` is a single module-level
+      // map), so the two "instances" here are the same `coalesce` calls
+      // made under two different keys standing in for "this account's
+      // status as seen by instance A" and "...by instance B" — the point
+      // being to show that even within ONE process, a predicate that
+      // refuses to cache the transient state prevents the staleness that
+      // caching it would have produced.
+      let db: "pending" | "passed" = "pending";
+      const shouldCache = (status: string) => status !== "pending";
+      const readOn = (instanceKey: string) =>
+        coalesce(instanceKey, 30_000, async () => db, shouldCache);
+
+      // Instance A reads first (a fresh account's GET /api/me): sees
+      // "pending", and — because of shouldCache — does NOT cache it.
+      expect(await readOn("instanceA")).toBe("pending");
+
+      // The account declares its age. In the real bug this write happens on
+      // instance B and only invalidates instance B's cache; here it is
+      // simply the source of truth changing.
+      db = "passed";
+
+      // The WS auth frame lands back on instance A, inside what would have
+      // been the old TTL window. Because "pending" was never cached, this
+      // is a fresh read of the real, current answer rather than a stale hit.
+      expect(await readOn("instanceA")).toBe("passed");
+    });
   });
 
   it("resetReadCacheForTests clears the resident-byte counter, not just the entries", async () => {

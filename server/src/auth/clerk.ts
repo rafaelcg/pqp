@@ -292,8 +292,15 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
 /**
  * The DB row for a Clerk id. Cached because `resolveAuthUser` runs on every
  * request and would otherwise issue an UPDATE each time.
+ *
+ * 60s rather than the 30s this held before 2026-09-13: `upsertUser` (in
+ * services/users.ts) now skips the UPDATE outright when nothing it would
+ * write actually differs, so what a longer TTL buys here is fewer of
+ * *those* no-op round trips too, not fresher data — a new avatar or a newly
+ * verified email domain still lands within one TTL window either way, same
+ * bound this cache always had.
  */
-const USER_TTL_MS = 30_000;
+const USER_TTL_MS = 60_000;
 const userCache = new Map<string, { user: DbUser; expiresAt: number }>();
 const userInflight = new Map<string, Promise<DbUser>>();
 

@@ -11,10 +11,15 @@ import {
   liveHlsConfig,
 } from "../voice/hls-egress.js";
 import { countDueSessions } from "../voice/hls-cleanup.js";
+import { llHlsActivity } from "../voice/hls-remux.js";
 import {
   hlsKeepWarmLoopsActive,
   hlsKeepWarmRenders,
 } from "../voice/hls-playlist-proxy.js";
+import {
+  hlsTelemetryActivity,
+  type HlsTelemetryActivity,
+} from "../voice/hls-latency-metrics.js";
 import { processRole, runsColdJobs } from "../lib/process-role.js";
 import { getPresenceFanoutStats } from "../ws/chat.js";
 import {
@@ -23,7 +28,11 @@ import {
   type AcquisitionReport,
   type RetentionReport,
 } from "./acquisition.js";
-import { dbTxByPath } from "../lib/db-tx-metrics.js";
+import {
+  dbQueriesByRoute,
+  dbQueryTotal,
+  dbTxByPath,
+} from "../lib/db-tx-metrics.js";
 import { readCacheMetrics } from "../lib/read-cache.js";
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
@@ -148,6 +157,31 @@ export interface AdminMetrics {
    */
   dbTx: {
     byPath: Record<string, number>;
+  };
+  /**
+   * `db.queries.total` and `db.queries.byRoute`: EVERY Postgres round trip
+   * this process has run since boot, wrapped once at the pool itself
+   * (`db.ts`'s `getPool`) rather than at individual call sites — unlike
+   * `dbTx.byPath` above, nothing has to remember to instrument a new query
+   * for this to see it. `byRoute` breaks the total down by the HTTP route
+   * the query happened inside (`GET /api/servers/:serverId/members`, the
+   * path template, never an interpolated id), via an AsyncLocalStorage
+   * context `handleApi` sets once per request (`lib/route-context.ts`). Two
+   * reserved labels stand outside the route table: `"auth"` is Bearer
+   * resolution and the age-gate/timeout gates, which run before any route
+   * has matched and are shared across every request rather than belonging
+   * to whichever endpoint follows — folding them into `"other"` would have
+   * hidden a real cost center (53k auth-resolution writes alone) behind the
+   * same label used for background work; `"other"` itself is left for a WS
+   * handler, a cold job, or anything at boot. Added alongside the 2026-09-13
+   * Vultr cutover cache work (member list, auth-write skip, webhook poll
+   * backoff, per-request permission caches) specifically so the drop from
+   * that work is a number on this endpoint, not a guess from query-log
+   * sampling the way the 785k figure that motivated it was.
+   */
+  dbQueries: {
+    total: number;
+    byRoute: Record<string, number>;
   };
   /**
    * `read-cache.ts`'s counters, cumulative since boot: `coalesce` calls that
@@ -384,6 +418,46 @@ export interface AdminMetrics {
     keepWarmLoops: number;
     /** Warm (non-viewer) renders performed by those loops since boot. */
     keepWarmRenders: number;
+    /**
+     * BROADCAST_PIPELINE B0.5/B0.6: what sampled viewers report about their
+     * own playback. `byRung[].p50Ms`/`p95Ms` are encode-to-paint, computed
+     * from `hls-latency-metrics.ts`'s histogram, never mixed with the
+     * capture-to-encode estimate (that estimate is not reported here at all
+     * -- see the T0-T4 row of B0.3's table). In-process only: a restart
+     * clears it, same as `keepWarmRenders` above.
+     */
+    latency: HlsTelemetryActivity;
+    /**
+     * Live `pqp-remux` sessions (`docs/plans/LL_HLS.md` L1.5), this process,
+     * right now. Zero on every deployment with `LIVE_HLS_LL` unset, which is
+     * every deployment until an operator sets it -- this is the "is the
+     * flag doing anything" counter for the second delivery mode, the same
+     * role `sessions` plays for the conventional ladder.
+     */
+    llSessions: number;
+    /**
+     * `POST /sessions` to the control API failed, or the control plane was
+     * not configured at all, since this process started. Belongs at zero
+     * once configured; a start requested (the flag, the allowlist and the
+     * party's own toggle all say yes) that never produces a session shows up
+     * here rather than as a silent nothing.
+     */
+    llStartFailures: number;
+    /**
+     * A `DELETE /sessions/:id` to the control API failed, at either the
+     * normal stop path or a retry. Belongs at zero; a nonzero, growing
+     * number is a session `stopLlSession`/`retryStopOpenLlRow` cannot yet
+     * confirm the box has actually released.
+     */
+    llStopFailures: number;
+    /**
+     * An LL session was demoted back to the conventional ladder by `L1.6`'s
+     * watchdog, which does not exist yet -- this reads zero on every
+     * deployment until that task ships. Reserved here now so the dashboard
+     * panel and this counter's meaning are fixed before the code that
+     * increments it exists.
+     */
+    llDemoted: number;
   };
   topServers24h: {
     name: string;
@@ -703,6 +777,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   // it falls back to -1, which reads as "could not ask" rather than "clean".
   const hlsFlag = liveHlsConfig();
   const hlsActivity = liveHlsActivity();
+  const llActivity = llHlsActivity();
   const hlsUncleaned = await countDueSessions().catch(() => -1);
 
   // The tab detail, in a second round of parallel queries. It is separate from
@@ -978,6 +1053,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     activeTextChannels24h: Number(m?.active_text_channels ?? 0),
     channels: channelCounts,
     dbTx: { byPath: dbTxByPath() },
+    dbQueries: { total: dbQueryTotal(), byRoute: dbQueriesByRoute() },
     readCache: readCacheMetrics(),
     presence: getPresenceFanoutStats(),
     voice: {
@@ -1024,6 +1100,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       sweepsHere: runsColdJobs(processRole()),
       keepWarmLoops: hlsKeepWarmLoopsActive(),
       keepWarmRenders: hlsKeepWarmRenders(),
+      latency: hlsTelemetryActivity(),
+      llSessions: llActivity.sessions,
+      llStartFailures: llActivity.startFailures,
+      llStopFailures: llActivity.stopFailures,
+      llDemoted: llActivity.demoted,
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,

@@ -173,6 +173,22 @@ export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
  */
 export const VOICE_TRACK_NAME = "voice-track";
 
+/**
+ * CONVIDADOS (`docs/plans/WATCH_PARTY_GUESTS.md` §5.2): the presenter's mixed
+ * bus — their own microphone plus every accepted guest's, built by
+ * `lib/stage-mix.ts` — published under this name in exactly the shape
+ * `VOICE_TRACK_NAME` is: a second `Microphone` source, told apart by name
+ * because a publish grant is an allowlist of *sources* (pitfall 14).
+ *
+ * MUTUALLY EXCLUSIVE WITH `VOICE_TRACK_NAME`, never both at once: `guests`
+ * being anything but `off` is what forces "separada" for the length of the
+ * party (§5.3), so `stage-mix` replaces `voice-track` as the presenter's
+ * carrier rather than sitting beside it. The server's picker prefers
+ * `stage-mix` over `voice-track` for exactly this reason (see
+ * `STAGE_MIX_TRACK_NAME` in `server/src/voice/hls-egress.ts`).
+ */
+export const STAGE_MIX_TRACK_NAME = "stage-mix";
+
 export interface LiveKitSession {
   /** Publish (or re-publish) the processed mic track. */
   publish(stream: MediaStream): Promise<void>;
@@ -205,6 +221,16 @@ export interface LiveKitSession {
   publishVoiceTrack(stream: MediaStream): Promise<void>;
   /** Stop publishing it. Safe to call when nothing is published. */
   unpublishVoiceTrack(): Promise<void>;
+  /**
+   * Publish (or replace) the CONVIDADOS stage mix under `stage-mix`. Called
+   * every time the mixed bus's output track changes identity — a guest
+   * joining or leaving rebuilds the underlying `MediaStreamTrack` — so this
+   * always republishes with `replaceTrack` semantics, never leaving two
+   * `stage-mix` publications up at once. See `STAGE_MIX_TRACK_NAME`.
+   */
+  publishStageMix(stream: MediaStream): Promise<void>;
+  /** Stop publishing it. Safe to call when nothing is published. */
+  unpublishStageMix(): Promise<void>;
   /** Stop publishing the screen share, audio half included. */
   unpublishScreen(): Promise<void>;
   /** Withdraw only the screen's audio, leaving the picture published. */
@@ -421,6 +447,8 @@ export async function connectLiveKit({
   let publishedMicArchive: InstanceType<typeof LocalAudioTrack> | null = null;
   /** The "separada" voice-track publication, kept so it can be withdrawn. */
   let publishedVoiceTrack: InstanceType<typeof LocalAudioTrack> | null = null;
+  /** The CONVIDADOS stage-mix publication, kept so it can be withdrawn. */
+  let publishedStageMix: InstanceType<typeof LocalAudioTrack> | null = null;
   /** Raw screen-share track we published, kept so we can unpublish it later. */
   let publishedScreenTrack: MediaStreamTrack | null = null;
   /** Raw camera track we published, kept so we can unpublish it later. */
@@ -731,13 +759,14 @@ export async function connectLiveKit({
       // So: not filed, not metered, and unsubscribed.
       if (
         pub.trackName === MIC_ARCHIVE_TRACK_NAME ||
-        pub.trackName === VOICE_TRACK_NAME
+        pub.trackName === VOICE_TRACK_NAME ||
+        pub.trackName === STAGE_MIX_TRACK_NAME
       ) {
-        // THE VOICE-TRACK PUBLICATION IS THE SAME SHAPE OF DUPLICATE. It
-        // arrives tagged `Microphone` like the presenter's real one and the
-        // room already hears them through THAT publication (unmuted while
-        // "separada" — `publicationShouldBeMuted` in `use-voice.ts`); filing
-        // this one too would play the host twice for every room participant.
+        // THE VOICE-TRACK AND STAGE-MIX PUBLICATIONS ARE THE SAME SHAPE OF
+        // DUPLICATE. Both arrive tagged `Microphone` like the presenter's
+        // real one, and the room already hears them (and every guest they
+        // mix in) through the room's own per-participant publications;
+        // filing this one too would play everyone on the mix twice.
         try {
           pub.setSubscribed(false);
         } catch {
@@ -2182,6 +2211,39 @@ export async function connectLiveKit({
       await room.localParticipant.unpublishTrack(track);
     },
 
+    async publishStageMix(stream: MediaStream) {
+      const [audioTrack] = stream.getAudioTracks();
+      if (!audioTrack) {
+        return;
+      }
+      if (publishedStageMix) {
+        await room.localParticipant.unpublishTrack(publishedStageMix);
+        publishedStageMix = null;
+      }
+      publishedStageMix = new LocalAudioTrack(audioTrack);
+      await room.localParticipant.publishTrack(publishedStageMix, {
+        // MICROPHONE, NOT AN INVENTED SOURCE — same reasoning as
+        // `publishVoiceTrack`: a grant is an allowlist of sources, and the
+        // name (`STAGE_MIX_TRACK_NAME`) is what carries the meaning instead.
+        source: Track.Source.Microphone,
+        name: STAGE_MIX_TRACK_NAME,
+        // Same reasoning as `publishVoiceTrack`: a live mix, not a phone
+        // call — DTX gating quiet passages reads as the bus cutting in and
+        // out to the egress, and RED's redundancy buys nothing here either.
+        dtx: false,
+        red: false,
+      });
+    },
+
+    async unpublishStageMix() {
+      if (!publishedStageMix) {
+        return;
+      }
+      const track = publishedStageMix;
+      publishedStageMix = null;
+      await room.localParticipant.unpublishTrack(track);
+    },
+
     async unpublishScreenAudio() {
       return enqueueScreenOp(async () => {
         if (!publishedScreenAudioTrack) {
@@ -2361,6 +2423,7 @@ export async function connectLiveKit({
       publishedScreenAudioTrack = null;
       publishedMicArchive = null;
       publishedVoiceTrack = null;
+      publishedStageMix = null;
       await room.disconnect();
     },
 

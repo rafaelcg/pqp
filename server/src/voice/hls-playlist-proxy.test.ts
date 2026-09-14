@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { verifyHlsPartyPass } from "./hls-viewer-token.js";
 
 /**
  * The signed playlist proxy: rewrites a fetched playlist's segment lines
@@ -11,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const CHANNEL = "00000000-0000-4000-8000-0000000000aa";
 const STARTED_AT = 1_700_000_000_000;
 const OTHER_CHANNEL = "00000000-0000-4000-8000-0000000000bb";
+const USER = "00000000-0000-4000-8000-0000000000cc";
 
 const pool = vi.hoisted(() => ({
   rowCount: 1,
@@ -38,13 +40,20 @@ vi.mock("../db.js", () => ({
   DatabaseUnavailableError: MockDatabaseUnavailableError,
 }));
 
+// Carries a real `#EXT-X-PROGRAM-DATE-TIME` per segment, matching what
+// production's egress actually writes (BROADCAST_PIPELINE B0.2), so a test
+// that forces two independent renders of the same session (cache reset in
+// between) is not incidentally exercising the proxy's synthesised-PDT
+// fallback, whose wall clock legitimately differs between two real renders.
 const PLAYLIST_BODY = [
   "#EXTM3U",
   "#EXT-X-VERSION:3",
   "#EXT-X-TARGETDURATION:2",
   "#EXT-X-MEDIA-SEQUENCE:0",
+  "#EXT-X-PROGRAM-DATE-TIME:2026-09-12T10:10:39.718Z",
   "#EXTINF:2.0,",
   `${STARTED_AT}_00000.ts`,
+  "#EXT-X-PROGRAM-DATE-TIME:2026-09-12T10:10:41.718Z",
   "#EXTINF:2.0,",
   `${STARTED_AT}_00001.ts`,
 ].join("\n");
@@ -81,6 +90,7 @@ const {
   HLS_KEEP_WARM_IDLE_MS,
   hlsKeepWarmLoopsActive,
   hlsKeepWarmRenders,
+  resolveHlsSessionId,
 } = await import("./hls-playlist-proxy.js");
 const { mintHlsViewerToken } = await import("./hls-viewer-token.js");
 const { playlistLooksLive } = await import("@pqp/shared");
@@ -227,23 +237,42 @@ describe("buildSignedPlaylist", () => {
     expect(lines[1]).toBe("#EXT-X-VERSION:3");
     expect(lines[2]).toBe("#EXT-X-TARGETDURATION:2");
     expect(lines[3]).toBe("#EXT-X-MEDIA-SEQUENCE:0");
-    expect(lines[4]).toBe("#EXTINF:2.0,");
+    // The egress's own `#EXT-X-PROGRAM-DATE-TIME`, copied through untouched
+    // (BROADCAST_PIPELINE B0.2 -- production writes one already).
+    expect(lines[4]).toBe("#EXT-X-PROGRAM-DATE-TIME:2026-09-12T10:10:39.718Z");
+    expect(lines[5]).toBe("#EXTINF:2.0,");
 
-    const segmentLine = lines[5]!;
+    const segmentLine = lines[6]!;
     expect(segmentLine).toMatch(/^https:\/\/live\.example\.test\//);
     expect(segmentLine).toContain(`${STARTED_AT}_00000.ts`);
     const url = new URL(segmentLine);
     expect(url.searchParams.get("X-Amz-Expires")).toBe("120");
 
-    const secondSegmentLine = lines[7]!;
+    const secondSegmentLine = lines[9]!;
     expect(secondSegmentLine).toContain(`${STARTED_AT}_00001.ts`);
   });
 
   it("defaults the TTL to 900 seconds when LIVE_HLS_URL_TTL_SECONDS is unset", async () => {
     const body = await buildSignedPlaylist(CHANNEL, STARTED_AT);
-    const segmentLine = body.split("\n")[5]!;
+    const segmentLine = body.split("\n")[6]!;
     const url = new URL(segmentLine);
     expect(url.searchParams.get("X-Amz-Expires")).toBe("900");
+  });
+
+  it("signs every segment for an immutable response, since a segment never changes once written", async () => {
+    // The egress cannot set Cache-Control at PUT time (LiveKit egress 1.14's
+    // S3Upload has no such field -- see the doc comment on
+    // SEGMENT_CACHE_CONTROL). This is the fallback: an S3 `response-*`
+    // override, signed into the URL, that makes THIS GET answer immutable
+    // regardless of what (if anything) is stored on the object.
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    // Index 6, not 5 -- the egress's #EXT-X-PROGRAM-DATE-TIME line (B0.2)
+    // sits at index 4, same as the other tests in this file.
+    const segmentLine = body.split("\n")[6]!;
+    const url = new URL(segmentLine);
+    expect(url.searchParams.get("response-cache-control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
   });
 
   it("throws HlsPlaylistNotFound when no session row matches (e.g. cleaned up already)", async () => {
@@ -436,7 +465,7 @@ describe("playlist render cache", () => {
     expect(second).toBe(first);
     // A cache hit is a complete, playable window, not a stub: same segments,
     // still absolute, still presigned with the configured expiry.
-    const segment = second.split("\n")[5]!;
+    const segment = second.split("\n")[6]!;
     const url = new URL(segment);
     expect(url.searchParams.get("X-Amz-Expires")).toBe("120");
     expect(url.searchParams.get("X-Amz-Signature")).toBeTruthy();
@@ -690,6 +719,7 @@ describe("buildMasterPlaylistFor", () => {
     return buildMasterPlaylistFor({
       channelId: CHANNEL,
       startedAt: STARTED_AT,
+      userId: USER,
       token,
       now,
     });
@@ -717,8 +747,73 @@ describe("buildMasterPlaylistFor", () => {
     // way a header-less player (Safari native, iOS) authorises the second
     // request.
     for (const line of body!.split("\n").filter((l) => l.startsWith("/api"))) {
-      expect(line).toContain("?t=tok%20en%2F%2B");
+      // `+` for a space, not `%20` -- built with URLSearchParams now (so a
+      // party pass can be appended alongside the token, see below), which
+      // serializes as application/x-www-form-urlencoded. Still round-trips
+      // correctly: `url.searchParams.get` on the receiving end decodes `+`
+      // back to a space the same way.
+      expect(line).toContain("?t=tok+en%2F%2B");
     }
+  });
+
+  describe("the party pass on every variant", () => {
+    afterEach(() => {
+      delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+      delete process.env.LIVE_HLS_PARTY_PASS_TTL_MS;
+    });
+
+    /**
+     * THE BUG THIS PINS. `stampViewerStream` stamps `?pp=` on the SESSION
+     * url a viewer is initially handed, but once a session has run a
+     * ladder, that session url IS this master -- and the URIs a player
+     * actually polls every 2-4s are the VARIANT lines below, which used to
+     * carry only `?t=`. A party pass that never reaches the edge Worker's
+     * rendition route is dead weight: this is what makes it live there.
+     */
+    it("mints a fresh party pass and stamps it onto every rendition URI when the edge host is configured", async () => {
+      process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+      rungRows(["1080p30", "720p30"]);
+      const mintedAt = clock;
+      const body = await master("tok-en", mintedAt);
+      const variantLines = body!.split("\n").filter((l) => l.startsWith("/api"));
+      expect(variantLines.length).toBeGreaterThan(0);
+      for (const line of variantLines) {
+        const url = new URL(line, "https://hls.pqp.gg");
+        expect(url.searchParams.get("t")).toBe("tok-en");
+        const pass = url.searchParams.get("pp");
+        expect(pass).toBeTruthy();
+        // Verified at the SAME instant it was minted -- `master()`'s test
+        // clock is nowhere near real time, so a default `now = Date.now()`
+        // on the verify side would see every pass as already expired.
+        expect(
+          verifyHlsPartyPass(pass, { channelId: CHANNEL, startedAt: STARTED_AT }, mintedAt),
+        ).toEqual({ userId: USER, issuedAt: mintedAt });
+      }
+    });
+
+    it("mints no party pass, and omits ?pp= entirely, with no edge host configured", async () => {
+      delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+      rungRows(["720p30"]);
+      const body = await master("tok-en");
+      const variantLines = body!.split("\n").filter((l) => l.startsWith("/api"));
+      expect(variantLines.length).toBeGreaterThan(0);
+      for (const line of variantLines) {
+        expect(line).not.toContain("pp=");
+      }
+    });
+
+    it("omits ?pp= when the pass is disabled by env, even with an edge host configured", async () => {
+      process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+      process.env.LIVE_HLS_PARTY_PASS_TTL_MS = "0";
+      rungRows(["720p30"]);
+      const body = await master("tok-en");
+      for (const line of body!.split("\n").filter((l) => l.startsWith("/api"))) {
+        expect(line).not.toContain("pp=");
+        // The viewer token is still there -- same fallback shape as
+        // stampViewerStream's own "disabled by env" case.
+        expect(line).toContain("?t=tok-en");
+      }
+    });
   });
 
   it("only looks at rows of THIS session", async () => {
@@ -812,6 +907,72 @@ describe("buildMasterPlaylistFor", () => {
   });
 });
 
+/**
+ * BROADCAST_PIPELINE B0.6: the telemetry route's own session identity, so an
+ * accepted batch's `sessionId` is the SAME string `buildMasterPlaylistFor`
+ * puts in `#EXT-X-PQP-SESSION` (both read it off this same `sessionRungs`
+ * call, sharing its cache) rather than a `channelId:startedAt` pair that
+ * reads the same to a human but never joins by equality against
+ * `voice.hlsStarted` (a Farol finding, 2026-09-14).
+ */
+describe("resolveHlsSessionId", () => {
+  beforeEach(() => {
+    resetHlsPlaylistCacheForTests();
+    pool.query.mockReset();
+  });
+
+  afterEach(() => {
+    resetHlsPlaylistCacheForTests();
+    pool.query.mockReset();
+  });
+
+  it("returns the lowest-bitrate rung's row id -- the same one buildMasterPlaylistFor tags", async () => {
+    pool.query.mockImplementation(async () => ({
+      rowCount: 2,
+      rows: [
+        { id: "row-1080", rung: "1080p30" },
+        { id: "row-720", rung: "720p30" },
+      ],
+    }));
+    await expect(
+      resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
+    ).resolves.toBe("row-720");
+  });
+
+  it("is null when the session has no known rungs right now", async () => {
+    pool.query.mockImplementation(async () => ({ rowCount: 0, rows: [] }));
+    await expect(
+      resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
+    ).resolves.toBeNull();
+  });
+
+  it("is null, never throws, when the lookup itself fails", async () => {
+    pool.query.mockImplementation(async () => {
+      throw new Error("pool exhausted");
+    });
+    await expect(
+      resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
+    ).resolves.toBeNull();
+  });
+
+  it("shares sessionRungs' cache with buildMasterPlaylistFor -- one query serves both", async () => {
+    pool.query.mockImplementation(async () => ({
+      rowCount: 1,
+      rows: [{ id: "row-720", rung: "720p30" }],
+    }));
+    await buildMasterPlaylistFor({
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+      userId: USER,
+      now: 1_000,
+    });
+    await expect(
+      resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
+    ).resolves.toBe("row-720");
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("buildSignedPlaylist with a rung", () => {
   beforeEach(() => {
     enableHls();
@@ -881,8 +1042,11 @@ describe("buildSignedPlaylist with a rung", () => {
 describe("keep-warm loop", () => {
   function stubSessionRungs(rungs: string[]) {
     pool.query.mockImplementation(async (sql: string) => {
-      if (sql.includes("SELECT rung FROM hls_sessions")) {
-        return { rowCount: rungs.length, rows: rungs.map((rung) => ({ rung })) };
+      if (sql.includes("SELECT id, rung FROM hls_sessions")) {
+        return {
+          rowCount: rungs.length,
+          rows: rungs.map((rung, i) => ({ id: `session-${i}`, rung })),
+        };
       }
       // The exists-check every render runs (`SELECT 1 FROM hls_sessions ...`),
       // scoped to a session that is live.

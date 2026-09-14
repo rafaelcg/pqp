@@ -83,6 +83,8 @@ const mutedCalls: boolean[] = [];
 
 /** Every `publishVoiceTrack`/`unpublishVoiceTrack` call, in order. */
 const voiceTrackCalls: ("publish" | "unpublish")[] = [];
+/** Every `publishStageMix`/`unpublishStageMix` call, in order (CONVIDADOS). */
+const stageMixCalls: ("publish" | "unpublish")[] = [];
 /**
  * One-shot gate: when set, the NEXT `publishVoiceTrack`/`unpublishVoiceTrack`
  * call hangs on it before resolving, so a test can hold one call's SFU round
@@ -117,6 +119,12 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishVoiceTrack: async () => {
       voiceTrackCalls.push("unpublish");
       await holdNextVoiceTrackCall();
+    },
+    publishStageMix: async () => {
+      stageMixCalls.push("publish");
+    },
+    unpublishStageMix: async () => {
+      stageMixCalls.push("unpublish");
     },
     publishCamera: async () => {},
     unpublishCamera: async () => {},
@@ -177,6 +185,24 @@ function installBrowserStubs() {
   g.setInterval = () => 1;
   g.clearInterval = () => {};
   g.window = { addEventListener: () => {}, dispatchEvent: () => true };
+  // `stage-mix.ts` wraps a stream's own tracks in `new MediaStream(tracks)`
+  // before handing them to `AudioContext.createMediaStreamSource` — needed
+  // only once CONVIDADOS is exercised in this file, node has no such global.
+  g.MediaStream = class {
+    private tracks: ReturnType<typeof fakeTrack>[];
+    constructor(tracks: ReturnType<typeof fakeTrack>[] = []) {
+      this.tracks = tracks;
+    }
+    getTracks() {
+      return [...this.tracks];
+    }
+    getAudioTracks() {
+      return this.tracks.filter((t) => t.kind === "audio");
+    }
+    getVideoTracks() {
+      return this.tracks.filter((t) => t.kind === "video");
+    }
+  };
   try {
     delete (globalThis as { localStorage?: unknown }).localStorage;
   } catch {
@@ -208,16 +234,32 @@ function installBrowserStubs() {
   // the real audio graph `screen-mix.test.ts` owns.
   g.AudioContext = class {
     createMediaStreamSource() {
-      return { connect: () => {} };
+      return { connect: () => {}, disconnect: () => {} };
     }
     createGain() {
-      return { gain: { value: 1 }, connect: () => {} };
+      return { gain: { value: 1 }, connect: () => {}, disconnect: () => {} };
     }
     createAnalyser() {
-      return { fftSize: 0, smoothingTimeConstant: 0, connect: () => {} };
+      return {
+        fftSize: 0,
+        smoothingTimeConstant: 0,
+        connect: () => {},
+        disconnect: () => {},
+      };
     }
     createMediaStreamDestination() {
       return { stream: fakeStream("processed") };
+    }
+    createDynamicsCompressor() {
+      return {
+        threshold: { value: 0 },
+        knee: { value: 0 },
+        ratio: { value: 0 },
+        attack: { value: 0 },
+        release: { value: 0 },
+        connect: () => {},
+        disconnect: () => {},
+      };
     }
     close() {
       return Promise.resolve();
@@ -308,6 +350,7 @@ beforeEach(() => {
   screenMixInstances.length = 0;
   mutedCalls.length = 0;
   voiceTrackCalls.length = 0;
+  stageMixCalls.length = 0;
   voiceTrackModeFrames.length = 0;
   voiceTrackServerSupport = true;
   voiceTrackGate = null;
@@ -598,5 +641,76 @@ describe("'separada' with no microphone to publish at all", () => {
 
     expect(voice.getState().voiceTrackMode).toBe("junto");
     expect(voice.getState().notice).toBeTruthy();
+  });
+});
+
+describe("CONVIDADOS: guests publish stage-mix instead of voice-track", () => {
+  it("publishes stage-mix, not voice-track, the moment guests turn on while sharing", async () => {
+    const voice = await joinedHost();
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+
+    voice.setWatchPartyGuests("invite", []);
+    await settle();
+
+    expect(stageMixCalls).toEqual(["publish"]);
+    expect(voiceTrackCalls).toEqual([]);
+  });
+
+  it("does not republish stage-mix when a guest joins or leaves air", async () => {
+    // §5.2: "the mix persists across calls so a guest joining mid-show is
+    // an input added to a bus already running, not a fresh one starting."
+    // The SFU publication itself must not churn either.
+    const voice = await joinedHost();
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+    voice.setWatchPartyGuests("invite", []);
+    await settle();
+    expect(stageMixCalls).toEqual(["publish"]);
+
+    voice.setWatchPartyGuests("invite", ["guest-1"]);
+    await settle();
+    voice.setWatchPartyGuests("invite", ["guest-1", "guest-2"]);
+    await settle();
+    voice.setWatchPartyGuests("invite", []);
+    await settle();
+
+    // Still exactly the one publish from turning guests on in the first
+    // place — none of the on-air roster changes touched the SFU.
+    expect(stageMixCalls).toEqual(["publish"]);
+  });
+
+  it("switches back to voice-track when guests turn off, still separated", async () => {
+    const voice = await joinedHost();
+    await voice.setVoiceTrackMode("separada");
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+    voice.setWatchPartyGuests("request", ["guest-1"]);
+    await settle();
+    expect(stageMixCalls).toEqual(["publish"]);
+
+    voice.setWatchPartyGuests("off", []);
+    await settle();
+
+    expect(stageMixCalls).toEqual(["publish", "unpublish"]);
+    // The share started already "separada" (voice-track published first),
+    // guests turning on swapped it for stage-mix (unpublish then publish
+    // above), and guests turning off again swaps back.
+    expect(voiceTrackCalls).toEqual(["publish", "unpublish", "publish"]);
+  });
+
+  it("guests forces separada even when the standing preference is junto", async () => {
+    const voice = await joinedHost();
+    await voice.startScreenShare(false, { watchParty: true });
+    await settle();
+    expect(voice.getState().voiceTrackMode).toBe("junto");
+
+    voice.setWatchPartyGuests("request", []);
+    await settle();
+
+    // The film mix stays out of the mic's way — same signal
+    // `effectiveVoiceSeparated()` gives the standing preference.
+    expect(mutedCalls.at(-1)).toBe(false);
+    expect(stageMixCalls).toEqual(["publish"]);
   });
 });
