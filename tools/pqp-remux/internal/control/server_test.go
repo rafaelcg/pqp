@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -225,6 +226,64 @@ func TestServer_ConcurrentSignedRequests_DoNotDeadlock(t *testing.T) {
 			t.Fatalf("request %d: expected 200, got %d", i, code)
 		}
 	}
+}
+
+// TestServer_SlowRequestBodyDoesNotHoldSemaphoreForever is Farol's
+// follow-up finding on the concurrency cap above (PR #584, round 2):
+// bodySem is acquired BEFORE the body is read or the request is
+// authenticated, on purpose (an unauthenticated caller is exactly who
+// this cap must bound), which means an unauthenticated caller that opens
+// a connection and never finishes sending its body would hold that slot
+// forever if nothing ever aborts the read. This drives a real TCP
+// connection (httptest.NewRecorder can't exercise this -- the timeout
+// lives in net/http.Server's own connection handling, not in the
+// Handler) that declares a body and then sends none of it, against a
+// server configured with the same ReadTimeout cmd/pqp-remuxd/main.go now
+// sets, and requires the semaphore slot to be released once that
+// timeout elapses.
+func TestServer_SlowRequestBodyDoesNotHoldSemaphoreForever(t *testing.T) {
+	secret := "topsecret"
+	srv, _ := newTestServer(t, secret, failingFactory)
+
+	ts := httptest.NewUnstartedServer(srv)
+	ts.Config.ReadHeaderTimeout = 100 * time.Millisecond
+	ts.Config.ReadTimeout = 200 * time.Millisecond
+	ts.Start()
+	defer ts.Close()
+
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// A large declared Content-Length with nothing behind it -- the
+	// unsigned, incomplete request a slow-loris caller sends. No
+	// signature headers at all: withSigning must reach io.ReadAll (and
+	// acquire bodySem) before it ever gets a chance to reject this for
+	// being unsigned.
+	if _, err := conn.Write([]byte("POST /sessions HTTP/1.1\r\nHost: test\r\nContent-Length: 1000000\r\n\r\n")); err != nil {
+		t.Fatalf("writing request headers: %v", err)
+	}
+
+	waitFor := func(t *testing.T, desc string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if cond() {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for: %s", desc)
+	}
+
+	waitFor(t, "the slow request to acquire a semaphore slot", func() bool {
+		return len(srv.bodySem) > 0
+	})
+	waitFor(t, "the semaphore slot to be released after the read timeout", func() bool {
+		return len(srv.bodySem) == 0
+	})
 }
 
 func TestServer_StartSession_RejectsInvalidBody(t *testing.T) {

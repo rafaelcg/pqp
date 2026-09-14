@@ -31,6 +31,29 @@ import (
 // this module.
 const shutdownTimeout = 10 * time.Second
 
+// readHeaderTimeout/readTimeout bound how long ListenAndServe will let one
+// connection take to send its headers, and its whole request (headers plus
+// body), before closing it (Farol review, PR #584): withSigning's
+// concurrency semaphore (internal/control/server.go's bodySem) is acquired
+// BEFORE the body is read or authenticated, on purpose -- it exists to
+// bound aggregate buffering, which an unauthenticated caller must not be
+// able to grow without limit by opening many requests at once. Without a
+// server-level deadline on receiving the request, that same caller could
+// instead hold ONE slot indefinitely by sending an incomplete body slowly
+// (or never finishing it), and 64 such connections would block every
+// legitimate session start/stop/list behind them. Go's default
+// http.Server has no such deadline (the "default unlimited timeout
+// behavior" this review also flagged) -- these two constants close both
+// findings at once, at the one place (the listener itself) that can act
+// before a body read even begins. 10s is generous for real bodies (a
+// handful of numbers and short strings, StartSessionRequest's own doc
+// comment) while still giving an unauthenticated slow-loris connection a
+// bounded, not unbounded, hold on a semaphore slot.
+const (
+	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 10 * time.Second
+)
+
 func main() {
 	cfg, err := control.LoadGlobalConfig()
 	if err != nil {
@@ -53,7 +76,12 @@ func main() {
 
 	registry := control.NewRegistry(supervisorCtx, control.NewRemuxPipeline, cfg, cfg.WatchdogConfig(), time.Now)
 	srv := control.NewServer(cfg.Secret, cfg.MediaOriginKey, registry)
-	httpServer := &http.Server{Addr: cfg.Listen, Handler: srv}
+	httpServer := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           srv,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+	}
 
 	log.Printf("pqp-remuxd: listening on %s (part-stuck=%dms demote-window=%dms)",
 		cfg.Listen, cfg.PartStuckMs, cfg.DemoteWindowMs)
