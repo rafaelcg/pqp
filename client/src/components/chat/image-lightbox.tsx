@@ -111,7 +111,13 @@ export function ImageLightbox({
 
   // ------------------------------------------------------------- attachment src
 
-  const src = current ? (resolvedUrl[current.id] ?? current.url) : "";
+  // The single source of truth for "where do the bytes live right now" — a
+  // refresh from `handleImgError` updates `resolvedUrl` and every action
+  // below reads through this, not `current.url` directly. Before 2026-09-14
+  // three of the five actions still read `current.url`, so a healed picture
+  // (the refreshed URL rendering fine) sat next to a copy/open/download that
+  // silently reused the expired one Farol caught this on review.
+  const currentUrl = current ? (resolvedUrl[current.id] ?? current.url) : "";
   const isBroken = current ? broken.has(current.id) : false;
   const isLoaded = current ? loaded.has(current.id) : false;
 
@@ -250,14 +256,19 @@ export function ImageLightbox({
     }
   }
 
+  /**
+   * Copying the image failed; try the link instead, and say what actually
+   * happened. Reporting "link copied" when `writeText` itself threw would be
+   * a second, quieter version of the same lie the picture just told — the
+   * toast has to match reality, not the happy path it was written for.
+   */
   async function copyLinkFallback(url: string) {
     try {
       await navigator.clipboard.writeText(url);
+      showToast(t("lightbox.copyFailedToast"));
     } catch {
-      // Best effort — the toast below still names what was attempted, and a
-      // clipboard that refuses plain text refuses everything else here too.
+      showToast(t("lightbox.copyFailedNoFallbackToast"));
     }
-    showToast(t("lightbox.copyFailedToast"));
   }
 
   async function handleCopyImage() {
@@ -270,7 +281,7 @@ export function ImageLightbox({
       ) {
         throw new Error("Clipboard image writes unsupported");
       }
-      const response = await fetch(src);
+      const response = await fetch(currentUrl);
       if (!response.ok) {
         throw new Error(`fetch failed: ${response.status}`);
       }
@@ -280,19 +291,19 @@ export function ImageLightbox({
         : sourceBlob;
       const items: Record<string, Blob> = { "image/png": pngBlob };
       if (plan.includeLinkText) {
-        items["text/plain"] = new Blob([current.url], { type: "text/plain" });
+        items["text/plain"] = new Blob([currentUrl], { type: "text/plain" });
       }
       await navigator.clipboard.write([new ClipboardItem(items)]);
       flashCopied("image");
     } catch {
-      await copyLinkFallback(current.url);
+      await copyLinkFallback(currentUrl);
     }
   }
 
   async function handleCopyLink() {
     if (!current) return;
     try {
-      await navigator.clipboard.writeText(current.url);
+      await navigator.clipboard.writeText(currentUrl);
       flashCopied("link");
     } catch {
       showToast(t("lightbox.copyLinkFailedToast"));
@@ -302,7 +313,7 @@ export function ImageLightbox({
   async function handleDownload() {
     if (!current) return;
     try {
-      const response = await fetch(src);
+      const response = await fetch(currentUrl);
       if (!response.ok) {
         throw new Error(`fetch failed: ${response.status}`);
       }
@@ -319,7 +330,7 @@ export function ImageLightbox({
       // (it has to render inline in the grid), and a cross-origin bucket
       // ignores the `download` attribute anyway — opening it is the honest
       // fallback rather than a download that silently never starts.
-      window.open(current.url, "_blank", "noopener,noreferrer");
+      window.open(currentUrl, "_blank", "noopener,noreferrer");
     }
   }
 
@@ -487,6 +498,63 @@ export function ImageLightbox({
   const sizeLabel = current ? formatByteSize(current.byteSize) : "";
   const metaLabel = [dimensions, sizeLabel].filter(Boolean).join(" · ");
 
+  // ---------------------------------------------------------------- dismiss
+
+  /**
+   * "Click outside the image closes it" — shared by the root, the visible
+   * backdrop layer, and the stage (the flex box the image sits centred in,
+   * which is what a real click on the empty area around a small image
+   * actually lands on: it fully covers the backdrop div underneath, so
+   * `event.target === event.currentTarget` on the root alone never matched a
+   * real click, only a synthetic one dispatched straight at the root node —
+   * Farol's finding on this PR).
+   *
+   * mousedown+mouseup on the same element, not `onClick` alone, so this can
+   * tell a click from the two gestures it must never eat: dragging to select
+   * the filename (the mouseup lands off-target or the selection is non-empty)
+   * and dragging to pan a zoomed image (the press itself already targets the
+   * image, never the background, so it never reaches here at all — the
+   * movement check is the second line of defence for a fast drag that
+   * somehow still starts on the background).
+   *
+   * A mismatched target is a no-op, not a reset. Stage sits inside root, so a
+   * real press on stage bubbles up and runs root's copy of this handler too;
+   * if that copy nulled the ref on every non-match, it would erase what the
+   * inner, matching handler had just set a moment earlier, on the very same
+   * event. Leaving a mismatch untouched means whichever element the press
+   * actually started on is the one whose recorded position survives to the
+   * matching mouseup, no matter how many ancestors also carry this pair.
+   */
+  const dismissPressRef = useRef<{ x: number; y: number } | null>(null);
+
+  function handleDismissMouseDown(event: React.MouseEvent<HTMLElement>) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    dismissPressRef.current = { x: event.clientX, y: event.clientY };
+  }
+
+  function handleDismissMouseUp(event: React.MouseEvent<HTMLElement>) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    const press = dismissPressRef.current;
+    dismissPressRef.current = null;
+    if (!press) {
+      return;
+    }
+    const moved =
+      Math.abs(event.clientX - press.x) > 4 || Math.abs(event.clientY - press.y) > 4;
+    if (moved) {
+      return;
+    }
+    const selection = window.getSelection?.();
+    if (selection && selection.toString().length > 0) {
+      return;
+    }
+    onClose();
+  }
+
   if (!current) {
     return null;
   }
@@ -500,13 +568,15 @@ export function ImageLightbox({
       ref={panelRef}
       tabIndex={-1}
       className="fixed inset-0 z-[60] flex flex-col outline-none"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
+      onMouseDown={handleDismissMouseDown}
+      onMouseUp={handleDismissMouseUp}
     >
-      <div aria-hidden="true" className="absolute inset-0 bg-surface-0/95" />
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-surface-0/95"
+        onMouseDown={handleDismissMouseDown}
+        onMouseUp={handleDismissMouseUp}
+      />
 
       {/* Top bar */}
       <div className="relative z-10 flex items-center gap-2 border-b border-border bg-surface-0/90 px-3 py-2 backdrop-blur-sm sm:px-4">
@@ -575,7 +645,7 @@ export function ImageLightbox({
               `variant="ghost" size="icon"` by hand. */}
           <Tooltip label={t("lightbox.openOriginal")}>
             <a
-              href={current.url}
+              href={currentUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex h-11 w-11 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] text-text-tertiary transition-[background,color,transform] duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring active:scale-[0.98]"
@@ -635,6 +705,14 @@ export function ImageLightbox({
         onDoubleClick={handleDoubleClick}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
+        // The stage is the box a real click on "outside the image" actually
+        // lands on — its own rectangle sits directly over the backdrop div
+        // underneath for the whole middle of the screen, so it needs the same
+        // shared dismiss pair. A press that starts on the `<img>` itself
+        // (panning a zoomed image) never satisfies `target === currentTarget`
+        // here, so the two gestures cannot collide.
+        onMouseDown={handleDismissMouseDown}
+        onMouseUp={handleDismissMouseUp}
       >
         {isBroken ? (
           <div className="flex flex-col items-center gap-2 text-text-tertiary">
@@ -645,7 +723,7 @@ export function ImageLightbox({
           <>
             {!isLoaded && (
               <img
-                src={src}
+                src={currentUrl}
                 alt=""
                 aria-hidden="true"
                 draggable={false}
@@ -654,7 +732,7 @@ export function ImageLightbox({
             )}
             <img
               key={current.id}
-              src={src}
+              src={currentUrl}
               alt={current.filename}
               draggable={false}
               onLoad={(event) => handleLoad(current.id, event)}

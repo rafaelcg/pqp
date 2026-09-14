@@ -2301,6 +2301,7 @@
   "lightbox.copyLink": "Copy link",
   "lightbox.copyLinkDone": "Link copied",
   "lightbox.copyFailedToast": "Couldn't copy the image, link copied instead",
+  "lightbox.copyFailedNoFallbackToast": "Couldn't copy the image",
   "lightbox.copyLinkFailedToast": "Couldn't copy the link",
   "lightbox.openOriginal": "Open original",
   "lightbox.download": "Download",
