@@ -1,6 +1,7 @@
 # Plan status
 
 > **Handover (2026-08-25):** live URLs, secrets checklist, voice FIXED → [`HANDOVER.md`](./HANDOVER.md). Agent quickstart → [`../CLAUDE.md`](../CLAUDE.md).
+> **M6 rehearsal 3 (2026-09-14):** three fix PRs (#593, #595, #596) re-verified live on `pqp-api-staging` at three machines, production switch PR (#594) shape. 200-seat ramp 200/200 (was 65–67.5%), the watch-party WS-ordering race echoed on all three machines, rolling deploy under 150-seat load 0 failures, `/ready` never 503. See [`plans/M6_REHEARSAL_2026-09-14b.md`](./plans/M6_REHEARSAL_2026-09-14b.md) — includes a process-incident writeup worth reading before the next rehearsal of this shape.
 
 ## Original roadmap
 
