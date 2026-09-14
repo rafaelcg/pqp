@@ -498,8 +498,22 @@ fly logs --app pqp-api | grep '\[role\]'
 # 2. Resize the (still single) machine. One variable at a time: this is a
 #    real downsize (performance-2x/4gb -> performance-1x/2048mb), not
 #    bundled with adding a machine, so if it alone causes trouble it is
-#    unambiguous which change did it.
+#    unambiguous which change did it. THIS IS THE RISKIEST MOMENT IN THE
+#    WHOLE FLIP, not the count change: for a few minutes, ALL production
+#    traffic runs on one performance-1x/2048mb machine alone — the exact
+#    peak load the old performance-2x/4gb machine carried (~1 core, 185
+#    sockets peak, per current production measurements), now on half the
+#    CPU and half the RAM budget, and with no second machine yet to fail
+#    over to. Watch this window specifically, not just "for a day":
 fly scale vm performance-1x --memory 2048 --region gru --app pqp-api
+fly status --app pqp-api                    # RSS / CPU on the resized machine
+curl -s https://api.pqp.gg/health | jq .    # still answering promptly
+# STOP AND REVERT (fly scale vm performance-2x --memory 4096 --region gru
+# --app pqp-api) BEFORE step 4 if CPU is pinned, RSS is climbing toward the
+# 2048mb ceiling, or /health latency degrades — do not scale to two machines
+# on top of a single machine that is already struggling at this size, since
+# a rolling deploy later will recreate exactly this one-machine-carries-it-
+# all condition on every deploy going forward.
 
 # 3. Keep CI's post-deploy machine-count assertion honest while fly.toml
 #    (still 1 on main until this PR merges) and the live app (about to be 2)
@@ -544,20 +558,22 @@ done
 #    now run at two machines for the first time on production.
 
 # 8. THE SHADOW-SECRET TRAP. fly.toml's own banner warns about this in
-#    general, and CLUSTER_BUS, VOICE_REGISTRY and PG_POOL_MAX have all been
-#    live Fly SECRETS on pqp-api at one point or another (CLUSTER_BUS/
-#    VOICE_REGISTRY since 2026-09-07; PG_POOL_MAX=70 since the 2026-09-12
-#    Vultr DB migration, still live today). A secret of the same name
-#    SHADOWS [env] silently — merging this PR does NOT change what the app
-#    actually uses for any name that still has a live secret sitting on top
-#    of it. In THIS flip the values happen to already agree (PG_POOL_MAX=70
-#    live == 70 in this PR's fly.toml, per the measured-budget recompute in
-#    docs/DB_RUNBOOK.md §3; CLUSTER_BUS/VOICE_REGISTRY are both "postgres"
-#    either way), so nothing breaks if you skip this step — but leaving a
-#    secret in place means a FUTURE edit to fly.toml silently does nothing
-#    for that name, which is the trap. Clear it now while it's free:
+#    general, and CLUSTER_BUS, VOICE_REGISTRY, PG_POOL_MAX and (as of step 1
+#    above) WORKER_MODE are all live Fly SECRETS on pqp-api at this point
+#    (CLUSTER_BUS/VOICE_REGISTRY since 2026-09-07; PG_POOL_MAX=70 since the
+#    2026-09-12 Vultr DB migration; WORKER_MODE=api set by step 1 of this
+#    flip). A secret of the same name SHADOWS [env] silently — merging this
+#    PR does NOT change what the app actually uses for any name that still
+#    has a live secret sitting on top of it. In THIS flip the values happen
+#    to already agree with what's now in fly.toml (PG_POOL_MAX=70,
+#    WORKER_MODE=api, CLUSTER_BUS/VOICE_REGISTRY=postgres), so nothing
+#    breaks if you skip this step — but leaving a secret in place means a
+#    FUTURE edit to fly.toml silently does nothing for that name, which is
+#    the trap (see the rollback below for exactly this biting: the intuitive
+#    rollback command for WORKER_MODE does not work once it is unset here).
+#    Clear all four now while it's free:
 fly secrets list --app pqp-api
-fly secrets unset CLUSTER_BUS VOICE_REGISTRY PG_POOL_MAX --app pqp-api
+fly secrets unset CLUSTER_BUS VOICE_REGISTRY PG_POOL_MAX WORKER_MODE --app pqp-api
 # (unsetting a name that was never set is a harmless no-op restart, not an
 # error — but check with `fly secrets list` first so you know which restart
 # you are about to cause and why)
@@ -581,11 +597,21 @@ gh variable delete PQP_API_MACHINES
 ```bash
 fly scale count 1 --region gru --app pqp-api
 gh variable set PQP_API_MACHINES --body 1   # or revert fly.toml's min_machines_running to 1 and skip this
-fly secrets unset WORKER_MODE --app pqp-api # batch jobs resume on pqp-api itself; skip this line if you
-                                             # only want fewer API machines and pqp-worker stays healthy —
-                                             # WORKER_MODE=api at one machine is still correct, just no
-                                             # longer necessary to avoid the breaker-flap finding
 ```
+
+**If you also need batch jobs to resume on `pqp-api` itself** (only if `pqp-worker` is unhealthy — otherwise leave `WORKER_MODE=api` alone, it is still correct at one machine, just no longer necessary to avoid the breaker-flap finding): **`fly secrets unset WORKER_MODE` does NOT work once this PR has merged**, and this is worth spelling out because it is exactly the shadow-secret trap from step 8 above, biting in the other direction. After the merge, `WORKER_MODE = "api"` is baked into `fly.toml`'s `[env]` block itself — unsetting a secret only removes something sitting *on top of* the file, and there is nothing there to remove once step 8 cleared it (or even if there were, the file's own value takes over the instant the secret is gone). Getting batch jobs back onto `pqp-api` needs a secret that **overrides** the file with a different value, not one that unsets:
+
+```bash
+fly secrets set WORKER_MODE=all --app pqp-api   # "all" (or "0"/"false"/unset) is what
+                                                 # server/src/lib/process-role.ts treats as
+                                                 # "run everything here"; "api" is what fly.toml
+                                                 # now says, so only a SET with a different
+                                                 # value can override it
+fly logs --app pqp-api | grep '\[role\]'
+# should NOT show "WORKER_MODE=api: batch jobs left to the worker process" any more
+```
+
+The permanent fix, if this rollback is not a brief one-off, is to also revert `fly.toml`'s `WORKER_MODE = "api"` line and merge that — otherwise the next redeploy (any ordinary merge to `main`) picks the file's `"api"` back up and silently drops the override you just set, since a deploy does not touch secrets and the shadow is exactly what makes that invisible.
 
 Optionally revert the machine size (`fly scale vm performance-2x --memory 4096 --region gru --app pqp-api`) if the downsize itself is suspected; do this as its own step, not bundled with the count rollback, for the same "one variable at a time" reason as the flip.
 
@@ -823,7 +849,7 @@ gh secret set FLY_API_TOKEN_WORKER
 
 The worker needs no TURN, LiveKit, CORS, Clerk authorized parties, provider keys or `ADMIN_METRICS_TOKEN`. It does not run the schema migration; CI deploys it after the API has verified, so it never runs against a schema older than its code.
 
-**Rollback:** `fly secrets unset WORKER_MODE --app pqp-api` puts every job back on the API (restarts it), and `fly scale count 0 --app pqp-worker` parks the worker. Both processes running the jobs at once is safe: every job claims its rows in SQL, so the overlap is duplicate work, not wrong work.
+**Rollback:** on a fresh setup that has never merged the two-machine `fly.toml` from §6a-bis, `WORKER_MODE` is still secret-only, so `fly secrets unset WORKER_MODE --app pqp-api` puts every job back on the API (restarts it). **Once §6a-bis's `fly.toml` is merged, `WORKER_MODE = "api"` lives in `[env]` and unsetting the secret no longer does anything** — see §6a-bis's own Rollback subsection for the correct command (`fly secrets set WORKER_MODE=all`, which overrides the file rather than trying to unset a secret that isn't shadowing anything). Either way, `fly scale count 0 --app pqp-worker` parks the worker, and both processes running the jobs at once is safe: every job claims its rows in SQL, so the overlap is duplicate work, not wrong work.
 
 ---
 

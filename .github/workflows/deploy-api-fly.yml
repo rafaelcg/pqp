@@ -313,12 +313,33 @@ jobs:
             exit 1
           fi
 
+          # Probe every pending machine IN PARALLEL each attempt, not serially:
+          # with N machines a serial loop is N * (curl timeout + sleep) per
+          # attempt, so an N-machine flip made this check slower to fail in
+          # direct proportion to the machine count it exists to verify. An
+          # explicit wall-clock deadline is the backstop instead of a fixed
+          # attempt count, so the bound on total run time doesn't grow with N
+          # either.
           pending="$ids"
-          for attempt in $(seq 1 40); do
+          deadline=$((SECONDS + 600))  # 10 minutes total, independent of N
+          attempt=0
+          while [ -n "$pending" ]; do
+            attempt=$((attempt + 1))
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out after 10 minutes waiting for these machines to report the deployed commit, and they are probably still serving the previous build: $pending"
+              exit 1
+            fi
+            tmpdir=$(mktemp -d)
+            for id in $pending; do
+              (
+                body=$(curl -fsS --max-time 10 -H "fly-force-instance-id: $id" "$API_URL/health" || echo '{}')
+                printf '%s' "$body" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' > "$tmpdir/$id"
+              ) &
+            done
+            wait
             still=""
             for id in $pending; do
-              body=$(curl -fsS --max-time 10 -H "fly-force-instance-id: $id" "$API_URL/health" || echo '{}')
-              got=$(printf '%s' "$body" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+              got=$(cat "$tmpdir/$id" 2>/dev/null || echo "")
               if [ "$got" = "$EXPECTED" ]; then
                 echo "machine $id is serving $got"
               else
@@ -326,6 +347,7 @@ jobs:
                 still="$still $id"
               fi
             done
+            rm -rf "$tmpdir"
             pending=$(printf '%s\n' "$still" | xargs -n1 2>/dev/null || true)
             if [ -z "$pending" ]; then
               echo "Every started machine is serving $EXPECTED."
@@ -333,8 +355,6 @@ jobs:
             fi
             sleep 15
           done
-          echo "::error::These machines never reported the deployed commit, and are probably still serving the previous build: $pending"
-          exit 1
 
       # The worker (fly.worker.toml): same image the step above just pushed,
       # under the label of this commit, so the two apps can never run two
