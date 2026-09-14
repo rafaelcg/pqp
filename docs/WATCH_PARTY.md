@@ -1522,16 +1522,17 @@ without anyone acting on it:
   so a 500-viewer party is one loop, not a storm; `liveHls.tokenRemintLoops`
   / `tokenRemints` on `GET /api/admin/metrics` are what say it actually ran
   rather than merely deployed (the pitfall-9 shape).
-- **Web:** `shouldAdoptHlsSource` already refused to re-attach on a restamped
-  `?t=`, correctly, but nothing then did anything with the fresher token that
-  kept arriving as a new `src` prop — it was refused and dropped. hls.js
-  polls the exact URL it was given at `loadSource` for the life of the
-  attach, so `playlistPollUrl` (`client/src/lib/hls-playback.ts`) now swaps a
-  same-session token in inside `xhrSetup`, right before the request goes out,
-  by re-`xhr.open`-ing with the freshest known URL. No re-attach, no dropped
-  buffer, no rebuffer — only the playlist request's own URL changes, and
-  every segment/media URL is already an absolute presigned bucket URL that
-  never goes through this path.
+- **Web:** already fixed by the recovery ladder (B1, PR 570):
+  `shouldAdoptHlsSource` refuses to re-attach on a restamped `?t=`, and
+  `nextFreshPlaylistUrl` captures that restamp into `freshPlaylistUrlRef`
+  instead of dropping it. `withFreshHlsToken` (`client/src/lib/hls-playback.ts`)
+  swaps that ref's token into every outgoing playlist request inside
+  `xhrSetup`, right before it goes out, by re-`xhr.open`-ing with the
+  freshest known URL — no re-attach, no dropped buffer, no rebuffer, and it
+  already carries the rung-suffix handling a screen-share ladder needs. This
+  session's periodic remint reaches the loader the same way the audience
+  keyframe restamp always did: as an ordinary `channel-live` frame, which is
+  already this same `src`-prop door.
 - **iOS / Android:** both already scheduled the same 50-minute proactive
   renewal client-side (`WatchStreamSwap.renewAfter`,
   `WATCH_TOKEN_RENEWAL_MS`), but a hard playback failure (a rejected, expired
