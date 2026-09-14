@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -102,6 +103,19 @@ type Session struct {
 	audioReaderDone chan struct{}
 	audioFrag       *pipeline.AudioFragmenter
 	audioRing       *ring.Ring
+	// audioMu guards the restart decision in recoverAudioEncoder and the
+	// audioClosed flag together, as one critical section: recoverAudioEncoder
+	// holds it for its ENTIRE body, including the (possibly slow, a real
+	// subprocess spawn) newEncoderFunc call, and Close takes it too before
+	// deciding what to close. That is what makes "a replacement ffmpeg can
+	// never outlive the session" true by construction rather than by
+	// timing luck — Close either runs to completion before a restart ever
+	// starts (nothing to race), or it blocks on this mutex until the
+	// in-flight restart finishes and then closes whatever encoder that
+	// restart left as current, instead of the (possibly already-closed)
+	// one it started with. See TestSession_CloseDuringInFlightRestart*.
+	audioMu     sync.Mutex
+	audioClosed bool
 	// audioDead is set once, permanently, when the audio pipeline gives
 	// up (a WriteSamples failure survives the one allowed restart):
 	// Health() reports it so a broken pipe that still "looks alive" (the
@@ -357,8 +371,23 @@ func (s *Session) Finish() {
 // from writing any more PCM, so this Close drains whatever the encoder
 // already has rather than racing a final in-flight write against the
 // pipe this closes.
+//
+// Close takes audioMu before deciding what to close, the same lock
+// recoverAudioEncoder holds for its entire body: if a restart is
+// in-flight when Close runs, Close blocks here until that restart
+// finishes, THEN closes whichever encoder the restart left as current —
+// never the (possibly already-closed) one that failed. This is what
+// makes a replacement ffmpeg unable to outlive the session: either Close
+// runs to completion before any restart begins, or it waits for the
+// restart and closes its result, and no third interleaving exists
+// because recoverAudioEncoder never releases audioMu in between.
 func (s *Session) Close() {
-	if enc := s.loadEncoder(); enc != nil {
+	s.audioMu.Lock()
+	s.audioClosed = true
+	enc := s.loadEncoder()
+	s.audioMu.Unlock()
+
+	if enc != nil {
 		enc.Close()
 	}
 }
@@ -570,12 +599,25 @@ func (s *Session) runAudioPacer(ctx context.Context, cfg AudioConfig) {
 // by the time Close returns — audioReaderDone covers the second half,
 // this session's own consumer of that now-closed encoder).
 //
+// The whole body runs under audioMu, held for as long as newEncoderFunc
+// takes (a real subprocess spawn, in production): that is deliberate, not
+// an oversight — see Close's doc comment for why holding it across the
+// entire restart, rather than releasing it around the slow part, is what
+// makes "Close either fully precedes a restart or fully waits for one"
+// true without a second check after construction. A shutdown racing this
+// call blocks briefly on audioMu rather than closing a session while a
+// replacement ffmpeg is still being decided.
+//
 // restarted is the pacer's own "have I already used my one restart"
 // flag, passed by reference so both this call and the next tick's checks
 // share it. Returns true if a replacement encoder is now running (the
-// caller should keep going), false if a restart was already spent or the
-// new subprocess itself failed to start.
+// caller should keep going), false if a restart was already spent, the
+// session is already closed, or the new subprocess itself failed to
+// start.
 func (s *Session) recoverAudioEncoder(ctx context.Context, cfg AudioConfig, restarted *bool) bool {
+	s.audioMu.Lock()
+	defer s.audioMu.Unlock()
+
 	if old := s.loadEncoder(); old != nil {
 		old.Close()
 	}
@@ -583,6 +625,10 @@ func (s *Session) recoverAudioEncoder(ctx context.Context, cfg AudioConfig, rest
 		<-s.audioReaderDone
 	}
 
+	if s.audioClosed {
+		log.Print("pqp-remux: session is closing; skipping the AAC encoder restart")
+		return false
+	}
 	if *restarted {
 		log.Print("pqp-remux: AAC encoder failed again after its one allowed restart; giving up on audio for this session")
 		return false

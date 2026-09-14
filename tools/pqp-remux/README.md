@@ -483,7 +483,13 @@ why ffmpeg is a real, not incidental, dependency of this module now).
   before giving up; giving up sets `audioDead` rather than leaving a broken
   pipe reporting as healthy — the pitfall-15 shape (see `CLAUDE.md`) applied
   to this task's own subprocess. Video passthrough is never affected either
-  way.
+  way. `Session.Close` and a restart in flight are mutually exclusive
+  (`audioMu`, held across `recoverAudioEncoder`'s entire body): shutdown
+  either fully precedes a restart attempt (which then sees the session is
+  already closed and refuses to spawn a replacement at all) or blocks until
+  an already-in-flight restart finishes and closes *that* encoder, so a
+  replacement `ffmpeg` can never outlive the session it was replacing an
+  encoder for.
 - **A/V sync is not independently measured over a real 30-minute session**:
   `internal/session`'s `framesElapsed` tests prove the pacing layer itself
   cannot drift, and "Codec choices" above documents every known,

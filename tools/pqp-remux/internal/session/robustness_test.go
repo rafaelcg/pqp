@@ -115,6 +115,122 @@ func TestSession_AudioEncoderWriteFailureRestartsOnceThenMarksDead(t *testing.T)
 	}
 }
 
+// TestSession_CloseDuringInFlightRestartNeverLeaksTheReplacementEncoder
+// is the regression test for the shutdown race Farol found in
+// commit 2a19abd1: Session.Close and a WriteSamples-triggered restart in
+// recoverAudioEncoder could run concurrently, and Close could close the
+// OLD (already-failed) encoder while the restart went on to install a
+// brand new one that nothing would ever close again -- a replacement
+// ffmpeg outliving the session. audioMu (held for recoverAudioEncoder's
+// entire body, including the newEncoderFunc call) fixes this: Close
+// either completes before a restart ever begins, or blocks on audioMu
+// until the in-flight restart finishes and then closes whatever encoder
+// that restart left as current.
+//
+// This test forces the second interleaving deterministically: the first
+// (always-failing) encoder triggers a restart, whose newEncoderFunc call
+// is held open until the test has started Close() concurrently and given
+// it time to actually reach (and block on) audioMu.
+func TestSession_CloseDuringInFlightRestartNeverLeaksTheReplacementEncoder(t *testing.T) {
+	var mu sync.Mutex
+	var built []*fakeEncoder
+	proceedWithRestart := make(chan struct{})
+	firstEncoderBuilt := make(chan struct{})
+	secondEncoderConstructing := make(chan struct{})
+
+	withFakeEncoderFactory(t, func(ctx context.Context, cfg aacenc.Config) (remuxEncoder, error) {
+		mu.Lock()
+		idx := len(built)
+		fe := newFakeEncoder()
+		if idx == 0 {
+			fe.writeErr = errors.New("broken pipe") // always fails: forces exactly one restart attempt
+		}
+		built = append(built, fe)
+		mu.Unlock()
+
+		switch idx {
+		case 0:
+			close(firstEncoderBuilt)
+		case 1:
+			close(secondEncoderConstructing)
+			<-proceedWithRestart // hold the restart open until the test says go
+		}
+		return fe, nil
+	})
+
+	s := New(45000, 360000, ring.New(6, 90000), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), SegmentTicks: 4 * 48000}); err != nil {
+		t.Fatalf("EnableAudio: %v", err)
+	}
+
+	<-firstEncoderBuilt
+	select {
+	case <-secondEncoderConstructing:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recoverAudioEncoder never attempted a restart after the write failure")
+	}
+
+	// Close races the in-flight restart: it must block on audioMu (held
+	// by recoverAudioEncoder) rather than closing the old encoder while
+	// the restart is still deciding what the new current one will be.
+	closeDone := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before the in-flight restart finished -- it did not wait on audioMu")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(proceedWithRestart) // let recoverAudioEncoder's newEncoderFunc call return
+
+	select {
+	case <-closeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return after the restart finished -- a replacement encoder may be stuck outliving the session")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(built) != 2 {
+		t.Fatalf("expected exactly 2 encoders built, got %d", len(built))
+	}
+	for i, fe := range built {
+		fe.mu.Lock()
+		closed := fe.closed
+		fe.mu.Unlock()
+		if !closed {
+			t.Fatalf("encoder %d was never closed: it can outlive the session", i)
+		}
+	}
+}
+
+// TestSession_RestartRejectedOnceSessionIsAlreadyClosed covers the other
+// interleaving: Close runs to completion (setting audioClosed) BEFORE a
+// pending restart ever gets to run. recoverAudioEncoder must see
+// audioClosed and refuse to spawn a replacement at all, rather than
+// starting a new encoder for a session that has already shut down.
+func TestSession_RestartRejectedOnceSessionIsAlreadyClosed(t *testing.T) {
+	s := New(45000, 360000, ring.New(6, 90000), nil)
+	s.audioClosed = true // simulate Close() having already run
+	s.audioReaderDone = nil
+
+	var restarted bool
+	ok := s.recoverAudioEncoder(context.Background(), AudioConfig{}, &restarted)
+	if ok {
+		t.Fatal("recoverAudioEncoder must refuse to restart once the session is closed")
+	}
+	if restarted {
+		t.Fatal("the restart flag must not be consumed by a rejected restart")
+	}
+}
+
 func TestSession_AudioEncoderRecoversFromATransientFailure(t *testing.T) {
 	// The FIRST encoder fails once then works; this proves a restart
 	// gets the pipeline back to healthy rather than always marking it
