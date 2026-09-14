@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"sync"
@@ -21,6 +22,13 @@ const watchdogTick = 500 * time.Millisecond
 // demotion or Stop), and the watchdog goroutine driving evaluateWatchdog
 // against it.
 type ManagedSession struct {
+	// ctx is the supervisor's own lifetime context, carried from
+	// Registry (see its own doc comment) and reused, unchanged, for
+	// every factory call this session ever makes -- the initial build in
+	// newManagedSession AND every watchdog-triggered restart (restart,
+	// below) -- so a restart's replacement pipeline is just as
+	// cancelable by process shutdown as the session's first one was.
+	ctx         context.Context
 	req         StartSessionRequest
 	startedAtMs int64
 	cfg         PipelineConfig
@@ -54,7 +62,10 @@ type ManagedSession struct {
 // (registry.go's StartOrGet) does that only once the session is actually in
 // the registry, so a watchdog can never fire against a session nothing can
 // look up yet.
-func newManagedSession(req StartSessionRequest, startedAtMs int64, global GlobalConfig, watchdogCfg WatchdogConfig, factory PipelineFactory) (*ManagedSession, error) {
+func newManagedSession(ctx context.Context, req StartSessionRequest, startedAtMs int64, global GlobalConfig, watchdogCfg WatchdogConfig, factory PipelineFactory) (*ManagedSession, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cfg := PipelineConfig{
 		SessionID:      req.SessionID,
 		Room:           req.Room,
@@ -69,12 +80,13 @@ func newManagedSession(req StartSessionRequest, startedAtMs int64, global Global
 		Global:         global,
 	}
 
-	p, err := factory(cfg)
+	p, err := factory(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	return &ManagedSession{
+		ctx:               ctx,
 		req:               req,
 		startedAtMs:       startedAtMs,
 		cfg:               cfg,
@@ -206,7 +218,7 @@ func (m *ManagedSession) restart() {
 		m.mu.Unlock()
 	}
 
-	newP, err := m.factory(cfg)
+	newP, err := m.factory(m.ctx, cfg)
 	if err != nil {
 		log.Printf("pqp-remux: control: session %s: restart failed: %v", m.req.SessionID, err)
 		return

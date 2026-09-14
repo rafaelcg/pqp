@@ -48,10 +48,33 @@ type remuxPipeline struct {
 // body mirrors cmd/pqp-remux/main.go's runServer closely on purpose: same
 // pieces, same wiring, same shutdown-order reasoning (see Close) -- a
 // reader who already knows that function should recognize this one.
-func NewRemuxPipeline(cfg PipelineConfig) (Pipeline, error) {
+//
+// parentCtx is the supervisor's own lifetime context (see PipelineFactory's
+// own doc comment) -- this function's internal ctx is a child of it, not
+// of context.Background(), specifically so a process shutdown that fires
+// WHILE this function is still running (still inside EnableAudio's ffmpeg
+// spawn, or blocked in subscriber.Connect's network dial) tears down
+// whatever this construction has built so far instead of leaving it to
+// outlive the supervisor that asked to stop. Two known-narrower cases,
+// both because of what they depend on:
+//   - Anything built AFTER parentCtx is cancelled but BEFORE this
+//     function notices (the check right after subscriber.Connect, below)
+//     still gets built and then torn down immediately -- a real but
+//     bounded amount of wasted work, not a leak: the teardown path is the
+//     SAME one a Connect failure already uses.
+//   - subscriber.Connect itself takes no context (lksdk's own
+//     ConnectToRoomWithToken has no cancellation parameter this package
+//     can reach), so a dial that is genuinely wedged inside that call
+//     cannot be interrupted from here -- only unblocked by the SDK's own
+//     internal timeout. This is a real limitation of the dependency, not
+//     something ctx threading alone can close; the check below catches
+//     every case where Connect DOES return (success or failure) during or
+//     after a shutdown, which is the case this task's own acceptance bar
+//     ("no goroutine or ffmpeg child remains" after a cancel) needs.
+func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, error) {
 	r := ring.New(cfg.RingSegments, h264.ClockRate)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parentCtx)
 
 	var r2Writer *r2.Writer
 	global := cfg.Global
@@ -120,6 +143,27 @@ func NewRemuxPipeline(cfg PipelineConfig) (Pipeline, error) {
 			r2Writer.Close()
 		}
 		return nil, fmt.Errorf("connecting to %s room %q: %w", global.LiveKitURL, cfg.Room, err)
+	}
+
+	// The supervisor may have started shutting down WHILE the network
+	// calls above (EnableAudio's ffmpeg spawn, subscriber.Connect's
+	// dial) were still in flight -- Connect can succeed even after
+	// parentCtx is already cancelled, since it has no way to observe
+	// that cancellation itself (see this function's own doc comment).
+	// Catch that here, before this pipeline is ever handed back to a
+	// caller that would register it: tear down exactly like a Connect
+	// failure does (same order, same cleanup) and refuse to start,
+	// rather than let a session finish constructing successfully after
+	// the process that owns it has already begun tearing everything
+	// else down.
+	if parentCtx.Err() != nil {
+		sub.Close()
+		cancel()
+		sess.Close()
+		if r2Writer != nil {
+			r2Writer.Close()
+		}
+		return nil, fmt.Errorf("control: session %s: supervisor is shutting down: %w", cfg.SessionID, parentCtx.Err())
 	}
 
 	if cfg.KeyframePolicy == KeyframePolicyPLI {

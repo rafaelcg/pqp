@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sync"
@@ -79,7 +80,7 @@ func (s *pipelineSpy) factory() PipelineFactory {
 // primes every generation with a recent LastPartAt/LastIdrAt so the
 // part-stuck ladder -- not FirstPartTimeoutMs -- is what's under test).
 func (s *pipelineSpy) factoryWithHealth(initial PipelineHealth) PipelineFactory {
-	return func(cfg PipelineConfig) (Pipeline, error) {
+	return func(ctx context.Context, cfg PipelineConfig) (Pipeline, error) {
 		p := newFakePipeline(initial)
 		s.mu.Lock()
 		s.pipelines = append(s.pipelines, p)
@@ -110,4 +111,6 @@ var errFakeFactory = errors.New("fake factory: refusing to connect")
 
 // failingFactory always returns errFakeFactory, for testing that a failed
 // start leaves nothing registered.
-func failingFactory(cfg PipelineConfig) (Pipeline, error) { return nil, errFakeFactory }
+func failingFactory(ctx context.Context, cfg PipelineConfig) (Pipeline, error) {
+	return nil, errFakeFactory
+}

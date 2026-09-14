@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"sync"
 	"testing"
 )
@@ -28,7 +29,7 @@ func testStartReq(sessionID, channelID, room string) StartSessionRequest {
 
 func newTestRegistry(t *testing.T, factory PipelineFactory) *Registry {
 	t.Helper()
-	reg := NewRegistry(factory, GlobalConfig{}, fixedWatchdogCfg(), nil)
+	reg := NewRegistry(context.Background(), factory, GlobalConfig{}, fixedWatchdogCfg(), nil)
 	t.Cleanup(reg.StopAll)
 	return reg
 }

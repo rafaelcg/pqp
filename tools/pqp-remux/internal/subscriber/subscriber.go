@@ -118,13 +118,29 @@ type Session struct {
 	// cannot both start a reader against the caller's OnAudioPacket.
 	audioBound atomic.Bool
 
+	// closeMu pairs "am I closed" with "register a video reader" into one
+	// atomic decision, closing a second race Farol caught on the first
+	// version of this fix (PR #584, round 2): that version called
+	// videoWG.Add(1) with no synchronization against Close at all, so
+	// Add could run concurrently with a Wait that was observing a zero
+	// counter -- both a documented WaitGroup misuse (the race detector
+	// catches it: "WaitGroup misuse: Add called concurrently with Wait")
+	// and, depending on scheduling, a Close that sailed through Wait
+	// before the video reader it should have waited for had even
+	// started. See Close's own doc comment for the ordering this field
+	// now guarantees instead.
+	closeMu sync.Mutex
+	// closed is set under closeMu by Close, before Disconnect and before
+	// Wait -- see Close's doc comment. Read under closeMu by
+	// OnTrackSubscribed's video case before it registers a reader.
+	closed bool
 	// videoWG is held for the video track's entire readRTP call: Add(1)
-	// runs synchronously in OnTrackSubscribed's video case, strictly
-	// before that case starts readRTP, and Done() runs only after
-	// readRTP returns -- which itself only happens after it has already
-	// called Handlers.OnVideoTrackEnded (session.Session.Finish in
-	// production). Close waits on it after disconnecting, which is what
-	// makes "the video track has fully ended, including its caller
+	// runs (under closeMu, see above) in OnTrackSubscribed's video case,
+	// strictly before that case starts readRTP, and Done() runs only
+	// after readRTP returns -- which itself only happens after it has
+	// already called Handlers.OnVideoTrackEnded (session.Session.Finish
+	// in production). Close waits on it after disconnecting, which is
+	// what makes "the video track has fully ended, including its caller
 	// callback" something Close's RETURN can be trusted to mean, instead
 	// of merely "disconnect was requested" -- see Close's own doc
 	// comment for the race this closes (Farol review, PR #584).
@@ -165,7 +181,8 @@ func (s *Session) RequestKeyframe() {
 // goroutine to fully finish -- including having already called
 // Handlers.OnVideoTrackEnded -- before returning. Safe to call more than
 // once (the second call's Wait returns immediately: videoWG's counter is
-// already back at zero).
+// already back at zero, and closed is already true so no third reader can
+// ever register after the first Close).
 //
 // This closes a real race Farol caught in review (PR #584): a caller that
 // tears an old pipeline down and then immediately reads its Health() (see
@@ -185,11 +202,42 @@ func (s *Session) RequestKeyframe() {
 // fully done" the same fact: Wait cannot return before Done does, and
 // Done runs only after OnVideoTrackEnded has already returned.
 //
+// closed is set FIRST, under closeMu, before Disconnect and before Wait
+// (Farol review round 2, PR #584 -- the first version of this fix called
+// videoWG.Add(1) with no synchronization against Close at all, which the
+// race detector flags directly as "Add called concurrently with Wait" and
+// which could also let Close's Wait observe a zero counter and return
+// before a video track that was subscribing AT THAT EXACT MOMENT ever
+// got the chance to register). OnTrackSubscribed's video case takes the
+// SAME mutex before it decides whether to start a reader at all: if closed
+// is already true, it returns without binding a track or calling Add,
+// full stop -- a video track discovered after Close has begun is simply
+// never read, not read-then-raced. If closed is still false, it calls
+// Add(1) WHILE STILL HOLDING closeMu, and only then releases it and starts
+// readRTP. Because closeMu enforces one total order between "Close begins"
+// and "a reader registers," every Add is now provably either fully
+// complete before Wait is ever called (the reader's critical section ran
+// first) or never happens at all (Close's critical section ran first) --
+// exactly the happens-before relationship sync.WaitGroup's own contract
+// requires of a caller that Adds while the counter could be zero.
+//
 // A video track that never bound at all (e.g. Close called on a session
 // still in its StateWaiting phase, before any presenter ever shared) means
 // videoWG's counter was never incremented, so Wait returns immediately --
 // this never blocks callers with nothing to wait for.
+//
+// Do not call Close from inside Handlers.OnVideoTrackEnded or
+// Handlers.OnVideoPacket (or anything else readRTP invokes for the video
+// track): that callback runs ON the goroutine whose Done Close is waiting
+// for, so Close would wait on its own caller and never return. No handler
+// in this codebase does this today (session.Session.Finish and the
+// idr-log mode's closeReaderDone both only ever touch session/local
+// state), and it is not a pattern this package needs to support.
 func (s *Session) Close() {
+	s.closeMu.Lock()
+	s.closed = true
+	s.closeMu.Unlock()
+
 	if s.room != nil {
 		s.room.Disconnect()
 	}
@@ -220,23 +268,38 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 		switch {
 		case isScreenShareVideo(pub):
+			// closeMu pairs "is this session already closed" with "Add
+			// a video reader" into one atomic decision (Farol review
+			// round 2, PR #584): the whole bind-check-and-Add below
+			// runs under the SAME mutex Close takes to set closed
+			// before it Waits, so this either completes entirely
+			// before Close's Wait can observe it (Add happens-before
+			// Wait, satisfying sync.WaitGroup's own contract) or never
+			// runs at all (closed was already true) -- never
+			// concurrently with Wait, and never after Wait has already
+			// returned on a zero counter. See Close's own doc comment.
+			sess.closeMu.Lock()
+			if sess.closed {
+				sess.closeMu.Unlock()
+				return
+			}
 			bound := sess.video.CompareAndSwap(nil, &videoBinding{participant: rp, pub: pub})
 			if !bound {
+				sess.closeMu.Unlock()
 				log.Printf("subscriber: ignoring an additional screen-share video track from %q in room %q; already bound to a presenter", rp.Identity(), cfg.Room)
 				return
 			}
+			// Add still under closeMu -- released only once Add has
+			// already run, per the ordering the doc comment above
+			// describes; readRTP itself (and the caller callbacks it
+			// invokes) run with the lock released, so a long-running
+			// handler never blocks Close's own Lock/Unlock.
+			sess.videoWG.Add(1)
+			sess.closeMu.Unlock()
+			defer sess.videoWG.Done()
 			if h.OnVideoTrackFound != nil {
 				h.OnVideoTrackFound(sess)
 			}
-			// Add BEFORE readRTP starts (never concurrently with a
-			// Close that could be racing in from another goroutine
-			// right now): this case runs at most once per Session
-			// (guarded by the CompareAndSwap above), so this is the
-			// only place that ever calls videoWG.Add, and it happens
-			// strictly before the Done below -- see Close's own doc
-			// comment for what this pairing guarantees callers.
-			sess.videoWG.Add(1)
-			defer sess.videoWG.Done()
 			readRTP(track, h.OnVideoPacket, h.OnVideoTrackEnded)
 		case isScreenShareAudio(pub):
 			if !sess.audioBound.CompareAndSwap(false, true) {

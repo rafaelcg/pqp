@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func TestManagedSession_WatchdogRestartsThenDemotes_Integration(t *testing.T) {
 	// of ticks; a wide FirstPartTimeoutMs/DemoteWindowMs so neither the
 	// waiting phase nor the demote-window boundary interferes.
 	wd := WatchdogConfig{FirstPartTimeoutMs: 60_000, PartStuckMs: 50, DemoteWindowMs: 60_000}
-	reg := NewRegistry(spy.factoryWithHealth(PipelineHealth{LastPartAt: time.Now(), LastIdrAt: time.Now()}), GlobalConfig{}, wd, nil)
+	reg := NewRegistry(context.Background(), spy.factoryWithHealth(PipelineHealth{LastPartAt: time.Now(), LastIdrAt: time.Now()}), GlobalConfig{}, wd, nil)
 	t.Cleanup(reg.StopAll)
 
 	req := testStartReq(sessA, chanA, chanA)
@@ -95,7 +96,7 @@ func TestManagedSession_WatchdogRestartsThenDemotes_Integration(t *testing.T) {
 // that its watchdog goroutine has genuinely exited before Stop returns).
 func TestManagedSession_StopClosesActivePipeline(t *testing.T) {
 	spy := &pipelineSpy{}
-	reg := NewRegistry(spy.factory(), GlobalConfig{}, fixedWatchdogCfg(), nil)
+	reg := NewRegistry(context.Background(), spy.factory(), GlobalConfig{}, fixedWatchdogCfg(), nil)
 	t.Cleanup(reg.StopAll)
 
 	req := testStartReq(sessA, chanA, chanA)

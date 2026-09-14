@@ -37,7 +37,21 @@ func main() {
 		log.Fatalf("pqp-remuxd: %v", err)
 	}
 
-	registry := control.NewRegistry(control.NewRemuxPipeline, cfg, cfg.WatchdogConfig(), time.Now)
+	// supervisorCtx is this PROCESS's own lifetime, handed to every
+	// session's Pipeline construction (control.PipelineFactory's own doc
+	// comment) so shutdown reaches a session even while it is still being
+	// built -- still inside EnableAudio's ffmpeg spawn, or blocked in
+	// subscriber.Connect's network dial -- not only the sessions that had
+	// already finished starting and been registered (Farol review, PR
+	// #584). Cancelled explicitly, as the very first step of shutdown,
+	// below; the defer here is only a safety net for any return path that
+	// bypasses that (there is none today, but a context that outlives the
+	// function that created it, with nothing to ever cancel it, is
+	// exactly the shape this whole change exists to avoid repeating).
+	supervisorCtx, supervisorCancel := context.WithCancel(context.Background())
+	defer supervisorCancel()
+
+	registry := control.NewRegistry(supervisorCtx, control.NewRemuxPipeline, cfg, cfg.WatchdogConfig(), time.Now)
 	srv := control.NewServer(cfg.Secret, cfg.MediaOriginKey, registry)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: srv}
 
@@ -55,8 +69,16 @@ func main() {
 		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("pqp-remuxd: %v", err)
 		}
+		supervisorCancel()
 	case <-sigCh:
 		log.Print("pqp-remuxd: shutting down")
+		// Cancel FIRST, before even starting the HTTP graceful drain
+		// below: any session construction currently in flight inside a
+		// handleStart call starts tearing itself down immediately and
+		// concurrently with that drain, instead of only after it
+		// finishes (or times out) -- see supervisorCtx's own doc
+		// comment above for what this does and does not reach.
+		supervisorCancel()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer shutdownCancel()
 		// Shutdown blocks until every in-flight request finishes on its

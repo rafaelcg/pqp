@@ -149,3 +149,74 @@ func TestLoadGlobalConfig_RejectsMalformedIntegers(t *testing.T) {
 		t.Fatal("expected a malformed PART_STUCK_MS to be refused")
 	}
 }
+
+// baseR2Env is the minimal env every R2-validation test below layers its
+// one bad value onto -- everything else must be valid so the failure each
+// test expects is provably about R2_UPLOAD_QUEUE_DEPTH/R2_UPLOAD_MAX_RETRIES
+// specifically, not some other missing required var.
+func baseR2Env() map[string]string {
+	return map[string]string{
+		"REMUX_CONTROL_SECRET": "s",
+		"LIVEKIT_URL":          "wss://example",
+		"LIVEKIT_API_KEY":      "key",
+		"LIVEKIT_API_SECRET":   "sec",
+	}
+}
+
+func TestLoadGlobalConfig_RefusesZeroR2QueueDepth(t *testing.T) {
+	env := baseR2Env()
+	env["R2_UPLOAD_QUEUE_DEPTH"] = "0"
+	withEnv(t, env)
+	if _, err := LoadGlobalConfig(); err == nil {
+		t.Fatal("expected R2_UPLOAD_QUEUE_DEPTH=0 to be refused (Farol review, PR #584: a session must never start with upload config that cannot work)")
+	}
+}
+
+func TestLoadGlobalConfig_RefusesNegativeR2QueueDepth(t *testing.T) {
+	env := baseR2Env()
+	env["R2_UPLOAD_QUEUE_DEPTH"] = "-1"
+	withEnv(t, env)
+	if _, err := LoadGlobalConfig(); err == nil {
+		t.Fatal("expected a negative R2_UPLOAD_QUEUE_DEPTH to be refused")
+	}
+}
+
+func TestLoadGlobalConfig_RefusesNegativeR2MaxRetries(t *testing.T) {
+	env := baseR2Env()
+	env["R2_UPLOAD_MAX_RETRIES"] = "-1"
+	withEnv(t, env)
+	if _, err := LoadGlobalConfig(); err == nil {
+		t.Fatal("expected a negative R2_UPLOAD_MAX_RETRIES to be refused")
+	}
+}
+
+// TestLoadGlobalConfig_AllowsZeroR2MaxRetries pins the other half of this
+// task's own bound ("retries >= 0"): zero is a legitimate, deliberate
+// "never retry an upload, fail fast" choice, not a value to refuse the
+// way a negative or zero queue depth is.
+func TestLoadGlobalConfig_AllowsZeroR2MaxRetries(t *testing.T) {
+	env := baseR2Env()
+	env["R2_UPLOAD_MAX_RETRIES"] = "0"
+	withEnv(t, env)
+	cfg, err := LoadGlobalConfig()
+	if err != nil {
+		t.Fatalf("expected R2_UPLOAD_MAX_RETRIES=0 to be accepted, got error: %v", err)
+	}
+	if cfg.R2UploadMaxRetries != 0 {
+		t.Fatalf("expected R2UploadMaxRetries to be 0, got %d", cfg.R2UploadMaxRetries)
+	}
+}
+
+func TestLoadGlobalConfig_DefaultR2SettingsAreValid(t *testing.T) {
+	withEnv(t, baseR2Env())
+	cfg, err := LoadGlobalConfig()
+	if err != nil {
+		t.Fatalf("unexpected error with default R2 settings: %v", err)
+	}
+	if cfg.R2UploadQueueDepth != DefaultR2QueueDepth {
+		t.Fatalf("expected default R2UploadQueueDepth %d, got %d", DefaultR2QueueDepth, cfg.R2UploadQueueDepth)
+	}
+	if cfg.R2UploadMaxRetries != DefaultR2MaxRetries {
+		t.Fatalf("expected default R2UploadMaxRetries %d, got %d", DefaultR2MaxRetries, cfg.R2UploadMaxRetries)
+	}
+}

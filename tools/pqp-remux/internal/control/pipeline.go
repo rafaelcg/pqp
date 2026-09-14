@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"net/http"
 	"time"
 )
@@ -104,4 +105,16 @@ type PipelineConfig struct {
 // allowed restart. Production uses NewRemuxPipeline
 // (remux_pipeline.go); tests substitute a fake that never touches a
 // network.
-type PipelineFactory func(cfg PipelineConfig) (Pipeline, error)
+//
+// ctx is the SUPERVISOR's own lifetime context (cmd/pqp-remuxd/main.go's
+// top-level ctx, threaded through Registry and ManagedSession -- see
+// Registry's own doc comment), not a per-pipeline one: a factory that
+// derives its pipeline's internal context from ctx (NewRemuxPipeline
+// does) means a process shutdown cancels a session's construction even
+// while it is still in flight -- e.g. still inside subscriber.Connect's
+// network dial, or partway through spawning the AAC encoder's ffmpeg
+// subprocess -- rather than only the sessions that had already finished
+// starting and been registered (Farol review, PR #584: "pipeline startup
+// uses an independent background context and can outlive the HTTP
+// request and registry shutdown").
+type PipelineFactory func(ctx context.Context, cfg PipelineConfig) (Pipeline, error)

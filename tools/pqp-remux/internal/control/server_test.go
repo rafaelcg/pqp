@@ -2,6 +2,7 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,7 +47,7 @@ func newTestServer(t *testing.T, secret string, factory PipelineFactory) (*Serve
 
 func newTestServerWithOriginKey(t *testing.T, secret, mediaOriginKey string, factory PipelineFactory) (*Server, *Registry) {
 	t.Helper()
-	reg := NewRegistry(factory, GlobalConfig{}, fixedWatchdogCfg(), nil)
+	reg := NewRegistry(context.Background(), factory, GlobalConfig{}, fixedWatchdogCfg(), nil)
 	t.Cleanup(reg.StopAll)
 	return NewServer(secret, mediaOriginKey, reg), reg
 }

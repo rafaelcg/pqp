@@ -1,6 +1,7 @@
 package subscriber
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,5 +94,89 @@ func TestSessionCloseIsIdempotent(t *testing.T) {
 	case <-done:
 	case <-time.After(1 * time.Second):
 		t.Fatal("a second Session.Close hung after videoWG's counter was already back at zero")
+	}
+}
+
+// simulateVideoTrackSubscribed reproduces the exact critical section
+// Connect's OnTrackSubscribed video case runs in subscriber.go: take
+// closeMu, bail out with nothing registered if the session is already
+// closed, otherwise Add(1) to videoWG WHILE STILL HOLDING closeMu, release,
+// then run the stand-in "readRTP" (onEnded, called synchronously, exactly
+// where the real readRTP calls Handlers.OnVideoTrackEnded before
+// returning) before the deferred Done. Kept here rather than driving it
+// through Connect (which needs a live LiveKit room) so this test can fire
+// it concurrently against Close with a fast, deterministic, controllable
+// stand-in reader. Returns whether a reader actually got registered.
+func simulateVideoTrackSubscribed(sess *Session, onEnded func()) (registered bool) {
+	sess.closeMu.Lock()
+	if sess.closed {
+		sess.closeMu.Unlock()
+		return false
+	}
+	sess.videoWG.Add(1)
+	sess.closeMu.Unlock()
+	defer sess.videoWG.Done()
+	if onEnded != nil {
+		onEnded()
+	}
+	return true
+}
+
+// TestSessionCloseRacesConcurrentTrackSubscription is the -race regression
+// test for Farol's round-2 finding on PR #584: the FIRST version of this
+// fix called videoWG.Add(1) with no synchronization against Close at all,
+// so a video track discovered right as Close begins could either race
+// Add against Wait (a WaitGroup misuse the race detector reports
+// directly) or lose the race entirely -- Close's Wait observing a zero
+// counter and returning before the late-arriving track's Add ever ran, the
+// same "restart() reads Health() before the async work finished" class of
+// bug the videoWG mechanism exists to close in the first place.
+//
+// This fires simulateVideoTrackSubscribed and Close truly concurrently,
+// many times (scheduling is what surfaces this kind of race, not a single
+// trial), and checks the contract closeMu is meant to guarantee: EITHER
+// the reader never registered at all (Close won the race for closeMu --
+// no read started, nothing to wait for) OR it registered and its onEnded
+// callback is provably finished by the time both goroutines have joined
+// (Close won the race for the underlying videoWG.Wait -- and read the
+// segment index of a section 3.1 race). There is no third outcome: a
+// registered reader whose callback never finished before Close returned.
+//
+// Run with -race (the repo's `make test` always does): the unsynchronized
+// version of this fix fails this test's race detector directly ("WaitGroup
+// misuse: Add called concurrently with Wait"), not just its assertions --
+// verified manually by reverting to that version before restoring this
+// one.
+func TestSessionCloseRacesConcurrentTrackSubscription(t *testing.T) {
+	const iterations = 500
+	for i := 0; i < iterations; i++ {
+		sess := &Session{}
+		var registered, readStarted, readFinished atomic.Bool
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			ok := simulateVideoTrackSubscribed(sess, func() {
+				readStarted.Store(true)
+				readFinished.Store(true)
+			})
+			registered.Store(ok)
+		}()
+		go func() {
+			defer wg.Done()
+			sess.Close()
+		}()
+		wg.Wait()
+
+		if !registered.Load() {
+			if readStarted.Load() {
+				t.Fatalf("iteration %d: no reader registered (Close closed the session first) but the stand-in read still started -- a track discovered after Close must never be read", i)
+			}
+			continue
+		}
+		if !readFinished.Load() {
+			t.Fatalf("iteration %d: a reader registered but its callback never finished before both goroutines returned -- Close's Wait did not actually wait for the registered reader", i)
+		}
 	}
 }

@@ -186,6 +186,33 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	if c.DemoteWindowMs <= 0 {
 		return GlobalConfig{}, fmt.Errorf("control: DEMOTE_WINDOW_MS must be positive, got %d", c.DemoteWindowMs)
 	}
+	// R2_UPLOAD_QUEUE_DEPTH/R2_UPLOAD_MAX_RETRIES were read above with no
+	// bound check at all: envIntOr accepts any integer, including zero or
+	// negative (Farol review, PR #584). r2.NewWriter happens to clamp a
+	// non-positive QueueDepth/MaxRetries up to its own package default
+	// rather than crash or build a broken (unbuffered/negative-size)
+	// channel -- but silently substituting a different value than the
+	// one the operator explicitly set is exactly the "uploads silently
+	// broken" shape this whole file exists to refuse elsewhere (see
+	// LIVEKIT_URL, REMUX_CONTROL_SECRET, FIRST_PART_TIMEOUT_MS above: a
+	// nonsensical or out-of-range value fails LoadGlobalConfig outright,
+	// never gets quietly reinterpreted). Refusing here, at process
+	// startup, is what keeps a session from ever starting with upload
+	// config that does not mean what it says: GlobalConfig is loaded
+	// once and shared by every session this process will ever build
+	// (NewRemuxPipeline reads R2UploadQueueDepth/R2UploadMaxRetries
+	// straight from it), so there is no later, per-session point where
+	// this could be caught instead without duplicating the check once
+	// per session. A negative retry count is refused outright (there is
+	// no such thing as "less retrying than zero"); zero itself is a
+	// legitimate, deliberate choice ("fail fast, never retry an upload")
+	// and stays allowed, per this task's own "retries >= 0" bound.
+	if c.R2UploadQueueDepth < 1 {
+		return GlobalConfig{}, fmt.Errorf("control: R2_UPLOAD_QUEUE_DEPTH must be at least 1, got %d", c.R2UploadQueueDepth)
+	}
+	if c.R2UploadMaxRetries < 0 {
+		return GlobalConfig{}, fmt.Errorf("control: R2_UPLOAD_MAX_RETRIES must not be negative, got %d", c.R2UploadMaxRetries)
+	}
 
 	return c, nil
 }

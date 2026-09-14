@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
@@ -26,6 +27,12 @@ type startingEntry struct {
 // keyed by sessionId. Registry itself never touches LiveKit or HTTP; it is
 // exercised directly by registry_test.go with a fake PipelineFactory.
 type Registry struct {
+	// ctx is the supervisor's own lifetime context (cmd/pqp-remuxd/main.go),
+	// handed unchanged to every factory call this Registry ever makes --
+	// see PipelineFactory's own doc comment for why: a process shutdown
+	// (main cancelling this ctx) reaches a session even while it is still
+	// being built, not only the ones already registered.
+	ctx         context.Context
 	factory     PipelineFactory
 	global      GlobalConfig
 	watchdogCfg WatchdogConfig
@@ -36,17 +43,22 @@ type Registry struct {
 	starting map[string]*startingEntry
 }
 
-// NewRegistry builds an empty Registry. factory builds a Pipeline for every
-// session this registry ever starts (including a watchdog-triggered
-// restart); global and watchdogCfg are shared by every session; now
-// defaults to time.Now if nil (tests substitute a fixed/fake clock only
-// for StartedAtMs bookkeeping -- evaluateWatchdog's own clock is
+// NewRegistry builds an empty Registry. ctx is the supervisor's own
+// lifetime context (see Registry's own doc comment); factory builds a
+// Pipeline for every session this registry ever starts (including a
+// watchdog-triggered restart); global and watchdogCfg are shared by every
+// session; now defaults to time.Now if nil (tests substitute a fixed/fake
+// clock only for StartedAtMs bookkeeping -- evaluateWatchdog's own clock is
 // controlled independently in watchdog_test.go, not through this).
-func NewRegistry(factory PipelineFactory, global GlobalConfig, watchdogCfg WatchdogConfig, now func() time.Time) *Registry {
+func NewRegistry(ctx context.Context, factory PipelineFactory, global GlobalConfig, watchdogCfg WatchdogConfig, now func() time.Time) *Registry {
 	if now == nil {
 		now = time.Now
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return &Registry{
+		ctx:         ctx,
 		factory:     factory,
 		global:      global,
 		watchdogCfg: watchdogCfg,
@@ -83,7 +95,7 @@ func (reg *Registry) StartOrGet(req StartSessionRequest) (info SessionInfo, isNe
 	reg.mu.Unlock()
 
 	startedAtMs := reg.now().UnixMilli()
-	ms, buildErr := newManagedSession(req, startedAtMs, reg.global, reg.watchdogCfg, reg.factory)
+	ms, buildErr := newManagedSession(reg.ctx, req, startedAtMs, reg.global, reg.watchdogCfg, reg.factory)
 
 	reg.mu.Lock()
 	delete(reg.starting, req.SessionID)

@@ -122,7 +122,7 @@ type realSessionPipeline struct {
 }
 
 func newRealSessionPipelineFactory(writer *r2.Writer) PipelineFactory {
-	return func(cfg PipelineConfig) (Pipeline, error) {
+	return func(ctx context.Context, cfg PipelineConfig) (Pipeline, error) {
 		r := ring.New(cfg.RingSegments, h264.ClockRate)
 		partTicks := uint32(msToTicks(cfg.PartMs))
 		segmentTicks := uint32(msToTicks(cfg.SegmentMs))
@@ -223,7 +223,7 @@ func TestManagedSession_RestartNeverReusesR2Key(t *testing.T) {
 	req.PartMs = 500
 	req.SegmentMs = 500
 
-	ms, err := newManagedSession(req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
+	ms, err := newManagedSession(context.Background(), req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
 	if err != nil {
 		t.Fatalf("unexpected error starting session: %v", err)
 	}
@@ -391,8 +391,8 @@ func TestManagedSession_RestartWaitsForAsyncFinish(t *testing.T) {
 	baseFactory := newRealSessionPipelineFactory(writer)
 	var generation int
 	var asyncP *asyncSealsOneMoreSegmentOnClose
-	factory := func(cfg PipelineConfig) (Pipeline, error) {
-		p, err := baseFactory(cfg)
+	factory := func(ctx context.Context, cfg PipelineConfig) (Pipeline, error) {
+		p, err := baseFactory(ctx, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -413,7 +413,7 @@ func TestManagedSession_RestartWaitsForAsyncFinish(t *testing.T) {
 	req.PartMs = 500
 	req.SegmentMs = 500
 
-	ms, err := newManagedSession(req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
+	ms, err := newManagedSession(context.Background(), req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
 	if err != nil {
 		t.Fatalf("unexpected error starting session: %v", err)
 	}
@@ -476,8 +476,8 @@ func TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown(t *testing.T
 
 	baseFactory := newRealSessionPipelineFactory(writer)
 	var generation int
-	factory := func(cfg PipelineConfig) (Pipeline, error) {
-		p, err := baseFactory(cfg)
+	factory := func(ctx context.Context, cfg PipelineConfig) (Pipeline, error) {
+		p, err := baseFactory(ctx, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -498,7 +498,7 @@ func TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown(t *testing.T
 	req.PartMs = 500
 	req.SegmentMs = 500
 
-	ms, err := newManagedSession(req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
+	ms, err := newManagedSession(context.Background(), req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
 	if err != nil {
 		t.Fatalf("unexpected error starting session: %v", err)
 	}
