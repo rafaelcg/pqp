@@ -502,24 +502,6 @@ export function HlsWatchPlayer({
 
   const reconnect = useCallback(
     async (options: { forceRebuild?: boolean } = {}) => {
-      if (isVod) {
-        // A replay has no live channel to ask for a fresher session -- its
-        // URL already names the one broadcast it is ever going to be
-        // (`/api/voice/hls-replay/<channel>/<startedAt>`), and there is no
-        // `GET .../live` for a finished session to poll. Re-attaching the
-        // same URL is the whole of "try again" and of the automatic path
-        // alike: a same-URL re-attach re-fetches the signed playlist proxy,
-        // which mints fresh presigned segment URLs. `channelIdFromHlsUrl`
-        // also does not match this path (it only knows the live proxy and
-        // the raw bucket shapes), so falling into the live branch below
-        // would silently no-op into the same outcome anyway -- this guard
-        // just says so, rather than relying on that being true. None of the
-        // recovery-ladder overlap guards below matter here: there is no
-        // network round trip to race against, so run it unconditionally.
-        setPhase("reconnecting");
-        setAttempt((n) => n + 1);
-        return;
-      }
       // Only the automatic path (the watchdog's own "sequence-stuck"
       // reconnect checks) is guarded against overlap: a stuck egress could
       // otherwise stack one `fetchChannelLive` per tick with nothing to stop
@@ -543,6 +525,17 @@ export function HlsWatchPlayer({
         reconnectInFlightRef.current = true;
       }
       setPhase("reconnecting");
+      // Only the live-channel refetch is VOD-specific, and it is skipped
+      // here by construction rather than by an early return: a replay's
+      // URL (`/api/voice/hls-replay/<channel>/<startedAt>`) matches neither
+      // the live proxy nor the raw bucket shape `channelIdFromHlsUrl`
+      // knows, so `channelId` is null, `next` stays null, and every branch
+      // below runs the same for both -- a person's "try again" still falls
+      // through to `setAttempt` (a same-URL re-attach re-fetches the signed
+      // playlist proxy, which mints fresh presigned segment URLs; there is
+      // no `GET .../live` for a finished session to poll), and the
+      // overlap/generation guards above cost nothing extra since there is
+      // no network round trip for them to race against.
       const channelId = channelIdFromHlsUrl(activeSrc);
       let next: string | null = null;
       try {
@@ -609,7 +602,7 @@ export function HlsWatchPlayer({
       // if the condition persists.
       setPhase("reconnecting");
     },
-    [activeSrc, isVod],
+    [activeSrc],
   );
 
   // Held in a ref so the attach effect does not list `reconnect` as a
@@ -1071,24 +1064,27 @@ export function HlsWatchPlayer({
         clearPendingReconnect();
         const hls = hlsRef.current;
         console.warn(`[hls] stream stalled (${watch.lastReason}), ${decision}`);
-        if (isVod) {
-          // A VOD manifest has no live edge to seek back to: `liveSyncPosition`
-          // is null (hls.js never sets it on a non-live playlist) and
-          // `mediaSeekableEnd` reads the replay's own duration, so
-          // `liveSeekTarget` below would return a point near the END of the
-          // recording -- the Chrome-back-buffer jump that seek exists to
-          // correct, applied to a stall that has nothing to do with it. Run
-          // whichever recovery step the ladder picked (still correct: a
-          // decode error still wants `recoverMediaError`, a stuck fragment
-          // still wants `startLoad`), just without the seek.
-          applyHlsRecoveryStep(hls, decision);
-          return;
-        }
-        const target = liveSeekTarget({
-          currentTime: video.currentTime,
-          liveSyncPosition: hls?.liveSyncPosition ?? null,
-          seekableEnd: mediaSeekableEnd(video),
-        });
+        // Only the seek is VOD-specific -- a VOD manifest has no live edge
+        // to seek back to: `liveSyncPosition` is null (hls.js never sets it
+        // on a non-live playlist) and `mediaSeekableEnd` reads the replay's
+        // own duration, so `liveSeekTarget` would return a point near the
+        // END of the recording -- the Chrome-back-buffer jump this seek
+        // exists to correct, applied to a stall that has nothing to do with
+        // it. `applyHlsRecoveryStep` below still runs unconditionally
+        // (a decode error still wants `recoverMediaError`, a stuck fragment
+        // still wants `startLoad`, whichever the ladder picked), and this
+        // tick never decides the terminal `"rebuild"`/`"dead"` outcome --
+        // that stays entirely in `watch.tick()`'s own escalation, read at
+        // the top of this handler, so a replay whose fragments keep
+        // failing still reaches the ladder's bound the same as a live
+        // stream would.
+        const target = isVod
+          ? null
+          : liveSeekTarget({
+              currentTime: video.currentTime,
+              liveSyncPosition: hls?.liveSyncPosition ?? null,
+              seekableEnd: mediaSeekableEnd(video),
+            });
         applyHlsRecoveryStep(hls, decision);
         if (target !== null) {
           video.currentTime = target;
