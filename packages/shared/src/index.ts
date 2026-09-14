@@ -19,6 +19,7 @@ export * from "./polls.js";
 export * from "./feedback.js";
 export * from "./friends.js";
 export * from "./gifs.js";
+export * from "./hls-remux-control.js";
 export * from "./live-hls.js";
 export * from "./live-hls-telemetry.js";
 export * from "./moderation.js";

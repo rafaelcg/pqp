@@ -33,6 +33,16 @@ import {
   signRequest,
   type StorageConfig,
 } from "../lib/s3.js";
+import {
+  isLiveHlsLLEnabled,
+  llHasRoom,
+  llStreamFor,
+  reconcileLlHlsNow,
+  requestedHlsModeForChannel,
+  resetHlsRemuxForTests,
+  resolveHlsMode,
+  stopLlSession,
+} from "./hls-remux.js";
 
 /**
  * Live HLS for a watch-party screen share: LiveKit Track Composite egress
@@ -1404,6 +1414,7 @@ export function resetLiveHlsForTests(): void {
   injectedFinder = null;
   injectedPlaylistReady = true;
   injectedPlaylistProbe = null;
+  resetHlsRemuxForTests();
 }
 
 export function setLiveHlsChangeListener(
@@ -4080,6 +4091,44 @@ async function reconcileLiveHlsNow(
   serverId: string | null,
   sourceHeight?: number | null,
 ): Promise<LiveHlsReconcileResult> {
+  // THE MODE BRANCH, BEFORE ANYTHING ELSE HERE READS TRACKS OR RUNGS.
+  // `resolveHlsMode` answers `conventional` unconditionally while
+  // `LIVE_HLS_LL` is unset, so this branch is a map read that always misses
+  // and nothing below it changes: the flag off leaves this function
+  // byte-for-byte what it was before L1.5. `pqp-remux` finds its own screen
+  // track (its README), so the LL half skips every LiveKit-specific probe
+  // this function does for the ladder.
+  // With `LIVE_HLS_LL` unset there is nothing to ask the database: no LL
+  // session can exist, and a transient read failure must not be able to
+  // skip the conventional reconcile below (a Farol finding on the rebased
+  // PR #580: the lookup ran, and failed closed, even with the flag off).
+  const requestedMode = isLiveHlsLLEnabled()
+    ? await requestedHlsModeForChannel(channelId)
+    : false;
+  if (requestedMode === null) {
+    // FAIL CLOSED (a Farol finding on PR #580, fourth round): a database
+    // read failure here must be indistinguishable from "try again later",
+    // never read as "this party did not ask" -- that would fall through to
+    // `resolveHlsMode`'s `conventional` default and tear down a running LL
+    // session on a transient blip. Make no mode decision at all this
+    // reconcile: hand back whatever is already running, untouched, and let
+    // the next reconcile (the next roster event) ask again.
+    const existing = rooms.get(channelId);
+    return { stream: existing ? existing.stream : llStreamFor(channelId) };
+  }
+  const mode = resolveHlsMode({ serverId, requestedMode });
+  if (mode === "ll") {
+    // A mode flip mid-party (the request field changed between two "Ir ao
+    // vivo" presses for the same channel) must never leave two transcodes
+    // running for one room.
+    if (rooms.has(channelId)) {
+      await stopRoom(channelId, "ll-mode-selected");
+    }
+    return { stream: await reconcileLlHlsNow(channelId, presenterPeerId) };
+  }
+  if (llHasRoom(channelId)) {
+    await stopLlSession(channelId, "conventional-mode-selected");
+  }
   if (!(await isLiveHlsEnabledForServer(serverId))) {
     // "not allowlisted" and "nobody is sharing" used to arrive here as the
     // same thing, because `pushLiveHls` resolved the server id only when it

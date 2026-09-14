@@ -132,6 +132,7 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import { liveHlsConfigForServer } from "../voice/hls-egress.js";
+import { setRequestedHlsMode } from "../voice/hls-remux.js";
 import {
   buildReplayMasterPlaylist,
   buildReplaySignedPlaylist,
@@ -5068,6 +5069,17 @@ router.post(
         body.state,
         row.status,
       );
+      // The LL-HLS request field (`docs/plans/LL_HLS.md` L1.5), persisted on
+      // the party's own row (`channel_sessions.low_latency_requested`) so
+      // `reconcileLiveHlsNow` can read it once a sharer actually appears --
+      // which can be well after this call returns, and can survive an API
+      // restart in between (a Farol finding on PR #580: an in-memory version
+      // did not). Set unconditionally, not only when true: a party going
+      // live again without `lowLatency` must not inherit a previous party's
+      // request for this channel.
+      if (action === "goLive") {
+        await setRequestedHlsMode(sessionId!, Boolean(body.lowLatency));
+      }
       // Going live is the moment the host's setup choices become the room's
       // rules. Slow mode is a channel field owned by the chat feature; the
       // party only carries what the host picked in the sheet so one press

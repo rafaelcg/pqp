@@ -228,6 +228,24 @@ describeDb("hls playlist route", () => {
     expect((await get(path(channelId), null)).status).toBe(401);
   });
 
+  it("an unsigned request to an LL-mode session's playlist is refused the same way", async () => {
+    // docs/plans/LL_HLS.md L1.5: `llPlaylistUrl` in hls-remux.ts hands a
+    // viewer this exact route (`/api/voice/hls-playlist/:channelId/:startedAt`)
+    // rather than inventing a second, unauthenticated one -- a Farol review
+    // of PR #580 flagged an earlier version that pointed straight at the
+    // egress box's raw origin instead. `mode = 'll'` on the row must not be
+    // a way around the same signed-token-or-Bearer rule every other session
+    // answers to: `handleApi` resolves auth before the router even sees
+    // which row this path names, so the row's mode cannot matter here, and
+    // this test pins that rather than assuming it.
+    await getPool().query(
+      `UPDATE hls_sessions SET mode = 'll', remux_session_id = $2
+       WHERE channel_id = $1`,
+      [channelId, "00000000-0000-4000-8000-0000000000c1"],
+    );
+    expect((await get(path(channelId), null)).status).toBe(401);
+  });
+
   it("a valid token with no header is allowed", async () => {
     const t = mintHlsViewerToken({
       userId: owner.id,

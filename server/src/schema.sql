@@ -3824,6 +3824,59 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_egress
   ON hls_sessions (egress_id)
   WHERE egress_id IS NOT NULL AND cleaned_at IS NULL;
 
+-- LL-HLS (docs/plans/LL_HLS.md, task L1.5). Which driver produced this row.
+-- 'conventional' is every row before this column existed, and every one this
+-- deployment will ever write while LIVE_HLS_LL is off: a `pqp-remux` session
+-- is never started unless the flag, the allowlist and the party's own
+-- request all say so (`resolveHlsMode` in `hls-remux.ts`). A 'll' row has no
+-- `egress_id` at all -- there is no LiveKit egress behind it -- and
+-- `remux_session_id` is its handle on the remux box's own control API
+-- instead (`POST/DELETE/GET /sessions`, `packages/shared/hls-remux-control.ts`).
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'conventional';
+
+DO $$
+BEGIN
+  ALTER TABLE hls_sessions DROP CONSTRAINT IF EXISTS hls_sessions_mode_check;
+  ALTER TABLE hls_sessions
+    ADD CONSTRAINT hls_sessions_mode_check
+    CHECK (mode IN ('conventional', 'll'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- The remux box's own id for the session (its `sessionId`, the idempotency
+-- key `POST /sessions` was called with). NULL for every 'conventional' row.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS remux_session_id TEXT;
+
+-- The two fields the LL playlist front (`L2.x`) will need and the ones
+-- `pqp-remux` was actually started with, stored rather than re-derived from
+-- environment at read time: an operator changing `LIVE_HLS_REMUX_ORIGIN_URL`
+-- mid-party must not rewrite the URL a viewer already has. `part_target_ms`
+-- is `PART_MS` from the start request; `origin_base_url` is where the parts
+-- and playlists this session writes are actually served from (the egress
+-- box's Caddy, `docs/plans/LL_HLS.md` §1 -- "Where the parts are served
+-- from"), distinct from `LIVE_HLS_REMUX_CONTROL_URL`, which is the control
+-- plane this row was started through and never serves media.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS part_target_ms INTEGER;
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS origin_base_url TEXT;
+
+-- The boot reconcile's LL half looks a session up by the remux box's own id,
+-- the same way the conventional half does by `egress_id`.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_remux
+  ON hls_sessions (remux_session_id)
+  WHERE remux_session_id IS NOT NULL AND cleaned_at IS NULL;
+
+-- A stop was requested but the box has not confirmed it (a failed or
+-- timed-out DELETE): the row is neither "running" nor "ended", it is
+-- "trying to end". `ended_at` stays NULL until the box actually confirms,
+-- so a row like this is never adopted as live (`hls-remux.ts` excludes it)
+-- and never silently forgotten either -- the next start attempt for the
+-- channel, or the next boot sweep, retries the DELETE, paced by
+-- `stop_attempts` (a Farol review of PR #580's third round: a failed DELETE
+-- must not just be dropped).
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stopping_at TIMESTAMPTZ;
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stop_attempts INTEGER NOT NULL DEFAULT 0;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.
@@ -3993,6 +4046,18 @@ ALTER TABLE channel_sessions
   ADD COLUMN IF NOT EXISTS restore_slowmode_seconds INTEGER;
 ALTER TABLE channel_sessions
   ADD COLUMN IF NOT EXISTS stage_speak_applied BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- LL-HLS (`docs/plans/LL_HLS.md`, task L1.5): "Ir ao vivo com latência
+-- baixa", carried on the party row rather than kept in `pqp-api`'s process
+-- memory. Set by `POST /api/watch-parties/:id/state` on every `goLive`
+-- (unconditionally, so a party going live again without asking does not
+-- inherit a previous ask), read by `reconcileLiveHlsNow` once a sharer
+-- actually appears. Durable on purpose: an in-memory version of this was a
+-- Farol finding on PR #580 -- a restart mid-party made the very next
+-- reconcile resolve `conventional` and stop the LL session boot adoption had
+-- just brought back.
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS low_latency_requested BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Who the host has personally put on the stage of a party whose floor is
 -- closed (`stageMode = 'invited'`). One row per person per party; the row is

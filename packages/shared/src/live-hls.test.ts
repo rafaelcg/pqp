@@ -72,6 +72,25 @@ describe("voice-stream is an optional addition to the wire", () => {
       liveHlsStreamSchema.parse({ ...stream, cameraHlsUrl: "" }),
     ).toThrow();
   });
+
+  it("mode is absent by default and OPTIONAL, meaning conventional", () => {
+    // `docs/plans/LL_HLS.md` L1.5: every session before this field existed
+    // omits it, and a client that has never heard of LL-HLS must keep
+    // treating an absent `mode` as the conventional ladder it always was.
+    expect(liveHlsStreamSchema.parse(stream).mode).toBeUndefined();
+  });
+
+  it("accepts the ll mode a pqp-remux session sets", () => {
+    expect(
+      liveHlsStreamSchema.parse({ ...stream, mode: "ll" }).mode,
+    ).toBe("ll");
+  });
+
+  it("rejects an unknown mode", () => {
+    expect(() =>
+      liveHlsStreamSchema.parse({ ...stream, mode: "srt" }),
+    ).toThrow();
+  });
 });
 
 describe("playlistLooksLive", () => {
