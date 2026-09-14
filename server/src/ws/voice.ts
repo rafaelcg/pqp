@@ -142,6 +142,7 @@ import {
 import {
   countAuthenticatedSockets,
   forEachAuthenticatedSocket,
+  getSocketUser,
   socketHasCap,
   SOCKET_CAPS,
 } from "./sockets.js";
@@ -1485,6 +1486,10 @@ export interface VoiceActivitySnapshot {
     watching: number;
     /** Channels with a live stream this instance last announced. */
     liveChannels: number;
+    /** Proactive per-session token-renewal passes run since boot (`HLS_VIEWER_TOKEN_REMINT_MS`). */
+    tokenRemintLoops: number;
+    /** Fresh viewer tokens handed out by those passes since boot. */
+    tokenRemints: number;
   };
   /**
    * One entry per room that has somebody in it, largest first.
@@ -1675,6 +1680,8 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
         .liveChannels()
         .reduce((sum, id) => sum + hlsAudience.count(id), 0),
       liveChannels: hlsAudience.liveChannels().length,
+      tokenRemintLoops: hlsTokenRemint.loops,
+      tokenRemints: hlsTokenRemint.tokens,
     },
     rooms,
   };
@@ -2189,6 +2196,32 @@ const rosterFramesSent = { deltas: 0, snapshots: 0, audienceSnapshots: 0 };
 const hlsAudienceFramesSent = { frames: 0 };
 
 /**
+ * How long a live session waits between proactively re-minting its
+ * watchers' viewer tokens, independent of any change to the stream itself.
+ *
+ * `HLS_VIEWER_TOKEN_TTL_MS` (`hls-viewer-token.ts`) is 60 minutes; before
+ * this existed, a token only ever got refreshed by `broadcastChannelLive`
+ * running on a genuine change (a new session, a sharer swap) or by the
+ * 30-second audience keyframe happening to catch a socket that is also part
+ * of the DB-backed "may view this channel" audience. A viewer who never left
+ * that audience but also never triggered a change could still ride the same
+ * `?t=` for the length of a film, and on 2026-09-12 production logged
+ * exactly that: rolling waves of `hlsPlaylistRejected reason=expired`. Ten
+ * minutes of margin under the hour, matching the same number iOS
+ * (`WatchStreamSwap.renewAfter`) and Android (`WATCH_TOKEN_RENEWAL_MS`)
+ * already schedule their own client-side renewal at, so every platform
+ * converges on one number.
+ */
+export const HLS_VIEWER_TOKEN_REMINT_MS = 50 * 60 * 1000;
+
+/** `voice.hlsTokenRemint` loops and tokens sent, since boot. Belongs nonzero
+ * on any deployment carrying a watch party past the 50-minute mark: a zero
+ * here while `liveHls.watching` is nonzero is this feature not running,
+ * which is indistinguishable from working right up until an hour in (the
+ * shape pitfall 9 in CLAUDE.md warns about). */
+const hlsTokenRemint = { loops: 0, tokens: 0 };
+
+/**
  * Watch mode without a seat. `voice-stream` only reaches the room, so until
  * this path a viewer learned a stream was live by joining, and the sidebar
  * pill saw nothing but the roster. `channel-live` goes to everyone who may
@@ -2201,7 +2234,101 @@ const hlsAudience = createHlsAudience({
   broadcast: (channelId) => {
     void broadcastChannelLive(channelId);
   },
+  remintMs: HLS_VIEWER_TOKEN_REMINT_MS,
+  remint: (channelId, watchers) => {
+    remintHlsAudienceTokens(channelId, watchers);
+  },
 });
+
+/**
+ * One loop over a live session's already-known watchers (`hlsAudience`
+ * tracks the `Set<WebSocket>` in memory; no DB round trip for the
+ * membership itself), minting each a fresh capability and pushing it as an
+ * ordinary `channel-live` frame. Same frame shape a change or a keyframe
+ * would have sent, so the client's existing same-session token-swap path
+ * (`shouldAdoptHlsSource` on web, `WatchStreamSwap`/`watchSourceChanged` on
+ * iOS/Android) is what actually applies it — this only has to make sure a
+ * fresh one keeps arriving.
+ *
+ * `watch-live` checks `canAccessChannel` once, at subscribe time, and never
+ * again — a socket that stays open and subscribed is otherwise never asked
+ * twice. Without a re-check here, a ban, a kick, a channel turned private,
+ * or a permission overwrite that revokes VIEW would leave that socket
+ * quietly re-authorized every `HLS_VIEWER_TOKEN_REMINT_MS` for as long as
+ * the connection and the broadcast both last — the exact opposite of what a
+ * capability with a TTL is for. `canAccessChannelForRoster` is the cached,
+ * invalidation-aware wrapper this file already built for "ask access
+ * repeatedly for many sockets against the same channel": its cache is
+ * cleared by the same events that can make this answer flip (membership,
+ * privacy, an overwrite change), so a revoked watcher is caught within one
+ * cache TTL rather than only on their next natural resubscribe. A watcher
+ * that fails the check is dropped from `hlsAudience` outright, not merely
+ * skipped this once, so the next remint does not re-ask the same settled
+ * question for a socket that is never getting the answer back.
+ *
+ * TWO MORE THINGS an `await` per watcher makes possible that a purely
+ * synchronous loop never had to worry about, both closed here rather than
+ * left for the next incident. First, `stream` is re-read fresh from
+ * `liveHlsStreamFor` on every iteration rather than captured once before the
+ * loop: each `await` is a real suspension point, wide enough on a long
+ * watcher list for the broadcast to end or restart underneath it, and a
+ * snapshot taken before the loop would keep handing out a session that no
+ * longer exists — or worse, one a newer session has already replaced,
+ * regressing a client back to an obsolete HLS session the same way a
+ * stale, out-of-order frame would (see the `generation` guards this same
+ * remint feeds on every client). Second, this function is called from
+ * `setInterval` (`createHlsAudience`, `hls-audience.ts`) without an await or
+ * a `.catch`, which used to be safe because nothing here could reject; now
+ * that it can (a database error inside `canAccessChannelForRoster`, or `send`
+ * throwing on a socket that closed between the readyState check and the
+ * write), an uncaught rejection here would be unhandled at the interval
+ * boundary — fatal on Node configurations that treat unhandled rejections as
+ * such, and even short of that, it would abort the loop for every watcher
+ * still waiting behind the one that failed. So every watcher's own work is
+ * wrapped below: one failure is logged and skipped, never allowed to reach
+ * the caller or cost anyone else their renewal.
+ */
+async function remintHlsAudienceTokens(
+  channelId: string,
+  watchers: readonly WebSocket[],
+): Promise<void> {
+  if (!liveHlsStreamFor(channelId)) {
+    return;
+  }
+  hlsTokenRemint.loops += 1;
+  for (const socket of watchers) {
+    if (socket.readyState !== 1 /* WebSocket.OPEN */) {
+      continue;
+    }
+    const user = getSocketUser(socket);
+    if (!user) {
+      continue;
+    }
+    try {
+      if (!(await canAccessChannelForRoster(channelId, user.id))) {
+        hlsAudience.unsubscribe(channelId, socket);
+        continue;
+      }
+      const stream = liveHlsStreamFor(channelId);
+      if (!stream) {
+        continue;
+      }
+      send(socket, {
+        type: "channel-live",
+        channelId,
+        stream: stampViewerStream(stream, user.id),
+        watching: hlsAudience.count(channelId),
+      });
+      hlsTokenRemint.tokens += 1;
+    } catch (error) {
+      console.error(
+        "[voice] remintHlsAudienceTokens failed for one watcher:",
+        channelId,
+        error,
+      );
+    }
+  }
+}
 
 /**
  * What the cluster bus is carrying for voice, since boot, on this instance.
@@ -2258,6 +2385,8 @@ export function resetRosterSequences(): void {
   rosterFramesSent.snapshots = 0;
   rosterFramesSent.audienceSnapshots = 0;
   hlsAudienceFramesSent.frames = 0;
+  hlsTokenRemint.loops = 0;
+  hlsTokenRemint.tokens = 0;
   clusterFrames.relayed = 0;
   clusterFrames.received = 0;
 }

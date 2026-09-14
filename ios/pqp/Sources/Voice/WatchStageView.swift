@@ -43,6 +43,37 @@ struct WatchStageView: View {
     @State private var attached: AttachedStream?
     @State private var stall = WatchStallWatch()
     @State private var edge = WatchLiveEdge()
+    /// Bounded automatic recovery from a hard `AVPlayerItem` failure. See
+    /// `WatchFailureRecovery`.
+    @State private var recovery = WatchFailureRecovery()
+    /// The `attachedAt` of the last attach for which `recovery` was cleared.
+    /// A fresh `attach()` does NOT reset the budget by itself anymore: a
+    /// replacement item that fails again immediately must still count
+    /// against `WatchFailureRecovery.maxAttempts`, or a failure loop never
+    /// reaches `giveUp`. The watchdog clears it only once THIS attach has
+    /// held `.readyToPlay` and an advancing playhead for
+    /// `recoveryConfirmTicks` straight seconds, which is the only signal
+    /// that the replacement is not about to fail again in the next breath.
+    @State private var recoveryClearedAttachedAt: Date?
+    /// Consecutive watchdog ticks (one per second) this attach has spent
+    /// confirmed healthy. Reset to zero the moment a tick is not, so a
+    /// flicker (ready for one second, failed the next) never accumulates
+    /// toward the threshold across two different unhealthy stretches.
+    @State private var healthyPlaybackTicks = 0
+    /// The playhead position read on the previous watchdog tick, so this
+    /// tick can tell "reported playing" from "actually advancing". A stuck
+    /// item can sit at `.readyToPlay` with `rate > 0` and a `timeControlStatus`
+    /// of `.playing` while the decoder itself has wedged; none of those
+    /// three are proof by themselves. `nil` right after an attach, so the
+    /// very first tick of a new item never counts as advancing — there is
+    /// nothing yet to compare it against.
+    @State private var lastHealthCheckPosition: Double?
+    /// Straight seconds of confirmed, ADVANCING playback before the recovery
+    /// budget is considered proven, not merely started. Three ticks: long
+    /// enough that a replacement item still holding together after a couple
+    /// of seconds is actually different from the one that just failed, short
+    /// enough that a real recovery is not made to look slower than it is.
+    private static let recoveryConfirmTicks = 3
     @State private var isMinimised = false
 
     /// What the master playlist advertised for THIS broadcast, and how far
@@ -201,9 +232,7 @@ struct WatchStageView: View {
             guard let player, attached != nil else { continue }
             guard let item = player.currentItem else { continue }
             if item.status == .failed {
-                model.playbackFailed(
-                    String(localized: "The connection to the stream dropped.")
-                )
+                await recoverFromFailure()
                 continue
             }
             let now = Date()
@@ -218,6 +247,29 @@ struct WatchStageView: View {
             let status = player.timeControlStatus
             isPlaying = status == .playing || player.rate > 0
             chrome.tick(playing: isPlaying, at: now)
+            // The budget clears only once THIS attach has held
+            // `.readyToPlay`, `.playing` AND an advancing playhead for
+            // `recoveryConfirmTicks` straight seconds, not on attach itself
+            // and not on the first healthy-looking tick: a replacement item
+            // that fails again a second later must still spend from the
+            // same budget as the failure that produced it, or the
+            // three-attempt cap is never reached. `.readyToPlay` plus
+            // `rate > 0` is not proof on its own — a decoder can wedge while
+            // still reporting both — so a tick only counts when the
+            // position this tick is strictly ahead of the position last
+            // tick. Any tick that is not confirmed advancing resets the
+            // streak, so two short healthy stretches never add up.
+            let advanced = lastHealthCheckPosition.map { position > $0 } ?? false
+            let confirmedHealthyTick =
+                item.status == .readyToPlay && isPlaying && player.rate > 0 && advanced
+            lastHealthCheckPosition = position
+            healthyPlaybackTicks = confirmedHealthyTick ? healthyPlaybackTicks + 1 : 0
+            if let attached,
+               healthyPlaybackTicks >= Self.recoveryConfirmTicks,
+               recoveryClearedAttachedAt != attached.attachedAt {
+                recovery.reset()
+                recoveryClearedAttachedAt = attached.attachedAt
+            }
 
             edge.learnSegmentSeconds(recommendedOffset: item.recommendedTimeOffsetFromLive.seconds)
             // Once the real segment length is known, narrow the forward
@@ -257,6 +309,74 @@ struct WatchStageView: View {
                 now: now
             )
             if stalled { reconcile(force: true) }
+        }
+    }
+
+    /**
+     A hard `AVPlayerItem` failure, with one bounded attempt to fix it before
+     the viewer sees a card.
+
+     The dead end this replaces was calling `model.playbackFailed` on the
+     spot, which never once asked the server for anything: if the failure was
+     an expired token — the common case, since the token this player is
+     holding can be up to `WatchStreamSwap.renewAfter` stale, or far staler
+     than that if the socket has been quiet — the freshest thing available
+     locally is the same dead URL. `refreshLive` asks the server what is
+     actually true right now; `WatchFailureRecovery` is what stops that
+     becoming an unbounded refetch loop against a stream that is genuinely
+     gone.
+     */
+    private func recoverFromFailure() async {
+        switch recovery.onFailure(now: Date()) {
+        case .giveUp:
+            model.playbackFailed(
+                String(localized: "The connection to the stream dropped.")
+            )
+        case .refetch:
+            do {
+                switch try await model.refreshLive() {
+                case .applied(let stream):
+                    if stream != nil {
+                        // A fresh stream came back: reattach to it
+                        // regardless of how old `attached` is, the same way
+                        // a stall or a manual retry does.
+                        reconcile(force: true)
+                    }
+                    // `stream == nil` means the broadcast genuinely ended
+                    // or never started, and `applyStream` already moved
+                    // `phase` to `.ended` / `.idle` inside `refreshLive` —
+                    // that sentence is truer than "the connection dropped",
+                    // and `.onChange(of: model.phase)` tears the player
+                    // down on its own.
+                case .failed:
+                    if model.phase == .live {
+                        // The refetch itself failed (network), so `phase`
+                        // was never touched by it and is still `.live` from
+                        // before this failure. Nothing better is available:
+                        // show the card.
+                        model.playbackFailed(
+                            String(localized: "The connection to the stream dropped.")
+                        )
+                    }
+                case .superseded:
+                    // Something more recent than this call already spoke
+                    // for the stream — a socket frame, or a newer
+                    // overlapping `refreshLive()` — and applied its own
+                    // answer correctly. This call has nothing to add, and
+                    // MUST NOT fall through to `playbackFailed`: `phase` can
+                    // already be `.live` again with a perfectly good,
+                    // freshly attached stream, and painting that as dead is
+                    // exactly the false failure this case exists to avoid.
+                    break
+                }
+            } catch is CancellationError {
+                // The watchdog task itself was cancelled while this was in
+                // flight (the view went away). Nothing to reconcile and
+                // nothing to mark failed: there is no picture left to be
+                // wrong about.
+            } catch {
+                // `refreshLive` never throws anything but cancellation.
+            }
         }
     }
 
@@ -567,7 +687,11 @@ struct WatchStageView: View {
             }
             Spacer()
             if retry {
-                Button("Try again") { model.retry(); reconcile(force: true) }
+                Button("Try again") {
+                    recovery.reset()
+                    model.retry()
+                    reconcile(force: true)
+                }
                     .font(Typography.callout)
                     .foregroundStyle(Palette.signal)
             }
@@ -636,6 +760,10 @@ struct WatchStageView: View {
         attached = AttachedStream(startedAt: stream.startedAt, attachedAt: Date())
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
+        // NOT `recovery.reset()` here: this attach is unproven until the
+        // watchdog confirms it. See `recoveryClearedAttachedAt`.
+        healthyPlaybackTicks = 0
+        lastHealthCheckPosition = nil
         behindLive = false
         delaySeconds = nil
         effectiveLines = nil
@@ -858,6 +986,10 @@ struct WatchStageView: View {
         attached = nil
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
+        recovery.reset()
+        recoveryClearedAttachedAt = nil
+        healthyPlaybackTicks = 0
+        lastHealthCheckPosition = nil
         ladder = .empty
         behindLive = false
         delaySeconds = nil

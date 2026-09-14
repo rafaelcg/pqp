@@ -221,6 +221,70 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertLessThan(WatchStreamSwap.renewAfter, 60 * 60)
     }
 
+    // MARK: - Recovering from a hard playback failure
+
+    /// The must-have case: a failure asks for a refetch-and-reattach rather
+    /// than going straight to the failed card.
+    func testAFailureAsksToRefetchRatherThanGivingUpImmediately() {
+        var recovery = WatchFailureRecovery()
+        XCTAssertEqual(recovery.onFailure(now: Date()), .refetch)
+    }
+
+    /// Repeated failures inside the window keep counting toward the cap, not
+    /// resetting it — a flapping connection should not get an unlimited
+    /// number of retries just because time passes between them.
+    func testRepeatedFailuresWithinTheWindowCountTowardTheCap() {
+        var recovery = WatchFailureRecovery()
+        let start = Date()
+        var decisions: [WatchFailureRecovery.Decision] = []
+        for i in 0..<WatchFailureRecovery.maxAttempts {
+            decisions.append(recovery.onFailure(now: start.addingTimeInterval(Double(i) * 10)))
+        }
+        XCTAssertEqual(decisions, Array(repeating: .refetch, count: WatchFailureRecovery.maxAttempts))
+        // One more, still inside the window: budget is spent.
+        XCTAssertEqual(
+            recovery.onFailure(now: start.addingTimeInterval(Double(WatchFailureRecovery.maxAttempts) * 10)),
+            .giveUp
+        )
+    }
+
+    /// Past the cap the stream is treated as genuinely dead: the existing
+    /// "Try again" card, not an unbounded loop of refetches against the API.
+    func testExceedingTheCapFallsThroughToGivingUp() {
+        var recovery = WatchFailureRecovery()
+        let start = Date()
+        for i in 0..<WatchFailureRecovery.maxAttempts {
+            _ = recovery.onFailure(now: start.addingTimeInterval(Double(i)))
+        }
+        XCTAssertEqual(recovery.onFailure(now: start.addingTimeInterval(1)), .giveUp)
+        // And it stays given up, not just on the very next call.
+        XCTAssertEqual(recovery.onFailure(now: start.addingTimeInterval(2)), .giveUp)
+    }
+
+    /// A failure outside the rolling window is not counted against the cap:
+    /// this is a budget over time, not a lifetime total.
+    func testAFailureOutsideTheWindowDoesNotCountAgainstTheCap() {
+        var recovery = WatchFailureRecovery()
+        let start = Date()
+        for i in 0..<WatchFailureRecovery.maxAttempts {
+            _ = recovery.onFailure(now: start.addingTimeInterval(Double(i)))
+        }
+        let longAfter = start.addingTimeInterval(WatchFailureRecovery.windowSeconds + 1)
+        XCTAssertEqual(recovery.onFailure(now: longAfter), .refetch)
+    }
+
+    /// A reset (a reattach that stuck, or a manual "Try again") clears the
+    /// slate so a later, unrelated failure gets the full budget again.
+    func testAResetClearsThePreviousFailuresFromTheWindow() {
+        var recovery = WatchFailureRecovery()
+        let start = Date()
+        for i in 0..<WatchFailureRecovery.maxAttempts {
+            _ = recovery.onFailure(now: start.addingTimeInterval(Double(i)))
+        }
+        recovery.reset()
+        XCTAssertEqual(recovery.onFailure(now: start.addingTimeInterval(1)), .refetch)
+    }
+
     // MARK: - A picture that stopped without anybody being told
 
     func testAPlayerWhoseClockStopsIsEventuallyDeclaredStalled() {

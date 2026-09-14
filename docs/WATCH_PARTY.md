@@ -1504,6 +1504,51 @@ caller.
 Tests: `server/src/ws/voice-hls-audience.test.ts` (the gate, the audience,
 the count cadence, the token on every path).
 
+**The token outliving a quiet socket (2026-09-12).** The audience keyframe
+and a genuine stream change both re-mint a watcher's token, but both are
+triggered by something happening — a viewer who never triggers either (an
+open tab that is simply part of the channel's "may view" audience, or whose
+socket went quiet for a while) could still be holding the very first token
+this session ever handed out when `HLS_VIEWER_TOKEN_TTL_MS` (an hour) ran
+out. Production logged it as rolling waves of `hlsPlaylistRejected
+reason=expired`. Three independent fixes, one per place a token can go stale
+without anyone acting on it:
+
+- **Server:** every live session now runs its own clock, independent of the
+  keyframe and of any change to the stream — `HLS_VIEWER_TOKEN_REMINT_MS`
+  (50 minutes, ten inside the TTL) in `server/src/ws/voice.ts`, wired through
+  `createHlsAudience`'s `remintMs`/`remint` (`server/src/ws/hls-audience.ts`).
+  It walks only the in-memory `watching` set — no DB-backed audience query —
+  so a 500-viewer party is one loop, not a storm; `liveHls.tokenRemintLoops`
+  / `tokenRemints` on `GET /api/admin/metrics` are what say it actually ran
+  rather than merely deployed (the pitfall-9 shape).
+- **Web:** already fixed by the recovery ladder (B1, PR 570):
+  `shouldAdoptHlsSource` refuses to re-attach on a restamped `?t=`, and
+  `nextFreshPlaylistUrl` captures that restamp into `freshPlaylistUrlRef`
+  instead of dropping it. `withFreshHlsToken` (`client/src/lib/hls-playback.ts`)
+  swaps that ref's token into every outgoing playlist request inside
+  `xhrSetup`, right before it goes out, by re-`xhr.open`-ing with the
+  freshest known URL — no re-attach, no dropped buffer, no rebuffer, and it
+  already carries the rung-suffix handling a screen-share ladder needs. This
+  session's periodic remint reaches the loader the same way the audience
+  keyframe restamp always did: as an ordinary `channel-live` frame, which is
+  already this same `src`-prop door.
+- **iOS / Android:** both already scheduled the same 50-minute proactive
+  renewal client-side (`WatchStreamSwap.renewAfter`,
+  `WATCH_TOKEN_RENEWAL_MS`), but a hard playback failure (a rejected, expired
+  token) could reattach to the exact same stale value it just failed on, if
+  the socket had not delivered anything fresher — the "hammering with
+  the same expired token" shape production actually showed. Android's
+  `WatchPane.kt` was discarding a same-session `GET /api/channels/:id/live`
+  refetch outright (`reconnectAttachment` in `WatchSource.kt` fixes that,
+  plus a `trustFreshRefetch` flag so the reattach effect does not overwrite
+  it with a stale socket-cached value); iOS's `WatchStageView.swift` never
+  refetched on a hard failure at all, only re-tried whatever `WatchModel`
+  already held (`WatchModel.refreshLive()` plus the bounded
+  `WatchFailureRecovery` — 3 attempts / 5 minutes, mirroring Android's
+  `HlsWatchdog` — now ask the server first and only fall through to the
+  manual "Try again" card once that budget is spent).
+
 Scheduling (built in parallel) attaches to the channel; the sidebar row has a
 `TODO(schedule)` where the next session time goes in the idle state.
 

@@ -108,6 +108,28 @@ final class WatchModel {
     /// Whether a stream has been seen at all during this visit. What separates
     /// `idle` from `ended`.
     private var sawStream = false
+    /// One "latest wins" counter, bumped by every event that can supersede
+    /// an in-flight `refreshLive()` response: a socket-delivered stream
+    /// frame (`channel-live`, `voice-stream`), AND the start of every
+    /// `refreshLive()` call itself. `refreshLive` snapshots the value right
+    /// after bumping it for its own call, and only applies its response if
+    /// the snapshot still equals the live counter when the response comes
+    /// back.
+    ///
+    /// That single comparison covers both ways a response can go stale: a
+    /// socket delivers a fresher token strictly faster than an HTTP
+    /// round-trip this same server serves, so if a frame landed while the
+    /// GET was in flight the socket has already said something newer; and
+    /// two overlapping `refreshLive()` calls (two watchdog reconnect
+    /// attempts in flight together) are themselves unordered against each
+    /// other over the network, so whichever call started LAST claims the
+    /// highest number and is the only one whose response can still apply,
+    /// regardless of which one's HTTP response actually lands first. There
+    /// used to be a split here — a socket-only counter plus separate
+    /// reasoning for overlapping refetches — which is exactly the gap that
+    /// let one stale HTTP response overwrite a fresher one from another
+    /// in-flight `refreshLive()` call. One counter, one comparison.
+    private var generation = 0
 
     // MARK: - Lifecycle
 
@@ -168,6 +190,87 @@ final class WatchModel {
         applyStream(state.stream)
     }
 
+    /// What a `refreshLive()` call resolved to. A plain `LiveHlsStream?`
+    /// cannot tell a caller "this genuinely failed" apart from "this was
+    /// superseded and something newer already spoke for the stream" — both
+    /// looked like `nil`, and `recoverFromFailure()` treated either as proof
+    /// the broadcast is unreachable. It is not: a superseded call means a
+    /// socket frame or a newer overlapping `refreshLive()` already applied
+    /// its own (fresher) answer, correctly, before this one returned. Taking
+    /// that as a failure would paint a picture that is already playing fine
+    /// as dead.
+    enum RefreshOutcome {
+        /// The freshest answer, and it was applied. `nil` means the
+        /// broadcast is over or never started; `applyStream` already moved
+        /// `phase` accordingly.
+        case applied(LiveHlsStream?)
+        /// A genuine failure to ask the server at all (network, non-2xx).
+        /// Silent, same posture as `seed`: a transient 500 is not a verdict
+        /// on the broadcast, only a caller in `recoverFromFailure` decides
+        /// whether this is worth surfacing.
+        case failed
+        /// This call's answer no longer matters: the channel changed, there
+        /// is no active channel, or a socket frame / newer overlapping call
+        /// already applied something more recent. Whatever superseded it is
+        /// responsible for `phase`/`stream` being correct; this caller has
+        /// nothing left to do.
+        case superseded
+    }
+
+    /**
+     `GET /api/channels/:channelId/live` again, on demand.
+
+     The recovery path for a hard playback failure (`WatchFailureRecovery`):
+     the URL `AVPlayer` just rejected may carry the very token that expired,
+     and only the server knows the fresh one — the socket's next
+     `channel-live` could be up to thirty seconds away, which is thirty
+     seconds of a dead player a viewer is staring at right now. Unlike
+     `seed`, this has no `phase == .unknown` guard, because it exists
+     precisely for the case where a phase is already established and wrong.
+
+     Applies through the same `applyStream` every other update goes through,
+     so a broadcast that genuinely ended surfaces here as `.ended` exactly
+     like it would over the socket — the caller does not need to special-case
+     that outcome, only tell it apart from a request that flat-out failed
+     (see `RefreshOutcome`).
+     */
+    func refreshLive() async throws -> RefreshOutcome {
+        guard let channelId, let session else { return .superseded }
+        // Claim the next number before the GET goes out. If another
+        // `refreshLive()` call is already in flight, this bump is what
+        // demotes it: its captured snapshot is now behind `generation`, so
+        // its response — however the two land — can no longer win.
+        generation &+= 1
+        let requestedGeneration = generation
+        let state: ChannelLiveState
+        do {
+            state = try await session.api.get("/api/channels/\(channelId)/live")
+        } catch {
+            // The watchdog task that called us can be cancelled mid-request
+            // (view torn down, channel switched away from) — that is not a
+            // verdict on the stream, so it must not read as one to the
+            // caller. Propagate it instead of returning `.failed`, which
+            // `recoverFromFailure` would otherwise read as "the refetch
+            // failed" and mark the picture dead on its way out the door.
+            if error is CancellationError { throw error }
+            return .failed
+        }
+        guard self.channelId == channelId else { return .superseded }
+        // Either a socket frame landed while this request was in flight
+        // (necessarily fresher than a response an HTTP request started
+        // before it), or a NEWER `refreshLive()` call started after this one
+        // and has already claimed a higher number — including one whose own
+        // response already landed and applied. Either way, something more
+        // recent than this call now speaks for the stream; drop this
+        // response rather than reattaching a token, or an "ended", that has
+        // been superseded.
+        guard requestedGeneration == generation else { return .superseded }
+        participants = state.participants
+        watching = state.watching
+        applyStream(state.stream)
+        return .applied(state.stream)
+    }
+
     // MARK: - Wire
 
     private func apply(_ event: RealtimeEvent) {
@@ -175,6 +278,7 @@ final class WatchModel {
         case .channelLive(let id, let stream, let watching):
             guard id == channelId else { return }
             self.watching = watching
+            generation &+= 1
             applyStream(stream)
 
         // The room's own copy. Only reaches a socket with a seat, so it is
@@ -182,6 +286,7 @@ final class WatchModel {
         // and the model is still alive; it carries no headcount.
         case .voiceStream(let id, let stream):
             guard id == channelId else { return }
+            generation &+= 1
             applyStream(stream)
 
         // A NEW SOCKET KNOWS NOTHING ABOUT THIS VIEWER. The audience is a set
