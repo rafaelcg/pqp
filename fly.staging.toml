@@ -52,9 +52,13 @@ kill_timeout = 30
   # for the full rationale; raise only if another proxy goes in front of Fly.
   TRUST_PROXY = "true"
 
-  # pg pool ceiling per process. Staging shares the pqp-db cluster with
-  # production's database, so keep this modest.
-  PG_POOL_MAX = "10"
+  # M6 REHEARSAL 3, TEMPORARY, NOT FOR MERGE: 60 = the production switch PR
+  # (#594) formula at n=3, floor(187 / 3) - 2, carried in [env] exactly the way
+  # #594 carries it in fly.toml, with the PG_POOL_MAX Fly SECRET unset -- a
+  # secret of the same name shadows this line (#594 runbook step 8). Staging's
+  # own database is a 1 GB postgres-flex box for this run (docs/plans/
+  # M6_REHEARSAL_2026-09-14b.md), not production's cluster. Revert to "10".
+  PG_POOL_MAX = "60"
 
 [http_service]
   internal_port = 3001
