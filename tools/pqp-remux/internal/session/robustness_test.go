@@ -279,6 +279,59 @@ func TestSession_AudioEncoderRecoversFromATransientFailure(t *testing.T) {
 	}
 }
 
+// TestSession_UnexpectedEncoderErrorTripsRecovery is the session-level
+// regression test for Farol's "unexpected ffmpeg exit is exposed as
+// clean audio completion" finding: an error arriving on Errs() (the
+// shape aacenc.Encoder's readADTS produces for a crash or an unrequested
+// exit) must trip the same recoverAudioEncoder path a WriteSamples
+// failure does -- one restart attempt, then AudioDead if that also
+// fails -- rather than the audio track just going quiet while nothing
+// downstream (Session.Health included) ever notices.
+func TestSession_UnexpectedEncoderErrorTripsRecovery(t *testing.T) {
+	var mu sync.Mutex
+	var built []*fakeEncoder
+	withFakeEncoderFactory(t, func(ctx context.Context, cfg aacenc.Config) (remuxEncoder, error) {
+		mu.Lock()
+		fe := newFakeEncoder()
+		built = append(built, fe)
+		idx := len(built) - 1
+		mu.Unlock()
+
+		if idx == 0 {
+			// Mirror aacenc.readADTS's own shape for an unexpected exit:
+			// an error on Errs(), then Frames() closes.
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				fe.errs <- errors.New("ffmpeg exited unexpectedly")
+				fe.Close()
+			}()
+		}
+		return fe, nil
+	})
+
+	s := New(45000, 360000, ring.New(6, 90000), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer s.Close()
+
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), SegmentTicks: 4 * 48000}); err != nil {
+		t.Fatalf("EnableAudio: %v", err)
+	}
+
+	waitFor(t, 3*time.Second, func() bool { return s.Health().AudioRestarts == 1 })
+
+	mu.Lock()
+	n := len(built)
+	mu.Unlock()
+	if n != 2 {
+		t.Fatalf("expected exactly 2 encoders (the crashed one + one restart), got %d", n)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if s.Health().AudioDead {
+		t.Fatal("audio should not be dead: the replacement encoder never fails")
+	}
+}
+
 // --- Farol finding 3: reading Errs() without an ok check can busy-loop
 // or exit prematurely. ---
 
@@ -290,9 +343,10 @@ func TestReadEncoderFrames_ExitsCleanlyWhenFramesClosesWithErrsOpenAndEmpty(t *t
 
 	fe := newFakeEncoder()
 	done := make(chan struct{})
+	failed := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
-		s.readEncoderFrames(fe, done)
+		s.readEncoderFrames(fe, done, failed)
 		close(finished)
 	}()
 
@@ -318,9 +372,10 @@ func TestReadEncoderFrames_KeepsDeliveringFramesAfterErrsCloses(t *testing.T) {
 
 	fe := newFakeEncoder()
 	done := make(chan struct{})
+	failed := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
-		s.readEncoderFrames(fe, done)
+		s.readEncoderFrames(fe, done, failed)
 		close(finished)
 	}()
 

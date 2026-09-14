@@ -59,7 +59,8 @@ func sigv4Sign(cfg Config, method, key string, body []byte, now time.Time) (sign
 		payloadHash,
 	}, "\n")
 
-	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStamp, cfg.Region, service)
+	region := cfg.SigningRegion()
+	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStamp, region, service)
 	stringToSign := strings.Join([]string{
 		algorithm,
 		amzDate,
@@ -67,7 +68,7 @@ func sigv4Sign(cfg Config, method, key string, body []byte, now time.Time) (sign
 		sha256Hex([]byte(canonicalRequest)),
 	}, "\n")
 
-	signingKey := deriveSigningKey(cfg.SecretAccessKey, dateStamp, cfg.Region)
+	signingKey := deriveSigningKey(cfg.SecretAccessKey, dateStamp, region)
 	signature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
 
 	authorization := fmt.Sprintf("%s Credential=%s/%s, SignedHeaders=%s, Signature=%s",

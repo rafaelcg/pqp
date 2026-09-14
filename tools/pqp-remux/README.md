@@ -97,7 +97,7 @@ Read by `internal/config`.
 | `CHANNEL_ID` | `ROOM`'s value | The R2 key layout's `channelId` segment. Defaults to `ROOM` because `server/src/voice/hls-egress.ts`'s own `roomName` **is** the channel id (one LiveKit room per voice channel) — this exists only to override that in a test or a future topology where that stops holding |
 | `STARTED_AT_MS` | this process's own start time | The R2 key layout's `startedAt` segment. A stand-in for the `hls_sessions.started_at` value `L1.5`'s API control plane will eventually own and pass in |
 | `RUNG` | `ll` | The R2 key layout's rung segment, matching the plan's own choice (`docs/plans/LL_HLS.md` §4/§6: "its `hls_sessions` row carries `rung = 'll'`") |
-| `LIVE_HLS_S3_ENDPOINT` / `_BUCKET` / `_REGION` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_FORCE_PATH_STYLE` | — (optional) | Exactly the same names and shape as the server's own `LIVE_HLS_S3_*` (`server/src/voice/hls-egress.ts`'s `liveHlsStorageConfig()`), read by `internal/r2`. Any one missing (besides region/path-style) means the R2 writer is off — the same "not configured, not an error" shape as everywhere else this bucket is read |
+| `LIVE_HLS_S3_ENDPOINT` / `_BUCKET` / `_REGION` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_FORCE_PATH_STYLE` | — (optional; `_REGION` defaults to `auto`) | Exactly the same names and shape as the server's own `LIVE_HLS_S3_*` (`server/src/voice/hls-egress.ts`'s `liveHlsStorageConfig()`), read by `internal/r2`. Any one missing besides region/path-style means the R2 writer is off — the same "not configured, not an error" shape as everywhere else this bucket is read. An unset `_REGION` does **not** disable it: `r2.Config.SigningRegion()` falls back to R2's own `auto` convention, so a deployment that only ever set the other four still signs correctly instead of passing "configured" and then failing every PUT |
 | `R2_UPLOAD_QUEUE_DEPTH` | `64` | Bounded async upload queue depth (`internal/r2.Writer`); a full queue drops the newest item and counts it rather than blocking the part/segment pipeline |
 | `R2_UPLOAD_MAX_RETRIES` | `3` | Additional attempts a failed upload gets (so the default is up to 4 total attempts) before it is counted `Failed` and dropped |
 
@@ -313,8 +313,24 @@ than applying backpressure to the part/segment pipeline, per the task's own
 `.Failed` / `.Dropped` are exposed on `GET /healthz` once `L1.6`'s watchdog
 wants them (already surfaced today as `r2Uploaded`/`r2Failed`/`r2Dropped`).
 
+**`Close` is bounded too**: a dead bucket cannot make process shutdown hang
+for the tens of minutes a full queue's worth of retries would otherwise take
+(`QueueDepth × (1+MaxRetries)` attempts, each up to `uploadTimeout` plus
+backoff). Past `CloseDeadline` (default 10s), `Close` cancels every
+in-flight and queued attempt and counts what never got a real try as
+`Dropped`, not `Failed`.
+
 **Parts are never uploaded** (only closed segments and each rendition's init
 segment) — per the plan §1: parts are served from the box itself.
+
+**Shutdown order matters, and got it wrong once** (Farol caught it):
+`cmd/pqp-remux/main.go`'s `runServer` registers the R2 writer's `Close`
+*before* the session's, specifically so it executes *last* — defers run
+last-registered-first, so registration order (`r2Writer`, `sess`, `cancel`,
+`sub`) becomes execution order `sub.Close` → `cancel` → `sess.Close` →
+`r2Writer.Close`. Getting this backwards (the writer closing before
+`Session.Close` had a chance to flush and enqueue the final video and audio
+segments) silently dropped a party's last few segments from R2 every time.
 
 ## Try it against staging
 
@@ -489,7 +505,29 @@ why ffmpeg is a real, not incidental, dependency of this module now).
   already closed and refuses to spawn a replacement at all) or blocks until
   an already-in-flight restart finishes and closes *that* encoder, so a
   replacement `ffmpeg` can never outlive the session it was replacing an
-  encoder for.
+  encoder for. The recovery ladder also runs for an **unexpected** exit
+  (a crash, a kill, ffmpeg quitting on its own), not only a `WriteSamples`
+  failure: `aacenc.Encoder`'s own reader distinguishes "Close asked for
+  this" (`intentionalClose`) from everything else and reports the latter
+  on `Errs()`, which `readEncoderFrames` turns into the same
+  `recoverAudioEncoder` call a write failure triggers — an unrequested
+  ffmpeg exit used to close `Frames()` silently and look exactly like a
+  clean, successful end of the audio track. `aacenc.Encoder.Close` is
+  itself deadlock-free regardless of whether anything is still reading
+  `Frames()` (a `closeRequested` signal lets a blocked delivery abandon
+  itself rather than wait forever on a full, unread channel) and always
+  waits for the process's own exit and its ADTS reader to fully finish
+  before returning, so no two generations' readers can ever race each
+  other into the CMAF muxer.
+- **The session ending closes the audio track's last segment too**:
+  before this, only a mid-session roll-over ever called
+  `uploadAudioSegment` — audio shorter than one `SEGMENT_MS` target (or
+  simply the tail after the last full segment) never triggered a "next
+  segment" fragment and so never got a final upload at all.
+  `Session.Close` now uploads whatever segment is still open once the
+  encoder has been drained (bounded by `audioCloseFlushDeadline`, 5s, for
+  the same "shutdown must complete" reason `r2.Writer.Close` is bounded),
+  the audio-side counterpart to `Finish`'s existing video handling.
 - **A/V sync is not independently measured over a real 30-minute session**:
   `internal/session`'s `framesElapsed` tests prove the pacing layer itself
   cannot drift, and "Codec choices" above documents every known,

@@ -174,8 +174,20 @@ func TestServer_AudioRoutesServedAfterSetAudioRing(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /audio-playlist.m3u8: status=%d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "seg-0.m4s") {
-		t.Fatalf("audio playlist does not mention seg-0.m4s: %q", rec.Body.String())
+	body := rec.Body.String()
+	// Every URI must be "audio-" prefixed: those are the only routes this
+	// server actually answers for the audio ring (see
+	// TestServer_AudioRoutesServedAfterSetAudioRing's other assertions
+	// above). An unprefixed "seg-0.m4s"/"init.mp4" would send a real
+	// player to the VIDEO ring's routes instead.
+	if !strings.Contains(body, "audio-seg-0.m4s") {
+		t.Fatalf("audio playlist does not mention audio-seg-0.m4s: %q", body)
+	}
+	if !strings.Contains(body, `URI="audio-init.mp4"`) {
+		t.Fatalf("audio playlist does not reference audio-init.mp4: %q", body)
+	}
+	if strings.Contains(body, `URI="init.mp4"`) {
+		t.Fatalf("audio playlist must not reference the unprefixed (video) init.mp4: %q", body)
 	}
 
 	// The video-side routes must be entirely unaffected by SetAudioRing.

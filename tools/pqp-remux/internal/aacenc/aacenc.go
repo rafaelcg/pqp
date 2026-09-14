@@ -29,6 +29,7 @@ import (
 	"math"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 )
 
 // SampleRate/Channels match internal/audiomix.SampleRate/Channels exactly:
@@ -101,6 +102,25 @@ type Encoder struct {
 	frames chan Frame
 	errs   chan error
 
+	// intentionalClose is set (before stdin is closed) by Close, so
+	// readADTS can tell "we asked ffmpeg to stop" apart from "ffmpeg
+	// stopped on its own" once its read loop ends -- both look like the
+	// same EOF/closed-pipe condition from inside that loop, and only this
+	// flag distinguishes a normal shutdown from an unexpected exit worth
+	// reporting through Errs().
+	intentionalClose atomic.Bool
+	// closeRequested lets a blocked "deliver this frame" send abandon
+	// itself once Close is underway, so a consumer that has stopped
+	// reading Frames() (or never started) cannot make Close hang forever
+	// waiting on a full channel. See readADTS's send loop.
+	closeRequested chan struct{}
+	// processDone closes once cmd.Wait() returns, called exactly once,
+	// from readADTS's own goroutine after its read loop ends -- the
+	// single place this Encoder ever calls Wait, so Close does not need
+	// (and must not attempt) a second call.
+	processDone chan struct{}
+	waitErr     error // valid only after processDone closes
+
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -139,10 +159,12 @@ func New(ctx context.Context, cfg Config) (*Encoder, error) {
 	}
 
 	e := &Encoder{
-		cmd:    cmd,
-		stdin:  stdin,
-		frames: make(chan Frame, 32),
-		errs:   make(chan error, 1),
+		cmd:            cmd,
+		stdin:          stdin,
+		frames:         make(chan Frame, 32),
+		errs:           make(chan error, 1),
+		closeRequested: make(chan struct{}),
+		processDone:    make(chan struct{}),
 	}
 	go e.readADTS(stdout)
 	return e, nil
@@ -174,32 +196,105 @@ func (e *Encoder) Frames() <-chan Frame { return e.frames }
 // count/log failures should select on it alongside Frames().
 func (e *Encoder) Errs() <-chan error { return e.errs }
 
-// Close stops feeding the subprocess and waits for it to exit and its
-// ADTS reader goroutine to finish draining stdout. Safe to call more than
-// once; every call after the first returns the same result.
+// Close stops feeding the subprocess (closing stdin, which is ffmpeg's own
+// signal to flush and exit) and waits for its ADTS reader goroutine to
+// both finish draining stdout AND observe the process's exit (Wait),
+// returning that exit error. Safe to call more than once; every call
+// after the first returns the same result.
+//
+// This never deadlocks even if the caller has stopped reading Frames():
+// closeRequested (closed here) lets readADTS's blocked "deliver this
+// frame" send abandon itself instead of waiting forever on a full,
+// unread channel -- see readADTS's own send loop for why that matters
+// and what it costs (the frame in flight at that exact moment, at most).
 func (e *Encoder) Close() error {
 	e.closeOnce.Do(func() {
+		e.intentionalClose.Store(true)
 		_ = e.stdin.Close()
-		e.closeErr = e.cmd.Wait()
+		close(e.closeRequested)
+		<-e.processDone
+		e.closeErr = e.waitErr
 	})
 	return e.closeErr
 }
 
+// readADTS is the only goroutine that ever reads stdout or calls
+// cmd.Wait (exec.Cmd forbids calling Wait more than once, and calling it
+// before stdout is fully drained risks losing buffered output -- see the
+// stdlib's own StdoutPipe doc comment -- so both live in this one
+// sequential flow). Once its read loop ends for any reason, it waits for
+// the process, then -- unless Close asked for this shutdown
+// (intentionalClose) -- reports whatever looks like an unexpected exit
+// through Errs(), so a caller (internal/session) can tell "the encoder
+// finished because we told it to" apart from "the encoder died on its
+// own" instead of both looking like an ordinary, silent end of Frames().
 func (e *Encoder) readADTS(r io.Reader) {
 	defer close(e.frames)
 	br := bufio.NewReaderSize(r, 64*1024)
+
+	var readErr error
+readLoop:
 	for {
 		frame, err := readOneADTSFrame(br)
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				select {
-				case e.errs <- err:
-				default:
-				}
-			}
-			return
+			readErr = err
+			break
 		}
-		e.frames <- frame
+		// Prefer delivering without ever consulting closeRequested: a
+		// consumer that is actively draining Frames() (the normal case,
+		// including for the whole tail of an intentional shutdown, which
+		// wants every buffered frame delivered) must never lose a frame
+		// to closeRequested winning an arbitrary select race. Only fall
+		// back to the closeRequested-aware select once the channel is
+		// actually full, meaning nothing is being read right now.
+		select {
+		case e.frames <- frame:
+			continue
+		default:
+		}
+		select {
+		case e.frames <- frame:
+		case <-e.closeRequested:
+			// Shutdown is in progress and nobody appears to be reading
+			// Frames(): stop the whole loop rather than risk blocking
+			// again on the very next frame (which would also block
+			// Close, which waits on processDone below). Whatever was
+			// still pending, including this frame and any further ADTS
+			// output, is lost -- an accepted cost of an
+			// already-abnormal "consumer stopped" shutdown.
+			break readLoop
+		}
+	}
+
+	waitErr := e.cmd.Wait()
+	e.waitErr = waitErr
+	close(e.processDone)
+
+	if e.intentionalClose.Load() {
+		return
+	}
+
+	// Not asked for: either the read loop hit a genuine parse/read error,
+	// or ffmpeg exited (cleanly or not) without Close ever being called.
+	// Either is worth reporting -- internal/session treats this the same
+	// as a WriteSamples failure, attempting one restart before giving up
+	// (see recoverAudioEncoder) -- so an ffmpeg crash never just looks
+	// like a quiet, successful end of the audio track.
+	var reportErr error
+	switch {
+	case readErr != nil && !errors.Is(readErr, io.EOF):
+		reportErr = fmt.Errorf("aacenc: reading ADTS output: %w", readErr)
+	case waitErr != nil:
+		reportErr = fmt.Errorf("aacenc: ffmpeg exited unexpectedly: %w", waitErr)
+	default:
+		// Plain EOF on stdout with a clean exit status, but Close was
+		// never called: ffmpeg closed its output on its own, which is
+		// still not something this Encoder was told to expect.
+		reportErr = errors.New("aacenc: ffmpeg's output ended unexpectedly (Close was not called)")
+	}
+	select {
+	case e.errs <- reportErr:
+	default:
 	}
 }
 

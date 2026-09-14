@@ -176,7 +176,20 @@ func (r *Ring) findSegment(index int) *segment {
 // sealed segment currently retained, oldest first. An unsealed (still
 // live) segment is never listed: HLS requires EXTINF's duration to be the
 // segment's true duration, which is only known once it is sealed.
-func (r *Ring) Playlist() string {
+func (r *Ring) Playlist() string { return r.PlaylistWithURIPrefix("") }
+
+// PlaylistWithURIPrefix is Playlist, but every URI it emits (the init
+// segment and each segment) is prefixed with prefix. internal/serve
+// serves a second, independent ring for the audio rendition on routes
+// named "audio-init.mp4"/"audio-seg-<n>.m4s" (see its own doc comment),
+// so its playlist must advertise those same prefixed names -- calling
+// plain Playlist() there would tell a player to fetch "/init.mp4" and
+// "/seg-<n>.m4s", which route back to the VIDEO ring instead, and the
+// advertised audio rendition would either 404 or silently play the wrong
+// track. Video's own call sites keep using Playlist() (prefix ""), which
+// keeps every existing test and this method's on-disk file names
+// unchanged.
+func (r *Ring) PlaylistWithURIPrefix(prefix string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -189,7 +202,7 @@ func (r *Ring) Playlist() string {
 	}
 	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", target)
 	fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n", r.baseIndex)
-	b.WriteString("#EXT-X-MAP:URI=\"init.mp4\"\n")
+	fmt.Fprintf(&b, "#EXT-X-MAP:URI=\"%sinit.mp4\"\n", prefix)
 
 	for _, s := range r.segments {
 		if !s.sealed {
@@ -197,7 +210,7 @@ func (r *Ring) Playlist() string {
 		}
 		durSecs := float64(s.durationTicks()) / float64(r.timescale)
 		fmt.Fprintf(&b, "#EXTINF:%.3f,\n", durSecs)
-		fmt.Fprintf(&b, "seg-%d.m4s\n", s.index)
+		fmt.Fprintf(&b, "%sseg-%d.m4s\n", prefix, s.index)
 	}
 	return b.String()
 }

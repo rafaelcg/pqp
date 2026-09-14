@@ -36,7 +36,15 @@ func (f *fakeUploader) PutObject(ctx context.Context, key string, body []byte, c
 	f.mu.Unlock()
 
 	if f.blockCh != nil {
-		<-f.blockCh
+		select {
+		case <-f.blockCh:
+		case <-ctx.Done():
+			// A real HTTP client aborts an in-flight request when its
+			// context is cancelled; this fake mirrors that so
+			// writer.go's Close-deadline cancellation can actually be
+			// tested without the fake itself hanging forever.
+			return ctx.Err()
+		}
 	}
 
 	f.mu.Lock()
@@ -66,6 +74,19 @@ func (f *fakeUploader) attemptsFor(key string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.attempts[key]
+}
+
+// attemptsForAny sums attempts across every key, for a test that only
+// cares whether *some* number of workers have started (e.g. are now
+// blocked mid-PUT), not which specific keys.
+func (f *fakeUploader) attemptsForAny() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	total := 0
+	for _, n := range f.attempts {
+		total += n
+	}
+	return total
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {
@@ -183,6 +204,44 @@ func TestWriterCloseWaitsForInFlightUploads(t *testing.T) {
 	if w.Uploaded() != 10 {
 		t.Fatalf("Uploaded() = %d after Close, want 10 (Close must drain the queue)", w.Uploaded())
 	}
+}
+
+// TestWriterCloseIsBoundedDuringAnOutage is the regression test for the
+// "Close can block for tens of minutes" finding: an uploader that never
+// returns (a hung/unreachable bucket) must not make Close wait for every
+// queued job's full retry budget. With a short CloseDeadline, Close must
+// return promptly, and every job that never got a real attempt must be
+// counted Dropped rather than Failed (nothing about the upload itself
+// was ever tried and found wanting -- shutdown just gave up waiting).
+func TestWriterCloseIsBoundedDuringAnOutage(t *testing.T) {
+	up := newFakeUploader()
+	up.blockCh = make(chan struct{}) // every PutObject blocks forever until this test closes it, simulating a dead bucket
+
+	w := NewWriter(up, WriterConfig{Workers: 2, QueueDepth: 10, CloseDeadline: 100 * time.Millisecond})
+
+	for i := 0; i < 5; i++ {
+		w.Enqueue(fmt.Sprintf("stuck-%d", i), []byte("x"), "")
+	}
+	waitForCondition(t, time.Second, func() bool { return up.attemptsForAny() >= 2 }) // both workers now blocked mid-PUT
+
+	start := time.Now()
+	w.Close()
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Fatalf("Close took %s, want roughly CloseDeadline (100ms), not tens of minutes", elapsed)
+	}
+	if w.Uploaded() != 0 {
+		t.Fatalf("Uploaded() = %d, want 0 -- the uploader never actually returns", w.Uploaded())
+	}
+	if w.Failed() != 0 {
+		t.Fatalf("Failed() = %d, want 0 -- an abandoned-at-shutdown job is Dropped, not Failed", w.Failed())
+	}
+	if w.Dropped() == 0 {
+		t.Fatal("expected the abandoned jobs to be counted Dropped")
+	}
+
+	close(up.blockCh) // let the now-cancelled PutObject calls actually return, so the test process itself can exit cleanly
 }
 
 func TestWriterConcurrentEnqueueIsRace_Free(t *testing.T) {

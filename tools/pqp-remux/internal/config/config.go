@@ -215,7 +215,12 @@ func FromEnv() (Config, error) {
 
 	c.LiveHlsS3Endpoint = os.Getenv("LIVE_HLS_S3_ENDPOINT")
 	c.LiveHlsS3Bucket = os.Getenv("LIVE_HLS_S3_BUCKET")
-	c.LiveHlsS3Region = os.Getenv("LIVE_HLS_S3_REGION")
+	// Defaults to r2.DefaultRegion's own value ("auto", R2's convention):
+	// repeated as a literal, not imported, to keep this a leaf package
+	// (see DefaultAACBitrateKbps's comment above for the same reasoning).
+	// r2.Config.SigningRegion() applies the identical fallback on its own
+	// if this ever changes without a matching update here.
+	c.LiveHlsS3Region = envOr("LIVE_HLS_S3_REGION", "auto")
 	c.LiveHlsS3AccessKeyID = os.Getenv("LIVE_HLS_S3_ACCESS_KEY_ID")
 	c.LiveHlsS3SecretAccessKey = os.Getenv("LIVE_HLS_S3_SECRET_ACCESS_KEY")
 	c.LiveHlsS3ForcePathStyle = os.Getenv("LIVE_HLS_S3_FORCE_PATH_STYLE") == "true"
