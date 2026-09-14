@@ -56,13 +56,36 @@ vi.mock("../voice/backends.js", () => ({
   isLiveKitConfigured: () => true,
 }));
 
+/**
+ * The access check the catch-up runs per channel, held open on demand. The
+ * window this file's last test is about is exactly "a party ended while this
+ * was in flight", and a real round trip is the only thing that window is made
+ * of; `accessGate.wait` makes it a place the test can stand.
+ */
+const accessGate = vi.hoisted(() => ({
+  /** Held open from this call onwards (1-based). 0 never holds. */
+  blockFrom: 0,
+  wait: null as Promise<void> | null,
+  calls: [] as string[],
+}));
+
 vi.mock("../services/users.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/users.js")>()),
   resolveMemberName: async (
     _serverId: string | null,
     user: { display_name: string },
   ) => user.display_name,
-  canAccessChannel: async () => true,
+  canAccessChannel: async (channelId: string) => {
+    accessGate.calls.push(channelId);
+    if (
+      accessGate.wait &&
+      accessGate.blockFrom > 0 &&
+      accessGate.calls.length >= accessGate.blockFrom
+    ) {
+      await accessGate.wait;
+    }
+    return true;
+  },
 }));
 
 vi.mock("../services/sanctions.js", () => ({
@@ -328,6 +351,9 @@ describeDb("watch party stream and state across two instances", () => {
     hub = createMemoryHub();
     onTheWire = [];
     hub.listeners.add((frame) => onTheWire.push(frame));
+    accessGate.wait = null;
+    accessGate.calls = [];
+    accessGate.blockFrom = 0;
     vi.spyOn(console, "log").mockImplementation(() => {});
     await pools[0]!
       .getPool()
@@ -617,6 +643,86 @@ describeDb("watch party stream and state across two instances", () => {
         ended: true,
       });
       expect((await b.voice.getChannelLiveState(channel)).stream).toBeNull();
+    });
+
+    /**
+     * The catch-up a socket gets when it authenticates enumerates the live
+     * channels, then runs an access check per channel. That check is a round
+     * trip and a party can end inside it, which would hand the socket the
+     * snapshot's stream (a session that is over) or a bare `null` with no
+     * `ended`, which this PR's own client is written to ignore. The
+     * generation captured at enumeration and re-read at framing is what turns
+     * that into the authoritative end it is (`sendAllVoiceRosters`).
+     *
+     * HONEST ABOUT WHAT IT PINS: the stop is made to land while the catch-up
+     * is suspended inside an access check, but which of the catch-up's two
+     * checks for this channel it lands in is not forced, so this is an
+     * end-to-end invariant ("a socket is never left holding a session that
+     * has ended") rather than a pin on that one interleaving. The invariant
+     * is the part that mattered on 2026-09-14.
+     */
+    it("a stream that ends between enumeration and framing is sent as ended, not as silence", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const host = await join(a, randomUUID(), channel);
+      await setSharing(a, host, true);
+      await waitFor(
+        () => onTheWire.some((f) => f.topic === "voice.live"),
+        "the relay on the wire",
+      );
+      for (let i = 0; i < 10; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(
+        (await b.voice.getChannelLiveState(channel)).stream?.presenterPeerId,
+      ).toBe(host.peerId);
+
+      const startedAt = (await b.voice.getChannelLiveState(channel)).stream!
+        .startedAt;
+
+      // `sendAllVoiceRosters` checks this channel twice: once for the room's
+      // roster, and once for the `channel-live` catch-up AFTER it has
+      // enumerated the live channels. Holding the SECOND one open is
+      // standing exactly inside the window.
+      let open = () => {};
+      accessGate.blockFrom = 2;
+      accessGate.wait = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const latecomer = recorder();
+      const userId = randomUUID();
+      b.sockets.setAuthenticatedSocket(latecomer.socket, asUser(userId));
+      // Started, NOT awaited: the catch-up enumerates, then blocks on the
+      // access check, and the stop lands while it is in there.
+      const catchUp = b.voice.sendAllVoiceRosters(
+        latecomer.socket,
+        asUser(userId),
+      );
+      await waitFor(
+        () => accessGate.calls.length >= 2,
+        "the catch-up to reach its access check",
+      );
+      a.bus.publishToCluster(a.voice.VOICE_LIVE_TOPIC, {
+        channelId: channel,
+        stream: null,
+        endsStartedAt: startedAt,
+        at: Date.now(),
+      });
+      open();
+      await catchUp;
+
+      // This socket is on B and authenticated, so the relay's own fan-out
+      // reaches it as well as the catch-up: what is asserted is that NOT ONE
+      // of the frames it received carries the session that has ended, and
+      // that it was told in as many words that there is nothing live. The
+      // snapshot's stream reaching it, with or without `ended`, is the defect.
+      const live = frames(latecomer, "channel-live").filter(
+        (f) => f.channelId === channel,
+      );
+      expect(live.length).toBeGreaterThan(0);
+      expect(live.filter((f) => f.stream !== null)).toHaveLength(0);
+      expect(live.some((f) => f.ended === true)).toBe(true);
     });
 
     it("bus off: nothing crosses, and A behaves exactly as today", async () => {

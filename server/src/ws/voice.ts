@@ -4608,27 +4608,51 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   // opening a channel without a seat know before anything changes. The
   // access check is the same one the roster above ran; a room with a stream
   // always has a roster, so this is usually a repeat of a query just made.
+  //
+  // THE AUDIENCE'S OWN ANSWER, never a query. This walk is over
+  // `hlsAudience.liveChannels()`, which is exactly the channels this process
+  // holds a stream for, so resolving would find it in memory anyway -- but it
+  // would also put a Postgres fallback one refactor away from a path that runs
+  // once per socket, and a reconnect storm after a deploy is hundreds of
+  // sockets in a few seconds (2026-09-12: 141 tabs pinned the pool).
+  // Discovery belongs to the paths a person triggers.
+  //
+  // THE ENUMERATION IS A SNAPSHOT AND THE ACCESS CHECK IS A ROUND TRIP, so a
+  // party can end (or restart as a new session) between the two. The
+  // generation moves on every authoritative change this process installs
+  // (`rememberChannelStream`), so a generation that moved is this process
+  // having learned something newer than the snapshot: re-read it, and say
+  // `ended` rather than shipping a session that is over or an unknown null
+  // the client is now written to ignore.
+  const live = hlsAudience.liveChannels().map((channelId) => ({
+    channelId,
+    stream: hlsAudience.stream(channelId),
+    generation: streamGeneration.get(channelId) ?? 0,
+  }));
   await Promise.all(
-    hlsAudience.liveChannels().map(async (channelId) => {
+    live.map(async (entry) => {
       try {
-        if (!(await canAccessChannelForRoster(channelId, user.id))) {
+        if (!(await canAccessChannelForRoster(entry.channelId, user.id))) {
           return;
         }
       } catch (error) {
         console.error("[voice] channel-live membership check failed:", error);
         return;
       }
-      // THE AUDIENCE'S OWN ANSWER, never a query. This walk is over
-      // `hlsAudience.liveChannels()`, which is exactly the channels this
-      // process holds a stream for, so resolving would find it in memory
-      // anyway -- but it would also put a Postgres fallback one refactor away
-      // from a path that runs once per socket, and a reconnect storm after a
-      // deploy is hundreds of sockets in a few seconds (2026-09-12: 141 tabs
-      // pinned the pool). Discovery belongs to the paths a person triggers.
-      const stream = hlsAudience.stream(channelId);
+      const moved =
+        (streamGeneration.get(entry.channelId) ?? 0) !== entry.generation;
+      const stream = moved
+        ? hlsAudience.stream(entry.channelId)
+        : entry.stream;
       send(
         socket,
-        channelLiveFrameWith(channelId, user.id, stream, stream !== null),
+        // A null this process installed itself is an answer, not silence.
+        channelLiveFrameWith(
+          entry.channelId,
+          user.id,
+          stream,
+          stream !== null || moved,
+        ),
       );
       hlsAudienceFramesSent.frames += 1;
     }),
