@@ -147,14 +147,12 @@ if [ -n "$SOURCE_FILE" ] && [ ! -f "$SOURCE_FILE" ]; then
   echo "[bench] ERROR: --source-file $SOURCE_FILE does not exist" >&2
   exit 1
 fi
-if [ -n "$SOURCE_FILE" ]; then
-  case "$(basename "$SOURCE_FILE")" in
-    *:*)
-      echo "[bench] ERROR: --source-file's name '$(basename "$SOURCE_FILE")' contains a colon, which docker's -v host:container[:mode] syntax cannot represent. Rename the file, or point --source-file at a colon-free symlink to it." >&2
-      exit 1
-      ;;
-  esac
-fi
+# The colon-in-filename check that used to live here moved into
+# validate_env, gated on the resolved limiter actually being docker: a
+# colon is a perfectly ordinary filename character for taskset/none, which
+# exec ffmpeg directly and never build a docker -v spec, so rejecting it
+# unconditionally refused valid input on those paths for a Docker-only
+# restriction.
 
 # The path build_leg_cmd actually puts on ffmpeg's command line. Equal to
 # SOURCE_FILE everywhere except inside run_profile_docker, which bind-mounts
@@ -226,6 +224,13 @@ validate_env() {
         ok=0
       elif ! docker info >/dev/null 2>&1; then
         log "limiter=docker but the docker daemon is not reachable (docker info failed)."
+        ok=0
+      elif [ -n "$SOURCE_FILE" ] && case "$(basename "$SOURCE_FILE")" in *:*) true ;; *) false ;; esac; then
+        # docker's -v host:container[:mode] syntax has no escape for a
+        # colon inside the host path. Only enforced for this limiter: a
+        # colon is an ordinary filename character for taskset/none, which
+        # exec ffmpeg directly and never build a -v spec.
+        log "--source-file's name '$(basename "$SOURCE_FILE")' contains a colon, which docker's -v syntax cannot represent under --limiter docker. Rename the file, point at a colon-free symlink, or use --limiter taskset/none instead."
         ok=0
       elif [ "$DRY_RUN" -eq 0 ]; then
         # Warm the image up front, outside any profile's timing window -- a
