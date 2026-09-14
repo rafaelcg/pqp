@@ -23,6 +23,7 @@ import {
 import { randomInt } from "node:crypto";
 import type { PoolClient } from "pg";
 import { getPool, type DbMessage, type DbUser } from "../db.js";
+import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { deleteObject } from "../lib/s3.js";
 import {
   claimAttachments,
@@ -270,6 +271,31 @@ async function hydrate(
   };
 }
 
+/**
+ * The read a client makes every time a channel is opened or reloaded, and
+ * the one a reload storm repeats identically hundreds of times: no cursor,
+ * viewer-independent (`viewerId` only affects `hydrate`'s per-viewer shaping,
+ * called below on the shared result). `MESSAGES_LATEST_TTL_MS` matches
+ * `read-cache.ts`'s default; named here rather than passed as a literal so
+ * `invalidateLatestMessages` below documents where it comes from.
+ */
+const MESSAGES_LATEST_TTL_MS = 2_000;
+
+function latestMessagesCacheKey(channelId: string, limit: number): string {
+  return `messages:latest:${channelId}:${limit}`;
+}
+
+/**
+ * Drop the cached latest-page rows for a channel, at every page size a
+ * client might have asked for. Called on every write that changes what the
+ * latest page contains: a new message, an edit (the cached rows carry the
+ * body), a delete, or a bulk delete/purge. The prefix has no trailing limit,
+ * so `invalidate` drops all of them in one call.
+ */
+export function invalidateLatestMessages(channelId: string): void {
+  invalidateReadCache(`messages:latest:${channelId}:`);
+}
+
 export async function listMessages(
   channelId: string,
   options: ListMessagesOptions = {},
@@ -323,8 +349,18 @@ export async function listMessages(
     return hydrate(page.rows.reverse(), page.overflow, true, viewerId);
   }
 
-  const page = await keysetPage(channelId, limit);
-  return hydrate(page.rows.reverse(), page.overflow, false, viewerId);
+  // The only branch that is identical for every viewer with access — no
+  // cursor means "the latest page", and nothing in `keysetPage`'s query
+  // depends on who is asking. Cached before `hydrate`'s per-viewer shaping
+  // (blocked authors, per-viewer reaction/poll state), which still runs on
+  // every call, cached or not. `page.rows` is shared across callers when
+  // this is a cache hit, so it is copied before `.reverse()` mutates it.
+  const page = await coalesce(
+    latestMessagesCacheKey(channelId, limit),
+    MESSAGES_LATEST_TTL_MS,
+    () => keysetPage(channelId, limit),
+  );
+  return hydrate([...page.rows].reverse(), page.overflow, false, viewerId);
 }
 
 /**
@@ -658,6 +694,7 @@ export async function createMessage(
     );
 
     await client.query("COMMIT");
+    invalidateLatestMessages(channelId);
 
     const polls = interactive?.poll
       ? await listPollsForMessages([message.id], author.id)
@@ -719,6 +756,9 @@ export async function updateMessageBody(
   if (!message) {
     return null;
   }
+  // The edited body is inside the cached latest-page rows, so a stale cache
+  // would keep serving the pre-edit text.
+  invalidateLatestMessages(message.channel_id);
 
   await getPool().query(`DELETE FROM message_mentions WHERE message_id = $1`, [
     messageId,
@@ -750,6 +790,16 @@ export async function updateMessageBody(
     listThreadsForMessages([messageId]),
     listPollsForMessages([messageId]),
   ]);
+  // Invalidated again now that every write this edit makes has landed
+  // (mentions included), on top of the call right after the UPDATE above.
+  // `read-cache.ts`'s `coalesce` already refuses to let a load that started
+  // before an `invalidate()` write its answer back over a fresher one (the
+  // "still ours" identity guard), so this second call is not closing a gap
+  // that fix leaves open — it is a second, independent line of defense
+  // against a mistake in that guard, cheap enough (one key-prefix scan over
+  // a capped map) to keep even though it should never do anything the first
+  // call didn't already.
+  invalidateLatestMessages(message.channel_id);
   return {
     ...message,
     reactions: reactions.get(messageId) ?? [],
@@ -770,12 +820,15 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
     [messageId],
   );
 
-  const result = await getPool().query(`DELETE FROM messages WHERE id = $1`, [
-    messageId,
-  ]);
-  const deleted = (result.rowCount ?? 0) > 0;
+  const result = await getPool().query<{ channel_id: string }>(
+    `DELETE FROM messages WHERE id = $1 RETURNING channel_id`,
+    [messageId],
+  );
+  const deletedRow = result.rows[0];
+  const deleted = deletedRow !== undefined;
 
   if (deleted) {
+    invalidateLatestMessages(deletedRow.channel_id);
     sweepAttachmentObjects(attached.rows.map((row) => row.storage_key));
   }
 
@@ -873,6 +926,7 @@ export async function deleteMessagesBulk(
   const deleted = result.rows.map((row) => row.id);
 
   if (deleted.length > 0) {
+    invalidateLatestMessages(channelId);
     sweepAttachmentObjects(attached.rows.map((row) => row.storage_key));
   }
 

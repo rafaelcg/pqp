@@ -722,6 +722,29 @@ The client half of the same bug is in the iOS app (#411) and only reaches
 people who update. This switch reaches every build already on a phone, which
 is the reason it exists.
 
+### Read cache
+
+`GET /api/admin/metrics` carries a `readCache` block (`server/src/lib/read-cache.ts`,
+polled, not logged, same as `dbTx` next to it): `hits`, `misses`, `coalesced`,
+`staleServed` and `size`, cumulative since boot. It exists for the same reason
+`dbTx.byPath` does — the 2026-09-12 postmortem (A2), where 141 reconnecting
+tabs each asked Postgres for the same channel's latest message page, the same
+server's channel list, and the same channel's watch-party state, and the pool
+queued 79 of them. `coalesced` is the number that matters during a reload
+storm: it is the count of callers who arrived while an identical query was
+already running and shared its answer instead of starting a second one, so it
+should jump exactly when a room full of people reconnects at once, and sit
+near zero the rest of the time. `hits` is a request answered from an
+unexpired entry with no query at all; `staleServed` is one answered from an
+entry past its TTL but still inside its stale-while-revalidate window (also
+no query, but a background refresh was kicked off); `misses` is every actual
+Postgres round trip this cache issued. `size` is bounded by the module's 5k-key
+LRU cap and is not itself a health signal. `READ_CACHE=off` (or `false`/`0`)
+is the rollback switch — with it set, `misses` grows to match every call and
+the other three stay at zero, which is the same "did the flag actually take"
+check pitfall 12 in `CLAUDE.md` describes for the roster delta counter: read
+the counter that proves the code path ran, not just that the flag is set.
+
 ### Adding a panel
 
 1. Explore, datasource `grafanacloud-logs`, get the query right there first.
