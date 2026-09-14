@@ -4519,33 +4519,51 @@ function MainAppContent({
   }
 
   /**
-   * `Entrar no ar`. §3.4's order: the player already stops itself (the HLS
-   * player watches for this browser appearing in its own `guests.onAir` and
-   * pauses), so what is left here is mic/camera then the room, and only once
-   * the room actually has the guest does the server hear about it — a failed
-   * `getUserMedia` must never claim a slot with nobody speaking into it.
+   * `Entrar no ar`. THE SERVER SAYS YES FIRST, THEN THE ROOM. `mayGoOnAir`
+   * (both the client's read of it and `join-voice-room`'s own check) only
+   * lets an ACCEPTED guest in — `accepted_at IS NOT NULL` — and the guest
+   * `join` HTTP action is the one write that sets it, inside the transaction
+   * that also enforces `WATCH_PARTY_MAX_GUESTS`. Calling `voice.join` before
+   * that action lands asks the room to seat somebody the server does not yet
+   * consider a guest, which it correctly refuses
+   * (`voice.watchPartySeatRefused`) — every real join through this path used
+   * to fail invisibly on the very race it was written to handle (the
+   * invitation confirmed a beat after the room was asked for). So: the HTTP
+   * `join` first, which is also where the invitation-expired/cap-full errors
+   * surface with nobody's microphone open yet; only once the server has
+   * actually accepted this browser does it ask for the room.
    *
-   * ROLLED BACK ON EITHER FAILURE. A `voice.join` that throws never reaches
-   * the server at all — nothing to roll back. A `join` action that fails
-   * AFTER the room join succeeded (the invitation expired, the cap filled in
-   * the meantime) leaves this browser connected and possibly transmitting
-   * with no guest state behind it, so that path leaves the room again before
-   * the error is re-thrown to the caller (the invite dialog keeps itself
-   * open on a failure it is told about).
+   * ROLLED BACK ON EITHER FAILURE. A `join` action that throws never reaches
+   * `voice.join` at all — nothing to roll back. A `voice.join` that fails
+   * AFTER the server accepted this guest (mic/camera refused, a room error)
+   * leaves the row `accepted_at`-set with nobody connected to it, so that
+   * path calls the guest `leave` action to undo it, best-effort, before the
+   * original error is re-thrown to the caller (the invite dialog keeps
+   * itself open on a failure it is told about). A `leave` that ALSO fails
+   * here is not silently dropped: the guest's own next disconnect and the
+   * ordinary voice-seat reconciliation still clear a row nobody is holding,
+   * so this is a UX rollback, not the only backstop.
    */
   async function handleWatchPartyGuestGoOnAir(channelId: string) {
-    voiceServerIdRef.current = selectedServerId;
-    await voice.join(channelId, {
-      inputDeviceId: localSettings.inputDeviceId,
-      inputVolume: localSettings.inputVolume,
-      inputMode: localSettings.inputMode,
-      vadThreshold: localSettings.vadThreshold,
-      processing: localSettings.micProcessing,
-    });
+    await handleWatchPartyGuestAction({ action: "join" }, channelId);
     try {
-      await handleWatchPartyGuestAction({ action: "join" }, channelId);
+      voiceServerIdRef.current = selectedServerId;
+      await voice.join(channelId, {
+        inputDeviceId: localSettings.inputDeviceId,
+        inputVolume: localSettings.inputVolume,
+        inputMode: localSettings.inputMode,
+        vadThreshold: localSettings.vadThreshold,
+        processing: localSettings.micProcessing,
+      });
     } catch (err) {
-      voice.leave();
+      try {
+        await handleWatchPartyGuestAction({ action: "leave" }, channelId);
+      } catch (rollbackErr) {
+        console.error(
+          "[watch-party] could not roll back an accepted guest slot after voice.join failed:",
+          rollbackErr,
+        );
+      }
       throw err;
     }
   }
@@ -6770,11 +6788,15 @@ function MainAppContent({
             cameraOn={voiceState.isCameraOn}
             onToggleMic={() => voice.toggleMute()}
             onToggleCamera={() => void voice.toggleCamera()}
+            // THE PROMISE GOES THROUGH UNCAUGHT. The overlay's own callers
+            // decide how to react to a failure now: `decline` rolls its
+            // dialog back open, everything else logs through its own
+            // `fireGuestAction` wrapper. Catching and swallowing it here,
+            // as this used to, is exactly what made a failed decline
+            // indistinguishable from a successful one three lines up the
+            // call stack.
             onGuestAction={(action) =>
-              handleWatchPartyGuestAction(action, selectedChannel.id).catch(
-                (err) =>
-                  console.warn("[watch-party] guest action failed", err),
-              )
+              handleWatchPartyGuestAction(action, selectedChannel.id)
             }
             onGoOnAir={() => handleWatchPartyGuestGoOnAir(selectedChannel.id)}
             onGoOffAir={() => handleWatchPartyGuestGoOffAir(selectedChannel.id)}

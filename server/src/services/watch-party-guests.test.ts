@@ -1,6 +1,8 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
+import type { DbUser } from "../db.js";
 
 /**
  * CONVIDADOS: who may request, accept, invite, remove, and the cap.
@@ -44,6 +46,10 @@ const { createServer: createChatServer, createChannel } = await import(
 const { createRole, assignRole } = await import("./roles.js");
 const { WATCH_PARTY_MAX_GUESTS } = await import("@pqp/shared");
 const { Permission } = await import("@pqp/shared");
+const { setAuthenticatedSocket, deleteAuthenticatedSocket } = await import(
+  "../ws/sockets.js"
+);
+type FakeSocket = { readyState: number; send: (data: string) => void };
 
 let httpServer: Server;
 let baseUrl: string;
@@ -90,6 +96,12 @@ interface PartyBody {
     requestCount: number;
     requested: boolean;
     position: number | null;
+  };
+  /** DEPRECATED compat mirror -- see `legacyWatchPartyStageOf`. */
+  stage: {
+    invited: Person[];
+    hands: Person[];
+    handRaised: boolean;
   };
 }
 
@@ -414,5 +426,100 @@ describeDb("watch party guests", () => {
       `/api/channels/${channelId}/watch-party`,
     );
     expect(read.body.party?.options.guests).toBe("request");
+  });
+
+  // ------------------------------------------------------ legacy compat
+
+  it("the deprecated `stage.invited` mirror still carries an accepted guest", async () => {
+    // `watch-party-panel.tsx` (frozen ahead of #538) reads `party.stage.invited`
+    // to decide whether it draws "Entrar no palco"; if this ever goes back to
+    // being hardcoded empty, that button silently stops appearing for anyone
+    // the host actually brought up.
+    const party = await liveParty({ guests: "invite" });
+    expect(
+      (await guests(host, party.id, { action: "invite", userId: viewer.id }))
+        .status,
+    ).toBe(200);
+    const joined = await guests(viewer, party.id, { action: "join" });
+    expect(joined.status).toBe(200);
+    expect(joined.body.party?.stage.invited.map((p) => p.userId)).toEqual([
+      viewer.id,
+    ]);
+  });
+
+  it("the deprecated `stage.hands`/`handRaised` mirror the request queue", async () => {
+    const requestChannel = await freshChannel();
+    const party = await liveParty({ guests: "request" }, requestChannel);
+    const requested = await guests(viewer2, party.id, { action: "request" });
+    expect(requested.status).toBe(200);
+    // The requester's own copy: `handRaised` true, and they are in `hands`
+    // (host/co-host visibility does not apply to one's own row).
+    expect(requested.body.party?.stage.handRaised).toBe(true);
+    // The host's copy: the same row, from the other side.
+    const hostView = await call<{ party: PartyBody }>(
+      host,
+      "GET",
+      `/api/channels/${requestChannel}/watch-party`,
+    );
+    expect(hostView.status).toBe(200);
+    expect(hostView.body.party?.stage.hands.map((p) => p.userId)).toContain(
+      viewer2.id,
+    );
+  });
+
+  it("`raise`/`lower` (a stale tab's request/withdraw) still work on the same route", async () => {
+    // §2.3: `raiseHand` is gone from the schema, and `raise`/`lower` are gone
+    // from the action vocabulary, but `watch-party-panel.tsx` still sends
+    // them (it is frozen ahead of #538) and this route is the only door a
+    // stale tab has. They must keep meaning exactly `request`/`withdraw`.
+    const party = await liveParty({ guests: "request" });
+    const raised = await guests(viewer, party.id, { action: "raise" });
+    expect(raised.status).toBe(200);
+    expect(raised.body.party?.guests.requested).toBe(true);
+    expect(raised.body.party?.stage.handRaised).toBe(true);
+
+    const lowered = await guests(viewer, party.id, { action: "lower" });
+    expect(lowered.status).toBe(200);
+    expect(lowered.body.party?.guests.requested).toBe(false);
+  });
+
+  // ------------------------------------------------------------ the wire
+
+  it("broadcasts the request queue and the accepted guest to a DIFFERENT socket, not just the actor", async () => {
+    // THE BUG THIS PINS (2026-09-14): `broadcastWatchParty` called
+    // `mapWatchParty` with no `guests` argument at all, so every socket but
+    // the actor's own HTTP response saw an empty queue and an empty stage
+    // until their own next unrelated action refreshed it. The actor always
+    // sees their own change correctly (the HTTP response, asserted by every
+    // other test in this file); only a SECOND, uninvolved socket proves the
+    // fan-out itself carries the state.
+    const party = await liveParty({ guests: "request" });
+    const sent: unknown[] = [];
+    const fakeHostSocket: FakeSocket = {
+      readyState: 1,
+      send: (data: string) => sent.push(JSON.parse(data)),
+    };
+    setAuthenticatedSocket(
+      fakeHostSocket as unknown as WebSocket,
+      host as unknown as DbUser,
+      [],
+    );
+    try {
+      const requested = await guests(viewer, party.id, { action: "request" });
+      expect(requested.status).toBe(200);
+      // Give the fire-and-forget `void broadcastWatchParty(...)` its turn.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const updates = sent.filter(
+        (frame): frame is { type: string; party: PartyBody | null } =>
+          (frame as { type?: string }).type === "watch-party-update",
+      );
+      expect(updates.length).toBeGreaterThan(0);
+      const last = updates[updates.length - 1]!.party;
+      expect(last?.guests.requests.map((p) => p.userId)).toEqual([viewer.id]);
+      expect(last?.guests.requestCount).toBe(1);
+      expect(last?.stage.hands.map((p) => p.userId)).toEqual([viewer.id]);
+    } finally {
+      deleteAuthenticatedSocket(fakeHostSocket as unknown as WebSocket);
+    }
   });
 });

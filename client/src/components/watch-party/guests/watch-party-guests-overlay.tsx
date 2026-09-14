@@ -54,8 +54,13 @@ export function WatchPartyGuestsOverlay({
   cameraOn: boolean;
   onToggleMic: () => void;
   onToggleCamera: () => void;
-  /** Every action but `join`/`leave`, which have their own dedicated flow (§3.4/§3.6). */
-  onGuestAction: (action: GuestAction) => void;
+  /**
+   * Every action but `join`/`leave`, which have their own dedicated flow
+   * (§3.4/§3.6). Returns the request's own promise so a caller that needs to
+   * know whether it actually landed -- `decline` below, which hides a whole
+   * dialog on the strength of it -- can await it rather than guess.
+   */
+  onGuestAction: (action: GuestAction) => Promise<void>;
   /** `join`: stop the player, ask mic/camera, join the room, THEN confirm. */
   onGoOnAir: () => Promise<void>;
   /** `leave`: confirm, then leave the room and resume the player. */
@@ -112,15 +117,38 @@ export function WatchPartyGuestsOverlay({
     }
   }
 
-  function decline() {
+  async function decline() {
+    // OPTIMISTIC, WITH A ROLLBACK. Hiding the dialog before the request is
+    // known to succeed used to be permanent: a dropped connection or a
+    // timeout on the `leave` call left the dialog gone from this screen
+    // while the invite row was still very much there, with no way back to
+    // it short of a reload. Setting `answered` back to `false` on failure
+    // un-hides it, which `isInvited` still gates correctly because the row
+    // never moved.
     setAnswered(true);
-    // `leave`, not `decline`: `decline` is the host's action on a REQUEST
-    // (§5.8), gated on `manageGuests`, and takes the OTHER person's id — an
-    // invited person calling it on themselves would 403. `leaveWatchPartyGuestSlot`
-    // deletes the invite row whether it is pending (this case) or already
-    // accepted (on-air leaving), which is exactly "I don't want this any
-    // more" for both. Farol suggested `decline` here; that would break.
-    onGuestAction({ action: "leave" });
+    try {
+      // `leave`, not `decline`: `decline` is the host's action on a REQUEST
+      // (§5.8), gated on `manageGuests`, and takes the OTHER person's id —
+      // an invited person calling it on themselves would 403.
+      // `leaveWatchPartyGuestSlot` deletes the invite row whether it is
+      // pending (this case) or already accepted (on-air leaving), which is
+      // exactly "I don't want this any more" for both. Farol suggested
+      // `decline` here; that would break.
+      await onGuestAction({ action: "leave" });
+    } catch (err) {
+      console.warn("[watch-party] decline failed, invitation still stands", err);
+      setAnswered(false);
+    }
+  }
+
+  /** Fire-and-forget guest actions that carry no local UI state of their own
+   *  to roll back -- the party frame itself is what confirms or refutes them
+   *  on the next `watch-party-update`, so a failure is logged rather than
+   *  silently dropped and nothing here needs to guess at recovery. */
+  function fireGuestAction(action: GuestAction) {
+    onGuestAction(action).catch((err) =>
+      console.warn("[watch-party] guest action failed", err),
+    );
   }
 
   return (
@@ -161,8 +189,8 @@ export function WatchPartyGuestsOverlay({
           requested={guests.requested}
           position={guests.position}
           cooldownMinutesLeft={null}
-          onRequest={() => onGuestAction({ action: "request" })}
-          onWithdraw={() => onGuestAction({ action: "withdraw" })}
+          onRequest={() => fireGuestAction({ action: "request" })}
+          onWithdraw={() => fireGuestAction({ action: "withdraw" })}
         />
       )}
 
@@ -190,10 +218,10 @@ export function WatchPartyGuestsOverlay({
             requests={guests.requests}
             requestCount={guests.requestCount}
             candidates={candidates}
-            onAccept={(userId) => onGuestAction({ action: "accept", userId })}
-            onDecline={(userId) => onGuestAction({ action: "decline", userId })}
-            onRemove={(userId) => onGuestAction({ action: "remove", userId })}
-            onInvite={(userId) => onGuestAction({ action: "invite", userId })}
+            onAccept={(userId) => fireGuestAction({ action: "accept", userId })}
+            onDecline={(userId) => fireGuestAction({ action: "decline", userId })}
+            onRemove={(userId) => fireGuestAction({ action: "remove", userId })}
+            onInvite={(userId) => fireGuestAction({ action: "invite", userId })}
           />
         </>
       )}

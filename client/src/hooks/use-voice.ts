@@ -2852,6 +2852,21 @@ export function createVoiceController(transport: RealtimeTransport) {
    */
   let voiceTrackAvailable = false;
   /**
+   * `setMicInStream`'s own generation counter, the same idiom as
+   * `cameraCapGeneration`/`voiceTrackGeneration` above: the function awaits a
+   * network round trip (`refreshVoiceTrackAvailable`) BEFORE applying its
+   * `on` argument to `state.isSharingMic` and the running mix, and that
+   * argument is a closure value captured at call time, not a re-read of
+   * `state.micInStream`. Two toggles in flight at once (on, then off, before
+   * the first's await resolves) can therefore land out of order and apply
+   * the OLDER call's `on` last, leaving the mix and the publication carrying
+   * a value the person's own last click already reversed. Bumped at the top
+   * of every call; a call whose generation has moved on by the time its
+   * await resolves is superseded and applies nothing further, exactly the
+   * `cameraCapGeneration` pattern.
+   */
+  let micInStreamGeneration = 0;
+  /**
    * Refresh `voiceTrackAvailable` from the server. Deployment-wide, not
    * per-server, the same scope `publishMicArchiveIfRecording` already checks
    * `micArchive` at — `loadLiveHlsConfig()` with no server id.
@@ -5083,12 +5098,22 @@ export function createVoiceController(transport: RealtimeTransport) {
      * next one.
      */
     async setMicInStream(on: boolean) {
+      const generation = ++micInStreamGeneration;
       saveMicInStream(on);
       state.micInStream = on;
       // Freshest answer before `micForScreenMix()` is consulted below: a
       // stale "separada" from a previous, capable server must never pull the
       // mic out of the film on one that cannot carry it any other way.
       await refreshVoiceTrackAvailable();
+      if (generation !== micInStreamGeneration) {
+        // A later toggle already reset `state.micInStream`/`state.isSharingMic`
+        // to what the person actually wants now; applying this call's OWN
+        // captured `on` here would overwrite that with a stale answer. The
+        // newer call either already applied it (it started after this one's
+        // `state.micInStream = on` above) or is itself still in flight and
+        // will apply it when its own turn comes.
+        return;
+      }
       if (state.status === "idle") {
         // Left mid-await: nothing left to apply this to.
         return;

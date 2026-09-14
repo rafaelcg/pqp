@@ -450,22 +450,48 @@ export async function presentWatchParty(
   ) {
     return null;
   }
+  const guests = await presentGuests(row.id, role, viewer.userId);
   return mapWatchParty(
     row,
     list,
     role,
     await isReminding(row.id, viewer.userId),
-    // DEPRECATED, and deliberately trivial: the stage this described no
-    // longer exists (`docs/plans/WATCH_PARTY_GUESTS.md`), so nothing reads
-    // the old tables for it any more. Kept only so a stale tab or a native
-    // app that has not shipped `guests` yet parses a party it understands.
-    { invited: [], hands: [], handRaised: false },
-    await presentGuests(row.id, role, viewer.userId),
+    legacyWatchPartyStageOf(guests),
+    guests,
   );
 }
 
 /**
- * Convidados, as this person may see them.
+ * DEPRECATED, but genuinely populated for one release: the schema comment on
+ * `stage` promises "an accepted guest still shows up here too", and this is
+ * that promise kept rather than stated. The old model had no accept step (an
+ * invite WAS a seat), so the compat reading of "invited" is the new model's
+ * `onAir` (accepted_at IS NOT NULL) -- exactly what `watch-party-panel.tsx`'s
+ * `isInvited` needs to draw "Entrar no palco" for someone the host actually
+ * brought up. `hands`/`handRaised` are the same borrow of the old raise-hand
+ * vocabulary for the new request queue. Kept only so a stale tab or a native
+ * app that has not shipped `guests` yet parses a party it understands;
+ * delete alongside `watchPartyStageSchema` once #538 lands.
+ */
+export function legacyWatchPartyStageOf(guests: WatchPartyGuests): WatchPartyStage {
+  return {
+    invited: guests.onAir,
+    hands: guests.requests,
+    handRaised: guests.requested,
+  };
+}
+
+/**
+ * Convidados, as this person may see them -- the pure, no-query half of
+ * `presentGuests`, split out so a fan-out to N recipients (`broadcastWatchParty`)
+ * can run the two queries in `loadWatchPartyGuestRows` ONCE per mutation and
+ * reshape the same rows per viewer, rather than once per socket. Every reader
+ * of party.guests (the HTTP response to the actor, the WS broadcast to
+ * everyone else, `listActiveWatchPartiesForServer`'s sidebar block) must go
+ * through this one function, or a viewer's copy can silently disagree with
+ * the actor's -- which is exactly the shape of bug this replaced (the guest
+ * broadcast used to call `mapWatchParty` with no guests argument at all,
+ * so every socket but the actor's own HTTP response saw an empty queue).
  *
  * `onAir` is public: they are about to be audible, and a viewer wondering why
  * a stranger is talking deserves the answer. `invited` and `requests` are
@@ -476,14 +502,16 @@ export async function presentWatchParty(
  * (`docs/plans/WATCH_PARTY_GUESTS.md` §5.8, closing paragraph). Everyone is
  * told their own `requested`/`position`, same reasoning as the old hand.
  */
-async function presentGuests(
-  sessionId: string,
+export function shapeWatchPartyGuests(
+  rows: {
+    onAir: readonly WatchPartyGuestRow[];
+    invited: readonly WatchPartyGuestRow[];
+    requests: readonly WatchPartyGuestRow[];
+  },
   role: WatchPartyRole,
   userId: string,
-): Promise<WatchPartyGuests> {
-  const { onAir, invited, requests } = await loadWatchPartyGuestRows(
-    sessionId,
-  );
+): WatchPartyGuests {
+  const { onAir, invited, requests } = rows;
   const runsTheParty = role === "host" || role === "cohost";
   const person = (r: {
     user_id: string;
@@ -517,6 +545,15 @@ async function presentGuests(
     requested: requests.some((r) => r.user_id === userId),
     position,
   };
+}
+
+async function presentGuests(
+  sessionId: string,
+  role: WatchPartyRole,
+  userId: string,
+): Promise<WatchPartyGuests> {
+  const rows = await loadWatchPartyGuestRows(sessionId);
+  return shapeWatchPartyGuests(rows, role, userId);
 }
 
 /**

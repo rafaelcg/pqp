@@ -1891,6 +1891,12 @@ test("a party takes no requests until Convidados is on, and request-accept-join 
     await host
       .locator('[data-watch-party-guests-option="request"] input')
       .click();
+    // Close the drawer: the dock control it sits on top of is behind it,
+    // and a covered element never becomes clickable.
+    await host.keyboard.press("Escape");
+    await expect(host.getByTestId("watch-party-options-drawer")).toHaveCount(
+      0,
+    );
 
     // THE GUEST'S PAGE HAS NOT RELOADED. This appearing is the PATCH, the
     // broadcast and the affordance, in a client that was already open.
@@ -1918,10 +1924,10 @@ test("a party takes no requests until Convidados is on, and request-accept-join 
     ).toBeVisible({ timeout: 20_000 });
     await guest.locator("[data-watch-party-guest-invite-accept]").click();
 
-    // THE GUEST HEARS "VOCÊ ESTÁ NO AR" — the on-air strip, in words, never
-    // colour alone (§6.2).
+    // THE GUEST HEARS "VOCÊ ESTÁ NO AR" ("YOU ARE ON AIR" in this suite's
+    // `?lang=en`) — the on-air strip, in words, never colour alone (§6.2).
     await expect(guest.locator("[data-watch-party-on-air-strip]")).toContainText(
-      "VOCÊ ESTÁ NO AR",
+      "YOU ARE ON AIR",
       { timeout: 20_000 },
     );
     expect(await gumCalls(guest)).toBeGreaterThan(0);
@@ -1946,7 +1952,6 @@ test("a viewer sees no request button unless Convidados is taking requests", asy
    * and the other two must never draw it, on or off camera.
    */
   const shared = await seedServer("wp-guests-off-host", "wp-guests-off-viewer");
-  const room = `/app/server/${shared.serverId}/channel/${shared.textChannelId}`;
 
   const offParty = await createParty(
     "wp-guests-off-host",
@@ -1954,6 +1959,9 @@ test("a viewer sees no request button unless Convidados is taking requests", asy
     "Sem convidados",
     { guests: "off" },
   );
+  // The server's one hidden party room, not the general text channel: the
+  // bar this test checks for only ever renders on the party's own channel.
+  const room = `/app/server/${shared.serverId}/channel/${offParty.channelId}`;
   await setPartyState("wp-guests-off-host", offParty.partyId, "live");
 
   const viewerClient = await secondClient(browser);
@@ -1986,6 +1994,72 @@ test("a viewer sees no request button unless Convidados is taking requests", asy
     ).toHaveCount(0);
   } finally {
     await viewerClient.context.close();
+  }
+});
+
+test("declining an invitation clears it, and the guest is offered it again on a fresh call up", async ({
+  page,
+  browser,
+}) => {
+  /**
+   * §3.4's "Agora não". `WatchPartyGuestsOverlay.decline` hides the dialog
+   * OPTIMISTICALLY, before the server confirms the `leave` request that
+   * actually clears the invite row -- this is the real request reaching a
+   * real server, so it proves the happy path lands (the row is genuinely
+   * gone, not just hidden on this one screen) rather than the rollback,
+   * which is a client-only concern with nothing on the wire to assert on a
+   * SUCCESSFUL call.
+   */
+  const shared = await seedServer("wp-decline-host", "wp-decline-guest");
+  const party = await createParty(
+    "wp-decline-host",
+    shared.serverId,
+    "Recuso",
+    { guests: "invite" },
+  );
+  await setPartyState("wp-decline-host", party.partyId, "live");
+  const room = `/app/server/${shared.serverId}/channel/${party.channelId}`;
+  const guestId = await materialiseAccount("wp-decline-guest");
+  await inviteToStage("wp-decline-host", party.partyId, guestId);
+
+  const host = page;
+  await openAs(host, room, "wp-decline-host");
+  await expect(host.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+
+  const guestClient = await secondClient(browser);
+  try {
+    const guest = guestClient.page;
+    await installGumCounter(guest);
+    await openAs(guest, room, "wp-decline-guest");
+    await expect(
+      guest.locator("[data-watch-party-guest-invite-dialog]"),
+    ).toBeVisible({ timeout: 20_000 });
+    await guest.locator("[data-watch-party-guest-invite-decline]").click();
+    await expect(
+      guest.locator("[data-watch-party-guest-invite-dialog]"),
+    ).toHaveCount(0);
+    // Never went on air: no microphone was ever opened for a declined call-up.
+    expect(await gumCalls(guest)).toBe(0);
+
+    // THE SERVER SIDE, not just this screen: the row is gone, so a fresh
+    // call-up dialogs again rather than silently doing nothing (which is
+    // what it would do if `decline` had only hidden the dialog locally
+    // while the invite row survived server-side).
+    await host.locator("[data-watch-party-guests-dock]").click();
+    await expect(host.locator("[data-watch-party-guest-panel]")).toBeVisible({
+      timeout: 20_000,
+    });
+    await host.locator("[data-watch-party-guest-invite-someone]").click();
+    await host.locator(`[data-watch-party-guest-invite="${guestId}"]`).click();
+    await host.keyboard.press("Escape");
+
+    await expect(
+      guest.locator("[data-watch-party-guest-invite-dialog]"),
+    ).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await guestClient.context.close();
   }
 });
 

@@ -1062,27 +1062,67 @@ export function isLiveWatchPartySurface(surface: WatchPartySurface): boolean {
 }
 
 /**
+ * `raise`/`lower` are gone from the ACTION VOCABULARY, not from the wire: a
+ * stale tab and `watch-party-panel.tsx` (frozen ahead of PR #538, and this
+ * PR was explicitly told not to touch it beyond a mount line) still send
+ * them. They meant exactly what `request`/`withdraw` mean now — a viewer
+ * asking on themselves, self-scoped, no `userId` — so this maps the name
+ * rather than the behaviour. Both contracts answer the same question the
+ * same way: a legacy `hosts_only`/`invited`-with-`raiseHand` row derives to
+ * `guests: "request"` (`deriveWatchPartyGuestsMode`), so the 403 a `request`
+ * gets when `guests !== "request"` lands exactly where the old floor check
+ * would have. Delete alongside `watchPartyStageRequestSchema` once #538's
+ * rewrite removes the call site.
+ */
+const LEGACY_STAGE_ACTION_ALIASES: Readonly<
+  Record<string, "request" | "withdraw">
+> = { raise: "request", lower: "withdraw" };
+
+function withLegacyStageActionAlias(raw: unknown): unknown {
+  if (
+    raw !== null &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    "action" in raw &&
+    typeof (raw as { action: unknown }).action === "string" &&
+    (raw as { action: string }).action in LEGACY_STAGE_ACTION_ALIASES
+  ) {
+    return {
+      ...(raw as Record<string, unknown>),
+      action:
+        LEGACY_STAGE_ACTION_ALIASES[(raw as { action: string }).action],
+    };
+  }
+  return raw;
+}
+
+/**
  * `POST /api/watch-parties/:id/guests` — `/stage` is kept as a URL alias for
- * one release (§5.8), same handler, same body. Eight actions:
+ * one release (§5.8), same handler, same body. Eight actions, plus the two
+ * legacy aliases above:
  *
  * Host/co-host, on somebody else: `invite` calls a person up (they still have
  * to `join`), `accept`/`decline` answer a request, `remove` takes an on-air
- * guest down. Viewer, on themselves only: `request` asks, `withdraw` gives up
- * asking. Invited person, on themselves: `join` accepts the call-up and goes
- * on air, `leave` goes off air. Following the rule this codebase keeps: your
- * own state rides a socket frame in general, but a watch party's stage is
- * small and host-moderated enough that every action here is one HTTP route,
- * same as the raise/invite/remove stage this replaces.
+ * guest down. Viewer, on themselves only: `request` (`raise`) asks,
+ * `withdraw` (`lower`) gives up asking. Invited person, on themselves: `join`
+ * accepts the call-up and goes on air, `leave` goes off air. Following the
+ * rule this codebase keeps: your own state rides a socket frame in general,
+ * but a watch party's stage is small and host-moderated enough that every
+ * action here is one HTTP route, same as the raise/invite/remove stage this
+ * replaces.
  */
-export const watchPartyGuestsRequestSchema = z.union([
-  z.object({
-    action: z.enum(["invite", "accept", "decline", "remove"]),
-    userId: z.string().uuid(),
-  }),
-  z.object({
-    action: z.enum(["request", "withdraw", "join", "leave"]),
-  }),
-]);
+export const watchPartyGuestsRequestSchema = z.preprocess(
+  withLegacyStageActionAlias,
+  z.union([
+    z.object({
+      action: z.enum(["invite", "accept", "decline", "remove"]),
+      userId: z.string().uuid(),
+    }),
+    z.object({
+      action: z.enum(["request", "withdraw", "join", "leave"]),
+    }),
+  ]),
+);
 
 export type WatchPartyGuestsRequest = z.infer<
   typeof watchPartyGuestsRequestSchema

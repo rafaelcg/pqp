@@ -385,6 +385,56 @@ describeDb("watch party options and the stage", () => {
     expect(party.options).toEqual(WATCH_PARTY_DEFAULT_OPTIONS);
   });
 
+  it("guests: off is byte-identical to a pre-Convidados party: no seat, no stage, no queue, anywhere", async () => {
+    // CONVIDADOS SHIPS DARK. `guests` defaults to `off` per party, and this
+    // is the acceptance criterion the plan's own QA list names first: "with
+    // guests: 'off', the wire is byte-for-byte what it is today". The
+    // options object is already pinned above; this is the OTHER two objects
+    // every response carries, `stage` and `guests`, which is where a
+    // Convidados regression would actually show up (a stray seat, a queue
+    // entry nobody asked for) — a party this fresh has touched none of the
+    // guest machinery at all, so both must be the empty shape and nothing
+    // else.
+    const party = await draft();
+    expect(party.stage).toEqual({
+      invited: [],
+      hands: [],
+      handRaised: false,
+    });
+    expect(party.guests).toEqual({
+      onAir: [],
+      invited: [],
+      requests: [],
+      requestCount: 0,
+      requested: false,
+      position: null,
+    });
+
+    // Going live changes nothing about this: an "off" party never seats
+    // anyone by construction (`mayGoOnAir`), so live is still the empty
+    // shape, not merely the draft default.
+    const live = await call<{ party: PartyBody }>(
+      host,
+      "POST",
+      `/api/watch-parties/${party.id}/state`,
+      { state: "live" },
+    );
+    expect(live.status).toBe(200);
+    expect(live.body.party.stage).toEqual({
+      invited: [],
+      hands: [],
+      handRaised: false,
+    });
+    expect(live.body.party.guests.onAir).toEqual([]);
+
+    // And the door itself: a plain viewer gets no seat on an "off" party,
+    // the exact rule this whole feature exists not to weaken.
+    const requestOnOff = await call(member, "POST", `/api/watch-parties/${party.id}/guests`, {
+      action: "request",
+    });
+    expect(requestOnOff.status).toBe(403);
+  });
+
   it("refuses options the client made up", async () => {
     // `open` was a real stage mode once. A client that never reloaded, or an
     // old mobile build, will still send it, and the failure has to be loud:

@@ -6,10 +6,13 @@ import {
 import {
   getWatchPartyRow,
   invalidateActiveWatchParty,
+  legacyWatchPartyStageOf,
   loadCohostRows,
+  loadWatchPartyGuestRows,
   mapWatchParty,
   markWatchPartyHostBack,
   markWatchPartyHostGone,
+  shapeWatchPartyGuests,
 } from "../services/watch-parties.js";
 import {
   invalidateWatchPartySeat,
@@ -124,6 +127,14 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
   const cohosts = await loadCohostRows(row.id).catch(() => []);
   const cohostIds = cohosts.map((c) => c.user_id);
   const cache: PermissionCache = new Map();
+  // ONE PAIR OF QUERIES FOR THE WHOLE FAN-OUT, not one per recipient: who is
+  // on air, invited or asking is the same two rows for every socket this
+  // broadcasts to, and only the PER-VIEWER SHAPE of it (`shapeWatchPartyGuests`,
+  // no query of its own) differs by role. Skipped for a terminal party, which
+  // sends `null` and needs no guests at all.
+  const guestRows = terminal
+    ? null
+    : await loadWatchPartyGuestRows(row.id).catch(() => null);
 
   const targets: { socket: import("ws").WebSocket; userId: string }[] = [];
   forEachAuthenticatedSocket((socket, user) => {
@@ -160,7 +171,27 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
         // concerned the party has never existed.
         continue;
       }
-      party = mapWatchParty(row, cohosts, role, false);
+      // BUG THIS FIXES (2026-09-14): this call used to pass no guests
+      // argument at all, so `mapWatchParty`'s default parameter
+      // (`WATCH_PARTY_EMPTY_GUESTS`) shipped to every socket on every
+      // mutation -- a request, an accept, a join. The ACTOR of a guest
+      // action saw their own change (the HTTP response uses
+      // `presentWatchParty`, which does this correctly), and everyone else
+      // watching the same party over the open socket saw an empty queue
+      // and an empty stage until their own next unrelated action refreshed
+      // it. "The audience finds out without reloading anything" was true
+      // for exactly one person per action: the one who took it.
+      const guests = guestRows
+        ? shapeWatchPartyGuests(guestRows, role, target.userId)
+        : undefined;
+      party = mapWatchParty(
+        row,
+        cohosts,
+        role,
+        false,
+        guests && legacyWatchPartyStageOf(guests),
+        guests,
+      );
     }
     if (party === null && !terminal) {
       continue;
