@@ -150,6 +150,17 @@ export interface ScreenCaptureIntent {
    * Only the two lines that would have called `getDisplayMedia` are skipped.
    */
   stream?: MediaStream;
+  /**
+   * Which watch party this go-live share belongs to (Farol, 2026-09-14).
+   * The gate this intent travels through can defer a share behind
+   * `HlsHostAckSheet`'s disclosure notice for as long as the host takes to
+   * read and confirm it, and the app's selected channel is free to change
+   * in that window. Carrying the id on the intent itself, rather than
+   * re-reading "whatever party is selected right now" when the deferred
+   * share finally resolves, is what keeps the eventual mic prompt pointed
+   * at the party that actually asked for it.
+   */
+  partyId?: string;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */

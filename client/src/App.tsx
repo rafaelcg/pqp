@@ -4347,14 +4347,18 @@ function MainAppContent({
    * started. Both routes call this now, so the prompt arms exactly once,
    * only on a share that genuinely went out, regardless of which one got
    * there.
+   *
+   * TAKES `partyId` RATHER THAN RE-READING `currentWatchParty()` (Farol,
+   * 2026-09-14, round two). The disclosure sheet can sit open for as long
+   * as a host takes to read it, and the selected channel is free to change
+   * in that window; resolving "the party" at completion time would arm the
+   * prompt for whatever party happens to be on screen when the sheet is
+   * confirmed, not the one that actually asked for the share. Both callers
+   * pass the id they captured when the share was FIRST requested.
    */
-  function finishWatchPartyGoLiveShare(wentOut: boolean) {
-    if (!wentOut) {
-      return;
-    }
-    const party = currentWatchParty();
-    if (party && voice.getState().isMuted) {
-      setMicPromptPartyId(party.id);
+  function finishWatchPartyGoLiveShare(partyId: string, wentOut: boolean) {
+    if (wentOut && voice.getState().isMuted) {
+      setMicPromptPartyId(partyId);
     }
   }
 
@@ -4411,9 +4415,10 @@ function MainAppContent({
     // cancelled the picker or had the OS refuse the capture still got "Ativar
     // o mic?" for a broadcast that never started. `finishWatchPartyGoLiveShare`
     // is also what the disclosure-sheet route below calls once IT knows the
-    // outcome, so the two routes end in the same transition.
-    const wentOut = await startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
-    finishWatchPartyGoLiveShare(wentOut);
+    // outcome, so the two routes end in the same transition; `partyId` rides
+    // on the intent so that route still has it after the sheet closes.
+    const wentOut = await startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream, partyId: party.id });
+    finishWatchPartyGoLiveShare(party.id, wentOut);
   }
 
   /**
@@ -8351,19 +8356,25 @@ function MainAppContent({
           // Same audio choice and capture intent the person asked for
           // before the sheet, through the same gate (now acknowledged).
           //
-          // ONLY A GO-LIVE SHARE FINISHES THE HANDOFF (Farol, 2026-09-14).
-          // `intent.stream` is the signal handed only by
-          // `handleWatchPartyGoLive` (an already-approved preview capture);
-          // every other caller through this same gate — the ordinary call
-          // share button, a mid-show reshare — has none, and must never pop
-          // the watch-party mic prompt on THEIR confirm.
-          const isGoLiveShare = pending.request.intent?.stream != null;
+          // ONLY A GO-LIVE SHARE FINISHES THE HANDOFF, AND FOR THE PARTY IT
+          // WAS ACTUALLY FOR (Farol, 2026-09-14, two rounds). `intent.stream`
+          // is the signal handed only by `handleWatchPartyGoLive` (an
+          // already-approved preview capture); every other caller through
+          // this same gate — the ordinary call share button, a mid-show
+          // reshare — has none, and must never pop the watch-party mic
+          // prompt on THEIR confirm. `intent.partyId` travels with it rather
+          // than reading `currentWatchParty()` here, because the sheet can
+          // sit open for as long as the host takes to read it and the
+          // selected channel is free to change in that window.
+          const goLivePartyId = pending.request.intent?.stream
+            ? pending.request.intent.partyId
+            : undefined;
           void startScreenShareGated(
             pending.request.audio,
             pending.request.intent,
           ).then((wentOut) => {
-            if (isGoLiveShare) {
-              finishWatchPartyGoLiveShare(wentOut);
+            if (goLivePartyId) {
+              finishWatchPartyGoLiveShare(goLivePartyId, wentOut);
             }
           });
         }}

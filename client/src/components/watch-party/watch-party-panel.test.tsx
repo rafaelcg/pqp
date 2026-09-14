@@ -741,7 +741,7 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
       source.indexOf("async function handleWatchPartyEnd"),
     );
     expect(goLive).toContain(
-      "startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream })",
+      "startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream, partyId: party.id })",
     );
     expect(goLive).toContain("startMuted: true");
     expect(goLive).not.toContain("getAudioTracks().length > 0");
@@ -749,12 +749,16 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
   });
 
   /**
-   * THE DISCLOSURE ROUTE (Farol, 2026-09-14). A go-live share can resolve
-   * two ways: at once, or after `HlsHostAckSheet`'s "you are responsible for
-   * what you transmit" sheet, for a host's first ever HLS-capable share. Both
-   * have to end in the same place — `finishWatchPartyGoLiveShare`, which is
-   * what arms the mic prompt — or a presenter who happens to hit the sheet on
-   * their very first watch party never gets asked to turn their mic on.
+   * THE DISCLOSURE ROUTE (Farol, 2026-09-14, two rounds). A go-live share
+   * can resolve two ways: at once, or after `HlsHostAckSheet`'s "you are
+   * responsible for what you transmit" sheet, for a host's first ever
+   * HLS-capable share. Both have to end in the same place —
+   * `finishWatchPartyGoLiveShare`, which is what arms the mic prompt — or a
+   * presenter who happens to hit the sheet on their very first watch party
+   * never gets asked to turn their mic on. And the disclosure route has to
+   * carry the party id it started with rather than reading whatever party
+   * is selected once the host finally confirms the sheet, which can be a
+   * different one if they navigated while it sat open.
    *
    * Source-scanned, like the sibling tests in this describe block: `App.tsx`
    * is not mounted in this suite.
@@ -769,19 +773,23 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
       source.indexOf("async function handleWatchPartyGoLive"),
       source.indexOf("async function handleWatchPartyReminder"),
     );
-    expect(goLive).toContain("finishWatchPartyGoLiveShare(wentOut)");
+    expect(goLive).toContain("finishWatchPartyGoLiveShare(party.id, wentOut)");
+    expect(goLive).toContain("partyId: party.id");
 
     const ackSheetStart = source.indexOf("<HlsHostAckSheet");
     const ackSheet = source.slice(
       ackSheetStart,
       source.indexOf("<ConfirmDialog", ackSheetStart),
     );
-    // Only a go-live share finishes the handoff: `intent.stream` is the
-    // signal `handleWatchPartyGoLive` alone hands the gate. An ordinary call
-    // share or a mid-show reshare stalled behind the same sheet must never
-    // pop the watch-party mic prompt on ITS confirm.
-    expect(ackSheet).toContain("intent?.stream != null");
-    expect(ackSheet).toContain("finishWatchPartyGoLiveShare(wentOut)");
+    // Only a go-live share finishes the handoff, and only for the party it
+    // was actually for: `intent.stream` is the signal `handleWatchPartyGoLive`
+    // alone hands the gate (an ordinary call share or a mid-show reshare
+    // stalled behind the same sheet has none and must never pop the
+    // watch-party mic prompt on ITS confirm), and `intent.partyId` — not
+    // `currentWatchParty()` — is what the deferred completion is armed with.
+    expect(ackSheet).toContain("intent?.stream");
+    expect(ackSheet).toContain("intent.partyId");
+    expect(ackSheet).toContain("finishWatchPartyGoLiveShare(goLivePartyId, wentOut)");
   });
 });
 
