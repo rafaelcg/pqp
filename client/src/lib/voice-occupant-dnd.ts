@@ -153,8 +153,47 @@ export function cloneVoiceOccupancy(
 }
 
 /**
+ * Which `VoiceParticipant` objects are this client's own guess rather than
+ * the server's word — a side table, not a field on the object, so nothing
+ * about the shape callers pass around or the wire schema in `@pqp/shared`
+ * has to know this exists. `use-voice.ts`'s roster-delta merge is the one
+ * reader: a fresh `joined`/`updated` for a user id may only replace an
+ * EXISTING same-user entry under a different peer id when that entry is
+ * marked here. An entry the server itself sent — including a second real
+ * session of the same person, two tabs or a phone and a desktop open at
+ * once, which genuinely is two different peer ids under one user id — is
+ * never in this set and is therefore never touched.
+ */
+const optimisticEntries = new WeakSet<VoiceParticipant>();
+
+/** True only for an entry `moveOccupantSeat` invented, or carried forward from one. */
+export function isOptimisticVoiceEntry(participant: VoiceParticipant): boolean {
+  return optimisticEntries.has(participant);
+}
+
+/**
+ * Carry the optimistic tag onto a REPLACEMENT object for an entry that was
+ * already tagged. A roster-delta `updated` frame is a fresh object every
+ * time (mute, camera, whatever changed) even when it still describes this
+ * client's own unconfirmed guess at a peer id — the tag lives on the object
+ * reference, so without re-marking the replacement here, an `updated` for
+ * that same still-optimistic peer id would silently drop the tag and the
+ * next real move for that person would find nothing to collapse.
+ */
+export function markOptimisticVoiceEntry(participant: VoiceParticipant): void {
+  optimisticEntries.add(participant);
+}
+
+/**
  * Move one seated person onto another voice channel in the local roster.
  * Used for the optimistic seat (paint now, rollback if the move fails).
+ *
+ * The moved entry is copied, not carried over by reference: `moved` (the
+ * return value) still stands for "who was dragged, unmarked", which is what
+ * a caller doing its own bookkeeping (or a rollback) expects, while the copy
+ * placed into `next` is the one tagged as optimistic — it is that copy the
+ * destination channel's occupancy actually holds, under the peer id this
+ * client cannot help but guess wrong.
  */
 export function moveOccupantSeat(
   occupancy: Record<string, VoiceParticipant[]>,
@@ -184,7 +223,9 @@ export function moveOccupantSeat(
   if (!moved || fromChannelId === toChannelId) {
     return { next: occupancy, fromChannelId, moved };
   }
-  next[toChannelId] = [...(next[toChannelId] ?? []), moved];
+  const optimisticMoved: VoiceParticipant = { ...moved };
+  markOptimisticVoiceEntry(optimisticMoved);
+  next[toChannelId] = [...(next[toChannelId] ?? []), optimisticMoved];
   return { next, fromChannelId, moved };
 }
 
