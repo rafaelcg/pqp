@@ -74,6 +74,22 @@ type Session struct {
 	lastIdrAtMs      atomic.Int64
 	audioPacketsSeen atomic.Uint64
 
+	// segmentOpenedAtMs is elapsedMs() at the moment the currently-open
+	// segment began (the fragment whose IsSegmentStart was true most
+	// recently), or -1 before the session's first segment has opened
+	// (before the first IDR). L1.6's control-plane watchdog reads this
+	// (via OpenSegmentMs) to report `openSegmentMs` on GET /sessions --
+	// "how long the currently-open segment has been accumulating, ms"
+	// (docs/plans/LL_HLS.md §5). Nothing before L1.6 needed this value, so
+	// it did not exist until now.
+	segmentOpenedAtMs atomic.Int64
+	// idrSeen flips true the first time an IDR is depacketized on this
+	// session's video track, so a caller can tell "no IDR yet" (a fresh
+	// session) apart from "an IDR really did arrive at elapsed time zero",
+	// which lastIdrAtMs's own zero value alone cannot distinguish. See
+	// HasIdr.
+	idrSeen atomic.Bool
+
 	// --- L1.3: audio (nil/zero until EnableAudio succeeds) ---
 
 	audioMixer        *audiomix.Mixer
@@ -161,6 +177,7 @@ func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requeste
 	if keyReq != nil {
 		s.keyReq.Store(keyReq)
 	}
+	s.segmentOpenedAtMs.Store(-1)
 	return s
 }
 
@@ -322,6 +339,7 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 
 	if au.IsIDR {
 		s.lastIdrAtMs.Store(s.elapsedMs())
+		s.idrSeen.Store(true)
 		if kr := s.keyReq.Load(); kr != nil {
 			kr.OnIDR(time.Now())
 		}
@@ -443,6 +461,9 @@ const audioCloseFlushDeadline = 5 * time.Second
 func (s *Session) publish(frag *pipeline.Fragment) {
 	if !s.initSet.Load() {
 		return
+	}
+	if frag.IsSegmentStart {
+		s.segmentOpenedAtMs.Store(s.elapsedMs())
 	}
 	sealedIndex := -1
 	if frag.IsSegmentStart && frag.SegmentIndex > 0 {
@@ -810,6 +831,41 @@ func (s *Session) readEncoderFrames(enc remuxEncoder, done, failed chan struct{}
 }
 
 func (s *Session) elapsedMs() int64 { return time.Since(s.started).Milliseconds() }
+
+// Started returns the wall-clock instant this Session was constructed
+// (New). L1.6's control-plane pipeline wrapper (internal/control) uses it
+// to convert the elapsed-millisecond fields Health() reports (LastPartAtMs,
+// LastIdrAtMs) into the absolute Unix-millisecond values
+// docs/plans/LL_HLS.md's control contract
+// (packages/shared/src/hls-remux-control.ts) exposes on GET /sessions --
+// this package's own /healthz (internal/serve) deliberately keeps reporting
+// elapsed-ms, unchanged: that shape is already documented and tested, and
+// only the control layer needs the absolute conversion.
+func (s *Session) Started() time.Time { return s.started }
+
+// HasPart reports whether this session has ever published a part, i.e.
+// whether Health().LastPartAtMs actually names a real event rather than its
+// zero value. Exists purely so a caller (internal/control) can report a
+// nullable lastPartAtMs without guessing from the zero value alone.
+func (s *Session) HasPart() bool { return s.partsWritten.Load() > 0 }
+
+// HasIdr reports whether an IDR has ever been depacketized on this
+// session's video track, for the same "distinguish zero from never" reason
+// as HasPart.
+func (s *Session) HasIdr() bool { return s.idrSeen.Load() }
+
+// OpenSegmentMs reports how long the currently-open segment has been
+// accumulating, in milliseconds, and whether one is open at all yet (false
+// before the session's first IDR opens segment 0). docs/plans/LL_HLS.md §5
+// names this exact quantity as something L1.6's watchdog needs; it did not
+// exist before L1.6 added segmentOpenedAtMs.
+func (s *Session) OpenSegmentMs() (ms int64, ok bool) {
+	at := s.segmentOpenedAtMs.Load()
+	if at < 0 {
+		return 0, false
+	}
+	return s.elapsedMs() - at, true
+}
 
 // Health implements serve.HealthSource.
 func (s *Session) Health() serve.Health {
