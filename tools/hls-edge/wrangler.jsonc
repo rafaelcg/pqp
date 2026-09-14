@@ -37,7 +37,7 @@
     // (see ll-playlist-origin.ts's header). Empty: `LlPlaylistOrigin` is
     // never `ready`, every request behaves exactly as it did before L2.2 --
     // no LL rung is ever offered. Set once a real box exists (L1.6/L2.3).
-    "LL_ORIGIN_BASE": ""
+    "LL_ORIGIN_BASE": "https://remux.pqp.gg"
   },
 
   // Party-pass (and now shared-rendition-cache) revocation denylist --
@@ -79,5 +79,11 @@
   //   { "tag": "v1", "new_classes": ["SessionWindow"] }
   // ],
 
+  "kv_namespaces": [
+    { "binding": "HLS_REVOKED_USERS", "id": "056d7e5a2f0748f6beafd60cf3b2b203" }
+  ],
+  "routes": [
+    { "pattern": "hls.pqp.gg", "custom_domain": true }
+  ],
   "observability": { "enabled": true }
 }
