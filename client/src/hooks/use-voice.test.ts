@@ -3619,16 +3619,59 @@ describe("watch mode without a seat", () => {
     // The room we are in is `liveStream`'s business, untouched by this frame.
     expect(voice.getState().liveStream).toBeNull();
 
+    // A NULL THE SERVER DID NOT VOUCH FOR KEEPS THE STREAM. On 2026-09-14
+    // the API machine that was not running the egress sent exactly this for
+    // a party live on the other machine, and every viewer whose socket was
+    // there lost the stream `GET /live` had just given them. The count is
+    // still taken: it is per machine and always was.
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream: null,
+      watching: 2,
+    });
+    expect(voice.getState().channelLive[WATCHED]?.stream?.presenterPeerId).toBe(
+      "host",
+    );
+    expect(voice.getState().channelLive[WATCHED]?.watching).toBe(2);
+    expect(voice.getState().channelLive[WATCHED]?.streamEnded).toBe(false);
+
+    // The server's own word ends it.
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream: null,
+      watching: 0,
+      ended: true,
+    });
+    expect(voice.getState().channelLive[WATCHED]).toEqual({
+      stream: null,
+      watching: 0,
+      streamEnded: true,
+    });
+  });
+
+  it("a null for a channel never described is not an end, and the GET seed's null is", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
     voice.handleSignaling({
       type: "channel-live",
       channelId: WATCHED,
       stream: null,
       watching: 0,
     });
-    expect(voice.getState().channelLive[WATCHED]).toEqual({
-      stream: null,
-      watching: 0,
-    });
+    expect(voice.getState().channelLive[WATCHED]?.streamEnded).toBe(false);
+
+    // The route's null is an END only when it says so: `ended` is absent when
+    // the server could not reach the session table, and a failed query must
+    // not hang a viewer up.
+    const OTHER = "00000000-0000-4000-8000-0000000000ef";
+    voice.seedChannelLive(OTHER, { stream: null, watching: 0, ended: true });
+    expect(voice.getState().channelLive[OTHER]?.streamEnded).toBe(true);
+
+    const UNSURE = "00000000-0000-4000-8000-0000000000ee";
+    voice.seedChannelLive(UNSURE, { stream: null, watching: 0 });
+    expect(voice.getState().channelLive[UNSURE]?.streamEnded).toBe(false);
   });
 
   it("says watch-live once, takes it back once, and repeats neither", () => {

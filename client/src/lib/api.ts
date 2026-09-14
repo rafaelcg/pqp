@@ -628,6 +628,13 @@ export const fetchLiveHlsConfig = (serverId?: string) =>
 export const fetchChannelLive = (channelId: string) =>
   apiFetch<{
     stream: LiveHlsStream | null;
+    /**
+     * With `stream: null`: the server checked and there is nothing live.
+     * Absent when it could not check (the session table was unreachable), and
+     * the caller must then keep what it has rather than treat one failed
+     * query as the party being over. Same contract as `channel-live`.
+     */
+    ended?: boolean;
     watching: number;
     participants: number;
   }>(`/api/channels/${channelId}/live`);

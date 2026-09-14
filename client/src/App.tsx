@@ -169,7 +169,13 @@ import {
   isWatchPartyChannelType,
   isWatchPartyChannelsEnabled,
 } from "@/lib/watch-party-channels";
-import { shouldReleaseAudienceWatchSeat } from "@/lib/watch-party-seat";
+import {
+  AUDIENCE_SEAT_GRACE_MS,
+  audienceSeatAgeMs,
+  nextAudienceSeatClock,
+  shouldReleaseAudienceWatchSeat,
+  type AudienceSeatClock,
+} from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
 import { watchPartyHistoryCandidates } from "@/lib/watch-party-history-access";
@@ -4279,6 +4285,24 @@ function MainAppContent({
    * seats when the stream dies, and for anybody still seated once the
    * party is over (including a mic that was handed out mid-show).
    */
+  // When the current seat was taken, so the backstop below can tell a
+  // `channel-live` that is merely late from a stream that ended. The rule is
+  // `nextAudienceSeatClock`, where it can be tested: taking the stage is a new
+  // seat even in a room this tab was already sitting in.
+  const seatTakenAtRef = useRef<AudienceSeatClock | null>(null);
+  const [seatGraceTick, setSeatGraceTick] = useState(0);
+  useEffect(() => {
+    seatTakenAtRef.current = nextAudienceSeatClock(seatTakenAtRef.current, {
+      channelId: voiceState.voiceChannelId,
+      isAudienceSeat: voiceState.isAudienceSeat,
+      voiceStatus: voiceState.status,
+      now: Date.now(),
+    });
+  }, [
+    voiceState.isAudienceSeat,
+    voiceState.status,
+    voiceState.voiceChannelId,
+  ]);
   useEffect(() => {
     const channelId = voiceState.voiceChannelId;
     if (!channelId || voiceState.status === "idle") {
@@ -4293,6 +4317,12 @@ function MainAppContent({
       party?.state === "cancelled"
         ? party.state
         : undefined;
+    const live = voiceState.channelLive[channelId];
+    const seatAgeMs = audienceSeatAgeMs(
+      seatTakenAtRef.current,
+      channelId,
+      Date.now(),
+    );
     if (
       !shouldReleaseAudienceWatchSeat({
         channelType: seated?.type,
@@ -4300,14 +4330,26 @@ function MainAppContent({
         isSharingScreen: voiceState.isSharingScreen,
         voiceStatus: voiceState.status,
         partyState,
-        hasLiveStream: voiceState.channelLive[channelId]?.stream != null,
+        hasLiveStream: live?.stream != null,
+        streamEnded: live?.streamEnded === true,
+        seatAgeMs,
       })
     ) {
+      // A seat inside its grace is not judged yet. Nothing else re-runs this
+      // when the grace ends, so look again then with whatever has arrived.
+      if (seatAgeMs !== null && seatAgeMs < AUDIENCE_SEAT_GRACE_MS) {
+        const handle = window.setTimeout(
+          () => setSeatGraceTick((tick) => tick + 1),
+          AUDIENCE_SEAT_GRACE_MS - seatAgeMs + 50,
+        );
+        return () => window.clearTimeout(handle);
+      }
       return;
     }
     voice.leave();
   }, [
     channels,
+    seatGraceTick,
     voice,
     voiceState.channelLive,
     voiceState.isAudienceSeat,

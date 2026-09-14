@@ -1466,6 +1466,15 @@ export function liveHlsStreamFor(channelId: string): LiveHlsStream | null {
  */
 export async function liveHlsStreamFromDb(
   channelId: string,
+  options: {
+    /**
+     * Rethrow a query failure (after logging it) instead of answering null.
+     * `resolveChannelStream` (`ws/voice.ts`) needs to tell "no live session"
+     * from "could not ask", because only the first may be sent to a client
+     * as a positive `ended`.
+     */
+    strict?: boolean;
+  } = {},
 ): Promise<LiveHlsStream | null> {
   let row:
     | { started_at: Date; presenter_peer_id: string | null; mode: string }
@@ -1489,6 +1498,9 @@ export async function liveHlsStreamFromDb(
       channelId,
       error: error instanceof Error ? error.message : String(error),
     });
+    if (options.strict) {
+      throw error;
+    }
     return null;
   }
   if (!row || !row.presenter_peer_id) {

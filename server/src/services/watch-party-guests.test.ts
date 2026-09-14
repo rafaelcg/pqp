@@ -566,7 +566,7 @@ describeDb("watch party guests", () => {
     const realBroadcast = watchPartyEvents.broadcastWatchParty;
     const broadcastStub = vi
       .spyOn(watchPartyEvents, "broadcastWatchParty")
-      .mockImplementation(async () => {});
+      .mockImplementation(async () => true);
 
     // 500 real, distinct server members, each with a fake socket watching —
     // bulk-inserted rather than 500 round trips through `upsertUser`/

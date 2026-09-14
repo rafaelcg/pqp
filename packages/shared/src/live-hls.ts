@@ -176,6 +176,18 @@ export const channelLiveMessageSchema = z.object({
   stream: liveHlsStreamSchema.nullable(),
   /** Watch-mode viewers without a seat. Room participants are on the roster. */
   watching: z.number().int().nonnegative(),
+  /**
+   * With `stream: null`: the server is CERTAIN there is no live session in
+   * this channel (it checked its own maps and the session table, or it just
+   * ended the session itself). Absent on a null the server could not vouch
+   * for (the table was unreachable). A client holding a stream must not
+   * drop it on a null without this: on 2026-09-14 the API machine that was
+   * not running the egress said `null` for a party live on the other one,
+   * every viewer whose socket was there lost the stream they had, and the
+   * audience-seat backstop hung them up. Never set beside a stream.
+   * Optional on purpose: iOS and Android parse the frame and ignore it.
+   */
+  ended: z.boolean().optional(),
 });
 
 export type ChannelLiveMessage = z.infer<typeof channelLiveMessageSchema>;
