@@ -177,6 +177,9 @@ export function trackSocketLiveness(socket: WebSocket): void {
 export function handleWsConnection(socket: WebSocket, remoteKey: string) {
   let authenticated = false;
   let closed = false;
+  // The ordering chain `onMessage` is queued onto — see the comment on
+  // `socket.on("message", ...)` below for why this exists.
+  let messageChain: Promise<void> = Promise.resolve();
   const connId = nextConnectionId();
   logEvent("ws.connect", { connId });
 
@@ -334,11 +337,30 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
   }
 
   socket.on("message", (data) => {
-    // A throwing handler (e.g. transient DB error) must not become an unhandled
-    // rejection — that kills the process and drops every client.
-    void onMessage(data).catch((error) => {
-      console.error("[ws] message handler failed:", error);
-    });
+    // FIFO PER SOCKET. Each `message` event used to spawn its own
+    // fire-and-forget `onMessage(data)`, with no ordering guarantee between
+    // two frames from the SAME connection once either one `await`s: a client
+    // that sends `join-voice-room` immediately followed by `set-watch-party`
+    // (the real "Ir ao vivo" flow, and every WS test harness that does not
+    // wait for `welcome` before its next send) could have the second frame's
+    // handler run to completion, read `socketToPeerId.get(socket)` and hit
+    // the `!existingPeerId` early return, BEFORE the first frame's own
+    // permission/channel-access awaits (`canAccessChannel`, `getChannel`,
+    // `resolveMemberChannelPermissions`, ...) had registered the peer. The
+    // write was then silently dropped: no error, no `voice.watchPartyStart`,
+    // nothing a client or an operator could see. Same shape as pitfall 13 in
+    // CLAUDE.md ("a fire-and-forget write is not an ordered write") and the
+    // same fix as `dispatchChain` in `lib/bus-postgres.ts`: chain this
+    // socket's messages onto one promise so the next frame's handler does not
+    // start until the previous one has finished, in the order they arrived.
+    // A throwing handler (e.g. transient DB error) must not become an
+    // unhandled rejection — that kills the process and drops every client —
+    // and must not wedge the chain for every later frame on this socket.
+    messageChain = messageChain
+      .then(() => onMessage(data))
+      .catch((error) => {
+        console.error("[ws] message handler failed:", error);
+      });
   });
 
   socket.on("error", (error: Error) => {
