@@ -44,9 +44,12 @@ const { upsertUser } = await import("../services/users.js");
 const { reconcileStaleHlsSessions } = await import("./hls-cleanup.js");
 const {
   activeBoxEgressCount,
+  checkLiveHlsHealth,
+  deferredHlsStopCount,
   liveHlsActivity,
   liveHlsStreamFor,
   resetLiveHlsForTests,
+  seedDeferredHlsStopForTests,
   setLiveHlsTestHooks,
 } = await import("./hls-egress.js");
 const {
@@ -428,6 +431,77 @@ describeDb("hls_sessions ownership across two API machines", () => {
     const row = await rowById(id);
     expect(row.ended_at).not.toBeNull();
     expect(row.instance_id).toBe(machineA);
+  });
+
+  it("leaves the row ended when the teardown lands after an in-flight claim started", async () => {
+    // THE CANCELLATION IS ASYNCHRONOUS AND THE WRITE IS NOT. Dropping the
+    // queue entry cannot stop a retry that is already in flight, so the write
+    // itself is conditional on the moment the claim was decided: a row torn
+    // down after that instant refuses to reopen, whichever order Postgres runs
+    // the two statements in.
+    const decidedAt = Date.now() - 5_000;
+    const id = await makeSession({
+      prefix: `live/${channelA}/9930`,
+      egressId: "EG_raced",
+      instanceId: machineA,
+      // The teardown: ended NOW, after the claim below was decided.
+      endedAt: new Date(),
+    });
+
+    expect(
+      await claimHlsSessionRows([id], { reopen: true, claimedAt: decidedAt }),
+    ).toBe(true);
+
+    const row = await rowById(id);
+    expect(row.ended_at).not.toBeNull();
+    expect(row.instance_id).toBe(machineA);
+  });
+
+  it("retries a deferred teardown once ownership is knowable, and gives up on one that never clears", async () => {
+    const stop = vi.fn(async () => {});
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: async () => ({ egressId: "unused" }),
+        stopEgress: stop,
+        listEgress: async () => [],
+      },
+    });
+    const id = await makeSession({
+      prefix: `live/${channelA}/9940`,
+      egressId: "EG_deferred",
+      instanceId: null,
+      endedAt: new Date(),
+    });
+    seedDeferredHlsStopForTests({
+      egressId: "EG_deferred",
+      channelId: channelA,
+      sessionId: id,
+    });
+
+    await checkLiveHlsHealth();
+
+    // Nobody owns it, so the transcode this process wanted to stop is stopped.
+    expect(stop).toHaveBeenCalledWith("EG_deferred");
+    expect(deferredHlsStopCount()).toBe(0);
+
+    // And an entry that has used up its attempts is abandoned rather than
+    // retried forever: `StopEgress` landing and losing its response looks
+    // exactly like `StopEgress` failing.
+    seedDeferredHlsStopForTests({
+      egressId: "EG_never-clears",
+      channelId: channelA,
+      sessionId: id,
+      attempts: 10,
+    });
+    logEvent.mockClear();
+
+    await checkLiveHlsHealth();
+
+    expect(deferredHlsStopCount()).toBe(0);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsStopDeferredAbandoned",
+      expect.objectContaining({ egressId: "EG_never-clears" }),
+    );
   });
 
   it("(d) the ghost filter still writes off a record nobody owns", async () => {

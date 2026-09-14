@@ -51,6 +51,7 @@ import {
   requestedHlsModeForChannel,
   resetHlsRemuxForTests,
   resolveHlsMode,
+  runBounded,
   stopLlSession,
 } from "./hls-remux.js";
 
@@ -487,7 +488,16 @@ const deferredStops = new Map<
 const DEFERRED_STOP_MAX_ATTEMPTS = 10;
 const DEFERRED_STOP_TTL_MS = 10 * 60_000;
 /** Retries per tick, so a wide outage cannot turn one tick into a long serial run. */
-const DEFERRED_STOP_PER_TICK = 5;
+const DEFERRED_STOP_PER_TICK = 8;
+/** In flight at once within a tick: bounded, never one-at-a-time and never a fan-out. */
+const DEFERRED_STOP_CONCURRENCY = 4;
+/**
+ * The queue itself is bounded. A database outage during a mass teardown must
+ * not turn an in-memory map into the thing that fails next; past this the
+ * oldest entries are dropped, loudly, which is the same trade the backoff
+ * above makes for a single id.
+ */
+const DEFERRED_STOP_MAX_ENTRIES = 200;
 /**
  * Channels whose camera transcode died or was refused, and when another may
  * start.
@@ -1874,6 +1884,12 @@ export interface LiveHlsActivity {
    * machines and a party running means the `instance_id` stamp never landed.
    */
   skippedOwnedElsewhere: number;
+  /**
+   * Teardowns parked because this process could not prove the egress was its
+   * own (the ownership lookup failed), waiting on the monitor's retry. Belongs
+   * at zero; a number that stays up is a database that is not answering.
+   */
+  deferredStops: number;
 }
 
 /**
@@ -1911,6 +1927,7 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
     micArchives,
     cameraSessions: runningCameraCount(),
     skippedOwnedElsewhere: hlsSkippedOwnedElsewhereCount(),
+    deferredStops: deferredStops.size,
   };
 }
 
@@ -2329,10 +2346,10 @@ async function retryDeferredStops(now = Date.now()): Promise<void> {
     // Still cannot ask. Keep them; this runs again in a few seconds.
     return;
   }
-  for (const egressId of batch) {
+  await runBounded(batch, DEFERRED_STOP_CONCURRENCY, async (egressId) => {
     const entry = deferredStops.get(egressId);
     if (!entry) {
-      continue;
+      return;
     }
     entry.attempts += 1;
     if (owned.has(egressId)) {
@@ -2345,7 +2362,7 @@ async function retryDeferredStops(now = Date.now()): Promise<void> {
         egressId,
         sessionId: entry.sessionId,
       });
-      continue;
+      return;
     }
     if (await stopEgressById(egressId, entry.channelId)) {
       deferredStops.delete(egressId);
@@ -2359,7 +2376,35 @@ async function retryDeferredStops(now = Date.now()): Promise<void> {
     }
     // A stop that failed keeps its place: `stopEgressById` is already backing
     // off, and forgetting it here is the leak this queue exists to prevent.
-  }
+  });
+}
+
+/**
+ * Test seam: put an entry in the deferred-stop queue directly. The state it
+ * models is a teardown whose ownership lookup failed, which needs a database
+ * that fails DURING a room teardown to reach honestly, and the thing worth
+ * pinning is what the retry does with it afterwards.
+ */
+export function seedDeferredHlsStopForTests(entry: {
+  egressId: string;
+  channelId: string;
+  sessionId: string;
+  rung?: string;
+  attempts?: number;
+  queuedAt?: number;
+}): void {
+  deferredStops.set(entry.egressId, {
+    channelId: entry.channelId,
+    sessionId: entry.sessionId,
+    rung: entry.rung ?? "720p30",
+    queuedAt: entry.queuedAt ?? Date.now(),
+    attempts: entry.attempts ?? 0,
+  });
+}
+
+/** How many teardowns are waiting on an ownership answer. Belongs at zero. */
+export function deferredHlsStopCount(): number {
+  return deferredStops.size;
 }
 
 export async function checkLiveHlsHealth(
@@ -3662,6 +3707,20 @@ async function stopRungs(
         queuedAt: Date.now(),
         attempts: 0,
       });
+      while (deferredStops.size > DEFERRED_STOP_MAX_ENTRIES) {
+        const [oldest] = deferredStops.keys();
+        const dropped = oldest ? deferredStops.get(oldest) : undefined;
+        if (!oldest) {
+          break;
+        }
+        deferredStops.delete(oldest);
+        logEvent("voice.hlsStopDeferredAbandoned", {
+          channelId: dropped?.channelId ?? null,
+          egressId: oldest,
+          sessionId: dropped?.sessionId ?? null,
+          reason: "queue-full",
+        });
+      }
       logEvent("voice.hlsStopDeferred", {
         channelId,
         egressId: entry.egressId,

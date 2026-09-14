@@ -1018,7 +1018,7 @@ function toOpenLlRow(row: StaleLlRow): OpenLlRow {
 }
 
 /** Run `fn` over `items`, at most `limit` in flight at once, waiting for each batch. */
-async function runBounded<T>(
+export async function runBounded<T>(
   items: readonly T[],
   limit: number,
   fn: (item: T) => Promise<void>,
