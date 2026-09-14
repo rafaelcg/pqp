@@ -63,6 +63,7 @@ import type {
   PublicCommunity,
   PublicProfile,
   PublicUser,
+  AllReportPage,
   Report,
   ReportPage,
   ReportStatus,
@@ -1762,3 +1763,17 @@ export const resolveReport = (
   reportId: string,
   body: ResolveReportRequest,
 ) => patch<{ report: Report }>(`/api/reports/${reportId}`, body);
+
+/**
+ * Every report an instance moderator may see, across every server and the
+ * instance queue alike — the surface `/api/reports/instance` and a server's
+ * own `/api/servers/:id/reports` used to force apart. 200 for a moderator,
+ * anything else means "not visible", never just a 404.
+ */
+export const fetchAllReports = (
+  options: { before?: string; status?: ReportStatus } = {},
+) => apiFetch<AllReportPage>(`/api/reports/all${reportQuery(options)}`);
+
+/** Deletes the reported message. 400 when there is nothing live to remove. */
+export const removeReportedMessage = (reportId: string) =>
+  post<{ ok: true }>(`/api/reports/${reportId}/remove-message`, undefined);

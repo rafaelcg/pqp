@@ -244,6 +244,47 @@ export const reportSummaryPageSchema = z.object({
 });
 export type ReportSummaryPage = z.infer<typeof reportSummaryPageSchema>;
 
+/**
+ * Evidence from the attachment scanner, carried on an `AllReport` row only
+ * when the report is automated (`reporterId === null`) and the server could
+ * match it back to the attachment that produced it — see the "attachment
+ * ([0-9a-f-]{36})" hint in `createAutomatedReport`'s `details` string.
+ *
+ * `stillAttached` is `false` for a rejected upload (never claimed, so there
+ * is nothing to attach) and for a flagged one whose message has since been
+ * deleted; `true` for a flagged upload that is still visible in a channel.
+ */
+export const reportScanInfoSchema = z.object({
+  status: z.string(),
+  score: z.number().nullable(),
+  labels: z.array(z.string()),
+  provider: z.string().nullable(),
+  contentType: z.string().nullable(),
+  stillAttached: z.boolean(),
+});
+export type ReportScanInfo = z.infer<typeof reportScanInfoSchema>;
+
+/**
+ * `reportSchema` plus what only an instance moderator reading EVERY queue at
+ * once needs: which server (if any) the report belongs to, and the scan
+ * evidence behind an automated one. A server-scoped report through
+ * `listServerReports` carries neither — its reader already knows which
+ * server they opened.
+ */
+export const allReportSchema = reportSchema.extend({
+  serverId: z.string().uuid().nullable(),
+  /** Snapshot-free: the server's current name, or null for the instance queue. */
+  serverName: z.string().nullable(),
+  scan: reportScanInfoSchema.nullable(),
+});
+export type AllReport = z.infer<typeof allReportSchema>;
+
+export const allReportPageSchema = z.object({
+  reports: z.array(allReportSchema),
+  hasMore: z.boolean(),
+});
+export type AllReportPage = z.infer<typeof allReportPageSchema>;
+
 /** Human labels, kept beside the enum so a new reason cannot ship without one. */
 export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
   spam: "Spam or scam",

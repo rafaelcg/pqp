@@ -1,9 +1,11 @@
 import {
   formatUserTag,
+  type AllReport,
   type Report,
   type ReportContextKind,
   type ReportReason,
   type ReportResolution,
+  type ReportScanInfo,
   type ReportStatus,
   type ReportSummary,
 } from "@pqp/shared";
@@ -689,10 +691,10 @@ function listConditions(
           LIMIT $${params.length}`;
 }
 
-function page<T>(
-  rows: ReportRow[],
+function page<Row extends ReportRow, T>(
+  rows: Row[],
   limit: number,
-  map: (row: ReportRow) => T,
+  map: (row: Row) => T,
 ): { reports: T[]; hasMore: boolean } {
   return {
     reports: rows.slice(0, limit).map(map),
@@ -738,6 +740,87 @@ export async function listInstanceReports(
     params,
   );
   return page(result.rows, options.limit, toReport);
+}
+
+interface AllReportRow extends ReportRow {
+  all_server_id: string | null;
+  server_name: string | null;
+  scan_status: string | null;
+  scan_score: number | null;
+  scan_labels: string[] | null;
+  scan_provider: string | null;
+  scan_content_type: string | null;
+  scan_still_attached: boolean | null;
+}
+
+function toAllReport(row: AllReportRow): AllReport {
+  const scan: ReportScanInfo | null = row.scan_status
+    ? {
+        status: row.scan_status,
+        score: row.scan_score,
+        labels: row.scan_labels ?? [],
+        provider: row.scan_provider,
+        contentType: row.scan_content_type,
+        stillAttached: row.scan_still_attached ?? false,
+      }
+    : null;
+  return {
+    ...toReport(row),
+    serverId: row.all_server_id,
+    serverName: row.server_name,
+    scan,
+  };
+}
+
+/**
+ * Every report on the instance, server-scoped or not — the read an instance
+ * moderator needs to see the thing pitfall-shaped bug reports are made of: an
+ * automated hit filed into a two-member server's queue, invisible to anyone
+ * outside it, while the operator dashboard's "abertas" count only ever summed
+ * across every server without a screen that could open one.
+ *
+ * Two joins beyond `listServerReports`/`listInstanceReports`:
+ *
+ * 1. `servers` for the name, so a row names its server without a second
+ *    round trip per report.
+ * 2. A LATERAL match back to `message_attachments`, for an automated report
+ *    only (`reporter_id IS NULL`). The report itself does not carry an
+ *    attachment id — `createAutomatedReport` had none to give it, because a
+ *    rejected upload is never attached to a message — so this recovers it
+ *    from the one place it was recorded: the "attachment <uuid>" phrase
+ *    `escalateScanResult` writes into `details`. `NULLIF(..., '')::uuid`
+ *    resolves to NULL rather than raising when the pattern does not match
+ *    (a human-filed report, or a legacy row from before that phrasing),
+ *    which is what keeps the cast from failing the whole query.
+ */
+export async function listAllReports(
+  options: ListReportsOptions,
+): Promise<{ reports: AllReport[]; hasMore: boolean }> {
+  const params: unknown[] = [];
+  const tail = listConditions(options, ["TRUE"], params);
+  const result = await getPool().query<AllReportRow>(
+    `SELECT ${REPORT_COLUMNS}, r.server_id::text AS all_server_id,
+            srv.name AS server_name,
+            ma.scan_status, ma.scan_score, ma.scan_labels,
+            ma.scan_provider, ma.content_type AS scan_content_type,
+            (ma.message_id IS NOT NULL) AS scan_still_attached
+     FROM reports r
+     ${REPORT_JOINS}
+     LEFT JOIN servers srv ON srv.id = r.server_id
+     LEFT JOIN LATERAL (
+       SELECT scan_status, scan_score, scan_labels, scan_provider,
+              content_type, message_id
+       FROM message_attachments
+       WHERE r.reporter_id IS NULL
+         AND id = NULLIF(
+               substring(r.details FROM 'attachment ([0-9a-f-]{36})'),
+               ''
+             )::uuid
+     ) ma ON TRUE
+     ${tail}`,
+    params,
+  );
+  return page(result.rows, options.limit, toAllReport);
 }
 
 /** What the reporter filed, in the narrow shape they are allowed to see. */

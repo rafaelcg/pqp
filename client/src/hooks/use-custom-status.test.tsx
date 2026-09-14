@@ -29,6 +29,7 @@ function account(customStatus: string | null): User {
     handleChangedAt: null,
     bannerUrl: null,
     customStatus,
+    isInstanceModerator: false,
   };
 }
 

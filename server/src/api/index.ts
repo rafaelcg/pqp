@@ -476,6 +476,7 @@ import {
   getReport,
   getReportScope,
   isInstanceModerator,
+  listAllReports,
   listInstanceReports,
   listReportsByReporter,
   listServerReports,
@@ -1095,8 +1096,28 @@ router.post("/api/desktop/handoff", async ({ req, res, user }) => {
 
 // ---------------------------------------------------------------- profile
 
+/**
+ * `toPublicUser` plus the one field only the account's own owner may see that
+ * `services/users.ts` cannot compute itself: whether this Clerk id is an
+ * instance moderator. Kept here rather than inside `toPublicUser` to avoid a
+ * cycle — `reports.ts` (home of `isInstanceModerator`) already imports from
+ * `users.ts` for `canAccessChannel`.
+ *
+ * Every route that hands an account its own `User` shape back — not
+ * `toPublicUserSummary`, which strangers see — goes through this, or a
+ * moderator's Settings nav loses its "Moderação da instância" door the moment
+ * they save any profile field, since `userSchema.isInstanceModerator`
+ * defaults `false` when the key is simply missing from the response.
+ */
+async function toOwnUser(user: DbUser) {
+  return {
+    ...(await toPublicUser(user)),
+    isInstanceModerator: isInstanceModerator(user),
+  };
+}
+
 router.get("/api/me", async ({ user, ageGate }) => ({
-  ...(await toPublicUser(user)),
+  ...(await toOwnUser(user)),
   // Reachable while the gate is still pending or blocked — it is how the client
   // finds out which of the two it is looking at.
   ageGate,
@@ -1175,7 +1196,7 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
   });
   invalidateUserCache(updated.clerk_id);
   announceProfile(updated);
-  return { ...(await toPublicUser(updated)), ageGate };
+  return { ...(await toOwnUser(updated)), ageGate };
 });
 
 // ------------------------------------------------------------- avatars
@@ -1250,7 +1271,7 @@ router.post("/api/me/avatar/claim", async ({ req, user }) => {
   });
   invalidateUserCache(updated.clerk_id);
   announceProfile(updated);
-  return { user: await toPublicUser(updated) };
+  return { user: await toOwnUser(updated) };
 });
 
 /**
@@ -1269,7 +1290,7 @@ router.delete("/api/me/avatar", async ({ user }) => {
   });
   invalidateUserCache(updated.clerk_id);
   announceProfile(updated);
-  return { user: await toPublicUser(updated) };
+  return { user: await toOwnUser(updated) };
 });
 
 // ------------------------------------------------------------- user banners
@@ -1348,7 +1369,7 @@ router.post("/api/me/banner/claim", async ({ req, user }) => {
   if (updated.previousKey && updated.previousKey !== body.key) {
     void discardBannerObject(updated.previousKey);
   }
-  return { user: await toPublicUser(updated.user) };
+  return { user: await toOwnUser(updated.user) };
 });
 
 /**
@@ -1368,7 +1389,7 @@ router.delete("/api/me/banner", async ({ user }) => {
   if (updated.previousKey) {
     void discardBannerObject(updated.previousKey);
   }
-  return { user: await toPublicUser(updated.user) };
+  return { user: await toOwnUser(updated.user) };
 });
 
 /**
@@ -7327,6 +7348,22 @@ router.get("/api/reports/instance", async ({ url, user }) => {
 });
 
 /**
+ * Every report on the instance — the read that closed the gap the operator
+ * dashboard's "abertas" count exposed: a two-member server's own automated
+ * gore flag, visible only to that server's owner and admins, with no screen
+ * an instance moderator could open to see or resolve it. Gated exactly like
+ * `/api/reports/instance` — `isInstanceModerator` and nothing an in-app role
+ * can grant — and 404 for anyone else for the same reason: whether this
+ * deployment has an instance moderator at all is not a fact to confirm.
+ */
+router.get("/api/reports/all", async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return listAllReports(reportListOptions(url));
+});
+
+/**
  * One server's queue. `requireManager`, like every other moderation read — and
  * it can only ever return reports about that server's own channels, because a
  * report about a conversation has no server id to match (see the `reports`
@@ -7347,10 +7384,18 @@ router.get(
 /**
  * Close a report, actioned or dismissed.
  *
- * Who may do so follows the report's own scope and nothing else: a server id
- * means a manager of that server, no server id means an instance moderator.
- * The scope is read before anything is returned, so an unauthorized caller
- * learns nothing about the report — not even that the id exists.
+ * Who may act follows the report's own scope, plus one override: a server id
+ * means a manager of that server OR an instance moderator (this is the gap
+ * `docs/CONTENT_SAFETY.md` §"Operator review of server queues" closes — a
+ * two-member server's automated flag had no screen an instance moderator
+ * could reach), no server id means an instance moderator. The scope is read
+ * before anything is returned, so an unauthorized caller learns nothing
+ * about the report — not even that the id exists.
+ *
+ * `canSanctionOnServer` is a NARROWER question than "may resolve", checked
+ * separately below: an instance moderator may close any report, but timing a
+ * member out is still a server-rank action, so an instance moderator with no
+ * standing in that particular server may resolve it and nothing more.
  */
 router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   const reportId = reportIdParam(report);
@@ -7358,14 +7403,30 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   if (!scope) {
     throw new NotFound("Report not found");
   }
-  let canActOnServer = false;
+  let canSanctionOnServer = false;
   if (scope.serverId) {
-    await requireAnyPermission(scope.serverId, user.id, [
-      Permission.KICK_MEMBERS,
-      Permission.BAN_MEMBERS,
-      Permission.MODERATE_MEMBERS,
-    ]);
-    canActOnServer = true;
+    if (isInstanceModerator(user)) {
+      // Resolving is allowed regardless; only note it down if they also
+      // happen to hold a real management role on this server, which is what
+      // the timeout branch below asks for.
+      try {
+        await requireAnyPermission(scope.serverId, user.id, [
+          Permission.KICK_MEMBERS,
+          Permission.BAN_MEMBERS,
+          Permission.MODERATE_MEMBERS,
+        ]);
+        canSanctionOnServer = true;
+      } catch {
+        // Not a manager of this particular server — still fine to resolve.
+      }
+    } else {
+      await requireAnyPermission(scope.serverId, user.id, [
+        Permission.KICK_MEMBERS,
+        Permission.BAN_MEMBERS,
+        Permission.MODERATE_MEMBERS,
+      ]);
+      canSanctionOnServer = true;
+    }
   } else if (!isInstanceModerator(user)) {
     throw new NotFound("Report not found");
   }
@@ -7381,7 +7442,7 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   // that is what happened. Either both happen or neither does.
   let timeoutTarget: string | null = null;
   if (body.timeoutMinutes != null) {
-    if (!scope.serverId || !canActOnServer) {
+    if (!scope.serverId) {
       // An instance-queue report is about a conversation, which has no server
       // and therefore no place to be timed out *in*. Silencing somebody's DMs
       // is not a sanction this product has, and inventing one here would hand
@@ -7390,6 +7451,13 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
         400,
         "A report with no server behind it cannot carry a timeout",
       );
+    }
+    if (!canSanctionOnServer) {
+      // An instance moderator resolving a server's report with no management
+      // standing there at all may still close it (above); a timeout is a
+      // server-rank sanction and stays refused, distinctly from the "no
+      // server at all" case above.
+      throw new Forbidden("You do not have permission to do that");
     }
     await requirePermission(
       scope.serverId,
@@ -7491,6 +7559,111 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
 
   return { report: resolved };
 });
+
+/**
+ * Remove a flagged attachment's message — the operator action a moderator
+ * reading `GET /api/reports/all` has no other button for: closing the report
+ * says the queue entry was handled, it does not take the content down.
+ *
+ * A sibling route rather than a field on the PATCH above, on purpose: the two
+ * are independent actions with independent failure modes (a report can be
+ * resolved with nothing to remove — the message may already be gone, or the
+ * report may be a `user`/`server` subject with no message at all), and
+ * folding "also delete this" into the resolve body would make one request
+ * responsible for two very different kinds of refusal.
+ *
+ * Same authorization as the PATCH immediately above: a manager of the
+ * report's server, or — the gap this feature closes — an instance moderator
+ * regardless of their standing in that particular server.
+ */
+router.post(
+  "/api/reports/:report/remove-message",
+  async ({ user }, { report }) => {
+    const reportId = reportIdParam(report);
+    const scope = await getReportScope(reportId);
+    if (!scope) {
+      throw new NotFound("Report not found");
+    }
+    if (scope.serverId) {
+      if (!isInstanceModerator(user)) {
+        await requireAnyPermission(scope.serverId, user.id, [
+          Permission.KICK_MEMBERS,
+          Permission.BAN_MEMBERS,
+          Permission.MODERATE_MEMBERS,
+        ]);
+      }
+    } else if (!isInstanceModerator(user)) {
+      throw new NotFound("Report not found");
+    }
+
+    const full = await getReport(reportId);
+    if (!full || full.subjectType !== "message" || !full.messageId) {
+      // A `user` or `server` report names an account or a community, never a
+      // message — and a message report whose message is already gone (the
+      // ordinary delete path, or a previous call to this same route) reads
+      // `messageId: null` per the `messageDeleted` contract on the schema.
+      // Both are "nothing left to remove", not a server error.
+      throw new HttpError(
+        400,
+        "This report has no live message left to remove",
+      );
+    }
+
+    const existing = await getMessage(full.messageId);
+    if (!existing) {
+      // The row raced ahead of the report's own snapshot — deleted by its
+      // author, or by this same action from another tab, between the read
+      // above and this one.
+      throw new HttpError(400, "The reported message is already gone");
+    }
+
+    await deleteMessage(full.messageId);
+    broadcastToChannel(existing.channel_id, {
+      type: "message-delete",
+      channelId: existing.channel_id,
+      messageId: full.messageId,
+    });
+
+    // Deliberately unconditional and deliberately not only the DB row below:
+    // a conversation message has no server and therefore no `audit_log` row
+    // to carry it (that table's `server_id` is NOT NULL), so this line is the
+    // only trail that case gets. Shouty on purpose, same register as the
+    // `[content-safety]` lines this queue's automated reports come from.
+    console.log(
+      `[moderation] operator removed message — report ${reportId}, ` +
+        `message ${full.messageId}, moderator ${user.id}`,
+    );
+
+    if (existing.server_id) {
+      // Best-effort, deliberately, and AFTER the deletion has already
+      // committed and been broadcast: the message is gone either way, so an
+      // audit-log hiccup (a pooled connection blip, say) must not turn an
+      // already-completed removal into an error response — the client would
+      // show "failed", a retry would hit the "already gone" 400 above, and
+      // the operator would be left unsure whether the message was actually
+      // removed. Same shape as `escalateScanResult`'s `createAutomatedReport`
+      // call in `services/attachments.ts`.
+      try {
+        await logAudit({
+          serverId: existing.server_id,
+          actorId: user.id,
+          action: "message.delete",
+          targetType: "message",
+          targetId: full.messageId,
+          changes: [{ key: "report", old: null, new: reportId }],
+        });
+      } catch (error) {
+        console.error(
+          `[moderation] audit write failed after removing message ` +
+            `${full.messageId} (report ${reportId}):`,
+          error,
+        );
+      }
+    }
+
+    return { ok: true };
+  },
+);
 
 // ----------------------------------------------------------- call ratings
 

@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
   canRenameHandle,
   deleteConfirmationMatches,
@@ -152,6 +152,7 @@ import {
   OwnedServersError,
   type BlockingOwnedServer,
 } from "@/lib/api";
+import { AllReportsSection } from "@/components/layout/all-reports-section";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { queuePreferenceSync } from "@/lib/preferences";
@@ -419,7 +420,8 @@ type SectionId =
   | "appearance"
   | "privacy"
   | "data"
-  | "feedback";
+  | "feedback"
+  | "moderation";
 
 /** For callers that open the dialog at a particular section (the user menu). */
 export type SettingsSectionId = SectionId;
@@ -486,6 +488,15 @@ const SECTIONS: SectionDef[] = [
     description: "settings.feedback.description",
     icon: Bug,
   },
+  // Hidden from the rail unless `canModerateInstance` resolves true — see
+  // `visibleSections` where `SettingsModal` filters this out for everyone
+  // else. Kept last so the tab order for every existing account never shifts.
+  {
+    id: "moderation",
+    label: "settings.section.moderation",
+    description: "settings.moderation.description",
+    icon: Siren,
+  },
 ];
 
 /**
@@ -499,11 +510,13 @@ const SECTIONS: SectionDef[] = [
  * have to know which one the CSS picked.
  */
 function SectionRail({
+  sections,
   active,
   onSelect,
   idFor,
   panelId,
 }: {
+  sections: SectionDef[];
   active: SectionId;
   onSelect: (id: SectionId) => void;
   idFor: (id: SectionId) => string;
@@ -513,8 +526,8 @@ function SectionRail({
   const railRef = useRef<HTMLDivElement>(null);
 
   function move(to: number) {
-    const index = (to + SECTIONS.length) % SECTIONS.length;
-    const next = SECTIONS[index]!;
+    const index = (to + sections.length) % sections.length;
+    const next = sections[index]!;
     onSelect(next.id);
     const tabs =
       railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
@@ -522,7 +535,7 @@ function SectionRail({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const current = SECTIONS.findIndex((section) => section.id === active);
+    const current = sections.findIndex((section) => section.id === active);
     switch (event.key) {
       case "ArrowRight":
       case "ArrowDown":
@@ -540,7 +553,7 @@ function SectionRail({
         break;
       case "End":
         event.preventDefault();
-        move(SECTIONS.length - 1);
+        move(sections.length - 1);
         break;
       default:
         break;
@@ -561,7 +574,7 @@ function SectionRail({
         "sm:w-56 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4",
       )}
     >
-      {SECTIONS.map((section) => {
+      {sections.map((section) => {
         const selected = section.id === active;
         const Icon = section.icon;
         return (
@@ -3407,7 +3420,49 @@ export function SettingsModal({
   // Camera permission is asked once per open Settings session. Tabbing
   // through the Voice form must not blink the webcam LED on every focus.
   const camerasAskedRef = useRef(false);
-  const active = SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0]!;
+  // Whether this account is an instance moderator — `user.isInstanceModerator`
+  // rides down on every `/api/me`-shaped response (see `toOwnUser` on the
+  // server), computed server-side from `INSTANCE_MODERATOR_CLERK_IDS` and
+  // nothing the client can influence. This is an AFFORDANCE ONLY: it decides
+  // whether the nav shows the door, nothing more. Every route behind it
+  // (`GET /api/reports/all`, `PATCH /api/reports/:id`,
+  // `POST /api/reports/:id/remove-message`) re-checks `isInstanceModerator`
+  // itself and does not trust this flag.
+  //
+  // Deliberately NOT learned by probing a route that answers 404 for
+  // everyone else: firing that probe on every Settings open, for every
+  // account, would put a 404 in the network console of the near-totality of
+  // people who are not moderators — exactly the console noise
+  // `theme-switching.spec.ts`'s "no console errors" check exists to catch.
+  const canModerateInstance = user?.isInstanceModerator ?? false;
+
+  // A stale `requestedSection="moderation"` (the dashboard deep link landing
+  // on an account the flag says no to) must not strand the dialog on a door
+  // that does not exist for it — bounce to the same target ("profile") the
+  // rail's own out-of-bounds guard below uses.
+  useEffect(() => {
+    if (!canModerateInstance && section === "moderation") {
+      setSection("profile");
+    }
+  }, [canModerateInstance, section]);
+
+  // The whole nav, minus the moderation door for every account it did not
+  // open for. Derived per render rather than mutating the module-level
+  // `SECTIONS` constant, which every other settings dialog instance shares.
+  const visibleSections = useMemo(
+    () =>
+      canModerateInstance
+        ? SECTIONS
+        : SECTIONS.filter((entry) => entry.id !== "moderation"),
+    [canModerateInstance],
+  );
+
+  // A caller (or a stale sticky section from a previous session) pointing at
+  // "moderation" before the gate resolves true must not show a blank pane —
+  // land on Profile instead, exactly like an unknown section id would.
+  const active =
+    visibleSections.find((entry) => entry.id === section) ??
+    visibleSections[0]!;
   const tabIdPrefix = "settings-tab";
   const panelId = "settings-panel";
 
@@ -3613,6 +3668,7 @@ export function SettingsModal({
       >
         <div className="flex h-full min-h-0 flex-col sm:flex-row">
           <SectionRail
+            sections={visibleSections}
             active={section}
             onSelect={setSection}
             idFor={(id) => `${tabIdPrefix}-${id}`}
@@ -3698,6 +3754,19 @@ export function SettingsModal({
             )}
 
             {section === "feedback" && <FeedbackSection />}
+
+            {section === "moderation" &&
+              (canModerateInstance ? (
+                <AllReportsSection />
+              ) : (
+                // Only reachable for the one render before the effect above
+                // bounces off this section — a deep link can land here before
+                // React has run its effects. The nav entry itself never
+                // exists for an account the flag says no to.
+                <p role="status" aria-live="polite" className="text-sm text-paper-muted">
+                  {t("common.loading")}
+                </p>
+              ))}
 
             {error && (
               <p className="mt-4 text-sm text-danger" role="alert">
