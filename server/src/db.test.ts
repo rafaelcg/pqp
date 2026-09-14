@@ -190,6 +190,38 @@ describeDb("A3.1: guardPoolQueries covers connect() and half-open", () => {
     }
   });
 
+  // A FOURTH Farol pass caught two more gaps in the comment-aware scanner
+  // above: a `\r`-only ("old Mac") line ending never terminates a `--`
+  // comment if only `\n` is checked for, so a real bundled statement after
+  // one would be silently dropped rather than scanned — a multi-statement
+  // bypass, same shape as the original one this whole scanner exists to
+  // close. And Postgres nests `/* */` block comments (unlike C), so
+  // stopping at the first `*/` can leave an outer comment's tail
+  // un-stripped, wrongly rejecting an ordinary ROLLBACK/COMMIT that
+  // happens to carry one.
+  it("a bundled statement after a CR-only comment terminator is still rejected while open", async () => {
+    forceDbBreakerStateForTests("open");
+    await expect(
+      getPool().query("ROLLBACK -- comment\r; SELECT 1"),
+    ).rejects.toBeInstanceOf(DatabaseUnavailableError);
+  });
+
+  it("a semicolon inside a nested block comment does not stop ROLLBACK from being treated as a control statement", async () => {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      forceDbBreakerStateForTests("open");
+      // The whole /* ... */ is ONE comment, nesting included — Postgres
+      // parses this as just `ROLLBACK`.
+      await expect(
+        client.query("ROLLBACK /* outer /* inner; */ still outer */"),
+      ).resolves.toBeDefined();
+    } finally {
+      forceDbBreakerStateForTests("closed");
+      client.release();
+    }
+  });
+
   it("a client a rejected query poisons mid-transaction is destroyed on release, and its writes never land", async () => {
     const clerkId = "clerk_dirty_txn_test";
     await getPool().query(`DELETE FROM users WHERE clerk_id = $1`, [clerkId]);

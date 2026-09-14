@@ -408,7 +408,18 @@ function stripCommentsAndLiterals(text: string): string {
   let result = "";
   for (let i = 0; i < text.length; i++) {
     if (text[i] === "-" && text[i + 1] === "-") {
-      const end = text.indexOf("\n", i);
+      // A `--` comment ends at the line's end. A fourth Farol pass caught
+      // that scanning only for `\n` treats a `\r`-only ("old Mac") line
+      // ending as never terminating the comment, dropping everything after
+      // it -- including any REAL statement-separating `;` -- rather than
+      // stopping where Postgres's own lexer does.
+      let end = -1;
+      for (let k = i + 2; k < text.length; k++) {
+        if (text[k] === "\n" || text[k] === "\r") {
+          end = k;
+          break;
+        }
+      }
       if (end === -1) {
         break;
       }
@@ -416,11 +427,32 @@ function stripCommentsAndLiterals(text: string): string {
       continue;
     }
     if (text[i] === "/" && text[i + 1] === "*") {
-      const end = text.indexOf("*/", i + 2);
-      if (end === -1) {
+      // Postgres nests block comments (unlike C or the SQL standard) --
+      // `/* /* */ */` is ONE comment, not one that ends at the first `*/`.
+      // The same Farol pass caught that stopping there could leave the
+      // outer comment's own tail un-stripped, which can carry a `;` that
+      // wrongly disqualifies an ordinary ROLLBACK/COMMIT from
+      // control-statement treatment -- rejecting exactly the cleanup
+      // statement the dirty-transaction fix depends on going through.
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") {
+          depth += 1;
+          j += 2;
+          continue;
+        }
+        if (text[j] === "*" && text[j + 1] === "/") {
+          depth -= 1;
+          j += 2;
+          continue;
+        }
+        j += 1;
+      }
+      if (depth > 0) {
         break;
       }
-      i = end + 1;
+      i = j - 1;
       continue;
     }
     const quote = text[i];
