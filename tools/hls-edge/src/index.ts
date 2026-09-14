@@ -158,6 +158,19 @@ export interface Env {
    * `ll-playlist-origin.ts`'s header.
    */
   LL_ORIGIN_BASE?: string;
+  /**
+   * `pqp-remuxd`'s `MEDIA_ORIGIN_KEY` (`internal/control/server.go`, PR
+   * #584's Farol-review fix), set here with `wrangler secret put` —
+   * NEVER in `vars`, matching `HLS_VIEWER_TOKEN_SECRET` above — since
+   * unlike `LL_ORIGIN_BASE` this value is a credential, not just a host.
+   * Sent as `X-Pqp-Origin-Key` on every request `LlPlaylistOrigin` makes
+   * against `LL_ORIGIN_BASE` (parts, init segments, `state.json`) — see
+   * `ll-playlist-origin.ts`'s `originKey` doc comment. Unset: no header is
+   * sent, matching `pqp-remuxd` leaving `MEDIA_ORIGIN_KEY` empty for a
+   * loopback-only `CONTROL_LISTEN`. Deliberately never forwarded to a
+   * viewer, the same rule `LL_ORIGIN_BASE` documents above.
+   */
+  LL_ORIGIN_KEY?: string;
   // ALWAYS-ON (not yet built, see playlist-origin.ts and
   // docs/plans/ALWAYS_ON.md task A1.x): a future R2-backed PlaylistOrigin
   // would add its own bindings here (an R2Bucket, a DurableObjectNamespace).
@@ -812,11 +825,13 @@ const inFlightRenditionFetches = new Map<string, Promise<FetchedPlaylist>>();
  */
 let llOriginSingleton: LlPlaylistOrigin | null = null;
 let llOriginSingletonBase: string | undefined;
+let llOriginSingletonKey: string | undefined;
 
-function getLlOrigin(originBase: string | undefined, timeoutMs: number): LlPlaylistOrigin {
-  if (!llOriginSingleton || llOriginSingletonBase !== originBase) {
-    llOriginSingleton = new LlPlaylistOrigin(originBase, timeoutMs);
+function getLlOrigin(originBase: string | undefined, timeoutMs: number, originKey: string | undefined): LlPlaylistOrigin {
+  if (!llOriginSingleton || llOriginSingletonBase !== originBase || llOriginSingletonKey !== originKey) {
+    llOriginSingleton = new LlPlaylistOrigin(originBase, timeoutMs, originKey);
     llOriginSingletonBase = originBase;
+    llOriginSingletonKey = originKey;
   }
   return llOriginSingleton;
 }
@@ -888,7 +903,7 @@ export default {
     // task L2.2's LL origin -- ready only when `LL_ORIGIN_BASE` is set; see
     // `ll-playlist-origin.ts` and the `Env.LL_ORIGIN_BASE` doc comment above.
     const apiOrigin = new ApiPlaylistOrigin(env.ORIGIN_BASE, UPSTREAM_TIMEOUT_MS);
-    const llOrigin = getLlOrigin(env.LL_ORIGIN_BASE, UPSTREAM_TIMEOUT_MS);
+    const llOrigin = getLlOrigin(env.LL_ORIGIN_BASE, UPSTREAM_TIMEOUT_MS, env.LL_ORIGIN_KEY);
 
     const response = await handlePlaylistRequest(
       request,

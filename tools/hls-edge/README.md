@@ -392,6 +392,28 @@ box directly" above). `ll-state.js`'s `parseLlState` is the validator: a
 malformed document is treated exactly like "origin unreachable" by every
 caller, never a crash.
 
+### `LL_ORIGIN_KEY`: this Worker's credential against the remux origin
+
+Every fetch `LlPlaylistOrigin` makes against `LL_ORIGIN_BASE` — `state.json`,
+parts, init segments, all of it — carries `X-Pqp-Origin-Key: <LL_ORIGIN_KEY>`
+when that secret is configured. This is `pqp-remuxd`'s own
+`MEDIA_ORIGIN_KEY`/`OriginKeyHeader` contract (`internal/control/server.go`,
+`tools/pqp-remux`, PR #584's Farol-review fix): a static shared value the
+origin constant-time-compares before the request ever reaches a session
+lookup, the CDN-to-origin auth-header shape rather than a per-request
+signature — a viewer's player cannot produce it and never needs to, the same
+way it never sees `LL_ORIGIN_BASE`'s host. Set with `wrangler secret put
+LL_ORIGIN_KEY`, never in `wrangler.jsonc`'s `vars` (see that file's own
+comment) — it is a credential, unlike `LL_ORIGIN_BASE`, which is only a
+host. Unset (the default): no header is sent at all, matching `pqp-remuxd`
+leaving `MEDIA_ORIGIN_KEY` empty for a loopback-only `CONTROL_LISTEN` — both
+sides default to the same "no key configured" posture, and neither one
+implies the other is wrong until a real deployment sets both. Never
+forwarded to a viewer: `fetchPlaylist`/`fetchMultivariantPlaylist` always
+construct a FRESH `Response` with only a `Content-Type` header, never the
+origin fetch's own request or response headers — pinned by
+`test/ll-playlist-origin.test.mjs`.
+
 ## Why the cache key drops the token
 
 A rendition's media playlist body
@@ -692,6 +714,7 @@ npm install
 npx wrangler login          # once, if not already authenticated
 npx wrangler secret put HLS_VIEWER_TOKEN_SECRET   # value from above
 npx wrangler secret put HLS_PARTY_PASS_SECRET     # value from above; omit to leave the party pass off
+npx wrangler secret put LL_ORIGIN_KEY             # pqp-remuxd's MEDIA_ORIGIN_KEY; optional until LL_ORIGIN_BASE is set
 npx wrangler deploy
 ```
 
@@ -704,6 +727,10 @@ leave it that way until a real `pqp-remux` box exists and implements
 `state.json` ("The `state.json` contract" above); setting it early just means
 every viewer's master-playlist fetch pays one extra round trip probing a box
 that answers nothing yet, before falling back to the conventional path.
+`LL_ORIGIN_KEY` is the credential half — set it whenever `pqp-remuxd`'s
+`MEDIA_ORIGIN_KEY` is non-empty (required once its `CONTROL_LISTEN` binds
+beyond loopback), matching values on both sides ("`LL_ORIGIN_KEY`: this
+Worker's credential against the remux origin" above).
 
 **Rollback**: unset `LIVE_HLS_PLAYLIST_BASE_URL` on the API (see
 `docs/WATCH_PARTY.md` §"Playlists at the edge") — new sessions immediately go

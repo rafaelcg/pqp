@@ -88,6 +88,20 @@ interface BufferedOriginResponse {
 
 export class LlPlaylistOrigin implements PlaylistOrigin {
   private readonly originBase: string | undefined;
+  /**
+   * `LL_ORIGIN_KEY` — this Worker's credential for reaching `pqp-remuxd`'s
+   * media routes (`/s/:id/*`), sent as `X-Pqp-Origin-Key` on every request
+   * `fetchFromOriginUncoalesced` makes. Matches `pqp-remuxd`'s
+   * `MEDIA_ORIGIN_KEY`/`OriginKeyHeader` contract (`internal/control/server.go`,
+   * PR #584's Farol-review fix) — a static shared value the origin
+   * constant-time-compares, not a per-request signature; a viewer's player
+   * never sees or produces it, the same way it never sees `LL_ORIGIN_BASE`
+   * itself. Unset (the default until an operator sets the Worker secret):
+   * no header is sent, matching `pqp-remuxd` leaving `MEDIA_ORIGIN_KEY`
+   * empty for a loopback-only `CONTROL_LISTEN` — both sides default to the
+   * same "no key configured" posture. See README.md "LL playlist (L2.2)".
+   */
+  private readonly originKey: string | undefined;
   private readonly timeoutMs: number;
   private readonly videoCodecCache = new Map<string, CachedVideoCodec>();
 
@@ -113,9 +127,10 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
   // which erases type annotations but cannot inject the
   // `this.field = field` assignments parameter properties require --
   // `tsc --noEmit` doesn't care either way, but the test runner does.
-  constructor(originBase: string | undefined, timeoutMs: number) {
+  constructor(originBase: string | undefined, timeoutMs: number, originKey?: string) {
     this.originBase = originBase;
     this.timeoutMs = timeoutMs;
+    this.originKey = originKey;
   }
 
   get ready(): boolean {
@@ -160,8 +175,17 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     const url = new URL(path, this.originBase).toString();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    // `X-Pqp-Origin-Key`, only when `LL_ORIGIN_KEY` is configured — see
+    // `originKey`'s doc comment above. Never attached to anything a viewer
+    // can reach: this fetch talks to `pqp-remuxd` directly, and the
+    // response built from it (`fetchPlaylist`/`fetchMultivariantPlaylist`)
+    // always constructs a FRESH `Response` with only a `Content-Type`
+    // header, never forwarding this request's own headers outward — see
+    // `test/ll-playlist-origin.test.mjs`'s "never forwarded to a viewer"
+    // case, which pins that.
+    const headers: HeadersInit | undefined = this.originKey ? { "X-Pqp-Origin-Key": this.originKey } : undefined;
     try {
-      const response = await fetch(url, { signal: controller.signal });
+      const response = await fetch(url, { signal: controller.signal, headers });
       const body = await response.arrayBuffer();
       return { status: response.status, ok: response.ok, body };
     } finally {

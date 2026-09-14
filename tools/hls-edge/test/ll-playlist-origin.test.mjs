@@ -144,8 +144,14 @@ function installFetchStub({
   bodyDelayMs = 0,
 } = {}) {
   const calls = { state: 0, init: 0, other: 0 };
+  // Every request's headers, in call order — a plain array rather than
+  // "last seen" so a test asserting "the origin key is on EVERY origin
+  // fetch, not just the first" (state.json AND init.mp4, across a join
+  // burst) has something to check, not just one sample.
+  const requestHeaders = [];
   const original = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
+    requestHeaders.push(new Headers(init?.headers));
     const signal = init?.signal;
     await delay(headersDelayMs, signal);
     const href = url.toString();
@@ -171,6 +177,7 @@ function installFetchStub({
   };
   return {
     calls,
+    requestHeaders,
     restore: () => {
       globalThis.fetch = original;
     },
@@ -333,6 +340,55 @@ test("a stalled body also bounds a rendition request (fetchPlaylist rejects, doe
       elapsedMs < BODY_STALL_MS / 2,
       `expected the abort to bound the body read well under the ${BODY_STALL_MS}ms stall (got ${elapsedMs}ms)`,
     );
+  } finally {
+    stub.restore();
+  }
+});
+
+test("LL_ORIGIN_KEY is sent as X-Pqp-Origin-Key on every origin fetch (state.json AND init.mp4)", async () => {
+  const stub = installFetchStub({ stateProvider: () => stateFixture({ withAudio: false }) });
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000, "remux-shared-secret");
+    await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
+    assert.ok(stub.requestHeaders.length >= 2, "expected at least one state.json and one init.mp4 fetch");
+    for (const headers of stub.requestHeaders) {
+      assert.equal(headers.get("X-Pqp-Origin-Key"), "remux-shared-secret");
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test("no LL_ORIGIN_KEY configured: no X-Pqp-Origin-Key header is sent at all", async () => {
+  const stub = installFetchStub({ stateProvider: () => stateFixture({ withAudio: false }) });
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
+    assert.ok(stub.requestHeaders.length >= 1);
+    for (const headers of stub.requestHeaders) {
+      assert.equal(headers.get("X-Pqp-Origin-Key"), null);
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test("the origin key is never forwarded to a viewer: the rendered response carries no such header", async () => {
+  const stub = installFetchStub({ stateProvider: () => stateFixture({ withAudio: false }) });
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000, "remux-shared-secret");
+    const master = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
+    assert.ok(master);
+    assert.equal(master.headers.get("X-Pqp-Origin-Key"), null);
+    assert.equal(master.headers.get("Content-Type"), "application/vnd.apple.mpegurl; charset=utf-8");
+
+    const rendition = await origin.fetchPlaylist({
+      channelId: CHANNEL_ID,
+      startedAt: STARTED_AT,
+      rung: LL_VIDEO_RUNG,
+      token: "ignored",
+    });
+    assert.equal(rendition.headers.get("X-Pqp-Origin-Key"), null);
   } finally {
     stub.restore();
   }
