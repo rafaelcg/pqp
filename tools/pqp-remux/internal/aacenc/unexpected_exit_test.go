@@ -68,10 +68,19 @@ func TestEncoderReportsAnUnexpectedExitThroughErrs(t *testing.T) {
 	}
 }
 
-// TestEncoderCleanExitAfterCloseReportsNoError is the control case: the
-// same shutdown, but Close is called first (intentionalClose), so no
-// error should ever reach Errs() -- a normal shutdown must not look like
-// a crash.
+// TestEncoderCleanExitAfterCloseReportsNoError is the control case for
+// TestEncoderReportsAnUnexpectedExitThroughErrs: Close is called
+// immediately, the only shape an intentional shutdown ever takes in this
+// codebase (Session.Close calls Encoder.Close directly; nothing here
+// waits for the process to exit on its own first and calls Close
+// afterward -- an earlier version of this test did exactly that, which
+// Farol correctly flagged as racy: with a fake process that exits
+// instantly regardless of stdin, a fixed sleep before Close is a coin
+// flip on whether readADTS's own "Close was not called" report fires
+// before Close ever sets intentionalClose. Calling Close right away
+// removes that race by construction: intentionalClose is the very first
+// thing Close does, strictly before anything that could let the
+// process's exit become observable to readADTS.
 func TestEncoderCleanExitAfterCloseReportsNoError(t *testing.T) {
 	bin := fakeExitingBinary(t, 0)
 
@@ -82,10 +91,6 @@ func TestEncoderCleanExitAfterCloseReportsNoError(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// Give the fake process a moment to exit on its own first (it does,
-	// immediately) -- Close must still be clean even though the process
-	// is already gone by the time it runs.
-	time.Sleep(50 * time.Millisecond)
 	if err := enc.Close(); err != nil {
 		// The fake process exits 0, so Close's own return (the process's
 		// Wait error) should be nil.
@@ -96,6 +101,50 @@ func TestEncoderCleanExitAfterCloseReportsNoError(t *testing.T) {
 	case err, ok := <-enc.Errs():
 		if ok {
 			t.Fatalf("expected no error after an intentional Close, got: %v", err)
+		}
+	default:
+	}
+}
+
+// TestEncoderContextCancellationIsTreatedAsIntentional is the regression
+// test for Farol's "notification-ordering gap": cancelling ctx (not
+// calling Close) is exactly what kills the ffmpeg subprocess first in
+// internal/session's own shutdown sequence (cancel() runs before
+// sess.Close() -- see Session.Close's doc comment), so a ctx-triggered
+// exit must be treated as intentional too, not just an explicit Close
+// call, or an ordinary session shutdown would misreport itself as an
+// encoder crash and could even attempt a pointless restart mid-teardown.
+// Uses a real, long-running ffmpeg (not the instant fake binary) so
+// cancellation genuinely races the process's exit, the same shape a live
+// session's shutdown has.
+func TestEncoderContextCancellationIsTreatedAsIntentional(t *testing.T) {
+	requireFFmpeg(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	enc, err := New(ctx, Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	cancel() // not enc.Close() -- mirrors Session's own shutdown order exactly
+
+	// Wait for the definitive completion signal (Frames() closing) first;
+	// readADTS's own errs-send (if any) always happens strictly before
+	// that close (see its doc comment), so a non-blocking check of Errs()
+	// right after is enough -- no need for a second bounded wait.
+	select {
+	case _, ok := <-enc.Frames():
+		if ok {
+			t.Fatal("expected Frames() to close, not deliver a frame, after ctx cancellation with no input ever written")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Frames() never closed after ctx cancellation")
+	}
+
+	select {
+	case err, ok := <-enc.Errs():
+		if ok {
+			t.Fatalf("a ctx-cancellation-triggered exit must not be reported as an unexpected error, got: %v", err)
 		}
 	default:
 	}

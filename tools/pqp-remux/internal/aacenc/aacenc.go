@@ -30,7 +30,18 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// frameDeliveryStallTimeout bounds how long readADTS waits for room in a
+// full Frames() channel before concluding nobody is actively reading it
+// at all. Generous next to this pipeline's own cadence (one frame roughly
+// every 21ms, SamplesPerFrame/SampleRate) so a consumer that is merely a
+// scheduling beat behind -- including the ordinary tail of an intentional
+// Close, which keeps draining Frames() throughout -- never loses a real
+// frame; only a consumer that has genuinely stopped reading does, and
+// even then Close is bounded rather than hanging forever.
+const frameDeliveryStallTimeout = 2 * time.Second
 
 // SampleRate/Channels match internal/audiomix.SampleRate/Channels exactly:
 // this package encodes whatever PCM it is handed without resampling, and
@@ -102,18 +113,20 @@ type Encoder struct {
 	frames chan Frame
 	errs   chan error
 
-	// intentionalClose is set (before stdin is closed) by Close, so
-	// readADTS can tell "we asked ffmpeg to stop" apart from "ffmpeg
-	// stopped on its own" once its read loop ends -- both look like the
-	// same EOF/closed-pipe condition from inside that loop, and only this
-	// flag distinguishes a normal shutdown from an unexpected exit worth
-	// reporting through Errs().
+	// intentionalClose is set BEFORE stdin is closed, from two places:
+	// Close itself, and a goroutine (started in New) that watches the ctx
+	// New was given, since exec.CommandContext kills this process the
+	// same way an explicit Close does the moment that ctx is cancelled --
+	// per this package's own doc comment and every caller's (see
+	// internal/session's EnableAudio), cancelling ctx IS a normal,
+	// intentional shutdown, not a crash. Without watching ctx here too,
+	// a session's own cancel()-then-Close() shutdown sequence had a race
+	// where the ctx-triggered kill could be observed (and reported as an
+	// "unexpected exit") before Close ever ran and set this flag --
+	// Farol found this. readADTS reads this once its loop ends, to tell
+	// "we asked for this" apart from "ffmpeg stopped on its own", which
+	// otherwise look identical (the same EOF/closed-pipe condition).
 	intentionalClose atomic.Bool
-	// closeRequested lets a blocked "deliver this frame" send abandon
-	// itself once Close is underway, so a consumer that has stopped
-	// reading Frames() (or never started) cannot make Close hang forever
-	// waiting on a full channel. See readADTS's send loop.
-	closeRequested chan struct{}
 	// processDone closes once cmd.Wait() returns, called exactly once,
 	// from readADTS's own goroutine after its read loop ends -- the
 	// single place this Encoder ever calls Wait, so Close does not need
@@ -159,15 +172,30 @@ func New(ctx context.Context, cfg Config) (*Encoder, error) {
 	}
 
 	e := &Encoder{
-		cmd:            cmd,
-		stdin:          stdin,
-		frames:         make(chan Frame, 32),
-		errs:           make(chan error, 1),
-		closeRequested: make(chan struct{}),
-		processDone:    make(chan struct{}),
+		cmd:         cmd,
+		stdin:       stdin,
+		frames:      make(chan Frame, 32),
+		errs:        make(chan error, 1),
+		processDone: make(chan struct{}),
 	}
 	go e.readADTS(stdout)
+	go e.watchContext(ctx)
 	return e, nil
+}
+
+// watchContext marks this shutdown intentional the moment ctx is
+// cancelled, matching what exec.CommandContext is about to do to the
+// process itself -- see intentionalClose's own doc comment for why this
+// exists. Returns once either happens; watching after processDone is
+// already closed would just leak this goroutine forever on a long-lived
+// ctx that outlives the Encoder (the common case: one ctx covers a whole
+// session, of which this Encoder's process is one restartable part).
+func (e *Encoder) watchContext(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		e.intentionalClose.Store(true)
+	case <-e.processDone:
+	}
 }
 
 // WriteSamples feeds interleaved stereo float32 PCM (SampleRate,
@@ -203,15 +231,18 @@ func (e *Encoder) Errs() <-chan error { return e.errs }
 // after the first returns the same result.
 //
 // This never deadlocks even if the caller has stopped reading Frames():
-// closeRequested (closed here) lets readADTS's blocked "deliver this
-// frame" send abandon itself instead of waiting forever on a full,
-// unread channel -- see readADTS's own send loop for why that matters
-// and what it costs (the frame in flight at that exact moment, at most).
+// readADTS's own frame-delivery loop is bounded by
+// frameDeliveryStallTimeout, not by anything Close does, so a consumer
+// that never reads at all still lets Close return (after that timeout)
+// rather than hang forever -- see readADTS's send loop for why that
+// bound is timeout-based and not tied to Close being called (a Close
+// racing an ACTIVELY draining consumer, which is the ordinary case for
+// Session.Close's own final-segment flush, must never lose a frame just
+// because Close happened to run).
 func (e *Encoder) Close() error {
 	e.closeOnce.Do(func() {
 		e.intentionalClose.Store(true)
 		_ = e.stdin.Close()
-		close(e.closeRequested)
 		<-e.processDone
 		e.closeErr = e.waitErr
 	})
@@ -240,28 +271,36 @@ readLoop:
 			readErr = err
 			break
 		}
-		// Prefer delivering without ever consulting closeRequested: a
-		// consumer that is actively draining Frames() (the normal case,
-		// including for the whole tail of an intentional shutdown, which
-		// wants every buffered frame delivered) must never lose a frame
-		// to closeRequested winning an arbitrary select race. Only fall
-		// back to the closeRequested-aware select once the channel is
-		// actually full, meaning nothing is being read right now.
+		// Prefer delivering without ever starting a timer: the common
+		// case, including throughout an intentional Close's own final
+		// flush (Session.Close keeps its reader draining Frames() the
+		// whole time -- see its own doc comment), is that there is room
+		// and this send never blocks at all.
 		select {
 		case e.frames <- frame:
 			continue
 		default:
 		}
+		// The channel was full at that instant. Wait up to
+		// frameDeliveryStallTimeout for room rather than either
+		// blocking forever (if nobody is reading at all) or bailing out
+		// immediately whenever Close happens to be in progress (which
+		// would risk dropping a frame from a consumer that is merely a
+		// beat behind, not stopped -- exactly the frames a final
+		// segment flush cares about). Only a channel that stays full
+		// for the whole timeout means nobody is actively reading.
+		timer := time.NewTimer(frameDeliveryStallTimeout)
 		select {
 		case e.frames <- frame:
-		case <-e.closeRequested:
-			// Shutdown is in progress and nobody appears to be reading
-			// Frames(): stop the whole loop rather than risk blocking
-			// again on the very next frame (which would also block
-			// Close, which waits on processDone below). Whatever was
-			// still pending, including this frame and any further ADTS
-			// output, is lost -- an accepted cost of an
-			// already-abnormal "consumer stopped" shutdown.
+			timer.Stop()
+		case <-timer.C:
+			// Genuinely stalled: stop the whole loop rather than retry
+			// this same wait on every subsequent frame (which would
+			// also delay Close, which waits on processDone below, by a
+			// multiple of this timeout instead of just once). Whatever
+			// was still pending, including this frame and any further
+			// ADTS output, is lost -- an accepted cost of an
+			// already-abnormal "consumer stopped entirely" case.
 			break readLoop
 		}
 	}
