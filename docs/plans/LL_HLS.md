@@ -326,12 +326,21 @@ tick, treats `demoted: true`, `state: "demoted"` and "not listed at all"
 alike, stops the session, ends the row with the box's own reason, logs
 `voice.hlsLlDemoted`, and hands the channel back to `hls-egress.ts` to
 reconcile onto the rungs. A control API that cannot be reached demotes
-nothing. **And the fallback sticks**: the demotion clears the party's
+nothing, and neither does a channel whose row this process no longer owns:
+the sweep re-claims the row before it stops anything, because `llRooms` is
+process memory and a stale entry acted on after another machine took the
+party over would kill the new owner's stream through the one path with no
+claim in front of it. **And the fallback sticks**: the demotion clears the party's
 `low_latency_requested` (logged as `voice.hlsLlRequestCleared`) and memoes the
 channel for the same five minutes the box's own `DEMOTE_WINDOW_MS` uses, so
 the next reconcile cannot start a second LL session on top of the one just
-given up on. The next `goLive` writes the column again, which is what makes a
-demotion last the party and not a minute longer.
+given up on. That write is scoped to the party row the demoted session
+belonged to, never to the channel, so a cleanup that runs late cannot clear a
+newer party's request; a write that fails is retried on the next sweep
+(`pendingLlModeClearCount`), because the memo expires in five minutes and the
+column is what has to outlive it. The next `goLive` writes the column again
+AND clears the memo, which is what makes a demotion last the party and not a
+minute longer.
 
 **Adoption is free, but only if exactly one machine does it.** The same night,
 machine B booted first, resumed the existing remux session
@@ -347,9 +356,10 @@ every row in `llRooms`, which is a read-then-act across two machines:
 `claimHlsSessionRow` (`hls-ownership.ts`) is a heartbeat-aware compare-and-set
 run BEFORE a session is started, resumed or adopted, and the loser of that
 UPDATE neither adopts nor stops — it is not an orphan, it has a driver.
-`adoptLlHlsSessions` writes its own `voice_instances` heartbeat first, or two
-machines booting inside one TTL would each read the other as dead and take the
-row back in turn. A row another process wrote in the last 60 s (the window
+`adoptLlHlsSessions` writes its own `voice_instances` heartbeat first and
+ABORTS THE PASS if that write fails, or two machines booting inside one TTL
+would each read the other as dead and take the row back in turn: "could not
+say I am alive" is not "I am alive". A row another process wrote in the last 60 s (the window
 between `startLlSession`'s INSERT and its POST) is left alone whatever the
 heartbeats say, which is this section's own grace, now enforced.
 
@@ -358,9 +368,14 @@ heartbeats say, which is this section's own grace, now enforced.
 frame happened to land on — about half of them, with no session affinity —
 the whole call is a no-op, the mode branch included. An instance that does not
 hold the channel (`liveHlsOwnsChannel`: `rooms` or `llRooms`) now publishes a
-`voice.hlsReconcile` intent on the cluster bus, throttled per channel, and the
-owner runs its own local reconcile; nobody else acts on it, and with one
-machine nothing is published at all. `voice.cluster.hlsReconcileRelayed` /
+`voice.hlsReconcile` intent on the cluster bus, throttled per channel and only
+when its own `hlsAudience` says the other machine has a party here, so an
+ordinary LiveKit voice room's joins and leaves publish nothing. The owner runs
+its own local reconcile; nobody else acts on it, and with one machine nothing
+is published at all. The relaying instance still runs its own local path
+afterwards, deliberately: a channel NOBODY owns yet is the ordinary case for a
+share about to start, and the machine holding the presenter is the one that
+has to start it. `voice.cluster.hlsReconcileRelayed` /
 `hlsReconcileApplied` are the two counters that say it runs.
 
 **How the box budget counts a remux.** CPU is nearly free: passthrough under 0.02

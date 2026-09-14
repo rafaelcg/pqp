@@ -1989,7 +1989,23 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
   // and the owner does its own local half. Nothing changes on one machine
   // (`isBusEnabled()` is false) and nothing changes on the owner, which takes
   // the local path below exactly as it always did.
-  if (!liveHlsOwnsChannel(voiceChannelId)) {
+  //
+  // GATED ON THERE BEING SOMETHING TO RECONCILE, which is `hlsAudience`
+  // holding a stream this instance did not produce: on a non-owner that map
+  // is filled by `voice.live` and nothing else, so a non-empty entry is the
+  // other machine having said "there is a party here" (a Farol finding on PR
+  // #618 -- without it, every join and leave in every ordinary LiveKit voice
+  // room published a frame that woke the whole cluster to discover there was
+  // no transcode anywhere).
+  //
+  // THE LOCAL PATH STILL RUNS BELOW, deliberately. Relaying is not a handoff:
+  // a channel NOBODY owns yet is the ordinary case for a share that is about
+  // to start, and the machine holding the presenter is the one that has to
+  // start it. Returning here instead would mean a party whose first reconcile
+  // happens to find no owner never gets one. The two are not in conflict on
+  // the machine that matters: a non-owner with no local sharer resolves
+  // `presenterPeerId: null` and its `reconcileLiveHls` has no room to stop.
+  if (!liveHlsOwnsChannel(voiceChannelId) && hlsAudience.stream(voiceChannelId)) {
     relayHlsReconcile(voiceChannelId);
   }
   // THE PARTY IS THE BROADCAST, AND ENDING IT ENDS THE BROADCAST.

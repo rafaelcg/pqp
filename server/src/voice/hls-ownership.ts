@@ -434,21 +434,31 @@ async function writeHlsSessionClaims(
  * "last writer wins" into "first writer wins", which is the only version of
  * this that has an answer.
  *
- * A no-op with the registry off (no heartbeats mean anything there) and a
- * swallowed failure: a beat that did not land leaves the claim no worse than
- * it was before this function existed.
+ * ANSWERS WHETHER THE CLAIMANT IS NOW VISIBLE, and a caller that is about to
+ * claim MUST abort on `false` (a Farol finding on PR #618). Swallowing the
+ * failure and claiming anyway is the exact race this function exists to
+ * close, one step further along: machine A takes an expired row while its own
+ * heartbeat is missing, machine B reads A as dead and takes it straight back,
+ * and both drive the same remux session until one stops the other's stream.
+ * "Could not say I am alive" is not "I am alive".
+ *
+ * `true` with the registry off, and no round trip: there are no heartbeats to
+ * be visible in, one process owns everything, and the claim's own predicate
+ * omits the owner clause for exactly that reason.
  */
-export async function ensureHlsOwnerHeartbeat(): Promise<void> {
+export async function ensureHlsOwnerHeartbeat(): Promise<boolean> {
   if (!isVoiceRegistryEnabled()) {
-    return;
+    return true;
   }
   try {
     await heartbeatVoiceInstance();
+    return true;
   } catch (error) {
     logEvent("voice.hlsOwnerLookupFailed", {
       scope: "heartbeat",
       error: error instanceof Error ? error.message : String(error),
     });
+    return false;
   }
 }
 

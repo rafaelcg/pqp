@@ -209,8 +209,12 @@ async function viewerVisits(instance: Instance, channel: string): Promise<void> 
   );
 }
 
-/** This instance holds the transcode, as an adoption across a deploy leaves it. */
-function ownHere(instance: Instance, channel: string): void {
+/**
+ * This instance holds the transcode, as an adoption across a deploy leaves
+ * it. Answers the stream, so the caller can tell the other machine about it
+ * the way `pushLiveHls` would.
+ */
+function ownHere(instance: Instance, channel: string) {
   const stream = instance.egress.adoptLiveHlsSession({
     channelId: channel,
     egressId: `EG_${channel.slice(0, 8)}`,
@@ -221,6 +225,26 @@ function ownHere(instance: Instance, channel: string): void {
   });
   expect(stream).not.toBeNull();
   expect(instance.egress.liveHlsOwnsChannel(channel)).toBe(true);
+  return stream!;
+}
+
+/**
+ * "There is a party on this channel", said by the machine running it — the
+ * `voice.live` frame `pushLiveHls` publishes after every stream change. What
+ * fills `hlsAudience` on the OTHER machine, and what gates the reconcile
+ * relay: an instance with no idea a party exists has nothing to relay about.
+ */
+function announceLive(
+  from: Instance,
+  channel: string,
+  stream: { hlsUrl: string; startedAt: number; presenterPeerId: string },
+): void {
+  from.bus.publishToCluster(from.voice.VOICE_LIVE_TOPIC, {
+    channelId: channel,
+    stream,
+    endsStartedAt: null,
+    at: Date.now(),
+  });
 }
 
 const previousRegistry = process.env.VOICE_REGISTRY;
@@ -268,8 +292,14 @@ describeDb("voice.hlsReconcile: the owner machine runs the reconcile", () => {
     const channel = randomUUID();
     const a = await bootInstance();
     const b = await bootInstance();
-    ownHere(b, channel);
+    const stream = ownHere(b, channel);
     expect(a.egress.liveHlsOwnsChannel(channel)).toBe(false);
+    // B tells the cluster there is a party, exactly as its own `pushLiveHls`
+    // does. This is what A knows about the channel, and all it knows.
+    announceLive(b, channel, stream);
+    // The memory transport delivers synchronously, and the handler's own
+    // fan-out is a promise; one turn is enough for A to have recorded it.
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     // On A this is the no-op that started the incident: no room, no LL
     // session, nothing at all to reconcile.
@@ -298,8 +328,14 @@ describeDb("voice.hlsReconcile: the owner machine runs the reconcile", () => {
     const a = await bootInstance();
     const b = await bootInstance();
 
-    // Nobody holds a transcode anywhere. A still relays (it cannot know), and
-    // B must do nothing with it but drop it.
+    // A has been told there is a party (so it relays), and NOBODY holds the
+    // transcode any more — the machine that did has restarted, or the session
+    // ended. B must do nothing with the intent but drop it.
+    announceLive(b, channel, {
+      hlsUrl: `/api/voice/hls-playlist/${channel}/1000`,
+      startedAt: Date.now() - 60_000,
+      presenterPeerId: "peer-presenter",
+    });
     await viewerVisits(a, channel);
     // The memory transport delivers synchronously, so once A has published,
     // B has either handled it or dropped it. One turn of the loop covers the

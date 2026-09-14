@@ -57,6 +57,7 @@ const { upsertUser } = await import("../services/users.js");
 const {
   adoptLlHlsSessions,
   deriveLlSessionId,
+  setRequestedHlsMode,
   llDemotedRecently,
   llHasRoom,
   llHlsActivity,
@@ -389,6 +390,64 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       `UPDATE channel_sessions SET low_latency_requested = TRUE WHERE id = $1`,
       [partyId],
     );
+    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+  });
+
+  it("(1b-bis) does not suppress a NEW party that asks for LL on the same channel", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "no-video",
+    });
+    await sweepLlDemotions();
+    expect(llDemotedRecently(channelA)).toBe(true);
+
+    // The host ends the party and starts another one, asking for LL again.
+    // The memo is a verdict about a session that no longer exists, and
+    // holding the new party to it for the rest of five minutes would be a
+    // silent downgrade nobody could explain.
+    await setRequestedHlsMode(partyId, true);
+
+    expect(llDemotedRecently(channelA)).toBe(false);
+    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+  });
+
+  it("(1c) never stops a demoted session whose row another live instance has taken", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "part-stuck",
+    });
+    // This process was out of touch long enough for the other machine to take
+    // the row and (as far as it is concerned) drive the party. Acting on a
+    // stale `llRooms` entry here would DELETE the box session and rewrite a
+    // live owner's row: the exact failure the rest of this change prevents,
+    // arriving through the one path with no claim in front of it.
+    const machineB = randomUUID();
+    await heartbeat(machineB, 1);
+    const taken = await getPool().query<{ id: string }>(
+      `UPDATE hls_sessions SET instance_id = $2
+        WHERE channel_id = $1 AND mode = 'll' AND ended_at IS NULL
+        RETURNING id`,
+      [channelA, machineB],
+    );
+    expect(taken.rowCount).toBe(1);
+
+    const fellBack = await sweepLlDemotions();
+
+    expect(fellBack).toEqual([]);
+    expect(stopped).toEqual([]);
+    expect(llHlsActivity().demoted).toBe(0);
+    // The stale entry is dropped, so this process stops claiming a session it
+    // does not own, and the row stays exactly as its owner left it.
+    expect(llHasRoom(channelA)).toBe(false);
+    const row = await rowById(taken.rows[0]!.id);
+    expect(row.ended_at).toBeNull();
+    expect(row.instance_id).toBe(machineB);
     expect(await requestedHlsModeForChannel(channelA)).toBe(true);
   });
 
