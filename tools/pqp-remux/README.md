@@ -4,10 +4,16 @@ A headless, hidden LiveKit subscriber that turns a watch party presenter's
 screen-share H.264 into CMAF (fragmented MP4) parts and segments for LL-HLS —
 video passthrough, no decode or re-encode of a single frame — and mixes every
 stage microphone plus the screen's own audio into one AAC-LC track alongside
-it. This is `L1.1` through `L1.4` of
-[`docs/plans/LL_HLS.md`](../../docs/plans/LL_HLS.md) on `main` — read that
-file's "1. Architecture" and "3. Keyframes" sections first; this README does
-not repeat the reasoning, only the interface.
+it. This is `L1.1` through `L1.4`, plus `L1.6`'s Go-side control API and
+watchdog, of [`docs/plans/LL_HLS.md`](../../docs/plans/LL_HLS.md) on `main` —
+read that file's "1. Architecture" and "3. Keyframes" sections first; this
+README does not repeat the reasoning, only the interface.
+
+Two binaries live here now: `cmd/pqp-remux` is the single-session process
+described by "What it does today" below (one `ROOM`, set by hand or a load
+harness); `cmd/pqp-remuxd` is the `L1.6` **control-plane supervisor** that
+holds N of that same pipeline in one process, driven over HTTP by
+`pqp-api` — see "Control API (`L1.6`)".
 
 ## What it does today
 
@@ -332,6 +338,230 @@ last-registered-first, so registration order (`r2Writer`, `sess`, `cancel`,
 `Session.Close` had a chance to flush and enqueue the final video and audio
 segments) silently dropped a party's last few segments from R2 every time.
 
+## Control API (`L1.6`)
+
+`cmd/pqp-remuxd` (`internal/control`) is the supervisor
+`packages/shared/src/hls-remux-control.ts` (`L1.5`, PR #580) describes from
+`pqp-api`'s side: "a small HTTP surface a supervisor on the egress box
+exposes, fronting one `pqp-remux` subscriber per session." One process, N
+sessions, each a real `session.Session` + `subscriber.Session` pair built
+and torn down on demand (`internal/control.NewRemuxPipeline` — the exact
+same construction `cmd/pqp-remux/main.go`'s `runServer` uses for the
+single-session binary, refactored to run more than once per process
+lifetime) — never a subprocess, never a container per session.
+
+### Routes
+
+| Route | Signed? | What |
+|---|---|---|
+| `POST /sessions` | yes | Start a session. Body: `sessionId`, `room`, `channelId`, `partMs`, `segmentMs`, `ringSegments`, `keyframePolicy`, `pliPaceMs`, `pliGateFactor` — one field per `pqp-remux` config knob (see Config above). 201 with the session's info, or 409 with the SAME info if `sessionId` already names a session (idempotent retry). |
+| `DELETE /sessions/:id` | yes | Stop a session. 204 always, including "already gone" — stopping is idempotent. |
+| `GET /sessions` | yes | Every session this process currently holds. |
+| `GET /s/:id/*` | origin key (see below) | That session's media: `init.mp4`, `playlist.m3u8`, `part-N.m4s`, `seg-N.m4s` and their `audio-*` twins — the exact route shapes `internal/serve.Server` already answers, mounted per session under one prefix so `L2.3`'s edge Worker has one origin path shape regardless of how many sessions are live. Never HMAC-signed like `/sessions` (a viewer's player cannot produce that signature, and does not need to reach this route through anything but the edge Worker in a real deployment) — see "Access control" below for what actually gates it. |
+
+`ringSegments` is bounded (`2`..`60`, `internal/control/types.go`'s
+`minRingSegments`/`maxRingSegments`) rather than merely "a positive
+integer": a session's ring lives entirely in this process's memory, so an
+unbounded caller-supplied value is a memory-DoS knob, not a real DVR-window
+choice.
+
+`GET /sessions`'s response carries the ten fields
+`remuxSessionInfoSchema` in `hls-remux-control.ts` names
+(`sessionId`, `room`, `channelId`, `subscribed`, `startedAtMs`,
+`lastPartAtMs`, `lastIdrAtMs`, `openSegmentMs`, `partsWritten`,
+`bytesServed` — `lastPartAtMs`/`lastIdrAtMs`/`openSegmentMs` are absolute
+Unix milliseconds or `null`, matching `startedAtMs`'s own units, NOT the
+elapsed-since-start convention `internal/serve`'s local-test `/healthz`
+uses) plus a handful more this task's own description asks for
+(`state`, `demoted`, `demotedReason`, `audioHealth`, `lastIdrAgeMs`) that
+the TS schema has not grown yet. That schema is a plain `z.object({...})`
+with no `.strict()`, so `pqp-api`'s own `.parse()` call silently strips
+whatever it does not name (Zod's documented default) — returning the extra
+fields today is forward-compatible, not a contract violation.
+
+### Signing
+
+Every `/sessions` route (never the media routes) is HMAC-signed as
+`hls-remux-control.ts`'s own doc comment specifies, EXTENDED with a nonce
+(Farol review, PR #584 — not yet reflected in that file itself, see below):
+`X-Pqp-Remux-Timestamp` (unix ms), `X-Pqp-Remux-Nonce` (a per-request random
+value the caller generates) and `X-Pqp-Remux-Signature` (lowercase hex
+HMAC-SHA256) over
+
+```
+${METHOD}\n${path}\n${timestampMs}\n${nonce}\n${rawBody}
+```
+
+verified with a constant-time compare (`crypto/hmac.Equal` on the decoded
+bytes, never a string `==`), a 60s clock-skew window, AND a bounded
+in-memory replay cache (`internal/control/nonce_cache.go`) that remembers
+every nonce a valid signature was ever accepted for, for 2× the skew window
+(120s) — a captured, still-fresh request now fails on its **second** use,
+not merely once the skew window eventually closes. The nonce check runs
+only after the signature itself verifies, so a forged request can never
+pollute the cache. A request that fails either check never reaches a
+handler at all: no session lookup, no registry mutation.
+
+**This is a breaking change to the wire contract the TS side
+(`server/src/voice/hls-remux.ts`, PR #580) has not picked up yet**: every
+request from an unpatched client is refused as "missing nonce" until it
+sends `X-Pqp-Remux-Nonce` as part of the signed payload, in the exact
+position above (any sufficiently random per-request string — a UUID or 16+
+bytes of hex both work). See the PR description and the follow-up comment
+left on #580.
+
+### Watchdog and the demotion contract
+
+`docs/plans/LL_HLS.md` §5. Each session runs its own watchdog goroutine
+(`internal/control/watchdog.go`'s `evaluateWatchdog`, pure — no clock, no
+IO — driven by `managed_session.go`'s ticker), which:
+
+0. **Waiting is not stalled.** No part has EVER been produced yet (a
+   presenter who has not clicked "share screen", or a room just joined) is
+   `StateWaiting`, governed by its own, much longer `FIRST_PART_TIMEOUT_MS`
+   (default 60s) — `PART_STUCK_MS`'s 3s would otherwise demote the ordinary
+   "nobody has started sharing yet" case almost immediately (Farol review,
+   PR #584). Past that timeout with still nothing at all → demote, reason
+   `no-video`, no restart attempt (there is nothing to restart into; the
+   pipeline is already doing the one thing it can). Every rule below only
+   applies once at least one part has arrived.
+1. **Restarts once, then demotes.** No NEW part for `PART_STUCK_MS` (default
+   3000ms, "six parts" per the plan) → rebuild this session's pipeline: the
+   OLD pipeline is closed FIRST, and only then is its replacement built
+   (new subscription to the same room, same config), so a real gap —
+   however long the replacement's own subscriber takes to connect — is
+   the price of a correctness guarantee below, not an accident (Farol
+   review round 2, PR #584: an earlier revision built the replacement
+   before closing the old one to avoid that gap, and that was the bug —
+   see below). A second stall within `DEMOTE_WINDOW_MS` (default 5
+   minutes) of that restart → **demote**: the pipeline is closed and the
+   session is marked `demoted` for good. A stall further apart than that
+   window is a fresh episode and gets its own restart. **The replacement
+   pipeline's video and audio segment counters continue from the old
+   pipeline's own FINAL index, plus one** (`PipelineConfig.
+   StartVideoSegmentIndex`/`StartAudioSegmentIndex`,
+   `session.Session.SetStartSegmentIndex`) — never reset to 0 — so its R2
+   object keys (`internal/r2.ObjectPrefix`) never collide with (and
+   silently overwrite) whatever the stalled predecessor already uploaded.
+   "Plus one" specifically because the OLD pipeline's own teardown
+   independently finalizes and uploads whatever segment was still open on
+   it (`session.Session.Finish`/`Close`); reserving that exact index for
+   the replacement is what makes the two pipelines' key ranges disjoint.
+   Reading that final index requires the old pipeline to actually BE
+   final first — closing it before reading `Health()` (and before
+   building the replacement) is what makes "plus one" a value nothing can
+   invalidate out from under it, rather than a snapshot a rollover mid-
+   factory-call can race. Pinned by
+   `TestManagedSession_RestartNeverReusesR2Key` (an in-memory-S3-backed
+   regression test) and
+   `TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown` (the
+   same, but the old pipeline's own teardown seals one more segment on its
+   way down).
+2. **The IDR-gap ladder takes precedence and skips the restart entirely.**
+   No IDR for more than 2× the segment target → log once per gap (rate
+   limited; resets the moment a real IDR arrives). Past 3× with still no
+   IDR → demote immediately, no restart attempt at all: restarting the SAME
+   subscription to the SAME room does nothing for a publisher that has
+   simply stopped sending keyframes, and a segment can never close on a
+   non-IDR boundary (plan §5, "never close a segment on a non-IDR
+   boundary").
+3. **Audio-dead propagation.** `session.Session.Health().AudioDead` (`L1.3`'s
+   own one-restart-then-give-up ladder for the AAC encoder subprocess) is
+   surfaced on `GET /sessions`'s `audioHealth.dead` — never a reason to
+   demote the video rung, matching `internal/session`'s own "video
+   passthrough is unaffected" rule throughout.
+
+**Demoted is terminal and reported, not silently dropped**: a demoted
+session's pipeline is closed (no more LiveKit subscription, no more CPU),
+but it stays on `GET /sessions` with `demoted: true` and a `demotedReason`
+until an explicit `DELETE` removes it — so `pqp-api` can notice on its next
+poll and flip the party to the conventional ladder, incrementing
+`liveHls.llDemoted` on its side (that counter and the poll loop that would
+read this response are `L1.5`'s own file, `server/src/voice/hls-remux.ts`,
+tracked on a separate branch — see "Not yet" below). Every restart and
+every demotion is logged with its `reason` (`pqp-remux: control: session
+<id>: restarting (part-stuck)` / `demoting (idr-gap-exceeded)` and so on),
+pitfall 15's rule in the root `CLAUDE.md`: a state change with no reason in
+the log is exactly what cost an afternoon there.
+
+**A killed API never reaps a healthy session**: `pqp-remuxd` has no idea
+whether anything is polling `GET /sessions` at all, so a session simply
+keeps running (and, if it stalls, keeps working through the exact same
+ladder above) regardless of whether `pqp-api` is up, down, or mid-restart.
+Adoption across an API restart is `pqp-api`'s own job on reconnect (list,
+match against its `hls_sessions` rows) — this box has nothing to do
+differently either way.
+
+### Access control
+
+Nothing under `GET /s/:id/*` authenticates a *viewer* — the signing above
+authenticates `pqp-api`'s own control calls, not a browser's playlist/part
+requests. A real per-viewer access control layer in front of the media
+routes is `L2.x`'s job (the edge Worker and its own token check), not this
+package's.
+
+What DOES gate `/s/:id/*` today is two independent things, and Farol's
+review of the first version of this task (PR #584) found the first one was
+missing entirely:
+
+- **`MEDIA_ORIGIN_KEY`** (`X-Pqp-Origin-Key` header, `server.go`'s
+  `withOriginKey`, constant-time compared via `crypto/subtle`): the seam
+  L2.3's edge Worker is meant to use, a static shared value the Worker
+  attaches when proxying — the same shape a CDN-to-origin auth header
+  takes, and distinct from `/sessions`' own per-request HMAC (a viewer's
+  player still never sees or produces either credential). Checked before
+  the registry is ever consulted: an unknown session id with no key is
+  refused the same way a known one is, never leaking which is true to an
+  unauthenticated caller.
+- **`CONTROL_LISTEN`'s loopback-by-default binding.** With no
+  `MEDIA_ORIGIN_KEY` set, this is the ONLY thing protecting the media
+  routes, which is why `LoadGlobalConfig` **refuses to start** if
+  `CONTROL_LISTEN` is bound beyond loopback (`internal/control.
+  isLoopbackAddr`: `localhost` or a literal loopback IP, nothing else)
+  with no `MEDIA_ORIGIN_KEY` — a box configured to listen on a routable
+  address with nothing here would disclose a live presenter's media to
+  anyone who can reach the port. The default (`127.0.0.1:8090`) needs no
+  key, and setting one is optional, but the fix is that the two can no
+  longer silently combine into an open box.
+
+### Env (control-plane specific)
+
+In addition to `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`,
+`LIVE_HLS_S3_*`, `AAC_BITRATE_KBPS`, `FFMPEG_PATH` and
+`R2_UPLOAD_QUEUE_DEPTH` / `R2_UPLOAD_MAX_RETRIES` (read exactly as
+documented in Config above — `pqp-remuxd` shares those names with
+`pqp-remux` on purpose, so one box's env covers both binaries) —
+`internal/control.LoadGlobalConfig`:
+
+| Var | Default | Meaning |
+|---|---|---|
+| `CONTROL_LISTEN` | `127.0.0.1:8090` | HTTP address for both the signed `/sessions` routes and the `/s/:id/*` media routes. **Loopback by default on purpose** — see "Access control" above. Refused at startup if bound beyond loopback with no `MEDIA_ORIGIN_KEY`. |
+| `REMUX_CONTROL_SECRET` | — (required) | The shared HMAC secret. `pqp-remuxd` refuses to start without it — an unsigned control API on a box that can disclose a live presenter's media is not a mode this binary offers. Matches `pqp-api`'s `LIVE_HLS_REMUX_CONTROL_SECRET`. |
+| `MEDIA_ORIGIN_KEY` | — (optional; required with a non-loopback `CONTROL_LISTEN`) | Gates `/s/:id/*` via the `X-Pqp-Origin-Key` header — see "Access control" above. Empty (the default, loopback-only posture) leaves those routes unauthenticated. |
+| `FIRST_PART_TIMEOUT_MS` | `60000` (60s) | No part has EVER arrived for this long → demote, reason `no-video`. Governs the "waiting for a presenter" phase, deliberately separate from and much longer than `PART_STUCK_MS` — see "Watchdog" above. |
+| `PART_STUCK_MS` | `3000` | Once at least one part has arrived: no NEW part for this long → restart the session's pipeline once. `docs/plans/LL_HLS.md` §5's own number ("six parts"). |
+| `DEMOTE_WINDOW_MS` | `300000` (5 min) | A second stall within this long of the last restart demotes instead of restarting again; further apart, it's a fresh episode. Sized after the conventional path's own "3 restarts per 5 min then a 5 min cooldown" family (`CLAUDE.md` pitfall 15) — there is no measured number for this specific ladder in the plan text, so this is `L1.6`'s own considered default, not a specified one. |
+
+`RUNG` is **not** read here: every session this binary ever runs is the
+low-latency rendition, `rung = "ll"`, fixed in code
+(`internal/control/remux_pipeline.go`) — unlike `pqp-remux`'s own `RUNG`
+env var, which exists as an override for a test or a future topology, this
+binary has no other rung to produce.
+
+### Shutdown
+
+`cmd/pqp-remuxd/main.go`: on `SIGINT`/`SIGTERM`, `http.Server.Shutdown` is
+given `shutdownTimeout` (10s) to let in-flight requests finish on their
+own; if that deadline passes first (Farol review, PR #584), `Shutdown`'s
+own error is logged and `http.Server.Close` is called to forcibly abort
+whatever is still holding a connection open (a stuck or unusually slow
+media response) — a shutdown must complete on its own bound regardless of
+what a client is doing, and a request must never be left racing
+`registry.StopAll()`, which runs only after the HTTP server has
+genuinely stopped serving. `registry.StopAll` then tears down every live
+session (unsubscribe from LiveKit, stop encoders, flush R2 queues) so a
+killed supervisor never leaks a subprocess or an open subscription.
+
 ## Try it against staging
 
 ```
@@ -465,6 +695,68 @@ infrastructure rather than assumed-present. Notably:
 - `internal/ring`, `internal/serve`: eviction, sealed-vs-open segments, the
   playlist body, and every HTTP route including the 404/503 edges, on both
   the video ring and (once `SetAudioRing` is called) the audio ring.
+- `internal/control` (`L1.6`): signature accept/reject — a valid signature,
+  a lowercase method, a wrong secret, a timestamp on either side of the 60s
+  skew window (including the edge case exactly at the boundary), a replayed
+  body under an otherwise-valid signature, missing headers, malformed hex;
+  `evaluateWatchdog` (pure, a fake clock, no goroutine) — a healthy tick is
+  a no-op, a first stall restarts, a second stall inside `DEMOTE_WINDOW_MS`
+  demotes, a stall long after the window restarts again as a fresh episode,
+  the IDR-gap warning logs once per gap and resets on a real IDR, an
+  exceeded IDR gap demotes outright with **no** restart attempt even while
+  parts are still flowing fine (precedence over the part-stuck ladder), and
+  both references fall back to the pipeline's own start time when nothing
+  has ever arrived at all; a full integration test drives the REAL watchdog
+  goroutine against a fake `Pipeline` end to end (restart, then demote,
+  within a handful of real ticks, and a demoted session staying demoted
+  with nothing further disturbing it); `Registry` — idempotent `StartOrGet`
+  (a retried start builds no second pipeline), a failed factory registers
+  nothing and a later retry is unblocked, idempotent `Stop` (including on
+  an id that never existed), N concurrently-started sessions are fully
+  isolated from each other (stopping one never touches another's `Get`),
+  and a genuinely concurrent pair of identical-sessionId starts still
+  builds exactly one pipeline; `Server`'s HTTP handlers — unsigned/
+  wrongly-signed control requests are 401 before touching the registry, an
+  invalid `StartSessionRequest` body is 400, `POST /sessions` is 201 then
+  409 on a retry, `DELETE` is 204 whether or not the session existed, the
+  unsigned `/s/:id/*` media routes proxy to the right session and count
+  `bytesServed`, an unknown session id is 404 and a demoted one is 503, and
+  `GET /sessions`'s response is checked field-by-field against
+  `remuxSessionInfoSchema`'s own ten names (transcribed directly from
+  `hls-remux-control.ts`, since that file has no literal JSON example to
+  copy) with the nullable fields round-tripped through a Go mirror of the
+  TS-inferred type to prove they are JSON `null`, not zero, before anything
+  has happened yet.
+- `internal/control`, Farol's second round (PR #584): the nonce is checked
+  end to end at the `Server` level — a fresh nonce succeeds, the identical
+  nonce replayed is rejected even though its own signature is independently
+  valid, and a different nonce is unaffected by another's use
+  (`TestServer_RejectsReplayedNonce`) — plus `verifySignature` on its own
+  rejecting a missing or oversized nonce; `MEDIA_ORIGIN_KEY` gating —
+  missing, wrong, and correct header values, and that an unknown session id
+  is refused on the header alone before the registry is ever consulted
+  (`TestServer_MediaRoute_RequiresOriginKeyWhenConfigured`), with the
+  no-key-configured posture pinned unchanged
+  (`TestServer_MediaRoute_NoOriginKeyConfiguredStaysOpen`);
+  `LoadGlobalConfig` refusing a non-loopback `CONTROL_LISTEN` with no
+  `MEDIA_ORIGIN_KEY` (and accepting it once one is set), a loopback
+  `CONTROL_LISTEN` in several spellings never requiring one, and
+  `isLoopbackAddr` itself table-tested; `evaluateWatchdog`'s waiting-vs-
+  stalled split — no part yet is a no-op well past `PART_STUCK_MS` but
+  within `FIRST_PART_TIMEOUT_MS`, and demotes with reason `no-video` once
+  that timeout passes with nothing at all; a defensive-fallback case for
+  the (impossible in practice, per `internal/pipeline.Fragmenter`'s own
+  invariant) combination of a part with no recorded IDR; and
+  `TestManagedSession_RestartNeverReusesR2Key`, a full
+  `session.Session` + `r2.Writer`-backed regression test (a real
+  in-memory-S3 fake, built with no LiveKit connection at all via a
+  test-only `Pipeline` wrapping a real `Session`) proving a watchdog
+  restart's replacement pipeline never re-uploads a segment key its
+  predecessor already used. `internal/pipeline` and `internal/session`
+  each gained their own direct unit test for `SetStartSegmentIndex`
+  (`TestFragmenter_SetStartSegmentIndexAppliesToFirstSegment`,
+  `TestAudioFragmenterSetStartSegmentIndexAppliesToFirstSegment`,
+  `TestSession_SetStartSegmentIndex`) below the integration level.
 
 CI: `.github/workflows/pqp-remux.yml`, its own workflow (not a job inside
 the root `ci.yml`, since that workflow's trigger filter applies to all its
@@ -475,13 +767,34 @@ why ffmpeg is a real, not incidental, dependency of this module now).
 
 ## Not yet
 
-- **API control plane (`L1.5`)**: no `hls_sessions` row, no `LIVE_HLS_LL`
-  flag, no start/stop/adopt lifecycle — this binary is started and stopped
-  by hand (or by a load-testing harness), not by `pqp-api`. `CHANNEL_ID` /
-  `STARTED_AT_MS` / `RUNG` (see Config) are this task's stand-in for what
-  that row will eventually own, read from the environment rather than
-  assigned by the API.
-- **Watchdog (`L1.6`)**: `/healthz` reports raw counters
+- **`pqp-api` actually driving this (`L1.5`)**: this PR's own scope is
+  `tools/pqp-remux/` only (see the PR description), so the TS/API side of
+  the control plane — `server/src/voice/hls-remux.ts`, the `hls_sessions`
+  row, the `LIVE_HLS_LL` flag, `llDemoted`/`llHlsActivity()` — lives on a
+  separate branch (PR #580, `L1.5`) and is not part of this diff. What
+  `L1.6` adds here (the `pqp-remuxd` binary, `internal/control`'s HTTP
+  contract, session management and watchdog — see "Control API" above) is
+  the Go side that branch's own doc comments describe calling; the two are
+  written to the same wire contract (`hls-remux-control.ts`) but are not
+  wired together by this PR. `pqp-api`'s own periodic polling of
+  `GET /sessions` to notice a `demoted: true` session and flip the party to
+  conventional — the other half of "report it on GET /sessions so the API
+  flips the party" — is that branch's job too, not this one's: today
+  nothing calls `GET /sessions` except an operator or a test. **The nonce
+  requirement above (Farol's second review) makes this coordination
+  mandatory, not optional**: #580's own `hls-remux.ts` signs requests with
+  the ORIGINAL four-part payload (no nonce), so as written it cannot
+  successfully call this binary's `/sessions` routes at all until it adds
+  `X-Pqp-Remux-Nonce` in the position `signaturePayload` now defines. A
+  follow-up comment naming this is on #580; until it lands, the two
+  branches must not be merged and pointed at each other.
+  `cmd/pqp-remux`'s single-session mode is unaffected either way; it is
+  still started and stopped by hand (or a load-testing harness), never by
+  `pqp-api`, and `CHANNEL_ID` / `STARTED_AT_MS` / `RUNG` (see Config) are
+  still its own env-driven stand-in for what a control-plane-managed
+  session's `PipelineConfig` now carries instead.
+- **Watchdog, single-session binary**: `cmd/pqp-remux`'s own `/healthz`
+  (unchanged by this task) reports raw counters
   (`subscribed`, `partsWritten`, `bytesWritten`, `lastPartAtMs`,
   `lastIdrAtMs`, and now `audioPartsWritten`, `audioBytesWritten`,
   `audioDead`, `audioRestarts`, `r2Uploaded`, `r2Failed`, `r2Dropped`) but
@@ -583,15 +896,19 @@ why ffmpeg is a real, not incidental, dependency of this module now).
   `EXT-X-SERVER-CONTROL`, `EXT-X-PART`, `EXT-X-PRELOAD-HINT`, and no
   blocking-reload support; that is entirely the edge Worker's job in `L2.1`
   and `L2.2`.
-- **Production serving surface**: `internal/serve` is explicitly a local
-  test surface (task description, item 4) — one process, everything on one
-  `LISTEN` address including `/healthz`. The plan's production shape (parts
-  from tmpfs behind Caddy, `/healthz` on loopback only, never proxied) is
-  `L1.5`'s wiring, not this task's — `L1.4`'s own part is only the R2 writer
-  (done, see above), which is independent of how parts themselves get to a
-  viewer.
-- **A container image / compose entry**: the plan's `L1.1` acceptance test
-  mentions "a container beside the egress in
-  `tools/sfu/hls/docker-compose.yaml`" — not added here, since this PR does
-  not touch anything under `tools/sfu/` (kept out of scope on purpose, see
-  the PR description).
+- **Production serving surface**: `internal/serve` (the single-session
+  binary's own `LISTEN`) is still explicitly a local test surface, unchanged
+  by this task. `pqp-remuxd`'s `/s/:id/*` (see "Control API" above) is
+  closer to the production shape in ONE sense — one process serving every
+  live session's parts and playlists behind one listener — but it is still
+  serving straight out of each session's in-memory ring over plain HTTP,
+  not tmpfs files behind Caddy the way the plan's §1 architecture diagram
+  draws it. Whether `pqp-remuxd` ends up sitting behind Caddy as-is, or
+  parts move to tmpfs for Caddy to serve directly, is `L2.x`'s call once the
+  edge Worker's own proxying needs are concrete.
+- **A container image / compose entry for `pqp-remuxd`**: the plan's `L1.1`
+  acceptance test mentions "a container beside the egress in
+  `tools/sfu/hls/docker-compose.yaml`" for the single-session binary, and
+  that was already out of scope there; the same is true here for
+  `pqp-remuxd` — nothing under `tools/sfu/` is touched by this PR (kept out
+  of scope on purpose, see the PR description).

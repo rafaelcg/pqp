@@ -246,3 +246,37 @@ func TestFragmenter_FlushClosesTrailingPart(t *testing.T) {
 		t.Fatalf("second Flush should be a no-op: frag=%v err=%v", frag2, err)
 	}
 }
+
+// TestFragmenter_SetStartSegmentIndexAppliesToFirstSegment is L1.6's own
+// regression test (Farol review, PR #584): a watchdog restart must
+// continue a session's video segment numbering (and therefore its R2
+// object keys) from where a stalled predecessor left off, not reset to 0.
+func TestFragmenter_SetStartSegmentIndexAppliesToFirstSegment(t *testing.T) {
+	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
+	f.SetStartSegmentIndex(7)
+
+	frag, err := f.Push(au(0, true))
+	if err != nil {
+		t.Fatalf("first IDR should be accepted: %v", err)
+	}
+	if frag != nil {
+		t.Fatal("expected no fragment yet on the very first AU")
+	}
+
+	closed, err := f.Flush()
+	if err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if closed == nil {
+		t.Fatal("expected Flush to close the trailing part")
+	}
+	if closed.SegmentIndex != 7 {
+		t.Fatalf("expected the first segment to carry the overridden start index 7, got %d", closed.SegmentIndex)
+	}
+	if !closed.IsSegmentStart {
+		t.Fatal("expected the first fragment to still be a segment start")
+	}
+	if got := f.CurrentSegmentIndex(); got != 7 {
+		t.Fatalf("expected CurrentSegmentIndex to report 7 before any rollover, got %d", got)
+	}
+}

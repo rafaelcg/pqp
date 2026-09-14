@@ -156,6 +156,30 @@ func TestWriterGivesUpAfterMaxRetries(t *testing.T) {
 	}
 }
 
+// TestWriterHonorsExplicitZeroMaxRetries pins WriterConfig.MaxRetries's own
+// doc comment (Farol review, PR #584): zero is a distinct, legitimate
+// "never retry" choice, not an unset field that should silently fall back
+// to DefaultMaxRetries the way QueueDepth/Workers's own zero values do.
+// Before this fix, MaxRetries: 0 here would have retried DefaultMaxRetries
+// (3) times instead of the 0 the caller asked for -- exactly the "operator
+// sets a value, the value is silently ignored" shape control.LoadGlobalConfig
+// exists to refuse at config-load time, so the writer itself must actually
+// honor the value that validation lets through.
+func TestWriterHonorsExplicitZeroMaxRetries(t *testing.T) {
+	up := newFakeUploader()
+	up.failN["seg-2.m4s"] = 100 // never succeeds
+
+	w := NewWriter(up, WriterConfig{Workers: 1, MaxRetries: 0})
+	defer w.Close()
+
+	w.Enqueue("seg-2.m4s", []byte("data"), "video/mp4")
+
+	waitForCondition(t, 3*time.Second, func() bool { return w.Failed() == 1 })
+	if got := up.attemptsFor("seg-2.m4s"); got != 1 {
+		t.Fatalf("attempts = %d, want 1 (MaxRetries: 0 means fail fast on the first attempt, not the package default of %d)", got, DefaultMaxRetries)
+	}
+}
+
 func TestWriterEnqueueNeverBlocksWhenQueueIsFull(t *testing.T) {
 	up := newFakeUploader()
 	up.blockCh = make(chan struct{}) // every PutObject blocks until we close this

@@ -38,7 +38,19 @@ type WriterConfig struct {
 	QueueDepth int
 	// MaxRetries is how many additional attempts a failed upload gets
 	// (so MaxRetries=3 means up to 4 total attempts) before it is counted
-	// as Failed and dropped for good.
+	// as Failed and dropped for good. Zero is a legitimate, meaningful
+	// value here -- "never retry, fail fast" -- NOT "unset, use
+	// DefaultMaxRetries" the way QueueDepth/Workers below treat their own
+	// zero value: unlike those two (where 0 has no coherent standalone
+	// meaning of its own), 0 retries is a real, distinct operator choice
+	// (Farol review, PR #584: control.LoadGlobalConfig validates
+	// R2_UPLOAD_MAX_RETRIES >= 0 specifically so this value means what it
+	// says once it reaches here). Only a NEGATIVE value -- which every
+	// production caller's own config validation already refuses before
+	// it can reach this struct -- falls back to the default, as a
+	// defensive floor for a caller that skips that validation (a test
+	// leaving this field unset gets Go's own int zero value, 0, which is
+	// exactly the "no retries" case, not the negative one).
 	MaxRetries int
 	// Workers is how many uploads may be in flight at once. R2/MinIO PUT
 	// latency measured elsewhere in this repo (hls-egress.ts's own
@@ -86,15 +98,17 @@ type uploadJob struct {
 
 // NewWriter starts cfg.Workers upload goroutines (default DefaultWorkers)
 // pulling from a queue of depth cfg.QueueDepth (default DefaultQueueDepth),
-// each upload retried up to cfg.MaxRetries times (default
-// DefaultMaxRetries) before being counted Failed.
+// each upload retried up to cfg.MaxRetries times (default DefaultMaxRetries,
+// but an explicit zero is honored as "never retry" -- see WriterConfig.
+// MaxRetries's own doc comment for why that field's zero value is treated
+// differently than QueueDepth/Workers's).
 func NewWriter(uploader Uploader, cfg WriterConfig) *Writer {
 	queueDepth := cfg.QueueDepth
 	if queueDepth <= 0 {
 		queueDepth = DefaultQueueDepth
 	}
 	maxRetries := cfg.MaxRetries
-	if maxRetries <= 0 {
+	if maxRetries < 0 {
 		maxRetries = DefaultMaxRetries
 	}
 	workers := cfg.Workers

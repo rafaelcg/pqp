@@ -57,6 +57,12 @@ func NewAudioFragmenter(cfg AudioConfig) *AudioFragmenter {
 	return &AudioFragmenter{cfg: cfg, nextIsSegmentStart: true}
 }
 
+// SetStartSegmentIndex is the audio counterpart of
+// Fragmenter.SetStartSegmentIndex -- see that method's doc comment for why
+// L1.6's watchdog restart needs this. Call it, if at all, immediately
+// after NewAudioFragmenter and before the first Push.
+func (f *AudioFragmenter) SetStartSegmentIndex(index int) { f.segmentIndex = index }
+
 // Push feeds one AAC frame (aacenc.SamplesPerFrame samples, already
 // stripped of its ADTS header) at pts (in Timescale ticks -- the caller's
 // own running sample counter, so consecutive calls are expected to differ
