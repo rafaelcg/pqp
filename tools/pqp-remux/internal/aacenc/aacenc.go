@@ -110,22 +110,29 @@ type Encoder struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
 
+	// ctx is the context New was given. exec.CommandContext kills this
+	// process the moment ctx is cancelled -- per this package's own doc
+	// comment and every caller's (see internal/session's EnableAudio),
+	// that is a normal, intentional shutdown, not a crash, since a
+	// session's own teardown cancels ctx before calling Close(). readADTS
+	// checks ctx.Err() (not a flag set by a separately racing goroutine)
+	// specifically because that check is race-free by construction:
+	// context.CancelFunc closes ctx's Done channel synchronously, before
+	// it returns, strictly before the asynchronous machinery in
+	// exec.CommandContext ever signals the process -- so any code path
+	// that could observe "the process died because ctx was cancelled"
+	// necessarily already has ctx.Err() != nil by the time it runs. An
+	// earlier version of this fix used a separate watcher goroutine
+	// racing to set a flag, which Farol correctly flagged as still
+	// leaving a window; checking ctx directly has none.
+	ctx context.Context
+
 	frames chan Frame
 	errs   chan error
 
-	// intentionalClose is set BEFORE stdin is closed, from two places:
-	// Close itself, and a goroutine (started in New) that watches the ctx
-	// New was given, since exec.CommandContext kills this process the
-	// same way an explicit Close does the moment that ctx is cancelled --
-	// per this package's own doc comment and every caller's (see
-	// internal/session's EnableAudio), cancelling ctx IS a normal,
-	// intentional shutdown, not a crash. Without watching ctx here too,
-	// a session's own cancel()-then-Close() shutdown sequence had a race
-	// where the ctx-triggered kill could be observed (and reported as an
-	// "unexpected exit") before Close ever ran and set this flag --
-	// Farol found this. readADTS reads this once its loop ends, to tell
-	// "we asked for this" apart from "ffmpeg stopped on its own", which
-	// otherwise look identical (the same EOF/closed-pipe condition).
+	// intentionalClose is set BEFORE stdin is closed by an explicit
+	// Close call; readADTS also treats ctx.Err() != nil the same way
+	// (see ctx's own doc comment above) without needing a second flag.
 	intentionalClose atomic.Bool
 	// processDone closes once cmd.Wait() returns, called exactly once,
 	// from readADTS's own goroutine after its read loop ends -- the
@@ -174,28 +181,13 @@ func New(ctx context.Context, cfg Config) (*Encoder, error) {
 	e := &Encoder{
 		cmd:         cmd,
 		stdin:       stdin,
+		ctx:         ctx,
 		frames:      make(chan Frame, 32),
 		errs:        make(chan error, 1),
 		processDone: make(chan struct{}),
 	}
 	go e.readADTS(stdout)
-	go e.watchContext(ctx)
 	return e, nil
-}
-
-// watchContext marks this shutdown intentional the moment ctx is
-// cancelled, matching what exec.CommandContext is about to do to the
-// process itself -- see intentionalClose's own doc comment for why this
-// exists. Returns once either happens; watching after processDone is
-// already closed would just leak this goroutine forever on a long-lived
-// ctx that outlives the Encoder (the common case: one ctx covers a whole
-// session, of which this Encoder's process is one restartable part).
-func (e *Encoder) watchContext(ctx context.Context) {
-	select {
-	case <-ctx.Done():
-		e.intentionalClose.Store(true)
-	case <-e.processDone:
-	}
 }
 
 // WriteSamples feeds interleaved stereo float32 PCM (SampleRate,
@@ -254,8 +246,9 @@ func (e *Encoder) Close() error {
 // before stdout is fully drained risks losing buffered output -- see the
 // stdlib's own StdoutPipe doc comment -- so both live in this one
 // sequential flow). Once its read loop ends for any reason, it waits for
-// the process, then -- unless Close asked for this shutdown
-// (intentionalClose) -- reports whatever looks like an unexpected exit
+// the process, then -- unless this shutdown was asked for (an explicit
+// Close, or ctx being cancelled; see intentionalClose's and ctx's own
+// doc comments) -- reports whatever looks like an unexpected exit
 // through Errs(), so a caller (internal/session) can tell "the encoder
 // finished because we told it to" apart from "the encoder died on its
 // own" instead of both looking like an ordinary, silent end of Frames().
@@ -301,6 +294,19 @@ readLoop:
 			// was still pending, including this frame and any further
 			// ADTS output, is lost -- an accepted cost of an
 			// already-abnormal "consumer stopped entirely" case.
+			//
+			// Kill the process here, unconditionally: without this,
+			// cmd.Wait() below can block forever if nobody ever closes
+			// stdin (Close was never called -- that is exactly the
+			// "consumer stopped, nothing else happened" scenario this
+			// branch exists for) and ffmpeg itself has no reason to
+			// exit on its own. A stalled consumer must not be able to
+			// leave the reader goroutine, and every later Close/Session
+			// shutdown that waits on it, blocked indefinitely -- Farol's
+			// finding on the first version of this fix.
+			if e.cmd.Process != nil {
+				_ = e.cmd.Process.Kill()
+			}
 			break readLoop
 		}
 	}
@@ -309,7 +315,7 @@ readLoop:
 	e.waitErr = waitErr
 	close(e.processDone)
 
-	if e.intentionalClose.Load() {
+	if e.intentionalClose.Load() || e.ctx.Err() != nil {
 		return
 	}
 
