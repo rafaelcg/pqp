@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -25,6 +26,29 @@ const OriginKeyHeader = "X-Pqp-Origin-Key"
 // limit any legitimate request could hit.
 const maxSignedBodyBytes = 1 << 20 // 1 MiB
 
+// maxConcurrentSignedBodies bounds how many requests withSigning may be
+// buffering a body for AT ONCE (Farol review, PR #584): maxSignedBodyBytes
+// only caps one request's own buffer, so with no cap on concurrency itself
+// the aggregate across every simultaneously in-flight signed request is
+// still unbounded -- N callers each sending a body near that per-request
+// cap is N times the memory, growing without limit as N does. 64 is
+// generous for this control plane's real traffic (pqp-api, one call per
+// session start/stop/list) while still giving a fixed ceiling on
+// simultaneous buffering: 64 * maxSignedBodyBytes, 64 MiB, rather than a
+// number that grows with however many requests happen to arrive at once.
+const maxConcurrentSignedBodies = 64
+
+// sanitizeForLog quotes an attacker-controlled string before it reaches a
+// log line (Farol review, PR #584): r.URL.Path is decoded from whatever
+// the caller sent -- an unsigned request that fails verifySignature never
+// reaches anything that would reject a stray %0A/%0D -- so writing it into
+// a log line unescaped lets a rejected request forge additional fake log
+// lines. strconv.Quote escapes control characters (and wraps the result
+// in quotes, which also makes an otherwise-empty or whitespace-only path
+// visible in the log line) rather than stripping them, so nothing about
+// the rejected path is lost for whoever reads the log.
+func sanitizeForLog(s string) string { return strconv.Quote(s) }
+
 // Server is the control-plane HTTP surface: POST/DELETE/GET /sessions
 // (HMAC-signed) and GET /s/{id}/{rest...} (media, gated by MEDIA_ORIGIN_KEY
 // when one is set -- see withOriginKey and control.go's package comment).
@@ -39,6 +63,13 @@ type Server struct {
 	// for 2xClockSkewMs, and an exact repeat within that window is
 	// refused. See nonce_cache.go and NonceHeader's own doc comment.
 	nonces *nonceCache
+	// bodySem bounds how many requests withSigning may be buffering a
+	// body for at once -- see maxConcurrentSignedBodies's own doc
+	// comment. A buffered channel used as a counting semaphore: acquire
+	// blocks (rather than rejecting outright) once it is full, applying
+	// backpressure to a burst instead of refusing a legitimate caller
+	// that simply arrived while others were mid-request.
+	bodySem chan struct{}
 }
 
 // NewServer builds a Server. secret is REMUX_CONTROL_SECRET; mediaOriginKey
@@ -61,6 +92,7 @@ func NewServer(secret, mediaOriginKey string, registry *Registry) *Server {
 		now:            time.Now,
 		mux:            http.NewServeMux(),
 		nonces:         newNonceCache(2 * time.Duration(ClockSkewMs) * time.Millisecond),
+		bodySem:        make(chan struct{}, maxConcurrentSignedBodies),
 	}
 	s.mux.HandleFunc("POST /sessions", s.withSigning(s.handleStart))
 	s.mux.HandleFunc("DELETE /sessions/{id}", s.withSigning(s.handleStop))
@@ -82,6 +114,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.Serve
 // registry mutation, nothing.
 func (s *Server) withSigning(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Held only across the buffer-then-verify window below, not the
+		// whole handler: once a body is read and verified, next runs
+		// with nothing left to bound here (Farol review, PR #584 --
+		// maxSignedBodyBytes's own doc comment on the per-request cap
+		// this closes the aggregate gap in).
+		s.bodySem <- struct{}{}
+		defer func() { <-s.bodySem }()
+
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxSignedBodyBytes+1))
 		r.Body.Close()
 		if err != nil {
@@ -98,12 +138,12 @@ func (s *Server) withSigning(next http.HandlerFunc) http.HandlerFunc {
 		nonce := r.Header.Get(NonceHeader)
 		now := s.now()
 		if err := verifySignature(s.secret, r.Method, r.URL.Path, ts, nonce, body, sig, now); err != nil {
-			log.Printf("pqp-remux: control: rejected %s %s: %v", r.Method, r.URL.Path, err)
+			log.Printf("pqp-remux: control: rejected %s %s: %v", r.Method, sanitizeForLog(r.URL.Path), err)
 			writeError(w, http.StatusUnauthorized, "invalid signature")
 			return
 		}
 		if !s.nonces.checkAndRemember(nonce, now) {
-			log.Printf("pqp-remux: control: rejected %s %s: replayed nonce", r.Method, r.URL.Path)
+			log.Printf("pqp-remux: control: rejected %s %s: replayed nonce", r.Method, sanitizeForLog(r.URL.Path))
 			writeError(w, http.StatusUnauthorized, "replayed nonce")
 			return
 		}

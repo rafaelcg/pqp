@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -101,6 +104,126 @@ func TestServer_RejectsReplayedNonce(t *testing.T) {
 	srv.ServeHTTP(rec3, signedHTTPRequest(t, secret, http.MethodGet, "/sessions", nil))
 	if rec3.Code != http.StatusOK {
 		t.Fatalf("expected a fresh, different nonce to succeed, got %d: %s", rec3.Code, rec3.Body.String())
+	}
+}
+
+// TestSanitizeForLog_EscapesControlCharacters pins sanitizeForLog's job
+// (Farol review, PR #584): a rejected request's r.URL.Path is
+// attacker-controlled and unverified (that is WHY the request was
+// rejected), so writing it into a log line unescaped would let a crafted
+// path forge additional fake log lines via an encoded newline.
+func TestSanitizeForLog_EscapesControlCharacters(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"newline", "/sessions/evil\nFAKE LOG LINE: everything is fine"},
+		{"carriage return", "/sessions/evil\r\nFAKE LOG LINE"},
+		{"tab", "/sessions/evil\ttabbed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeForLog(tt.input)
+			if strings.ContainsAny(got, "\n\r") {
+				t.Fatalf("sanitizeForLog(%q) = %q still contains a raw control character", tt.input, got)
+			}
+			// Nothing about the original path is silently dropped --
+			// Quote escapes rather than strips, so the same bytes are
+			// still recoverable from the log line.
+			unquoted, err := strconv.Unquote(got)
+			if err != nil {
+				t.Fatalf("sanitizeForLog(%q) = %q is not a valid quoted string: %v", tt.input, got, err)
+			}
+			if unquoted != tt.input {
+				t.Fatalf("sanitizeForLog(%q) round-tripped to %q, want the original input preserved", tt.input, unquoted)
+			}
+		})
+	}
+}
+
+// TestServer_RejectedControlRequest_DoesNotForgeLogLines is the same
+// finding exercised end to end: an unsigned request against a path
+// carrying an encoded newline must not be able to inject a second,
+// fabricated line into this process's own log output.
+func TestServer_RejectedControlRequest_DoesNotForgeLogLines(t *testing.T) {
+	secret := "topsecret"
+	srv, _ := newTestServer(t, secret, failingFactory)
+
+	var logBuf bytes.Buffer
+	origOutput := log.Writer()
+	origFlags := log.Flags()
+	log.SetOutput(&logBuf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(origOutput)
+		log.SetFlags(origFlags)
+	})
+
+	// %0A is a decoded newline by the time this reaches r.URL.Path; the
+	// request is deliberately unsigned so it exercises the "rejected"
+	// log line this finding is about.
+	req := httptest.NewRequest(http.MethodDelete, "/sessions/evil%0AFAKE-LOG-LINE-INJECTED", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for an unsigned request, got %d", rec.Code)
+	}
+
+	lines := strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly one log line from one rejected request, got %d: %q", len(lines), logBuf.String())
+	}
+	if strings.Contains(lines[0], "FAKE-LOG-LINE-INJECTED") && !strings.Contains(lines[0], `"`) {
+		t.Fatalf("log line contains the injected text unescaped: %q", lines[0])
+	}
+}
+
+// TestServer_ConcurrentSignedRequests_DoNotDeadlock pins the aggregate
+// body-buffering cap withSigning applies (Farol review, PR #584):
+// maxConcurrentSignedBodies bounds how many requests may be buffering a
+// body at once, via a channel semaphore acquired then released around
+// that window. This drives well past that cap concurrently and requires
+// every request to still complete -- a regression that acquired without
+// releasing (or released on the wrong path, e.g. only some early
+// returns) would deadlock the requests queued behind the leaked slot
+// instead of merely slowing them down.
+func TestServer_ConcurrentSignedRequests_DoNotDeadlock(t *testing.T) {
+	secret := "topsecret"
+	srv, _ := newTestServer(t, secret, failingFactory)
+
+	const n = maxConcurrentSignedBodies*3 + 1
+	reqs := make([]*http.Request, n)
+	for i := range reqs {
+		reqs[i] = signedHTTPRequest(t, secret, http.MethodGet, "/sessions", nil)
+	}
+
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i, req := range reqs {
+		wg.Add(1)
+		go func(i int, req *http.Request) {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+			codes[i] = rec.Code
+		}(i, req)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("requests did not all complete within the timeout -- the concurrency semaphore likely deadlocked")
+	}
+
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d", i, code)
+		}
 	}
 }
 

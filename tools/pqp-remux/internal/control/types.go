@@ -2,7 +2,10 @@ package control
 
 import (
 	"fmt"
+	"math"
 	"regexp"
+
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/h264"
 )
 
 // KeyframePolicy mirrors packages/shared/src/hls-remux-control.ts's
@@ -35,6 +38,27 @@ const (
 	minRingSegments = 2
 	maxRingSegments = 60
 )
+
+// maxTicksSafeMs is the largest PartMs/SegmentMs value whose conversion to
+// 90kHz ticks (NewRemuxPipeline's msToTicks) still fits in a uint32,
+// computed the same overflow-safe way internal/config's own
+// maxTicksSafeMs is (Farol review, PR #584): this request is
+// caller-controlled and reaches msToTicks with no bound of its own today
+// -- a "positive integer" check alone lets a value large enough to wrap
+// through uint32(...) truncation land on a tiny or zero tick count,
+// exactly the boundary internal/config's own analogous check already
+// closes for the env-configured single-session binary. Duplicated rather
+// than imported: this package's wire types intentionally have no
+// compile-time dependency on internal/config (see KeyframePolicy's own
+// doc comment for the same reasoning applied to internal/keyframe).
+var maxTicksSafeMs = uint64(math.MaxUint32) * 1000 / uint64(h264.ClockRate)
+
+// exceedsTicksBound reports whether ms would overflow a uint32 once
+// converted to 90kHz ticks -- checked against ms directly, never against
+// a tick conversion that may have already wrapped.
+func exceedsTicksBound(ms int) bool {
+	return ms < 0 || uint64(ms) > maxTicksSafeMs
+}
 
 // uuidPattern is deliberately loose (RFC 4122 shape, not a strict version
 // check): this side only needs to refuse obviously-wrong input, matching
@@ -90,8 +114,14 @@ func (r StartSessionRequest) Validate() error {
 	if r.PartMs <= 0 {
 		return fmt.Errorf("partMs must be a positive integer")
 	}
+	if exceedsTicksBound(r.PartMs) {
+		return fmt.Errorf("partMs=%d converts to more than a uint32 of 90kHz ticks; keep it under about 13.25 hours", r.PartMs)
+	}
 	if r.SegmentMs <= 0 {
 		return fmt.Errorf("segmentMs must be a positive integer")
+	}
+	if exceedsTicksBound(r.SegmentMs) {
+		return fmt.Errorf("segmentMs=%d converts to more than a uint32 of 90kHz ticks; keep it under about 13.25 hours", r.SegmentMs)
 	}
 	if r.RingSegments < minRingSegments || r.RingSegments > maxRingSegments {
 		return fmt.Errorf("ringSegments must be between %d and %d", minRingSegments, maxRingSegments)

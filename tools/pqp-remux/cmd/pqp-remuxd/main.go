@@ -64,10 +64,20 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
+	// listenErr is set when the listener itself fails (e.g. the port is
+	// already in use) so the process can still exit non-zero -- but only
+	// AFTER running the exact same registry.StopAll() teardown the normal
+	// shutdown path gets below, never in place of it (Farol review, PR
+	// #584: log.Fatalf calls os.Exit before that point, so a listener
+	// failure used to skip session cleanup entirely -- no unsubscribe, no
+	// encoder shutdown, no R2 queue flush -- something SIGTERM never
+	// skips).
+	var listenErr error
 	select {
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("pqp-remuxd: %v", err)
+			log.Printf("pqp-remuxd: %v", err)
+			listenErr = err
 		}
 		supervisorCancel()
 	case <-sigCh:
@@ -107,6 +117,11 @@ func main() {
 	// queues) AFTER the HTTP server itself has stopped taking new
 	// requests -- and, per the above, after any request still holding one
 	// open has been forcibly cut off -- so a session never gets torn down
-	// out from under a request actively being served.
+	// out from under a request actively being served. Runs on EVERY exit
+	// path out of the select above, listener failure included.
 	registry.StopAll()
+
+	if listenErr != nil {
+		os.Exit(1)
+	}
 }
