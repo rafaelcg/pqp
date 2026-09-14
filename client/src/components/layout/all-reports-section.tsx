@@ -86,6 +86,14 @@ export function AllReportsSection() {
     // response check "is the tab that started me still the one showing" —
     // any tab change invalidates every request in flight for the old one.
     requestIdRef.current += 1;
+    // A load-more abandoned by this tab change will see its generation go
+    // stale and skip its own `setLoadingMore(false)` (see `loadMore`) so it
+    // cannot stomp on a NEWER load-more the new tab might already be running.
+    // That means nothing else ever clears the flag for the old request, so it
+    // has to happen here, once, on the tab change itself — otherwise the new
+    // tab's "Load more" button is stuck reading "Loading…" until the whole
+    // component remounts.
+    setLoadingMore(false);
     let cancelled = false;
     setLoading(true);
     setError(null);

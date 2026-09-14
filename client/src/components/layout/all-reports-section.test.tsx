@@ -123,6 +123,56 @@ function buttonWithText(label: string): HTMLButtonElement {
 }
 
 describe("AllReportsSection tab-switch races", () => {
+  it("resets the stuck load-more spinner when the tab changes mid-request", async () => {
+    const eve = makeReport({ id: "e", reportedUserName: "Eve" });
+    const frank = makeReport({
+      id: "f",
+      reportedUserName: "Frank",
+      status: "actioned",
+    });
+
+    fetchAllReportsMock.mockResolvedValueOnce({ reports: [eve], hasMore: true });
+    await mount();
+    expect(host!.textContent).toContain("Eve");
+
+    // Click "Load more" on the open tab, but keep its response pending.
+    const loadMoreDeferred = deferred<{
+      reports: AllReport[];
+      hasMore: boolean;
+    }>();
+    fetchAllReportsMock.mockReturnValueOnce(loadMoreDeferred.promise);
+    await act(async () => {
+      buttonWithText("Load more").click();
+    });
+    // Sanity: the click really did put the control into its loading state.
+    expect(buttonWithText("Loading…").disabled).toBe(true);
+
+    // Switch tabs before that page ever arrives. The destination tab's own
+    // fetch resolves with something that also has more to load.
+    fetchAllReportsMock.mockResolvedValueOnce({
+      reports: [frank],
+      hasMore: true,
+    });
+    await act(async () => {
+      tab("Actioned").click();
+      await Promise.resolve();
+    });
+
+    // The abandoned load-more must not leave the NEW tab's own control stuck
+    // reading "Loading…" forever — it was never this tab's request.
+    expect(() => buttonWithText("Loading…")).toThrow();
+    const loadMore = buttonWithText("Load more");
+    expect(loadMore.disabled).toBe(false);
+
+    // Letting the stale response land afterwards must not resurrect the
+    // stuck state either.
+    await act(async () => {
+      loadMoreDeferred.resolve({ reports: [], hasMore: false });
+      await Promise.resolve();
+    });
+    expect(() => buttonWithText("Loading…")).toThrow();
+  });
+
   it("discards a load-more page that lands after the tab has changed", async () => {
     const alice = makeReport({ id: "a", reportedUserName: "Alice" });
     const bob = makeReport({ id: "b", reportedUserName: "Bob", status: "actioned" });
