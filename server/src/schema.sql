@@ -3844,6 +3844,26 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_egress
   ON hls_sessions (egress_id)
   WHERE egress_id IS NOT NULL AND cleaned_at IS NULL;
 
+-- WHICH API PROCESS OWNS THIS SESSION. NULL is "nobody in particular": every
+-- row written before this column, and every row on a single-process
+-- deployment (`VOICE_REGISTRY` off), which is what a self-host runs. It is
+-- stamped by the process that STARTS a session and re-stamped by the one that
+-- ADOPTS it at boot, and it is read against `voice_instances.heartbeat_at`:
+-- a row whose owner is still answering belongs to that owner, and a row that
+-- is unowned or whose owner's heartbeat has expired is free.
+--
+-- Without it, the boot reconcile's founding assumption ("this process owns no
+-- session at boot, so every open row is stale") is a promise that machine B
+-- will adopt machine A's live egresses and end the rows for anything LiveKit
+-- did not list for it, i.e. that every rolling deploy kills a live watch
+-- party. See `server/src/voice/hls-ownership.ts`.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS instance_id TEXT;
+
+-- The owner lookup: open rows, by owner.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_instance
+  ON hls_sessions (instance_id)
+  WHERE instance_id IS NOT NULL AND cleaned_at IS NULL;
+
 -- LL-HLS (docs/plans/LL_HLS.md, task L1.5). Which driver produced this row.
 -- 'conventional' is every row before this column existed, and every one this
 -- deployment will ever write while LIVE_HLS_LL is off: a `pqp-remux` session

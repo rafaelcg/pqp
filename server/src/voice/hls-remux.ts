@@ -13,6 +13,14 @@ import {
 } from "@pqp/shared";
 import { logEvent } from "../lib/log.js";
 import { getPool } from "../db.js";
+import {
+  claimHlsSessionRows,
+  forgetPendingHlsSessionClaims,
+  hlsOwnerInstanceId,
+  liveOtherInstances,
+  noteHlsSkippedOwnedElsewhere,
+  ownedByLiveOtherInstance,
+} from "./hls-ownership.js";
 
 /**
  * The `pqp-remux` driver, beside the LiveKit egress driver in `hls-egress.ts`.
@@ -545,8 +553,8 @@ async function recordLlSessionStarted(
     await getPool().query(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, mode, remux_session_id,
-          presenter_peer_id, part_target_ms, origin_base_url)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7)
+          presenter_peer_id, part_target_ms, origin_base_url, instance_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8)
        ON CONFLICT (object_prefix) DO NOTHING`,
       [
         channelId,
@@ -556,6 +564,10 @@ async function recordLlSessionStarted(
         presenterPeerId,
         partTargetMs,
         originBaseUrl,
+        // Which API process drives this session: the other machine's boot
+        // sweep reads it before adopting or ending anything. See
+        // `hls-ownership.ts`.
+        hlsOwnerInstanceId(),
       ],
     );
     return true;
@@ -590,6 +602,9 @@ async function recordLlSessionsEndedByIds(ids: readonly string[]): Promise<void>
   if (ids.length === 0) {
     return;
   }
+  // A queued ownership stamp for a row we are ending would reopen it on its
+  // next retry, leaving a row retention can never collect. Drop it first.
+  forgetPendingHlsSessionClaims(ids);
   try {
     await getPool().query(
       `UPDATE hls_sessions SET ended_at = NOW() WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,
@@ -987,6 +1002,8 @@ interface StaleLlRow {
   presenter_peer_id: string | null;
   stopping_at: string | null;
   stop_attempts: number;
+  /** Which API process last started or adopted it. NULL = nobody's. */
+  instance_id: string | null;
 }
 
 function toOpenLlRow(row: StaleLlRow): OpenLlRow {
@@ -1001,7 +1018,7 @@ function toOpenLlRow(row: StaleLlRow): OpenLlRow {
 }
 
 /** Run `fn` over `items`, at most `limit` in flight at once, waiting for each batch. */
-async function runBounded<T>(
+export async function runBounded<T>(
   items: readonly T[],
   limit: number,
   fn: (item: T) => Promise<void>,
@@ -1056,18 +1073,48 @@ export async function adoptLlHlsSessions(): Promise<{
     return null;
   }
 
+  // THE SAME TWO-MACHINE RULE THE CONVENTIONAL BOOT SWEEP RUNS. A row whose
+  // owner is still answering its `voice_instances` heartbeat belongs to that
+  // machine: not adopted here (it already has a driver), not stopped, not
+  // ended. Without this the LL driver has the conventional driver's bug --
+  // machine B ends and stops machine A's live session on every deploy. A
+  // lookup we could not run answers null and stops the whole pass, exactly
+  // like a control API we could not list.
+  const liveOthers = await liveOtherInstances();
+  if (liveOthers === null) {
+    logEvent("voice.hlsLlBootReconcileSkipped", { reason: "owner-lookup-failed" });
+    return null;
+  }
+
   const rows = await getPool().query<StaleLlRow>(
     `SELECT id, channel_id, started_at, ended_at, remux_session_id, presenter_peer_id,
-            stopping_at, stop_attempts
+            stopping_at, stop_attempts, instance_id
      FROM hls_sessions
      WHERE mode = 'll' AND cleaned_at IS NULL
        AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
   );
+  const ownedElsewhere = (row: StaleLlRow): boolean =>
+    ownedByLiveOtherInstance(row.instance_id, liveOthers);
+  for (const row of rows.rows) {
+    // Only the OPEN rows are counted as skips: an ended row inside the
+    // one-hour window is read here purely so an orphan stop can name it, and
+    // this pass was never going to touch it either way.
+    if (row.ended_at === null && ownedElsewhere(row)) {
+      noteHlsSkippedOwnedElsewhere({
+        site: "ll-boot",
+        channelId: row.channel_id,
+        sessionId: row.id,
+        ownerInstanceId: row.instance_id,
+      });
+    }
+  }
 
   // A row mid-teardown is retried here, bounded and backed off, and is
   // excluded from every other bucket below: it must never be adopted as
   // live no matter what the box still answers for its id.
-  const stoppingRows = rows.rows.filter((row) => row.ended_at === null && row.stopping_at !== null);
+  const stoppingRows = rows.rows.filter(
+    (row) => row.ended_at === null && row.stopping_at !== null && !ownedElsewhere(row),
+  );
   let retriedStops = 0;
   await runBounded(stoppingRows, ORPHAN_STOP_CONCURRENCY, async (row) => {
     if (await retryStopOpenLlRow(toOpenLlRow(row), row.channel_id)) {
@@ -1093,11 +1140,23 @@ export async function adoptLlHlsSessions(): Promise<{
       )
       .map((row) => [row.remux_session_id!, row]),
   );
+  // A remote session whose row another live machine owns is skipped whole: it
+  // must not be adopted here, and it must not fall into `toStop` as a session
+  // with "no row" either, which would stop a stream that has a healthy driver.
+  const remuxIdsOwnedElsewhere = new Set(
+    rows.rows
+      .filter((row) => row.remux_session_id && ownedElsewhere(row))
+      .map((row) => row.remux_session_id!),
+  );
   const remoteById = new Map(remoteSessions.map((session) => [session.sessionId, session]));
 
   let adopted = 0;
+  const adoptedRowIds: string[] = [];
   const toStop: { sessionId: string; reason: "no-presenter" | "no-row" }[] = [];
   for (const remote of remoteSessions) {
+    if (remuxIdsOwnedElsewhere.has(remote.sessionId)) {
+      continue;
+    }
     const row = rowByRemuxId.get(remote.sessionId);
     if (!row || !row.presenter_peer_id) {
       toStop.push({
@@ -1120,11 +1179,16 @@ export async function adoptLlHlsSessions(): Promise<{
       },
     });
     adopted += 1;
+    adoptedRowIds.push(row.id);
     logEvent("voice.hlsLlSessionAdopted", {
       channelId: row.channel_id,
       sessionId: remote.sessionId,
     });
   }
+  // THIS PROCESS OWNS THEM NOW. Re-stamping is what stops the next machine to
+  // boot reading a dead instance's id and freeing a session this one is
+  // driving.
+  await claimHlsSessionRows(adoptedRowIds);
 
   // Bounded parallel cleanup, not one round trip per orphan in a row (this
   // runs before `listen()`) and not every orphan fired at once either (an
@@ -1146,6 +1210,7 @@ export async function adoptLlHlsSessions(): Promise<{
 
   const staleIds = rows.rows
     .filter((row) => row.ended_at === null && row.stopping_at === null)
+    .filter((row) => !ownedElsewhere(row))
     .filter((row) => !(row.remux_session_id && remoteById.has(row.remux_session_id)))
     .map((row) => row.id);
   await recordLlSessionsEndedByIds(staleIds);

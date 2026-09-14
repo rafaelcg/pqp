@@ -388,6 +388,20 @@ export interface AdminMetrics {
      */
     orphansStopped: number;
     /**
+     * `hls_sessions` rows this process did NOT adopt, end or stop because
+     * another API instance whose `voice_instances` heartbeat is still fresh
+     * owns them. Zero on a one-machine deployment; on two, a zero while a
+     * party is running through a deploy means the `instance_id` stamp is not
+     * landing and the boot sweep is free to kill the other machine's stream.
+     */
+    skippedOwnedElsewhere: number;
+    /**
+     * Teardowns waiting on an ownership answer because the lookup failed. Zero
+     * on a healthy deployment; anything else is a database that is not
+     * answering while this process wants to stop a transcode.
+     */
+    deferredStops: number;
+    /**
      * Live sessions writing the host's voice to its own file beside the
      * segments (`LIVE_HLS_MIC_ARCHIVE`). Zero while the flag is off, which is
      * every deployment until somebody sets it. Zero WITH the flag on and
@@ -1090,6 +1104,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       oldestSessionMinutes: hlsActivity.oldestMinutes,
       silentSessions: hlsActivity.silentSessions,
       orphansStopped: hlsActivity.orphansStopped,
+      // Zero on one machine. On two it is the proof that the cross-machine
+      // owner guard runs at all: rows this process left alone because the
+      // other one is still driving them.
+      skippedOwnedElsewhere: hlsActivity.skippedOwnedElsewhere,
+      deferredStops: hlsActivity.deferredStops,
       micArchive: hlsActivity.micArchives,
       // Each of these is a second, video-only 360p30 transcode of a
       // presenter's camera, on top of that party's ladder: roughly 0.2 to 0.3
