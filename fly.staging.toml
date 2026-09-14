@@ -66,7 +66,7 @@ kill_timeout = 30
   # (client/src/lib/realtime.ts). "stop", not "suspend": a suspended machine
   # restores in-process presence/voice Maps from a snapshot that no longer
   # matches any connected client.
-  auto_stop_machines = "stop"
+  auto_stop_machines = "off"
 
   # STAGING DIFFERENCE. The proxy wakes the machine on the first request after
   # an idle stop. Note this only ever restarts the one machine that exists —
@@ -74,7 +74,7 @@ kill_timeout = 30
   auto_start_machines = true
 
   # STAGING DIFFERENCE. Zero: idle staging costs nothing.
-  min_machines_running = 0
+  min_machines_running = 3
 
   processes = ["app"]
 
