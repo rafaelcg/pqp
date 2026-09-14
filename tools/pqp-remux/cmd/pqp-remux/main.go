@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -158,6 +159,13 @@ func runIDRLog(cfg config.Config) (err error) {
 	// accessUnitScanner.firstErr being an atomic.Pointer is the other
 	// half, guarding the field itself.
 	readerDone := make(chan struct{})
+	var closeReaderDoneOnce sync.Once
+	// subscriber's own single-track guard (internal/subscriber.go's
+	// video.CompareAndSwap) means OnVideoTrackEnded should only ever fire
+	// once in practice, but close() on an already-closed channel panics,
+	// and this call site should not depend on an invariant enforced in a
+	// different file to stay panic-safe.
+	closeReaderDone := func() { closeReaderDoneOnce.Do(func() { close(readerDone) }) }
 
 	sub, connErr := subscriber.Connect(subscriber.Config{
 		URL:       cfg.LiveKitURL,
@@ -166,7 +174,7 @@ func runIDRLog(cfg config.Config) (err error) {
 		Room:      cfg.Room,
 	}, subscriber.Handlers{
 		OnVideoPacket:     scanner.push,
-		OnVideoTrackEnded: func() { close(readerDone) },
+		OnVideoTrackEnded: closeReaderDone,
 	})
 	if connErr != nil {
 		return fmt.Errorf("connecting to %s room %q: %w", cfg.LiveKitURL, cfg.Room, connErr)
