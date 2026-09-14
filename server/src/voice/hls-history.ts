@@ -52,7 +52,7 @@
  * in that gap would keep being served after the history API already reports
  * the broadcast gone.
  */
-import { Readable, Transform } from "node:stream";
+import { Readable, Transform, type Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { getPool } from "../db.js";
@@ -661,15 +661,29 @@ const DOWNLOAD_CONTENT_TYPE: Record<WatchPartyDownloadKind, string> = {
 const DOWNLOAD_OBJECT_TTL_SECONDS = 900;
 
 /**
- * Per-object IDLE timeout, and idle is the whole point. `fetch`'s signal
- * aborts the body as well as the headers, and this body is drained against
- * the client's backpressure: an hour of film down a slow link is a
- * completely healthy transfer, and a deadline on the whole object would kill
- * exactly the downloads that need the most patience. The clock below is
- * restarted by every chunk that arrives, so what trips it is a transfer that
- * has stopped moving, never one that is merely slow.
+ * How long a download may make NO progress before it is abandoned, and
+ * progress means bytes the client actually took.
+ *
+ * Idle, not elapsed: a body is drained at the client's pace, so an hour of
+ * film down a slow link is a completely healthy transfer and a deadline on
+ * the object would kill exactly the downloads that need the most patience.
+ * But "the destination is backpressured" is NOT a reason to keep waiting
+ * either -- a reader that stops reading altogether would then hold a storage
+ * connection and a server pipeline open forever. So the clock is restarted by
+ * a chunk arriving from storage AND by the socket draining what it was handed,
+ * and by nothing else: a slow client keeps draining, a dead one does not.
  */
 const DOWNLOAD_OBJECT_IDLE_MS = 120_000;
+
+/** How often the clock above is examined. */
+const DOWNLOAD_PROGRESS_TICK_MS = 5_000;
+
+/**
+ * The absolute ceiling on one download, whatever it is doing. Six hours is
+ * far past any real broadcast down any real link, and exists so a pathological
+ * client that dribbles one byte every two minutes forever still ends.
+ */
+const DOWNLOAD_MAX_MS = 6 * 60 * 60 * 1000;
 
 /** A `ListObjectsV2` per rung prefix, memoised because two different
  * requests want the same answer: the panel opening (to price the files) and,
@@ -950,85 +964,107 @@ export async function buildWatchPartyDownloadPlan(
  * this process's memory. `{ end: false }` keeps the response open between
  * objects; the caller ends it.
  *
+ * ONE `AbortSignal` DRIVES BOTH HALVES. It is handed to the storage `fetch`
+ * and to `pipeline`, because either half can be the one that stops: storage
+ * going quiet, or a client that stops reading with the body already buffered
+ * (aborting only the fetch there does nothing at all -- the fetch has
+ * finished). Firing it tears the whole chain down, which is the only way to
+ * be sure a stalled download stops costing a connection and a socket buffer.
+ *
  * Once the first byte is out there is no way to turn the answer into an HTTP
  * error, so a failure mid-stream can only destroy the response and let the
  * client see a truncated download -- which is why the plan is built (and
  * every "is this still there" question answered) BEFORE the head is written.
+ *
+ * `idleMs` / `maxMs` are the tests' way in; nothing in production passes them.
  */
 export async function streamWatchPartyDownload(
   plan: WatchPartyDownloadPlan,
-  target: NodeJS.WritableStream & { writableNeedDrain?: boolean },
+  target: Writable,
+  options: { idleMs?: number; maxMs?: number } = {},
 ): Promise<void> {
   const config = liveHlsStorageConfig();
   if (!config) {
     throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
   }
-  for (const key of plan.keys) {
-    const url = signRequest({
-      method: "GET",
-      key,
-      ttlSeconds: DOWNLOAD_OBJECT_TTL_SECONDS,
-      forRead: true,
-      config,
-    }).url;
-    const controller = new AbortController();
-    let idle: NodeJS.Timeout;
-    const onIdle = (): void => {
-      // NOTHING HAS ARRIVED, AND THAT IS ONLY STORAGE'S FAULT IF STORAGE IS
-      // THE HALF WE ARE WAITING ON. Under backpressure the pipeline stops
-      // pulling, so no chunk reaches the guard below however healthy the
-      // transfer is: a viewer on a slow link, or one who paused the download,
-      // would otherwise be cut off for being slow. A destination that has not
-      // drained what it was already handed is that case exactly, so the clock
-      // simply starts again.
-      if (target.writableNeedDrain) {
-        restartIdleClock();
-        return;
-      }
-      controller.abort();
-    };
-    const restartIdleClock = (): void => {
-      clearTimeout(idle);
-      idle = setTimeout(onIdle, DOWNLOAD_OBJECT_IDLE_MS);
-    };
-    idle = setTimeout(onIdle, DOWNLOAD_OBJECT_IDLE_MS);
-    try {
-      let response: Response;
-      try {
-        response = await fetch(url, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-      } catch (error) {
+  const idleMs = options.idleMs ?? DOWNLOAD_OBJECT_IDLE_MS;
+  const maxMs = options.maxMs ?? DOWNLOAD_MAX_MS;
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  const noteProgress = (): void => {
+    lastProgressAt = Date.now();
+  };
+  // The socket taking what it was handed is the only proof the client is
+  // still there; a chunk arriving from storage is the proof for the other
+  // half. Nothing else counts as progress.
+  target.on("drain", noteProgress);
+  try {
+    for (const key of plan.keys) {
+      // Checked between objects as well as on the tick below: a download of
+      // many small segments can finish each one inside a single tick and
+      // never be examined at all.
+      if (Date.now() - startedAt >= maxMs) {
         throw new HlsPlaylistUnavailable(
-          error instanceof Error ? error.message : "Storage unreachable",
+          `Download of ${plan.kind} outlived its ceiling`,
         );
       }
-      if (!response.ok || !response.body) {
-        throw new HlsPlaylistUnavailable(
-          `Storage returned HTTP ${response.status} for ${key}`,
-        );
-      }
-      await pipeline(
-        // `fetch`'s body is typed as the DOM `ReadableStream`,
-        // `Readable.fromWeb` takes the `node:stream/web` one; they are the
-        // same object at runtime and differ only in how the two lib
-        // definitions spell it.
-        Readable.fromWeb(
-          response.body as unknown as NodeReadableStream<Uint8Array>,
-        ),
-        // Every chunk that arrives is proof the transfer is alive.
-        new Transform({
-          transform(chunk, _encoding, done) {
-            restartIdleClock();
-            done(null, chunk);
-          },
-        }),
-        target,
-        { end: false },
+      const url = signRequest({
+        method: "GET",
+        key,
+        ttlSeconds: DOWNLOAD_OBJECT_TTL_SECONDS,
+        forRead: true,
+        config,
+      }).url;
+      const controller = new AbortController();
+      const watchdog = setInterval(
+        () => {
+          const now = Date.now();
+          if (now - lastProgressAt >= idleMs || now - startedAt >= maxMs) {
+            controller.abort();
+          }
+        },
+        Math.max(250, Math.min(DOWNLOAD_PROGRESS_TICK_MS, idleMs, maxMs)),
       );
-    } finally {
-      clearTimeout(idle);
+      try {
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+        } catch (error) {
+          throw new HlsPlaylistUnavailable(
+            error instanceof Error ? error.message : "Storage unreachable",
+          );
+        }
+        if (!response.ok || !response.body) {
+          throw new HlsPlaylistUnavailable(
+            `Storage returned HTTP ${response.status} for ${key}`,
+          );
+        }
+        noteProgress();
+        await pipeline(
+          // `fetch`'s body is typed as the DOM `ReadableStream`,
+          // `Readable.fromWeb` takes the `node:stream/web` one; they are the
+          // same object at runtime and differ only in how the two lib
+          // definitions spell it.
+          Readable.fromWeb(
+            response.body as unknown as NodeReadableStream<Uint8Array>,
+          ),
+          new Transform({
+            transform(chunk, _encoding, done) {
+              noteProgress();
+              done(null, chunk);
+            },
+          }),
+          target,
+          { end: false, signal: controller.signal },
+        );
+      } finally {
+        clearInterval(watchdog);
+      }
     }
+  } finally {
+    target.off("drain", noteProgress);
   }
 }

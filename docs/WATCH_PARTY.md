@@ -2564,9 +2564,15 @@ play for its first few seconds, which is the worst way for this to be wrong.
   a **409 before the head goes out** (a half-swept recording) rather than a
   file that looks complete and is not. 404 for a kind this broadcast never
   wrote, 409 once the retention sweep has been through, exactly as replay
-  answers. The per-object clock while streaming is an IDLE timeout that every
-  chunk restarts, so an hour of film down a slow link is never mistaken for a
-  stuck transfer.
+  answers. The clock while streaming measures PROGRESS, not elapsed time, and
+  progress is bytes storage delivered or bytes the socket accepted (its
+  `drain`) and nothing else: an hour of film down a slow link is never
+  mistaken for a stuck transfer, and a reader that stops reading altogether
+  does not get to hold a storage connection and a server pipeline open on the
+  strength of being backpressured. One `AbortSignal` drives the storage fetch
+  AND the pipeline, because either half can be the one that stopped (aborting
+  only the fetch is useless when the body has already arrived and the socket
+  is the stuck end), with a six-hour absolute ceiling behind both.
 
 **A download is a navigation, not a `fetch`,** so the byte route has the same
 two doors the replay proxy has. Saving a `fetch` response means holding the
