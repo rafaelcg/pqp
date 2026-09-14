@@ -23,6 +23,11 @@ describe("resolveOwnStatus", () => {
       // not overwrite a statement.
       ["dnd", false, "dnd"],
       ["dnd", true, "dnd"],
+      // `away` is a declaration too, not a manual idle: it renders as idle
+      // whether or not the activity timer would agree, and stays that way —
+      // the "still amber after typing for a minute" acceptance criterion.
+      ["away", false, "idle"],
+      ["away", true, "idle"],
       // The whole feature in one row. Invisible never renders as itself to
       // anyone but its owner, and the owner's label is swapped at the call site,
       // not here.

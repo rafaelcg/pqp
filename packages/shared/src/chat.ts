@@ -307,6 +307,26 @@ export const channelActivitySchema = z.object({
   kind: channelKindSchema.default("server"),
   channelId: z.string().uuid(),
   mention: z.boolean(),
+  /**
+   * The message preview, for a conversation only (`kind` of `dm` or `group`).
+   * Absent for a server channel — that comment above still holds there — and
+   * absent for a conversation too when the recipient has
+   * `notifications.previewInApp` off. Optional rather than nullable so a
+   * frame built by a server that predates this field still parses: an older
+   * instance's copy across `CLUSTER_BUS` carries neither key at all.
+   *
+   * Already redacted and truncated to 140 chars server-side
+   * (`server/src/services/dm-preview.ts`). Never raw markdown, never sent for
+   * a server channel.
+   */
+  preview: z.string().max(140).optional(),
+  authorName: z.string().max(64).optional(),
+  /**
+   * Present whenever `preview` is. Lets a live client patch its conversation
+   * list's `lastMessage` in place (own-message/group-author prefixing needs
+   * to know who wrote it) without a second round trip.
+   */
+  authorId: z.string().uuid().optional(),
 });
 
 export const reactionBroadcastSchema = z.object({

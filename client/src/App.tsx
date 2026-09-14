@@ -984,6 +984,8 @@ function MainAppContent({
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [newDmOpen, setNewDmOpen] = useState(false);
+  /** Whether any DM arrival card is currently up — see `effectiveCornerHint`. */
+  const [dmToastActive, setDmToastActive] = useState(false);
   const [showCreateServer, setShowCreateServer] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
   /**
@@ -2968,6 +2970,10 @@ function MainAppContent({
               serverId?: string | null;
               /** Absent from an API that predates conversations. */
               kind?: ChannelKind;
+              /** Conversation-only, and absent when previews are off. */
+              preview?: string;
+              authorName?: string;
+              authorId?: string;
             };
             // Where this came from, taken from the frame rather than looked up.
             // The directory is only ever fed the SELECTED server's channel
@@ -2990,7 +2996,26 @@ function MainAppContent({
                 )
               ) {
                 setConversations((prev) =>
-                  touchConversation(prev, activity.channelId, now),
+                  touchConversation(
+                    prev,
+                    activity.channelId,
+                    now,
+                    // A frame with a preview is always plain text from
+                    // somebody else — this account never receives its own
+                    // activity, and an attachment/GIF-only message carries
+                    // no preview at all (falls back to the count, same as
+                    // the toast). `undefined` here leaves the row's existing
+                    // preview alone rather than blanking it.
+                    activity.preview && activity.authorId
+                      ? {
+                          authorId: activity.authorId,
+                          authorName: activity.authorName ?? "",
+                          preview: activity.preview,
+                          isAttachment: false,
+                          isGif: false,
+                        }
+                      : undefined,
+                  ),
                 );
               } else {
                 // Somebody opened a conversation with this account while it was
@@ -3015,13 +3040,22 @@ function MainAppContent({
             // channel with a backlog. Runs before the early return below so a
             // hidden tab still hears about the channel it left open.
             notifyChannelActivity(
-              describeActivity(activity.channelId, {
-                count: 1,
-                mentions: activity.mention ? 1 : 0,
-              }),
+              describeActivity(
+                activity.channelId,
+                { count: 1, mentions: activity.mention ? 1 : 0 },
+                {
+                  preview: activity.preview,
+                  authorName: activity.authorName,
+                  authorId: activity.authorId,
+                },
+              ),
               {
                 selectedChannelId: selectedChannelIdRef.current,
                 documentVisible: document.visibilityState === "visible",
+                windowFocused: document.hasFocus(),
+                immersive: document.documentElement.hasAttribute(
+                  "data-immersive-stage",
+                ),
               },
             );
             if (activity.channelId === selectedChannelIdRef.current) {
@@ -3529,6 +3563,10 @@ function MainAppContent({
           setShortcutOverlayOpen(false);
           setSettingsSection(null);
           setSettingsOpen(true);
+          return;
+        case "openNewDm":
+          setShortcutOverlayOpen(false);
+          setNewDmOpen(true);
           return;
         case "previousChannel":
         case "nextChannel":
@@ -5915,8 +5953,14 @@ function MainAppContent({
       shortcutsQuietReady &&
       attachedFeatureHint === null,
   });
+  // A DM arrival card and the bottom-right onboarding queue would collide on
+  // a phone, so a toast up wins the corner for its duration — same yield the
+  // update prompt already gets. The card records no impression while it
+  // yields (`docs/ONBOARDING.md` §Adding a card, rule 3): `enabled` goes
+  // false below, which every corner card already treats as "never rendered".
+  const effectiveCornerHint = dmToastActive ? null : cornerHint;
   const liveAttachedHint =
-    cornerHint === null || cornerHint === "shortcuts"
+    effectiveCornerHint === null || effectiveCornerHint === "shortcuts"
       ? attachedFeatureHint
       : null;
   /** The conversation the active call lives in, when it is a DM call. */
@@ -7093,6 +7137,7 @@ function MainAppContent({
         conversations={conversations}
         selectedChannelId={selectedChannelId}
         onOpen={(channelId) => void selectConversation(channelId)}
+        onActiveChange={setDmToastActive}
       />
 
       {isChannelSessionScheduleEnabled() && (
@@ -7229,6 +7274,7 @@ function MainAppContent({
           unread={unread}
           isLoading={conversationsLoading}
           blockedUserIds={blockedUserIds}
+          viewerId={user?.id ?? null}
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
           onSelectConversation={(id) => void selectConversation(id)}
@@ -7237,6 +7283,7 @@ function MainAppContent({
           // is just deselecting the conversation.
           friendsSelected={!selectedChannelId}
           friendRequestCount={friends.data.incoming.length}
+          hasFriends={friends.data.friends.length > 0}
           onOpenFriends={selectHome}
           onHideConversation={(id) => void handleHideConversation(id)}
           pinnedChannelIds={pinnedChannelIds}
@@ -8040,29 +8087,29 @@ function MainAppContent({
       />
 
       <CargosHint
-        enabled={cornerHint === "cargos"}
+        enabled={effectiveCornerHint === "cargos"}
         onOpenRoles={() => {
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
         }}
       />
       <CommunityHomePostHint
-        enabled={cornerHint === "communityHomePost"}
+        enabled={effectiveCornerHint === "communityHomePost"}
         serverName={communityHomePostToast?.serverName ?? ""}
         onOpen={openCommunityHomePostToast}
         onDismiss={dismissCommunityHomePostToast}
       />
       <ShortcutsHint
-        enabled={cornerHint === "shortcuts"}
+        enabled={effectiveCornerHint === "shortcuts"}
         shortcutLabel={formatBinding(shortcutBindings.toggleOverlay)}
       />
       <WhatsNewPrompt
-        enabled={cornerHint === "whatsNew"}
+        enabled={effectiveCornerHint === "whatsNew"}
         onOpen={handleOpenWhatsNew}
       />
-      <MobileBetaHint enabled={cornerHint === "mobileBeta"} />
+      <MobileBetaHint enabled={effectiveCornerHint === "mobileBeta"} />
       <QgHint
-        enabled={cornerHint === "qg"}
+        enabled={effectiveCornerHint === "qg"}
         onWantedChange={handleQgHintWantedChange}
         onJoined={(result) => {
           if (result.joinedNow) {

@@ -120,6 +120,14 @@ export function touchConversation(
   list: readonly DmSummary[],
   channelId: string,
   at: string,
+  /**
+   * The live frame's own preview, when it carried one — lets the sidebar row
+   * update without waiting on a refetch. Omitted (not merely undefined)
+   * leaves the existing `lastMessage` as it was, since an attachment-only
+   * live frame and previews-off both carry no preview at all and must not be
+   * read as "the last message had no content".
+   */
+  lastMessage?: DmSummary["lastMessage"],
 ): DmSummary[] {
   const current = list.find(
     (conversation) => conversation.channelId === channelId,
@@ -127,7 +135,11 @@ export function touchConversation(
   if (!current) {
     return list as DmSummary[];
   }
-  return upsertConversation(list, { ...current, lastMessageAt: at });
+  return upsertConversation(list, {
+    ...current,
+    lastMessageAt: at,
+    ...(lastMessage !== undefined ? { lastMessage } : {}),
+  });
 }
 
 /**
@@ -179,6 +191,43 @@ export function unreadFromConversations(
  * conversation clears and what every activity frame increments. Two counters
  * for one number is how a badge ends up outliving the thing it counted.
  */
+/**
+ * The sidebar row's second line and the toast's body: the server's redacted
+ * `lastMessage`/preview, with the reader's own relationship to it prefixed on
+ * the client — own message, group author, or nothing for a 1:1 from the other
+ * person. The server never adds this prefix: it has no idea which of the
+ * participants is about to read it.
+ */
+export function formatMessagePreview(
+  message: {
+    authorId: string;
+    authorName: string;
+    preview: string;
+    isAttachment: boolean;
+    isGif: boolean;
+  },
+  options: {
+    viewerId: string | null;
+    /** A group conversation prefixes the author's first name; a 1:1 does not. */
+    isGroup: boolean;
+  },
+): string {
+  const body = message.isAttachment
+    ? translateMessage(message.isGif ? "dm.preview.gif" : "dm.preview.attachment")
+    : message.preview;
+  if (message.authorId === options.viewerId) {
+    return translateMessage("dm.preview.you", { text: body });
+  }
+  if (options.isGroup) {
+    const firstName = message.authorName.split(" ")[0] || message.authorName;
+    return translateMessage("dm.preview.groupAuthor", {
+      name: firstName,
+      text: body,
+    });
+  }
+  return body;
+}
+
 export function conversationUnreadTotals(
   list: readonly DmSummary[],
   unread: Readonly<Record<string, UnreadCounts>>,

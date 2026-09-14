@@ -7,7 +7,9 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { noBlockBetweenSql, notBlockedSql } from "./blocks.js";
+import { buildMessagePreview } from "./dm-preview.js";
 import { areFriendsSql } from "./friends.js";
+import { getPreferences } from "./preferences.js";
 import { toPublicUserSummary } from "./users.js";
 
 /**
@@ -375,6 +377,12 @@ interface DmRow {
   last_message_at: Date | null;
   count: string;
   mentions: string;
+  last_message_id: string | null;
+  last_message_body: string | null;
+  last_message_author_id: string | null;
+  last_message_author_name: string | null;
+  last_message_has_attachments: boolean | null;
+  last_message_first_attachment_type: string | null;
 }
 
 /**
@@ -396,33 +404,90 @@ export async function listConversations(
   userId: string,
   onlyChannelId?: string,
 ): Promise<DmSummary[]> {
-  const rows = await getPool().query<DmRow>(
-    `SELECT c.id AS channel_id,
-            c.kind,
-            (SELECT MAX(created_at) FROM messages any_m
-              WHERE any_m.channel_id = c.id) AS last_message_at,
-            COUNT(m.id)::text AS count,
-            COUNT(mm.user_id)::text AS mentions
-     FROM channel_members me
-     JOIN channels c ON c.id = me.channel_id AND c.kind <> 'server'
-     LEFT JOIN channel_reads cr
-       ON cr.channel_id = c.id AND cr.user_id = $1
-     LEFT JOIN messages m
-       ON m.channel_id = c.id
-      AND m.author_id <> $1
-      AND m.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
-      AND ${notBlockedSql("$1", "m.author_id")}
-     LEFT JOIN message_mentions mm
-       ON mm.message_id = m.id AND mm.user_id = $1
-     WHERE me.user_id = $1
-       AND ($2::uuid IS NULL OR c.id = $2)
-     GROUP BY c.id, c.kind
-     ORDER BY last_message_at DESC NULLS LAST, c.id`,
-    [userId, onlyChannelId ?? null],
-  );
+  const [rows, preferences] = await Promise.all([
+    getPool().query<DmRow>(
+      // `counts` is grouped down to one row per channel BEFORE the lateral
+      // join runs, on purpose: `lastmsg` is a LATERAL, and joining it against
+      // the raw `messages`/`message_mentions` join (which fans out to one row
+      // per unread message) would let the planner re-evaluate the per-channel
+      // "newest message" lookup once per unread row instead of once per
+      // conversation — a heavy unread count in one DM should not cost more
+      // lateral work than a light one. `LEFT(lm.body, 2000)` is a defensive
+      // bound: the 140-char cap is enforced on the redacted *output*, not on
+      // what gets fetched and run through the markdown strip, so this keeps a
+      // pathological input from costing more than a page of text regardless.
+      `WITH counts AS (
+         SELECT c.id AS channel_id,
+                c.kind,
+                (SELECT MAX(created_at) FROM messages any_m
+                  WHERE any_m.channel_id = c.id) AS last_message_at,
+                COUNT(m.id)::text AS count,
+                COUNT(mm.user_id)::text AS mentions
+         FROM channel_members me
+         JOIN channels c ON c.id = me.channel_id AND c.kind <> 'server'
+         LEFT JOIN channel_reads cr
+           ON cr.channel_id = c.id AND cr.user_id = $1
+         LEFT JOIN messages m
+           ON m.channel_id = c.id
+          AND m.author_id <> $1
+          AND m.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
+          AND ${notBlockedSql("$1", "m.author_id")}
+         LEFT JOIN message_mentions mm
+           ON mm.message_id = m.id AND mm.user_id = $1
+         WHERE me.user_id = $1
+           AND ($2::uuid IS NULL OR c.id = $2)
+         GROUP BY c.id, c.kind
+       )
+       SELECT counts.channel_id,
+              counts.kind,
+              counts.last_message_at,
+              counts.count,
+              counts.mentions,
+              lastmsg.id AS last_message_id,
+              lastmsg.body AS last_message_body,
+              lastmsg.author_id AS last_message_author_id,
+              lastmsg.author_name AS last_message_author_name,
+              lastmsg.has_attachments AS last_message_has_attachments,
+              lastmsg.first_attachment_type AS last_message_first_attachment_type
+       FROM counts
+       LEFT JOIN LATERAL (
+         SELECT lm.id, LEFT(lm.body, 2000) AS body, lm.author_id,
+                u2.display_name AS author_name,
+                EXISTS (
+                  SELECT 1 FROM message_attachments ma
+                  WHERE ma.message_id = lm.id
+                ) AS has_attachments,
+                (
+                  SELECT ma2.content_type FROM message_attachments ma2
+                  WHERE ma2.message_id = lm.id
+                  ORDER BY ma2.position ASC, ma2.created_at ASC
+                  LIMIT 1
+                ) AS first_attachment_type
+         FROM messages lm
+         JOIN users u2 ON u2.id = lm.author_id
+         WHERE lm.channel_id = counts.channel_id
+           AND ${notBlockedSql("$1", "lm.author_id")}
+         ORDER BY lm.created_at DESC
+         LIMIT 1
+       ) lastmsg ON true
+       ORDER BY counts.last_message_at DESC NULLS LAST, counts.channel_id`,
+      [userId, onlyChannelId ?? null],
+    ),
+    // A preference read that fails must not take the whole conversation list
+    // down with it — the list itself did not fail, only the choice of
+    // whether to show text on top of it. Fails CLOSED: a transient read
+    // error could be masking a stored "off", and showing text against a
+    // choice we simply could not confirm is the wrong direction to guess.
+    getPreferences(userId).catch(() => null),
+  ]);
 
   const channelIds = rows.rows.map((row) => row.channel_id);
   const participants = await listParticipants(channelIds, userId);
+  // Default true only when the read genuinely succeeded and found nothing —
+  // that is what "never touched the setting" means. A failed read (`null`)
+  // is not the same fact and must not read as an affirmative "on".
+  const previewsOn =
+    preferences !== null && preferences.notifications?.previewInApp !== false;
 
   return rows.rows.map((row) => ({
     channelId: row.channel_id,
@@ -430,6 +495,18 @@ export async function listConversations(
     participants: participants.get(row.channel_id) ?? [],
     lastMessageAt: row.last_message_at?.toISOString() ?? null,
     unread: { count: Number(row.count), mentions: Number(row.mentions) },
+    lastMessage:
+      previewsOn && row.last_message_id && row.last_message_author_id
+        ? {
+            authorId: row.last_message_author_id,
+            authorName: row.last_message_author_name ?? "",
+            ...buildMessagePreview({
+              body: row.last_message_body ?? "",
+              hasAttachments: row.last_message_has_attachments === true,
+              isGifAttachment: row.last_message_first_attachment_type === "image/gif",
+            }),
+          }
+        : null,
   }));
 }
 

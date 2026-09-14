@@ -1,4 +1,4 @@
-import { Bug, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings, X } from "lucide-react";
+import { BellOff, Bug, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { UserButton } from "@clerk/clerk-react";
 import { CUSTOM_STATUS_MAX_LENGTH, type ManualStatus, type UserStatus } from "@pqp/shared";
@@ -102,10 +102,20 @@ const CHOICES: readonly {
   manual: ManualStatus;
   /** The pip a choice shows — invisible deliberately borrows offline's. */
   pip: UserStatus;
-  labelKey: "status.online" | "status.dnd" | "status.invisible";
-  hintKey?: "status.dndHint" | "status.invisibleHint";
+  labelKey: "status.online" | "status.idle" | "status.dnd" | "status.invisible";
+  hintKey?: "status.awayHint" | "status.dndHint" | "status.invisibleHint";
 }[] = [
   { manual: "online", pip: "online", labelKey: "status.online" },
+  // `away` is a fourth MANUAL value, not a manual idle — see the long note in
+  // `packages/shared/src/status.ts`. It borrows `idle`'s pip and its label
+  // (that key's English changed from "Idle" to "Away" so the two languages
+  // name the same pip the same way; pt-BR was already "Ausente").
+  {
+    manual: "away",
+    pip: "idle",
+    labelKey: "status.idle",
+    hintKey: "status.awayHint",
+  },
   {
     manual: "dnd",
     pip: "dnd",
@@ -157,6 +167,13 @@ export function UserPanel({
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [hintDismissed, setHintDismissed] = useState(isDownloadHintDismissed);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const choiceRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  /**
+   * `Escape` closing the popover has to hand focus back to what opened it —
+   * the button unmounts the popover it was inside of, so without this the
+   * browser just drops focus to `<body>` once the focused row disappears.
+   */
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const showDownload = !isDesktopApp();
   // Phone browsers get the corner card instead. Two invites for the same
   // APK/TestFlight hop in a 16rem sidebar is noise, and this strip used to
@@ -181,7 +198,17 @@ export function UserPanel({
       return;
     }
     function onPointerDown(event: MouseEvent) {
-      if (!popoverRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      // The trigger button is outside `popoverRef` too, so without this a
+      // second click meant to CLOSE the menu closed it here on `mousedown`
+      // and the button's own `onClick` toggle — reading state that already
+      // flipped, in the same batch — immediately reopened it on `click`.
+      // The button owns its own open/close there; this handler is only for
+      // a click genuinely outside both.
+      if (
+        !popoverRef.current?.contains(target) &&
+        !triggerRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     }
@@ -194,6 +221,7 @@ export function UserPanel({
       }
       event.preventDefault();
       setOpen(false);
+      triggerRef.current?.focus();
     }
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown, true);
@@ -214,6 +242,38 @@ export function UserPanel({
   // not tick it down twice. Negative is a real state and is drawn in red: the
   // save is refused rather than the field silently truncating what was pasted.
   const remaining = customStatusRemaining(draft);
+
+  // Roving focus inside the status group: ArrowDown/ArrowUp wrap, Home/End
+  // jump to the ends. `Tab` is left alone — it already leaves the group and
+  // continues through the menu's other items, which is the point of using
+  // `role="group"` rather than trapping focus the way a real listbox would.
+  function onChoicesKeyDown(event: React.KeyboardEvent) {
+    const currentIndex = choiceRefs.current.findIndex(
+      (el) => el === document.activeElement,
+    );
+    if (currentIndex === -1) {
+      return;
+    }
+    let nextIndex: number | null = null;
+    switch (event.key) {
+      case "ArrowDown":
+        nextIndex = (currentIndex + 1) % CHOICES.length;
+        break;
+      case "ArrowUp":
+        nextIndex = (currentIndex - 1 + CHOICES.length) % CHOICES.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = CHOICES.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    choiceRefs.current[nextIndex]?.focus();
+  }
 
   return (
     <div className="safe-pb relative border-t border-ink-4/60 bg-ink">
@@ -341,11 +401,20 @@ export function UserPanel({
             )}
           </div>
           <div role="separator" className="my-1 border-t border-ink-4/60" />
-          {CHOICES.map((choice) => {
+          {/* `role="group"`, not `listbox` — a listbox may only contain
+              `option` children, and this container is a menu that also holds
+              the rename item, the recado field, feedback and the download
+              row. `menuitemradio` already carries the single-select semantics;
+              what this container adds is roving arrow-key focus. */}
+          <div role="group" aria-label={t("status.change")} onKeyDown={onChoicesKeyDown}>
+          {CHOICES.map((choice, index) => {
             const selected = choice.manual === manualStatus;
             return (
               <button
                 key={choice.manual}
+                ref={(el) => {
+                  choiceRefs.current[index] = el;
+                }}
                 type="button"
                 role="menuitemradio"
                 aria-checked={selected}
@@ -382,6 +451,7 @@ export function UserPanel({
               </button>
             );
           })}
+          </div>
           {statusError && (
             <p role="alert" className="px-2.5 py-1.5 text-[11px] text-danger">
               {statusError}
@@ -424,6 +494,7 @@ export function UserPanel({
 
         <Tooltip label={t("status.change")}>
         <button
+        ref={triggerRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -553,6 +624,23 @@ export function UserPanel({
           </Button>
         </span>
       </Tooltip>
+      {/* A discreet way to notice Não Perturbe is on, and a way out of it in
+          one click. Only DND gets this — `away` suppresses nothing, so it
+          needs no reminder. Not a second control for the same fact as the
+          avatar pip: that pip is presence for everyone; this chip is the one
+          person who set it noticing why the app has gone quiet. */}
+      {manualStatus === "dnd" && (
+        <Tooltip label={t("status.dnd")} detail={t("status.dndClear")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0 text-danger"
+            onClick={() => onSetStatus("online")}
+          >
+            <BellOff className="h-4 w-4" />
+          </Button>
+        </Tooltip>
+      )}
       <Tooltip
         label={t("userPanel.settings")}
         name={t("userPanel.openSettings")}

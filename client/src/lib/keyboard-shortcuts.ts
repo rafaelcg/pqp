@@ -28,6 +28,7 @@ export const SHORTCUT_ACTIONS = [
   "previousUnreadChannel",
   "nextUnreadChannel",
   "toggleOverlay",
+  "openNewDm",
 ] as const;
 
 export type ShortcutAction = (typeof SHORTCUT_ACTIONS)[number];
@@ -47,7 +48,7 @@ export const SHORTCUT_GROUPS: ReadonlyArray<{
       "nextUnreadChannel",
     ],
   },
-  { id: "app", actions: ["openUserSettings", "toggleOverlay"] },
+  { id: "app", actions: ["openUserSettings", "toggleOverlay", "openNewDm"] },
 ];
 
 export type BindableId = ShortcutAction | "pushToTalk";
@@ -122,6 +123,21 @@ export function defaultShortcutBindings(
       ctrl: false,
       meta: false,
       alt: true,
+      shift: true,
+    },
+    // The spec this ships against asked for Cmd/Ctrl+Shift+M — "Ctrl/Cmd+K is
+    // taken by search, so Shift+M" — but that chord is already `toggleMute`
+    // above, is Electron's own View → Toggle Mute app-menu accelerator (see
+    // `electron/main.js`, `CommandOrControl+Shift+M`), and a chord two
+    // actions share is a chord `matchShortcut` can only ever resolve to the
+    // first of them, so the new one would never fire at all. Shift+N is free
+    // everywhere this app runs; see `docs/plans/DM_NOTIFICATIONS_POLISH.md`
+    // §2.4 for the ask and this file's history for the correction.
+    openNewDm: {
+      code: "KeyN",
+      label: "N",
+      ...mod,
+      alt: false,
       shift: true,
     },
   };

@@ -1,5 +1,16 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
-import { Ban, Copy, Phone, Pin, PinOff, Plus, UserRound, Users, X } from "lucide-react";
+import {
+  Ban,
+  BellOff,
+  Copy,
+  Phone,
+  Pin,
+  PinOff,
+  Plus,
+  UserRound,
+  Users,
+  X,
+} from "lucide-react";
 import { useRef, type CSSProperties, type ReactNode } from "react";
 import { useHasDraft } from "@/lib/composer-drafts";
 import { DraftMark } from "@/components/layout/channel-list";
@@ -22,7 +33,7 @@ import {
 import { useTranslation } from "@/lib/i18n";
 import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
-import { conversationTitle } from "@/lib/conversations";
+import { conversationTitle, formatMessagePreview } from "@/lib/conversations";
 import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
@@ -37,6 +48,8 @@ interface DmListProps {
   isLoading?: boolean;
   /** So a 1:1 with somebody blocked offers "Unblock" instead of "Block". */
   blockedUserIds: ReadonlySet<string>;
+  /** For the "you:" preview prefix — never anyone else's line. */
+  viewerId: string | null;
   onSelectConversation: (channelId: string) => void;
   onStartConversation: () => void;
   /** The Friends nav entry at the top — highlighted when the view is showing. */
@@ -48,6 +61,8 @@ interface DmListProps {
    * the number cannot disagree with the one on the server rail.
    */
   friendRequestCount?: number;
+  /** Whether this account has any accepted friends — picks the empty-state copy. */
+  hasFriends?: boolean;
   onHideConversation: (channelId: string) => void;
   /** Channel ids currently pinned to the rail, so the row can offer unpin. */
   pinnedChannelIds?: ReadonlySet<string>;
@@ -80,11 +95,13 @@ export function DmList({
   unread,
   isLoading = false,
   blockedUserIds,
+  viewerId,
   onSelectConversation,
   onStartConversation,
   friendsSelected = false,
   onOpenFriends,
   friendRequestCount = 0,
+  hasFriends = true,
   onHideConversation,
   pinnedChannelIds,
   onTogglePin,
@@ -120,7 +137,7 @@ export function DmList({
       style={
         { "--channel-sidebar-width": `${sidebarWidth}px` } as CSSProperties
       }
-      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:left-auto md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
+      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-border bg-surface-1 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:left-auto md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
         mobileOpen
           ? "translate-x-0"
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"
@@ -132,13 +149,15 @@ export function DmList({
         onWidthChange={setSidebarWidth}
         onCommit={commitSidebarWidth}
       />
-      <div className="flex h-14 items-center justify-between gap-2 border-b border-ink-4/60 px-4">
-        <p className="truncate font-display text-base font-bold">{t("dm.title")}</p>
+      <div className="flex h-14 items-center justify-between gap-2 border-b border-border px-4">
+        <p className="truncate font-display text-base font-semibold text-text">
+          {t("dm.title")}
+        </p>
         <div className="flex items-center gap-1">
           <Tooltip label={t("dm.new")}>
             <button
               type="button"
-              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+              className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text"
               onClick={onStartConversation}
             >
               <Plus className="h-4 w-4" />
@@ -147,7 +166,7 @@ export function DmList({
           {onMobileClose && (
             <button
               type="button"
-              className="rounded p-1 hover:bg-ink-3 md:hidden"
+              className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text md:hidden"
               aria-label={t("dm.closeList")}
               onClick={onMobileClose}
             >
@@ -162,92 +181,109 @@ export function DmList({
             Friends view is where "home with nothing selected" lands, and this
             is the way back to it once a conversation is open. */}
         {onOpenFriends && (
-          <button
-            type="button"
-            className={cn(
-              "mb-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-              friendsSelected
-                ? "bg-ink-3 text-paper"
-                : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
-            )}
-            aria-current={friendsSelected ? "page" : undefined}
-            onClick={() => {
-              onOpenFriends();
-              onMobileClose?.();
-            }}
-          >
-            <Users aria-hidden="true" className="h-4 w-4 shrink-0" />
-            <span className="truncate font-medium">{t("friends.title")}</span>
-            {/* Requests waiting on YOU, counted where the way in is. Before
-                this the number existed only on the Pending tab *inside* the
-                view, which is a badge you have to already be looking at the
-                thing to see. Outgoing requests are excluded for the reason
-                `pendingActionCount` gives: a badge is a call to action, and
-                there is nothing to do about one you sent. */}
-            {friendRequestCount > 0 && (
-              <span
-                data-friend-requests={friendRequestCount}
-                className="ml-auto min-w-[1.15rem] shrink-0 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-              >
-                {friendRequestCount}
-              </span>
-            )}
-            {friendRequestCount > 0 && (
-              <span className="sr-only">
-                {t("friends.pendingBadge", { count: friendRequestCount })}
-              </span>
-            )}
-          </button>
+          <>
+            <button
+              type="button"
+              className={cn(
+                "flex h-10 w-full items-center gap-2 rounded-[var(--radius-control)] px-2 text-sm font-medium",
+                friendsSelected
+                  ? "bg-surface-2 text-text"
+                  : "text-text-tertiary hover:bg-surface-2/70 hover:text-text",
+              )}
+              aria-current={friendsSelected ? "page" : undefined}
+              onClick={() => {
+                onOpenFriends();
+                onMobileClose?.();
+              }}
+            >
+              <Users aria-hidden="true" className="h-4 w-4 shrink-0" />
+              <span className="truncate">{t("friends.title")}</span>
+              {/* Requests waiting on YOU, counted where the way in is. Before
+                  this the number existed only on the Pending tab *inside* the
+                  view, which is a badge you have to already be looking at the
+                  thing to see. Outgoing requests are excluded for the reason
+                  `pendingActionCount` gives: a badge is a call to action, and
+                  there is nothing to do about one you sent.
+
+                  Accent, not danger: the same fact reads accent everywhere —
+                  the rail's top-corner badge for requests is accent too. Red
+                  is reserved for unread messages, one colour per meaning. */}
+              {friendRequestCount > 0 && (
+                <span
+                  data-friend-requests={friendRequestCount}
+                  className="ml-auto min-w-[1.15rem] shrink-0 rounded-full bg-accent px-1 py-0.5 text-center text-[10px] font-bold leading-none text-on-accent"
+                >
+                  {friendRequestCount}
+                </span>
+              )}
+              {friendRequestCount > 0 && (
+                <span className="sr-only">
+                  {t("friends.pendingBadge", { count: friendRequestCount })}
+                </span>
+              )}
+            </button>
+            <div className="my-2 h-px bg-border" />
+          </>
         )}
         {isLoading ? (
           <ChannelListSkeleton />
         ) : conversations.length === 0 ? (
           <div className="px-2 py-6">
-            <p className="text-sm text-paper-muted">
-              {t("dm.empty")}
+            <p className="text-sm font-semibold text-text">{t("dm.empty")}</p>
+            <p className="mt-1 text-sm text-text-tertiary">
+              {hasFriends ? t("dm.empty.body") : t("dm.empty.noFriends")}
             </p>
             <button
               type="button"
-              className="mt-2 text-sm text-signal underline underline-offset-2"
-              onClick={onStartConversation}
+              className="mt-2 text-sm text-accent underline underline-offset-2"
+              onClick={hasFriends ? onStartConversation : onOpenFriends}
             >
               {t("dm.messageSomeone")}
             </button>
           </div>
         ) : (
-          conversations.map((conversation) => (
-            <ConversationRow
-              key={conversation.channelId}
-              conversation={conversation}
-              selected={selectedChannelId === conversation.channelId}
-              unread={unread[conversation.channelId] ?? EMPTY_UNREAD}
-              blockedUserIds={blockedUserIds}
-              onSelect={() => {
-                onSelectConversation(conversation.channelId);
-                onMobileClose?.();
-              }}
-              onHide={() => onHideConversation(conversation.channelId)}
-              pinned={pinnedChannelIds?.has(conversation.channelId) ?? false}
-              onTogglePin={
-                onTogglePin
-                  ? () => onTogglePin(conversation.channelId)
-                  : undefined
-              }
-              onBlock={onBlockUser}
-              onUnblock={onUnblockUser}
-              hasActiveCall={
-                activeCallChannelIds?.has(conversation.channelId) ?? false
-              }
-              onStartCall={
-                onStartCall
-                  ? () => {
-                      onStartCall(conversation.channelId);
-                      onMobileClose?.();
-                    }
-                  : undefined
-              }
-            />
-          ))
+          <>
+            {/* The eyebrow is what stops the Amigos row above from reading as
+                conversation zero — it is only drawn once there is at least
+                one real conversation under it. */}
+            <p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+              {t("dm.sectionLabel")}
+            </p>
+            {conversations.map((conversation) => (
+              <ConversationRow
+                key={conversation.channelId}
+                conversation={conversation}
+                selected={selectedChannelId === conversation.channelId}
+                unread={unread[conversation.channelId] ?? EMPTY_UNREAD}
+                blockedUserIds={blockedUserIds}
+                viewerId={viewerId}
+                onSelect={() => {
+                  onSelectConversation(conversation.channelId);
+                  onMobileClose?.();
+                }}
+                onHide={() => onHideConversation(conversation.channelId)}
+                pinned={pinnedChannelIds?.has(conversation.channelId) ?? false}
+                onTogglePin={
+                  onTogglePin
+                    ? () => onTogglePin(conversation.channelId)
+                    : undefined
+                }
+                onBlock={onBlockUser}
+                onUnblock={onUnblockUser}
+                hasActiveCall={
+                  activeCallChannelIds?.has(conversation.channelId) ?? false
+                }
+                onStartCall={
+                  onStartCall
+                    ? () => {
+                        onStartCall(conversation.channelId);
+                        onMobileClose?.();
+                      }
+                    : undefined
+                }
+              />
+            ))}
+          </>
         )}
       </div>
 
@@ -261,6 +297,7 @@ function ConversationRow({
   selected,
   unread,
   blockedUserIds,
+  viewerId,
   onSelect,
   onHide,
   pinned,
@@ -274,6 +311,7 @@ function ConversationRow({
   selected: boolean;
   unread: UnreadState;
   blockedUserIds: ReadonlySet<string>;
+  viewerId: string | null;
   onSelect: () => void;
   onHide: () => void;
   pinned?: boolean;
@@ -386,46 +424,83 @@ function ConversationRow({
   // exist, since it is the more specific claim.
   const badge = mentions > 0 ? mentions : muted || selected ? 0 : unread.count;
 
+  const previewLine = hasActiveCall
+    ? t("dm.inCall")
+    : conversation.lastMessage
+      ? formatMessagePreview(conversation.lastMessage, {
+          viewerId,
+          isGroup: conversation.kind === "group",
+        })
+      : null;
+
   return (
     <ContextMenu items={items}>
       <div
         ref={rowRef}
         className={cn(
-          "group relative mb-0.5 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm",
+          "group relative mb-0.5 flex items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5",
           selected
-            ? "bg-ink-3 text-paper"
-            : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
-          hasUnread && !muted && !selected && "text-paper",
-          muted && !selected && "opacity-50",
+            ? "bg-surface-2"
+            : "hover:bg-surface-2/70",
+          muted && !selected && "opacity-60",
         )}
       >
         {hasUnread && !muted && (
           <span
             aria-hidden="true"
-            className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
+            className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-text"
           />
         )}
         <button
           type="button"
           onClick={onSelect}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          className="flex min-h-[44px] min-w-0 flex-1 items-center gap-2.5 text-left"
         >
           <AvatarStack participants={conversation.participants} />
-          <span
-            className={cn("truncate", hasUnread && !muted && "font-semibold")}
-          >
-            {title}
-          </span>
-          {hasDraft && <DraftMark />}
-          {blocked && <span className="sr-only">{t("chrome.blockedSr")}</span>}
-          {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
-          {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            {conversation.kind === "group" && (
-              <span className="rounded bg-ink-4 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-paper-muted">
-                {conversation.participants.length + 1}
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1">
+              <span
+                className={cn(
+                  "truncate text-sm",
+                  selected
+                    ? "text-text"
+                    : hasUnread && !muted
+                      ? "font-semibold text-text"
+                      : muted
+                        ? "text-text-tertiary"
+                        : "text-text-secondary",
+                )}
+              >
+                {title}
+              </span>
+              {hasDraft && <DraftMark />}
+              {conversation.kind === "group" && (
+                <span className="rounded bg-surface-2 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-text-tertiary">
+                  {conversation.participants.length + 1}
+                </span>
+              )}
+              {blocked && <span className="sr-only">{t("chrome.blockedSr")}</span>}
+              {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
+              {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
+            </span>
+            {previewLine && (
+              <span
+                className={cn(
+                  "block truncate text-xs",
+                  hasActiveCall
+                    ? "text-success"
+                    : muted
+                      ? "text-text-tertiary"
+                      : hasUnread
+                        ? "text-text-secondary"
+                        : "text-text-tertiary",
+                )}
+              >
+                {previewLine}
               </span>
             )}
+          </span>
+          <span className="ml-auto flex shrink-0 flex-col items-end gap-1">
             {/* When the last message landed: a time only if that was today,
                 otherwise the day, so an old thread never passes for a fresh
                 one. Steps aside for the hover actions. */}
@@ -435,17 +510,17 @@ function ConversationRow({
                 title={formatFullTimestamp(conversation.lastMessageAt)}
                 className={cn(
                   "text-[11px] tabular-nums transition-opacity group-hover:opacity-0 group-focus-within:opacity-0",
-                  hasUnread && !muted ? "text-paper" : "text-paper-muted",
+                  hasUnread && !muted ? "text-text" : "text-text-tertiary",
                 )}
                 data-dm-recency
               >
                 {formatRecency(conversation.lastMessageAt)}
               </time>
             )}
-            {badge > 0 && (
+            {badge > 0 ? (
               <span
                 key={badge}
-                className="min-w-4 animate-badge-pop rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+                className="min-w-[18px] h-[18px] animate-badge-pop rounded-full bg-danger px-1 text-center text-[10px] font-bold leading-none text-text"
                 aria-label={
                   mentions > 0
                     ? t("chrome.unreadMentions", { count: mentions })
@@ -455,7 +530,9 @@ function ConversationRow({
               >
                 {formatBadgeCount(badge)}
               </span>
-            )}
+            ) : muted ? (
+              <BellOff className="h-3 w-3 text-text-tertiary" aria-hidden="true" />
+            ) : null}
           </span>
         </button>
         {/* The call entry point. Always visible while a call is live in this
@@ -477,10 +554,10 @@ function ConversationRow({
             <button
               type="button"
               className={cn(
-                "shrink-0 rounded-md p-1.5",
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)]",
                 hasActiveCall
                   ? "text-success"
-                  : "text-paper-muted opacity-0 hover:bg-ink-3 hover:text-paper focus-visible:opacity-100 group-hover:opacity-100",
+                  : "text-text-tertiary opacity-0 hover:bg-surface-2 hover:text-text focus-visible:opacity-100 group-hover:opacity-100",
               )}
               onClick={onStartCall}
             >
@@ -502,7 +579,10 @@ function AvatarStack({
   const shown = participants.slice(0, MAX_STACKED_AVATARS);
   if (shown.length === 0) {
     return (
-      <span className="h-6 w-6 shrink-0 rounded-full bg-ink-4" aria-hidden="true" />
+      <span
+        className="h-8 w-8 shrink-0 rounded-full bg-surface-2"
+        aria-hidden="true"
+      />
     );
   }
   return (
@@ -512,8 +592,8 @@ function AvatarStack({
           key={person.id}
           name={person.displayName}
           avatarUrl={person.avatarUrl}
-          className="h-6 w-6 ring-2 ring-channel"
-          fallbackClassName="bg-ink-4 text-[10px] text-paper"
+          className="h-8 w-8 ring-2 ring-surface-1"
+          fallbackClassName="bg-surface-2 text-[10px] text-text"
           rounded="full"
         />
       ))}

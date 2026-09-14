@@ -131,6 +131,7 @@ describe("the channel column's draggable edge", () => {
         unread={{}}
         isLoading={false}
         blockedUserIds={new Set<string>()}
+        viewerId={null}
         pinnedChannelIds={new Set<string>()}
         onSelectConversation={() => {}}
         onStartConversation={() => {}}

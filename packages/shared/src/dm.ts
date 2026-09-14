@@ -81,6 +81,31 @@ export const dmSummarySchema = z.object({
   participants: z.array(publicUserSchema).max(DM_MAX_RECIPIENTS),
   lastMessageAt: z.string().nullable(),
   unread: unreadCountsSchema,
+  /**
+   * The conversation list's preview line. Null when nobody has spoken yet, or
+   * when the reader has `notifications.previewInApp` off — the server omits
+   * the content rather than sending it for the client to hide, the same
+   * discipline `channelActivitySchema.preview` follows.
+   *
+   * Optional, not just nullable: a server mid-rolling-deploy that predates
+   * this field omits the key entirely, and a client that already has the new
+   * schema must still parse that response rather than fail the whole DM list
+   * over one added field (the CLUSTER_BUS mixed-version case this repo has
+   * been burned by before — see `channelActivitySchema.preview`).
+   */
+  lastMessage: z
+    .object({
+      authorId: z.string().uuid(),
+      authorName: z.string(),
+      /** Already redacted and truncated by the server. Never raw markdown. */
+      preview: z.string().max(140),
+      /** True when the message was attachments only and preview is a label. */
+      isAttachment: z.boolean(),
+      /** Refines `isAttachment`: the sole attachment was a GIF, not a file. */
+      isGif: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export type DmSummary = z.infer<typeof dmSummarySchema>;

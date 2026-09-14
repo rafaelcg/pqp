@@ -38,7 +38,10 @@ import { Input } from "@/components/ui/input";
 import { AvatarPicker } from "@/components/user/avatar-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
-import { useNotificationSettings } from "@/hooks/use-notifications";
+import {
+  useNotificationSettings,
+  useNotificationState,
+} from "@/hooks/use-notifications";
 import { useAccentHue } from "@/hooks/use-accent-hue";
 import { useAppearance } from "@/hooks/use-appearance";
 import { useChatDisplay } from "@/hooks/use-chat-display";
@@ -110,6 +113,8 @@ import {
 } from "@/lib/locale";
 import {
   adoptNotificationPreferences,
+  setArrivalToastEnabled,
+  setPreviewInAppEnabled,
   type NotificationLevel,
 } from "@/lib/notifications";
 import {
@@ -1795,6 +1800,12 @@ function LanguagePicker() {
       return;
     }
     setLocalePreference(next);
+    // Server-side too, not just this browser's localStorage: it is the one
+    // signal `server/src/services/push-copy.ts` has for which language a
+    // closed phone's push should read in, and there is no i18next there to
+    // ask instead. Immediate, not debounced — the reload two lines down
+    // would otherwise race the request and drop it.
+    queuePreferenceSync({ locale: next }, { immediate: true });
     await getDesktop()?.setLocale?.(next);
     try {
       const url = new URL(window.location.href);
@@ -2135,6 +2146,9 @@ const LEVEL_OPTIONS: { value: NotificationLevel; label: MessageKey }[] = [
 ];
 
 const SOUND_CUE_OPTIONS: { cue: SoundCue; label: MessageKey }[] = [
+  // First: the one sound a DM makes, which until now had no switch at all —
+  // the catalogue key already existed and was unreachable.
+  { cue: "message", label: "settings.notifications.sounds.message" },
   { cue: "mention", label: "settings.notifications.sounds.mention" },
   { cue: "voiceJoin", label: "settings.notifications.sounds.voiceJoin" },
   { cue: "voiceLeave", label: "settings.notifications.sounds.voiceLeave" },
@@ -2230,6 +2244,8 @@ function NotificationsSection() {
           })}
         </div>
       </Field>
+
+      <DirectMessagesSection />
 
       <Field
         label={t("settings.notifications.soundsLabel")}
@@ -2327,7 +2343,6 @@ function PushNotificationsSection() {
   const [availability, setAvailability] = useState<PushAvailability | null>(null);
   const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
   const [subscribed, setSubscribed] = useState(false);
-  const [dmDetails, setDmDetails] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2348,7 +2363,6 @@ function PushNotificationsSection() {
           return;
         }
         setServerEnabled(config.enabled);
-        setDmDetails(config.dmDetails);
         setSubscribed(subscription !== null);
       } catch {
         // The section renders nothing rather than a broken toggle.
@@ -2380,18 +2394,6 @@ function PushNotificationsSection() {
       setError(t("settings.push.unreachable"));
     } finally {
       setBusy(false);
-    }
-  };
-
-  const toggleDmDetails = async () => {
-    const next = !dmDetails;
-    // Optimistic — it is a checkbox, and the server answer below corrects it.
-    setDmDetails(next);
-    try {
-      const saved = await setPushDmDetails(next);
-      setDmDetails(saved.dmDetails);
-    } catch {
-      setDmDetails(!next);
     }
   };
 
@@ -2435,25 +2437,112 @@ function PushNotificationsSection() {
               {error}
             </p>
           ) : null}
-          {subscribed ? (
-            <label className="mt-3 flex items-start gap-2 text-sm text-paper">
-              <input
-                type="checkbox"
-                checked={dmDetails}
-                onChange={() => void toggleDmDetails()}
-                className="mt-0.5 accent-accent"
-              />
-              <span>
-                {t("settings.push.dmDetails")}
-                <span className="block text-xs text-paper-muted">
-                  {t("settings.push.dmDetailsHint")}
-                </span>
-              </span>
-            </label>
-          ) : null}
         </>
       )}
     </Field>
+  );
+}
+
+/**
+ * The three DM privacy choices, adjacent: the corner toast, its message
+ * preview, and whether a phone notification may name the sender. Previously
+ * `dmDetails` lived inside `PushNotificationsSection`, shown only once a
+ * device had subscribed — but it is a stored account preference, not a fact
+ * about this browser's subscription, so it belongs here with its siblings
+ * and stays visible whether or not push is on for this device.
+ */
+function DirectMessagesSection() {
+  const { t } = useTranslation();
+  const state = useNotificationState();
+  const [dmDetails, setDmDetails] = useState(false);
+  // Set the moment a person touches the switch, so the initial config fetch
+  // — which can resolve after that click — knows not to stomp a choice
+  // already in flight with whatever the server answered a moment earlier.
+  const touchedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getPushConfig()
+      .then((config) => {
+        if (!cancelled && !touchedRef.current) {
+          setDmDetails(config.dmDetails);
+        }
+      })
+      .catch(() => {
+        // No push configured on this server — the switch still renders (it
+        // is a preference independent of push), just starts at its default.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleDmDetails = () => {
+    touchedRef.current = true;
+    const next = !dmDetails;
+    setDmDetails(next);
+    void setPushDmDetails(next)
+      .then((saved) => setDmDetails(saved.dmDetails))
+      .catch(() => setDmDetails(!next));
+  };
+
+  return (
+    <Field label={t("settings.notifications.dm.label")}>
+      <div className="space-y-3">
+        <SwitchRow
+          label={t("settings.notifications.dm.arrivalToast")}
+          hint={t("settings.notifications.dm.arrivalToastHint")}
+          checked={state.arrivalToast}
+          onChange={setArrivalToastEnabled}
+        />
+        <SwitchRow
+          label={t("settings.notifications.dm.previewInApp")}
+          hint={t("settings.notifications.dm.previewInAppHint")}
+          checked={state.previewInApp}
+          disabled={!state.arrivalToast}
+          onChange={setPreviewInAppEnabled}
+        />
+        <SwitchRow
+          label={t("settings.push.dmDetails")}
+          hint={t("settings.push.dmDetailsHint")}
+          checked={dmDetails}
+          onChange={toggleDmDetails}
+        />
+      </div>
+      <p className="mt-3 text-xs text-paper-muted">
+        {t("settings.notifications.dndHint")}
+      </p>
+    </Field>
+  );
+}
+
+function SwitchRow({
+  label,
+  hint,
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className={cn("flex items-start gap-2 text-sm text-paper", disabled && "opacity-50")}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 accent-accent"
+      />
+      <span>
+        {label}
+        <span className="block text-xs text-paper-muted">{hint}</span>
+      </span>
+    </label>
   );
 }
 

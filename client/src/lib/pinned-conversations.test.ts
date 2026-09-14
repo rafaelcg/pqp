@@ -30,6 +30,7 @@ function dm(channelId: string): DmSummary {
     ],
     lastMessageAt: null,
     unread: { count: 0, mentions: 0 },
+    lastMessage: null,
   };
 }
 
