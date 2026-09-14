@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { verifyHlsPartyPass } from "./hls-viewer-token.js";
 
 /**
  * The signed playlist proxy: rewrites a fetched playlist's segment lines
@@ -11,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const CHANNEL = "00000000-0000-4000-8000-0000000000aa";
 const STARTED_AT = 1_700_000_000_000;
 const OTHER_CHANNEL = "00000000-0000-4000-8000-0000000000bb";
+const USER = "00000000-0000-4000-8000-0000000000cc";
 
 const pool = vi.hoisted(() => ({
   rowCount: 1,
@@ -255,6 +257,22 @@ describe("buildSignedPlaylist", () => {
     const segmentLine = body.split("\n")[6]!;
     const url = new URL(segmentLine);
     expect(url.searchParams.get("X-Amz-Expires")).toBe("900");
+  });
+
+  it("signs every segment for an immutable response, since a segment never changes once written", async () => {
+    // The egress cannot set Cache-Control at PUT time (LiveKit egress 1.14's
+    // S3Upload has no such field -- see the doc comment on
+    // SEGMENT_CACHE_CONTROL). This is the fallback: an S3 `response-*`
+    // override, signed into the URL, that makes THIS GET answer immutable
+    // regardless of what (if anything) is stored on the object.
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    // Index 6, not 5 -- the egress's #EXT-X-PROGRAM-DATE-TIME line (B0.2)
+    // sits at index 4, same as the other tests in this file.
+    const segmentLine = body.split("\n")[6]!;
+    const url = new URL(segmentLine);
+    expect(url.searchParams.get("response-cache-control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
   });
 
   it("throws HlsPlaylistNotFound when no session row matches (e.g. cleaned up already)", async () => {
@@ -701,6 +719,7 @@ describe("buildMasterPlaylistFor", () => {
     return buildMasterPlaylistFor({
       channelId: CHANNEL,
       startedAt: STARTED_AT,
+      userId: USER,
       token,
       now,
     });
@@ -728,8 +747,73 @@ describe("buildMasterPlaylistFor", () => {
     // way a header-less player (Safari native, iOS) authorises the second
     // request.
     for (const line of body!.split("\n").filter((l) => l.startsWith("/api"))) {
-      expect(line).toContain("?t=tok%20en%2F%2B");
+      // `+` for a space, not `%20` -- built with URLSearchParams now (so a
+      // party pass can be appended alongside the token, see below), which
+      // serializes as application/x-www-form-urlencoded. Still round-trips
+      // correctly: `url.searchParams.get` on the receiving end decodes `+`
+      // back to a space the same way.
+      expect(line).toContain("?t=tok+en%2F%2B");
     }
+  });
+
+  describe("the party pass on every variant", () => {
+    afterEach(() => {
+      delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+      delete process.env.LIVE_HLS_PARTY_PASS_TTL_MS;
+    });
+
+    /**
+     * THE BUG THIS PINS. `stampViewerStream` stamps `?pp=` on the SESSION
+     * url a viewer is initially handed, but once a session has run a
+     * ladder, that session url IS this master -- and the URIs a player
+     * actually polls every 2-4s are the VARIANT lines below, which used to
+     * carry only `?t=`. A party pass that never reaches the edge Worker's
+     * rendition route is dead weight: this is what makes it live there.
+     */
+    it("mints a fresh party pass and stamps it onto every rendition URI when the edge host is configured", async () => {
+      process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+      rungRows(["1080p30", "720p30"]);
+      const mintedAt = clock;
+      const body = await master("tok-en", mintedAt);
+      const variantLines = body!.split("\n").filter((l) => l.startsWith("/api"));
+      expect(variantLines.length).toBeGreaterThan(0);
+      for (const line of variantLines) {
+        const url = new URL(line, "https://hls.pqp.gg");
+        expect(url.searchParams.get("t")).toBe("tok-en");
+        const pass = url.searchParams.get("pp");
+        expect(pass).toBeTruthy();
+        // Verified at the SAME instant it was minted -- `master()`'s test
+        // clock is nowhere near real time, so a default `now = Date.now()`
+        // on the verify side would see every pass as already expired.
+        expect(
+          verifyHlsPartyPass(pass, { channelId: CHANNEL, startedAt: STARTED_AT }, mintedAt),
+        ).toEqual({ userId: USER, issuedAt: mintedAt });
+      }
+    });
+
+    it("mints no party pass, and omits ?pp= entirely, with no edge host configured", async () => {
+      delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+      rungRows(["720p30"]);
+      const body = await master("tok-en");
+      const variantLines = body!.split("\n").filter((l) => l.startsWith("/api"));
+      expect(variantLines.length).toBeGreaterThan(0);
+      for (const line of variantLines) {
+        expect(line).not.toContain("pp=");
+      }
+    });
+
+    it("omits ?pp= when the pass is disabled by env, even with an edge host configured", async () => {
+      process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+      process.env.LIVE_HLS_PARTY_PASS_TTL_MS = "0";
+      rungRows(["720p30"]);
+      const body = await master("tok-en");
+      for (const line of body!.split("\n").filter((l) => l.startsWith("/api"))) {
+        expect(line).not.toContain("pp=");
+        // The viewer token is still there -- same fallback shape as
+        // stampViewerStream's own "disabled by env" case.
+        expect(line).toContain("?t=tok-en");
+      }
+    });
   });
 
   it("only looks at rows of THIS session", async () => {
@@ -876,7 +960,12 @@ describe("resolveHlsSessionId", () => {
       rowCount: 1,
       rows: [{ id: "row-720", rung: "720p30" }],
     }));
-    await buildMasterPlaylistFor({ channelId: CHANNEL, startedAt: STARTED_AT, now: 1_000 });
+    await buildMasterPlaylistFor({
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+      userId: USER,
+      now: 1_000,
+    });
     await expect(
       resolveHlsSessionId(CHANNEL, STARTED_AT, 1_000),
     ).resolves.toBe("row-720");

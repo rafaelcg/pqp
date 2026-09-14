@@ -40,7 +40,11 @@
  * entry, so a rejoin works without waiting anything out.
  */
 
-import { HLS_VIEWER_TOKEN_TTL_MS } from "./hls-viewer-token.js";
+import {
+  writeHlsEdgeChannelRevocation,
+  writeHlsEdgeRevocationForScope,
+} from "./hls-edge-revocation.js";
+import { hlsViewerTokenTtlMs } from "./hls-viewer-token.js";
 
 interface Revocation {
   /** When access was taken away. Tokens minted at or after this survive. */
@@ -55,7 +59,39 @@ interface Revocation {
  * Nothing older than a token's own lifetime can matter: any token it could
  * still catch has expired on its own by then. So the map is bounded by the
  * number of channels that had an eviction in the last token lifetime.
+ *
+ * "A token's own lifetime" is `hlsViewerTokenTtlMs()`, the LIVE value
+ * (`LIVE_HLS_VIEWER_TOKEN_TTL_MS` or its default) -- but the HIGH-WATER MARK
+ * of it, `pruneWindowMs()` below, not whatever the env says at THIS instant.
+ * A token minted a moment ago carries an expiry baked in from the TTL that
+ * was live when it was minted, not from whatever the env says now: an
+ * operator who LOWERS `LIVE_HLS_VIEWER_TOKEN_TTL_MS` while older,
+ * longer-lived tokens are still outstanding must not have this map start
+ * forgetting revocations sooner than those tokens actually expire, or a
+ * viewer banned under the old TTL becomes un-bannable again once the
+ * shorter window has passed -- Farol caught this as a MEDIUM. Raising the
+ * TTL is symmetric and already safe without tracking anything (a bigger
+ * pruning window only ever keeps MORE entries), so the mark only ever needs
+ * to grow, never shrink, and growing it costs nothing but a few extra
+ * `Revocation` entries kept a little longer than the CURRENT setting alone
+ * would justify. It resets to the process's own compiled-in default on
+ * restart, same as the revocation map itself, which is fine: a restart
+ * already drops every revocation this map is tracking, there is nothing left
+ * for the mark to protect from before that instant.
+ *
+ * This deliberately says nothing about the party pass
+ * (`hls-viewer-token.ts`'s `mintHlsPartyPass`) -- that credential is checked
+ * only by the edge Worker, which has no path to this map at all, and
+ * extending this pruning window would not reach it. See the party pass's own
+ * doc comment for that trade-off.
  */
+let highWaterTtlMs = hlsViewerTokenTtlMs();
+
+function pruneWindowMs(): number {
+  highWaterTtlMs = Math.max(highWaterTtlMs, hlsViewerTokenTtlMs());
+  return highWaterTtlMs;
+}
+
 const byChannel = new Map<string, Revocation[]>();
 
 function prune(channelId: string, now: number): Revocation[] {
@@ -63,7 +99,7 @@ function prune(channelId: string, now: number): Revocation[] {
   if (!entries) {
     return [];
   }
-  const kept = entries.filter((entry) => now - entry.at < HLS_VIEWER_TOKEN_TTL_MS);
+  const kept = entries.filter((entry) => now - entry.at < pruneWindowMs());
   if (kept.length === 0) {
     byChannel.delete(channelId);
   } else if (kept.length !== entries.length) {
@@ -96,6 +132,24 @@ export function revokeHlsAccess(
   const entries = prune(channelId, now);
   entries.push(entry);
   byChannel.set(channelId, entries);
+  // Tell the edge Worker's KV denylist too, fire-and-forget -- see
+  // `hls-edge-revocation.ts`'s module doc comment for the two shapes this
+  // takes and why neither is awaited here. A named list (`only`, a kick or
+  // a ban) writes one per-viewer key each; an UNSCOPED revocation (no
+  // `only` at all -- a channel deleted, or gone private for everyone) has
+  // no fixed userId list to key per-viewer entries by, so it writes a
+  // single CHANNEL-wide key instead, which the Worker's gate checks
+  // alongside the per-viewer one. `exceptUserIds`-only (a role change that
+  // leaves most viewers revoked but names a few who keep access) is
+  // deliberately treated as unscoped here too -- the channel-wide write is
+  // the conservative direction to err in: it can cost the few named
+  // exceptions a stale-cache window at worst, never let a truly revoked
+  // viewer through.
+  if (entry.only) {
+    writeHlsEdgeRevocationForScope(channelId, [...entry.only], now);
+  } else {
+    writeHlsEdgeChannelRevocation(channelId, now);
+  }
 }
 
 /** Convenience for the "this user lost these channels" eviction shape. */
@@ -138,4 +192,7 @@ export function isHlsAccessRevoked(
 
 export function resetHlsRevocationsForTests(): void {
   byChannel.clear();
+  // Same as a real restart: the high-water mark forgets every TTL it has
+  // ever observed and starts again from whatever the env says right now.
+  highWaterTtlMs = hlsViewerTokenTtlMs();
 }

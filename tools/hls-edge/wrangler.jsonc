@@ -9,12 +9,39 @@
   "name": "pqp-hls-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
-  // Non-secret configuration. HLS_VIEWER_TOKEN_SECRET is set with
-  // `wrangler secret put` and never lives in this file — see README.md for
-  // what value it takes (NOT the raw CLERK_SECRET_KEY).
+  // Non-secret configuration. HLS_VIEWER_TOKEN_SECRET and HLS_PARTY_PASS_SECRET
+  // are set with `wrangler secret put` and never live in this file — see
+  // README.md for what value each takes (NOT the raw CLERK_SECRET_KEY, and
+  // NOT the same value as each other: they are two different derived keys,
+  // see `partySecret()` in `server/src/voice/hls-viewer-token.ts`).
+  //
+  // ENVIRONMENT="production" governs exactly one thing: whether a party
+  // pass may be honored with no `HLS_REVOKED_USERS` binding behind it --
+  // see `partyPassRequiresKvInProduction` in src/party-pass-revocation.js
+  // and README.md "Enabling in production". Override for a local
+  // `wrangler dev` run with `wrangler dev --var ENVIRONMENT:development`
+  // (or just leave it: unset/non-"production" keeps the pre-sign-off
+  // fail-open default, which is what local development needs to work with
+  // no KV namespace at all).
   "vars": {
-    "ORIGIN_BASE": "https://api.pqp.gg"
+    "ORIGIN_BASE": "https://api.pqp.gg",
+    "ENVIRONMENT": "production"
   },
+
+  // Party-pass (and now shared-rendition-cache) revocation denylist --
+  // signed off 2026-09-14, see README.md "Enabling in production" for the
+  // exact `wrangler kv namespace create` / binding steps and the API-side
+  // env vars that write to it (`server/src/voice/hls-edge-revocation.ts`).
+  // Left commented out here on purpose even after the sign-off: creating
+  // the namespace is an operator action against a real Cloudflare account,
+  // not something this repo can do on an operator's behalf, and an
+  // unbound KV already has a correct, tested default (fails open outside
+  // production, refuses party passes in production) -- uncomment and set a
+  // real `id` only once the namespace actually exists.
+  //
+  // "kv_namespaces": [
+  //   { "binding": "HLS_REVOKED_USERS", "id": "<from `wrangler kv namespace create HLS_REVOKED_USERS`>" }
+  // ],
 
   // ALWAYS-ON (not built yet): the owner wants a watch party to keep playing
   // when the API is down. That needs a SECOND `PlaylistOrigin`

@@ -1,11 +1,12 @@
 import { getPool, DatabaseUnavailableError } from "../db.js";
 import { signRequest } from "../lib/s3.js";
-import { verifyHlsViewerToken } from "./hls-viewer-token.js";
+import { mintHlsPartyPass, verifyHlsViewerToken } from "./hls-viewer-token.js";
 import {
   hlsObjectPrefix,
   hlsUrlTtlSeconds,
   liveHlsStorageConfig,
   internalPlaylistUrl,
+  playlistBaseUrl,
   sessionPrefixPattern,
 } from "./hls-egress.js";
 import {
@@ -15,10 +16,43 @@ import {
   withPqpSessionTag,
   type MasterVariant,
 } from "./hls-ladder.js";
-import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
+import { HLS_PARTY_PASS_PARAM, HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * A MEDIA SEGMENT NEVER CHANGES ONCE THE EGRESS WRITES IT, so every fetch of
+ * one is a request for the same bytes forever -- the textbook case for
+ * `Cache-Control: immutable`. Nothing in the write path can say so today:
+ * LiveKit egress 1.14's `S3Upload` (`livekit.S3Upload` in
+ * `@livekit/protocol`) carries `metadata` (arbitrary `x-amz-meta-*` pairs,
+ * not a real HTTP header), `tagging` and `content_disposition`, and no field
+ * for `Cache-Control` at all -- confirmed against the actual PUT, not just
+ * the protobuf: `livekit/storage`'s `s3Storage.upload` (`s3.go`) builds its
+ * `s3.PutObjectInput` from exactly `Body`, `Bucket`, `ContentType`, `Key`,
+ * `Metadata` and `ContentDisposition` (defaulted to `"inline"`), nothing
+ * else. So this cannot be set at PUT time without forking egress.
+ *
+ * This proxy is a GET path, not the PUT path, but S3's `GetObject` (which R2
+ * implements) accepts a `response-cache-control` query override that
+ * controls only the header THIS response carries, independent of what (if
+ * anything) was stored on the object -- exactly the "Worker on GET" shape
+ * `docs/plans/BROADCAST_PIPELINE.md` B1.4 asks for, minus a Worker: the
+ * override rides on the presigned URL the client already fetches directly
+ * from R2, so every viewer's own repeat requests (a seek backward, a stall
+ * retry) hit their OWN browser cache instead of R2 again. It does NOT give
+ * two different viewers a shared cache entry -- their URLs differ by SigV4
+ * signature (`?X-Amz-Signature=...`), so a CDN sitting in front of the raw R2
+ * endpoint (there isn't one today) would still see distinct URLs per viewer
+ * per signing bucket. Cross-viewer sharing needs either an R2-side rule tied
+ * to a stable, unsigned path, or the edge Worker serving segment bytes itself
+ * off its own R2 credentials -- both out of scope for this change; see
+ * `docs/WATCH_PARTY.md` §"Segments at the edge" for the design and why the
+ * Worker option is the one to build when `LIVE_HLS_S3_*` credentials reach
+ * `tools/hls-edge/`.
+ */
+const SEGMENT_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 /**
  * THE CLOCK A SEGMENT URL IS SIGNED WITH, AND WHY IT IS NOT `Date.now()`.
@@ -614,6 +648,7 @@ async function renderSignedPlaylist(
         forRead: true,
         config,
         now: signedAt,
+        query: { "response-cache-control": SEGMENT_CACHE_CONTROL },
       }).url;
       memo.set(key, { url, signedAtMs: signedAt.getTime() });
       return url;
@@ -822,7 +857,27 @@ export async function resolveHlsSessionId(
  * header-less player (Safari's native HLS, iOS) can authorise the second
  * request; and staying on this API's own origin is what makes hls.js attach
  * the Bearer header through `isOwnHlsPlaylistProxyUrl`. An absolute bucket
- * URL here would do neither.
+ * URL here would do neither. And because the URI is root-relative, a master
+ * served THROUGH the edge Worker (`LIVE_HLS_PLAYLIST_BASE_URL`) resolves its
+ * variant lines against the EDGE host, not this API — the same "no client
+ * rebuild" trick `stampViewerStream` relies on for the session URL itself.
+ *
+ * EVERY VARIANT ALSO CARRIES A FRESH PARTY PASS, NOT JUST THE TOKEN. This
+ * was a real gap, not a cosmetic one: `stampViewerStream` stamps `?pp=` onto
+ * the SESSION url a viewer is initially handed, but once that session has
+ * run a ladder, the session url IS this master, and the URIs a player
+ * actually polls every 2-4s are the VARIANT lines below -- which, before
+ * this, carried only `?t=`. A party pass that never reaches the edge
+ * Worker's rendition route is useless there, so for any session that ever
+ * ran a ladder (the normal case), `?pp=` was live on the initial fetch and
+ * then silently dropped from every subsequent poll the moment the master
+ * was rendered. Minting fresh here (rather than trying to forward the
+ * caller's own `?pp=`, which the edge Worker deliberately never looks at on
+ * THIS route -- see its own module doc comment) needs nothing from the
+ * caller: this function already has `userId` from the same access check
+ * that authorized the request. Gated on `playlistBaseUrl()` for the same
+ * reason `stampViewerStream` gates it: a pass nobody's Worker will ever
+ * check is wasted bytes on every variant line.
  *
  * A session with no rung rows at all is a pre-ladder session: its single
  * media playlist is served directly, so an in-flight viewer from before this
@@ -831,6 +886,7 @@ export async function resolveHlsSessionId(
 export async function buildMasterPlaylistFor(input: {
   channelId: string;
   startedAt: number;
+  userId: string;
   /** The `?t=` the request arrived with, stamped onto each variant. */
   token?: string | null;
   now?: number;
@@ -843,9 +899,23 @@ export async function buildMasterPlaylistFor(input: {
   if (rungs.length === 0) {
     return null;
   }
-  const query = input.token
-    ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(input.token)}`
-    : "";
+  const now = input.now ?? Date.now();
+  const partyPass = playlistBaseUrl()
+    ? mintHlsPartyPass({
+        userId: input.userId,
+        channelId: input.channelId,
+        startedAt: input.startedAt,
+        now,
+      })
+    : null;
+  const params = new URLSearchParams();
+  if (input.token) {
+    params.set(HLS_VIEWER_TOKEN_PARAM, input.token);
+  }
+  if (partyPass) {
+    params.set(HLS_PARTY_PASS_PARAM, partyPass);
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const variants: MasterVariant[] = rungs.map((rung) => ({
     rung: LADDER_RUNGS[rung]!,
     uri:
