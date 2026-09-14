@@ -679,6 +679,41 @@ export async function listVoicePeersInRoom(
 }
 
 /**
+ * Distinct occupants of several rooms at once, cluster-wide, one query.
+ *
+ * The idle-alone sweep (`sweepIdleAloneSeats`) used to call
+ * `listVoicePeersInRoom` once per single-occupant room, every
+ * `IDLE_ALONE_SWEEP_MS`: a busy instance with a thousand one-person rooms
+ * meant a thousand round trips a tick. Every candidate channel goes in one
+ * `WHERE channel_id = ANY($1)`, so the sweep costs one query regardless of
+ * how many lone seats it is checking. A channel with nobody in
+ * `voice_peers` at all (already emptied elsewhere) is simply absent from the
+ * result — callers should read a missing key as zero, not as unknown.
+ */
+export async function countVoicePeerUsersByChannel(
+  channelIds: readonly string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (channelIds.length === 0) {
+    return counts;
+  }
+  const result = await getPool().query<{
+    channel_id: string;
+    users: string;
+  }>(
+    `SELECT channel_id, COUNT(DISTINCT user_id)::text AS users
+       FROM voice_peers
+      WHERE channel_id = ANY($1)
+      GROUP BY channel_id`,
+    [channelIds],
+  );
+  for (const row of result.rows) {
+    counts.set(row.channel_id, Number(row.users));
+  }
+  return counts;
+}
+
+/**
  * Every occupied room in the cluster, largest first. For the operator
  * snapshot.
  *

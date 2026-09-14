@@ -67,7 +67,10 @@ import { resolveMemberChannelPermissions } from "../services/permissions.js";
  * acyclic. Importing it statically from here is the direction that stays
  * acyclic, so the seat gate below costs no lazy import on the join path.
  */
-import { loadWatchPartySeat } from "../services/watch-parties.js";
+import {
+  getActiveWatchPartyRow,
+  loadWatchPartySeat,
+} from "../services/watch-parties.js";
 import { canAccessChannel, resolveMemberName } from "../services/users.js";
 import { broadcastToChannel, onPermissionsUpdate } from "./chat.js";
 import { resolveStatus } from "./status.js";
@@ -113,6 +116,7 @@ import {
   adoptVoicePeer,
   clearWatchPartyIfEmpty,
   countIdleVoiceSeats,
+  countVoicePeerUsersByChannel,
   deleteVoicePeer,
   getVoicePeerRow,
   isVoicePeerRetired,
@@ -3460,21 +3464,105 @@ const SELF_INITIATED_VOICE_FRAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Distinct people seated in a room, cluster-wide when the registry is on.
- * Orphans count: a seat held for a resume is still a seat.
+ * Defensive only, not reachable today: an SFU-side composite-egress bot
+ * (LiveKit's own `EG_...` participant, minted to subscribe to tracks for a
+ * watch-party transcode) never sends our `join-voice-room` and so never gets
+ * a `VoicePeer` or a `voice_peers` row — nothing in this file or
+ * `registry.ts` writes one for it. If that ever changes (a LiveKit webhook
+ * syncing participants, say), the idle sweep must still never count it as
+ * the person keeping a seat warm.
  */
-async function countRoomOccupants(voiceChannelId: string): Promise<number> {
-  const users = new Set<string>();
-  for (const peer of getRoomPeers(voiceChannelId)) {
-    users.add(peer.userId);
-  }
-  if (registryOn() && users.size <= 1) {
-    for (const row of await listVoicePeersInRoom(voiceChannelId)) {
-      users.add(row.userId);
+function isEgressIdentity(userId: string): boolean {
+  return userId.startsWith("EG_");
+}
+
+/**
+ * Per-room occupant counts for one sweep tick, batched into at most one
+ * registry query total (`countVoicePeerUsersByChannel`) rather than one per
+ * room — a room with more than one LOCAL occupant already knows it is not
+ * alone and never touches the registry at all. `roomPeers` must include
+ * orphaned seats: a seat held for the resume window still counts as
+ * somebody being there (pitfall 11), it is just never itself a sweep
+ * candidate (see the `orphanedAt` filter in `sweepIdleAloneSeats`).
+ *
+ * A room's count comes back `null` only when the registry had to be asked
+ * and the read failed — the caller must treat that as "unknown this tick"
+ * and skip the room, never as "alone": a DB hiccup must never manufacture a
+ * disconnect for a room that has a second occupant on another instance.
+ */
+async function computeRoomOccupancy(
+  byRoom: ReadonlyMap<string, VoicePeer[]>,
+): Promise<Map<string, number | null>> {
+  const occupants = new Map<string, number | null>();
+  const needsRegistry: string[] = [];
+  for (const [voiceChannelId, roomPeers] of byRoom) {
+    const localUsers = new Set<string>();
+    for (const peer of roomPeers) {
+      if (!isEgressIdentity(peer.userId)) {
+        localUsers.add(peer.userId);
+      }
+    }
+    occupants.set(voiceChannelId, localUsers.size);
+    if (registryOn() && localUsers.size <= 1) {
+      needsRegistry.push(voiceChannelId);
     }
   }
-  return users.size;
+  if (needsRegistry.length > 0) {
+    try {
+      const registryCounts = await countVoicePeerUsersByChannel(needsRegistry);
+      for (const voiceChannelId of needsRegistry) {
+        const local = occupants.get(voiceChannelId) ?? 0;
+        const registryCount = registryCounts.get(voiceChannelId) ?? 0;
+        occupants.set(voiceChannelId, Math.max(local, registryCount));
+      }
+    } catch (error) {
+      console.error("[voice] idle sweep: occupancy read failed:", error);
+      for (const voiceChannelId of needsRegistry) {
+        occupants.set(voiceChannelId, null);
+      }
+    }
+  }
+  return occupants;
 }
+
+/**
+ * A lone seat that is presenting a live watch party to an audience is not
+ * alone — the audience is watching HLS without a seat by design (see
+ * `docs/WATCH_PARTY.md`, "The stream"), so the room's only `VoicePeer` is
+ * genuinely the host with nobody else in this channel. Cluster-safe: reads
+ * `channel_sessions` (Postgres), not the per-process egress map, because the
+ * host's socket and the instance actually running the HLS egress are not
+ * guaranteed to be the same machine.
+ *
+ * Only asked when it might matter (a `watch_party` channel already down to
+ * one local occupant), and fails toward NOT disconnecting: a read error
+ * means "skip this room's decision this tick", the same rule
+ * `computeRoomOccupancy` uses for its own registry read.
+ */
+async function isPresentingLiveWatchParty(
+  voiceChannelId: string,
+  roomPeers: readonly VoicePeer[],
+): Promise<boolean> {
+  if (!roomPeers.some((peer) => peer.watchParty)) {
+    return false;
+  }
+  try {
+    const row = await getActiveWatchPartyRow(voiceChannelId);
+    return row?.status === "live";
+  } catch (error) {
+    console.error("[voice] idle sweep: watch-party read failed:", error);
+    return true;
+  }
+}
+
+/** Guards `sweepIdleAloneSeats` against overlapping itself: a slow registry
+ * (or a slow watch-party read) under load must not stack a second full scan
+ * on top of a first one still awaiting Postgres, which is exactly the kind
+ * of pile-up an outage turns into cascading load. A skipped tick is fine —
+ * the next one 15s later, or the one after, picks the state back up; there
+ * is no cumulative state this drops (`aloneSince` lives on the peer, not on
+ * the sweep). */
+let idleAloneSweepRunning = false;
 
 /**
  * THE IDLE HANGUP'S TICK. Walks this instance's live seats; a seat whose
@@ -3484,6 +3572,19 @@ async function countRoomOccupants(voiceChannelId: string): Promise<number> {
  * disconnect takes (notice first, then the seat, then the SFU). A room that
  * gains a second person clears both marks without a frame. Never throws.
  *
+ * MULTI-INSTANCE: this only ever reads and acts on `peers`, this process's
+ * own local map — every `peers.has`, every `disconnectVoiceUser` call is
+ * scoped to a seat whose socket lives on THIS instance. It is therefore
+ * correct, not merely tolerated, to run this same sweep unmodified on every
+ * `pqp-api` machine: each instance disconnects only its own seats, and the
+ * registry (`countVoicePeerUsersByChannel`) is what tells an instance
+ * holding a lone local seat whether a second person is seated on some other
+ * machine before it acts. `WORKER_MODE=worker` never reaches this code at
+ * all (`main()` in `server/src/index.ts` hands off to `worker.js` before the
+ * `setInterval` that calls this is ever created), so a batch worker process
+ * never runs it — it is a per-socket timer in the process that holds the
+ * sockets, exactly the shape `WORKER_MODE=api` requires.
+ *
  * Exported for the tests and for `server/src/index.ts`, which runs it every
  * `IDLE_ALONE_SWEEP_MS`. `now` is a parameter so a test can move the clock.
  */
@@ -3492,67 +3593,87 @@ export async function sweepIdleAloneSeats(now = Date.now()): Promise<void> {
   if (limit <= 0) {
     return;
   }
-  const byRoom = new Map<string, VoicePeer[]>();
-  for (const peer of peers.values()) {
-    if (peer.orphanedAt !== undefined) {
-      continue;
-    }
-    const list = byRoom.get(peer.voiceChannelId) ?? [];
-    list.push(peer);
-    byRoom.set(peer.voiceChannelId, list);
+  if (idleAloneSweepRunning) {
+    return;
   }
-  for (const [voiceChannelId, seated] of byRoom) {
-    let occupants: number;
-    try {
-      occupants = await countRoomOccupants(voiceChannelId);
-    } catch (error) {
-      console.error("[voice] idle sweep: occupancy read failed:", error);
-      continue;
+  idleAloneSweepRunning = true;
+  try {
+    // Every local peer, orphans included: occupancy counts them (pitfall
+    // 11 — a seat mid-resume is still a seat), even though the candidate
+    // loop below skips them as a target.
+    const byRoom = new Map<string, VoicePeer[]>();
+    for (const peer of peers.values()) {
+      const list = byRoom.get(peer.voiceChannelId) ?? [];
+      list.push(peer);
+      byRoom.set(peer.voiceChannelId, list);
     }
-    for (const peer of seated) {
-      // Re-read: an earlier hangup in this loop may have removed it.
-      if (!peers.has(peer.id)) {
+    const occupancy = await computeRoomOccupancy(byRoom);
+    for (const [voiceChannelId, roomPeers] of byRoom) {
+      const occupants = occupancy.get(voiceChannelId);
+      // null: the registry read for this room failed this tick. undefined
+      // cannot happen (every room in byRoom got an entry above), but is
+      // treated the same way out of caution — skip, never guess.
+      if (occupants === null || occupants === undefined) {
         continue;
       }
-      if (occupants > 1) {
-        peer.aloneSince = undefined;
-        peer.idleWarnedAt = undefined;
+      const candidates = roomPeers.filter(
+        (peer) => peer.orphanedAt === undefined && !isEgressIdentity(peer.userId),
+      );
+      if (candidates.length === 0) {
         continue;
       }
-      if (peer.aloneSince === undefined) {
-        peer.aloneSince = now;
+      if (occupants <= 1 && (await isPresentingLiveWatchParty(voiceChannelId, roomPeers))) {
         continue;
       }
-      const elapsed = now - peer.aloneSince;
-      if (elapsed >= limit) {
-        idleAloneDisconnected += 1;
-        logEvent("voice.idleAloneDisconnected", {
-          channelId: voiceChannelId,
-          userId: peer.userId,
-          peerId: peer.id,
-          aloneMinutes: Math.round(elapsed / 60_000),
-        });
-        disconnectVoiceUser(peer.userId, voiceChannelId, {
-          message: `You were alone in the call for ${Math.round(
-            limit / 60_000,
-          )} minutes, so you were disconnected.`,
-          reason: "idle",
-        });
-        continue;
-      }
-      if (
-        peer.idleWarnedAt === undefined &&
-        elapsed >= limit - IDLE_ALONE_WARNING_MS
-      ) {
-        peer.idleWarnedAt = now;
-        idleAloneWarned += 1;
-        send(peer.socket, {
-          type: "voice-idle-warning",
-          voiceChannelId,
-          disconnectAt: peer.aloneSince + limit,
-        });
+      for (const peer of candidates) {
+        // Re-read: an earlier hangup in this loop may have removed it.
+        if (!peers.has(peer.id)) {
+          continue;
+        }
+        if (occupants > 1) {
+          peer.aloneSince = undefined;
+          peer.idleWarnedAt = undefined;
+          continue;
+        }
+        if (peer.aloneSince === undefined) {
+          peer.aloneSince = now;
+          continue;
+        }
+        const elapsed = now - peer.aloneSince;
+        if (elapsed >= limit) {
+          idleAloneDisconnected += 1;
+          const aloneMinutes = Math.round(limit / 60_000);
+          logEvent("voice.idleAloneDisconnected", {
+            channelId: voiceChannelId,
+            userId: peer.userId,
+            peerId: peer.id,
+            aloneMinutes: Math.round(elapsed / 60_000),
+          });
+          disconnectVoiceUser(peer.userId, voiceChannelId, {
+            message: `You were alone in the call for ${aloneMinutes} minute${
+              aloneMinutes === 1 ? "" : "s"
+            }, so you were disconnected.`,
+            reason: "idle",
+            aloneMinutes,
+          });
+          continue;
+        }
+        if (
+          peer.idleWarnedAt === undefined &&
+          elapsed >= limit - IDLE_ALONE_WARNING_MS
+        ) {
+          peer.idleWarnedAt = now;
+          idleAloneWarned += 1;
+          send(peer.socket, {
+            type: "voice-idle-warning",
+            voiceChannelId,
+            disconnectAt: peer.aloneSince + limit,
+          });
+        }
       }
     }
+  } finally {
+    idleAloneSweepRunning = false;
   }
 }
 
@@ -5080,6 +5201,21 @@ export async function handleVoiceMessage(
     // now, and counting it twice would inflate the pill.
     hlsAudience.dropSocket(socket);
     noteRoomSizeForPeak(getRoomPeers(payload.voiceChannelId).length);
+    // Clear any idle-alone clock on this instance's OTHER seats in the room
+    // right now, rather than waiting up to `IDLE_ALONE_SWEEP_MS` for the next
+    // sweep to notice. Without this, a visit that starts and ends between two
+    // sweeps is invisible to `sweepIdleAloneSeats` (it only samples once per
+    // tick), so the departed visitor's presence would never reset the
+    // remaining peer's `aloneSince` and a later sweep could count the whole
+    // stretch, visit included, as one uninterrupted alone period. Same-
+    // instance only: a join on a DIFFERENT machine still reaches the other
+    // peer through the next sweep's registry read, bounded by one tick.
+    for (const other of getRoomPeers(payload.voiceChannelId)) {
+      if (other.id !== peerId) {
+        other.aloneSince = undefined;
+        other.idleWarnedAt = undefined;
+      }
+    }
     if (!canSpeak) {
       // Once per join, so an operator can see a stage working (or a member
       // locked out by accident) without a client-side log.
@@ -6405,6 +6541,9 @@ function notifyLocalVoiceModeration(
         : {}),
       message: notice.message,
       ...(notice.reason ? { reason: notice.reason } : {}),
+      ...(notice.aloneMinutes !== undefined
+        ? { aloneMinutes: notice.aloneMinutes }
+        : {}),
     });
     told += 1;
   }
@@ -6425,7 +6564,12 @@ function notifyLocalVoiceModeration(
 export function disconnectVoiceUser(
   userId: string,
   voiceChannelId: string,
-  notice: { movedToChannelId?: string; message: string; reason?: "idle" },
+  notice: {
+    movedToChannelId?: string;
+    message: string;
+    reason?: "idle";
+    aloneMinutes?: number;
+  },
   /** Peer ids seen elsewhere in the cluster (`findVoicePeerIdentities`), merged into the SFU sweep's hint. */
   knownIdentities: Map<string, string> = getVoicePeerIdentities(
     userId,
@@ -6443,6 +6587,9 @@ export function disconnectVoiceUser(
       : {}),
     message: notice.message,
     ...(notice.reason ? { reason: notice.reason } : {}),
+    ...(notice.aloneMinutes !== undefined
+      ? { aloneMinutes: notice.aloneMinutes }
+      : {}),
   };
   // Local only: the cluster hears the notice inside the eviction frame, so
   // the other instance says it once, right before it drops the peer.
@@ -7274,6 +7421,7 @@ const voiceModerationNoticeSchema = voiceModerationMessageSchema.pick({
   movedToChannelId: true,
   message: true,
   reason: true,
+  aloneMinutes: true,
 });
 type VoiceModerationNotice = z.infer<typeof voiceModerationNoticeSchema>;
 

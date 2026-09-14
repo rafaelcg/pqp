@@ -3330,7 +3330,9 @@ function MainAppContent({
                 : message.action === "unmuted"
                   ? translateMessage("voice.serverMuted.cleared")
                   : message.reason === "idle"
-                    ? translateMessage("voice.idle.disconnected")
+                    ? translateMessage("voice.idle.disconnected", {
+                        count: message.aloneMinutes ?? 10,
+                      })
                     : message.message,
             );
             if (message.action === "disconnected") {

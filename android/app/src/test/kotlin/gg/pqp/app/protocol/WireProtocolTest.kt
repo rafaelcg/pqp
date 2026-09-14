@@ -248,6 +248,15 @@ class WireProtocolTest {
         // (docs/MUSIC.md), which is a feature and not a frame.
         "music" to "no music player on the phone yet",
         "channel-music" to "no now-playing row on the phone's channel list yet",
+        // The one-minute-before-hangup notice for the idle-alone timeout
+        // (VOICE_IDLE_ALONE_MINUTES). The hangup itself still works correctly
+        // without this: it arrives as an ordinary `voice-moderation` frame
+        // with `action: "disconnected"`, which VoiceController already
+        // handles, so a phone sitting alone in a call is still released on
+        // time. Only the countdown banner and its "still here" button are
+        // missing; per the PR that added this frame, that is a deliberate
+        // follow-up, not an oversight.
+        "voice-idle-warning" to "disconnect already works via voice-moderation; the warning banner is a follow-up",
     )
 
     /**
