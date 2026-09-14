@@ -526,8 +526,54 @@ async function findRemuxSessionById(sessionId: string): Promise<RemuxSessionInfo
  *    also failed, so a session is running on the box that nothing durable
  *    tracks. The next attempt must finish tearing THIS ONE down before it
  *    is allowed to start anything else for the room.
+ *
+ * `mintedAtMs` IS THE FIX FOR AN OPEN-ENDED MARKER. Without it, a channel
+ * whose one ambiguous attempt is never retried (the presenter leaves, the
+ * party ends with nobody sharing again) keeps its entry forever, and a
+ * Farol review of the second round's fix (PR #580) named the failure mode
+ * precisely: a much later, wholly unrelated party in the SAME channel could
+ * still match this stale marker's `sessionId` via `findRemuxSessionById` and
+ * "confirm" a session that has nothing to do with it, if the box still
+ * happened to answer for that id. `pendingStartFor` refuses a marker older
+ * than `PENDING_START_TTL_MS` and deletes it on the way out, so staleness
+ * has a ceiling: past that window this is exactly the no-marker case, a
+ * fresh id is minted, and anything still running under the old one is left
+ * for the next `adoptLlHlsSessions` boot sweep -- the same backstop that
+ * already exists for a marker lost to a restart, not a new mechanism.
  */
-const pendingStarts = new Map<string, { sessionId: string; needsStop: boolean }>();
+const pendingStarts = new Map<
+  string,
+  { sessionId: string; needsStop: boolean; mintedAtMs: number }
+>();
+
+/** How long an unresolved start attempt may still be trusted before it is treated as gone. */
+const PENDING_START_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * The channel's pending marker, or `null` for "no marker" AND for "the
+ * marker expired" alike -- callers never need to tell the two apart, which
+ * is the point: past the TTL a stale marker is not merely ignored, it is
+ * deleted, so it cannot go on being re-checked (and re-logged) forever by a
+ * channel nothing ever reconciles again.
+ */
+function pendingStartFor(
+  channelId: string,
+): { sessionId: string; needsStop: boolean; mintedAtMs: number } | null {
+  const pending = pendingStarts.get(channelId);
+  if (!pending) {
+    return null;
+  }
+  if (Date.now() - pending.mintedAtMs > PENDING_START_TTL_MS) {
+    pendingStarts.delete(channelId);
+    logEvent("voice.hlsLlPendingStartExpired", {
+      channelId,
+      sessionId: pending.sessionId,
+      needsStop: pending.needsStop,
+    });
+    return null;
+  }
+  return pending;
+}
 
 async function startLlSession(
   channelId: string,
@@ -539,7 +585,7 @@ async function startLlSession(
     logEvent("voice.hlsLlStartFailed", { channelId, reason: "not-configured" });
     return null;
   }
-  const pending = pendingStarts.get(channelId);
+  const pending = pendingStartFor(channelId);
   if (pending?.needsStop) {
     try {
       await remuxStopSession(pending.sessionId);
@@ -562,14 +608,14 @@ async function startLlSession(
   const cfg = remuxSessionConfig();
   let info: RemuxSessionInfo;
   try {
-    const stillPending = pendingStarts.get(channelId);
+    const stillPending = pendingStartFor(channelId);
     const existing = stillPending ? await findRemuxSessionById(stillPending.sessionId) : null;
     if (existing) {
       logEvent("voice.hlsLlStartFoundExisting", { channelId, sessionId: existing.sessionId });
       info = existing;
     } else {
       const sessionId = stillPending?.sessionId ?? randomUUID();
-      pendingStarts.set(channelId, { sessionId, needsStop: false });
+      pendingStarts.set(channelId, { sessionId, needsStop: false, mintedAtMs: Date.now() });
       info = await remuxStartSession(buildStartRequest({ sessionId, channelId }));
     }
   } catch (error) {
@@ -607,7 +653,11 @@ async function startLlSession(
       // tracks unless `pendingStarts` remembers it. Mark it `needsStop` so
       // the next call here finishes the teardown before trying anything
       // else for this room (a Farol finding on PR #580, second round).
-      pendingStarts.set(channelId, { sessionId: info.sessionId, needsStop: true });
+      pendingStarts.set(channelId, {
+        sessionId: info.sessionId,
+        needsStop: true,
+        mintedAtMs: Date.now(),
+      });
       logEvent("voice.hlsLlStartRollbackFailed", {
         channelId,
         sessionId: info.sessionId,
@@ -674,6 +724,11 @@ export async function stopLlSession(channelId: string, reason: string): Promise<
     return;
   }
   llRooms.delete(channelId);
+  // The channel's session just ended cleanly: any pending marker for it is
+  // now moot, and leaving it in place would only let a later, unrelated
+  // party in the same channel find and check a session id that belongs to
+  // this one that just closed.
+  pendingStarts.delete(channelId);
   await recordLlSessionEnded(channelId, room.startedAt);
   logEvent("voice.hlsLlStopped", { channelId, sessionId: room.sessionId, reason });
 }

@@ -515,6 +515,59 @@ describe("starting and stopping a session", () => {
     );
   });
 
+  it("expires a stale pending marker instead of letting a later, unrelated party adopt it", async () => {
+    // A channel whose one ambiguous attempt is never retried (the presenter
+    // leaves, nobody shares again for a while) must not keep that marker
+    // forever: a much later, unrelated party starting in the SAME channel
+    // must never "confirm" the old attempt's session just because its id
+    // still happens to be the one remembered (a Farol finding on PR #580,
+    // third round).
+    enableLL();
+    const server = createFakeRemuxServer();
+    let dropNextPostResponse = true;
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        const method = (init.method ?? "GET").toUpperCase();
+        if (method === "POST" && dropNextPostResponse) {
+          dropNextPostResponse = false;
+          await server.fetchImpl(url, init); // lands on the box
+          throw new Error("ETIMEDOUT"); // but never reaches this caller
+        }
+        return server.fetchImpl(url, init);
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
+      expect(first).toBeNull();
+      const staleSessionId = server.created[0]!;
+      expect(server.sessions.has(staleSessionId)).toBe(true);
+
+      // Past the 2-minute window, and for a different presenter entirely --
+      // a genuinely new, unrelated party in this same channel.
+      await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
+
+      const second = await reconcileLlHlsNow(CHANNEL, "peer-9");
+
+      expect(second).not.toBeNull();
+      expect(second?.presenterPeerId).toBe("peer-9");
+      // A fresh session was started -- the stale one was never treated as
+      // belonging to this new party.
+      expect(server.created).toHaveLength(2);
+      expect(server.created[1]).not.toBe(staleSessionId);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsLlPendingStartExpired",
+        expect.objectContaining({ channelId: CHANNEL, sessionId: staleSessionId }),
+      );
+      expect(logEvent).not.toHaveBeenCalledWith(
+        "voice.hlsLlStartFoundExisting",
+        expect.objectContaining({ sessionId: staleSessionId }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("finishes an unresolved rollback before starting anything new for the room", async () => {
     enableLL();
     const server = createFakeRemuxServer();
