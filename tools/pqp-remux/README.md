@@ -507,18 +507,30 @@ why ffmpeg is a real, not incidental, dependency of this module now).
   replacement `ffmpeg` can never outlive the session it was replacing an
   encoder for. The recovery ladder also runs for an **unexpected** exit
   (a crash, a kill, ffmpeg quitting on its own), not only a `WriteSamples`
-  failure: `aacenc.Encoder`'s own reader distinguishes "Close asked for
-  this" (`intentionalClose`) from everything else and reports the latter
-  on `Errs()`, which `readEncoderFrames` turns into the same
-  `recoverAudioEncoder` call a write failure triggers — an unrequested
-  ffmpeg exit used to close `Frames()` silently and look exactly like a
-  clean, successful end of the audio track. `aacenc.Encoder.Close` is
-  itself deadlock-free regardless of whether anything is still reading
-  `Frames()` (a `closeRequested` signal lets a blocked delivery abandon
-  itself rather than wait forever on a full, unread channel) and always
-  waits for the process's own exit and its ADTS reader to fully finish
-  before returning, so no two generations' readers can ever race each
-  other into the CMAF muxer.
+  failure: `aacenc.Encoder`'s own reader distinguishes "this shutdown was
+  intentional" from everything else and reports the latter on `Errs()`,
+  which `readEncoderFrames` turns into the same `recoverAudioEncoder` call
+  a write failure triggers — an unrequested ffmpeg exit used to close
+  `Frames()` silently and look exactly like a clean, successful end of the
+  audio track. "Intentional" covers **two** paths, both of which mark the
+  same `intentionalClose` flag before anything downstream can observe the
+  resulting exit: an explicit `Close()` call, and — since
+  `internal/session`'s own shutdown cancels `ctx` *before* calling
+  `Close()` (see `Session.Close`'s doc comment) — a dedicated goroutine
+  that watches that same `ctx` and marks the flag the instant it's
+  cancelled. Missing the second path was a real Farol finding: without it,
+  an ordinary session shutdown could observe its own ctx-triggered kill as
+  an "unexpected exit" and misfire a restart mid-teardown. `Encoder.Close`
+  is deadlock-free regardless of whether anything is still reading
+  `Frames()` — its frame-delivery loop only ever blocks up to a bounded
+  stall timeout (2s) waiting for channel room, not on `Close` having been
+  called, which matters because `Close` routinely runs *while* a
+  legitimate consumer is still draining the encoder's final output
+  (`Session.Close`'s own segment flush): tying the bailout to `Close`
+  itself, an earlier version of this fix, risked dropping exactly those
+  final frames. `Close` always waits for the process's own exit and its
+  ADTS reader to fully finish before returning, so no two generations'
+  readers can ever race each other into the CMAF muxer.
 - **The session ending closes the audio track's last segment too**:
   before this, only a mid-session roll-over ever called
   `uploadAudioSegment` — audio shorter than one `SEGMENT_MS` target (or
