@@ -325,8 +325,38 @@ async function writeHlsSessionClaims(
   if (live.length === 0) {
     return true;
   }
+  // AND THE OWNER MUST STILL BE TAKEABLE, but only where owners mean anything.
+  // Two processes booting inside one heartbeat TTL can both read the same
+  // owner as expired and both adopt; without this the second stamp would
+  // simply overwrite the first and the row would name the machine that lost
+  // the race, so the row itself is made the arbiter: unowned, already mine, or
+  // owned by an instance that is not answering.
+  //
+  // WITH THE REGISTRY OFF THE CLAUSE IS OMITTED ENTIRELY, not merely harmless.
+  // A single-process deployment has no live instance rows to speak of and can
+  // perfectly well find one naming a previous boot that nothing prunes;
+  // judging a self-host's adoption against those would refuse the only
+  // process there is.
+  const ownerPredicate = isVoiceRegistryEnabled()
+    ? `AND (s.instance_id IS NULL
+            OR s.instance_id = $2
+            OR NOT EXISTS (
+              SELECT 1 FROM voice_instances i
+               WHERE i.instance_id::text = s.instance_id
+                 AND i.heartbeat_at
+                     > NOW() - ($5::bigint * INTERVAL '1 millisecond')))`
+    : "";
+  const params: unknown[] = [
+    live.map((entry) => entry.id),
+    me,
+    live.map((entry) => entry.claimedAt),
+    live.map((entry) => entry.reopen),
+  ];
+  if (ownerPredicate) {
+    params.push(INSTANCE_TTL_MS);
+  }
   try {
-    await getPool().query(
+    const written = await getPool().query(
       `UPDATE hls_sessions s
           SET instance_id = $2,
               ended_at = CASE WHEN c.reopen THEN NULL ELSE s.ended_at END
@@ -344,14 +374,22 @@ async function writeHlsSessionClaims(
           -- statements either way round and this predicate loses whichever way
           -- it is the older intent.
           AND (s.ended_at IS NULL
-               OR s.ended_at <= to_timestamp(c.claimed_at_ms / 1000.0))`,
-      [
-        live.map((entry) => entry.id),
-        me,
-        live.map((entry) => entry.claimedAt),
-        live.map((entry) => entry.reopen),
-      ],
+               OR s.ended_at <= to_timestamp(c.claimed_at_ms / 1000.0))
+          ${ownerPredicate}`,
+      params,
     );
+    const refused = live.length - (written.rowCount ?? live.length);
+    if (refused > 0) {
+      // Not an error and not retryable: the ROW refused, because it was swept,
+      // torn down after this claim was decided, or taken by a machine that is
+      // answering. Said out loud, because a stamp that did not land is exactly
+      // what this file is about.
+      logEvent("voice.hlsSessionClaimRefused", {
+        refused,
+        of: live.length,
+        sessionIds: live.map((entry) => entry.id),
+      });
+    }
     for (const entry of live) {
       pendingClaims.delete(entry.id);
     }
