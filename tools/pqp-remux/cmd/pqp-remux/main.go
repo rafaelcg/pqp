@@ -20,10 +20,12 @@ import (
 
 	"github.com/pion/rtp"
 
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/aacenc"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/config"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/h264"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/idrlog"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/keyframe"
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/serve"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/session"
@@ -63,9 +65,73 @@ func main() {
 // return value (the subscriber.Session) can write a PLI — see that
 // method's doc comment for why this can't just be a second session.New
 // call.
+//
+// ctx is created before sess so EnableAudio (L1.3) can be started on it:
+// cancelling ctx on shutdown stops both the audio pacer goroutine and (via
+// aacenc.New's own exec.CommandContext) the ffmpeg subprocess.
+//
+// Shutdown order is deliberate throughout this function's defers, and it
+// is the OPPOSITE of registration order (defers run last-registered-
+// first): registering r2Writer.Close() first, then sess.Close(), then
+// cancel(), then (once Connect succeeds) sub.Close() means execution runs
+// sub.Close() (stop new packets) -> cancel() (stop the audio pacer
+// writing more PCM) -> sess.Close() (drain the encoder and flush the
+// final segments, which enqueues their uploads) -> r2Writer.Close()
+// LAST, so those final uploads actually get a chance to run before the
+// writer stops accepting and processing work. Getting this backwards --
+// registering the writer's Close after the session's, which used to
+// execute it BEFORE session finalization -- was a Farol finding: it
+// silently dropped every party's last few segments.
 func runServer(cfg config.Config) error {
 	r := ring.New(cfg.RingSegments, 90000)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// L1.4: the R2 writer, created (and its Close deferred) before the
+	// session -- see this function's own doc comment for why the order
+	// matters.
+	var r2Writer *r2.Writer
+	if cfg.LiveHlsS3Configured() {
+		r2Writer = r2.NewWriter(r2.NewUploader(r2.Config{
+			Endpoint:        cfg.LiveHlsS3Endpoint,
+			Bucket:          cfg.LiveHlsS3Bucket,
+			Region:          cfg.LiveHlsS3Region,
+			AccessKeyID:     cfg.LiveHlsS3AccessKeyID,
+			SecretAccessKey: cfg.LiveHlsS3SecretAccessKey,
+			ForcePathStyle:  cfg.LiveHlsS3ForcePathStyle,
+		}), r2.WriterConfig{
+			QueueDepth: cfg.R2UploadQueueDepth,
+			MaxRetries: cfg.R2UploadMaxRetries,
+		})
+		defer r2Writer.Close()
+		log.Printf("pqp-remux: R2 writer enabled: bucket=%s prefix=%s", cfg.LiveHlsS3Bucket, r2.ObjectPrefix(cfg.ChannelID, cfg.StartedAtMs, cfg.Rung))
+	}
+
 	sess := session.New(cfg.PartTicks(), cfg.SegmentTicks(), r, nil)
+	defer sess.Close()
+	defer cancel()
+
+	if r2Writer != nil {
+		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, cfg.Rung)
+	}
+
+	// L1.3: audio. Non-fatal if the encoder subprocess cannot start (e.g.
+	// ffmpeg missing) — video passthrough must never depend on this
+	// succeeding, per the plan's own instruction to keep the video path
+	// untouched.
+	audioRing := ring.New(cfg.RingSegments, aacenc.SampleRate)
+	audioEnabled := true
+	if err := sess.EnableAudio(ctx, session.AudioConfig{
+		Ring:         audioRing,
+		SegmentTicks: uint32(cfg.SegmentMS) * aacenc.SampleRate / 1000,
+		Encoder: aacenc.Config{
+			FFmpegPath:  cfg.FFmpegPath,
+			BitrateKbps: cfg.AACBitrateKbps,
+		},
+	}); err != nil {
+		audioEnabled = false
+		log.Printf("pqp-remux: audio mixing disabled: %v", err)
+	}
 
 	sub, err := subscriber.Connect(subscriber.Config{
 		URL:       cfg.LiveKitURL,
@@ -76,6 +142,12 @@ func runServer(cfg config.Config) error {
 		OnVideoTrackFound: func(*subscriber.Session) { sess.MarkSubscribed() },
 		OnVideoPacket:     sess.HandleVideoPacket,
 		OnAudioPacket:     sess.HandleAudioPacket,
+		// Every stage microphone, not just the presenter's screen-share
+		// audio above — see subscriber.Handlers.OnMicTrackFound's doc
+		// comment for why no further authorization check belongs here.
+		// sess.NewMicSink is a harmless no-op sink when EnableAudio
+		// failed above (see NewMicSink's doc comment).
+		OnMicTrackFound: func(identity string) subscriber.AudioSink { return sess.NewMicSink(identity) },
 		// The track ending (presenter stopped sharing, or the room
 		// disconnected) is the only signal that a trailing partial
 		// fragment needs flushing; without this, whatever accumulated
@@ -87,8 +159,6 @@ func runServer(cfg config.Config) error {
 	}
 	defer sub.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	if cfg.KeyframePolicy == keyframe.PolicyPLI {
 		keyReq := keyframe.NewRequester(cfg.KeyframeConfig(), sub)
 		sess.SetKeyframeRequester(keyReq)
@@ -96,10 +166,13 @@ func runServer(cfg config.Config) error {
 	}
 
 	srv := serve.New(r, sess)
+	if audioEnabled {
+		srv.SetAudioRing(audioRing)
+	}
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: srv}
 
-	log.Printf("pqp-remux: listening on %s, subscribing to room %q at %s (part=%dms segment=%dms policy=%s)",
-		cfg.Listen, cfg.Room, cfg.LiveKitURL, cfg.PartMS, cfg.SegmentMS, cfg.KeyframePolicy)
+	log.Printf("pqp-remux: listening on %s, subscribing to room %q at %s (part=%dms segment=%dms policy=%s audio=%t)",
+		cfg.Listen, cfg.Room, cfg.LiveKitURL, cfg.PartMS, cfg.SegmentMS, cfg.KeyframePolicy, audioEnabled)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpServer.ListenAndServe() }()
