@@ -501,13 +501,27 @@ export function parseLlState(raw) {
   //     generous enough for jitter, nowhere near generous enough to hide a
   //     segment that is actually many multiples of the target (the shape a
   //     genuinely malformed or hostile snapshot would take).
+  //
+  //  THE BOUND IS EXCLUSIVE AT THE TOP, NOT INCLUSIVE (Farol, third
+  //  review). `renderedTargetDuration + MAX_SEGMENT_OVERAGE_SECS` sits
+  //  EXACTLY at the next whole second (e.g. target 2 + 0.5 = 2.5, and a
+  //  segment landing precisely at 2.5s would itself round-half-up to 3 --
+  //  a target-duration player derives from that ceiling MUST already be
+  //  3, not 2, for a segment that long, so accepting it at `>` (only
+  //  rejecting strictly PAST 2.5) let a segment through whose OWN
+  //  half-second boundary case round-tripped to a target one whole second
+  //  higher than what this parser had just accepted. `>=` closes it: a
+  //  segment must land strictly BELOW the next whole second past the
+  //  ceiling to pass, so `duration < renderedTargetDuration +
+  //  MAX_SEGMENT_OVERAGE_SECS` is the actual accept condition, and this
+  //  check is its negation.
   const renderedTargetDuration = Math.max(1, Math.ceil(value.targetDurationSecs));
   const MAX_SEGMENT_OVERAGE_SECS = 0.5;
   for (const track of audio ? [video, audio] : [video]) {
     for (const segment of track.segments) {
       if (
         segment.complete &&
-        /** @type {number} */ (segment.durationSecs) > renderedTargetDuration + MAX_SEGMENT_OVERAGE_SECS
+        /** @type {number} */ (segment.durationSecs) >= renderedTargetDuration + MAX_SEGMENT_OVERAGE_SECS
       ) {
         return null;
       }

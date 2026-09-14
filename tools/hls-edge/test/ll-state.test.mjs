@@ -242,6 +242,25 @@ test("still rejects a segment many multiples of the target -- the tolerance does
   assert.equal(parseLlState(raw), null);
 });
 
+test("the jitter tolerance's own boundary is exclusive at the top: target + 0.49 accepted, target + 0.5 rejected", () => {
+  // renderedTargetDuration is Math.ceil(targetDurationSecs) = 2 here, and
+  // MAX_SEGMENT_OVERAGE_SECS is 0.5, so the accept condition is
+  // `duration < 2.5`, not `duration <= 2.5`. A segment sitting EXACTLY at
+  // 2.5s would itself round-half-up to a target of 3, not 2 -- accepting
+  // it at this boundary would mean the snapshot this parser just validated
+  // needs a HIGHER target duration than the one it was validated against,
+  // so the accept side must stay strictly below the next whole second.
+  const justUnder = fixtureState({ targetDurationSecs: 2 });
+  justUnder.video.segments[0].durationSecs = 2.49;
+  justUnder.video.segments[1].durationSecs = 2.0;
+  assert.ok(parseLlState(justUnder), "2.49s against a 2s target must be accepted");
+
+  const atBoundary = fixtureState({ targetDurationSecs: 2 });
+  atBoundary.video.segments[0].durationSecs = 2.5;
+  atBoundary.video.segments[1].durationSecs = 2.0;
+  assert.equal(parseLlState(atBoundary), null, "2.5s against a 2s target must be rejected, not accepted");
+});
+
 test("rejects a live segment with zero parts and no preload hint -- nothing published, nothing scheduled", () => {
   const raw = fixtureState();
   raw.video.segments[2].parts = [];
