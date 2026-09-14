@@ -420,6 +420,97 @@ describeDb("POST /api/live-hls/telemetry", () => {
   });
 
   /**
+   * Farol finding, 2026-09-14: "the session-ID fallback conflates a
+   * successful database write with a failed metadata lookup and can tear
+   * down a camera egress." REJECTED -- one sentence, then the proof. The
+   * telemetry route's only database access for a signed batch is
+   * `resolveHlsSessionId` (`hls-playlist-proxy.ts`'s `sessionRungs`), a
+   * single `SELECT` with no `INSERT`/`UPDATE`/`DELETE` anywhere in it, and
+   * neither that function nor this route imports anything from
+   * `hls-egress.ts` that starts, reopens, or stops an egress (`grep` for
+   * `stopRoom`/`reapForeignEgresses`/`endSupersededSessions` across both
+   * files returns nothing); the "camera reopen hits an ended row" finding
+   * Farol raised earlier this same review is a real but UNRELATED path,
+   * reachable only from an actual camera start/stop, never from a telemetry
+   * POST. This test is the property itself, not just the reasoning: it
+   * proves no telemetry batch -- for a real, a stale, or a wholly invented
+   * session -- changes a single row anywhere in `hls_sessions`.
+   */
+  it("changes nothing in hls_sessions, for a real session, a stale one, or one that was never real", async () => {
+    const server = await getPool().query<{ id: string }>(
+      `INSERT INTO servers (name, owner_id) VALUES ('readonly-test', $1) RETURNING id`,
+      [viewer.id],
+    );
+    const channel = await getPool().query<{ id: string }>(
+      `INSERT INTO channels (server_id, name, type, position)
+       VALUES ($1, 'cinema', 'watch_party', 0) RETURNING id`,
+      [server.rows[0]!.id],
+    );
+    const channelId = channel.rows[0]!.id;
+    const liveStartedAt = 1_702_000_000_000;
+    const staleStartedAt = 1_702_100_000_000;
+    await getPool().query(
+      `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, rung)
+       VALUES ($1, $2, NOW(), '720p30')`,
+      [channelId, hlsObjectPrefix(channelId, liveStartedAt, "720p30")],
+    );
+    // A row the SQL predicate excludes on purpose (`ended_at IS NOT NULL`):
+    // exactly the "stale" case `resolveHlsSessionId` falls back away from.
+    await getPool().query(
+      `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, ended_at, rung)
+       VALUES ($1, $2, NOW() - INTERVAL '1 hour', NOW() - INTERVAL '30 minutes', '720p30')`,
+      [channelId, hlsObjectPrefix(channelId, staleStartedAt, "720p30")],
+    );
+
+    const snapshotAll = async () =>
+      (
+        await getPool().query(
+          `SELECT id, channel_id, object_prefix, started_at, ended_at,
+                  keep_replay, cleaned_at, egress_id, rung,
+                  presenter_peer_id, video_track_id
+             FROM hls_sessions
+            WHERE channel_id = $1
+            ORDER BY id`,
+          [channelId],
+        )
+      ).rows;
+
+    const before = await snapshotAll();
+    expect(before).toHaveLength(2);
+
+    const liveToken = mintHlsViewerToken({
+      userId: viewer.id,
+      channelId,
+      startedAt: liveStartedAt,
+    })!;
+    const staleToken = mintHlsViewerToken({
+      userId: viewer.id,
+      channelId,
+      startedAt: staleStartedAt,
+    })!;
+    const neverRealToken = mintHlsViewerToken({
+      userId: viewer.id,
+      channelId,
+      startedAt: 9_999_999_999_999,
+    })!;
+
+    for (const token of [liveToken, staleToken, neverRealToken]) {
+      const result = await post(
+        {
+          sessionId: "irrelevant",
+          sessionToken: token,
+          samples: [{ rung: "720p30", latencyMs: 1_000 }],
+        },
+        viewer,
+      );
+      expect(result.status).toBe(200);
+    }
+
+    const after = await snapshotAll();
+    expect(after).toEqual(before);
+  });
+
+  /**
    * Farol finding, 2026-09-14: a batch with no token to verify used to still
    * accept the client's OWN `sessionId` as a label and a rate-limit key --
    * exactly the unbounded, attacker-controlled key space the `rung`
@@ -462,6 +553,49 @@ describeDb("POST /api/live-hls/telemetry", () => {
    * (never-settling) `resolveHlsSessionId` call and the real 500ms bound.
    */
   describe("a session lookup that never settles", () => {
+    /**
+     * Farol finding, 2026-09-14: concurrent batches for the same session
+     * each started their own lookup. Different users, same verified
+     * session, all in flight at once -- the shape a party's sampled
+     * audience actually produces when it flushes on the same tick.
+     */
+    it("shares one resolveHlsSessionId call across concurrent batches for the same session", async () => {
+      // `post`'s test harness authenticates through a single shared `actor`
+      // variable set just before each `fetch`, which only works for
+      // sequential calls -- so this uses ONE caller sending several
+      // requests at once, which is enough to prove single-flight: the
+      // guard dedupes on the SESSION key, not on who is asking. A short
+      // real delay on the (mocked) lookup gives three real HTTP requests,
+      // each over its own loopback socket, room to all reach the route
+      // handler before the first one resolves -- without it, whichever
+      // request happens to win the race to the handler first can finish
+      // before the next one arrives, understating the dedup this proves.
+      resolveHlsSessionIdSpy.mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(() => resolve("shared-id"), 50)),
+      );
+      const token = mintHlsViewerToken({
+        userId: viewer.id,
+        channelId: TOKEN_CHANNEL,
+        startedAt: TOKEN_STARTED_AT,
+      })!;
+      const results = await Promise.all(
+        [0, 1, 2].map(() =>
+          post(
+            {
+              sessionId: "irrelevant",
+              sessionToken: token,
+              samples: [{ rung: "720p30", latencyMs: 1_000 }],
+            },
+            viewer,
+          ),
+        ),
+      );
+      for (const result of results) {
+        expect(result.status).toBe(200);
+      }
+      expect(resolveHlsSessionIdSpy).toHaveBeenCalledTimes(1);
+    });
+
     it("fails the batch closed with 503, then skips the lookup entirely for the next batch on the same session", async () => {
       resolveHlsSessionIdSpy.mockImplementationOnce(
         () => new Promise<string | null>(() => {}),
