@@ -136,9 +136,16 @@ import { setRequestedHlsMode } from "../voice/hls-remux.js";
 import {
   buildReplayMasterPlaylist,
   buildReplaySignedPlaylist,
+  buildWatchPartyDownloadPlan,
   checkWatchPartyReplayAccess,
+  isWatchPartyDownloadKind,
   listWatchPartyHistory,
   setWatchPartyKeepReplay,
+  streamWatchPartyDownload,
+  watchPartyDownloadSizes,
+  WATCH_PARTY_DOWNLOAD_KINDS,
+  type WatchPartyDownloadKind,
+  type WatchPartyDownloadPlan,
 } from "../voice/hls-history.js";
 import {
   buildMasterPlaylistFor,
@@ -5435,6 +5442,314 @@ router.get(
   },
 );
 
+// ---------------------------------------- watch party history (download)
+/**
+ * "Baixar": the same past broadcast as a file, in up to three pieces -- the
+ * film, the presenter's camera pip, and the host's voice archive. Same
+ * permission as everything else on this surface
+ * (`requireWatchPartyHistoryAccess`), same availability rule as replay (404
+ * unknown, 409 once the retention sweep has been through), and the same
+ * `?t=` capability in the URL.
+ *
+ * NOTHING IS TRANSCODED. The API hands back the objects the egress already
+ * wrote: the rung's MPEG-TS segments concatenated in playlist order, or the
+ * `.ogg` the Track Egress wrote, streamed through with backpressure and
+ * never buffered. `hls-history.ts`'s download section has the reasoning for
+ * why concatenated MPEG-TS is a real, playable file and what the one-line
+ * ffmpeg remux to mp4 is.
+ *
+ * A DOWNLOAD IS A NAVIGATION, NOT A `fetch`. The client cannot ask the
+ * browser to save a `fetch` response without buffering the whole broadcast
+ * into a Blob in the tab, so the link is a plain `<a href download>` -- and
+ * a navigation carries no `Authorization` header, cross-origin `download`
+ * is ignored by the browser anyway (the SPA and the API are different
+ * origins in production), and `Content-Disposition: attachment` is what
+ * actually makes it a download. So the byte route has the same two doors
+ * the replay proxy has, for the same reason: `?t=` alone is the shape the
+ * product produces, and the Bearer door exists for everything else.
+ */
+
+/**
+ * The handler wrote the whole response itself. `RawResponse` buffers its
+ * body, which is exactly what a multi-gigabyte broadcast must not do, so a
+ * streaming route answers with this instead and `handleApi` simply stops.
+ */
+class StreamedResponse {}
+
+/** `Um Servidor` + `sala-de-cinema` + a date, as something a file system is
+ * happy with. Never empty: the epoch date always survives the slug. */
+function downloadFilenameStem(
+  serverName: string,
+  channelName: string,
+  startedAtMs: number,
+): string {
+  const slug = (value: string): string =>
+    value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
+  const date = new Date(startedAtMs).toISOString().slice(0, 10);
+  return [slug(serverName), slug(channelName), date].filter(Boolean).join("-");
+}
+
+/** The camera and the voice get a suffix so all three can live in one
+ * downloads folder without overwriting each other. */
+function downloadFilename(stem: string, plan: WatchPartyDownloadPlan): string {
+  const suffix =
+    plan.kind === "camera" ? "-camera" : plan.kind === "voice" ? "-voice" : "";
+  return `${stem}${suffix}.${plan.extension}`;
+}
+
+interface PreparedWatchPartyDownload {
+  plan: WatchPartyDownloadPlan;
+  filename: string;
+}
+
+/**
+ * Everything that can still answer with a status code, done before a single
+ * byte is written: the permission (or the capability), the same
+ * availability check replay makes, and the object list itself. Once the head
+ * is out a failure can only truncate the file.
+ */
+async function prepareWatchPartyDownload(input: {
+  channelId: string;
+  startedAtMs: number;
+  kind: WatchPartyDownloadKind;
+  userId: string;
+  tokenIssuedAt: number | null;
+}): Promise<PreparedWatchPartyDownload> {
+  const channel = await requireServerChannel(input.channelId);
+  if (input.tokenIssuedAt === null) {
+    await requireWatchPartyHistoryAccess(channel, input.userId);
+  } else if (
+    isHlsAccessRevoked(input.userId, input.channelId, input.tokenIssuedAt)
+  ) {
+    throw new NotFound("Channel not found");
+  }
+  const access = await checkWatchPartyReplayAccess(
+    input.channelId,
+    input.startedAtMs,
+  );
+  if (access === "not-found") {
+    throw new NotFound("Broadcast not found");
+  }
+  if (access === "unavailable") {
+    throw new HttpError(
+      409,
+      "This broadcast's recording is no longer available",
+    );
+  }
+  let plan: WatchPartyDownloadPlan | null;
+  try {
+    plan = await buildWatchPartyDownloadPlan(
+      input.channelId,
+      input.startedAtMs,
+      input.kind,
+    );
+  } catch (error) {
+    if (error instanceof HlsPlaylistUnavailable) {
+      throw new HttpError(503, "Live HLS storage unavailable");
+    }
+    throw error;
+  }
+  if (!plan) {
+    throw new NotFound("This broadcast has no such file");
+  }
+  const server = await getServer(channel.server_id);
+  return {
+    plan,
+    filename: downloadFilename(
+      downloadFilenameStem(
+        server?.name ?? "pqp",
+        channel.name,
+        input.startedAtMs,
+      ),
+      plan,
+    ),
+  };
+}
+
+function sendWatchPartyDownload(
+  req: IncomingMessage,
+  res: ServerResponse,
+  prepared: PreparedWatchPartyDownload,
+): Promise<void> {
+  const { plan, filename } = prepared;
+  res.writeHead(200, {
+    "content-type": plan.contentType,
+    // The filename is a slug of `[a-z0-9-]` plus a date, so it needs no
+    // quoting beyond the quotes.
+    "content-disposition": `attachment; filename="${filename}"`,
+    // Only when the listing priced every object the playlist names, so the
+    // browser's progress bar is either right or absent, never wrong.
+    ...(plan.bytes !== null ? { "content-length": String(plan.bytes) } : {}),
+    "cache-control": "private, no-store",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  return streamWatchPartyDownload(plan, res).then(
+    () => {
+      res.end();
+    },
+    (error: unknown) => {
+      // Mid-stream: the status line is long gone, so the only honest signal
+      // left is an aborted response, which every client reports as a failed
+      // download rather than a complete-looking truncated file.
+      console.error("[voice] watch party download failed mid-stream:", error);
+      res.destroy();
+    },
+  );
+}
+
+router.get(
+  "/api/channels/:channelId/watch-party/history/:sessionAt/download",
+  async ({ user }, { channelId, sessionAt }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    const access = await checkWatchPartyReplayAccess(channelId!, startedAtMs);
+    if (access === "not-found") {
+      throw new NotFound("Broadcast not found");
+    }
+    if (access === "unavailable") {
+      throw new HttpError(
+        409,
+        "This broadcast's recording is no longer available",
+      );
+    }
+    const sizes = await watchPartyDownloadSizes(channelId!, startedAtMs);
+    const token = mintHlsViewerToken({
+      userId: user.id,
+      channelId: channelId!,
+      startedAt: startedAtMs,
+      purpose: "replay",
+    });
+    const query = token
+      ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(token)}`
+      : "";
+    const downloads: Record<
+      WatchPartyDownloadKind,
+      { bytes: number | null; url: string } | null
+    > = { film: null, camera: null, voice: null };
+    for (const kind of WATCH_PARTY_DOWNLOAD_KINDS) {
+      if (sizes[kind] === null) {
+        continue;
+      }
+      downloads[kind] = {
+        bytes: sizes[kind],
+        url:
+          `/api/channels/${encodeURIComponent(channelId!)}` +
+          `/watch-party/history/${startedAtMs}/download/${kind}${query}`,
+      };
+    }
+    return { downloads };
+  },
+);
+
+router.get(
+  "/api/channels/:channelId/watch-party/history/:sessionAt/download/:kind",
+  async ({ req, res, user, url }, { channelId, sessionAt, kind }) => {
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    if (!kind || !isWatchPartyDownloadKind(kind)) {
+      throw new NotFound("Broadcast not found");
+    }
+    const viewer = resolveHlsPlaylistViewer({
+      bearerUserId: user.id,
+      token: url.searchParams.get(HLS_VIEWER_TOKEN_PARAM),
+      channelId: channelId!,
+      startedAt: startedAtMs,
+      purpose: "replay",
+    });
+    await sendWatchPartyDownload(
+      req,
+      res,
+      await prepareWatchPartyDownload({
+        channelId: channelId!,
+        startedAtMs,
+        kind,
+        userId: viewer?.userId ?? user.id,
+        tokenIssuedAt: viewer?.issuedAt ?? null,
+      }),
+    );
+    return new StreamedResponse();
+  },
+);
+
+const WATCH_PARTY_DOWNLOAD_PATH =
+  /^\/api\/channels\/([0-9a-fA-F-]{36})\/watch-party\/history\/(\d{1,20})\/download\/([a-z]{1,16})$/;
+
+/**
+ * The header-less door for a download link, mirroring
+ * `tryHlsReplayCapabilityDoor`. A browser navigating to `<a href download>`
+ * sends no `Authorization`, so for the product's own link this door is the
+ * only one that ever answers.
+ */
+async function tryWatchPartyDownloadCapabilityDoor(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): Promise<boolean> {
+  const match = WATCH_PARTY_DOWNLOAD_PATH.exec(pathname);
+  if (!match) {
+    return false;
+  }
+  const kind = match[3]!;
+  if (!isWatchPartyDownloadKind(kind)) {
+    return false;
+  }
+  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+    HLS_VIEWER_TOKEN_PARAM,
+  );
+  const channelId = match[1]!;
+  const startedAtMs = Number(match[2]);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId: null,
+    token,
+    channelId,
+    startedAt: startedAtMs,
+    purpose: "replay",
+  });
+  if (!viewer) {
+    return false;
+  }
+  if (!apiLimiter.take(`user:${viewer.userId}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(apiLimiter.retryAfter(`user:${viewer.userId}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return true;
+  }
+  try {
+    await sendWatchPartyDownload(
+      req,
+      res,
+      await prepareWatchPartyDownload({
+        channelId,
+        startedAtMs,
+        kind,
+        userId: viewer.userId,
+        tokenIssuedAt: viewer.issuedAt ?? 0,
+      }),
+    );
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      sendDatabaseUnavailable(res, req);
+      return true;
+    }
+    if (error instanceof HttpError) {
+      sendError(res, error.status, error.message, req);
+      return true;
+    }
+    console.error("[voice] watch party download (token) failed:", error);
+    sendError(res, 500, "Internal server error", req);
+  }
+  return true;
+}
+
 /**
  * The replay playlist proxy: the same rewrite-segments-into-signed-URLs job
  * as the live one (`hlsPlaylistResponse` above), pointed at
@@ -8855,6 +9170,9 @@ export async function handleApi(
     if (await tryHlsReplayCapabilityDoor(req, res, pathname)) {
       return;
     }
+    if (await tryWatchPartyDownloadCapabilityDoor(req, res, pathname)) {
+      return;
+    }
   }
 
   // The operator dashboard's machine token, for exactly two GETs and nothing
@@ -8961,6 +9279,12 @@ export async function handleApi(
     if (
       req.method === "GET" &&
       (await tryHlsReplayCapabilityDoor(req, res, pathname))
+    ) {
+      return;
+    }
+    if (
+      req.method === "GET" &&
+      (await tryWatchPartyDownloadCapabilityDoor(req, res, pathname))
     ) {
       return;
     }
@@ -9071,6 +9395,12 @@ export async function handleApi(
     }
     if (result instanceof Created) {
       sendJson(res, 201, result.body, req);
+      return;
+    }
+    // The handler streamed its own answer (a past-broadcast download). There
+    // is nothing left to write, and `sendJson` would throw on a socket whose
+    // head went out long ago.
+    if (result instanceof StreamedResponse) {
       return;
     }
     if (result instanceof RawResponse) {

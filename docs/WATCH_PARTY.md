@@ -2498,6 +2498,75 @@ channel) narrowed by `useWatchPartyHistoryAvailability`
 of the same history endpoint) so an entry never opens on an empty dialog.
 Client-only; no new server route.
 
+### Baixar: the film, the camera and the voice
+
+A broadcast is not only something to watch back, it is footage. Each
+available row in "Transmissões anteriores" has a **Baixar** panel offering up
+to three files, and a file that is not there says which fact of the night it
+was missing from rather than reading as an error:
+
+| Entry | What it is | Absent when |
+|---|---|---|
+| Vídeo (stream) | The top available ladder rung's segments, concatenated | never, while the broadcast is available |
+| Câmera do apresentador | The `cam360p30` pip rung, the same way | the presenter kept the camera off |
+| Voz do apresentador | The `<startedAt>-mic.ogg` Track Egress wrote | `LIVE_HLS_MIC_ARCHIVE` was off (see above) |
+
+**Nothing is transcoded, and nothing is buffered.** The API hands back the
+objects the egress already wrote, signed one at a time and piped through with
+backpressure (`streamWatchPartyDownload` in `hls-history.ts`), so a three-hour
+broadcast never exists in the API process's memory. Muxing the three into one
+deliverable would mean an ffmpeg per download on the box that runs the chat
+API, and the three are more useful apart anyway: that is the whole reason the
+mic archive is a separate file at all.
+
+**The video comes out as `.ts`, and that is a real file.** A rung's segments
+are MPEG-TS, which is a stream format: 188-byte packets carrying their own
+PAT/PMT and timestamps, no header at the front and no index at the back. Byte
+concatenation in playlist order is therefore exactly the bytes a player would
+have seen playing the playlist, which is why `cat *.ts > out.ts` works and why
+the same trick does not work for fragmented MP4. VLC, mpv and ffmpeg play the
+result directly. For an editor or a browser:
+
+```bash
+ffmpeg -i broadcast.ts -c copy broadcast.mp4    # remux, no re-encode
+# and with the voice on its own track:
+ffmpeg -i broadcast.ts -i broadcast-voice.ogg -c copy -map 0:v -map 0:a -map 1:a mixdown.mkv
+```
+
+**Order comes from the playlist, never from the bucket listing.**
+`ListObjectsV2` answers in lexicographic key order, which matches segment
+order only while the numbering keeps its width; the accumulated
+`-index.m3u8` is the run's own record of what it wrote and when, so that is
+what the download reads. A broadcast reassembled in listing order would still
+play for its first few seconds, which is the worst way for this to be wrong.
+
+**Two routes, the same permission and the same availability rule as replay:**
+
+- `GET /api/channels/:channelId/watch-party/history/:sessionAt/download` --
+  what exists and roughly how big, plus a ready-to-use URL per kind carrying
+  the `?t=` capability. Sizes are a bucket listing per file, cached per
+  broadcast for five minutes, which is why the history LIST does not carry
+  them: twenty broadcasts would be sixty round-trips to storage for a dialog
+  that usually downloads none of them. The client asks when somebody opens
+  the panel on a row.
+- `GET .../download/:kind` with `kind` in `film | camera | voice` -- the
+  bytes, `Content-Disposition: attachment`, and a `Content-Length` only when
+  the listing priced every object the playlist names (a number that is merely
+  close is worse than none: the browser reports the download as failed or
+  hangs waiting for bytes that never come). 404 for a kind this broadcast
+  never wrote, 409 once the retention sweep has been through, exactly as
+  replay answers.
+
+**A download is a navigation, not a `fetch`,** so the byte route has the same
+two doors the replay proxy has. Saving a `fetch` response means holding the
+whole broadcast in the tab as a Blob first; the client therefore uses a plain
+`<a href download>`, a navigation carries no `Authorization` header, and the
+`download` attribute is ignored cross-origin anyway (the SPA and the API are
+different origins in production) -- `Content-Disposition` is what actually
+makes it a download. The headerless door
+(`tryWatchPartyDownloadCapabilityDoor`) is therefore the one that answers the
+product's own link, with the Bearer route for everything else.
+
 ## How you know it is running
 
 The whole of the above can be deployed, configured and doing nothing, and for
