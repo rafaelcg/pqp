@@ -264,7 +264,7 @@ export async function sessionIdsOwnedElsewhere(
  */
 export async function claimHlsSessionRows(
   sessionIds: readonly string[],
-  options: HlsOwnershipOptions & { reopen?: boolean } = {},
+  options: HlsOwnershipOptions & { reopen?: boolean; retry?: boolean } = {},
 ): Promise<boolean> {
   if (sessionIds.length === 0) {
     return true;
@@ -274,7 +274,11 @@ export async function claimHlsSessionRows(
     await getPool().query(
       `UPDATE hls_sessions
           SET instance_id = $2${options.reopen ? ", ended_at = NULL" : ""}
-        WHERE id = ANY($1::uuid[])`,
+        WHERE id = ANY($1::uuid[])
+          -- Never resurrect a swept row. On a RETRY this matters: minutes may
+          -- have passed, and reopening a session whose objects are gone leaves
+          -- an open row retention can never collect.
+          AND cleaned_at IS NULL`,
       [[...sessionIds], me],
     );
     for (const id of sessionIds) {
@@ -282,10 +286,16 @@ export async function claimHlsSessionRows(
     }
     return true;
   } catch (error) {
+    const now = Date.now();
     for (const id of sessionIds) {
       // The most demanding shape wins: a row that needed reopening still needs
-      // it on the retry, even if a later claim for the same id did not.
-      pendingClaims.set(id, (pendingClaims.get(id) ?? false) || Boolean(options.reopen));
+      // it on the retry, even if a later claim for the same id did not. The
+      // clock is the ORIGINAL queueing, so a retry never renews the TTL.
+      const previous = pendingClaims.get(id);
+      pendingClaims.set(id, {
+        reopen: (previous?.reopen ?? false) || Boolean(options.reopen),
+        queuedAt: previous?.queuedAt ?? now,
+      });
     }
     logEvent("voice.hlsSessionClaimFailed", {
       count: sessionIds.length,
@@ -296,8 +306,17 @@ export async function claimHlsSessionRows(
   }
 }
 
-/** Session ids whose ownership stamp did not land, and whether to reopen them. */
-const pendingClaims = new Map<string, boolean>();
+/** Session ids whose ownership stamp did not land, and what they still want. */
+const pendingClaims = new Map<string, { reopen: boolean; queuedAt: number }>();
+
+/**
+ * How long a queued stamp stays worth retrying. A claim is a repair of a write
+ * about a session this process is DRIVING; once it has been waiting this long
+ * the process has either been driving it all along (in which case the monitor's
+ * own restart path is the authority on whether it still exists) or has long
+ * since let it go, and replaying the stamp then can only resurrect a row.
+ */
+const CLAIM_RETRY_TTL_MS = 5 * 60_000;
 
 /** For the dashboard and the tests: rows this process owns and cannot say so. */
 export function pendingHlsSessionClaimCount(): number {
@@ -305,20 +324,51 @@ export function pendingHlsSessionClaimCount(): number {
 }
 
 /**
+ * THE SESSION IS OVER, SO THE STAMP IS NOT WANTED ANY MORE. A queued claim
+ * carries `reopen`, and a teardown between the failure and the retry would
+ * otherwise have the retry set `ended_at = NULL` on a row whose egress is
+ * gone: an open row the retention sweep can never collect, which is the
+ * opposite of the bug this file exists to avoid. Every teardown path that
+ * knows a row id calls this.
+ */
+export function forgetPendingHlsSessionClaims(
+  sessionIds: readonly (string | null | undefined)[],
+): void {
+  for (const id of sessionIds) {
+    if (id) {
+      pendingClaims.delete(id);
+    }
+  }
+}
+
+/**
  * Retry the stamps that failed, from the health monitor's tick. Two batches at
  * most (one per `reopen` shape) however many rows are waiting, and a no-op
- * with an empty queue, which is every tick on a healthy deployment.
+ * with an empty queue, which is every tick on a healthy deployment. Entries
+ * past `CLAIM_RETRY_TTL_MS` are dropped rather than replayed forever.
  */
-export async function retryPendingHlsSessionClaims(): Promise<void> {
+export async function retryPendingHlsSessionClaims(
+  now = Date.now(),
+): Promise<void> {
+  for (const [id, entry] of [...pendingClaims]) {
+    if (now - entry.queuedAt > CLAIM_RETRY_TTL_MS) {
+      pendingClaims.delete(id);
+      logEvent("voice.hlsSessionClaimAbandoned", { sessionId: id });
+    }
+  }
   if (pendingClaims.size === 0) {
     return;
   }
-  const reopen = [...pendingClaims].filter(([, wants]) => wants).map(([id]) => id);
-  const plain = [...pendingClaims].filter(([, wants]) => !wants).map(([id]) => id);
+  const reopen = [...pendingClaims]
+    .filter(([, entry]) => entry.reopen)
+    .map(([id]) => id);
+  const plain = [...pendingClaims]
+    .filter(([, entry]) => !entry.reopen)
+    .map(([id]) => id);
   if (reopen.length > 0) {
-    await claimHlsSessionRows(reopen, { reopen: true });
+    await claimHlsSessionRows(reopen, { reopen: true, retry: true });
   }
   if (plain.length > 0) {
-    await claimHlsSessionRows(plain);
+    await claimHlsSessionRows(plain, { retry: true });
   }
 }

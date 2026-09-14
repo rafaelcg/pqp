@@ -51,6 +51,7 @@ const {
 } = await import("./hls-egress.js");
 const {
   claimHlsSessionRows,
+  forgetPendingHlsSessionClaims,
   hlsOwnerInstanceId,
   pendingHlsSessionClaimCount,
   retryPendingHlsSessionClaims,
@@ -362,6 +363,71 @@ describeDb("hls_sessions ownership across two API machines", () => {
     const row = await rowById(id);
     expect(row.instance_id).toBe(hlsOwnerInstanceId());
     expect(row.ended_at).toBeNull();
+  });
+
+  it("drops a queued stamp when the session is torn down, rather than reopening a dead row", async () => {
+    // The retry carries `reopen`, so a teardown between the failed claim and
+    // the retry would otherwise clear `ended_at` on a row whose egress is
+    // gone: an open row retention can never collect, which is the opposite of
+    // what this whole change is for.
+    const id = await makeSession({
+      prefix: `live/${channelA}/9900`,
+      egressId: "EG_torn-down",
+      instanceId: machineA,
+      endedAt: new Date(),
+    });
+    const pool = getPool();
+    const failOnce = vi
+      .spyOn(pool, "query")
+      .mockRejectedValueOnce(new Error("connection terminated"));
+    await claimHlsSessionRows([id], { reopen: true });
+    failOnce.mockRestore();
+    expect(pendingHlsSessionClaimCount()).toBe(1);
+
+    forgetPendingHlsSessionClaims([id]);
+    await retryPendingHlsSessionClaims();
+
+    expect(pendingHlsSessionClaimCount()).toBe(0);
+    expect((await rowById(id)).ended_at).not.toBeNull();
+  });
+
+  it("gives up on a stamp that has been waiting past its retry window", async () => {
+    // `StopEgress` and this UPDATE share a property: a queue with no terminal
+    // case is a queue that replays forever. The row is minutes stale by then
+    // and the monitor is the authority on what this process still drives.
+    const id = await makeSession({
+      prefix: `live/${channelA}/9910`,
+      egressId: "EG_stale-claim",
+      instanceId: machineA,
+    });
+    const failOnce = vi
+      .spyOn(getPool(), "query")
+      .mockRejectedValueOnce(new Error("connection terminated"));
+    await claimHlsSessionRows([id]);
+    failOnce.mockRestore();
+    expect(pendingHlsSessionClaimCount()).toBe(1);
+
+    await retryPendingHlsSessionClaims(Date.now() + 6 * 60_000);
+
+    expect(pendingHlsSessionClaimCount()).toBe(0);
+    // Untouched: giving up means leaving the row as it is, not writing to it.
+    expect((await rowById(id)).instance_id).toBe(machineA);
+  });
+
+  it("never reopens a swept row, however long the stamp waited", async () => {
+    const id = await makeSession({
+      prefix: `live/${channelA}/9920`,
+      egressId: "EG_swept",
+      instanceId: machineA,
+      endedAt: new Date(),
+    });
+    await getPool().query(`UPDATE hls_sessions SET cleaned_at = NOW() WHERE id = $1`, [id]);
+
+    expect(await claimHlsSessionRows([id], { reopen: true })).toBe(true);
+
+    const row = await rowById(id);
+    expect(row.ended_at).not.toBeNull();
+    expect(row.instance_id).toBe(machineA);
   });
 
   it("(d) the ghost filter still writes off a record nobody owns", async () => {

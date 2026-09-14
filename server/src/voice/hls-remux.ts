@@ -15,6 +15,7 @@ import { logEvent } from "../lib/log.js";
 import { getPool } from "../db.js";
 import {
   claimHlsSessionRows,
+  forgetPendingHlsSessionClaims,
   hlsOwnerInstanceId,
   liveOtherInstances,
   noteHlsSkippedOwnedElsewhere,
@@ -601,6 +602,9 @@ async function recordLlSessionsEndedByIds(ids: readonly string[]): Promise<void>
   if (ids.length === 0) {
     return;
   }
+  // A queued ownership stamp for a row we are ending would reopen it on its
+  // next retry, leaving a row retention can never collect. Drop it first.
+  forgetPendingHlsSessionClaims(ids);
   try {
     await getPool().query(
       `UPDATE hls_sessions SET ended_at = NOW() WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,

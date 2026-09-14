@@ -32,6 +32,7 @@ import {
   egressIdsOwnedElsewhere,
   hlsOwnerInstanceId,
   hlsSkippedOwnedElsewhereCount,
+  forgetPendingHlsSessionClaims,
   noteHlsSkippedOwnedElsewhere,
   resetHlsOwnershipForTests,
   retryPendingHlsSessionClaims,
@@ -474,8 +475,19 @@ const loggedGhostEgressIds = new Set<string>();
  */
 const deferredStops = new Map<
   string,
-  { channelId: string; sessionId: string; rung: string }
+  { channelId: string; sessionId: string; rung: string; queuedAt: number; attempts: number }
 >();
+/**
+ * A deferred stop is a repair, not a debt without end. `StopEgress` is not
+ * idempotent from here: a request that actually landed and lost its response
+ * looks exactly like one that failed, so an entry that will not clear has to
+ * be given up on rather than retried forever. Both bounds are generous enough
+ * that an ordinary database or control-plane blip resolves long before either.
+ */
+const DEFERRED_STOP_MAX_ATTEMPTS = 10;
+const DEFERRED_STOP_TTL_MS = 10 * 60_000;
+/** Retries per tick, so a wide outage cannot turn one tick into a long serial run. */
+const DEFERRED_STOP_PER_TICK = 5;
 /**
  * Channels whose camera transcode died or was refused, and when another may
  * start.
@@ -1651,6 +1663,27 @@ async function listChannelsWithLiveHlsSessions(
  * also never read as infinite and refuse everything, so the floor is what
  * this process knows for certain it is running right now.
  */
+/**
+ * "No live `hls_sessions` row for this room, and old enough that the row would
+ * have landed by now." One rule, read by the pre-pass that decides whom to ask
+ * about and by the loop that decides what to count -- two copies of it would
+ * be a filter that drifts from the thing it filters for.
+ */
+function isGhostCandidate(
+  info: EgressListing,
+  liveChannels: Set<string> | null,
+  now: number,
+): boolean {
+  const ageMs = info.startedAt !== undefined ? now - info.startedAt : null;
+  const withinGracePeriod =
+    ageMs === null || ageMs < GHOST_EGRESS_GRACE_PERIOD_MS;
+  const noLiveSession =
+    liveChannels !== null &&
+    info.roomName !== undefined &&
+    !liveChannels.has(info.roomName);
+  return noLiveSession && !withinGracePeriod;
+}
+
 export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
   const localFloor = runningRungCount();
   const egress = getEgress();
@@ -1682,7 +1715,18 @@ export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
   // makes its still-running transcode look abandoned to us, and calling it a
   // ghost discounts a rendition that is really costing the box a core. Ask by
   // egress id instead, and take "could not ask" as "not a ghost".
-  const ownerLookup = await egressIdsOwnedElsewhere([...currentIds]);
+  //
+  // ONLY THE CANDIDATES ARE ASKED ABOUT, and on a healthy box there are none,
+  // so this tick costs no query at all. Sending every listed id would put a
+  // join over `hls_sessions` on the monitor's cadence for nothing.
+  const ghostCandidates = listing
+    .filter(
+      (info) =>
+        healthFromListing(info.egressId, listing) === "alive" &&
+        isGhostCandidate(info, liveChannels, now),
+    )
+    .map((info) => info.egressId);
+  const ownerLookup = await egressIdsOwnedElsewhere(ghostCandidates);
   const ownedElsewhere = ownerLookup ?? new Set<string>();
   const ownerLookupFailed = ownerLookup === null;
   for (const id of loggedGhostEgressIds) {
@@ -1695,15 +1739,8 @@ export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
       continue;
     }
     const ageMs = info.startedAt !== undefined ? now - info.startedAt : null;
-    const withinGracePeriod =
-      ageMs === null || ageMs < GHOST_EGRESS_GRACE_PERIOD_MS;
-    const noLiveSession =
-      liveChannels !== null &&
-      info.roomName !== undefined &&
-      !liveChannels.has(info.roomName);
     if (
-      noLiveSession &&
-      !withinGracePeriod &&
+      isGhostCandidate(info, liveChannels, now) &&
       (ownerLookupFailed || ownedElsewhere.has(info.egressId))
     ) {
       // Owned, live, and someone else's: count it against the box budget like
@@ -1721,8 +1758,7 @@ export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
       count += 1;
       continue;
     }
-    const isGhost = noLiveSession && !withinGracePeriod;
-    if (isGhost) {
+    if (isGhostCandidate(info, liveChannels, now)) {
       if (!loggedGhostEgressIds.has(info.egressId)) {
         loggedGhostEgressIds.add(info.egressId);
         logEvent("voice.hlsGhostEgress", {
@@ -2268,16 +2304,37 @@ async function reapForeignEgresses(
  * interval. Returns the channels it restarted or failed, for the log and
  * the test.
  */
-async function retryDeferredStops(): Promise<void> {
+async function retryDeferredStops(now = Date.now()): Promise<void> {
+  for (const [egressId, entry] of [...deferredStops]) {
+    if (
+      entry.attempts >= DEFERRED_STOP_MAX_ATTEMPTS ||
+      now - entry.queuedAt > DEFERRED_STOP_TTL_MS
+    ) {
+      deferredStops.delete(egressId);
+      logEvent("voice.hlsStopDeferredAbandoned", {
+        channelId: entry.channelId,
+        egressId,
+        sessionId: entry.sessionId,
+        attempts: entry.attempts,
+        ageMs: now - entry.queuedAt,
+      });
+    }
+  }
   if (deferredStops.size === 0) {
     return;
   }
-  const owned = await egressIdsOwnedElsewhere([...deferredStops.keys()]);
+  const batch = [...deferredStops.keys()].slice(0, DEFERRED_STOP_PER_TICK);
+  const owned = await egressIdsOwnedElsewhere(batch);
   if (owned === null) {
     // Still cannot ask. Keep them; this runs again in a few seconds.
     return;
   }
-  for (const [egressId, entry] of [...deferredStops]) {
+  for (const egressId of batch) {
+    const entry = deferredStops.get(egressId);
+    if (!entry) {
+      continue;
+    }
+    entry.attempts += 1;
     if (owned.has(egressId)) {
       // Somebody alive owns it after all: never ours to stop, and no longer
       // ours to remember.
@@ -3586,6 +3643,10 @@ async function stopRungs(
   const ownedElsewhere = await sessionIdsOwnedElsewhere(
     entries.map((entry) => entry.sessionId),
   );
+  // THE ROWS ARE FINISHED, SO THEIR QUEUED STAMPS ARE TOO. A claim that failed
+  // moments ago still carries `reopen`, and replaying it after this teardown
+  // would clear the `ended_at` that retention needs.
+  forgetPendingHlsSessionClaims(entries.map((entry) => entry.sessionId));
   for (const entry of entries) {
     if (ownedElsewhere === null && entry.sessionId) {
       // COULD NOT ASK IS NOT PERMISSION, HERE EITHER. Stopping on a failed
@@ -3598,6 +3659,8 @@ async function stopRungs(
         channelId,
         sessionId: entry.sessionId,
         rung: entry.rung.name,
+        queuedAt: Date.now(),
+        attempts: 0,
       });
       logEvent("voice.hlsStopDeferred", {
         channelId,
