@@ -5,6 +5,7 @@ import type { RemotePeer } from "@/lib/peer-connection-manager";
 import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
 import { defaultMicProcessing } from "@/lib/audio-devices";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
+import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -2847,6 +2848,86 @@ describe("voice roster deltas", () => {
     expect(voice.getState().occupancy[other]?.map((p) => p.peerId)).toEqual([
       "x",
     ]);
+  });
+
+  /**
+   * A moderator's drag-and-drop move (`moveOccupantSeat` in
+   * `voice-occupant-dnd.ts`) paints the destination channel optimistically
+   * with the person's CURRENT peer id, because it cannot know the fresh one
+   * their reconnect will mint. If a stale entry like that survives past the
+   * real `joined` for the same person, `byId.size` never agrees with the
+   * server's count and every delta is refused (a wrong badge "for a few
+   * seconds" that, moved-and-back, becomes forever) — which is the reported
+   * bug: the sidebar keeps reading the abandoned peer id, `speakingPeerIds`
+   * only ever names the live one, and that person's ring never lights again.
+   */
+  it("collapses a stale entry for the same user under a different peer id, so a delta converges instead of waiting on the next keyframe", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+
+    // Stands in for the optimistic paint: this channel already lists
+    // "friend" under a peer id the room has since moved on from.
+    voice.handleSignaling(
+      snapshot(1, [person("stale", { userId: "user-friend" })]),
+    );
+
+    // The room's real word: the same person, freshly reconnected under a
+    // different peer id — exactly a moderator move and move-back.
+    voice.handleSignaling(
+      delta(2, 1, { joined: [person("fresh", { userId: "user-friend" })] }),
+    );
+
+    expect(idsIn(voice)).toEqual(["fresh"]);
+  });
+
+  /**
+   * The full reported shape, end to end: drag friend out to another channel
+   * and back, using the same optimistic-then-reconciled choreography the app
+   * runs (`replaceOccupancy` for the paint, a delta for the server's word).
+   * Without the fix, channel A ends the sequence still keyed on friend's
+   * very first peer id ("x") — the one from before either move — because the
+   * optimism from the FIRST move survives the size-mismatch rejection on the
+   * way there and gets carried into the second move by `moveOccupantSeat`'s
+   * own `findIndex` lookup, one call in `App.tsx`'s `handleMoveVoiceOccupant`
+   * for both hops.
+   */
+  it("ends up on the current peer id after a move away and a move back, not the id from before either move", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const channelB = "00000000-0000-4000-8000-0000000000bb";
+
+    // Friend starts seated in A under their original peer id.
+    voice.handleSignaling(
+      snapshot(1, [person("x", { userId: "user-friend" })], CHANNEL),
+    );
+
+    // Move #1, A -> B: the mover's optimistic paint (`moveOccupantSeat`)
+    // carries the CURRENT entry ("x") into B ahead of the server.
+    const move1 = moveOccupantSeat(voice.getState().occupancy, "user-friend", channelB);
+    voice.replaceOccupancy(move1.next);
+
+    // The server's real word for both rooms: A empties, and friend reconnects
+    // into B under a brand-new peer id ("y") — the cold join a moved user
+    // always gets, never the id the mover's paint guessed at.
+    voice.handleSignaling(delta(2, 0, { left: ["x"] }, CHANNEL));
+    voice.handleSignaling(delta(1, 1, { joined: [person("y", { userId: "user-friend" })] }, channelB));
+
+    // Move #2, B -> A: the mover drags friend back, reading B's occupancy —
+    // which must already say "y", not the stale "x" from before move #1.
+    const move2 = moveOccupantSeat(voice.getState().occupancy, "user-friend", CHANNEL);
+    expect(move2.moved?.peerId).toBe("y");
+    voice.replaceOccupancy(move2.next);
+
+    // And the server's real word for the return: friend reconnects into A
+    // under yet another fresh peer id ("z"). Channel A emptied when "x" left
+    // it, which forgets its sequence (a room the server forgot too — see
+    // "forgets the sequence when the room empties" above), so this delta
+    // is the room's first again, seq 1, not a continuation of the seq 2 that
+    // emptied it.
+    voice.handleSignaling(delta(2, 0, { left: ["y"] }, channelB));
+    voice.handleSignaling(delta(1, 1, { joined: [person("z", { userId: "user-friend" })] }, CHANNEL));
+
+    expect(idsIn(voice)).toEqual(["z"]);
   });
 });
 
