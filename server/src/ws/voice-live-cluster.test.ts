@@ -808,8 +808,18 @@ describeDb("watch party stream and state across two instances", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(onTheWire.filter((f) => f.topic === "watchParty.state")).toHaveLength(1);
       expect(frames(sidebarOnA, "watch-party-update")).toHaveLength(1);
-      expect(a.events.watchPartyStateFrameCounters()).toEqual({ relayed: 1, fromBus: 0 });
-      expect(b.events.watchPartyStateFrameCounters()).toEqual({ relayed: 0, fromBus: 1 });
+      expect(a.events.watchPartyStateFrameCounters()).toEqual({
+        relayed: 1,
+        fromBus: 0,
+        retries: 0,
+      });
+            // `retries` at zero is the point: the relayed walk succeeded first time,
+      // so the process-wide retry limiter was never entered.
+      expect(b.events.watchPartyStateFrameCounters()).toEqual({
+        relayed: 0,
+        fromBus: 1,
+        retries: 0,
+      });
 
       await pools[0]!
         .getPool()

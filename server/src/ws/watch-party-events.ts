@@ -149,11 +149,13 @@ const watchPartyStateFrameSchema = z.object({
  * `watchPartyStateFrameCounters`. `relayed` is what this instance published;
  * `fromBus` is what it applied. Zero on one machine, both climbing on two.
  */
-const watchPartyStateFrames = { relayed: 0, fromBus: 0 };
+const watchPartyStateFrames = { relayed: 0, fromBus: 0, retries: 0 };
 
 export function watchPartyStateFrameCounters(): {
   relayed: number;
   fromBus: number;
+  /** Retried walks since boot. Zero unless a dependency has been failing. */
+  retries: number;
 } {
   return { ...watchPartyStateFrames };
 }
@@ -161,6 +163,7 @@ export function watchPartyStateFrameCounters(): {
 export function resetWatchPartyStateFrameCountersForTests(): void {
   watchPartyStateFrames.relayed = 0;
   watchPartyStateFrames.fromBus = 0;
+  watchPartyStateFrames.retries = 0;
 }
 
 /**
@@ -180,7 +183,37 @@ export function resetWatchPartyStateFrameCountersForTests(): void {
  */
 const WATCH_PARTY_RELAY_ATTEMPTS = 12;
 const WATCH_PARTY_RELAY_BACKOFF_MS = 500;
-const WATCH_PARTY_RELAY_BACKOFF_MAX_MS = 20_000;
+const WATCH_PARTY_RELAY_BACKOFF_MAX_MS = 30_000;
+
+/**
+ * ONE RETRY WALK AT A TIME, ACROSS THE WHOLE PROCESS. A walk is a full
+ * audience load plus a permission read per recipient, and the reason a walk
+ * is being retried at all is that a dependency is failing -- most likely
+ * Postgres, which is also what every one of those reads needs. Retrying ten
+ * parties at once into a database that is already struggling is the shape of
+ * the 2026-09-12 incident, so the retries queue instead. A FIRST attempt is
+ * never queued: that is the live path and it must stay as fast as it was.
+ */
+let retryWalkInFlight = false;
+const retryWalkQueue: (() => void)[] = [];
+
+function withRetrySlot(run: () => void): void {
+  if (retryWalkInFlight) {
+    retryWalkQueue.push(run);
+    return;
+  }
+  retryWalkInFlight = true;
+  run();
+}
+
+function releaseRetrySlot(): void {
+  const next = retryWalkQueue.shift();
+  if (next) {
+    next();
+    return;
+  }
+  retryWalkInFlight = false;
+}
 
 /**
  * ONE WALK PER SESSION AT A TIME, plus at most one waiting behind it. A burst
@@ -201,7 +234,12 @@ function applyRelayedWatchPartyState(sessionId: string, attempt: number): void {
   }
   const entry = { pending: false };
   relayedWalks.set(sessionId, entry);
-  runRelayedWatchPartyWalk(sessionId, attempt, entry);
+  if (attempt === 1) {
+    runRelayedWatchPartyWalk(sessionId, attempt, entry);
+    return;
+  }
+  watchPartyStateFrames.retries += 1;
+  withRetrySlot(() => runRelayedWatchPartyWalk(sessionId, attempt, entry));
 }
 
 function runRelayedWatchPartyWalk(
@@ -211,6 +249,9 @@ function runRelayedWatchPartyWalk(
 ): void {
   const done = (retry: string | null) => {
     relayedWalks.delete(sessionId);
+    if (attempt > 1) {
+      releaseRetrySlot();
+    }
     if (entry.pending) {
       // Something changed while this walk was running: one more walk, from
       // the top, which re-reads the row and so covers every frame that

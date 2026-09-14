@@ -375,7 +375,7 @@ export interface AdminMetrics {
      * stream's own relay is `voice.liveHls.audienceFramesRelayed` /
      * `audienceFramesFromBus`.
      */
-    stateFrames: { relayed: number; fromBus: number };
+    stateFrames: { relayed: number; fromBus: number; retries: number };
     /** Rung names this deployment would encode, lowest first. */
     ladder: string[];
     sessions: number;

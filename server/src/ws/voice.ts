@@ -2508,6 +2508,7 @@ export function resetHlsAudience(): void {
   dbStreamInFlight.clear();
   streamGeneration.clear();
   locallyEndedAt.clear();
+  resetConvergenceTurns();
 }
 
 /**
@@ -2727,15 +2728,73 @@ const hlsTokenRemint = { loops: 0, tokens: 0 };
  * by a person and bounded by them.
  */
 const HLS_CONVERGENCE_PER_TICK = 8;
-let convergenceBudget = HLS_CONVERGENCE_PER_TICK;
+
 /**
- * The budget refills on its own clock rather than per tick, because each
- * channel keeps its own keyframe timer: there is no one moment when "the
- * tick" happens.
+ * WHOSE TURN IT IS, kept between ticks. The keyframe timers are per channel
+ * and fire in whatever order they were started, so a budget alone is spent by
+ * whichever channels happen to tick first and the ones behind them would
+ * never recover from a lost bus frame at all -- which is the entire point of
+ * this path. So the budget is not "the first eight to ask": every channel
+ * that has ever asked is on `convergenceOrder`, and each refill hands the
+ * turn to the next `HLS_CONVERGENCE_PER_TICK` of them from a cursor that
+ * survives the refill. A channel that stops being watched keeps its place
+ * until the sweep drops it, which costs nothing: an unwatched channel simply
+ * never calls in to use its turn.
  */
-setInterval(() => {
-  convergenceBudget = HLS_CONVERGENCE_PER_TICK;
-}, ROSTER_AUDIENCE_KEYFRAME_MS).unref?.();
+const convergenceOrder: string[] = [];
+const convergenceIndex = new Map<string, number>();
+let convergenceCursor = 0;
+let convergenceTurn = new Set<string>();
+
+function rotateConvergenceTurn(): void {
+  convergenceTurn = new Set();
+  if (convergenceOrder.length === 0) {
+    return;
+  }
+  for (let i = 0; i < HLS_CONVERGENCE_PER_TICK; i += 1) {
+    if (convergenceTurn.size >= convergenceOrder.length) {
+      break;
+    }
+    convergenceTurn.add(convergenceOrder[convergenceCursor % convergenceOrder.length]!);
+    convergenceCursor = (convergenceCursor + 1) % convergenceOrder.length;
+  }
+}
+
+setInterval(rotateConvergenceTurn, ROSTER_AUDIENCE_KEYFRAME_MS).unref?.();
+
+/**
+ * Whether this channel may spend a convergence read right now. Registers a
+ * channel the first time it asks (it takes its turn on a later rotation, not
+ * this one, which is what keeps the per-tick cost flat however many channels
+ * appear at once).
+ */
+export function takeConvergenceTurn(channelId: string): boolean {
+  if (!convergenceIndex.has(channelId)) {
+    convergenceIndex.set(channelId, convergenceOrder.length);
+    convergenceOrder.push(channelId);
+    return false;
+  }
+  if (!convergenceTurn.has(channelId)) {
+    return false;
+  }
+  // One read per turn: a channel with several watchers still asks once.
+  convergenceTurn.delete(channelId);
+  return true;
+}
+
+/** Test hook: forget the rotation. */
+export function resetConvergenceTurns(): void {
+  convergenceOrder.length = 0;
+  convergenceIndex.clear();
+  convergenceCursor = 0;
+  convergenceTurn = new Set();
+}
+
+/** Test hook: the rotation the interval would do. */
+export function rotateConvergenceTurnsForTests(): string[] {
+  rotateConvergenceTurn();
+  return [...convergenceTurn];
+}
 
 const hlsAudience = createHlsAudience({
   keyframeMs: ROSTER_AUDIENCE_KEYFRAME_MS,
@@ -2759,13 +2818,14 @@ const hlsAudience = createHlsAudience({
       void broadcastChannelLive(channelId, { stream: held, known: true });
       return;
     }
-    if (convergenceBudget > 0) {
-      convergenceBudget -= 1;
+    if (takeConvergenceTurn(channelId)) {
       void broadcastChannelLive(channelId);
-      return;
     }
-    // Out of budget this tick: restate what we have, ask nothing.
-    void broadcastChannelLive(channelId, { stream: null, known: false });
+    // Not this channel's turn: SAY NOTHING. There is no news to restate --
+    // this machine holds no stream for the channel and has not asked -- and a
+    // frame carrying `stream: null` is one more chance for a client to read
+    // silence as an end. A null goes out only when something positively
+    // answered that there is nothing live.
   },
   remintMs: HLS_VIEWER_TOKEN_REMINT_MS,
   remint: (channelId, watchers) => {
