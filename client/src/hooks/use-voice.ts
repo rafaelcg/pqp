@@ -68,6 +68,7 @@ import {
 } from "../lib/noise-suppression";
 import {
   isOptimisticVoiceEntry,
+  markOptimisticVoiceEntry,
   moveOccupantSeat,
 } from "@/lib/voice-occupant-dnd";
 import {
@@ -3395,27 +3396,26 @@ export function createVoiceController(transport: RealtimeTransport) {
             participant,
           ]),
         );
-        // A user id -> peer ids index, built once per delta rather than
-        // rescanned per participant, so `mergeParticipant` below stays O(D)
-        // (D = joined.length + updated.length) instead of O(D * room size).
-        // A user practically holds at most a couple of concurrent sessions,
-        // so the inner loop it drives is small regardless of room size.
-        const peerIdsByUserId = new Map<string, Set<string>>();
-        for (const [peerId, participant] of byId) {
-          let ids = peerIdsByUserId.get(participant.userId);
-          if (!ids) {
-            ids = new Set();
-            peerIdsByUserId.set(participant.userId, ids);
+        // A user id -> peer ids index, so `mergeParticipant` below stays
+        // O(D) (D = joined.length + updated.length) rather than rescanning
+        // the whole room per participant. Built lazily — a `left`-only delta
+        // (the common case: somebody simply leaves) calls `mergeParticipant`
+        // zero times and must not pay to build an index nothing will read.
+        let peerIdsByUserId: Map<string, Set<string>> | null = null;
+        function peerIdsByUserIdIndex(): Map<string, Set<string>> {
+          if (peerIdsByUserId) {
+            return peerIdsByUserId;
           }
-          ids.add(peerId);
-        }
-        function indexParticipant(participant: VoiceParticipant) {
-          let ids = peerIdsByUserId.get(participant.userId);
-          if (!ids) {
-            ids = new Set();
-            peerIdsByUserId.set(participant.userId, ids);
+          peerIdsByUserId = new Map();
+          for (const [peerId, participant] of byId) {
+            let ids = peerIdsByUserId.get(participant.userId);
+            if (!ids) {
+              ids = new Set();
+              peerIdsByUserId.set(participant.userId, ids);
+            }
+            ids.add(peerId);
           }
-          ids.add(participant.peerId);
+          return peerIdsByUserId;
         }
         // In order, and every entry an absolute statement about one peer, so
         // replaying one that a snapshot already folded in changes nothing.
@@ -3441,8 +3441,17 @@ export function createVoiceController(transport: RealtimeTransport) {
         // or a phone and a desktop both in the same call — which is one user
         // id legitimately holding two different peer ids at once and must
         // never be treated as staleness.
+        //
+        // The tag has to survive an `updated` that replaces the object
+        // sitting at the SAME peer id slot, not only a `joined` at a
+        // different one: `updated` frames carry a fresh object every time
+        // (mute, camera, whatever changed), and if the replacement silently
+        // dropped the tag, the NEXT delta to actually move this person would
+        // find an untagged entry at that slot and refuse to collapse it —
+        // quietly undoing this whole fix for that one peer id.
         function mergeParticipant(participant: VoiceParticipant) {
-          const sameUserPeerIds = peerIdsByUserId.get(participant.userId);
+          const index = peerIdsByUserIdIndex();
+          const sameUserPeerIds = index.get(participant.userId);
           if (sameUserPeerIds) {
             for (const peerId of sameUserPeerIds) {
               if (peerId === participant.peerId) {
@@ -3455,8 +3464,17 @@ export function createVoiceController(transport: RealtimeTransport) {
               }
             }
           }
+          const sameSlot = byId.get(participant.peerId);
+          if (sameSlot && isOptimisticVoiceEntry(sameSlot)) {
+            markOptimisticVoiceEntry(participant);
+          }
           byId.set(participant.peerId, participant);
-          indexParticipant(participant);
+          let ids = index.get(participant.userId);
+          if (!ids) {
+            ids = new Set();
+            index.set(participant.userId, ids);
+          }
+          ids.add(participant.peerId);
         }
         for (const participant of message.joined ?? []) {
           mergeParticipant(participant);

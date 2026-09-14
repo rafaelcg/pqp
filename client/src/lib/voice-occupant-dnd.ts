@@ -166,9 +166,22 @@ export function cloneVoiceOccupancy(
  */
 const optimisticEntries = new WeakSet<VoiceParticipant>();
 
-/** True only for the entry `moveOccupantSeat` just invented. */
+/** True only for an entry `moveOccupantSeat` invented, or carried forward from one. */
 export function isOptimisticVoiceEntry(participant: VoiceParticipant): boolean {
   return optimisticEntries.has(participant);
+}
+
+/**
+ * Carry the optimistic tag onto a REPLACEMENT object for an entry that was
+ * already tagged. A roster-delta `updated` frame is a fresh object every
+ * time (mute, camera, whatever changed) even when it still describes this
+ * client's own unconfirmed guess at a peer id — the tag lives on the object
+ * reference, so without re-marking the replacement here, an `updated` for
+ * that same still-optimistic peer id would silently drop the tag and the
+ * next real move for that person would find nothing to collapse.
+ */
+export function markOptimisticVoiceEntry(participant: VoiceParticipant): void {
+  optimisticEntries.add(participant);
 }
 
 /**
@@ -211,7 +224,7 @@ export function moveOccupantSeat(
     return { next: occupancy, fromChannelId, moved };
   }
   const optimisticMoved: VoiceParticipant = { ...moved };
-  optimisticEntries.add(optimisticMoved);
+  markOptimisticVoiceEntry(optimisticMoved);
   next[toChannelId] = [...(next[toChannelId] ?? []), optimisticMoved];
   return { next, fromChannelId, moved };
 }

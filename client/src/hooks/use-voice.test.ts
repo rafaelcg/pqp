@@ -2893,6 +2893,61 @@ describe("voice roster deltas", () => {
   });
 
   /**
+   * Farol's second-round catch: `updated` frames are a fresh object every
+   * time (a mute toggle, a rename, anything), so if one lands on the SAME
+   * still-unconfirmed peer id an optimistic entry occupies, replacing it
+   * without carrying the tag forward would silently un-mark it — and the
+   * NEXT delta that actually needs to collapse that peer id (the real
+   * reconnect finally arriving) would find nothing to collapse, landing
+   * right back in the original bug for that one peer id.
+   */
+  it("keeps the optimistic tag across an `updated` for the still-unconfirmed peer id", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const channelB = "00000000-0000-4000-8000-0000000000bb";
+
+    voice.handleSignaling(
+      snapshot(1, [person("stale", { userId: "user-friend" })], CHANNEL),
+    );
+    const moved = moveOccupantSeat(
+      voice.getState().occupancy,
+      "user-friend",
+      channelB,
+    );
+    voice.replaceOccupancy(moved.next);
+
+    // Something updates the still-optimistic entry in place before the real
+    // reconnect lands — a fresh object at the same peer id.
+    voice.handleSignaling(
+      delta(
+        1,
+        1,
+        {
+          updated: [
+            person("stale", { userId: "user-friend", muted: true }),
+          ],
+        },
+        channelB,
+      ),
+    );
+    expect(
+      voice.getState().occupancy[channelB]?.find((p) => p.peerId === "stale")
+        ?.muted,
+    ).toBe(true);
+
+    // The room's real word finally arrives, under a genuinely different peer
+    // id. Without the tag surviving the `updated` above, this would sit
+    // beside "stale" forever instead of replacing it.
+    voice.handleSignaling(
+      delta(2, 1, { joined: [person("fresh", { userId: "user-friend" })] }, channelB),
+    );
+
+    expect(
+      (voice.getState().occupancy[channelB] ?? []).map((p) => p.peerId),
+    ).toEqual(["fresh"]);
+  });
+
+  /**
    * Farol's catch on the first version of this fix: collapsing by user id
    * ALONE would also swallow a second genuine session of the same person —
    * two tabs, or a phone and a desktop, both seated in the same call at once
