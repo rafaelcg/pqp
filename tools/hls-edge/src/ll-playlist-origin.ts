@@ -33,6 +33,30 @@
  * Farol review of this PR's first draft caught that embedding the real
  * token here leaked one viewer's bearer credential into the shared
  * cache/coalescer's entry, readable by every other viewer who hit it warm.
+ *
+ * A CONVENTIONAL MASTER REQUEST MUST NOT PAY THE FULL UPSTREAM TIMEOUT.
+ * `fetchMultivariantPlaylist` runs for EVERY session/master request once
+ * `LL_ORIGIN_BASE` is configured, LL or not — a conventional session's is
+ * the common case at party scale, and each one used to probe `state.json`
+ * and simply wait out `timeoutMs` (the SAME bound the codec/rendition
+ * fetches use, chosen for those, not for this) before falling back to the
+ * API. A Farol review flagged this twice: as latency (every conventional
+ * master request pays the probe) and as availability (an unhealthy LL
+ * origin holds every one of them for the full timeout before the API is
+ * even tried). `MASTER_PROBE_TIMEOUT_MS` bounds THIS caller's own patience
+ * separately from `timeoutMs` — `state.json` is a small, frequently
+ * rewritten file a healthy remux answers in well under a second, so a
+ * master request that has not heard back by then almost certainly belongs
+ * to a conventional session or an unhealthy origin either way, and the
+ * honest move is to answer from the API now rather than make a viewer's
+ * player wait on a guess. The underlying fetch is never aborted when the
+ * probe deadline wins — it keeps running under its own `timeoutMs` in the
+ * background, exactly as `fetchFromOrigin`'s in-flight de-dup already
+ * shares it with any other concurrent caller, and whatever it eventually
+ * decides is remembered in `sessionProbeCache` so the NEXT master request
+ * for the SAME (channelId, startedAt) skips the wait entirely for
+ * `SESSION_PROBE_CACHE_TTL_MS` — turning "every viewer's join pays a
+ * probe" into "one prober per window pays it."
  */
 
 import { AAC_LC_CODEC, extractAvc1VideoInfo } from "./ll-init-codecs.js";
@@ -53,6 +77,18 @@ import { logEvent } from "./log.js";
 
 /** Bound on the per-session video-codec cache — same shape as `index.ts`'s `rejectionLog`: a churn of many short LL sessions must not grow this forever. */
 const VIDEO_CODEC_CACHE_MAX_ENTRIES = 200;
+
+/** See this file's header, "A CONVENTIONAL MASTER REQUEST MUST NOT PAY THE FULL UPSTREAM TIMEOUT" — deliberately much shorter than the `timeoutMs` the underlying origin fetch still runs under. */
+const MASTER_PROBE_TIMEOUT_MS = 1_500;
+
+/** How long a (channelId, startedAt) recently found to have no LL session (or an unreachable/erroring origin) is treated that way without asking again — same header. Short enough that a session which starts conventional and later grows an LL state (or a recovering origin) is noticed again within one window. */
+const SESSION_PROBE_CACHE_TTL_MS = 5_000;
+
+/** Same bounded-map shape as `videoCodecCache` below — a churn of distinct (channelId, startedAt) pairs must not grow this forever. */
+const SESSION_PROBE_CACHE_MAX_ENTRIES = 500;
+
+/** Thrown internally by `raceProbe` when `MASTER_PROBE_TIMEOUT_MS` elapses before the underlying fetch settles — never thrown across this module's own public API. */
+class MasterProbeTimeoutError extends Error {}
 
 /**
  * Only the VIDEO half of a session's codec info is cached — it is read off
@@ -120,6 +156,17 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    * instant" would serve stale segments/parts, unlike the codec string.
    */
   private readonly inFlight = new Map<string, Promise<BufferedOriginResponse>>();
+
+  /**
+   * `(channelId, startedAt)` key -> the epoch ms a "no LL session here" (or
+   * "origin errored") result was last observed. Checked ONLY by
+   * `fetchMultivariantPlaylist` — see this file's header, "A CONVENTIONAL
+   * MASTER REQUEST MUST NOT PAY THE FULL UPSTREAM TIMEOUT". Never consulted
+   * by `fetchPlaylist` (the rendition route): a viewer only ever asks for
+   * `ll`/`ll-audio` because a master response already handed them that rung
+   * name, so that route has no "is this even LL" question to short-circuit.
+   */
+  private readonly sessionProbeCache = new Map<string, number>();
 
   // A plain constructor body, not TypeScript parameter-property shorthand:
   // this class is exercised directly by `test/ll-playlist-origin.test.mjs`
@@ -272,11 +319,36 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     startedAt: string,
     token: string,
   ): Promise<Response | null> {
+    const probeKey = `${channelId}:${startedAt}`;
+    if (this.recentlyProbedNegative(probeKey)) {
+      return null;
+    }
+    // Started once, awaited with a SHORT deadline below -- but never
+    // aborted when that deadline wins, so a slow-but-eventually-answering
+    // origin still gets to populate `sessionProbeCache` for the benefit of
+    // the NEXT master request, even though THIS one already fell back to
+    // the API. See this file's header, "A CONVENTIONAL MASTER REQUEST MUST
+    // NOT PAY THE FULL UPSTREAM TIMEOUT".
+    const statePromise = this.fetchState(channelId, startedAt);
+    statePromise.then(
+      (result) => {
+        if (!result) {
+          this.rememberNegativeProbe(probeKey);
+        }
+      },
+      () => {
+        this.rememberNegativeProbe(probeKey);
+      },
+    );
     let found: { sessionId: string; state: LlSessionState } | null;
     try {
-      found = await this.fetchState(channelId, startedAt);
+      found = await this.raceProbe(statePromise, MASTER_PROBE_TIMEOUT_MS);
     } catch (error) {
-      logEvent("hlsEdge.llStateFetchFailed", { channelId, error: String(error) });
+      if (error instanceof MasterProbeTimeoutError) {
+        logEvent("hlsEdge.llMasterProbeTimedOut", { channelId, timeoutMs: MASTER_PROBE_TIMEOUT_MS });
+      } else {
+        logEvent("hlsEdge.llStateFetchFailed", { channelId, error: String(error) });
+      }
       return null;
     }
     if (!found) {
@@ -359,5 +431,45 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     }
     this.videoCodecCache.set(sessionId, result);
     return result;
+  }
+
+  /** True when `key` was last probed negative within `SESSION_PROBE_CACHE_TTL_MS` — see `sessionProbeCache`'s doc comment. */
+  private recentlyProbedNegative(key: string): boolean {
+    const at = this.sessionProbeCache.get(key);
+    return at !== undefined && Date.now() - at < SESSION_PROBE_CACHE_TTL_MS;
+  }
+
+  private rememberNegativeProbe(key: string): void {
+    if (this.sessionProbeCache.size >= SESSION_PROBE_CACHE_MAX_ENTRIES && !this.sessionProbeCache.has(key)) {
+      const oldestKey = this.sessionProbeCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.sessionProbeCache.delete(oldestKey);
+      }
+    }
+    this.sessionProbeCache.set(key, Date.now());
+  }
+
+  /**
+   * Awaits `promise` but never for longer than `ms` — rejecting with
+   * `MasterProbeTimeoutError` if the deadline wins, WITHOUT cancelling
+   * `promise` itself (it keeps running under its own bound, e.g.
+   * `fetchFromOrigin`'s `timeoutMs`, and whatever it eventually settles to
+   * is still observed by any other `.then`/`await` already attached to it —
+   * see the call site in `fetchMultivariantPlaylist`).
+   */
+  private raceProbe<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new MasterProbeTimeoutError()), ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 }

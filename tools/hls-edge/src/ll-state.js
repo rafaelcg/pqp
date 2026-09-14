@@ -91,6 +91,47 @@
  *    it is what `#EXT-X-PRELOAD-HINT` tells a player to start fetching
  *    before the origin has finished writing it (RFC 8216bis §4.4.3.9).
  *
+ * FIVE MORE RULES, added after a Farol review of the first draft found this
+ * parser checked every FIELD in isolation but none of the RELATIONSHIPS
+ * `ll-playlist.js`'s renderer and `ll-playlist-origin.ts`'s origin fetches
+ * silently depend on — a `state.json` that passed every per-field check
+ * above could still describe a snapshot that made no sense as a timeline,
+ * and the renderer had no choice but to render it anyway:
+ *
+ *  - A track's segment MSNs are STRICTLY INCREASING AND CONTIGUOUS (each one
+ *    exactly one more than the last) — a gap or a duplicate is not a
+ *    playlist this format has any way to represent, so it is rejected
+ *    outright rather than rendered with a silently wrong media sequence.
+ *  - `mediaSequence` must equal the VIDEO track's OLDEST (first) segment MSN
+ *    — the one piece of cross-field arithmetic the shape above documents in
+ *    words ("MSN of the OLDEST segment in video.segments") and nothing
+ *    previously checked.
+ *  - Every COMPLETE segment's `durationSecs`, on either track, must not
+ *    exceed `targetDurationSecs` — `EXT-X-TARGETDURATION` is a ceiling RFC
+ *    8216bis requires every `EXTINF` to respect; a response that violates it
+ *    is already malformed, not merely awkward to render.
+ *  - The track's OWN live edge must have something to play: if the last
+ *    (possibly incomplete) segment has zero parts, `preloadHint` must be
+ *    present — a live segment with neither parts nor a hint at what is
+ *    coming next renders a playlist with nothing new to fetch at all.
+ *  - A present `preloadHint` must name the EXACT next unwritten part — part
+ *    0 of a new segment one past the last, if the last segment is complete;
+ *    otherwise the next index after the last segment's own parts. Anything
+ *    else either re-announces a part that already exists (which
+ *    `EXT-X-PRELOAD-HINT` must never do, per RFC 8216bis §4.4.3.9) or points
+ *    somewhere a client could never reconcile with the segments already
+ *    listed.
+ *
+ * `sessionId` is also checked against the UUID shape `ll-session.js`'s
+ * `deriveLlSessionId` always produces (not merely "non-empty") — it is
+ * rendered UNESCAPED into `#EXT-X-PQP-SESSION:` (`ll-playlist.js`) and used
+ * as a path segment against the remux origin (`ll-playlist-origin.ts`), so a
+ * value this parser let through unconstrained would let a compromised or
+ * mistaken origin inject arbitrary playlist lines or, worse, redirect this
+ * Worker's own outbound requests. The per-item URI fields (`initUri`, a
+ * segment's `uri`, a part's `uri`, a preload hint's `uri`) get the same
+ * treatment for the same reason — see `isSafeUriSegment` below.
+ *
  * `ll-playlist.js` renders text FROM the parsed shape below; nothing in
  * that file re-reads `raw` JSON, and nothing here renders a single playlist
  * tag — same "read/render" split `hls-blocking-reload.js`'s own module doc
@@ -127,6 +168,39 @@ function isNonEmptyString(value) {
 }
 
 /**
+ * A safe origin-supplied "file name" — no `/`, no `..`, no query/fragment,
+ * no whitespace or control characters, nothing a template literal could
+ * turn into a playlist-line injection or a `new URL(path, base)` escape.
+ * `new URL` resolves a leading `//host/...` or a full `scheme://...` string
+ * against a DIFFERENT origin entirely rather than the intended base — this
+ * pattern's charset makes that construction impossible, closing both the
+ * playlist-injection and the origin-redirect readings of the same
+ * underlying gap. Every legitimate name in `state.json`'s own contract
+ * (`init.mp4`, `seg-41.m4s`, `part-41.0.m4s`, `audio-init.mp4`, ...) is well
+ * inside it; 191 characters is generous headroom over anything the remux
+ * actually writes.
+ * @param {unknown} value
+ * @returns {value is string}
+ */
+const URI_SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$/;
+function isSafeUriSegment(value) {
+  return typeof value === "string" && URI_SEGMENT_PATTERN.test(value);
+}
+
+/**
+ * The exact shape `ll-session.js`'s `deriveLlSessionId` always produces.
+ * `state.json`'s own `sessionId` is rendered UNESCAPED into
+ * `#EXT-X-PQP-SESSION:` (`ll-playlist.js`) — this bounds it to characters
+ * that can never break out of that line.
+ * @param {unknown} value
+ * @returns {value is string}
+ */
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuidLike(value) {
+  return typeof value === "string" && SESSION_ID_PATTERN.test(value);
+}
+
+/**
  * @typedef {{ index: number, durationSecs: number, independent: boolean, uri: string }} LlPart
  */
 
@@ -148,7 +222,7 @@ function parsePart(raw) {
   if (typeof value.independent !== "boolean") {
     return null;
   }
-  if (!isNonEmptyString(value.uri)) {
+  if (!isSafeUriSegment(value.uri)) {
     return null;
   }
   return {
@@ -189,7 +263,7 @@ function parseSegment(raw) {
     if (!isFiniteNumber(value.durationSecs) || value.durationSecs <= 0) {
       return null;
     }
-    if (!isNonEmptyString(value.uri)) {
+    if (!isSafeUriSegment(value.uri)) {
       return null;
     }
   } else if (value.uri !== undefined && value.uri !== null) {
@@ -244,7 +318,7 @@ function parsePreloadHint(raw) {
     return null;
   }
   const value = /** @type {Record<string, unknown>} */ (raw);
-  if (!isNonNegInt(value.msn) || !isNonNegInt(value.part) || !isNonEmptyString(value.uri)) {
+  if (!isNonNegInt(value.msn) || !isNonNegInt(value.part) || !isSafeUriSegment(value.uri)) {
     return null;
   }
   return { msn: value.msn, part: value.part, uri: value.uri };
@@ -263,7 +337,7 @@ function parseTrack(raw) {
     return null;
   }
   const value = /** @type {Record<string, unknown>} */ (raw);
-  if (!isNonEmptyString(value.initUri)) {
+  if (!isSafeUriSegment(value.initUri)) {
     return null;
   }
   if (!Array.isArray(value.segments) || value.segments.length === 0) {
@@ -284,12 +358,40 @@ function parseTrack(raw) {
       return null;
     }
   }
+  // MSNs are strictly increasing and contiguous -- a gap or a duplicate is
+  // not a timeline this format can represent (see the module doc comment,
+  // "FIVE MORE RULES").
+  for (let i = 1; i < segments.length; i += 1) {
+    if (segments[i].msn !== segments[i - 1].msn + 1) {
+      return null;
+    }
+  }
   let preloadHint = null;
   if (value.preloadHint !== undefined && value.preloadHint !== null) {
     preloadHint = parsePreloadHint(value.preloadHint);
     if (!preloadHint) {
       // Present but malformed -- distinct from "absent", which is
       // legitimately null (the origin has nothing new to hint at yet).
+      return null;
+    }
+  }
+  const last = segments[segments.length - 1];
+  if (!last.complete && last.parts.length === 0 && !preloadHint) {
+    // The live edge has nothing published and nothing scheduled -- see the
+    // module doc comment, "The track's OWN live edge must have something to
+    // play".
+    return null;
+  }
+  if (preloadHint) {
+    // Must name the EXACT next unwritten part: part 0 of the segment one
+    // past the last if that last segment is already sealed, otherwise the
+    // next index after the last segment's own parts. Anything else either
+    // re-announces a part that already exists or points somewhere the
+    // segments listed here cannot reconcile with.
+    const expected = last.complete
+      ? { msn: last.msn + 1, part: 0 }
+      : { msn: last.msn, part: last.parts.length };
+    if (preloadHint.msn !== expected.msn || preloadHint.part !== expected.part) {
       return null;
     }
   }
@@ -325,7 +427,7 @@ export function parseLlState(raw) {
     return null;
   }
   const value = /** @type {Record<string, unknown>} */ (raw);
-  if (!isNonEmptyString(value.sessionId) || !isNonEmptyString(value.channelId)) {
+  if (!isUuidLike(value.sessionId) || !isNonEmptyString(value.channelId)) {
     return null;
   }
   if (!Number.isInteger(value.partTargetMs) || value.partTargetMs <= 0) {
@@ -344,11 +446,29 @@ export function parseLlState(raw) {
   if (!video) {
     return null;
   }
+  // `mediaSequence` must be the VIDEO track's OLDEST (first) segment MSN --
+  // the shape's own documented invariant ("MSN of the OLDEST segment in
+  // video.segments"), unchecked before this review. `video.segments` is
+  // never empty (parseTrack already rejects that), so `[0]` is safe.
+  if (value.mediaSequence !== video.segments[0].msn) {
+    return null;
+  }
   let audio = null;
   if (value.audio !== undefined && value.audio !== null) {
     audio = parseTrack(value.audio);
     if (!audio) {
       return null;
+    }
+  }
+  // No COMPLETE segment, on either track, may claim a duration longer than
+  // the playlist's own advertised ceiling -- EXT-X-TARGETDURATION is a
+  // ceiling every EXTINF must respect (RFC 8216bis), and a response that
+  // violates it is malformed, not merely awkward to render.
+  for (const track of audio ? [video, audio] : [video]) {
+    for (const segment of track.segments) {
+      if (segment.complete && /** @type {number} */ (segment.durationSecs) > value.targetDurationSecs) {
+        return null;
+      }
     }
   }
   return {

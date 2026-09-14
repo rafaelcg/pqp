@@ -157,6 +157,93 @@ test("rejects non-positive partTargetMs/segmentTargetMs/targetDurationSecs", () 
   }
 });
 
+test("rejects a sessionId that is not shaped like a UUID -- unescaped into playlist text and used as a request path segment", () => {
+  for (const badId of ["not-a-uuid", "5a1b2c3d\n#EXT-X-DISCONTINUITY", "../../evil", ""]) {
+    const raw = fixtureState({ sessionId: badId });
+    assert.equal(parseLlState(raw), null, `sessionId ${JSON.stringify(badId)}`);
+  }
+});
+
+test("rejects a uri containing path separators, .., or control characters (playlist injection / origin-fetch escape)", () => {
+  for (const badUri of ["../../secret", "a/b.m4s", "seg 41.m4s", "seg\n41.m4s", "http://evil.example/x", ""]) {
+    const badInitUri = fixtureState();
+    badInitUri.video.initUri = badUri;
+    assert.equal(parseLlState(badInitUri), null, `initUri ${JSON.stringify(badUri)}`);
+
+    const badSegmentUri = fixtureState();
+    badSegmentUri.video.segments[0].uri = badUri;
+    assert.equal(parseLlState(badSegmentUri), null, `segment uri ${JSON.stringify(badUri)}`);
+
+    const badPartUri = fixtureState();
+    badPartUri.video.segments[0].parts[0].uri = badUri;
+    assert.equal(parseLlState(badPartUri), null, `part uri ${JSON.stringify(badUri)}`);
+  }
+});
+
+test("rejects non-contiguous or duplicate segment MSNs", () => {
+  const gap = fixtureState();
+  gap.video.segments[1].msn = 45; // was 42, leaves a gap after 41
+  assert.equal(parseLlState(gap), null);
+
+  const duplicate = fixtureState();
+  duplicate.video.segments[1].msn = 41; // duplicates segment 0's msn
+  assert.equal(parseLlState(duplicate), null);
+
+  const outOfOrder = fixtureState();
+  outOfOrder.video.segments.reverse();
+  assert.equal(parseLlState(outOfOrder), null);
+});
+
+test("rejects mediaSequence that does not match the video track's oldest segment MSN", () => {
+  const raw = fixtureState({ mediaSequence: 40 }); // fixture's first video segment is msn 41
+  assert.equal(parseLlState(raw), null);
+});
+
+test("rejects a complete segment whose duration exceeds targetDurationSecs", () => {
+  const raw = fixtureState({ targetDurationSecs: 1 }); // segment 0 claims durationSecs 4.016
+  assert.equal(parseLlState(raw), null);
+});
+
+test("rejects a live segment with zero parts and no preload hint -- nothing published, nothing scheduled", () => {
+  const raw = fixtureState();
+  raw.video.segments[2].parts = [];
+  raw.video.preloadHint = null;
+  assert.equal(parseLlState(raw), null);
+
+  // The same zero-part live segment IS accepted once a preload hint names
+  // the very next part.
+  const withHint = fixtureState();
+  withHint.video.segments[2].parts = [];
+  withHint.video.preloadHint = { msn: 43, part: 0, uri: "part-43.0.m4s" };
+  assert.ok(parseLlState(withHint));
+});
+
+test("rejects a preload hint that re-announces an already-published part", () => {
+  const raw = fixtureState();
+  // segments[2] (msn 43) already has part index 0 published -- a hint for
+  // {msn: 43, part: 0} re-announces it instead of naming the next one.
+  raw.video.preloadHint = { msn: 43, part: 0, uri: "part-43.0.m4s" };
+  assert.equal(parseLlState(raw), null);
+});
+
+test("rejects a preload hint pointing at the wrong segment once the live one is sealed", () => {
+  const raw = fixtureState();
+  raw.video.segments[2].complete = true;
+  raw.video.segments[2].durationSecs = 4.0;
+  raw.video.segments[2].uri = "seg-43.m4s";
+  // Now that msn 43 is sealed, a valid hint must be {msn: 44, part: 0} --
+  // this one still points at the old live edge.
+  raw.video.preloadHint = { msn: 43, part: 1, uri: "part-43.1.m4s" };
+  assert.equal(parseLlState(raw), null);
+
+  const correct = fixtureState();
+  correct.video.segments[2].complete = true;
+  correct.video.segments[2].durationSecs = 4.0;
+  correct.video.segments[2].uri = "seg-43.m4s";
+  correct.video.preloadHint = { msn: 44, part: 0, uri: "part-44.0.m4s" };
+  assert.ok(parseLlState(correct));
+});
+
 test("playlistOriginKindForRung: only the two LL rung names route to the LL origin", () => {
   assert.equal(playlistOriginKindForRung(LL_VIDEO_RUNG), "ll");
   assert.equal(playlistOriginKindForRung(LL_AUDIO_RUNG), "ll");

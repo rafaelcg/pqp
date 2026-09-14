@@ -9,14 +9,19 @@ import test from "node:test";
 // `tsconfig.json`'s `moduleResolution: "Bundler"` requires, which only
 // `tsc` itself resolves.
 //
-// SCOPE: this file exercises ONLY the session/master route
-// (`handlePlaylistRequest` called with `rung` undefined) -- the one branch
-// that never touches `caches.default` or `ctx.waitUntil`, both Workers-only
-// globals `node --test` has no counterpart for. The rendition route (the
-// 2s shared cache, blocking reload) stays untested here for that reason,
-// same as before this file existed.
+// SCOPE: this file exercises the session/master route
+// (`handlePlaylistRequest` called with `rung` undefined), which never
+// touches `caches.default` or `ctx.waitUntil`, both Workers-only globals
+// `node --test` has no counterpart for -- plus ONE slice of the rendition
+// route (`rung` set): the revocation gate, which runs and returns EARLY,
+// before `caches.default` or the blocking-reload machinery are ever
+// reached (see `handlePlaylistRequest`'s "THE FIX FOR..." comment for where
+// that check sits). Anything past that point on the rendition route (the
+// 2s shared cache, blocking reload, the LL token-stamping path) stays
+// untested here for that reason, same as before this file existed.
 import { handlePlaylistRequest } from "../dist/index.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "../src/hls-viewer-token.js";
+import { LL_VIDEO_RUNG } from "../src/ll-state.js";
 
 /** Same minting scheme as `hls-viewer-token.test.mjs` -- see that file's
  * header for why signing with Node's `createHmac` (rather than the
@@ -228,5 +233,65 @@ test("LL master route: LL origin not ready falls through to the API forward, no 
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("X-HLS-Edge-Cache"), "BYPASS");
+  assert.equal(ll.calls, 0);
+});
+
+test("LL rendition route (ll): a revoked viewer is refused before any origin -- API or LL -- is ever selected", async () => {
+  const channelId = "chan-revoked-rendition-1";
+  const startedAt = "1726000000004";
+  const userId = "user-revoked-rendition-1";
+  const issuedAt = NOW - 1_000;
+  const token = tokenFor(userId, channelId, startedAt, issuedAt);
+  const ll = fakeLlOrigin({ ready: true });
+  const env = baseEnv({
+    HLS_REVOKED_USERS: fakeKv([`${userId}:${channelId}:${issuedAt + 500}`]),
+  });
+
+  const response = await handlePlaylistRequest(
+    requestFor(channelId, startedAt, token),
+    { api: fakeApiOrigin(), ll },
+    noopCtx,
+    env,
+    channelId,
+    startedAt,
+    LL_VIDEO_RUNG,
+  );
+
+  assert.equal(response.status, 403);
+  const body = await response.json();
+  assert.equal(body.reason, "revoked");
+  // Neither origin -- and, past that, neither `caches.default` nor the
+  // blocking-reload machinery -- is ever reached: the check returns before
+  // `playlistOriginKindForRung` even runs.
+  assert.equal(ll.calls, 0);
+});
+
+test("LL rendition route (ll): a CHANNEL-WIDE revocation (not just a per-viewer one) also refuses the request", async () => {
+  const channelId = "chan-revoked-rendition-2";
+  const startedAt = "1726000000005";
+  const userId = "user-untouched-1";
+  const issuedAt = NOW - 1_000;
+  const token = tokenFor(userId, channelId, startedAt, issuedAt);
+  const ll = fakeLlOrigin({ ready: true });
+  const env = baseEnv({
+    // No per-viewer key at all -- only the whole-channel prefix, e.g. the
+    // channel going private or being deleted (see party-pass-revocation.js
+    // module doc comment, "TWO PREFIXES PER CHECK, NOT ONE").
+    HLS_REVOKED_USERS: fakeKv([`channel:${channelId}:${issuedAt + 500}`]),
+  });
+
+  const response = await handlePlaylistRequest(
+    requestFor(channelId, startedAt, token),
+    { api: fakeApiOrigin(), ll },
+    noopCtx,
+    env,
+    channelId,
+    startedAt,
+    LL_VIDEO_RUNG,
+  );
+
+  assert.equal(response.status, 403);
+  const body = await response.json();
+  assert.equal(body.reason, "revoked");
   assert.equal(ll.calls, 0);
 });

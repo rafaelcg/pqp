@@ -288,6 +288,64 @@ test("a session with no LL state at all (plain 404) makes the master route retur
   }
 });
 
+test("a conventional session's master request does not wait out the full origin timeout -- MASTER_PROBE_TIMEOUT_MS bounds it", async () => {
+  // A generously long origin timeout (5000ms) that would normally govern
+  // this fetch -- state.json itself answers 404 (no LL session), but only
+  // after a delay well PAST the master route's own short probe deadline.
+  // Without the probe bound, `fetchMultivariantPlaylist` would wait the
+  // full STATE_DELAY_MS before falling back to the API; with it, THIS
+  // request must come back quickly regardless.
+  const STATE_DELAY_MS = 2_500; // comfortably past the module's MASTER_PROBE_TIMEOUT_MS (1_500ms), well inside the 5000ms origin timeout below
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    await new Promise((resolve) => setTimeout(resolve, STATE_DELAY_MS));
+    return { status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+  };
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    const startedAt = Date.now();
+    const result = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(result, null, "a conventional (no-LL) session must still fall back to the API");
+    assert.ok(
+      elapsedMs < STATE_DELAY_MS,
+      `expected the master probe's own short deadline to win before the ${STATE_DELAY_MS}ms origin delay (got ${elapsedMs}ms)`,
+    );
+    assert.equal(calls, 1, "the underlying state.json fetch still happens exactly once, just not waited on by this caller");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a negative probe is cached: a second master request for the same conventional session skips the origin entirely", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return { status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+  };
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    const first = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-1");
+    assert.equal(first, null);
+    assert.equal(calls, 1, "the first request has to ask the origin");
+
+    const second = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-2");
+    assert.equal(second, null);
+    assert.equal(calls, 1, "a second request within the cache TTL must not ask the origin again");
+
+    // A DIFFERENT session (channel) is unaffected by the first session's
+    // cached negative -- the cache key includes channelId/startedAt.
+    const otherChannel = await origin.fetchMultivariantPlaylist("chan_other", STARTED_AT, "token-3");
+    assert.equal(otherChannel, null);
+    assert.equal(calls, 2, "a different session must still be probed on its own");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("a stalled body is bounded by the timeout, not just the headers wait", async () => {
   // Headers answer promptly; the body then stalls far longer than the
   // configured timeout. Before this was fixed, `fetchFromOrigin` cleared
