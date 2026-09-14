@@ -516,6 +516,46 @@ describeDb("reports", () => {
     expect(isInstanceModerator({ clerk_id: owner.clerk_id })).toBe(false);
   });
 
+  /**
+   * The client's nav-visibility cue rides on `GET /api/me` rather than on
+   * probing a route that answers 404 for everyone else — see
+   * `client/src/components/layout/settings-modal.tsx`. Pinned here because a
+   * fetch-based version of that gate once regressed: it fired
+   * `GET /api/reports/all` on every Settings open for every account, which
+   * put a "Failed to load resource: 404" in the browser console of every
+   * non-moderator and broke `theme-switching.spec.ts`'s "no console errors"
+   * assertion in CI.
+   */
+  it("carries isInstanceModerator on /api/me, and it survives a profile edit", async () => {
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+
+    const meOwner = await call<{ isInstanceModerator: boolean }>(
+      owner,
+      "GET",
+      "/api/me",
+    );
+    expect(meOwner.body.isInstanceModerator).toBe(false);
+
+    const meOperator = await call<{ isInstanceModerator: boolean }>(
+      operator,
+      "GET",
+      "/api/me",
+    );
+    expect(meOperator.body.isInstanceModerator).toBe(true);
+
+    // Saving an unrelated profile field must not drop the flag — every
+    // self-service route that hands an account its own `User` shape back
+    // goes through the same `toOwnUser` helper.
+    const patched = await call<{ isInstanceModerator: boolean }>(
+      operator,
+      "PATCH",
+      "/api/me",
+      { displayName: "Operator Renamed" },
+    );
+    expect(patched.status).toBe(200);
+    expect(patched.body.isInstanceModerator).toBe(true);
+  });
+
   // ------------------------------------------------------------- the routes
 
   it("lets a manager open a server's queue and refuses a plain member", async () => {

@@ -1096,8 +1096,28 @@ router.post("/api/desktop/handoff", async ({ req, res, user }) => {
 
 // ---------------------------------------------------------------- profile
 
+/**
+ * `toPublicUser` plus the one field only the account's own owner may see that
+ * `services/users.ts` cannot compute itself: whether this Clerk id is an
+ * instance moderator. Kept here rather than inside `toPublicUser` to avoid a
+ * cycle — `reports.ts` (home of `isInstanceModerator`) already imports from
+ * `users.ts` for `canAccessChannel`.
+ *
+ * Every route that hands an account its own `User` shape back — not
+ * `toPublicUserSummary`, which strangers see — goes through this, or a
+ * moderator's Settings nav loses its "Moderação da instância" door the moment
+ * they save any profile field, since `userSchema.isInstanceModerator`
+ * defaults `false` when the key is simply missing from the response.
+ */
+async function toOwnUser(user: DbUser) {
+  return {
+    ...(await toPublicUser(user)),
+    isInstanceModerator: isInstanceModerator(user),
+  };
+}
+
 router.get("/api/me", async ({ user, ageGate }) => ({
-  ...(await toPublicUser(user)),
+  ...(await toOwnUser(user)),
   // Reachable while the gate is still pending or blocked — it is how the client
   // finds out which of the two it is looking at.
   ageGate,
@@ -1176,7 +1196,7 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
   });
   invalidateUserCache(updated.clerk_id);
   announceProfile(updated);
-  return { ...(await toPublicUser(updated)), ageGate };
+  return { ...(await toOwnUser(updated)), ageGate };
 });
 
 // ------------------------------------------------------------- avatars
@@ -1251,7 +1271,7 @@ router.post("/api/me/avatar/claim", async ({ req, user }) => {
   });
   invalidateUserCache(updated.clerk_id);
   announceProfile(updated);
-  return { user: await toPublicUser(updated) };
+  return { user: await toOwnUser(updated) };
 });
 
 /**
@@ -1270,7 +1290,7 @@ router.delete("/api/me/avatar", async ({ user }) => {
   });
   invalidateUserCache(updated.clerk_id);
   announceProfile(updated);
-  return { user: await toPublicUser(updated) };
+  return { user: await toOwnUser(updated) };
 });
 
 // ------------------------------------------------------------- user banners
@@ -1349,7 +1369,7 @@ router.post("/api/me/banner/claim", async ({ req, user }) => {
   if (updated.previousKey && updated.previousKey !== body.key) {
     void discardBannerObject(updated.previousKey);
   }
-  return { user: await toPublicUser(updated.user) };
+  return { user: await toOwnUser(updated.user) };
 });
 
 /**
@@ -1369,7 +1389,7 @@ router.delete("/api/me/banner", async ({ user }) => {
   if (updated.previousKey) {
     void discardBannerObject(updated.previousKey);
   }
-  return { user: await toPublicUser(updated.user) };
+  return { user: await toOwnUser(updated.user) };
 });
 
 /**

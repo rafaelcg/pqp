@@ -495,6 +495,23 @@ export const userSchema = z.object({
    * not from a second one.
    */
   customStatus: z.string().nullable().default(null),
+  /**
+   * Whether this Clerk id is in `INSTANCE_MODERATOR_CLERK_IDS` — see
+   * `isInstanceModerator` in `server/src/services/reports.ts`, the one and
+   * only place that decides it. Rides down on `/api/me` rather than being
+   * learned by probing a route that answers 404 for everyone else: a probe
+   * fired for every account on every Settings open would put a 404 in every
+   * browser's network console for the near-totality of accounts that are not
+   * moderators, which is exactly the kind of console noise a "no console
+   * errors" check exists to catch. This is a client-side AFFORDANCE ONLY — it
+   * decides whether the Settings nav shows the door, nothing more. Every
+   * route the door leads to (`GET /api/reports/all`,
+   * `PATCH /api/reports/:id`, `POST /api/reports/:id/remove-message`) still
+   * runs its own `isInstanceModerator` check server-side and does not trust
+   * this field at all. Optional and defaulted false so a response from an API
+   * that predates it still parses.
+   */
+  isInstanceModerator: z.boolean().optional().default(false),
 });
 
 /**

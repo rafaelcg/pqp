@@ -146,7 +146,6 @@ import {
   deleteMyAccount,
   deleteUserBanner,
   exportMyData,
-  fetchAllReports,
   fetchUserBannerConfig,
   sendFeedback,
   updateMe,
@@ -3421,52 +3420,31 @@ export function SettingsModal({
   // Camera permission is asked once per open Settings session. Tabbing
   // through the Voice form must not blink the webcam LED on every focus.
   const camerasAskedRef = useRef(false);
-  // Whether this account is an instance moderator, learned from the one route
-  // that answers only for one: `GET /api/reports/all` is 200 for a moderator
-  // and non-200 (usually 404, same gate as `/api/reports/instance`) for
-  // everyone else. Checked once per dialog session rather than kept as a claim
-  // on `user` — the server is the only source of truth for a role env vars
-  // grant, and re-deriving it from a JWT claim here would drift from it.
-  const [canModerateInstance, setCanModerateInstance] = useState(false);
-  const [moderationGateChecked, setModerationGateChecked] = useState(false);
-  const moderationGateAskedRef = useRef(false);
-
-  useEffect(() => {
-    if (!open || moderationGateAskedRef.current) {
-      return;
-    }
-    moderationGateAskedRef.current = true;
-    let cancelled = false;
-    fetchAllReports({ status: "open" })
-      .then(() => {
-        if (!cancelled) {
-          setCanModerateInstance(true);
-        }
-      })
-      .catch(() => {
-        // Any non-200 (almost always 404) means "not visible to this account",
-        // not an error worth surfacing — the nav entry simply never appears.
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setModerationGateChecked(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
+  // Whether this account is an instance moderator — `user.isInstanceModerator`
+  // rides down on every `/api/me`-shaped response (see `toOwnUser` on the
+  // server), computed server-side from `INSTANCE_MODERATOR_CLERK_IDS` and
+  // nothing the client can influence. This is an AFFORDANCE ONLY: it decides
+  // whether the nav shows the door, nothing more. Every route behind it
+  // (`GET /api/reports/all`, `PATCH /api/reports/:id`,
+  // `POST /api/reports/:id/remove-message`) re-checks `isInstanceModerator`
+  // itself and does not trust this flag.
+  //
+  // Deliberately NOT learned by probing a route that answers 404 for
+  // everyone else: firing that probe on every Settings open, for every
+  // account, would put a 404 in the network console of the near-totality of
+  // people who are not moderators — exactly the console noise
+  // `theme-switching.spec.ts`'s "no console errors" check exists to catch.
+  const canModerateInstance = user?.isInstanceModerator ?? false;
 
   // A stale `requestedSection="moderation"` (the dashboard deep link landing
-  // before this account's own gate check has ever run) must not strand the
-  // dialog on a door that turns out not to exist for it — fall back the
-  // moment the gate resolves negative, same target ("profile") the rail's
-  // own out-of-bounds guard below uses.
+  // on an account the flag says no to) must not strand the dialog on a door
+  // that does not exist for it — bounce to the same target ("profile") the
+  // rail's own out-of-bounds guard below uses.
   useEffect(() => {
-    if (moderationGateChecked && !canModerateInstance && section === "moderation") {
+    if (!canModerateInstance && section === "moderation") {
       setSection("profile");
     }
-  }, [moderationGateChecked, canModerateInstance, section]);
+  }, [canModerateInstance, section]);
 
   // The whole nav, minus the moderation door for every account it did not
   // open for. Derived per render rather than mutating the module-level
@@ -3781,11 +3759,10 @@ export function SettingsModal({
               (canModerateInstance ? (
                 <AllReportsSection />
               ) : (
-                // Only reachable by a race (the gate check still in flight
-                // when a deep link lands on this section) — the nav entry
-                // itself never exists for an account the gate says no to,
-                // and the effect above moves off this section the moment it
-                // resolves negative.
+                // Only reachable for the one render before the effect above
+                // bounces off this section — a deep link can land here before
+                // React has run its effects. The nav entry itself never
+                // exists for an account the flag says no to.
                 <p role="status" aria-live="polite" className="text-sm text-paper-muted">
                   {t("common.loading")}
                 </p>
