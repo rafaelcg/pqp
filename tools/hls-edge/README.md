@@ -44,6 +44,24 @@ version of `hls-live-window.ts`'s in-process history on the API) and
 `wrangler.jsonc` has the R2 bucket and Durable Object bindings that work will
 need, commented out until code exists to read them.
 
+**Testing a `.ts` origin directly.** `ApiPlaylistOrigin`/`index.ts` have no
+direct unit test in this package (`tsc --noEmit` plus the pure `.js` modules
+they call into is the coverage), because `tsconfig.json`'s
+`moduleResolution: "Bundler"` lets these files `import "./log.js"` for a
+file that is actually `log.ts` on disk — a convention only a bundler or
+`tsc` itself resolves, not Node's native `--experimental-strip-types`
+loader. `test/ll-playlist-origin.test.mjs` needed real coverage of
+`LlPlaylistOrigin` (Farol's review of this PR's first draft found three of
+its four findings inside that one class), so `npm test`'s `pretest` step now
+runs `tsc -p tsconfig.test-build.json` first, emitting a `dist/` (gitignored,
+matching this repo's `**/dist/` pattern) the test imports from instead of
+the `.ts` source — the compiled output's import specifiers resolve exactly
+the way they were written, since every sibling module lands in the same
+directory. `LlPlaylistOrigin`'s constructor is a plain body rather than
+TypeScript parameter-property shorthand for the same reason: type-stripping
+erases type annotations but cannot inject the `this.field = field`
+assignments a parameter property requires.
+
 ## What it does
 
 For `GET /api/voice/hls-playlist/:channelId/:startedAt(/:rung)?`, the SAME
@@ -273,11 +291,27 @@ segments, and always for the one still being assembled) `EXT-X-PART` lines
 (`DURATION`, `URI`, `INDEPENDENT=YES` exactly when `state.json` says that
 part starts on an IDR) then, once the segment is sealed, `EXTINF` + its URI;
 and one `EXT-X-PRELOAD-HINT:TYPE=PART,URI=...` for the next unwritten part,
-when the origin names one. Every URI carries the viewer's own `?t=` token
-(`HLS_VIEWER_TOKEN_PARAM`), matching PR #572's party-lifetime pass, and is
-relative to `/api/voice/hls-playlist/:channelId/:startedAt/:rung/<name>` —
-never the remux box's own host (see "Why this Worker talks to the remux box
-directly" above).
+when the origin names one. Every URI is relative to
+`/api/voice/hls-playlist/:channelId/:startedAt/:rung/<name>` — never the
+remux box's own host (see "Why this Worker talks to the remux box directly"
+above) — and, in the RENDERED body, carries `LL_TOKEN_PLACEHOLDER`
+(`ll-playlist.js`) rather than a real `?t=` token. **This is deliberate, and
+the opposite of the conventional master's rule.** A first draft of this task
+embedded the real viewer's token directly, matching PR #572's party-lifetime
+rule for the conventional master — but a rendition response, unlike the
+master, flows through `index.ts`'s shared 2s cache and the blocking-reload
+poll-loop coalescer, both keyed on (channel, session, rung) alone, with the
+token deliberately dropped because a CONVENTIONAL body never varies by
+viewer. An LL body embedding a real token broke that invariant: a Farol
+review of this PR caught that the first viewer's bearer token could leak
+into a warm cache/poll-loop entry and be served, and be replayable, by every
+other viewer of that rung. **Fixed**: the rendered/cached/coalesced body is
+token-free (a pure function of `state.json` alone), and `index.ts`'s
+`stampLlToken` substitutes the ACTUAL requesting viewer's token into the
+response on its way out, once per request, never into what gets written
+back into the cache or held by the poll loop. The multivariant (master)
+route is unaffected by any of this — see below, it was never cached in the
+first place.
 
 **The multivariant playlist** lists the video variant
 (`EXT-X-STREAM-INF`, `CODECS` including the video's `avc1.PPCCLL` string)
@@ -293,9 +327,28 @@ audio pipeline is AAC-LC only, so there is nothing to read from
 (`docs/plans/LL_HLS.md` §8's cost table is an estimate, not a per-session
 number) — `DEFAULT_LL_VIDEO_BANDWIDTH_BPS` in `ll-playlist.js` is a
 documented placeholder until `L3.2`'s staging benchmark has a real one.
-Codec strings are cached per `sessionId` for the life of the Worker isolate
-(`LlPlaylistOrigin`'s own small bounded map) — they cannot change mid-session,
-so only the FIRST master request for a session ever fetches an init segment.
+Only the VIDEO codec/geometry is cached per `sessionId` for the life of the
+Worker isolate (`LlPlaylistOrigin`'s own small bounded map) — `avcC` cannot
+change mid-session, so only the FIRST master request for a session ever
+fetches `init.mp4`. **The AUDIO codec is deliberately never cached, and is
+re-derived from the current `state.json` on every master request instead.**
+A first draft cached both together: a session observed video-only on its
+FIRST master request cached `audioCodec: null` forever, and once a speaker
+later joined, every subsequent master request kept reading that stale
+`null` and never grew an audio group for the rest of the isolate's life — a
+Farol review caught this. Concurrent master (and rendition) requests for a
+session with no cache entry yet share ONE `state.json` fetch and ONE
+`init.mp4` fetch via `fetchFromOrigin`'s in-flight de-duplication (the same
+shape `index.ts`'s own `fetchRenditionCoalesced` already uses one layer up)
+— a join burst of viewers produces one round trip to the box, not one per
+viewer; also caught by the same review, since the master route has no
+`index.ts`-level coalescing of its own (it is never cached, by design — see
+above). That de-duplication window is also what now bounds a stalled remux
+response: `fetchFromOrigin` buffers the WHOLE body inside the same
+`AbortController` window the headers wait uses, so a box that answers
+headers and then stalls mid-`state.json`/`init.mp4` fails the request at the
+configured timeout instead of hanging it indefinitely (an earlier version
+cleared the abort timer right after the headers arrived).
 
 ### The `state.json` contract (for `L1.6`/`L2.3`)
 

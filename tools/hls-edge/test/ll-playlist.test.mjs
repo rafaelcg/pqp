@@ -5,6 +5,8 @@ import { parseLiveEdge } from "../src/hls-blocking-reload.js";
 import {
   DEFAULT_LL_VIDEO_BANDWIDTH_BPS,
   KEPT_PART_SEGMENTS,
+  LL_TOKEN_PLACEHOLDER,
+  applyLlRenditionToken,
   buildLlMultivariantPlaylist,
   buildLlRenditionPlaylist,
 } from "../src/ll-playlist.js";
@@ -12,6 +14,11 @@ import { LL_AUDIO_RUNG, LL_VIDEO_RUNG } from "../src/ll-state.js";
 
 const TOKEN = "signed-token-abc";
 const BASE_PATH = "/api/voice/hls-playlist/chan_abc123/1757865600000";
+
+/** Escapes a string for embedding literally inside a `RegExp`. */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /** One complete segment with N parts, the first one independent. */
 function segment(msn, { partCount = 2, complete = true, offsetSecs = 0 } = {}) {
@@ -58,7 +65,6 @@ test("golden LL media playlist: header tags", () => {
   const state = fixtureState();
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
   const lines = text.split("\n");
   assert.equal(lines[0], "#EXTM3U");
@@ -68,21 +74,33 @@ test("golden LL media playlist: header tags", () => {
   assert.equal(lines[4], "#EXT-X-PART-INF:PART-TARGET=0.5");
   assert.equal(lines[5], "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.5");
   assert.equal(lines[6], "#EXT-X-MEDIA-SEQUENCE:41");
-  assert.match(lines[7], /^#EXT-X-MAP:URI="\/api\/voice\/hls-playlist\/chan_abc123\/1757865600000\/ll\/init\.mp4\?t=signed-token-abc"$/);
+  assert.match(
+    lines[7],
+    new RegExp(
+      `^#EXT-X-MAP:URI="/api/voice/hls-playlist/chan_abc123/1757865600000/ll/init\\.mp4\\?t=${escapeRegExp(LL_TOKEN_PLACEHOLDER)}"$`,
+    ),
+  );
 });
 
-test("golden LL media playlist: every URI carries the viewer token, on the rendition's own rung path", () => {
+test("golden LL media playlist: every URI carries the placeholder, never a real token, on the rendition's own rung path", () => {
   const state = fixtureState();
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
   const uriLines = text
     .split("\n")
     .filter((line) => line.length > 0 && !line.startsWith("#"));
   assert.ok(uriLines.length > 0);
+  const suffix = new RegExp(
+    `^/api/voice/hls-playlist/chan_abc123/1757865600000/ll/.+\\?t=${escapeRegExp(LL_TOKEN_PLACEHOLDER)}$`,
+  );
   for (const uri of uriLines) {
-    assert.match(uri, /^\/api\/voice\/hls-playlist\/chan_abc123\/1757865600000\/ll\/.+\?t=signed-token-abc$/);
+    assert.match(uri, suffix);
+    // This function must NEVER be handed a real token: doing so is exactly
+    // the bug a Farol review caught (`ll-playlist.js`'s header) -- a real
+    // token embedded here would be shared across every viewer of a warm
+    // cache entry or blocking-reload poll loop.
+    assert.doesNotMatch(uri, /signed-token/);
   }
 });
 
@@ -90,7 +108,6 @@ test("INDEPENDENT placement: only the first part of each kept segment is marked 
   const state = fixtureState();
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
   const partLines = text.split("\n").filter((line) => line.startsWith("#EXT-X-PART:"));
   assert.ok(partLines.length > 0);
@@ -108,7 +125,6 @@ test("parts are pruned beyond the last KEPT_PART_SEGMENTS complete segments, plu
   const state = fixtureState();
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
   // Complete segments are 41..46 (6 of them); KEPT_PART_SEGMENTS = 3 keeps
   // parts for 44, 45, 46 only -- 41, 42, 43 must have NO #EXT-X-PART lines,
@@ -131,12 +147,11 @@ test("preload hint points at the next part", () => {
   const state = fixtureState();
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
   const preloadLine = text.split("\n").find((line) => line.startsWith("#EXT-X-PRELOAD-HINT:"));
   assert.ok(preloadLine, "expected a preload hint line");
   assert.match(preloadLine, /TYPE=PART/);
-  assert.match(preloadLine, /part-47\.2\.m4s\?t=signed-token-abc/);
+  assert.match(preloadLine, new RegExp(`part-47\\.2\\.m4s\\?t=${escapeRegExp(LL_TOKEN_PLACEHOLDER)}`));
   // Exactly one preload hint, and it is the LAST line before the trailing newline.
   const lines = text.trimEnd().split("\n");
   assert.equal(lines[lines.length - 1], preloadLine);
@@ -147,7 +162,6 @@ test("no preload hint present -> no #EXT-X-PRELOAD-HINT line at all", () => {
   state.video.preloadHint = null;
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
   assert.doesNotMatch(text, /#EXT-X-PRELOAD-HINT/);
 });
@@ -156,7 +170,6 @@ test("the rendered playlist is readable by hls-blocking-reload.js's own parseLiv
   const state = fixtureState();
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
   const edge = parseLiveEdge(text);
   // 6 complete segments (41..46) means the newest complete MSN is 46.
@@ -174,7 +187,6 @@ test("a fully-sealed rendition (no partial segment) has no trailing PART lines a
   state.video.preloadHint = null;
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
   const edge = parseLiveEdge(text);
   assert.equal(edge.lastCompleteMsn, 46);
@@ -200,10 +212,52 @@ test("audio rendition uses the ll-audio rung path", () => {
   };
   const text = buildLlRenditionPlaylist(state, audioTrack, LL_AUDIO_RUNG, {
     basePath: BASE_PATH,
-    token: TOKEN,
   });
-  assert.match(text, /\/ll-audio\/audio-init\.mp4\?t=signed-token-abc/);
-  assert.match(text, /\/ll-audio\/audio-seg-41\.m4s\?t=signed-token-abc/);
+  assert.match(text, new RegExp(`/ll-audio/audio-init\\.mp4\\?t=${escapeRegExp(LL_TOKEN_PLACEHOLDER)}`));
+  assert.match(text, new RegExp(`/ll-audio/audio-seg-41\\.m4s\\?t=${escapeRegExp(LL_TOKEN_PLACEHOLDER)}`));
+});
+
+test("applyLlRenditionToken stamps a real token into every placeholder occurrence", () => {
+  const state = fixtureState();
+  const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
+  assert.match(text, new RegExp(escapeRegExp(LL_TOKEN_PLACEHOLDER)));
+
+  const stamped = applyLlRenditionToken(text, TOKEN);
+  assert.doesNotMatch(stamped, new RegExp(escapeRegExp(LL_TOKEN_PLACEHOLDER)), "no placeholder should survive stamping");
+  const uriLines = stamped.split("\n").filter((line) => line.length > 0 && !line.startsWith("#"));
+  assert.ok(uriLines.length > 0);
+  for (const uri of uriLines) {
+    assert.match(uri, /\?t=signed-token-abc$/);
+  }
+});
+
+test("applyLlRenditionToken is a no-op on text with no placeholder (e.g. a conventional body, or an LL 404)", () => {
+  assert.equal(applyLlRenditionToken("plain text, no placeholder here", TOKEN), "plain text, no placeholder here");
+  assert.equal(applyLlRenditionToken("Not found", TOKEN), "Not found");
+});
+
+test("two viewers sharing the SAME cached/coalesced rendition body each get only their own token stamped in", () => {
+  // Simulates index.ts's shared cache / blocking-reload poll loop: ONE
+  // rendered body (built once, with the placeholder, exactly as it would be
+  // cached or coalesced across concurrent viewers) is stamped independently
+  // per viewer. Neither viewer's token may appear in the other's response,
+  // and the shared source text itself must stay untouched by either call
+  // (stamping never mutates the cached copy in place).
+  const state = fixtureState();
+  const sharedRenderedBody = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
+
+  const aliceToken = "alice-token-111";
+  const bobToken = "bob-token-222";
+  const aliceResponse = applyLlRenditionToken(sharedRenderedBody, aliceToken);
+  const bobResponse = applyLlRenditionToken(sharedRenderedBody, bobToken);
+
+  assert.match(aliceResponse, /\?t=alice-token-111/);
+  assert.doesNotMatch(aliceResponse, /bob-token-222/);
+  assert.match(bobResponse, /\?t=bob-token-222/);
+  assert.doesNotMatch(bobResponse, /alice-token-111/);
+  // The shared source text (what a cache entry or poll-loop state would
+  // actually hold) is untouched by either viewer's stamping.
+  assert.match(sharedRenderedBody, new RegExp(escapeRegExp(LL_TOKEN_PLACEHOLDER)));
 });
 
 test("golden multivariant playlist: video only, no audio group", () => {

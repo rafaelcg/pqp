@@ -32,11 +32,7 @@
  * WHAT THE URIS POINT AT. Every URI this file emits is relative to
  * `opts.basePath` (this Worker's own viewer-facing route root,
  * `/api/voice/hls-playlist/:channelId/:startedAt` — see `playlist-route.ts`)
- * plus `/{rung}/{name}`, with the viewer's own `?t=` token appended
- * (`hls-viewer-token.js`'s `HLS_VIEWER_TOKEN_PARAM`), matching PR #572's
- * party-lifetime pass: the token stays on every URI this Worker hands out,
- * the same rule the conventional master (`buildMasterPlaylistFor` on the
- * API) already follows. These are DELIBERATELY NEVER the remux origin's own
+ * plus `/{rung}/{name}`. These are DELIBERATELY NEVER the remux origin's own
  * host — `hls-remux.ts`'s doc comment on `llPlaylistUrl` explains why a raw
  * origin URL must never reach a client: it is a bearer link nothing can
  * revoke short of ending the session. `/{rung}/{name}` is the shape
@@ -45,6 +41,29 @@
  * these gets a 404 from THIS Worker (no route matches it yet) rather than a
  * bypass URL, which is the same "wired, not yet reachable" shape the rest of
  * this plan uses throughout (flags, allowlists, `origin_base_url` unset).
+ *
+ * THE TOKEN, AND WHY `buildLlRenditionPlaylist` NEVER TAKES ONE. PR #572's
+ * party-lifetime pass established that the viewer's own `?t=` token stays on
+ * every URI this Worker hands out — true for the master (`buildMasterPlaylistFor`
+ * on the API, and `buildLlMultivariantPlaylist` below, neither of which is
+ * ever cached) but NOT safely true for a RENDITION playlist that goes
+ * through `index.ts`'s shared 2s cache and blocking-reload poll-loop
+ * coalescer, which key on (channel, session, rung) alone — no token — on the
+ * premise that the body is identical for every viewer of that rung in that
+ * window. A first draft of this file embedded the REQUESTING viewer's real
+ * token directly, which broke that premise: a Farol review of this PR
+ * caught that the cached/coalesced entry then handed one viewer's bearer
+ * token to every other viewer who hit the same warm entry, readable and
+ * reusable by them even after the original viewer's own token expired or
+ * was revoked. **Fixed**: `buildLlRenditionPlaylist` renders every URI with
+ * the fixed, non-secret `LL_TOKEN_PLACEHOLDER` string instead of a real
+ * token, so its OUTPUT is a pure function of `(state, rung, basePath)` again
+ * — safe to cache and coalesce exactly like a conventional rendition body.
+ * `applyLlRenditionToken` is the one substitution step that turns that
+ * shared text into a specific viewer's playable response, and it must run
+ * AFTER the cache/coalescer, once per outgoing response, never before
+ * (`index.ts`'s `stampLlToken`, called only on the response actually being
+ * returned to a request, never on what gets written into the cache).
  */
 
 import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
@@ -70,6 +89,17 @@ export const KEPT_PART_SEGMENTS = 3;
 export const DEFAULT_LL_VIDEO_BANDWIDTH_BPS = 4_000_000;
 
 /**
+ * Stands in for a real `?t=` token in every URI `buildLlRenditionPlaylist`
+ * emits — see this file's header, "THE TOKEN, AND WHY...". Not a secret and
+ * not itself usable as a token: it exists purely so the rendered text is
+ * identical for every viewer, and is replaced with a real one by
+ * `applyLlRenditionToken` after the cache/coalescer, per response. Chosen to
+ * contain no URI-reserved characters, so it round-trips through a `URL`
+ * unmodified and is trivial to find-and-replace with a plain string split.
+ */
+export const LL_TOKEN_PLACEHOLDER = "__PQP_LL_TOKEN_PLACEHOLDER__";
+
+/**
  * @param {string} uri
  * @param {string} token
  * @returns {string}
@@ -77,6 +107,24 @@ export const DEFAULT_LL_VIDEO_BANDWIDTH_BPS = 4_000_000;
 function withToken(uri, token) {
   const separator = uri.includes("?") ? "&" : "?";
   return `${uri}${separator}${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(token)}`;
+}
+
+/**
+ * The one substitution that turns a cached/coalesced, placeholder-bearing LL
+ * rendition body into a specific viewer's playable response — a plain
+ * string `split`/`join` rather than a `RegExp`, since `LL_TOKEN_PLACEHOLDER`
+ * is a fixed literal with no regex metacharacters to worry about escaping.
+ * Pure and total: text with no placeholder in it (any conventional
+ * playlist, or an LL error body like "Not found") comes back byte-for-byte
+ * unchanged, so callers do not need to special-case "was this actually an
+ * LL body" before calling it.
+ *
+ * @param {string} playlistText
+ * @param {string} token
+ * @returns {string}
+ */
+export function applyLlRenditionToken(playlistText, token) {
+  return playlistText.split(LL_TOKEN_PLACEHOLDER).join(encodeURIComponent(token));
 }
 
 /**
@@ -117,16 +165,21 @@ function formatPartLine(part, basePath, rung, token) {
 
 /**
  * One rung's LL media playlist — the body a viewer's player polls or
- * blocking-reloads.
+ * blocking-reloads. Takes NO token (see this file's header, "THE TOKEN,
+ * AND WHY..."): every URI carries `LL_TOKEN_PLACEHOLDER` instead, so this
+ * function's output is a pure function of `(state, rung, basePath)` and
+ * safe to cache/coalesce across viewers exactly like a conventional
+ * rendition. `applyLlRenditionToken` turns it into one viewer's response.
  *
  * @param {import("./ll-state.js").LlSessionState} state
  * @param {import("./ll-state.js").LlTrackState} track
  * @param {string} rung
- * @param {{ basePath: string, token: string }} opts
+ * @param {{ basePath: string }} opts
  * @returns {string}
  */
 export function buildLlRenditionPlaylist(state, track, rung, opts) {
-  const { basePath, token } = opts;
+  const { basePath } = opts;
+  const token = LL_TOKEN_PLACEHOLDER;
   const partTargetSecs = state.partTargetMs / 1000;
   const partHoldBackSecs = partTargetSecs * PART_HOLD_BACK_MULTIPLIER;
   const targetDuration = Math.max(1, Math.ceil(state.targetDurationSecs));

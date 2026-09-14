@@ -100,6 +100,7 @@ import {
 import { parsePlaylistPath } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { LlPlaylistOrigin } from "./ll-playlist-origin.js";
+import { applyLlRenditionToken } from "./ll-playlist.js";
 import { playlistOriginKindForRung } from "./ll-state.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
@@ -538,6 +539,13 @@ async function handlePlaylistRequest(
   // rung" 404 rather than inventing a new failure shape.
   const origin: PlaylistOrigin =
     playlistOriginKindForRung(rung) === "ll" && origins.ll.ready ? origins.ll : origins.api;
+  // Gates `stampLlToken` below: an LL rendition body is rendered with
+  // `LL_TOKEN_PLACEHOLDER` (`ll-playlist.js`), never a real token, so it is
+  // safe to cache/coalesce across viewers -- but that means it must be
+  // turned back into a playable, per-viewer response before this Worker
+  // returns it. Reference equality against `origins.ll`, not the rung name,
+  // so the check tracks exactly which origin actually answered.
+  const isLlRendition = origin === origins.ll;
 
   // A rendition request carrying a directive skips the 2 s cache entirely —
   // see hls-blocking-reload.js's module doc comment for why a hold is not a
@@ -571,7 +579,7 @@ async function handlePlaylistRequest(
     // served the ordinary way below -- the non-blocking cache-or-forward
     // path -- rather than evicting or starving something already active.
     if (blockingResponse) {
-      return blockingResponse;
+      return isLlRendition ? await stampLlToken(blockingResponse, token!) : blockingResponse;
     }
   }
 
@@ -582,7 +590,8 @@ async function handlePlaylistRequest(
     noteCacheHit(channelId, rung);
     const headers = new Headers(cached.headers);
     headers.set("X-HLS-Edge-Cache", "HIT");
-    return new Response(cached.body, { status: cached.status, headers });
+    const response = new Response(cached.body, { status: cached.status, headers });
+    return isLlRendition ? await stampLlToken(response, token!) : response;
   }
 
   // A CACHE MISS NEEDS AN ORIGIN-VERIFIABLE TOKEN, AND A PARTY PASS IS NOT
@@ -664,7 +673,29 @@ async function handlePlaylistRequest(
 
   const response = new Response(fetched.body, { status: 200, headers: new Headers(headers) });
   response.headers.set("X-HLS-Edge-Cache", "MISS");
-  return response;
+  // `toCache` above (what gets written into the shared cache) is built from
+  // the SAME `fetched.body` the LL origin rendered with `LL_TOKEN_PLACEHOLDER`
+  // -- stamping only happens here, on the copy actually leaving the Worker
+  // for THIS request, never on what other viewers will later read back out
+  // of the cache.
+  return isLlRendition ? await stampLlToken(response, token!) : response;
+}
+
+/**
+ * The shared/coalesced LL rendition body is deliberately token-FREE
+ * (`ll-playlist.js`'s `LL_TOKEN_PLACEHOLDER`) so it can be cached and
+ * coalesced across viewers exactly like a conventional rendition — this is
+ * the one place that turns it back into a playable response for THIS
+ * specific viewer, stamping their own token into every URI right before it
+ * leaves the Worker. Callers gate this on `isLlRendition`
+ * (`origin === origins.ll`) rather than calling it unconditionally: a
+ * conventional body never contains the placeholder, so calling this on one
+ * would just be a wasted read-and-rebuild of every conventional response.
+ */
+async function stampLlToken(response: Response, token: string): Promise<Response> {
+  const text = await response.text();
+  const headers = new Headers(response.headers);
+  return new Response(applyLlRenditionToken(text, token), { status: response.status, headers });
 }
 
 /**

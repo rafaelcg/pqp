@@ -26,6 +26,13 @@
  * A session this Worker cannot confidently render as LL must never come
  * back as a 502 where the API would have answered it as
  * conventional-with-no-LL-rung; see that call site's own comment for why.
+ *
+ * `fetchPlaylist` renders with `LL_TOKEN_PLACEHOLDER`, never a real token —
+ * see `ll-playlist.js`'s header. This is what lets `index.ts` cache and
+ * coalesce an LL rendition response exactly like a conventional one; a
+ * Farol review of this PR's first draft caught that embedding the real
+ * token here leaked one viewer's bearer credential into the shared
+ * cache/coalescer's entry, readable by every other viewer who hit it warm.
  */
 
 import { AAC_LC_CODEC, extractAvc1VideoInfo } from "./ll-init-codecs.js";
@@ -44,14 +51,19 @@ import {
 import type { PlaylistFetch, PlaylistOrigin } from "./playlist-origin.js";
 import { logEvent } from "./log.js";
 
-/** Bound on the per-session codec cache — same shape as `index.ts`'s `rejectionLog`: a churn of many short LL sessions must not grow this forever. */
-const CODEC_CACHE_MAX_ENTRIES = 200;
+/** Bound on the per-session video-codec cache — same shape as `index.ts`'s `rejectionLog`: a churn of many short LL sessions must not grow this forever. */
+const VIDEO_CODEC_CACHE_MAX_ENTRIES = 200;
 
-interface CachedCodecs {
+/**
+ * Only the VIDEO half of a session's codec info is cached — it is read off
+ * `avcC` in `init.mp4`, which cannot change for the session's lifetime once
+ * written. The AUDIO codec is deliberately NOT part of this shape: see
+ * `videoCodecFor`'s doc comment for why caching it too was a real bug.
+ */
+interface CachedVideoCodec {
   videoCodec: string;
   videoWidth: number;
   videoHeight: number;
-  audioCodec: string | null;
 }
 
 function statePath(sessionId: string): string {
@@ -67,20 +79,78 @@ function renditionBasePath(channelId: string, startedAt: string): string {
   return `/api/voice/hls-playlist/${encodeURIComponent(channelId)}/${startedAt}`;
 }
 
-export class LlPlaylistOrigin implements PlaylistOrigin {
-  private readonly codecCache = new Map<string, CachedCodecs>();
+/** One fully-buffered remux-origin response: status plus the whole body, read inside the SAME abort window `fetchFromOrigin` opened — see that method's doc comment for why. */
+interface BufferedOriginResponse {
+  status: number;
+  ok: boolean;
+  body: ArrayBuffer;
+}
 
-  constructor(
-    private readonly originBase: string | undefined,
-    private readonly timeoutMs: number,
-  ) {}
+export class LlPlaylistOrigin implements PlaylistOrigin {
+  private readonly originBase: string | undefined;
+  private readonly timeoutMs: number;
+  private readonly videoCodecCache = new Map<string, CachedVideoCodec>();
+
+  /**
+   * In-flight de-duplication, keyed by the exact path fetched (a
+   * `state.json` path IS `${channelId}:${startedAt}`-unique because the
+   * `sessionId` it is derived from already is) — collapses a join burst's
+   * simultaneous `fetchState`/video-init calls into ONE real fetch, the
+   * same shape `index.ts`'s own `fetchRenditionCoalesced` already uses for
+   * rendition requests. This is de-duplication, not caching: an entry lives
+   * only from the first caller's request to its settlement (`finally`
+   * deletes it), so it composes with, and does not replace, the durable
+   * `videoCodecCache` above. NOT used for `state.json` itself past this
+   * de-dup window, on purpose — a session's state changes every part
+   * (~500ms), so caching it beyond "however many viewers asked in the same
+   * instant" would serve stale segments/parts, unlike the codec string.
+   */
+  private readonly inFlight = new Map<string, Promise<BufferedOriginResponse>>();
+
+  // A plain constructor body, not TypeScript parameter-property shorthand:
+  // this class is exercised directly by `test/ll-playlist-origin.test.mjs`
+  // under Node's native type-stripping (`node --experimental-strip-types`),
+  // which erases type annotations but cannot inject the
+  // `this.field = field` assignments parameter properties require --
+  // `tsc --noEmit` doesn't care either way, but the test runner does.
+  constructor(originBase: string | undefined, timeoutMs: number) {
+    this.originBase = originBase;
+    this.timeoutMs = timeoutMs;
+  }
 
   get ready(): boolean {
     return Boolean(this.originBase);
   }
 
-  /** One bounded fetch against the remux origin (state.json or an init segment) — never a viewer-facing route. */
-  private async fetchFromOrigin(path: string): Promise<Response> {
+  /**
+   * One bounded, de-duplicated, FULLY BUFFERED fetch against the remux
+   * origin (`state.json` or an init segment) — never a viewer-facing route.
+   *
+   * BUFFERS THE BODY INSIDE THE SAME ABORT WINDOW. A first version of this
+   * method returned as soon as `fetch()` resolved and cleared its timer in
+   * a `finally` right there — which only bounds the time to receive
+   * RESPONSE HEADERS. A Farol review caught that a remux which sends
+   * headers and then stalls mid-body (a large `init.mp4`, or `state.json`
+   * dribbling out) was then read with NO deadline at all by whichever
+   * caller ran `response.json()`/`.arrayBuffer()` afterward, since the
+   * timer had already been cleared. Reading the whole body here, before
+   * `finally` runs, means one timeout covers the ENTIRE exchange — the same
+   * fix `ApiPlaylistOrigin.fetchPlaylist` already applies, for the same
+   * reason (see that method's own doc comment).
+   */
+  private fetchFromOrigin(path: string): Promise<BufferedOriginResponse> {
+    const existing = this.inFlight.get(path);
+    if (existing) {
+      return existing;
+    }
+    const promise = this.fetchFromOriginUncoalesced(path);
+    this.inFlight.set(path, promise);
+    return promise.finally(() => {
+      this.inFlight.delete(path);
+    });
+  }
+
+  private async fetchFromOriginUncoalesced(path: string): Promise<BufferedOriginResponse> {
     if (!this.originBase) {
       // The caller is expected to check `ready` first, same contract as
       // `ApiPlaylistOrigin.fetchPlaylist` — reaching this is a bug in this
@@ -91,7 +161,9 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      return await fetch(url, { signal: controller.signal });
+      const response = await fetch(url, { signal: controller.signal });
+      const body = await response.arrayBuffer();
+      return { status: response.status, ok: response.ok, body };
     } finally {
       clearTimeout(timer);
     }
@@ -101,21 +173,25 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    * `sessionId` (recomputed, never looked up — `ll-session.js`) plus the
    * parsed `state.json`, or `null` when this specific (channelId, startedAt)
    * has no LL session at all (a plain 404 from the origin — the ordinary
-   * "this party is conventional" case, not a failure).
+   * "this party is conventional" case, not a failure). Concurrent callers
+   * for the SAME session share one origin fetch via `fetchFromOrigin`'s
+   * in-flight map — a join burst of viewers or master requests for one
+   * party produces one `state.json` fetch, not one per caller.
    */
   private async fetchState(
     channelId: string,
     startedAt: string,
   ): Promise<{ sessionId: string; state: LlSessionState } | null> {
     const sessionId = await deriveLlSessionId(channelId, Number(startedAt));
-    const response = await this.fetchFromOrigin(statePath(sessionId));
-    if (response.status === 404) {
+    const fetched = await this.fetchFromOrigin(statePath(sessionId));
+    if (fetched.status === 404) {
       return null;
     }
-    if (!response.ok) {
-      throw new Error(`state.json fetch failed: ${response.status}`);
+    if (!fetched.ok) {
+      throw new Error(`state.json fetch failed: ${fetched.status}`);
     }
-    const parsed = parseLlState(await response.json());
+    const text = new TextDecoder().decode(fetched.body);
+    const parsed = parseLlState(JSON.parse(text));
     if (!parsed) {
       throw new Error("state.json failed validation");
     }
@@ -126,6 +202,14 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    * `PlaylistOrigin.fetchPlaylist`: one rung's LL media playlist. Only ever
    * called by `index.ts` for `rung === LL_VIDEO_RUNG || LL_AUDIO_RUNG` — see
    * that file's origin-selection comment.
+   *
+   * Renders with `LL_TOKEN_PLACEHOLDER`, ignoring `req.token` entirely for
+   * the BODY (kept on `PlaylistFetch` only because the interface is shared
+   * with `ApiPlaylistOrigin`, which DOES need a real token to authorize
+   * against the API) — see `ll-playlist.js`'s header for why the body must
+   * stay token-free to be safely cached/coalesced by `index.ts`.
+   * `index.ts`'s `stampLlToken` is what turns this response into a specific
+   * viewer's playable one, applied AFTER caching/coalescing, never here.
    */
   async fetchPlaylist(req: PlaylistFetch): Promise<Response> {
     if (req.rung !== LL_VIDEO_RUNG && req.rung !== LL_AUDIO_RUNG) {
@@ -143,10 +227,7 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       return new Response("Not found", { status: 404 });
     }
     const basePath = renditionBasePath(req.channelId, req.startedAt);
-    const text = buildLlRenditionPlaylist(found.state, track, req.rung, {
-      basePath,
-      token: req.token,
-    });
+    const text = buildLlRenditionPlaylist(found.state, track, req.rung, { basePath });
     return new Response(text, {
       status: 200,
       headers: { "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8" },
@@ -157,7 +238,10 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    * The multivariant playlist for the session/master route, or `null` when
    * this Worker should not answer with one at all (no LL session; origin
    * unreachable; a `state.json` or init segment this file can't make sense
-   * of). See this file's header, "FAILS TOWARD...".
+   * of). See this file's header, "FAILS TOWARD...". Called directly, per
+   * request, with the CALLER's own real token (this route is never cached —
+   * see `ll-playlist.js`'s header and `index.ts`'s own comment on the
+   * session/master route for why that has always been true, LL or not).
    */
   async fetchMultivariantPlaylist(
     channelId: string,
@@ -175,15 +259,20 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       return null;
     }
     try {
-      const codecs = await this.codecsFor(found.sessionId, found.state);
+      const videoCodec = await this.videoCodecFor(found.sessionId, found.state);
+      // Derived FRESH from the state THIS request just fetched, never
+      // cached — see `videoCodecFor`'s doc comment for why caching this
+      // half was a real bug (a session that starts video-only and grows
+      // audio later would otherwise never see the audio group appear).
+      const audioCodec = found.state.audio ? AAC_LC_CODEC : null;
       const basePath = renditionBasePath(channelId, startedAt);
       const text = buildLlMultivariantPlaylist(found.state, {
         basePath,
         token,
-        videoCodec: codecs.videoCodec,
-        videoWidth: codecs.videoWidth,
-        videoHeight: codecs.videoHeight,
-        audioCodec: codecs.audioCodec,
+        videoCodec: videoCodec.videoCodec,
+        videoWidth: videoCodec.videoWidth,
+        videoHeight: videoCodec.videoHeight,
+        audioCodec,
       });
       return new Response(text, {
         status: 200,
@@ -199,37 +288,52 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     }
   }
 
-  /** Codec strings never change for a session's lifetime, so one successful read is cached for every later master request this isolate serves. */
-  private async codecsFor(sessionId: string, state: LlSessionState): Promise<CachedCodecs> {
-    const cached = this.codecCache.get(sessionId);
+  /**
+   * Only the VIDEO codec/geometry is memoized here, and only once
+   * successfully read — `avcC` in `init.mp4` cannot change for a session's
+   * lifetime, so every later master request for the same session reuses it
+   * with no origin fetch at all.
+   *
+   * A first version of this method cached the AUDIO codec alongside the
+   * video one, computed from whatever `state.audio` happened to be on the
+   * FIRST request that populated the cache. `state.json`'s own contract
+   * (`ll-state.js`) says audio is legitimately absent until a stage source
+   * has spoken — so a session observed video-only on its very first master
+   * request cached `audioCodec: null` forever, and once a speaker DID join,
+   * every later master request kept reading that stale cached `null` and
+   * never grew an audio group for the rest of the Worker isolate's life. A
+   * Farol review caught this. The fix is this method's scope: it now knows
+   * nothing about audio at all, so there is nothing here left to go stale.
+   *
+   * Concurrent master requests for a session with no cached entry yet share
+   * one video-init fetch via `fetchFromOrigin`'s in-flight de-duplication —
+   * a join burst produces one `init.mp4` transfer, not one per viewer.
+   */
+  private async videoCodecFor(sessionId: string, state: LlSessionState): Promise<CachedVideoCodec> {
+    const cached = this.videoCodecCache.get(sessionId);
     if (cached) {
       return cached;
     }
-    const videoInitResponse = await this.fetchFromOrigin(originAssetPath(sessionId, state.video.initUri));
-    if (!videoInitResponse.ok) {
-      throw new Error(`video init fetch failed: ${videoInitResponse.status}`);
+    const fetched = await this.fetchFromOrigin(originAssetPath(sessionId, state.video.initUri));
+    if (!fetched.ok) {
+      throw new Error(`video init fetch failed: ${fetched.status}`);
     }
-    const videoInfo = extractAvc1VideoInfo(await videoInitResponse.arrayBuffer());
+    const videoInfo = extractAvc1VideoInfo(fetched.body);
     if (!videoInfo) {
       throw new Error("video init segment did not yield an avcC box");
     }
-    // AAC-LC never varies for this pipeline (`ll-init-codecs.js`'s own doc
-    // comment) — no need to fetch and parse `audio-init.mp4`'s `esds` box
-    // just to learn a constant.
-    const audioCodec = state.audio ? AAC_LC_CODEC : null;
-    const result: CachedCodecs = {
+    const result: CachedVideoCodec = {
       videoCodec: videoInfo.codec,
       videoWidth: videoInfo.width,
       videoHeight: videoInfo.height,
-      audioCodec,
     };
-    if (this.codecCache.size >= CODEC_CACHE_MAX_ENTRIES) {
-      const oldestKey = this.codecCache.keys().next().value;
+    if (this.videoCodecCache.size >= VIDEO_CODEC_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.videoCodecCache.keys().next().value;
       if (oldestKey !== undefined) {
-        this.codecCache.delete(oldestKey);
+        this.videoCodecCache.delete(oldestKey);
       }
     }
-    this.codecCache.set(sessionId, result);
+    this.videoCodecCache.set(sessionId, result);
     return result;
   }
 }
