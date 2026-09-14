@@ -219,15 +219,22 @@ validate_env() {
         log "limiter=docker but the docker daemon is not reachable (docker info failed)."
         ok=0
       elif [ "$DRY_RUN" -eq 0 ]; then
-        # Pull (or confirm cached) up front, outside any profile's timing
-        # window -- a first-run pull inside the timed run would otherwise
-        # inflate wall time and could read as a false FAIL.
-        log "docker: reachable, warming image $DOCKER_IMAGE ..."
-        if ! docker pull "$DOCKER_IMAGE" >/dev/null 2>&1; then
-          log "failed to pull $DOCKER_IMAGE. Check network access from this box, or --docker-image an image already cached locally."
-          ok=0
+        # Warm the image up front, outside any profile's timing window -- a
+        # first-run pull inside the timed run would otherwise inflate wall
+        # time and could read as a false FAIL. A box already carrying the
+        # image (staged ahead of time, or offline/network-restricted) must
+        # not be blocked on reaching the registry: only pull when the tag
+        # is not already cached locally.
+        if docker image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
+          log "docker: reachable, image already cached: $DOCKER_IMAGE"
         else
-          log "docker image ready: $DOCKER_IMAGE"
+          log "docker: reachable, warming image $DOCKER_IMAGE ..."
+          if ! docker pull "$DOCKER_IMAGE" >/dev/null 2>&1; then
+            log "failed to pull $DOCKER_IMAGE and no cached copy exists locally. Check network access from this box, or pre-stage the image, or --docker-image an image already cached."
+            ok=0
+          else
+            log "docker image ready: $DOCKER_IMAGE"
+          fi
         fi
       else
         log "docker: reachable, will use image $DOCKER_IMAGE"
@@ -393,16 +400,19 @@ run_profile_docker() {
     mkdir -p "$outdir/$leg"
   done
 
-  # --source-file: mount its directory read-only and point ffmpeg at the
-  # in-container path for the duration of this profile only. A plain host
-  # path (e.g. /tmp/clip.mp4) does not exist inside the container.
+  # --source-file: bind-mount the FILE ITSELF (not its directory) read-only
+  # and point ffmpeg at the in-container path for the duration of this
+  # profile only. A plain host path (e.g. /tmp/clip.mp4) does not exist
+  # inside the container. Mounting just the file, rather than its parent
+  # directory, keeps the container from seeing whatever else happens to
+  # live alongside the clip on the host.
   local src_mount=()
   local saved_effective_source="$EFFECTIVE_SOURCE_FILE"
   if [ -n "$SOURCE_FILE" ]; then
-    local src_dir src_base
-    src_dir="$(cd "$(dirname "$SOURCE_FILE")" && pwd)"
+    local src_base src_abs
     src_base="$(basename "$SOURCE_FILE")"
-    src_mount=(-v "$src_dir:/src:ro")
+    src_abs="$(cd "$(dirname "$SOURCE_FILE")" && pwd)/$src_base"
+    src_mount=(-v "$src_abs:/src/$src_base:ro")
     EFFECTIVE_SOURCE_FILE="/src/$src_base"
   fi
 
@@ -427,13 +437,18 @@ run_profile_docker() {
     "$DOCKER_IMAGE" "/out/run-inside-container.sh" >/dev/null
 
   # This box is shared with real transcodes (see README). If the operator
-  # kills this script or the SSH session drops, do not leave a detached
-  # container pegging CPU behind -- --rm only cleans up a container that has
-  # already stopped, not one still running when we exit uncleanly.
-  trap 'docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT INT TERM
+  # kills this script, presses Ctrl-C, or the SSH session drops (SIGHUP), do
+  # not leave a detached container pegging CPU behind -- --rm only cleans up
+  # a container that has already stopped, not one still running when we
+  # exit uncleanly. Installing a trap replaces bash's default "just die" for
+  # INT/TERM/HUP, so the handler must exit explicitly too, or Ctrl-C would
+  # silently stop only the container and let the script carry on to the
+  # next profile as though this one had finished normally.
+  trap 'docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT
+  trap 'docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true; log "interrupted, stopped $CONTAINER_NAME"; exit 130' INT TERM HUP
 
-  sample_docker_and_wait "$CONTAINER_NAME" "$outdir"
-  trap - EXIT INT TERM
+  sample_docker_and_wait "$CONTAINER_NAME" "$outdir" || true
+  trap - EXIT INT TERM HUP
 
   check_legs_done "$outdir" "${legs[@]}"
 }
@@ -443,12 +458,25 @@ sample_docker_and_wait() {
   local samples="$outdir/cpu-samples.txt"
   : > "$samples"
   local ps_out stat
+  local consecutive_failures=0
+  local max_consecutive_failures=30 # ~30s of a wedged daemon, not forever
   while true; do
     if ! ps_out="$(docker ps --format '{{.Names}}' 2>&1)"; then
-      log "warning: 'docker ps' failed while monitoring ($ps_out); retrying"
+      consecutive_failures=$((consecutive_failures + 1))
+      log "warning: 'docker ps' failed while monitoring ($ps_out); retry $consecutive_failures/$max_consecutive_failures"
+      if [ "$consecutive_failures" -ge "$max_consecutive_failures" ]; then
+        # A genuinely wedged daemon must not spin this loop forever. Give
+        # up on this profile; check_legs_done downstream will find no
+        # LEG_DONE marker for any leg and correctly report it as failed
+        # rather than this function silently pretending the run finished.
+        log "docker daemon unresponsive for ${max_consecutive_failures}s, giving up on this profile"
+        docker stop "$name" >/dev/null 2>&1 || true
+        return 1
+      fi
       sleep 1
       continue
     fi
+    consecutive_failures=0
     if ! printf '%s\n' "$ps_out" | grep -qx "$name"; then
       break
     fi
@@ -652,7 +680,7 @@ for profile in $PROFILES_TO_RUN; do
     EFFECTIVE_SOURCE_FILE="$preview_saved_source"
     if [ "$RESOLVED_LIMITER" = "docker" ]; then
       mount_note=""
-      [ -n "$SOURCE_FILE" ] && mount_note=", -v <$(dirname "$SOURCE_FILE")>:/src:ro"
+      [ -n "$SOURCE_FILE" ] && mount_note=", -v <$SOURCE_FILE>:/src/$(basename "$SOURCE_FILE"):ro"
       log "  would run inside: docker run --rm --cpus=$CPUS -v <outdir>:/out${mount_note} $DOCKER_IMAGE (all legs backgrounded together)"
     elif [ "$RESOLVED_LIMITER" = "taskset" ]; then
       log "  would run under: taskset -c <cores for $CPUS> (all legs backgrounded together)"
