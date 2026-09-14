@@ -145,6 +145,8 @@ export function clearAuthCaches(): void {
   userCache.clear();
   userInflight.clear();
   evictionGeneration.clear();
+  evictionInFlightCount.clear();
+  evictionExpiresAt.clear();
 }
 
 /**
@@ -172,8 +174,11 @@ export function sweepAuthCaches(now = Date.now()): void {
       userCache.delete(key);
     }
   }
-  // `evictionGeneration` is deliberately NOT swept here — see its own doc
-  // comment for why a TTL on that map defeats the guard it exists to provide.
+  // Bounded the way `evictionGeneration`'s own doc comment describes: a
+  // tombstone whose clock has started (nothing left in flight for that id)
+  // and whose TTL has passed. One that is still mid-lookup is never touched
+  // here regardless of `now`.
+  sweepEvictionGenerations(now);
 }
 
 /** Test helper: how many entries each cache is holding. */
@@ -270,8 +275,10 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
 
   // Snapshot before the `await` below — see `evictionGeneration`'s doc
   // comment. An eviction that lands while this lookup is in flight must not
-  // be undone by this lookup's own completion.
+  // be undone by this lookup's own completion, and its tombstone must not
+  // expire while this lookup is still the reason it needs to hold.
   const startGeneration = currentEvictionGeneration(clerkId);
+  beginEvictionLookup(clerkId);
   const request = (async () => {
     try {
       const user = await clerk.users.getUser(clerkId);
@@ -297,6 +304,7 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
       return cached?.user ?? null;
     } finally {
       profileInflight.delete(clerkId);
+      endEvictionLookup(clerkId);
     }
   })();
 
@@ -348,36 +356,130 @@ export function invalidateUserCache(clerkId: string): void {
  * entry the eviction just cleared — or, for `resolveDbUser`, its `upsertUser`
  * would have already recreated the row `DELETE FROM users` just removed by
  * the time anyone checks. `loadProfile`/`resolveDbUser` snapshot the
- * generation before starting their async work and refuse to cache a result
- * whose generation has since moved — they still return the answer to the one
- * caller waiting on that particular promise, since the lookup itself was
- * genuinely valid when it started; what they refuse is repopulating a cache
- * entry for everyone after. (Farol review of #603.)
+ * generation before starting their async work (via `beginEvictionLookup`)
+ * and refuse to cache a result whose generation has since moved — they still
+ * return the answer to the one caller waiting on that particular promise,
+ * since the lookup itself was genuinely valid when it started; what they
+ * refuse is repopulating a cache entry for everyone after. (Farol review of
+ * #603.)
  *
- * NEVER SWEPT, UNLIKE `profileCache`/`userCache` — deliberately. A first pass
- * of this guard expired entries after `PROFILE_TTL_MS`, and Farol's review
- * caught what that TTL actually meant: an unusually slow Clerk or Postgres
- * completion that outlives five minutes would find its tombstone already
+ * WHY THIS CANNOT USE A PLAIN TTL. A first pass expired entries after
+ * `PROFILE_TTL_MS` (5 minutes) like `profileCache`/`userCache` do, and a
+ * second review caught what that TTL actually meant: a Clerk or Postgres
+ * completion slow enough to outlive it would find its tombstone already
  * gone, read the generation back as the pre-eviction value, and repopulate
- * the cache anyway — the exact write this map exists to refuse. There is no
- * TTL that is provably longer than every in-flight lookup, so this entry has
- * to survive for the rest of the process's life once an identity has been
- * evicted at all. That is safe to do unconditionally, unlike the two caches
- * above: those hold one entry per identity that has EVER SIGNED IN (already
- * flagged once, see `sweepAuthCaches`'s doc comment, for growing with the
- * total number of accounts ever, not the number online), while this one
- * holds an entry only for an identity that has been TERMINATED at least
- * once — a much rarer event, bounded by how many accounts this process has
- * ever deleted or force-invalidated, not by how many have ever logged in.
+ * the cache anyway — the exact write this map exists to refuse. A second pass
+ * removed the sweep entirely — correct for the race, but then a THIRD review
+ * caught the cost: an entry every account this process has ever terminated
+ * holds forever is still a live, if slower, version of the same unbounded
+ * growth `sweepAuthCaches`'s own doc comment already flags for the two
+ * caches above.
+ *
+ * So the tombstone's clock does not start at eviction — it starts once
+ * nothing is still in flight for that identity. `evictionInFlightCount`
+ * tracks how many `loadProfile`/`resolveDbUser` calls are currently running
+ * per clerk id (`beginEvictionLookup`/`endEvictionLookup`, called around the
+ * same async work the generation snapshot brackets); `evictionExpiresAt`
+ * holds a sweep-eligible timestamp ONLY while that count is zero, cleared the
+ * instant a new lookup starts. `sweepAuthCaches` (the same 60s timer that
+ * sweeps the two caches above) drops a generation entry once its expiry has
+ * both been set and passed — never while anything for that id is still
+ * running, however long that turns out to take. `EVICTION_TOMBSTONE_MAX_ENTRIES`
+ * is a backstop under that, not the primary bound: a volume of terminations
+ * that could realistically hit it is not a shape this product has, but an
+ * unconditional cap costs nothing to have anyway.
  */
+/** Exported for `clerk-eviction-race.test.ts`, so the test that pins the
+ *  sweep boundary does not hardcode a duplicate of this number. */
+export const EVICTION_TOMBSTONE_TTL_MS = 15 * 60_000;
+const EVICTION_TOMBSTONE_MAX_ENTRIES = 10_000;
+
 const evictionGeneration = new Map<string, number>();
+/** How many lookups are currently in flight for this identity — see the doc
+ *  comment on `evictionGeneration` above. */
+const evictionInFlightCount = new Map<string, number>();
+/** When a tombstone with nothing left in flight becomes sweep-eligible.
+ *  Absent while a lookup is running for that id (the clock has not started)
+ *  or while the identity has no tombstone at all. */
+const evictionExpiresAt = new Map<string, number>();
 
 function bumpEvictionGeneration(clerkId: string): void {
   evictionGeneration.set(clerkId, (evictionGeneration.get(clerkId) ?? 0) + 1);
+  if ((evictionInFlightCount.get(clerkId) ?? 0) === 0) {
+    scheduleTombstoneExpiry(clerkId);
+  }
+  // Else: something is still in flight for this id. `endEvictionLookup`
+  // starts the clock once it (and everything else running right now for
+  // this id) finishes.
+}
+
+function scheduleTombstoneExpiry(clerkId: string): void {
+  // Re-inserts the key, which is what keeps `enforceTombstoneCap`'s
+  // insertion-order eviction tracking recency well enough for a backstop
+  // that is not expected to ever actually trigger.
+  evictionExpiresAt.delete(clerkId);
+  evictionExpiresAt.set(clerkId, Date.now() + EVICTION_TOMBSTONE_TTL_MS);
+  enforceTombstoneCap();
+}
+
+function enforceTombstoneCap(): void {
+  while (evictionGeneration.size > EVICTION_TOMBSTONE_MAX_ENTRIES) {
+    // Oldest sweep-eligible entry first. An id with nothing in
+    // `evictionExpiresAt` yet (still in flight) is never a candidate here.
+    const oldest = evictionExpiresAt.keys().next();
+    if (oldest.done) {
+      break; // Every remaining tombstone still has a lookup in flight.
+    }
+    evictionGeneration.delete(oldest.value);
+    evictionExpiresAt.delete(oldest.value);
+  }
 }
 
 function currentEvictionGeneration(clerkId: string): number {
   return evictionGeneration.get(clerkId) ?? 0;
+}
+
+/**
+ * Call immediately before starting a Clerk/Postgres lookup whose completion
+ * will (if the generation has not moved by then) write into
+ * `profileCache`/`userCache`. Pairs with `endEvictionLookup` in that
+ * lookup's `finally`.
+ */
+function beginEvictionLookup(clerkId: string): void {
+  evictionInFlightCount.set(
+    clerkId,
+    (evictionInFlightCount.get(clerkId) ?? 0) + 1,
+  );
+  // A lookup just started: any tombstone for this id must not expire under
+  // it, whether or not it existed already.
+  evictionExpiresAt.delete(clerkId);
+}
+
+function endEvictionLookup(clerkId: string): void {
+  const remaining = (evictionInFlightCount.get(clerkId) ?? 1) - 1;
+  if (remaining > 0) {
+    evictionInFlightCount.set(clerkId, remaining);
+    return;
+  }
+  evictionInFlightCount.delete(clerkId);
+  if (evictionGeneration.has(clerkId)) {
+    // Nothing left in flight for this id — the tombstone's clock starts now.
+    scheduleTombstoneExpiry(clerkId);
+  }
+}
+
+function sweepEvictionGenerations(now: number): void {
+  for (const [clerkId, expiresAt] of evictionExpiresAt) {
+    if (expiresAt <= now) {
+      evictionExpiresAt.delete(clerkId);
+      evictionGeneration.delete(clerkId);
+    }
+  }
+}
+
+/** Test-only: how many identities currently hold an eviction tombstone. */
+export function evictionTombstoneCount(): number {
+  return evictionGeneration.size;
 }
 
 /**
@@ -594,6 +696,7 @@ async function resolveDbUser(auth: AuthUser): Promise<DbUser> {
   // repopulate `userCache` with the row it just fetched/wrote, for every
   // caller after this one — not just answer the one request that started it.
   const startGeneration = currentEvictionGeneration(auth.clerkId);
+  beginEvictionLookup(auth.clerkId);
   const request = upsertUser(auth)
     .then((user) => {
       if (currentEvictionGeneration(auth.clerkId) === startGeneration) {
@@ -606,6 +709,7 @@ async function resolveDbUser(auth: AuthUser): Promise<DbUser> {
     })
     .finally(() => {
       userInflight.delete(auth.clerkId);
+      endEvictionLookup(auth.clerkId);
     });
 
   userInflight.set(auth.clerkId, request);

@@ -59,6 +59,8 @@ const {
   clearAuthCaches,
   resolveAuthUser,
   sweepAuthCaches,
+  evictionTombstoneCount,
+  EVICTION_TOMBSTONE_TTL_MS,
 } = await import("./clerk.js");
 
 function deferred<T>(): {
@@ -124,13 +126,15 @@ describe("auth cache eviction race (Farol review of #603)", () => {
   /**
    * A first version of `evictionGeneration` expired its entries after
    * `PROFILE_TTL_MS` (5 minutes), the same TTL `profileCache`/`userCache`
-   * use — Farol's review of that version caught what the TTL actually meant:
-   * a lookup slow enough to outlive it would find its tombstone gone, read
-   * the generation back as the pre-eviction value, and repopulate the cache
-   * anyway. Fixed by never sweeping this map at all (see its doc comment for
-   * why that is safe here). This pins it directly: run the sweep, with the
-   * clock pushed well past any TTL that map ever had, WHILE the lookup is
-   * still in flight, and confirm the eviction still holds once it completes.
+   * use — a review of that version caught what the TTL actually meant: a
+   * lookup slow enough to outlive it would find its tombstone gone, read the
+   * generation back as the pre-eviction value, and repopulate the cache
+   * anyway. Fixed by tying the tombstone's clock to "nothing left in flight
+   * for this id" instead of a fixed deadline from eviction — see
+   * `evictionGeneration`'s doc comment. This pins it directly: run the
+   * sweep, with the clock pushed an hour past this file's own
+   * `EVICTION_TOMBSTONE_TTL_MS`, WHILE the lookup is still in flight, and
+   * confirm both the tombstone and the eviction it guards survive it.
    */
   it("a lookup started before eviction still does not write after the sweep has run", async () => {
     const clerkId = "clerk_race_sweptTombstone";
@@ -143,9 +147,11 @@ describe("auth cache eviction race (Farol review of #603)", () => {
 
     forgetAuthUser(clerkId);
 
-    // Far enough past any TTL `profileCache`/`userCache` use that a
-    // time-bounded tombstone would already be gone.
-    sweepAuthCaches(Date.now() + 60 * 60_000);
+    // Far enough past the tombstone's own TTL that a clock started at
+    // eviction would already have expired it — but the clock has not
+    // started, because a lookup is still in flight.
+    sweepAuthCaches(Date.now() + EVICTION_TOMBSTONE_TTL_MS + 60 * 60_000);
+    expect(evictionTombstoneCount()).toBe(1);
     expect(authCacheSizes().users).toBe(0);
 
     // The lookup that started before the eviction — and survived the sweep —
@@ -154,6 +160,37 @@ describe("auth cache eviction race (Farol review of #603)", () => {
     await inFlight;
 
     expect(authCacheSizes().users).toBe(0);
+  });
+
+  it("drops the tombstone once nothing is in flight and the TTL has passed — it does not hold forever", async () => {
+    const clerkId = "clerk_race_idleTombstone";
+    stubs.verifyToken.mockResolvedValue({ sub: clerkId });
+    const gate = deferred<ReturnType<typeof dbUser>>();
+    stubs.upsertUser.mockReturnValue(gate.promise);
+
+    const inFlight = resolveAuthUser("Bearer real-token");
+    await vi.waitFor(() => expect(stubs.upsertUser).toHaveBeenCalled());
+    forgetAuthUser(clerkId);
+
+    // Still in flight: the tombstone's clock has not started, so even a far
+    // future sweep must not drop it yet.
+    sweepAuthCaches(Date.now() + EVICTION_TOMBSTONE_TTL_MS + 60 * 60_000);
+    expect(evictionTombstoneCount()).toBe(1);
+
+    // The lookup finishes — this is what starts the clock.
+    gate.resolve(dbUser(clerkId));
+    await inFlight;
+
+    // Immediately after: the TTL has not elapsed yet, so the tombstone must
+    // still be held.
+    sweepAuthCaches(Date.now());
+    expect(evictionTombstoneCount()).toBe(1);
+
+    // Once nothing has been in flight for longer than the TTL, the sweep
+    // reclaims it — this map does not hold every terminated identity
+    // forever.
+    sweepAuthCaches(Date.now() + EVICTION_TOMBSTONE_TTL_MS + 1);
+    expect(evictionTombstoneCount()).toBe(0);
   });
 
   it("does not let a slow Clerk profile lookup repopulate profileCache after an eviction lands mid-flight", async () => {
