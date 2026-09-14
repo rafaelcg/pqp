@@ -147,7 +147,11 @@ func (s *Server) handleAudioPlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Write([]byte(ar.Playlist()))
+	// "audio-" because that ring's init segment and fragments are served
+	// from /audio-init.mp4 and /audio-seg-<n>.m4s (below), not the plain
+	// names Playlist() would emit for the video ring's own routes: an
+	// unprefixed audio playlist told a player to fetch the video's URLs.
+	w.Write([]byte(ar.PlaylistWithURIPrefix("audio-")))
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

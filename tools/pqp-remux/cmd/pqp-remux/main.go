@@ -68,28 +68,28 @@ func main() {
 //
 // ctx is created before sess so EnableAudio (L1.3) can be started on it:
 // cancelling ctx on shutdown stops both the audio pacer goroutine and (via
-// aacenc.New's own exec.CommandContext) the ffmpeg subprocess. Shutdown
-// order is deliberate throughout this function's defers — see
-// session.Session.Close's doc comment for why cancel() must run before
-// sess.Close(), which this achieves by deferring sess.Close() BEFORE
-// cancel() (defers run last-registered-first).
+// aacenc.New's own exec.CommandContext) the ffmpeg subprocess.
+//
+// Shutdown order is deliberate throughout this function's defers, and it
+// is the OPPOSITE of registration order (defers run last-registered-
+// first): registering r2Writer.Close() first, then sess.Close(), then
+// cancel(), then (once Connect succeeds) sub.Close() means execution runs
+// sub.Close() (stop new packets) -> cancel() (stop the audio pacer
+// writing more PCM) -> sess.Close() (drain the encoder and flush the
+// final segments, which enqueues their uploads) -> r2Writer.Close()
+// LAST, so those final uploads actually get a chance to run before the
+// writer stops accepting and processing work. Getting this backwards --
+// registering the writer's Close after the session's, which used to
+// execute it BEFORE session finalization -- was a Farol finding: it
+// silently dropped every party's last few segments.
 func runServer(cfg config.Config) error {
 	r := ring.New(cfg.RingSegments, 90000)
 
-	// defer runs last-registered-first: sess.Close() is deferred BEFORE
-	// cancel() so that, in execution order, cancel() fires first (stopping
-	// the audio pacer from writing any more PCM) and sess.Close() runs
-	// second (draining whatever the encoder already has) — see
-	// session.Session.Close's doc comment.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	sess := session.New(cfg.PartTicks(), cfg.SegmentTicks(), r, nil)
-	defer sess.Close()
-	defer cancel()
-
-	// L1.4: the R2 writer, independent of L1.3's audio — wired in before
-	// EnableAudio so an audio init segment built during EnableAudio is
-	// never missed (see EnableAudio's own doc comment on this ordering).
+	// L1.4: the R2 writer, created (and its Close deferred) before the
+	// session -- see this function's own doc comment for why the order
+	// matters.
 	var r2Writer *r2.Writer
 	if cfg.LiveHlsS3Configured() {
 		r2Writer = r2.NewWriter(r2.NewUploader(r2.Config{
@@ -104,8 +104,15 @@ func runServer(cfg config.Config) error {
 			MaxRetries: cfg.R2UploadMaxRetries,
 		})
 		defer r2Writer.Close()
-		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, cfg.Rung)
 		log.Printf("pqp-remux: R2 writer enabled: bucket=%s prefix=%s", cfg.LiveHlsS3Bucket, r2.ObjectPrefix(cfg.ChannelID, cfg.StartedAtMs, cfg.Rung))
+	}
+
+	sess := session.New(cfg.PartTicks(), cfg.SegmentTicks(), r, nil)
+	defer sess.Close()
+	defer cancel()
+
+	if r2Writer != nil {
+		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, cfg.Rung)
 	}
 
 	// L1.3: audio. Non-fatal if the encoder subprocess cannot start (e.g.

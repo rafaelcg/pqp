@@ -95,3 +95,10 @@ func (f *AudioFragmenter) Push(pts int64, durationTicks uint32, data []byte) *Fr
 
 	return frag
 }
+
+// CurrentSegmentIndex returns the index of the segment currently open (or
+// most recently opened, if nothing has arrived since). Used by
+// Session.Close to know which segment the audio track's own end has just
+// closed, for the R2 writer (L1.4) -- the same role
+// pipeline.Fragmenter.CurrentSegmentIndex plays for video's Finish.
+func (f *AudioFragmenter) CurrentSegmentIndex() int { return f.segmentIndex }

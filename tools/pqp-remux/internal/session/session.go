@@ -101,8 +101,17 @@ type Session struct {
 	// runs on it) — see recoverAudioEncoder's doc comment for why waiting
 	// on it before starting a replacement matters.
 	audioReaderDone chan struct{}
-	audioFrag       *pipeline.AudioFragmenter
-	audioRing       *ring.Ring
+	// audioEncoderFailed is the current generation's "the encoder ended
+	// unexpectedly" signal (closed by readEncoderFrames when it observes
+	// a genuine error on Errs(), as opposed to a clean, intentional
+	// shutdown) — runAudioPacer selects on it alongside its ticker so an
+	// ffmpeg crash mid-session goes through the exact same
+	// recoverAudioEncoder path a WriteSamples failure does, rather than
+	// silently ending the audio track. Same single-owner (the pacer
+	// goroutine) reasoning as audioReaderDone.
+	audioEncoderFailed chan struct{}
+	audioFrag          *pipeline.AudioFragmenter
+	audioRing          *ring.Ring
 	// audioMu guards the restart decision in recoverAudioEncoder and the
 	// audioClosed flag together, as one critical section: recoverAudioEncoder
 	// holds it for its ENTIRE body, including the (possibly slow, a real
@@ -250,8 +259,10 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 	s.enqueueR2("audio-init.mp4", audioInit, "audio/mp4")
 
 	done := make(chan struct{})
+	failed := make(chan struct{})
 	s.audioReaderDone = done
-	go s.readEncoderFrames(enc, done)
+	s.audioEncoderFailed = failed
+	go s.readEncoderFrames(enc, done, failed)
 	go s.runAudioPacer(ctx, cfg)
 
 	return nil
@@ -385,12 +396,43 @@ func (s *Session) Close() {
 	s.audioMu.Lock()
 	s.audioClosed = true
 	enc := s.loadEncoder()
+	readerDone := s.audioReaderDone
 	s.audioMu.Unlock()
 
-	if enc != nil {
-		enc.Close()
+	if enc == nil {
+		return
+	}
+	enc.Close() // stops feeding ffmpeg, waits for it to exit and drain its own ADTS reader
+
+	// Bounded wait for THIS session's own reader goroutine to finish
+	// processing whatever aacenc.Encoder.Close just finished delivering:
+	// without this, the final segment upload below could run before the
+	// last few AAC frames ever reach audioFrag, silently truncating the
+	// tail of the audio track. Bounded (not "wait forever") for the same
+	// reason r2.Writer.Close is: shutdown must complete even if something
+	// downstream is unexpectedly stuck.
+	if readerDone != nil {
+		select {
+		case <-readerDone:
+		case <-time.After(audioCloseFlushDeadline):
+			log.Printf("pqp-remux: timed out after %s waiting for the audio reader to drain during shutdown; the final segment may be incomplete", audioCloseFlushDeadline)
+		}
+	}
+
+	// The session ending is what closes the audio track's last (still
+	// open) segment, in the same sense Finish does for video: nothing
+	// else will ever start a *next* segment to trigger the ordinary
+	// roll-over upload.
+	if s.audioFrag != nil {
+		s.uploadAudioSegment(s.audioFrag.CurrentSegmentIndex())
 	}
 }
+
+// audioCloseFlushDeadline bounds Close's wait for the audio reader to
+// finish draining the encoder's final output. Generous next to a single
+// AAC frame's own cadence (~21ms) but still short enough not to
+// meaningfully delay process shutdown if the reader is ever stuck.
+const audioCloseFlushDeadline = 5 * time.Second
 
 // publish is HandleVideoPacket and Finish's shared tail: a fragment is
 // only written into the ring once a valid init segment exists. Publishing
@@ -548,6 +590,18 @@ func (s *Session) runAudioPacer(ctx context.Context, cfg AudioConfig) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.audioEncoderFailed:
+			// The current generation's readEncoderFrames observed the
+			// encoder end unexpectedly (aacenc's own "not asked for"
+			// case: a crash, a kill, ffmpeg exiting on its own). Route
+			// through the exact same recovery this pacer already uses
+			// for a WriteSamples failure, so an ffmpeg crash gets one
+			// restart attempt instead of the audio track quietly going
+			// dark while Health() still reports it enabled.
+			if !s.recoverAudioEncoder(ctx, cfg, &restarted) {
+				s.markAudioDead()
+				return
+			}
 		case <-ticker.C:
 			if s.audioDead.Load() {
 				return
@@ -643,9 +697,11 @@ func (s *Session) recoverAudioEncoder(ctx context.Context, cfg AudioConfig, rest
 	s.audioRestarts.Add(1)
 	s.storeEncoder(enc)
 	done := make(chan struct{})
+	failed := make(chan struct{})
 	s.audioReaderDone = done
-	go s.readEncoderFrames(enc, done)
-	log.Print("pqp-remux: AAC encoder restarted after a write failure")
+	s.audioEncoderFailed = failed // a fresh channel: the old one may already be closed, and a closed channel is always select-ready, which would re-trigger recovery every tick
+	go s.readEncoderFrames(enc, done, failed)
+	log.Print("pqp-remux: AAC encoder restarted")
 	return true
 }
 
@@ -686,16 +742,40 @@ func framesElapsed(elapsed time.Duration, frameSamples, emitted int) int {
 // exited) or — see the loop body — never on Errs() alone, since Errs()
 // closing only means no more error reports will ever arrive, not that
 // Frames() is done delivering already-buffered data.
-func (s *Session) readEncoderFrames(enc remuxEncoder, done chan struct{}) {
+func (s *Session) readEncoderFrames(enc remuxEncoder, done, failed chan struct{}) {
 	defer close(done)
 
 	framesCh := enc.Frames()
 	errsCh := enc.Errs()
+	reportedFailure := false
+	reportFailure := func(err error) {
+		log.Printf("pqp-remux: AAC encode: %v", err)
+		if !reportedFailure {
+			reportedFailure = true
+			close(failed) // wakes runAudioPacer's select immediately, even mid-tick
+		}
+	}
+
 	for {
 		select {
 		case frame, ok := <-framesCh:
 			if !ok {
-				return // the only definitive "no more data, ever" signal
+				// The only definitive "no more data, ever" signal. But
+				// aacenc.Encoder always queues an unexpected-exit error
+				// (if any) onto Errs() BEFORE closing Frames() -- see
+				// its own readADTS doc comment -- and select does not
+				// guarantee we would have observed it first just
+				// because it happened first, so take one last
+				// non-blocking look here rather than risk silently
+				// missing it.
+				select {
+				case err, ok2 := <-errsCh:
+					if ok2 {
+						reportFailure(err)
+					}
+				default:
+				}
+				return
 			}
 			pts := s.audioNextPTS.Add(aacenc.SamplesPerFrame) - aacenc.SamplesPerFrame
 			frag := s.audioFrag.Push(pts, aacenc.SamplesPerFrame, frame.Data)
@@ -724,7 +804,7 @@ func (s *Session) readEncoderFrames(enc remuxEncoder, done chan struct{}) {
 				errsCh = nil
 				continue
 			}
-			log.Printf("pqp-remux: AAC encode: %v", err)
+			reportFailure(err)
 		}
 	}
 }

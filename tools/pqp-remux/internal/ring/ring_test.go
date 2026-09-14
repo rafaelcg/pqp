@@ -130,3 +130,27 @@ func TestRing_SegmentServableWhileStillOpen(t *testing.T) {
 		t.Fatalf("an in-progress segment must still be servable by index: got %q, %v", got, ok)
 	}
 }
+
+func TestRing_PlaylistWithURIPrefix(t *testing.T) {
+	r := New(6, 90000)
+	r.Push(frag(1, 0, true, 90000, []byte("A")))
+	r.Push(frag(2, 1, true, 90000, []byte("B"))) // seals segment 0
+
+	pl := r.PlaylistWithURIPrefix("audio-")
+	if !strings.Contains(pl, `#EXT-X-MAP:URI="audio-init.mp4"`) {
+		t.Fatalf("expected the init URI to carry the prefix:\n%s", pl)
+	}
+	if !strings.Contains(pl, "audio-seg-0.m4s") {
+		t.Fatalf("expected the segment URI to carry the prefix:\n%s", pl)
+	}
+	if strings.Contains(pl, `URI="init.mp4"`) || (strings.Contains(pl, "seg-0.m4s") && !strings.Contains(pl, "audio-seg-0.m4s")) {
+		t.Fatalf("did not expect any unprefixed URI in a prefixed playlist:\n%s", pl)
+	}
+
+	// The plain Playlist() must be entirely unaffected: video's own call
+	// sites and every existing test depend on the unprefixed names.
+	plain := r.Playlist()
+	if !strings.Contains(plain, `URI="init.mp4"`) || !strings.Contains(plain, "seg-0.m4s") {
+		t.Fatalf("Playlist() must still emit unprefixed URIs:\n%s", plain)
+	}
+}

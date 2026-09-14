@@ -100,6 +100,12 @@ func (u *countingUploader) hasKeySuffix(suffix string) bool {
 	return false
 }
 
+func (u *countingUploader) keysSnapshot() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return append([]string(nil), u.keys...)
+}
+
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -175,6 +181,56 @@ func TestSessionAudioPipelineEndToEnd(t *testing.T) {
 	// ever sent, so nothing should have published there.
 	if h.PartsWritten != 0 || h.BytesWritten != 0 {
 		t.Fatalf("audio-only traffic must not touch the video counters, got PartsWritten=%d BytesWritten=%d", h.PartsWritten, h.BytesWritten)
+	}
+}
+
+// TestSessionCloseUploadsTheFinalOpenAudioSegment is the regression test
+// for Farol's "final audio segment is never closed or uploaded" finding:
+// with less audio than one segment target, the audio track never rolls
+// over on its own (uploadAudioSegment is only ever called from
+// readEncoderFrames's roll-over branch before this fix), so the whole
+// party's audio would be silently missing from R2 unless the session
+// ending is itself treated as closing that last segment -- exactly what
+// Session.Close now does.
+func TestSessionCloseUploadsTheFinalOpenAudioSegment(t *testing.T) {
+	requireFFmpeg(t)
+
+	s := New(45000, 360000, ring.New(6, 90000), nil)
+
+	uploader := &countingUploader{}
+	writer := r2.NewWriter(uploader, r2.WriterConfig{Workers: 2})
+	s.EnableR2(writer, "chan-1", 1_700_000_000_001, "ll")
+
+	audioRing := ring.New(6, 48000)
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: audioRing, SegmentTicks: 4 * 48000}); err != nil {
+		t.Fatalf("EnableAudio: %v", err)
+	}
+
+	packets := opusTonePackets(t, 1.0) // well under the 4s segment target: no natural roll-over will ever happen
+	rtpTS := uint32(1000)
+	for _, p := range packets {
+		s.HandleAudioPacket(&rtp.Packet{Header: rtp.Header{Timestamp: rtpTS}, Payload: p})
+		rtpTS += 960
+	}
+
+	waitFor(t, 5*time.Second, func() bool { return s.Health().AudioPartsWritten > 0 })
+
+	if uploader.hasKeySuffix("/audio-seg-0.m4s") {
+		t.Fatal("segment 0 must not be uploaded before the session ends: it has not rolled over and is not yet closed")
+	}
+
+	// Shutdown order matters, as everywhere else in this package: cancel
+	// before Close.
+	cancel()
+	s.Close()
+	writer.Close()
+
+	if _, ok := audioRing.Segment(0); !ok {
+		t.Fatal("expected segment 0 to exist in the audio ring after Close")
+	}
+	if !uploader.hasKeySuffix("/audio-seg-0.m4s") {
+		t.Fatalf("expected Close to upload the final (never-rolled-over) audio segment; got keys: %v", uploader.keysSnapshot())
 	}
 }
 
