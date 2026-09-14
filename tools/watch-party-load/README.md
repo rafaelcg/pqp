@@ -330,6 +330,17 @@ must be exactly `staging`; there is no local or production path in this file
 at all, unlike `index.ts`. `--speaking-publishers > 0` needs the same
 non-production `PQP_LOAD_SFU_HOST` guard as `index.ts`.
 
+**Pinning seats to specific machines** (`PQP_LOAD_MACHINE_IDS`, added for the
+M6 multi-instance rehearsal): a comma-separated list of Fly machine ids
+(`fly machines list -a pqp-api-staging`). When set, each seat's WS socket is
+opened with `fly-force-instance-id` set to `machineIds[slot % machineIds.length]`,
+so seats land on every listed machine deterministically instead of trusting
+the proxy's own balancing — needed to prove a moderator mute or an eviction
+resweep holds across instances with a *real* published track, not just a
+signaling-only identity. HTTP calls are never pinned (room state is
+cluster-wide via `CLUSTER_BUS`/`VOICE_REGISTRY`, so only the socket's home
+instance matters). Omit it and behavior is unchanged.
+
 ```sh
 cd tools/watch-party-load && pnpm install
 

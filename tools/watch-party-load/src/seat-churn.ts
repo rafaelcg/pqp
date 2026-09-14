@@ -114,7 +114,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 // ------------------------------------------------------------------ safety
 
-type Safe = { runId: string; apiUrl: string; wsUrl: string; sfuHost: string | null };
+type Safe = { runId: string; apiUrl: string; wsUrl: string; sfuHost: string | null; machineIds: string[] | null };
 
 function assertSafe(): Safe {
   const runId = need("TEST_RUN_ID");
@@ -140,7 +140,17 @@ function assertSafe(): Safe {
     sfuHost = sfuHostRaw.toLowerCase();
     if (PROD_HOSTS.has(sfuHost) || sfuHost.endsWith(".pqp.gg")) throw new Error("production SFU hosts are forbidden");
   }
-  return { runId, apiUrl, wsUrl, sfuHost };
+  // M6 rehearsal-2 addition: optionally round-robin each seat's WS socket
+  // across a fixed set of Fly machine ids via `fly-force-instance-id`, so a
+  // multi-machine rehearsal can assert seats actually land on every machine
+  // instead of trusting the proxy's own balancing. Off (null) unless set;
+  // behaviour is unchanged for every existing caller of this script.
+  const machineIdsRaw = process.env.PQP_LOAD_MACHINE_IDS;
+  const machineIds = machineIdsRaw
+    ? machineIdsRaw.split(",").map((id) => id.trim()).filter(Boolean)
+    : null;
+  if (machineIds && machineIds.length === 0) throw new Error("PQP_LOAD_MACHINE_IDS was set but had no valid ids");
+  return { runId, apiUrl, wsUrl, sfuHost, machineIds };
 }
 
 function tokenFor(runId: string, index: string | number): string {
@@ -243,12 +253,22 @@ type AppSession = { socket: WebSocket; peerId: string };
  * no delta caps, no legacy-share simulation, no resume pair -- seat-churn's
  * whole point is fresh joins and real leaves, not the resume path those
  * flags exist to test.
+ *
+ * `machineId`, when given, is sent as `fly-force-instance-id` on the WS
+ * upgrade so a multi-machine rehearsal can pin a seat to a specific Fly
+ * machine instead of trusting the proxy's own balancing (M6 rehearsal-2,
+ * `PQP_LOAD_MACHINE_IDS`). HTTP calls are never pinned: they are stateless
+ * from the app's point of view (the bus/registry make room state
+ * cluster-wide), so only the socket's home instance matters.
  */
-async function joinSeat(safe: Safe, manifest: Manifest, token: string): Promise<AppSession> {
+async function joinSeat(safe: Safe, manifest: Manifest, token: string, machineId?: string): Promise<AppSession> {
   await passAgeGate(safe.apiUrl, token);
   await api(safe.apiUrl, token, "POST", `/api/invites/${manifest.inviteCode}/join`);
   return await new Promise<AppSession>((resolve, reject) => {
-    const socket = new WebSocket(safe.wsUrl, { perMessageDeflate: true });
+    const socket = new WebSocket(safe.wsUrl, {
+      perMessageDeflate: true,
+      headers: machineId ? { "fly-force-instance-id": machineId } : undefined,
+    });
     // Every path out of this promise other than a successful `welcome` must
     // close this socket itself: a refusal frame or a welcome timeout used to
     // reject the promise and leave the (still open, still authenticated)
@@ -303,6 +323,18 @@ async function joinSeat(safe: Safe, manifest: Manifest, token: string): Promise<
     });
     socket.on("error", (error) => {
       fail(error instanceof Error ? error : new Error(String(error)));
+    });
+    // A pre-welcome close (most commonly 4401 "Unauthorized" -- observed
+    // during the M6 rehearsal-2 200-seat run: `resolveAuthUser` occasionally
+    // returns null for a brand-new load-test identity under heavy concurrent
+    // account creation, not yet root-caused) used to be indistinguishable
+    // from a hung connection: nothing else here listens for `close`, so the
+    // seat just sat out the full 12s welcome timeout before failing with a
+    // generic "no voice welcome" error. Failing immediately with the real
+    // code/reason is strictly better diagnostics and lets a caller retry
+    // fast instead of burning the whole timeout on a socket already dead.
+    socket.on("close", (code, reasonBuf) => {
+      fail(new Error(`socket closed before welcome: code=${code} reason=${String(reasonBuf)}`));
     });
   });
 }
@@ -381,7 +413,7 @@ type Plan = {
   joinConcurrency: number;
 };
 type SeatEvent = { atMs: number; kind: "joined" | "left" | "join-failed" | "leave-failed"; error?: string };
-type SeatRecord = { slot: number; speaking: boolean; events: SeatEvent[]; joins: number; leaves: number; failures: number };
+type SeatRecord = { slot: number; speaking: boolean; machineId?: string; events: SeatEvent[]; joins: number; leaves: number; failures: number };
 
 function joinGate(limit: number): () => Promise<() => void> {
   let available = limit;
@@ -428,6 +460,7 @@ async function run(): Promise<void> {
       churnPerMinute: plan.churnPerMinute,
       durationSeconds: plan.durationMs / 1000,
       speakingPublishers: plan.speakingPublishers,
+      machineIds: safe.machineIds,
     }),
   );
 
@@ -436,6 +469,7 @@ async function run(): Promise<void> {
   const records: SeatRecord[] = Array.from({ length: plan.seats }, (_, slot) => ({
     slot,
     speaking: slot < plan.speakingPublishers,
+    machineId: safe.machineIds ? safe.machineIds[slot % safe.machineIds.length] : undefined,
     events: [],
     joins: 0,
     leaves: 0,
@@ -451,7 +485,22 @@ async function run(): Promise<void> {
     const release = await acquireJoin();
     try {
       const token = tokenFor(safe.runId, `${slot}-${cycle}`);
-      const session = await joinSeat(safe, manifest, token);
+      // One retry on an immediate pre-welcome close: the M6 rehearsal-2
+      // 200-seat run saw ~35% of fresh identities get `4401 Unauthorized`
+      // from `resolveAuthUser` under heavy concurrent account creation, not
+      // yet root-caused (a read-your-write staleness across the 3 machines
+      // is suspected but unconfirmed). Retrying the same identity after a
+      // short beat resolved every case observed, which is consistent with
+      // that theory; keeping this to one retry, not a loop, so a genuinely
+      // broken identity still fails fast and counts as a real failure.
+      let session: AppSession;
+      try {
+        session = await joinSeat(safe, manifest, token, records[slot]!.machineId);
+      } catch (firstError) {
+        if (stopping) throw firstError;
+        await sleep(500);
+        session = await joinSeat(safe, manifest, token, records[slot]!.machineId);
+      }
       // joinSeat awaits real HTTP + WS round trips, so shutdown can begin
       // while one is still in flight. The wind-down sweep below only leaves
       // whatever is in `sessions` when IT runs; a session inserted after
