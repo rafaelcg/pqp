@@ -350,6 +350,7 @@ async function handlePlaylistRequest(
           env.HLS_REVOKED_USERS,
           passVerified.userId,
           channelId,
+          passVerified.issuedAt,
         );
         if (kvError) {
           logEvent("hlsEdge.partyPassRevocationCheckError", { channelId });
@@ -428,6 +429,7 @@ async function handlePlaylistRequest(
       env.HLS_REVOKED_USERS,
       verified.userId,
       channelId,
+      verified.issuedAt,
     );
     if (kvError) {
       logEvent("hlsEdge.partyPassRevocationCheckError", { channelId });
@@ -451,16 +453,25 @@ async function handlePlaylistRequest(
   // A CACHE MISS NEEDS AN ORIGIN-VERIFIABLE TOKEN, AND A PARTY PASS IS NOT
   // ONE (`hls-viewer-token.ts`'s `verifyHlsViewerToken` cannot verify a
   // party pass, by construction). A viewer authorised here ONLY by a party
-  // pass -- no `t` at all, or one that has since expired -- cannot make this
-  // Worker mint a fresh origin fetch on their own. In practice that is a
-  // narrow window: the shared cache above is refilled by ANY other valid
-  // viewer of the same rung, and a live party rarely has every viewer's
-  // short-lived token expire at once. When it does, the honest answer is a
-  // retryable miss, not a 401 -- the caller is not unauthorized, there is
-  // just no fresh copy this request can produce. `voice.hlsPlaylistRejected`
-  // logs "expired" from real 401s; this gets its own counter so the two are
-  // never confused when reading a dashboard.
-  if (!token) {
+  // pass -- no `t` at all, OR ONE THAT HAS SINCE EXPIRED OR OTHERWISE FAILED
+  // VERIFICATION -- cannot make this Worker mint a fresh origin fetch on
+  // their own. Gated on `usedPartyPass`, NOT on `!token`: a present-but-bad
+  // token is not usable here either, and forwarding it to the coalesced
+  // fetch below would have the origin reject it (401) FOR EVERY OTHER
+  // CALLER coalesced onto the same shared promise, including ones sitting
+  // on their own still-fresh `?t=` -- one viewer's stale token would poison
+  // the shared fetch for everyone polling the same rung in the same window.
+  // `token` reaching `fetchRenditionCoalesced` below is therefore always the
+  // SAME string `verifyHlsViewerToken` just accepted a few lines up, never
+  // an unverified one. In practice this is a narrow window: the shared
+  // cache above is refilled by ANY other valid viewer of the same rung, and
+  // a live party rarely has every viewer's short-lived token expire at
+  // once. When it does, the honest answer is a retryable miss, not a 401 --
+  // the caller is not unauthorized, there is just no fresh copy this
+  // request can produce. `voice.hlsPlaylistRejected` logs "expired" from
+  // real 401s; this gets its own counter so the two are never confused when
+  // reading a dashboard.
+  if (usedPartyPass || !token) {
     logEvent("hlsEdge.partyPassMissWithoutToken", { channelId, rung });
     return text(503, "Playlist not cached; retry shortly");
   }
@@ -483,24 +494,15 @@ async function handlePlaylistRequest(
   }
 
   if (fetched.status < 200 || fetched.status >= 300) {
-    if (usedPartyPass && (fetched.status === 401 || fetched.status === 403)) {
-      // The caller's OWN credential (the party pass) is still valid; it is
-      // the `t` this Worker had to forward instead that the origin refused
-      // (expired, most likely -- see the block above). Reporting the
-      // origin's raw 401 would tell a legitimately-partied viewer they are
-      // unauthorized, which they are not. Same shape as the no-token case
-      // above: retryable, not a rejection, and its own counter.
-      logEvent("hlsEdge.partyPassOriginMissRefused", {
-        channelId,
-        rung,
-        originStatus: fetched.status,
-      });
-      return text(503, "Playlist not cached; retry shortly");
-    }
-    // Never cache non-200 — a stream that has not started yet or has just
-    // ended must not get frozen into "not found" for every viewer for the
-    // rest of the cache window. `hlsEdge.originRejected` is already logged
-    // once, inside the shared fetch.
+    // `usedPartyPass` is always false here -- a party-pass-only rider never
+    // reaches `fetchRenditionCoalesced` at all any more (see the guard
+    // above), so the token this Worker just forwarded is always the one it
+    // verified itself moments ago, and the origin refusing it would be a
+    // drift between the two implementations' HMAC checks, not an expiry
+    // race. Never cache non-200 — a stream that has not started yet or has
+    // just ended must not get frozen into "not found" for every viewer for
+    // the rest of the cache window. `hlsEdge.originRejected` is already
+    // logged once, inside the shared fetch.
     const headers = new Headers(fetched.headers);
     headers.set("X-HLS-Edge-Cache", "SKIP");
     return new Response(fetched.body, { status: fetched.status, headers });
@@ -549,14 +551,32 @@ async function safeCacheMatch(cache: Cache, key: Request): Promise<Response | un
  * Same reasoning in the other direction: a failed `cache.put` must not
  * become an unhandled rejection under `ctx.waitUntil` (which Cloudflare
  * treats as a Worker error) when the response it was populating the cache
- * FOR has already been served successfully. Losing one write just means the
- * next request repeats the origin fetch this write would have saved it.
+ * FOR has already been served successfully.
+ *
+ * ONE RETRY, NOT ZERO. This is the producer's ONLY attempt at populating
+ * the shared cache for this window (see "ONLY THE PRODUCER WRITES THE
+ * CACHE" at the call site) — every OTHER caller sharing the coalesced fetch
+ * already has its own copy of the bytes and returns successfully to its own
+ * viewer regardless, so a bare `cache.put` failure was invisible to every
+ * individual request while still meaning NOBODY populated the shared cache
+ * for the rest of the window, undoing exactly the collapse this Worker
+ * exists for. A transient Cache API error is the common failure shape here
+ * (`cache.match` gets the identical treatment above), so one immediate
+ * retry recovers most of them; `hlsEdge.cacheWriteError` now fires only
+ * once BOTH attempts have failed, with `attempts: 2` to tell it apart from
+ * a single-attempt failure if this ever needs a third try later.
  */
 async function safeCachePut(cache: Cache, key: Request, response: Response): Promise<void> {
   try {
+    await cache.put(key, response.clone());
+    return;
+  } catch {
+    // fall through to the retry below
+  }
+  try {
     await cache.put(key, response);
   } catch {
-    logEvent("hlsEdge.cacheWriteError", {});
+    logEvent("hlsEdge.cacheWriteError", { attempts: 2 });
   }
 }
 

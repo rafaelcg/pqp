@@ -157,19 +157,37 @@ Three things worth being precise about:
    cannot verify a party pass at all — a different secret, by design (see the
    doc comment above `partySecret()`). A viewer authorised here only by a
    party pass rides the shared cache for as long as some OTHER viewer's
-   still-fresh `?t=` keeps refilling it; on a genuine miss with no usable
-   `?t=` in hand, this Worker answers a retryable 503
-   (`hlsEdge.partyPassMissWithoutToken` / `hlsEdge.partyPassOriginMissRefused`
-   in the logs), not a 401 — the caller is not unauthorized, there is simply
-   no fresh copy this specific request can produce. In a live party with more
-   than a handful of viewers this is a corner, not a common path.
+   still-fresh `?t=` keeps refilling it; on a genuine miss with no
+   ORIGIN-VERIFIABLE `?t=` in hand — no token at all, OR one present but
+   already expired or otherwise invalid, gated on `usedPartyPass` rather
+   than mere presence, so this Worker never forwards a caller's own bad
+   token to the origin on its behalf (that would poison the SHARED
+   coalesced fetch for every other caller waiting on the same rung, not
+   just this one) — this Worker answers a retryable 503
+   (`hlsEdge.partyPassMissWithoutToken` in the logs), not a 401 — the caller
+   is not unauthorized, there is simply no fresh copy this specific request
+   can produce. In a live party with more than a handful of viewers this is
+   a corner, not a common path.
 3. **Revocation, closed the same way the shared cache's gap was closed
    above, with one extra rule for production.** `PartyPassRevocationGate`
-   (`src/party-pass-revocation.js`) checks `HLS_REVOKED_USERS`, keyed on
-   `userId:channelId`, before honoring a party pass — the SAME gate and the
-   SAME 30 s bound as the rendition-route check above, written to by
+   (`src/party-pass-revocation.js`) checks `HLS_REVOKED_USERS` before
+   honoring a party pass — the SAME gate and the SAME 30 s bound as the
+   rendition-route check above. TWO keys, not one: `userId:channelId` (a
+   kick, a ban, a role losing VIEW for one viewer) and `channel:channelId`
+   (a channel deleted or gone private for the whole audience, which has no
+   fixed viewer list to key per-viewer entries by). Both store a
+   REVOCATION TIMESTAMP, not a flag, compared against the credential's own
+   `issuedAt` claim — the same "minted before or after the most recent
+   eviction" rule `hls-revocation.ts`'s in-memory check already applies, so
+   a viewer banned and later un-banned mints a fresh credential that reads
+   as not-revoked again immediately, rather than staying locked out for the
+   old ban record's remaining TTL. Written to by
    `server/src/voice/hls-edge-revocation.ts` the moment `hls-revocation.ts`
-   records an eviction (a kick, a ban, a role losing VIEW). See "Enabling in
+   records an eviction (a kick, a ban, a role losing VIEW, a channel going
+   private or being deleted), monotonically (a write can only raise a
+   key's recorded timestamp, never lower it, so two racing writes can never
+   have an older one clobber a newer one that already landed) and retried
+   through a small bounded in-process queue on failure. See "Enabling in
    production" below for the exact provisioning steps. The extra rule:
    because a party pass's ceiling (6 h) is so much wider than a `?t=`
    token's, **honoring one with NO KV behind it at all in production is a

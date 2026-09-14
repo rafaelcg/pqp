@@ -57,6 +57,7 @@ const {
 } = await import("./hls-playlist-proxy.js");
 
 const STARTED_AT = 1_788_962_552_321;
+const PLAYLIST_USER = "00000000-0000-4000-8000-0000000000dd";
 
 describeDb("the playlist proxy only serves a session that is still live", () => {
   let channelId: string;
@@ -160,6 +161,7 @@ describeDb("the playlist proxy only serves a session that is still live", () => 
     const master = await buildMasterPlaylistFor({
       channelId,
       startedAt: STARTED_AT,
+      userId: PLAYLIST_USER,
     });
     expect(master).toContain("720p30");
     expect(master).toContain("1080p30");
@@ -167,7 +169,7 @@ describeDb("the playlist proxy only serves a session that is still live", () => 
     await getPool().query(`UPDATE hls_sessions SET ended_at = NOW()`);
     resetHlsPlaylistCacheForTests();
     expect(
-      await buildMasterPlaylistFor({ channelId, startedAt: STARTED_AT }),
+      await buildMasterPlaylistFor({ channelId, startedAt: STARTED_AT, userId: PLAYLIST_USER }),
     ).toBeNull();
   });
 
@@ -203,7 +205,7 @@ describeDb("the playlist proxy only serves a session that is still live", () => 
     const media = await buildSignedPlaylist(channelId, STARTED_AT, "720p30");
     expect(media).toContain(`#EXT-X-PQP-SESSION:${id720}`);
 
-    const master = await buildMasterPlaylistFor({ channelId, startedAt: STARTED_AT });
+    const master = await buildMasterPlaylistFor({ channelId, startedAt: STARTED_AT, userId: PLAYLIST_USER });
     expect(master).toMatch(/#EXT-X-PQP-SESSION:[0-9a-f-]{36}/);
   });
 

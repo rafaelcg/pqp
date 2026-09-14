@@ -2423,6 +2423,7 @@ async function hlsPlaylistResponse(
     const master = await buildMasterPlaylistFor({
       channelId,
       startedAt: parsedStartedAt,
+      userId,
       token: options.token,
     });
     if (master !== null) {

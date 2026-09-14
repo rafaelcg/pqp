@@ -40,7 +40,10 @@
  * entry, so a rejoin works without waiting anything out.
  */
 
-import { writeHlsEdgeRevocationForScope } from "./hls-edge-revocation.js";
+import {
+  writeHlsEdgeChannelRevocation,
+  writeHlsEdgeRevocationForScope,
+} from "./hls-edge-revocation.js";
 import { hlsViewerTokenTtlMs } from "./hls-viewer-token.js";
 
 interface Revocation {
@@ -130,11 +133,22 @@ export function revokeHlsAccess(
   entries.push(entry);
   byChannel.set(channelId, entries);
   // Tell the edge Worker's KV denylist too, fire-and-forget -- see
-  // `hls-edge-revocation.ts`'s module doc comment for why this only fires
-  // for a named user list (`only`), never for an unscoped "everyone"
-  // revocation, and why it is never awaited here.
+  // `hls-edge-revocation.ts`'s module doc comment for the two shapes this
+  // takes and why neither is awaited here. A named list (`only`, a kick or
+  // a ban) writes one per-viewer key each; an UNSCOPED revocation (no
+  // `only` at all -- a channel deleted, or gone private for everyone) has
+  // no fixed userId list to key per-viewer entries by, so it writes a
+  // single CHANNEL-wide key instead, which the Worker's gate checks
+  // alongside the per-viewer one. `exceptUserIds`-only (a role change that
+  // leaves most viewers revoked but names a few who keep access) is
+  // deliberately treated as unscoped here too -- the channel-wide write is
+  // the conservative direction to err in: it can cost the few named
+  // exceptions a stale-cache window at worst, never let a truly revoked
+  // viewer through.
   if (entry.only) {
     writeHlsEdgeRevocationForScope(channelId, [...entry.only], now);
+  } else {
+    writeHlsEdgeChannelRevocation(channelId, now);
   }
 }
 

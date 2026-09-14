@@ -7,7 +7,11 @@ import {
 } from "./hls-revocation.js";
 
 const writeHlsEdgeRevocationForScope = vi.hoisted(() => vi.fn());
-vi.mock("./hls-edge-revocation.js", () => ({ writeHlsEdgeRevocationForScope }));
+const writeHlsEdgeChannelRevocation = vi.hoisted(() => vi.fn());
+vi.mock("./hls-edge-revocation.js", () => ({
+  writeHlsEdgeRevocationForScope,
+  writeHlsEdgeChannelRevocation,
+}));
 
 /**
  * The memory lookup that replaced a per-request access query on the playlist
@@ -24,10 +28,11 @@ describe("hls revocation", () => {
   beforeEach(() => {
     resetHlsRevocationsForTests();
     writeHlsEdgeRevocationForScope.mockClear();
+    writeHlsEdgeChannelRevocation.mockClear();
   });
 
   describe("the edge Worker's KV denylist hook", () => {
-    it("writes one edge revocation per named user (onlyUserIds scope)", () => {
+    it("writes one edge revocation per named user (onlyUserIds scope), and no channel-wide record", () => {
       revokeHlsAccess(CHANNEL, { onlyUserIds: [ALICE, BOB] }, T0);
       expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledTimes(1);
       expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledWith(
@@ -35,6 +40,7 @@ describe("hls revocation", () => {
         [ALICE, BOB],
         T0,
       );
+      expect(writeHlsEdgeChannelRevocation).not.toHaveBeenCalled();
     });
 
     it("revokeHlsAccessForUser hits the same hook, once per channel", () => {
@@ -42,16 +48,21 @@ describe("hls revocation", () => {
       expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledTimes(2);
       expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledWith(CHANNEL, [ALICE], T0);
       expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledWith(OTHER, [ALICE], T0);
+      expect(writeHlsEdgeChannelRevocation).not.toHaveBeenCalled();
     });
 
-    it("does not fire for an unscoped (everyone) revocation -- no fixed userId list to write", () => {
+    it("writes a channel-wide record for an unscoped (everyone) revocation -- no fixed userId list to key per-viewer entries by", () => {
       revokeHlsAccess(CHANNEL, undefined, T0);
       expect(writeHlsEdgeRevocationForScope).not.toHaveBeenCalled();
+      expect(writeHlsEdgeChannelRevocation).toHaveBeenCalledTimes(1);
+      expect(writeHlsEdgeChannelRevocation).toHaveBeenCalledWith(CHANNEL, T0);
     });
 
-    it("does not fire for an exceptUserIds-only scope -- same reasoning, no fixed userId list", () => {
+    it("writes a channel-wide record for an exceptUserIds-only scope too -- the conservative direction to err in", () => {
       revokeHlsAccess(CHANNEL, { exceptUserIds: [BOB] }, T0);
       expect(writeHlsEdgeRevocationForScope).not.toHaveBeenCalled();
+      expect(writeHlsEdgeChannelRevocation).toHaveBeenCalledTimes(1);
+      expect(writeHlsEdgeChannelRevocation).toHaveBeenCalledWith(CHANNEL, T0);
     });
   });
 

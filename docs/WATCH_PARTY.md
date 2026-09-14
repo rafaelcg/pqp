@@ -2904,13 +2904,13 @@ edge, rate-limited the same shape as the API's own rejection log). See
 `tools/hls-edge/README.md` "Load shape" for what one Worker invocation costs
 and what the numbers should look like at party scale.
 
-If the party pass is on, two more lines belong at or near zero:
-`hlsEdge.partyPassMissWithoutToken` and `hlsEdge.partyPassOriginMissRefused`
--- both mean a viewer authorised only by a party pass hit a cache miss with
-no origin-verifiable `?t=` in hand (see `tools/hls-edge/README.md` "The party
-pass", point 2). Either fires occasionally on an idle rung with few viewers;
-either fires often on a busy rung, which is worth investigating rather than
-just watching, since a busy rung should almost never run its cache dry.
+If the party pass is on, one more line belongs at or near zero:
+`hlsEdge.partyPassMissWithoutToken` -- a viewer authorised only by a party
+pass hit a cache miss with no origin-verifiable `?t=` in hand (no token at
+all, or one present but expired/invalid; see `tools/hls-edge/README.md` "The
+party pass", point 2). Fires occasionally on an idle rung with few viewers;
+fires often on a busy rung, which is worth investigating rather than just
+watching, since a busy rung should almost never run its cache dry.
 
 ## Segments at the edge (design, not built)
 
