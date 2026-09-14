@@ -83,6 +83,8 @@ interface FakeHlsRow {
   presenter_peer_id: string | null;
   stopping_at: number | null;
   stop_attempts: number;
+  /** Which API process owns it. The fake plays one machine unless a test says otherwise. */
+  instance_id?: string | null;
 }
 
 function createFakeDb() {
@@ -119,9 +121,40 @@ function createFakeDb() {
           presenter_peer_id: presenterPeerId,
           stopping_at: null,
           stop_attempts: 0,
+          instance_id: (p[7] as string | null) ?? null,
         });
       }
       return { rowCount: 1, rows: [] };
+    }
+
+    // `claimHlsSessionRow`: the compare-and-set an LL start or adoption runs
+    // before it touches the box. These suites run with the registry off (one
+    // machine), so the owner predicate is omitted and any OPEN row is
+    // claimable -- the two-machine version of this is pinned on a real
+    // Postgres in `hls-ll-demotion.test.ts`.
+    if (sql.includes("SET instance_id = $2") && sql.includes("s.id = $1::uuid")) {
+      const [id, instanceId] = p as [string, string];
+      const row = hlsRows.find((r) => r.id === id && r.ended_at === null);
+      if (row) {
+        row.instance_id = instanceId;
+      }
+      return { rowCount: row ? 1 : 0, rows: [] };
+    }
+
+    // `clearRequestedHlsMode`: the durable half of a demotion.
+    if (
+      sql.includes("UPDATE channel_sessions SET low_latency_requested = FALSE") &&
+      sql.includes("channel_id = $1")
+    ) {
+      const [channelId] = p as [string];
+      let count = 0;
+      for (const row of channelSessions.values()) {
+        if (row.channel_id === channelId && row.status === "live" && row.low_latency_requested) {
+          row.low_latency_requested = false;
+          count += 1;
+        }
+      }
+      return { rowCount: count, rows: [] };
     }
 
     if (sql.includes("SELECT low_latency_requested")) {
@@ -203,6 +236,7 @@ function createFakeDb() {
                 presenter_peer_id: row.presenter_peer_id,
                 stopping_at: row.stopping_at ? new Date(row.stopping_at).toISOString() : null,
                 stop_attempts: row.stop_attempts,
+                instance_id: row.instance_id ?? null,
               },
             ]
           : [],
@@ -223,6 +257,7 @@ function createFakeDb() {
           presenter_peer_id: row.presenter_peer_id,
           stopping_at: row.stopping_at ? new Date(row.stopping_at).toISOString() : null,
           stop_attempts: row.stop_attempts,
+          instance_id: row.instance_id ?? null,
         })),
       };
     }

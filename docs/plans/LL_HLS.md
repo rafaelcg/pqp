@@ -310,6 +310,97 @@ it is for the egress: the remux is a separate process on a separate box, so a
 restart never touches it, and on boot the API reads `/healthz` and adopts any
 session with a live `hls_sessions` row.
 
+**What the first real party actually found (2026-09-14, 21:50 UTC, two API
+machines, `VOICE_REGISTRY=postgres`, `CLUSTER_BUS=postgres`).** All three of
+the rules above were written down and none of them had a caller.
+`pqp-remuxd` logged `demoting (idr-gap-exceeded)` fourteen seconds in and
+closed its LiveKit subscription; the API kept the row open with `mode='ll'`,
+kept handing viewers the LL playlist (the edge Worker logged
+`hlsEdge.llStateFetchFailed` twelve times), never started the conventional
+ladder, and the audience had no picture until an unrelated restart.
+`llDemoted` was declared, reported on the dashboard and incremented by
+nothing — pitfall 12's shape, in a counter invented for exactly this
+incident. It has a writer now: `sweepLlDemotions` in
+`server/src/voice/hls-remux.ts` polls `GET /sessions` on the health monitor's
+tick, treats `demoted: true`, `state: "demoted"` and "not listed at all"
+alike, stops the session, ends the row with the box's own reason, logs
+`voice.hlsLlDemoted`, and hands the channel back to `hls-egress.ts` to
+reconcile onto the rungs. A control API that cannot be reached demotes
+nothing, and neither does a channel whose row this process no longer owns:
+the sweep re-claims the row before it stops anything, because `llRooms` is
+process memory and a stale entry acted on after another machine took the
+party over would kill the new owner's stream through the one path with no
+claim in front of it. **And the fallback sticks**: the demotion clears the party's
+`low_latency_requested` (logged as `voice.hlsLlRequestCleared`) and memoes the
+channel for the same five minutes the box's own `DEMOTE_WINDOW_MS` uses, so
+the next reconcile cannot start a second LL session on top of the one just
+given up on. That write is scoped to the party the session
+RECORDED (`hls_sessions.watch_party_session_id`, written at start, which is
+the one moment "the party that asked" and "the party that is live" are
+certainly the same), never to the channel, so a cleanup that runs late cannot
+clear a newer party's request.
+
+**A NULL attribution is unknown, not "no party".** The column is NULL for two
+different reasons a row cannot tell apart: the session genuinely started with
+no live party, or the SELECT that would have recorded one failed. Reading it
+as the first was the last hole in the fallback: the demotion found nothing to
+clear, said so, and `low_latency_requested` stayed true until the memo lapsed.
+A demotion whose party is unknown is re-attributed at cleanup time, bounded by
+the session's own start (a party live before the session began could have
+asked for it; one created afterwards emphatically could not), and after three
+empty attempts it fails closed by clearing whatever party is live, logged as
+`voice.hlsLlRequestClearUnattributed`.
+
+**A demotion is three writes and is not done until all three are.** Stopping
+the box session and ending the row, clearing the party's request, and getting
+the conventional ladder started: each can fail on its own, and doing them once
+and hoping is how the durable half is lost to a database blip, after which the
+five-minute memo expires and a reconcile starts LL into the same failure
+again. They are a per-channel entry in a bounded queue
+(`pendingLlDemotionCount`, cap 64, exponential backoff to a minute, abandoned
+after 30 minutes with a log), re-run from the health tick until each lands.
+Every step is idempotent by construction and every retry re-asks the ownership
+question, so a cleanup that resumes after this process's heartbeat lapsed
+cannot touch a row the other machine has since taken. The next `goLive` writes the column again
+AND clears the memo, which is what makes a demotion last the party and not a
+minute longer.
+
+**Adoption is free, but only if exactly one machine does it.** The same night,
+machine B booted first, resumed the existing remux session
+(`voice.hlsLlStartFoundExisting` + `voice.hlsLlStarted`), and machine A booted
+three seconds later and stopped it (`voice.hlsLlOrphanStopped reason=no-row`),
+leaving B with `llSessions=1` for a session that no longer existed. Two
+causes. The conventional boot sweep read LL rows at all: it decides a row's
+fate by whether LiveKit lists its `egress_id`, an LL row has none, so it fell
+straight into "end it" — `reconcileStaleHlsSessions` now excludes `mode='ll'`
+outright, because the only sweep entitled to judge those rows is the one that
+asks the box holding them. And LL adoption stamped ownership AFTER putting
+every row in `llRooms`, which is a read-then-act across two machines:
+`claimHlsSessionRow` (`hls-ownership.ts`) is a heartbeat-aware compare-and-set
+run BEFORE a session is started, resumed or adopted, and the loser of that
+UPDATE neither adopts nor stops — it is not an orphan, it has a driver.
+`adoptLlHlsSessions` writes its own `voice_instances` heartbeat first and
+ABORTS THE PASS if that write fails, or two machines booting inside one TTL
+would each read the other as dead and take the row back in turn: "could not
+say I am alive" is not "I am alive". A row another process wrote in the last 60 s (the window
+between `startLlSession`'s INSERT and its POST) is left alone whatever the
+heartbeats say, which is this section's own grace, now enforced.
+
+**The mode re-check has to run where the transcode is.** Every path into
+`pushLiveHls` reads this process's own maps, so on the machine a viewer's
+frame happened to land on — about half of them, with no session affinity —
+the whole call is a no-op, the mode branch included. An instance that does not
+hold the channel (`liveHlsOwnsChannel`: `rooms` or `llRooms`) now publishes a
+`voice.hlsReconcile` intent on the cluster bus, throttled per channel and only
+when its own `hlsAudience` says the other machine has a party here, so an
+ordinary LiveKit voice room's joins and leaves publish nothing. The owner runs
+its own local reconcile; nobody else acts on it, and with one machine nothing
+is published at all. The relaying instance still runs its own local path
+afterwards, deliberately: a channel NOBODY owns yet is the ordinary case for a
+share about to start, and the machine holding the presenter is the one that
+has to start it. `voice.cluster.hlsReconcileRelayed` /
+`hlsReconcileApplied` are the two counters that say it runs.
+
 **How the box budget counts a remux.** CPU is nearly free: passthrough under 0.02
 core, audio mix and AAC about 0.05 for a busy stage, muxing and HTTP about 0.03, so
 **0.1 core** against the 0.51 a 720p30 rung costs today. **Memory**: parts and the
@@ -349,6 +440,14 @@ CPU under 1.5 of 4 cores with the conventional ladder alongside.
 beside it, a named operator watching `voice.hlsLlDemoted` and `B0.6`'s
 `liveHls.latency` panel, and a paragraph in `docs/EVENT_RUNBOOK.md`. If it demotes,
 that is the design working.
+
+**The first one (2026-09-14) demoted and the design did not work**, because
+nothing on the API side was reading the verdict — see §5. Before the next
+party: `liveHls.llDemoted` must be able to move (it is the proof the poll
+runs at all), and on two machines `voice.cluster.hlsReconcileRelayed` and
+`hlsReconcileApplied` must both be non-zero within a minute of a party with
+viewers on both, a `relayed` climbing beside an `applied` that stays at zero
+being the same pitfall-12 shape one more time.
 
 ## 7. The tasks
 

@@ -45,6 +45,7 @@ import {
 } from "../lib/s3.js";
 import {
   isLiveHlsLLEnabled,
+  llDemotedRecently,
   llHasRoom,
   llStreamFor,
   reconcileLlHlsNow,
@@ -53,6 +54,7 @@ import {
   resolveHlsMode,
   runBounded,
   stopLlSession,
+  sweepLlDemotions,
 } from "./hls-remux.js";
 
 /**
@@ -1436,6 +1438,22 @@ export function liveHlsStreamFor(channelId: string): LiveHlsStream | null {
 }
 
 /**
+ * WHOSE RECONCILE IS THE ONE THAT MATTERS FOR THIS CHANNEL.
+ *
+ * Both drivers' maps in one question, because "the machine that can actually
+ * change this party's transcode" is exactly "the one holding the session",
+ * whichever driver produced it. Read by `ws/voice.ts` to decide whether to
+ * run a reconcile here or relay the intent to the machine that can: a
+ * viewer's `voice.join` landing on the other machine ran `reconcileLiveHls`
+ * against an empty `rooms` map and did nothing at all, which is how a party
+ * that needed its mode re-checked (a demotion, a presenter change) sat on the
+ * wrong one until something happened to touch the owner.
+ */
+export function liveHlsOwnsChannel(channelId: string): boolean {
+  return rooms.has(channelId) || llHasRoom(channelId);
+}
+
+/**
  * The last resort `getChannelLiveState` (`server/src/ws/voice.ts`) reaches
  * for when this process never ran the egress itself: `rooms`, `llStreamFor`
  * and `hlsAudience.stream` are every one of them in-process maps, populated
@@ -2448,6 +2466,16 @@ export async function checkLiveHlsHealth(
   // still presenting anything.
   await retryPendingHlsSessionClaims();
   await revisitSkippedHlsSessions();
+  // AND BEFORE `getEgress()`, because a demotion is not a LiveKit question.
+  // The remux box has its own watchdog and its own verdict; this process's
+  // only job is to hear it and put the party back on the conventional
+  // ladder. `notifyChanged` is the same seam a dead egress uses
+  // (`ws/voice.ts` turns it into a `pushLiveHls`, which re-resolves the mode
+  // -- now `conventional`, because `sweepLlDemotions` has both cleared
+  // `low_latency_requested` and memoed the channel -- and starts the rungs).
+  for (const channelId of await sweepLlDemotions()) {
+    notifyChanged(channelId, "ll-demoted");
+  }
   const egress = getEgress();
   if (!egress) {
     return [];
@@ -4561,7 +4589,16 @@ async function reconcileLiveHlsNow(
     const existing = rooms.get(channelId);
     return { stream: existing ? existing.stream : llStreamFor(channelId) };
   }
-  const mode = resolveHlsMode({ serverId, requestedMode });
+  // A DEMOTION STICKS FOR THE REST OF THE PARTY. `sweepLlDemotions` clears
+  // `low_latency_requested` too, so this is belt and braces on the machine
+  // that did the demoting: the clear is a write on a different tick, and
+  // between the two this read would still answer `true` and start a second LL
+  // session on top of the one the box has just given up on. Five minutes, the
+  // same window the box's own watchdog uses.
+  const mode = resolveHlsMode({
+    serverId,
+    requestedMode: requestedMode && !llDemotedRecently(channelId),
+  });
   if (mode === "ll") {
     // A mode flip mid-party (the request field changed between two "Ir ao
     // vivo" presses for the same channel) must never leave two transcodes

@@ -167,6 +167,33 @@ export const remuxSessionInfoSchema = z.object({
   partsWritten: z.number().int().nonnegative(),
   /** Bytes served to viewers, NOT bytes written into the ring (see the Go README). */
   bytesServed: z.number().int().nonnegative(),
+  /**
+   * THE DEMOTION CONTRACT, AND WHY THESE THREE ARE OPTIONAL.
+   *
+   * `tools/pqp-remux/README.md` §"Watchdog and the demotion contract": a
+   * session the box has given up on is NOT dropped from `GET /sessions`. Its
+   * pipeline is closed (no LiveKit subscription, no CPU) and it stays listed
+   * with `demoted: true` and a `demotedReason` until an explicit `DELETE`
+   * removes it, precisely so `pqp-api` can notice on its next poll, end the
+   * `hls_sessions` row and fall the party back to the conventional ladder.
+   *
+   * Until 2026-09-14 this schema did not name them, and a `z.object()` with
+   * no `.strict()` STRIPS what it does not name (Zod's documented default).
+   * So the box said `demoting (idr-gap-exceeded)` fourteen seconds into the
+   * first real LL party, `pqp-api` parsed the field away, kept the row open
+   * and kept handing viewers an LL playlist nothing was writing: no picture
+   * at all until an unrelated restart. The fields were on the wire the whole
+   * time; nothing on this side could see them.
+   *
+   * Optional rather than required so an older `pqp-remuxd` (one that predates
+   * the watchdog) still parses: absent is read as "not demoted", which is
+   * what such a box means.
+   */
+  state: z.string().min(1).optional(),
+  demoted: z.boolean().optional(),
+  demotedReason: z.string().nullable().optional(),
+  /** How long since the last IDR, ms. Diagnostic; the box decides, not us. */
+  lastIdrAgeMs: z.number().int().nonnegative().nullable().optional(),
 });
 export type RemuxSessionInfo = z.infer<typeof remuxSessionInfoSchema>;
 

@@ -1840,6 +1840,14 @@ server channel" to `reconcileLiveHls`. So an ordinary end of share was torn down
 by the allowlist branch instead of the no-share branch. It is a map read, so the
 saving was imaginary and the ambiguity was not.
 
+**A low-latency session the remux box gives up on falls back to the
+conventional ladder, and the party stops asking for LL.** `pqp-remuxd` keeps a
+demoted session listed with `demoted: true` and a reason; the API's health
+monitor reads that every tick, ends the `hls_sessions` row, counts
+`liveHls.llDemoted`, logs `voice.hlsLlDemoted channelId reason`, clears the
+party's `low_latency_requested` and reconciles the channel so the rungs start.
+See `docs/plans/LL_HLS.md` §5.
+
 **A rung the monitor declares dead may still be running.** `rungHealth` says
 "ended" for two different reasons and only one of them means the handler is
 over. LiveKit saying so is final. The playlist not moving for

@@ -280,6 +280,18 @@ export async function reconcileStaleHlsSessions(): Promise<{
             ended_at IS NULL AS still_open
      FROM hls_sessions
      WHERE cleaned_at IS NULL
+       -- AN LL ROW IS NOT THIS SWEEP'S BUSINESS, and reading it here was the
+       -- 2026-09-14 boot race. This pass decides a row's fate by whether
+       -- LiveKit still lists its egress_id; an LL row HAS no egress id (it
+       -- names a pqp-remux session instead, mode = 'll'), so it can never
+       -- match, is never adopted, and fell straight into toEnd — machine A
+       -- ended the row for a session machine B had just resumed, and
+       -- adoptLlHlsSessions then found a live remux session with no open
+       -- row and stopped it as an orphan (reason=no-row). The audience had
+       -- no picture until an unrelated restart. adoptLlHlsSessions in
+       -- hls-remux.ts is the only sweep that may judge these rows, because
+       -- it is the only one that asks the box that actually holds them.
+       AND mode <> 'll'
        AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
   );
   const byEgressId = new Map(

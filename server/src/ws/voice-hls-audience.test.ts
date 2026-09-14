@@ -124,6 +124,11 @@ vi.mock("../voice/hls-egress.js", () => ({
   playlistBaseUrl: () => null,
   liveHlsStreamFor: (channelId: string) =>
     egress.streams.get(channelId) ?? null,
+  // Whether THIS instance holds the channel's transcode: what `pushLiveHls`
+  // reads to decide between reconciling here and relaying the intent to the
+  // machine that can. One machine in this file, and the fake egress above is
+  // its own, so a channel with a stream is a channel it owns.
+  liveHlsOwnsChannel: (channelId: string) => egress.streams.has(channelId),
   reconcileLiveHls: async (
     channelId: string,
     presenterPeerId: string | null,

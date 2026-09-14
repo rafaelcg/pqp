@@ -36,7 +36,11 @@
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import { logEvent } from "../lib/log.js";
-import { INSTANCE_TTL_MS, isVoiceRegistryEnabled } from "./registry.js";
+import {
+  heartbeatVoiceInstance,
+  INSTANCE_TTL_MS,
+  isVoiceRegistryEnabled,
+} from "./registry.js";
 
 /**
  * The identity stamped into `hls_sessions.instance_id`. The same process id
@@ -413,6 +417,120 @@ async function writeHlsSessionClaims(
       error: error instanceof Error ? error.message : String(error),
     });
     return false;
+  }
+}
+
+/**
+ * A CLAIM IS ONLY DECISIVE IF THE CLAIMANT IS VISIBLY ALIVE.
+ *
+ * `claimHlsSessionRow`'s predicate lets a row be taken from an owner whose
+ * heartbeat has expired, which is exactly what makes a claim work after a
+ * restart — and exactly what makes TWO booting machines both succeed if
+ * neither has written its own heartbeat yet: A stamps the row, B's UPDATE
+ * re-evaluates against A, finds no live `voice_instances` row for it, and
+ * takes it straight back. `startVoiceInstanceHeartbeat` fires its first beat
+ * with `void`, so at boot that is not a hypothetical, it is the ordinary
+ * ordering. Writing the row first costs one upsert per boot sweep and turns
+ * "last writer wins" into "first writer wins", which is the only version of
+ * this that has an answer.
+ *
+ * ANSWERS WHETHER THE CLAIMANT IS NOW VISIBLE, and a caller that is about to
+ * claim MUST abort on `false` (a Farol finding on PR #618). Swallowing the
+ * failure and claiming anyway is the exact race this function exists to
+ * close, one step further along: machine A takes an expired row while its own
+ * heartbeat is missing, machine B reads A as dead and takes it straight back,
+ * and both drive the same remux session until one stops the other's stream.
+ * "Could not say I am alive" is not "I am alive".
+ *
+ * `true` with the registry off, and no round trip: there are no heartbeats to
+ * be visible in, one process owns everything, and the claim's own predicate
+ * omits the owner clause for exactly that reason.
+ */
+export async function ensureHlsOwnerHeartbeat(): Promise<boolean> {
+  if (!isVoiceRegistryEnabled()) {
+    return true;
+  }
+  try {
+    await heartbeatVoiceInstance();
+    return true;
+  } catch (error) {
+    logEvent("voice.hlsOwnerLookupFailed", {
+      scope: "heartbeat",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * CLAIM ONE OPEN ROW, AND SAY WHETHER IT WAS ACTUALLY TAKEN.
+ *
+ * `claimHlsSessionRows` is a repair: it stamps rows this process has ALREADY
+ * adopted in memory, and a refusal there is logged and otherwise survivable.
+ * The LL path needs the opposite shape — a claim asked BEFORE anything is
+ * started or reused, whose answer decides whether to proceed at all — because
+ * on 2026-09-14 two machines booted three seconds apart against one open LL
+ * row and both acted on it: B resumed the remux session, A read the same row
+ * (still stamped with the dead pre-restart instance) and stopped the session B
+ * had just taken over. Adopting first and stamping afterwards cannot tell
+ * those two apart; a conditional UPDATE whose `rowCount` is the verdict can.
+ *
+ * Three answers, and the caller must treat them differently:
+ *
+ *  - `claimed`: the row is this process's now. Go ahead.
+ *  - `refused`: swept, already ended, or owned by an instance that is
+ *    answering its heartbeat. Do NOTHING to it — not start, not stop, not
+ *    end. Somebody alive is driving it.
+ *  - `failed`: the database could not be asked. Also do nothing, for the
+ *    same reason `findOpenLlRow` fails closed: guessing is how a deploy kills
+ *    a stream.
+ *
+ * With the registry off the owner predicate is omitted exactly as it is in
+ * `writeHlsSessionClaims` — one process, no heartbeats to judge against, and
+ * judging a self-host's only process against a previous boot's row would
+ * refuse the only claimant there is.
+ */
+export async function claimHlsSessionRow(
+  sessionId: string,
+  options: HlsOwnershipOptions = {},
+): Promise<"claimed" | "refused" | "failed"> {
+  const me = options.instanceId ?? hlsOwnerInstanceId();
+  const ttlMs = options.ttlMs ?? INSTANCE_TTL_MS;
+  const ownerPredicate = isVoiceRegistryEnabled()
+    ? `AND (s.instance_id IS NULL
+            OR s.instance_id = $2
+            OR NOT EXISTS (
+              SELECT 1 FROM voice_instances i
+               WHERE i.instance_id::text = s.instance_id
+                 AND i.heartbeat_at
+                     > NOW() - ($3::bigint * INTERVAL '1 millisecond')))`
+    : "";
+  const params: unknown[] = [sessionId, me];
+  if (ownerPredicate) {
+    params.push(ttlMs);
+  }
+  try {
+    const written = await getPool().query(
+      `UPDATE hls_sessions s
+          SET instance_id = $2
+        WHERE s.id = $1::uuid
+          AND s.cleaned_at IS NULL
+          -- An ENDED row is never claimable here. Unlike the batch repair
+          -- above there is no reopen shape: a row somebody closed is a
+          -- session that is over, and an LL start that wants one makes a new
+          -- row rather than resurrecting this one.
+          AND s.ended_at IS NULL
+          ${ownerPredicate}`,
+      params,
+    );
+    return (written.rowCount ?? 0) > 0 ? "claimed" : "refused";
+  } catch (error) {
+    logEvent("voice.hlsSessionClaimFailed", {
+      count: 1,
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return "failed";
   }
 }
 
