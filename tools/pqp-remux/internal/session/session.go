@@ -228,6 +228,12 @@ type AudioConfig struct {
 	// Encoder configures internal/aacenc.New. A zero-value Config is
 	// fine (its own defaults apply: 128kbps, "ffmpeg" via PATH).
 	Encoder aacenc.Config
+	// StartSegmentIndex is the audio counterpart of
+	// Session.SetStartSegmentIndex's video parameter -- see that method's
+	// doc comment. 0 (the zero value) is ordinary "start counting from
+	// segment 0" behaviour; L1.6's watchdog restart is the only caller
+	// that ever sets this to anything else.
+	StartSegmentIndex int
 }
 
 // EnableAudio starts the AAC encoder subprocess and this session's audio
@@ -258,6 +264,9 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 		Timescale:       aacenc.SampleRate,
 		SegmentDuration: cfg.SegmentTicks,
 	})
+	if cfg.StartSegmentIndex > 0 {
+		s.audioFrag.SetStartSegmentIndex(cfg.StartSegmentIndex)
+	}
 	s.audioRing = cfg.Ring
 
 	audioInit, err := cmaf.BuildAudioInitSegment(cmaf.AudioInitParams{
@@ -322,6 +331,33 @@ func (s *Session) MarkSubscribed() { s.subscribed.Store(true) }
 // SetKeyframeRequester wires a keyframe.Requester in (or out, with nil)
 // after construction. Safe to call concurrently with HandleVideoPacket.
 func (s *Session) SetKeyframeRequester(r *keyframe.Requester) { s.keyReq.Store(r) }
+
+// SetStartSegmentIndex overrides the index the video track's FIRST segment
+// will carry (0 by default). Call it, if at all, immediately after New and
+// before the first HandleVideoPacket call: L1.6's control-plane watchdog
+// restart uses this so a replacement pipeline's segment numbering (and
+// therefore its R2 object keys, internal/r2.ObjectPrefix) continues from
+// where a stalled predecessor left off, instead of starting back at 0 and
+// silently overwriting objects the predecessor already uploaded (Farol
+// review, PR #584).
+func (s *Session) SetStartSegmentIndex(index int) { s.frag.SetStartSegmentIndex(index) }
+
+// CurrentVideoSegmentIndex returns the video fragmenter's current (open,
+// not-yet-sealed) segment index. internal/control reads this (via Health,
+// remux_pipeline.go) before closing a stalled pipeline, so the replacement
+// built by SetStartSegmentIndex above can continue past it -- see that
+// method's doc comment for the full reasoning.
+func (s *Session) CurrentVideoSegmentIndex() int { return s.frag.CurrentSegmentIndex() }
+
+// CurrentAudioSegmentIndex is CurrentVideoSegmentIndex's audio
+// counterpart; 0 before EnableAudio has ever run (no fragmenter exists yet,
+// so there is nothing meaningful to continue).
+func (s *Session) CurrentAudioSegmentIndex() int {
+	if s.audioFrag == nil {
+		return 0
+	}
+	return s.audioFrag.CurrentSegmentIndex()
+}
 
 // HandleVideoPacket feeds one RTP packet from the subscribed screen-share
 // video track through depacketization, CMAF muxing and the ring, in that

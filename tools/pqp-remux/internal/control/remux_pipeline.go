@@ -74,6 +74,9 @@ func NewRemuxPipeline(cfg PipelineConfig) (Pipeline, error) {
 	partTicks := uint32(msToTicks(cfg.PartMs))
 	segmentTicks := uint32(msToTicks(cfg.SegmentMs))
 	sess := session.New(partTicks, segmentTicks, r, nil)
+	if cfg.StartVideoSegmentIndex > 0 {
+		sess.SetStartSegmentIndex(cfg.StartVideoSegmentIndex)
+	}
 
 	if r2Writer != nil {
 		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, rung)
@@ -88,6 +91,7 @@ func NewRemuxPipeline(cfg PipelineConfig) (Pipeline, error) {
 			FFmpegPath:  global.FFmpegPath,
 			BitrateKbps: global.AACBitrateKbps,
 		},
+		StartSegmentIndex: cfg.StartAudioSegmentIndex,
 	}); err != nil {
 		audioEnabled = false
 		log.Printf("pqp-remux: control: session %s: audio mixing disabled: %v", cfg.SessionID, err)
@@ -162,11 +166,13 @@ func msDuration(ms int64) time.Duration { return time.Duration(ms) * time.Millis
 func (p *remuxPipeline) Health() PipelineHealth {
 	h := p.sess.Health()
 	ph := PipelineHealth{
-		Subscribed:    h.Subscribed,
-		PartsWritten:  h.PartsWritten,
-		AudioEnabled:  p.audioEnabled,
-		AudioDead:     h.AudioDead,
-		AudioRestarts: h.AudioRestarts,
+		Subscribed:        h.Subscribed,
+		PartsWritten:      h.PartsWritten,
+		AudioEnabled:      p.audioEnabled,
+		AudioDead:         h.AudioDead,
+		AudioRestarts:     h.AudioRestarts,
+		VideoSegmentIndex: p.sess.CurrentVideoSegmentIndex(),
+		AudioSegmentIndex: p.sess.CurrentAudioSegmentIndex(),
 	}
 	started := p.sess.Started()
 	if p.sess.HasPart() {

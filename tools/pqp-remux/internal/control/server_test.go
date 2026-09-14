@@ -3,18 +3,31 @@ package control
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
+// testNonceCounter hands every signedHTTPRequest call a distinct nonce:
+// tests that intentionally want a REPEATED nonce (replay) build the
+// request by hand instead -- see TestServer_RejectsReplayedNonce.
+var testNonceCounter atomic.Int64
+
 func signedHTTPRequest(t *testing.T, secret, method, path string, body []byte) *http.Request {
 	t.Helper()
+	nonce := fmt.Sprintf("test-nonce-%d", testNonceCounter.Add(1))
+	return signedHTTPRequestWithNonce(t, secret, method, path, nonce, body)
+}
+
+func signedHTTPRequestWithNonce(t *testing.T, secret, method, path, nonce string, body []byte) *http.Request {
+	t.Helper()
 	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	sig := sign([]byte(secret), method, path, ts, string(body))
+	sig := sign([]byte(secret), method, path, ts, nonce, string(body))
 	var r io.Reader
 	if body != nil {
 		r = bytes.NewReader(body)
@@ -22,14 +35,20 @@ func signedHTTPRequest(t *testing.T, secret, method, path string, body []byte) *
 	req := httptest.NewRequest(method, path, r)
 	req.Header.Set(TimestampHeader, ts)
 	req.Header.Set(SignatureHeader, sig)
+	req.Header.Set(NonceHeader, nonce)
 	return req
 }
 
 func newTestServer(t *testing.T, secret string, factory PipelineFactory) (*Server, *Registry) {
 	t.Helper()
+	return newTestServerWithOriginKey(t, secret, "", factory)
+}
+
+func newTestServerWithOriginKey(t *testing.T, secret, mediaOriginKey string, factory PipelineFactory) (*Server, *Registry) {
+	t.Helper()
 	reg := NewRegistry(factory, GlobalConfig{}, fixedWatchdogCfg(), nil)
 	t.Cleanup(reg.StopAll)
-	return NewServer(secret, reg), reg
+	return NewServer(secret, mediaOriginKey, reg), reg
 }
 
 func TestServer_RejectsUnsignedControlRequests(t *testing.T) {
@@ -50,6 +69,37 @@ func TestServer_RejectsUnsignedControlRequests(t *testing.T) {
 	srv.ServeHTTP(rec2, signedHTTPRequest(t, "wrong-secret", http.MethodGet, "/sessions", nil))
 	if rec2.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for a wrongly-signed request, got %d", rec2.Code)
+	}
+}
+
+// TestServer_RejectsReplayedNonce is the "bounded seen-nonce cache" finding
+// from Farol's review of PR #584: a nonce this box has already accepted a
+// signature for must not work a second time, even though each individual
+// request is (on its own) validly signed -- this is what makes a captured
+// request stop working on its SECOND use, not merely once the clock-skew
+// window eventually closes.
+func TestServer_RejectsReplayedNonce(t *testing.T) {
+	secret := "topsecret"
+	srv, _ := newTestServer(t, secret, failingFactory)
+
+	const nonce = "fixed-nonce-for-replay-test"
+	rec1 := httptest.NewRecorder()
+	srv.ServeHTTP(rec1, signedHTTPRequestWithNonce(t, secret, http.MethodGet, "/sessions", nonce, nil))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected the first use of a fresh nonce to succeed, got %d: %s", rec1.Code, rec1.Body.String())
+	}
+
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, signedHTTPRequestWithNonce(t, secret, http.MethodGet, "/sessions", nonce, nil))
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected a replayed nonce to be rejected, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+
+	// A DIFFERENT nonce must be unaffected by the first one's use.
+	rec3 := httptest.NewRecorder()
+	srv.ServeHTTP(rec3, signedHTTPRequest(t, secret, http.MethodGet, "/sessions", nil))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("expected a fresh, different nonce to succeed, got %d: %s", rec3.Code, rec3.Body.String())
 	}
 }
 
@@ -249,6 +299,87 @@ func TestServer_MediaRoute_UnknownSessionIs404(t *testing.T) {
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/s/does-not-exist/playlist.m3u8", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+// TestServer_MediaRoute_RequiresOriginKeyWhenConfigured is the HIGH
+// finding from Farol's review of PR #584: once MEDIA_ORIGIN_KEY is set,
+// /s/:id/* -- L2.3's edge Worker's own seam -- must refuse a request that
+// does not carry the matching X-Pqp-Origin-Key header, checked before the
+// registry is ever consulted (a request for an id that does not even
+// exist must still be refused on the header alone, not leak a 404-vs-401
+// distinction to an unauthenticated caller).
+func TestServer_MediaRoute_RequiresOriginKeyWhenConfigured(t *testing.T) {
+	secret := "topsecret"
+	originKey := "edge-worker-shared-key"
+	spy := &pipelineSpy{}
+	srv, _ := newTestServerWithOriginKey(t, secret, originKey, spy.factory())
+
+	startBody, _ := json.Marshal(testStartReq(sessA, chanA, chanA))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, signedHTTPRequest(t, secret, http.MethodPost, "/sessions", startBody))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rec.Code)
+	}
+	spy.last().setBody("#EXTM3U\n")
+
+	// No header at all: refused, even for a session id that does exist.
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/s/"+sessA+"/playlist.m3u8", nil))
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with no origin key header, got %d", rec2.Code)
+	}
+
+	// Wrong value: also refused.
+	rec3 := httptest.NewRecorder()
+	req3 := httptest.NewRequest(http.MethodGet, "/s/"+sessA+"/playlist.m3u8", nil)
+	req3.Header.Set(OriginKeyHeader, "not-the-right-key")
+	srv.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with a wrong origin key, got %d", rec3.Code)
+	}
+
+	// An unknown session id, still refused on the header alone -- must
+	// not leak whether the id exists to an unauthenticated caller.
+	rec4 := httptest.NewRecorder()
+	srv.ServeHTTP(rec4, httptest.NewRequest(http.MethodGet, "/s/does-not-exist/playlist.m3u8", nil))
+	if rec4.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 (not 404) for an unknown id with no origin key, got %d", rec4.Code)
+	}
+
+	// The correct value: allowed through to the session.
+	rec5 := httptest.NewRecorder()
+	req5 := httptest.NewRequest(http.MethodGet, "/s/"+sessA+"/playlist.m3u8", nil)
+	req5.Header.Set(OriginKeyHeader, originKey)
+	srv.ServeHTTP(rec5, req5)
+	if rec5.Code != http.StatusOK {
+		t.Fatalf("expected 200 with the correct origin key, got %d: %s", rec5.Code, rec5.Body.String())
+	}
+	if rec5.Body.String() != "#EXTM3U\n" {
+		t.Fatalf("unexpected body: %q", rec5.Body.String())
+	}
+}
+
+// TestServer_MediaRoute_NoOriginKeyConfiguredStaysOpen documents the
+// default (loopback) posture is unchanged: with MEDIA_ORIGIN_KEY unset,
+// the media routes behave exactly as before this fix (see
+// TestServer_MediaRoute_ProxiesUnsignedToSession).
+func TestServer_MediaRoute_NoOriginKeyConfiguredStaysOpen(t *testing.T) {
+	secret := "topsecret"
+	spy := &pipelineSpy{}
+	srv, _ := newTestServerWithOriginKey(t, secret, "", spy.factory())
+
+	startBody, _ := json.Marshal(testStartReq(sessA, chanA, chanA))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, signedHTTPRequest(t, secret, http.MethodPost, "/sessions", startBody))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rec.Code)
+	}
+
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/s/"+sessA+"/playlist.m3u8", nil))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 with no origin key configured, got %d", rec2.Code)
 	}
 }
 

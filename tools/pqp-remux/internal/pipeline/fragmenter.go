@@ -69,6 +69,17 @@ func NewFragmenter(cfg Config) *Fragmenter {
 	return &Fragmenter{cfg: cfg, nextIsSegmentStart: true}
 }
 
+// SetStartSegmentIndex overrides the index the FIRST segment this
+// Fragmenter ever closes will carry (0 by default, see NewFragmenter).
+// Call it, if at all, immediately after NewFragmenter and before the
+// first Push -- L1.6's control-plane watchdog restart uses this
+// (internal/session.Session.SetStartSegmentIndex) so a replacement
+// pipeline's segment numbering (and therefore its R2 object keys)
+// continues from where a stalled predecessor left off, rather than
+// starting back at 0 and silently overwriting objects the predecessor
+// already uploaded (Farol review, PR #584).
+func (f *Fragmenter) SetStartSegmentIndex(index int) { f.segmentIndex = index }
+
 // Push feeds the next access unit in PTS order. It returns a Fragment
 // whenever this AU's arrival closes a part (which may also close a
 // segment), or nil while a part is still open. ErrWaitingForIDR is

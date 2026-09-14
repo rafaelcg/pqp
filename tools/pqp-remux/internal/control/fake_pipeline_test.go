@@ -69,8 +69,18 @@ type pipelineSpy struct {
 }
 
 func (s *pipelineSpy) factory() PipelineFactory {
+	return s.factoryWithHealth(PipelineHealth{})
+}
+
+// factoryWithHealth is factory, but every pipeline it builds starts with
+// initial (rather than the zero value): useful for watchdog integration
+// tests that need to skip straight past the "waiting for a first part"
+// phase (see managed_session_test.go's restart-then-demote test, which
+// primes every generation with a recent LastPartAt/LastIdrAt so the
+// part-stuck ladder -- not FirstPartTimeoutMs -- is what's under test).
+func (s *pipelineSpy) factoryWithHealth(initial PipelineHealth) PipelineFactory {
 	return func(cfg PipelineConfig) (Pipeline, error) {
-		p := newFakePipeline(PipelineHealth{})
+		p := newFakePipeline(initial)
 		s.mu.Lock()
 		s.pipelines = append(s.pipelines, p)
 		s.mu.Unlock()

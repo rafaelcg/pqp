@@ -136,26 +136,55 @@ func (m *ManagedSession) evaluateTick(now time.Time) {
 	}
 }
 
-// restart builds a fresh Pipeline from this session's own (unchanged)
-// PipelineConfig and swaps it in, closing the old one only once the new one
-// is already live -- the same "new up before old down" ordering
-// internal/session's own shutdown-order doc comments favor elsewhere in
-// this module, minimizing the gap with no viewer-visible player rebuild
-// (this task's own acceptance bar). If the factory call itself fails (e.g.
-// LiveKit unreachable), the old (stalled) pipeline is left in place and
-// this attempt is only logged: the next tick re-evaluates against
-// evaluateWatchdog's own ladder, which demotes rather than retrying forever
-// once the demote window has already been consumed by this attempt (see
-// evaluateWatchdog's doc comment).
+// restart builds a fresh Pipeline and swaps it in, closing the old one only
+// once the new one is already live -- the same "new up before old down"
+// ordering internal/session's own shutdown-order doc comments favor
+// elsewhere in this module, minimizing the gap with no viewer-visible
+// player rebuild (this task's own acceptance bar). If the factory call
+// itself fails (e.g. LiveKit unreachable), the old (stalled) pipeline is
+// left in place and this attempt is only logged: the next tick
+// re-evaluates against evaluateWatchdog's own ladder, which demotes rather
+// than retrying forever once the demote window has already been consumed
+// by this attempt (see evaluateWatchdog's doc comment).
+//
+// The new pipeline's config is m.cfg with StartVideoSegmentIndex/
+// StartAudioSegmentIndex overridden to the OLD pipeline's own current
+// (open) segment index **plus one** (Farol review, PR #584) -- never the
+// bare current index, and never left at m.cfg's original zero value.
+// "Plus one" matters because the old pipeline's own teardown (old.Close,
+// below) finalizes and enqueues an R2 upload for whatever segment was
+// still open on it: closing the subscriber disconnects the room, which
+// (per internal/subscriber's own readRTP doc comment: a track "ends" on
+// either the publisher stopping OR the session disconnecting) fires
+// OnVideoTrackEnded asynchronously, running session.Session.Finish, which
+// uploads the video track's current segment; session.Session.Close does
+// the same synchronously for audio's own tail segment. If the replacement
+// pipeline started at that SAME index instead, its own first sealed
+// segment would eventually PUT the identical R2 key the old pipeline's
+// teardown is independently in the middle of uploading -- a second write
+// to a key already used, silently overwriting real (if truncated) content,
+// exactly what this fix exists to prevent. Reserving index+1 for the
+// replacement makes the two pipelines' key ranges disjoint by construction,
+// regardless of exactly when the old pipeline's async teardown finishes.
 func (m *ManagedSession) restart() {
-	newP, err := m.factory(m.cfg)
+	m.mu.Lock()
+	old := m.current
+	m.mu.Unlock()
+
+	cfg := m.cfg
+	if old != nil {
+		oldHealth := old.Health()
+		cfg.StartVideoSegmentIndex = oldHealth.VideoSegmentIndex + 1
+		cfg.StartAudioSegmentIndex = oldHealth.AudioSegmentIndex + 1
+	}
+
+	newP, err := m.factory(cfg)
 	if err != nil {
 		log.Printf("pqp-remux: control: session %s: restart failed: %v", m.req.SessionID, err)
 		return
 	}
 
 	m.mu.Lock()
-	old := m.current
 	m.current = newP
 	m.pipelineStartedAt = time.Now()
 	m.mu.Unlock()
@@ -285,18 +314,23 @@ func (m *ManagedSession) Info() SessionInfo {
 	return info
 }
 
+// stateFor mirrors evaluateWatchdog's own "has a part ever arrived" phase
+// boundary exactly (watchdog.go): PartsWritten > 0 is what separates
+// StateWaiting from StateRunning there, so the state this method reports
+// is not just a cosmetic summary but the ACTUAL phase the watchdog is
+// currently applying its rules from.
 func (m *ManagedSession) stateFor(p Pipeline, demoted bool) SessionState {
 	if demoted {
 		return StateDemoted
 	}
 	if p == nil {
-		return StateStarting
+		return StateWaiting
 	}
 	h := p.Health()
-	if h.Subscribed || h.PartsWritten > 0 {
+	if h.PartsWritten > 0 {
 		return StateRunning
 	}
-	return StateStarting
+	return StateWaiting
 }
 
 // countingResponseWriter wraps an http.ResponseWriter, counting bytes

@@ -8,7 +8,11 @@ import (
 const testSegmentMs = 4000 // matches config.DefaultSegmentMS
 
 func fixedWatchdogCfg() WatchdogConfig {
-	return WatchdogConfig{PartStuckMs: DefaultPartStuckMs, DemoteWindowMs: DefaultDemoteWindowMs}
+	return WatchdogConfig{
+		FirstPartTimeoutMs: DefaultFirstPartTimeoutMs,
+		PartStuckMs:        DefaultPartStuckMs,
+		DemoteWindowMs:     DefaultDemoteWindowMs,
+	}
 }
 
 func TestEvaluateWatchdog_HealthyIsNoop(t *testing.T) {
@@ -25,21 +29,46 @@ func TestEvaluateWatchdog_HealthyIsNoop(t *testing.T) {
 	}
 }
 
-func TestEvaluateWatchdog_NeverProducedAnything_FallsBackToPipelineStart(t *testing.T) {
-	// No part, no IDR, ever: both references fall back to pipelineStartedAt.
-	// Once PART_STUCK_MS has passed since start with nothing at all, that
-	// is exactly as stuck as a pipeline that stopped after a good start.
+func TestEvaluateWatchdog_NoPartYet_IsWaitingNotStalled(t *testing.T) {
+	// No part has ever arrived: this is StateWaiting (a presenter who has
+	// not clicked "share screen" yet, or a room just joined), NOT a stall
+	// -- PART_STUCK_MS (3s by default) must NOT govern this phase at all
+	// (Farol review, PR #584). Well past PartStuckMs, but nowhere near
+	// FirstPartTimeoutMs, must still be a no-op.
 	start := time.UnixMilli(0)
 	cfg := fixedWatchdogCfg()
-	now := start.Add(time.Duration(cfg.PartStuckMs)*time.Millisecond + time.Millisecond)
-	// Keep the IDR-gap side out of the way for this test: pretend a
-	// recent IDR arrived, so only the part-stuck ladder can fire.
-	h := PipelineHealth{LastIdrAt: now.Add(-time.Second)}
+	now := start.Add(10 * time.Duration(cfg.PartStuckMs) * time.Millisecond)
+	// Nothing has arrived, video or audio -- even a "recent IDR" fixture
+	// would be nonsensical here (internal/pipeline.Fragmenter never emits
+	// a part before its first IDR, so "an IDR but no part" cannot happen
+	// in practice); PipelineHealth{} is the honest fixture.
+	h := PipelineHealth{}
 	var st watchdogState
 
 	got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, now)
-	if got.action != actionRestart {
-		t.Fatalf("expected actionRestart, got %v (%s)", got.action, got.reason)
+	if got.action != actionNone {
+		t.Fatalf("expected actionNone while waiting for a first part (well under FirstPartTimeoutMs), got %v (%s)", got.action, got.reason)
+	}
+}
+
+func TestEvaluateWatchdog_NoPartEverArrives_DemotesAsNoVideo(t *testing.T) {
+	// Past FirstPartTimeoutMs with still nothing at all: demote, reason
+	// "no-video" -- distinct from the part-stuck ladder's own reasons, and
+	// with no restart attempt recorded (there is nothing to restart INTO;
+	// the pipeline is already doing the one thing it can, waiting for a
+	// track).
+	start := time.UnixMilli(0)
+	cfg := fixedWatchdogCfg()
+	now := start.Add(time.Duration(cfg.FirstPartTimeoutMs)*time.Millisecond + time.Millisecond)
+	h := PipelineHealth{}
+	var st watchdogState
+
+	got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, now)
+	if got.action != actionDemote || got.reason != "no-video" {
+		t.Fatalf("expected actionDemote with reason %q, got %v (%s)", "no-video", got.action, got.reason)
+	}
+	if !st.restartedAt.IsZero() {
+		t.Fatal("expected the no-video demote path to never touch the part-stuck restart bookkeeping")
 	}
 }
 
@@ -178,16 +207,26 @@ func TestEvaluateWatchdog_IdrGapExceededDemotesOutright(t *testing.T) {
 	}
 }
 
-func TestEvaluateWatchdog_NeverAnIdr_FallsBackToPipelineStart(t *testing.T) {
+// TestEvaluateWatchdog_PartWithNoRecordedIdr_DefensiveFallback covers a
+// combination internal/pipeline.Fragmenter's own invariant makes
+// impossible in practice (it never emits a fragment before the stream's
+// first IDR -- ErrWaitingForIDR -- so PartsWritten > 0 already implies an
+// IDR has been seen): a part has arrived, but LastIdrAt is still zero.
+// evaluateWatchdog falls back to h.LastPartAt for the IDR reference in
+// that case (watchdog.go), which makes the "gap" zero rather than
+// "however many years since the Unix epoch" -- fail toward a harmless
+// no-op if this invariant is ever violated by a future change, not toward
+// an instant, surprising demote.
+func TestEvaluateWatchdog_PartWithNoRecordedIdr_DefensiveFallback(t *testing.T) {
 	start := time.UnixMilli(0)
 	cfg := fixedWatchdogCfg()
 	segDur := time.Duration(testSegmentMs) * time.Millisecond
 	var st watchdogState
 
 	now := start.Add(3*segDur + time.Millisecond)
-	h := PipelineHealth{LastPartAt: now} // parts flowing, but no IDR ever (LastIdrAt zero)
+	h := PipelineHealth{LastPartAt: now} // a part just arrived; LastIdrAt is (impossibly) still zero
 	got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, now)
-	if got.action != actionDemote || got.reason != "idr-gap-exceeded" {
-		t.Fatalf("expected a session that has never produced an IDR to demote once 3x the segment target has passed since it started, got %v (%s)", got.action, got.reason)
+	if got.action != actionNone {
+		t.Fatalf("expected the defensive IDR fallback to treat this as a healthy tick, got %v (%s)", got.action, got.reason)
 	}
 }

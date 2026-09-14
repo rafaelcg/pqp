@@ -2,6 +2,7 @@ package control
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 )
@@ -19,10 +20,21 @@ const (
 	// pqp-api's own signed control calls are authenticated (signing.go).
 	DefaultListen = "127.0.0.1:8090"
 
+	// DefaultFirstPartTimeoutMs bounds "waiting for a part that has never
+	// arrived yet" (StateWaiting), a phase PartStuckMs must NOT govern:
+	// a party that has just gone live but whose presenter has not yet
+	// clicked "share screen" looks identical, from PartsWritten's point
+	// of view, to a genuinely broken pipeline (Farol review, PR #584). 60s
+	// is this task's own considered default -- long enough for an
+	// ordinary "go live, then share" sequence, short enough that a truly
+	// dead room does not sit registered forever.
+	DefaultFirstPartTimeoutMs = 60_000
 	// DefaultPartStuckMs is docs/plans/LL_HLS.md §5's own number: "the LL
 	// path uses PART_STUCK_MS = 3000 (six parts)", six times faster than
 	// the conventional path's 20s PLAYLIST_STUCK_MS because giving up
-	// here is cheap (an ABR rendition switch, not an outage).
+	// here is cheap (an ABR rendition switch, not an outage). Applies only
+	// once at least one part has already been produced -- see
+	// FirstPartTimeoutMs above for before that.
 	DefaultPartStuckMs = 3000
 	// DefaultDemoteWindowMs: how long after the one allowed restart a
 	// second stall still counts as "the same episode" and demotes,
@@ -48,13 +60,24 @@ const (
 type GlobalConfig struct {
 	Listen string
 	Secret string
+	// MediaOriginKey gates the unsigned /s/:id/* media routes (server.go's
+	// withOriginKey): empty means off, matching every other optional
+	// access-control layer in this repo's own "not configured, not an
+	// error" shape -- but see LoadGlobalConfig's own validation, which
+	// refuses to start with a non-loopback Listen and an empty
+	// MediaOriginKey (Farol review, PR #584): the loopback default is the
+	// ONLY thing protecting those routes until this is set, so a box
+	// configured to listen beyond loopback with nothing here would
+	// disclose a live presenter's media to anyone who can reach the port.
+	MediaOriginKey string
 
 	LiveKitURL    string
 	LiveKitAPIKey string
 	LiveKitAPISec string
 
-	PartStuckMs    int64
-	DemoteWindowMs int64
+	FirstPartTimeoutMs int64
+	PartStuckMs        int64
+	DemoteWindowMs     int64
 
 	AACBitrateKbps int
 	FFmpegPath     string
@@ -81,7 +104,11 @@ func (c GlobalConfig) LiveHlsS3Configured() bool {
 // WatchdogConfig extracts just the two timers watchdog.go's evaluateWatchdog
 // needs, so that package need not import all of GlobalConfig.
 func (c GlobalConfig) WatchdogConfig() WatchdogConfig {
-	return WatchdogConfig{PartStuckMs: c.PartStuckMs, DemoteWindowMs: c.DemoteWindowMs}
+	return WatchdogConfig{
+		FirstPartTimeoutMs: c.FirstPartTimeoutMs,
+		PartStuckMs:        c.PartStuckMs,
+		DemoteWindowMs:     c.DemoteWindowMs,
+	}
 }
 
 // LoadGlobalConfig reads CONTROL_LISTEN, REMUX_CONTROL_SECRET,
@@ -96,11 +123,12 @@ func (c GlobalConfig) WatchdogConfig() WatchdogConfig {
 // disclose a live presenter's media is not a mode this package offers).
 func LoadGlobalConfig() (GlobalConfig, error) {
 	c := GlobalConfig{
-		Listen:        envOr("CONTROL_LISTEN", DefaultListen),
-		Secret:        os.Getenv("REMUX_CONTROL_SECRET"),
-		LiveKitURL:    os.Getenv("LIVEKIT_URL"),
-		LiveKitAPIKey: os.Getenv("LIVEKIT_API_KEY"),
-		LiveKitAPISec: os.Getenv("LIVEKIT_API_SECRET"),
+		Listen:         envOr("CONTROL_LISTEN", DefaultListen),
+		Secret:         os.Getenv("REMUX_CONTROL_SECRET"),
+		MediaOriginKey: os.Getenv("MEDIA_ORIGIN_KEY"),
+		LiveKitURL:     os.Getenv("LIVEKIT_URL"),
+		LiveKitAPIKey:  os.Getenv("LIVEKIT_API_KEY"),
+		LiveKitAPISec:  os.Getenv("LIVEKIT_API_SECRET"),
 
 		AACBitrateKbps: DefaultAACBitrateKbps,
 		FFmpegPath:     os.Getenv("FFMPEG_PATH"),
@@ -114,6 +142,9 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	}
 
 	var err error
+	if c.FirstPartTimeoutMs, err = envInt64Or("FIRST_PART_TIMEOUT_MS", DefaultFirstPartTimeoutMs); err != nil {
+		return GlobalConfig{}, err
+	}
 	if c.PartStuckMs, err = envInt64Or("PART_STUCK_MS", DefaultPartStuckMs); err != nil {
 		return GlobalConfig{}, err
 	}
@@ -139,6 +170,15 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	}
 	if c.Secret == "" {
 		return GlobalConfig{}, fmt.Errorf("control: REMUX_CONTROL_SECRET is required")
+	}
+	if !isLoopbackAddr(c.Listen) && c.MediaOriginKey == "" {
+		return GlobalConfig{}, fmt.Errorf(
+			"control: CONTROL_LISTEN=%q is not loopback; MEDIA_ORIGIN_KEY is required to bind a non-loopback address (see the README's \"Access control\" section) -- without it, the unsigned /s/:id/* media routes would be reachable by anyone who can reach this port",
+			c.Listen,
+		)
+	}
+	if c.FirstPartTimeoutMs <= 0 {
+		return GlobalConfig{}, fmt.Errorf("control: FIRST_PART_TIMEOUT_MS must be positive, got %d", c.FirstPartTimeoutMs)
 	}
 	if c.PartStuckMs <= 0 {
 		return GlobalConfig{}, fmt.Errorf("control: PART_STUCK_MS must be positive, got %d", c.PartStuckMs)
@@ -179,4 +219,25 @@ func envInt64Or(key string, def int64) (int64, error) {
 		return 0, fmt.Errorf("control: %s=%q is not an integer", key, v)
 	}
 	return n, nil
+}
+
+// isLoopbackAddr reports whether addr (a net.Listen-style "host:port", or
+// a bare host) resolves to loopback: "localhost" literally, or an IP
+// address for which net.IP.IsLoopback is true (127.0.0.0/8, ::1). An empty
+// host (the ":8090" shorthand for "every interface") and any other host
+// (a real hostname, 0.0.0.0, a LAN/public IP) are NOT loopback -- this is
+// deliberately conservative: anything this function cannot positively
+// identify as loopback is treated as reachable from beyond this box,
+// which is the safer direction to be wrong in for a function that gates
+// whether MEDIA_ORIGIN_KEY is required (LoadGlobalConfig).
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

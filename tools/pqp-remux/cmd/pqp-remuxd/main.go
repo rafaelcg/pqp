@@ -22,6 +22,15 @@ import (
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/control"
 )
 
+// shutdownTimeout bounds how long a graceful shutdown waits for in-flight
+// requests to finish on their own before this process forces the issue
+// (Close, below) -- shutdown must complete even if something downstream
+// (a held media response, a slow client) is unexpectedly stuck, the same
+// "bounded shutdown" reasoning internal/r2.Writer.Close and
+// internal/session's audioCloseFlushDeadline already apply elsewhere in
+// this module.
+const shutdownTimeout = 10 * time.Second
+
 func main() {
 	cfg, err := control.LoadGlobalConfig()
 	if err != nil {
@@ -29,7 +38,7 @@ func main() {
 	}
 
 	registry := control.NewRegistry(control.NewRemuxPipeline, cfg, cfg.WatchdogConfig(), time.Now)
-	srv := control.NewServer(cfg.Secret, registry)
+	srv := control.NewServer(cfg.Secret, cfg.MediaOriginKey, registry)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: srv}
 
 	log.Printf("pqp-remuxd: listening on %s (part-stuck=%dms demote-window=%dms)",
@@ -48,13 +57,34 @@ func main() {
 		}
 	case <-sigCh:
 		log.Print("pqp-remuxd: shutting down")
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer shutdownCancel()
-		_ = httpServer.Shutdown(shutdownCtx)
+		// Shutdown blocks until every in-flight request finishes on its
+		// own OR shutdownCtx's deadline passes, whichever is first --
+		// "honours its timeout" (Farol review, PR #584) means THIS call
+		// must never be allowed to run longer than that, which
+		// http.Server.Shutdown already guarantees by contract. What it
+		// does NOT do on its own is abort a request still in flight when
+		// the deadline arrives: Shutdown returns ctx.Err() in that case,
+		// but the underlying connection (and whatever handler goroutine
+		// is still running against it -- e.g. a held media response) is
+		// left exactly as it was. Close forces that: it closes every
+		// listener and every active connection immediately, so a request
+		// held past the deadline is aborted rather than left to race the
+		// registry.StopAll() that follows and observe a pipeline torn
+		// down out from under it.
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("pqp-remuxd: graceful shutdown did not finish within %s (%v); forcibly closing remaining connections, including any held media responses", shutdownTimeout, err)
+			if cerr := httpServer.Close(); cerr != nil {
+				log.Printf("pqp-remuxd: error forcibly closing the HTTP server: %v", cerr)
+			}
+		}
 	}
 
 	// Stop every live session (unsubscribe, close encoders, flush R2
 	// queues) AFTER the HTTP server itself has stopped taking new
-	// requests, so a session doesn't get torn down mid-request.
+	// requests -- and, per the above, after any request still holding one
+	// open has been forcibly cut off -- so a session never gets torn down
+	// out from under a request actively being served.
 	registry.StopAll()
 }

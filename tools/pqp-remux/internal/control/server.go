@@ -1,12 +1,21 @@
 package control
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"time"
 )
+
+// OriginKeyHeader carries MEDIA_ORIGIN_KEY on a request to /s/:id/* --
+// L2.3's edge Worker's own credential for reaching this box, distinct from
+// the HMAC signing /sessions uses (a viewer's player cannot produce that
+// signature, and does not need to reach this route through anything but
+// the edge Worker in a real deployment). See withOriginKey and the
+// README's "Access control" section.
+const OriginKeyHeader = "X-Pqp-Origin-Key"
 
 // maxSignedBodyBytes bounds how much of a request body the signing
 // middleware will buffer before verifying its signature. Every real body
@@ -17,33 +26,46 @@ import (
 const maxSignedBodyBytes = 1 << 20 // 1 MiB
 
 // Server is the control-plane HTTP surface: POST/DELETE/GET /sessions
-// (signed) and GET /s/{id}/{rest...} (unsigned media, loopback-only by
-// convention -- see control.go's package comment).
+// (HMAC-signed) and GET /s/{id}/{rest...} (media, gated by MEDIA_ORIGIN_KEY
+// when one is set -- see withOriginKey and control.go's package comment).
 type Server struct {
-	secret   []byte
-	registry *Registry
-	now      func() time.Time
-	mux      *http.ServeMux
+	secret         []byte
+	mediaOriginKey string
+	registry       *Registry
+	now            func() time.Time
+	mux            *http.ServeMux
+	// nonces is the replay cache withSigning consults after a signature
+	// verifies (Farol review, PR #584): a per-request nonce is remembered
+	// for 2xClockSkewMs, and an exact repeat within that window is
+	// refused. See nonce_cache.go and NonceHeader's own doc comment.
+	nonces *nonceCache
 }
 
-// NewServer builds a Server. secret is REMUX_CONTROL_SECRET; registry holds
+// NewServer builds a Server. secret is REMUX_CONTROL_SECRET; mediaOriginKey
+// is MEDIA_ORIGIN_KEY (empty means the media routes stay unauthenticated,
+// relying on CONTROL_LISTEN's loopback-by-default binding alone -- see
+// GlobalConfig.MediaOriginKey and LoadGlobalConfig's own validation, which
+// refuses that combination once Listen is not loopback); registry holds
 // every session. Panics if secret is empty -- GlobalConfig.Secret is
 // already validated non-empty by LoadGlobalConfig, so this is a
 // programmer error (a test constructing a Server with no secret on
 // purpose), not a runtime condition a caller should handle.
-func NewServer(secret string, registry *Registry) *Server {
+func NewServer(secret, mediaOriginKey string, registry *Registry) *Server {
 	if secret == "" {
 		panic("control: NewServer called with an empty secret")
 	}
-	s := &Server{secret: []byte(secret), registry: registry, now: time.Now, mux: http.NewServeMux()}
+	s := &Server{
+		secret:         []byte(secret),
+		mediaOriginKey: mediaOriginKey,
+		registry:       registry,
+		now:            time.Now,
+		mux:            http.NewServeMux(),
+		nonces:         newNonceCache(2 * time.Duration(ClockSkewMs) * time.Millisecond),
+	}
 	s.mux.HandleFunc("POST /sessions", s.withSigning(s.handleStart))
 	s.mux.HandleFunc("DELETE /sessions/{id}", s.withSigning(s.handleStop))
 	s.mux.HandleFunc("GET /sessions", s.withSigning(s.handleList))
-	// Deliberately unsigned: a viewer's player cannot produce an HMAC over
-	// pqp-api's shared secret, and does not need to -- see control.go's
-	// package comment on why CONTROL_LISTEN's own loopback-by-default
-	// binding is this route family's actual access control today.
-	s.mux.HandleFunc("/s/{id}/{rest...}", s.handleMedia)
+	s.mux.HandleFunc("/s/{id}/{rest...}", s.withOriginKey(s.handleMedia))
 	return s
 }
 
@@ -52,9 +74,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.Serve
 // withSigning wraps next with signature verification: reads and buffers the
 // raw body (so signaturePayload sees the EXACT bytes sent, per the
 // contract's own "re-serializing JSON after signing invalidates the
-// signature" rule), verifies it, then restores r.Body for next to decode
-// normally. A request that fails verification never reaches next at all --
-// no session lookup, no registry mutation, nothing.
+// signature" rule), verifies it (including the nonce -- see
+// NonceHeader's doc comment), checks the nonce has not been used before
+// (the replay cache, only once the signature itself is known good), then
+// restores r.Body for next to decode normally. A request that fails
+// verification never reaches next at all -- no session lookup, no
+// registry mutation, nothing.
 func (s *Server) withSigning(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxSignedBodyBytes+1))
@@ -70,13 +95,49 @@ func (s *Server) withSigning(next http.HandlerFunc) http.HandlerFunc {
 
 		ts := r.Header.Get(TimestampHeader)
 		sig := r.Header.Get(SignatureHeader)
-		if err := verifySignature(s.secret, r.Method, r.URL.Path, ts, body, sig, s.now()); err != nil {
+		nonce := r.Header.Get(NonceHeader)
+		now := s.now()
+		if err := verifySignature(s.secret, r.Method, r.URL.Path, ts, nonce, body, sig, now); err != nil {
 			log.Printf("pqp-remux: control: rejected %s %s: %v", r.Method, r.URL.Path, err)
 			writeError(w, http.StatusUnauthorized, "invalid signature")
 			return
 		}
+		if !s.nonces.checkAndRemember(nonce, now) {
+			log.Printf("pqp-remux: control: rejected %s %s: replayed nonce", r.Method, r.URL.Path)
+			writeError(w, http.StatusUnauthorized, "replayed nonce")
+			return
+		}
 
 		r.Body = io.NopCloser(&bodyReader{b: body})
+		next(w, r)
+	}
+}
+
+// withOriginKey gates /s/:id/* with a constant-time comparison against
+// mediaOriginKey (Farol review, PR #584): this is the seam L2.3's edge
+// Worker uses, a static shared value rather than a per-request signature
+// (a viewer's player still never sees or produces this; the Worker
+// attaches it when proxying, exactly the way a CDN-to-origin auth header
+// works). A request missing the header, or carrying the wrong value, is
+// rejected before the registry is ever consulted -- same "fail before any
+// side effect" shape withSigning already gives the control routes.
+//
+// When mediaOriginKey is empty (the default, matching a loopback-only
+// CONTROL_LISTEN), this is a no-op: LoadGlobalConfig already refuses to
+// combine a non-loopback Listen with no MediaOriginKey, so reaching this
+// package with both empty means the operator deliberately chose the
+// loopback-only posture control.go's package comment describes.
+func (s *Server) withOriginKey(next http.HandlerFunc) http.HandlerFunc {
+	if s.mediaOriginKey == "" {
+		return next
+	}
+	key := []byte(s.mediaOriginKey)
+	return func(w http.ResponseWriter, r *http.Request) {
+		given := r.Header.Get(OriginKeyHeader)
+		if given == "" || subtle.ConstantTimeCompare([]byte(given), key) != 1 {
+			writeError(w, http.StatusUnauthorized, "missing or invalid "+OriginKeyHeader)
+			return
+		}
 		next(w, r)
 	}
 }

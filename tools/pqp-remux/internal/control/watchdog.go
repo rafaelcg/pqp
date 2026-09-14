@@ -4,9 +4,17 @@ import "time"
 
 // WatchdogConfig controls the stall/demote ladder, docs/plans/LL_HLS.md §5.
 type WatchdogConfig struct {
-	// PartStuckMs: no new part for this long -> restart the session's
-	// pipeline once. Default DefaultPartStuckMs (3000ms, "six parts" per
-	// the plan).
+	// FirstPartTimeoutMs: no part has EVER been produced (the presenter
+	// has not started sharing yet, or the room has not been joined yet)
+	// for this long -> demote with reason "no-video". Deliberately its
+	// own, much longer timer than PartStuckMs (Farol review, PR #584): a
+	// session waiting for someone to click "share screen" is not stalled,
+	// and PartStuckMs's 3s would demote it long before a real presenter
+	// could ever join. Default DefaultFirstPartTimeoutMs (60s).
+	FirstPartTimeoutMs int64
+	// PartStuckMs: a part HAS already arrived at least once, and then no
+	// new one for this long -> restart the session's pipeline once.
+	// Default DefaultPartStuckMs (3000ms, "six parts" per the plan).
 	PartStuckMs int64
 	// DemoteWindowMs: a second stall within this many ms of the last
 	// restart demotes instead of restarting again. A stall further apart
@@ -55,29 +63,50 @@ type watchdogState struct {
 // pipeline's current health, the segment target (for the IDR-gap rule,
 // which is expressed as a multiple of it), this session's own watchdog
 // bookkeeping, the wall-clock instant the CURRENT pipeline instance itself
-// started (used as the reference point when health has never reported a
-// part or an IDR at all -- a pipeline that has been running for
-// PartStuckMs with literally nothing yet is exactly as stuck as one that
-// stopped producing after a good start), and now, it decides what to do.
-// This is deliberately the whole of the watchdog's decision logic, kept
-// separate from managed_session.go's goroutine/locking so
-// watchdog_test.go can drive it directly with a fake clock, per this
-// task's own "watchdog restart-then-demote with a fake pipeline clock"
-// acceptance bar.
+// started, and now, it decides what to do. This is deliberately the whole
+// of the watchdog's decision logic, kept separate from
+// managed_session.go's goroutine/locking so watchdog_test.go can drive it
+// directly with a fake clock, per this task's own "watchdog
+// restart-then-demote with a fake pipeline clock" acceptance bar.
 //
-// Precedence: the IDR-gap check runs first and can demote outright with no
-// restart attempt at all, because restarting the SAME subscription to the
-// SAME room does nothing for a publisher that has simply stopped sending
-// keyframes -- docs/plans/LL_HLS.md §5: "never close a segment on a
-// non-IDR boundary... at 3x S with still no IDR, stop the LL rung and
-// demote." The part-stuck ladder (no NEW part at all, a harder failure
-// suggesting the pipeline itself -- not just the publisher's keyframe
-// cadence -- has stopped) is evaluated only if the IDR-gap check found
-// nothing worth acting on this tick.
+// Three phases, evaluated in this order:
+//
+//  1. h.LastPartAt.IsZero() -- NO part has ever been produced. This is
+//     "waiting" (SessionState StateWaiting), not "stalled": a session
+//     whose presenter has not started sharing yet looks identical, from
+//     PartsWritten's point of view, to one whose pipeline is genuinely
+//     broken, and PART_STUCK_MS's 3s window would demote the ordinary
+//     "nobody has clicked share screen yet" case almost immediately
+//     (Farol review, PR #584). FirstPartTimeoutMs is the real bound here,
+//     and its ONLY action is demote-with-reason-"no-video" past that
+//     bound; there is nothing to restart (the pipeline is already doing
+//     the one thing it can -- waiting for a track).
+//  2. Once a part has arrived at least once, the IDR-gap check runs next
+//     and can demote outright with no restart attempt at all, because
+//     restarting the SAME subscription to the SAME room does nothing for
+//     a publisher that has simply stopped sending keyframes --
+//     docs/plans/LL_HLS.md §5: "never close a segment on a non-IDR
+//     boundary... at 3x S with still no IDR, stop the LL rung and
+//     demote." internal/pipeline.Fragmenter never emits a fragment before
+//     the stream's first IDR (ErrWaitingForIDR), so by this point
+//     h.LastIdrAt is never zero in practice; the fallback to h.LastPartAt
+//     below exists only so a violation of that invariant fails toward "a
+//     small, sane gap" instead of "no IDR since the Unix epoch, demote
+//     instantly."
+//  3. The part-stuck ladder: no NEW part for PartStuckMs, evaluated only
+//     if the IDR-gap check found nothing worth acting on this tick.
 func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipelineStartedAt time.Time, st *watchdogState, now time.Time) watchdogResult {
+	if h.LastPartAt.IsZero() {
+		firstPartTimeout := time.Duration(cfg.FirstPartTimeoutMs) * time.Millisecond
+		if now.Sub(pipelineStartedAt) > firstPartTimeout {
+			return watchdogResult{actionDemote, "no-video"}
+		}
+		return watchdogResult{actionNone, ""}
+	}
+
 	idrRef := h.LastIdrAt
 	if idrRef.IsZero() {
-		idrRef = pipelineStartedAt
+		idrRef = h.LastPartAt
 	}
 	segDur := time.Duration(segmentMs) * time.Millisecond
 	idrGap := now.Sub(idrRef)
@@ -95,12 +124,8 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 		st.idrWarnLogged = false
 	}
 
-	partRef := h.LastPartAt
-	if partRef.IsZero() {
-		partRef = pipelineStartedAt
-	}
 	stuckThreshold := time.Duration(cfg.PartStuckMs) * time.Millisecond
-	if now.Sub(partRef) <= stuckThreshold {
+	if now.Sub(h.LastPartAt) <= stuckThreshold {
 		return watchdogResult{actionNone, ""}
 	}
 

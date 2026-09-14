@@ -19,6 +19,27 @@ func TestAudioFragmenterFirstFrameStartsSegment0(t *testing.T) {
 	}
 }
 
+// TestAudioFragmenterSetStartSegmentIndexAppliesToFirstSegment is the
+// audio counterpart of the video fragmenter's own regression test (Farol
+// review, PR #584): a watchdog restart must continue the audio track's
+// segment numbering too, so its R2 object keys never collide with a
+// stalled predecessor's.
+func TestAudioFragmenterSetStartSegmentIndexAppliesToFirstSegment(t *testing.T) {
+	f := NewAudioFragmenter(AudioConfig{Timescale: 48000, SegmentDuration: 4 * 48000})
+	f.SetStartSegmentIndex(9)
+
+	frag := f.Push(0, 1024, []byte{1, 2, 3})
+	if frag.SegmentIndex != 9 {
+		t.Fatalf("SegmentIndex = %d, want 9", frag.SegmentIndex)
+	}
+	if !frag.IsSegmentStart {
+		t.Fatal("the first frame must still be a segment start")
+	}
+	if got := f.CurrentSegmentIndex(); got != 9 {
+		t.Fatalf("expected CurrentSegmentIndex to report 9, got %d", got)
+	}
+}
+
 func TestAudioFragmenterCutsOnSchedule(t *testing.T) {
 	const timescale = 48000
 	const frameSamples = 1024

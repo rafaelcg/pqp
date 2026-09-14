@@ -23,6 +23,19 @@ func (p KeyframePolicy) valid() bool {
 	return p == KeyframePolicyNatural || p == KeyframePolicyPLI
 }
 
+// minRingSegments/maxRingSegments bound RingSegments (Farol review, PR
+// #584): the schema's own z.number().int().positive() has no upper bound,
+// but a session's ring lives entirely in this process's memory
+// (internal/ring), so an unbounded value from a caller is a memory-DoS
+// knob, not a real DVR-window choice. 2 is the least that still gives a
+// "current plus one sealed" window; 60 is comfortably past any DVR window
+// this plan has ever discussed (docs/plans/LL_HLS.md §5 budgets 6 as the
+// default, "~24s of DVR at the default segment target").
+const (
+	minRingSegments = 2
+	maxRingSegments = 60
+)
+
 // uuidPattern is deliberately loose (RFC 4122 shape, not a strict version
 // check): this side only needs to refuse obviously-wrong input, matching
 // zod's z.string().uuid() closely enough for that purpose without pulling
@@ -80,8 +93,8 @@ func (r StartSessionRequest) Validate() error {
 	if r.SegmentMs <= 0 {
 		return fmt.Errorf("segmentMs must be a positive integer")
 	}
-	if r.RingSegments <= 0 {
-		return fmt.Errorf("ringSegments must be a positive integer")
+	if r.RingSegments < minRingSegments || r.RingSegments > maxRingSegments {
+		return fmt.Errorf("ringSegments must be between %d and %d", minRingSegments, maxRingSegments)
 	}
 	if !r.KeyframePolicy.valid() {
 		return fmt.Errorf("keyframePolicy must be %q or %q", KeyframePolicyNatural, KeyframePolicyPLI)
@@ -101,11 +114,15 @@ func (r StartSessionRequest) Validate() error {
 type SessionState string
 
 const (
-	// StateStarting: registered, but the pipeline has not yet subscribed
-	// to a video track or published a part (a freshly started session, or
-	// one whose presenter has not begun sharing yet).
-	StateStarting SessionState = "starting"
-	// StateRunning: subscribed and/or producing parts.
+	// StateWaiting: registered, but no part has been produced yet (a
+	// freshly started session, or one whose presenter has not begun
+	// sharing yet). Distinct from "stalled" on purpose (Farol review, PR
+	// #584): the watchdog gives this its own, much longer grace
+	// (FirstPartTimeoutMs, default 60s) before treating it as a problem
+	// at all -- PART_STUCK_MS's 3s would otherwise demote a session that
+	// is legitimately waiting for someone to click "share screen".
+	StateWaiting SessionState = "waiting"
+	// StateRunning: producing parts.
 	StateRunning SessionState = "running"
 	// StateDemoted: the watchdog gave up on this session (docs/plans/LL_HLS.md
 	// §5's restart-then-demote ladder, or the 3x-segment IDR-gap rule) --

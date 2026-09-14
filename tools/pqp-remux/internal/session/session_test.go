@@ -175,3 +175,44 @@ func TestSession_AudioPacketsAreCountedNotMuxed(t *testing.T) {
 		t.Fatalf("audioPacketsSeen = %d, want 2", s.audioPacketsSeen.Load())
 	}
 }
+
+// TestSession_SetStartSegmentIndex is L1.6's own regression test (Farol
+// review, PR #584): internal/control's watchdog restart calls this,
+// before the first packet, to continue a replacement session's video
+// segment numbering (and therefore its R2 object keys) past a stalled
+// predecessor's, rather than starting back at 0 and silently overwriting
+// objects the predecessor already uploaded.
+func TestSession_SetStartSegmentIndex(t *testing.T) {
+	r := ring.New(6, 90000)
+	s := New(45000, 360000, r, nil)
+	s.SetStartSegmentIndex(12)
+
+	if got := s.CurrentVideoSegmentIndex(); got != 12 {
+		t.Fatalf("expected CurrentVideoSegmentIndex to report the overridden start index before any packet, got %d", got)
+	}
+
+	s.HandleVideoPacket(videoPacket(singleNAL(7, realishSPS()[1:]), 0, false))
+	s.HandleVideoPacket(videoPacket(singleNAL(8, realishPPS()[1:]), 0, false))
+	s.HandleVideoPacket(videoPacket(singleNAL(5, []byte{0xAA, 0xBB, 0xCC}), 0, true))
+	s.Finish()
+
+	if _, ok := r.Segment(12); !ok {
+		t.Fatal("expected the first (and only) segment to be uploaded/stored under the overridden index 12, not 0")
+	}
+	if _, ok := r.Segment(0); ok {
+		t.Fatal("expected segment 0 to never have been produced once a start index was set")
+	}
+}
+
+// TestSession_CurrentAudioSegmentIndexIsZeroBeforeEnableAudio guards the
+// nil-audioFrag branch CurrentAudioSegmentIndex must take before
+// EnableAudio has ever run -- internal/control reads this on every
+// session, including ones whose audio pipeline failed to start (a
+// non-fatal condition -- see EnableAudio's own doc comment).
+func TestSession_CurrentAudioSegmentIndexIsZeroBeforeEnableAudio(t *testing.T) {
+	r := ring.New(6, 90000)
+	s := New(45000, 360000, r, nil)
+	if got := s.CurrentAudioSegmentIndex(); got != 0 {
+		t.Fatalf("expected 0 before EnableAudio, got %d", got)
+	}
+}

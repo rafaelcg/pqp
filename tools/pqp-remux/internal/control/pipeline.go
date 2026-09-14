@@ -30,6 +30,18 @@ type PipelineHealth struct {
 	AudioEnabled  bool
 	AudioDead     bool
 	AudioRestarts uint64
+
+	// VideoSegmentIndex/AudioSegmentIndex are the CURRENT (open,
+	// not-yet-sealed) segment index of each track's fragmenter --
+	// internal/session.Session's CurrentVideoSegmentIndex/
+	// CurrentAudioSegmentIndex. managed_session.go's restart reads these
+	// from the OLD pipeline, before closing it, to compute the
+	// replacement pipeline's StartVideoSegmentIndex/StartAudioSegmentIndex
+	// (PipelineConfig below) -- see restart's own doc comment for why
+	// "+1" past these values, not the values themselves, is what a
+	// restart actually resumes at.
+	VideoSegmentIndex int
+	AudioSegmentIndex int
 }
 
 // Pipeline is the minimal surface a managed session's media pipeline
@@ -71,6 +83,15 @@ type PipelineConfig struct {
 	KeyframePolicy KeyframePolicy
 	PliPaceMs      int
 	PliGateFactor  float64
+
+	// StartVideoSegmentIndex/StartAudioSegmentIndex are 0 for a session's
+	// very first pipeline (ordinary "start counting from segment 0"), and
+	// set by managed_session.go's restart to continue a replacement
+	// pipeline's numbering (and therefore its R2 object keys) past
+	// whatever a stalled predecessor already used -- see
+	// internal/session.Session.SetStartSegmentIndex's doc comment.
+	StartVideoSegmentIndex int
+	StartAudioSegmentIndex int
 
 	Global GlobalConfig
 }
