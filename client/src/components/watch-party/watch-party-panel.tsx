@@ -1092,6 +1092,14 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const [pickError, setPickError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  // Distinct from `scheduling` above, which is only the toggle: "does this
+  // draft have a time at all". This is the in-flight state of one Salvar
+  // press (Farol, 2026-09-14): the button used to fire `onSchedule` with
+  // `void` and never look at it again, so a rejection was invisible and a
+  // second click before the first response landed could race it. Guarded in
+  // `saveSchedule` below, which is the only caller.
+  const [savingWhen, setSavingWhen] = useState(false);
+  const [whenSaveError, setWhenSaveError] = useState<string | null>(null);
   // The quality select sits in the card now, so the checklist's quality row
   // follows it live instead of reading storage once at mount (same fix the
   // live surface needed on 2026-09-13).
@@ -1227,6 +1235,30 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   };
 
   /**
+   * Salvar on the Quando row. `savingWhen` guards a double click and a
+   * change-then-save-again before the first response lands from sending a
+   * second, possibly out-of-order, PATCH; `whenSaveError` is what a rejected
+   * one now has to say, instead of the card quietly staying a draft with
+   * nothing on screen to explain it.
+   */
+  const saveSchedule = async () => {
+    if (savingWhen) {
+      return;
+    }
+    setSavingWhen(true);
+    setWhenSaveError(null);
+    try {
+      await props.onSchedule?.(new Date(whenValue).toISOString());
+    } catch (error) {
+      setWhenSaveError(
+        error instanceof Error ? error.message : t("watchParty.setup.whenSaveError"),
+      );
+    } finally {
+      setSavingWhen(false);
+    }
+  };
+
+  /**
    * TWO COLUMNS, ONE STEPPER, ONE BUTTON (2026-09-13). The setup surface
    * used to be a black pane with a grey button in the middle, a name pill
    * floating top-right, a settings string that read like a log line, a
@@ -1337,7 +1369,16 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             under the preview. */}
         <aside
           data-testid="watch-party-setup-card"
-          className="flex w-full shrink-0 flex-col border-t border-ink-4/60 bg-ink-2 md:w-80 md:border-l md:border-t-0"
+          // MIN-H-0 + FLEX-1 ON THE STACKED LAYOUT (Farol, 2026-09-14). This
+          // was `shrink-0` at every width, which is right for the `md:` row
+          // (a fixed 320px column beside the preview) and wrong for the
+          // stacked phone column: `shrink-0` there means "take my full
+          // content height, whatever that is", so the inner `overflow-y-auto`
+          // never became a scroll boundary and the OUTER pane's
+          // `overflow-hidden` silently clipped whatever did not fit —
+          // including, on a long options list, the Ir ao vivo button itself.
+          // `md:flex-none` restores the untouched desktop sizing.
+          className="flex w-full min-h-0 flex-1 flex-col border-t border-ink-4/60 bg-ink-2 md:w-80 md:flex-none md:border-l md:border-t-0"
         >
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
             <SetupStep number={1} label={t("watchParty.setup.stepNameWhen")}>
@@ -1400,25 +1441,37 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                         className="h-[var(--control-sm)] w-auto bg-surface-2 text-xs"
                         value={whenValue}
                         min={toLocalInputValue(new Date())}
-                        onChange={(event) => setWhenValue(event.target.value)}
+                        onChange={(event) => {
+                          setWhenValue(event.target.value);
+                          setWhenSaveError(null);
+                        }}
                         data-watch-party-when-input
                       />
                       <Button
                         type="button"
                         size="sm"
                         variant="secondary"
-                        disabled={whenValue === "" || Number.isNaN(Date.parse(whenValue))}
-                        onClick={() =>
-                          void props.onSchedule?.(new Date(whenValue).toISOString())
+                        disabled={
+                          savingWhen ||
+                          whenValue === "" ||
+                          Number.isNaN(Date.parse(whenValue))
                         }
+                        onClick={() => void saveSchedule()}
                         data-watch-party-when-save
                       >
-                        {t("watchParty.setup.whenSave")}
+                        {savingWhen
+                          ? t("watchParty.setup.whenSaving")
+                          : t("watchParty.setup.whenSave")}
                       </Button>
                       <span className="text-[11px] text-text-tertiary">
                         {browserTimezone()}
                       </span>
                     </div>
+                  )}
+                  {whenSaveError && (
+                    <p data-watch-party-when-error className="text-xs text-danger">
+                      {whenSaveError}
+                    </p>
                   )}
                 </div>
               )}
@@ -1738,6 +1791,27 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
 }
 
 // --------------------------------------------------------------------- live
+
+/**
+ * THE DOCK'S MIC LEVEL, ON ITS OWN (Farol, 2026-09-14). This used to be a
+ * `useState` inside `LiveSurface` itself, polled at 10 Hz for as long as a
+ * host was presenting: every reading re-rendered the whole presenter tree —
+ * bar, dock, transmission panel, every open dialog — for one small bar that
+ * changes on its own and nothing else on screen needs to know about. Same
+ * fix `StreamMixControl`'s meters already use, one level down: the polling
+ * interval and the state it drives live in their own leaf, so the 10 Hz
+ * timer only ever re-renders this.
+ */
+function DockMicLevel({ micLevelDb }: { micLevelDb: () => number | null }) {
+  const [micLevel, setMicLevel] = useState<number | null>(null);
+  useEffect(() => {
+    const interval = setInterval(() => setMicLevel(micLevelDb()), 100);
+    return () => clearInterval(interval);
+  }, [micLevelDb]);
+  return micLevel !== null ? (
+    <MicLevelMeterBar db={micLevel} testId="watch-party-dock-mic-level" />
+  ) : null;
+}
 
 /**
  * A live party is two facts that are NOT the same fact: the show is on, and
@@ -2268,17 +2342,10 @@ function LiveSurface(
 
   /* THE METER BESIDE THE MIC, with no click (§6.2, gap 5). `micLevelDb`
      reads the mic branch of the running mix, so it exists only while a
-     share is mixing; null draws nothing. Same 10 Hz the mixer uses. */
-  const [micLevel, setMicLevel] = useState<number | null>(null);
-  const micLevelDb = props.micLevelDb;
-  useEffect(() => {
-    if (!runsTheShow || !micLevelDb) {
-      setMicLevel(null);
-      return;
-    }
-    const interval = setInterval(() => setMicLevel(micLevelDb()), 100);
-    return () => clearInterval(interval);
-  }, [runsTheShow, micLevelDb]);
+     share is mixing; absent draws nothing. Polling and the 10 Hz state it
+     drives live in `DockMicLevel` (Farol, 2026-09-14), never here — see
+     that component's own doc. */
+  const micLevelDb = runsTheShow ? props.micLevelDb : undefined;
 
   /**
    * THE HEADER IS FACTS, PLUS ONE RED BUTTON (2026-09-13,
@@ -2360,9 +2427,7 @@ function LiveSurface(
       className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ink-4/60 bg-ink px-3 py-1.5"
     >
       {micPill}
-      {micLevel !== null && (
-        <MicLevelMeterBar db={micLevel} testId="watch-party-dock-mic-level" />
-      )}
+      {micLevelDb && <DockMicLevel micLevelDb={micLevelDb} />}
       {seatControls}
       {audienceActions}
       <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">

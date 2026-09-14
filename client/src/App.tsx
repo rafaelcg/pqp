@@ -1817,7 +1817,7 @@ function MainAppContent({
   }
 
   const startScreenShareGated = useCallback(
-    (audio: boolean, intent?: ScreenCaptureIntent) => {
+    (audio: boolean, intent?: ScreenCaptureIntent): Promise<boolean> => {
       const withFps = {
         ...intent,
         maxFrameRate: intent?.maxFrameRate ?? shareMaxFrameRate(),
@@ -1825,18 +1825,25 @@ function MainAppContent({
       // Every share start in this file goes through here: the sidebar
       // button, the call stage, the "share without sound" retry, and the DM
       // stage. `screen-share-gate.test.ts` scans this file to keep it so.
-      void gateScreenShareStart<ScreenCaptureIntent>({
+      //
+      // RESOLVES TO WHETHER THE CAPTURE ITSELF SUCCEEDED (2026-09-14), not
+      // merely whether the gate let the request through: a caller that
+      // needs to know before acting further (the watch-party go-live mic
+      // prompt) awaits this instead of arming something on the strength of
+      // "the button was clicked". Most callers still fire and forget, which
+      // is unaffected: nothing here changed for them.
+      return gateScreenShareStart<ScreenCaptureIntent>({
         request: { audio, intent: withFps },
         serverId: selectedServerIdRef.current,
         hlsEnabled: liveHlsConfigRef.current?.enabled ?? null,
         checkNeedsAck: (serverId) => hlsHostAck.checkNeedsAck(serverId),
-        start: (request) => {
-          void voice.startScreenShare(request.audio, request.intent);
-        },
+        start: (request) => voice.startScreenShare(request.audio, request.intent),
         ask: (serverId, request) => {
           setHlsHostAck({ serverId, request });
         },
-      });
+      }).then(
+        (decision) => decision === "started" && voice.getState().isSharingScreen,
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [hlsHostAck],
@@ -4375,8 +4382,15 @@ function MainAppContent({
     // used to look like an opt-in to whole-computer sound. `preferBrowserTab`
     // matches the setup picker so a retry without a handed stream stays on
     // the echo-safe path.
-    startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
-    if (voice.getState().isMuted) {
+    //
+    // THE MIC PROMPT WAITS FOR THE SHARE TO ACTUALLY LAND (Farol, 2026-09-14).
+    // This used to arm the moment the share was ASKED for, so a host who
+    // cancelled the picker or had the OS refuse the capture still got "Ativar
+    // o mic?" for a broadcast that never started. It is also the only path
+    // that ever calls `setMicPromptPartyId`, and only from this one, real
+    // go-live transition — never from picking a source in the setup preview.
+    const wentOut = await startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
+    if (wentOut && voice.getState().isMuted) {
       setMicPromptPartyId(party.id);
     }
   }
@@ -4515,9 +4529,17 @@ function MainAppContent({
       return;
     }
     const answer = await apiUpdateWatchParty(party.id, { startsAt });
-    if (answer.party) {
-      watchParties.put(answer.party);
+    // A rejected PATCH already throws (`apiFetch`); a 200 that somehow
+    // carries no party is the same failure in a different shape, and both
+    // have to reach the caller the same way. The setup card's Salvar button
+    // is what awaits this (Farol, 2026-09-14) and shows its own inline
+    // error, so this function does not also swallow the rejection into a
+    // global toast: one place says what went wrong, next to the control
+    // that asked.
+    if (!answer.party) {
+      throw new Error("Could not save the time");
     }
+    watchParties.put(answer.party);
   }
 
   /**

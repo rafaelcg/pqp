@@ -1612,7 +1612,19 @@ function ActiveCall({
               communityName={serverName}
               coverUrl={serverIconUrl}
             />
-          ) : watchPartyChrome && presenterStage && localShare ? (
+          ) : watchPartyChrome &&
+            presenterStage &&
+            localShare &&
+            // ONLY WHEN OURS IS THE ONLY SHARE (Farol, 2026-09-14). This used
+            // to fire on `localShare` alone, so a co-host or an invited guest
+            // sharing at the same time as the host lost their picture off the
+            // stage entirely the moment the host's own share substituted the
+            // presenter's monitor-and-activity layout for the grid. A watch
+            // party with more than one screen up is rare but not refused
+            // anywhere upstream (guests, `docs/plans/WATCH_PARTY_GUESTS.md`),
+            // so the grid — which already draws every tile, ours included —
+            // is what a second share falls back to correctly.
+            screenTiles.length === 1 ? (
             presenterStage(localShare.stream)
           ) : stage.tiles.length > 0 ? (
             <ul

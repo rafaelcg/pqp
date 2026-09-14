@@ -3098,6 +3098,8 @@
   "watchParty.setup.settings.chat": "Chat",
   "watchParty.setup.settings.voice": "Voz",
   "watchParty.setup.whenSave": "Agendar",
+  "watchParty.setup.whenSaving": "Agendando…",
+  "watchParty.setup.whenSaveError": "Não deu pra salvar o horário. Tenta de novo.",
   "watchParty.setup.whenSet": "Marcar uma hora",
   "watchParty.setup.whenNow": "Agora, quando você for ao vivo",
   "watchParty.setup.when": "Quando",

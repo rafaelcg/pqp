@@ -65,6 +65,25 @@ export function useWatchPartyActivity({
   const lastCount = useRef<number | null>(null);
   const lastHands = useRef<readonly ActivityPerson[]>(hands);
 
+  // ONE PARTY'S ACTIVITY AT A TIME (Farol, 2026-09-14). A presenter who
+  // switches from one live party to another without this hook unmounting
+  // (`channelId` reaches it as a prop, not a key) used to keep the old
+  // channel's feed, count and hand roster: the new channel's first bump in
+  // viewers read as a delta against the old one's count, and a hand already
+  // up in the new room could be misread as freshly raised against the old
+  // room's roster. Reset DURING RENDER rather than in an effect, so it lands
+  // before either effect below reads `lastCount` or `lastHands` for this
+  // channel — React's own documented pattern for "adjusting state when a
+  // prop changes" (calling a setter mid-render, guarded by a ref compare, is
+  // what discards this render and starts over with the reset already done).
+  const seenChannelId = useRef(channelId);
+  if (seenChannelId.current !== channelId) {
+    seenChannelId.current = channelId;
+    lastCount.current = null;
+    lastHands.current = hands;
+    setEvents([]);
+  }
+
   // Audience: only growth is worth a line. People leaving is a number the
   // header already carries, and a feed of departures is not what a host
   // wants to read mid-show.
