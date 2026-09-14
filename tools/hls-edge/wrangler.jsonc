@@ -9,11 +9,15 @@
   "name": "pqp-hls-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
-  // Non-secret configuration. HLS_VIEWER_TOKEN_SECRET and HLS_PARTY_PASS_SECRET
-  // are set with `wrangler secret put` and never live in this file — see
-  // README.md for what value each takes (NOT the raw CLERK_SECRET_KEY, and
-  // NOT the same value as each other: they are two different derived keys,
-  // see `partySecret()` in `server/src/voice/hls-viewer-token.ts`).
+  // Non-secret configuration. HLS_VIEWER_TOKEN_SECRET, HLS_PARTY_PASS_SECRET
+  // and LL_ORIGIN_KEY are all set with `wrangler secret put` and never live
+  // in this file — see README.md for what value each takes (NOT the raw
+  // CLERK_SECRET_KEY, and NOT the same value as each other: they are
+  // different derived keys / credentials, see `partySecret()` in
+  // `server/src/voice/hls-viewer-token.ts`). LL_ORIGIN_KEY is
+  // pqp-remuxd's MEDIA_ORIGIN_KEY, sent as X-Pqp-Origin-Key on every
+  // request LlPlaylistOrigin makes against LL_ORIGIN_BASE below (README.md
+  // "LL playlist (L2.2)").
   //
   // ENVIRONMENT="production" governs exactly one thing: whether a party
   // pass may be honored with no `HLS_REVOKED_USERS` binding behind it --
@@ -25,7 +29,15 @@
   // no KV namespace at all).
   "vars": {
     "ORIGIN_BASE": "https://api.pqp.gg",
-    "ENVIRONMENT": "production"
+    "ENVIRONMENT": "production",
+    // LL-HLS (docs/plans/LL_HLS.md task L2.2): the remux box's own Caddy
+    // origin, e.g. "https://egress-1.pqp.gg:8443" -- NOT the same value as
+    // the API's `LIVE_HLS_REMUX_ORIGIN_URL`, even though both eventually
+    // point at the same box; the two processes never call into each other
+    // (see ll-playlist-origin.ts's header). Empty: `LlPlaylistOrigin` is
+    // never `ready`, every request behaves exactly as it did before L2.2 --
+    // no LL rung is ever offered. Set once a real box exists (L1.6/L2.3).
+    "LL_ORIGIN_BASE": ""
   },
 
   // Party-pass (and now shared-rendition-cache) revocation denylist --

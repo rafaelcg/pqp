@@ -99,6 +99,9 @@ import {
 } from "./party-pass-revocation.js";
 import { parsePlaylistPath } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
+import { LlPlaylistOrigin } from "./ll-playlist-origin.js";
+import { applyLlRenditionToken } from "./ll-playlist.js";
+import { playlistOriginKindForRung } from "./ll-state.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
 import { handleBlockingReload, parseBlockingReloadParams } from "./hls-blocking-reload.js";
@@ -144,6 +147,30 @@ export interface Env {
   ENVIRONMENT?: string;
   /** Comma-separated allowlist. Unset: every origin is echoed back (see cors.ts). */
   CORS_ALLOWED_ORIGINS?: string;
+  /**
+   * The remux box's own Caddy origin, e.g. `https://egress-1.pqp.gg:8443`
+   * (`docs/plans/LL_HLS.md` §1, `LIVE_HLS_REMUX_ORIGIN_URL` on the API side
+   * — this is this Worker's OWN copy of that value, not shared with it: the
+   * two processes never call into each other). Unset: `LlPlaylistOrigin` is
+   * never `ready`, every request behaves exactly as it did before task
+   * `L2.2` — no LL rung is ever offered, and `/ll`/`/ll-audio` 404 like any
+   * other unrecognized rung. Deliberately NEVER forwarded to a viewer — see
+   * `ll-playlist-origin.ts`'s header.
+   */
+  LL_ORIGIN_BASE?: string;
+  /**
+   * `pqp-remuxd`'s `MEDIA_ORIGIN_KEY` (`internal/control/server.go`, PR
+   * #584's Farol-review fix), set here with `wrangler secret put` —
+   * NEVER in `vars`, matching `HLS_VIEWER_TOKEN_SECRET` above — since
+   * unlike `LL_ORIGIN_BASE` this value is a credential, not just a host.
+   * Sent as `X-Pqp-Origin-Key` on every request `LlPlaylistOrigin` makes
+   * against `LL_ORIGIN_BASE` (parts, init segments, `state.json`) — see
+   * `ll-playlist-origin.ts`'s `originKey` doc comment. Unset: no header is
+   * sent, matching `pqp-remuxd` leaving `MEDIA_ORIGIN_KEY` empty for a
+   * loopback-only `CONTROL_LISTEN`. Deliberately never forwarded to a
+   * viewer, the same rule `LL_ORIGIN_BASE` documents above.
+   */
+  LL_ORIGIN_KEY?: string;
   // ALWAYS-ON (not yet built, see playlist-origin.ts and
   // docs/plans/ALWAYS_ON.md task A1.x): a future R2-backed PlaylistOrigin
   // would add its own bindings here (an R2Bucket, a DurableObjectNamespace).
@@ -308,9 +335,19 @@ function cacheKeyRequest(request: Request): Request {
   return new Request(url.toString(), { method: "GET" });
 }
 
-async function handlePlaylistRequest(
+/**
+ * Exported for `test/index.test.mjs` ONLY, the same convention
+ * `ll-playlist-origin.ts` documents on its own class: this function reaches
+ * `caches.default`/`ctx.waitUntil` only past the rendition route's cache
+ * lookup, so a request for the SESSION/MASTER route (`rung` unset,
+ * including the LL master added by task L2.2) never touches a Workers-only
+ * global and can run directly under `node --test` against the compiled
+ * output in `dist/` -- see that test file's header for why it is scoped to
+ * exactly that route.
+ */
+export async function handlePlaylistRequest(
   request: Request,
-  origin: PlaylistOrigin,
+  origins: { api: PlaylistOrigin; ll: LlPlaylistOrigin },
   ctx: ExecutionContext,
   env: Pick<Env, "HLS_VIEWER_TOKEN_SECRET" | "HLS_PARTY_PASS_SECRET" | "HLS_REVOKED_USERS" | "ENVIRONMENT">,
   channelId: string,
@@ -385,7 +422,7 @@ async function handlePlaylistRequest(
     return json(statusForRejection(reason), { error: "Unauthorized", reason });
   }
 
-  if (!origin.ready) {
+  if (!origins.api.ready) {
     logEvent("hlsEdge.originNotConfigured", { channelId, rung: rung ?? null });
     return text(503, "Origin not configured");
   }
@@ -412,9 +449,60 @@ async function handlePlaylistRequest(
   // `t` (party pass is skipped when `rung` is unset), so `token` here is
   // never null.
   if (!rung) {
+    // LL-HLS multivariant playlist (task L2.2, `ll-playlist-origin.ts`).
+    // Tried FIRST, straight against the remux origin, never the API: only
+    // an LL session's master needs to look any different from what the API
+    // already answers (`docs/plans/LL_HLS.md` §4, "the master playlist
+    // lists the LL rung beside the 720p30 rung" — full mixing with the
+    // conventional ladder is a later task; for now an LL session's master
+    // is LL-only). `fetchMultivariantPlaylist` returns `null` for every
+    // failure mode -- `LL_ORIGIN_BASE` unset, this specific session isn't
+    // LL, the origin is unreachable, a malformed `state.json` or init
+    // segment -- so a bug or an outage in the LL path can only ever fall
+    // through to the EXACT byte-for-byte-unchanged API forward below, never
+    // turn a conventional session's master into an error. See
+    // `ll-playlist-origin.ts`'s header, "FAILS TOWARD...".
+    if (origins.ll.ready) {
+      // REVOCATION, FOR THIS PATH ONLY. The conventional forward below
+      // always reaches the API live, which runs its own always-current
+      // `isHlsAccessRevoked` check on every request -- that is why the
+      // session/master route otherwise has no revocation check of its own
+      // (see the module doc comment, "WHAT THIS WORKER DOES NOT MAKE
+      // FASTER"). The LL master never touches the API at all: it is served
+      // straight off the remux origin, which has no concept of a viewer's
+      // ban/kick/VIEW status. So this Worker has to run the SAME gate the
+      // rendition route uses (`PartyPassRevocationGate`) here, before
+      // trusting the LL origin -- a revoked viewer must not get a working
+      // LL master (and, through it, LL rendition URLs) just because the LL
+      // path skips the API. Refused outright rather than falling through to
+      // the API forward below: that forward carries the SAME token, so it
+      // would be refused there too, and silently downgrading a revoked
+      // viewer to non-LL playback instead of rejecting them would be its
+      // own kind of leak.
+      const { revoked, kvError } = await partyPassRevocationGate.check(
+        env.HLS_REVOKED_USERS,
+        verified.userId,
+        channelId,
+        verified.issuedAt,
+      );
+      if (kvError) {
+        logEvent("hlsEdge.partyPassRevocationCheckError", { channelId });
+      }
+      if (revoked) {
+        logRejection(channelId, rung, "revoked");
+        return json(statusForRejection("revoked"), { error: "Unauthorized", reason: "revoked" });
+      }
+      const llResponse = await origins.ll.fetchMultivariantPlaylist(channelId, startedAt, token!);
+      if (llResponse) {
+        const headers = new Headers(llResponse.headers);
+        headers.set("X-HLS-Edge-Cache", "BYPASS");
+        headers.set("X-HLS-Edge-Mode", "ll");
+        return new Response(llResponse.body, { status: llResponse.status, headers });
+      }
+    }
     let originResponse: Response;
     try {
-      originResponse = await origin.fetchPlaylist({
+      originResponse = await origins.api.fetchPlaylist({
         channelId,
         startedAt,
         token: token!,
@@ -443,7 +531,10 @@ async function handlePlaylistRequest(
   // is bound. Cheap when it is not: `check()` returns immediately on an
   // unbound KV, same as before this existed. Ordered ahead of the blocking
   // reload below on purpose -- a revoked viewer must not get a long hold
-  // open on the origin before being rejected.
+  // open on the origin before being rejected. This also covers an LL
+  // rendition (`ll`/`ll-audio`): the check runs before the origin below is
+  // ever selected, so it gates the LL origin's rendition path exactly the
+  // same way it gates the API's.
   if (!usedPartyPass) {
     const { revoked, kvError } = await partyPassRevocationGate.check(
       env.HLS_REVOKED_USERS,
@@ -460,6 +551,25 @@ async function handlePlaylistRequest(
     }
   }
 
+  // Which origin actually answers a RENDITION request: the LL origin for
+  // the two LL rung names when it is configured (`LL_ORIGIN_BASE`), the API
+  // for every other rung -- unchanged (`playlistOriginKindForRung`,
+  // `ll-state.js` -- pure, unit-tested directly for the "every non-LL rung
+  // stays on the API" guarantee). A viewer only ever asks for `ll` /
+  // `ll-audio` because the LL master above handed them that rung name, so
+  // `origins.ll.ready` is expected to already be true here; falling back to
+  // `origins.api` when it somehow isn't reproduces today's plain "unknown
+  // rung" 404 rather than inventing a new failure shape.
+  const origin: PlaylistOrigin =
+    playlistOriginKindForRung(rung) === "ll" && origins.ll.ready ? origins.ll : origins.api;
+  // Gates `stampLlToken` below: an LL rendition body is rendered with
+  // `LL_TOKEN_PLACEHOLDER` (`ll-playlist.js`), never a real token, so it is
+  // safe to cache/coalesce across viewers -- but that means it must be
+  // turned back into a playable, per-viewer response before this Worker
+  // returns it. Reference equality against `origins.ll`, not the rung name,
+  // so the check tracks exactly which origin actually answered.
+  const isLlRendition = origin === origins.ll;
+
   // A rendition request carrying a directive skips the 2 s cache entirely —
   // see hls-blocking-reload.js's module doc comment for why a hold is not a
   // cache entry — and shares its origin fetches with the coalesced fetcher
@@ -471,13 +581,19 @@ async function handlePlaylistRequest(
     const blockingResponse = await handleBlockingReload(
       cacheKeyRequest(request).url,
       blockingReload.value,
+      // `handleBlockingReload` wants the bare `FetchedPlaylist` its own
+      // poll loop reads `status`/`headers`/`body` off of -- it never writes
+      // to `caches.default` itself (see that module's header), so
+      // `isProducer` has nothing for it to do. Unwrap `.result` here rather
+      // than changing `fetchRenditionCoalesced`'s return shape, which the
+      // non-blocking cache-or-forward path below still needs whole.
       () =>
         fetchRenditionCoalesced(cacheKeyRequest(request).url, origin, {
           channelId,
           startedAt,
           rung,
           token: token!,
-        }),
+        }).then((coalesced) => coalesced.result),
       logEvent,
       { channelId, rung },
       request.signal,
@@ -492,7 +608,7 @@ async function handlePlaylistRequest(
     // served the ordinary way below -- the non-blocking cache-or-forward
     // path -- rather than evicting or starving something already active.
     if (blockingResponse) {
-      return blockingResponse;
+      return isLlRendition ? await stampLlToken(blockingResponse, token!) : blockingResponse;
     }
   }
 
@@ -503,7 +619,8 @@ async function handlePlaylistRequest(
     noteCacheHit(channelId, rung);
     const headers = new Headers(cached.headers);
     headers.set("X-HLS-Edge-Cache", "HIT");
-    return new Response(cached.body, { status: cached.status, headers });
+    const response = new Response(cached.body, { status: cached.status, headers });
+    return isLlRendition ? await stampLlToken(response, token!) : response;
   }
 
   // A CACHE MISS NEEDS AN ORIGIN-VERIFIABLE TOKEN, AND A PARTY PASS IS NOT
@@ -585,7 +702,29 @@ async function handlePlaylistRequest(
 
   const response = new Response(fetched.body, { status: 200, headers: new Headers(headers) });
   response.headers.set("X-HLS-Edge-Cache", "MISS");
-  return response;
+  // `toCache` above (what gets written into the shared cache) is built from
+  // the SAME `fetched.body` the LL origin rendered with `LL_TOKEN_PLACEHOLDER`
+  // -- stamping only happens here, on the copy actually leaving the Worker
+  // for THIS request, never on what other viewers will later read back out
+  // of the cache.
+  return isLlRendition ? await stampLlToken(response, token!) : response;
+}
+
+/**
+ * The shared/coalesced LL rendition body is deliberately token-FREE
+ * (`ll-playlist.js`'s `LL_TOKEN_PLACEHOLDER`) so it can be cached and
+ * coalesced across viewers exactly like a conventional rendition — this is
+ * the one place that turns it back into a playable response for THIS
+ * specific viewer, stamping their own token into every URI right before it
+ * leaves the Worker. Callers gate this on `isLlRendition`
+ * (`origin === origins.ll`) rather than calling it unconditionally: a
+ * conventional body never contains the placeholder, so calling this on one
+ * would just be a wasted read-and-rebuild of every conventional response.
+ */
+async function stampLlToken(response: Response, token: string): Promise<Response> {
+  const text = await response.text();
+  const headers = new Headers(response.headers);
+  return new Response(applyLlRenditionToken(text, token), { status: response.status, headers });
 }
 
 /**
@@ -689,6 +828,30 @@ interface CoalescedFetch {
  */
 const inFlightRenditionFetches = new Map<string, Promise<FetchedPlaylist>>();
 
+/**
+ * `LlPlaylistOrigin` holds a per-session codec cache (`ll-playlist-origin.ts`)
+ * that is only worth anything if the SAME instance answers every request
+ * this isolate serves -- constructing a fresh one per `fetch()` call, the
+ * way `ApiPlaylistOrigin` above is (harmless for it: it holds no state)
+ * would silently throw that cache away on every single request. Recreated
+ * only if `LL_ORIGIN_BASE` itself changes, which in practice never happens
+ * mid-isolate-lifetime -- Workers bindings are fixed for an isolate -- but
+ * checking costs nothing and avoids a stale value surviving a config change
+ * some future test or `wrangler dev --local` reload makes.
+ */
+let llOriginSingleton: LlPlaylistOrigin | null = null;
+let llOriginSingletonBase: string | undefined;
+let llOriginSingletonKey: string | undefined;
+
+function getLlOrigin(originBase: string | undefined, timeoutMs: number, originKey: string | undefined): LlPlaylistOrigin {
+  if (!llOriginSingleton || llOriginSingletonBase !== originBase || llOriginSingletonKey !== originKey) {
+    llOriginSingleton = new LlPlaylistOrigin(originBase, timeoutMs, originKey);
+    llOriginSingletonBase = originBase;
+    llOriginSingletonKey = originKey;
+  }
+  return llOriginSingleton;
+}
+
 async function fetchRenditionCoalesced(
   cacheKeyUrl: string,
   origin: PlaylistOrigin,
@@ -751,13 +914,16 @@ export default {
       return withCors(json(404, { error: "Not found" }), env, request);
     }
 
-    // Today's only `PlaylistOrigin`: ask the API. See `playlist-origin.ts`
-    // for the seam a future R2-backed implementation swaps in through.
-    const origin = new ApiPlaylistOrigin(env.ORIGIN_BASE, UPSTREAM_TIMEOUT_MS);
+    // The conventional origin: ask the API. See `playlist-origin.ts` for the
+    // seam a future R2-backed implementation swaps in through. Alongside it,
+    // task L2.2's LL origin -- ready only when `LL_ORIGIN_BASE` is set; see
+    // `ll-playlist-origin.ts` and the `Env.LL_ORIGIN_BASE` doc comment above.
+    const apiOrigin = new ApiPlaylistOrigin(env.ORIGIN_BASE, UPSTREAM_TIMEOUT_MS);
+    const llOrigin = getLlOrigin(env.LL_ORIGIN_BASE, UPSTREAM_TIMEOUT_MS, env.LL_ORIGIN_KEY);
 
     const response = await handlePlaylistRequest(
       request,
-      origin,
+      { api: apiOrigin, ll: llOrigin },
       ctx,
       env,
       match.channelId,

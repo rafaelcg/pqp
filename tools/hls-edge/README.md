@@ -28,6 +28,11 @@ lands on the same Worker, so the code is already split along that line:
 | `src/playlist-route.ts` | Is this even a playlist request, and for what | No — the shape a viewer's client requests never changes |
 | `src/playlist-origin.ts` | Where the playlist's BYTES actually come from | **Yes** — gets a second implementation |
 | `src/hls-blocking-reload.js` | LL-HLS blocking playlist reload (`_HLS_msn`/`_HLS_part`, see below) | No — it holds a request open until the origin's answer advances, regardless of where that answer eventually comes from |
+| `src/ll-state.js` | The `state.json` contract: validation, the rung constants, `playlistOriginKindForRung` | No — a JSON shape, not a fetch |
+| `src/ll-playlist.js` | Renders LL-HLS playlist TEXT from a validated `state.json` (media + multivariant) | No — pure text rendering, no I/O |
+| `src/ll-init-codecs.js` | Reads `CODECS` (`avc1.PPCCLL`) off an init segment's `avcC` box | No — pure bytes-in, string-out |
+| `src/ll-session.js` | The remux `sessionId` for a channel's LL session — ported, pure | No |
+| `src/ll-playlist-origin.ts` | `PlaylistOrigin` for an LL session — talks to the remux box directly | No — this is the second-origin seam already, one level below `playlist-origin.ts` |
 | `src/index.ts` | Routing, the cache-or-forward decision, CORS, logging | No, or minimally — it is written against the `PlaylistOrigin` interface, not against "the API" |
 
 `playlist-origin.ts` today has exactly one implementation, `ApiPlaylistOrigin`
@@ -38,6 +43,24 @@ version of `hls-live-window.ts`'s in-process history on the API) and
 `docs/plans/ALWAYS_ON.md` task A1.x for the plan itself — not built here.
 `wrangler.jsonc` has the R2 bucket and Durable Object bindings that work will
 need, commented out until code exists to read them.
+
+**Testing a `.ts` origin directly.** `ApiPlaylistOrigin`/`index.ts` have no
+direct unit test in this package (`tsc --noEmit` plus the pure `.js` modules
+they call into is the coverage), because `tsconfig.json`'s
+`moduleResolution: "Bundler"` lets these files `import "./log.js"` for a
+file that is actually `log.ts` on disk — a convention only a bundler or
+`tsc` itself resolves, not Node's native `--experimental-strip-types`
+loader. `test/ll-playlist-origin.test.mjs` needed real coverage of
+`LlPlaylistOrigin` (Farol's review of this PR's first draft found three of
+its four findings inside that one class), so `npm test`'s `pretest` step now
+runs `tsc -p tsconfig.test-build.json` first, emitting a `dist/` (gitignored,
+matching this repo's `**/dist/` pattern) the test imports from instead of
+the `.ts` source — the compiled output's import specifiers resolve exactly
+the way they were written, since every sibling module lands in the same
+directory. `LlPlaylistOrigin`'s constructor is a plain body rather than
+TypeScript parameter-property shorthand for the same reason: type-stripping
+erases type annotations but cannot inject the `this.field = field`
+assignments a parameter property requires.
 
 ## What it does
 
@@ -195,13 +218,201 @@ with nothing to fall back to yet, a first-tick deadline win is a distinct
 "A SLOW ORIGIN DOES NOT OWE A WAITER ITS OWN DEADLINE, NOT EVEN ON THE FIRST
 TICK", for the full detail.
 
-**Deferred to later L2 tasks** (`docs/plans/LL_HLS.md` §7):
-`EXT-X-SERVER-CONTROL`/`EXT-X-PART-INF`/`EXT-X-PART`/`EXT-X-PRELOAD-HINT`
-emission on the playlist body (L2.2), and proxying PART byte ranges
-themselves through this Worker (L2.3). Until L2.2 ships, no production
-playlist advertises `CAN-BLOCK-RELOAD=YES`, so no real player sends these
-directives yet — this task is the server half landing first, tested directly
-rather than through a client that cannot exercise it yet.
+**Deferred to `L2.3`**: proxying PART/segment byte ranges themselves through
+this Worker (`/{channelId}/{startedAt}/{rung}/{name}`, the URI shape "LL
+playlist (L2.2)" below emits). Until then, a client that actually tries to
+fetch a part or segment this Worker's own LL playlist points at gets a 404
+from THIS Worker (no byte route exists yet) — the same "wired, not yet
+reachable" shape the rest of `docs/plans/LL_HLS.md` uses throughout. `L2.2`
+(below) is the server half of blocking reload landing for LL sessions
+specifically: `EXT-X-SERVER-CONTROL`/`EXT-X-PART-INF`/`EXT-X-PART`/
+`EXT-X-PRELOAD-HINT` are now real, so a real LL-HLS player will start
+sending `_HLS_msn`/`_HLS_part` directives against an LL rung the moment one
+exists in production.
+
+## LL playlist (L2.2)
+
+`docs/plans/LL_HLS.md` task `L2.2`. For a session in `ll` mode, this Worker
+renders the LL playlist ITSELF — video rendition (`ll`), the separate audio
+rendition (`ll-audio`), and the multivariant (master) playlist that lists
+both — straight from state it polls off the remux origin
+(`ll-playlist-origin.ts`), never through the API. Nothing upstream of this
+Worker writes an LL-shaped playlist yet: `tools/pqp-remux/README.md`'s "Not
+yet" section says outright that `GET /playlist.m3u8` (the box's own local
+test surface) is conventional-only and that LL tags are "entirely the edge
+Worker's job in `L2.1` and `L2.2`".
+
+**Why this Worker talks to the remux box directly, unlike the conventional
+path's `ApiPlaylistOrigin`.** The API is the ONLY renderer of a conventional
+playlist, so the conventional path forwards a viewer's request to it. For LL
+there is no renderer anywhere else to forward to — this Worker has to be
+the renderer, and a renderer needs raw material (segment/part existence,
+durations, which part starts on an IDR), not somebody else's finished
+playlist text. Going through the API for that material would add a hop with
+no upside: the API has no better claim to the remux box's state than this
+Worker does. `hls-remux.ts`'s own doc comment on `llPlaylistUrl` explains why
+the box's raw host must stay OUT OF A VIEWER'S hands — this Worker is not a
+viewer, the same reason it already isn't when it fetches conventional
+playlists from `ApiPlaylistOrigin`.
+
+**How a request is routed** (`index.ts`):
+
+- The session/master route (no `:rung`) tries the LL path FIRST, whenever
+  `LL_ORIGIN_BASE` is configured: it derives the remux `sessionId` and asks
+  for `state.json` (see the contract below). Found → this Worker renders and
+  returns an LL-only multivariant playlist (video + the audio group), never
+  touching the API for that response. Not found, unreachable, or malformed
+  in any way → falls straight through to the EXACT byte-for-byte-unchanged
+  API forward that has always served this route. A bug or an outage
+  anywhere in the LL path can therefore only ever downgrade a request to
+  "conventional, like before" — never turn a working conventional session's
+  master into an error. `playlistOriginKindForRung` (`ll-state.js`) is the
+  pure, unit-tested rule for the RENDITION half of this same guarantee:
+  every rung name except `ll`/`ll-audio` stays on the API's origin, always.
+- A rendition route for `:rung` = `ll` or `ll-audio` renders that ONE
+  track's LL media playlist from the same `state.json`. This is the text a
+  real player then polls or blocking-reloads exactly the way
+  `hls-blocking-reload.js` already handles a conventional rendition —
+  `parseLiveEdge` reads `PART-TARGET=`, counts `#EXTINF:` lines for complete
+  segments and trailing `#EXT-X-PART:` lines for the one being assembled,
+  generically, off ANY playlist text. **No change was needed in that file
+  for `L2.2`**: pointing an LL rendition's fetch at this Worker's own
+  renderer instead of the API is the entire wiring.
+
+**Tags emitted** (RFC 8216bis), on the rendition playlist: `EXT-X-VERSION:9`;
+this Worker's own `EXT-X-PQP-SESSION:<sessionId>` (an informational tag, new
+in this task, harmless to any parser that has never heard of it);
+`EXT-X-TARGETDURATION` (`ceil(state.targetDurationSecs)`); `EXT-X-PART-INF:
+PART-TARGET=<part target, seconds>`; `EXT-X-SERVER-CONTROL:
+CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=<3× part target>`; `EXT-X-MEDIA-SEQUENCE`
+(the oldest listed segment's MSN); `EXT-X-MAP:URI=...` for the init segment;
+per segment, `EXT-X-PROGRAM-DATE-TIME` then (for the newest 3 complete
+segments, and always for the one still being assembled) `EXT-X-PART` lines
+(`DURATION`, `URI`, `INDEPENDENT=YES` exactly when `state.json` says that
+part starts on an IDR) then, once the segment is sealed, `EXTINF` + its URI;
+and one `EXT-X-PRELOAD-HINT:TYPE=PART,URI=...` for the next unwritten part,
+when the origin names one. Every URI is relative to
+`/api/voice/hls-playlist/:channelId/:startedAt/:rung/<name>` — never the
+remux box's own host (see "Why this Worker talks to the remux box directly"
+above) — and, in the RENDERED body, carries `LL_TOKEN_PLACEHOLDER`
+(`ll-playlist.js`) rather than a real `?t=` token. **This is deliberate, and
+the opposite of the conventional master's rule.** A first draft of this task
+embedded the real viewer's token directly, matching PR #572's party-lifetime
+rule for the conventional master — but a rendition response, unlike the
+master, flows through `index.ts`'s shared 2s cache and the blocking-reload
+poll-loop coalescer, both keyed on (channel, session, rung) alone, with the
+token deliberately dropped because a CONVENTIONAL body never varies by
+viewer. An LL body embedding a real token broke that invariant: a Farol
+review of this PR caught that the first viewer's bearer token could leak
+into a warm cache/poll-loop entry and be served, and be replayable, by every
+other viewer of that rung. **Fixed**: the rendered/cached/coalesced body is
+token-free (a pure function of `state.json` alone), and `index.ts`'s
+`stampLlToken` substitutes the ACTUAL requesting viewer's token into the
+response on its way out, once per request, never into what gets written
+back into the cache or held by the poll loop. The multivariant (master)
+route is unaffected by any of this — see below, it was never cached in the
+first place.
+
+**The multivariant playlist** lists the video variant
+(`EXT-X-STREAM-INF`, `CODECS` including the video's `avc1.PPCCLL` string)
+plus, when the session has one, the audio rendition as a separate
+`EXT-X-MEDIA:TYPE=AUDIO` group referenced by `AUDIO=`. `CODECS` comes from
+the init segments, per this task's own instruction: the video half is read
+straight off `init.mp4`'s `avcC` box (`ll-init-codecs.js`, a small hand-rolled
+ISO-BMFF box walk — no MP4 parsing dependency, same reasoning
+`tools/pqp-remux/README.md`'s R2 writer gives for hand-rolling SigV4), and
+the audio half is the constant `mp4a.40.2` (`tools/pqp-remux/README.md`'s
+audio pipeline is AAC-LC only, so there is nothing to read from
+`audio-init.mp4` for it). `BANDWIDTH` has no real measurement source yet
+(`docs/plans/LL_HLS.md` §8's cost table is an estimate, not a per-session
+number) — `DEFAULT_LL_VIDEO_BANDWIDTH_BPS` in `ll-playlist.js` is a
+documented placeholder until `L3.2`'s staging benchmark has a real one.
+Only the VIDEO codec/geometry is cached per `sessionId` for the life of the
+Worker isolate (`LlPlaylistOrigin`'s own small bounded map) — `avcC` cannot
+change mid-session, so only the FIRST master request for a session ever
+fetches `init.mp4`. **The AUDIO codec is deliberately never cached, and is
+re-derived from the current `state.json` on every master request instead.**
+A first draft cached both together: a session observed video-only on its
+FIRST master request cached `audioCodec: null` forever, and once a speaker
+later joined, every subsequent master request kept reading that stale
+`null` and never grew an audio group for the rest of the isolate's life — a
+Farol review caught this. Concurrent master (and rendition) requests for a
+session with no cache entry yet share ONE `state.json` fetch and ONE
+`init.mp4` fetch via `fetchFromOrigin`'s in-flight de-duplication (the same
+shape `index.ts`'s own `fetchRenditionCoalesced` already uses one layer up)
+— a join burst of viewers produces one round trip to the box, not one per
+viewer; also caught by the same review, since the master route has no
+`index.ts`-level coalescing of its own (it is never cached, by design — see
+above). That de-duplication window is also what now bounds a stalled remux
+response: `fetchFromOrigin` buffers the WHOLE body inside the same
+`AbortController` window the headers wait uses, so a box that answers
+headers and then stalls mid-`state.json`/`init.mp4` fails the request at the
+configured timeout instead of hanging it indefinitely (an earlier version
+cleared the abort timer right after the headers arrived).
+
+### The `state.json` contract (for `L1.6`/`L2.3`)
+
+`GET {LL_ORIGIN_BASE}/s/:sessionId/state.json`, `sessionId` =
+`ll-session.js`'s `deriveLlSessionId(channelId, startedAtMs)` — a **pure**
+function of two values every request to this Worker already carries, ported
+line-for-line from `deriveLlSessionId` in `server/src/voice/hls-remux.ts`
+(same "port, not shared import" reasoning as `hls-viewer-token.js`, except
+this port needs no secret: a session id is not a capability). This Worker
+computes the id itself; the remux never needs to be asked for it, only to
+serve `state.json` under the id it was already started with.
+
+**Nothing implements this endpoint yet** — `ll-state.js`'s module doc
+comment carries the full JSON shape with a worked example; the summary:
+
+```jsonc
+{
+  "sessionId": "...", "channelId": "...",
+  "partTargetMs": 500, "segmentTargetMs": 4000,
+  "targetDurationSecs": 4.5,       // ceil'd for EXT-X-TARGETDURATION
+  "mediaSequence": 41,             // oldest listed segment's MSN
+  "video": {
+    "initUri": "init.mp4",
+    "segments": [
+      { "msn": 41, "complete": true, "durationSecs": 4.016,
+        "programDateTime": "2026-09-14T18:03:21.114Z", "uri": "seg-41.m4s",
+        "parts": [{ "index": 0, "durationSecs": 0.501, "independent": true, "uri": "part-41.0.m4s" }, ...] },
+      // ... at most the LAST entry may have "complete": false (no "uri" yet)
+    ],
+    "preloadHint": { "msn": 44, "part": 1, "uri": "part-44.1.m4s" } // or null
+  },
+  "audio": { /* same shape, "audio-init.mp4" / "audio-seg-<n>.m4s" / "audio-part-<seq>.m4s" */ } // or null/absent until a stage source has spoken
+}
+```
+
+All origin-relative filenames (`seg-<n>.m4s`, `part-<seq>.m4s`, `init.mp4`,
+and their `audio-` counterparts, matching `tools/pqp-remux/README.md`'s R2
+writer naming) — fetched by THIS Worker at `{LL_ORIGIN_BASE}/s/:sessionId/<name>`,
+never handed to a viewer directly (see "Why this Worker talks to the remux
+box directly" above). `ll-state.js`'s `parseLlState` is the validator: a
+malformed document is treated exactly like "origin unreachable" by every
+caller, never a crash.
+
+### `LL_ORIGIN_KEY`: this Worker's credential against the remux origin
+
+Every fetch `LlPlaylistOrigin` makes against `LL_ORIGIN_BASE` — `state.json`,
+parts, init segments, all of it — carries `X-Pqp-Origin-Key: <LL_ORIGIN_KEY>`
+when that secret is configured. This is `pqp-remuxd`'s own
+`MEDIA_ORIGIN_KEY`/`OriginKeyHeader` contract (`internal/control/server.go`,
+`tools/pqp-remux`, PR #584's Farol-review fix): a static shared value the
+origin constant-time-compares before the request ever reaches a session
+lookup, the CDN-to-origin auth-header shape rather than a per-request
+signature — a viewer's player cannot produce it and never needs to, the same
+way it never sees `LL_ORIGIN_BASE`'s host. Set with `wrangler secret put
+LL_ORIGIN_KEY`, never in `wrangler.jsonc`'s `vars` (see that file's own
+comment) — it is a credential, unlike `LL_ORIGIN_BASE`, which is only a
+host. Unset (the default): no header is sent at all, matching `pqp-remuxd`
+leaving `MEDIA_ORIGIN_KEY` empty for a loopback-only `CONTROL_LISTEN` — both
+sides default to the same "no key configured" posture, and neither one
+implies the other is wrong until a real deployment sets both. Never
+forwarded to a viewer: `fetchPlaylist`/`fetchMultivariantPlaylist` always
+construct a FRESH `Response` with only a `Content-Type` header, never the
+origin fetch's own request or response headers — pinned by
+`test/ll-playlist-origin.test.mjs`.
 
 ## Why the cache key drops the token
 
@@ -503,6 +714,7 @@ npm install
 npx wrangler login          # once, if not already authenticated
 npx wrangler secret put HLS_VIEWER_TOKEN_SECRET   # value from above
 npx wrangler secret put HLS_PARTY_PASS_SECRET     # value from above; omit to leave the party pass off
+npx wrangler secret put LL_ORIGIN_KEY             # pqp-remuxd's MEDIA_ORIGIN_KEY; optional until LL_ORIGIN_BASE is set
 npx wrangler deploy
 ```
 
@@ -510,6 +722,15 @@ Then in the Cloudflare dashboard, add a CNAME (or A/AAAA, per how the rest of
 `pqp.gg` is routed) for `hls.pqp.gg` to this Worker, proxied. `ORIGIN_BASE` in
 `wrangler.jsonc` already points at `https://api.pqp.gg`; change it there (not
 as a secret — it is not sensitive) if the API's public host changes.
+`LL_ORIGIN_BASE` (also in `wrangler.jsonc`, also not a secret) ships empty —
+leave it that way until a real `pqp-remux` box exists and implements
+`state.json` ("The `state.json` contract" above); setting it early just means
+every viewer's master-playlist fetch pays one extra round trip probing a box
+that answers nothing yet, before falling back to the conventional path.
+`LL_ORIGIN_KEY` is the credential half — set it whenever `pqp-remuxd`'s
+`MEDIA_ORIGIN_KEY` is non-empty (required once its `CONTROL_LISTEN` binds
+beyond loopback), matching values on both sides ("`LL_ORIGIN_KEY`: this
+Worker's credential against the remux origin" above).
 
 **Rollback**: unset `LIVE_HLS_PLAYLIST_BASE_URL` on the API (see
 `docs/WATCH_PARTY.md` §"Playlists at the edge") — new sessions immediately go
