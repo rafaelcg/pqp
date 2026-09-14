@@ -225,10 +225,36 @@ async function fetchAgeGateStatus(userId: string): Promise<AgeGateStatus> {
  * reason `services/users.ts`'s per-request caches are: an SLA an operator
  * script can trivially meet (`sleep 30`) is a small price for cutting this
  * query's call volume by two orders of magnitude.
+ *
+ * `"pending"` is never written into the cache (see the `shouldCache` argument
+ * below and its doc on `coalesce`). It is the one status that is not
+ * permanent — the gate is one-shot, so `"passed"`/`"blocked"` can never
+ * change back, but `"pending"` can flip to either on ANY request against ANY
+ * instance the moment the account answers `POST /api/me/age-check` — and
+ * `invalidateAgeGateStatus` below only ever clears the instance that
+ * happened to handle that request. On one process that is invisible: the
+ * next read after a declaration always goes through the same cache the
+ * declaration just invalidated. Behind a load balancer with no session
+ * affinity it is not: a brand-new account's `GET /api/me` can cache
+ * `"pending"` on machine A, the declaration a moment later can land on (and
+ * only invalidate) machine B, and the WS auth frame that follows — a
+ * different connection, possibly seconds later — can land back on machine A
+ * and read a `"pending"` that stopped being true before the socket even
+ * opened. That is exactly what closed roughly a third of the join attempts
+ * in the 2026-09-14 M6 rehearsal (3 machines) with `4401 Unauthorized`: real,
+ * just-declared accounts, refused by a stale in-memory answer on one instance
+ * of a cache with no cross-instance invalidation. Not caching the transient
+ * state at all costs one extra query per pending account (a brief, one-time
+ * population) and removes the staleness entirely, without needing the
+ * cluster-wide invalidation `CLUSTER_BUS` would otherwise imply for a status
+ * this cheap to just not cache.
  */
 export async function getAgeGateStatus(userId: string): Promise<AgeGateStatus> {
-  return coalesce(ageGateCacheKey(userId), AGE_GATE_TTL_MS, () =>
-    fetchAgeGateStatus(userId),
+  return coalesce(
+    ageGateCacheKey(userId),
+    AGE_GATE_TTL_MS,
+    () => fetchAgeGateStatus(userId),
+    (status) => status !== "pending",
   );
 }
 
