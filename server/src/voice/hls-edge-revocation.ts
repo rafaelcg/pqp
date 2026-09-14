@@ -205,19 +205,33 @@ let retryDelaysMs: readonly number[] = [2_000, 8_000, 20_000];
  * Bounds the TOTAL number of revocation deliveries (first attempt plus any
  * retries still in backoff) this process holds open at once, across every
  * key -- not just how many are actively hitting the network
- * (`MAX_CONCURRENT_KV_REQUESTS` already bounds that separately). A
- * sustained Cloudflare outage during a mass-ban used to let every one of
- * potentially hundreds of evictions queue its own independent retry chain
- * with no shared ceiling; past this bound a NEW delivery is dropped
- * outright rather than queued, logged once via
- * `voice.hlsEdgeRevocationQueueFull` -- the same "drop and count" shape
- * `rejectionLog` and `partyPassRevocationCache` already use elsewhere in
- * this feature for an attacker- or incident-sized burst. A dropped write
- * degrades to "this one revocation's edge record never lands", not a
+ * (`MAX_CONCURRENT_KV_REQUESTS` already bounds that separately). Keyed by
+ * the write key so a duplicate call for the SAME key (a replayed eviction,
+ * the same event delivered twice off the cluster bus, two callers racing
+ * on the exact same millisecond) coalesces onto the ONE delivery already
+ * in flight rather than starting a second independent chain -- an earlier
+ * version kept a map entry per CALL instead of per key, so duplicates each
+ * got their own suspended retry chain while `size` under-counted them,
+ * defeating the bound it claimed to be (Farol, 2026-09-14).
+ *
+ * THE FIRST ATTEMPT IS NEVER GATED ON THIS BOUND. `writeHlsEdgeRevocationAt`
+ * always starts (or joins) a delivery; the bound is enforced INSIDE
+ * `deliver`, only at the point a FAILED attempt is about to be handed a
+ * retry slot (see `deliver` below) -- a security-critical event silently
+ * skipping even its first try because the process happened to be busy
+ * would have been strictly worse than the thing this bound exists to
+ * prevent (Farol flagged the earlier pre-attempt gate as a HIGH: it could
+ * drop a revocation's only delivery attempt outright).
+ *
+ * Past the bound, a NEW key's retry is refused rather than queued, logged
+ * once via `voice.hlsEdgeRevocationQueueFull` -- the same "drop and count"
+ * shape `rejectionLog` and `partyPassRevocationCache` already use
+ * elsewhere in this feature for an incident-sized burst. That degrades to
+ * "this one revocation's edge record may arrive late or not at all", not a
  * memory or socket leak; the in-memory `hls-revocation.ts` set (and the
  * WebSocket eviction it runs alongside) are unaffected either way.
  */
-const MAX_PENDING_DELIVERIES = 1_000;
+let maxPendingDeliveries = 1_000;
 const pendingDeliveries = new Map<string, Promise<void>>();
 
 async function deliver(
@@ -235,6 +249,21 @@ async function deliver(
     logEvent("voice.hlsEdgeRevocationWriteFailed", { key, attempts: attempt + 1 });
     return;
   }
+  // The bound applies HERE, to admitting a retry, never to the attempt
+  // that already just ran above -- see the module doc comment on
+  // `pendingDeliveries`. This key already holds its own slot in the map
+  // (set by `writeHlsEdgeRevocationAt` before this function was ever
+  // called), so `size` here counts every OTHER key currently in flight;
+  // past the bound, give up on retrying rather than compete for a slot
+  // that does not exist.
+  if (pendingDeliveries.size > maxPendingDeliveries) {
+    logEvent("voice.hlsEdgeRevocationQueueFull", {
+      key,
+      pending: pendingDeliveries.size,
+      attempts: attempt + 1,
+    });
+    return;
+  }
   await new Promise<void>((resolve) => setTimeout(resolve, retryDelaysMs[attempt]));
   return deliver(config, key, now, fetchImpl, attempt + 1);
 }
@@ -248,11 +277,17 @@ async function deliver(
  * round trip to do it, so it fires this with `void` and moves on. Never
  * throws. No-ops silently (not even a log line) when unconfigured, which
  * is the expected shape for every deployment that has not provisioned the
- * edge KV namespace -- most of them. `pendingDeliveries` is the fan-out
- * bound described above; an entry occupies its slot for the FULL
- * attempt-plus-retry lifetime, so it is what actually caps how much
- * concurrent work (network requests AND suspended backoff timers) this
- * mechanism can ever be holding at once.
+ * edge KV namespace -- most of them.
+ *
+ * A duplicate call for a key ALREADY in flight joins that delivery instead
+ * of starting a second one -- see `pendingDeliveries`'s doc comment. The
+ * `pendingDeliveries.get(key) === promise` check before deleting guards
+ * against a narrow but real case: caller A starts a delivery, it fails and
+ * exhausts retries and is about to clean up, while caller B's `void
+ * writeHlsEdgeRevocation(...)` for the SAME key (a fresh eviction of the
+ * same viewer a moment later) has already joined and then re-started a
+ * NEW delivery for that key in between -- without the check, A's stale
+ * `finally` would delete B's live entry out from under it.
  */
 export async function writeHlsEdgeRevocationAt(
   key: string,
@@ -263,16 +298,18 @@ export async function writeHlsEdgeRevocationAt(
   if (!config) {
     return;
   }
-  if (pendingDeliveries.size >= MAX_PENDING_DELIVERIES) {
-    logEvent("voice.hlsEdgeRevocationQueueFull", { key, pending: pendingDeliveries.size });
-    return;
+  const existing = pendingDeliveries.get(key);
+  if (existing) {
+    return existing;
   }
   const promise = deliver(config, key, now, fetchImpl);
   pendingDeliveries.set(key, promise);
   try {
     await promise;
   } finally {
-    pendingDeliveries.delete(key);
+    if (pendingDeliveries.get(key) === promise) {
+      pendingDeliveries.delete(key);
+    }
   }
 }
 
@@ -327,4 +364,14 @@ export function resetHlsEdgeRevocationRetryDelaysForTests(): void {
 /** Test-only: how many deliveries this process currently holds open, for asserting the fan-out bound. */
 export function hlsEdgeRevocationPendingCountForTests(): number {
   return pendingDeliveries.size;
+}
+
+/** Test-only: shrinks the pending-delivery bound so a "queue full" test does not need 1,000 real writes. */
+export function setHlsEdgeRevocationMaxPendingForTests(max: number): void {
+  maxPendingDeliveries = max;
+}
+
+/** Test-only: restores the production pending-delivery bound. */
+export function resetHlsEdgeRevocationMaxPendingForTests(): void {
+  maxPendingDeliveries = 1_000;
 }

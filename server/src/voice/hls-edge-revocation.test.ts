@@ -3,7 +3,9 @@ import {
   hlsEdgeChannelRevocationKey,
   hlsEdgeRevocationKey,
   hlsEdgeRevocationPendingCountForTests,
+  resetHlsEdgeRevocationMaxPendingForTests,
   resetHlsEdgeRevocationRetryDelaysForTests,
+  setHlsEdgeRevocationMaxPendingForTests,
   setHlsEdgeRevocationRetryDelaysForTests,
   writeHlsEdgeChannelRevocation,
   writeHlsEdgeRevocation,
@@ -81,6 +83,7 @@ describe("writeHlsEdgeRevocation", () => {
   afterEach(() => {
     clearKvEnv();
     resetHlsEdgeRevocationRetryDelaysForTests();
+    resetHlsEdgeRevocationMaxPendingForTests();
   });
 
   it("is a no-op with no config: no fetch call at all", async () => {
@@ -246,30 +249,68 @@ describe("writeHlsEdgeRevocation", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(20); // one PUT per write, no GET
     });
 
-    it("drops a new delivery and logs once the pending-delivery bound is reached, without throwing", async () => {
+    it("ALWAYS makes the first attempt, even when the pending-delivery bound is already full -- Farol: never discard a first delivery", async () => {
       setKvEnv();
-      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-      // Hold every PUT open forever so nothing ever settles and frees a slot.
+      setHlsEdgeRevocationMaxPendingForTests(2);
+      // Fill the bound with deliveries whose PUT never resolves (so their
+      // map entry never frees, without needing any real backoff timer).
       let release!: () => void;
       const neverSettles = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const fetchImpl = vi.fn(async () => {
+      const fillFetch = vi.fn(async () => {
         await neverSettles;
         return new Response(JSON.stringify({ success: true }), { status: 200 });
       });
-      // Fill the bound directly through the exported hook rather than
-      // 1,000 real writes -- exercises the same guard cheaply.
-      const fills = Array.from({ length: 1_000 }, (_, i) =>
-        writeHlsEdgeRevocationAt(`fill-${i}`, 1_000, fetchImpl),
-      );
-      // Give them a turn to register in the pending map.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(hlsEdgeRevocationPendingCountForTests()).toBe(1_000);
+      const fills = [
+        writeHlsEdgeRevocationAt("fill-1", 1_000, fillFetch),
+        writeHlsEdgeRevocationAt("fill-2", 1_000, fillFetch),
+      ];
+      await Promise.resolve(); // let both register in the pending map
+      expect(hlsEdgeRevocationPendingCountForTests()).toBe(2);
 
-      const overflowFetch = vi.fn();
+      // A brand new key's first attempt still happens -- the bound never
+      // gates entry, only whether a FAILED attempt gets a retry.
+      const overflowFetch = vi.fn(
+        async () => new Response(JSON.stringify({ success: true }), { status: 200 }),
+      );
       await writeHlsEdgeRevocationAt("overflow-key", 1_000, overflowFetch);
-      expect(overflowFetch).not.toHaveBeenCalled();
+      expect(overflowFetch).toHaveBeenCalledTimes(1);
+
+      release();
+      await Promise.all(fills);
+      resetHlsEdgeRevocationMaxPendingForTests();
+    });
+
+    it("refuses to retry (and logs queue-full) once the bound is reached, after the first attempt already ran and failed", async () => {
+      setKvEnv();
+      setHlsEdgeRevocationMaxPendingForTests(2);
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      let release!: () => void;
+      const neverSettles = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const fillFetch = vi.fn(async () => {
+        await neverSettles;
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      });
+      const fills = [
+        writeHlsEdgeRevocationAt("fill-1", 1_000, fillFetch),
+        writeHlsEdgeRevocationAt("fill-2", 1_000, fillFetch),
+      ];
+      await Promise.resolve();
+      expect(hlsEdgeRevocationPendingCountForTests()).toBe(2);
+
+      let overflowAttempts = 0;
+      const overflowFetch = vi.fn(async () => {
+        overflowAttempts += 1;
+        return new Response("down", { status: 500 });
+      });
+      await writeHlsEdgeRevocationAt("overflow-key", 1_000, overflowFetch);
+      // The first attempt happened, failed, and no retry was scheduled
+      // (the bound was already full) -- so exactly one call, not the two
+      // or more a normal retry sequence would produce.
+      expect(overflowAttempts).toBe(1);
       const overflowLine = logSpy.mock.calls
         .map((c) => String(c[0]))
         .find((line) => line.includes("voice.hlsEdgeRevocationQueueFull"));
@@ -277,7 +318,32 @@ describe("writeHlsEdgeRevocation", () => {
 
       release();
       await Promise.all(fills);
+      resetHlsEdgeRevocationMaxPendingForTests();
       logSpy.mockRestore();
+    });
+
+    it("coalesces duplicate calls for the SAME key onto ONE delivery, rather than starting a second independent chain", async () => {
+      setKvEnv();
+      let calls = 0;
+      let resolvePut!: () => void;
+      const putGate = new Promise<void>((resolve) => {
+        resolvePut = resolve;
+      });
+      const fetchImpl = vi.fn(async () => {
+        calls += 1;
+        await putGate;
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      });
+      // Two callers write the exact same key (a replayed eviction, or the
+      // same event delivered twice off the cluster bus) before either
+      // resolves.
+      const first = writeHlsEdgeRevocationAt("dup-key", 1_000, fetchImpl);
+      const second = writeHlsEdgeRevocationAt("dup-key", 1_000, fetchImpl);
+      expect(hlsEdgeRevocationPendingCountForTests()).toBe(1); // ONE entry, not two
+      resolvePut();
+      await Promise.all([first, second]);
+      expect(calls).toBe(1); // ONE PUT, not two
+      expect(hlsEdgeRevocationPendingCountForTests()).toBe(0);
     });
   });
 });

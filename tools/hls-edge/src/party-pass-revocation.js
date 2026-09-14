@@ -70,16 +70,21 @@
  * exists to serve (Farol flagged the unbounded version of this as a MEDIUM
  * performance regression).
  *
- * LIST IS NOT PAGINATED HERE ON PURPOSE. A real eviction is a rare,
- * human-triggered event (a kick, a ban) and each key self-expires after
- * the party pass's own 6 h ceiling, so the number of live keys under one
- * prefix is bounded by how many times ONE (userId, channelId) pair (or ONE
- * channel) was evicted inside the last 6 hours -- a handful at most, well
- * inside Cloudflare's default `list` page size. This gate reads the first
- * page and takes the max of what it sees; missing a stray key past that
- * page would only ever make a check MORE permissive by a few keys' worth
- * of margin in a pathological case this design does not expect to hit, not
- * less safe than the single-key design it replaced.
+ * LIST FOLLOWS ITS CURSOR TO `list_complete`, UP TO `MAX_LIST_PAGES`. A
+ * single `kv.list` call is one PAGE (Cloudflare's default page size is
+ * 1,000 keys), not the whole prefix -- reading only the first page would
+ * have let a prefix with more revocations than that silently drop the
+ * NEWEST one if it landed on a later page, which is a security bug, not a
+ * performance shortfall (Farol, 2026-09-14): a party pass issued after the
+ * wrongly-visible maximum but before the real one would read as
+ * not-revoked. `_readMaxForPrefix` pages through the full result before
+ * answering; running out of pages with more still unread fails CLOSED
+ * (`kvError: true`) rather than caching a possibly-incomplete answer. In
+ * practice a real eviction is a rare, human-triggered event and each key
+ * self-expires after the party pass's own 6 h ceiling, so hitting the page
+ * cap at all should never happen outside a pathological key-space attack
+ * on one (userId, channelId) pair -- but the code no longer ASSUMES that,
+ * it verifies it.
  */
 
 export const PARTY_PASS_REVOCATION_CACHE_TTL_MS = 30_000;
@@ -146,7 +151,21 @@ export class PartyPassRevocationGate {
    * comparison against it is `revokedAt > issuedAt`, and a real `issuedAt`
    * is always a positive epoch millisecond value, so 0 can never itself
    * read as "revoked".
-   * @param {{ list(opts: { prefix: string }): Promise<{ keys: { name: string }[] }> }} kv
+   *
+   * FOLLOWS THE CURSOR UNTIL `list_complete`. A single `kv.list` response
+   * is one PAGE, not the whole prefix -- Cloudflare's own default page
+   * size is 1,000 keys, and stopping at the first page silently drops
+   * anything past it. Missing a later page here is not a performance
+   * shortfall, it is a security bug: the newest revocation could be on
+   * that missing page, and a party pass issued after the (wrongly) visible
+   * maximum but before the real one would read as not-revoked (Farol,
+   * 2026-09-14). `MAX_LIST_PAGES` bounds total work per check (a real
+   * eviction burst for ONE (userId, channelId) pair large enough to need
+   * more than a handful of pages inside one 6 h TTL window is not a shape
+   * this design expects to see) -- hitting it fails CLOSED via `kvError`,
+   * the same direction every other "could not find out for sure" case in
+   * this file already fails, rather than silently truncating the answer.
+   * @param {{ list(opts: { prefix: string, cursor?: string }): Promise<{ keys: { name: string }[], list_complete?: boolean, cursor?: string }> }} kv
    * @param {string} prefix
    * @param {number} now
    * @returns {Promise<{ revokedAt: number; kvError: boolean }>}
@@ -156,21 +175,34 @@ export class PartyPassRevocationGate {
     if (cached) {
       return { revokedAt: cached.revokedAt, kvError: false };
     }
-    let listed;
+    const MAX_LIST_PAGES = 10;
+    let revokedAt = 0;
+    let cursor;
     try {
-      listed = await kv.list({ prefix });
+      for (let page = 0; page < MAX_LIST_PAGES; page++) {
+        const listed = await kv.list(cursor ? { prefix, cursor } : { prefix });
+        for (const key of listed?.keys ?? []) {
+          const ts = suffixTimestamp(key.name, prefix);
+          if (ts > revokedAt) {
+            revokedAt = ts;
+          }
+        }
+        if (listed?.list_complete || !listed?.cursor) {
+          break;
+        }
+        if (page === MAX_LIST_PAGES - 1) {
+          // Ran out of pages to scan with more still unread -- an
+          // incomplete answer is exactly the shape that must never be
+          // cached or trusted as "not revoked". Fail CLOSED.
+          return { revokedAt: Number.POSITIVE_INFINITY, kvError: true };
+        }
+        cursor = listed.cursor;
+      }
     } catch {
       // Bound but unreachable: fail CLOSED (see the module doc comment).
       // Not cached -- a real outage should not pin every request to
       // "revoked" for the next 30 s once the namespace recovers.
       return { revokedAt: Number.POSITIVE_INFINITY, kvError: true };
-    }
-    let revokedAt = 0;
-    for (const key of listed?.keys ?? []) {
-      const ts = suffixTimestamp(key.name, prefix);
-      if (ts > revokedAt) {
-        revokedAt = ts;
-      }
     }
     this._remember(prefix, revokedAt, now);
     return { revokedAt, kvError: false };

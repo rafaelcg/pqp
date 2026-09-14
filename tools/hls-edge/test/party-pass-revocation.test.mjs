@@ -29,6 +29,29 @@ function throwingKv(error = new Error("kv unavailable")) {
   };
 }
 
+/**
+ * A KV fake that paginates: `pageSize` key names per call, following
+ * `cursor`, matching the real Cloudflare `list_complete`/`cursor` shape.
+ * Used to prove `_readMaxForPrefix` actually follows the cursor instead of
+ * only ever reading the first page.
+ */
+function pagedFakeKv(keyNames, pageSize) {
+  return {
+    async list({ prefix, cursor }) {
+      const matching = keyNames.filter((name) => name.startsWith(prefix));
+      const start = cursor ? Number(cursor) : 0;
+      const page = matching.slice(start, start + pageSize);
+      const nextStart = start + pageSize;
+      const complete = nextStart >= matching.length;
+      return {
+        keys: page.map((name) => ({ name })),
+        list_complete: complete,
+        cursor: complete ? undefined : String(nextStart),
+      };
+    },
+  };
+}
+
 const ISSUED_AT = 1_000_000;
 
 test("no KV bound: fails open, not revoked, no error", async () => {
@@ -181,6 +204,40 @@ test("evicts the oldest entry once the cache is full, rather than growing withou
   }
   await gate.check(kv, "user-overflow", "chan-1", ISSUED_AT, now);
   assert.ok(gate._cache.size <= CAP);
+});
+
+test("follows the cursor: the newest revocation on a LATER page is still found, not just the first page", async () => {
+  const gate = new PartyPassRevocationGate();
+  // Six keys under the prefix, two per page, oldest first -- the newest
+  // (which must win) lands on the LAST page.
+  const keys = [
+    `user-1:chan-1:${ISSUED_AT - 5_000}`,
+    `user-1:chan-1:${ISSUED_AT - 4_000}`,
+    `user-1:chan-1:${ISSUED_AT - 3_000}`,
+    `user-1:chan-1:${ISSUED_AT - 2_000}`,
+    `user-1:chan-1:${ISSUED_AT - 1_000}`,
+    `user-1:chan-1:${ISSUED_AT + 1}`, // newest, on the 3rd page
+  ];
+  const kv = pagedFakeKv(keys, 2);
+  const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
+  assert.deepEqual(result, { revoked: true, kvError: false });
+});
+
+test("a single-page prefix (the common case) does not even need a cursor", async () => {
+  const gate = new PartyPassRevocationGate();
+  const kv = pagedFakeKv([`user-1:chan-1:${ISSUED_AT + 1}`], 1_000);
+  const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
+  assert.deepEqual(result, { revoked: true, kvError: false });
+});
+
+test("running out of pages (MAX_LIST_PAGES) with more still unread fails CLOSED, never a truncated answer", async () => {
+  const gate = new PartyPassRevocationGate();
+  // 11 pages' worth at 1 key per page -- one more page than the gate will
+  // read (MAX_LIST_PAGES = 10) -- so the list is never actually exhausted.
+  const keys = Array.from({ length: 11 }, (_, i) => `user-1:chan-1:${ISSUED_AT - 10_000 + i}`);
+  const kv = pagedFakeKv(keys, 1);
+  const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
+  assert.deepEqual(result, { revoked: true, kvError: true });
 });
 
 test("partyPassRequiresKvInProduction: false when KV is bound, regardless of ENVIRONMENT", () => {
