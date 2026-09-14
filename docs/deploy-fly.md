@@ -571,20 +571,38 @@ done
 #    FUTURE edit to fly.toml silently does nothing for that name, which is
 #    the trap (see the rollback below for exactly this biting: the intuitive
 #    rollback command for WORKER_MODE does not work once it is unset here).
-#    Clear all four now while it's free:
+#    Clear all four now while it's free. USE --stage, NOT A PLAIN UNSET:
+#    a rehearsal (M6-adjacent, three machines) found `fly secrets unset`
+#    can report success and have `fly secrets list` show the name gone
+#    while an ALREADY-RUNNING machine keeps the old value live in its own
+#    process environment — a plain unset does not reliably force the
+#    restart that actually applies the change on every machine, only on
+#    whichever one happens to cycle next. `--stage` queues the change
+#    explicitly and `fly secrets deploy` is the one rolling restart that
+#    is guaranteed to land it on every machine, the same guarantee the
+#    machine-count/image assertions elsewhere in this runbook exist for:
 fly secrets list --app pqp-api
-fly secrets unset CLUSTER_BUS VOICE_REGISTRY PG_POOL_MAX WORKER_MODE --app pqp-api
+fly secrets unset --stage CLUSTER_BUS VOICE_REGISTRY PG_POOL_MAX WORKER_MODE --app pqp-api
+fly secrets deploy --app pqp-api
 # (unsetting a name that was never set is a harmless no-op restart, not an
 # error — but check with `fly secrets list` first so you know which restart
 # you are about to cause and why)
 
 # 9. Re-confirm PG_POOL_MAX reads 70 per machine from fly.toml now, not a
-#    leftover secret of some other value:
+#    leftover secret of some other value — ON BOTH MACHINES BY NAME, not
+#    just "the app answers 70 sometimes" (the load-balanced hostname can
+#    hit the same machine twice and miss a straggler exactly like the
+#    deployed-commit check earlier in this flip):
 for id in $(fly machines list --app pqp-api --json | jq -r '.[].id'); do
+  echo "== $id =="
   curl -s -H "fly-force-instance-id: $id" \
     -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
     https://api.pqp.gg/api/admin/metrics | jq .runtime.pool
 done
+# Expect `"max": 70` from BOTH machine ids. Any machine still reporting the
+# old secret's value (or "10", fly.toml's pre-this-PR default) means the
+# `fly secrets deploy` above has not reached it yet — wait for the restart
+# to finish and re-run this loop before moving on to step 10.
 
 # 10. Clean up the CI override now that the file and the app agree.
 gh variable delete PQP_API_MACHINES
@@ -599,16 +617,27 @@ fly scale count 1 --region gru --app pqp-api
 gh variable set PQP_API_MACHINES --body 1   # or revert fly.toml's min_machines_running to 1 and skip this
 ```
 
-**If you also need batch jobs to resume on `pqp-api` itself** (only if `pqp-worker` is unhealthy — otherwise leave `WORKER_MODE=api` alone, it is still correct at one machine, just no longer necessary to avoid the breaker-flap finding): **`fly secrets unset WORKER_MODE` does NOT work once this PR has merged**, and this is worth spelling out because it is exactly the shadow-secret trap from step 8 above, biting in the other direction. After the merge, `WORKER_MODE = "api"` is baked into `fly.toml`'s `[env]` block itself — unsetting a secret only removes something sitting *on top of* the file, and there is nothing there to remove once step 8 cleared it (or even if there were, the file's own value takes over the instant the secret is gone). Getting batch jobs back onto `pqp-api` needs a secret that **overrides** the file with a different value, not one that unsets:
+**If you also need batch jobs to resume on `pqp-api` itself** (only if `pqp-worker` is unhealthy — otherwise leave `WORKER_MODE=api` alone, it is still correct at one machine, just no longer necessary to avoid the breaker-flap finding): **`fly secrets unset WORKER_MODE` does NOT work once this PR has merged**, and this is worth spelling out because it is exactly the shadow-secret trap from step 8 above, biting in the other direction. After the merge, `WORKER_MODE = "api"` is baked into `fly.toml`'s `[env]` block itself — unsetting a secret only removes something sitting *on top of* the file, and there is nothing there to remove once step 8 cleared it (or even if there were, the file's own value takes over the instant the secret is gone). Getting batch jobs back onto `pqp-api` needs a secret that **overrides** the file with a different value, not one that unsets — and, per the same rehearsal finding step 8/9 of the flip document (a plain `fly secrets set`/`unset` can leave a stale value live on a machine that hasn't cycled), use `--stage` + `fly secrets deploy` here too rather than trusting a bare `set`:
 
 ```bash
-fly secrets set WORKER_MODE=all --app pqp-api   # "all" (or "0"/"false"/unset) is what
-                                                 # server/src/lib/process-role.ts treats as
-                                                 # "run everything here"; "api" is what fly.toml
-                                                 # now says, so only a SET with a different
-                                                 # value can override it
-fly logs --app pqp-api | grep '\[role\]'
-# should NOT show "WORKER_MODE=api: batch jobs left to the worker process" any more
+fly secrets set --stage WORKER_MODE=all --app pqp-api   # "all" (or "0"/"false"/unset) is
+                                                          # what server/src/lib/process-role.ts
+                                                          # treats as "run everything here";
+                                                          # "api" is what fly.toml now says, so
+                                                          # only a SET with a different value
+                                                          # can override it
+fly secrets deploy --app pqp-api                         # the one rolling restart that
+                                                          # guarantees every machine picks it up
+for id in $(fly machines list --app pqp-api --json | jq -r '.[].id'); do
+  echo "== $id =="
+  fly logs --app pqp-api --machine "$id" --no-tail | grep '\[role\]' | tail -1
+done
+# server/src/index.ts only logs a "[role]" line for the WORKER_MODE=api /
+# worker case ("batch jobs left to the worker process") — role "all" runs
+# startColdJobs() silently, with no boot line of its own. So the thing to
+# confirm per machine is the ABSENCE of that line on this restart (grep
+# returns nothing for a machine that picked up the override), not the
+# presence of a different one.
 ```
 
 The permanent fix, if this rollback is not a brief one-off, is to also revert `fly.toml`'s `WORKER_MODE = "api"` line and merge that — otherwise the next redeploy (any ordinary merge to `main`) picks the file's `"api"` back up and silently drops the override you just set, since a deploy does not touch secrets and the shadow is exactly what makes that invisible.
