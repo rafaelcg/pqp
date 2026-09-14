@@ -252,6 +252,7 @@ import {
   limitFromEnv,
 } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
+import { AUTH_ROUTE_LABEL, runWithRoute } from "../lib/route-context.js";
 import {
   buildPersonalExport,
   deleteAccount,
@@ -570,6 +571,7 @@ import {
   findUserByTag,
   getMemberRole,
   getUserById,
+  invalidateMemberListsForUser,
   isServerMember,
   leaveServer,
   listServerMembers,
@@ -1260,7 +1262,7 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
     customStatus: body.customStatus,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
+  await announceProfile(updated);
   return { ...(await toOwnUser(updated)), ageGate };
 });
 
@@ -1335,7 +1337,7 @@ router.post("/api/me/avatar/claim", async ({ req, user }) => {
     avatarKey: body.key,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
+  await announceProfile(updated);
   return { user: await toOwnUser(updated) };
 });
 
@@ -1354,7 +1356,7 @@ router.delete("/api/me/avatar", async ({ user }) => {
     avatarKey: null,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
+  await announceProfile(updated);
   return { user: await toOwnUser(updated) };
 });
 
@@ -1463,7 +1465,28 @@ router.delete("/api/me/banner", async ({ user }) => {
  * the onboarding backfill call, and a broadcast belongs to a request somebody
  * made — not to every write of the row.
  */
-function announceProfile(updated: DbUser): void {
+async function announceProfile(updated: DbUser): Promise<void> {
+  // Awaited, not fire-and-forget: a member-list read that lands right after
+  // this request must see the new handle/name/avatar/status, not whatever
+  // was cached before it (`services/users.ts`'s `invalidateMemberListsForUser`).
+  //
+  // The profile row itself is already committed by the time this runs (every
+  // caller of `announceProfile` calls it after its own write), so a failure
+  // HERE must not turn into a failure response for a mutation that already
+  // succeeded — the caller would retry a write that has nothing left to do,
+  // and never learn the actual outcome. Logged and swallowed instead: the
+  // worst case is a member list serving a stale name/avatar/handle for up to
+  // the cache's 30s TTL, the same bound this cache already lives with for
+  // every other write it does not explicitly invalidate.
+  try {
+    await invalidateMemberListsForUser(updated.id);
+  } catch (error) {
+    console.error(
+      "[profile] member-list invalidation failed:",
+      updated.id,
+      error,
+    );
+  }
   broadcastProfileUpdate({
     type: "profile-update",
     userId: updated.id,
@@ -8755,7 +8778,17 @@ export async function handleApi(
 
   let resolved: Awaited<ReturnType<typeof resolveAuthSession>> = null;
   try {
-    resolved = await resolveAuthSession(req.headers.authorization);
+    // Its own label, not the eventual route's: this runs before the router
+    // has matched anything (a 404 gets resolved too), and a Clerk/DB round
+    // trip here is shared account-resolution work, not business logic that
+    // belongs to whichever endpoint happens to follow it. Without this label
+    // every one of these queries — 53k UPDATEs in 16.5h of the 2026-09-13
+    // Vultr cutover alone — was silently folded into `dbQueries.byRoute`'s
+    // `"other"` bucket, hiding a real cost center behind the same label used
+    // for WS handlers and cold jobs.
+    resolved = await runWithRoute(AUTH_ROUTE_LABEL, () =>
+      resolveAuthSession(req.headers.authorization),
+    );
   } catch (error) {
     if (error instanceof DatabaseUnavailableError) {
       // The breaker is open: this rejected in milliseconds rather than
@@ -8874,7 +8907,12 @@ export async function handleApi(
   // in. `findTimeoutForRequest` owns both rules — see the comment on
   // `TIMEOUT_EXEMPT_SUFFIXES` for the two writes that stay open.
   if (WRITE_METHODS.has(method)) {
-    const timeout = await findTimeoutForRequest(user.id, method, pathname);
+    // Same reasoning as the `resolveAuthSession` call above: a gate that
+    // runs ahead of every route, labelled as what it is rather than folded
+    // into "other".
+    const timeout = await runWithRoute(AUTH_ROUTE_LABEL, () =>
+      findTimeoutForRequest(user.id, method, pathname),
+    );
     if (timeout) {
       sendError(res, 403, timeoutMessage(timeout), req);
       return;
@@ -8890,7 +8928,9 @@ export async function handleApi(
     }
 
     const ctx: RequestContext = { req, res, url, user, ageGate: resolved.ageGate };
-    const result = await matched.handler(ctx, matched.params);
+    const result = await runWithRoute(`${method} ${matched.routePath}`, () =>
+      matched.handler(ctx, matched.params),
+    );
     // Conditional reads. Deliberately *here*, downstream of everything above:
     // the Bearer token has been resolved, the age gate and timeout gate have
     // run, the route matched, and the handler has finished — which means its

@@ -17,6 +17,8 @@ import {
 } from "./lib/db-breaker.js";
 import { HttpError } from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
+import { noteDbQuery } from "./lib/db-tx-metrics.js";
+import { currentRoute } from "./lib/route-context.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -700,8 +702,33 @@ export function getPool(): pg.Pool {
       ...pgSslConfig(),
     });
     pool = created;
+    // `db.queries.total` / `db.queries.byRoute` (`lib/db-tx-metrics.ts`):
+    // every query this pool ever runs, counted once, against whichever
+    // route's `runWithRoute` (`lib/route-context.ts`) the call happens to be
+    // running inside. Wrapped here rather than left to individual call
+    // sites' own `countedQuery` calls (which only ever covered a handful of
+    // hot paths) because "how many queries did the 2026-09-13 cache work
+    // actually remove" needs the true total, not a count of the call sites
+    // somebody remembered to instrument. One extra `Map.set` per query.
+    //
+    // Wrapped BEFORE `guardPoolQueries` below, deliberately: the breaker
+    // guard has to be the OUTER layer, so a call it fast-rejects never
+    // reaches this counter. `db.queries.total` promises "every Postgres
+    // round trip this process has run since boot" — a call the breaker
+    // turned away never became one, and counting it anyway would make the
+    // 2026-09-13 cache-work delta this metric exists to prove look smaller
+    // than it really is on exactly the days the breaker is doing its job.
+    const rawQuery = created.query.bind(created) as (
+      ...args: unknown[]
+    ) => unknown;
+    created.query = ((...args: unknown[]) => {
+      noteDbQuery(currentRoute());
+      return rawQuery(...args);
+    }) as typeof created.query;
     // A3.1: fail fast on every query while the breaker is open, rather than
     // let each caller discover a dead database by queueing on this pool.
+    // Wrapping AFTER the metrics assignment above so this becomes the
+    // OUTERMOST layer around `created.query` — see the comment there.
     guardPoolQueries(created);
     // Idle-client errors (Postgres restart, network blip) are emitted on the
     // pool; without a listener they crash the process.

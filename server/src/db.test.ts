@@ -12,6 +12,16 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
  * exercise. Real Postgres — a mocked `pg.Pool` would not exercise pg-pool's
  * own idle-client reuse, which is exactly what the idempotency test below
  * depends on.
+ *
+ * Alongside it: the pool wrapper behind `db.queries.total` /
+ * `db.queries.byRoute` (`services/metrics.ts`, `lib/db-tx-metrics.ts`).
+ * Every other file in this suite talks to Postgres through `getPool()` too,
+ * so this only needs to pin the one thing that is otherwise easy to
+ * silently break: every query — not just the ones some call site remembers
+ * to wrap in `countedQuery` — is counted exactly once, against whichever
+ * route (or "other") happened to be running, and that the breaker guard
+ * (above) sits OUTSIDE this counter so a fast-rejected call is never
+ * counted as a round trip that never happened.
  */
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -29,6 +39,10 @@ const {
   resetDbBreakerForTests,
   DatabaseUnavailableError,
 } = await import("./db.js");
+const { dbQueryTotal, dbQueriesByRoute, resetDbTxMetrics } = await import(
+  "./lib/db-tx-metrics.js"
+);
+const { runWithRoute } = await import("./lib/route-context.js");
 
 describeDb("A3.1: guardPoolQueries covers connect() and half-open", () => {
   beforeAll(async () => {
@@ -268,5 +282,57 @@ describeDb("A3.1: guardPoolQueries covers connect() and half-open", () => {
       [clerkId],
     );
     expect(check.rowCount).toBe(0);
+  });
+});
+
+describeDb("db.ts pool wrapper", () => {
+  beforeAll(async () => {
+    await initDb();
+  });
+
+  afterAll(async () => {
+    await closePool();
+  });
+
+  beforeEach(() => {
+    resetDbTxMetrics();
+  });
+
+  it("counts a plain query with no route as 'other'", async () => {
+    await getPool().query("SELECT 1");
+    expect(dbQueryTotal()).toBe(1);
+    expect(dbQueriesByRoute()).toEqual({ other: 1 });
+  });
+
+  it("counts a query issued inside runWithRoute against that route", async () => {
+    await runWithRoute("GET /api/servers/:serverId/members", async () => {
+      await getPool().query("SELECT 1");
+      await getPool().query("SELECT 2");
+    });
+    await getPool().query("SELECT 3");
+
+    expect(dbQueryTotal()).toBe(3);
+    expect(dbQueriesByRoute()).toEqual({
+      "GET /api/servers/:serverId/members": 2,
+      other: 1,
+    });
+  });
+
+  // Pins the ordering fix in `getPool()`: the breaker guard must be the
+  // OUTER wrapper around the metrics counter, so a call the breaker
+  // fast-rejects is never counted as a round trip that never reached
+  // Postgres. See the comment in `db.ts` where the two wrappers are
+  // installed.
+  it("does not count a query the breaker fast-rejected", async () => {
+    const { forceDbBreakerStateForTests, resetDbBreakerForTests } =
+      await import("./db.js");
+    resetDbBreakerForTests();
+    try {
+      forceDbBreakerStateForTests("open");
+      await expect(getPool().query("SELECT 1")).rejects.toThrow();
+      expect(dbQueryTotal()).toBe(0);
+    } finally {
+      resetDbBreakerForTests();
+    }
   });
 });

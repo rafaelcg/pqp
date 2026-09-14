@@ -801,6 +801,67 @@ each is high enough (more than a handful) to trust the percentile rather than
 a couple of noisy readings. `voice.hlsTelemetryBatch`'s log trend should track
 the same shape, if noisier, in real time on the dashboard above.
 
+### DB call budget (2026-09-13 Vultr cutover)
+
+The cutover's first 16.5h of Postgres query stats found four repeat
+offenders totalling roughly 785k of the queries in that window — a member
+list re-fetched on every open, an auth-resolution `UPDATE` that almost
+always wrote back what was already there, a webhook poller ticking at a
+fixed 2s whether or not there was anything to send, and three per-request
+permission lookups (age gate, a member's role, channel access) run fresh on
+every call. `GET /api/admin/metrics` carries the counters that say whether
+the fixes for each are actually running:
+
+- **`dbQueries.total` / `dbQueries.byRoute`.** Every Postgres round trip this
+  process has issued since boot, and the same total broken down by the HTTP
+  route it happened inside (`GET /api/servers/:serverId/members`, the path
+  template, never an interpolated id) — a WS handler, a cold job, or
+  anything at boot has no route and is counted under `"other"`. A reserved
+  `"auth"` label sits next to those two: Bearer resolution and the age-gate
+  and timeout gates run in `handleApi` before any route has matched, and
+  folding that work into `"other"` would have hidden a real cost center (the
+  53k auth-resolution writes below) behind the same bucket used for
+  background jobs. Wrapped once at the pool itself (`db.ts`), so unlike
+  `dbTx.byPath` next to it, nothing had to remember to instrument a new call
+  site for this to see it. This is the number the 785k figure should now be
+  read against — a route whose count did not drop after this shipped is a
+  route the caching missed.
+- **`readCache.*`** (documented above) now also covers the server member
+  list (`services/users.ts`'s `listServerMembers`, 30s TTL, keyed per
+  server) and the three per-request permission lookups: the age gate
+  (`services/age-gate.ts`, 30s, keyed per user), a member's role
+  (`services/users.ts`'s `getMemberRole`, 30s, keyed per server+user), and
+  the channel access check (`canAccessChannel`, same TTL, keyed per
+  channel+user). All four share this one counter with the three read-cache.ts
+  callers PR #560 shipped, so a spike in `misses` right after a deploy that
+  touched any of these seven call sites is expected — what should NOT happen
+  is `misses` climbing steadily during ordinary traffic once the process has
+  been up a few minutes.
+- **`readCache.size`** grew a corresponding amount once these four joined —
+  still bounded by the same 5k-entry LRU either way.
+- **The webhook poller no longer has its own counter** (it is not a cache),
+  but its effect shows up as `outgoing-webhooks.*`-labelled rows almost
+  disappearing from `dbQueries.byRoute`'s `"other"` bucket once idle for a
+  while: `deliverDueOutgoingWebhooks` ticks every 2s while it finds work,
+  doubling its wait on every empty tick up to 30s, and a Postgres NOTIFY
+  (`services/outgoing-webhook-poller.ts`, its own dedicated LISTEN channel,
+  not the cluster bus) wakes it immediately on a fresh enqueue rather than
+  leaving it to wait out its current backoff. Same instant delivery on the
+  single-machine deployment this instance runs today; the adaptive interval
+  only changes how often an EMPTY outbox gets polled between real events.
+
+Security note for the three permission caches: authorization is still
+checked on every request against a value that is at most 30s old, same as
+`readCache.ts`'s own rule for the caches PR #560 shipped — nothing here
+skips the check, it only skips re-asking Postgres the same question inside
+the TTL window. A kick, a ban, or a role/overwrite change invalidates the
+relevant cache immediately rather than waiting out the TTL (see the
+invalidation comments beside `invalidateServerAudienceLocally` in
+`services/servers.ts` and `notifyPermissionsUpdate` in `ws/chat.ts`, the two
+chokepoints all three ride), so a removed member is denied on their very
+next request, warm cache or not — `server/src/services/permission-caches.test.ts`
+pins that.
+
 ### Adding a panel
 
 1. Explore, datasource `grafanacloud-logs`, get the query right there first.

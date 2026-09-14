@@ -170,14 +170,18 @@ describeDb("read-cache: end-to-end wiring", () => {
         expect(r.status).toBe(200);
       }
       const after = readCacheMetrics();
-      // Exactly one caller actually queried Postgres — every other request,
-      // whichever way scheduling landed it (joining the in-flight load, or
-      // finding a just-written fresh entry), shared that one answer rather
-      // than issuing a query of its own.
-      expect(after.misses - before.misses).toBe(1);
+      // Two distinct cache keys are actually live on this route since the
+      // 2026-09-13 permission-cache work — the message page itself, and
+      // `requireChannelAccess`'s `canAccessChannel` check on the way in
+      // (`services/users.ts`) — sharing this same process-wide counter. Each
+      // one real query, and every other caller of THAT key served from its
+      // one answer, however scheduling split them between joining the
+      // in-flight load and finding a just-written fresh entry: one miss per
+      // key, 49 shared answers per key.
+      expect(after.misses - before.misses).toBe(2);
       expect(
         after.coalesced - before.coalesced + (after.hits - before.hits),
-      ).toBe(49);
+      ).toBe(98);
     });
 
     it("shows a message created after the cache was warmed", async () => {
@@ -294,14 +298,15 @@ describeDb("read-cache: end-to-end wiring", () => {
         expect(r.status).toBe(200);
       }
       const after = readCacheMetrics();
-      // Same invariant as the message-page version of this test: one real
-      // query, and every other caller served from that one answer, however
-      // scheduling split them between joining the in-flight load and
-      // finding a just-written fresh entry.
-      expect(after.misses - before.misses).toBe(1);
+      // Same invariant as the message-page version of this test, and the
+      // same reason it counts two keys rather than one:
+      // `requireServerMember`'s `getMemberRole` check (`services/users.ts`)
+      // is cached on this same shared counter since the 2026-09-13
+      // permission-cache work, alongside the channel list itself.
+      expect(after.misses - before.misses).toBe(2);
       expect(
         after.coalesced - before.coalesced + (after.hits - before.hits),
-      ).toBe(49);
+      ).toBe(98);
     });
 
     it("keeps a private channel out of a plain member's list even though the shared cache holds it", async () => {
@@ -443,14 +448,15 @@ describeDb("read-cache: end-to-end wiring", () => {
         expect(r.status).toBe(200);
       }
       const after = readCacheMetrics();
-      // Same invariant as the message-page version of this test: one real
-      // query, and every other caller served from that one answer, however
-      // scheduling split them between joining the in-flight load and
-      // finding a just-written fresh entry.
-      expect(after.misses - before.misses).toBe(1);
+      // Same invariant as the message-page version of this test, and the
+      // same reason it counts two keys rather than one: this route's own
+      // `requireChannelAccess` call (`canAccessChannel`, `services/users.ts`)
+      // is cached on this same shared counter since the 2026-09-13
+      // permission-cache work, alongside the watch-party state itself.
+      expect(after.misses - before.misses).toBe(2);
       expect(
         after.coalesced - before.coalesced + (after.hits - before.hits),
-      ).toBe(49);
+      ).toBe(98);
     });
 
     it("shows the party to a plain member once live, sharing the host's cached read", async () => {

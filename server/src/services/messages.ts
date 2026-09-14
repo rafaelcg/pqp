@@ -756,25 +756,41 @@ export async function updateMessageBody(
   if (!message) {
     return null;
   }
-  // The edited body is inside the cached latest-page rows, so a stale cache
-  // would keep serving the pre-edit text.
-  invalidateLatestMessages(message.channel_id);
 
-  await getPool().query(`DELETE FROM message_mentions WHERE message_id = $1`, [
-    messageId,
-  ]);
-  // The reply mention is re-recorded too: an edit wipes the row set, and losing
-  // it would quietly downgrade the reply to decoration.
-  await recordMentions(
-    getPool(),
-    messageId,
-    message.channel_id,
-    message.author_id,
-    storedBody,
-    message.reply_to_id
-      ? { parentId: message.reply_to_id, authorId: message.author_id }
-      : undefined,
-  );
+  try {
+    await getPool().query(
+      `DELETE FROM message_mentions WHERE message_id = $1`,
+      [messageId],
+    );
+    // The reply mention is re-recorded too: an edit wipes the row set, and
+    // losing it would quietly downgrade the reply to decoration.
+    await recordMentions(
+      getPool(),
+      messageId,
+      message.channel_id,
+      message.author_id,
+      storedBody,
+      message.reply_to_id
+        ? { parentId: message.reply_to_id, authorId: message.author_id }
+        : undefined,
+    );
+  } finally {
+    // In `finally`, not after: the body update already committed in the CTE
+    // above, so a failure rewriting mentions must not leave that committed
+    // body sitting stale behind the cache for the rest of its TTL — this
+    // function still throws (the caller needs to know the mentions half
+    // failed), but the one thing this cache must never do, serve pre-edit
+    // text after the edit is durably on disk, is closed either way.
+    //
+    // Placed after both writes rather than right after the body UPDATE for
+    // the other half of the same reasoning: a concurrent reload landing
+    // between an earlier invalidation and the mentions rewrite could have
+    // repopulated the cache with the new body against a mention set that
+    // was mid-rewrite (briefly empty, or still the pre-edit rows) — a
+    // narrower mismatch than a stale body, but still one this cache should
+    // never produce. One invalidation, positioned to close both windows.
+    invalidateLatestMessages(message.channel_id);
+  }
 
   // An edit never touches attachments, but the broadcast it produces is a whole
   // message — dropping them here would blank the images out of every open tab

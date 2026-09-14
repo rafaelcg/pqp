@@ -50,6 +50,10 @@ vi.mock("../lib/safe-fetch.js", async (importOriginal) => {
   return { ...actual, safePost: vi.fn() };
 });
 
+vi.mock("./outgoing-webhook-poller.js", () => ({
+  notifyOutgoingWebhookEnqueued: vi.fn(async () => {}),
+}));
+
 const { getPool, initDb, closePool } = await import("../db.js");
 const { handleApi, resetApiRateLimits } = await import("../api/index.js");
 const { upsertUser } = await import("./users.js");
@@ -62,6 +66,9 @@ const { handleChatMessage, resetChatRateLimits } = await import(
   "../ws/chat.js"
 );
 const { safePost } = await import("../lib/safe-fetch.js");
+const { notifyOutgoingWebhookEnqueued } = await import(
+  "./outgoing-webhook-poller.js"
+);
 const {
   assertOutgoingWebhookUrl,
   enqueueOutgoingMessageCreated,
@@ -185,6 +192,8 @@ describeDb("outgoing webhooks", () => {
     resetChatRateLimits();
     resetOutgoingWebhookRateLimit();
     process.env.OUTGOING_WEBHOOKS_ALLOW_PRIVATE = "true";
+    delete process.env.WORKER_MODE;
+    vi.mocked(notifyOutgoingWebhookEnqueued).mockClear();
     vi.mocked(safePost).mockReset();
     vi.mocked(safePost).mockResolvedValue({
       statusCode: 500,
@@ -314,6 +323,26 @@ describeDb("outgoing webhooks", () => {
 
     await say(owner, otherChannelId, "nothing subscribed here");
     expect(await deliveryCount()).toBe(1);
+  });
+
+  /**
+   * `notifyOutgoingWebhookEnqueued`'s NOTIFY is only useful when this
+   * process is not the one running `outgoing-webhook-poller.ts`'s own loop
+   * — a split `WORKER_MODE=api`/`worker` deployment. On the default single
+   * process it would be a query with nothing on the other end to wake.
+   */
+  it("skips the enqueue NOTIFY on a single process, sends it when this process is API-only", async () => {
+    expect(
+      (await call(owner, "POST", `/api/servers/${serverId}/outgoing-webhooks`, createBody())).status,
+    ).toBe(201);
+
+    delete process.env.WORKER_MODE;
+    await say(owner, channelId, "single process");
+    expect(notifyOutgoingWebhookEnqueued).not.toHaveBeenCalled();
+
+    process.env.WORKER_MODE = "api";
+    await say(owner, channelId, "split deployment");
+    expect(notifyOutgoingWebhookEnqueued).toHaveBeenCalledTimes(1);
   });
 
   it("does not enqueue for character, incoming-webhook, or is_bot authors", async () => {

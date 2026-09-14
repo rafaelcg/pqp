@@ -10,7 +10,7 @@ import { noBlockBetweenSql, notBlockedSql } from "./blocks.js";
 import { buildMessagePreview } from "./dm-preview.js";
 import { areFriendsSql } from "./friends.js";
 import { getPreferences } from "./preferences.js";
-import { toPublicUserSummary } from "./users.js";
+import { invalidateChannelAccessForChannel, toPublicUserSummary } from "./users.js";
 
 /**
  * Conversations: 1:1 and group direct messages.
@@ -179,6 +179,12 @@ export async function restoreDmParticipants(channelId: string): Promise<void> {
      ON CONFLICT DO NOTHING`,
     [channelId],
   );
+  // A conversation has no server, so none of `servers.ts`'s audience
+  // invalidation runs for it — `canAccessChannel`'s cache (services/users.ts)
+  // needs its own call here, or a hidden-then-restored DM answers "no
+  // access" for up to 30s after the very message that was supposed to bring
+  // it back.
+  invalidateChannelAccessForChannel(channelId);
 }
 
 /**
@@ -368,6 +374,9 @@ export async function hideConversation(
        AND c.kind <> 'server'`,
     [channelId, userId],
   );
+  // Same reasoning as `restoreDmParticipants`: this is the DM/group leave
+  // path's own `channel_members` write, and nothing in `servers.ts` sees it.
+  invalidateChannelAccessForChannel(channelId);
   return (result.rowCount ?? 0) > 0;
 }
 

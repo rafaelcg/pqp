@@ -55,7 +55,7 @@ describeDb("auth cache sweeping", () => {
     await signInMany(20);
     expect(authCacheSizes().users).toBe(20);
 
-    // The user TTL is 30s; sweep as if an hour has gone by.
+    // The user TTL is 60s; sweep as if an hour has gone by.
     sweepAuthCaches(Date.now() + 60 * 60_000);
     expect(authCacheSizes().users).toBe(0);
   });

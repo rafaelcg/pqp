@@ -1,5 +1,9 @@
 import { MINIMUM_AGE_YEARS, type AgeGateStatus } from "@pqp/shared";
 import { getPool } from "../db.js";
+import {
+  coalesce,
+  invalidateExact as invalidateReadCache,
+} from "../lib/read-cache.js";
 
 export type { AgeGateStatus };
 
@@ -178,28 +182,54 @@ function statusOf(row: AgeCheckRow | undefined): AgeGateStatus {
   return row.age_check_passed ? "passed" : "blocked";
 }
 
+const AGE_GATE_TTL_MS = 30_000;
+
+function ageGateCacheKey(userId: string): string {
+  return `age-gate:${userId}`;
+}
+
 /**
- * Where this account stands, read fresh from the database on every call.
- *
- * Deliberately not carried on the session user the way `email_domains` and the
- * handle are. `resolveDbUser` caches that row for 30 seconds to avoid an UPDATE
- * per request, and a value read off it would keep answering with the state the
- * account had when it was cached — for the one flag that decides whether the
- * account may be in the product at all. Two cases make that unacceptable rather
- * than merely untidy: an operator blocking an account by hand needs it to take
- * effect now, and a user who has just declared their date of birth needs their
- * very next request to succeed rather than to fail for another half minute.
- *
- * The cost is one primary-key lookup per authenticated request. `/api/me`
- * already issues three. This is the same trade `getDmPrivacy` makes, for the
- * same reason.
+ * Drop this account's cached gate status. Called from both branches of
+ * `recordAgeDeclaration` — the winner of a race and the loser alike just
+ * resolved what this account's status now is, so both must not leave a
+ * pre-declaration "pending" answer sitting in the cache for up to 30s.
  */
-export async function getAgeGateStatus(userId: string): Promise<AgeGateStatus> {
+export function invalidateAgeGateStatus(userId: string): void {
+  invalidateReadCache(ageGateCacheKey(userId));
+}
+
+async function fetchAgeGateStatus(userId: string): Promise<AgeGateStatus> {
   const result = await getPool().query<AgeCheckRow>(
     `SELECT age_checked_at, age_check_passed FROM users WHERE id = $1`,
     [userId],
   );
   return statusOf(result.rows[0]);
+}
+
+/**
+ * Where this account stands with the 18+ gate.
+ *
+ * Read on every authenticated request (`/api/me` already issues three other
+ * queries; this is the trade `getDmPrivacy` makes too), which is exactly the
+ * shape a read cache exists for: 183k calls in 16.5h of the 2026-09-13 Vultr
+ * cutover, one per request, virtually always answering the same thing for
+ * the same account. Cached for 30s with `invalidateAgeGateStatus` called at
+ * the one place this account's answer changes in the ordinary course of the
+ * product (`recordAgeDeclaration`), so the case this used to be uncached
+ * for — "a user who has just declared their date of birth needs their very
+ * next request to succeed" — is still exact, not merely bounded by the TTL.
+ *
+ * What the TTL does NOT cover: an operator flipping the columns by hand
+ * outside this module (a raw `UPDATE`, not a code path) can now take up to
+ * 30s to take effect, where it used to be immediate. Accepted for the same
+ * reason `services/users.ts`'s per-request caches are: an SLA an operator
+ * script can trivially meet (`sleep 30`) is a small price for cutting this
+ * query's call volume by two orders of magnitude.
+ */
+export async function getAgeGateStatus(userId: string): Promise<AgeGateStatus> {
+  return coalesce(ageGateCacheKey(userId), AGE_GATE_TTL_MS, () =>
+    fetchAgeGateStatus(userId),
+  );
 }
 
 export interface AgeDeclarationResult {
@@ -241,9 +271,18 @@ export async function recordAgeDeclaration(
     [userId, passed, passed ? null : formatCalendarDate(dob)],
   );
 
+  // Either branch just resolved this account's answer — the winner wrote it,
+  // the loser is about to read what the winner wrote — so the cache must not
+  // keep answering with whatever it held before this call.
+  invalidateAgeGateStatus(userId);
+
   const row = result.rows[0];
   if (!row) {
-    return { recorded: false, status: await getAgeGateStatus(userId) };
+    // Read fresh rather than through `getAgeGateStatus`: the invalidation
+    // just above and this read are two separate calls, and coalescing this
+    // one with a concurrent cache miss for the same user would reintroduce
+    // exactly the staleness window this function exists to avoid.
+    return { recorded: false, status: await fetchAgeGateStatus(userId) };
   }
   return { recorded: true, status: statusOf(row) };
 }

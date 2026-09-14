@@ -33,6 +33,12 @@ vi.mock("./services/outgoing-webhooks.js", () => ({
   deliverDueOutgoingWebhooks: vi.fn(async () => 0),
   pruneDeliveredOutgoingWebhooks: vi.fn(async () => 0),
 }));
+// The adaptive poller has its own scheduling tests
+// (outgoing-webhook-poller.test.ts); this file only needs to know that
+// `startColdJobs` starts one and `stop()` stops it.
+vi.mock("./services/outgoing-webhook-poller.js", () => ({
+  startOutgoingWebhookPoller: vi.fn(() => ({ stop: vi.fn() })),
+}));
 vi.mock("./services/channel-sessions.js", () => ({
   sendDueChannelSessionReminders: vi.fn(async () => undefined),
 }));
@@ -64,6 +70,7 @@ import { pruneAuditLog } from "./services/audit.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
+import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import {
@@ -74,7 +81,6 @@ import {
   ATTACHMENT_SWEEP_INTERVAL_MS,
   CHANNEL_SESSION_REMINDER_INTERVAL_MS,
   DAILY_MS,
-  OUTGOING_WEBHOOK_TICK_MS,
   PENDING_DELETION_SWEEP_INTERVAL_MS,
   startColdJobs,
   type ColdJobs,
@@ -112,6 +118,25 @@ describe("cold jobs", () => {
     expect(pruneAuditLog).not.toHaveBeenCalled();
   });
 
+  /**
+   * The webhook delivery loop's own adaptive scheduling (backoff, NOTIFY
+   * wake) is pinned in `outgoing-webhook-poller.test.ts`; this only needs to
+   * know `startColdJobs` starts exactly one, wired to the real delivery
+   * function, and that `stop()` tears it down.
+   */
+  it("starts the outgoing webhook poller wired to the real delivery function", () => {
+    jobs = startColdJobs();
+    expect(startOutgoingWebhookPoller).toHaveBeenCalledTimes(1);
+    expect(startOutgoingWebhookPoller).toHaveBeenCalledWith(
+      deliverDueOutgoingWebhooks,
+    );
+
+    const { stop } = vi.mocked(startOutgoingWebhookPoller).mock.results[0]!
+      .value as { stop: () => void };
+    jobs.stop();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("fires each job on its own cadence", async () => {
     jobs = startColdJobs();
     // 15 before the watch party host sweep, which runs on the same minute
@@ -119,9 +144,6 @@ describe("cold jobs", () => {
     // assert the new job's cadence below rather than only moving the number:
     // a count on its own passes for a job that is registered and never fires.
     expect(jobs.count).toBe(16);
-
-    await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_TICK_MS);
-    expect(deliverDueOutgoingWebhooks).toHaveBeenCalledTimes(1);
 
     // One occupancy row a minute, and not one at boot: an extra sample at t=0
     // would land in the same minute bucket as the first tick anyway, so the
@@ -155,16 +177,13 @@ describe("cold jobs", () => {
 
   it("a failing sweep is logged and the timer survives", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(deliverDueOutgoingWebhooks).mockRejectedValueOnce(
-      new Error("boom"),
-    );
+    vi.mocked(sweepPendingAccountDeletions)
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue(0);
     jobs = startColdJobs();
-    await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_TICK_MS * 2);
-    expect(deliverDueOutgoingWebhooks).toHaveBeenCalledTimes(2);
-    expect(error).toHaveBeenCalledWith(
-      "[outgoing-webhooks] failed:",
-      expect.any(Error),
-    );
+    await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS * 2);
+    expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(2);
+    expect(error).toHaveBeenCalledWith("[account] failed:", expect.any(Error));
     error.mockRestore();
   });
 

@@ -28,7 +28,11 @@ import {
   type AcquisitionReport,
   type RetentionReport,
 } from "./acquisition.js";
-import { dbTxByPath } from "../lib/db-tx-metrics.js";
+import {
+  dbQueriesByRoute,
+  dbQueryTotal,
+  dbTxByPath,
+} from "../lib/db-tx-metrics.js";
 import { readCacheMetrics } from "../lib/read-cache.js";
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
@@ -153,6 +157,31 @@ export interface AdminMetrics {
    */
   dbTx: {
     byPath: Record<string, number>;
+  };
+  /**
+   * `db.queries.total` and `db.queries.byRoute`: EVERY Postgres round trip
+   * this process has run since boot, wrapped once at the pool itself
+   * (`db.ts`'s `getPool`) rather than at individual call sites — unlike
+   * `dbTx.byPath` above, nothing has to remember to instrument a new query
+   * for this to see it. `byRoute` breaks the total down by the HTTP route
+   * the query happened inside (`GET /api/servers/:serverId/members`, the
+   * path template, never an interpolated id), via an AsyncLocalStorage
+   * context `handleApi` sets once per request (`lib/route-context.ts`). Two
+   * reserved labels stand outside the route table: `"auth"` is Bearer
+   * resolution and the age-gate/timeout gates, which run before any route
+   * has matched and are shared across every request rather than belonging
+   * to whichever endpoint follows — folding them into `"other"` would have
+   * hidden a real cost center (53k auth-resolution writes alone) behind the
+   * same label used for background work; `"other"` itself is left for a WS
+   * handler, a cold job, or anything at boot. Added alongside the 2026-09-13
+   * Vultr cutover cache work (member list, auth-write skip, webhook poll
+   * backoff, per-request permission caches) specifically so the drop from
+   * that work is a number on this endpoint, not a guess from query-log
+   * sampling the way the 785k figure that motivated it was.
+   */
+  dbQueries: {
+    total: number;
+    byRoute: Record<string, number>;
   };
   /**
    * `read-cache.ts`'s counters, cumulative since boot: `coalesce` calls that
@@ -1024,6 +1053,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     activeTextChannels24h: Number(m?.active_text_channels ?? 0),
     channels: channelCounts,
     dbTx: { byPath: dbTxByPath() },
+    dbQueries: { total: dbQueryTotal(), byRoute: dbQueriesByRoute() },
     readCache: readCacheMetrics(),
     presence: getPresenceFanoutStats(),
     voice: {

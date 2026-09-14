@@ -18,7 +18,13 @@ import {
   seedDefaultRoles,
   upsertMemberViewOverwrite,
 } from "./permissions.js";
-import { channelVisibleSql } from "./users.js";
+import {
+  channelVisibleSql,
+  invalidateChannelAccessForChannel,
+  invalidateChannelAccessForServer,
+  invalidateServerMemberList,
+  invalidateServerMemberRoles,
+} from "./users.js";
 
 /**
  * A `channels` row as it actually comes back now that a channel need not belong
@@ -370,6 +376,7 @@ export async function createChannel(
   } finally {
     invalidateServerChannelList(serverId);
   }
+  invalidateServerChannelList(serverId);
   return channel;
 }
 
@@ -1230,6 +1237,11 @@ export function invalidateServerAudience(serverId: string): void {
 function invalidateChannelAudienceLocally(channelId: string): void {
   audienceEpoch++;
   dropCachedAudience(channelId);
+  // Same trigger this file already fires `notifyAudienceInvalidated` on —
+  // `channel_members` or privacy changing for this one channel — so the
+  // per-request access cache (`services/users.ts`) rides this chokepoint
+  // rather than a second scan of the write paths that can move it.
+  invalidateChannelAccessForChannel(channelId);
   notifyAudienceInvalidated({ channelId });
 }
 
@@ -1240,6 +1252,14 @@ function invalidateServerAudienceLocally(serverId: string): void {
       dropCachedAudience(channelId);
     }
   }
+  // Join, leave, kick, ban, a role change, or the server going away — every
+  // one of them already lands here (see the doc comment on
+  // `invalidateServerAudience` above), which is also every write that can
+  // move a server's member list, a member's cached role, or channel access
+  // through membership. Three caches, one chokepoint.
+  invalidateServerMemberList(serverId);
+  invalidateServerMemberRoles(serverId);
+  invalidateChannelAccessForServer();
   notifyAudienceInvalidated({ serverId });
 }
 
