@@ -12,8 +12,8 @@ import {
   FileVideo,
   ImageOff,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { Dialog } from "@/components/ui/dialog";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ImageLightbox } from "@/components/chat/image-lightbox";
 import { fetchAttachmentUrl } from "@/lib/api";
 import { formatByteSize } from "@/lib/attachments";
 import { translateMessage } from "@/lib/i18n";
@@ -38,10 +38,15 @@ interface AttachmentGridProps {
  * has already been access-checked.
  */
 export function AttachmentGrid({ attachments }: AttachmentGridProps) {
-  const [lightbox, setLightbox] = useState<{
-    attachment: Attachment;
-    src: string;
-  } | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
+  // The lightbox navigates only the images of this one message — a video or a
+  // PDF chip sitting between two photos is not something arrow keys should
+  // stop on.
+  const images = useMemo(
+    () => attachments.filter((a) => isImageContentType(a.contentType)),
+    [attachments],
+  );
 
   if (attachments.length === 0) {
     return null;
@@ -55,7 +60,9 @@ export function AttachmentGrid({ attachments }: AttachmentGridProps) {
             <ImageTile
               key={attachment.id}
               attachment={attachment}
-              onOpen={(src) => setLightbox({ attachment, src })}
+              onOpen={() =>
+                setLightboxIndex(images.findIndex((img) => img.id === attachment.id))
+              }
             />
           ) : isVideoContentType(attachment.contentType) ? (
             <VideoTile key={attachment.id} attachment={attachment} />
@@ -67,22 +74,14 @@ export function AttachmentGrid({ attachments }: AttachmentGridProps) {
         )}
       </div>
 
-      {/* The shared Dialog owns the focus trap, Escape, and putting focus back
-          on the thumbnail that opened it. */}
-      <Dialog
-        open={lightbox !== null}
-        title={lightbox?.attachment.filename ?? ""}
-        size="lg"
-        onClose={() => setLightbox(null)}
-      >
-        {lightbox && (
-          <img
-            src={lightbox.src}
-            alt={lightbox.attachment.filename}
-            className="mx-auto max-h-[72vh] w-auto max-w-full"
-          />
-        )}
-      </Dialog>
+      {lightboxIndex !== null && (
+        <ImageLightbox
+          attachments={images}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onIndexChange={setLightboxIndex}
+        />
+      )}
     </>
   );
 }
@@ -118,7 +117,7 @@ function ImageTile({
   onOpen,
 }: {
   attachment: Attachment;
-  onOpen: (src: string) => void;
+  onOpen: () => void;
 }) {
   const [src, setSrc] = useState(attachment.url);
   const [isBroken, setIsBroken] = useState(false);
@@ -158,7 +157,7 @@ function ImageTile({
   return (
     <button
       type="button"
-      onClick={() => onOpen(src)}
+      onClick={onOpen}
       aria-label={translateMessage("chat.openAttachment", {
         name: attachment.filename,
       })}
