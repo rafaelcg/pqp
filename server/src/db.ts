@@ -391,22 +391,77 @@ function queryTextOf(args: unknown[]): string | null {
 }
 
 /**
- * Postgres's simple query protocol treats `;` as a statement separator, so
+ * Strips `--` line comments, `/* *\/` block comments, and single/double-quoted
+ * regions (doubling a quote is SQL's own escape for one inside a literal,
+ * e.g. `'it''s'`) out of a query string, leaving only the `;` characters
+ * that could actually be statement separators. A first version of the
+ * multi-statement check below scanned the RAW text for any `;`, and a
+ * second Farol pass caught that this misclassified a perfectly ordinary
+ * `ROLLBACK; -- because the breaker was open` — a trailing comment on the
+ * SAME statement — as a bundled multi-statement string, sending that exact
+ * ROLLBACK back through rejection while the breaker is open and
+ * reintroducing the dirty-transaction bug this guard exists to prevent.
+ * Not a general SQL parser — it does not need to be, only correct about
+ * where a `;` can and cannot mean "another statement follows".
+ */
+function stripCommentsAndLiterals(text: string): string {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "-" && text[i + 1] === "-") {
+      const end = text.indexOf("\n", i);
+      if (end === -1) {
+        break;
+      }
+      i = end;
+      continue;
+    }
+    if (text[i] === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      if (end === -1) {
+        break;
+      }
+      i = end + 1;
+      continue;
+    }
+    const quote = text[i];
+    if (quote === "'" || quote === '"') {
+      let j = i + 1;
+      while (j < text.length) {
+        if (text[j] === quote) {
+          if (text[j + 1] === quote) {
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        j += 1;
+      }
+      i = j;
+      continue;
+    }
+    result += text[i];
+  }
+  return result;
+}
+
+/**
+ * Postgres's simple query protocol treats a `;` outside any comment or
+ * quoted region as a statement separator, so
  * `client.query("BEGIN; DELETE FROM users; COMMIT")` is ONE call carrying
  * THREE statements. A Farol pass caught that classifying by first keyword
  * alone would read that whole string as `"begin"` and let the guard wave
  * the bundled `DELETE` through unrejected along with it. Nothing in this
  * codebase issues a query this way today (every call site here is one
  * statement per `client.query`), but the guard itself must not assume that
- * stays true — a single trailing `;` is normal and allowed; a `;` anywhere
- * else means this is not the single control statement it looks like at a
- * glance.
+ * stays true — a single trailing `;` is normal and allowed; a real `;`
+ * anywhere else means this is not the single control statement it looks
+ * like at a glance.
  */
 function isSingleStatement(text: string): boolean {
-  const trimmed = text.trim();
-  const withoutTrailingSemicolon = trimmed.endsWith(";")
-    ? trimmed.slice(0, -1)
-    : trimmed;
+  const stripped = stripCommentsAndLiterals(text).trim();
+  const withoutTrailingSemicolon = stripped.endsWith(";")
+    ? stripped.slice(0, -1)
+    : stripped;
   return !withoutTrailingSemicolon.includes(";");
 }
 

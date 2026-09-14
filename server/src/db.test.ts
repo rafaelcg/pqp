@@ -170,6 +170,26 @@ describeDb("A3.1: guardPoolQueries covers connect() and half-open", () => {
     ).rejects.toBeInstanceOf(DatabaseUnavailableError);
   });
 
+  // A THIRD Farol pass caught that the fix for the case above was too
+  // blunt: scanning the raw text for any `;` also disqualified a perfectly
+  // ordinary control statement carrying a trailing comment, which would
+  // send exactly the ROLLBACK the dirty-transaction fix depends on back
+  // through rejection while the breaker is open.
+  it("a semicolon inside a trailing comment does not stop ROLLBACK/COMMIT from being treated as control statements", async () => {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      forceDbBreakerStateForTests("open");
+      // The comment's own `;` must not make this look like two statements.
+      await expect(
+        client.query("ROLLBACK; -- because the breaker is open"),
+      ).resolves.toBeDefined();
+    } finally {
+      forceDbBreakerStateForTests("closed");
+      client.release();
+    }
+  });
+
   it("a client a rejected query poisons mid-transaction is destroyed on release, and its writes never land", async () => {
     const clerkId = "clerk_dirty_txn_test";
     await getPool().query(`DELETE FROM users WHERE clerk_id = $1`, [clerkId]);
