@@ -532,11 +532,17 @@ export function createChatController(
   }
 
   function forgetInOutbox(nonce: string) {
+    // `transmit` marks every connected send's generation here, durable or
+    // not — an attachment, a chance/poll roll, or a thread panel's send
+    // (which never owns the outbox at all). Only a durable send ever enters
+    // `outbox` below, so clearing this unconditionally, before the early
+    // return, is what keeps a long-lived tab from leaking one entry per
+    // non-durable send for the life of the controller.
+    sentOnGeneration.delete(nonce);
     if (!ownsOutbox || !outbox.some((item) => item.nonce === nonce)) {
       return;
     }
     outbox = outbox.filter((item) => item.nonce !== nonce);
-    sentOnGeneration.delete(nonce);
     persistOutbox();
     ownedNonces.delete(nonce);
   }
