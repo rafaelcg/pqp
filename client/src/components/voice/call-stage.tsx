@@ -47,6 +47,7 @@ import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import {
   hlsModeOf,
   hlsPartTargetMs,
+  watchPlayerMode,
   type LlHlsStreamFields,
 } from "@/lib/hls-live-edge";
 import type { VideoQuality } from "@/lib/video-quality";
@@ -3612,7 +3613,7 @@ export function ScreenTileFrame({
         <HlsWatchPlayer
           src={tile.hlsUrl}
           delaySeconds={tile.delaySeconds}
-          mode={tile.mode}
+          mode={tile.mode ? watchPlayerMode(tile.mode) : undefined}
           partTargetMs={tile.partTargetMs}
           videoRef={videoRef}
           onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}

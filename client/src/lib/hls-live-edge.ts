@@ -172,6 +172,22 @@ export function hlsModeOf(
 }
 
 /**
+ * `HlsWatchPlayer.mode` is a THIRD vocabulary from this one: `"live"` /
+ * `"vod"` / `"ll"` (`hls-watch-player.tsx`, PR 573's VOD replay mode
+ * alongside this task's `"ll"`), where `HlsMode` here only ever covers a
+ * stream that IS live (`"conventional"` vs `"ll"` engine tuning) -- a
+ * replay is a separate, component-level concept this file has no notion of.
+ * Every caller that threads a live stream's wire `mode` down to the player
+ * (`watch-stage.tsx`, `cinema-stage.tsx`, `call-stage.tsx` via
+ * `screen-stage.tsx`) goes through this rather than passing `HlsMode`
+ * straight through -- `"conventional"` is not a valid `HlsWatchPlayer.mode`
+ * value, `"live"` is.
+ */
+export function watchPlayerMode(mode: HlsMode): "live" | "ll" {
+  return mode === "ll" ? "ll" : "live";
+}
+
+/**
  * What THIS SESSION is actually behaving as, once §4's pin rule (two
  * part-load errors inside 10s) may have moved it off LL client-side --
  * which the server never learns about, so the `mode` prop itself keeps

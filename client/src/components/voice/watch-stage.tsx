@@ -7,6 +7,7 @@ import { fetchChannelLive } from "@/lib/api";
 import {
   hlsModeOf,
   hlsPartTargetMs,
+  watchPlayerMode,
   type HlsMode,
   type LlHlsStreamFields,
 } from "@/lib/hls-live-edge";
@@ -212,7 +213,7 @@ export function WatchStage({
           cameraHasVideo={cameraHasVideo}
           cameraHasVoiceAudio={cameraHasVoiceAudio}
           delaySeconds={delaySeconds}
-          mode={mode}
+          mode={mode ? watchPlayerMode(mode) : undefined}
           partTargetMs={partTargetMs}
           mediaTitle={mediaTitle}
           communityName={communityName}

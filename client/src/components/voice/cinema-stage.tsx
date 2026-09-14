@@ -3,7 +3,7 @@ import { Crown, Phone } from "lucide-react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { presenceAvatars, type CinemaStagePerson } from "@/lib/cinema-layout";
-import type { HlsMode } from "@/lib/hls-live-edge";
+import { watchPlayerMode, type HlsMode } from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
@@ -80,7 +80,7 @@ export function CinemaStage({
         cameraHasVideo={cameraHasVideo}
         cameraHasVoiceAudio={cameraHasVoiceAudio}
         delaySeconds={delaySeconds}
-        mode={mode}
+        mode={mode ? watchPlayerMode(mode) : undefined}
         partTargetMs={partTargetMs}
         mediaTitle={mediaTitle}
         communityName={communityName}
