@@ -48,7 +48,6 @@ import {
   sampleVideoPlaybackQuality,
   sendHlsTelemetryBatch,
   setHlsPlaybackStats,
-  shouldAdoptHlsSource,
   type HlsTelemetryQueue,
   withFreshHlsToken,
 } from "@/lib/hls-playback";
