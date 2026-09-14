@@ -426,15 +426,19 @@ IO — driven by `managed_session.go`'s ticker), which:
    pipeline is already doing the one thing it can). Every rule below only
    applies once at least one part has arrived.
 1. **Restarts once, then demotes.** No NEW part for `PART_STUCK_MS` (default
-   3000ms, "six parts" per the plan) → rebuild this session's pipeline in
-   place (new subscription to the same room, same config; the old pipeline
-   is closed only once the new one is already live, so a healthy viewer
-   never sees a gap). A second stall within `DEMOTE_WINDOW_MS` (default 5
+   3000ms, "six parts" per the plan) → rebuild this session's pipeline: the
+   OLD pipeline is closed FIRST, and only then is its replacement built
+   (new subscription to the same room, same config), so a real gap —
+   however long the replacement's own subscriber takes to connect — is
+   the price of a correctness guarantee below, not an accident (Farol
+   review round 2, PR #584: an earlier revision built the replacement
+   before closing the old one to avoid that gap, and that was the bug —
+   see below). A second stall within `DEMOTE_WINDOW_MS` (default 5
    minutes) of that restart → **demote**: the pipeline is closed and the
    session is marked `demoted` for good. A stall further apart than that
    window is a fresh episode and gets its own restart. **The replacement
    pipeline's video and audio segment counters continue from the old
-   pipeline's own current index, plus one** (`PipelineConfig.
+   pipeline's own FINAL index, plus one** (`PipelineConfig.
    StartVideoSegmentIndex`/`StartAudioSegmentIndex`,
    `session.Session.SetStartSegmentIndex`) — never reset to 0 — so its R2
    object keys (`internal/r2.ObjectPrefix`) never collide with (and
@@ -442,10 +446,17 @@ IO — driven by `managed_session.go`'s ticker), which:
    "Plus one" specifically because the OLD pipeline's own teardown
    independently finalizes and uploads whatever segment was still open on
    it (`session.Session.Finish`/`Close`); reserving that exact index for
-   the predecessor is what makes the two pipelines' key ranges disjoint
-   regardless of the old pipeline's teardown timing. Pinned by
-   `TestManagedSession_RestartNeverReusesR2Key`, an in-memory-S3-backed
-   regression test.
+   the replacement is what makes the two pipelines' key ranges disjoint.
+   Reading that final index requires the old pipeline to actually BE
+   final first — closing it before reading `Health()` (and before
+   building the replacement) is what makes "plus one" a value nothing can
+   invalidate out from under it, rather than a snapshot a rollover mid-
+   factory-call can race. Pinned by
+   `TestManagedSession_RestartNeverReusesR2Key` (an in-memory-S3-backed
+   regression test) and
+   `TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown` (the
+   same, but the old pipeline's own teardown seals one more segment on its
+   way down).
 2. **The IDR-gap ladder takes precedence and skips the restart entirely.**
    No IDR for more than 2× the segment target → log once per gap (rate
    limited; resets the moment a real IDR arrives). Past 3× with still no
