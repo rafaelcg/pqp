@@ -5,11 +5,22 @@ import {
   HLS_BACK_BUFFER_LENGTH_SECONDS,
   HLS_CATCH_UP_MAX_PLAYBACK_RATE,
   HLS_EGRESS_WINDOW_SEGMENTS,
+  HLS_LIVE_MAX_LATENCY_DURATION_COUNT,
   HLS_LIVE_SEGMENT_SECONDS,
   HLS_LIVE_SYNC_DURATION_COUNT,
   HLS_LIVE_WINDOW_SECONDS,
+  HLS_MAX_BUFFER_LENGTH_SECONDS,
+  HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
   HLS_PLAYER_CUSHION_SECONDS,
+  LL_HLS_BACK_BUFFER_SECONDS,
+  LL_HLS_DEFAULT_PART_TARGET_MS,
+  LL_HLS_MAX_LATENCY_PARTS,
+  LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
+  LL_HLS_MAX_BUFFER_LENGTH_SECONDS,
+  LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
+  LL_HLS_PART_ERROR_PIN_WINDOW_MS,
   applyHlsRecoveryStep,
+  behindLiveThresholdSeconds,
   buildMediaSessionMetadata,
   catchUpPlaybackRate,
   effectiveLiveSyncDurationCount,
@@ -17,15 +28,22 @@ import {
   hasSafariPresentationMode,
   hlsLivePlayerConfig,
   hlsLiveSyncFitsWindow,
+  hlsModeOf,
+  hlsPartTargetMs,
   isBehindLive,
+  isInPlaceModeDemotion,
+  isLlPartLoadErrorDetail,
   isPipAvailable,
   jumpToLiveTime,
+  liveSeekOffsetSeconds,
   liveSeekTarget,
+  llHlsConfig,
   mediaSeekableEnd,
   reloadHlsLevelPlaylist,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
   secondsBehindLive,
+  shouldPinToConventionalRung,
   type HlsRecoveryHandle,
 } from "./hls-live-edge";
 
@@ -421,5 +439,214 @@ describe("applyHlsRecoveryStep", () => {
   it("is a no-op on a null handle -- a not-yet-attached or torn-down player", () => {
     expect(() => applyHlsRecoveryStep(null, "start-load")).not.toThrow();
     expect(() => applyHlsRecoveryStep(undefined, "reload-level")).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LL-HLS (`docs/plans/LL_HLS.md`, task L2.4).
+// ---------------------------------------------------------------------------
+
+describe("hlsModeOf / hlsPartTargetMs", () => {
+  it("defaults to conventional and the standard part target when absent", () => {
+    expect(hlsModeOf(null)).toBe("conventional");
+    expect(hlsModeOf(undefined)).toBe("conventional");
+    expect(hlsModeOf({})).toBe("conventional");
+    expect(hlsPartTargetMs(null)).toBe(LL_HLS_DEFAULT_PART_TARGET_MS);
+    expect(hlsPartTargetMs({ mode: "ll" })).toBe(LL_HLS_DEFAULT_PART_TARGET_MS);
+  });
+
+  it("reads mode and partTargetMs straight off the stream when present", () => {
+    expect(hlsModeOf({ mode: "ll" })).toBe("ll");
+    expect(hlsPartTargetMs({ mode: "ll", partTargetMs: 200 })).toBe(200);
+  });
+
+  it("falls back on a non-positive or non-finite partTargetMs", () => {
+    expect(hlsPartTargetMs({ partTargetMs: 0 })).toBe(
+      LL_HLS_DEFAULT_PART_TARGET_MS,
+    );
+    expect(hlsPartTargetMs({ partTargetMs: -50 })).toBe(
+      LL_HLS_DEFAULT_PART_TARGET_MS,
+    );
+    expect(hlsPartTargetMs({ partTargetMs: Number.NaN })).toBe(
+      LL_HLS_DEFAULT_PART_TARGET_MS,
+    );
+  });
+});
+
+describe("llHlsConfig", () => {
+  it("derives every number from partTargetMs, never a hardcoded 20s", () => {
+    const config = llHlsConfig(500);
+    expect(config.lowLatencyMode).toBe(true);
+    expect(config.liveMaxLatencyDuration).toBe(LL_HLS_MAX_LATENCY_PARTS * 0.5);
+    expect(config.maxLiveSyncPlaybackRate).toBe(
+      LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
+    );
+    expect(config.backBufferLength).toBe(LL_HLS_BACK_BUFFER_SECONDS);
+    expect(config.maxBufferLength).toBe(LL_HLS_MAX_BUFFER_LENGTH_SECONDS);
+    expect(config.maxMaxBufferLength).toBe(LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS);
+    expect(config.startLevel).toBe(-1);
+    // Never present at all -- see the interface's own comment on why hls.js
+    // must not see a `liveSyncDuration`/`liveSyncDurationCount` key here.
+    expect("liveSyncDuration" in config).toBe(false);
+    expect("liveSyncDurationCount" in config).toBe(false);
+  });
+
+  it("scales liveMaxLatencyDuration with a different part target", () => {
+    const fast = llHlsConfig(200);
+    const slow = llHlsConfig(1000);
+    expect(fast.liveMaxLatencyDuration).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 0.2);
+    expect(slow.liveMaxLatencyDuration).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 1.0);
+    expect(fast.liveMaxLatencyDuration).toBeLessThan(slow.liveMaxLatencyDuration);
+  });
+
+  it("never returns the conventional path's ~20s cushion for a realistic part target", () => {
+    const config = llHlsConfig(500);
+    expect(config.liveMaxLatencyDuration).toBeLessThan(HLS_LIVE_WINDOW_SECONDS / 2);
+  });
+
+  it("falls back to the default part target on a non-finite/zero input", () => {
+    expect(llHlsConfig(0).liveMaxLatencyDuration).toBe(
+      llHlsConfig(LL_HLS_DEFAULT_PART_TARGET_MS).liveMaxLatencyDuration,
+    );
+    expect(llHlsConfig(Number.NaN).liveMaxLatencyDuration).toBe(
+      llHlsConfig(LL_HLS_DEFAULT_PART_TARGET_MS).liveMaxLatencyDuration,
+    );
+  });
+
+  it("is a byte-identical snapshot at the documented 500ms part target", () => {
+    expect(llHlsConfig(500)).toEqual({
+      lowLatencyMode: true,
+      liveMaxLatencyDuration: 4,
+      maxLiveSyncPlaybackRate: 1.1,
+      maxBufferLength: 6,
+      maxMaxBufferLength: 10,
+      backBufferLength: 4,
+      startLevel: -1,
+    });
+  });
+});
+
+describe("hlsLivePlayerConfig (conventional, byte-identical)", () => {
+  it("is unchanged by LL-HLS existing at all", () => {
+    // The exact snapshot this function returned before task L2.4 -- any
+    // diff here means the conventional path stopped being byte-identical.
+    expect(hlsLivePlayerConfig()).toEqual({
+      liveSyncDurationCount: HLS_LIVE_SYNC_DURATION_COUNT,
+      liveMaxLatencyDurationCount: HLS_LIVE_MAX_LATENCY_DURATION_COUNT,
+      maxBufferLength: HLS_MAX_BUFFER_LENGTH_SECONDS,
+      maxMaxBufferLength: HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
+      backBufferLength: HLS_BACK_BUFFER_LENGTH_SECONDS,
+      startLevel: -1,
+    });
+  });
+});
+
+describe("liveSeekOffsetSeconds", () => {
+  it("is one conventional segment on the conventional path, unchanged", () => {
+    expect(liveSeekOffsetSeconds("conventional")).toBe(HLS_LIVE_SEGMENT_SECONDS);
+  });
+
+  it("is one part, not a whole segment, on LL", () => {
+    expect(liveSeekOffsetSeconds("ll", 500)).toBe(0.5);
+    expect(liveSeekOffsetSeconds("ll", 200)).toBe(0.2);
+  });
+
+  it("never goes to zero or negative on a degenerate part target", () => {
+    expect(liveSeekOffsetSeconds("ll", 0)).toBeGreaterThan(0);
+    expect(liveSeekOffsetSeconds("ll", -10)).toBeGreaterThan(0);
+  });
+});
+
+describe("behindLiveThresholdSeconds", () => {
+  it("is the conventional constant on the conventional path", () => {
+    expect(behindLiveThresholdSeconds("conventional")).toBe(
+      BEHIND_LIVE_THRESHOLD_SECONDS,
+    );
+  });
+
+  it("is far smaller on LL -- the whole point is not sitting 20s back", () => {
+    const llThreshold = behindLiveThresholdSeconds("ll", 500);
+    expect(llThreshold).toBeLessThan(BEHIND_LIVE_THRESHOLD_SECONDS);
+    expect(llThreshold).toBe((LL_HLS_MAX_LATENCY_PARTS * 500) / 1000);
+  });
+});
+
+describe("isInPlaceModeDemotion", () => {
+  it("is true exactly for ll -> conventional on the same session", () => {
+    expect(
+      isInPlaceModeDemotion({
+        previousMode: "ll",
+        nextMode: "conventional",
+        sameSession: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("is false across a session change -- that is an ordinary re-attach", () => {
+    expect(
+      isInPlaceModeDemotion({
+        previousMode: "ll",
+        nextMode: "conventional",
+        sameSession: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false for every other transition", () => {
+    expect(
+      isInPlaceModeDemotion({
+        previousMode: "conventional",
+        nextMode: "ll",
+        sameSession: true,
+      }),
+    ).toBe(false);
+    expect(
+      isInPlaceModeDemotion({
+        previousMode: "conventional",
+        nextMode: "conventional",
+        sameSession: true,
+      }),
+    ).toBe(false);
+    expect(
+      isInPlaceModeDemotion({
+        previousMode: "ll",
+        nextMode: "ll",
+        sameSession: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldPinToConventionalRung / isLlPartLoadErrorDetail", () => {
+  it("is false with fewer than two errors", () => {
+    expect(shouldPinToConventionalRung([])).toBe(false);
+    expect(shouldPinToConventionalRung([1000])).toBe(false);
+  });
+
+  it("pins on two errors inside the 10s window", () => {
+    expect(shouldPinToConventionalRung([1000, 1000 + 9_000])).toBe(true);
+    expect(
+      shouldPinToConventionalRung([1000, 1000 + LL_HLS_PART_ERROR_PIN_WINDOW_MS]),
+    ).toBe(true);
+  });
+
+  it("does not pin when the two errors are more than 10s apart", () => {
+    expect(shouldPinToConventionalRung([1000, 1000 + 10_001])).toBe(false);
+  });
+
+  it("only ever looks at the LAST two errors", () => {
+    // Two errors far apart long ago, then two close together now.
+    const t = 1_000_000;
+    expect(
+      shouldPinToConventionalRung([0, t, t + 5_000]),
+    ).toBe(true);
+  });
+
+  it("recognises hls.js's fragment/part load error details", () => {
+    expect(isLlPartLoadErrorDetail("fragLoadError")).toBe(true);
+    expect(isLlPartLoadErrorDetail("fragLoadTimeOut")).toBe(true);
+    expect(isLlPartLoadErrorDetail("fragParsingError")).toBe(true);
+    expect(isLlPartLoadErrorDetail("manifestLoadError")).toBe(false);
+    expect(isLlPartLoadErrorDetail("bufferStalledError")).toBe(false);
   });
 });

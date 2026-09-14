@@ -975,6 +975,7 @@
   "voice.hls.buffering": "Carregando o stream…",
   "voice.hls.unmute": "Toca pra ligar o som",
   "voice.hls.live": "Ao vivo",
+  "voice.hls.liveLowLatency": "Ao vivo · ~{seconds}s",
   "voice.hls.jumpToLive": "Pular pro ao vivo",
   "voice.hls.play": "Continuar",
   "voice.hls.pause": "Pausar",

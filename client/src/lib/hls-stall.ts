@@ -1,3 +1,9 @@
+import {
+  LL_HLS_DEFAULT_PART_TARGET_MS,
+  LL_HLS_SEQUENCE_STUCK_PARTS,
+  type HlsMode,
+} from "./hls-live-edge";
+
 /**
  * Stall watchdog for the HLS watch player. Pure: events and a clock in,
  * decisions out, so the whole policy is unit-testable without a `<video>`.
@@ -100,7 +106,10 @@ const MAX_LADDER_CYCLES = 3;
 
 export class HlsStallWatch {
   private readonly stallMs: number;
-  private readonly sequenceStuckMs: number;
+  /** Mutable: `configureForMode` scales this for LL, `hls-live-edge.ts`'s `LL_HLS_SEQUENCE_STUCK_PARTS`. */
+  private sequenceStuckMs: number;
+  /** The constructed value, restored by `configureForMode("conventional")`. */
+  private readonly defaultSequenceStuckMs: number;
   private readonly maxRebuilds: number;
   private readonly windowMs: number;
   private readonly reconnectBackoffMs: number;
@@ -125,11 +134,30 @@ export class HlsStallWatch {
   constructor(options: HlsStallOptions = {}) {
     this.stallMs = options.stallMs ?? 8_000;
     this.sequenceStuckMs = options.sequenceStuckMs ?? 20_000;
+    this.defaultSequenceStuckMs = this.sequenceStuckMs;
     this.maxRebuilds = options.maxRebuilds ?? 3;
     this.windowMs = options.windowMs ?? 5 * 60_000;
     this.reconnectBackoffMs = options.reconnectBackoffMs ?? 2_000;
     this.reconnectBackoffMaxMs = options.reconnectBackoffMaxMs ?? 20_000;
     this.maxReconnects = options.maxReconnects ?? 8;
+  }
+
+  /**
+   * §5: "20 s is forty parts, an eternity at this cadence, so the LL path
+   * uses `PART_STUCK_MS` = 3000 (six parts)". Called once per attach
+   * (`HlsWatchPlayer`), never mid-episode, so this never fights the ladder
+   * that is already walking: `conventional` restores exactly the value the
+   * constructor chose, so a caller that never calls this at all -- every
+   * existing test, and every conventional session -- sees byte-identical
+   * behaviour.
+   */
+  configureForMode(mode: HlsMode, partTargetMs?: number): void {
+    if (mode === "ll") {
+      const parts = partTargetMs ?? LL_HLS_DEFAULT_PART_TARGET_MS;
+      this.sequenceStuckMs = LL_HLS_SEQUENCE_STUCK_PARTS * parts;
+      return;
+    }
+    this.sequenceStuckMs = this.defaultSequenceStuckMs;
   }
 
   /** The element started or resumed rendering: the current episode is over. */

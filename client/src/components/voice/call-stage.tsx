@@ -41,8 +41,14 @@ import {
 import { flushSync } from "react-dom";
 import {
   MESH_VOICE_WARNING,
+  type LiveHlsStream,
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
+import {
+  hlsModeOf,
+  hlsPartTargetMs,
+  type LlHlsStreamFields,
+} from "@/lib/hls-live-edge";
 import type { VideoQuality } from "@/lib/video-quality";
 import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
@@ -1395,6 +1401,18 @@ function ActiveCall({
           cameraHasVideo={cinemaTile.cameraHasVideo}
           cameraHasVoiceAudio={cinemaTile.cameraHasVoiceAudio}
           delaySeconds={cinemaTile.delaySeconds ?? voiceState.liveStream?.delaySeconds}
+          mode={
+            cinemaTile.mode ??
+            hlsModeOf(
+              voiceState.liveStream as (LiveHlsStream & LlHlsStreamFields) | null,
+            )
+          }
+          partTargetMs={
+            cinemaTile.partTargetMs ??
+            hlsPartTargetMs(
+              voiceState.liveStream as (LiveHlsStream & LlHlsStreamFields) | null,
+            )
+          }
           mediaTitle={title}
           communityName={serverName}
           coverUrl={serverIconUrl}
@@ -3594,6 +3612,8 @@ export function ScreenTileFrame({
         <HlsWatchPlayer
           src={tile.hlsUrl}
           delaySeconds={tile.delaySeconds}
+          mode={tile.mode}
+          partTargetMs={tile.partTargetMs}
           videoRef={videoRef}
           onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
           className={cn("h-full w-full", videoFitClass(fit.fit))}

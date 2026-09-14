@@ -319,6 +319,63 @@ describe("HlsStallWatch", () => {
       ).toBe("unavailable");
     });
   });
+
+  describe("configureForMode (LL-HLS, docs/plans/LL_HLS.md §5)", () => {
+    it("leaves the constructed default untouched when never called -- byte-identical conventional behaviour", () => {
+      // 20s (the constructed default): a sequence stuck for 19s must NOT
+      // fire, and one stuck for 20s must.
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      expect(watch.tick(T0 + 19_000)).toBe("none");
+      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+    });
+
+    it("scales the sequence-stuck threshold to six parts on ll", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      // Six parts at 500ms = 3000ms -- far under the conventional 20s.
+      expect(watch.tick(T0 + 2_999)).toBe("none");
+      expect(watch.tick(T0 + 3_000)).toBe("start-load");
+    });
+
+    it("restores the constructed default on conventional after an ll episode", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.configureForMode("conventional");
+      expect(watch.tick(T0 + 3_000)).toBe("none");
+      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+    });
+
+    it("defaults the part target when omitted on ll", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll");
+      // 6 * 500ms (LL_HLS_DEFAULT_PART_TARGET_MS) = 3000ms.
+      expect(watch.tick(T0 + 2_999)).toBe("none");
+      expect(watch.tick(T0 + 3_000)).toBe("start-load");
+    });
+
+    it("does not disturb an explicitly configured sequenceStuckMs's restore value", () => {
+      const watch = new HlsStallWatch({ sequenceStuckMs: 9_000 });
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.configureForMode("conventional");
+      expect(watch.tick(T0 + 8_999)).toBe("none");
+      expect(watch.tick(T0 + 9_000)).toBe("start-load");
+    });
+  });
 });
 
 describe("channelIdFromHlsUrl", () => {

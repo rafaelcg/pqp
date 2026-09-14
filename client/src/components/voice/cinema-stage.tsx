@@ -3,6 +3,7 @@ import { Crown, Phone } from "lucide-react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { presenceAvatars, type CinemaStagePerson } from "@/lib/cinema-layout";
+import type { HlsMode } from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,8 @@ export function CinemaStage({
   cameraHasVideo = true,
   cameraHasVoiceAudio = false,
   delaySeconds,
+  mode,
+  partTargetMs,
   mediaTitle,
   communityName,
   coverUrl,
@@ -41,6 +44,10 @@ export function CinemaStage({
   /** Whether `cameraHlsUrl` carries the presenter's mic. See `watch-stage.tsx`. */
   cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
+  /** `LiveHlsStream.mode` (`docs/plans/LL_HLS.md`). Absent means conventional. */
+  mode?: HlsMode;
+  /** `LiveHlsStream.partTargetMs`, read only when `mode === "ll"`. */
+  partTargetMs?: number;
   mediaTitle?: string;
   communityName?: string | null;
   coverUrl?: string | null;
@@ -73,6 +80,8 @@ export function CinemaStage({
         cameraHasVideo={cameraHasVideo}
         cameraHasVoiceAudio={cameraHasVoiceAudio}
         delaySeconds={delaySeconds}
+        mode={mode}
+        partTargetMs={partTargetMs}
         mediaTitle={mediaTitle}
         communityName={communityName}
         coverUrl={coverUrl}
