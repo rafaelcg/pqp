@@ -397,7 +397,18 @@ infrastructure rather than assumed-present. Notably:
   own tests simulate 30 minutes of pacer ticks and assert the emitted frame
   count never diverges from wall-clock-implied elapsed time by more than one
   frame — the property the plan's 40ms/30-minute sync bar rests on at the
-  pacing layer.
+  pacing layer. A fake `remuxEncoder` (no real `ffmpeg`, `newEncoderFunc` as
+  the seam) proves the recovery ladder end to end: a `WriteSamples` failure
+  restarts the encoder exactly once and recovers if the replacement is
+  healthy, or marks `AudioDead` (with `AudioRestarts == 1`, never more) if
+  it isn't; `readEncoderFrames`'s own shutdown edges are pinned directly —
+  `Frames()` closing while `Errs()` stays open and empty exits cleanly, and
+  `Errs()` closing first never drops or stalls delivery of frames still
+  arriving on `Frames()`. `TestSession_R2UploadHappensOnlyAfterSegmentSeals`
+  checks, from inside a recording uploader with a live reference to the
+  ring, that every segment upload happens only once the ring's own
+  `Playlist()` already lists it sealed, and that no rollover segment is
+  ever uploaded twice.
 - `internal/audiomix`: a real Opus fixture (`testdata/tone.opus`, generated
   by `ffmpeg -c:a libopus`, committed under 25KB) decoded and placed on the
   timeline at the expected anchor, silence before/after a source's write
@@ -457,12 +468,22 @@ why ffmpeg is a real, not incidental, dependency of this module now).
 - **Watchdog (`L1.6`)**: `/healthz` reports raw counters
   (`subscribed`, `partsWritten`, `bytesWritten`, `lastPartAtMs`,
   `lastIdrAtMs`, and now `audioPartsWritten`, `audioBytesWritten`,
-  `r2Uploaded`, `r2Failed`, `r2Dropped`) but nothing consumes them yet — no
-  `PART_STUCK_MS` stall detector, no restart-then-demote ladder, no
-  `voice.hlsLlDemoted`. `bytesWritten`/`audioBytesWritten` count bytes
-  written into the ring, not bytes an HTTP client has actually read; naming
-  them that way (rather than `bytesServed`) is deliberate, not a
-  placeholder.
+  `audioDead`, `audioRestarts`, `r2Uploaded`, `r2Failed`, `r2Dropped`) but
+  nothing external consumes them yet — no `PART_STUCK_MS` stall detector, no
+  restart-then-demote ladder, no `voice.hlsLlDemoted`. `bytesWritten`/
+  `audioBytesWritten` count bytes written into the ring, not bytes an HTTP
+  client has actually read; naming them that way (rather than
+  `bytesServed`) is deliberate, not a placeholder. One piece of `L1.6`'s own
+  job is already done for the audio subprocess specifically, scoped tightly
+  to what this task's own failure mode needs: a `WriteSamples` failure
+  (`internal/session.recoverAudioEncoder`) closes the broken `ffmpeg`,
+  waits for its reader goroutine to fully drain (so a restarted encoder's
+  reader can never race the old one writing into the same
+  `AudioFragmenter`), and starts exactly **one** replacement subprocess
+  before giving up; giving up sets `audioDead` rather than leaving a broken
+  pipe reporting as healthy — the pitfall-15 shape (see `CLAUDE.md`) applied
+  to this task's own subprocess. Video passthrough is never affected either
+  way.
 - **A/V sync is not independently measured over a real 30-minute session**:
   `internal/session`'s `framesElapsed` tests prove the pacing layer itself
   cannot drift, and "Codec choices" above documents every known,

@@ -44,6 +44,16 @@ type Health struct {
 	// PartsWritten/BytesWritten report the video track's.
 	AudioPartsWritten uint64 `json:"audioPartsWritten,omitempty"`
 	AudioBytesWritten uint64 `json:"audioBytesWritten,omitempty"`
+	// AudioDead is true once the audio pipeline has given up for good (a
+	// WriteSamples failure survived the one allowed ffmpeg restart —
+	// internal/session's recoverAudioEncoder): video passthrough is
+	// unaffected, but this is the difference between "audio is enabled
+	// and producing nothing" (pitfall 15's shape: alive-looking, actually
+	// dead) and an honest, visible signal on /healthz. AudioRestarts
+	// counts how many replacement ffmpeg subprocesses this session has
+	// ever started (0 or 1, today's "one restart" policy).
+	AudioDead     bool   `json:"audioDead,omitempty"`
+	AudioRestarts uint64 `json:"audioRestarts,omitempty"`
 
 	// R2Uploaded/R2Failed/R2Dropped mirror internal/r2.Writer's own
 	// counters (L1.4), zero and omitted until EnableR2 has been called.
