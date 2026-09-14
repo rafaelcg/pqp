@@ -7635,14 +7635,30 @@ router.post(
     );
 
     if (existing.server_id) {
-      await logAudit({
-        serverId: existing.server_id,
-        actorId: user.id,
-        action: "message.delete",
-        targetType: "message",
-        targetId: full.messageId,
-        changes: [{ key: "report", old: null, new: reportId }],
-      });
+      // Best-effort, deliberately, and AFTER the deletion has already
+      // committed and been broadcast: the message is gone either way, so an
+      // audit-log hiccup (a pooled connection blip, say) must not turn an
+      // already-completed removal into an error response — the client would
+      // show "failed", a retry would hit the "already gone" 400 above, and
+      // the operator would be left unsure whether the message was actually
+      // removed. Same shape as `escalateScanResult`'s `createAutomatedReport`
+      // call in `services/attachments.ts`.
+      try {
+        await logAudit({
+          serverId: existing.server_id,
+          actorId: user.id,
+          action: "message.delete",
+          targetType: "message",
+          targetId: full.messageId,
+          changes: [{ key: "report", old: null, new: reportId }],
+        });
+      } catch (error) {
+        console.error(
+          `[moderation] audit write failed after removing message ` +
+            `${full.messageId} (report ${reportId}):`,
+          error,
+        );
+      }
     }
 
     return { ok: true };

@@ -3,7 +3,7 @@ import {
   type AllReport,
   type ReportStatus,
 } from "@pqp/shared";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -65,7 +65,27 @@ export function AllReportsSection() {
 
   const filter = status === "all" ? undefined : status;
 
+  // Which tab is actually on screen, read at the moment an in-flight request
+  // resolves rather than at the moment it was fired — a ref because `resolve`
+  // and `loadMore` need the CURRENT value, not the one their own closure
+  // captured when the request started.
+  const statusRef = useRef(status);
   useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  // Bumped every time the tab (and therefore the fetch it drives) changes.
+  // `loadMore` captures the value in force when it starts and checks it again
+  // before touching state, so a load-more response that lands after the tab
+  // has already moved on is discarded instead of appending onto whatever the
+  // new tab just fetched.
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    // Bumping this here (rather than in `loadMore`) is what lets a load-more
+    // response check "is the tab that started me still the one showing" —
+    // any tab change invalidates every request in flight for the old one.
+    requestIdRef.current += 1;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -96,18 +116,29 @@ export function AllReportsSection() {
     if (!last) {
       return;
     }
+    const requestId = requestIdRef.current;
     setLoadingMore(true);
     try {
       const res = await fetchAllReports({
         status: filter,
         before: last.id,
       });
+      if (requestIdRef.current !== requestId) {
+        // The tab changed while this page was in flight. The tab's own fetch
+        // has already replaced `reports`; appending this response now would
+        // mix rows from two different statuses into one list.
+        return;
+      }
       setReports((prev) => [...prev, ...res.reports]);
       setHasMore(res.hasMore);
     } catch (err) {
-      setError(messageOf(err, t("reports.loadMoreFailed")));
+      if (requestIdRef.current === requestId) {
+        setError(messageOf(err, t("reports.loadMoreFailed")));
+      }
     } finally {
-      setLoadingMore(false);
+      if (requestIdRef.current === requestId) {
+        setLoadingMore(false);
+      }
     }
   }
 
@@ -121,9 +152,13 @@ export function AllReportsSection() {
           note: notes[report.id]?.trim() || null,
         });
         setReports((prev) =>
-          // On the open tab a closed report leaves the list; on any other tab it
-          // stays and re-renders with its new state.
-          status === "open"
+          // Read at completion time, not from the tab this call started on:
+          // an operator who switches tabs while the PATCH is in flight must
+          // not have this update wrongly drop the report from whatever tab
+          // they have since landed on (it may simply not be in that page yet,
+          // which the next tab click or reload catches — the never-remove-
+          // the-wrong-row rule matters more than instant consistency here).
+          statusRef.current === "open"
             ? prev.filter((r) => r.id !== report.id)
             : prev.map((r) =>
                 r.id === report.id ? { ...r, ...res.report } : r,
@@ -135,7 +170,7 @@ export function AllReportsSection() {
         setBusyId(null);
       }
     },
-    [notes, status, t],
+    [notes, t],
   );
 
   const removeMessage = useCallback(
