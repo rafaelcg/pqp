@@ -36,12 +36,22 @@ type Config struct {
 	TokenTTL time.Duration
 }
 
-// Handlers are the callbacks Connect drives as RTP arrives. OnAudioPacket
-// is present because the plan asks this task to select and log the
-// presenter's screen-share audio track; nothing mixes or encodes it yet
-// (L1.3).
+// AudioSink receives one dynamically-discovered stage microphone's RTP
+// packets (see Handlers.OnMicTrackFound) and is told when that one
+// publication ends, exactly once, so a caller (internal/session) can tear
+// it out of a mix without this package needing to know anything about
+// mixing, decoding or muxing.
+type AudioSink interface {
+	HandlePacket(pkt *rtp.Packet)
+	Close()
+}
+
+// Handlers are the callbacks Connect drives as RTP arrives.
 type Handlers struct {
 	OnVideoPacket func(pkt *rtp.Packet)
+	// OnAudioPacket carries the presenter's screen-share audio (L1.3 mixes
+	// this in as one stage source, keyed "screen" by the caller — see
+	// internal/session).
 	OnAudioPacket func(pkt *rtp.Packet)
 	// OnVideoTrackFound/OnAudioTrackFound fire once, when the presenter's
 	// screen-share publication is subscribed, before any packet callback:
@@ -49,11 +59,29 @@ type Handlers struct {
 	// gets the participant + track handle it needs.
 	OnVideoTrackFound func(s *Session)
 	OnAudioTrackFound func(s *Session)
+	// OnMicTrackFound fires once per participant microphone publication
+	// subscribed: every stage speaker's microphone, not just the
+	// presenter's. LiveKit's own SPEAK grant is what gates who can
+	// publish a microphone at all (liveKitPublishGrant, server-side), so
+	// every mic track this process ever sees already is a stage speaker —
+	// the same reasoning isScreenShareVideo's doc comment gives for not
+	// re-checking authorization on the screen share. identity is the
+	// publishing participant's LiveKit identity (their peer id), stable
+	// for that publication's lifetime. Unlike the screen-share slots
+	// above, multiple microphones may be found concurrently; each gets
+	// its own AudioSink and its own RTP-reading goroutine. A nil
+	// OnMicTrackFound (the idr-log mode's Handlers never sets it) means
+	// every microphone track is drained and discarded, matching how a nil
+	// per-packet callback already behaves elsewhere in this file.
+	OnMicTrackFound func(identity string) AudioSink
 	// OnVideoTrackEnded fires once the screen-share video track's RTP read
 	// loop returns (the publisher stopped sharing, or the room
 	// disconnected): the caller's only signal to flush a trailing partial
 	// CMAF fragment (session.Session.Finish exists for exactly this).
-	// There is no audio equivalent since nothing buffers audio yet (L1.3).
+	// There is no equivalent for screen-share audio or a microphone: the
+	// audio pipeline has no per-fragment "trailing partial" to flush the
+	// way the video muxer does (see internal/pipeline.AudioFragmenter's
+	// doc comment), only a mix that keeps running with one fewer source.
 	OnVideoTrackEnded func()
 }
 
@@ -169,6 +197,13 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 				h.OnAudioTrackFound(sess)
 			}
 			readRTP(track, h.OnAudioPacket, nil)
+		case isMicrophone(pub):
+			if h.OnMicTrackFound == nil {
+				readRTP(track, nil, nil) // drain and discard; see Handlers.OnMicTrackFound's doc comment
+				return
+			}
+			sink := h.OnMicTrackFound(rp.Identity())
+			readRTP(track, sink.HandlePacket, sink.Close)
 		}
 	}
 
@@ -255,4 +290,12 @@ func isScreenShareVideo(p hasSourceAndKind) bool {
 
 func isScreenShareAudio(p hasSourceAndKind) bool {
 	return p.Kind() == lksdk.TrackKindAudio && p.Source() == livekit.TrackSource_SCREEN_SHARE_AUDIO
+}
+
+// isMicrophone matches a stage speaker's microphone: any participant, not
+// just the presenter (unlike isScreenShareVideo/isScreenShareAudio, which
+// bind to one presenter's publication). See Handlers.OnMicTrackFound for
+// why no further authorization check belongs here.
+func isMicrophone(p hasSourceAndKind) bool {
+	return p.Kind() == lksdk.TrackKindAudio && p.Source() == livekit.TrackSource_MICROPHONE
 }

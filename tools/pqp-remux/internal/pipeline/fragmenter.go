@@ -139,6 +139,12 @@ func (f *Fragmenter) Flush() (*Fragment, error) {
 	return frag, nil
 }
 
+// CurrentSegmentIndex returns the index of the segment currently open (or
+// most recently opened, if nothing has arrived since). Used by
+// Session.Finish (internal/session) to know which segment the stream
+// ending has just closed, for the R2 writer (L1.4).
+func (f *Fragmenter) CurrentSegmentIndex() int { return f.segmentIndex }
+
 func (f *Fragmenter) closePart(durationTicks uint32) *Fragment {
 	samples := f.partSamples
 	f.partSamples = nil
