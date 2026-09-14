@@ -6157,7 +6157,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         [channelId]: {
           stream: live.stream ? resolveLiveHlsStream(live.stream) : null,
           watching: live.watching,
-          // The route asked the server outright (and, since #598, the
+          // The route asked the server outright (and, since PR 598, the
           // database behind it), so a null here is an answer, not silence.
           streamEnded: live.stream == null,
         },

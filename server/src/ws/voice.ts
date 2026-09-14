@@ -2065,6 +2065,7 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       });
     }
     hlsAudience.setStream(voiceChannelId, next);
+    rememberChannelStream(voiceChannelId, next);
     // `next` is the reconcile's own answer, so the frame carries it rather
     // than resolving again: a `null` here is the session this process just
     // ended, which is as certain as it gets.
@@ -2151,6 +2152,72 @@ const dbStreamMemo = new Map<
   string,
   { at: number; stream: LiveHlsStream | null }
 >();
+/**
+ * One query per channel, not per caller. The memo is written only when the
+ * row comes back, so without this a wave of `watch-live` subscribes for the
+ * same channel each start their own round trip (and each retry their own
+ * failure) before any of them has an answer to memoise.
+ */
+const dbStreamInFlight = new Map<
+  string,
+  Promise<{ stream: LiveHlsStream | null; known: boolean }>
+>();
+
+/**
+ * AN AUTHORITATIVE ANSWER DROPS THE GUESS. Called wherever this process
+ * learns what a channel is really playing: its own `pushLiveHls` after a
+ * reconcile, and the `voice.live` relay from the other machine.
+ *
+ * A stop is the case that matters. `resolveChannelStream` consults
+ * `hlsAudience` before the memo, so a live stream always wins on its own;
+ * but a machine that answered from the session row and then heard the stop
+ * would keep handing that ended playlist to the next joiner for the rest of
+ * the memo's few seconds, with no `ended` marker, which is the very shape
+ * this PR exists to remove. Deleting rather than storing a null keeps the
+ * recovery path honest: the next caller asks the table again, which is the
+ * one source that can still say "a party started on the other machine while
+ * the bus was down".
+ */
+function rememberChannelStream(
+  channelId: string,
+  stream: LiveHlsStream | null,
+): void {
+  if (stream) {
+    dbStreamMemo.set(channelId, { at: Date.now(), stream });
+  } else {
+    dbStreamMemo.delete(channelId);
+  }
+  pruneLiveChannelState();
+}
+
+/**
+ * Both per-channel maps are keyed by every channel that has ever gone live or
+ * been asked about, and a `pqp-api` process runs for days. Neither entry is
+ * large, but neither was ever removed either, so this sweeps the ones that
+ * can no longer matter: a memo past its TTL, and a straggler guard for a
+ * channel nothing has said anything about for half an hour (far longer than
+ * a frame can be in flight). Only walked when the maps are big enough to be
+ * worth walking, so the ordinary deployment never pays for it.
+ */
+const LIVE_CHANNEL_STATE_SWEEP_AT = 512;
+const RELAYED_LIVE_AT_MAX_AGE_MS = 30 * 60_000;
+function pruneLiveChannelState(): void {
+  const now = Date.now();
+  if (dbStreamMemo.size > LIVE_CHANNEL_STATE_SWEEP_AT) {
+    for (const [channelId, memo] of dbStreamMemo) {
+      if (now - memo.at > HLS_DB_STREAM_MEMO_MS) {
+        dbStreamMemo.delete(channelId);
+      }
+    }
+  }
+  if (relayedLiveAt.size > LIVE_CHANNEL_STATE_SWEEP_AT) {
+    for (const [channelId, at] of relayedLiveAt) {
+      if (now - at > RELAYED_LIVE_AT_MAX_AGE_MS && !hlsAudience.stream(channelId)) {
+        relayedLiveAt.delete(channelId);
+      }
+    }
+  }
+}
 
 async function resolveChannelStream(
   channelId: string,
@@ -2163,9 +2230,24 @@ async function resolveChannelStream(
   if (memo && Date.now() - memo.at < HLS_DB_STREAM_MEMO_MS) {
     return { stream: memo.stream, known: true };
   }
+  const inFlight = dbStreamInFlight.get(channelId);
+  if (inFlight) {
+    return inFlight;
+  }
+  const query = readChannelStreamFromDb(channelId).finally(() => {
+    dbStreamInFlight.delete(channelId);
+  });
+  dbStreamInFlight.set(channelId, query);
+  return query;
+}
+
+async function readChannelStreamFromDb(
+  channelId: string,
+): Promise<{ stream: LiveHlsStream | null; known: boolean }> {
   try {
     const stream = await liveHlsStreamFromDb(channelId, { strict: true });
     dbStreamMemo.set(channelId, { at: Date.now(), stream });
+    pruneLiveChannelState();
     return { stream, known: true };
   } catch {
     // Already logged by `liveHlsStreamFromDb` (`voice.hlsLiveStreamDbFallbackFailed`).
@@ -2349,6 +2431,7 @@ export function resetHlsAudience(): void {
   hlsAudience.reset();
   relayedLiveAt.clear();
   dbStreamMemo.clear();
+  dbStreamInFlight.clear();
 }
 
 /**
@@ -2563,7 +2646,15 @@ const hlsTokenRemint = { loops: 0, tokens: 0 };
 const hlsAudience = createHlsAudience({
   keyframeMs: ROSTER_AUDIENCE_KEYFRAME_MS,
   broadcast: (channelId) => {
-    void broadcastChannelLive(channelId);
+    // THE KEYFRAME RESTATES, IT DOES NOT DISCOVER. This clock also ticks for
+    // a channel that merely has a watcher and no stream at all, so resolving
+    // here would put one `hls_sessions` query per such channel behind a
+    // 30-second timer for as long as somebody has the channel open. What the
+    // audience is holding is exactly what the keyframe is for; discovery
+    // belongs to the paths a person triggers (the welcome, `watch-live`,
+    // `GET /live`), which are bounded by their own caller.
+    const stream = hlsAudience.stream(channelId);
+    void broadcastChannelLive(channelId, { stream, known: stream !== null });
   },
   remintMs: HLS_VIEWER_TOKEN_REMINT_MS,
   remint: (channelId, watchers) => {
@@ -8424,6 +8515,9 @@ subscribeToCluster(VOICE_LIVE_TOPIC, (data) => {
   // frames about to go out, and so the audience keyframe clock starts here
   // exactly as it does on the machine running the egress.
   hlsAudience.setStream(frame.channelId, frame.stream);
+  // And the memo, so a stop cannot be undone by a row this process read
+  // seconds earlier (`rememberChannelStream`).
+  rememberChannelStream(frame.channelId, frame.stream);
   hlsAudienceFramesSent.fromBus += 1;
   // The room's own frame too, for the seats this instance holds in it: a
   // room spans machines (M2), and `pushLiveHls` only ever reached the

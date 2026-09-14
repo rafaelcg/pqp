@@ -543,6 +543,82 @@ describeDb("watch party stream and state across two instances", () => {
       });
     });
 
+    /**
+     * The memo behind `resolveChannelStream` is the one thing that can undo a
+     * stop. A machine that answered a joiner from `hls_sessions` holds that
+     * stream for a few seconds; if the relayed stop only reached
+     * `hlsAudience`, the very next `watch-live` would fall through to the
+     * memo and hand somebody an ended playlist with no `ended` marker --
+     * exactly the frame the client is now written to believe.
+     */
+    it("a relayed stop drops a stream this machine had read from the session row", async () => {
+      const channel = randomUUID();
+      const presenterPeerId = randomUUID();
+      await pools[0]!.getPool().query(
+        `INSERT INTO channels (id, server_id, name, type, kind)
+         VALUES ($1, NULL, 'memo-test', 'watch_party', 'dm')`,
+        [channel],
+      );
+      const startedAt = new Date();
+      await pools[0]!.getPool().query(
+        `INSERT INTO hls_sessions
+           (channel_id, object_prefix, started_at, ended_at, presenter_peer_id, mode)
+         VALUES ($1, $2, $3, NULL, $4, 'conventional')`,
+        [
+          channel,
+          `live/${channel}/${startedAt.getTime()}-720p30-${randomUUID()}`,
+          startedAt,
+          presenterPeerId,
+        ],
+      );
+      const a = await bootInstance();
+      const b = await bootInstance();
+
+      // B learns the stream the only way it can: the row. That memoises it.
+      const early = watcher(b);
+      await b.voice.handleVoiceMessage(
+        { socket: early.socket, user: asUser(early.userId) },
+        { type: "watch-live", channelId: channel, watching: true },
+      );
+      expect(
+        (frames(early, "channel-live")[0]!.stream as LiveHlsStream).presenterPeerId,
+      ).toBe(presenterPeerId);
+
+      // A ends it: the session row closes and the stop goes on the bus, in
+      // that order, which is the order `pushLiveHls` produces.
+      await pools[0]!
+        .getPool()
+        .query(`UPDATE hls_sessions SET ended_at = NOW() WHERE channel_id = $1`, [
+          channel,
+        ]);
+      a.bus.publishToCluster(a.voice.VOICE_LIVE_TOPIC, {
+        channelId: channel,
+        stream: null,
+        endsStartedAt: startedAt.getTime(),
+        at: Date.now(),
+      });
+      await waitFor(
+        () => frames(early, "channel-live").length === 2,
+        "the stop on B",
+      );
+      expect(frames(early, "channel-live")[1]).toMatchObject({
+        stream: null,
+        ended: true,
+      });
+
+      // AND THE NEXT SUBSCRIBER, well inside the memo's few seconds.
+      const late = watcher(b);
+      await b.voice.handleVoiceMessage(
+        { socket: late.socket, user: asUser(late.userId) },
+        { type: "watch-live", channelId: channel, watching: true },
+      );
+      expect(frames(late, "channel-live")[0]).toMatchObject({
+        stream: null,
+        ended: true,
+      });
+      expect((await b.voice.getChannelLiveState(channel)).stream).toBeNull();
+    });
+
     it("bus off: nothing crosses, and A behaves exactly as today", async () => {
       const channel = randomUUID();
       const a = await bootInstance(false);

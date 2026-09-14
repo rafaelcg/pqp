@@ -163,6 +163,41 @@ export function resetWatchPartyStateFrameCountersForTests(): void {
   watchPartyStateFrames.fromBus = 0;
 }
 
+/**
+ * A RELAYED FRAME IS THE ONLY NOTICE THIS MACHINE GETS. The local caller that
+ * published it has already finished; nothing here will be told again. So a
+ * receiver whose Postgres blinks while reading the row would otherwise
+ * consume the notification and leave its half of the audience on yesterday's
+ * party until somebody's next mutation. `broadcastWatchParty` reports whether
+ * it could read the row at all (an absent row is an answer, an unreadable one
+ * is not), and an unreadable one is retried a few times with a widening gap.
+ */
+const WATCH_PARTY_RELAY_ATTEMPTS = 4;
+const WATCH_PARTY_RELAY_BACKOFF_MS = 500;
+
+function applyRelayedWatchPartyState(sessionId: string, attempt: number): void {
+  void broadcastWatchParty(sessionId, { fromBus: true })
+    .then((read) => {
+      if (read) {
+        return;
+      }
+      if (attempt >= WATCH_PARTY_RELAY_ATTEMPTS) {
+        console.error(
+          "[watch-party] relayed state dropped, session row unreadable:",
+          sessionId,
+        );
+        return;
+      }
+      setTimeout(
+        () => applyRelayedWatchPartyState(sessionId, attempt + 1),
+        WATCH_PARTY_RELAY_BACKOFF_MS * attempt,
+      ).unref?.();
+    })
+    .catch((error: unknown) => {
+      console.error("[watch-party] relayed state broadcast failed:", error);
+    });
+}
+
 subscribeToCluster(WATCH_PARTY_STATE_TOPIC, (data) => {
   const parsed = watchPartyStateFrameSchema.safeParse(data);
   if (!parsed.success) {
@@ -172,11 +207,7 @@ subscribeToCluster(WATCH_PARTY_STATE_TOPIC, (data) => {
   // The origin guard in `lib/bus.ts` already dropped this instance's own
   // frames; `fromBus` keeps the local walk from publishing in turn, which is
   // the other half of never letting two instances answer each other forever.
-  void broadcastWatchParty(parsed.data.sessionId, { fromBus: true }).catch(
-    (error: unknown) => {
-      console.error("[watch-party] relayed state broadcast failed:", error);
-    },
-  );
+  applyRelayedWatchPartyState(parsed.data.sessionId, 1);
 });
 
 export async function broadcastWatchParty(
@@ -190,7 +221,7 @@ export async function broadcastWatchParty(
      */
     fromBus?: boolean;
   } = {},
-): Promise<void> {
+): Promise<boolean> {
   // This read follows a write to the SAME row moments earlier (the mutation
   // that made this call happen at all), so a failure here is almost always
   // a transient blip rather than a real absence — and giving up after one
@@ -199,11 +230,22 @@ export async function broadcastWatchParty(
   // fresh-plus-stale window with nothing else positioned to catch it: this
   // function is the one place every mutation passes through. One retry
   // costs nothing on the common path and meaningfully narrows that gap.
-  const row = await getWatchPartyRow(sessionId).catch(() =>
-    getWatchPartyRow(sessionId).catch(() => null),
-  );
+  //
+  // The answer says whether this walk actually happened: `false` means the
+  // row could not be READ (both attempts threw) or the audience could not be
+  // loaded, both of which a relayed frame retries, while a row that is simply
+  // not there is a real answer and reported as one.
+  let row: Awaited<ReturnType<typeof getWatchPartyRow>> = null;
+  try {
+    row = await getWatchPartyRow(sessionId).catch(() =>
+      getWatchPartyRow(sessionId),
+    );
+  } catch (error) {
+    console.error("[watch-party] session row unreadable:", error);
+    return false;
+  }
   if (!row) {
-    return;
+    return true;
   }
   const terminal = row.status === "ended" || row.status === "cancelled";
   // THE SEAT CACHE. Every mutation fans out through here, including a Voz
@@ -239,7 +281,9 @@ export async function broadcastWatchParty(
   invalidateActiveWatchParty(row.channel_id);
   const audience = await getChannelAudience(row.channel_id).catch(() => null);
   if (!audience) {
-    return;
+    // Nobody was told. A relayed frame retries this; a local caller's own
+    // mutation already failed loudly enough for its own path.
+    return false;
   }
   // THE ONE PLACE THAT SEES EVERY STATE CHANGE, which is why the egress's
   // "is the party over" mark is set from here rather than from each of the
@@ -356,6 +400,7 @@ export async function broadcastWatchParty(
       // handler's problem, not this one's.
     }
   }
+  return true;
 }
 
 /**
