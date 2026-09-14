@@ -361,6 +361,23 @@ jobs:
       # both apps are already on the same image by the time this can fail,
       # so a readiness failure is a loud alert about the release, not a
       # second problem (a stale worker) on top of it.
+      #
+      # SKIPPABLE ON PURPOSE, same call as its sibling above ("Verify the
+      # deployed commit"), not an oversight a later Farol pass should keep
+      # re-flagging: `VITE_API_URL` is a required secret on THIS repo's own
+      # `pqp-api` deploy (see CLAUDE.md's GitHub Actions secrets table) and
+      # is always set here, so the skip branch is dead on every run that
+      # matters to this project. It exists only for a fork or a self-host
+      # running this workflow against an app that has not set the secret —
+      # exactly the audience `docs/deploy-fly.md` is written for — where the
+      # alternative is a hard failure on every deploy for a check the fork
+      # has no way to satisfy yet. Made non-skippable, forks would either
+      # never merge this workflow file at all (silently losing every OTHER
+      # safety check in it) or set the secret to a throwaway value just to
+      # clear the gate, which is worse than the warning below. The 40-attempt
+      # deployed-commit check the sibling step runs and the machine
+      # count/region/image assertions above it are NOT skippable — this is
+      # the one check this repo cannot demand of an app it does not own.
       - name: Verify the release is ready (Postgres reachable)
         if: steps.relevant.outputs.needed == 'true'
         env:

@@ -127,4 +127,81 @@ describeDb("A3.1: guardPoolQueries covers connect() and half-open", () => {
       third.release();
     }
   });
+
+  // A Farol pass on PR #566 caught the sharpest bug in this file: the guard
+  // above rejected `ROLLBACK` exactly like any other query, so a client
+  // mid-transaction that hit the breaker on its next statement had its own
+  // cleanup rolled back by nothing, and pg-pool handed the still-open
+  // transaction to a later, unrelated request.
+  it("transaction-control statements are never rejected by the guard, even while open", async () => {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      forceDbBreakerStateForTests("open");
+      // COMMIT is a control statement, not application data access — it
+      // must go through regardless of breaker state.
+      await expect(client.query("COMMIT")).resolves.toBeDefined();
+    } finally {
+      forceDbBreakerStateForTests("closed");
+      client.release();
+    }
+
+    // Nothing was ever rejected on this client, so it must still be safe to
+    // reuse: pg-pool hands the same idle object back with nothing else
+    // contending for the pool (see the idempotency test above).
+    const again = await getPool().connect();
+    try {
+      expect(again).toBe(client);
+    } finally {
+      again.release();
+    }
+  });
+
+  it("a client a rejected query poisons mid-transaction is destroyed on release, and its writes never land", async () => {
+    const clerkId = "clerk_dirty_txn_test";
+    await getPool().query(`DELETE FROM users WHERE clerk_id = $1`, [clerkId]);
+
+    const client = await getPool().connect();
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO users (clerk_id, display_name) VALUES ($1, $2)`,
+      [clerkId, "Dirty Txn Test"],
+    );
+
+    forceDbBreakerStateForTests("open");
+
+    // The application's next statement is fast-rejected by the breaker...
+    await expect(client.query("SELECT 1")).rejects.toBeInstanceOf(
+      DatabaseUnavailableError,
+    );
+    // ...but its own ROLLBACK — the `catch { await client.query("ROLLBACK") }`
+    // shape every service in this codebase uses — must NOT be rejected by
+    // the same guard. Before the fix, this line was the bug: a rejected
+    // ROLLBACK never reaches Postgres, and the transaction stays open on a
+    // connection about to be released as if it were clean.
+    await expect(client.query("ROLLBACK")).resolves.toBeDefined();
+
+    // The application releases with no error — it has no way to know the
+    // guard rejected one of its statements. This must be overridden.
+    client.release();
+    forceDbBreakerStateForTests("closed");
+
+    // The client must have been destroyed, not returned to the idle pool:
+    // with nothing else contending for the pool, pg-pool would otherwise
+    // hand back this exact object (proven above) — getting a DIFFERENT one
+    // is the evidence `release(err)` actually ran instead of a plain release.
+    const fresh = await getPool().connect();
+    try {
+      expect(fresh).not.toBe(client);
+    } finally {
+      fresh.release();
+    }
+
+    // And the row never survives for a later, unrelated request to inherit.
+    const check = await getPool().query(
+      `SELECT 1 FROM users WHERE clerk_id = $1`,
+      [clerkId],
+    );
+    expect(check.rowCount).toBe(0);
+  });
 });

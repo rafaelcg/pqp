@@ -1,4 +1,5 @@
 import pg from "pg";
+import { createServer, type AddressInfo, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createDbBreaker,
@@ -108,4 +109,64 @@ describeDb("createDbBreaker against a real, unreachable Postgres port", () => {
     await breaker.tick();
     expect(breaker.state()).toBe("closed");
   });
+});
+
+/**
+ * The singleton wiring in `db.ts` specifically — not `createDbBreaker` in
+ * isolation. A Farol pass caught that timing out the race in
+ * `probeWithinBudget` did not stop `db.ts`'s `probeConnection` from running:
+ * `pg` has no query cancellation this version can use, so the abandoned
+ * connection attempt or query kept going toward its own (larger) internal
+ * timeout. This proves the fix — `abortProbeConnection` — against a REAL
+ * stalled connection, not a closed one: a bare TCP listener that accepts
+ * the socket and never speaks Postgres's startup protocol back, which is
+ * the "stalled, not refused" shape a saturated real Postgres produces and a
+ * closed port (ECONNREFUSED, instant) does not exercise at all.
+ */
+const describeDbSingleton = DATABASE_URL ? describe : describe.skip;
+
+describeDbSingleton("db.ts's breaker probe against a real stalled connection", () => {
+  afterEach(async () => {
+    const { resetDbBreakerForTests } = await import("../db.js");
+    resetDbBreakerForTests();
+  });
+
+  it("a probe that misses its latency budget is torn down, not left running", async () => {
+    const { tickDbBreakerForTests, probeConnectionActiveForTests, resetDbBreakerForTests } =
+      await import("../db.js");
+
+    // Track every accepted socket -- `server.close()`'s callback only fires
+    // once every connection it accepted has ended, and a socket this test
+    // never speaks on (deliberately, to simulate a stall) does not close
+    // itself just because the client side called `end()`.
+    const sockets = new Set<Socket>();
+    const server = createServer((socket) => {
+      // Accept the connection and do nothing — never send Postgres's own
+      // startup response, so `pg.Client.connect()` hangs waiting for one.
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+      socket.on("error", () => {});
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    const previousUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = `postgresql://pqp:pqp@127.0.0.1:${port}/nope`;
+    resetDbBreakerForTests();
+
+    try {
+      expect(probeConnectionActiveForTests()).toBe(false);
+      await tickDbBreakerForTests();
+      // Torn down the instant the latency budget elapsed, not left hanging
+      // toward `probeConnection`'s own 2s `connectionTimeoutMillis`.
+      expect(probeConnectionActiveForTests()).toBe(false);
+    } finally {
+      process.env.DATABASE_URL = previousUrl;
+      resetDbBreakerForTests();
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 10_000);
 });

@@ -26,6 +26,7 @@ interface Harness {
   state(): DbBreakerState;
   transitions: DbBreakerState[];
   probeCount(): number;
+  abortCount(): number;
 }
 
 function harness(overrides: Partial<Parameters<typeof createDbBreaker>[0]> = {}): Harness {
@@ -33,6 +34,7 @@ function harness(overrides: Partial<Parameters<typeof createDbBreaker>[0]> = {})
   let postgres: "ok" | "fail" | "hang" = "ok";
   let waiting: number | null = 0;
   let probeCount = 0;
+  let abortCount = 0;
   const transitions: DbBreakerState[] = [];
   const hang = () => new Promise<never>(() => {});
 
@@ -43,6 +45,9 @@ function harness(overrides: Partial<Parameters<typeof createDbBreaker>[0]> = {})
       if (postgres === "fail") throw new Error("connection terminated");
       if (postgres === "hang") return hang();
       return "ok";
+    },
+    abortProbe: () => {
+      abortCount += 1;
     },
     poolStats: () => (waiting === null ? null : { waiting }),
     // Real but tiny, so a "hang" resolves fast without slowing the suite.
@@ -65,6 +70,7 @@ function harness(overrides: Partial<Parameters<typeof createDbBreaker>[0]> = {})
     state: () => breaker.state(),
     transitions,
     probeCount: () => probeCount,
+    abortCount: () => abortCount,
   };
 }
 
@@ -101,6 +107,31 @@ describe("createDbBreaker", () => {
     h.advance(DB_BREAKER_GRACE_MS + 1);
     await h.tick();
     expect(h.state()).toBe("open");
+  });
+
+  // A Farol pass on this PR caught that racing a probe against a timer only
+  // stops COUNTING it: the abandoned connection attempt kept running past
+  // the race, toward its own larger timeout, consuming exactly the
+  // resource the breaker exists to protect during the outage it is
+  // protecting it from. `abortProbe` is how the caller tears its own
+  // resource down the instant this module gives up on it.
+  it("calls abortProbe the instant a hung probe misses its budget", async () => {
+    const h = harness();
+    h.setPostgres("hang");
+    await h.tick();
+    expect(h.abortCount()).toBe(1);
+    await h.tick();
+    expect(h.abortCount()).toBe(2);
+  });
+
+  it("does not call abortProbe when the probe settles within its budget", async () => {
+    const h = harness();
+    await h.tick(); // healthy — settles well inside latencyBudgetMs
+    expect(h.abortCount()).toBe(0);
+
+    h.setPostgres("fail");
+    await h.tick(); // fails fast (a thrown error), also within budget
+    expect(h.abortCount()).toBe(0);
   });
 
   it("a queue over threshold for the grace window opens it even with a healthy probe", async () => {

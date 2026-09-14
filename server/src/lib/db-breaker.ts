@@ -73,6 +73,20 @@ export interface DbBreakerPoolStats {
 export interface DbBreakerOptions {
   /** Resolves once Postgres answers; rejects or hangs when it does not. */
   probe: () => Promise<unknown>;
+  /**
+   * Called the instant a probe misses `latencyBudgetMs`, before this module
+   * gives up on it. A Farol pass on this PR caught that racing `probe()`
+   * against a timer only stops COUNTING it — `pg` has no query cancellation
+   * this version can use, so the abandoned connection attempt or query kept
+   * running past the race to its own, larger, internal timeout
+   * (`connectionTimeoutMillis`/`query_timeout` in `db.ts`'s `probeConnection`),
+   * occupying exactly the kind of resource a breaker exists to stop handing
+   * out during an outage. This module has no idea what "the connection" is —
+   * `probe` is an opaque function — so it hands the caller a callback to tear
+   * its own resource down instead. Optional so a test harness that only cares
+   * about state transitions may omit it.
+   */
+  abortProbe?: () => void;
   /** Null when there is no pool yet — reported as no queue pressure. */
   poolStats: () => DbBreakerPoolStats | null;
   now?: () => number;
@@ -116,15 +130,25 @@ export interface DbBreaker {
 
 /**
  * Race a probe against a timeout, same shape as `services/ready.ts`'s
- * `timed`: the loser is abandoned and its rejection swallowed.
+ * `timed`. The loser is abandoned and its rejection swallowed, but unlike
+ * that helper, "abandoned" cannot mean "ignored" here: the timer callback
+ * calls `abortProbe` (when the caller gave one) BEFORE resolving `false`, so
+ * whatever connection `probe` opened is torn down at the moment this stops
+ * counting on it, not left to run out its own, larger timeout. `attempt`'s
+ * eventual settlement (however long it takes) is still swallowed either way
+ * — this function has already answered by then.
  */
 function probeWithinBudget(
   probe: () => Promise<unknown>,
   budgetMs: number,
+  abortProbe?: () => void,
 ): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), budgetMs);
+    timer = setTimeout(() => {
+      abortProbe?.();
+      resolve(false);
+    }, budgetMs);
     timer.unref?.();
   });
   const attempt = Promise.resolve()
@@ -201,7 +225,11 @@ export function createDbBreaker(options: DbBreakerOptions): DbBreaker {
       const queueUnhealthy =
         queueBadSince !== null && at - queueBadSince >= graceMs;
 
-      const ok = await probeWithinBudget(options.probe, latencyBudgetMs);
+      const ok = await probeWithinBudget(
+        options.probe,
+        latencyBudgetMs,
+        options.abortProbe,
+      );
       if (!ok) {
         probeBadSince ??= at;
       } else {

@@ -75,12 +75,13 @@ export function isDbBreakerEnabled(): boolean {
 let probeClient: pg.Client | null = null;
 
 async function probeConnection(): Promise<void> {
-  if (!probeClient) {
+  let client = probeClient;
+  if (!client) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new Error("DATABASE_URL is required");
     }
-    const client = new pg.Client({
+    client = new pg.Client({
       connectionString,
       // Bounded independently of the app pool's own timeouts: this
       // connection exists only to answer "is Postgres reachable, right
@@ -96,10 +97,20 @@ async function probeConnection(): Promise<void> {
         probeClient = null;
       }
     });
-    await client.connect();
+    // Published BEFORE the connection attempt settles, not after — a Farol
+    // pass caught that `abortProbeConnection` below could only ever reach a
+    // client whose `connect()` had already resolved, so a probe stalled
+    // DURING the connection handshake itself (Postgres accepted the TCP
+    // connection but never finished its own startup exchange — exactly what
+    // a saturated real server does, and a different failure shape than the
+    // "refused" a closed port produces) had nothing published for the
+    // timeout race to tear down. `client.end()` on a still-connecting
+    // client is well-defined in `pg`: it closes the socket and the pending
+    // `connect()` below rejects, which is exactly what "abandoned" needs to
+    // mean here.
     probeClient = client;
+    await client.connect();
   }
-  const client = probeClient;
   try {
     await client.query("SELECT 1");
   } catch (error) {
@@ -118,8 +129,40 @@ export async function closeDbBreakerProbe(): Promise<void> {
   await client?.end().catch(() => {});
 }
 
+/**
+ * `db-breaker.ts`'s `probeWithinBudget` calls this the instant a probe
+ * misses `DB_BREAKER_LATENCY_BUDGET_MS`, before it gives up on it. A Farol
+ * pass on this PR caught that the race alone only stopped COUNTING the
+ * probe: `pg` has no query cancellation this version can use, so the
+ * connection attempt or the `SELECT 1` kept running past the race, toward
+ * `connectionTimeoutMillis`/`query_timeout` above (2s / 1s) — up to a
+ * second and a half longer than the 750ms this process had already stopped
+ * waiting on it. Ending the socket here, synchronously, means the NEXT tick
+ * (`DB_BREAKER_PROBE_INTERVAL_MS` later) starts a fresh connection instead
+ * of finding one still mid-attempt, and `probeConnectionActiveForTests`
+ * below goes false right away rather than up to 1.5s later.
+ *
+ * Idempotent with `probeConnection`'s own catch block by construction: both
+ * only touch `probeClient` if it's still the client they know about, so
+ * whichever runs first wins and the second is a no-op.
+ */
+function abortProbeConnection(): void {
+  const client = probeClient;
+  if (!client) {
+    return;
+  }
+  probeClient = null;
+  void client.end().catch(() => {});
+}
+
+/** Test hook: is the breaker's probe connection currently open/connecting? */
+export function probeConnectionActiveForTests(): boolean {
+  return probeClient !== null;
+}
+
 const dbBreaker: DbBreaker = createDbBreaker({
   probe: probeConnection,
+  abortProbe: abortProbeConnection,
   poolStats: () => currentDbBreakerPoolStats(),
   onStateChange: (next, previous) => {
     logEvent("db.breaker.stateChange", { from: previous, to: next });
@@ -180,6 +223,20 @@ export function resetDbBreakerForTests(): void {
  */
 export function forceDbBreakerStateForTests(state: DbBreakerState): void {
   dbBreaker.forceStateForTests(state);
+}
+
+/**
+ * Test hook: run exactly one of the breaker's own sampling ticks (sample the
+ * pool, probe Postgres when the state calls for it, step the state machine)
+ * against the real singleton, without waiting for `DB_BREAKER_PROBE_INTERVAL_MS`
+ * on a real timer. Real wall-clock time still passes for the probe's own
+ * race against `DB_BREAKER_LATENCY_BUDGET_MS`, unlike `db-breaker.test.ts`'s
+ * fully-faked clock — this hook exists specifically for tests that need the
+ * real `probeConnection`/`abortProbeConnection` wiring, not an approximation
+ * of it.
+ */
+export async function tickDbBreakerForTests(): Promise<void> {
+  await dbBreaker.tick();
 }
 
 /**
@@ -262,6 +319,84 @@ function shouldRejectDbCall(): boolean {
  */
 const guardedQueryTargets = new WeakSet<object>();
 
+/**
+ * A Farol pass on this PR found the sharpest bug in this whole file:
+ * `guardQueryMethod` rejected EVERY query on an open client, `BEGIN` and
+ * `COMMIT`/`ROLLBACK` included. A client mid-transaction that has already
+ * issued a write, hits the breaker on its next statement, and lands in the
+ * ordinary `catch { ROLLBACK } finally { client.release() }` shape every
+ * service in this codebase uses (`server/src/services/*.ts`) gets that
+ * `ROLLBACK` rejected TOO — by this guard, synthetically, nothing to do with
+ * whether Postgres itself is reachable — so the rollback never reaches
+ * Postgres, the client is released as if clean, and pg-pool hands the SAME
+ * connection to a later, unrelated request with an open transaction still
+ * sitting on it. `BEGIN` on a connection already inside a transaction is a
+ * warning, not a reset, so that later request's own writes land inside the
+ * earlier request's transaction and its `COMMIT` commits both — writes a
+ * caller was told had failed, silently persisted under somebody else's
+ * request. Two changes fix this, together:
+ *
+ *  - Transaction-control statements (`BEGIN`, `COMMIT`, `ROLLBACK`, and
+ *    `SAVEPOINT`/`RELEASE` even though nothing in this codebase issues those
+ *    today) are NEVER rejected by this guard, breaker state notwithstanding.
+ *    If Postgres is genuinely unreachable they fail on their own, at the
+ *    driver level, which is a real error the caller's existing catch already
+ *    has to handle — this guard must not manufacture an ADDITIONAL way for
+ *    exactly the cleanup statement to fail.
+ *  - Every `PoolClient` this module hands out is tracked while it has an
+ *    open transaction (`BEGIN` succeeded, no `COMMIT`/`ROLLBACK` has
+ *    succeeded since). If the guard rejects a query on such a client — the
+ *    exact case above — the client is marked poisoned, and `guardClientRelease`
+ *    below forces `release(err)` on it regardless of what the caller passes,
+ *    so pg-pool destroys the connection instead of returning a dirty one to
+ *    its idle list. A `ROLLBACK`/`COMMIT` that itself fails (a real
+ *    connection error, Postgres truly gone) poisons the client the same way,
+ *    for the same reason: its outcome is unknown, and unknown is not clean.
+ */
+const TRANSACTION_BEGIN = /^\s*(BEGIN\b|START\s+TRANSACTION\b)/i;
+const TRANSACTION_END = /^\s*(COMMIT\b|END\b|ROLLBACK\b)(?!\s+TO\b)/i;
+const TRANSACTION_MID = /^\s*(SAVEPOINT\b|RELEASE\b)/i;
+
+function queryTextOf(args: unknown[]): string | null {
+  const first = args[0];
+  if (typeof first === "string") {
+    return first;
+  }
+  if (
+    first &&
+    typeof first === "object" &&
+    "text" in first &&
+    typeof (first as { text: unknown }).text === "string"
+  ) {
+    return (first as { text: string }).text;
+  }
+  return null;
+}
+
+type TransactionControlKind = "begin" | "end" | "mid" | null;
+
+function transactionControlKind(args: unknown[]): TransactionControlKind {
+  const text = queryTextOf(args);
+  if (!text) {
+    return null;
+  }
+  if (TRANSACTION_BEGIN.test(text)) {
+    return "begin";
+  }
+  if (TRANSACTION_END.test(text)) {
+    return "end";
+  }
+  if (TRANSACTION_MID.test(text)) {
+    return "mid";
+  }
+  return null;
+}
+
+/** Clients with a `BEGIN` that has not yet been closed by a `COMMIT`/`ROLLBACK`. */
+const openTransactionClients = new WeakSet<object>();
+/** Clients a rejected query poisoned mid-transaction — must be destroyed, never reused. */
+const poisonedClients = new WeakSet<object>();
+
 function guardQueryMethod(
   target: { query: (...args: unknown[]) => unknown },
 ): void {
@@ -273,13 +408,87 @@ function guardQueryMethod(
     ...args: unknown[]
   ) => Promise<unknown>;
   const guarded = (...args: unknown[]): Promise<unknown> => {
-    if (shouldRejectDbCall()) {
+    const kind = transactionControlKind(args);
+    if (kind === null && shouldRejectDbCall()) {
       dbBreaker.noteRejected();
+      if (openTransactionClients.has(target)) {
+        poisonedClients.add(target);
+      }
       return Promise.reject(new DatabaseUnavailableError());
     }
-    return original(...args);
+    const result = original(...args);
+    if (kind === "begin") {
+      return result.then(
+        (value) => {
+          openTransactionClients.add(target);
+          return value;
+        },
+        (error: unknown) => {
+          // A `BEGIN` that itself failed never opened a transaction.
+          throw error;
+        },
+      );
+    }
+    if (kind === "end") {
+      return result.then(
+        (value) => {
+          openTransactionClients.delete(target);
+          return value;
+        },
+        (error: unknown) => {
+          // The transaction's fate is now unknown — Postgres refused or
+          // never heard the statement meant to resolve it one way or the
+          // other. Never hand this connection back out as if it were clean.
+          poisonedClients.add(target);
+          throw error;
+        },
+      );
+    }
+    return result;
   };
   (target as { query: unknown }).query = guarded;
+}
+
+/**
+ * Wraps `PoolClient.release` so a client `guardQueryMethod` poisoned mid-transaction
+ * is destroyed rather than returned to pg-pool's idle list, regardless of what
+ * the caller's own `finally { client.release() }` passes — the caller has no
+ * way to know the guard rejected its `ROLLBACK`, so it cannot be the one
+ * deciding whether this connection is safe to reuse.
+ *
+ * NOT idempotency-guarded like `guardQueryMethod` — deliberately, and for the
+ * opposite reason. `pg-pool` reassigns `client.release` to a brand new
+ * closure on EVERY checkout (`this._releaseOnce(client, idleListener)` in
+ * `pg-pool/index.js`'s `connect()`, right before handing the client back),
+ * unlike `client.query`, which persists across checkouts and is exactly why
+ * THAT guard needs a `WeakSet` to stay idempotent. A `WeakSet` here would
+ * guard the wrong thing: the first checkout's wrapper would survive being
+ * recorded as "already guarded" while pg-pool quietly threw it away and
+ * installed a fresh, unwrapped `release` underneath for every checkout
+ * after the first — which is exactly how an early version of this fix
+ * passed on a client's FIRST checkout and silently stopped working on its
+ * second. Called fresh from `guardedConnect` on every checkout instead, to
+ * wrap whatever pg-pool just installed, every time.
+ */
+function guardClientRelease(client: pg.PoolClient): void {
+  const originalRelease = client.release.bind(client);
+  (client as unknown as { release: (err?: Error | boolean) => void }).release = (
+    err?: Error | boolean,
+  ) => {
+    if (poisonedClients.has(client)) {
+      poisonedClients.delete(client);
+      openTransactionClients.delete(client);
+      originalRelease(
+        err instanceof Error
+          ? err
+          : new Error(
+              "A DB-breaker rejection landed mid-transaction on this client; destroying it instead of returning a possibly-dirty connection to the pool.",
+            ),
+      );
+      return;
+    }
+    originalRelease(err);
+  };
 }
 
 function guardPoolQueries(target: pg.Pool): void {
@@ -304,6 +513,7 @@ function guardPoolQueries(target: pg.Pool): void {
     // an already-unusual result into a crash of its own.
     if (client) {
       guardQueryMethod(client as unknown as { query: (...args: unknown[]) => unknown });
+      guardClientRelease(client);
     }
     return client;
   };
