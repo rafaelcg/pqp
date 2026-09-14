@@ -293,3 +293,146 @@ func (m *ManagedSession) currentPipelineForTest() Pipeline {
 	defer m.mu.Unlock()
 	return m.current
 }
+
+// sealsOneMoreSegmentOnClose wraps a real*sessionPipeline whose Close()
+// does not just tear down: first it pushes one more segment's worth of
+// synthetic frames (rolling the fragmenter's open segment forward by one,
+// via the SAME ordinary-rollover path that seals and uploads a segment
+// mid-stream) and then calls Session.Finish directly -- exactly what
+// production's async subscriber.readRTP -> OnVideoTrackEnded ->
+// session.Session.Finish does for a real LiveKit disconnect, except
+// synchronous and deterministic here so the test does not depend on
+// goroutine scheduling. This is "the old pipeline seals one more segment
+// during teardown" the Farol review named: a stalled pipeline kept
+// receiving (and rolling over) real packets for as long as it stayed
+// subscribed, and closing it is what finally stops that and finalizes
+// whatever was left open.
+type sealsOneMoreSegmentOnClose struct {
+	*realSessionPipeline
+	extraFrameStart int
+}
+
+func (p *sealsOneMoreSegmentOnClose) Close() {
+	p.pushIDRFrames(p.extraFrameStart, restartTestFramesPerSegment, restartTestFrameStep)
+	p.sess.Finish()
+	p.realSessionPipeline.Close()
+}
+
+// restartTestFramesPerSegment is how many restartTestFrameStep-spaced
+// frames it takes to roll a 500ms segment over (500ms / ~33ms), matching
+// TestManagedSession_RestartNeverReusesR2Key's own "45000-tick segments /
+// 3000-tick frames = 15 frames per rollover" arithmetic.
+const restartTestFramesPerSegment = 15
+
+// TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown is the
+// test Farol's review on PR #584 specifically asked for: "the replacement
+// never reuses a key even if the old pipeline seals one more segment
+// during teardown." It reproduces the exact race restart()'s ordering fix
+// exists to close: read the OLD pipeline's segment index too early (while
+// it is still active) and a segment that rolls over AFTER that read, but
+// BEFORE the old pipeline actually stops, gets finalized at an index the
+// replacement has already been told to reuse.
+//
+// The factory here makes ONLY the first pipeline
+// (sealsOneMoreSegmentOnClose) advance and finalize an extra segment
+// inside its own Close() -- the replacement built by restart() is a plain
+// realSessionPipeline, same as the other test in this file, so this test
+// isolates the one thing it means to check: that restart() reads the OLD
+// pipeline's FINAL index (after that extra rollover), not a stale
+// pre-close snapshot.
+//
+// With the bug (Health() read before old.Close()), this test fails: the
+// pre-close read reports the segment open at 50 frames, the replacement
+// reserves that+1, the extra rollover inside Close() finalizes exactly
+// that reserved index, and video-seg-<reserved>.m4s gets PUT twice.
+func TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown(t *testing.T) {
+	uploader := newKeyTrackingUploader()
+	writer := r2.NewWriter(uploader, r2.WriterConfig{Workers: 4})
+	defer writer.Close()
+
+	baseFactory := newRealSessionPipelineFactory(writer)
+	var generation int
+	factory := func(cfg PipelineConfig) (Pipeline, error) {
+		p, err := baseFactory(cfg)
+		if err != nil {
+			return nil, err
+		}
+		rp := p.(*realSessionPipeline)
+		generation++
+		if generation == 1 {
+			// extraFrameStart continues the first pipeline's own RTP
+			// timeline right where its 50 ordinary frames left off, so
+			// the extra rollover inside Close() is indistinguishable
+			// (to the fragmenter) from packets that simply arrived a
+			// little later on a still-subscribed connection.
+			return &sealsOneMoreSegmentOnClose{realSessionPipeline: rp, extraFrameStart: framesPerGenerationForTest}, nil
+		}
+		return rp, nil
+	}
+
+	req := testStartReq(sessA, chanA, chanA)
+	req.PartMs = 500
+	req.SegmentMs = 500
+
+	ms, err := newManagedSession(req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
+	if err != nil {
+		t.Fatalf("unexpected error starting session: %v", err)
+	}
+
+	p1wrap := ms.currentPipelineForTest().(*sealsOneMoreSegmentOnClose)
+	p1 := p1wrap.realSessionPipeline
+	p1.pushSPSPPS(0)
+	p1.pushIDRFrames(0, framesPerGenerationForTest, restartTestFrameStep)
+
+	preRestartIndex := p1.sess.CurrentVideoSegmentIndex()
+	if preRestartIndex < 2 {
+		t.Fatalf("expected the first pipeline to have rolled over at least two segments before the simulated restart, got index %d", preRestartIndex)
+	}
+
+	// restart() must close p1wrap (running the extra rollover above)
+	// BEFORE it reads p1's segment index and BEFORE it builds the
+	// replacement -- see restart's own doc comment.
+	ms.restart()
+
+	// The extra rollover inside Close() advanced (and finalized) the open
+	// segment by one past preRestartIndex, sealing preRestartIndex+1 --
+	// exactly the index the OLD, buggy ordering would have reserved for
+	// the replacement. The replacement must reserve one PAST that.
+	finalOldIndex := preRestartIndex + 1
+	wantReplacementStart := finalOldIndex + 1
+
+	p2 := ms.currentPipelineForTest().(*realSessionPipeline)
+	if p2 == p1 {
+		t.Fatal("expected restart to build a new pipeline instance")
+	}
+	if got := p2.sess.CurrentVideoSegmentIndex(); got != wantReplacementStart {
+		t.Fatalf("expected the replacement to continue numbering at %d (final old index %d, plus one), got %d -- this is exactly the collision Farol's review flagged if it fails", wantReplacementStart, finalOldIndex, got)
+	}
+
+	p2.pushSPSPPS(uint32(wantReplacementStart) * restartTestFrameStep * restartTestFramesPerSegment)
+	p2.pushIDRFrames(wantReplacementStart*restartTestFramesPerSegment, framesPerGenerationForTest, restartTestFrameStep)
+
+	wantKeys := []string{
+		"video-seg-0.m4s",
+		fmt.Sprintf("video-seg-%d.m4s", preRestartIndex),      // sealed by the extra rollover, uploaded by p1's own ordinary path
+		fmt.Sprintf("video-seg-%d.m4s", finalOldIndex),        // sealed and uploaded by p1wrap.Close()'s Finish() call
+		fmt.Sprintf("video-seg-%d.m4s", wantReplacementStart), // p2's own first sealed segment
+	}
+	waitFor(t, 2*time.Second, func() bool {
+		for _, want := range wantKeys {
+			if uploader.putsForSuffix(want) == 0 {
+				return false
+			}
+		}
+		return true
+	})
+
+	if dups := uploader.duplicates(); len(dups) > 0 {
+		t.Fatalf("expected no numbered R2 segment key to be PUT twice even when the old pipeline seals one more segment during teardown, got duplicate keys: %v", dups)
+	}
+}
+
+// framesPerGenerationForTest mirrors TestManagedSession_RestartNeverReusesR2Key's
+// own framesPerGeneration (50): enough frames to seal at least two 15-frame
+// segments (0 and 1) with a third left open.
+const framesPerGenerationForTest = 50

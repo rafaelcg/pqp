@@ -136,36 +136,59 @@ func (m *ManagedSession) evaluateTick(now time.Time) {
 	}
 }
 
-// restart builds a fresh Pipeline and swaps it in, closing the old one only
-// once the new one is already live -- the same "new up before old down"
-// ordering internal/session's own shutdown-order doc comments favor
-// elsewhere in this module, minimizing the gap with no viewer-visible
-// player rebuild (this task's own acceptance bar). If the factory call
-// itself fails (e.g. LiveKit unreachable), the old (stalled) pipeline is
-// left in place and this attempt is only logged: the next tick
-// re-evaluates against evaluateWatchdog's own ladder, which demotes rather
-// than retrying forever once the demote window has already been consumed
-// by this attempt (see evaluateWatchdog's doc comment).
+// restart closes the OLD pipeline FIRST and only then builds its
+// replacement (Farol review round 2, PR #584 -- this inverts the "new up
+// before old down" ordering an earlier revision used, which minimized the
+// viewer-visible gap but was wrong: see the segment-index reasoning
+// below). If the factory call itself fails (e.g. LiveKit unreachable), the
+// session is left with no active pipeline and this attempt is only
+// logged: the next tick re-evaluates against evaluateWatchdog's own
+// ladder, which demotes rather than retrying forever once the demote
+// window has already been consumed by this attempt (see evaluateWatchdog's
+// doc comment). That failure mode is new too -- the old ordering kept the
+// stalled pipeline alive on a failed restart, but keeping it alive is
+// exactly the "still active" state this fix removes, so a failed factory
+// call now demotes on the next tick instead of silently continuing to
+// serve a pipeline whose segment numbering this method has already
+// promised to a replacement that never got built.
 //
 // The new pipeline's config is m.cfg with StartVideoSegmentIndex/
-// StartAudioSegmentIndex overridden to the OLD pipeline's own current
-// (open) segment index **plus one** (Farol review, PR #584) -- never the
-// bare current index, and never left at m.cfg's original zero value.
-// "Plus one" matters because the old pipeline's own teardown (old.Close,
-// below) finalizes and enqueues an R2 upload for whatever segment was
-// still open on it: closing the subscriber disconnects the room, which
-// (per internal/subscriber's own readRTP doc comment: a track "ends" on
-// either the publisher stopping OR the session disconnecting) fires
+// StartAudioSegmentIndex overridden to the OLD pipeline's own final (now
+// sealed) segment index **plus one** (Farol review, PR #584) -- never the
+// bare index, and never left at m.cfg's original zero value. "Plus one"
+// matters because the old pipeline's own teardown (old.Close, below)
+// finalizes and enqueues an R2 upload for whatever segment was still open
+// on it: closing the subscriber disconnects the room, which (per
+// internal/subscriber's own readRTP doc comment: a track "ends" on either
+// the publisher stopping OR the session disconnecting) fires
 // OnVideoTrackEnded asynchronously, running session.Session.Finish, which
 // uploads the video track's current segment; session.Session.Close does
 // the same synchronously for audio's own tail segment. If the replacement
 // pipeline started at that SAME index instead, its own first sealed
 // segment would eventually PUT the identical R2 key the old pipeline's
-// teardown is independently in the middle of uploading -- a second write
-// to a key already used, silently overwriting real (if truncated) content,
-// exactly what this fix exists to prevent. Reserving index+1 for the
-// replacement makes the two pipelines' key ranges disjoint by construction,
-// regardless of exactly when the old pipeline's async teardown finishes.
+// teardown independently uploads -- a second write to a key already used,
+// silently overwriting real (if truncated) content, exactly what this fix
+// exists to prevent.
+//
+// Reading that final index requires old to actually BE final first. An
+// earlier revision read old.Health() while old was still subscribed and
+// only called old.Close() afterward, once the replacement was already
+// live -- built by m.factory(cfg), which for the production Pipeline
+// (NewRemuxPipeline) means connecting a brand new subscriber.Session to
+// LiveKit, real network time old keeps running through. A stalled
+// pipeline's segment boundary is exactly as likely to fall inside that
+// window as any other moment, and old's own natural rollover during it
+// seals a segment index one past the one Health() already reported --
+// old.Close() then uploads THAT index, colliding with the replacement's
+// reserved start. Closing old before reading its index (and before
+// building the replacement) removes the window: nothing can advance old's
+// fragmenter once its subscriber is disconnected and its context
+// cancelled, so the Health() read below is the true final value, not a
+// snapshot a concurrent rollover can invalidate. The cost is a real gap
+// (the replacement's own subscriber connect time) with no active pipeline
+// serving new media; acceptable because a watchdog restart is already a
+// stall-recovery path, and a never-collide guarantee on R2 keys matters
+// more here than shaving that gap.
 func (m *ManagedSession) restart() {
 	m.mu.Lock()
 	old := m.current
@@ -173,9 +196,14 @@ func (m *ManagedSession) restart() {
 
 	cfg := m.cfg
 	if old != nil {
+		old.Close()
 		oldHealth := old.Health()
 		cfg.StartVideoSegmentIndex = oldHealth.VideoSegmentIndex + 1
 		cfg.StartAudioSegmentIndex = oldHealth.AudioSegmentIndex + 1
+
+		m.mu.Lock()
+		m.current = nil
+		m.mu.Unlock()
 	}
 
 	newP, err := m.factory(cfg)
@@ -188,10 +216,6 @@ func (m *ManagedSession) restart() {
 	m.current = newP
 	m.pipelineStartedAt = time.Now()
 	m.mu.Unlock()
-
-	if old != nil {
-		old.Close()
-	}
 }
 
 // demote is terminal: the pipeline is closed and the session is marked

@@ -32,14 +32,15 @@ type PipelineHealth struct {
 	AudioRestarts uint64
 
 	// VideoSegmentIndex/AudioSegmentIndex are the CURRENT (open,
-	// not-yet-sealed) segment index of each track's fragmenter --
+	// not-yet-sealed, or -- read right after Close -- the now-final)
+	// segment index of each track's fragmenter --
 	// internal/session.Session's CurrentVideoSegmentIndex/
-	// CurrentAudioSegmentIndex. managed_session.go's restart reads these
-	// from the OLD pipeline, before closing it, to compute the
+	// CurrentAudioSegmentIndex. managed_session.go's restart closes the
+	// OLD pipeline FIRST and only then reads these, to compute the
 	// replacement pipeline's StartVideoSegmentIndex/StartAudioSegmentIndex
 	// (PipelineConfig below) -- see restart's own doc comment for why
-	// "+1" past these values, not the values themselves, is what a
-	// restart actually resumes at.
+	// reading this after Close, not before, is what makes "+1" past these
+	// values a value a restart can safely resume at.
 	VideoSegmentIndex int
 	AudioSegmentIndex int
 }
@@ -61,8 +62,10 @@ type Pipeline interface {
 	// Close tears the pipeline down: unsubscribe from LiveKit, stop the
 	// audio encoder, flush and close this pipeline's own R2 upload queue.
 	// Called at most once per Pipeline instance, either by a restart
-	// (managed_session.go's restart, closing the OLD pipeline once a new
-	// one has taken over) or by demotion/explicit stop.
+	// (managed_session.go's restart, closing the OLD pipeline BEFORE
+	// building its replacement -- see restart's own doc comment for why
+	// that order, not the reverse, is what a correct segment-index handoff
+	// requires) or by demotion/explicit stop.
 	Close()
 }
 
