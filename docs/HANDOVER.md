@@ -2,6 +2,14 @@
 
 Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.md). Roadmap checklist: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
+**2026-09-14, M6 rehearsal 3:** the production two-machine switch (PR #594) is gated on
+[`docs/plans/M6_REHEARSAL_2026-09-14b.md`](./plans/M6_REHEARSAL_2026-09-14b.md) — three fix PRs
+(#593 age-gate cache, #595 cross-instance cache audit, #596 WS frame ordering) re-verified live at
+three `pqp-api-staging` machines in #594's own shape. 200-seat ramp 200/200, watch-party race fixed
+on all three machines, rolling deploy under load 0 failures. Named gaps and one process incident
+(a self-forked research task acted on live shared staging infra) are in that doc's own sections —
+read before treating the flip as unconditionally clear.
+
 ## Product
 
 **pqp** — open-source Discord-like voice + text chat. Hosted twin aimed at **pqp.gg**; self-host is an independent copy (own URL, DB, Clerk).

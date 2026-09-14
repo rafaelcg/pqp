@@ -341,6 +341,17 @@ signaling-only identity. HTTP calls are never pinned (room state is
 cluster-wide via `CLUSTER_BUS`/`VOICE_REGISTRY`, so only the socket's home
 instance matters). Omit it and behavior is unchanged.
 
+Two things it cannot do, learned in M6 rehearsal 3 (`docs/plans/M6_REHEARSAL_2026-09-14b.md`):
+a seat whose slot is pinned to a machine that is later **destroyed** (`fly scale
+count` downward) keeps re-opening its socket with that dead id on every churn
+cycle, fly-proxy accepts the upgrade and never routes it, and the seat fails
+with "no voice welcome within 12s" — a harness artifact, since no real client
+sends the header; run the scale-down test with the pinning off, or expect and
+discount those failures. And this script neither reconnects a socket the
+server closed (a rolling deploy's 1001 drain) nor records that close as an
+event, so it cannot measure drops or reconnect time across a deploy; that
+needs a reconnecting probe beside it (the rehearsal doc describes one).
+
 ```sh
 cd tools/watch-party-load && pnpm install
 
