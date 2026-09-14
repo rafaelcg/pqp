@@ -1,6 +1,9 @@
 import {
-  LL_HLS_DEFAULT_PART_TARGET_MS,
-  LL_HLS_SEQUENCE_STUCK_PARTS,
+  HLS_LIVE_SEGMENT_SECONDS,
+  LL_HLS_PART_STUCK_PARTS,
+  LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
+  LL_HLS_SEQUENCE_STUCK_SEGMENTS,
+  validPartTargetMs,
   type HlsMode,
 } from "./hls-live-edge";
 
@@ -87,7 +90,12 @@ export type HlsStallDecision =
   | "dead";
 
 /** Why the watchdog last asked for something, for the console and the holding screen. */
-export type HlsStallReason = "fatal" | "stall" | "sequence-stuck" | null;
+export type HlsStallReason =
+  | "fatal"
+  | "stall"
+  | "sequence-stuck"
+  | "part-stuck"
+  | null;
 
 const FATAL_LADDER: readonly HlsStallDecision[] = [
   "recover-media-error",
@@ -106,7 +114,7 @@ const MAX_LADDER_CYCLES = 3;
 
 export class HlsStallWatch {
   private readonly stallMs: number;
-  /** Mutable: `configureForMode` scales this for LL, `hls-live-edge.ts`'s `LL_HLS_SEQUENCE_STUCK_PARTS`. */
+  /** Mutable: `configureForMode` scales this for LL, segment-paced -- see `LL_HLS_SEQUENCE_STUCK_SEGMENTS`. */
   private sequenceStuckMs: number;
   /** The constructed value, restored by `configureForMode("conventional")`. */
   private readonly defaultSequenceStuckMs: number;
@@ -119,6 +127,16 @@ export class HlsStallWatch {
   private waitingSince: number | null = null;
   private lastSequence: number | null = null;
   private sequenceSeenAt: number | null = null;
+  /**
+   * LL only: `null` disables the part-stuck rule entirely (the constructed
+   * default, and every conventional session). Set by `configureForMode`.
+   */
+  private partStuckMs: number | null = null;
+  /** The newest known (segment, part-index) key `onPartAdvance` has seen. */
+  private lastPartKey: string | null = null;
+  private partSeenAt: number | null = null;
+  /** This stall episode's one-shot part-stuck nudge has already fired. */
+  private partStuckFired = false;
   /** Timestamps of past `"rebuild"` decisions, for the `"dead"` gate. */
   private rebuilds: number[] = [];
   /** How many `"reconnect"` checks this episode has already asked for. */
@@ -143,21 +161,56 @@ export class HlsStallWatch {
   }
 
   /**
-   * §5: "20 s is forty parts, an eternity at this cadence, so the LL path
-   * uses `PART_STUCK_MS` = 3000 (six parts)". Called once per attach
-   * (`HlsWatchPlayer`), never mid-episode, so this never fights the ladder
-   * that is already walking: `conventional` restores exactly the value the
-   * constructor chose, so a caller that never calls this at all -- every
-   * existing test, and every conventional session -- sees byte-identical
-   * behaviour.
+   * §5, corrected after a Farol review of this PR: the ladder's
+   * `sequence-stuck` reason keys on `EXT-X-MEDIA-SEQUENCE`, which only
+   * advances once per closed SEGMENT even in LL mode, so scaling that
+   * threshold to a handful of PARTS (the first cut of this method) fired the
+   * full escalating ladder on a perfectly healthy stream. `sequenceStuckMs`
+   * on LL is therefore segment-paced (`LL_HLS_SEQUENCE_STUCK_SEGMENTS`
+   * segments, floored at `LL_HLS_SEQUENCE_STUCK_FLOOR_MS`) and independent
+   * of `partTargetMs` entirely. The genuinely part-paced signal is the
+   * SEPARATE `partStuckMs` rule below, fed by `onPartAdvance` and read only
+   * in `tick()`'s "nothing else is already flagged" branch -- it fires the
+   * ladder's first in-place step once, then gets out of the way; the
+   * segment rule above is what actually reconnects/rebuilds a stream that
+   * stays broken.
+   *
+   * Called once per attach (`HlsWatchPlayer`), never mid-episode, so this
+   * never fights a ladder that is already walking: `conventional` restores
+   * exactly the constructor's values and disables the part rule, so a
+   * caller that never calls this at all -- every existing test, and every
+   * conventional session -- sees byte-identical behaviour.
    */
   configureForMode(mode: HlsMode, partTargetMs?: number): void {
     if (mode === "ll") {
-      const parts = partTargetMs ?? LL_HLS_DEFAULT_PART_TARGET_MS;
-      this.sequenceStuckMs = LL_HLS_SEQUENCE_STUCK_PARTS * parts;
+      const parts = validPartTargetMs(partTargetMs);
+      this.sequenceStuckMs = Math.max(
+        LL_HLS_SEQUENCE_STUCK_SEGMENTS * HLS_LIVE_SEGMENT_SECONDS * 1_000,
+        LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
+      );
+      this.partStuckMs = LL_HLS_PART_STUCK_PARTS * parts;
       return;
     }
     this.sequenceStuckMs = this.defaultSequenceStuckMs;
+    this.partStuckMs = null;
+  }
+
+  /**
+   * LL only: a genuinely new part arrived. `key` names the newest known
+   * (segment, part-index) pair -- callers compute it from hls.js's
+   * `LevelDetails.lastPartSn`/`lastPartIndex` on `LEVEL_UPDATED`, which
+   * fires per part under LL's blocking reload, not only per segment -- and
+   * only a CHANGE here counts as progress, the same shape `onMediaSequence`
+   * already uses for the segment number. Re-arms `partStuckFired` so a
+   * later stall episode (after a real recovery) can trigger the one-shot
+   * nudge again.
+   */
+  onPartAdvance(key: string, now: number): void {
+    if (key !== this.lastPartKey) {
+      this.lastPartKey = key;
+      this.partSeenAt = now;
+      this.partStuckFired = false;
+    }
   }
 
   /** The element started or resumed rendering: the current episode is over. */
@@ -210,6 +263,9 @@ export class HlsStallWatch {
     this.waitingSince = null;
     this.lastSequence = null;
     this.sequenceSeenAt = now;
+    this.lastPartKey = null;
+    this.partSeenAt = now;
+    this.partStuckFired = false;
     this.pendingFatal = false;
     this.pendingDecodeError = false;
     this.ladderStep = 0;
@@ -257,6 +313,20 @@ export class HlsStallWatch {
     const reason = this.currentReason(now);
     if (reason === null) {
       this.ladderStep = 0;
+      // The part-stuck rule only ever gets a turn when nothing more urgent
+      // (fatal, stall, or the segment-based sequence-stuck) is already
+      // flagged -- it is a quick, early nudge for the case those slower
+      // signals have not caught yet, never a competitor to them.
+      if (
+        this.partStuckMs !== null &&
+        !this.partStuckFired &&
+        this.partSeenAt !== null &&
+        now - this.partSeenAt >= this.partStuckMs
+      ) {
+        this.partStuckFired = true;
+        this.lastReason = "part-stuck";
+        return "start-load";
+      }
       return "none";
     }
     if (reason !== this.lastReason) {

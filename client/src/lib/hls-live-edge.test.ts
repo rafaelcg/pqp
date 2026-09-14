@@ -18,11 +18,14 @@ import {
   LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
   LL_HLS_MAX_BUFFER_LENGTH_SECONDS,
   LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
+  LL_HLS_MAX_PART_TARGET_MS,
+  LL_HLS_MIN_PART_TARGET_MS,
   LL_HLS_PART_ERROR_PIN_WINDOW_MS,
   applyHlsRecoveryStep,
   behindLiveThresholdSeconds,
   buildMediaSessionMetadata,
   catchUpPlaybackRate,
+  effectiveHlsMode,
   effectiveLiveSyncDurationCount,
   endToEndDelaySeconds,
   hasSafariPresentationMode,
@@ -44,6 +47,7 @@ import {
   secondsBehindCatchUpTarget,
   secondsBehindLive,
   shouldPinToConventionalRung,
+  validPartTargetMs,
   type HlsRecoveryHandle,
 } from "./hls-live-edge";
 
@@ -470,6 +474,53 @@ describe("hlsModeOf / hlsPartTargetMs", () => {
     expect(hlsPartTargetMs({ partTargetMs: Number.NaN })).toBe(
       LL_HLS_DEFAULT_PART_TARGET_MS,
     );
+  });
+
+  it("falls back on a partTargetMs outside [200, 2000] (Farol review, this PR)", () => {
+    expect(hlsPartTargetMs({ partTargetMs: 199 })).toBe(
+      LL_HLS_DEFAULT_PART_TARGET_MS,
+    );
+    expect(hlsPartTargetMs({ partTargetMs: 2_001 })).toBe(
+      LL_HLS_DEFAULT_PART_TARGET_MS,
+    );
+    // The band's own edges are valid.
+    expect(hlsPartTargetMs({ partTargetMs: 200 })).toBe(200);
+    expect(hlsPartTargetMs({ partTargetMs: 2_000 })).toBe(2_000);
+  });
+});
+
+describe("validPartTargetMs (the one helper the player, collectScreenTiles and the stall config all share)", () => {
+  it("passes through a value inside [200, 2000]", () => {
+    expect(validPartTargetMs(200)).toBe(200);
+    expect(validPartTargetMs(500)).toBe(500);
+    expect(validPartTargetMs(2_000)).toBe(2_000);
+  });
+
+  it("falls back to the default outside the band, non-finite, or absent", () => {
+    expect(validPartTargetMs(LL_HLS_MIN_PART_TARGET_MS - 1)).toBe(
+      LL_HLS_DEFAULT_PART_TARGET_MS,
+    );
+    expect(validPartTargetMs(LL_HLS_MAX_PART_TARGET_MS + 1)).toBe(
+      LL_HLS_DEFAULT_PART_TARGET_MS,
+    );
+    expect(validPartTargetMs(Number.NaN)).toBe(LL_HLS_DEFAULT_PART_TARGET_MS);
+    expect(validPartTargetMs(Number.POSITIVE_INFINITY)).toBe(
+      LL_HLS_DEFAULT_PART_TARGET_MS,
+    );
+    expect(validPartTargetMs(null)).toBe(LL_HLS_DEFAULT_PART_TARGET_MS);
+    expect(validPartTargetMs(undefined)).toBe(LL_HLS_DEFAULT_PART_TARGET_MS);
+  });
+});
+
+describe("effectiveHlsMode", () => {
+  it("is the raw mode when not pinned", () => {
+    expect(effectiveHlsMode("ll", false)).toBe("ll");
+    expect(effectiveHlsMode("conventional", false)).toBe("conventional");
+  });
+
+  it("is always conventional once pinned, regardless of the raw mode", () => {
+    expect(effectiveHlsMode("ll", true)).toBe("conventional");
+    expect(effectiveHlsMode("conventional", true)).toBe("conventional");
   });
 });
 

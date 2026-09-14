@@ -58,6 +58,7 @@ import {
   behindLiveThresholdSeconds,
   buildMediaSessionMetadata,
   catchUpPlaybackRate,
+  effectiveHlsMode,
   effectiveLiveSyncDurationCount,
   hasSafariPresentationMode,
   HLS_ABR_DEFAULT_ESTIMATE_BPS,
@@ -69,11 +70,11 @@ import {
   liveSeekOffsetSeconds,
   liveSeekTarget,
   llHlsConfig,
-  LL_HLS_DEFAULT_PART_TARGET_MS,
   mediaSeekableEnd,
   resolveLiveEdge,
   secondsBehindCatchUpTarget,
   shouldPinToConventionalRung,
+  validPartTargetMs,
   type HlsMode,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
@@ -207,7 +208,7 @@ export function HlsWatchPlayer({
   layout = "tile",
   dualDeviceWarning = false,
   mode = "live",
-  partTargetMs = LL_HLS_DEFAULT_PART_TARGET_MS,
+  partTargetMs: partTargetMsProp,
 }: {
   src: string;
   /**
@@ -316,6 +317,12 @@ export function HlsWatchPlayer({
   // it maps onto "conventional" here -- inert, since every downstream read
   // of this value is already skipped when `isVod` is true.
   const hlsMode: HlsMode = mode === "ll" ? "ll" : "conventional";
+  // Validated once, here, regardless of whether the caller went through
+  // `hlsPartTargetMs` (which already validates) or passed a raw number
+  // straight through -- the player is the one place every LL-HLS caller's
+  // value ultimately reaches, so this is where a bad one gets caught
+  // (Farol review, this PR).
+  const partTargetMs = validPartTargetMs(partTargetMsProp);
   const fit = useVideoFit("watch");
   const whole = fit.fit === "contain";
   const innerRef = useRef<HTMLVideoElement | null>(null);
@@ -363,13 +370,24 @@ export function HlsWatchPlayer({
   const watchRef = useRef<HlsStallWatch>(new HlsStallWatch());
   // L2.4: two part-load errors inside 10 s pin this viewing session to
   // conventional-style targeting for the rest of it (`docs/plans/LL_HLS.md`
-  // §4, `shouldPinToConventionalRung`). A ref, not state -- it is read only
-  // from inside the attach effect and the error handler it owns, never by a
-  // render, and the master playlist itself has no separate "conventional
-  // rung" for this client to switch onto yet (`L2.1`/`L2.2`), so pinning
-  // means "stop asking hls.js to hold the LL edge", not "pick another level".
+  // §4, `shouldPinToConventionalRung`). The master playlist itself has no
+  // separate "conventional rung" for this client to switch onto yet
+  // (`L2.1`/`L2.2`), so pinning means "stop asking hls.js to hold the LL
+  // edge", not "pick another level".
+  //
+  // A REF, mirrored by `pinnedToConventional` STATE below (same shape as
+  // `stallReason`/`watchRef.current.lastReason`): the ref is what the
+  // attach effect and its own event handlers read and write synchronously
+  // (a pin must take effect on the very tick it fires, before any render
+  // happens), and the state exists ONLY so a render -- the live badge, and
+  // eventually any telemetry sample -- can see it too. A Farol review of
+  // this PR found the badge kept showing an LL latency reading after a
+  // session had already been pinned, because it read the raw `mode` prop
+  // (which the server never updates for a client-only pin) with nothing to
+  // re-render on.
   const llPartErrorTimestampsRef = useRef<number[]>([]);
   const pinnedToConventionalRef = useRef(false);
+  const [pinnedToConventional, setPinnedToConventional] = useState(false);
   // Which `activeSrc` the pin/error state above belongs to -- reset on a
   // genuine new session, kept across a same-URL `attempt` rebuild (the pin
   // itself causes one; forgetting the pin on the very rebuild that applies
@@ -732,9 +750,10 @@ export function HlsWatchPlayer({
     // §4's pin rule can have quietly moved this session onto
     // conventional-style targeting; a seek offset sized for LL parts would
     // undershoot a conventional segment's actual live edge.
-    const effectiveMode: HlsMode = pinnedToConventionalRef.current
-      ? "conventional"
-      : hlsMode;
+    const effectiveMode = effectiveHlsMode(
+      hlsMode,
+      pinnedToConventionalRef.current,
+    );
     const target = liveSeekTarget({
       currentTime: video.currentTime,
       liveSyncPosition: hlsRef.current?.liveSyncPosition ?? null,
@@ -802,9 +821,10 @@ export function HlsWatchPlayer({
       // rule); reading it fresh on every tick, rather than once per effect
       // run, is what makes the pin take effect immediately rather than
       // after the next attach.
-      const effectiveMode: HlsMode = pinnedToConventionalRef.current
-        ? "conventional"
-        : hlsMode;
+      const effectiveMode = effectiveHlsMode(
+        hlsMode,
+        pinnedToConventionalRef.current,
+      );
       const liveEdge = resolveLiveEdge(
         hlsRef.current?.liveSyncPosition ?? null,
         mediaSeekableEnd(video),
@@ -1251,6 +1271,7 @@ export function HlsWatchPlayer({
       pinSessionSrcRef.current = activeSrc;
       llPartErrorTimestampsRef.current = [];
       pinnedToConventionalRef.current = false;
+      setPinnedToConventional(false);
     }
     // §4's pin rule only ever forces LL DOWN to conventional-style
     // targeting for the rest of a session; nothing promotes the reverse.
@@ -1258,9 +1279,10 @@ export function HlsWatchPlayer({
     // via `attempt` for a pin/demotion and via `activeSrc` for a new
     // session), so every read below -- the hls.js config, the watchdog, the
     // badge -- agrees for the life of this instance.
-    const effectiveMode: HlsMode = pinnedToConventionalRef.current
-      ? "conventional"
-      : hlsMode;
+    const effectiveMode = effectiveHlsMode(
+      hlsMode,
+      pinnedToConventionalRef.current,
+    );
     watch.configureForMode(effectiveMode, partTargetMs);
     // This attach's own starting point for the token-swap ref (B1.3, item
     // 3): a real re-attach (this effect re-running at all) always deserves
@@ -1320,9 +1342,10 @@ export function HlsWatchPlayer({
       }
       // hls.js's own `latency` getter (LL badge, item 3). Read
       // unconditionally: harmless on the conventional path (the badge only
-      // ever renders it when `mode === "ll"`), and reading it here rather
-      // than gating on mode means a mid-session pin/demotion clears the
-      // number on its own next tick instead of needing its own branch.
+      // ever renders it when `effectiveHlsMode(...) === "ll"`, which a §4
+      // pin flips to `"conventional"`), and reading it here rather than
+      // gating on mode means a mid-session pin/demotion clears the number
+      // on its own next tick instead of needing its own branch.
       const measured = hlsRef.current?.latency;
       setLlLatencySeconds(
         typeof measured === "number" && Number.isFinite(measured) && measured > 0
@@ -1628,6 +1651,11 @@ export function HlsWatchPlayer({
             shouldPinToConventionalRung(timestamps)
           ) {
             pinnedToConventionalRef.current = true;
+            // The render-visible mirror (Farol review, this PR): without
+            // this the live badge kept showing an LL latency reading after
+            // the session had already been pinned, since it read the raw
+            // `mode` prop, which a client-only pin never changes.
+            setPinnedToConventional(true);
             console.warn(
               "[hls] two LL part-load errors inside 10s, pinning to conventional for the rest of this session",
             );
@@ -1661,6 +1689,21 @@ export function HlsWatchPlayer({
         // the playlist answering but never advancing; this is how the
         // watchdog tells that apart from a slow network.
         watch.onMediaSequence(data.details.startSN, Date.now());
+        // LL only, and a SEPARATE signal from the media-sequence one above
+        // (Farol review, this PR): under LL's blocking reload, hls.js fires
+        // this same event once per PART, not only once per segment --
+        // `lastPartSn`/`lastPartIndex` are hls.js's own (segment, part)
+        // pair for the newest part it has seen (verified against `hls.mjs`:
+        // `onLevelLoaded`'s own debug log names exactly this pair). Feeding
+        // that into `onPartAdvance` is what lets the watchdog's part-stuck
+        // rule tell "no new part yet" apart from "no new segment yet",
+        // which is the normal, healthy state for several seconds at a time.
+        if (effectiveMode === "ll") {
+          watch.onPartAdvance(
+            `${data.details.lastPartSn}.${data.details.lastPartIndex}`,
+            Date.now(),
+          );
+        }
         // Conventional only. This is exactly the override §4 warns against
         // on an LL manifest: it fights `PART-HOLD-BACK` by giving
         // `userConfig.liveSyncDurationCount` a truthy value at construction
@@ -1905,8 +1948,14 @@ export function HlsWatchPlayer({
   // (2026-09-09 postmortem, `hls-live-edge.ts`'s `endToEndDelaySeconds`
   // comment). `null` (no hls.js instance yet, the native engine, or a
   // reading not in yet) falls back to the plain label, same as always.
+  //
+  // `effectiveHlsMode` (not the raw `mode` prop) so §4's pin rule is
+  // reflected here too (Farol review, this PR): a pinned session must say
+  // conventional latency, not linger on an LL reading the server was never
+  // told to demote.
+  const displayMode = effectiveHlsMode(hlsMode, pinnedToConventional);
   const liveBadgeText =
-    mode === "ll" && llLatencySeconds !== null
+    displayMode === "ll" && llLatencySeconds !== null
       ? t("voice.hls.liveLowLatency", {
           seconds: llLatencySeconds.toFixed(1),
         })

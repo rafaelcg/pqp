@@ -137,7 +137,7 @@ export const HLS_ABR_DEFAULT_ESTIMATE_BPS = 3_500_000;
 export type HlsMode = "conventional" | "ll";
 
 /**
- * `LiveHlsStream.mode` (PR #580, `feat/llhls-l1-5-control-plane`, not yet
+ * `LiveHlsStream.mode` (PR 580, `feat/llhls-l1-5-control-plane`, not yet
  * merged to `main`) and `LiveHlsStream.partTargetMs`, which does not exist
  * on that branch's wire type EITHER as of this PR -- `hls-remux.ts` there
  * stores `part_target_ms` on the `hls_sessions` row and never puts it on the
@@ -154,7 +154,7 @@ export type HlsMode = "conventional" | "ll";
  * site casts through it rather than widening `LiveHlsStream` itself, which
  * this task is not allowed to touch (client-only; see `CLAUDE.md`).
  *
- * TODO(PR #580): once `mode` (and a `partTargetMs`, once something wires it
+ * TODO(PR 580): once `mode` (and a `partTargetMs`, once something wires it
  * onto the wire type) land on `packages/shared/src/live-hls.ts`, delete this
  * interface and read the fields straight off `LiveHlsStream`.
  */
@@ -172,6 +172,24 @@ export function hlsModeOf(
 }
 
 /**
+ * What THIS SESSION is actually behaving as, once §4's pin rule (two
+ * part-load errors inside 10s) may have moved it off LL client-side --
+ * which the server never learns about, so the `mode` prop itself keeps
+ * saying `"ll"` for the rest of the party. Every reader of "which mode is
+ * this, right now" -- the hls.js config, the watchdog, the seek offset, the
+ * live badge and, eventually, any telemetry sample -- must go through this
+ * rather than the raw prop (Farol review, this PR: the badge kept showing
+ * an LL latency reading after a session had already been pinned to
+ * conventional-style targeting).
+ */
+export function effectiveHlsMode(
+  mode: HlsMode,
+  pinnedToConventional: boolean,
+): HlsMode {
+  return pinnedToConventional ? "conventional" : mode;
+}
+
+/**
  * `LIVE_HLS_REMUX_PART_MS`'s own default (`server/src/voice/hls-remux.ts`),
  * mirrored client-side for the case `partTargetMs` is absent on an `ll`
  * stream -- every deployment that has not overridden the env var runs this
@@ -179,21 +197,80 @@ export function hlsModeOf(
  */
 export const LL_HLS_DEFAULT_PART_TARGET_MS = 500;
 
+/**
+ * The sane band a real `partTargetMs` lives in. `LIVE_HLS_REMUX_PART_MS`
+ * defaults to 500 and the plan's whole latency budget (§2) assumes
+ * sub-second parts; nothing in `docs/plans/LL_HLS.md` proposes a part under
+ * 200ms (more overhead than picture) or over 2s (no longer "low latency" by
+ * any definition this feature uses).
+ */
+export const LL_HLS_MIN_PART_TARGET_MS = 200;
+export const LL_HLS_MAX_PART_TARGET_MS = 2_000;
+
+/**
+ * The ONE validity check for a raw `partTargetMs`, wherever it is read from:
+ * the live stream (`hlsPartTargetMs` below), a prop already threaded down
+ * to `HlsWatchPlayer`, `collectScreenTiles`' tile output, or the stall
+ * watchdog's `configureForMode`. Non-finite or outside
+ * [`LL_HLS_MIN_PART_TARGET_MS`, `LL_HLS_MAX_PART_TARGET_MS`] falls back to
+ * the default rather than being trusted as-is (Farol review, this PR): a
+ * value outside that band is a malformed frame or a caller bug, not a real
+ * deployment's part target, and every LL number in this file -- the config,
+ * the watchdog thresholds, the seek offset, the badge threshold -- is
+ * derived from it.
+ */
+export function validPartTargetMs(value: number | null | undefined): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < LL_HLS_MIN_PART_TARGET_MS ||
+    value > LL_HLS_MAX_PART_TARGET_MS
+  ) {
+    return LL_HLS_DEFAULT_PART_TARGET_MS;
+  }
+  return value;
+}
+
 export function hlsPartTargetMs(
   stream: LlHlsStreamFields | null | undefined,
 ): number {
-  const value = stream?.partTargetMs;
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? value
-    : LL_HLS_DEFAULT_PART_TARGET_MS;
+  return validPartTargetMs(stream?.partTargetMs);
 }
 
 /**
- * §5's stall ceiling, in parts rather than a fixed 20 s: "20 s is forty
- * parts, an eternity at this cadence, so the LL path uses `PART_STUCK_MS` =
- * 3000 (six parts)". Read by `hls-stall.ts`'s `HlsStallWatch.configureForMode`.
+ * §5's SEGMENT-level stall ceiling for the full escalating ladder
+ * (`sequence-stuck`: start-load, restart-load, reload-level, then
+ * reconnect/dead). Farol review, this PR: the ladder keys on
+ * `EXT-X-MEDIA-SEQUENCE` (`HlsStallWatch.onMediaSequence`, fed from hls.js's
+ * `LEVEL_UPDATED`'s `details.startSN`/`endSN`), and that number only
+ * advances once per closed SEGMENT even in LL mode -- segments still close
+ * on the elastic rule in `docs/plans/LL_HLS.md` §3, roughly every
+ * `HLS_LIVE_SEGMENT_SECONDS`, while PARTS arrive far more often. An earlier
+ * version of this constant scaled the SAME threshold to a handful of PARTS,
+ * which fired the full ladder on a perfectly healthy stream: the segment
+ * number legitimately does not move for several seconds, parts or no parts.
+ * `LL_HLS_SEQUENCE_STUCK_SEGMENTS` keeps this SEGMENT-paced -- three
+ * segments, floored at `LL_HLS_SEQUENCE_STUCK_FLOOR_MS` -- tighter than the
+ * conventional 20 s constructor default but never part-scaled. See
+ * `HlsStallWatch.configureForMode` and, separately, `LL_HLS_PART_STUCK_PARTS`
+ * below for the actual part-level signal.
  */
-export const LL_HLS_SEQUENCE_STUCK_PARTS = 6;
+export const LL_HLS_SEQUENCE_STUCK_SEGMENTS = 3;
+export const LL_HLS_SEQUENCE_STUCK_FLOOR_MS = 6_000;
+
+/**
+ * §5's PART-level stall check, SEPARATE from the segment-based ceiling
+ * above: parts stop arriving at all, not merely "no new segment yet" (which
+ * is the ordinary, healthy case for seconds at a time). Farol review, this
+ * PR: this rule exists precisely because the segment-based ceiling above is
+ * -- correctly -- too slow to catch a dead part feed quickly, so it fires
+ * the ladder's FIRST in-place recovery step exactly once per stall episode
+ * and never escalates further on its own; a problem that persists past that
+ * one nudge is left for the segment-based ceiling's own full ladder to
+ * eventually catch. Four parts, not six: at a 500 ms target that is 2 s,
+ * comfortably inside the segment ceiling's 6 s floor.
+ */
+export const LL_HLS_PART_STUCK_PARTS = 4;
 
 /**
  * How far behind the edge hls.js is allowed to drift before it forces a

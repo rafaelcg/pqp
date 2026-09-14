@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { LiveReactionEmoji } from "@pqp/shared";
-import type { HlsMode } from "@/lib/hls-live-edge";
+import { validPartTargetMs, type HlsMode } from "@/lib/hls-live-edge";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { useLgUp } from "@/hooks/use-lg-up";
@@ -76,7 +76,12 @@ export function collectScreenTiles(args: {
             cameraHasVoiceAudio: args.liveStream.cameraHasVoiceAudio,
             delaySeconds: args.liveStream.delaySeconds,
             mode: args.liveStream.mode,
-            partTargetMs: args.liveStream.partTargetMs,
+            // Validated here, once, so every downstream reader of a tile's
+            // `partTargetMs` (the player, the stall config) already holds a
+            // sane value (Farol review, this PR) -- never the raw wire
+            // number, which nothing between the server and this map
+            // otherwise checks.
+            partTargetMs: validPartTargetMs(args.liveStream.partTargetMs),
           }
         : {
             hlsUrl: null,
