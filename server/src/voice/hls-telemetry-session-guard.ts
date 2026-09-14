@@ -49,6 +49,18 @@
  * passed -- starts a genuinely fresh attempt rather than piling onto a
  * promise this module still thinks is "in flight".
  *
+ * "Synchronous lookup failure leaves a permanently rejected in-flight entry"
+ * (reliability, on the single-flight round above) -- a `lookup` that throws
+ * SYNCHRONOUSLY rather than returning a rejected promise used to finish this
+ * whole function, `finally` included, before `inFlight.set(key, attempt)`
+ * ever ran; the cleanup found nothing to remove, and the rejected `attempt`
+ * it should have deleted was cached forever, failing every later call for
+ * that key until a process restart or `reset()`. Fixed by calling `lookup`
+ * through a promise boundary (`Promise.resolve().then(lookup)`), so any
+ * throw becomes an ordinary rejection on a LATER microtask -- by which time
+ * `attempt` is already the map's entry and `finally` will actually run
+ * against it.
+ *
  * Keyed by the CALLER's choice of string, not by a channel/session pair
  * itself, so this stays a plain cache-and-timeout primitive with no HLS
  * knowledge of its own -- easy to drive with a fake lookup and fake timers
@@ -126,8 +138,22 @@ export function createHlsSessionLookupGuard(options: {
           timer = setTimeoutFn(() => resolveRace("timeout"), options.timeoutMs);
         });
         try {
+          // `lookup` is called THROUGH a promise boundary (`Promise.resolve()
+          // .then(lookup)`), not directly, so a caller whose `lookup` throws
+          // SYNCHRONOUSLY (rather than returning a rejected promise) cannot
+          // finish this whole async function -- finally included -- before
+          // `inFlight.set(key, attempt)` below ever runs (a Farol finding,
+          // 2026-09-14: that ordering left a permanently rejected promise
+          // cached under `key`, since the cleanup in `finally` ran and found
+          // nothing to clean up yet). Routed through `.then()`, the throw
+          // becomes an ordinary rejection on the next microtask, by which
+          // time this function is already suspended at `await`, `attempt`
+          // already holds the (still-pending) promise, and `inFlight` already
+          // has the entry `finally` is about to remove.
           const raced = await Promise.race([
-            lookup().then((sessionId) => ({ sessionId }) as const),
+            Promise.resolve()
+              .then(lookup)
+              .then((sessionId) => ({ sessionId }) as const),
             timeout,
           ]);
           if (raced === "timeout") {

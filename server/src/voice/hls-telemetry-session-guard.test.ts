@@ -146,6 +146,11 @@ describe("createHlsSessionLookupGuard", () => {
       const first = guard.resolve("chan:123", lookup, 1_000);
       const second = guard.resolve("chan:123", lookup, 1_000);
       const third = guard.resolve("chan:123", lookup, 1_000);
+      // `lookup` is now called through a promise boundary (a Farol finding
+      // on synchronous throws, fixed alongside this), so it runs on the
+      // NEXT microtask rather than synchronously -- flush one before
+      // checking it was only reached once.
+      await Promise.resolve();
       expect(lookup).toHaveBeenCalledTimes(1);
 
       resolveLookup!("shared-id");
@@ -194,6 +199,31 @@ describe("createHlsSessionLookupGuard", () => {
       expect(b).toEqual({ outcome: "resolved", sessionId: "id-b" });
       expect(lookupA).toHaveBeenCalledTimes(1);
       expect(lookupB).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * Farol finding, 2026-09-14: a `lookup` that throws SYNCHRONOUSLY
+     * (rather than returning a rejected promise) used to finish the whole
+     * attempt -- `finally` included -- before this module ever stored it in
+     * `inFlight`, so the cleanup ran too early to remove anything and the
+     * rejected attempt was cached under `key` PERMANENTLY: every later call
+     * for that key failed forever, without even calling `lookup` again.
+     */
+    it("a synchronously-throwing lookup rejects this call but does not poison later calls for the same key", async () => {
+      const { guard } = guardWithFakeTimers({ timeoutMs: 500, negativeCacheMs: 30_000 });
+      const throwingLookup = (): Promise<string | null> => {
+        throw new Error("boom: this throws before returning a promise at all");
+      };
+      await expect(guard.resolve("chan:123", throwingLookup, 1_000)).rejects.toThrow(
+        "boom",
+      );
+
+      // The key must NOT be stuck: a normal lookup right after gets a
+      // genuinely fresh attempt, not the same rejected promise replayed.
+      const healthyLookup = vi.fn(async () => "recovered-id");
+      const result = await guard.resolve("chan:123", healthyLookup, 1_001);
+      expect(result).toEqual({ outcome: "resolved", sessionId: "recovered-id" });
+      expect(healthyLookup).toHaveBeenCalledTimes(1);
     });
   });
 
