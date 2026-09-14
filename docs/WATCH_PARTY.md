@@ -2544,18 +2544,25 @@ play for its first few seconds, which is the worst way for this to be wrong.
 
 - `GET /api/channels/:channelId/watch-party/history/:sessionAt/download` --
   what exists and roughly how big, plus a ready-to-use URL per kind carrying
-  the `?t=` capability. Sizes are a bucket listing per file, cached per
-  broadcast for five minutes, which is why the history LIST does not carry
-  them: twenty broadcasts would be sixty round-trips to storage for a dialog
-  that usually downloads none of them. The client asks when somebody opens
-  the panel on a row.
+  the `?t=` capability. Sizes are a bucket listing per rung prefix, memoised
+  for five minutes, which is why the history LIST does not carry them: twenty
+  broadcasts would be sixty round-trips to storage for a dialog that usually
+  downloads none of them. The client asks when somebody opens the panel on a
+  row, and the download that follows reuses the same listing rather than
+  scanning the prefix again. **A listing that fails is a 503, never an empty
+  answer**: "storage did not reply" and "that file was never written" are
+  different facts, and conflating them tells a moderator the camera was off
+  during an outage. Failures are not cached, so reopening the panel retries.
 - `GET .../download/:kind` with `kind` in `film | camera | voice` -- the
-  bytes, `Content-Disposition: attachment`, and a `Content-Length` only when
-  the listing priced every object the playlist names (a number that is merely
-  close is worse than none: the browser reports the download as failed or
-  hangs waiting for bytes that never come). 404 for a kind this broadcast
-  never wrote, 409 once the retention sweep has been through, exactly as
-  replay answers.
+  bytes, `Content-Disposition: attachment`, and an exact `Content-Length`:
+  the plan refuses to exist unless the same listing priced every object its
+  playlist names, so a playlist naming an object the bucket no longer has is
+  a **409 before the head goes out** (a half-swept recording) rather than a
+  file that looks complete and is not. 404 for a kind this broadcast never
+  wrote, 409 once the retention sweep has been through, exactly as replay
+  answers. The per-object clock while streaming is an IDLE timeout that every
+  chunk restarts, so an hour of film down a slow link is never mistaken for a
+  stuck transfer.
 
 **A download is a navigation, not a `fetch`,** so the byte route has the same
 two doors the replay proxy has. Saving a `fetch` response means holding the

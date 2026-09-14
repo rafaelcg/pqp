@@ -1033,6 +1033,45 @@ describeDb("watch party history", () => {
         .toBe(404);
     });
 
+    it("503s when storage will not answer, rather than saying the files are not there", async () => {
+      const startedAt = 1_700_000_037_000;
+      await seedBroadcast({
+        startedAt,
+        endedMinutesAgo: 5,
+        rungs: ["720p30", CAMERA_RUNG_NAME],
+      });
+      seedRungObjects(startedAt, "720p30");
+      seedRungObjects(startedAt, CAMERA_RUNG_NAME);
+      // The bucket is up enough to answer, and answers 500.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input instanceof Request ? input.url : input);
+          return url.includes("s3.example.test")
+            ? new Response("boom", { status: 500 })
+            : realFetch(input, init);
+        }),
+      );
+      // "Could not list" is not "camera not used": the dialog has to be able
+      // to tell an outage from a fact about the night.
+      expect(
+        (await call(owner, "GET", `${historyPath()}/${startedAt}/download`))
+          .status,
+      ).toBe(503);
+    });
+
+    it("409s a half-swept recording instead of streaming a truncated file", async () => {
+      const startedAt = 1_700_000_038_000;
+      await seedBroadcast({ startedAt, endedMinutesAgo: 5 });
+      seedRungObjects(startedAt, "720p30");
+      // The playlist still names both segments; one of the objects is gone.
+      objects.delete(`live/${channelId}/${startedAt}-720p30_00000.ts`);
+      const res = await download(downloadPath(startedAt, "film"), owner);
+      expect(res.status).toBe(409);
+      // And nothing of the file was written before the refusal.
+      expect(res.headers.get("content-disposition")).toBeNull();
+    });
+
     it("serves a header-less request carrying only the capability", async () => {
       const startedAt = 1_700_000_036_000;
       await seedBroadcast({ startedAt, endedMinutesAgo: 5 });

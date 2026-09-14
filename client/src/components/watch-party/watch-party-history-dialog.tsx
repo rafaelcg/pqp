@@ -441,8 +441,13 @@ export function WatchPartyHistoryDialog({
     (entry: WatchPartyHistoryEntry) => {
       setDownloads((current) => {
         // Already asked, and a finished broadcast's files do not change while
-        // the dialog is open -- re-opening the panel must not re-list.
-        if (current[entry.sessionId]) {
+        // the dialog is open -- re-opening the panel must not re-list. An
+        // EARLIER FAILURE IS NOT AN ANSWER, though: storage being down for a
+        // moment must not leave the row stuck on its error message until the
+        // whole dialog is closed and reopened, so re-opening the panel after
+        // one asks again.
+        const asked = current[entry.sessionId];
+        if (asked && asked.status !== "error") {
           return current;
         }
         void fetchWatchPartyHistoryDownloads(channelId, entry.sessionId)

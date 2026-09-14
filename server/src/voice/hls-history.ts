@@ -52,7 +52,7 @@
  * in that gap would keep being served after the history API already reports
  * the broadcast gone.
  */
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { getPool } from "../db.js";
@@ -633,15 +633,17 @@ export interface WatchPartyDownloadSizes {
 }
 
 /** Everything the byte route needs: which objects, in what order, and how
- * big the concatenation is (null when the listing and the playlist disagree
- * -- see `planFromRung`). */
+ * big the concatenation is. */
 export interface WatchPartyDownloadPlan {
   kind: WatchPartyDownloadKind;
   contentType: string;
   /** Appended to the caller's filename stem. */
   extension: "ts" | "ogg";
   keys: string[];
-  bytes: number | null;
+  /** Exact: every object the download concatenates was priced by the same
+   * listing that proved it is there, so this is a `Content-Length` the
+   * browser can hold us to. */
+  bytes: number;
 }
 
 const DOWNLOAD_CONTENT_TYPE: Record<WatchPartyDownloadKind, string> = {
@@ -659,28 +661,36 @@ const DOWNLOAD_CONTENT_TYPE: Record<WatchPartyDownloadKind, string> = {
 const DOWNLOAD_OBJECT_TTL_SECONDS = 900;
 
 /**
- * Per-object read timeout, which is NOT `REQUEST_TIMEOUT_MS`. `fetch`'s
- * signal aborts the body as well as the headers, and this body is drained
- * against a browser's backpressure: a 3 MB segment on a 2 Mbit link is over
- * ten seconds of perfectly healthy transfer. Ten minutes is long enough that
- * only a genuinely stuck object trips it.
+ * Per-object IDLE timeout, and idle is the whole point. `fetch`'s signal
+ * aborts the body as well as the headers, and this body is drained against
+ * the client's backpressure: an hour of film down a slow link is a
+ * completely healthy transfer, and a deadline on the whole object would kill
+ * exactly the downloads that need the most patience. The clock below is
+ * restarted by every chunk that arrives, so what trips it is a transfer that
+ * has stopped moving, never one that is merely slow.
  */
-const DOWNLOAD_OBJECT_TIMEOUT_MS = 600_000;
+const DOWNLOAD_OBJECT_IDLE_MS = 120_000;
 
-/** Sizes are a `ListObjectsV2` per rung, which is why they are cached rather
- * than folded into `listWatchPartyHistory`: a history load listing objects
- * for twenty broadcasts would be sixty bucket round-trips for a dialog that
- * usually downloads none of them. The dialog asks per broadcast, when the
- * download menu is opened. A finished broadcast's objects never change, so
- * the entry is good for as long as the retention window lets it exist. */
-const DOWNLOAD_SIZE_TTL_MS = 300_000;
-const downloadSizeCache = new Map<
+/** A `ListObjectsV2` per rung prefix, memoised because two different
+ * requests want the same answer: the panel opening (to price the files) and,
+ * moments later, the download itself (to set `Content-Length` and to know
+ * every segment is really there). A finished broadcast's objects never
+ * change, so one listing serves both. This is also why sizes are NOT folded
+ * into `listWatchPartyHistory`: twenty broadcasts would be sixty bucket
+ * round-trips for a dialog that usually downloads none of them.
+ *
+ * FAILURES ARE NEVER CACHED, and never returned as an empty listing: "the
+ * bucket did not answer" and "that file was never written" are different
+ * facts, and conflating them tells a moderator the camera was off when
+ * storage was merely down. A failure throws. */
+const DOWNLOAD_LISTING_TTL_MS = 300_000;
+const objectListingCache = new Map<
   string,
-  { sizes: WatchPartyDownloadSizes; at: number }
+  { sizes: Map<string, number>; at: number }
 >();
 
 export function resetWatchPartyDownloadCacheForTests(): void {
-  downloadSizeCache.clear();
+  objectListingCache.clear();
 }
 
 interface BroadcastRungRow {
@@ -749,73 +759,84 @@ function downloadRungs(rows: BroadcastRungRow[]): Record<
 async function objectSizes(
   prefix: string,
   config: NonNullable<ReturnType<typeof liveHlsStorageConfig>>,
+  now = Date.now(),
 ): Promise<Map<string, number>> {
+  const cached = objectListingCache.get(prefix);
+  if (cached && now - cached.at < DOWNLOAD_LISTING_TTL_MS) {
+    return cached.sizes;
+  }
   const sizes = new Map<string, number>();
-  for (const object of await listObjects(prefix, config)) {
+  let listing: Awaited<ReturnType<typeof listObjects>>;
+  try {
+    listing = await listObjects(prefix, config);
+  } catch (error) {
+    throw new HlsPlaylistUnavailable(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  }
+  for (const object of listing) {
     sizes.set(object.key, object.size);
   }
+  pruneStale(objectListingCache, now);
+  objectListingCache.set(prefix, { sizes, at: now });
   return sizes;
+}
+
+/** Where one kind's objects live: the mic archive is a single object, every
+ * other kind is a rung's prefix. */
+function downloadPrefix(
+  channelId: string,
+  startedAtMs: number,
+  kind: WatchPartyDownloadKind,
+  rung: string,
+): string {
+  return kind === "voice"
+    ? micArchiveObjectKey(channelId, startedAtMs)
+    : hlsObjectPrefix(channelId, startedAtMs, rung);
 }
 
 /**
  * How big each of the three files is, or null for one this broadcast never
- * wrote. Sizes are approximate by contract -- they are what the bucket
- * reports for the objects under the rung's prefix, which is exactly what the
- * download concatenates, but a caller should treat them as a label on a
- * button rather than a `Content-Length` promise.
+ * wrote. Sizes are approximate by contract -- what the bucket reports for the
+ * objects the download concatenates -- and belong on a button, not in a
+ * promise.
  *
- * Refuses (throws) nothing when storage is down: a listing that fails leaves
- * that kind `null`, because "we could not price it" and "it is not there"
- * both mean the same thing to the dialog, and a bucket hiccup should not
- * take the whole history dialog with it.
+ * Throws `HlsPlaylistUnavailable` when storage is unset or will not answer,
+ * rather than reporting every kind as absent: a caller that cannot tell the
+ * two apart shows "câmera não usada" during an outage.
  */
 export async function watchPartyDownloadSizes(
   channelId: string,
   startedAtMs: number,
-  now = Date.now(),
 ): Promise<WatchPartyDownloadSizes> {
-  const cacheKey = `${channelId}:${startedAtMs}`;
-  const cached = downloadSizeCache.get(cacheKey);
-  if (cached && now - cached.at < DOWNLOAD_SIZE_TTL_MS) {
-    return cached.sizes;
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
   }
   const sizes: WatchPartyDownloadSizes = {
     film: null,
     camera: null,
     voice: null,
   };
-  const config = liveHlsStorageConfig();
-  if (config) {
-    const rungs = downloadRungs(await broadcastRungRows(channelId, startedAtMs));
-    for (const kind of WATCH_PARTY_DOWNLOAD_KINDS) {
-      const rung = rungs[kind];
-      if (!rung) {
-        continue;
-      }
-      const prefix =
-        kind === "voice"
-          ? micArchiveObjectKey(channelId, startedAtMs)
-          : `${hlsObjectPrefix(channelId, startedAtMs, rung)}`;
-      try {
-        let total = 0;
-        for (const object of await listObjects(prefix, config)) {
-          // Playlists are a rounding error next to the segments, but counting
-          // them would make the number disagree with what is actually sent.
-          if (kind === "voice" || object.key.endsWith(".ts")) {
-            total += object.size;
-          }
-        }
-        sizes[kind] = total > 0 ? total : null;
-      } catch (error) {
-        console.warn(
-          `[voice] could not size the ${kind} download for ${channelId}/${startedAtMs}:`,
-          error instanceof Error ? error.message : error,
-        );
+  const rungs = downloadRungs(await broadcastRungRows(channelId, startedAtMs));
+  for (const kind of WATCH_PARTY_DOWNLOAD_KINDS) {
+    const rung = rungs[kind];
+    if (!rung) {
+      continue;
+    }
+    let total = 0;
+    for (const [key, size] of await objectSizes(
+      downloadPrefix(channelId, startedAtMs, kind, rung),
+      config,
+    )) {
+      // Playlists are a rounding error next to the segments, but counting
+      // them would make the number disagree with what is actually sent.
+      if (kind === "voice" || key.endsWith(".ts")) {
+        total += size;
       }
     }
+    sizes[kind] = total > 0 ? total : null;
   }
-  pruneStale(downloadSizeCache, now);
-  downloadSizeCache.set(cacheKey, { sizes, at: now });
   return sizes;
 }
 
@@ -837,8 +858,11 @@ function playlistKeys(body: string, objectPrefix: string): string[] {
 /**
  * What to stream for one kind, or null when this broadcast has no such file.
  * Throws `HlsPlaylistUnavailable` when storage is not configured or cannot be
- * read -- the same two errors the replay builders raise, mapped by the route
- * to the same statuses.
+ * read, and `HlsPlaylistNotFound` when the playlist names an object the
+ * bucket does not have -- a half-swept recording, which the route answers
+ * with the same 409 as a fully swept one. Discovering that mid-stream is not
+ * an option: the head is out by then and the moderator is left with a file
+ * that looks complete and is not.
  */
 export async function buildWatchPartyDownloadPlan(
   channelId: string,
@@ -855,41 +879,37 @@ export async function buildWatchPartyDownloadPlan(
   if (!rung) {
     return null;
   }
+  const prefix = downloadPrefix(channelId, startedAtMs, kind, rung);
+  // The same listing the panel already paid for, memoised: opening the panel
+  // and then downloading from it must not scan the prefix twice.
+  const sizes = await objectSizes(prefix, config);
   if (kind === "voice") {
-    // One object, whose size the bucket can state exactly.
-    const key = micArchiveObjectKey(channelId, startedAtMs);
-    const sizes = await objectSizes(key, config);
-    if (!sizes.has(key)) {
+    const size = sizes.get(prefix);
+    if (size === undefined) {
       return null;
     }
     return {
       kind,
       contentType: DOWNLOAD_CONTENT_TYPE[kind],
       extension: "ogg",
-      keys: [key],
-      bytes: sizes.get(key)!,
+      keys: [prefix],
+      bytes: size,
     };
   }
-  const objectPrefix = hlsObjectPrefix(channelId, startedAtMs, rung);
   const keys = playlistKeys(
     await fetchReplayPlaylistBody(config, channelId, startedAtMs, rung),
-    objectPrefix,
+    prefix,
   );
   if (keys.length === 0) {
     return null;
   }
-  // `Content-Length` only when every segment the playlist names was priced by
-  // the listing. A number that is merely close is worse than none at all: the
-  // browser would report the download as failed (short) or hang waiting for
-  // bytes that never come (long).
-  const sizes = await objectSizes(objectPrefix, config);
   let total = 0;
-  let exact = true;
   for (const key of keys) {
     const size = sizes.get(key);
     if (size === undefined) {
-      exact = false;
-      break;
+      throw new HlsPlaylistNotFound(
+        `Replay ${prefix} is missing ${key}, which its playlist names`,
+      );
     }
     total += size;
   }
@@ -898,7 +918,7 @@ export async function buildWatchPartyDownloadPlan(
     contentType: DOWNLOAD_CONTENT_TYPE[kind],
     extension: "ts",
     keys,
-    bytes: exact ? total : null,
+    bytes: total,
   };
 }
 
@@ -930,31 +950,52 @@ export async function streamWatchPartyDownload(
       forRead: true,
       config,
     }).url;
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(DOWNLOAD_OBJECT_TIMEOUT_MS),
-      });
-    } catch (error) {
-      throw new HlsPlaylistUnavailable(
-        error instanceof Error ? error.message : "Storage unreachable",
-      );
-    }
-    if (!response.ok || !response.body) {
-      throw new HlsPlaylistUnavailable(
-        `Storage returned HTTP ${response.status} for ${key}`,
-      );
-    }
-    await pipeline(
-      // `fetch`'s body is typed as the DOM `ReadableStream`, `Readable.fromWeb`
-      // takes the `node:stream/web` one; they are the same object at runtime
-      // and differ only in how the two lib definitions spell it.
-      Readable.fromWeb(
-        response.body as unknown as NodeReadableStream<Uint8Array>,
-      ),
-      target,
-      { end: false },
+    const controller = new AbortController();
+    let idle: NodeJS.Timeout = setTimeout(
+      () => controller.abort(),
+      DOWNLOAD_OBJECT_IDLE_MS,
     );
+    const restartIdleClock = (): void => {
+      clearTimeout(idle);
+      idle = setTimeout(() => controller.abort(), DOWNLOAD_OBJECT_IDLE_MS);
+    };
+    try {
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+      } catch (error) {
+        throw new HlsPlaylistUnavailable(
+          error instanceof Error ? error.message : "Storage unreachable",
+        );
+      }
+      if (!response.ok || !response.body) {
+        throw new HlsPlaylistUnavailable(
+          `Storage returned HTTP ${response.status} for ${key}`,
+        );
+      }
+      await pipeline(
+        // `fetch`'s body is typed as the DOM `ReadableStream`,
+        // `Readable.fromWeb` takes the `node:stream/web` one; they are the
+        // same object at runtime and differ only in how the two lib
+        // definitions spell it.
+        Readable.fromWeb(
+          response.body as unknown as NodeReadableStream<Uint8Array>,
+        ),
+        // Every chunk that arrives is proof the transfer is alive.
+        new Transform({
+          transform(chunk, _encoding, done) {
+            restartIdleClock();
+            done(null, chunk);
+          },
+        }),
+        target,
+        { end: false },
+      );
+    } finally {
+      clearTimeout(idle);
+    }
   }
 }

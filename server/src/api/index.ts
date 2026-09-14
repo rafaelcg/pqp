@@ -5553,6 +5553,16 @@ async function prepareWatchPartyDownload(input: {
     if (error instanceof HlsPlaylistUnavailable) {
       throw new HttpError(503, "Live HLS storage unavailable");
     }
+    if (error instanceof HlsPlaylistNotFound) {
+      // The playlist names an object the bucket no longer has: a half-swept
+      // recording, which is the same thing to a moderator as a swept one and
+      // answers with the same 409. Caught HERE rather than mid-stream, which
+      // would hand back a file that looks complete and is not.
+      throw new HttpError(
+        409,
+        "This broadcast's recording is no longer available",
+      );
+    }
     throw error;
   }
   if (!plan) {
@@ -5583,9 +5593,9 @@ function sendWatchPartyDownload(
     // The filename is a slug of `[a-z0-9-]` plus a date, so it needs no
     // quoting beyond the quotes.
     "content-disposition": `attachment; filename="${filename}"`,
-    // Only when the listing priced every object the playlist names, so the
-    // browser's progress bar is either right or absent, never wrong.
-    ...(plan.bytes !== null ? { "content-length": String(plan.bytes) } : {}),
+    // Exact: the plan refuses to exist unless the listing priced every
+    // object it names, so the browser's progress bar is never wrong.
+    "content-length": String(plan.bytes),
     "cache-control": "private, no-store",
     ...SECURITY_HEADERS,
     ...corsHeaders(req),
@@ -5620,7 +5630,18 @@ router.get(
         "This broadcast's recording is no longer available",
       );
     }
-    const sizes = await watchPartyDownloadSizes(channelId!, startedAtMs);
+    let sizes;
+    try {
+      sizes = await watchPartyDownloadSizes(channelId!, startedAtMs);
+    } catch (error) {
+      if (error instanceof HlsPlaylistUnavailable) {
+        // Not "there is no camera": storage would not answer. The dialog
+        // shows a retryable failure rather than claiming the night had no
+        // camera and no voice.
+        throw new HttpError(503, "Live HLS storage unavailable");
+      }
+      throw error;
+    }
     const token = mintHlsViewerToken({
       userId: user.id,
       channelId: channelId!,
