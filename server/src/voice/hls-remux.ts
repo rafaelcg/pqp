@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import {
   remuxControlSignaturePayload,
   remuxErrorResponseSchema,
@@ -24,6 +24,20 @@ import { getPool } from "../db.js";
  * module speaks (start/stop/list, HMAC signing) — that file is the one both
  * `pqp-api` and `pqp-remux` (L1.6) build from, so the shape lives there, not
  * here.
+ *
+ * NOTHING IN THIS FILE IS KEPT IN PROCESS MEMORY AS THE ONLY RECORD OF
+ * ANYTHING. Three rounds of Farol review on PR #580 found the same shape of
+ * bug three times over an in-memory retry marker: it could be lost to a
+ * restart, expire while the session it named was still running, or let an
+ * unrelated later party match a stale id. The fix each time was the same
+ * idea sharpened further, and this version is where it lands: a session's
+ * identity is `deriveLlSessionId(channelId, startedAt)`, a pure function of
+ * two values the `hls_sessions` row already carries durably, so ANY retry —
+ * a POST whose response was lost, an attempt made after a restart, a boot
+ * adoption sweep — recomputes the exact same id from the row instead of
+ * remembering one. `llRooms` (in-memory) is a cache of what THIS process
+ * currently believes is running, never the source of truth for what to do
+ * next; the row is.
  *
  * What this module deliberately does NOT do, all left to later tasks:
  *
@@ -76,8 +90,8 @@ export function liveHlsLLAllowlist(): Set<string> | null {
  * did not ask -> `conventional` (the default `docs/plans/LL_HLS.md` §4
  * requires). Flag on, asked, and either no allowlist or this server is on
  * it -> `ll`. Asked, flag on, allowlist set, server not on it ->
- * `conventional`, silently: `watchPartyStateRequestSchema.lowLatency` is not
- * a promise the client's request can enforce on its own.
+ * `conventional`, silently: the request is not a promise the client's ask
+ * can enforce on its own.
  */
 export function resolveHlsMode(input: {
   serverId: string | null | undefined;
@@ -97,25 +111,54 @@ export function resolveHlsMode(input: {
 }
 
 /**
- * What a channel's most recent "go live" asked for. Set by the
- * `POST /api/watch-parties/:id/state` route when `state: "live"` carries
- * `lowLatency`, read by `reconcileLiveHlsNow` at the moment a sharer actually
- * appears (which can be well after the party went live). A channel that has
- * never asked, or last asked with `lowLatency` false/absent, answers false —
- * there is no "sticky yes" from a previous party.
+ * What a channel's most recent "go live" asked for — `channel_sessions.
+ * low_latency_requested`, not process memory (a Farol finding on PR #580:
+ * an in-memory version did not survive a restart, so the very next
+ * reconcile after one resolved `conventional` and stopped the LL session
+ * boot adoption had just brought back). Written by
+ * `POST /api/watch-parties/:id/state` on every `goLive`, unconditionally —
+ * a party going live again without asking must not inherit a previous
+ * party's request for this channel.
+ *
+ * `false` on any read failure: a database hiccup should not itself flip a
+ * running conventional deployment into asking for LL sessions, or vice
+ * versa mid-party (the caller re-reads on every reconcile, so a transient
+ * miss here is not sticky).
  */
-const requestedHlsMode = new Map<string, boolean>();
-
-export function setRequestedHlsMode(channelId: string, requested: boolean): void {
-  if (requested) {
-    requestedHlsMode.set(channelId, true);
-  } else {
-    requestedHlsMode.delete(channelId);
+export async function requestedHlsModeForChannel(channelId: string): Promise<boolean> {
+  try {
+    const result = await getPool().query<{ low_latency_requested: boolean }>(
+      `SELECT low_latency_requested FROM channel_sessions
+       WHERE channel_id = $1 AND status = 'live'
+       LIMIT 1`,
+      [channelId],
+    );
+    return result.rows[0]?.low_latency_requested === true;
+  } catch (error) {
+    logEvent("voice.hlsLlRequestedModeReadFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
   }
 }
 
-export function requestedHlsModeFor(channelId: string): boolean {
-  return requestedHlsMode.get(channelId) === true;
+/** `POST /api/watch-parties/:id/state`'s `goLive` handler calls this with the party's own row id. */
+export async function setRequestedHlsMode(
+  watchPartySessionId: string,
+  requested: boolean,
+): Promise<void> {
+  try {
+    await getPool().query(
+      `UPDATE channel_sessions SET low_latency_requested = $1 WHERE id = $2`,
+      [requested, watchPartySessionId],
+    );
+  } catch (error) {
+    logEvent("voice.hlsLlRequestedModeWriteFailed", {
+      watchPartySessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +184,8 @@ export function remuxControlSecret(): string | null {
  * Where parts and playlists for a session are actually served from (Caddy on
  * the egress box, `docs/plans/LL_HLS.md` §1), distinct from the control URL
  * above, which never serves media. Required to start a session: a session
- * nothing can ever play is not worth starting.
+ * nothing can ever play is not worth starting. NEVER sent to a client — see
+ * `llPlaylistUrl`'s doc comment.
  */
 export function remuxOriginBaseUrl(): string | null {
   const raw = envTrimmed("LIVE_HLS_REMUX_ORIGIN_URL");
@@ -307,6 +351,16 @@ async function remuxListSessions(): Promise<RemuxSessionInfo[]> {
   return remuxListSessionsResponseSchema.parse(await response.json()).sessions;
 }
 
+/** The box's current answer for one specific session id, or null if it holds no such session. */
+async function findRemuxSessionById(sessionId: string): Promise<RemuxSessionInfo | null> {
+  try {
+    const sessions = await remuxListSessions();
+    return sessions.find((session) => session.sessionId === sessionId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function buildStartRequest(input: {
   sessionId: string;
   channelId: string;
@@ -340,6 +394,39 @@ function buildStartRequest(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Deterministic session identity
+// ---------------------------------------------------------------------------
+
+/**
+ * The remux `sessionId` for this channel's session that started at this
+ * instant — a pure function of the two values, so it is recomputable from
+ * the `hls_sessions` row alone, forever, by anything that reads that row: a
+ * retried start after an ambiguous POST, a process that restarted between
+ * inserting the row and hearing back from the box, or `adoptLlHlsSessions`'s
+ * boot sweep. Nothing about "which attempt this is" is ever tracked in
+ * memory (see the file header) precisely so this is the only thing that has
+ * to be recomputed.
+ *
+ * sha256 rather than a library UUID v5: no new dependency for one hash, and
+ * the version/variant nibbles below only exist to keep the result shaped
+ * like every other id in `hls_sessions.remux_session_id` (a
+ * `z.string().uuid()` in the wire contract) — collision resistance comes
+ * from sha256 over the exact (channelId, startedAt) pair, not from the UUID
+ * shape.
+ */
+export function deriveLlSessionId(channelId: string, startedAt: number): string {
+  const hash = createHash("sha256").update(`${channelId}:${startedAt}`).digest("hex");
+  const variantNibble = "89ab"[Number.parseInt(hash[16]!, 16) % 4];
+  return [
+    hash.slice(0, 8),
+    hash.slice(8, 12),
+    `5${hash.slice(13, 16)}`,
+    `${variantNibble}${hash.slice(17, 20)}`,
+    hash.slice(20, 32),
+  ].join("-");
+}
+
+// ---------------------------------------------------------------------------
 // Session bookkeeping and the DB rows
 // ---------------------------------------------------------------------------
 
@@ -352,6 +439,8 @@ interface LlRoom {
 
 const llRooms = new Map<string, LlRoom>();
 let llStartFailures = 0;
+/** A `remuxStopSession` call failed, at either the normal-stop or retry path. Belongs at zero. */
+let llStopFailures = 0;
 /**
  * Incremented by `L1.6`'s watchdog when a stalled LL session is demoted back
  * to the conventional ladder. Nothing in this file can produce that
@@ -372,7 +461,11 @@ function llObjectPrefix(channelId: string, startedAt: number): string {
 /**
  * What a viewer is actually handed as `LiveHlsStream.hlsUrl`, and
  * deliberately the SAME shape `viewerPlaylistUrl` in `hls-egress.ts` uses for
- * the conventional ladder -- never the egress box's raw origin URL.
+ * the conventional ladder -- never the egress box's raw origin URL, and
+ * never anything a client could copy and use to bypass a later access
+ * revocation. `origin_base_url` (the egress box's Caddy) stays server-side:
+ * it is stored on the row and read by this API's own playlist proxy (once
+ * `L2.x` teaches it about `mode: 'll'`), never put in a response.
  *
  * A Farol review of the first version of this file (PR #580) is why: that
  * version pointed `hlsUrl` straight at `${originBaseUrl}/${sessionId}/playlist.m3u8`,
@@ -385,7 +478,9 @@ function llObjectPrefix(channelId: string, startedAt: number): string {
  * `stampViewerStream`) mints and appends the SAME signed, per-user,
  * per-session `?t=` capability the conventional path already requires --
  * `extractChannelId`'s regex in `hls-viewer-token.ts` matches this exact
- * prefix, so it works with no changes there.
+ * prefix, so it works with no changes there, and the same route's existing
+ * refusal of a request with no valid token applies here too (see
+ * `hls-playlist-route.test.ts`).
  *
  * This does NOT mean an LL session is playable today: `renderSignedPlaylist`
  * has no idea what a `mode: 'll'` row is (`rung IS NULL` for one, so
@@ -396,7 +491,7 @@ function llObjectPrefix(channelId: string, startedAt: number): string {
  * specially yet (`L2.4`), and the playlist front that would make this URL
  * actually resolve is `L2.1`/`L2.2`. What matters for L1.5 is that nothing
  * this server hands out can be played by someone the access check would
- * have refused.
+ * have refused, and that no response ever names the origin host.
  */
 function llPlaylistUrl(channelId: string, startedAt: number): string {
   return `/api/voice/hls-playlist/${channelId}/${startedAt}`;
@@ -472,6 +567,30 @@ async function recordLlSessionsEndedByIds(ids: readonly string[]): Promise<void>
   }
 }
 
+/**
+ * Mark a row as mid-teardown: `stopping_at` is bumped to now and
+ * `stop_attempts` incremented every time this is called, which is the pacing
+ * `stopBackoffMs` reads. Keyed by the object prefix, the same way
+ * `recordLlSessionEnded` is, since the callers that need this (`stopLlSession`)
+ * only have `(channelId, startedAt)` in hand, not a row id.
+ */
+async function markLlSessionStopping(channelId: string, startedAt: number): Promise<void> {
+  try {
+    await getPool().query(
+      `UPDATE hls_sessions
+       SET stopping_at = NOW(), stop_attempts = stop_attempts + 1
+       WHERE object_prefix = $1 AND ended_at IS NULL`,
+      [llObjectPrefix(channelId, startedAt)],
+    );
+  } catch (error) {
+    logEvent("voice.hlsLlSessionRecordFailed", {
+      channelId,
+      startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Start / stop / reconcile — the seam `hls-egress.ts` calls
 // ---------------------------------------------------------------------------
@@ -485,94 +604,110 @@ export function llStreamFor(channelId: string): LiveHlsStream | null {
   return llRooms.get(channelId)?.stream ?? null;
 }
 
-/**
- * Reuse a session the box already holds for this room rather than start a
- * second one, an ambiguous POST (the request reached the box, but the
- * response was lost or timed out).
- *
- * MATCHED BY sessionId, NEVER BY channelId ALONE. A first version of this
- * function asked "does the box have ANY session for this room" and reused
- * whatever it found — which also reuses a genuinely STALE session: one this
- * process already told a viewer had ended (a row with `ended_at` set,
- * excluded from `adoptLlHlsSessions`'s own adoption exactly because it is
- * not owned) that simply never got torn down on the box, for reasons this
- * process cannot see (a Farol finding on PR #580, second round). Matching
- * only a `sessionId` THIS process itself minted and is still waiting to
- * confirm (`pendingStarts`) closes that hole: a leftover session with a
- * different id is invisible to this check and is left for a future
- * `adoptLlHlsSessions` boot sweep to find and stop, never silently reused as
- * if it were a fresh party.
- */
-async function findRemuxSessionById(sessionId: string): Promise<RemuxSessionInfo | null> {
+interface OpenLlRow {
+  id: string;
+  startedAtMs: number;
+  remuxSessionId: string | null;
+  presenterPeerId: string | null;
+  stoppingAtMs: number | null;
+  stopAttempts: number;
+}
+
+/** This channel's one open (`ended_at IS NULL`) LL row, if any — the durable retry point. */
+async function findOpenLlRow(channelId: string): Promise<OpenLlRow | null> {
   try {
-    const sessions = await remuxListSessions();
-    return sessions.find((session) => session.sessionId === sessionId) ?? null;
-  } catch {
+    const result = await getPool().query<{
+      id: string;
+      started_at: string;
+      remux_session_id: string | null;
+      presenter_peer_id: string | null;
+      stopping_at: string | null;
+      stop_attempts: number;
+    }>(
+      `SELECT id, started_at, remux_session_id, presenter_peer_id, stopping_at, stop_attempts
+       FROM hls_sessions
+       WHERE channel_id = $1 AND mode = 'll' AND ended_at IS NULL
+       ORDER BY started_at DESC
+       LIMIT 1`,
+      [channelId],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      startedAtMs: new Date(row.started_at).getTime(),
+      remuxSessionId: row.remux_session_id,
+      presenterPeerId: row.presenter_peer_id,
+      stoppingAtMs: row.stopping_at ? new Date(row.stopping_at).getTime() : null,
+      stopAttempts: row.stop_attempts,
+    };
+  } catch (error) {
+    logEvent("voice.hlsLlOpenRowLookupFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }
 
-/**
- * One outstanding attempt per channel, kept only across the (in-process)
- * lifetime of an ambiguous request -- a restart clears it, and
- * `adoptLlHlsSessions`'s boot sweep is what resolves anything left dangling
- * across that boundary instead.
- *
- *  - `needsStop: false` — this sessionId was (or may have been) started and
- *    is waiting for its `hls_sessions` row to be confirmed. The next attempt
- *    for this channel checks whether it actually landed before minting a
- *    new one.
- *  - `needsStop: true` — recording the row failed AND the rollback `DELETE`
- *    also failed, so a session is running on the box that nothing durable
- *    tracks. The next attempt must finish tearing THIS ONE down before it
- *    is allowed to start anything else for the room.
- *
- * `mintedAtMs` IS THE FIX FOR AN OPEN-ENDED MARKER. Without it, a channel
- * whose one ambiguous attempt is never retried (the presenter leaves, the
- * party ends with nobody sharing again) keeps its entry forever, and a
- * Farol review of the second round's fix (PR #580) named the failure mode
- * precisely: a much later, wholly unrelated party in the SAME channel could
- * still match this stale marker's `sessionId` via `findRemuxSessionById` and
- * "confirm" a session that has nothing to do with it, if the box still
- * happened to answer for that id. `pendingStartFor` refuses a marker older
- * than `PENDING_START_TTL_MS` and deletes it on the way out, so staleness
- * has a ceiling: past that window this is exactly the no-marker case, a
- * fresh id is minted, and anything still running under the old one is left
- * for the next `adoptLlHlsSessions` boot sweep -- the same backstop that
- * already exists for a marker lost to a restart, not a new mechanism.
- */
-const pendingStarts = new Map<
-  string,
-  { sessionId: string; needsStop: boolean; mintedAtMs: number }
->();
-
-/** How long an unresolved start attempt may still be trusted before it is treated as gone. */
-const PENDING_START_TTL_MS = 2 * 60 * 1000;
+/** Backoff for retrying a stop: paced, not hammered, on every reconcile or boot sweep. */
+const STOP_RETRY_BACKOFF_STEPS_MS = [1_000, 5_000, 15_000, 30_000] as const;
+function stopBackoffMs(attempts: number): number {
+  return STOP_RETRY_BACKOFF_STEPS_MS[Math.min(attempts, STOP_RETRY_BACKOFF_STEPS_MS.length - 1)]!;
+}
 
 /**
- * The channel's pending marker, or `null` for "no marker" AND for "the
- * marker expired" alike -- callers never need to tell the two apart, which
- * is the point: past the TTL a stale marker is not merely ignored, it is
- * deleted, so it cannot go on being re-checked (and re-logged) forever by a
- * channel nothing ever reconciles again.
+ * Retry stopping a row already marked `stopping_at` (or push it into that
+ * state for the first time) until the box confirms it. Used both by
+ * `startLlSession` (a foreign or mid-teardown row found in this channel's
+ * way) and `adoptLlHlsSessions`'s boot sweep — the two places that inherit a
+ * row this process's own `llRooms` does not currently explain.
+ *
+ * Returns whether the row is now closed (`ended_at` set). `false` covers
+ * both "still backing off, did not even try" and "tried, the box refused" —
+ * callers only ever need to know whether they may now treat the room as
+ * free.
  */
-function pendingStartFor(
-  channelId: string,
-): { sessionId: string; needsStop: boolean; mintedAtMs: number } | null {
-  const pending = pendingStarts.get(channelId);
-  if (!pending) {
-    return null;
+async function retryStopOpenLlRow(row: OpenLlRow, channelId: string): Promise<boolean> {
+  if (!row.remuxSessionId) {
+    // Recorded intent that never got far enough to have a box-side id worth
+    // asking about (deterministic, so this can only be a row whose insert
+    // succeeded but nothing after it ever ran) — nothing to tell the box.
+    await recordLlSessionsEndedByIds([row.id]);
+    return true;
   }
-  if (Date.now() - pending.mintedAtMs > PENDING_START_TTL_MS) {
-    pendingStarts.delete(channelId);
-    logEvent("voice.hlsLlPendingStartExpired", {
-      channelId,
-      sessionId: pending.sessionId,
-      needsStop: pending.needsStop,
+  if (row.stoppingAtMs !== null && Date.now() - row.stoppingAtMs < stopBackoffMs(row.stopAttempts)) {
+    return false;
+  }
+  await getPool()
+    .query(
+      `UPDATE hls_sessions SET stopping_at = NOW(), stop_attempts = stop_attempts + 1 WHERE id = $1`,
+      [row.id],
+    )
+    .catch((error: unknown) => {
+      logEvent("voice.hlsLlSessionRecordFailed", {
+        channelId,
+        id: row.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
-    return null;
+  try {
+    await remuxStopSession(row.remuxSessionId);
+  } catch (error) {
+    llStopFailures += 1;
+    logEvent("voice.hlsLlStopFailed", {
+      channelId,
+      sessionId: row.remuxSessionId,
+      reason: "retry",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
   }
-  return pending;
+  await recordLlSessionsEndedByIds([row.id]);
+  logEvent("voice.hlsLlStopped", { channelId, sessionId: row.remuxSessionId, reason: "retry" });
+  return true;
 }
 
 async function startLlSession(
@@ -585,44 +720,67 @@ async function startLlSession(
     logEvent("voice.hlsLlStartFailed", { channelId, reason: "not-configured" });
     return null;
   }
-  const pending = pendingStartFor(channelId);
-  if (pending?.needsStop) {
-    try {
-      await remuxStopSession(pending.sessionId);
-      pendingStarts.delete(channelId);
-    } catch (error) {
+  const cfg = remuxSessionConfig();
+
+  let openRow = await findOpenLlRow(channelId);
+  if (openRow && (openRow.stoppingAtMs !== null || openRow.presenterPeerId !== presenterPeerId)) {
+    // Not this presenter's session, or already mid-teardown: finish closing
+    // it before this room gets anything new. A durable version of the same
+    // rule `reconcileLlHlsNow` already applies from its in-memory `llRooms`
+    // -- this is what catches the case that map does not know about (a row
+    // left over from before a restart, or from an attempt this process
+    // never got to track).
+    const closed = await retryStopOpenLlRow(openRow, channelId);
+    if (!closed) {
       llStartFailures += 1;
-      logEvent("voice.hlsLlStartFailed", {
-        channelId,
-        reason: "pending-cleanup-failed",
-        sessionId: pending.sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Do not start anything new for this room while an earlier attempt's
-      // teardown is still unresolved: that would be a second untracked
-      // session on top of the first.
+      logEvent("voice.hlsLlStartFailed", { channelId, reason: "foreign-row-unresolved" });
+      return null;
+    }
+    openRow = null;
+  }
+
+  let startedAt: number;
+  let sessionId: string;
+  if (openRow) {
+    // Our own unresolved attempt for this exact presenter: resume it
+    // deterministically. `remuxSessionId` should already be set (the INSERT
+    // below always writes it), but recomputing is the same value regardless
+    // -- that recomputability is the whole point (see `deriveLlSessionId`).
+    startedAt = openRow.startedAtMs;
+    sessionId = openRow.remuxSessionId ?? deriveLlSessionId(channelId, startedAt);
+  } else {
+    startedAt = Date.now();
+    sessionId = deriveLlSessionId(channelId, startedAt);
+    const inserted = await recordLlSessionStarted(
+      channelId,
+      startedAt,
+      sessionId,
+      presenterPeerId,
+      cfg.partMs,
+      originBaseUrl,
+    );
+    if (!inserted) {
+      // No remux call was ever made: nothing on the box to roll back.
+      llStartFailures += 1;
+      logEvent("voice.hlsLlStartFailed", { channelId, reason: "record-failed" });
       return null;
     }
   }
-  const startedAt = Date.now();
-  const cfg = remuxSessionConfig();
+
   let info: RemuxSessionInfo;
   try {
-    const stillPending = pendingStartFor(channelId);
-    const existing = stillPending ? await findRemuxSessionById(stillPending.sessionId) : null;
+    const existing = await findRemuxSessionById(sessionId);
     if (existing) {
-      logEvent("voice.hlsLlStartFoundExisting", { channelId, sessionId: existing.sessionId });
+      logEvent("voice.hlsLlStartFoundExisting", { channelId, sessionId });
       info = existing;
     } else {
-      const sessionId = stillPending?.sessionId ?? randomUUID();
-      pendingStarts.set(channelId, { sessionId, needsStop: false, mintedAtMs: Date.now() });
       info = await remuxStartSession(buildStartRequest({ sessionId, channelId }));
     }
   } catch (error) {
-    // `pendingStarts` is deliberately left as it was set just above (same
-    // sessionId, `needsStop: false`): the POST may still have landed despite
-    // the error reaching us, so the NEXT attempt checks THIS SAME id via
-    // `findRemuxSessionById` before minting another one.
+    // The row is left exactly as it is: open, unresolved, `remux_session_id`
+    // already set to `sessionId`. The NEXT attempt for this channel calls
+    // `findOpenLlRow`, gets this same row back, and recomputes this exact
+    // same `sessionId` -- there is nothing else to remember.
     llStartFailures += 1;
     logEvent("voice.hlsLlStartFailed", {
       channelId,
@@ -631,42 +789,7 @@ async function startLlSession(
     });
     return null;
   }
-  const recorded = await recordLlSessionStarted(
-    channelId,
-    startedAt,
-    info.sessionId,
-    presenterPeerId,
-    cfg.partMs,
-    originBaseUrl,
-  );
-  if (!recorded) {
-    // A session is now running on the box with no `hls_sessions` row behind
-    // it. Publishing a stream nobody's retention or boot-adoption logic
-    // knows about is worse than refusing: stop what was just started (or
-    // found) and let the caller's next reconcile try again from scratch.
-    llStartFailures += 1;
-    try {
-      await remuxStopSession(info.sessionId);
-      pendingStarts.delete(channelId);
-    } catch (error) {
-      // The rollback itself failed: a session is now running that NOTHING
-      // tracks unless `pendingStarts` remembers it. Mark it `needsStop` so
-      // the next call here finishes the teardown before trying anything
-      // else for this room (a Farol finding on PR #580, second round).
-      pendingStarts.set(channelId, {
-        sessionId: info.sessionId,
-        needsStop: true,
-        mintedAtMs: Date.now(),
-      });
-      logEvent("voice.hlsLlStartRollbackFailed", {
-        channelId,
-        sessionId: info.sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    return null;
-  }
-  pendingStarts.delete(channelId);
+
   const stream: LiveHlsStream = {
     hlsUrl: llPlaylistUrl(channelId, startedAt),
     startedAt,
@@ -674,17 +797,8 @@ async function startLlSession(
     delaySeconds: llDelaySeconds(),
     mode: "ll",
   };
-  llRooms.set(channelId, {
-    sessionId: info.sessionId,
-    startedAt,
-    presenterPeerId,
-    stream,
-  });
-  logEvent("voice.hlsLlStarted", {
-    channelId,
-    sessionId: info.sessionId,
-    subscribed: info.subscribed,
-  });
+  llRooms.set(channelId, { sessionId, startedAt, presenterPeerId, stream });
+  logEvent("voice.hlsLlStarted", { channelId, sessionId, subscribed: info.subscribed });
   return stream;
 }
 
@@ -692,29 +806,32 @@ async function startLlSession(
  * Every teardown carries a `reason` (pitfall 15's rule, and this driver has
  * no excuse to relearn it on day one).
  *
- * THE ROOM IS KEPT, NOT FORGOTTEN, WHEN THE REMOTE STOP FAILS. An earlier
- * version deleted from `llRooms` and marked the row ended unconditionally,
- * so a control-API hiccup left the remux process running with nothing on
- * this side still tracking it -- a future reconcile would then start a
- * SECOND session for the same room, and `adoptLlHlsSessions`'s boot sweep
- * could adopt a row marked `ended_at` while the session it names was still
- * live on the box (a Farol finding on PR #580). Now the row is only ended,
- * and the room only forgotten, once the box has actually confirmed the
- * session is gone (204 or 404, both idempotent successes in
- * `remuxStopSession`). A failure leaves the room in place so the NEXT call
- * here (the following reconcile, or nothing at all if the party is truly
- * over) gets another chance, at the cost of a session this process believes
- * is still live when the box may have already dropped it -- the same
- * ambiguity `adoptLlHlsSessions` exists to resolve on the next boot.
+ * A FAILED STOP MOVES THE ROW TO `stopping`, IT DOES NOT FORGET IT. `llRooms`
+ * forgets the room either way (this process is done treating it as a live
+ * stream this call), but the row keeps `ended_at` NULL and now carries
+ * `stopping_at` — the next `startLlSession` for this channel (via
+ * `findOpenLlRow`) or the next boot sweep (`adoptLlHlsSessions`) retries the
+ * DELETE, paced by `stopBackoffMs`. Earlier versions of this function either
+ * forgot the room unconditionally (a Farol finding on PR #580: the remote
+ * session then outlived everything tracking it) or kept retrying only from
+ * an in-memory marker with no ceiling (the next finding: the marker could
+ * expire while still the only reference to a still-running session). A row
+ * has neither problem: it cannot be lost to a restart, and there is no
+ * separate expiry to accidentally discard the only pointer to a live
+ * session — `retryStopOpenLlRow` only ever stops retrying once the box
+ * confirms the session is actually gone.
  */
 export async function stopLlSession(channelId: string, reason: string): Promise<void> {
   const room = llRooms.get(channelId);
   if (!room) {
     return;
   }
+  llRooms.delete(channelId);
+  await markLlSessionStopping(channelId, room.startedAt);
   try {
     await remuxStopSession(room.sessionId);
   } catch (error) {
+    llStopFailures += 1;
     logEvent("voice.hlsLlStopFailed", {
       channelId,
       sessionId: room.sessionId,
@@ -723,38 +840,50 @@ export async function stopLlSession(channelId: string, reason: string): Promise<
     });
     return;
   }
-  llRooms.delete(channelId);
-  // The channel's session just ended cleanly: any pending marker for it is
-  // now moot, and leaving it in place would only let a later, unrelated
-  // party in the same channel find and check a session id that belongs to
-  // this one that just closed.
-  pendingStarts.delete(channelId);
   await recordLlSessionEnded(channelId, room.startedAt);
   logEvent("voice.hlsLlStopped", { channelId, sessionId: room.sessionId, reason });
 }
 
 /**
- * The LL half of `reconcileLiveHlsNow`. No track probing: unlike the
- * conventional ladder, `pqp-remux` finds the presenter's screen share itself
- * (its README, "Presenter authorization" — the first `SCREEN_SHARE` source
- * it sees), so there is nothing here to compare a track sid against. A
- * presenter reconnecting under a fresh peer id is therefore NOT specially
- * reattached the way the conventional path does it: the simpler rule below
- * (same peer id keeps the session, any other change restarts it) is correct
- * for L1.5's scope and can be sharpened once `L1.6`'s watchdog exists to
- * make a restart cheap to recover from.
+ * The LL half of `reconcileLiveHlsNow`, single-flighted per channel. No
+ * track probing: unlike the conventional ladder, `pqp-remux` finds the
+ * presenter's screen share itself (its README, "Presenter authorization" —
+ * the first `SCREEN_SHARE` source it sees), so there is nothing here to
+ * compare a track sid against. A presenter reconnecting under a fresh peer
+ * id is therefore NOT specially reattached the way the conventional path
+ * does it: the simpler rule below (same peer id keeps the session, any
+ * other change restarts it) is correct for L1.5's scope and can be
+ * sharpened once `L1.6`'s watchdog exists to make a restart cheap to
+ * recover from.
  *
- * CONCURRENT CALLS FOR THE SAME CHANNEL CANNOT INTERLEAVE HERE. This
- * function is only ever reached through `reconcileLiveHlsNow` in
- * `hls-egress.ts`, which itself is only ever reached through the exported
- * `reconcileLiveHls`'s `reconcileQueue` -- a promise chain keyed per
- * channel, so a second roster event for a channel already mid-reconcile
- * waits for the first to finish rather than racing it. Two starts for one
- * room (a Farol concern on PR #580) would need two DIFFERENT channels'
- * reconciles to both resolve to the same LiveKit room name, which cannot
- * happen: the room name IS the channel id.
+ * SELF-CONTAINED SINGLE-FLIGHT. `hls-egress.ts`'s own `reconcileLiveHls`
+ * already serializes calls per channel with its own queue, but a Farol
+ * review of PR #580 flagged relying on that alone: this function is
+ * exported and nothing in its own module enforces that a caller never
+ * invokes it twice concurrently for one channel. `llReconcileQueue` below is
+ * the same promise-chain-per-key pattern, kept in this file so the guarantee
+ * holds regardless of what calls it.
  */
-export async function reconcileLlHlsNow(
+export function reconcileLlHlsNow(
+  channelId: string,
+  presenterPeerId: string | null,
+): Promise<LiveHlsStream | null> {
+  const previous = llReconcileQueue.get(channelId) ?? Promise.resolve();
+  const chained = previous
+    .catch(() => undefined)
+    .then(() => reconcileLlHlsNowLocked(channelId, presenterPeerId));
+  llReconcileQueue.set(channelId, chained);
+  void chained.finally(() => {
+    if (llReconcileQueue.get(channelId) === chained) {
+      llReconcileQueue.delete(channelId);
+    }
+  });
+  return chained;
+}
+
+const llReconcileQueue = new Map<string, Promise<LiveHlsStream | null>>();
+
+async function reconcileLlHlsNowLocked(
   channelId: string,
   presenterPeerId: string | null,
 ): Promise<LiveHlsStream | null> {
@@ -773,8 +902,7 @@ export async function reconcileLlHlsNow(
     if (llRooms.has(channelId)) {
       // The stop above did not land (still in the map): do not start a
       // second session on top of one this process cannot confirm is gone.
-      // The next reconcile -- another roster event, or the health path once
-      // `L1.6` exists -- tries the stop again first.
+      // The next reconcile tries the stop again first.
       logEvent("voice.hlsLlSwitchDeferred", { channelId, presenterPeerId });
       return llRooms.get(channelId)!.stream;
     }
@@ -786,8 +914,8 @@ export async function reconcileLlHlsNow(
 // Boot adoption
 // ---------------------------------------------------------------------------
 
-/** How many orphan `DELETE`s the boot sweep holds in flight at once. */
-const ORPHAN_STOP_CONCURRENCY = 5;
+/** How many control-plane requests the boot sweep holds in flight at once. */
+const ORPHAN_STOP_CONCURRENCY = 4;
 
 interface StaleLlRow {
   id: string;
@@ -796,7 +924,30 @@ interface StaleLlRow {
   ended_at: string | null;
   remux_session_id: string | null;
   presenter_peer_id: string | null;
-  origin_base_url: string | null;
+  stopping_at: string | null;
+  stop_attempts: number;
+}
+
+function toOpenLlRow(row: StaleLlRow): OpenLlRow {
+  return {
+    id: row.id,
+    startedAtMs: new Date(row.started_at).getTime(),
+    remuxSessionId: row.remux_session_id,
+    presenterPeerId: row.presenter_peer_id,
+    stoppingAtMs: row.stopping_at ? new Date(row.stopping_at).getTime() : null,
+    stopAttempts: row.stop_attempts,
+  };
+}
+
+/** Run `fn` over `items`, at most `limit` in flight at once, waiting for each batch. */
+async function runBounded<T>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += limit) {
+    await Promise.allSettled(items.slice(i, i + limit).map(fn));
+  }
 }
 
 /**
@@ -808,11 +959,16 @@ interface StaleLlRow {
  * own is reconciled against what the box actually reports, and neither side
  * is trusted alone.
  *
- *  - a live remote session with an owning row -> adopted into `llRooms`.
- *  - a live remote session with no row, or a row with no presenter -> the
- *    box is asked to stop it: nobody here can rebuild a room for it.
- *  - a row with no matching remote session -> ended: the box does not hold
- *    it any more, so its retention row should not sit open forever.
+ *  - a row already `stopping_at` -> retried here too (bounded, backed off),
+ *    never adopted as live no matter what the box still answers for it.
+ *  - a live remote session with an owning, non-stopping row -> adopted into
+ *    `llRooms`.
+ *  - a live remote session with no row, a row with no presenter, or a row
+ *    that is mid-teardown -> the box is asked to stop it: nobody here can
+ *    (or should) rebuild a live room for it.
+ *  - a row with no matching remote session, not already handled above ->
+ *    ended: the box does not hold it any more, so its retention row should
+ *    not sit open forever.
  *
  * `null` (rather than the zero-in-every-field result) when the control API
  * could not be asked at all — same fail-safe as `reconcileStaleHlsSessions`'s
@@ -840,26 +996,40 @@ export async function adoptLlHlsSessions(): Promise<{
   }
 
   const rows = await getPool().query<StaleLlRow>(
-    `SELECT id, channel_id, started_at, ended_at, remux_session_id, presenter_peer_id, origin_base_url
+    `SELECT id, channel_id, started_at, ended_at, remux_session_id, presenter_peer_id,
+            stopping_at, stop_attempts
      FROM hls_sessions
      WHERE mode = 'll' AND cleaned_at IS NULL
        AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
   );
 
-  // ONLY AN OPEN ROW (`ended_at IS NULL`) OWNS A SESSION. The query above
-  // also reads rows ended within the last hour -- purely so the loop below
-  // can still name them when logging an orphan stop -- but `stopLlSession`
-  // now only marks a row ended once the box has confirmed the session gone
-  // (see its own doc comment), so a row with `ended_at` set here means THIS
-  // process already believes that session is stopped. Adopting it anyway
-  // because the box still happens to answer with it (a Farol finding on PR
-  // #580: a failed DELETE outside this process's own stop path, or a
-  // straight race with the 1-hour window) would resurrect a party that was
-  // told it ended. Such a row is treated exactly like "no row at all" below:
-  // the box is asked to stop it, not owned again.
+  // A row mid-teardown is retried here, bounded and backed off, and is
+  // excluded from every other bucket below: it must never be adopted as
+  // live no matter what the box still answers for its id.
+  const stoppingRows = rows.rows.filter((row) => row.ended_at === null && row.stopping_at !== null);
+  let retriedStops = 0;
+  await runBounded(stoppingRows, ORPHAN_STOP_CONCURRENCY, async (row) => {
+    if (await retryStopOpenLlRow(toOpenLlRow(row), row.channel_id)) {
+      retriedStops += 1;
+    }
+  });
+
+  // ONLY AN OPEN, NOT-STOPPING ROW (`ended_at IS NULL AND stopping_at IS
+  // NULL`) OWNS A SESSION. The query above also reads rows ended within the
+  // last hour -- purely so the loop below can still name them when logging
+  // an orphan stop -- but `stopLlSession` only marks a row ended once the
+  // box has confirmed the session gone, so a row with `ended_at` set here
+  // means THIS process already believes that session is stopped. Adopting
+  // it anyway because the box still happens to answer with it (a Farol
+  // finding on PR #580: a failed DELETE outside this process's own stop
+  // path, or a straight race with the 1-hour window) would resurrect a
+  // party that was told it ended. Such a row is treated exactly like "no
+  // row at all" below: the box is asked to stop it, not owned again.
   const rowByRemuxId = new Map(
     rows.rows
-      .filter((row) => row.remux_session_id && row.ended_at === null)
+      .filter(
+        (row) => row.remux_session_id && row.ended_at === null && row.stopping_at === null,
+      )
       .map((row) => [row.remux_session_id!, row]),
   );
   const remoteById = new Map(remoteSessions.map((session) => [session.sessionId, session]));
@@ -888,13 +1058,6 @@ export async function adoptLlHlsSessions(): Promise<{
         mode: "ll",
       },
     });
-    // The go-live request that started this session lived only in memory
-    // (`setRequestedHlsMode`), which a restart just wiped. Without restoring
-    // it here, the NEXT reconcile for this channel resolves `conventional`
-    // (the safe default) and immediately stops the very session this loop
-    // just adopted -- a Farol finding on PR #580. The adopted row is proof
-    // the party asked for LL, so the request is restored alongside it.
-    setRequestedHlsMode(row.channel_id, true);
     adopted += 1;
     logEvent("voice.hlsLlSessionAdopted", {
       channelId: row.channel_id,
@@ -902,37 +1065,26 @@ export async function adoptLlHlsSessions(): Promise<{
     });
   }
 
-  // Bounded parallel cleanup, not one round trip per orphan in a row and NOT
-  // every orphan fired at once either. This runs before `listen()`, so a
-  // handful of slow stops in a row would delay readiness by however long
-  // that many sequential 5 s timeouts take -- the original bug -- but firing
-  // every one of a large stale set at once is its own version of the same
-  // problem (a Farol finding on PR #580, second round): an unbounded
-  // control-plane/network fan-out at exactly the moment the process is also
-  // trying to come up. `ORPHAN_STOP_CONCURRENCY` chunks keep this parallel
-  // AND bounded.
+  // Bounded parallel cleanup, not one round trip per orphan in a row (this
+  // runs before `listen()`) and not every orphan fired at once either (an
+  // unbounded control-plane/network fan-out at exactly the moment the
+  // process is also trying to come up -- a Farol finding on PR #580).
   let stopped = 0;
-  for (let i = 0; i < toStop.length; i += ORPHAN_STOP_CONCURRENCY) {
-    const batch = toStop.slice(i, i + ORPHAN_STOP_CONCURRENCY);
-    const results = await Promise.allSettled(
-      batch.map(({ sessionId }) => remuxStopSession(sessionId)),
-    );
-    results.forEach((result, index) => {
-      const { sessionId, reason } = batch[index]!;
-      if (result.status === "fulfilled") {
-        stopped += 1;
-        logEvent("voice.hlsLlOrphanStopped", { sessionId, reason });
-      } else {
-        logEvent("voice.hlsLlOrphanStopFailed", {
-          sessionId,
-          error:
-            result.reason instanceof Error ? result.reason.message : String(result.reason),
-        });
-      }
-    });
-  }
+  await runBounded(toStop, ORPHAN_STOP_CONCURRENCY, async ({ sessionId, reason }) => {
+    try {
+      await remuxStopSession(sessionId);
+      stopped += 1;
+      logEvent("voice.hlsLlOrphanStopped", { sessionId, reason });
+    } catch (error) {
+      logEvent("voice.hlsLlOrphanStopFailed", {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 
   const staleIds = rows.rows
+    .filter((row) => row.ended_at === null && row.stopping_at === null)
     .filter((row) => !(row.remux_session_id && remoteById.has(row.remux_session_id)))
     .map((row) => row.id);
   await recordLlSessionsEndedByIds(staleIds);
@@ -940,7 +1092,7 @@ export async function adoptLlHlsSessions(): Promise<{
     logEvent("voice.hlsLlRowsEndedNoSession", { count: staleIds.length });
   }
 
-  return { adopted, ended: staleIds.length, stopped };
+  return { adopted, ended: staleIds.length + retriedStops, stopped };
 }
 
 // ---------------------------------------------------------------------------
@@ -950,11 +1102,13 @@ export async function adoptLlHlsSessions(): Promise<{
 export function llHlsActivity(): {
   sessions: number;
   startFailures: number;
+  stopFailures: number;
   demoted: number;
 } {
   return {
     sessions: llRooms.size,
     startFailures: llStartFailures,
+    stopFailures: llStopFailures,
     demoted: llDemoted,
   };
 }
@@ -963,8 +1117,8 @@ export function resetHlsRemuxForTests(): void {
   fetchImpl = (url, init) => fetch(url, init);
   nowImpl = () => Date.now();
   llRooms.clear();
-  requestedHlsMode.clear();
-  pendingStarts.clear();
+  llReconcileQueue.clear();
   llStartFailures = 0;
+  llStopFailures = 0;
   llDemoted = 0;
 }

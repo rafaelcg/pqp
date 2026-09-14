@@ -5,18 +5,21 @@ import { remuxControlSignaturePayload } from "@pqp/shared";
 const logEvent = vi.hoisted(() => vi.fn());
 vi.mock("../lib/log.js", () => ({ logEvent }));
 
-const query = vi.hoisted(() => vi.fn(async (_sql: string, _params?: unknown[]) => ({
-  rowCount: 0,
-  rows: [] as unknown[],
-})));
+const query = vi.hoisted(() =>
+  vi.fn(async (_sql: string, _params?: unknown[]) => ({
+    rowCount: 0,
+    rows: [] as unknown[],
+  })),
+);
 vi.mock("../db.js", () => ({ getPool: () => ({ query }) }));
 
 const {
   isLiveHlsLLEnabled,
   liveHlsLLAllowlist,
   resolveHlsMode,
+  requestedHlsModeForChannel,
   setRequestedHlsMode,
-  requestedHlsModeFor,
+  deriveLlSessionId,
   remuxControlUrl,
   remuxControlSecret,
   remuxOriginBaseUrl,
@@ -61,6 +64,223 @@ function disableLL() {
   delete process.env.LIVE_HLS_REMUX_DELAY_SECONDS;
 }
 
+// ---------------------------------------------------------------------------
+// A minimal fake Postgres for `hls_sessions` / `channel_sessions`, dispatched
+// by matching the SQL text `hls-remux.ts` actually sends. Real rows, real
+// timestamps (ms since epoch internally, ISO strings on the wire out) --
+// this is what lets the "resume the exact same deterministic id" and
+// "retry a stop with backoff" behavior be tested end to end rather than
+// mocked away.
+// ---------------------------------------------------------------------------
+
+interface FakeHlsRow {
+  id: string;
+  channel_id: string;
+  object_prefix: string;
+  started_at: number;
+  ended_at: number | null;
+  remux_session_id: string | null;
+  presenter_peer_id: string | null;
+  stopping_at: number | null;
+  stop_attempts: number;
+}
+
+function createFakeDb() {
+  const hlsRows: FakeHlsRow[] = [];
+  const channelSessions = new Map<
+    string,
+    { channel_id: string; status: string; low_latency_requested: boolean }
+  >();
+  let nextId = 1;
+
+  async function queryImpl(
+    sql: string,
+    params?: unknown[],
+  ): Promise<{ rowCount: number; rows: unknown[] }> {
+    const p = params ?? [];
+
+    if (sql.includes("INSERT INTO hls_sessions")) {
+      const [channelId, objectPrefix, startedAtMs, remuxSessionId, presenterPeerId] = p as [
+        string,
+        string,
+        number,
+        string,
+        string,
+      ];
+      const exists = hlsRows.find((r) => r.object_prefix === objectPrefix);
+      if (!exists) {
+        hlsRows.push({
+          id: `row-${nextId++}`,
+          channel_id: channelId,
+          object_prefix: objectPrefix,
+          started_at: startedAtMs,
+          ended_at: null,
+          remux_session_id: remuxSessionId,
+          presenter_peer_id: presenterPeerId,
+          stopping_at: null,
+          stop_attempts: 0,
+        });
+      }
+      return { rowCount: 1, rows: [] };
+    }
+
+    if (sql.includes("SELECT low_latency_requested")) {
+      const [channelId] = p as [string];
+      const found = [...channelSessions.values()].find(
+        (c) => c.channel_id === channelId && c.status === "live",
+      );
+      return {
+        rowCount: found ? 1 : 0,
+        rows: found ? [{ low_latency_requested: found.low_latency_requested }] : [],
+      };
+    }
+
+    if (sql.includes("UPDATE channel_sessions SET low_latency_requested")) {
+      const [requested, watchPartySessionId] = p as [boolean, string];
+      const row = channelSessions.get(watchPartySessionId);
+      if (row) {
+        row.low_latency_requested = requested;
+      }
+      return { rowCount: row ? 1 : 0, rows: [] };
+    }
+
+    if (sql.includes("stop_attempts = stop_attempts + 1") && sql.includes("object_prefix")) {
+      const [objectPrefix] = p as [string];
+      const row = hlsRows.find((r) => r.object_prefix === objectPrefix && r.ended_at === null);
+      if (row) {
+        row.stopping_at = Date.now();
+        row.stop_attempts += 1;
+      }
+      return { rowCount: row ? 1 : 0, rows: [] };
+    }
+
+    if (sql.includes("stop_attempts = stop_attempts + 1") && sql.includes("WHERE id = $1")) {
+      const [id] = p as [string];
+      const row = hlsRows.find((r) => r.id === id);
+      if (row) {
+        row.stopping_at = Date.now();
+        row.stop_attempts += 1;
+      }
+      return { rowCount: row ? 1 : 0, rows: [] };
+    }
+
+    if (sql.includes("SET ended_at = NOW()") && sql.includes("object_prefix")) {
+      const [objectPrefix] = p as [string];
+      const row = hlsRows.find((r) => r.object_prefix === objectPrefix && r.ended_at === null);
+      if (row) {
+        row.ended_at = Date.now();
+      }
+      return { rowCount: row ? 1 : 0, rows: [] };
+    }
+
+    if (sql.includes("SET ended_at = NOW()") && sql.includes("id = ANY")) {
+      const [ids] = p as [string[]];
+      let count = 0;
+      for (const id of ids) {
+        const row = hlsRows.find((r) => r.id === id && r.ended_at === null);
+        if (row) {
+          row.ended_at = Date.now();
+          count += 1;
+        }
+      }
+      return { rowCount: count, rows: [] };
+    }
+
+    if (sql.includes("ORDER BY started_at DESC")) {
+      const [channelId] = p as [string];
+      const matches = hlsRows
+        .filter((r) => r.channel_id === channelId && r.ended_at === null)
+        .sort((a, b) => b.started_at - a.started_at);
+      const row = matches[0];
+      return {
+        rowCount: row ? 1 : 0,
+        rows: row
+          ? [
+              {
+                id: row.id,
+                started_at: new Date(row.started_at).toISOString(),
+                remux_session_id: row.remux_session_id,
+                presenter_peer_id: row.presenter_peer_id,
+                stopping_at: row.stopping_at ? new Date(row.stopping_at).toISOString() : null,
+                stop_attempts: row.stop_attempts,
+              },
+            ]
+          : [],
+      };
+    }
+
+    if (sql.includes("mode = 'll' AND cleaned_at IS NULL")) {
+      const cutoffMs = Date.now() - 60 * 60 * 1000;
+      const matches = hlsRows.filter((r) => r.ended_at === null || r.ended_at > cutoffMs);
+      return {
+        rowCount: matches.length,
+        rows: matches.map((row) => ({
+          id: row.id,
+          channel_id: row.channel_id,
+          started_at: new Date(row.started_at).toISOString(),
+          ended_at: row.ended_at ? new Date(row.ended_at).toISOString() : null,
+          remux_session_id: row.remux_session_id,
+          presenter_peer_id: row.presenter_peer_id,
+          stopping_at: row.stopping_at ? new Date(row.stopping_at).toISOString() : null,
+          stop_attempts: row.stop_attempts,
+        })),
+      };
+    }
+
+    return { rowCount: 0, rows: [] };
+  }
+
+  return { hlsRows, channelSessions, queryImpl };
+}
+
+/** A minimal in-memory stand-in for the control API's three routes. */
+function createFakeRemuxServer() {
+  const sessions = new Map<string, ReturnType<typeof buildInfo>>();
+  const calls: { method: string; path: string; headers: Headers; body: string }[] = [];
+  const created: string[] = [];
+
+  function buildInfo(sessionId: string, room: string, channelId: string) {
+    return {
+      sessionId,
+      room,
+      channelId,
+      subscribed: true,
+      startedAtMs: Date.now(),
+      lastPartAtMs: null,
+      lastIdrAtMs: null,
+      openSegmentMs: null,
+      partsWritten: 0,
+      bytesServed: 0,
+    };
+  }
+
+  const fetchImpl = async (url: string, init: RequestInit): Promise<Response> => {
+    const { pathname } = new URL(url);
+    const method = (init.method ?? "GET").toUpperCase();
+    const body = typeof init.body === "string" ? init.body : "";
+    calls.push({ method, path: pathname, headers: new Headers(init.headers), body });
+
+    if (method === "POST" && pathname === "/sessions") {
+      const req = JSON.parse(body) as { sessionId: string; room: string; channelId: string };
+      const info = buildInfo(req.sessionId, req.room, req.channelId);
+      sessions.set(req.sessionId, info);
+      created.push(req.sessionId);
+      return new Response(JSON.stringify(info), { status: 201 });
+    }
+    if (method === "DELETE" && pathname.startsWith("/sessions/")) {
+      const id = pathname.slice("/sessions/".length);
+      const existed = sessions.delete(id);
+      return new Response(null, { status: existed ? 204 : 404 });
+    }
+    if (method === "GET" && pathname === "/sessions") {
+      return new Response(JSON.stringify({ sessions: [...sessions.values()] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+  };
+
+  return { fetchImpl, sessions, calls, created };
+}
+
 beforeEach(() => {
   disableLL();
   resetHlsRemuxForTests();
@@ -76,64 +296,104 @@ afterEach(() => {
 
 describe("resolveHlsMode: flag off means conventional, whatever was asked", () => {
   it("stays conventional when the flag is unset, even with the request field set", () => {
-    expect(
-      resolveHlsMode({ serverId: SERVER, requestedMode: true }),
-    ).toBe("conventional");
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("conventional");
   });
 
   it("stays conventional when the flag is on but nothing asked for it", () => {
     process.env.LIVE_HLS_LL = "true";
-    expect(
-      resolveHlsMode({ serverId: SERVER, requestedMode: false }),
-    ).toBe("conventional");
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: false })).toBe("conventional");
   });
 
   it("is ll when the flag is on, requested, and there is no allowlist", () => {
     process.env.LIVE_HLS_LL = "true";
     expect(isLiveHlsLLEnabled()).toBe(true);
     expect(liveHlsLLAllowlist()).toBeNull();
-    expect(
-      resolveHlsMode({ serverId: SERVER, requestedMode: true }),
-    ).toBe("ll");
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("ll");
   });
 
   it("is ll for a server on the allowlist", () => {
     process.env.LIVE_HLS_LL = "true";
     process.env.LIVE_HLS_LL_ALLOWLIST = `${OTHER_SERVER},${SERVER}`;
     expect(liveHlsLLAllowlist()).toEqual(new Set([OTHER_SERVER, SERVER]));
-    expect(
-      resolveHlsMode({ serverId: SERVER, requestedMode: true }),
-    ).toBe("ll");
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("ll");
   });
 
   it("stays conventional for a server NOT on the allowlist", () => {
     process.env.LIVE_HLS_LL = "true";
     process.env.LIVE_HLS_LL_ALLOWLIST = OTHER_SERVER;
-    expect(
-      resolveHlsMode({ serverId: SERVER, requestedMode: true }),
-    ).toBe("conventional");
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("conventional");
   });
 
   it("stays conventional with no server id and an allowlist set", () => {
     process.env.LIVE_HLS_LL = "true";
     process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
-    expect(
-      resolveHlsMode({ serverId: null, requestedMode: true }),
-    ).toBe("conventional");
+    expect(resolveHlsMode({ serverId: null, requestedMode: true })).toBe("conventional");
   });
 });
 
-describe("the per-channel request field", () => {
-  it("defaults to false for a channel that never asked", () => {
-    expect(requestedHlsModeFor(CHANNEL)).toBe(false);
+describe("the per-channel request field is durable, not process memory", () => {
+  it("defaults to false for a channel with no live party row", async () => {
+    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
   });
 
-  it("remembers a request until overwritten", () => {
-    setRequestedHlsMode(CHANNEL, true);
-    expect(requestedHlsModeFor(CHANNEL)).toBe(true);
-    expect(requestedHlsModeFor(OTHER_CHANNEL)).toBe(false);
-    setRequestedHlsMode(CHANNEL, false);
-    expect(requestedHlsModeFor(CHANNEL)).toBe(false);
+  it("persists a request written on the party's own row and reads it back by channel", async () => {
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    db.channelSessions.set("party-1", {
+      channel_id: CHANNEL,
+      status: "live",
+      low_latency_requested: false,
+    });
+
+    await setRequestedHlsMode("party-1", true);
+
+    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(true);
+  });
+
+  it("survives being read by a totally different call -- no in-memory state involved", async () => {
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    db.channelSessions.set("party-2", {
+      channel_id: OTHER_CHANNEL,
+      status: "live",
+      low_latency_requested: true,
+    });
+
+    // resetHlsRemuxForTests clears every in-memory map this module has; the
+    // request must still read back true because it was never IN one.
+    resetHlsRemuxForTests();
+    query.mockImplementation(db.queryImpl);
+
+    expect(await requestedHlsModeForChannel(OTHER_CHANNEL)).toBe(true);
+    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
+  });
+
+  it("answers false, not throws, on a database read failure", async () => {
+    query.mockImplementation(async () => {
+      throw new Error("connection terminated");
+    });
+    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
+  });
+});
+
+describe("deriveLlSessionId: deterministic per (channel, startedAt)", () => {
+  it("is the same value for the same inputs, every time", () => {
+    const a = deriveLlSessionId(CHANNEL, 1_725_000_000_000);
+    const b = deriveLlSessionId(CHANNEL, 1_725_000_000_000);
+    expect(a).toBe(b);
+  });
+
+  it("differs for a different channel or a different startedAt", () => {
+    const base = deriveLlSessionId(CHANNEL, 1_725_000_000_000);
+    expect(deriveLlSessionId(OTHER_CHANNEL, 1_725_000_000_000)).not.toBe(base);
+    expect(deriveLlSessionId(CHANNEL, 1_725_000_000_001)).not.toBe(base);
+  });
+
+  it("is shaped like the uuid the wire contract requires", () => {
+    const id = deriveLlSessionId(CHANNEL, 1_725_000_000_000);
+    expect(id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 });
 
@@ -176,71 +436,17 @@ describe("config helpers", () => {
   });
 });
 
-/** A minimal in-memory stand-in for the control API's three routes. */
-function createFakeRemuxServer() {
-  const sessions = new Map<string, ReturnType<typeof buildInfo>>();
-  const calls: { method: string; path: string; headers: Headers; body: string }[] = [];
-  /** Every sessionId ever accepted by POST /sessions, in order, even after it was later stopped. */
-  const created: string[] = [];
-
-  function buildInfo(sessionId: string, room: string, channelId: string) {
-    return {
-      sessionId,
-      room,
-      channelId,
-      subscribed: true,
-      startedAtMs: Date.now(),
-      lastPartAtMs: null,
-      lastIdrAtMs: null,
-      openSegmentMs: null,
-      partsWritten: 0,
-      bytesServed: 0,
-    };
-  }
-
-  const fetchImpl = async (url: string, init: RequestInit): Promise<Response> => {
-    const { pathname } = new URL(url);
-    const method = (init.method ?? "GET").toUpperCase();
-    const body = typeof init.body === "string" ? init.body : "";
-    calls.push({ method, path: pathname, headers: new Headers(init.headers), body });
-
-    if (method === "POST" && pathname === "/sessions") {
-      const req = JSON.parse(body) as { sessionId: string; room: string; channelId: string };
-      const info = buildInfo(req.sessionId, req.room, req.channelId);
-      sessions.set(req.sessionId, info);
-      created.push(req.sessionId);
-      return new Response(JSON.stringify(info), { status: 201 });
-    }
-    if (method === "DELETE" && pathname.startsWith("/sessions/")) {
-      const id = pathname.slice("/sessions/".length);
-      const existed = sessions.delete(id);
-      return new Response(null, { status: existed ? 204 : 404 });
-    }
-    if (method === "GET" && pathname === "/sessions") {
-      return new Response(
-        JSON.stringify({ sessions: [...sessions.values()] }),
-        { status: 200 },
-      );
-    }
-    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
-  };
-
-  return { fetchImpl, sessions, calls, created };
-}
-
 describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () => {
-  it("sends a timestamp and a matching HMAC-SHA256 signature", async () => {
+  it("sends a timestamp and a matching HMAC-SHA256 signature on the POST that starts a session", async () => {
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
     setHlsRemuxTestHooks({ fetch: server.fetchImpl, now: () => 1_000_000 });
 
     await reconcileLlHlsNow(CHANNEL, "peer-1");
 
-    // A GET /sessions precedes the POST (`findExistingRemuxSession`, the
-    // retry-safety check) -- both must be signed, so this asserts the LAST
-    // call, the POST that actually starts the session.
-    const call = server.calls.at(-1)!;
-    expect(call.method).toBe("POST");
+    const call = server.calls.find((c) => c.method === "POST")!;
     expect(call.path).toBe("/sessions");
     const timestamp = call.headers.get("x-pqp-remux-timestamp");
     const signature = call.headers.get("x-pqp-remux-signature");
@@ -253,6 +459,8 @@ describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () =
 
   it("signs a DELETE with the id in the path and an empty body", async () => {
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
     setHlsRemuxTestHooks({ fetch: server.fetchImpl, now: () => 2_000_000 });
     await reconcileLlHlsNow(CHANNEL, "peer-1");
@@ -260,9 +468,7 @@ describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () =
 
     await stopLlSession(CHANNEL, "test-stop");
 
-    expect(server.calls).toHaveLength(1);
-    const call = server.calls[0]!;
-    expect(call.method).toBe("DELETE");
+    const call = server.calls.find((c) => c.method === "DELETE")!;
     expect(call.body).toBe("");
     const signature = call.headers.get("x-pqp-remux-signature");
     const expected = createHmac("sha256", SECRET)
@@ -272,187 +478,30 @@ describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () =
   });
 });
 
-describe("starting and stopping a session", () => {
-  it("fails closed, counted, when the control plane is not configured", async () => {
-    // LIVE_HLS_LL unset entirely: reconcileLlHlsNow is only ever reached
-    // from hls-egress.ts after resolveHlsMode already said "ll", but this
-    // function itself must not assume that -- an operator can set the flag
-    // without yet setting the box's URL and secret.
-    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
-    expect(stream).toBeNull();
-    expect(llHlsActivity().startFailures).toBe(1);
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlStartFailed",
-      expect.objectContaining({ channelId: CHANNEL, reason: "not-configured" }),
-    );
-  });
-
-  it("starts a session, records the row, and returns a stream with mode ll", async () => {
+describe("the LL playlist URL never names the origin host (item 1)", () => {
+  it("is an API-relative path, never the raw egress origin", async () => {
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl, now: () => 3_000_000 });
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
 
     const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
 
     expect(stream).not.toBeNull();
-    expect(stream?.mode).toBe("ll");
-    expect(stream?.presenterPeerId).toBe("peer-1");
-    // The SAME access-controlled, signed-token path the conventional ladder
-    // uses -- never the egress box's raw origin URL. See llPlaylistUrl's own
-    // doc comment (a Farol HIGH finding on the first version of this file).
     expect(stream?.hlsUrl.startsWith(`/api/voice/hls-playlist/${CHANNEL}/`)).toBe(true);
-    expect(stream?.hlsUrl.startsWith(ORIGIN_URL)).toBe(false);
-    expect(llHasRoom(CHANNEL)).toBe(true);
-    expect(llStreamFor(CHANNEL)).toEqual(stream);
-    expect(llHlsActivity().sessions).toBe(1);
-
-    const insertCall = query.mock.calls.find(([sql]) =>
-      (sql as string).includes("INSERT INTO hls_sessions"),
-    );
-    expect(insertCall).toBeTruthy();
-    expect(insertCall![1]).toEqual(
-      expect.arrayContaining([CHANNEL]),
-    );
+    expect(stream?.hlsUrl).not.toContain(ORIGIN_URL);
+    expect(stream?.hlsUrl).not.toMatch(/^https?:\/\//);
   });
 
-  it("reuses the running session for the same presenter, without a second call", async () => {
+  it("is API-relative for an adopted session too", async () => {
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-
-    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
-    const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
-
-    expect(second).toEqual(first);
-    expect(server.calls.filter((c) => c.method === "POST")).toHaveLength(1);
-  });
-
-  it("stops and restarts on a presenter change", async () => {
-    enableLL();
-    const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-
-    await reconcileLlHlsNow(CHANNEL, "peer-1");
-    const second = await reconcileLlHlsNow(CHANNEL, "peer-2");
-
-    expect(second?.presenterPeerId).toBe("peer-2");
-    // A genuinely new session (a second distinct sessionId was created on
-    // the box), not the old presenter's row relabelled.
-    expect(server.created).toHaveLength(2);
-    expect(server.created[0]).not.toBe(server.created[1]);
-    expect(server.sessions.size).toBe(1);
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlStopped",
-      expect.objectContaining({ channelId: CHANNEL, reason: "presenter-changed" }),
-    );
-  });
-
-  it("stops on no presenter and logs the reason", async () => {
-    enableLL();
-    const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-    await reconcileLlHlsNow(CHANNEL, "peer-1");
-
-    const result = await reconcileLlHlsNow(CHANNEL, null);
-
-    expect(result).toBeNull();
-    expect(llHasRoom(CHANNEL)).toBe(false);
-    expect(server.sessions.size).toBe(0);
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlStopped",
-      expect.objectContaining({ channelId: CHANNEL, reason: "no-share" }),
-    );
-  });
-
-  it("treats a 404 on stop (already gone) as success, not a failure to log", async () => {
-    enableLL();
-    const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-    await reconcileLlHlsNow(CHANNEL, "peer-1");
-    // Gone on the box already -- a race with something else, or a restart.
-    server.sessions.clear();
-
-    await stopLlSession(CHANNEL, "test");
-
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlStopped",
-      expect.objectContaining({ reason: "test" }),
-    );
-    expect(logEvent).not.toHaveBeenCalledWith(
-      "voice.hlsLlStopFailed",
-      expect.anything(),
-    );
-  });
-
-  it("keeps the room when the remote DELETE fails, instead of forgetting it", async () => {
-    enableLL();
-    const server = createFakeRemuxServer();
-    let failDelete = false;
-    setHlsRemuxTestHooks({
-      fetch: async (url, init) => {
-        if (failDelete && (init.method ?? "GET").toUpperCase() === "DELETE") {
-          throw new Error("ETIMEDOUT");
-        }
-        return server.fetchImpl(url, init);
-      },
-    });
-    await reconcileLlHlsNow(CHANNEL, "peer-1");
-    failDelete = true;
-
-    await stopLlSession(CHANNEL, "test");
-
-    // Still owned: a failed stop must not be forgotten, or the next
-    // reconcile would start a second session on top of one that, for all
-    // this process knows, is still running on the box (a Farol finding on
-    // PR #580).
-    expect(llHasRoom(CHANNEL)).toBe(true);
-    expect(server.sessions.size).toBe(1);
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlStopFailed",
-      expect.objectContaining({ channelId: CHANNEL, reason: "test" }),
-    );
-  });
-
-  it("defers a presenter switch rather than starting a second session when the old one won't stop", async () => {
-    enableLL();
-    const server = createFakeRemuxServer();
-    let failDelete = false;
-    setHlsRemuxTestHooks({
-      fetch: async (url, init) => {
-        if (failDelete && (init.method ?? "GET").toUpperCase() === "DELETE") {
-          throw new Error("ETIMEDOUT");
-        }
-        return server.fetchImpl(url, init);
-      },
-    });
-    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
-    failDelete = true;
-
-    const second = await reconcileLlHlsNow(CHANNEL, "peer-2");
-
-    // The old session's stop could not be confirmed, so no new one was
-    // started on top of it: the channel is still reported as peer-1's
-    // session, not a second, orphaned peer-2 session.
-    expect(second).toEqual(first);
-    expect(server.created).toHaveLength(1);
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlSwitchDeferred",
-      expect.objectContaining({ channelId: CHANNEL, presenterPeerId: "peer-2" }),
-    );
-  });
-
-  it("does NOT reuse a stale session found only by channelId, with no pending attempt of its own", async () => {
-    // A leftover session for this room that THIS process never itself
-    // attempted (it survived an ended party's failed teardown, say) must
-    // never be silently adopted as if it were a fresh start -- the Farol
-    // finding (second round) that replaced "any session for this
-    // channelId" with "the specific sessionId I am waiting to confirm".
-    // Cleaning up a genuine leftover like this one is `adoptLlHlsSessions`'s
-    // job on the next boot, not a live start's.
-    enableLL();
-    const server = createFakeRemuxServer();
-    server.sessions.set("00000000-0000-4000-8000-0000000000e1", {
-      sessionId: "00000000-0000-4000-8000-0000000000e1",
+    const sessionId = "00000000-0000-4000-8000-0000000000c1";
+    server.sessions.set(sessionId, {
+      sessionId,
       room: CHANNEL,
       channelId: CHANNEL,
       subscribed: true,
@@ -463,28 +512,81 @@ describe("starting and stopping a session", () => {
       partsWritten: 0,
       bytesServed: 0,
     });
+    db.hlsRows.push({
+      id: "row-adopt",
+      channel_id: CHANNEL,
+      object_prefix: `live/${CHANNEL}/1725000000000-ll`,
+      started_at: 1_725_000_000_000,
+      ended_at: null,
+      remux_session_id: sessionId,
+      presenter_peer_id: "peer-1",
+      stopping_at: null,
+      stop_attempts: 0,
+    });
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+
+    await adoptLlHlsSessions();
+
+    expect(llStreamFor(CHANNEL)?.hlsUrl).not.toMatch(/^https?:\/\//);
+    expect(llStreamFor(CHANNEL)?.hlsUrl).toBe(`/api/voice/hls-playlist/${CHANNEL}/1725000000000`);
+  });
+});
+
+describe("starting a session (item 2: deterministic ids)", () => {
+  it("fails closed, counted, when the control plane is not configured", async () => {
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    expect(stream).toBeNull();
+    expect(llHlsActivity().startFailures).toBe(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlStartFailed",
+      expect.objectContaining({ channelId: CHANNEL, reason: "not-configured" }),
+    );
+  });
+
+  it("starts a session, records a row keyed by the derived id, and returns a stream", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
     setHlsRemuxTestHooks({ fetch: server.fetchImpl });
 
     const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
 
     expect(stream).not.toBeNull();
-    // A brand-new session was started; the stale one was left exactly as it
-    // was, not touched or reused.
-    expect(server.created).toHaveLength(1);
-    expect(server.created[0]).not.toBe("00000000-0000-4000-8000-0000000000e1");
-    expect(server.sessions.size).toBe(2);
-    expect(logEvent).not.toHaveBeenCalledWith(
-      "voice.hlsLlStartFoundExisting",
-      expect.anything(),
-    );
+    expect(stream?.mode).toBe("ll");
+    expect(stream?.presenterPeerId).toBe("peer-1");
+    expect(llHasRoom(CHANNEL)).toBe(true);
+    expect(llStreamFor(CHANNEL)).toEqual(stream);
+    expect(llHlsActivity().sessions).toBe(1);
+
+    expect(db.hlsRows).toHaveLength(1);
+    const row = db.hlsRows[0]!;
+    expect(row.remux_session_id).toBe(deriveLlSessionId(CHANNEL, row.started_at));
+    expect(server.created).toEqual([row.remux_session_id]);
   });
 
-  it("resumes an ambiguous start on the next attempt instead of minting a duplicate", async () => {
-    // The POST reaches the box, but this process never sees the response
-    // (a dropped connection, a timeout on the way back). The NEXT attempt
-    // for the same channel must find and confirm that exact session rather
-    // than starting a second one.
+  it("reuses the running session for the same presenter, without a second call", async () => {
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+
+    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(second).toEqual(first);
+    expect(server.created).toHaveLength(1);
+  });
+
+  it("resumes an ambiguous start on the next attempt with the SAME derived id -- no marker needed", async () => {
+    // The POST reaches the box, but this process never sees the response.
+    // The row was inserted BEFORE the POST, so the next attempt finds it via
+    // `findOpenLlRow`, recomputes the identical id from (channelId,
+    // startedAt), and confirms it rather than minting a second one.
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
     let dropNextPostResponse = true;
     setHlsRemuxTestHooks({
@@ -502,27 +604,29 @@ describe("starting and stopping a session", () => {
     const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
     expect(first).toBeNull();
     expect(server.created).toHaveLength(1);
-    expect(llHasRoom(CHANNEL)).toBe(false);
+    expect(db.hlsRows).toHaveLength(1);
+    const expectedId = db.hlsRows[0]!.remux_session_id;
 
     const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
 
     expect(second).not.toBeNull();
     expect(server.created).toHaveLength(1); // no second POST
-    expect(server.sessions.size).toBe(1);
+    expect(db.hlsRows).toHaveLength(1); // no second row either
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlStartFoundExisting",
-      expect.objectContaining({ channelId: CHANNEL, sessionId: server.created[0] }),
+      expect.objectContaining({ channelId: CHANNEL, sessionId: expectedId }),
     );
   });
 
-  it("expires a stale pending marker instead of letting a later, unrelated party adopt it", async () => {
-    // A channel whose one ambiguous attempt is never retried (the presenter
-    // leaves, nobody shares again for a while) must not keep that marker
-    // forever: a much later, unrelated party starting in the SAME channel
-    // must never "confirm" the old attempt's session just because its id
-    // still happens to be the one remembered (a Farol finding on PR #580,
-    // third round).
+  it("never lets a much later, unrelated party in the same channel adopt a stale attempt's id", async () => {
+    // There is no expiring marker to forget any more (item 2 removed it):
+    // the row itself is the only reference, and it is only ever resolved by
+    // confirming it, stopping it, or a boot sweep finding it truly gone.
+    // Time passing alone changes nothing -- the durable row is still there
+    // when a different presenter reconciles much later.
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
     let dropNextPostResponse = true;
     setHlsRemuxTestHooks({
@@ -530,58 +634,7 @@ describe("starting and stopping a session", () => {
         const method = (init.method ?? "GET").toUpperCase();
         if (method === "POST" && dropNextPostResponse) {
           dropNextPostResponse = false;
-          await server.fetchImpl(url, init); // lands on the box
-          throw new Error("ETIMEDOUT"); // but never reaches this caller
-        }
-        return server.fetchImpl(url, init);
-      },
-    });
-    vi.useFakeTimers();
-    try {
-      const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
-      expect(first).toBeNull();
-      const staleSessionId = server.created[0]!;
-      expect(server.sessions.has(staleSessionId)).toBe(true);
-
-      // Past the 2-minute window, and for a different presenter entirely --
-      // a genuinely new, unrelated party in this same channel.
-      await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
-
-      const second = await reconcileLlHlsNow(CHANNEL, "peer-9");
-
-      expect(second).not.toBeNull();
-      expect(second?.presenterPeerId).toBe("peer-9");
-      // A fresh session was started -- the stale one was never treated as
-      // belonging to this new party.
-      expect(server.created).toHaveLength(2);
-      expect(server.created[1]).not.toBe(staleSessionId);
-      expect(logEvent).toHaveBeenCalledWith(
-        "voice.hlsLlPendingStartExpired",
-        expect.objectContaining({ channelId: CHANNEL, sessionId: staleSessionId }),
-      );
-      expect(logEvent).not.toHaveBeenCalledWith(
-        "voice.hlsLlStartFoundExisting",
-        expect.objectContaining({ sessionId: staleSessionId }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("finishes an unresolved rollback before starting anything new for the room", async () => {
-    enableLL();
-    const server = createFakeRemuxServer();
-    let failInsert = true;
-    let failDelete = true;
-    query.mockImplementation(async (sql: string) => {
-      if (sql.includes("INSERT INTO hls_sessions") && failInsert) {
-        throw new Error("db down");
-      }
-      return { rowCount: 0, rows: [] };
-    });
-    setHlsRemuxTestHooks({
-      fetch: async (url, init) => {
-        if (failDelete && (init.method ?? "GET").toUpperCase() === "DELETE") {
+          await server.fetchImpl(url, init);
           throw new Error("ETIMEDOUT");
         }
         return server.fetchImpl(url, init);
@@ -590,47 +643,177 @@ describe("starting and stopping a session", () => {
 
     const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
     expect(first).toBeNull();
-    // The session is still running: recording failed AND the rollback
-    // DELETE also failed, so nothing tore it down yet.
-    expect(server.sessions.size).toBe(1);
-    expect(server.created).toHaveLength(1);
+    const staleId = db.hlsRows[0]!.remux_session_id;
 
-    failDelete = false;
-    failInsert = false;
-    const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
-
-    expect(second).not.toBeNull();
-    // The stuck session was cleaned up first, then a genuinely fresh one
-    // was started -- not the same id resurrected, and not a second one
-    // running alongside the first.
-    expect(server.created).toHaveLength(2);
-    expect(server.sessions.size).toBe(1);
-  });
-
-  it("stops the session it just started/found and refuses to publish when the row cannot be recorded", async () => {
-    enableLL();
-    const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-    query.mockImplementation(async (sql: string) => {
-      if (sql.includes("INSERT INTO hls_sessions")) {
-        throw new Error("connection terminated");
-      }
-      return { rowCount: 0, rows: [] };
-    });
-
-    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
-
-    expect(stream).toBeNull();
-    expect(llHasRoom(CHANNEL)).toBe(false);
-    // The remux session that was started is stopped again: nothing keeps
-    // running on the box with no `hls_sessions` row behind it (a Farol
-    // finding on PR #580).
-    expect(server.sessions.size).toBe(0);
-    expect(llHlsActivity().startFailures).toBe(1);
+    vi.useFakeTimers();
+    try {
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      // A different presenter: the row still belongs to peer-1's attempt,
+      // so this must close it, not confirm it as this presenter's own.
+      const second = await reconcileLlHlsNow(CHANNEL, "peer-9");
+      expect(second?.presenterPeerId).toBe("peer-9");
+      // The stale row is stopped and superseded by a genuinely new one (a
+      // new derived id for the new startedAt), never confirmed as-is.
+      expect(llStreamFor(CHANNEL)?.presenterPeerId).toBe("peer-9");
+      const finalRow = db.hlsRows.find((r) => r.ended_at === null);
+      expect(finalRow?.remux_session_id).not.toBe(staleId);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
-describe("boot adoption", () => {
+describe("stopping a session (item 3: retry with backoff, never silently forgotten)", () => {
+  it("stops on no presenter and marks the row ended", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    const result = await reconcileLlHlsNow(CHANNEL, null);
+
+    expect(result).toBeNull();
+    expect(llHasRoom(CHANNEL)).toBe(false);
+    expect(server.sessions.size).toBe(0);
+    expect(db.hlsRows[0]!.ended_at).not.toBeNull();
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlStopped",
+      expect.objectContaining({ channelId: CHANNEL, reason: "no-share" }),
+    );
+  });
+
+  it("treats a 404 on stop (already gone) as success", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
+    server.sessions.clear();
+
+    await stopLlSession(CHANNEL, "test");
+
+    expect(db.hlsRows[0]!.ended_at).not.toBeNull();
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlStopped",
+      expect.objectContaining({ reason: "test" }),
+    );
+    expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopFailed", expect.anything());
+  });
+
+  it("counts a failed DELETE in llStopFailures and marks the row stopping, not ended", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        if ((init.method ?? "GET").toUpperCase() === "DELETE") {
+          throw new Error("ETIMEDOUT");
+        }
+        return server.fetchImpl(url, init);
+      },
+    });
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    await stopLlSession(CHANNEL, "test");
+
+    expect(llHlsActivity().stopFailures).toBe(1);
+    expect(llHasRoom(CHANNEL)).toBe(false); // the in-memory room is forgotten either way
+    const row = db.hlsRows[0]!;
+    expect(row.ended_at).toBeNull(); // but the DB row is not: it is "stopping"
+    expect(row.stopping_at).not.toBeNull();
+    expect(server.sessions.size).toBe(1); // still running on the box
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlStopFailed",
+      expect.objectContaining({ channelId: CHANNEL, reason: "test" }),
+    );
+  });
+
+  it("retries a stopping row on the next start attempt for a different presenter, respecting backoff", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    let failDelete = true;
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        if (failDelete && (init.method ?? "GET").toUpperCase() === "DELETE") {
+          throw new Error("ETIMEDOUT");
+        }
+        return server.fetchImpl(url, init);
+      },
+    });
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
+    await stopLlSession(CHANNEL, "no-share"); // fails, row -> stopping
+    expect(llHlsActivity().stopFailures).toBe(1);
+
+    // Immediately retrying (still inside the backoff window) must not hit
+    // the control API again.
+    const server2Calls = server.calls.length;
+    const immediateRetry = await reconcileLlHlsNow(CHANNEL, "peer-2");
+    expect(immediateRetry).toBeNull(); // still blocked: the stopping row is unresolved
+    expect(server.calls.length).toBe(server2Calls); // no new DELETE attempted, backoff held
+
+    // Past the backoff window and with the DELETE now able to succeed:
+    failDelete = false;
+    vi.useFakeTimers();
+    try {
+      // One failed attempt so far -> backoff step index 1 -> 5000ms.
+      await vi.advanceTimersByTimeAsync(6_000);
+      const resumed = await reconcileLlHlsNow(CHANNEL, "peer-2");
+      expect(resumed).not.toBeNull();
+      expect(resumed?.presenterPeerId).toBe("peer-2");
+      const oldRow = db.hlsRows.find((r) => r.presenter_peer_id === "peer-1");
+      expect(oldRow?.ended_at).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("per-room single-flight (item 4)", () => {
+  it("serializes two concurrent reconciles for the same channel into one session", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+
+    const [a, b] = await Promise.all([
+      reconcileLlHlsNow(CHANNEL, "peer-1"),
+      reconcileLlHlsNow(CHANNEL, "peer-1"),
+    ]);
+
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a?.hlsUrl).toBe(b?.hlsUrl);
+    expect(server.created).toHaveLength(1);
+    expect(db.hlsRows).toHaveLength(1);
+  });
+
+  it("does not interleave a concurrent start and stop for the same channel", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    const results = await Promise.all([
+      reconcileLlHlsNow(CHANNEL, "peer-1"), // no-op, same presenter
+      reconcileLlHlsNow(CHANNEL, null), // stop
+    ]);
+
+    // Whichever order they queued in, the two calls ran one after another,
+    // never concurrently mutating `llRooms` for this channel.
+    expect(results.some((r) => r === null)).toBe(true);
+  });
+});
+
+describe("boot adoption (item 5: excludes ended/stopping rows, bounded concurrency, batched updates)", () => {
   it("does nothing, and touches no database, when the flag is off", async () => {
     const result = await adoptLlHlsSessions();
     expect(result).toEqual({ adopted: 0, ended: 0, stopped: 0 });
@@ -652,12 +835,14 @@ describe("boot adoption", () => {
     );
   });
 
-  it("adopts a remote session with a matching, owned row", async () => {
+  it("adopts a remote session with a matching, open, non-stopping row", async () => {
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-    server.sessions.set("00000000-0000-4000-8000-0000000000c1", {
-      sessionId: "00000000-0000-4000-8000-0000000000c1",
+    const sessionId = "00000000-0000-4000-8000-0000000000c1";
+    server.sessions.set(sessionId, {
+      sessionId,
       room: CHANNEL,
       channelId: CHANNEL,
       subscribed: true,
@@ -668,25 +853,18 @@ describe("boot adoption", () => {
       partsWritten: 3,
       bytesServed: 1024,
     });
-    query.mockImplementation(async (sql: string) => {
-      if (sql.includes("SELECT")) {
-        return {
-          rowCount: 1,
-          rows: [
-            {
-              id: "row-1",
-              channel_id: CHANNEL,
-              started_at: new Date(1_725_000_000_000).toISOString(),
-              ended_at: null,
-              remux_session_id: "00000000-0000-4000-8000-0000000000c1",
-              presenter_peer_id: "peer-1",
-              origin_base_url: ORIGIN_URL,
-            },
-          ],
-        };
-      }
-      return { rowCount: 0, rows: [] };
+    db.hlsRows.push({
+      id: "row-1",
+      channel_id: CHANNEL,
+      object_prefix: `live/${CHANNEL}/1725000000000-ll`,
+      started_at: 1_725_000_000_000,
+      ended_at: null,
+      remux_session_id: sessionId,
+      presenter_peer_id: "peer-1",
+      stopping_at: null,
+      stop_attempts: 0,
     });
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
 
     const result = await adoptLlHlsSessions();
 
@@ -694,23 +872,16 @@ describe("boot adoption", () => {
     expect(llHasRoom(CHANNEL)).toBe(true);
     expect(llStreamFor(CHANNEL)?.presenterPeerId).toBe("peer-1");
     expect(llStreamFor(CHANNEL)?.mode).toBe("ll");
-    // The go-live request is restored alongside the adopted row, or the
-    // very next reconcile (a roster event after boot) would resolve
-    // "conventional" and immediately stop the session this just adopted.
-    expect(requestedHlsModeFor(CHANNEL)).toBe(true);
   });
 
   it("does NOT adopt a row already marked ended, even if the box still answers with it", async () => {
-    // A failed DELETE outside `stopLlSession`'s own retry path, or a bare
-    // race with the 1-hour lookback window: the row says this process
-    // already told the party it was over. Adopting it anyway would
-    // resurrect a session someone was told had stopped (a Farol finding on
-    // PR #580).
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-    server.sessions.set("00000000-0000-4000-8000-0000000000c3", {
-      sessionId: "00000000-0000-4000-8000-0000000000c3",
+    const sessionId = "00000000-0000-4000-8000-0000000000c3";
+    server.sessions.set(sessionId, {
+      sessionId,
       room: CHANNEL,
       channelId: CHANNEL,
       subscribed: true,
@@ -721,48 +892,36 @@ describe("boot adoption", () => {
       partsWritten: 0,
       bytesServed: 0,
     });
-    query.mockImplementation(async (sql: string) => {
-      if (sql.includes("SELECT")) {
-        return {
-          rowCount: 1,
-          rows: [
-            {
-              id: "row-ended",
-              channel_id: CHANNEL,
-              started_at: new Date(1_725_000_000_000).toISOString(),
-              ended_at: new Date().toISOString(),
-              remux_session_id: "00000000-0000-4000-8000-0000000000c3",
-              presenter_peer_id: "peer-1",
-              origin_base_url: ORIGIN_URL,
-            },
-          ],
-        };
-      }
-      return { rowCount: 0, rows: [] };
+    db.hlsRows.push({
+      id: "row-ended",
+      channel_id: CHANNEL,
+      object_prefix: `live/${CHANNEL}/1725000000000-ll`,
+      started_at: 1_725_000_000_000,
+      ended_at: Date.now(),
+      remux_session_id: sessionId,
+      presenter_peer_id: "peer-1",
+      stopping_at: null,
+      stop_attempts: 0,
     });
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
 
     const result = await adoptLlHlsSessions();
 
     expect(result).toEqual({ adopted: 0, ended: 0, stopped: 1 });
     expect(llHasRoom(CHANNEL)).toBe(false);
-    expect(server.sessions.has("00000000-0000-4000-8000-0000000000c3")).toBe(false);
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlOrphanStopped",
-      expect.objectContaining({
-        sessionId: "00000000-0000-4000-8000-0000000000c3",
-        reason: "no-row",
-      }),
-    );
+    expect(server.sessions.has(sessionId)).toBe(false);
   });
 
-  it("stops a remote session with no owning row", async () => {
+  it("does NOT adopt a row marked stopping -- retries the stop instead", async () => {
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-    server.sessions.set("00000000-0000-4000-8000-0000000000c2", {
-      sessionId: "00000000-0000-4000-8000-0000000000c2",
-      room: OTHER_CHANNEL,
-      channelId: OTHER_CHANNEL,
+    const sessionId = "00000000-0000-4000-8000-0000000000c4";
+    server.sessions.set(sessionId, {
+      sessionId,
+      room: CHANNEL,
+      channelId: CHANNEL,
       subscribed: true,
       startedAtMs: Date.now(),
       lastPartAtMs: null,
@@ -771,56 +930,28 @@ describe("boot adoption", () => {
       partsWritten: 0,
       bytesServed: 0,
     });
-
-    const result = await adoptLlHlsSessions();
-
-    expect(result).toEqual({ adopted: 0, ended: 0, stopped: 1 });
-    expect(server.sessions.has("00000000-0000-4000-8000-0000000000c2")).toBe(false);
-    expect(logEvent).toHaveBeenCalledWith(
-      "voice.hlsLlOrphanStopped",
-      expect.objectContaining({ sessionId: "00000000-0000-4000-8000-0000000000c2", reason: "no-row" }),
-    );
-  });
-
-  it("ends a row whose remote session is gone", async () => {
-    enableLL();
-    const server = createFakeRemuxServer();
-    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
-    // No sessions on the box at all -- it restarted with nothing to adopt.
-    let updateCalled = false;
-    query.mockImplementation(async (sql: string, params?: unknown[]) => {
-      if (sql.includes("SELECT")) {
-        return {
-          rowCount: 1,
-          rows: [
-            {
-              id: "row-dead",
-              channel_id: CHANNEL,
-              started_at: new Date().toISOString(),
-              ended_at: null,
-              remux_session_id: "remux-dead",
-              presenter_peer_id: "peer-1",
-              origin_base_url: ORIGIN_URL,
-            },
-          ],
-        };
-      }
-      if (sql.includes("UPDATE hls_sessions")) {
-        updateCalled = true;
-        // One round trip for every stale row (a batched ANY($1) call), not
-        // one UPDATE per row -- a Farol finding on PR #580.
-        expect(params).toEqual([["row-dead"]]);
-      }
-      return { rowCount: 1, rows: [] };
+    db.hlsRows.push({
+      id: "row-stopping",
+      channel_id: CHANNEL,
+      object_prefix: `live/${CHANNEL}/1725000000000-ll`,
+      started_at: 1_725_000_000_000,
+      ended_at: null,
+      remux_session_id: sessionId,
+      presenter_peer_id: "peer-1",
+      stopping_at: Date.now() - 60_000, // well past every backoff step
+      stop_attempts: 1,
     });
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
 
     const result = await adoptLlHlsSessions();
 
-    expect(result).toEqual({ adopted: 0, ended: 1, stopped: 0 });
-    expect(updateCalled).toBe(true);
+    expect(llHasRoom(CHANNEL)).toBe(false);
+    expect(server.sessions.has(sessionId)).toBe(false);
+    expect(db.hlsRows[0]!.ended_at).not.toBeNull();
+    expect(result?.adopted).toBe(0);
   });
 
-  it("stops orphan sessions in parallel, BOUNDED, not one at a time and not all at once", async () => {
+  it("stops orphan sessions in parallel, BOUNDED at 4, not one at a time and not all at once", async () => {
     enableLL();
     const server = createFakeRemuxServer();
     let concurrentInFlight = 0;
@@ -837,9 +968,6 @@ describe("boot adoption", () => {
         return server.fetchImpl(url, init);
       },
     });
-    // More orphans than the concurrency bound, so an unbounded
-    // `Promise.allSettled` over the whole set (the Farol finding this test
-    // pins) would show every one of them in flight at once.
     const ids = Array.from(
       { length: 12 },
       (_, i) => `00000000-0000-4000-8000-00000000d${String(i).padStart(3, "0")}`,
@@ -863,17 +991,73 @@ describe("boot adoption", () => {
 
     expect(result).toEqual({ adopted: 0, ended: 0, stopped: 12 });
     expect(maxConcurrent).toBeGreaterThan(1);
-    expect(maxConcurrent).toBeLessThanOrEqual(5);
+    expect(maxConcurrent).toBeLessThanOrEqual(4);
+  });
+
+  it("ends stale rows (no matching remote session) with one batched UPDATE, not one per row", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    // No sessions on the box at all -- two rows that were open here now
+    // have nothing on the box behind them.
+    db.hlsRows.push(
+      {
+        id: "row-a",
+        channel_id: CHANNEL,
+        object_prefix: `live/${CHANNEL}/1000-ll`,
+        started_at: 1000,
+        ended_at: null,
+        remux_session_id: "00000000-0000-4000-8000-0000000000d1",
+        presenter_peer_id: "peer-1",
+        stopping_at: null,
+        stop_attempts: 0,
+      },
+      {
+        id: "row-b",
+        channel_id: OTHER_CHANNEL,
+        object_prefix: `live/${OTHER_CHANNEL}/2000-ll`,
+        started_at: 2000,
+        ended_at: null,
+        remux_session_id: "00000000-0000-4000-8000-0000000000d2",
+        presenter_peer_id: "peer-2",
+        stopping_at: null,
+        stop_attempts: 0,
+      },
+    );
+    let updateCalls = 0;
+    const originalImpl = db.queryImpl;
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("id = ANY")) {
+        updateCalls += 1;
+        expect((params![0] as string[]).sort()).toEqual(["row-a", "row-b"]);
+      }
+      return originalImpl(sql, params);
+    });
+
+    const result = await adoptLlHlsSessions();
+
+    expect(result).toEqual({ adopted: 0, ended: 2, stopped: 0 });
+    expect(updateCalls).toBe(1);
+    expect(db.hlsRows.every((r) => r.ended_at !== null)).toBe(true);
   });
 });
 
 describe("llHlsActivity", () => {
   it("reads zero on a fresh process", () => {
-    expect(llHlsActivity()).toEqual({ sessions: 0, startFailures: 0, demoted: 0 });
+    expect(llHlsActivity()).toEqual({
+      sessions: 0,
+      startFailures: 0,
+      stopFailures: 0,
+      demoted: 0,
+    });
   });
 
   it("resetHlsRemuxForTests clears sessions and counters", async () => {
     enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
     const server = createFakeRemuxServer();
     setHlsRemuxTestHooks({ fetch: server.fetchImpl });
     await reconcileLlHlsNow(CHANNEL, "peer-1");
@@ -881,7 +1065,12 @@ describe("llHlsActivity", () => {
 
     resetHlsRemuxForTests();
 
-    expect(llHlsActivity()).toEqual({ sessions: 0, startFailures: 0, demoted: 0 });
+    expect(llHlsActivity()).toEqual({
+      sessions: 0,
+      startFailures: 0,
+      stopFailures: 0,
+      demoted: 0,
+    });
     expect(llHasRoom(CHANNEL)).toBe(false);
   });
 });

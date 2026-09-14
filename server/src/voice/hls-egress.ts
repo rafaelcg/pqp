@@ -36,7 +36,7 @@ import {
 import {
   llHasRoom,
   reconcileLlHlsNow,
-  requestedHlsModeFor,
+  requestedHlsModeForChannel,
   resetHlsRemuxForTests,
   resolveHlsMode,
   stopLlSession,
@@ -4098,7 +4098,7 @@ async function reconcileLiveHlsNow(
   // this function does for the ladder.
   const mode = resolveHlsMode({
     serverId,
-    requestedMode: requestedHlsModeFor(channelId),
+    requestedMode: await requestedHlsModeForChannel(channelId),
   });
   if (mode === "ll") {
     // A mode flip mid-party (the request field changed between two "Ir ao

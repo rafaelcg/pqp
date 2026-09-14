@@ -415,6 +415,13 @@ export interface AdminMetrics {
      */
     llStartFailures: number;
     /**
+     * A `DELETE /sessions/:id` to the control API failed, at either the
+     * normal stop path or a retry. Belongs at zero; a nonzero, growing
+     * number is a session `stopLlSession`/`retryStopOpenLlRow` cannot yet
+     * confirm the box has actually released.
+     */
+    llStopFailures: number;
+    /**
      * An LL session was demoted back to the conventional ladder by `L1.6`'s
      * watchdog, which does not exist yet -- this reads zero on every
      * deployment until that task ships. Reserved here now so the dashboard
@@ -1066,6 +1073,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       latency: hlsTelemetryActivity(),
       llSessions: llActivity.sessions,
       llStartFailures: llActivity.startFailures,
+      llStopFailures: llActivity.stopFailures,
       llDemoted: llActivity.demoted,
     },
     topServers24h: topServers.rows.map((row) => ({
