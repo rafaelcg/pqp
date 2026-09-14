@@ -144,6 +144,7 @@ export function clearAuthCaches(): void {
   profileInflight.clear();
   userCache.clear();
   userInflight.clear();
+  evictionGeneration.clear();
 }
 
 /**
@@ -169,6 +170,13 @@ export function sweepAuthCaches(now = Date.now()): void {
   for (const [key, entry] of userCache) {
     if (entry.expiresAt <= now) {
       userCache.delete(key);
+    }
+  }
+  // Same TTL as the caches it guards — see `evictionGeneration`'s doc
+  // comment for why that bound is safe to reuse here.
+  for (const [key, entry] of evictionGeneration) {
+    if (entry.updatedAt + PROFILE_TTL_MS <= now) {
+      evictionGeneration.delete(key);
     }
   }
 }
@@ -265,6 +273,10 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
     return existing;
   }
 
+  // Snapshot before the `await` below — see `evictionGeneration`'s doc
+  // comment. An eviction that lands while this lookup is in flight must not
+  // be undone by this lookup's own completion.
+  const startGeneration = currentEvictionGeneration(clerkId);
   const request = (async () => {
     try {
       const user = await clerk.users.getUser(clerkId);
@@ -274,10 +286,12 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
         avatarUrl: user.imageUrl ?? null,
         emailDomains: verifiedEmailDomains(user.emailAddresses),
       };
-      profileCache.set(clerkId, {
-        user: profile,
-        expiresAt: Date.now() + PROFILE_TTL_MS,
-      });
+      if (currentEvictionGeneration(clerkId) === startGeneration) {
+        profileCache.set(clerkId, {
+          user: profile,
+          expiresAt: Date.now() + PROFILE_TTL_MS,
+        });
+      }
       return profile;
     } catch (error) {
       console.error("[auth] Clerk profile lookup failed:", error);
@@ -329,6 +343,42 @@ export function invalidateUserCache(clerkId: string): void {
 }
 
 /**
+ * Bumped every time `forgetAuthUser` runs for an identity — a local call, or
+ * an `auth.evictUser` frame from another instance applying here.
+ *
+ * Deleting a map entry does not cancel a promise already in flight: a
+ * `loadProfile`/`resolveDbUser` call that started before the eviction can
+ * still be sitting on an `await` to Clerk or Postgres when it lands, and
+ * without this guard its `.then()` would write straight back into the cache
+ * entry the eviction just cleared — or, for `resolveDbUser`, its `upsertUser`
+ * would have already recreated the row `DELETE FROM users` just removed by
+ * the time anyone checks. `loadProfile`/`resolveDbUser` snapshot the
+ * generation before starting their async work and refuse to cache a result
+ * whose generation has since moved — they still return the answer to the one
+ * caller waiting on that particular promise, since the lookup itself was
+ * genuinely valid when it started; what they refuse is repopulating a cache
+ * entry for everyone after. (Farol review of #603.)
+ *
+ * Bounded the same way `profileCache`/`userCache` are: swept out after
+ * `PROFILE_TTL_MS`, which is already far longer than any realistic in-flight
+ * Clerk/Postgres round trip, so the guard is live for every request that
+ * could plausibly still be running when an eviction lands.
+ */
+const evictionGeneration = new Map<
+  string,
+  { generation: number; updatedAt: number }
+>();
+
+function bumpEvictionGeneration(clerkId: string): void {
+  const next = (evictionGeneration.get(clerkId)?.generation ?? 0) + 1;
+  evictionGeneration.set(clerkId, { generation: next, updatedAt: Date.now() });
+}
+
+function currentEvictionGeneration(clerkId: string): number {
+  return evictionGeneration.get(clerkId)?.generation ?? 0;
+}
+
+/**
  * Drop *every* cached trace of an identity — the DB row and the Clerk profile
  * — ON THIS INSTANCE ONLY. See `evictUserAcrossCluster` for the version that
  * also closes sockets and reaches every other instance; this local half is
@@ -347,6 +397,7 @@ export function forgetAuthUser(clerkId: string): void {
   profileInflight.delete(clerkId);
   userCache.delete(clerkId);
   userInflight.delete(clerkId);
+  bumpEvictionGeneration(clerkId);
 }
 
 // ------------------------------------------------------------ cluster bus
@@ -364,6 +415,21 @@ export function forgetAuthUser(clerkId: string): void {
 // regardless, and a handler calls the *local* half only — `bus.ts`'s origin
 // guard is what stops the instance that published a frame from ever running
 // its own subscriber.
+//
+// NOT DURABLE, ON PURPOSE, LIKE EVERY OTHER TOPIC ON THIS BUS. `bus.ts`
+// documents `publishToCluster` as fire-and-forget with no delivery guarantee —
+// a sibling that is mid-reconnect to Postgres when this frame is published
+// never sees it, same as a `chat.broadcast` or an `EVICT_TOPIC` channel
+// eviction published during that same window. A Farol review of this file
+// flagged that gap as HIGH and asked for a durable outbox with retry or
+// reconciliation; that would be a real feature (a persisted eviction log, a
+// sweep to replay missed ones) and a bigger, more invasive change than the
+// audit this file closes asked for, applied to every bus topic rather than
+// this one alone — tracked as a follow-up rather than built here. What IS in
+// scope, and done: `evictionGeneration` below closes the narrower, concrete
+// race Farol's other two findings pointed at, where a lookup already in
+// flight when a (successfully delivered) eviction frame arrives could
+// otherwise complete afterward and undo it.
 
 const AUTH_EVICT_TOPIC = "auth.evictUser";
 const AUTH_INVALIDATE_TOPIC = "auth.invalidateUser";
@@ -521,12 +587,19 @@ async function resolveDbUser(auth: AuthUser): Promise<DbUser> {
     return existing;
   }
 
+  // Same guard as `loadProfile`, and the sharper half of it: without this an
+  // `upsertUser` that was already running when an eviction landed would
+  // repopulate `userCache` with the row it just fetched/wrote, for every
+  // caller after this one — not just answer the one request that started it.
+  const startGeneration = currentEvictionGeneration(auth.clerkId);
   const request = upsertUser(auth)
     .then((user) => {
-      userCache.set(auth.clerkId, {
-        user,
-        expiresAt: Date.now() + USER_TTL_MS,
-      });
+      if (currentEvictionGeneration(auth.clerkId) === startGeneration) {
+        userCache.set(auth.clerkId, {
+          user,
+          expiresAt: Date.now() + USER_TTL_MS,
+        });
+      }
       return user;
     })
     .finally(() => {
