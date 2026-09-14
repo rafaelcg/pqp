@@ -1175,7 +1175,7 @@
   "call.stage.collapse": "Recolher a call",
   "call.stage.expand": "Expandir a call",
   "call.stage.duration": "Duração da call",
-  "call.stage.selfPreview": "Prévia da sua câmera",
+  "call.stage.selfPreview": "Prévia flutuante da câmera",
   "call.stage.pin": "Fixar {name}",
   "call.stage.unpin": "Desafixar",
   "call.stage.fullscreenTile": "Ver {name} em tela cheia",
