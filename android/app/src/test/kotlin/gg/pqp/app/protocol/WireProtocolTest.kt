@@ -257,6 +257,13 @@ class WireProtocolTest {
         // missing; per the PR that added this frame, that is a deliberate
         // follow-up, not an oversight.
         "voice-idle-warning" to "disconnect already works via voice-moderation; the warning banner is a follow-up",
+        // The server taking back a `voice-idle-warning` it already sent (a
+        // second person joined, a watch party went live, or the peer's own
+        // frame reset the clock). Only meaningful to a client that renders
+        // the warning banner in the first place, which the phone does not
+        // yet — same follow-up as the warning itself, and no correctness
+        // gap: the phone was never showing a stale countdown to begin with.
+        "voice-idle-warning-cancelled" to "no warning banner on the phone yet to cancel; same follow-up as voice-idle-warning",
     )
 
     /**
