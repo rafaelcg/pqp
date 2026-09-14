@@ -34,6 +34,7 @@ import {
   hlsSkippedOwnedElsewhereCount,
   noteHlsSkippedOwnedElsewhere,
   resetHlsOwnershipForTests,
+  retryPendingHlsSessionClaims,
   sessionIdsOwnedElsewhere,
 } from "./hls-ownership.js";
 import {
@@ -464,6 +465,17 @@ let orphansStopped = 0;
  * appearing in `listEgress({active:true})`.
  */
 const loggedGhostEgressIds = new Set<string>();
+/**
+ * Egresses this process wanted to stop and could not prove were its own,
+ * because the ownership lookup itself failed. Retried on every monitor tick
+ * (`retryDeferredStops`) rather than stopped blind, which would let a database
+ * blip hang up the other machine's stream, or dropped, which would leak a
+ * transcode onto the media box exactly as pitfall 15 did.
+ */
+const deferredStops = new Map<
+  string,
+  { channelId: string; sessionId: string; rung: string }
+>();
 /**
  * Channels whose camera transcode died or was refused, and when another may
  * start.
@@ -1502,6 +1514,7 @@ export function resetLiveHlsForTests(): void {
   reconcileQueue.clear();
   orphanStopBackoff.clear();
   orphansStopped = 0;
+  deferredStops.clear();
   resetHlsOwnershipForTests();
   loggedGhostEgressIds.clear();
   cameraCooldownUntil.clear();
@@ -2255,13 +2268,55 @@ async function reapForeignEgresses(
  * interval. Returns the channels it restarted or failed, for the log and
  * the test.
  */
+async function retryDeferredStops(): Promise<void> {
+  if (deferredStops.size === 0) {
+    return;
+  }
+  const owned = await egressIdsOwnedElsewhere([...deferredStops.keys()]);
+  if (owned === null) {
+    // Still cannot ask. Keep them; this runs again in a few seconds.
+    return;
+  }
+  for (const [egressId, entry] of [...deferredStops]) {
+    if (owned.has(egressId)) {
+      // Somebody alive owns it after all: never ours to stop, and no longer
+      // ours to remember.
+      deferredStops.delete(egressId);
+      noteHlsSkippedOwnedElsewhere({
+        site: "stop-deferred",
+        channelId: entry.channelId,
+        egressId,
+        sessionId: entry.sessionId,
+      });
+      continue;
+    }
+    if (await stopEgressById(egressId, entry.channelId)) {
+      deferredStops.delete(egressId);
+      logEvent("voice.hlsStopped", {
+        channelId: entry.channelId,
+        reason: "deferred-stop-retried",
+        egressIds: [egressId],
+        sessionIds: [entry.sessionId],
+        rung: entry.rung,
+      });
+    }
+    // A stop that failed keeps its place: `stopEgressById` is already backing
+    // off, and forgetting it here is the leak this queue exists to prevent.
+  }
+}
+
 export async function checkLiveHlsHealth(
   now = Date.now(),
 ): Promise<{ channelId: string; outcome: "scheduled" | "failed" }[]> {
+  // FIRST, AND WHETHER OR NOT THERE IS AN EGRESS TO TALK TO: both of these are
+  // repairs of writes that did not land, and neither depends on this process
+  // still presenting anything.
+  await retryPendingHlsSessionClaims();
   const egress = getEgress();
   if (!egress) {
     return [];
   }
+  await retryDeferredStops();
   const outcomes: { channelId: string; outcome: "scheduled" | "failed" }[] =
     [];
   for (const [channelId, room] of [...rooms.entries()]) {
@@ -3528,11 +3583,33 @@ async function stopRungs(
   if (!egress) {
     return;
   }
-  const ownedElsewhere =
-    (await sessionIdsOwnedElsewhere(entries.map((entry) => entry.sessionId))) ??
-    new Set<string>();
+  const ownedElsewhere = await sessionIdsOwnedElsewhere(
+    entries.map((entry) => entry.sessionId),
+  );
   for (const entry of entries) {
-    if (entry.sessionId && ownedElsewhere.has(entry.sessionId)) {
+    if (ownedElsewhere === null && entry.sessionId) {
+      // COULD NOT ASK IS NOT PERMISSION, HERE EITHER. Stopping on a failed
+      // lookup is how one machine hangs up the other machine's stream during
+      // an ordinary database blip. But a handler we never stop is pitfall 15's
+      // leak, and this room is about to leave `rooms`, so nothing else would
+      // ever look at it again: the id is parked and the monitor tick retries
+      // it until ownership is knowable.
+      deferredStops.set(entry.egressId, {
+        channelId,
+        sessionId: entry.sessionId,
+        rung: entry.rung.name,
+      });
+      logEvent("voice.hlsStopDeferred", {
+        channelId,
+        egressId: entry.egressId,
+        sessionId: entry.sessionId,
+        rung: entry.rung.name,
+        reason: "owner-lookup-failed",
+        pending: deferredStops.size,
+      });
+      continue;
+    }
+    if (entry.sessionId && ownedElsewhere?.has(entry.sessionId)) {
       noteHlsSkippedOwnedElsewhere({
         site: "stop-rungs",
         channelId,
@@ -3541,6 +3618,7 @@ async function stopRungs(
       });
       continue;
     }
+    deferredStops.delete(entry.egressId);
     try {
       await egress.stopEgress(entry.egressId);
     } catch (error) {

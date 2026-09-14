@@ -76,6 +76,7 @@ export function hlsSkippedOwnedElsewhereCount(): number {
 export function resetHlsOwnershipForTests(): void {
   skippedOwnedElsewhere = 0;
   lastLoggedAt.clear();
+  pendingClaims.clear();
 }
 
 /**
@@ -190,6 +191,11 @@ export async function egressIdsOwnedElsewhere(
          -- refuse uuid = text, or throw on a row that is not a UUID.
          JOIN voice_instances i ON i.instance_id::text = s.instance_id
         WHERE s.egress_id = ANY($1::text[])
+          -- cleaned_at IS NULL is both right and fast: a swept row owns
+          -- nothing, and it is the predicate idx_hls_sessions_egress is
+          -- partial on, so this stays an index lookup as the table grows
+          -- instead of scanning every session the deployment ever ran.
+          AND s.cleaned_at IS NULL
           AND s.instance_id <> $2
           AND i.heartbeat_at > NOW() - ($3::bigint * INTERVAL '1 millisecond')`,
       [[...egressIds], me, ttlMs],
@@ -247,13 +253,21 @@ export async function sessionIdsOwnedElsewhere(
  * (or the one already running beside this one) can see an owner that is
  * answering. Adoption without this is half a fix: the row would still read as
  * the dead instance's and the sweep on the third machine would free it again.
+ *
+ * A CLAIM THAT FAILS IS NOT A CLAIM THAT DID NOT MATTER. The adoption itself
+ * has already happened in memory -- this process is driving the egress -- so a
+ * database blip here leaves a row that still names a dead instance (or nobody)
+ * while a live process depends on it, which is precisely the state the next
+ * machine's boot sweep is entitled to free. So a failure queues the ids and
+ * `retryPendingHlsSessionClaims`, on the health monitor's tick, keeps trying
+ * until the row says what is true. Answers whether the write landed.
  */
 export async function claimHlsSessionRows(
   sessionIds: readonly string[],
   options: HlsOwnershipOptions & { reopen?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   if (sessionIds.length === 0) {
-    return;
+    return true;
   }
   const me = options.instanceId ?? hlsOwnerInstanceId();
   try {
@@ -263,10 +277,48 @@ export async function claimHlsSessionRows(
         WHERE id = ANY($1::uuid[])`,
       [[...sessionIds], me],
     );
+    for (const id of sessionIds) {
+      pendingClaims.delete(id);
+    }
+    return true;
   } catch (error) {
+    for (const id of sessionIds) {
+      // The most demanding shape wins: a row that needed reopening still needs
+      // it on the retry, even if a later claim for the same id did not.
+      pendingClaims.set(id, (pendingClaims.get(id) ?? false) || Boolean(options.reopen));
+    }
     logEvent("voice.hlsSessionClaimFailed", {
       count: sessionIds.length,
+      pending: pendingClaims.size,
       error: error instanceof Error ? error.message : String(error),
     });
+    return false;
+  }
+}
+
+/** Session ids whose ownership stamp did not land, and whether to reopen them. */
+const pendingClaims = new Map<string, boolean>();
+
+/** For the dashboard and the tests: rows this process owns and cannot say so. */
+export function pendingHlsSessionClaimCount(): number {
+  return pendingClaims.size;
+}
+
+/**
+ * Retry the stamps that failed, from the health monitor's tick. Two batches at
+ * most (one per `reopen` shape) however many rows are waiting, and a no-op
+ * with an empty queue, which is every tick on a healthy deployment.
+ */
+export async function retryPendingHlsSessionClaims(): Promise<void> {
+  if (pendingClaims.size === 0) {
+    return;
+  }
+  const reopen = [...pendingClaims].filter(([, wants]) => wants).map(([id]) => id);
+  const plain = [...pendingClaims].filter(([, wants]) => !wants).map(([id]) => id);
+  if (reopen.length > 0) {
+    await claimHlsSessionRows(reopen, { reopen: true });
+  }
+  if (plain.length > 0) {
+    await claimHlsSessionRows(plain);
   }
 }

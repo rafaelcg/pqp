@@ -49,7 +49,12 @@ const {
   resetLiveHlsForTests,
   setLiveHlsTestHooks,
 } = await import("./hls-egress.js");
-const { hlsOwnerInstanceId } = await import("./hls-ownership.js");
+const {
+  claimHlsSessionRows,
+  hlsOwnerInstanceId,
+  pendingHlsSessionClaimCount,
+  retryPendingHlsSessionClaims,
+} = await import("./hls-ownership.js");
 
 describeDb("hls_sessions ownership across two API machines", () => {
   /** The OTHER machine. This test process is always "B". */
@@ -327,6 +332,36 @@ describeDb("hls_sessions ownership across two API machines", () => {
       expect.objectContaining({ site: "ghost", egressId: "EG_other-machine" }),
     );
     expect(liveHlsActivity().skippedOwnedElsewhere).toBeGreaterThan(0);
+  });
+
+  it("re-stamps later when the claim itself fails, rather than reporting an adoption the row never recorded", async () => {
+    // THE HANDOFF IS TWO THINGS AND ONLY ONE OF THEM IS IN MEMORY. The egress
+    // is this process's the moment it adopts it; the row saying so is a second
+    // write that can fail. A row left naming a dead instance while a live
+    // process drives it is exactly what the next machine's boot sweep is
+    // entitled to free, so a failed claim is queued and retried rather than
+    // swallowed.
+    const id = await makeSession({
+      prefix: `live/${channelA}/9800`,
+      egressId: "EG_claim",
+      instanceId: machineA,
+      endedAt: new Date(),
+    });
+    const pool = getPool();
+    const failOnce = vi
+      .spyOn(pool, "query")
+      .mockRejectedValueOnce(new Error("connection terminated"));
+
+    expect(await claimHlsSessionRows([id], { reopen: true })).toBe(false);
+    expect(pendingHlsSessionClaimCount()).toBe(1);
+
+    failOnce.mockRestore();
+    await retryPendingHlsSessionClaims();
+
+    expect(pendingHlsSessionClaimCount()).toBe(0);
+    const row = await rowById(id);
+    expect(row.instance_id).toBe(hlsOwnerInstanceId());
+    expect(row.ended_at).toBeNull();
   });
 
   it("(d) the ghost filter still writes off a record nobody owns", async () => {

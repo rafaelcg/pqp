@@ -399,7 +399,10 @@ fresh -- the same expiry rule `reconcileVoiceRegistry` uses to free a dead
 instance's seats. Unowned rows and rows whose owner has expired stay adoptable,
 so `VOICE_REGISTRY` off (a self-host, one process) behaves exactly as it always
 did, with no round trip. A lookup that fails is not permission: the pass does
-nothing and tries again later. `liveHls.skippedOwnedElsewhere` on
+nothing and tries again later, and the two writes that can be left half-done --
+a teardown whose ownership could not be checked, and an adoption whose stamp
+did not land -- are parked and retried on the health monitor's tick rather than
+guessed at (`retryDeferredStops`, `retryPendingHlsSessionClaims`). `liveHls.skippedOwnedElsewhere` on
 `GET /api/admin/metrics`, and the `voice.hlsSkippedOwnedElsewhere` log line
 beside it, are how you tell from outside that the guard runs at all: zero on one
 machine, non-zero within a deploy of a party running on two. See
