@@ -102,6 +102,31 @@ function dialog(): HTMLElement | null {
   return document.querySelector('[role="dialog"]');
 }
 
+/**
+ * Poll a condition with real macrotask waits rather than a fixed number of
+ * `await Promise.resolve()` ticks. A URL refresh crosses a mocked async
+ * boundary (`fetchAttachmentUrl(...).then(setState)`) and then a React
+ * commit; how many microtask ticks that takes is an implementation detail of
+ * the JS engine's scheduler, and it does not have to be the same number on
+ * every platform. It was: this test passed locally and failed in CI on
+ * exactly this shape (2026-09-14) — counting ticks by hand is not portable,
+ * polling for the actual effect is.
+ */
+async function waitFor(
+  check: () => boolean,
+  { timeout = 2000, interval = 10 } = {},
+): Promise<void> {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start > timeout) {
+      throw new Error("waitFor: condition did not become true in time");
+    }
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, interval));
+    });
+  }
+}
+
 describe("ImageLightbox", () => {
   it("renders as a labelled dialog with the current filename", () => {
     mount(
@@ -370,15 +395,15 @@ describe("ImageLightbox", () => {
       'button[aria-label="Copy image"]',
     ) as HTMLButtonElement;
     expect(button).not.toBeNull();
-    await act(async () => {
+    act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
-      await Promise.resolve();
     });
-    expect(writeText).toHaveBeenCalledWith(ONE[0]!.url);
-    expect(document.body.textContent).toContain(
-      "Couldn't copy the image, link copied instead",
+    await waitFor(() =>
+      document.body.textContent!.includes(
+        "Couldn't copy the image, link copied instead",
+      ),
     );
+    expect(writeText).toHaveBeenCalledWith(ONE[0]!.url);
   });
 
   it("reports honestly when the fallback link copy also fails, without claiming the link copied", async () => {
@@ -399,27 +424,39 @@ describe("ImageLightbox", () => {
     const button = document.querySelector(
       'button[aria-label="Copy image"]',
     ) as HTMLButtonElement;
-    await act(async () => {
+    act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
     });
+    await waitFor(() => document.body.textContent!.includes("Couldn't copy the image"));
     expect(writeText).toHaveBeenCalledWith(ONE[0]!.url);
     // Neither happy-path toast, and specifically not the one claiming the
     // link made it to the clipboard when it did not.
     expect(document.body.textContent).not.toContain(
       "Couldn't copy the image, link copied instead",
     );
-    expect(document.body.textContent).toContain("Couldn't copy the image");
   });
 
   it("uses the refreshed URL in every action once a presigned URL has been renewed", async () => {
     const freshUrl = "https://bucket.example/a1-fresh";
-    vi.mocked(api.fetchAttachmentUrl).mockResolvedValue({
-      url: freshUrl,
-      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+
+    // A promise this test resolves by hand, rather than an opaque
+    // `mockResolvedValue` whose own settling schedule is a JS-engine detail.
+    // Every assertion below polls for the refresh's *effect* (a rendered
+    // href, a mock call) instead of counting microtask ticks, which is what
+    // made the previous version of this test pass locally and fail in CI:
+    // the same code, a different number of ticks before the state landed.
+    let resolveFetchAttachmentUrl!: (value: {
+      url: string;
+      expiresAt: string;
+    }) => void;
+    const fetchAttachmentUrlPromise = new Promise<{
+      url: string;
+      expiresAt: string;
+    }>((resolve) => {
+      resolveFetchAttachmentUrl = resolve;
     });
+    vi.mocked(api.fetchAttachmentUrl).mockReturnValue(fetchAttachmentUrlPromise);
+
     const writeText = vi.fn().mockResolvedValue(undefined);
     const clipboardWrite = vi.fn().mockResolvedValue(undefined);
     stubClipboard({ writeText, write: clipboardWrite });
@@ -448,56 +485,66 @@ describe("ImageLightbox", () => {
       </TooltipProvider>,
     );
 
-    // The presigned GET baked into `ONE[0].url` has expired; the `<img>`
-    // fails to load and the component fetches a fresh one for rendering.
+    // Dispatched explicitly, only once the component has fully mounted —
+    // this never depends on a real image actually failing to load, jsdom
+    // does not attempt to load one at all.
     const img = dialog()!.querySelector('img[alt="screenshot.png"]') as HTMLImageElement;
-    await act(async () => {
+    act(() => {
       img.dispatchEvent(new Event("error"));
-      await Promise.resolve();
-      await Promise.resolve();
     });
+    await waitFor(() => vi.mocked(api.fetchAttachmentUrl).mock.calls.length > 0);
     expect(api.fetchAttachmentUrl).toHaveBeenCalledWith("a1");
 
+    await act(async () => {
+      resolveFetchAttachmentUrl({
+        url: freshUrl,
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      });
+      await fetchAttachmentUrlPromise;
+    });
+
     // Open original: the anchor's href follows the refresh.
-    const openOriginal = document.querySelector(
-      'a[aria-label="Open original"]',
-    ) as HTMLAnchorElement;
-    expect(openOriginal.getAttribute("href")).toBe(freshUrl);
+    await waitFor(
+      () =>
+        document
+          .querySelector('a[aria-label="Open original"]')
+          ?.getAttribute("href") === freshUrl,
+    );
 
     // Copy link: writes the refreshed URL, not the expired one the message
     // still carries in `attachment.url`.
     const copyLinkButton = document.querySelector(
       'button[aria-label="Copy link"]',
     ) as HTMLButtonElement;
-    await act(async () => {
+    act(() => {
       copyLinkButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
     });
-    expect(writeText).toHaveBeenLastCalledWith(freshUrl);
+    await waitFor(() =>
+      writeText.mock.calls.some((call: unknown[]) => call[0] === freshUrl),
+    );
 
     // Copy image and download both fetch the refreshed URL's bytes.
     const copyImageButton = document.querySelector(
       'button[aria-label="Copy image"]',
     ) as HTMLButtonElement;
     fetchMock.mockClear();
-    await act(async () => {
+    act(() => {
       copyImageButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
     });
-    expect(fetchMock).toHaveBeenCalledWith(freshUrl);
+    await waitFor(() =>
+      fetchMock.mock.calls.some((call: unknown[]) => call[0] === freshUrl),
+    );
 
     const downloadButton = document.querySelector(
       'button[aria-label="Download"]',
     ) as HTMLButtonElement;
     fetchMock.mockClear();
-    await act(async () => {
+    act(() => {
       downloadButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
-      await Promise.resolve();
     });
-    expect(fetchMock).toHaveBeenCalledWith(freshUrl);
+    await waitFor(() =>
+      fetchMock.mock.calls.some((call: unknown[]) => call[0] === freshUrl),
+    );
   });
 
   it("returns focus to whatever opened it when it closes", async () => {
