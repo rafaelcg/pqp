@@ -1,10 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isHlsAccessRevoked,
   resetHlsRevocationsForTests,
   revokeHlsAccess,
   revokeHlsAccessForUser,
 } from "./hls-revocation.js";
+
+const writeHlsEdgeRevocationForScope = vi.hoisted(() => vi.fn());
+vi.mock("./hls-edge-revocation.js", () => ({ writeHlsEdgeRevocationForScope }));
 
 /**
  * The memory lookup that replaced a per-request access query on the playlist
@@ -20,6 +23,36 @@ const T0 = 1_800_000_000_000;
 describe("hls revocation", () => {
   beforeEach(() => {
     resetHlsRevocationsForTests();
+    writeHlsEdgeRevocationForScope.mockClear();
+  });
+
+  describe("the edge Worker's KV denylist hook", () => {
+    it("writes one edge revocation per named user (onlyUserIds scope)", () => {
+      revokeHlsAccess(CHANNEL, { onlyUserIds: [ALICE, BOB] }, T0);
+      expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledTimes(1);
+      expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledWith(
+        CHANNEL,
+        [ALICE, BOB],
+        T0,
+      );
+    });
+
+    it("revokeHlsAccessForUser hits the same hook, once per channel", () => {
+      revokeHlsAccessForUser(ALICE, [CHANNEL, OTHER], T0);
+      expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledTimes(2);
+      expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledWith(CHANNEL, [ALICE], T0);
+      expect(writeHlsEdgeRevocationForScope).toHaveBeenCalledWith(OTHER, [ALICE], T0);
+    });
+
+    it("does not fire for an unscoped (everyone) revocation -- no fixed userId list to write", () => {
+      revokeHlsAccess(CHANNEL, undefined, T0);
+      expect(writeHlsEdgeRevocationForScope).not.toHaveBeenCalled();
+    });
+
+    it("does not fire for an exceptUserIds-only scope -- same reasoning, no fixed userId list", () => {
+      revokeHlsAccess(CHANNEL, { exceptUserIds: [BOB] }, T0);
+      expect(writeHlsEdgeRevocationForScope).not.toHaveBeenCalled();
+    });
   });
 
   it("says no by default", () => {

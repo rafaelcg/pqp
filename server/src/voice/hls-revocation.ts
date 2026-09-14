@@ -40,6 +40,7 @@
  * entry, so a rejoin works without waiting anything out.
  */
 
+import { writeHlsEdgeRevocationForScope } from "./hls-edge-revocation.js";
 import { hlsViewerTokenTtlMs } from "./hls-viewer-token.js";
 
 interface Revocation {
@@ -128,6 +129,13 @@ export function revokeHlsAccess(
   const entries = prune(channelId, now);
   entries.push(entry);
   byChannel.set(channelId, entries);
+  // Tell the edge Worker's KV denylist too, fire-and-forget -- see
+  // `hls-edge-revocation.ts`'s module doc comment for why this only fires
+  // for a named user list (`only`), never for an unscoped "everyone"
+  // revocation, and why it is never awaited here.
+  if (entry.only) {
+    writeHlsEdgeRevocationForScope(channelId, [...entry.only], now);
+  }
 }
 
 /** Convenience for the "this user lost these channels" eviction shape. */

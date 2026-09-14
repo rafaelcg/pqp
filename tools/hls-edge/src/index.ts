@@ -63,24 +63,24 @@
  * (`./hls-viewer-token.js`) — an invalid or expired token never reaches the
  * cache or the origin.
  *
- * REVOCATION IS THE EXCEPTION, AND IT IS WEAKER THAN A SINGLE VIEWER'S OWN
- * POLL INTERVAL WOULD SUGGEST. A ban or a lost VIEW permission is enforced by
- * `hls-revocation.ts`, an in-memory set that exists ONLY on the API process —
- * this Worker has no way to consult it, and never tries to. Without the
- * cache, that gap is bounded by "the next request THIS VIEWER makes", a
- * couple of seconds. WITH the cache, it is bounded by how long the SHARED
- * cache entry for that rung stays populated, which is refreshed by ANY valid
- * viewer's request, not particularly the revoked one's. During an active
- * party on a popular rung, that is effectively "as long as the party runs":
- * a banned or kicked viewer can keep receiving a live playlist and its
- * segment URLs for as long as other viewers keep the cache warm, because a
- * cache HIT never reaches the origin at all. This is a real, deliberate
- * trade-off of collapsing N viewers into one origin fetch — there is no way
- * to keep that collapse AND re-check each individual viewer's standing on
- * every request, since the second thing is what the first thing removes.
- * Flagged for explicit sign-off before this ships to production; see
- * `docs/plans/RELOAD_STORM.md` and `README.md` "What this Worker does NOT
- * make faster".
+ * REVOCATION: SIGNED OFF 2026-09-14, BOUND TO 30 SECONDS WHEN KV IS
+ * PROVISIONED. `hls-revocation.ts`'s in-memory set exists only on the API
+ * process; this Worker cannot consult IT directly, but `server/src/voice/hls-edge-revocation.ts`
+ * writes the same eviction to a Cloudflare KV denylist (`HLS_REVOKED_USERS`)
+ * this Worker DOES consult -- `PartyPassRevocationGate` in
+ * `party-pass-revocation.js`, checked before EVERY cache lookup on the
+ * rendition route, for both a `?t=` token and a `?pp=` party pass alike (see
+ * `handlePlaylistRequest`). With the KV namespace provisioned, a revoked
+ * viewer's next request is refused within the gate's 30 s cache window
+ * regardless of how long other viewers keep a rung's shared cache entry
+ * warm. Without it, the original trade-off applies unchanged for a `?t=`
+ * token (bounded by that token's own TTL, already accepted when
+ * `LIVE_HLS_PLAYLIST_BASE_URL` first shipped in #559) -- and a party pass is
+ * refused outright once `ENVIRONMENT=production`
+ * (`partyPassRequiresKvInProduction`) rather than riding its full 6 h
+ * ceiling with nothing checking it. See README.md "Enabling in production"
+ * for the provisioning steps and `docs/plans/RELOAD_STORM.md` for the
+ * numbers this Worker exists to cut in the first place.
  */
 
 import {
@@ -93,6 +93,10 @@ import {
   describeHlsPartyPass,
   verifyHlsPartyPass,
 } from "./hls-party-pass.js";
+import {
+  PartyPassRevocationGate,
+  partyPassRequiresKvInProduction,
+} from "./party-pass-revocation.js";
 import { parsePlaylistPath } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
@@ -118,11 +122,25 @@ export interface Env {
    */
   HLS_PARTY_PASS_SECRET?: string;
   /**
-   * Optional revocation hook for party-pass holders, see `isPartyPassRevoked`
-   * below. Unbound today (no KV namespace is provisioned) -- see the TODO on
-   * that function.
+   * The revocation denylist, written by `server/src/voice/hls-edge-revocation.ts`
+   * the moment a viewer is kicked, banned, or loses VIEW (`hls-revocation.ts`'s
+   * own eviction seam) -- see `party-pass-revocation.js`'s `PartyPassRevocationGate`
+   * for how this Worker reads it, and README.md "Enabling in production" for
+   * how an operator provisions it. Unbound: `HLS_REVOKED_USERS` governs
+   * nothing outside production (fails open, the pre-sign-off shape) and
+   * `partyPassRequiresKvInProduction` refuses party passes outright once
+   * `ENVIRONMENT=production`.
    */
   HLS_REVOKED_USERS?: KVNamespace;
+  /**
+   * `"production"` on the one real deploy (`wrangler.jsonc`'s default var).
+   * Governs exactly one thing: whether a party pass may be honored with no
+   * KV binding behind it -- see `partyPassRequiresKvInProduction`. Anything
+   * else (unset for `wrangler dev`, `"development"`, `"staging"`) keeps the
+   * pre-sign-off fail-open default, which is what local development and a
+   * self-host with no KV namespace still need to work at all.
+   */
+  ENVIRONMENT?: string;
   /** Comma-separated allowlist. Unset: every origin is echoed back (see cors.ts). */
   CORS_ALLOWED_ORIGINS?: string;
   // ALWAYS-ON (not yet built, see playlist-origin.ts and
@@ -133,85 +151,15 @@ export interface Env {
 }
 
 /**
- * TODO(party pass revocation): `hls-revocation.ts` on the API is an
- * in-memory set that lives only on that process -- this Worker has no path
- * to it, and a party pass (unlike `?t=`) can stay valid for up to
- * `LIVE_HLS_PARTY_PASS_MAX_TTL_MS` (6 h) after someone is banned or loses
- * VIEW. This function is the hook a real fix would hang off: given a KV
- * binding (`HLS_REVOKED_USERS`, not yet provisioned -- see the commented
- * placeholder in wrangler.jsonc) written to BY `hls-revocation.ts` on every
- * eviction (`userId` -> revoked-at timestamp, TTL'd to the party-pass
- * ceiling so the key expires on its own), this would check it before
- * honoring a party pass.
- *
- * TWO DIFFERENT KINDS OF "NO ANSWER", TWO DIFFERENT DEFAULTS. An UNCONFIGURED
- * binding (the only state that exists today -- nothing is provisioned) fails
- * OPEN: "not revoked", the same fail-open-on-unconfigured shape as
- * `CORS_ALLOWED_ORIGINS`, because the alternative would turn "operator has
- * not set up a KV namespace" into "the party pass feature silently does
- * nothing", which is a worse failure to debug than "revocation on a party
- * pass is best-effort" is to live with. A CONFIGURED binding that THROWS on
- * read is different: an operator who bound this namespace is telling this
- * Worker revocation matters to them, and a transient KV error is not the
- * same claim as "nothing is wired up" -- so once bound, a read failure fails
- * CLOSED, refusing the party pass for that one request (Farol flagged the
- * unconditional fail-open here as a HIGH). The caller already has a
- * fallback: the shared rendition cache, or the short-lived `?t=`, either of
- * which still works on a transient KV hiccup. `hlsEdge.partyPassRevocationCheckError`
- * says how often this actually happens; it should be rare, since Cloudflare
- * KV reads are normally fast and reliable from a colo.
- *
- * CACHED, NOT READ ON EVERY POLL. Without this, a viewer whose `?t=` has
- * expired pays one KV read per playlist poll (every 2-4 s) for the rest of
- * the party -- at a synchronized-expiry event that is hundreds of reads a
- * second landing on KV instead of the shared Cache API hit this whole Worker
- * exists to serve (Farol flagged this as a MEDIUM performance regression).
- * `PARTY_PASS_REVOCATION_CACHE_TTL_MS` bounds how stale a cached "not
- * revoked" answer can be -- 30 s, far tighter than the multi-hour exposure a
- * party pass already accepts, so caching this does not meaningfully widen
- * the trade-off already documented above; it removes an amplifier from it. A
- * REVOKED result is also cached, for the same window: a moderator does not
- * need this Worker to notice a ban within milliseconds, only quickly enough
- * that "revocation on a party pass is best-effort" stays true.
+ * One gate per isolate, same lifetime as the Worker instance -- see
+ * `party-pass-revocation.js` for what it checks, the fail-open/fail-closed
+ * rules, and the 30 s cache bound. Used for BOTH credential kinds on the
+ * rendition route now, not only a party pass -- see `handlePlaylistRequest`
+ * for where each call site sits relative to the cache lookup, and
+ * README.md "Enabling in production" for why that is what answers Farol's
+ * "shared rendition cache bypasses viewer revocation" finding.
  */
-const PARTY_PASS_REVOCATION_CACHE_TTL_MS = 30_000;
-const PARTY_PASS_REVOCATION_CACHE_MAX_ENTRIES = 10_000;
-const partyPassRevocationCache = new Map<string, { revoked: boolean; at: number }>();
-
-async function isPartyPassRevoked(env: Pick<Env, "HLS_REVOKED_USERS">, userId: string): Promise<boolean> {
-  if (!env.HLS_REVOKED_USERS) {
-    return false;
-  }
-  const now = Date.now();
-  const cached = partyPassRevocationCache.get(userId);
-  if (cached && now - cached.at < PARTY_PASS_REVOCATION_CACHE_TTL_MS) {
-    return cached.revoked;
-  }
-  let revoked: boolean;
-  try {
-    revoked = (await env.HLS_REVOKED_USERS.get(userId)) !== null;
-  } catch {
-    // Bound but unreachable: fail CLOSED (see the doc comment above for why
-    // this differs from the unconfigured case). Not cached -- a real outage
-    // should not pin every request to "revoked" for the next 30 s once the
-    // namespace recovers.
-    logEvent("hlsEdge.partyPassRevocationCheckError", {});
-    return true;
-  }
-  if (partyPassRevocationCache.size >= PARTY_PASS_REVOCATION_CACHE_MAX_ENTRIES) {
-    // `userId` only ever reaches here after a valid party-pass signature
-    // check, so this is bounded by real distinct viewers, not an
-    // attacker-controlled path segment the way `rejectionLog`'s key is --
-    // still, evicting the oldest entry on overflow costs nothing and keeps
-    // this from growing without bound across a very long-running isolate.
-    const oldestKey = partyPassRevocationCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      partyPassRevocationCache.delete(oldestKey);
-    }
-  }
-  partyPassRevocationCache.set(userId, { revoked, at: now });
-  return revoked;
-}
+const partyPassRevocationGate = new PartyPassRevocationGate();
 
 /**
  * How long a rendition's playlist is shared across viewers. The egress
@@ -344,7 +292,12 @@ function text(status: number, body: string): Response {
 
 /** 401 for "not a valid credential at all", 403 for "valid, but not for this resource". */
 function statusForRejection(reason: string): number {
-  return reason === "wrong-channel" || reason === "wrong-session" ? 403 : 401;
+  return reason === "wrong-channel" ||
+    reason === "wrong-session" ||
+    reason === "revoked" ||
+    reason === "party-pass-kv-unconfigured"
+    ? 403
+    : 401;
 }
 
 /** The cache-key request for a rendition: path only, no query — the token never varies the body. */
@@ -358,7 +311,7 @@ async function handlePlaylistRequest(
   request: Request,
   origin: PlaylistOrigin,
   ctx: ExecutionContext,
-  env: Pick<Env, "HLS_VIEWER_TOKEN_SECRET" | "HLS_PARTY_PASS_SECRET" | "HLS_REVOKED_USERS">,
+  env: Pick<Env, "HLS_VIEWER_TOKEN_SECRET" | "HLS_PARTY_PASS_SECRET" | "HLS_REVOKED_USERS" | "ENVIRONMENT">,
   channelId: string,
   startedAt: string,
   rung: string | undefined,
@@ -375,26 +328,57 @@ async function handlePlaylistRequest(
   // life to buy there -- see the module doc comment and `mintHlsPartyPass`'s
   // in `hls-viewer-token.ts`.
   let usedPartyPass = false;
+  // Set only on the party-pass path, so the final rejection block below can
+  // report the REAL reason a well-formed pass was refused -- without this,
+  // a revoked-but-otherwise-valid pass fell through to `describeHlsPartyPass`,
+  // which knows nothing about revocation and answered "malformed" for a
+  // pass that was not malformed at all.
+  let partyPassRejectReason: "revoked" | "party-pass-kv-unconfigured" | null = null;
   if (!verified && rung) {
     const partyPass = url.searchParams.get(HLS_PARTY_PASS_PARAM);
     const partySecret = env.HLS_PARTY_PASS_SECRET ?? null;
     const passVerified = await verifyHlsPartyPass(partyPass, expected, partySecret);
-    if (passVerified && !(await isPartyPassRevoked(env, passVerified.userId))) {
-      verified = passVerified;
-      usedPartyPass = true;
+    if (passVerified) {
+      if (partyPassRequiresKvInProduction(env)) {
+        // See README.md "Enabling in production": a party pass is a 6 h
+        // credential this Worker alone checks, and in production that is
+        // too wide a gap to accept with no KV denylist behind it at all --
+        // refuse outright rather than silently falling open.
+        partyPassRejectReason = "party-pass-kv-unconfigured";
+      } else {
+        const { revoked, kvError } = await partyPassRevocationGate.check(
+          env.HLS_REVOKED_USERS,
+          passVerified.userId,
+          channelId,
+        );
+        if (kvError) {
+          logEvent("hlsEdge.partyPassRevocationCheckError", { channelId });
+        }
+        if (revoked) {
+          partyPassRejectReason = "revoked";
+        }
+      }
+      if (!partyPassRejectReason) {
+        verified = passVerified;
+        usedPartyPass = true;
+      }
     }
   }
   if (!verified) {
-    // Describe whichever credential was actually offered: the token if
+    // Describe whichever credential was actually offered: a revoked/refused
+    // party pass reports that outcome directly (it verified fine as a
+    // signature; the KV check is what said no); otherwise the token if
     // present (the common case, and what most rejections are about), the
     // party pass only when the caller sent NO token at all.
-    const reason = token
-      ? ((await describeHlsViewerToken(token, expected, secret)) ?? "malformed")
-      : ((await describeHlsPartyPass(
-          url.searchParams.get(HLS_PARTY_PASS_PARAM),
-          expected,
-          env.HLS_PARTY_PASS_SECRET ?? null,
-        )) ?? "malformed");
+    const reason =
+      partyPassRejectReason ??
+      (token
+        ? ((await describeHlsViewerToken(token, expected, secret)) ?? "malformed")
+        : ((await describeHlsPartyPass(
+            url.searchParams.get(HLS_PARTY_PASS_PARAM),
+            expected,
+            env.HLS_PARTY_PASS_SECRET ?? null,
+          )) ?? "malformed"));
     logRejection(channelId, rung, reason);
     return json(statusForRejection(reason), { error: "Unauthorized", reason });
   }
@@ -427,6 +411,31 @@ async function handlePlaylistRequest(
       status: originResponse.status,
       headers,
     });
+  }
+
+  // THE FIX FOR "SHARED RENDITION CACHE BYPASSES VIEWER REVOCATION" (Farol
+  // HIGH). A party-pass-authorized request already ran this exact check
+  // above, before `verified` was ever set -- this covers the OTHER case, a
+  // still-fresh `?t=` token, which previously went straight to the cache
+  // lookup below with no revocation check at all once the signature itself
+  // verified. Running it HERE, before `cache.match`, closes the gap for
+  // both credential kinds the same way: a cache HIT can no longer outlive a
+  // revocation by more than `PARTY_PASS_REVOCATION_CACHE_TTL_MS` (30 s) once
+  // `HLS_REVOKED_USERS` is bound. Cheap when it is not: `check()` returns
+  // immediately on an unbound KV, same as before this existed.
+  if (!usedPartyPass) {
+    const { revoked, kvError } = await partyPassRevocationGate.check(
+      env.HLS_REVOKED_USERS,
+      verified.userId,
+      channelId,
+    );
+    if (kvError) {
+      logEvent("hlsEdge.partyPassRevocationCheckError", { channelId });
+    }
+    if (revoked) {
+      logRejection(channelId, rung, "revoked");
+      return json(statusForRejection("revoked"), { error: "Unauthorized", reason: "revoked" });
+    }
   }
 
   const cache = caches.default;

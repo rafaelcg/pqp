@@ -2791,14 +2791,20 @@ design (why only the rendition route is cached, why the token check stays
 authoritative at the edge, the secret it holds and the one it deliberately
 does not) is in [`tools/hls-edge/README.md`](../tools/hls-edge/README.md).
 
-**Before setting `LIVE_HLS_PLAYLIST_BASE_URL` in production, read
-`tools/hls-edge/README.md` "What this Worker does NOT make faster, and needs
-a sign-off".** Sharing one origin fetch across every viewer of a rendition
-means a ban or a lost VIEW permission (`hls-revocation.ts`) can keep reaching
-a revoked viewer for as long as OTHER viewers keep that rung's cache entry
-warm — not for one cache window, for as long as the party runs, on a popular
-rung. This is a structural trade-off of the caching itself, not a bug, and it
-needs an explicit decision, not just a merge.
+**Signed off 2026-09-14.** Sharing one origin fetch across every viewer of a
+rendition means a ban or a lost VIEW permission (`hls-revocation.ts`) can, in
+principle, keep reaching a revoked viewer for as long as OTHER viewers keep
+that rung's cache entry warm — a structural trade-off of the caching itself,
+not a bug. What closes it: `server/src/voice/hls-edge-revocation.ts` writes
+every eviction to a Cloudflare KV denylist the Worker checks before EVERY
+cache lookup, bounding the gap to 30 seconds wherever that KV namespace is
+provisioned, and a party pass (the widest version of this gap, up to 6h) is
+refused outright once the Worker's `ENVIRONMENT=production` and the KV
+namespace is not. Read `tools/hls-edge/README.md` "What this Worker does NOT
+make faster" and "Enabling in production" for the exact mechanism and the
+provisioning steps before setting `LIVE_HLS_PLAYLIST_BASE_URL` in production
+— the KV namespace is a separate operator action from the flag itself, worth
+doing in the same sitting rather than after.
 
 ### Deploying the Worker
 

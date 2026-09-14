@@ -100,39 +100,34 @@ way the API can, so it treats the whole route conservatively: always forward,
 never cache. This route is also fetched once per viewer join rather than
 polled, so the cost this Worker exists to cut was never on this path anyway.
 
-## What this Worker does NOT make faster, and needs a sign-off
+## What this Worker does NOT make faster
 
-**A ban or a lost VIEW permission does not reliably cut a viewer off while
-this Worker's cache is warm, and that is a real, not a cosmetic, weakening of
-today's behavior.** `hls-revocation.ts` is an in-memory set that exists ONLY
-on the API process; this Worker never consults it and has no way to. Without
-caching, that gap is "the next request THIS SPECIFIC VIEWER makes" — a couple
-of seconds, per viewer, exactly as `hls-viewer-token.ts`'s own TTL comment on
-the API describes. WITH this Worker's shared cache, the gap is instead "how
-long the cache entry for that rung stays populated" — and a cache HIT is
-served to EVERY viewer holding a still-signature-valid token, revoked or not,
-without ever reaching the origin. Because ANY valid viewer's request keeps
-the entry warm, a popular rung during an active party can keep a banned or
-kicked viewer's playlist (and its segment URLs) flowing for as long as the
-party runs, not for one cache window. This is a direct, structural
-consequence of collapsing N viewers into one origin fetch: there is no way to
-keep that collapse and still re-check each individual viewer's standing on
-every request, because the second thing is exactly what the first thing
-removes.
+**A ban or a lost VIEW permission does not cut a viewer off INSTANTLY while
+this Worker's cache is warm — that is a real, not a cosmetic, weakening of
+the origin's own instant-eviction behavior, and it is the trade-off inherent
+to caching authorization-gated content at all.** Without caching, the origin's
+own gap is "the next request THIS SPECIFIC VIEWER makes" — a couple of
+seconds, per viewer, exactly as `hls-viewer-token.ts`'s own TTL comment on
+the API describes. WITH this Worker's shared cache, a cache HIT used to be
+served to EVERY viewer holding a still-signature-valid token, revoked or
+not, without ever reaching the origin or anything that knew about the
+revocation — a popular rung during an active party could keep a banned or
+kicked viewer's playlist (and its segment URLs) flowing for as long as other
+viewers kept the cache warm, not for one cache window.
 
-Nothing here is a bug to fix with more code in this file — it is a trade-off
-inherent to caching authorization-gated content at all, and it needs
-Rafael's explicit decision before `LIVE_HLS_PLAYLIST_BASE_URL` is set in
-production, not just a merge. Two directions worth naming, both out of scope
-for this PR: (1) a lightweight revocation signal pushed from the origin to
-the edge (a lease the edge checks against the verified `userId`, refreshed
-far more often than the playlist cache) — a natural fit for whatever channel
-the "always-on" R2 work ends up building between origin and edge anyway (see
-`playlist-origin.ts` and `docs/plans/ALWAYS_ON.md` task A1.x); or (2)
-accepting the exposure as bounded by "this party's duration" and relying on
-`VOICE_MESH_RESUME_REQUIRES_CAP`-style narrow mitigations elsewhere (kicking
-a banned user's WebSocket session immediately still stops them from doing
-anything else; only the HLS *viewing* of an already-open stream is affected).
+**Signed off 2026-09-14; the bound is 30 s.** `PartyPassRevocationGate`
+(`src/party-pass-revocation.js`) is now checked BEFORE every cache lookup on
+the rendition route, for both a `?t=` token and a `?pp=` party pass — see
+"Enabling in production" below for what an operator does to turn this from
+"correct code with nothing behind it" into an actual bound. With
+`HLS_REVOKED_USERS` provisioned, a cache HIT can no longer outlive a
+revocation by more than the gate's cache TTL (`PARTY_PASS_REVOCATION_CACHE_TTL_MS`,
+30 s) — tighter than a `?t=` token's own TTL trade-off already was, and
+immeasurably tighter than a party pass's 6 h ceiling. Without it, the
+pre-sign-off behavior above still applies for a `?t=` token (already
+accepted when `LIVE_HLS_PLAYLIST_BASE_URL` first shipped in #559), and a
+party pass is refused outright in production rather than riding its full
+ceiling with nothing checking it — see "The party pass" below, point 3.
 
 The token check that DOES run on every request here (signature, expiry,
 channel, session) is unrelated to revocation and is unaffected by caching at
@@ -168,28 +163,94 @@ Three things worth being precise about:
    in the logs), not a 401 — the caller is not unauthorized, there is simply
    no fresh copy this specific request can produce. In a live party with more
    than a handful of viewers this is a corner, not a common path.
-3. **Revocation is WEAKER here than the trade-off described above, not the
-   same one.** The short-lived `?t=` trade-off is bounded by that token's own
-   TTL even if the shared cache never runs dry (a revoked viewer's own next
-   request, at latest an hour later, fails on expiry if nothing else catches
-   it sooner). A party pass has no such backstop: it verifies purely on
-   signature, channel, session and its own `e` claim, with **no path at all**
-   to `hls-revocation.ts`, which lives only in the API process's memory. A
-   viewer banned or losing VIEW mid-party keeps a valid party pass working
-   for up to 6 hours after the fact, full stop, unless something closes that
-   gap. `isPartyPassRevoked` in `src/index.ts` is that hook: given a KV
-   namespace (`HLS_REVOKED_USERS`, commented out in `wrangler.jsonc`,
-   deliberately not provisioned yet) written to by `hls-revocation.ts` on
-   every eviction, this Worker would refuse a party pass whose `userId`
-   appears there. Nothing writes to it today — the function always answers
-   "not revoked" when the binding is absent, so this Worker's behavior is
-   unchanged until an operator decides the gap is worth building the write
-   path for. See the TODO on that function for exactly what remains.
+3. **Revocation, closed the same way the shared cache's gap was closed
+   above, with one extra rule for production.** `PartyPassRevocationGate`
+   (`src/party-pass-revocation.js`) checks `HLS_REVOKED_USERS`, keyed on
+   `userId:channelId`, before honoring a party pass — the SAME gate and the
+   SAME 30 s bound as the rendition-route check above, written to by
+   `server/src/voice/hls-edge-revocation.ts` the moment `hls-revocation.ts`
+   records an eviction (a kick, a ban, a role losing VIEW). See "Enabling in
+   production" below for the exact provisioning steps. The extra rule:
+   because a party pass's ceiling (6 h) is so much wider than a `?t=`
+   token's, **honoring one with NO KV behind it at all in production is a
+   materially different exposure than the `?t=` trade-off ever was** — so
+   `partyPassRequiresKvInProduction` refuses a party pass outright
+   (`party-pass-kv-unconfigured`, a 403) whenever `ENVIRONMENT=production`
+   and `HLS_REVOKED_USERS` is unbound, rather than falling open the way an
+   unconfigured KV does everywhere else. Outside production (local dev, a
+   self-host that has not set `ENVIRONMENT`), the pre-sign-off fail-open
+   default still applies, so nothing here requires a KV namespace just to
+   run the Worker at all.
 
-An operator who is not ready to accept trade-off #3 sets
+An operator who is not ready to provision the KV namespace at all sets
 `LIVE_HLS_PARTY_PASS_TTL_MS=0` on the API: no pass is minted, `?pp=` never
 appears on a stream URL, and this Worker's gate is exactly what it was before
-this feature existed.
+this feature existed — the production refusal above never triggers because
+there is never a party pass to refuse.
+
+## Enabling in production
+
+Three pieces, all operator-side — this repo ships the code, not the
+Cloudflare account state:
+
+1. **Create the KV namespace** (once, from `tools/hls-edge/`):
+
+   ```sh
+   npx wrangler kv namespace create HLS_REVOKED_USERS
+   ```
+
+   This prints an `id`. Uncomment the `kv_namespaces` block in
+   `wrangler.jsonc` and paste it in:
+
+   ```jsonc
+   "kv_namespaces": [
+     { "binding": "HLS_REVOKED_USERS", "id": "<the id from the command above>" }
+   ],
+   ```
+
+   Redeploy the Worker (`npx wrangler deploy`) so the binding takes effect.
+   `ENVIRONMENT` is already `"production"` in `wrangler.jsonc`'s `vars` — no
+   change needed there.
+
+2. **Give the API a way to write to it.** The API talks to Cloudflare's KV
+   REST API directly (`server/src/voice/hls-edge-revocation.ts`), not
+   through this Worker, so it needs three env vars set wherever the API
+   runs (Fly today, see `docs/deploy-vultr.md` for where next):
+
+   | Var | Value |
+   |---|---|
+   | `HLS_EDGE_KV_ACCOUNT_ID` | The Cloudflare account id (same account this Worker deploys to) |
+   | `HLS_EDGE_KV_NAMESPACE_ID` | The `id` from step 1 |
+   | `HLS_EDGE_KV_API_TOKEN` | A Cloudflare API token scoped to **Workers KV Storage: Edit** for that namespace only — not the same token as `CLOUDFLARE_API_TOKEN` used to deploy Pages/Workers from CI, and not given any other permission |
+
+   All three unset (the default on every deployment today) is a supported,
+   tested configuration: `writeHlsEdgeRevocation` no-ops silently, and the
+   Worker's own unconfigured-KV defaults govern instead (fail open outside
+   production, refuse party passes in production — see above).
+
+3. **Verify it end to end** before trusting it live: kick or ban a test
+   account from a channel with an active watch party, and confirm
+   `voice.hlsEdgeRevocationWriteFailed` does NOT appear in the API's logs
+   for that eviction (it logs only on a failed write, never on success — a
+   quiet log is the expected outcome). On the Worker side,
+   `hlsEdge.partyPassRevocationCheckError` should stay at zero; a nonzero
+   rate there means the KV binding is provisioned but not reachable, which
+   fails CLOSED (refuses the request) rather than silently doing nothing.
+
+**Staging first.** Repeat step 1 against a namespace named distinctly (e.g.
+`HLS_REVOKED_USERS_STAGING`) bound to `pqp-hls-edge`'s staging deploy if one
+exists, or reuse the same Worker with a second `wrangler kv namespace create`
+result if staging and production share the Worker — either way, confirm the
+verification step above on staging before repeating steps 1-2 against
+production. There is no code difference between the two; it is purely which
+namespace id and which API token end up in which environment's config.
+
+**Rollback**: remove the `kv_namespaces` block from `wrangler.jsonc` and
+redeploy, or unset the three `HLS_EDGE_KV_*` vars on the API — either half
+reverts independently to the previous, already-shipped behavior (fail open
+outside production; refuse party passes in production if the Worker's KV
+binding is gone but `ENVIRONMENT` is still `"production"`, which is the
+conservative direction to fail in).
 
 ## Why a port, and why plain JS
 
