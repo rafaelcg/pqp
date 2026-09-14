@@ -25,7 +25,15 @@
   // no KV namespace at all).
   "vars": {
     "ORIGIN_BASE": "https://api.pqp.gg",
-    "ENVIRONMENT": "production"
+    "ENVIRONMENT": "production",
+    // LL-HLS (docs/plans/LL_HLS.md task L2.2): the remux box's own Caddy
+    // origin, e.g. "https://egress-1.pqp.gg:8443" -- NOT the same value as
+    // the API's `LIVE_HLS_REMUX_ORIGIN_URL`, even though both eventually
+    // point at the same box; the two processes never call into each other
+    // (see ll-playlist-origin.ts's header). Empty: `LlPlaylistOrigin` is
+    // never `ready`, every request behaves exactly as it did before L2.2 --
+    // no LL rung is ever offered. Set once a real box exists (L1.6/L2.3).
+    "LL_ORIGIN_BASE": ""
   },
 
   // Party-pass (and now shared-rendition-cache) revocation denylist --

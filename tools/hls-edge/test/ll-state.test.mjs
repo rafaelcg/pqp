@@ -1,0 +1,170 @@
+import { strict as assert } from "node:assert";
+import test from "node:test";
+
+import {
+  LL_AUDIO_RUNG,
+  LL_VIDEO_RUNG,
+  parseLlState,
+  playlistOriginKindForRung,
+  trackForRung,
+} from "../src/ll-state.js";
+
+/** A minimal, valid state.json body: two complete segments, one partial, no audio. */
+function fixtureState(overrides = {}) {
+  return {
+    sessionId: "5a1b2c3d-1234-5678-9abc-1234567890ab",
+    channelId: "chan_abc123",
+    partTargetMs: 500,
+    segmentTargetMs: 4000,
+    targetDurationSecs: 4.5,
+    mediaSequence: 41,
+    video: {
+      initUri: "init.mp4",
+      segments: [
+        {
+          msn: 41,
+          complete: true,
+          durationSecs: 4.016,
+          programDateTime: "2026-09-14T18:03:21.114Z",
+          uri: "seg-41.m4s",
+          parts: [
+            { index: 0, durationSecs: 0.501, independent: true, uri: "part-41.0.m4s" },
+            { index: 1, durationSecs: 0.498, independent: false, uri: "part-41.1.m4s" },
+          ],
+        },
+        {
+          msn: 42,
+          complete: true,
+          durationSecs: 4.0,
+          programDateTime: "2026-09-14T18:03:25.130Z",
+          uri: "seg-42.m4s",
+          parts: [{ index: 0, durationSecs: 0.5, independent: true, uri: "part-42.0.m4s" }],
+        },
+        {
+          msn: 43,
+          complete: false,
+          programDateTime: "2026-09-14T18:03:29.130Z",
+          parts: [{ index: 0, durationSecs: 0.502, independent: true, uri: "part-43.0.m4s" }],
+        },
+      ],
+      preloadHint: { msn: 43, part: 1, uri: "part-43.1.m4s" },
+    },
+    audio: null,
+    ...overrides,
+  };
+}
+
+test("parses a well-formed fixture", () => {
+  const state = parseLlState(fixtureState());
+  assert.ok(state);
+  assert.equal(state.sessionId, "5a1b2c3d-1234-5678-9abc-1234567890ab");
+  assert.equal(state.video.segments.length, 3);
+  assert.equal(state.video.segments[2].complete, false);
+  assert.equal(state.video.preloadHint.uri, "part-43.1.m4s");
+  assert.equal(state.audio, null);
+});
+
+test("rejects a non-object", () => {
+  assert.equal(parseLlState(null), null);
+  assert.equal(parseLlState("not json"), null);
+  assert.equal(parseLlState(42), null);
+});
+
+test("rejects an empty segments array", () => {
+  const raw = fixtureState();
+  raw.video.segments = [];
+  assert.equal(parseLlState(raw), null);
+});
+
+test("rejects an incomplete segment anywhere but last", () => {
+  const raw = fixtureState();
+  raw.video.segments[0].complete = false;
+  delete raw.video.segments[0].uri;
+  assert.equal(parseLlState(raw), null);
+});
+
+test("rejects a complete segment missing its duration or uri", () => {
+  const missingDuration = fixtureState();
+  delete missingDuration.video.segments[0].durationSecs;
+  assert.equal(parseLlState(missingDuration), null);
+
+  const missingUri = fixtureState();
+  delete missingUri.video.segments[0].uri;
+  assert.equal(parseLlState(missingUri), null);
+});
+
+test("rejects an incomplete segment that claims a uri", () => {
+  const raw = fixtureState();
+  raw.video.segments[2].uri = "seg-43.m4s";
+  assert.equal(parseLlState(raw), null);
+});
+
+test("rejects a part missing independent/uri/durationSecs", () => {
+  const raw = fixtureState();
+  delete raw.video.segments[0].parts[0].independent;
+  assert.equal(parseLlState(raw), null);
+});
+
+test("rejects a bad programDateTime", () => {
+  const raw = fixtureState();
+  raw.video.segments[0].programDateTime = "not a date";
+  assert.equal(parseLlState(raw), null);
+});
+
+test("preloadHint may be null, and a malformed one is rejected", () => {
+  const nullHint = fixtureState();
+  nullHint.video.preloadHint = null;
+  assert.ok(parseLlState(nullHint));
+
+  const badHint = fixtureState();
+  badHint.video.preloadHint = { msn: 43 }; // missing part/uri
+  assert.equal(parseLlState(badHint), null);
+});
+
+test("accepts a state with an audio track and trackForRung resolves both rungs", () => {
+  const raw = fixtureState({
+    audio: {
+      initUri: "audio-init.mp4",
+      segments: [
+        {
+          msn: 41,
+          complete: true,
+          durationSecs: 4.0,
+          programDateTime: "2026-09-14T18:03:21.114Z",
+          uri: "audio-seg-41.m4s",
+          parts: [{ index: 0, durationSecs: 0.5, independent: true, uri: "audio-part-41.0.m4s" }],
+        },
+      ],
+      preloadHint: null,
+    },
+  });
+  const state = parseLlState(raw);
+  assert.ok(state);
+  assert.equal(trackForRung(state, LL_VIDEO_RUNG), state.video);
+  assert.equal(trackForRung(state, LL_AUDIO_RUNG), state.audio);
+  assert.equal(trackForRung(state, "720p30"), null);
+});
+
+test("a malformed audio track fails the whole document, not just the audio half", () => {
+  const raw = fixtureState({ audio: { initUri: "audio-init.mp4", segments: [] } });
+  assert.equal(parseLlState(raw), null);
+});
+
+test("rejects non-positive partTargetMs/segmentTargetMs/targetDurationSecs", () => {
+  for (const field of ["partTargetMs", "segmentTargetMs", "targetDurationSecs"]) {
+    const raw = fixtureState({ [field]: 0 });
+    assert.equal(parseLlState(raw), null, `field ${field}`);
+  }
+});
+
+test("playlistOriginKindForRung: only the two LL rung names route to the LL origin", () => {
+  assert.equal(playlistOriginKindForRung(LL_VIDEO_RUNG), "ll");
+  assert.equal(playlistOriginKindForRung(LL_AUDIO_RUNG), "ll");
+  // Every conventional rendition name in this codebase, plus garbage — all
+  // of them must stay on "api", the SAME origin and code path they always
+  // used. This is the property behind "conventional sessions are untouched
+  // byte-for-byte" (docs/plans/LL_HLS.md task L2.2).
+  for (const rung of ["720p30", "1080p60", "audio", "ll2", "ll-audio2", "", "LL", "LL-AUDIO"]) {
+    assert.equal(playlistOriginKindForRung(rung), "api", `expected "api" for rung ${JSON.stringify(rung)}`);
+  }
+});
