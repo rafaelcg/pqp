@@ -25,6 +25,8 @@ import { getChannelAudience } from "../services/servers.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket, userHasAuthenticatedSocket } from "./sockets.js";
+import { hasClusterSocket } from "./status.js";
+import { logEvent } from "../lib/log.js";
 import { noteWatchPartyState } from "./watch-party-live.js";
 
 /**
@@ -343,16 +345,62 @@ export async function onHostSocketOpened(userId: string): Promise<void> {
 }
 
 /**
- * A socket closed. If it was this person's LAST socket and they host a live
- * party, start the grace clock.
+ * How often this instance declined to start a grace clock because the host
+ * was still connected on ANOTHER machine. Zero on one machine, and on two it
+ * is the number that says this check is doing something — the shape of
+ * pitfall 12 in CLAUDE.md, where a cross-instance path shipped and never once
+ * ran. Read by the tests; the `watchParty.hostSocketElsewhere` line beside it
+ * is what says so in production's logs.
+ */
+const hostPresence = { heldElsewhere: 0 };
+
+/** Test seam. */
+export function readHostPresenceCounters(): { heldElsewhere: number } {
+  return { ...hostPresence };
+}
+
+export function resetHostPresenceCountersForTests(): void {
+  hostPresence.heldElsewhere = 0;
+}
+
+/**
+ * Whether the host is still connected ANYWHERE — this process or any other.
+ *
+ * THE LOCAL MAP IS ASKED FIRST AND IS STILL THE FAST ANSWER: it is exact for
+ * this process with no window, since `deleteAuthenticatedSocket` has already
+ * run by the time we are called. What it cannot see is the other machine, and
+ * on two API instances a host with the laptop on A and the phone on B closing
+ * the laptop used to read, on B, as a host who had gone away: B started the
+ * grace clock and the sweep ended a party whose host was sitting right there.
+ *
+ * The cluster half is the status registry, which merges every instance's
+ * contribution over the bus and is the same source `push.ts` asks before it
+ * wakes somebody's phone. With one machine (or the bus off) it can only see
+ * this process's own sockets, so the answer is exactly what it always was.
+ */
+function hostIsConnectedAnywhere(userId: string): boolean {
+  if (userHasAuthenticatedSocket(userId)) {
+    return true;
+  }
+  if (!hasClusterSocket(userId)) {
+    return false;
+  }
+  hostPresence.heldElsewhere += 1;
+  logEvent("watchParty.hostSocketElsewhere", { userId });
+  return true;
+}
+
+/**
+ * A socket closed. If it was this person's LAST socket ANYWHERE and they host
+ * a live party, start the grace clock.
  *
  * THE "LAST SOCKET" CHECK IS WHY THIS IS NOT IN THE SERVICE. Somebody with
  * the app open on a laptop and a phone closes one of them constantly; only
- * the transition to zero sockets is a host going away, and the socket
- * registry is the only thing that knows.
+ * the transition to zero sockets is a host going away, and the presence
+ * registries are the only thing that knows.
  */
 export async function onHostSocketClosed(userId: string): Promise<void> {
-  if (userHasAuthenticatedSocket(userId)) {
+  if (hostIsConnectedAnywhere(userId)) {
     return;
   }
   const channels = await markWatchPartyHostGone(userId);

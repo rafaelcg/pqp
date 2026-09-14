@@ -1425,8 +1425,16 @@ CREATE TABLE IF NOT EXISTS voice_rooms (
   transport         TEXT NOT NULL CHECK (transport IN ('mesh', 'livekit')),
   watch_party       JSONB,
   watch_party_rev   BIGINT NOT NULL DEFAULT 0,
+  music             JSONB,
+  music_rev         BIGINT NOT NULL DEFAULT 0,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- The music queue is the watch party's twin: same contract (`rev` wins, ties
+-- break on `actorId`), same two columns, same rule that a write only lands
+-- when it outranks the row. Added after the table existed, so an existing
+-- deployment picks them up here rather than in a migration.
+ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music JSONB;
+ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music_rev BIGINT NOT NULL DEFAULT 0;
 
 -- One row per voice peer anywhere in the cluster. `instance_id` says which
 -- process holds the socket; `orphaned_at` is set when that socket closed and

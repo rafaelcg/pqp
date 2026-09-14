@@ -18,9 +18,15 @@ import { createRateLimiter } from "../lib/rate-limit.js";
  * to ask anybody for it, and the last participant leaving has to tear the
  * queue down.
  *
- * SCOPE. Per process, like `peers` in `voice.ts`: a room lives on one
- * instance. Not mirrored into the voice registry yet, so a queue does not
- * survive an API restart. Documented in `docs/MUSIC.md`.
+ * SCOPE. Per process, exactly like `peers` in `voice.ts` and the map in
+ * `ws/watch-party.ts`. With the voice registry off (the default) this map IS
+ * the queue and a room lives on one instance. With `VOICE_REGISTRY=postgres`
+ * the queue is `voice_rooms.music` and this map is a cache of it: a write is
+ * compared and coalesced here first, then persisted with the contract's
+ * ordering as the WHERE clause (`persistMusic` in `voice/registry.ts`), and a
+ * write that lost in the row is handed the row's winner. Writes from other
+ * instances land through `adoptMusicState`, off the `voice.music` bus topic.
+ * Documented in `docs/MUSIC.md`.
  */
 const rooms = new Map<string, MusicState>();
 
@@ -60,6 +66,34 @@ export function endMusic(voiceChannelId: string): boolean {
 export function resetMusicForTests(): void {
   rooms.clear();
   writeLimiter.reset();
+}
+
+/**
+ * Take a queue decided elsewhere (the registry row, or a `voice.music` frame
+ * from another instance) into the cache. Applies the contract's ordering
+ * against what is held, so a straggling frame cannot roll the cache back;
+ * `null` is a teardown and always wins, as it does in `applyMusicWrite`.
+ * Returns whether the cache changed. No limiter, no rights check, no log:
+ * nothing here was written by a person on this instance, and whoever accepted
+ * it already ran all three.
+ */
+export function adoptMusicState(
+  voiceChannelId: string,
+  state: MusicState | null,
+): boolean {
+  const held = getMusicState(voiceChannelId);
+  if (state === null) {
+    if (held === null) {
+      return false;
+    }
+    rooms.delete(voiceChannelId);
+    return true;
+  }
+  if (musicWriteIsStale(held, state)) {
+    return false;
+  }
+  rooms.set(voiceChannelId, state);
+  return true;
 }
 
 export type MusicWrite =

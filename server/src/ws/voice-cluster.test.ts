@@ -10,7 +10,12 @@ import {
   vi,
 } from "vitest";
 import type { WebSocket } from "ws";
-import { raisedHandQueue, type WatchPartyState } from "@pqp/shared";
+import {
+  raisedHandQueue,
+  type MusicState,
+  type MusicTrack,
+  type WatchPartyState,
+} from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { createMemoryHub, type BusFrame } from "../lib/bus.js";
 
@@ -372,6 +377,38 @@ async function resume(
 function party(rev: number, actorId: string, extra: Partial<WatchPartyState> = {}): WatchPartyState {
   return {
     videoId: "dQw4w9WgXcQ",
+    status: "playing",
+    positionMs: 0,
+    atMs: Date.now(),
+    rev,
+    actorId,
+    ...extra,
+  };
+}
+
+function musicTrack(id: string, addedBy: string): MusicTrack {
+  return {
+    id,
+    provider: "youtube",
+    videoId: id,
+    title: `Track ${id}`,
+    sourceUrl: null,
+    thumbnailUrl: null,
+    durationMs: 200_000,
+    addedByUserId: addedBy,
+    addedByName: "Someone",
+  };
+}
+
+function queue(
+  rev: number,
+  actorId: string,
+  current: MusicTrack | null,
+  extra: Partial<MusicState> = {},
+): MusicState {
+  return {
+    current,
+    queue: [],
     status: "playing",
     positionMs: 0,
     atMs: Date.now(),
@@ -769,6 +806,147 @@ describeDb("voice across two instances", () => {
         [channel],
       );
       expect(row.rows[0]?.watch_party).toBeNull();
+    });
+  });
+
+  describe("music queue", () => {
+    /**
+     * The queue was a process-local map with a comment saying "a room lives
+     * on one instance today", and with the registry on that stopped being
+     * true: half a room heard the play and the other half heard nothing, and
+     * somebody walking in on the other machine got silence next to a song
+     * three minutes in. Both halves are pinned here, plus the counters that
+     * say the relay actually ran (pitfall 12).
+     */
+    it("a play on A reaches the room on B, and the row is the queue", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userA = randomUUID();
+      const dj = await join(a, userA, channel);
+      const listenerOnB = await join(b, randomUUID(), channel);
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(1, userA, musicTrack("aaaaaaaaaaa", userA)),
+        },
+      );
+
+      // The echo on A, the crossing on B.
+      expect(frames(dj, "music")[0]?.state).toMatchObject({ rev: 1 });
+      await waitFor(() => frames(listenerOnB, "music").length === 1, "music on B");
+      expect(frames(listenerOnB, "music")[0]?.state).toMatchObject({
+        rev: 1,
+        current: { videoId: "aaaaaaaaaaa" },
+      });
+
+      // A pause crosses too: what this replaces failed per frame, not per
+      // room, so one crossing proves nothing about the next.
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(2, userA, musicTrack("aaaaaaaaaaa", userA), {
+            status: "paused",
+            positionMs: 30_000,
+          }),
+        },
+      );
+      await waitFor(() => frames(listenerOnB, "music").length === 2, "pause on B");
+      expect(frames(listenerOnB, "music")[1]?.state).toMatchObject({
+        rev: 2,
+        status: "paused",
+      });
+
+      const row = await pools[0]!.getPool().query<{ music_rev: string }>(
+        `SELECT music_rev FROM voice_rooms WHERE channel_id = $1`,
+        [channel],
+      );
+      expect(Number(row.rows[0]?.music_rev)).toBe(2);
+
+      // The relay ran on A and was applied on B. Both counters, because
+      // "published" and "applied" are different claims.
+      const snapshotA = await a.voice.getVoiceActivitySnapshot();
+      const snapshotB = await b.voice.getVoiceActivitySnapshot();
+      expect(snapshotA.cluster.musicRelayed).toBe(2);
+      expect(snapshotA.cluster.musicAdopted).toBe(0);
+      expect(snapshotB.cluster.musicAdopted).toBe(2);
+    });
+
+    it("a joiner on B is handed the queue that was set on A", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userA = randomUUID();
+      const dj = await join(a, userA, channel);
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(4, userA, musicTrack("bbbbbbbbbbb", userA), {
+            positionMs: 180_000,
+          }),
+        },
+      );
+
+      // Nobody on B was in the room, so no frame reached it: the row is the
+      // only thing that can answer this join.
+      const late = await join(b, randomUUID(), channel);
+      expect(frames(late, "music")[0]?.state).toMatchObject({
+        rev: 4,
+        positionMs: 180_000,
+        current: { videoId: "bbbbbbbbbbb" },
+      });
+    });
+
+    it("refuses a write that lost in the row when B missed the frame", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userA = randomUUID();
+      const userB = randomUUID();
+      const dj = await join(a, userA, channel);
+      const writerOnB = await join(b, userB, channel);
+      const bystanderOnB = await join(b, randomUUID(), channel);
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(1, userA, musicTrack("ccccccccccc", userA)),
+        },
+      );
+      await waitFor(() => frames(writerOnB, "music").length === 1, "rev 1 on B");
+
+      // B goes deaf (a bus blip); A skips on without B hearing.
+      await b.bus.closeBus();
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(5, userA, musicTrack("ddddddddddd", userA)),
+        },
+      );
+      expect(frames(writerOnB, "music")).toHaveLength(1);
+
+      bystanderOnB.frames.length = 0;
+      await b.voice.handleVoiceMessage(
+        { socket: writerOnB.socket, user: asUser(userB) },
+        {
+          type: "set-music",
+          state: queue(3, userB, musicTrack("eeeeeeeeeee", userB)),
+        },
+      );
+
+      // The loser is handed the winner, alone; the room hears nothing.
+      expect(frames(writerOnB, "music")[1]?.state).toMatchObject({
+        rev: 5,
+        current: { videoId: "ddddddddddd" },
+      });
+      expect(frames(bystanderOnB, "music")).toHaveLength(0);
     });
   });
 
