@@ -169,4 +169,33 @@ describeDbSingleton("db.ts's breaker probe against a real stalled connection", (
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   }, 10_000);
+
+  // A second Farol pass caught that publishing `probeClient` BEFORE
+  // `connect()` settles (the fix above) opened a different gap: a
+  // `connect()` that rejects on its own -- refused, not aborted by this
+  // process -- left that same client sitting in `probeClient` with nothing
+  // to un-publish it, so the next tick would find a "connection" here, skip
+  // making a fresh one, and waste a probe running a query against a client
+  // that was never actually connected.
+  it("a real connection refusal during connect() does not leave a dead client published", async () => {
+    const { tickDbBreakerForTests, probeConnectionActiveForTests, resetDbBreakerForTests } =
+      await import("../db.js");
+
+    const previousUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = CLOSED_PORT_URL;
+    resetDbBreakerForTests();
+
+    try {
+      expect(probeConnectionActiveForTests()).toBe(false);
+      await tickDbBreakerForTests();
+      expect(probeConnectionActiveForTests()).toBe(false);
+      // And the NEXT tick must attempt a fresh connection rather than
+      // reusing the dead one -- also proven false, not stuck true.
+      await tickDbBreakerForTests();
+      expect(probeConnectionActiveForTests()).toBe(false);
+    } finally {
+      process.env.DATABASE_URL = previousUrl;
+      resetDbBreakerForTests();
+    }
+  });
 });

@@ -157,6 +157,19 @@ describeDb("A3.1: guardPoolQueries covers connect() and half-open", () => {
     }
   });
 
+  // A second Farol pass caught that classifying a query as a transaction
+  // control statement by its first keyword alone would wave through a
+  // MULTI-statement string (Postgres's simple query protocol treats `;` as
+  // a statement separator) that merely starts with BEGIN — nothing in this
+  // codebase issues a query this way, but the guard itself must not assume
+  // that stays true.
+  it("a multi-statement string starting with BEGIN is not treated as a control statement", async () => {
+    forceDbBreakerStateForTests("open");
+    await expect(
+      getPool().query("BEGIN; SELECT 1"),
+    ).rejects.toBeInstanceOf(DatabaseUnavailableError);
+  });
+
   it("a client a rejected query poisons mid-transaction is destroyed on release, and its writes never land", async () => {
     const clerkId = "clerk_dirty_txn_test";
     await getPool().query(`DELETE FROM users WHERE clerk_id = $1`, [clerkId]);

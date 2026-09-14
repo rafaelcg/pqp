@@ -109,7 +109,24 @@ async function probeConnection(): Promise<void> {
     // `connect()` below rejects, which is exactly what "abandoned" needs to
     // mean here.
     probeClient = client;
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (error) {
+      // A SECOND Farol pass caught the gap publishing early opened: a
+      // `connect()` that rejects on its own (refused, not aborted by us)
+      // left this exact same client sitting in `probeClient` with nothing
+      // to un-publish it, so the NEXT tick would find a "connection" here,
+      // skip creating a fresh one, and waste a probe running `SELECT 1`
+      // against a client that was never actually connected — one tick's
+      // delay before the `query`-time catch below would have caught it
+      // anyway. Same cleanup as that catch, done here too, so a failed
+      // `connect()` is exactly as terminal as a failed query.
+      if (probeClient === client) {
+        probeClient = null;
+      }
+      void client.end().catch(() => {});
+      throw error;
+    }
   }
   try {
     await client.query("SELECT 1");
@@ -373,11 +390,31 @@ function queryTextOf(args: unknown[]): string | null {
   return null;
 }
 
+/**
+ * Postgres's simple query protocol treats `;` as a statement separator, so
+ * `client.query("BEGIN; DELETE FROM users; COMMIT")` is ONE call carrying
+ * THREE statements. A Farol pass caught that classifying by first keyword
+ * alone would read that whole string as `"begin"` and let the guard wave
+ * the bundled `DELETE` through unrejected along with it. Nothing in this
+ * codebase issues a query this way today (every call site here is one
+ * statement per `client.query`), but the guard itself must not assume that
+ * stays true — a single trailing `;` is normal and allowed; a `;` anywhere
+ * else means this is not the single control statement it looks like at a
+ * glance.
+ */
+function isSingleStatement(text: string): boolean {
+  const trimmed = text.trim();
+  const withoutTrailingSemicolon = trimmed.endsWith(";")
+    ? trimmed.slice(0, -1)
+    : trimmed;
+  return !withoutTrailingSemicolon.includes(";");
+}
+
 type TransactionControlKind = "begin" | "end" | "mid" | null;
 
 function transactionControlKind(args: unknown[]): TransactionControlKind {
   const text = queryTextOf(args);
-  if (!text) {
+  if (!text || !isSingleStatement(text)) {
     return null;
   }
   if (TRANSACTION_BEGIN.test(text)) {
@@ -390,6 +427,28 @@ function transactionControlKind(args: unknown[]): TransactionControlKind {
     return "mid";
   }
   return null;
+}
+
+/**
+ * `original(...args)` is typed as returning a `Promise`, but that is this
+ * module's own convenience cast (see the big comment above `guardQueryMethod`'s
+ * sibling `guardPoolQueries`) — `pg.Pool.query`/`PoolClient.query` also has a
+ * callback overload that returns a plain `Query` object with no `.then`.
+ * Nothing in this codebase uses that overload today, but a Farol pass on
+ * this exact function caught that calling `.then` unconditionally on the
+ * result would still be a crash waiting for whichever call site uses it
+ * first, for a class of query (transaction control) this guard now runs
+ * DIFFERENT code on. Falling back to a plain pass-through for a non-thenable
+ * result means such a call still WORKS — same as it always did — it simply
+ * does not get transaction-state tracking, which requires sequencing this
+ * guard cannot get from a callback-style call anyway.
+ */
+function isThenable(value: unknown): value is Promise<unknown> {
+  return (
+    !!value &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
 }
 
 /** Clients with a `BEGIN` that has not yet been closed by a `COMMIT`/`ROLLBACK`. */
@@ -417,7 +476,11 @@ function guardQueryMethod(
       return Promise.reject(new DatabaseUnavailableError());
     }
     const result = original(...args);
-    if (kind === "begin") {
+    // Not tracked at all when the call used pg's callback overload instead
+    // of the promise one (see `isThenable`'s comment) — nothing in this
+    // codebase does that, and a call this guard cannot sequence is a call
+    // it cannot safely track transaction state for anyway.
+    if (kind === "begin" && isThenable(result)) {
       return result.then(
         (value) => {
           openTransactionClients.add(target);
@@ -429,7 +492,7 @@ function guardQueryMethod(
         },
       );
     }
-    if (kind === "end") {
+    if (kind === "end" && isThenable(result)) {
       return result.then(
         (value) => {
           openTransactionClients.delete(target);
