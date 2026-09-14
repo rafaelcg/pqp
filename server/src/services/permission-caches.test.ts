@@ -223,13 +223,14 @@ describeDb("per-request permission caches", () => {
       expect(await getAgeGateStatus(user.id)).toBe("passed");
     });
 
-    it("does not re-issue the query for a repeated check inside the TTL", async () => {
+    it("does not re-issue the query for a repeated check of a declared account inside the TTL", async () => {
       const user = await upsertUser({
         clerkId: "clerk-age-2",
         displayName: "Adult",
         avatarUrl: null,
       });
-      await getAgeGateStatus(user.id);
+      await recordAgeDeclaration(user.id, { year: 1990, month: 1, day: 1 });
+      await getAgeGateStatus(user.id); // primes the cache with the terminal "passed"
       const spy = vi.spyOn(getPool(), "query");
       await getAgeGateStatus(user.id);
       const ageQueries = spy.mock.calls.filter(
@@ -239,6 +240,58 @@ describeDb("per-request permission caches", () => {
       );
       spy.mockRestore();
       expect(ageQueries).toHaveLength(0);
+    });
+
+    /**
+     * The inverse of the case above, and the regression test for the
+     * 2026-09-14 M6 rehearsal's WS `4401`s. "pending" is the one status that
+     * is not permanent: the gate is one-shot, so a cached "passed"/"blocked"
+     * can never go wrong, but a cached "pending" can be overtaken by a
+     * declaration landing on any instance at any moment, and this cache's
+     * invalidation only ever reaches the process that handled that write
+     * (`invalidateAgeGateStatus`, called from `recordAgeDeclaration`). Behind
+     * a load balancer with no session affinity, a stale "pending" read back
+     * on a DIFFERENT instance than the one that saw the declaration is
+     * exactly what closed a just-declared account's WebSocket as
+     * unauthorized. This process only ever models one instance, so what it
+     * can pin is the fix's actual mechanism: a still-pending account's status
+     * is never written into the cache at all (`getAgeGateStatus`'s
+     * `shouldCache`), so every read of it is a fresh query — there is no
+     * cached answer for another instance's write to be stale against.
+     */
+    it("re-issues the query for a repeated check of a still-pending account, because pending must never be cached", async () => {
+      const user = await upsertUser({
+        clerkId: "clerk-age-pending",
+        displayName: "Undeclared",
+        avatarUrl: null,
+      });
+      expect(await getAgeGateStatus(user.id)).toBe("pending");
+      const spy = vi.spyOn(getPool(), "query");
+      expect(await getAgeGateStatus(user.id)).toBe("pending");
+      const ageQueries = spy.mock.calls.filter(
+        (call) =>
+          typeof call[0] === "string" &&
+          call[0].includes("age_checked_at, age_check_passed FROM users"),
+      );
+      spy.mockRestore();
+      expect(ageQueries).toHaveLength(1);
+    });
+
+    it("a declaration is visible immediately even on a read that cached this account's earlier pending status", async () => {
+      // Models the rehearsal's failure and its fix in one instance: the
+      // first read (a fresh account's GET /api/me) sees "pending" and, with
+      // the fix, does not cache it. A declaration follows. The next read (the
+      // WS auth frame) must see "passed" — not a stale "pending" — with no
+      // explicit invalidation needed, because there was never a cached
+      // "pending" for the declaration to leave behind.
+      const user = await upsertUser({
+        clerkId: "clerk-age-race",
+        displayName: "Racing",
+        avatarUrl: null,
+      });
+      expect(await getAgeGateStatus(user.id)).toBe("pending");
+      await recordAgeDeclaration(user.id, { year: 1990, month: 1, day: 1 });
+      expect(await getAgeGateStatus(user.id)).toBe("passed");
     });
   });
 });

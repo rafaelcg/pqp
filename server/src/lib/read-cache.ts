@@ -198,6 +198,7 @@ function touch<T>(key: string, entry: Entry<T>): void {
 function revalidate<T>(
   key: string,
   loader: () => Promise<T>,
+  shouldCache: (value: T) => boolean,
 ): void {
   if (inflight.has(key)) {
     return;
@@ -225,11 +226,12 @@ function revalidate<T>(
     .then((value) => {
       if (inflight.get(key) === promise) {
         inflight.delete(key);
-        // A refresh that grew past `MAX_CACHEABLE_ROWS` is not written
-        // back — the stale entry already in `store` keeps answering hits
-        // until it ages into the doubly-stale miss path, same as any
+        // A refresh that grew past `MAX_CACHEABLE_ROWS`, or that `shouldCache`
+        // now refuses (see `coalesce`'s doc for why a caller would), is not
+        // written back — the stale entry already in `store` keeps answering
+        // hits until it ages into the doubly-stale miss path, same as any
         // other refresh failure.
-        if (isCacheable(value)) {
+        if (isCacheable(value) && shouldCache(value)) {
           touch(key, {
             value,
             storedAt: Date.now(),
@@ -272,11 +274,37 @@ function revalidate<T>(
  * per call site without a second cache instance; it is applied at both the
  * fresh/stale boundary and the stale/expired boundary (the stale window is
  * always one more `ttlMs`).
+ *
+ * `shouldCache`, when given, is consulted on every fresh load (miss or
+ * background revalidation) before the value is written to `store`; a `false`
+ * answer means the current caller (and anyone coalesced with it) still gets
+ * the value, it is simply never cached. This is for a value that is not
+ * merely large (`isCacheable` / `MAX_CACHEABLE_ROWS` already cover that) but
+ * WRONG to cache at all on this process: an in-progress, one-shot state that
+ * is about to change and, unlike everything else this module holds, is not
+ * safe to keep answering from *this instance's* memory once another instance
+ * has moved it on — `invalidateExact` only ever clears the process that calls
+ * it, never the cluster, so a value whose staleness other instances cannot
+ * see must not be cached at all rather than cached briefly. `age-gate.ts`'s
+ * `getAgeGateStatus` passes `(status) => status !== "pending"` for exactly
+ * this reason: `"passed"`/`"blocked"` are permanent per account (the gate is
+ * one-shot, `recordAgeDeclaration`'s `WHERE age_checked_at IS NULL`) so caching
+ * them is always correct, but `"pending"` can flip to one of those on ANY
+ * instance at ANY moment, and a multi-machine deploy has no way to tell this
+ * instance's cache that it did. Caching it anyway is exactly what produced
+ * the 2026-09-14 M6 rehearsal's WS `4401`s: a fresh account's `GET /api/me`
+ * cached `"pending"` on whichever machine served it, the age declaration that
+ * followed landed on (and only invalidated) a different machine, and the `ws`
+ * auth frame — often seconds later, on yet another connection — hit the
+ * first machine again inside the 30s TTL and read the stale `"pending"`,
+ * closing a real, just-declared account's socket as unauthorized. Defaults to
+ * "always cache" so every other call site is unaffected.
  */
 export async function coalesce<T>(
   key: string,
   ttlMs: number = DEFAULT_TTL_MS,
   loader: () => Promise<T>,
+  shouldCache: (value: T) => boolean = () => true,
 ): Promise<T> {
   if (!readCacheEnabled()) {
     return loader();
@@ -294,7 +322,7 @@ export async function coalesce<T>(
     if (age < ttlMs * 2) {
       metrics.staleServed += 1;
       touch(key, entry);
-      revalidate(key, loader);
+      revalidate(key, loader, shouldCache);
       return entry.value;
     }
     // Doubly stale: treat exactly like a miss below, including sharing an
@@ -322,10 +350,11 @@ export async function coalesce<T>(
     .then((value) => {
       if (inflight.get(key) === promise) {
         inflight.delete(key);
-        // Over `MAX_CACHEABLE_ROWS`: every current and coalesced caller
-        // still gets this answer (the `.then` return below), it is simply
-        // never written to `store` — the next call is a fresh miss again.
-        if (isCacheable(value)) {
+        // Over `MAX_CACHEABLE_ROWS`, or refused by `shouldCache`: every
+        // current and coalesced caller still gets this answer (the `.then`
+        // return below), it is simply never written to `store` — the next
+        // call is a fresh miss again.
+        if (isCacheable(value) && shouldCache(value)) {
           touch(key, { value, storedAt: Date.now(), size: estimateSize(value) });
         }
       }

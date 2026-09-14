@@ -553,6 +553,86 @@ describe("read-cache", () => {
     expect(readCacheMetrics().size).toBe(1);
   });
 
+  // ------------------------------------------------------------ shouldCache
+
+  describe("shouldCache", () => {
+    it("does not cache a value the predicate refuses, so the next call is a fresh miss", async () => {
+      let calls = 0;
+      const load = async () => {
+        calls += 1;
+        return "pending";
+      };
+      const shouldCache = (value: string) => value !== "pending";
+
+      const a = await coalesce("age-gate:u1", 60_000, load, shouldCache);
+      const b = await coalesce("age-gate:u1", 60_000, load, shouldCache);
+
+      // Both callers get the real answer...
+      expect(a).toBe("pending");
+      expect(b).toBe("pending");
+      // ...but nothing landed in the cache, so each call was a real load.
+      expect(calls).toBe(2);
+      expect(readCacheMetrics()).toMatchObject({ size: 0, bytes: 0 });
+    });
+
+    it("caches a value the predicate admits, same as no predicate at all", async () => {
+      let calls = 0;
+      const load = async () => {
+        calls += 1;
+        return "passed";
+      };
+      const shouldCache = (value: string) => value !== "pending";
+
+      await coalesce("age-gate:u1", 60_000, load, shouldCache);
+      await coalesce("age-gate:u1", 60_000, load, shouldCache);
+
+      expect(calls).toBe(1);
+      expect(readCacheMetrics().size).toBe(1);
+    });
+
+    it("defaults to always-cache when no predicate is given", async () => {
+      let calls = 0;
+      const load = async () => {
+        calls += 1;
+        return "v1";
+      };
+      await coalesce("k", 60_000, load);
+      await coalesce("k", 60_000, load);
+      expect(calls).toBe(1);
+    });
+
+    it("is the model of the cross-instance staleness bug this exists to close: a status cached by one process, changed via a different one, must never be read back stale by a third read on the first", async () => {
+      // Simulates two server instances sharing nothing but Postgres: `db`
+      // stands in for the one true answer, `instanceA`/`instanceB` for two
+      // processes each with their own in-memory `read-cache`. This module
+      // only ever models ONE process (`store` is a single module-level
+      // map), so the two "instances" here are the same `coalesce` calls
+      // made under two different keys standing in for "this account's
+      // status as seen by instance A" and "...by instance B" — the point
+      // being to show that even within ONE process, a predicate that
+      // refuses to cache the transient state prevents the staleness that
+      // caching it would have produced.
+      let db: "pending" | "passed" = "pending";
+      const shouldCache = (status: string) => status !== "pending";
+      const readOn = (instanceKey: string) =>
+        coalesce(instanceKey, 30_000, async () => db, shouldCache);
+
+      // Instance A reads first (a fresh account's GET /api/me): sees
+      // "pending", and — because of shouldCache — does NOT cache it.
+      expect(await readOn("instanceA")).toBe("pending");
+
+      // The account declares its age. In the real bug this write happens on
+      // instance B and only invalidates instance B's cache; here it is
+      // simply the source of truth changing.
+      db = "passed";
+
+      // The WS auth frame lands back on instance A, inside what would have
+      // been the old TTL window. Because "pending" was never cached, this
+      // is a fresh read of the real, current answer rather than a stale hit.
+      expect(await readOn("instanceA")).toBe("passed");
+    });
+  });
+
   it("resetReadCacheForTests clears the resident-byte counter, not just the entries", async () => {
     await coalesce("k", 60_000, async () => new Array(20).fill(0));
     const sizeBefore = readCacheMetrics().bytes;
