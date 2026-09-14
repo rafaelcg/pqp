@@ -23,6 +23,10 @@ the API-only morning runs whose method is in
 [`docs/STAGING.md`](./STAGING.md); and the two interactive-shape ladders of
 2026-09-09 (section 3a). Results for all of them: the operator's copy.
 
+For the dedicated egress box's encoder headroom (the B3.1 upgrade-only-on-a-reading
+question in `docs/plans/BROADCAST_PIPELINE.md` section 5), see
+[`tools/egress-bench/`](../tools/egress-bench/).
+
 ## Timeline
 
 Three changes to the production media server (Vultr `sfu-pqp`, São Paulo), in
