@@ -190,6 +190,7 @@ import {
   type GuestAction,
 } from "@/components/watch-party/guests/watch-party-guests-overlay";
 import { endWatchParty } from "@/lib/watch-party-end";
+import { decideGoLiveMicPrompt } from "@/lib/watch-party-go-live";
 import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
 import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
 import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
@@ -4348,18 +4349,48 @@ function MainAppContent({
    * only on a share that genuinely went out, regardless of which one got
    * there.
    *
-   * TAKES `partyId` RATHER THAN RE-READING `currentWatchParty()` (Farol,
-   * 2026-09-14, round two). The disclosure sheet can sit open for as long
-   * as a host takes to read it, and the selected channel is free to change
-   * in that window; resolving "the party" at completion time would arm the
-   * prompt for whatever party happens to be on screen when the sheet is
-   * confirmed, not the one that actually asked for the share. Both callers
-   * pass the id they captured when the share was FIRST requested.
+   * TAKES `partyId` AND `channelId` RATHER THAN RE-READING
+   * `currentWatchParty()` (Farol, 2026-09-14, round two). The disclosure
+   * sheet can sit open for as long as a host takes to read it, and the
+   * selected channel is free to change in that window; resolving "the
+   * party" at completion time would arm the prompt for whatever party
+   * happens to be on screen when the sheet is confirmed, not the one that
+   * actually asked for the share. Both callers pass the ids they captured
+   * when the share was FIRST requested.
+   *
+   * LOOKS THE PARTY UP FRESH AND BAILS QUIETLY IF IT IS GONE (Farol,
+   * 2026-09-14, round three). Carrying the id past the disclosure sheet
+   * fixed "the wrong party" — it does not fix "no party at all": the sheet
+   * can sit open long enough for the party to end on its own (the host
+   * closes it from another tab, the five-minute grace sweep times it out).
+   * A `MediaStream` publishing into a room that has moved on is not this
+   * function's problem to solve; not asking a now-nonexistent party's
+   * absent audience to hear an unmuted mic is. `decideGoLiveMicPrompt`
+   * (`lib/watch-party-go-live.ts`) is the actual decision, pure and unit
+   * tested; this is only the wiring — the fresh lookup and the one thing a
+   * pure function cannot do, showing the dialog.
    */
-  function finishWatchPartyGoLiveShare(partyId: string, wentOut: boolean) {
-    if (wentOut && voice.getState().isMuted) {
-      setMicPromptPartyId(partyId);
+  function finishWatchPartyGoLiveShare(
+    partyId: string,
+    channelId: string,
+    wentOut: boolean,
+  ) {
+    const decision = decideGoLiveMicPrompt({
+      wentOut,
+      requestedPartyId: partyId,
+      party: watchParties.byChannel[channelId],
+      isMuted: voice.getState().isMuted,
+    });
+    if (!decision.arm) {
+      if (decision.reason === "party-gone") {
+        console.warn(
+          "[watch-party] go-live mic handoff skipped: party no longer live",
+          { partyId, channelId },
+        );
+      }
+      return;
     }
+    setMicPromptPartyId(partyId);
   }
 
   /**
@@ -4415,10 +4446,15 @@ function MainAppContent({
     // cancelled the picker or had the OS refuse the capture still got "Ativar
     // o mic?" for a broadcast that never started. `finishWatchPartyGoLiveShare`
     // is also what the disclosure-sheet route below calls once IT knows the
-    // outcome, so the two routes end in the same transition; `partyId` rides
-    // on the intent so that route still has it after the sheet closes.
-    const wentOut = await startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream, partyId: party.id });
-    finishWatchPartyGoLiveShare(party.id, wentOut);
+    // outcome, so the two routes end in the same transition; `party` rides
+    // on the intent so that route still has both ids after the sheet closes.
+    const wentOut = await startScreenShareGated(false, {
+      preferBrowserTab: true,
+      watchParty: true,
+      stream,
+      party: { id: party.id, channelId: party.channelId },
+    });
+    finishWatchPartyGoLiveShare(party.id, party.channelId, wentOut);
   }
 
   /**
@@ -8357,24 +8393,30 @@ function MainAppContent({
           // before the sheet, through the same gate (now acknowledged).
           //
           // ONLY A GO-LIVE SHARE FINISHES THE HANDOFF, AND FOR THE PARTY IT
-          // WAS ACTUALLY FOR (Farol, 2026-09-14, two rounds). `intent.stream`
+          // WAS ACTUALLY FOR (Farol, 2026-09-14, three rounds). `intent.stream`
           // is the signal handed only by `handleWatchPartyGoLive` (an
           // already-approved preview capture); every other caller through
           // this same gate — the ordinary call share button, a mid-show
           // reshare — has none, and must never pop the watch-party mic
-          // prompt on THEIR confirm. `intent.partyId` travels with it rather
+          // prompt on THEIR confirm. `intent.party` travels with it rather
           // than reading `currentWatchParty()` here, because the sheet can
-          // sit open for as long as the host takes to read it and the
-          // selected channel is free to change in that window.
-          const goLivePartyId = pending.request.intent?.stream
-            ? pending.request.intent.partyId
+          // sit open for as long as the host takes to read it, the selected
+          // channel is free to change in that window, and
+          // `finishWatchPartyGoLiveShare` itself re-checks the party is
+          // still there and still live before arming anything.
+          const goLiveParty = pending.request.intent?.stream
+            ? pending.request.intent.party
             : undefined;
           void startScreenShareGated(
             pending.request.audio,
             pending.request.intent,
           ).then((wentOut) => {
-            if (goLivePartyId) {
-              finishWatchPartyGoLiveShare(goLivePartyId, wentOut);
+            if (goLiveParty) {
+              finishWatchPartyGoLiveShare(
+                goLiveParty.id,
+                goLiveParty.channelId,
+                wentOut,
+              );
             }
           });
         }}

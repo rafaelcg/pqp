@@ -740,25 +740,27 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
       source.indexOf("async function handleWatchPartyGoLive"),
       source.indexOf("async function handleWatchPartyEnd"),
     );
-    expect(goLive).toContain(
-      "startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream, partyId: party.id })",
-    );
+    expect(goLive).toContain("startScreenShareGated(false, {");
+    expect(goLive).toContain("watchParty: true,");
+    expect(goLive).toContain("stream,");
     expect(goLive).toContain("startMuted: true");
     expect(goLive).not.toContain("getAudioTracks().length > 0");
 
   });
 
   /**
-   * THE DISCLOSURE ROUTE (Farol, 2026-09-14, two rounds). A go-live share
+   * THE DISCLOSURE ROUTE (Farol, 2026-09-14, three rounds). A go-live share
    * can resolve two ways: at once, or after `HlsHostAckSheet`'s "you are
    * responsible for what you transmit" sheet, for a host's first ever
    * HLS-capable share. Both have to end in the same place —
    * `finishWatchPartyGoLiveShare`, which is what arms the mic prompt — or a
    * presenter who happens to hit the sheet on their very first watch party
-   * never gets asked to turn their mic on. And the disclosure route has to
-   * carry the party id it started with rather than reading whatever party
-   * is selected once the host finally confirms the sheet, which can be a
-   * different one if they navigated while it sat open.
+   * never gets asked to turn their mic on. The disclosure route has to carry
+   * the ids it started with rather than reading whatever party is selected
+   * once the host finally confirms the sheet (round two), and the eventual
+   * completion has to re-check the party is still there and still live
+   * before arming anything (round three — `decideGoLiveMicPrompt` in
+   * `lib/watch-party-go-live.test.ts` is the behavioural test for that part).
    *
    * Source-scanned, like the sibling tests in this describe block: `App.tsx`
    * is not mounted in this suite.
@@ -773,8 +775,10 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
       source.indexOf("async function handleWatchPartyGoLive"),
       source.indexOf("async function handleWatchPartyReminder"),
     );
-    expect(goLive).toContain("finishWatchPartyGoLiveShare(party.id, wentOut)");
-    expect(goLive).toContain("partyId: party.id");
+    expect(goLive).toContain(
+      "finishWatchPartyGoLiveShare(party.id, party.channelId, wentOut)",
+    );
+    expect(goLive).toContain("party: { id: party.id, channelId: party.channelId }");
 
     const ackSheetStart = source.indexOf("<HlsHostAckSheet");
     const ackSheet = source.slice(
@@ -785,11 +789,22 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     // was actually for: `intent.stream` is the signal `handleWatchPartyGoLive`
     // alone hands the gate (an ordinary call share or a mid-show reshare
     // stalled behind the same sheet has none and must never pop the
-    // watch-party mic prompt on ITS confirm), and `intent.partyId` — not
-    // `currentWatchParty()` — is what the deferred completion is armed with.
+    // watch-party mic prompt on ITS confirm), and `intent.party` — not
+    // `currentWatchParty()` — is what the deferred completion reads.
     expect(ackSheet).toContain("intent?.stream");
-    expect(ackSheet).toContain("intent.partyId");
-    expect(ackSheet).toContain("finishWatchPartyGoLiveShare(goLivePartyId, wentOut)");
+    expect(ackSheet).toContain("intent.party");
+    expect(ackSheet).toContain("finishWatchPartyGoLiveShare(");
+    expect(ackSheet).toContain("goLiveParty.id");
+    expect(ackSheet).toContain("goLiveParty.channelId");
+
+    // `finishWatchPartyGoLiveShare` itself: a fresh lookup through the pure,
+    // tested decision function, never a stale snapshot.
+    const helper = source.slice(
+      source.indexOf("function finishWatchPartyGoLiveShare"),
+      source.indexOf("async function handleWatchPartyGoLive"),
+    );
+    expect(helper).toContain("decideGoLiveMicPrompt(");
+    expect(helper).toContain("watchParties.byChannel[channelId]");
   });
 });
 
