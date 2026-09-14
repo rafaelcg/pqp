@@ -18,6 +18,7 @@ import {
 } from "./hls-ladder.js";
 import { HLS_PARTY_PASS_PARAM, HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
+import { hlsSessionOwnedElsewhere } from "./hls-ownership.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -238,7 +239,9 @@ export function resetHlsPlaylistCacheForTests(): void {
   windowHistory.clear();
   segmentUrlMemo.clear();
   stopAllKeepWarmLoops();
+  keepWarmOwnership.clear();
   keepWarmRenders = 0;
+  keepWarmDeclined = 0;
 }
 
 /**
@@ -420,6 +423,21 @@ async function renderCachedPlaylist(
  * (itself cached, so this costs nothing beyond what a master request already
  * costs), so a rung that starts mid-party is picked up on the next tick
  * without restarting anything.
+ *
+ * AND ONE LOOP PER SESSION PER CLUSTER, not per machine. The loop is armed by
+ * a VIEWER's request, and production runs two `pqp-api` machines behind a
+ * proxy with no session affinity, so both of them arm a loop for the same
+ * party within seconds of each other: two full ladder re-renders every two
+ * seconds, two listings, two sets of signatures, for one set of playlists in
+ * one bucket that neither machine's copy improves. Only the machine that owns
+ * the session's `hls_sessions` rows warms it (`hlsSessionOwnedElsewhere`); the
+ * other one serves every viewer exactly as before, from the shared cache and
+ * from storage, and simply does not poll on its own clock.
+ *
+ * WARMING IS THE FAIL-OPEN SIDE. An unstamped row, the registry off, or a
+ * lookup this process could not make all leave the loop running: a rung warmed
+ * twice costs money, a rung warmed by nobody costs the viewer who switches to
+ * it a third of a window (which is the bug this loop exists to fix).
  */
 export const HLS_KEEP_WARM_INTERVAL_MS = 2_000;
 
@@ -438,6 +456,56 @@ const keepWarmLoops = new Map<string, KeepWarmLoop>();
 
 /** Warm renders performed by the loop, for metrics. */
 let keepWarmRenders = 0;
+
+/**
+ * Loops this process declined to run (or stopped) because another live
+ * instance owns the session. Pitfall 12: a guard nobody can count is a guard
+ * nobody knows is running. Belongs at zero on one machine, and non-zero within
+ * a minute of a watch party running on two.
+ */
+let keepWarmDeclined = 0;
+
+/**
+ * The ownership answer per session, so the decision costs one query per
+ * session per TTL rather than one per two-second tick. Short on purpose: the
+ * owner can change mid-party (a deploy hands the session to the machine that
+ * adopts it), and this is how long the new owner waits before warming.
+ */
+const KEEP_WARM_OWNER_TTL_MS = 30_000;
+const keepWarmOwnership = new Map<string, { ownedElsewhere: boolean; at: number }>();
+
+/** Sessions this process left to the machine that owns them. For metrics. */
+export function hlsKeepWarmDeclined(): number {
+  return keepWarmDeclined;
+}
+
+/**
+ * Is somebody else warming this session? Cached both ways for
+ * `KEEP_WARM_OWNER_TTL_MS`, and a failed lookup keeps the previous answer
+ * rather than inventing one: "could not ask" is not "nobody owns it", and it
+ * is not "somebody does" either.
+ */
+async function keepWarmOwnedElsewhere(
+  channelId: string,
+  startedAt: number,
+  key: string,
+  now: number,
+): Promise<boolean | null> {
+  const known = keepWarmOwnership.get(key);
+  if (known && now - known.at < KEEP_WARM_OWNER_TTL_MS) {
+    return known.ownedElsewhere;
+  }
+  const answer = await hlsSessionOwnedElsewhere({
+    channelId,
+    objectPrefix: hlsObjectPrefix(channelId, startedAt),
+    prefixPattern: sessionPrefixPattern(channelId, startedAt),
+  });
+  if (answer === null) {
+    return known?.ownedElsewhere ?? null;
+  }
+  keepWarmOwnership.set(key, { ownedElsewhere: answer, at: now });
+  return answer;
+}
 
 function keepWarmSessionKey(channelId: string, startedAt: number): string {
   return `${channelId}/${startedAt}`;
@@ -458,6 +526,14 @@ function touchKeepWarmSession(channelId: string, startedAt: number, now: number)
   const loop = keepWarmLoops.get(key);
   if (loop) {
     loop.lastRequestedAt = now;
+    return;
+  }
+  // Already known to belong to the other machine: serve this viewer from the
+  // shared cache and storage, and do not re-arm a loop the first tick would
+  // only stop again. The entry expires, so a session this process later adopts
+  // is warmed by it within one TTL.
+  const known = keepWarmOwnership.get(key);
+  if (known?.ownedElsewhere && now - known.at < KEEP_WARM_OWNER_TTL_MS) {
     return;
   }
   const timer = setInterval(() => {
@@ -488,6 +564,21 @@ async function runKeepWarmTick(
   }
   loop.ticking = true;
   try {
+    // WHOSE SESSION IS THIS? Asked before anything is fetched, so a machine
+    // that is not the owner never touches the bucket on the loop's account.
+    // `null` (the lookup failed and nothing was known) leaves the loop running
+    // and tries again next tick: warming twice is the cheap mistake.
+    const ownedElsewhere = await keepWarmOwnedElsewhere(
+      channelId,
+      startedAt,
+      key,
+      now,
+    );
+    if (ownedElsewhere === true) {
+      keepWarmDeclined += 1;
+      stopKeepWarmLoop(key);
+      return;
+    }
     let rungs: (string | undefined)[];
     try {
       const { rungs: list } = await sessionRungs(channelId, startedAt, now);

@@ -601,3 +601,65 @@ back to this process's own numbers labelled as a cluster of one — local voice
 peers included, since a single-instance deployment IS the cluster and a
 hard-coded zero there would make the common configuration read as an empty
 service.
+## 12. Three more per-process things, found in the 2026-09-15 audit
+
+All three are the same shape as §11's: code written when one process was the
+whole deployment, correct then, quietly wrong the moment a second machine (or
+the `pqp-worker` split) exists. None of them fails loudly.
+
+**The keep-warm loop ran once per machine, not once per stream.** The playlist
+proxy keeps every rung of a live session rendered on its own two-second clock
+so a rung nobody is watching still has a full window (`keepWarmLoops` in
+`server/src/voice/hls-playlist-proxy.ts`). It is armed by a VIEWER's request,
+and the proxy in front of `pqp-api` has no session affinity, so both machines
+armed a loop for the same party within seconds of each other: every tick was a
+second full ladder re-render, a second set of storage GETs and a second set of
+signatures, for one set of playlists in one bucket that neither copy improves.
+Now only the machine that owns the session's `hls_sessions` rows warms it, via
+`hlsSessionOwnedElsewhere` (the `instance_id` stamp and `voice_instances`
+heartbeat from the ownership work above); the other machine serves every viewer
+exactly as before, from the shared cache and from storage. Warming is the
+fail-open side on purpose: an unstamped row, `VOICE_REGISTRY` off, or a lookup
+that could not be made all leave the loop running, because a rung warmed twice
+costs money and a rung warmed by nobody costs the viewer who switches to it a
+third of a window. Counted by `hlsKeepWarmDeclined()`, which belongs at zero on
+one machine and non-zero within a minute of a party running on two. (The
+dashboard line for it goes in beside `keepWarmLoops` / `keepWarmRenders` in
+`services/metrics.ts`, which another change owned while this one was written.)
+
+**AutoMod's rule cache and alert cooldown were both per process.** The rule
+cache holds a server's list for 30 s and the write path dropped only its own
+entry, so the other machine went on enforcing yesterday's list for the rest of
+its TTL: a word filter half the members trip and half no longer do, depending
+on which machine the proxy picked. The invalidation now goes over the bus
+(`automod.rules`, mirroring `PERMISSIONS_TOPIC` in `ws/chat.ts`, with the local
+half in `invalidateAutomodCacheLocally` so the originating instance and every
+relayed one run the same code). The alert cooldown — one #mod-log post per
+author per server per ten seconds — lived in a `Map`, so two machines meant two
+maps and two copies of the same embed, one per machine per window. The window
+is now a row: `automod_alert_cooldowns`, claimed by a conditional UPSERT whose
+`rowCount` is the verdict, so Postgres serialises the two machines and exactly
+one can win. The map stays in front of it as a cheap first gate and behind it
+as the fallback when the database cannot be asked — a duplicate alert during an
+outage is a nuisance, a swallowed one is a moderator not being told.
+
+**The worker had no bus at all, so two of its jobs finished nowhere.** `jobs.ts`
+runs on `pqp-worker` (`WORKER_MODE=worker`), a process with no `/ws` listener,
+and two of those jobs are the START of a fan-out: the channel-session reminder
+tick nudges everyone who asked to be reminded, and the watch-party host sweep
+ends a party whose host never came back and tells its audience through
+`broadcastWatchParty`. Both published into a bus that was never installed there
+— `isBusEnabled()` was false, so `publishToCluster` returned on its first line —
+and the socket half simply did not happen: the reminder landed as a Web Push and
+as nothing at all in the open tab. `worker.ts` now installs a **publish-only**
+Postgres transport (connect, NOTIFY, never LISTEN — `PostgresBusOptions.publishOnly`),
+gated on the same `CLUSTER_BUS=postgres` the API reads and set in
+`fly.worker.toml`. Subscribing there would be worse than useless: every handler
+in `ws/` would run against empty maps and zero sockets. Beside it, the reminder
+nudge itself is relayed (`channel-session.reminder`) so each API machine
+delivers it to its own sockets, while the Web Push stays with the process that
+claimed the row — sending it once per machine is how a phone gets three copies
+of one reminder. Pinned by
+`server/src/services/channel-session-reminder-cluster.test.ts` (a worker graph
+and an API graph over one hub, on a real Postgres) and
+`server/src/services/automod-cluster.test.ts`.

@@ -7,6 +7,11 @@ import {
 import { getPool } from "../db.js";
 import { pushChannelSessionReminder } from "./push.js";
 import { forEachAuthenticatedSocket } from "../ws/sockets.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 
 /**
  * Watch party scheduling: a session attached to a channel, plus who asked to
@@ -413,19 +418,45 @@ async function fireReminders(kind: "before" | "live"): Promise<void> {
   }
 }
 
-function notifyChannelSessionSubscribers(event: {
+/**
+ * "Your session starts in ten minutes", relayed to the machines that hold the
+ * sockets.
+ *
+ * THE REMINDER TICK DOES NOT RUN WHERE THE PEOPLE ARE. `jobs.ts` runs on
+ * `pqp-worker` in production (`WORKER_MODE=worker`), a process with no
+ * `/ws` listener at all, so the socket loop below walks ZERO sockets there and
+ * the nudge reached nobody: Web Push landed and the open tab showed nothing
+ * until its next refresh. The comment this replaces called that "a harmless
+ * no-op loop", which was true of the loop and false of the feature.
+ *
+ * So the loop is relayed: the process that claimed the reminder publishes the
+ * whole event once, and every API machine delivers it to its own sockets.
+ * Push stays with the ORIGINATING process — it is addressed per user, not per
+ * socket, and sending it once per machine is how a phone gets three copies of
+ * one reminder.
+ */
+const CHANNEL_SESSION_REMINDER_TOPIC = "channel-session.reminder";
+
+interface ChannelSessionReminderEvent {
   sessionId: string;
   channelId: string;
   title: string;
   startsAt: string;
   userIds: string[];
   kind: "before" | "live";
-}): void {
+}
+
+/**
+ * The half that runs on EVERY instance: the claiming process calls it for its
+ * own sockets (zero, on the worker) and the subscription below calls it on
+ * each API machine. Same shape as `deliverPermissionsUpdate` in `ws/chat.ts`,
+ * and for the same reason — one function, so a relayed reminder and a local
+ * one cannot drift apart.
+ */
+export function deliverChannelSessionReminder(
+  event: ChannelSessionReminderEvent,
+): void {
   const recipients = new Set(event.userIds);
-  // Live WS nudge for whoever is connected on this process. In the
-  // single-process deployment (`WORKER_MODE` unset, today's default) this is
-  // every online recipient; in a split worker it is a harmless no-op loop
-  // over zero sockets, and push (below) is what reaches them instead.
   const frame = JSON.stringify({
     type: "channel-session-reminder",
     sessionId: event.sessionId,
@@ -439,9 +470,54 @@ function notifyChannelSessionSubscribers(event: {
       socket.send(frame);
     }
   });
+}
+
+subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
+  const event = data as Partial<ChannelSessionReminderEvent> | null;
+  if (
+    !event ||
+    typeof event !== "object" ||
+    typeof event.sessionId !== "string" ||
+    typeof event.channelId !== "string" ||
+    typeof event.title !== "string" ||
+    typeof event.startsAt !== "string" ||
+    (event.kind !== "before" && event.kind !== "live") ||
+    !Array.isArray(event.userIds)
+  ) {
+    return;
+  }
+  const userIds = event.userIds.filter(
+    (id): id is string => typeof id === "string",
+  );
+  if (userIds.length === 0) {
+    return;
+  }
+  // No push here: the instance that claimed the reminder already sent it, and
+  // a second one would be a second notification on the same phone.
+  deliverChannelSessionReminder({
+    sessionId: event.sessionId,
+    channelId: event.channelId,
+    title: event.title,
+    startsAt: event.startsAt,
+    kind: event.kind,
+    userIds,
+  });
+});
+
+function notifyChannelSessionSubscribers(
+  event: ChannelSessionReminderEvent,
+): void {
+  const recipients = [...new Set(event.userIds)];
+  deliverChannelSessionReminder({ ...event, userIds: recipients });
+  if (isBusEnabled()) {
+    publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, {
+      ...event,
+      userIds: recipients,
+    });
+  }
 
   pushChannelSessionReminder({
-    userIds: [...recipients],
+    userIds: recipients,
     title: event.title,
     channelId: event.channelId,
     kind: event.kind,

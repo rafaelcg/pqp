@@ -11,6 +11,11 @@ import {
   type AutomodVerdict,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 import { logAudit } from "./audit.js";
 import { getHydratedMessage, type HydratedMessage } from "./messages.js";
 import { issueTimeout, type IssuedTimeout } from "./sanctions.js";
@@ -26,41 +31,136 @@ import { issueTimeout, type IssuedTimeout } from "./sanctions.js";
  * changes rarely, and is read on every message, so the rows are held in this
  * process for a short while. This is per-process state, which slow mode's
  * comment rightly warns about, and it is safe here for a different reason:
- * the cached thing is *configuration*, not a counter. On two machines an
- * edit takes at most `CACHE_TTL_MS` to reach the other one, and in that
- * window one machine enforces the old list. A refused send that should have
- * landed, or a landed send that should have been refused, for thirty
- * seconds after an owner edits the list, is the accepted cost. The write
- * path drops its own process's entry immediately.
+ * the cached thing is *configuration*, not a counter.
+ *
+ * THE INVALIDATION CROSSES THE CLUSTER. The write path drops its own
+ * process's entry and publishes `automod.rules`, so every other machine drops
+ * the same entry within a bus round trip instead of enforcing the old list
+ * for the rest of its `CACHE_TTL_MS`. `CACHE_TTL_MS` is what is left when the
+ * bus is off (a self-host, one process, where there is nobody to tell) or
+ * when a frame is lost, which is exactly the role it plays for every other
+ * cache in this codebase.
  */
 
 const CACHE_TTL_MS = 30_000;
+
+/**
+ * "This server's rules changed" and "this author has just had an alert
+ * posted", relayed so the second machine does not answer from a copy the
+ * first one already knows is wrong. Mirrors `PERMISSIONS_TOPIC` in
+ * `ws/chat.ts`: a content-free ping, the local half in its own function so
+ * the originating instance and every relayed one run exactly the same code.
+ */
+const AUTOMOD_RULES_TOPIC = "automod.rules";
+const AUTOMOD_ALERT_TOPIC = "automod.alert";
 
 /**
  * One alert post per author per server within this window; further hits in
  * the window are audited but not posted. A blocked send is refused before
  * slow mode charges it, so without this a member with a keyword and the
  * socket's send budget could put two hundred embeds a second into #mod-log.
- * Per process, like the rule cache, and for the same reason: an occasional
- * duplicate across two machines is a nuisance, not a hole.
+ *
+ * SHARED, not per process: see `claimAlertWindow` below. The map here is the
+ * fast gate in front of the row and the fallback behind it.
  */
 const ALERT_COOLDOWN_MS = 10_000;
 const lastAlertAt = new Map<string, number>();
 
-function alertAllowed(serverId: string, authorId: string, now: number): boolean {
-  const key = `${serverId}:${authorId}`;
-  const last = lastAlertAt.get(key);
-  if (last !== undefined && now - last < ALERT_COOLDOWN_MS) {
-    return false;
-  }
+function cooldownKey(serverId: string, authorId: string): string {
+  return `${serverId}:${authorId}`;
+}
+
+function rememberAlert(key: string, now: number): void {
   lastAlertAt.set(key, now);
   if (lastAlertAt.size > 10_000) {
     for (const [k, at] of lastAlertAt) {
       if (now - at >= ALERT_COOLDOWN_MS) lastAlertAt.delete(k);
     }
   }
+}
+
+/**
+ * THE WINDOW IS THE CLUSTER'S, NOT THIS PROCESS'S.
+ *
+ * With two API machines the same author's next blocked message lands on
+ * whichever machine the proxy picks, and a per-process map says "nobody has
+ * alerted about them" on the machine that did not: #mod-log gets the same
+ * embed twice, and a flood gets one copy per machine per window. So the
+ * window lives in a row, and the claim is one conditional UPSERT whose
+ * `rowCount` IS the verdict — Postgres serialises two machines racing for the
+ * same `(server, author)` pair, so exactly one of them can win.
+ *
+ * The local map stays in front of it as a cheap first gate (an alert this
+ * process just posted needs no round trip to be refused) and as the fallback
+ * when the database cannot be asked: a duplicate alert during an outage is a
+ * nuisance, a swallowed one is a moderator not being told.
+ */
+async function claimAlertWindow(
+  serverId: string,
+  authorId: string,
+  now: number,
+): Promise<boolean | null> {
+  try {
+    const result = await getPool().query(
+      `INSERT INTO automod_alert_cooldowns (server_id, author_id, last_alert_at)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0))
+       ON CONFLICT (server_id, author_id) DO UPDATE
+         SET last_alert_at = EXCLUDED.last_alert_at
+         WHERE automod_alert_cooldowns.last_alert_at
+               <= EXCLUDED.last_alert_at - ($4::bigint * INTERVAL '1 millisecond')`,
+      [serverId, authorId, now, ALERT_COOLDOWN_MS],
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    console.error("[automod] alert cooldown claim failed:", error);
+    return null;
+  }
+}
+
+async function alertAllowed(
+  serverId: string,
+  authorId: string,
+  now: number,
+): Promise<boolean> {
+  const key = cooldownKey(serverId, authorId);
+  const last = lastAlertAt.get(key);
+  if (last !== undefined && now - last < ALERT_COOLDOWN_MS) {
+    return false;
+  }
+  const claimed = await claimAlertWindow(serverId, authorId, now);
+  if (claimed === false) {
+    // The other machine posted this one. Not remembered locally: the row is
+    // the authority on when the window ends, and stamping our own map with
+    // `now` would extend it past what the row says.
+    return false;
+  }
+  // Claimed, or the database could not be asked and this process is deciding
+  // on its own. Either way this instance is about to post.
+  rememberAlert(key, now);
+  if (isBusEnabled()) {
+    // Belt to the row's braces, and the half that works during a blip: tell
+    // the other machines directly, so their local gate refuses before their
+    // own claim is even attempted.
+    publishToCluster(AUTOMOD_ALERT_TOPIC, { serverId, authorId, at: now });
+  }
   return true;
 }
+
+subscribeToCluster(AUTOMOD_ALERT_TOPIC, (data) => {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof (data as { serverId?: string }).serverId !== "string" ||
+    typeof (data as { authorId?: string }).authorId !== "string"
+  ) {
+    return;
+  }
+  const { serverId, authorId } = data as { serverId: string; authorId: string };
+  // Stamped with THIS clock, not the publisher's: the two machines' clocks are
+  // close but not identical, and a frame from a slightly fast peer must not
+  // shorten this instance's window.
+  rememberAlert(cooldownKey(serverId, authorId), Date.now());
+});
 
 /** Test seam. */
 export function resetAutomodAlertCooldown(): void {
@@ -111,13 +211,41 @@ function mapRule(row: RuleRow): AutomodRule {
 
 const cache = new Map<string, { rules: AutomodRule[]; expiresAt: number }>();
 
-export function invalidateAutomodCache(serverId?: string): void {
+/**
+ * Drop this process's copy. The half that runs on EVERY instance: the write
+ * path calls `invalidateAutomodCache` (below), which calls this and then says
+ * so on the bus; the subscription calls this again on every other machine.
+ * Same shape, and for the same reason, as `deliverPermissionsUpdate` in
+ * `ws/chat.ts` — an invalidation placed only in the write path leaves every
+ * OTHER machine enforcing the old rule list for up to `CACHE_TTL_MS` after an
+ * owner edits it, which on two machines is a word filter that half the
+ * members still trip and half no longer do.
+ */
+export function invalidateAutomodCacheLocally(serverId?: string): void {
   if (serverId) {
     cache.delete(serverId);
   } else {
     cache.clear();
   }
 }
+
+export function invalidateAutomodCache(serverId?: string): void {
+  invalidateAutomodCacheLocally(serverId);
+  if (isBusEnabled()) {
+    publishToCluster(AUTOMOD_RULES_TOPIC, { serverId: serverId ?? null });
+  }
+}
+
+subscribeToCluster(AUTOMOD_RULES_TOPIC, (data) => {
+  if (!data || typeof data !== "object") {
+    return;
+  }
+  const serverId = (data as { serverId?: unknown }).serverId;
+  if (serverId !== null && typeof serverId !== "string") {
+    return;
+  }
+  invalidateAutomodCacheLocally(serverId ?? undefined);
+});
 
 export async function listAutomodRules(serverId: string): Promise<AutomodRule[]> {
   const result = await getPool().query<RuleRow>(
@@ -487,7 +615,10 @@ export async function recordAutomodHit(
     }
   }
 
-  if (rule.alertChannelId && alertAllowed(input.serverId, input.authorId, Date.now())) {
+  if (
+    rule.alertChannelId &&
+    (await alertAllowed(input.serverId, input.authorId, Date.now()))
+  ) {
     try {
       const authorId = actorId;
       const author = await getPool().query<{ display_name: string; username: string | null; discriminator: string | null; name: string | null }>(
