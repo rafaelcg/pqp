@@ -3824,6 +3824,48 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_egress
   ON hls_sessions (egress_id)
   WHERE egress_id IS NOT NULL AND cleaned_at IS NULL;
 
+-- LL-HLS (docs/plans/LL_HLS.md, task L1.5). Which driver produced this row.
+-- 'conventional' is every row before this column existed, and every one this
+-- deployment will ever write while LIVE_HLS_LL is off: a `pqp-remux` session
+-- is never started unless the flag, the allowlist and the party's own
+-- request all say so (`resolveHlsMode` in `hls-remux.ts`). A 'll' row has no
+-- `egress_id` at all -- there is no LiveKit egress behind it -- and
+-- `remux_session_id` is its handle on the remux box's own control API
+-- instead (`POST/DELETE/GET /sessions`, `packages/shared/hls-remux-control.ts`).
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'conventional';
+
+DO $$
+BEGIN
+  ALTER TABLE hls_sessions DROP CONSTRAINT IF EXISTS hls_sessions_mode_check;
+  ALTER TABLE hls_sessions
+    ADD CONSTRAINT hls_sessions_mode_check
+    CHECK (mode IN ('conventional', 'll'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- The remux box's own id for the session (its `sessionId`, the idempotency
+-- key `POST /sessions` was called with). NULL for every 'conventional' row.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS remux_session_id TEXT;
+
+-- The two fields the LL playlist front (`L2.x`) will need and the ones
+-- `pqp-remux` was actually started with, stored rather than re-derived from
+-- environment at read time: an operator changing `LIVE_HLS_REMUX_ORIGIN_URL`
+-- mid-party must not rewrite the URL a viewer already has. `part_target_ms`
+-- is `PART_MS` from the start request; `origin_base_url` is where the parts
+-- and playlists this session writes are actually served from (the egress
+-- box's Caddy, `docs/plans/LL_HLS.md` §1 -- "Where the parts are served
+-- from"), distinct from `LIVE_HLS_REMUX_CONTROL_URL`, which is the control
+-- plane this row was started through and never serves media.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS part_target_ms INTEGER;
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS origin_base_url TEXT;
+
+-- The boot reconcile's LL half looks a session up by the remux box's own id,
+-- the same way the conventional half does by `egress_id`.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_remux
+  ON hls_sessions (remux_session_id)
+  WHERE remux_session_id IS NOT NULL AND cleaned_at IS NULL;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.

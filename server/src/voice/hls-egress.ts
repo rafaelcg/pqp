@@ -33,6 +33,14 @@ import {
   signRequest,
   type StorageConfig,
 } from "../lib/s3.js";
+import {
+  llHasRoom,
+  reconcileLlHlsNow,
+  requestedHlsModeFor,
+  resetHlsRemuxForTests,
+  resolveHlsMode,
+  stopLlSession,
+} from "./hls-remux.js";
 
 /**
  * Live HLS for a watch-party screen share: LiveKit Track Composite egress
@@ -1404,6 +1412,7 @@ export function resetLiveHlsForTests(): void {
   injectedFinder = null;
   injectedPlaylistReady = true;
   injectedPlaylistProbe = null;
+  resetHlsRemuxForTests();
 }
 
 export function setLiveHlsChangeListener(
@@ -4080,6 +4089,29 @@ async function reconcileLiveHlsNow(
   serverId: string | null,
   sourceHeight?: number | null,
 ): Promise<LiveHlsReconcileResult> {
+  // THE MODE BRANCH, BEFORE ANYTHING ELSE HERE READS TRACKS OR RUNGS.
+  // `resolveHlsMode` answers `conventional` unconditionally while
+  // `LIVE_HLS_LL` is unset, so this branch is a map read that always misses
+  // and nothing below it changes: the flag off leaves this function
+  // byte-for-byte what it was before L1.5. `pqp-remux` finds its own screen
+  // track (its README), so the LL half skips every LiveKit-specific probe
+  // this function does for the ladder.
+  const mode = resolveHlsMode({
+    serverId,
+    requestedMode: requestedHlsModeFor(channelId),
+  });
+  if (mode === "ll") {
+    // A mode flip mid-party (the request field changed between two "Ir ao
+    // vivo" presses for the same channel) must never leave two transcodes
+    // running for one room.
+    if (rooms.has(channelId)) {
+      await stopRoom(channelId, "ll-mode-selected");
+    }
+    return { stream: await reconcileLlHlsNow(channelId, presenterPeerId) };
+  }
+  if (llHasRoom(channelId)) {
+    await stopLlSession(channelId, "conventional-mode-selected");
+  }
   if (!(await isLiveHlsEnabledForServer(serverId))) {
     // "not allowlisted" and "nobody is sharing" used to arrive here as the
     // same thing, because `pushLiveHls` resolved the server id only when it

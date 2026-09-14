@@ -111,6 +111,18 @@ export const liveHlsStreamSchema = z.object({
    * mutes THIS stream, independently of the film's own volume.
    */
   cameraHasVoiceAudio: z.boolean().optional(),
+  /**
+   * Which driver produced this session: the LiveKit Track Composite ladder
+   * (`conventional`, the only thing that has ever existed) or `pqp-remux`'s
+   * CMAF passthrough (`ll`, `docs/plans/LL_HLS.md`). Absent means
+   * `conventional` — every session before this field existed, and every one
+   * this deployment will ever produce while `LIVE_HLS_LL` is off.
+   *
+   * This is a player-selection hint, not a viewer-facing claim: the LL
+   * playlist front (`EXT-X-SERVER-CONTROL`, blocking reload) is `L2.x`, not
+   * built yet, so a client has nothing different to do with `ll` today.
+   */
+  mode: z.enum(["conventional", "ll"]).optional(),
 });
 
 export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;

@@ -711,6 +711,18 @@ export function watchPartyHeadline(party: WatchParty): {
  */
 export const watchPartyStateRequestSchema = z.object({
   state: z.enum(["scheduled", "live", "ended", "cancelled"]),
+  /**
+   * "Ir ao vivo com latência baixa" — meaningless outside `state: "live"`
+   * and ignored there too. This is the server half of `docs/plans/LL_HLS.md`
+   * §4's per-session toggle: the presenter's UI for it is `L2.5`, not built
+   * yet, so today this only reaches the server from a direct API call. The
+   * server still decides the real answer (`resolveHlsMode` in
+   * `hls-remux.ts`): `LIVE_HLS_LL` off, or this server not on
+   * `LIVE_HLS_LL_ALLOWLIST`, means `true` here is silently downgraded to the
+   * conventional ladder rather than honoured or refused. Default `false`
+   * because a second delivery mode must never turn on by itself.
+   */
+  lowLatency: z.boolean().optional(),
 });
 
 export type WatchPartyStateRequest = z.infer<typeof watchPartyStateRequestSchema>;

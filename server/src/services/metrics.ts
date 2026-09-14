@@ -11,6 +11,7 @@ import {
   liveHlsConfig,
 } from "../voice/hls-egress.js";
 import { countDueSessions } from "../voice/hls-cleanup.js";
+import { llHlsActivity } from "../voice/hls-remux.js";
 import {
   hlsKeepWarmLoopsActive,
   hlsKeepWarmRenders,
@@ -397,6 +398,30 @@ export interface AdminMetrics {
      * clears it, same as `keepWarmRenders` above.
      */
     latency: HlsTelemetryActivity;
+    /**
+     * Live `pqp-remux` sessions (`docs/plans/LL_HLS.md` L1.5), this process,
+     * right now. Zero on every deployment with `LIVE_HLS_LL` unset, which is
+     * every deployment until an operator sets it -- this is the "is the
+     * flag doing anything" counter for the second delivery mode, the same
+     * role `sessions` plays for the conventional ladder.
+     */
+    llSessions: number;
+    /**
+     * `POST /sessions` to the control API failed, or the control plane was
+     * not configured at all, since this process started. Belongs at zero
+     * once configured; a start requested (the flag, the allowlist and the
+     * party's own toggle all say yes) that never produces a session shows up
+     * here rather than as a silent nothing.
+     */
+    llStartFailures: number;
+    /**
+     * An LL session was demoted back to the conventional ladder by `L1.6`'s
+     * watchdog, which does not exist yet -- this reads zero on every
+     * deployment until that task ships. Reserved here now so the dashboard
+     * panel and this counter's meaning are fixed before the code that
+     * increments it exists.
+     */
+    llDemoted: number;
   };
   topServers24h: {
     name: string;
@@ -716,6 +741,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   // it falls back to -1, which reads as "could not ask" rather than "clean".
   const hlsFlag = liveHlsConfig();
   const hlsActivity = liveHlsActivity();
+  const llActivity = llHlsActivity();
   const hlsUncleaned = await countDueSessions().catch(() => -1);
 
   // The tab detail, in a second round of parallel queries. It is separate from
@@ -1038,6 +1064,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       keepWarmLoops: hlsKeepWarmLoopsActive(),
       keepWarmRenders: hlsKeepWarmRenders(),
       latency: hlsTelemetryActivity(),
+      llSessions: llActivity.sessions,
+      llStartFailures: llActivity.startFailures,
+      llDemoted: llActivity.demoted,
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,

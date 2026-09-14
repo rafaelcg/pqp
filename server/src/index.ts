@@ -54,6 +54,7 @@ import {
 import { sweepChannelAudiences } from "./services/servers.js";
 import { startColdJobs, type ColdJobs } from "./jobs.js";
 import { reconcileStaleHlsSessions } from "./voice/hls-cleanup.js";
+import { adoptLlHlsSessions, isLiveHlsLLEnabled } from "./voice/hls-remux.js";
 import {
   isLiveHlsEnabled,
   startLiveHlsMonitor,
@@ -601,6 +602,24 @@ async function main() {
       );
     }
     startLiveHlsMonitor();
+  }
+  // LL-HLS (`docs/plans/LL_HLS.md` L1.5), same reasoning as the conventional
+  // adoption above, one process behind it: `pqp-remux` runs on the egress
+  // box, not in this process, so a `pqp-api` restart never touches a live
+  // low-latency party either. Independent flag, independent boot step -- a
+  // deployment with `LIVE_HLS_LL` unset never calls the control API at all.
+  if (isLiveHlsLLEnabled()) {
+    const reconciledLl = await adoptLlHlsSessions().catch((error: unknown) => {
+      console.error("[hls-ll] boot reconcile failed:", error);
+      return null;
+    });
+    if (reconciledLl && (reconciledLl.adopted || reconciledLl.stopped)) {
+      console.log(
+        `[hls-ll] boot: adopted ${reconciledLl.adopted} live LL session(s), ` +
+          `stopped ${reconciledLl.stopped} orphan remux session(s), ` +
+          `ended ${reconciledLl.ended} stale row(s)`,
+      );
+    }
   }
 
   // The cold paths (attachment sweeps, prunes, retention, the webhook outbox:

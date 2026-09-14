@@ -2019,7 +2019,14 @@ export function getChannelLiveState(channelId: string): {
   participants: number;
 } {
   return {
-    stream: liveHlsStreamFor(channelId),
+    // `liveHlsStreamFor` only ever knows about the conventional ladder (its
+    // `rooms` map, `hls-egress.ts`). `hlsAudience.stream` is what
+    // `pushLiveHls` last told the audience regardless of which driver built
+    // it, so it is the fallback that makes an LL session (`docs/plans/LL_HLS.md`
+    // L1.5) visible here too. The conventional answer is tried first and is
+    // unchanged: the two agree for every conventional session, since every
+    // `pushLiveHls` call sets both.
+    stream: liveHlsStreamFor(channelId) ?? hlsAudience.stream(channelId),
     watching: hlsAudience.count(channelId),
     participants: getRoomPeers(channelId).length,
   };
