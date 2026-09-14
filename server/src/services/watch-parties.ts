@@ -338,6 +338,38 @@ async function fetchActiveWatchPartyRow(
 }
 
 /**
+ * `status` for every channel in `channelIds` that currently has an active
+ * party, in one query — the idle-alone sweep's own door, deliberately
+ * bypassing `getActiveWatchPartyRow`'s per-channel cache. That cache
+ * coalesces repeat reads of ONE key; it does nothing for a tick that needs
+ * a DIFFERENT key per candidate room, which is exactly what made the sweep
+ * N+1 in the first place (one `getActiveWatchPartyRow` await per lone
+ * watch-party seat, every `IDLE_ALONE_SWEEP_MS`). A channel absent from the
+ * result has no active party — treat a missing key as "not live", not as
+ * unknown.
+ */
+export async function listActiveWatchPartyStatusesByChannel(
+  channelIds: readonly string[],
+): Promise<Map<string, WatchPartyPhase>> {
+  const statuses = new Map<string, WatchPartyPhase>();
+  if (channelIds.length === 0) {
+    return statuses;
+  }
+  const result = await getPool().query<{
+    channel_id: string;
+    status: WatchPartyPhase;
+  }>(
+    `SELECT channel_id, status FROM channel_sessions
+      WHERE channel_id = ANY($1) AND status IN ${ACTIVE_STATES}`,
+    [channelIds],
+  );
+  for (const row of result.rows) {
+    statuses.set(row.channel_id, row.status);
+  }
+  return statuses;
+}
+
+/**
  * What `join-voice-room` needs to know about this channel's party.
  *
  * THE CACHE SITS IN FRONT. The snapshot is per channel (voice on or off, the
