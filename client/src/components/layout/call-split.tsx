@@ -9,10 +9,12 @@ import {
   type RefObject,
 } from "react";
 import {
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
+  Columns2,
+  MessageSquare,
+  PanelRightClose,
+  Rows2,
+  Video,
+  VideoOff,
 } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -98,6 +100,31 @@ export interface CallSplitProps {
   paneSize?: PaneSize;
   stage: ReactNode;
   children: ReactNode;
+  /**
+   * THE CHAT'S OWN HEADER (2026-09-13). YouTube's live chat and Twitch's
+   * stream chat both put a title, a count and the one "hide chat" control
+   * at the top of the chat column; this pane used to have none, so it
+   * started mid-scroll and the only way to put it away was a pair of
+   * unlabeled chevrons at opposite edges of the divider. With this given
+   * the header draws the title and meta, the orientation switch, "Esconder
+   * vídeo" and "Esconder chat"; the divider keeps only the drag. When the
+   * chat is hidden a "Mostrar chat" pill sits on the stage's corner; when
+   * the video is hidden the header offers "Mostrar vídeo".
+   */
+  chatHeader?: CallSplitChatHeader;
+}
+
+export interface CallSplitChatHeader {
+  title: string;
+  /** "12 assistindo", "3 na call": whatever the room is. */
+  meta?: string;
+  /** A short badge beside the meta, e.g. slow mode. */
+  badge?: string;
+  orientation?: {
+    sideBySide: boolean;
+    canToggle: boolean;
+    onToggle: () => void;
+  };
 }
 
 export interface CallSplitState {
@@ -148,6 +175,7 @@ export function CallSplit({
   paneSize,
   stage,
   children,
+  chatHeader,
 }: CallSplitProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const stagePaneRef = useRef<HTMLDivElement>(null);
@@ -167,6 +195,7 @@ export function CallSplit({
     shape,
     kind,
   );
+  const { t } = useTranslation();
   const sideBySide = orientation === "side-by-side";
   const isWatchAudience = kind === "watch-audience";
   // Same rule as the orientation, one line below it on purpose: stored is what
@@ -365,7 +394,7 @@ export function CallSplit({
         data-call-split-stage=""
         hidden={collapsed === "stage"}
         className={cn(
-          "flex min-h-0 min-w-0 flex-col",
+          "relative flex min-h-0 min-w-0 flex-col",
           // A fullscreen stage takes the pane: the element-fullscreen mode
           // sizes itself `h-full`, and `h-full` of a shrink-to-fit box is
           // zero. Everything else is either the dragged size below or the
@@ -405,17 +434,22 @@ export function CallSplit({
         }
       >
         {stage}
+        {/* THE WAY BACK TO THE CHAT, on the stage's corner where YouTube and
+            Twitch put theirs, instead of a full-height strip at the edge. */}
+        {collapsed === "chat" && (
+          <button
+            type="button"
+            data-testid="call-split-restore"
+            data-call-split-restore="chat"
+            className="absolute right-2 top-2 z-20 flex items-center gap-1 rounded-full bg-ink/80 px-2.5 py-1 text-xs text-paper shadow backdrop-blur-sm hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            onClick={() => setCollapsed("none")}
+          >
+            <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("call.split.restoreChat")}
+          </button>
+        )}
       </div>
-      {collapsed !== "none" ? (
-        /* The way back, in the place the pane used to be, so it is where the
-           eye already is rather than in a menu. A collapsed pane that cannot
-           be restored from the boundary is a pane somebody has lost. */
-        <SplitRestoreBar
-          sideBySide={sideBySide}
-          collapsed={collapsed}
-          onRestore={() => setCollapsed("none")}
-        />
-      ) : resizable ? (
+      {collapsed !== "none" ? null : resizable ? (
         <SplitDivider
           sideBySide={sideBySide}
           dragging={dragging}
@@ -427,7 +461,6 @@ export function CallSplit({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           onKeyDown={onKeyDown}
-          onCollapse={setCollapsed}
         />
       ) : null}
       {/* Same reasoning for the transcript: unmounting it would lose the
@@ -437,6 +470,16 @@ export function CallSplit({
         hidden={collapsed === "chat"}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
       >
+        {chatHeader && shape !== "none" && (
+          <ChatPaneHeader
+            header={chatHeader}
+            videoHidden={collapsed === "stage"}
+            canHideChat={resizable}
+            onHideChat={() => setCollapsed("chat")}
+            onHideVideo={() => setCollapsed("stage")}
+            onShowVideo={() => setCollapsed("none")}
+          />
+        )}
         {children}
       </div>
     </div>
@@ -465,7 +508,6 @@ function SplitDivider({
   onPointerUp,
   onPointerCancel,
   onKeyDown,
-  onCollapse,
 }: {
   sideBySide: boolean;
   dragging: boolean;
@@ -477,7 +519,6 @@ function SplitDivider({
   onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
-  onCollapse: (which: CallSplitCollapsed) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -488,18 +529,12 @@ function SplitDivider({
         sideBySide ? "h-full flex-col" : "w-full flex-row",
       )}
     >
-      {/* THE TWO ENDS OF THE DRAG, AS BUTTONS.
-          A divider can already be dragged to the minimum, and the minimum is
-          deliberately not zero. These say the thing the drag is forbidden
-          from saying: put that one away entirely. They sit on the divider
-          because that is where the boundary between the two panes is, they
-          are real buttons so the keyboard reaches them, and the restore lands
-          in the same place so nothing is ever lost behind a menu. */}
-      <SplitCollapseButton
-        sideBySide={sideBySide}
-        toward="stage"
-        onCollapse={onCollapse}
-      />
+      {/* ONLY THE DRAG (2026-09-13). The two chevrons that used to sit at
+          either end of this bar, one hiding the video and one hiding the
+          chat, were the same shape doing two different things at opposite
+          edges of the screen with no word on either. Hiding a pane is now a
+          labeled control in the chat's header (`ChatPaneHeader`), and the
+          way back is a pill on the stage or a button in that same header. */}
       <Tooltip
         label={t("call.split.resize")}
         detail={t("call.split.hint")}
@@ -545,11 +580,122 @@ function SplitDivider({
           />
         </div>
       </Tooltip>
-      <SplitCollapseButton
-        sideBySide={sideBySide}
-        toward="chat"
-        onCollapse={onCollapse}
-      />
+    </div>
+  );
+}
+
+/**
+ * The chat column's header: what this is, how many are here, and the three
+ * layout controls that used to live on the divider and in the page header.
+ */
+function ChatPaneHeader({
+  header,
+  videoHidden,
+  canHideChat,
+  onHideChat,
+  onHideVideo,
+  onShowVideo,
+}: {
+  header: CallSplitChatHeader;
+  videoHidden: boolean;
+  canHideChat: boolean;
+  onHideChat: () => void;
+  onHideVideo: () => void;
+  onShowVideo: () => void;
+}) {
+  const { t } = useTranslation();
+  const iconButton =
+    "flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] text-paper-muted hover:bg-surface-2 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+  return (
+    <div
+      data-testid="call-split-chat-header"
+      className="flex shrink-0 items-center gap-2 border-b border-ink-4/60 bg-ink-2 px-3 py-1.5"
+    >
+      <span className="min-w-0 flex-1 truncate text-xs">
+        <span className="font-semibold text-paper">{header.title}</span>
+        {header.meta && (
+          <span className="text-paper-muted"> · {header.meta}</span>
+        )}
+        {header.badge && (
+          <span className="ml-2 rounded-full border border-warning/40 bg-warning/10 px-1.5 py-px text-[10px] text-warning">
+            {header.badge}
+          </span>
+        )}
+      </span>
+      {header.orientation?.canToggle && !videoHidden && (
+        <Tooltip
+          label={
+            header.orientation.sideBySide
+              ? t("call.split.stack")
+              : t("call.split.sideBySide")
+          }
+          detail={t("call.split.orientationHint")}
+          side="bottom"
+        >
+          <button
+            type="button"
+            data-call-split-toggle=""
+            aria-pressed={header.orientation.sideBySide}
+            className={iconButton}
+            onClick={header.orientation.onToggle}
+          >
+            {header.orientation.sideBySide ? (
+              <Rows2 className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <Columns2 className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
+        </Tooltip>
+      )}
+      {videoHidden ? (
+        <Tooltip label={t("call.split.restoreStage")} side="bottom">
+          <button
+            type="button"
+            data-testid="call-split-restore"
+            data-call-split-restore="stage"
+            aria-label={t("call.split.restoreStage")}
+            className={iconButton}
+            onClick={onShowVideo}
+          >
+            <Video className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </Tooltip>
+      ) : (
+        canHideChat && (
+          <Tooltip
+            label={t("call.split.collapseStage")}
+            detail={t("call.split.collapseHint")}
+            side="bottom"
+          >
+            <button
+              type="button"
+              data-testid="call-split-collapse-stage"
+              aria-label={t("call.split.collapseStage")}
+              className={iconButton}
+              onClick={onHideVideo}
+            >
+              <VideoOff className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </Tooltip>
+        )
+      )}
+      {canHideChat && (
+        <Tooltip
+          label={t("call.split.collapseChat")}
+          detail={t("call.split.collapseHint")}
+          side="bottom"
+        >
+          <button
+            type="button"
+            data-testid="call-split-collapse-chat"
+            aria-label={t("call.split.collapseChat")}
+            className={iconButton}
+            onClick={onHideChat}
+          >
+            <PanelRightClose className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </Tooltip>
+      )}
     </div>
   );
 }
@@ -577,102 +723,3 @@ function SplitDivider({
  * number the maths uses. Hover still brightens it; what changed is that
  * hover is no longer how you learn it is there.
  */
-function SplitCollapseButton({
-  sideBySide,
-  toward,
-  onCollapse,
-}: {
-  sideBySide: boolean;
-  /** Which pane this button hides. */
-  toward: "stage" | "chat";
-  onCollapse: (which: CallSplitCollapsed) => void;
-}) {
-  const { t } = useTranslation();
-  const label =
-    toward === "stage"
-      ? t("call.split.collapseStage")
-      : t("call.split.collapseChat");
-  const Icon = sideBySide
-    ? toward === "stage"
-      ? ChevronLeft
-      : ChevronRight
-    : toward === "stage"
-      ? ChevronUp
-      : ChevronDown;
-  return (
-    <Tooltip
-      label={label}
-      detail={t("call.split.collapseHint")}
-      side={sideBySide ? "right" : "bottom"}
-    >
-      <button
-        type="button"
-        data-testid={`call-split-collapse-${toward}`}
-        aria-label={label}
-        className={cn(
-          // The `::before` is the hit area, for the reason the divider has
-          // one: the boundary is 8px thick and a thumb is not.
-          "relative flex shrink-0 items-center justify-center bg-surface-3 text-text transition-colors before:absolute before:content-[''] hover:bg-accent hover:text-surface-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none",
-          sideBySide
-            ? "h-14 w-5 before:inset-y-0 before:-inset-x-2"
-            : "h-5 w-14 before:inset-x-0 before:-inset-y-2",
-        )}
-        onClick={() => onCollapse(toward)}
-      >
-        <Icon className="h-4 w-4" aria-hidden="true" />
-      </button>
-    </Tooltip>
-  );
-}
-
-/**
- * A collapsed pane's way back: a thin bar exactly where the pane was, with the
- * chevron pointing at where it will reappear from.
- *
- * It is a full edge rather than a small button on purpose. A collapsed pane is
- * the one state of this component somebody can be stuck in, and a strip along
- * the whole boundary is impossible to miss and impossible to miss clicking,
- * which a chevron in a corner is not.
- */
-function SplitRestoreBar({
-  sideBySide,
-  collapsed,
-  onRestore,
-}: {
-  sideBySide: boolean;
-  collapsed: CallSplitCollapsed;
-  onRestore: () => void;
-}) {
-  const { t } = useTranslation();
-  const label =
-    collapsed === "stage"
-      ? t("call.split.restoreStage")
-      : t("call.split.restoreChat");
-  const Icon = sideBySide
-    ? collapsed === "stage"
-      ? ChevronRight
-      : ChevronLeft
-    : collapsed === "stage"
-      ? ChevronDown
-      : ChevronUp;
-  return (
-    <Tooltip
-      label={label}
-      detail={t("call.split.collapseHint")}
-      side={sideBySide ? "right" : "bottom"}
-    >
-      <button
-        type="button"
-        data-testid="call-split-restore"
-        data-call-split-restore={collapsed}
-        className={cn(
-          "flex shrink-0 items-center justify-center border-ink-4/60 bg-ink-2/70 text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
-          sideBySide ? "h-full w-4 border-x" : "h-4 w-full border-y",
-        )}
-        onClick={onRestore}
-      >
-        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-    </Tooltip>
-  );
-}

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
 import type { VideoQuality } from "@/lib/video-quality";
@@ -46,6 +47,7 @@ export function VoiceChannelStage({
   onShapeChange,
   watchPartyChrome,
   isWatchPartyChannel,
+  presenterStage,
 }: {
   channelId: string;
   channelName: string;
@@ -90,6 +92,8 @@ export function VoiceChannelStage({
   watchPartyChrome?: boolean;
   /** See `CallStage.isWatchPartyChannel`. */
   isWatchPartyChannel?: boolean;
+  /** See `CallStage.presenterStage`. */
+  presenterStage?: (stream: MediaStream | null) => ReactNode;
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
   onShapeChange?: (shape: CallStageShape) => void;
@@ -135,6 +139,7 @@ export function VoiceChannelStage({
       compactPeers={compactPeers}
       watchPartyChrome={watchPartyChrome}
       isWatchPartyChannel={isWatchPartyChannel}
+      presenterStage={presenterStage}
       ringWhenAlone={false}
       fill={fill}
       onShapeChange={onShapeChange}

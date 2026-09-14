@@ -7,13 +7,11 @@ import {
 } from "@clerk/clerk-react";
 import {
   CalendarClock,
-  Columns2,
   History,
   Lock,
   Menu,
   Phone,
   Pin,
-  Rows2,
   Settings,
   Users,
   Video,
@@ -192,6 +190,7 @@ import {
   type GuestAction,
 } from "@/components/watch-party/guests/watch-party-guests-overlay";
 import { endWatchParty } from "@/lib/watch-party-end";
+import { decideGoLiveMicPrompt } from "@/lib/watch-party-go-live";
 import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
 import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
 import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
@@ -451,6 +450,9 @@ import {
 } from "@/lib/screen-share-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { effectiveRoleIds } from "@/lib/member-groups";
+import { WatchPartyPresenterStage } from "@/components/watch-party/presenter-stage";
+import { slowModeKey } from "@/components/watch-party/watch-party-options";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -1637,11 +1639,40 @@ function MainAppContent({
       voiceState.voiceChannelId === selectedChannelId &&
       voiceState.status !== "idle"
     );
+  /**
+   * THE PRESENTER'S LIVE LAYOUT (2026-09-13, the live-layout pass of
+   * `docs/plans/WATCH_PARTY_PRESENTER_UI.md`). Once the host's own share is
+   * up in a live party, the roster column is put away the same way it is
+   * for a viewer, and a chat the host had collapsed comes back: their job
+   * is now the room, and the members list is not the room.
+   */
+  const presentingAParty =
+    selectedChannelId !== null &&
+    watchParties.byChannel[selectedChannelId]?.state === "live" &&
+    voiceState.voiceChannelId === selectedChannelId &&
+    voiceState.isSharingScreen;
   useEffect(() => {
-    memberSidebar.suspend(watchingAParty);
+    memberSidebar.suspend(watchingAParty || presentingAParty);
     // `memberSidebar.suspend` is a stable callback from the hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchingAParty]);
+  }, [watchingAParty, presentingAParty]);
+  const wasPresenting = useRef(false);
+  useEffect(() => {
+    const rose = presentingAParty && !wasPresenting.current;
+    wasPresenting.current = presentingAParty;
+    if (rose && callSplit.collapsed === "chat") {
+      handleCallSplitChange({ ...callSplit, collapsed: "none" }, true);
+    }
+    // Only the rising edge matters; the split is read at that instant.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presentingAParty]);
+  /**
+   * "ATIVAR O MIC?" ONCE, AT GO-LIVE. The host always joins muted (see
+   * `handleWatchPartyGoLive`), which used to leave a permanent red strip
+   * saying so. One question at the moment it matters instead; the status
+   * row keeps the quiet reminder afterwards.
+   */
+  const [micPromptPartyId, setMicPromptPartyId] = useState<string | null>(null);
   const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
    * Audio consent for a Windows desktop shell whose picker cannot ask yet.
@@ -1803,7 +1834,7 @@ function MainAppContent({
   }
 
   const startScreenShareGated = useCallback(
-    (audio: boolean, intent?: ScreenCaptureIntent) => {
+    (audio: boolean, intent?: ScreenCaptureIntent): Promise<boolean> => {
       const withFps = {
         ...intent,
         maxFrameRate: intent?.maxFrameRate ?? shareMaxFrameRate(),
@@ -1811,18 +1842,25 @@ function MainAppContent({
       // Every share start in this file goes through here: the sidebar
       // button, the call stage, the "share without sound" retry, and the DM
       // stage. `screen-share-gate.test.ts` scans this file to keep it so.
-      void gateScreenShareStart<ScreenCaptureIntent>({
+      //
+      // RESOLVES TO WHETHER THE CAPTURE ITSELF SUCCEEDED (2026-09-14), not
+      // merely whether the gate let the request through: a caller that
+      // needs to know before acting further (the watch-party go-live mic
+      // prompt) awaits this instead of arming something on the strength of
+      // "the button was clicked". Most callers still fire and forget, which
+      // is unaffected: nothing here changed for them.
+      return gateScreenShareStart<ScreenCaptureIntent>({
         request: { audio, intent: withFps },
         serverId: selectedServerIdRef.current,
         hlsEnabled: liveHlsConfigRef.current?.enabled ?? null,
         checkNeedsAck: (serverId) => hlsHostAck.checkNeedsAck(serverId),
-        start: (request) => {
-          void voice.startScreenShare(request.audio, request.intent);
-        },
+        start: (request) => voice.startScreenShare(request.audio, request.intent),
         ask: (serverId, request) => {
           setHlsHostAck({ serverId, request });
         },
-      });
+      }).then(
+        (decision) => decision === "started" && voice.getState().isSharingScreen,
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [hlsHostAck],
@@ -2386,16 +2424,40 @@ function MainAppContent({
    * what the rest of this server calls that person and a picker that disagreed
    * with the member list would be a second name for the same face.
    */
-  const cohostCandidates = useMemo(
-    () =>
-      serverMembers.map((member) => ({
+  const cohostCandidates = useMemo(() => {
+    // STAFF FIRST, THEN FRIENDS, THEN EVERYBODY (2026-09-13, Rafael). The
+    // same ladder the member sidebar hoists by: cargos with `hoist`, highest
+    // position first, a person landing on the first one they hold. Friends
+    // take the tier after the last cargo. The rest carry no priority and
+    // sort by name inside `WatchPartyCohosts`.
+    const hoisted = [...serverRoles]
+      .filter((role) => role.hoist && !role.isEveryone)
+      .sort((a, b) => b.position - a.position);
+    const adminRoleId =
+      serverRoles.find((role) => role.systemKey === "admin")?.id ?? null;
+    const ownerRoleId =
+      serverRoles.find((role) => role.systemKey === "owner")?.id ?? null;
+    const friendTier = hoisted.length;
+    return serverMembers.map((member) => {
+      const held = new Set(effectiveRoleIds(member, adminRoleId, ownerRoleId));
+      const cargo = hoisted.findIndex((role) => held.has(role.id));
+      const priority =
+        member.role === "owner"
+          ? 0
+          : cargo >= 0
+            ? cargo
+            : memberSidebarFriendIds.has(member.id)
+              ? friendTier
+              : undefined;
+      return {
         userId: member.id,
         displayName: memberDisplayName(member),
         avatarUrl: member.avatarUrl,
         isCharacter: member.isCharacter,
-      })),
-    [serverMembers],
-  );
+        priority,
+      };
+    });
+  }, [serverMembers, serverRoles, memberSidebarFriendIds]);
 
   /**
    * What the profile card may do to somebody, in the server it was opened in.
@@ -4331,6 +4393,63 @@ function MainAppContent({
   }
 
   /**
+   * THE GO-LIVE SHARE'S LAST STEP, WHEREVER IT LANDS (Farol, 2026-09-14).
+   * `startScreenShareGated` has two ways to resolve `"started"`: at once, or
+   * after the disclosure sheet a host's FIRST ever HLS-capable share raises
+   * (`HlsHostAckSheet`). The immediate route used to be the only one that
+   * ever reached the mic prompt; a go-live share stalled behind the sheet
+   * resolved to `wentOut === false` on the spot (the gate only reports
+   * "asked", not the eventual outcome) and nothing downstream ever
+   * finished the handoff once the host confirmed and the capture actually
+   * started. Both routes call this now, so the prompt arms exactly once,
+   * only on a share that genuinely went out, regardless of which one got
+   * there.
+   *
+   * TAKES `partyId` AND `channelId` RATHER THAN RE-READING
+   * `currentWatchParty()` (Farol, 2026-09-14, round two). The disclosure
+   * sheet can sit open for as long as a host takes to read it, and the
+   * selected channel is free to change in that window; resolving "the
+   * party" at completion time would arm the prompt for whatever party
+   * happens to be on screen when the sheet is confirmed, not the one that
+   * actually asked for the share. Both callers pass the ids they captured
+   * when the share was FIRST requested.
+   *
+   * LOOKS THE PARTY UP FRESH AND BAILS QUIETLY IF IT IS GONE (Farol,
+   * 2026-09-14, round three). Carrying the id past the disclosure sheet
+   * fixed "the wrong party" — it does not fix "no party at all": the sheet
+   * can sit open long enough for the party to end on its own (the host
+   * closes it from another tab, the five-minute grace sweep times it out).
+   * A `MediaStream` publishing into a room that has moved on is not this
+   * function's problem to solve; not asking a now-nonexistent party's
+   * absent audience to hear an unmuted mic is. `decideGoLiveMicPrompt`
+   * (`lib/watch-party-go-live.ts`) is the actual decision, pure and unit
+   * tested; this is only the wiring — the fresh lookup and the one thing a
+   * pure function cannot do, showing the dialog.
+   */
+  function finishWatchPartyGoLiveShare(
+    partyId: string,
+    channelId: string,
+    wentOut: boolean,
+  ) {
+    const decision = decideGoLiveMicPrompt({
+      wentOut,
+      requestedPartyId: partyId,
+      party: watchParties.byChannel[channelId],
+      isMuted: voice.getState().isMuted,
+    });
+    if (!decision.arm) {
+      if (decision.reason === "party-gone") {
+        console.warn(
+          "[watch-party] go-live mic handoff skipped: party no longer live",
+          { partyId, channelId },
+        );
+      }
+      return;
+    }
+    setMicPromptPartyId(partyId);
+  }
+
+  /**
    * Ir ao vivo. One press, three things, in this order and no other:
    *
    * 1. the party's state changes, so the room's sidebar gets the block;
@@ -4377,7 +4496,21 @@ function MainAppContent({
     // used to look like an opt-in to whole-computer sound. `preferBrowserTab`
     // matches the setup picker so a retry without a handed stream stays on
     // the echo-safe path.
-    startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
+    //
+    // THE MIC PROMPT WAITS FOR THE SHARE TO ACTUALLY LAND (Farol, 2026-09-14).
+    // This used to arm the moment the share was ASKED for, so a host who
+    // cancelled the picker or had the OS refuse the capture still got "Ativar
+    // o mic?" for a broadcast that never started. `finishWatchPartyGoLiveShare`
+    // is also what the disclosure-sheet route below calls once IT knows the
+    // outcome, so the two routes end in the same transition; `party` rides
+    // on the intent so that route still has both ids after the sheet closes.
+    const wentOut = await startScreenShareGated(false, {
+      preferBrowserTab: true,
+      watchParty: true,
+      stream,
+      party: { id: party.id, channelId: party.channelId },
+    });
+    finishWatchPartyGoLiveShare(party.id, party.channelId, wentOut);
   }
 
   /**
@@ -4499,6 +4632,32 @@ function MainAppContent({
     if (answer.party) {
       watchParties.put(answer.party);
     }
+  }
+
+  /**
+   * Give a draft a time, or take it away. The server does the state move
+   * (`draft -> scheduled` on a time, `scheduled -> draft` on null), so this
+   * is the same PATCH as a rename with a different field. The setup card's
+   * "Quando" row is the only caller; the create dialog still sets a time at
+   * creation the way it always did.
+   */
+  async function handleWatchPartySchedule(startsAt: string | null) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await apiUpdateWatchParty(party.id, { startsAt });
+    // A rejected PATCH already throws (`apiFetch`); a 200 that somehow
+    // carries no party is the same failure in a different shape, and both
+    // have to reach the caller the same way. The setup card's Salvar button
+    // is what awaits this (Farol, 2026-09-14) and shows its own inline
+    // error, so this function does not also swallow the rejection into a
+    // global toast: one place says what went wrong, next to the control
+    // that asked.
+    if (!answer.party) {
+      throw new Error("Could not save the time");
+    }
+    watchParties.put(answer.party);
   }
 
   /**
@@ -6231,10 +6390,26 @@ function MainAppContent({
    * controls that cannot wait (which call, and the way out) and the user panel
    * stacks. Nothing is dropped that has no second home.
    */
+  /**
+   * NO CALL STRIP FOR A LIVE WATCH PARTY (2026-09-13, presenter-UI plan
+   * §6.3). Section 10 of the setup plan retired the generic strip for a
+   * watch party and the in-pane one obeyed; this one kept rendering on
+   * `voiceState.status` alone, so a presenter had a red "Sair da call" in
+   * the sidebar one click from Encerrar, plus a third Compartilhar tela
+   * and a camera the stream never carries. The party bar and the dock say
+   * everything this strip said, in the party's words. Keyed on the room
+   * the person is SEATED in, not the channel they are looking at: leaving
+   * the channel must not bring the strip back for a seat that is still a
+   * party seat.
+   */
+  const seatedInLiveParty =
+    voiceState.status !== "idle" &&
+    voiceState.voiceChannelId !== null &&
+    watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
   const sidebarFooter = (compact = false) => (
     <>
       <MusicMiniPlayer voiceState={voiceState} compact={compact} />
-      {voiceState.status !== "idle" && (
+      {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar
           channelName={
             voiceChannel?.name ??
@@ -6536,50 +6711,9 @@ function MainAppContent({
                 </>
               );
             })()}
-          {/* The arrangement of the two panes, next to the roster toggle that
-              is already a layout control, and only while there is a picture to
-              arrange around. Unlike the channel list's switch, which moved to
-              the left of this row because it is furniture, this one really is
-              a call control: with no stage there is nothing to put beside the
-              chat, and `CallSplit` would refuse the arrangement anyway. */}
-          {splitState.canSideBySide && (
-            <Tooltip
-              label={
-                effectiveOrientation(callSplit, splitKind) === "side-by-side"
-                  ? t(
-                      isWatchPartySplit
-                        ? "call.split.stackStream"
-                        : "call.split.stack",
-                    )
-                  : t(
-                      isWatchPartySplit
-                        ? "call.split.sideBySideStream"
-                        : "call.split.sideBySide",
-                    )
-              }
-              detail={t("call.split.orientationHint")}
-            >
-              <button
-                type="button"
-                data-call-split-toggle=""
-                aria-pressed={
-                  effectiveOrientation(callSplit, splitKind) === "side-by-side"
-                }
-                className={cn(
-                  HEADER_ACTION_TILE,
-                  effectiveOrientation(callSplit, splitKind) === "side-by-side" &&
-                    "text-paper",
-                )}
-                onClick={() => toggleSplitOrientation(splitKind)}
-              >
-                {effectiveOrientation(callSplit, splitKind) === "side-by-side" ? (
-                  <Rows2 className="h-4 w-4" />
-                ) : (
-                  <Columns2 className="h-4 w-4" />
-                )}
-              </button>
-            </Tooltip>
-          )}
+          {/* The side-by-side / stacked switch moved into the chat pane's
+              own header (2026-09-13), beside the hide controls it belongs
+              with. */}
           {isChannelSessionScheduleEnabled() &&
             canManageChannels &&
             selectedChannel.kind === "server" &&
@@ -6771,6 +6905,7 @@ function MainAppContent({
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
+            onSchedule={handleWatchPartySchedule}
             onClaimHost={handleWatchPartyClaimHost}
             onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
@@ -6865,6 +7000,34 @@ function MainAppContent({
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
+        chatHeader={{
+          title: t("chat.paneTitle"),
+          meta:
+            splitKind === "watch"
+              ? t("watchParty.live.viewers", {
+                  count: watchAudienceCount(
+                    voiceState.channelLive[selectedChannel.id],
+                    voiceState.occupancy[selectedChannel.id],
+                  ),
+                })
+              : undefined,
+          badge: (() => {
+            const seconds =
+              splitKind === "watch"
+                ? (watchParties.byChannel[selectedChannel.id]?.options
+                    .slowModeSeconds ?? 0)
+                : 0;
+            return seconds > 0
+              ? t("watchParty.summary.slow", { value: t(slowModeKey(seconds)) })
+              : undefined;
+          })(),
+          orientation: {
+            sideBySide:
+              effectiveOrientation(callSplit, splitKind) === "side-by-side",
+            canToggle: splitState.canSideBySide,
+            onToggle: () => toggleSplitOrientation(splitKind),
+          },
+        }}
         stage={
           <>
       {/* The conversation's call surface: invisible until a call exists, a
@@ -6929,6 +7092,7 @@ function MainAppContent({
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
+            onSchedule={handleWatchPartySchedule}
             onClaimHost={handleWatchPartyClaimHost}
             onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
@@ -7018,6 +7182,25 @@ function MainAppContent({
             // instant a seat lands, and `VoiceChannelStage` never mounts
             // `CallStage` before the seat does. See `CallStage.isWatchPartyChannel`.
             isWatchPartyChannel={isWatchPartySplit}
+            presenterStage={(stream) => (
+              <WatchPartyPresenterStage
+                stream={stream}
+                liveStream={
+                  voiceState.channelLive[selectedChannel.id]?.stream ?? null
+                }
+                channelId={selectedChannel.id}
+                audienceCount={watchAudienceCount(
+                  voiceState.channelLive[selectedChannel.id],
+                  voiceState.occupancy[selectedChannel.id],
+                )}
+                hands={
+                  watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []
+                }
+                onInvite={(userId) =>
+                  void handleWatchPartyStage("invite", userId)
+                }
+              />
+            )}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
@@ -8294,11 +8477,52 @@ function MainAppContent({
           }
           // Same audio choice and capture intent the person asked for
           // before the sheet, through the same gate (now acknowledged).
-          startScreenShareGated(pending.request.audio, pending.request.intent);
+          //
+          // ONLY A GO-LIVE SHARE FINISHES THE HANDOFF, AND FOR THE PARTY IT
+          // WAS ACTUALLY FOR (Farol, 2026-09-14, three rounds). `intent.stream`
+          // is the signal handed only by `handleWatchPartyGoLive` (an
+          // already-approved preview capture); every other caller through
+          // this same gate — the ordinary call share button, a mid-show
+          // reshare — has none, and must never pop the watch-party mic
+          // prompt on THEIR confirm. `intent.party` travels with it rather
+          // than reading `currentWatchParty()` here, because the sheet can
+          // sit open for as long as the host takes to read it, the selected
+          // channel is free to change in that window, and
+          // `finishWatchPartyGoLiveShare` itself re-checks the party is
+          // still there and still live before arming anything.
+          const goLiveParty = pending.request.intent?.stream
+            ? pending.request.intent.party
+            : undefined;
+          void startScreenShareGated(
+            pending.request.audio,
+            pending.request.intent,
+          ).then((wentOut) => {
+            if (goLiveParty) {
+              finishWatchPartyGoLiveShare(
+                goLiveParty.id,
+                goLiveParty.channelId,
+                wentOut,
+              );
+            }
+          });
         }}
         onClose={() => setHlsHostAck(null)}
       />
 
+      <ConfirmDialog
+        open={micPromptPartyId !== null}
+        title={t("watchParty.live.micPromptTitle")}
+        description={t("watchParty.live.micPromptBody")}
+        confirmLabel={t("watchParty.live.micPromptConfirm")}
+        destructive={false}
+        onConfirm={() => {
+          if (voice.getState().isMuted) {
+            voice.toggleMute();
+          }
+          setMicPromptPartyId(null);
+        }}
+        onClose={() => setMicPromptPartyId(null)}
+      />
       <ConfirmDialog
         open={pendingDeleteChannelId !== null}
         title={t("chrome.deleteChannel")}

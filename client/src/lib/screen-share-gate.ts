@@ -24,18 +24,25 @@ export async function gateScreenShareStart<Intent>(input: {
   /** `LiveHlsConfig.enabled` for that server; null while unanswered. */
   hlsEnabled: boolean | null;
   checkNeedsAck: (serverId: string) => Promise<boolean>;
-  start: (request: ScreenShareStart<Intent>) => void;
+  /**
+   * May return a promise. Callers that need to know whether the capture
+   * itself succeeded (not merely that the gate let it through) await the
+   * `gateScreenShareStart` call and read that outcome themselves — this
+   * function only reports the GATE's decision (`"started"` vs. `"asked"`),
+   * never the media result.
+   */
+  start: (request: ScreenShareStart<Intent>) => void | Promise<void>;
   ask: (serverId: string, request: ScreenShareStart<Intent>) => void;
 }): Promise<ScreenShareGateDecision> {
   const { request, serverId } = input;
   if (!serverId) {
-    input.start(request);
+    await input.start(request);
     return "started";
   }
   // Null is "not answered yet": ask the old way rather than skip a
   // disclosure by accident. Only an explicit `false` bypasses the sheet.
   if (input.hlsEnabled === false) {
-    input.start(request);
+    await input.start(request);
     return "started";
   }
   const needsAck = await input.checkNeedsAck(serverId);
@@ -43,6 +50,6 @@ export async function gateScreenShareStart<Intent>(input: {
     input.ask(serverId, request);
     return "asked";
   }
-  input.start(request);
+  await input.start(request);
   return "started";
 }

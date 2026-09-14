@@ -731,16 +731,23 @@ test("the collapse controls are visible and clickable without hunting", async ({
   // NOBODY HAS MOVED THE POINTER ANYWHERE NEAR THE DIVIDER. Playwright's
   // `toBeVisible` is satisfied by a non-empty box, and `opacity: 0` has one,
   // so the opacity is read directly: that is exactly what was wrong.
+  //
+  // The controls themselves moved off the divider and into the chat pane's
+  // own header (2026-09-13, `ChatPaneHeader`), which is what fixed the
+  // "invisible until hovered" half of the report: they render every frame,
+  // same as the header's other icon tiles (`HEADER_ACTION_TILE`,
+  // `iconButton` in `call-split.tsx`), both a 28px square. 40px was sized
+  // for finding a control on a 20px-tall divider by touch; a persistent
+  // header button held to the app's own icon-tile convention is the fix for
+  // "so small" without inventing a one-off size nothing else in a header
+  // uses.
   for (const control of [hideChat, hideStage]) {
     await expect(control).toBeVisible();
     expect(
       await control.evaluate((el) => Number(getComputedStyle(el).opacity)),
     ).toBe(1);
     const box = (await control.boundingBox())!;
-    // 56 along the boundary. The 20px cross axis is `CALL_SPLIT_DIVIDER_PX`
-    // and the CSS must move with it: every clamp in `lib/call-split.ts` is
-    // computed against it.
-    expect(Math.max(box.width, box.height)).toBeGreaterThanOrEqual(40);
+    expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(28);
   }
 
   // And it works from a cold pointer, with no hover step at all.

@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
 import { endToEndDelaySeconds } from "@/lib/hls-live-edge";
@@ -161,6 +162,9 @@ export function WatchPartyTransmission({
   micMuted = false,
   userId = null,
   onStreamQualityChange,
+  onOpenMixer,
+  detailsInDialog = false,
+  trailing,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
   stream: LiveHlsStream | null;
@@ -213,6 +217,18 @@ export function WatchPartyTransmission({
   /** For `StreamQualityControl`'s per-account preference (postmortem B7). */
   userId?: string | null;
   /**
+   * THE MIXER LIVES IN ITS OWN DIALOG WHEN THIS IS GIVEN (2026-09-13). The
+   * two sliders used to be inline here, inside a disclosure that defaults
+   * closed and, opened, pushes the host's own preview below the fold. After
+   * Moonkase's party asked for "volume controls for the streamer and the
+   * film", the answer was already built and nobody had found it. So the
+   * live bar gets an "Áudio" button (`watch-party-panel.tsx`) and this
+   * section keeps a one-line readout with the same door. Omitted, the mixer
+   * renders inline exactly as before, which is what the tests and any other
+   * caller still get.
+   */
+  onOpenMixer?: () => void;
+  /**
    * `StreamQualityControl` keeps its own `useState` and this panel is not
    * the only reader of the choice: the go-live checklist beside it also
    * shows a `quality` row (`watch-party-panel.tsx`'s `LiveSurface`), read
@@ -221,6 +237,21 @@ export function WatchPartyTransmission({
    * "ok" row until something else remounts the panel (Farol, 2026-09-13).
    */
   onStreamQualityChange?: (quality: WatchPartyStreamQuality) => void;
+  /**
+   * THE HEADER IS FACTS (2026-09-13, `docs/plans/WATCH_PARTY_PRESENTER_UI.md`
+   * §6.1). With this on, the collapsed row becomes the presenter's status
+   * line, a health dot in front of it, and the details open in a `Dialog`
+   * instead of unfolding in the column, so the picture never moves. Off,
+   * the row unfolds inline exactly as it did, which is what the tests pin.
+   */
+  detailsInDialog?: boolean;
+  /**
+   * Drawn at the right end of the status row, outside the toggle (a button
+   * cannot hold a button). The panel puts the mic warning and its Ativar
+   * mic here, so the muted state is part of the same line as the health
+   * dot instead of a red strip of its own (2026-09-13).
+   */
+  trailing?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -275,76 +306,35 @@ export function WatchPartyTransmission({
           })
         : t("watchParty.tx.collapsedRungZero", { height });
 
-  return (
-    <div
-      data-testid="watch-party-transmission"
-      data-tx-open={open ? "" : undefined}
-      className={cn(
-        "shrink-0 border-b border-ink-4/60 bg-ink-2/60 px-3 py-1.5",
-        className,
-      )}
-    >
-      <button
-        type="button"
-        data-testid="watch-party-tx-toggle"
-        aria-expanded={open}
-        className="flex w-full items-center gap-1.5 text-left text-[11px] text-paper-muted hover:text-paper"
-        onClick={() => setOpen((was) => !was)}
-        title={open ? t("watchParty.tx.collapse") : t("watchParty.tx.expand")}
-      >
-        {open ? (
-          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden />
-        ) : (
-          <ChevronRight className="h-3 w-3 shrink-0" aria-hidden />
-        )}
-        <span className="shrink-0 font-semibold uppercase tracking-wider">
-          {t("watchParty.tx.title")}
-        </span>
-        <span data-testid="watch-party-tx-summary" className="truncate">
-          {summary}
-        </span>
-        {/* IN THE COLLAPSED ROW, because the panel is collapsed by default and
-            a warning only a host who expanded it can see is a warning nobody
-            gets. It is the one line worth stealing the summary's space for. */}
-        {silent && (
-          <span
-            data-testid="watch-party-tx-silent-pill"
-            className="ml-auto flex shrink-0 items-center gap-1 text-warning"
-          >
-            <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
-            <span className="hidden sm:inline">
-              {t("watchParty.tx.silentPill")}
-            </span>
-          </span>
-        )}
-        {/* A DIFFERENT SIGNAL FROM `silent` ABOVE, and shown only when that
-            one is not already saying something: `silent` is the SERVER's
-            "no audio track at all" (`hasAudio`); this is the live mixed-bus
-            meter reading ten seconds of actual silence on a track that DOES
-            exist (postmortem B2's -91 dB while the panel read "screen +
-            mic"). Both mean the audience hears nothing; no reason to stack
-            two pills saying so. */}
-        {!silent && outputSilentWarning && (
-          <span
-            data-testid="watch-party-tx-output-silent-pill"
-            className="ml-auto flex shrink-0 items-center gap-1 text-warning"
-          >
-            <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
-            <span className="hidden sm:inline">
-              {t("watchParty.tx.outputSilentPill")}
-            </span>
-          </span>
-        )}
-        {strained && !silent && !outputSilentWarning && (
-          <TriangleAlert
-            className="ml-auto h-3 w-3 shrink-0 text-warning"
-            aria-hidden
-          />
-        )}
-      </button>
+  /**
+   * ONE COLOUR FOR THE WHOLE BROADCAST, the way Twitch's Stream Health and
+   * YouTube's stream health panel do it: green until something is wrong,
+   * and the something is the same three signals the collapsed row already
+   * ranks (no audio track, ten seconds of silence, uplink strain). Grey is
+   * "nothing is going out", which is not a fault.
+   */
+  const health: "idle" | "ok" | "warn" | "bad" = !stream
+    ? "idle"
+    : silent || outputSilentWarning
+      ? "bad"
+      : strained
+        ? "warn"
+        : "ok";
+  const healthTitle =
+    health === "idle"
+      ? t("watchParty.tx.healthIdle")
+      : health === "ok"
+        ? t("watchParty.tx.healthOk")
+        : health === "warn"
+          ? t("watchParty.tx.healthWarn")
+          : t("watchParty.tx.healthBad");
+  const statusLine =
+    detailsInDialog && stream && wentLiveAt
+      ? `${summary} · ${t("watchParty.tx.uptimeValue", { minutes })}`
+      : summary;
 
-      {open && (
-        <div className="mt-2 flex flex-col gap-2">
+  const details = (
+    <>
           {/* STAT TILES, NOT A DEFINITION LIST. The rows read as a form's
               output, and "this server does not report it" three times over
               is a paragraph nobody should have to read. Each tile is a
@@ -472,12 +462,16 @@ export function WatchPartyTransmission({
               `screen-mix.ts` for why unity gain under-served a processed
               mic next to a film at near-full scale, and
               `stream-mix-levels.ts` for the ranges. */}
-          <StreamMixControl
-            onMicGainChange={onMicGainChange}
-            onDisplayGainChange={onDisplayGainChange}
-            micLevelDb={micLevelDb}
-            outputLevelDb={outputLevelDb}
-          />
+          {onOpenMixer ? (
+            <StreamMixSummary onOpen={onOpenMixer} />
+          ) : (
+            <StreamMixControl
+              onMicGainChange={onMicGainChange}
+              onDisplayGainChange={onDisplayGainChange}
+              micLevelDb={micLevelDb}
+              outputLevelDb={outputLevelDb}
+            />
+          )}
           {/* One footnote, stated whether or not anything is wrong: the two
               audiences are on two different paths and the seated one is
               strictly richer. A host who never learns that assumes the
@@ -493,7 +487,118 @@ export function WatchPartyTransmission({
               seconds: endToEndDelaySeconds(stream?.delaySeconds),
             })}
           </p>
-        </div>
+    </>
+  );
+
+  return (
+    <div
+      data-testid="watch-party-transmission"
+      data-tx-open={open ? "" : undefined}
+      data-tx-health={health}
+      className={cn(
+        detailsInDialog
+          ? "shrink-0 border-b border-ink-4/60 bg-ink-2 px-3 py-1"
+          : "shrink-0 border-b border-ink-4/60 bg-ink-2/60 px-3 py-1.5",
+        className,
+      )}
+    >
+      <div className="flex items-center gap-2">
+      <button
+        type="button"
+        data-testid="watch-party-tx-toggle"
+        aria-expanded={open}
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px] text-paper-muted hover:text-paper"
+        onClick={() => setOpen((was) => !was)}
+        title={
+          detailsInDialog
+            ? healthTitle
+            : open
+              ? t("watchParty.tx.collapse")
+              : t("watchParty.tx.expand")
+        }
+      >
+        {detailsInDialog ? (
+          <span
+            data-testid="watch-party-tx-health"
+            aria-label={healthTitle}
+            className={cn(
+              "h-2 w-2 shrink-0 rounded-full",
+              health === "ok" && "bg-success",
+              health === "warn" && "bg-warning",
+              health === "bad" && "bg-danger motion-safe:animate-pulse",
+              health === "idle" && "bg-paper-muted/40",
+            )}
+          />
+        ) : open ? (
+          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0" aria-hidden />
+        )}
+        {!detailsInDialog && (
+          <span className="shrink-0 font-semibold uppercase tracking-wider">
+            {t("watchParty.tx.title")}
+          </span>
+        )}
+        <span data-testid="watch-party-tx-summary" className="truncate">
+          {statusLine}
+        </span>
+        {/* IN THE COLLAPSED ROW, because the panel is collapsed by default and
+            a warning only a host who expanded it can see is a warning nobody
+            gets. It is the one line worth stealing the summary's space for. */}
+        {silent && (
+          <span
+            data-testid="watch-party-tx-silent-pill"
+            className="ml-auto flex shrink-0 items-center gap-1 text-warning"
+          >
+            <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
+            <span className="hidden sm:inline">
+              {t("watchParty.tx.silentPill")}
+            </span>
+          </span>
+        )}
+        {/* A DIFFERENT SIGNAL FROM `silent` ABOVE, and shown only when that
+            one is not already saying something: `silent` is the SERVER's
+            "no audio track at all" (`hasAudio`); this is the live mixed-bus
+            meter reading ten seconds of actual silence on a track that DOES
+            exist (postmortem B2's -91 dB while the panel read "screen +
+            mic"). Both mean the audience hears nothing; no reason to stack
+            two pills saying so. */}
+        {!silent && outputSilentWarning && (
+          <span
+            data-testid="watch-party-tx-output-silent-pill"
+            className="ml-auto flex shrink-0 items-center gap-1 text-warning"
+          >
+            <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
+            <span className="hidden sm:inline">
+              {t("watchParty.tx.outputSilentPill")}
+            </span>
+          </span>
+        )}
+        {strained && !silent && !outputSilentWarning && (
+          <TriangleAlert
+            className="ml-auto h-3 w-3 shrink-0 text-warning"
+            aria-hidden
+          />
+        )}
+      </button>
+      {trailing}
+      </div>
+
+      {open && detailsInDialog && (
+        <Dialog
+          open
+          size="lg"
+          title={t("watchParty.tx.title")}
+          description={summary}
+          onClose={() => setOpen(false)}
+        >
+          <DialogBody>
+            <div className="flex flex-col gap-2">{details}</div>
+          </DialogBody>
+        </Dialog>
+      )}
+      {open && !detailsInDialog && (
+        <div className="mt-2 flex flex-col gap-2">{details}</div>
       )}
     </div>
   );
@@ -527,10 +632,13 @@ const STREAM_QUALITY_KEYS: Record<WatchPartyStreamQuality, MessageKey> = {
 export function StreamQualityControl({
   userId = null,
   onQualityChange,
+  stacked = false,
 }: {
   userId?: string | null;
   /** Told on every change, including the one this control makes to itself. */
   onQualityChange?: (quality: WatchPartyStreamQuality) => void;
+  /** Label above the select, no box of its own: for the setup card's column. */
+  stacked?: boolean;
 } = {}) {
   const { t } = useTranslation();
   const selectId = useId();
@@ -540,23 +648,39 @@ export function StreamQualityControl({
   return (
     <div
       data-testid="watch-party-tx-stream-quality"
-      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-0 px-2.5 py-1.5"
+      className={cn(
+        stacked
+          ? "flex flex-col gap-1.5 px-3 py-2.5"
+          : "flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-0 px-2.5 py-1.5",
+      )}
     >
       <label
         htmlFor={selectId}
-        className="min-w-0 flex flex-col text-[11px] text-paper-muted"
+        className={cn(
+          "min-w-0 flex flex-col",
+          stacked ? "text-sm" : "text-[11px] text-paper-muted",
+        )}
       >
-        <span className="font-semibold uppercase tracking-wider text-text-tertiary">
+        <span
+          className={
+            stacked
+              ? "text-text"
+              : "font-semibold uppercase tracking-wider text-text-tertiary"
+          }
+        >
           {t("watchParty.tx.streamQuality")}
         </span>
-        <span className="text-text-tertiary">
+        <span className={cn("text-text-tertiary", stacked && "mt-0.5 text-xs")}>
           {t("watchParty.tx.streamQualityHint")}
         </span>
       </label>
       <select
         id={selectId}
         data-testid="watch-party-tx-stream-quality-select"
-        className="h-[var(--control-sm)] shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+        className={cn(
+          "h-[var(--control-sm)] shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
+          stacked && "w-full",
+        )}
         value={quality}
         onChange={(event) => {
           const next = event.target.value as WatchPartyStreamQuality;
@@ -571,6 +695,43 @@ export function StreamQualityControl({
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+/**
+ * The one-line stand-in for the mixer inside the transmission details: the
+ * two levels as they are set right now, and the button that opens the real
+ * thing. Reads storage on every render on purpose: the dialog writes the
+ * same keys, and this row is only on screen while the details are open, so
+ * a re-render after the dialog closes is what keeps the two in agreement
+ * without a shared store.
+ */
+export function StreamMixSummary({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation();
+  const levels = readStreamMixLevels();
+  return (
+    <div
+      data-testid="watch-party-tx-mixer-summary"
+      className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-0 px-2.5 py-2 text-[11px]"
+    >
+      <span className="min-w-0 truncate text-paper-muted">
+        <span className="font-semibold uppercase tracking-wider text-text-tertiary">
+          {t("watchParty.tx.mixer")}
+        </span>{" "}
+        {t("watchParty.tx.mixerSummary", {
+          mic: formatGainDb(levels.micGain),
+          display: formatGainDb(levels.displayGain),
+        })}
+      </span>
+      <button
+        type="button"
+        data-testid="watch-party-tx-mixer-open"
+        className="shrink-0 text-signal hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+        onClick={onOpen}
+      >
+        {t("watchParty.tx.mixerOpen")}
+      </button>
     </div>
   );
 }
@@ -760,7 +921,7 @@ export function StreamMixControl({
  * empty bar rather than a warning — the warning text is a separate element
  * for the output case (`outputSilentWarning`), so this stays a plain meter.
  */
-function MicLevelMeterBar({
+export function MicLevelMeterBar({
   db,
   testId,
 }: {

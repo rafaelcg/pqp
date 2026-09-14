@@ -1526,9 +1526,12 @@ test("the people running the party keep their way into the room", async ({
   });
   // A WATCH PARTY IS NOT A LOBBY. With voice off the host is not offered a
   // seat as such: the way back into their own room is putting a picture up,
-  // which seats them, and that control is on the waiting surface.
+  // which seats them, and that control is on the presenter bar
+  // (`data-watch-party-bar-share`, the presenter/audience split's one share
+  // button — the empty stage's own second one, `data-watch-party-share-screen`,
+  // was retired alongside it).
   await expect(page.locator("[data-watch-party-join-call]")).toHaveCount(0);
-  await expect(page.locator("[data-watch-party-share-screen]")).toBeVisible();
+  await expect(page.locator("[data-watch-party-bar-share]")).toBeVisible();
 });
 
 test("a viewer can tell they are watching, and can stop", async ({
