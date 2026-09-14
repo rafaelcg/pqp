@@ -24,27 +24,33 @@ const startRequest = {
 };
 
 describe("remuxControlSignaturePayload", () => {
-  it("joins method, path, timestamp and body with newlines", () => {
-    expect(remuxControlSignaturePayload("POST", "/sessions", "1000", "{}")).toBe(
-      "POST\n/sessions\n1000\n{}",
-    );
+  it("joins method, path, timestamp, nonce and body with newlines", () => {
+    expect(
+      remuxControlSignaturePayload("POST", "/sessions", "1000", "abc123", "{}"),
+    ).toBe("POST\n/sessions\n1000\nabc123\n{}");
   });
 
   it("uppercases the method so GET and get sign identically", () => {
-    expect(remuxControlSignaturePayload("get", "/sessions", "1000", "")).toBe(
-      remuxControlSignaturePayload("GET", "/sessions", "1000", ""),
+    expect(remuxControlSignaturePayload("get", "/sessions", "1000", "n", "")).toBe(
+      remuxControlSignaturePayload("GET", "/sessions", "1000", "n", ""),
     );
   });
 
   it("treats an empty body as an empty string, not a literal null", () => {
     expect(
-      remuxControlSignaturePayload("DELETE", "/sessions/abc", "1000", ""),
-    ).toBe("DELETE\n/sessions/abc\n1000\n");
+      remuxControlSignaturePayload("DELETE", "/sessions/abc", "1000", "n", ""),
+    ).toBe("DELETE\n/sessions/abc\n1000\nn\n");
   });
 
   it("is sensitive to every field: no two distinct inputs collide by accident", () => {
-    const a = remuxControlSignaturePayload("POST", "/sessions", "1000", "{}");
-    const b = remuxControlSignaturePayload("POST", "/sessions/x", "100", "0}");
+    const a = remuxControlSignaturePayload("POST", "/sessions", "1000", "n1", "{}");
+    const b = remuxControlSignaturePayload("POST", "/sessions/x", "100", "n1", "0}");
+    expect(a).not.toBe(b);
+  });
+
+  it("is sensitive to the nonce alone: two otherwise-identical requests sign differently", () => {
+    const a = remuxControlSignaturePayload("POST", "/sessions", "1000", "nonce-a", "{}");
+    const b = remuxControlSignaturePayload("POST", "/sessions", "1000", "nonce-b", "{}");
     expect(a).not.toBe(b);
   });
 });

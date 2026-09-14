@@ -468,7 +468,7 @@ describe("config helpers", () => {
 });
 
 describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () => {
-  it("sends a timestamp and a matching HMAC-SHA256 signature on the POST that starts a session", async () => {
+  it("sends a timestamp, a nonce, and a matching HMAC-SHA256 signature on the POST that starts a session", async () => {
     enableLL();
     const db = createFakeDb();
     query.mockImplementation(db.queryImpl);
@@ -480,10 +480,16 @@ describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () =
     const call = server.calls.find((c) => c.method === "POST")!;
     expect(call.path).toBe("/sessions");
     const timestamp = call.headers.get("x-pqp-remux-timestamp");
+    const nonce = call.headers.get("x-pqp-remux-nonce");
     const signature = call.headers.get("x-pqp-remux-signature");
     expect(timestamp).toBe("1000000");
+    expect(nonce).toBeTruthy();
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
     const expected = createHmac("sha256", SECRET)
-      .update(remuxControlSignaturePayload("POST", "/sessions", "1000000", call.body), "utf8")
+      .update(
+        remuxControlSignaturePayload("POST", "/sessions", "1000000", nonce!, call.body),
+        "utf8",
+      )
       .digest("hex");
     expect(signature).toBe(expected);
   });
@@ -501,11 +507,31 @@ describe("the control client is signed with LIVE_HLS_REMUX_CONTROL_SECRET", () =
 
     const call = server.calls.find((c) => c.method === "DELETE")!;
     expect(call.body).toBe("");
+    const nonce = call.headers.get("x-pqp-remux-nonce");
+    expect(nonce).toBeTruthy();
     const signature = call.headers.get("x-pqp-remux-signature");
     const expected = createHmac("sha256", SECRET)
-      .update(remuxControlSignaturePayload("DELETE", call.path, "2000000", ""), "utf8")
+      .update(
+        remuxControlSignaturePayload("DELETE", call.path, "2000000", nonce!, ""),
+        "utf8",
+      )
       .digest("hex");
     expect(signature).toBe(expected);
+  });
+
+  it("uses a different nonce on every request, even with the clock stopped", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl, now: () => 3_000_000 });
+
+    await reconcileLlHlsNow(CHANNEL, "peer-1");
+    await stopLlSession(CHANNEL, "test-stop");
+
+    const nonces = server.calls.map((c) => c.headers.get("x-pqp-remux-nonce"));
+    expect(nonces.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(nonces).size).toBe(nonces.length);
   });
 });
 

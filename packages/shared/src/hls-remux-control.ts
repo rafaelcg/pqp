@@ -36,10 +36,21 @@ import { z } from "zod";
  * a Node one can both produce byte-for-byte from nothing but the secret and
  * the request itself.
  *
- * Two headers on every request:
+ * Three headers on every request:
  *
  *   X-Pqp-Remux-Timestamp   Unix milliseconds, as a decimal string, of when
  *                           the request was signed.
+ *   X-Pqp-Remux-Nonce       A random, per-request token (16+ bytes of hex, a
+ *                           UUID — anything sufficiently unlikely to repeat
+ *                           by accident). Folded into the signed payload so
+ *                           a captured request cannot be replayed even
+ *                           inside the clock-skew window: `pqp-remux`
+ *                           remembers every nonce it has accepted for
+ *                           2×{@link REMUX_CONTROL_CLOCK_SKEW_MS} and refuses
+ *                           an exact repeat (L1.6, `nonceCache` /
+ *                           `nonce_cache.go`). This side only has to
+ *                           generate one and sign it — the replay store
+ *                           lives entirely on the box.
  *   X-Pqp-Remux-Signature   Lowercase hex HMAC-SHA256, computed as described
  *                           below.
  *
@@ -48,23 +59,24 @@ import { z } from "zod";
  * and so the exact string either side hashes is defined ONCE, here, rather
  * than redescribed in two languages and drifting:
  *
- *   `${method.toUpperCase()}\n${path}\n${timestampMs}\n${rawBody}`
+ *   `${method.toUpperCase()}\n${path}\n${timestampMs}\n${nonce}\n${rawBody}`
  *
  * `method` is the HTTP verb. `path` is the request path with no scheme, host
  * or query string (these routes take none) — for `DELETE /sessions/:id` that
- * is the literal path including the id, e.g. `/sessions/abc123`. `rawBody` is
- * the exact UTF-8 bytes sent on the wire, `""` for a body-less request (GET,
- * DELETE): re-serializing JSON after signing (key reorder, whitespace)
- * invalidates the signature, the same rule `webhook-sign.ts` documents for
- * outgoing webhooks.
+ * is the literal path including the id, e.g. `/sessions/abc123`. `nonce` is
+ * the exact string sent in `X-Pqp-Remux-Nonce`, byte for byte — it is signed
+ * so a middlebox or a replaying attacker cannot swap it out from under an
+ * otherwise-valid signature. `rawBody` is the exact UTF-8 bytes sent on the
+ * wire, `""` for a body-less request (GET, DELETE): re-serializing JSON
+ * after signing (key reorder, whitespace) invalidates the signature, the
+ * same rule `webhook-sign.ts` documents for outgoing webhooks.
  *
  * The receiver computes the same payload from what it actually received,
  * HMACs it with the shared secret, and compares in constant time. A request
  * is refused (401, `remuxErrorResponseSchema`) when the signature does not
- * match OR when `timestampMs` is more than {@link REMUX_CONTROL_CLOCK_SKEW_MS}
- * away from the receiver's own clock — the skew window is what turns a
- * captured request into something that stops working shortly after capture,
- * since there is no nonce store on either side.
+ * match, when `timestampMs` is more than {@link REMUX_CONTROL_CLOCK_SKEW_MS}
+ * away from the receiver's own clock, or when the nonce has already been
+ * used inside that same window.
  */
 
 /** How far a signed request's timestamp may drift before it is refused. */
@@ -74,6 +86,8 @@ export const REMUX_CONTROL_CLOCK_SKEW_MS = 60_000;
 export const REMUX_CONTROL_TIMESTAMP_HEADER = "x-pqp-remux-timestamp";
 /** Request header carrying the hex HMAC-SHA256 signature. */
 export const REMUX_CONTROL_SIGNATURE_HEADER = "x-pqp-remux-signature";
+/** Request header carrying the per-request replay-resistance nonce. */
+export const REMUX_CONTROL_NONCE_HEADER = "x-pqp-remux-nonce";
 
 /**
  * The exact string both sides HMAC. No crypto here on purpose (see the file
@@ -85,9 +99,10 @@ export function remuxControlSignaturePayload(
   method: string,
   path: string,
   timestampMs: string,
+  nonce: string,
   rawBody: string,
 ): string {
-  return `${method.toUpperCase()}\n${path}\n${timestampMs}\n${rawBody}`;
+  return `${method.toUpperCase()}\n${path}\n${timestampMs}\n${nonce}\n${rawBody}`;
 }
 
 /**

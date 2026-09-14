@@ -1,9 +1,10 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   remuxControlSignaturePayload,
   remuxErrorResponseSchema,
   remuxListSessionsResponseSchema,
   remuxSessionInfoSchema,
+  REMUX_CONTROL_NONCE_HEADER,
   REMUX_CONTROL_SIGNATURE_HEADER,
   REMUX_CONTROL_TIMESTAMP_HEADER,
   type LiveHlsStream,
@@ -306,15 +307,19 @@ function signRequest(
   method: string,
   path: string,
   rawBody: string,
-): { timestamp: string; signature: string } {
+): { timestamp: string; nonce: string; signature: string } {
   const secret = remuxControlSecret();
   if (!secret) {
     throw new RemuxControlError("LIVE_HLS_REMUX_CONTROL_SECRET is not set");
   }
   const timestamp = String(nowImpl());
-  const payload = remuxControlSignaturePayload(method, path, timestamp, rawBody);
+  // 16 random bytes as hex (32 chars): well within pqp-remux's maxNonceLen
+  // (256) and, per request, unlikely enough to repeat that the box's replay
+  // cache (2x the clock-skew window) can treat an exact match as a replay.
+  const nonce = randomBytes(16).toString("hex");
+  const payload = remuxControlSignaturePayload(method, path, timestamp, nonce, rawBody);
   const signature = createHmac("sha256", secret).update(payload, "utf8").digest("hex");
-  return { timestamp, signature };
+  return { timestamp, nonce, signature };
 }
 
 /** `POST`/`GET`/`DELETE` against the control API, signed, with a hard timeout. */
@@ -324,7 +329,7 @@ async function remuxFetch(method: string, path: string, body?: unknown): Promise
     throw new RemuxControlError("LIVE_HLS_REMUX_CONTROL_URL is not set");
   }
   const rawBody = body === undefined ? "" : JSON.stringify(body);
-  const { timestamp, signature } = signRequest(method, path, rawBody);
+  const { timestamp, nonce, signature } = signRequest(method, path, rawBody);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REMUX_CONTROL_TIMEOUT_MS);
   try {
@@ -333,6 +338,7 @@ async function remuxFetch(method: string, path: string, body?: unknown): Promise
       headers: {
         "content-type": "application/json",
         [REMUX_CONTROL_TIMESTAMP_HEADER]: timestamp,
+        [REMUX_CONTROL_NONCE_HEADER]: nonce,
         [REMUX_CONTROL_SIGNATURE_HEADER]: signature,
       },
       body: rawBody.length > 0 ? rawBody : undefined,
