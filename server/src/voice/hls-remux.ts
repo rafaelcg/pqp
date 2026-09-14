@@ -265,79 +265,151 @@ export function llDemotedRecently(channelId: string, now = Date.now()): boolean 
 }
 
 /**
- * Clears whose write did not land, retried on the next sweep. The memo is
- * five minutes and this write is what has to outlive it: without a retry, a
- * database blip at exactly the wrong moment leaves `low_latency_requested`
- * true for a party whose remux has already given up, and the moment the memo
- * expires a reconcile starts LL for it all over again (a Farol finding on PR
- * #618). Keyed by the party row, not the channel, for the same reason the
- * write is (see below).
+ * A DEMOTION IS THREE WRITES, AND IT IS NOT DONE UNTIL ALL THREE ARE.
+ *
+ * Stopping the box session and ending the row; clearing the party's
+ * `low_latency_requested`; and getting the conventional ladder started. Each
+ * one can fail on its own, and the first version did them once and hoped: a
+ * database blip at the wrong moment left `low_latency_requested` true for a
+ * party whose remux had already given up, and the moment the five-minute memo
+ * expired a reconcile started LL for it all over again, into the same failure
+ * (a Farol finding on PR #618).
+ *
+ * So a demotion becomes an entry here, and the health monitor's tick re-runs
+ * whatever is still outstanding until it lands. Every step is idempotent by
+ * construction -- `retryStopOpenLlRow` only clears a row the box has
+ * confirmed gone, the mode clear is a conditional UPDATE, and the reconcile
+ * is a reconcile -- so re-running a step that half-succeeded is safe rather
+ * than merely tolerable.
+ *
+ * ONE ENTRY PER CHANNEL, backed off, and bounded. A channel cannot be demoted
+ * twice at once, the queue must not turn one unhappy database into repeated
+ * serialized work on every tick, and a process that somehow queued thousands
+ * would be leaking memory for state that stops being useful within the hour.
  */
-const pendingModeClears = new Map<
-  string,
-  { channelId: string; reason: string; queuedAt: number }
->();
+interface PendingDemotion {
+  channelId: string;
+  /** The remux session that was demoted: the identity every step is about. */
+  sessionId: string;
+  /** Its `hls_sessions` row. Re-claimed on every attempt, never assumed. */
+  rowId: string;
+  /** The party that asked for LL, read off the row. NULL is "memo only". */
+  partySessionId: string | null;
+  /** The box's own word for why. Carried into every log line. */
+  reason: string;
+  queuedAt: number;
+  nextAttemptAt: number;
+  attempts: number;
+  /** The box session is gone and the row is ended. */
+  stopped: boolean;
+  /** `low_latency_requested` is FALSE, or there was never anything to clear. */
+  cleared: boolean;
+}
+
+const pendingDemotions = new Map<string, PendingDemotion>();
 
 /** As long as a demotion's own memo could still be the only thing holding LL off. */
-const MODE_CLEAR_RETRY_TTL_MS = 30 * 60_000;
+const DEMOTION_RETRY_TTL_MS = 30 * 60_000;
+/** Exponential, capped at a minute: a tick is 10s and the queue is a repair. */
+const DEMOTION_BACKOFF_STEPS_MS = [0, 1_000, 5_000, 15_000, 30_000, 60_000] as const;
+/**
+ * More demoted channels than any deployment can plausibly have live at once.
+ * Past it the OLDEST entry is dropped, loudly: an unbounded repair queue is a
+ * leak, and the entry most likely to be worthless is the one that has been
+ * failing longest.
+ */
+const MAX_PENDING_DEMOTIONS = 64;
 
-/** For the dashboard and the tests: demotions this process could not write down. */
-export function pendingLlModeClearCount(): number {
-  return pendingModeClears.size;
+function demotionBackoffMs(attempts: number): number {
+  return DEMOTION_BACKOFF_STEPS_MS[
+    Math.min(attempts, DEMOTION_BACKOFF_STEPS_MS.length - 1)
+  ]!;
+}
+
+/** For the dashboard and the tests: demotions whose cleanup is not finished. */
+export function pendingLlDemotionCount(): number {
+  return pendingDemotions.size;
+}
+
+function queueDemotion(entry: PendingDemotion): void {
+  if (!pendingDemotions.has(entry.channelId)) {
+    while (pendingDemotions.size >= MAX_PENDING_DEMOTIONS) {
+      const oldest = [...pendingDemotions.values()].reduce((a, b) =>
+        a.queuedAt <= b.queuedAt ? a : b,
+      );
+      pendingDemotions.delete(oldest.channelId);
+      logEvent("voice.hlsLlDemotionCleanupDropped", {
+        channelId: oldest.channelId,
+        reason: "queue-full",
+      });
+    }
+  }
+  pendingDemotions.set(entry.channelId, entry);
 }
 
 /**
- * The durable half of the fallback: THIS party stops asking for LL.
+ * The durable half of the fallback: THE party that asked stops asking.
  *
- * SCOPED TO THE PARTY ROW, NOT THE CHANNEL. An earlier version updated every
- * live `channel_sessions` row for the channel, and a demotion cleanup that
- * ran late (a retry, a slow tick) would then clear a NEWER party's request as
- * well -- a party that had asked for LL seconds ago and never had anything go
- * wrong (a Farol finding on PR #618). The id is read at demotion time, so the
- * write can only ever land on the session that was actually demoted; a party
- * that has since ended matches `status = 'live'` no longer and the update is
- * a no-op, which is the right answer too.
+ * SCOPED TO THE PARTY ROW THE SESSION RECORDED, not to "whatever is live on
+ * this channel". Those are the same answer most of the time and a different
+ * one exactly when it matters: a cleanup that runs late (a retry after a
+ * database failure, a slow tick) would otherwise clear a NEWER party's
+ * request, silently downgrading a party that never had anything go wrong (a
+ * Farol finding on PR #618). `hls_sessions.watch_party_session_id` is written
+ * when the session starts, which is the one moment the two questions are
+ * certainly the same, and read back off the row here.
+ *
+ * Answers whether this step is done. A party with no recorded id (a row from
+ * before that column, or a session started with no live party) has nothing
+ * durable to clear and says so: the five-minute memo is the whole fallback
+ * there, which is what it is for.
  *
  * Never a silent write -- pitfall 15's rule -- because a party that quietly
  * stopped being low-latency is exactly the kind of state change nobody can
  * explain a week later.
  */
-async function clearRequestedHlsMode(
-  partySessionId: string,
-  channelId: string,
-  reason: string,
-  now = Date.now(),
-): Promise<void> {
+async function clearPartyLlRequest(entry: PendingDemotion): Promise<boolean> {
+  if (entry.partySessionId === null) {
+    logEvent("voice.hlsLlRequestClearSkipped", {
+      channelId: entry.channelId,
+      reason: entry.reason,
+    });
+    return true;
+  }
   try {
     const result = await getPool().query(
       `UPDATE channel_sessions SET low_latency_requested = FALSE
         WHERE id = $1 AND status = 'live' AND low_latency_requested`,
-      [partySessionId],
+      [entry.partySessionId],
     );
-    pendingModeClears.delete(partySessionId);
     logEvent("voice.hlsLlRequestCleared", {
-      channelId,
-      partySessionId,
-      reason,
+      channelId: entry.channelId,
+      partySessionId: entry.partySessionId,
+      reason: entry.reason,
       rows: result.rowCount ?? 0,
     });
+    return true;
   } catch (error) {
-    pendingModeClears.set(partySessionId, {
-      channelId,
-      reason,
-      queuedAt: pendingModeClears.get(partySessionId)?.queuedAt ?? now,
-    });
     logEvent("voice.hlsLlRequestedModeWriteFailed", {
-      channelId,
-      partySessionId,
-      reason,
+      channelId: entry.channelId,
+      partySessionId: entry.partySessionId,
+      reason: entry.reason,
       error: error instanceof Error ? error.message : String(error),
     });
+    return false;
   }
 }
 
-/** The live party this channel's demoted session belongs to, or null. */
-async function liveWatchPartyId(channelId: string): Promise<string | null> {
+/**
+ * The live party on this channel right now. Used ONLY when a session starts,
+ * to record which party asked; a demotion reads the recorded id instead (see
+ * `clearPartyLlRequest`). `{ ok: false }` is a read that failed, which is NOT
+ * "no party" -- the same distinction `findOpenLlRow` makes, for the same
+ * reason.
+ */
+async function liveWatchPartyId(
+  channelId: string,
+): Promise<{ ok: true; id: string | null } | { ok: false }> {
   try {
     const result = await getPool().query<{ id: string }>(
       `SELECT id FROM channel_sessions
@@ -346,31 +418,85 @@ async function liveWatchPartyId(channelId: string): Promise<string | null> {
         LIMIT 1`,
       [channelId],
     );
-    return result.rows[0]?.id ?? null;
+    return { ok: true, id: result.rows[0]?.id ?? null };
   } catch (error) {
     logLookupFailure(channelId, "requested-mode", error);
-    return null;
+    return { ok: false };
   }
 }
 
 /**
- * Retry the clears that did not land, from the same tick the demotion sweep
- * runs on. Dropped past `MODE_CLEAR_RETRY_TTL_MS`: by then the party it
- * names has either ended (the update is a no-op anyway) or been going for
- * half an hour with a request nothing acted on.
+ * Work the queue, and answer the channels whose conventional ladder should be
+ * (re)started this tick. Dropped past `DEMOTION_RETRY_TTL_MS`: by then the
+ * party has either ended, in which case every remaining step is a no-op, or
+ * been going half an hour with a request nothing could act on, and replaying
+ * the repair forever is its own failure.
  */
-async function retryPendingModeClears(now = Date.now()): Promise<void> {
-  for (const [id, entry] of [...pendingModeClears]) {
-    if (now - entry.queuedAt > MODE_CLEAR_RETRY_TTL_MS) {
-      pendingModeClears.delete(id);
-      logEvent("voice.hlsLlRequestClearAbandoned", {
-        channelId: entry.channelId,
-        partySessionId: id,
+async function runPendingDemotions(now = Date.now()): Promise<string[]> {
+  const reconcile: string[] = [];
+  for (const [channelId, entry] of [...pendingDemotions]) {
+    if (now - entry.queuedAt > DEMOTION_RETRY_TTL_MS) {
+      pendingDemotions.delete(channelId);
+      logEvent("voice.hlsLlDemotionCleanupAbandoned", {
+        channelId,
+        reason: entry.reason,
+        attempts: entry.attempts,
+        stopped: entry.stopped,
+        cleared: entry.cleared,
       });
       continue;
     }
-    await clearRequestedHlsMode(id, entry.channelId, entry.reason, now);
+    if (now < entry.nextAttemptAt) {
+      continue;
+    }
+    entry.attempts += 1;
+    entry.nextAttemptAt = now + demotionBackoffMs(entry.attempts);
+
+    if (!entry.stopped) {
+      // STILL OURS? Re-asked on every attempt, not assumed from the attempt
+      // that queued this: if this process's heartbeat lapsed in between,
+      // another instance is entitled to have taken the row, and stopping the
+      // box session or rewriting the row from here would kill a stream the
+      // new owner is driving.
+      const lookup = await findOpenLlRow(channelId);
+      if (!lookup.ok) {
+        continue;
+      }
+      const row = lookup.row;
+      if (!row || row.id !== entry.rowId) {
+        // The row this demotion was about is closed (or replaced). Nothing of
+        // ours is open on the box under it; the remaining steps stand alone.
+        entry.stopped = true;
+      } else {
+        const claim = await claimHlsSessionRow(row.id);
+        if (claim === "refused") {
+          pendingDemotions.delete(channelId);
+          noteHlsSkippedOwnedElsewhere({
+            site: "ll-demote",
+            channelId,
+            sessionId: row.id,
+            ownerInstanceId: row.instanceId,
+          });
+          continue;
+        }
+        if (claim === "failed") {
+          continue;
+        }
+        entry.stopped = await retryStopOpenLlRow(row, channelId);
+      }
+    }
+    if (!entry.cleared) {
+      entry.cleared = await clearPartyLlRequest(entry);
+    }
+    // ASKED FOR ON EVERY ATTEMPT, not only the first: the conventional ladder
+    // is the whole point of the fallback, and a reconcile that did not manage
+    // to start one (no sharer yet, a LiveKit hiccup) has to be asked again.
+    reconcile.push(channelId);
+    if (entry.stopped && entry.cleared) {
+      pendingDemotions.delete(channelId);
+    }
   }
+  return reconcile;
 }
 
 // ---------------------------------------------------------------------------
@@ -722,13 +848,15 @@ async function recordLlSessionStarted(
   presenterPeerId: string,
   partTargetMs: number,
   originBaseUrl: string,
+  watchPartySessionId: string | null,
 ): Promise<boolean> {
   try {
     await getPool().query(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, mode, remux_session_id,
-          presenter_peer_id, part_target_ms, origin_base_url, instance_id)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8)
+          presenter_peer_id, part_target_ms, origin_base_url, instance_id,
+          watch_party_session_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), 'll', $4, $5, $6, $7, $8, $9)
        ON CONFLICT (object_prefix) DO NOTHING`,
       [
         channelId,
@@ -742,6 +870,11 @@ async function recordLlSessionStarted(
         // sweep reads it before adopting or ending anything. See
         // `hls-ownership.ts`.
         hlsOwnerInstanceId(),
+        // WHICH PARTY ASKED. Recorded here, at the only moment "the party
+        // that asked for this session" and "the party that is live on this
+        // channel" are certainly the same. A demotion reads it back off the
+        // row rather than asking the channel again.
+        watchPartySessionId,
       ],
     );
     return true;
@@ -838,6 +971,8 @@ interface OpenLlRow {
   stopAttempts: number;
   /** Which API process last started, resumed or adopted it. NULL = nobody's. */
   instanceId: string | null;
+  /** The `channel_sessions` row that asked for LL. NULL on a pre-column row. */
+  watchPartySessionId: string | null;
 }
 
 /**
@@ -864,9 +999,10 @@ async function findOpenLlRow(
       stopping_at: string | null;
       stop_attempts: number;
       instance_id: string | null;
+      watch_party_session_id: string | null;
     }>(
       `SELECT id, started_at, remux_session_id, presenter_peer_id, stopping_at,
-              stop_attempts, instance_id
+              stop_attempts, instance_id, watch_party_session_id
        FROM hls_sessions
        WHERE channel_id = $1 AND mode = 'll' AND ended_at IS NULL
        ORDER BY started_at DESC
@@ -887,6 +1023,7 @@ async function findOpenLlRow(
         stoppingAtMs: row.stopping_at ? new Date(row.stopping_at).getTime() : null,
         stopAttempts: row.stop_attempts,
         instanceId: row.instance_id,
+        watchPartySessionId: row.watch_party_session_id,
       },
     };
   } catch (error) {
@@ -1037,6 +1174,7 @@ async function startLlSession(
   } else {
     startedAt = Date.now();
     sessionId = deriveLlSessionId(channelId, startedAt);
+    const party = await liveWatchPartyId(channelId);
     const inserted = await recordLlSessionStarted(
       channelId,
       startedAt,
@@ -1044,6 +1182,7 @@ async function startLlSession(
       presenterPeerId,
       cfg.partMs,
       originBaseUrl,
+      party.ok ? party.id : null,
     );
     if (!inserted) {
       // No remux call was ever made: nothing on the box to roll back.
@@ -1240,17 +1379,17 @@ async function reconcileLlHlsNowLocked(
  * It does NOT start one itself: `hls-egress.ts` owns that path, imports this
  * module and must never be imported back (see `llObjectPrefix`).
  */
-export async function sweepLlDemotions(): Promise<string[]> {
+export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
   if (!isLiveHlsLLEnabled() || !remuxControlUrl() || !remuxControlSecret()) {
     return [];
   }
-  // BEFORE the early return below, never after it: a clear whose write failed
-  // is a demotion this process has already acted on, and `llRooms` is empty
-  // precisely because it did. Gating the retry on a live session would be a
-  // queue that can only ever drain while there is nothing in it.
-  await retryPendingModeClears();
+  // DETECTION IS GATED ON HAVING A SESSION; THE REPAIR IS NOT. A cleanup step
+  // that failed belongs to a demotion this process has already acted on, and
+  // `llRooms` is empty precisely because it did -- gating the queue on a live
+  // session would be a repair that can only run while there is nothing to
+  // repair.
   if (llRooms.size === 0) {
-    return [];
+    return runPendingDemotions(now);
   }
   let remoteSessions: RemuxSessionInfo[];
   try {
@@ -1260,7 +1399,9 @@ export async function sweepLlDemotions(): Promise<string[]> {
       sessions: llRooms.size,
       error: error instanceof Error ? error.message : String(error),
     });
-    return [];
+    // The poll failed, so nothing NEW is demoted as far as this process can
+    // tell -- but whatever is already queued still wants finishing.
+    return runPendingDemotions(now);
   }
   const remoteById = new Map(remoteSessions.map((session) => [session.sessionId, session]));
 
@@ -1283,15 +1424,12 @@ export async function sweepLlDemotions(): Promise<string[]> {
     }
   }
 
-  const fellBack: string[] = [];
   for (const { channelId, sessionId, reason } of demotions) {
-    // STILL OURS TO ACT ON? `llRooms` is process memory and this process may
-    // have been out of touch for a while: if its heartbeat lapsed, another
-    // instance is entitled to have claimed the row and restarted the party,
-    // and stopping the box session or rewriting the row from here would kill
-    // a stream the new owner is driving (a Farol finding on PR #618 -- the
-    // very failure the rest of this change exists to stop, arriving through
-    // the one path that had no claim in front of it).
+    // WHICH ROW IS THIS DEMOTION ABOUT? Resolved from the box's own session
+    // id against the channel's open row, never from "the newest LL row here":
+    // the identity that travels through every step below is the remux
+    // session, and a row that does not name it is somebody else's session or
+    // a stale entry in this process's map.
     const lookup = await findOpenLlRow(channelId);
     if (!lookup.ok) {
       // Could not ask. Change nothing at all this tick; the next one is ten
@@ -1307,6 +1445,14 @@ export async function sweepLlDemotions(): Promise<string[]> {
       logEvent("voice.hlsLlForgotStaleRoom", { channelId, reason });
       continue;
     }
+    // STILL OURS TO ACT ON? `llRooms` is process memory and this process may
+    // have been out of touch for a while: if its heartbeat lapsed, another
+    // instance is entitled to have claimed the row and restarted the party,
+    // and stopping the box session or rewriting the row from here would kill
+    // a stream the new owner is driving (a Farol finding on PR #618 -- the
+    // very failure the rest of this change exists to stop, arriving through
+    // the one path that had no claim in front of it). Re-asked on every
+    // retry too, inside `runPendingDemotions`.
     const claim = await claimHlsSessionRow(row.id);
     if (claim !== "claimed") {
       if (claim === "refused") {
@@ -1322,32 +1468,33 @@ export async function sweepLlDemotions(): Promise<string[]> {
     }
     llDemoted += 1;
     logEvent("voice.hlsLlDemoted", { channelId, reason });
-    // THE MEMO FIRST. `stopLlSession` and the reconcile that follows both
-    // re-resolve the mode, and a memo written after them would let the very
-    // next reconcile start a second LL session for the party just given up
-    // on. See `noteLlDemotion`.
+    // THE MEMO FIRST. The cleanup below and the reconcile that follows it
+    // both re-resolve the mode, and a memo written after them would let the
+    // very next reconcile start a second LL session for the party just given
+    // up on. See `noteLlDemotion`.
     noteLlDemotion(channelId);
-    // Read BEFORE the stop, so the clear names the party that owned this
-    // session rather than whatever is live by the time the write runs.
-    const partySessionId = await liveWatchPartyId(channelId);
-    await stopLlSession(channelId, `demoted:${reason}`);
-    // Belt and braces both dropped: a `DELETE` the box refused leaves the
-    // room in `llRooms` (that is `stopLlSession`'s durable-retry design), but
-    // a session the box has DEMOTED is not producing anything either way, and
-    // holding it here would keep `llHasRoom` answering yes and keep the
-    // conventional path from starting. The row stays `stopping_at`, so the
-    // retry still happens on the next start or the next boot sweep.
+    // THE MAP IS RELEASED HERE, NOT WHEN THE BOX CONFIRMS. A session the box
+    // has demoted is producing nothing either way, and holding it would keep
+    // `llHasRoom` answering yes and keep the conventional path from starting.
+    // The DELETE and the row's own `ended_at` are the queue's first step,
+    // retried until the box agrees.
     llRooms.delete(channelId);
-    if (partySessionId) {
-      await clearRequestedHlsMode(partySessionId, channelId, `demoted:${reason}`);
-    } else {
-      // No live party to clear (it ended, or the read failed): the memo is
-      // the whole fallback for this channel, which is what it is for.
-      logEvent("voice.hlsLlRequestClearSkipped", { channelId, reason });
-    }
-    fellBack.push(channelId);
+    queueDemotion({
+      channelId,
+      sessionId,
+      rowId: row.id,
+      // Off the ROW, so the clear names the party that asked for this
+      // session rather than whatever happens to be live when the write runs.
+      partySessionId: row.watchPartySessionId,
+      reason: `demoted:${reason}`,
+      queuedAt: now,
+      nextAttemptAt: now,
+      attempts: 0,
+      stopped: false,
+      cleared: false,
+    });
   }
-  return fellBack;
+  return runPendingDemotions(now);
 }
 
 
@@ -1375,6 +1522,7 @@ interface StaleLlRow {
   stop_attempts: number;
   /** Which API process last started or adopted it. NULL = nobody's. */
   instance_id: string | null;
+  watch_party_session_id: string | null;
 }
 
 function toOpenLlRow(row: StaleLlRow): OpenLlRow {
@@ -1386,6 +1534,7 @@ function toOpenLlRow(row: StaleLlRow): OpenLlRow {
     stoppingAtMs: row.stopping_at ? new Date(row.stopping_at).getTime() : null,
     stopAttempts: row.stop_attempts,
     instanceId: row.instance_id,
+    watchPartySessionId: row.watch_party_session_id,
   };
 }
 
@@ -1470,7 +1619,7 @@ export async function adoptLlHlsSessions(): Promise<{
 
   const rows = await getPool().query<StaleLlRow>(
     `SELECT id, channel_id, started_at, ended_at, remux_session_id, presenter_peer_id,
-            stopping_at, stop_attempts, instance_id
+            stopping_at, stop_attempts, instance_id, watch_party_session_id
      FROM hls_sessions
      WHERE mode = 'll' AND cleaned_at IS NULL
        AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
@@ -1677,7 +1826,7 @@ export function resetHlsRemuxForTests(): void {
   llReconcileQueue.clear();
   lastLookupFailureLoggedAt.clear();
   llDemotedAt.clear();
-  pendingModeClears.clear();
+  pendingDemotions.clear();
   llStartFailures = 0;
   llStopFailures = 0;
   llDemoted = 0;

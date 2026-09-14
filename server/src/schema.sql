@@ -3900,6 +3900,19 @@ ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS remux_session_id TEXT;
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS part_target_ms INTEGER;
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS origin_base_url TEXT;
 
+-- WHICH WATCH PARTY ASKED FOR THIS SESSION, recorded when the session starts
+-- rather than looked up when it ends. A demotion has to clear
+-- `channel_sessions.low_latency_requested` for the party that asked, and
+-- "whatever is live on this channel right now" is a different question with
+-- the same answer only most of the time: a cleanup that runs late (a retry
+-- after a database failure, a slow monitor tick) would otherwise clear a
+-- NEWER party's request, silently downgrading a party that never had
+-- anything go wrong (a Farol finding on PR #618). NULL on every row written
+-- before this column, and on a session started with no live party row, in
+-- which case a demotion falls back to its five-minute in-memory memo and
+-- says so.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS watch_party_session_id UUID;
+
 -- The boot reconcile's LL half looks a session up by the remux box's own id,
 -- the same way the conventional half does by `egress_id`.
 CREATE INDEX IF NOT EXISTS idx_hls_sessions_remux

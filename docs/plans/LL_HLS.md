@@ -334,11 +334,23 @@ claim in front of it. **And the fallback sticks**: the demotion clears the party
 `low_latency_requested` (logged as `voice.hlsLlRequestCleared`) and memoes the
 channel for the same five minutes the box's own `DEMOTE_WINDOW_MS` uses, so
 the next reconcile cannot start a second LL session on top of the one just
-given up on. That write is scoped to the party row the demoted session
-belonged to, never to the channel, so a cleanup that runs late cannot clear a
-newer party's request; a write that fails is retried on the next sweep
-(`pendingLlModeClearCount`), because the memo expires in five minutes and the
-column is what has to outlive it. The next `goLive` writes the column again
+given up on. That write is scoped to the party the session
+RECORDED (`hls_sessions.watch_party_session_id`, written at start, which is
+the one moment "the party that asked" and "the party that is live" are
+certainly the same), never to the channel, so a cleanup that runs late cannot
+clear a newer party's request.
+
+**A demotion is three writes and is not done until all three are.** Stopping
+the box session and ending the row, clearing the party's request, and getting
+the conventional ladder started: each can fail on its own, and doing them once
+and hoping is how the durable half is lost to a database blip, after which the
+five-minute memo expires and a reconcile starts LL into the same failure
+again. They are a per-channel entry in a bounded queue
+(`pendingLlDemotionCount`, cap 64, exponential backoff to a minute, abandoned
+after 30 minutes with a log), re-run from the health tick until each lands.
+Every step is idempotent by construction and every retry re-asks the ownership
+question, so a cleanup that resumes after this process's heartbeat lapsed
+cannot touch a row the other machine has since taken. The next `goLive` writes the column again
 AND clears the memo, which is what makes a demotion last the party and not a
 minute longer.
 

@@ -57,6 +57,7 @@ const { upsertUser } = await import("../services/users.js");
 const {
   adoptLlHlsSessions,
   deriveLlSessionId,
+  pendingLlDemotionCount,
   setRequestedHlsMode,
   llDemotedRecently,
   llHasRoom,
@@ -88,8 +89,12 @@ interface FakeSession {
 describeDb("LL-HLS demotion and row ownership across two machines", () => {
   /** What the fake box currently holds, keyed by its own session id. */
   let boxSessions: Map<string, FakeSession>;
-  /** Every `DELETE /sessions/:id` the API sent, in order. */
+  /** Every `DELETE /sessions/:id` the API sent and the box accepted, in order. */
   let stopped: string[];
+  /** Every `DELETE` attempt, accepted or not: what a backoff is measured in. */
+  let stopAttempts: number;
+  /** When true the box answers 500 to a stop, the way an unhappy one does. */
+  let refuseStops: boolean;
   /** Every `POST /sessions` the API sent. */
   let started: string[];
   let channelA: string;
@@ -119,6 +124,8 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
 
     boxSessions = new Map();
     stopped = [];
+    stopAttempts = 0;
+    refuseStops = false;
     started = [];
     setHlsRemuxTestHooks({ fetch: fakeControlApi });
 
@@ -216,6 +223,10 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     }
     if (method === "DELETE" && path.startsWith("/sessions/")) {
       const id = path.slice("/sessions/".length);
+      stopAttempts += 1;
+      if (refuseStops) {
+        return new Response(JSON.stringify({ error: "busy" }), { status: 500 });
+      }
       stopped.push(id);
       boxSessions.delete(id);
       return new Response(null, { status: 204 });
@@ -449,6 +460,127 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     expect(row.ended_at).toBeNull();
     expect(row.instance_id).toBe(machineB);
     expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+  });
+
+  it("(1d) clears the party that asked for the session, not whatever is live now", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    // The host ends that party and starts ANOTHER one on the same channel,
+    // asking for LL again, before the demotion cleanup runs (a retry after a
+    // database failure, a slow tick). "The live party for this channel" is
+    // now a different row from the one that asked for the demoted session,
+    // and clearing it would silently downgrade a party that never had
+    // anything go wrong. Only one party may be live per channel, so this is
+    // the real sequence rather than a contrived one.
+    const owner = await getPool().query<{ id: string }>(
+      `SELECT created_by AS id FROM channel_sessions WHERE id = $1`,
+      [partyId],
+    );
+    await getPool().query(
+      `UPDATE channel_sessions SET status = 'ended' WHERE id = $1`,
+      [partyId],
+    );
+    const newer = await getPool().query<{ id: string }>(
+      `INSERT INTO channel_sessions
+         (channel_id, title, status, created_by, low_latency_requested)
+       VALUES ($1, 'Outra', 'live', $2, TRUE) RETURNING id`,
+      [channelA, owner.rows[0]!.id],
+    );
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "idr-gap-exceeded",
+    });
+
+    await sweepLlDemotions();
+
+    const rows = await getPool().query<{ id: string; low_latency_requested: boolean }>(
+      `SELECT id, low_latency_requested FROM channel_sessions WHERE channel_id = $1`,
+      [channelA],
+    );
+    const byId = new Map(rows.rows.map((row) => [row.id, row.low_latency_requested]));
+    // THE NEW PARTY KEEPS ITS REQUEST. The demoted session's own party is the
+    // only one the clear may name, and it is not live any more, so the write
+    // is a no-op rather than a downgrade of somebody else.
+    expect(byId.get(newer.rows[0]!.id)).toBe(true);
+    expect(byId.get(partyId)).toBe(true);
+  });
+
+  it("(1e) finishes the cleanup on a later tick when the box refuses the stop", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "part-stuck",
+    });
+    refuseStops = true;
+
+    const first = await sweepLlDemotions();
+
+    // The demotion is counted once and the ladder is asked for immediately --
+    // the audience must not wait on the box agreeing to a DELETE -- but the
+    // row is still open, so the cleanup is not done.
+    expect(first).toEqual([channelA]);
+    expect(llHlsActivity().demoted).toBe(1);
+    expect(pendingLlDemotionCount()).toBe(1);
+    const open = await getPool().query<{ id: string }>(
+      `SELECT id FROM hls_sessions WHERE channel_id = $1 AND ended_at IS NULL`,
+      [channelA],
+    );
+    expect(open.rowCount).toBe(1);
+
+    // The box comes back. `retryStopOpenLlRow` paces itself off the row, so
+    // age the stop the same way a real minute would.
+    refuseStops = false;
+    await getPool().query(
+      `UPDATE hls_sessions SET stopping_at = NOW() - INTERVAL '1 minute'
+        WHERE channel_id = $1 AND ended_at IS NULL`,
+      [channelA],
+    );
+
+    const second = await sweepLlDemotions(Date.now() + 120_000);
+
+    // Counted once, not twice: a retry finishes a demotion, it is not a new
+    // one. And the queue drains rather than replaying forever.
+    expect(second).toEqual([channelA]);
+    expect(llHlsActivity().demoted).toBe(1);
+    expect(pendingLlDemotionCount()).toBe(0);
+    expect(stopped).toContain(sessionId);
+    const after = await getPool().query<{ ended_at: Date | null }>(
+      `SELECT ended_at FROM hls_sessions WHERE channel_id = $1`,
+      [channelA],
+    );
+    expect(after.rows[0]!.ended_at).not.toBeNull();
+  });
+
+  it("(1f) backs the retry off instead of working the queue on every tick", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "no-video",
+    });
+    refuseStops = true;
+    const at = Date.now();
+    await sweepLlDemotions(at);
+    const afterFirst = stopAttempts;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    // The very next tick, ten seconds later: still backing off, no second
+    // DELETE, no second round of database work for the same entry.
+    await sweepLlDemotions(at + 10);
+    expect(stopAttempts).toBe(afterFirst);
+
+    // Past the backoff it tries again.
+    await getPool().query(
+      `UPDATE hls_sessions SET stopping_at = NOW() - INTERVAL '1 minute'
+        WHERE channel_id = $1 AND ended_at IS NULL`,
+      [channelA],
+    );
+    await sweepLlDemotions(at + 120_000);
+    expect(stopAttempts).toBeGreaterThan(afterFirst);
   });
 
   // -------------------------------------------------------------------------
