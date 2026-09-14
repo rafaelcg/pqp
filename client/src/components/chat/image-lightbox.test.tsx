@@ -469,9 +469,18 @@ describe("ImageLightbox", () => {
         constructor(public items: Record<string, Blob>) {}
       },
     );
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(new Response(new Blob(["x"], { type: "image/png" })));
+    // A plain object shaped like the two-member subset of `Response` this
+    // component actually reads (`ok`, `blob()`), not a real `new Response(…)`.
+    // A real one goes through undici on Node, which reads the body via
+    // `.stream()` on whatever produced it — and a `Blob` built by jsdom's own
+    // polyfill (the global this test runs under) does not implement that.
+    // `TypeError: object.stream is not a function`, Linux CI only: the same
+    // code, a different `Blob` under the same name.
+    const fakeImageBlob = new Blob(["x"], { type: "image/png" });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: () => Promise.resolve(fakeImageBlob),
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     mount(
