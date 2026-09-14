@@ -344,6 +344,7 @@ import {
   declineWatchPartyGuestRequest,
   guestRequestCooldownActive,
   inviteWatchPartyGuest,
+  isWatchPartyGuest,
   joinWatchPartyGuestSlot,
   leaveWatchPartyGuestSlot,
   reconcileLiveWatchPartyOptions,
@@ -2673,11 +2674,33 @@ router.post("/api/voice/token", async ({ req, user }) => {
   const channel = await requireChannelAccess(body.voiceChannelId, user.id);
   // Resolved at mint time, not copied from the join: a role edit between the
   // two must land in the token. The SFU only ever consults the grant.
-  const { canSpeak, canStream, canShowFace } = await resolveVoicePublish(
-    channel,
-    body.voiceChannelId,
-    user.id,
-  );
+  //
+  // FAIL CLOSED, EXPLICITLY. `resolveVoicePublish` reads the watch-party seat
+  // cache for `canShowFace` on a watch-party channel, and a cache miss falls
+  // through to a real query with no local retry of its own
+  // (`cachedWatchPartySeatSnapshot`'s own doc: "failures are not stored
+  // either"). Left uncaught, a transient failure here — the seat cache's own
+  // query, or `computeMemberPermissions` underneath it — would fall through
+  // to `handleApi`'s generic `catch`, which answers a plain 500 for anything
+  // that is not a recognised `HttpError`: correct in that no token is minted
+  // either way (nothing below this line runs), but it tells the caller
+  // nothing about whether trying again is the right move, and a
+  // `DatabaseUnavailableError` from the breaker is the only failure shape
+  // that already carries that signal. Converting explicitly to a 503 here
+  // makes every failure of this specific, security-sensitive resolution
+  // retryable by contract, not by accident of which error happened to be
+  // thrown.
+  let publish: { canSpeak: boolean; canStream: boolean; canShowFace: boolean };
+  try {
+    publish = await resolveVoicePublish(channel, body.voiceChannelId, user.id);
+  } catch (error) {
+    console.error("[voice] could not resolve the publish grant:", error);
+    throw new HttpError(
+      503,
+      "Could not verify voice permissions, try again",
+    );
+  }
+  const { canSpeak, canStream, canShowFace } = publish;
   const displayName = await resolveMemberName(
     channel.kind === "server" ? (channel.server_id ?? null) : null,
     user,
@@ -4866,10 +4889,20 @@ const handleWatchPartyGuestsAction: RouteHandler = async (
           throw error;
         }
       } else {
-        // `remove`. Mute, then revoke the publish grant, then eject, THEN
-        // delete the row — in that order, per §3.6: ejecting first leaves a
-        // window where a client that has not processed the disconnect is
-        // still publishing.
+        // `remove`. VERIFY FIRST. Muting, revoking a publish grant and
+        // evicting from the room are SFU/channel actions whose blast radius
+        // is well past this feature — nothing upstream of this branch checks
+        // that `body.userId` is actually a guest of this party (`manageGuests`
+        // authorises the CALLER, not the target), so without this check a
+        // host could silence and eject anybody's live SFU session on the
+        // strength of a `userId` that was never invited at all.
+        if (!(await isWatchPartyGuest(row.id, body.userId))) {
+          throw new HttpError(404, "That person is not a guest of this party");
+        }
+        // Mute, then revoke the publish grant, then eject, THEN delete the
+        // row — in that order, per §3.6: ejecting first leaves a window
+        // where a client that has not processed the disconnect is still
+        // publishing.
         if (getRoomTransport(row.channel_id) === "livekit") {
           const identities = await findVoicePeerIdentities(
             body.userId,

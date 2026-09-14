@@ -248,3 +248,154 @@ describeDb("POST /api/voice/token with an empty peer map", () => {
     expect(refused.status).toBe(409);
   });
 });
+
+/**
+ * FAIL CLOSED, EXPLICITLY. On a watch-party channel `resolveVoicePublish`
+ * reads the watch-party seat cache for `canShowFace` (whether this caller is
+ * an accepted guest) whenever they do not already carry STREAM outright. A
+ * database hiccup on that one lookup used to propagate uncaught out of this
+ * route and land wherever `handleApi`'s generic catch happened to put it --
+ * correct in that no token was minted either way, but a plain "Internal
+ * server error" 500 tells the caller nothing about whether trying again is
+ * the right move. This pins the explicit local catch: every failure of this
+ * specific, security-sensitive resolution is a clean, retryable 503, and
+ * nothing downstream of it ever runs.
+ */
+describeDb("POST /api/voice/token on a watch-party channel, seat lookup fails", () => {
+  let owner: { id: string; clerk_id: string };
+  let member: { id: string; clerk_id: string };
+  let watchPartyChannelId: string;
+
+  beforeAll(async () => {
+    process.env.LIVEKIT_URL = "wss://sfu.example.test";
+    process.env.LIVEKIT_API_KEY = "key";
+    process.env.LIVEKIT_API_SECRET = "secret";
+
+    await initDb();
+    server = createServer((req, res) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      void handleApi(req, res, pathname);
+    });
+    await new Promise<void>((done) => server.listen(0, done));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((done) => server.close(() => done()));
+    await closePool();
+    delete process.env.LIVEKIT_URL;
+    delete process.env.LIVEKIT_API_KEY;
+    delete process.env.LIVEKIT_API_SECRET;
+  });
+
+  beforeEach(async () => {
+    delete process.env.VOICE_REGISTRY;
+    resetApiRateLimits();
+    resetVoicePeers();
+    resetVoiceRoomTransports();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await getPool().query(
+      `TRUNCATE users, servers, channels, server_members, channel_members,
+                voice_rooms, voice_peers, channel_sessions
+       RESTART IDENTITY CASCADE`,
+    );
+
+    owner = await upsertUser({
+      clerkId: "clerk_seatfail_owner",
+      displayName: "Owner",
+      avatarUrl: null,
+    });
+    member = await upsertUser({
+      clerkId: "clerk_seatfail_member",
+      displayName: "Member",
+      avatarUrl: null,
+    });
+
+    const created = await call<{
+      server: { id: string };
+      channels: Array<{ id: string; type: string }>;
+    }>(owner, "POST", "/api/servers", { name: "Seat lookup test" });
+    expect(created.status).toBe(201);
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [created.body.server.id, member.id],
+    );
+    // A plain member on a `watch_party` channel: no STREAM, so
+    // `resolveVoicePublish` takes the `canShowFace` branch and reads the
+    // watch-party seat cache -- the exact path this describe block is about.
+    watchPartyChannelId = created.body.channels.find(
+      (c) => c.type === "voice",
+    )!.id;
+    await getPool().query(
+      `UPDATE channels SET type = 'watch_party', voice_transport = 'livekit' WHERE id = $1`,
+      [watchPartyChannelId],
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function tokenFor(userId: string, peerId: string) {
+    return mintVoiceResumeToken({
+      userId,
+      peerId,
+      voiceChannelId: watchPartyChannelId,
+      transport: "livekit",
+    })!;
+  }
+
+  it("returns a clean, retryable 503 and mints no token when the seat lookup query fails", async () => {
+    const pool = getPool();
+    const realQuery = pool.query.bind(pool) as typeof pool.query;
+    const querySpy = vi
+      .spyOn(pool, "query")
+      .mockImplementation(((...args: Parameters<typeof pool.query>) => {
+        const text = args[0];
+        // The watch-party seat snapshot query, and only that one: every
+        // other query on this request (auth, permissions, the peer proof)
+        // must keep working normally, or this would not isolate the one
+        // failure it claims to.
+        if (typeof text === "string" && text.includes("accepted_guest_ids")) {
+          return Promise.reject(new Error("simulated seat-cache failure"));
+        }
+        return realQuery(...args);
+      }) as typeof pool.query);
+
+    try {
+      const peerId = randomUUID();
+      const minted = await call<{ identity?: string }>(
+        member,
+        "POST",
+        "/api/voice/token",
+        {
+          voiceChannelId: watchPartyChannelId,
+          peerId,
+          resumeToken: tokenFor(member.id, peerId),
+        },
+      );
+      expect(minted.status).toBe(503);
+      expect(minted.body.identity).toBeUndefined();
+    } finally {
+      querySpy.mockRestore();
+    }
+  });
+
+  it("mints normally once the seat lookup succeeds -- proves the 503 above was the simulated failure, not a broken setup", async () => {
+    const peerId = randomUUID();
+    const minted = await call<{ identity: string }>(
+      member,
+      "POST",
+      "/api/voice/token",
+      {
+        voiceChannelId: watchPartyChannelId,
+        peerId,
+        resumeToken: tokenFor(member.id, peerId),
+      },
+    );
+    expect(minted.status).toBe(200);
+    expect(minted.body.identity).toBe(peerId);
+  });
+});

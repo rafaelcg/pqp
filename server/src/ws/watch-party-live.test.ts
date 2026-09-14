@@ -30,11 +30,15 @@ vi.mock("../services/watch-parties.js", () => ({
   getWatchPartyRow: async () => rows.current,
   invalidateActiveWatchParty: () => {},
   loadCohostRows: async () => [],
-  // Convidados: `broadcastWatchParty` loads the guest rows once per fan-out
-  // and shapes them per recipient. `mapWatchParty` is stubbed to `null`
-  // below regardless of what it is handed, so the exact shape here is never
-  // asserted on -- these three only need to exist and not throw.
+  // Convidados: `broadcastWatchParty` loads the guest rows once per fan-out,
+  // prepares them once, and shapes per recipient. `mapWatchParty` is stubbed
+  // to `null` below regardless of what it is handed, so the exact shape here
+  // is never asserted on -- these only need to exist and not throw.
+  // `guests: "request"` (not `"off"`) so the guest-loading path is actually
+  // exercised rather than short-circuited by the off-party skip.
+  watchPartyOptionsOf: () => ({ guests: "request" }),
   loadWatchPartyGuestRows: async () => ({ onAir: [], invited: [], requests: [] }),
+  prepareWatchPartyGuests: (rows: unknown) => rows,
   shapeWatchPartyGuests: () => ({
     onAir: [],
     invited: [],

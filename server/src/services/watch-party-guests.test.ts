@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { DbUser } from "../db.js";
@@ -40,6 +41,9 @@ vi.mock("../auth/clerk.js", () => ({
 const { getPool, initDb, closePool } = await import("../db.js");
 const { handleApi, resetApiRateLimits } = await import("../api/index.js");
 const { upsertUser } = await import("./users.js");
+const { joinWatchPartyGuestSlot, getWatchPartyRow } = await import(
+  "./watch-parties.js"
+);
 const { createServer: createChatServer, createChannel } = await import(
   "./servers.js"
 );
@@ -521,5 +525,263 @@ describeDb("watch party guests", () => {
     } finally {
       deleteAuthenticatedSocket(fakeHostSocket as unknown as WebSocket);
     }
+  });
+
+  it("broadcasting to 500 sockets loads the guest rows a fixed number of times, not once per recipient", async () => {
+    // SATURDAY'S PARTY IS THE REASON FOR THIS TEST. `broadcastWatchParty`
+    // loads `channel_session_stage_invites`/`channel_session_raised_hands`
+    // ONCE per fan-out and reshapes the same rows per recipient
+    // (`prepareWatchPartyGuests`/`shapeWatchPartyGuests`, no query of their
+    // own) -- this pins that the query count does not scale with the
+    // audience, which nothing short of an actual 500-socket broadcast can
+    // prove.
+    // 500 real, distinct server members, each with a fake socket watching —
+    // bulk-inserted rather than 500 round trips through `upsertUser`/
+    // `createRole`-style helpers, which this scale test has no need of.
+    // BEFORE the party goes live: `getChannelAudience` caches its answer on
+    // the first read, which going live already triggers, so a member
+    // inserted afterwards needs its own cache invalidation to be seen — this
+    // test is about the guest query, not the audience cache, so it sidesteps
+    // that entirely by existing first.
+    const scaleUserIds = Array.from({ length: 500 }, () => randomUUID());
+    const userValues = scaleUserIds
+      .map((id, i) => `('${id}', 'clerk_scale_${i}', 'scale-${i}', NULL)`)
+      .join(",");
+    await getPool().query(
+      `INSERT INTO users (id, clerk_id, display_name, avatar_url) VALUES ${userValues}`,
+    );
+    const memberValues = scaleUserIds
+      .map((id) => `('${serverId}', '${id}', 'member')`)
+      .join(",");
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ${memberValues}`,
+    );
+
+    const party = await liveParty({ guests: "request" });
+    // `liveParty`'s own two writes (draft, then live) each fire their own
+    // `void broadcastWatchParty(...)` in the background; let those finish
+    // before the spy below attaches, or their still-in-flight queries would
+    // be counted alongside the one broadcast this test is actually about.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const sent: unknown[] = [];
+    const scaleSockets = scaleUserIds.map((id) => {
+      const socket: FakeSocket = {
+        readyState: 1,
+        send: (data: string) => sent.push(JSON.parse(data)),
+      };
+      setAuthenticatedSocket(
+        socket as unknown as WebSocket,
+        { id } as unknown as DbUser,
+        [],
+      );
+      return socket;
+    });
+
+    const pool = getPool();
+    const querySpy = vi.spyOn(pool, "query");
+    try {
+      const requested = await guests(viewer, party.id, { action: "request" });
+      expect(requested.status).toBe(200);
+      // 500 sockets, 500 permission resolutions and 500 sends: give the
+      // fire-and-forget broadcast real time to walk all of them.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const guestRowQueries = querySpy.mock.calls.filter(([text]) =>
+        typeof text === "string" &&
+        text.includes("channel_session_stage_invites") &&
+        text.includes("i.invited_at"),
+      );
+      // At most two: the actor's own HTTP response (`presentWatchParty`) and
+      // the broadcast fan-out (`loadGuestRowsForBroadcast`) each load the
+      // rows once. Neither scales with the 500 recipients that follow.
+      expect(guestRowQueries.length).toBeLessThanOrEqual(2);
+      expect(guestRowQueries.length).toBeGreaterThan(0);
+
+      const updates = sent.filter(
+        (frame) => (frame as { type?: string }).type === "watch-party-update",
+      );
+      // Every recipient actually got a frame — the query count above is not
+      // low because the fan-out silently skipped people.
+      expect(updates.length).toBe(500);
+    } finally {
+      querySpy.mockRestore();
+      for (const socket of scaleSockets) {
+        deleteAuthenticatedSocket(socket as unknown as WebSocket);
+      }
+    }
+  }, 20_000);
+
+  it("a transient guest-rows failure during the fan-out keeps the last known state, never an empty one", async () => {
+    // THE FAILURE MODE THIS PINS: a Postgres hiccup mid-broadcast used to
+    // fall through to `mapWatchParty`'s empty default and ship THAT to
+    // every recipient as if it were the truth -- for a live 500-viewer
+    // party, that reads as every guest going silent at once. Keeping the
+    // last successfully loaded snapshot and falling back to it is "never
+    // emit empty" made literal.
+    const party = await liveParty({ guests: "invite" });
+    expect(
+      (await guests(host, party.id, { action: "invite", userId: viewer.id }))
+        .status,
+    ).toBe(200);
+    expect((await guests(viewer, party.id, { action: "join" })).status).toBe(
+      200,
+    );
+
+    const sent: unknown[] = [];
+    const fakeHostSocket: FakeSocket = {
+      readyState: 1,
+      send: (data: string) => sent.push(JSON.parse(data)),
+    };
+    setAuthenticatedSocket(
+      fakeHostSocket as unknown as WebSocket,
+      host as unknown as DbUser,
+      [],
+    );
+
+    const { broadcastWatchParty } = await import("../ws/watch-party-events.js");
+    try {
+      // Warm the fallback with a real, successful broadcast that reflects
+      // the accepted guest above, then discard that frame -- the test is
+      // about what happens on the NEXT broadcast, not this one.
+      await broadcastWatchParty(party.id);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      sent.length = 0;
+
+      const pool = getPool();
+      const realQuery = pool.query.bind(pool) as typeof pool.query;
+      const querySpy = vi
+        .spyOn(pool, "query")
+        .mockImplementation(((...args: Parameters<typeof pool.query>) => {
+          const text = args[0];
+          if (
+            typeof text === "string" &&
+            text.includes("channel_session_stage_invites") &&
+            text.includes("i.invited_at")
+          ) {
+            return Promise.reject(new Error("simulated transient failure"));
+          }
+          return realQuery(...args);
+        }) as typeof pool.query);
+
+      try {
+        await broadcastWatchParty(party.id);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      } finally {
+        querySpy.mockRestore();
+      }
+
+      const updates = sent.filter(
+        (frame) => (frame as { type?: string }).type === "watch-party-update",
+      );
+      expect(updates.length).toBeGreaterThan(0);
+      const last = updates[updates.length - 1] as {
+        party: PartyBody | null;
+      };
+      // NEVER EMPTY: the accepted guest from before the simulated failure
+      // is still there, not silently replaced with an empty onAir list.
+      expect(last.party?.guests.onAir.map((p) => p.userId)).toEqual([
+        viewer.id,
+      ]);
+      expect(last.party?.stage.invited.map((p) => p.userId)).toEqual([
+        viewer.id,
+      ]);
+    } finally {
+      deleteAuthenticatedSocket(fakeHostSocket as unknown as WebSocket);
+    }
+  });
+
+  // ------------------------------------------------ moderation and staleness
+
+  it("refuses to remove somebody who was never a guest, 404, before touching anything", async () => {
+    // FINDING 4: `remove`'s SFU moderation (mute, revoke, evict) used to run
+    // before anything checked that `userId` was ever invited or accepted at
+    // all -- `manageGuests` authorises the CALLER, not the target. `second`
+    // here is an ordinary server member, never invited to this party.
+    const party = await liveParty({ guests: "invite" });
+    const attempt = await guests(host, party.id, {
+      action: "remove",
+      userId: second.id,
+    });
+    expect(attempt.status).toBe(404);
+  });
+
+  it("still removes an actual accepted guest normally", async () => {
+    const party = await liveParty({ guests: "invite" });
+    expect(
+      (await guests(host, party.id, { action: "invite", userId: viewer.id }))
+        .status,
+    ).toBe(200);
+    expect((await guests(viewer, party.id, { action: "join" })).status).toBe(
+      200,
+    );
+    const removed = await guests(host, party.id, {
+      action: "remove",
+      userId: viewer.id,
+    });
+    expect(removed.status).toBe(200);
+    expect(removed.body.party?.guests.onAir).toEqual([]);
+  });
+
+  it("re-reads the party's live status and options inside the join transaction, not the caller's stale row", async () => {
+    // FINDING 5: `joinWatchPartyGuestSlot` used to decide the post-accept
+    // SPEAK grant from the `row` its HTTP caller had already fetched BEFORE
+    // this function's own transaction opened. A host flipping `guests` back
+    // to `off` in the gap between that read and this write landing must not
+    // still grant SPEAK on a floor that is no longer closed -- the fix reads
+    // `status`/`options` fresh, under the row's own `FOR UPDATE` lock, so
+    // this test calls the service function directly with a DELIBERATELY
+    // stale row to prove it does.
+    const party = await liveParty({ guests: "invite" });
+    expect(
+      (await guests(host, party.id, { action: "invite", userId: viewer.id }))
+        .status,
+    ).toBe(200);
+
+    // The STALE row: fetched while `guests` was still `invite` (floor
+    // closed) -- exactly what `requireWatchParty` hands the route a moment
+    // before a concurrent change lands.
+    const staleRow = await getWatchPartyRow(party.id);
+    expect(staleRow).not.toBeNull();
+
+    // The concurrent change: the host turns Convidados back off, mid-party
+    // (not ending it, which would delete the invite row this test still
+    // needs `joinWatchPartyGuestSlot` to find).
+    expect(
+      (
+        await call(host, "PATCH", `/api/watch-parties/${party.id}`, {
+          options: { guests: "off" },
+        })
+      ).status,
+    ).toBe(200);
+
+    // The join lands after that, but is handed the STALE row.
+    await joinWatchPartyGuestSlot(staleRow!, viewer.id);
+
+    // No SPEAK overwrite was written: the transaction's OWN re-read saw the
+    // floor was open by the time `accepted_at` landed, not the closed floor
+    // the stale row still claimed.
+    const overwrite = await getPool().query(
+      `SELECT 1 FROM channel_overwrites
+        WHERE channel_id = $1 AND target_type = 'member' AND target_id = $2`,
+      [channelId, viewer.id],
+    );
+    expect(overwrite.rowCount).toBe(0);
+  });
+
+  it("still grants SPEAK on an ordinary join with no concurrent change -- proves the test above is about staleness, not a broken grant path", async () => {
+    const party = await liveParty({ guests: "invite" });
+    expect(
+      (await guests(host, party.id, { action: "invite", userId: viewer.id }))
+        .status,
+    ).toBe(200);
+    const row = await getWatchPartyRow(party.id);
+    await joinWatchPartyGuestSlot(row!, viewer.id);
+    const overwrite = await getPool().query<{ allow: string }>(
+      `SELECT allow FROM channel_overwrites
+        WHERE channel_id = $1 AND target_type = 'member' AND target_id = $2`,
+      [channelId, viewer.id],
+    );
+    expect(overwrite.rowCount).toBe(1);
   });
 });
