@@ -147,12 +147,21 @@ if [ -n "$SOURCE_FILE" ] && [ ! -f "$SOURCE_FILE" ]; then
   echo "[bench] ERROR: --source-file $SOURCE_FILE does not exist" >&2
   exit 1
 fi
+if [ -n "$SOURCE_FILE" ]; then
+  case "$(basename "$SOURCE_FILE")" in
+    *:*)
+      echo "[bench] ERROR: --source-file's name '$(basename "$SOURCE_FILE")' contains a colon, which docker's -v host:container[:mode] syntax cannot represent. Rename the file, or point --source-file at a colon-free symlink to it." >&2
+      exit 1
+      ;;
+  esac
+fi
 
 # The path build_leg_cmd actually puts on ffmpeg's command line. Equal to
-# SOURCE_FILE everywhere except inside run_profile_docker, which mounts the
-# file's directory into the container at /src and points this at the
-# in-container path for the duration of that one profile's run -- a plain
-# host path like /tmp/clip.mp4 does not exist inside the container.
+# SOURCE_FILE everywhere except inside run_profile_docker, which bind-mounts
+# the file itself (not its directory) into the container at /src/<name> and
+# points this at the in-container path for the duration of that one
+# profile's run -- a plain host path like /tmp/clip.mp4 does not exist
+# inside the container.
 EFFECTIVE_SOURCE_FILE="$SOURCE_FILE"
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -470,7 +479,24 @@ sample_docker_and_wait() {
         # LEG_DONE marker for any leg and correctly report it as failed
         # rather than this function silently pretending the run finished.
         log "docker daemon unresponsive for ${max_consecutive_failures}s, giving up on this profile"
-        docker stop "$name" >/dev/null 2>&1 || true
+        # A single silently-swallowed stop attempt against a wedged daemon
+        # is exactly how a container survives this script unnoticed. Try a
+        # few times, and if none land, say so loudly rather than assuming
+        # it worked -- an unresponsive daemon is a real limit no amount of
+        # retrying here can guarantee past, so the operator needs to know.
+        local stop_ok=0 attempt
+        for attempt in 1 2 3; do
+          if docker stop "$name" >/dev/null 2>&1; then
+            stop_ok=1
+            break
+          fi
+          sleep 1
+        done
+        if [ "$stop_ok" -eq 1 ]; then
+          log "stopped $name"
+        else
+          log "WARNING: could not confirm $name was stopped after 3 attempts against an unresponsive daemon. Check 'docker ps' on this box by hand and stop it manually if it is still running."
+        fi
         return 1
       fi
       sleep 1
