@@ -1382,6 +1382,8 @@ export async function adoptLlHlsSessions(): Promise<{
   let adopted = 0;
   /** Rows another booting machine won the claim for. Never adopted, never stopped. */
   let claimRefusals = 0;
+  /** Rows whose claim could not be written at all. Same treatment, different cause. */
+  let claimFailures = 0;
   const toStop: { sessionId: string; reason: "no-presenter" | "no-row" }[] = [];
   for (const remote of remoteSessions) {
     if (remuxIdsOwnedElsewhere.has(remote.sessionId)) {
@@ -1412,8 +1414,13 @@ export async function adoptLlHlsSessions(): Promise<{
           sessionId: row.id,
           ownerInstanceId: row.instance_id,
         });
+        claimRefusals += 1;
+      } else {
+        // The database could not be asked, which is not permission either.
+        // Counted apart from a refusal: one is another machine winning, the
+        // other is this pass being unable to decide at all.
+        claimFailures += 1;
       }
-      claimRefusals += 1;
       continue;
     }
     const startedAt = new Date(row.started_at).getTime();
@@ -1437,8 +1444,11 @@ export async function adoptLlHlsSessions(): Promise<{
   }
   // The stamp already landed, per row, inside the loop above: it is what
   // decided each adoption rather than a repair issued after the fact.
-  if (claimRefusals > 0) {
-    logEvent("voice.hlsLlAdoptClaimRefused", { count: claimRefusals });
+  if (claimRefusals > 0 || claimFailures > 0) {
+    logEvent("voice.hlsLlAdoptClaimRefused", {
+      refused: claimRefusals,
+      failed: claimFailures,
+    });
   }
 
   // Bounded parallel cleanup, not one round trip per orphan in a row (this
