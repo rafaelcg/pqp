@@ -111,6 +111,34 @@ export function resolveHlsMode(input: {
 }
 
 /**
+ * `voice.hlsLlLookupFailed`, rate limited to once per channel per
+ * `LOOKUP_FAILURE_LOG_WINDOW_MS` regardless of which of the two durable
+ * reads below hit it — a channel stuck retrying every reconcile during an
+ * outage must not turn into a log line every few seconds for as long as
+ * that outage lasts.
+ */
+const LOOKUP_FAILURE_LOG_WINDOW_MS = 60_000;
+const lastLookupFailureLoggedAt = new Map<string, number>();
+
+function logLookupFailure(
+  channelId: string,
+  source: "open-row" | "requested-mode",
+  error: unknown,
+): void {
+  const now = Date.now();
+  const last = lastLookupFailureLoggedAt.get(channelId) ?? 0;
+  if (now - last < LOOKUP_FAILURE_LOG_WINDOW_MS) {
+    return;
+  }
+  lastLookupFailureLoggedAt.set(channelId, now);
+  logEvent("voice.hlsLlLookupFailed", {
+    channelId,
+    source,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/**
  * What a channel's most recent "go live" asked for — `channel_sessions.
  * low_latency_requested`, not process memory (a Farol finding on PR #580:
  * an in-memory version did not survive a restart, so the very next
@@ -120,12 +148,17 @@ export function resolveHlsMode(input: {
  * a party going live again without asking must not inherit a previous
  * party's request for this channel.
  *
- * `false` on any read failure: a database hiccup should not itself flip a
- * running conventional deployment into asking for LL sessions, or vice
- * versa mid-party (the caller re-reads on every reconcile, so a transient
- * miss here is not sticky).
+ * FAILS CLOSED, AND `null` IS THE FAILURE, NOT `false`. An earlier version
+ * answered `false` on any read error, which is indistinguishable from a
+ * genuine "this party never asked" — and `resolveHlsMode` then resolves
+ * `conventional`, so a transient database hiccup mid-party could silently
+ * tear down a running LL session (a Farol finding on PR #580, fourth
+ * round). The caller (`reconcileLiveHlsNow` in `hls-egress.ts`) treats
+ * `null` as "cannot decide this time" and makes NO mode change at all,
+ * leaving whatever is currently running exactly as it is until the next
+ * reconcile can actually ask.
  */
-export async function requestedHlsModeForChannel(channelId: string): Promise<boolean> {
+export async function requestedHlsModeForChannel(channelId: string): Promise<boolean | null> {
   try {
     const result = await getPool().query<{ low_latency_requested: boolean }>(
       `SELECT low_latency_requested FROM channel_sessions
@@ -135,11 +168,8 @@ export async function requestedHlsModeForChannel(channelId: string): Promise<boo
     );
     return result.rows[0]?.low_latency_requested === true;
   } catch (error) {
-    logEvent("voice.hlsLlRequestedModeReadFailed", {
-      channelId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return false;
+    logLookupFailure(channelId, "requested-mode", error);
+    return null;
   }
 }
 
@@ -613,8 +643,21 @@ interface OpenLlRow {
   stopAttempts: number;
 }
 
-/** This channel's one open (`ended_at IS NULL`) LL row, if any — the durable retry point. */
-async function findOpenLlRow(channelId: string): Promise<OpenLlRow | null> {
+/**
+ * This channel's one open (`ended_at IS NULL`) LL row, if any — the durable
+ * retry point.
+ *
+ * FAILS CLOSED: `{ ok: false }` on a database error is a DIFFERENT answer
+ * from `{ ok: true, row: null }` ("asked, genuinely no open row"). Collapsing
+ * the two into a bare `null` was the bug (a Farol finding on PR #580, fourth
+ * round): `startLlSession` would read that as "nothing to resume" and mint a
+ * SECOND session while the first might still be running perfectly well, the
+ * exact failure this whole file exists to avoid. Every caller must check
+ * `ok` before doing anything with `row`.
+ */
+async function findOpenLlRow(
+  channelId: string,
+): Promise<{ ok: true; row: OpenLlRow | null } | { ok: false }> {
   try {
     const result = await getPool().query<{
       id: string;
@@ -633,22 +676,22 @@ async function findOpenLlRow(channelId: string): Promise<OpenLlRow | null> {
     );
     const row = result.rows[0];
     if (!row) {
-      return null;
+      return { ok: true, row: null };
     }
     return {
-      id: row.id,
-      startedAtMs: new Date(row.started_at).getTime(),
-      remuxSessionId: row.remux_session_id,
-      presenterPeerId: row.presenter_peer_id,
-      stoppingAtMs: row.stopping_at ? new Date(row.stopping_at).getTime() : null,
-      stopAttempts: row.stop_attempts,
+      ok: true,
+      row: {
+        id: row.id,
+        startedAtMs: new Date(row.started_at).getTime(),
+        remuxSessionId: row.remux_session_id,
+        presenterPeerId: row.presenter_peer_id,
+        stoppingAtMs: row.stopping_at ? new Date(row.stopping_at).getTime() : null,
+        stopAttempts: row.stop_attempts,
+      },
     };
   } catch (error) {
-    logEvent("voice.hlsLlOpenRowLookupFailed", {
-      channelId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
+    logLookupFailure(channelId, "open-row", error);
+    return { ok: false };
   }
 }
 
@@ -722,7 +765,19 @@ async function startLlSession(
   }
   const cfg = remuxSessionConfig();
 
-  let openRow = await findOpenLlRow(channelId);
+  const lookup = await findOpenLlRow(channelId);
+  if (!lookup.ok) {
+    // FAIL CLOSED: a database read failure here is treated as "try again
+    // later", never as "no row" -- reading it the other way is exactly what
+    // let a second, untracked session start on top of one that might still
+    // be running perfectly well (a Farol finding on PR #580, fourth round).
+    // No insert, no remux call, nothing torn down: the next reconcile is
+    // what retries.
+    llStartFailures += 1;
+    logEvent("voice.hlsLlStartFailed", { channelId, reason: "lookup-failed" });
+    return null;
+  }
+  let openRow = lookup.row;
   if (openRow && (openRow.stoppingAtMs !== null || openRow.presenterPeerId !== presenterPeerId)) {
     // Not this presenter's session, or already mid-teardown: finish closing
     // it before this room gets anything new. A durable version of the same
@@ -1118,6 +1173,7 @@ export function resetHlsRemuxForTests(): void {
   nowImpl = () => Date.now();
   llRooms.clear();
   llReconcileQueue.clear();
+  lastLookupFailureLoggedAt.clear();
   llStartFailures = 0;
   llStopFailures = 0;
   llDemoted = 0;

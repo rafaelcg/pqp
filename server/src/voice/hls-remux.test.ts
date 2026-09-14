@@ -368,11 +368,42 @@ describe("the per-channel request field is durable, not process memory", () => {
     expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
   });
 
-  it("answers false, not throws, on a database read failure", async () => {
+  it("fails CLOSED: answers null (never false) on a database read failure, logged once", async () => {
+    // null must never be confused with a genuine "no request" (false):
+    // hls-egress.ts's reconcileLiveHlsNow treats null as "cannot decide,
+    // try again later" and makes no mode change at all, where false would
+    // resolve `conventional` and could tear down a running LL session on a
+    // transient blip (a Farol finding on PR #580, fifth round).
     query.mockImplementation(async () => {
       throw new Error("connection terminated");
     });
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
+
+    expect(await requestedHlsModeForChannel(CHANNEL)).toBeNull();
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlLookupFailed",
+      expect.objectContaining({ channelId: CHANNEL, source: "requested-mode" }),
+    );
+
+    // Rate limited: a second failure for the same channel inside the window
+    // does not log again.
+    logEvent.mockClear();
+    expect(await requestedHlsModeForChannel(CHANNEL)).toBeNull();
+    expect(logEvent).not.toHaveBeenCalled();
+  });
+
+  it("logs voice.hlsLlLookupFailed again for a DIFFERENT channel even inside the same window", async () => {
+    query.mockImplementation(async () => {
+      throw new Error("connection terminated");
+    });
+
+    await requestedHlsModeForChannel(CHANNEL);
+    logEvent.mockClear();
+    await requestedHlsModeForChannel(OTHER_CHANNEL);
+
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlLookupFailed",
+      expect.objectContaining({ channelId: OTHER_CHANNEL }),
+    );
   });
 });
 
@@ -541,6 +572,57 @@ describe("starting a session (item 2: deterministic ids)", () => {
       "voice.hlsLlStartFailed",
       expect.objectContaining({ channelId: CHANNEL, reason: "not-configured" }),
     );
+  });
+
+  it("fails closed on a findOpenLlRow read error: no insert, no remux call, nothing torn down", async () => {
+    // The core fix of item 2's follow-up (a Farol finding, fourth round):
+    // a lookup failure must never be read as "no open row", because that
+    // would let this proceed to mint and start a SECOND session on top of
+    // one that might still be running fine.
+    enableLL();
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    query.mockImplementation(async () => {
+      throw new Error("connection terminated");
+    });
+
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(stream).toBeNull();
+    expect(server.calls).toHaveLength(0); // the control API was never even asked
+    expect(llHasRoom(CHANNEL)).toBe(false);
+    expect(llHlsActivity().startFailures).toBe(1);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlLookupFailed",
+      expect.objectContaining({ channelId: CHANNEL, source: "open-row" }),
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlStartFailed",
+      expect.objectContaining({ channelId: CHANNEL, reason: "lookup-failed" }),
+    );
+  });
+
+  it("recovers and starts normally once the database read succeeds again", async () => {
+    enableLL();
+    const db = createFakeDb();
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+    let failOnce = true;
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (failOnce) {
+        failOnce = false;
+        throw new Error("connection terminated");
+      }
+      return db.queryImpl(sql, params);
+    });
+
+    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    expect(first).toBeNull();
+
+    const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(second).not.toBeNull();
+    expect(llHasRoom(CHANNEL)).toBe(true);
   });
 
   it("starts a session, records a row keyed by the derived id, and returns a stream", async () => {

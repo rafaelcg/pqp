@@ -35,6 +35,7 @@ import {
 } from "../lib/s3.js";
 import {
   llHasRoom,
+  llStreamFor,
   reconcileLlHlsNow,
   requestedHlsModeForChannel,
   resetHlsRemuxForTests,
@@ -4096,10 +4097,19 @@ async function reconcileLiveHlsNow(
   // byte-for-byte what it was before L1.5. `pqp-remux` finds its own screen
   // track (its README), so the LL half skips every LiveKit-specific probe
   // this function does for the ladder.
-  const mode = resolveHlsMode({
-    serverId,
-    requestedMode: await requestedHlsModeForChannel(channelId),
-  });
+  const requestedMode = await requestedHlsModeForChannel(channelId);
+  if (requestedMode === null) {
+    // FAIL CLOSED (a Farol finding on PR #580, fourth round): a database
+    // read failure here must be indistinguishable from "try again later",
+    // never read as "this party did not ask" -- that would fall through to
+    // `resolveHlsMode`'s `conventional` default and tear down a running LL
+    // session on a transient blip. Make no mode decision at all this
+    // reconcile: hand back whatever is already running, untouched, and let
+    // the next reconcile (the next roster event) ask again.
+    const existing = rooms.get(channelId);
+    return { stream: existing ? existing.stream : llStreamFor(channelId) };
+  }
+  const mode = resolveHlsMode({ serverId, requestedMode });
   if (mode === "ll") {
     // A mode flip mid-party (the request field changed between two "Ir ao
     // vivo" presses for the same channel) must never leave two transcodes
