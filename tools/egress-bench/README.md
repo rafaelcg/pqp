@@ -59,6 +59,12 @@ Do not run this against `api.pqp.gg`, `sfu-pqp`, or anything else in
 production. It only ever touches whatever local Docker/ffmpeg it's invoked
 on.
 
+If you Ctrl-C the script mid-run under `--limiter docker`, it stops the
+detached benchmark container itself on the way out (`trap ... EXIT INT TERM`
+around the container's lifetime) rather than leaving it pegging CPU on the
+box. Still worth a `docker ps` on the box afterward to confirm nothing named
+`egress-bench-*` is left running before you disconnect.
+
 ## Running it on a throwaway box instead
 
 Safer for a first look, and fine to run without Rafael watching. Spin up a
@@ -87,17 +93,31 @@ a `B3.2`-shaped one-off, not a standing box.
   the slowest of the profile's concurrent legs. Below 1.0x the box cannot
   keep up with the stream at all. This rig's PASS line is >= 1.15x, a margin
   chosen to leave headroom, not a number copied from the plan.
-- **cpu avg / p95** -- percent of the whole container's `--cpus` budget used,
-  sampled every second with `docker stats --no-stream` (the same tool
-  `docs/CAPACITY.md`'s own encoder measurement used).
+- **cpu avg / p95** -- percent of the REQUESTED `--cpus` cap used, sampled
+  every second with `docker stats --no-stream` (the same tool
+  `docs/CAPACITY.md`'s own encoder measurement used) or summed
+  `ps %cpu` under `--limiter taskset`/`none`. Both tools report percent of
+  ONE host core per process (400% is four full cores), so the rig divides
+  by `--cpus` before writing a sample -- the number in the table is already
+  "percent of the cap," not raw host CPU.
 - **steal** -- percent of host CPU time stolen by the hypervisor during the
   run, from `/proc/stat` (Linux only). High steal on a run that otherwise
   looks fine is a noisy-neighbour problem, not an encoder problem -- worth
   knowing before blaming the ladder for it.
-- **verdict** -- `PASS`, `FAIL`, or `INDETERMINATE` when no CPU cap was
-  actually applied (for example `--limiter none`, which is what a Mac
-  falls back to automatically). An INDETERMINATE run is not evidence either
-  way and should not be quoted as one.
+- **verdict** -- `PASS`, `FAIL`, or `INDETERMINATE`. INDETERMINATE covers
+  every case that isn't a real reading of the box's actual cap: no CPU cap
+  applied at all (`--limiter none`, what a Mac falls back to automatically),
+  no valid CPU sample was ever collected (every `docker stats` tick failed),
+  or `--limiter taskset` was given a non-integer `--cpus` and the run would
+  otherwise have PASSed -- taskset only pins whole cores, so a fractional
+  cap rounds UP, and a PASS under a looser cap than requested is not proof
+  the box holds at the tighter one (a FAIL still stands, since it would only
+  get worse with less room). Separately, if any leg's encoder did not exit
+  0 for its full requested duration, the row reads `FAIL (leg encode
+  failed: ...)` regardless of the realtime factor -- an encoder that died
+  early produces a fast, meaningless number, and this catches it rather
+  than reporting a false PASS. None of these is evidence either way and
+  should not be quoted as a box result.
 
 The synthetic source (two blended infinite generators plus temporal noise,
 see `bench.sh`'s header) is close to worst case on purpose, the same way
@@ -145,6 +165,8 @@ Read straight from `docs/plans/BROADCAST_PIPELINE.md` section 5:
 --segment-seconds N    HLS segment length (default: 4, matches production;
                        code default is 2 -- see hlsSegmentSeconds())
 --source-file PATH     use a real clip instead of the synthetic generator
+                       (with --limiter docker, its directory is bind-mounted
+                       read-only into the container automatically)
 --out DIR              output directory (default: ./results/<timestamp>)
 --dry-run              validate the environment and print commands only
 ```

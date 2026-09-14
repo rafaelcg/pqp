@@ -143,6 +143,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ -n "$SOURCE_FILE" ] && [ ! -f "$SOURCE_FILE" ]; then
+  echo "[bench] ERROR: --source-file $SOURCE_FILE does not exist" >&2
+  exit 1
+fi
+
+# The path build_leg_cmd actually puts on ffmpeg's command line. Equal to
+# SOURCE_FILE everywhere except inside run_profile_docker, which mounts the
+# file's directory into the container at /src and points this at the
+# in-container path for the duration of that one profile's run -- a plain
+# host path like /tmp/clip.mp4 does not exist inside the container.
+EFFECTIVE_SOURCE_FILE="$SOURCE_FILE"
+
 STAMP="$(date +%Y%m%d-%H%M%S)"
 [ -n "$OUT_DIR" ] || OUT_DIR="$SCRIPT_DIR/results/$STAMP"
 
@@ -181,15 +193,21 @@ validate_env() {
   local resolved_limiter="$1"
   local ok=1
 
-  if ! have_cmd ffmpeg; then
-    log "ffmpeg not found on PATH. Ubuntu: apt-get install -y ffmpeg. Mac: brew install ffmpeg."
-    ok=0
-  elif ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -q "libx264"; then
-    log "ffmpeg has no libx264 encoder. Ubuntu's ffmpeg package usually has it; if this is a stripped build, install a build with --enable-libx264 or apt-get install -y ffmpeg from universe."
-    ok=0
-  else
-    log "ffmpeg: $(ffmpeg -version 2>/dev/null | head -1)"
-    log "libx264: present"
+  # Host ffmpeg is only needed for the taskset/none paths, which exec it
+  # directly. Docker mode encodes inside $DOCKER_IMAGE and never touches a
+  # host ffmpeg at all -- a Docker-only egress box with no ffmpeg package
+  # installed is exactly the case this must not refuse.
+  if [ "$resolved_limiter" != "docker" ]; then
+    if ! have_cmd ffmpeg; then
+      log "ffmpeg not found on PATH. Ubuntu: apt-get install -y ffmpeg. Mac: brew install ffmpeg."
+      ok=0
+    elif ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -q "libx264"; then
+      log "ffmpeg has no libx264 encoder. Ubuntu's ffmpeg package usually has it; if this is a stripped build, install a build with --enable-libx264 or apt-get install -y ffmpeg from universe."
+      ok=0
+    else
+      log "ffmpeg: $(ffmpeg -version 2>/dev/null | head -1)"
+      log "libx264: present"
+    fi
   fi
 
   case "$resolved_limiter" in
@@ -200,8 +218,19 @@ validate_env() {
       elif ! docker info >/dev/null 2>&1; then
         log "limiter=docker but the docker daemon is not reachable (docker info failed)."
         ok=0
+      elif [ "$DRY_RUN" -eq 0 ]; then
+        # Pull (or confirm cached) up front, outside any profile's timing
+        # window -- a first-run pull inside the timed run would otherwise
+        # inflate wall time and could read as a false FAIL.
+        log "docker: reachable, warming image $DOCKER_IMAGE ..."
+        if ! docker pull "$DOCKER_IMAGE" >/dev/null 2>&1; then
+          log "failed to pull $DOCKER_IMAGE. Check network access from this box, or --docker-image an image already cached locally."
+          ok=0
+        else
+          log "docker image ready: $DOCKER_IMAGE"
+        fi
       else
-        log "docker: reachable, will use image $DOCKER_IMAGE (pulled on first run if not cached)"
+        log "docker: reachable, will use image $DOCKER_IMAGE"
       fi
       ;;
     taskset)
@@ -213,6 +242,9 @@ validate_env() {
         ok=0
       else
         log "taskset: present"
+        if ! awk -v c="$CPUS" 'BEGIN{exit !(c==int(c))}'; then
+          log "NOTE: taskset only pins whole cores. A ${CPUS}-core cap rounds UP to $(awk -v c="$CPUS" 'BEGIN{print (c==int(c))?c:int(c)+1}') whole cores, which is a LOOSER cap than requested -- a PASS from this run is not proof the box holds at the true ${CPUS}. Verdicts from a non-integer taskset cap are reported as approximate. Prefer --limiter docker for an exact fractional cap."
+        fi
       fi
       ;;
     none)
@@ -296,7 +328,7 @@ build_leg_cmd() {
 
   if [ "$leg" = "voice" ]; then
     if [ -n "$SOURCE_FILE" ]; then
-      LEG_ARGS+=(-i "$SOURCE_FILE" -vn)
+      LEG_ARGS+=(-i "$EFFECTIVE_SOURCE_FILE" -vn)
     else
       LEG_ARGS+=(-f lavfi -i "anoisesrc=color=pink:amplitude=0.3:sample_rate=48000")
     fi
@@ -304,23 +336,32 @@ build_leg_cmd() {
     return
   fi
 
+  # ALL -i inputs must be declared before any -map / -filter_complex: ffmpeg
+  # treats an option appearing after the last -i so far as belonging to
+  # whichever -i comes next, so interleaving "-map [vout]" between the video
+  # inputs and a later audio -i makes ffmpeg try to apply that map as an
+  # option of the audio input and fail outright ("Option map ... cannot be
+  # applied to input url ..."). Declare every input first, then every map.
+  local maps=()
   if [ -n "$SOURCE_FILE" ]; then
-    LEG_ARGS+=(-stream_loop -1 -i "$SOURCE_FILE")
+    LEG_ARGS+=(-stream_loop -1 -i "$EFFECTIVE_SOURCE_FILE")
     LEG_ARGS+=(-vf "scale=${w}:${h},fps=${fps},format=yuv420p")
+    # No explicit -map: ffmpeg's default stream selection picks the file's
+    # own best video (and, if has_audio, best audio) track.
   else
     LEG_ARGS+=(-f lavfi -i "life=size=${w}x${h}:rate=${fps}:mold=2:ratio=0.4:death_color=#0b0f14:life_color=#39ff88")
     LEG_ARGS+=(-f lavfi -i "mandelbrot=size=${w}x${h}:rate=${fps}:end_scale=0.0004")
-    LEG_ARGS+=(-filter_complex "$(video_filter "$w" "$h" "$fps")" -map "[vout]")
-  fi
-
-  if [ "$has_audio" = "1" ]; then
-    if [ -z "$SOURCE_FILE" ]; then
+    if [ "$has_audio" = "1" ]; then
       # Inputs so far: 0=life, 1=mandelbrot, so the audio generator lands at 2.
       LEG_ARGS+=(-f lavfi -i "anoisesrc=color=pink:amplitude=0.2:sample_rate=48000")
-      LEG_ARGS+=(-map "2:a")
+      maps+=(-map "2:a")
     fi
-    # --source-file case: no explicit -map was set above, so ffmpeg's
-    # default stream selection picks the file's own best audio track.
+    LEG_ARGS+=(-filter_complex "$(video_filter "$w" "$h" "$fps")")
+    maps=(-map "[vout]" "${maps[@]+"${maps[@]}"}")
+  fi
+  LEG_ARGS+=("${maps[@]+"${maps[@]}"}")
+
+  if [ "$has_audio" = "1" ]; then
     LEG_ARGS+=(-c:a aac -b:a "${akbps}k")
   else
     LEG_ARGS+=(-an)
@@ -347,9 +388,24 @@ run_profile_docker() {
   local legs=("$@")
   CONTAINER_NAME="egress-bench-$$-$RANDOM"
   local script="$outdir/run-inside-container.sh"
+  rm -f "$outdir/legs-failed"
   for leg in "${legs[@]}"; do
     mkdir -p "$outdir/$leg"
   done
+
+  # --source-file: mount its directory read-only and point ffmpeg at the
+  # in-container path for the duration of this profile only. A plain host
+  # path (e.g. /tmp/clip.mp4) does not exist inside the container.
+  local src_mount=()
+  local saved_effective_source="$EFFECTIVE_SOURCE_FILE"
+  if [ -n "$SOURCE_FILE" ]; then
+    local src_dir src_base
+    src_dir="$(cd "$(dirname "$SOURCE_FILE")" && pwd)"
+    src_base="$(basename "$SOURCE_FILE")"
+    src_mount=(-v "$src_dir:/src:ro")
+    EFFECTIVE_SOURCE_FILE="/src/$src_base"
+  fi
+
   {
     echo "#!/usr/bin/env bash"
     echo "set -e"
@@ -362,24 +418,78 @@ run_profile_docker() {
     echo 'wait'
   } > "$script"
   chmod +x "$script"
+  EFFECTIVE_SOURCE_FILE="$saved_effective_source"
 
   log "docker run --name $CONTAINER_NAME --cpus=$CPUS $DOCKER_IMAGE ..."
   docker run --rm -d --name "$CONTAINER_NAME" --cpus="$CPUS" \
-    -v "$outdir:/out" -w /out --entrypoint /bin/bash \
+    -v "$outdir:/out" "${src_mount[@]+"${src_mount[@]}"}" -w /out \
+    --entrypoint /bin/bash \
     "$DOCKER_IMAGE" "/out/run-inside-container.sh" >/dev/null
 
+  # This box is shared with real transcodes (see README). If the operator
+  # kills this script or the SSH session drops, do not leave a detached
+  # container pegging CPU behind -- --rm only cleans up a container that has
+  # already stopped, not one still running when we exit uncleanly.
+  trap 'docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true' EXIT INT TERM
+
   sample_docker_and_wait "$CONTAINER_NAME" "$outdir"
+  trap - EXIT INT TERM
+
+  check_legs_done "$outdir" "${legs[@]}"
 }
 
 sample_docker_and_wait() {
   local name="$1" outdir="$2"
   local samples="$outdir/cpu-samples.txt"
   : > "$samples"
-  while docker ps --format '{{.Names}}' | grep -qx "$name"; do
-    docker stats --no-stream --format '{{.CPUPerc}}' "$name" 2>/dev/null \
-      | tr -d '%' >> "$samples" || true
+  local ps_out stat
+  while true; do
+    if ! ps_out="$(docker ps --format '{{.Names}}' 2>&1)"; then
+      log "warning: 'docker ps' failed while monitoring ($ps_out); retrying"
+      sleep 1
+      continue
+    fi
+    if ! printf '%s\n' "$ps_out" | grep -qx "$name"; then
+      break
+    fi
+    if stat="$(docker stats --no-stream --format '{{.CPUPerc}}' "$name" 2>&1)"; then
+      # docker stats reports percent of ONE host core (400% = 4 full cores),
+      # not percent of the --cpus cap. Normalize to percent-of-cap so the
+      # reported number means what the README says it means.
+      printf '%s\n' "$stat" | tr -d '%' \
+        | awk -v cap="$CPUS" '{printf "%.2f\n", ($1+0)/cap}' >> "$samples"
+    else
+      log "warning: 'docker stats' failed this tick ($stat), sample dropped"
+    fi
     sleep 1
   done
+}
+
+# Reads each leg's log for "LEG_DONE:<leg>:<exit code>" (written by both the
+# docker container script and run_profile_hostcap) and writes
+# "$outdir/legs-failed" listing any leg that is missing that marker or
+# exited nonzero. A leg that never finished (killed, crashed, wrong input)
+# must not be scored as a valid encode just because the profile's wall
+# clock ran out.
+check_legs_done() {
+  local outdir="$1"; shift
+  local legs=("$@")
+  local failed=()
+  for leg in "${legs[@]}"; do
+    local log_file="$outdir/$leg.log"
+    local marker
+    marker="$(grep -o "LEG_DONE:${leg}:[0-9-]*" "$log_file" 2>/dev/null | tail -1)"
+    if [ -z "$marker" ]; then
+      failed+=("$leg:no-exit-marker")
+    else
+      local code="${marker##*:}"
+      [ "$code" = "0" ] || failed+=("$leg:exit-$code")
+    fi
+  done
+  if [ "${#failed[@]}" -gt 0 ]; then
+    printf '%s\n' "${failed[@]}" > "$outdir/legs-failed"
+    log "  leg failure(s): ${failed[*]}"
+  fi
 }
 
 run_profile_hostcap() {
@@ -387,7 +497,9 @@ run_profile_hostcap() {
   local mode="$1" profile="$2" outdir="$3"; shift 3
   local legs=("$@")
   local pids=()
+  local leg_names=()
   local prefix=()
+  rm -f "$outdir/legs-failed"
 
   if [ "$mode" = "taskset" ]; then
     local n_cores
@@ -402,11 +514,30 @@ run_profile_hostcap() {
   for leg in "${legs[@]}"; do
     mkdir -p "$outdir/$leg"
     build_leg_cmd "$leg" "$outdir"
-    ( "${prefix[@]+"${prefix[@]}"}" "${LEG_ARGS[@]}" > "$outdir/$leg.log" 2>&1; echo "LEG_DONE:$leg:$?" >> "$outdir/$leg.log" ) &
+    # Backgrounded directly (no wrapping subshell): $! below is the real
+    # ffmpeg PID (taskset execs into it in place rather than forking), which
+    # is what both CPU sampling and the exit-status check need to look at.
+    # A subshell wrapper here would leave $! pointing at an idle shell that
+    # is merely waiting on ffmpeg, reporting near-zero CPU regardless of
+    # what the encoder is actually doing.
+    "${prefix[@]+"${prefix[@]}"}" "${LEG_ARGS[@]}" > "$outdir/$leg.log" 2>&1 &
     pids+=("$!")
+    leg_names+=("$leg")
   done
 
   sample_host_and_wait "$outdir" "${pids[@]}"
+
+  local failed=() i=0
+  for pid in "${pids[@]}"; do
+    local status=0
+    wait "$pid" || status=$?
+    [ "$status" -eq 0 ] || failed+=("${leg_names[$i]}:exit-$status")
+    i=$((i + 1))
+  done
+  if [ "${#failed[@]}" -gt 0 ]; then
+    printf '%s\n' "${failed[@]}" > "$outdir/legs-failed"
+    log "  leg failure(s): ${failed[*]}"
+  fi
 }
 
 sample_host_and_wait() {
@@ -427,10 +558,13 @@ sample_host_and_wait() {
         total=$(awk -v a="$total" -v b="$pct" 'BEGIN{printf "%.2f", a+b}')
       fi
     done
-    [ "$any_alive" -eq 1 ] && echo "$total" >> "$samples"
+    if [ "$any_alive" -eq 1 ]; then
+      # ps %cpu, like docker stats, is percent of ONE host core per
+      # process; sum across legs, then normalize to percent-of-cap.
+      awk -v t="$total" -v cap="$CPUS" 'BEGIN{printf "%.2f\n", t/cap}' >> "$samples"
+    fi
     sleep 1
   done
-  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
 }
 
 # -------------------------------------------------------------------- steal
@@ -501,14 +635,25 @@ for profile in $PROFILES_TO_RUN; do
 
   if [ "$DRY_RUN" -eq 1 ]; then
     log "=== profile: $profile (dry run) ==="
+    preview_outdir="$pdir"
+    preview_saved_source="$EFFECTIVE_SOURCE_FILE"
+    if [ "$RESOLVED_LIMITER" = "docker" ]; then
+      preview_outdir="/out"
+      if [ -n "$SOURCE_FILE" ]; then
+        EFFECTIVE_SOURCE_FILE="/src/$(basename "$SOURCE_FILE")"
+      fi
+    fi
     for leg in "${legs[@]}"; do
-      build_leg_cmd "$leg" "$pdir"
+      build_leg_cmd "$leg" "$preview_outdir"
       printf '[bench]   leg=%s: ' "$leg" >&2
       printf '%q ' "${LEG_ARGS[@]}" >&2
       printf '\n' >&2
     done
+    EFFECTIVE_SOURCE_FILE="$preview_saved_source"
     if [ "$RESOLVED_LIMITER" = "docker" ]; then
-      log "  would run inside: docker run --rm --cpus=$CPUS $DOCKER_IMAGE (all legs backgrounded together)"
+      mount_note=""
+      [ -n "$SOURCE_FILE" ] && mount_note=", -v <$(dirname "$SOURCE_FILE")>:/src:ro"
+      log "  would run inside: docker run --rm --cpus=$CPUS -v <outdir>:/out${mount_note} $DOCKER_IMAGE (all legs backgrounded together)"
     elif [ "$RESOLVED_LIMITER" = "taskset" ]; then
       log "  would run under: taskset -c <cores for $CPUS> (all legs backgrounded together)"
     else
@@ -555,6 +700,25 @@ for profile in $PROFILES_TO_RUN; do
   if [ "$capped" = "yes" ]; then
     pass=$(awk -v a="$min_rt" 'BEGIN{print (a>=1.15)?1:0}')
     if [ "$pass" -eq 1 ]; then verdict="PASS"; else verdict="FAIL"; fi
+
+    if [ ! -s "$pdir/cpu-samples.txt" ]; then
+      # CPU sampling never produced a reading (e.g. every docker stats
+      # tick failed) -- the realtime factor alone is not a real reading.
+      verdict="INDETERMINATE (no valid CPU samples)"
+    elif [ "$RESOLVED_LIMITER" = "taskset" ] && [ "$verdict" = "PASS" ] \
+         && ! awk -v c="$CPUS" 'BEGIN{exit !(c==int(c))}'; then
+      # taskset rounded a fractional cap UP to whole cores, so this PASS
+      # ran with MORE room than requested and is not proof the box holds
+      # at the true, tighter cap. A FAIL still stands (it would only get
+      # worse with less room), so only PASS is downgraded.
+      verdict="INDETERMINATE (approx cap: taskset rounds ${CPUS} up to whole cores)"
+    fi
+  fi
+
+  if [ -s "$pdir/legs-failed" ]; then
+    # An encoder that exited early must never be scored as a valid,
+    # possibly-fast encode -- that is a false PASS waiting to happen.
+    verdict="FAIL (leg encode failed: $(tr '\n' ' ' < "$pdir/legs-failed"))"
   fi
 
   log "  legs realtime factor: $leg_summ"
