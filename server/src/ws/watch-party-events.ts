@@ -28,6 +28,12 @@ import { forEachAuthenticatedSocket, userHasAuthenticatedSocket } from "./socket
 import { hasClusterSocket } from "./status.js";
 import { logEvent } from "../lib/log.js";
 import { noteWatchPartyState } from "./watch-party-live.js";
+import { z } from "zod";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 
 /**
  * The `watch-party-update` fan-out, and the host's connection.
@@ -119,7 +125,72 @@ async function permissionsFor(
  * that slot would keep the block on screen after the show. Sending null is
  * how the block disappears.
  */
-export async function broadcastWatchParty(sessionId: string): Promise<void> {
+/**
+ * THE PARTY'S STATE, TO THE OTHER MACHINE. `broadcastWatchParty` walks
+ * `forEachAuthenticatedSocket`, which is this process's sockets only, and
+ * production runs two `pqp-api` machines with no session affinity. So until
+ * 2026-09-14 a party going live on machine A (or ending, or a guest change)
+ * reached only the half of its audience whose socket happened to be on A; the
+ * other half kept yesterday's block until their own next action refetched it.
+ * The frame is the session id and nothing else: the receiving instance runs
+ * its own `broadcastWatchParty`, which re-reads the row, resolves the party
+ * per recipient and stamps nothing it did not compute itself. Gated on the
+ * bus alone, like the seat cache's own invalidations: there is no row the
+ * frame could be a rumour about, the row IS what the receiver reads.
+ */
+export const WATCH_PARTY_STATE_TOPIC = "watchParty.state";
+
+const watchPartyStateFrameSchema = z.object({
+  sessionId: z.string().uuid(),
+});
+
+/**
+ * `watchParty.state` frames since boot, on `GET /api/admin/metrics` via
+ * `watchPartyStateFrameCounters`. `relayed` is what this instance published;
+ * `fromBus` is what it applied. Zero on one machine, both climbing on two.
+ */
+const watchPartyStateFrames = { relayed: 0, fromBus: 0 };
+
+export function watchPartyStateFrameCounters(): {
+  relayed: number;
+  fromBus: number;
+} {
+  return { ...watchPartyStateFrames };
+}
+
+export function resetWatchPartyStateFrameCountersForTests(): void {
+  watchPartyStateFrames.relayed = 0;
+  watchPartyStateFrames.fromBus = 0;
+}
+
+subscribeToCluster(WATCH_PARTY_STATE_TOPIC, (data) => {
+  const parsed = watchPartyStateFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  watchPartyStateFrames.fromBus += 1;
+  // The origin guard in `lib/bus.ts` already dropped this instance's own
+  // frames; `fromBus` keeps the local walk from publishing in turn, which is
+  // the other half of never letting two instances answer each other forever.
+  void broadcastWatchParty(parsed.data.sessionId, { fromBus: true }).catch(
+    (error: unknown) => {
+      console.error("[watch-party] relayed state broadcast failed:", error);
+    },
+  );
+});
+
+export async function broadcastWatchParty(
+  sessionId: string,
+  options: {
+    /**
+     * This walk was asked for by a `watchParty.state` frame from the other
+     * machine: run the local half only. The seat cache is skipped too, because
+     * the cache relays its own invalidations (`watch-party-seat-cache.ts`) and
+     * this instance already dropped its copy when the originating walk ran.
+     */
+    fromBus?: boolean;
+  } = {},
+): Promise<void> {
   // This read follows a write to the SAME row moments earlier (the mutation
   // that made this call happen at all), so a failure here is almost always
   // a transient blip rather than a real absence — and giving up after one
@@ -144,12 +215,21 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
   // another round trip. Before the audience walk on purpose: a fan-out
   // that bails must not leave the join gate holding yesterday's answer.
   if (terminal) {
-    rememberWatchPartySeatSnapshot(row.channel_id, null);
+    if (!options.fromBus) {
+      rememberWatchPartySeatSnapshot(row.channel_id, null);
+    }
     // Nothing left to fall back to for a party that is over; hold the
     // snapshot no longer than the party itself.
     lastKnownGuestRows.delete(row.id);
-  } else {
+  } else if (!options.fromBus) {
     invalidateWatchPartySeat(row.channel_id);
+  }
+  // Published before the audience walk and before anything below can fail:
+  // the other machine's walk must not depend on this one's audience load or
+  // permission reads succeeding. Its own re-read of the row is the truth.
+  if (!options.fromBus && isBusEnabled()) {
+    watchPartyStateFrames.relayed += 1;
+    publishToCluster(WATCH_PARTY_STATE_TOPIC, { sessionId: row.id });
   }
   // Same reasoning as the seat cache just above: this is the one place every
   // party mutation passes through, so one call here covers `getActiveWatchPartyRow`'s

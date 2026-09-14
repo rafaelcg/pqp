@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { shouldReleaseAudienceWatchSeat } from "./watch-party-seat";
+import {
+  AUDIENCE_SEAT_GRACE_MS,
+  shouldReleaseAudienceWatchSeat,
+} from "./watch-party-seat";
 
+/**
+ * An audience seat whose stream has genuinely ended: the client saw a stream
+ * and was then told `null`, and the seat is well past its grace.
+ */
 const audience = {
   channelType: "watch_party",
   isAudienceSeat: true,
@@ -8,6 +15,8 @@ const audience = {
   voiceStatus: "connected",
   partyState: "live" as const,
   hasLiveStream: false,
+  streamEnded: true,
+  seatAgeMs: 60_000,
 };
 
 describe("shouldReleaseAudienceWatchSeat", () => {
@@ -85,6 +94,58 @@ describe("shouldReleaseAudienceWatchSeat", () => {
         hasLiveStream: false,
       }),
     ).toBe(false);
+  });
+
+  /**
+   * 2026-09-14, 14:57:58 UTC: a viewer whose socket was on the API machine
+   * NOT running the egress pressed "Entrar no palco", was seated, and left one
+   * second later. No `channel-live` had reached that machine, so the
+   * channel's entry was simply absent, and absent read as "no stream".
+   */
+  it("does not release a seat when the channel has never been described (absent entry)", () => {
+    expect(
+      shouldReleaseAudienceWatchSeat({
+        ...audience,
+        hasLiveStream: false,
+        streamEnded: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not release a seat that was taken a moment ago, even with the stream reported ended", () => {
+    expect(
+      shouldReleaseAudienceWatchSeat({ ...audience, seatAgeMs: 1_000 }),
+    ).toBe(false);
+    expect(
+      shouldReleaseAudienceWatchSeat({
+        ...audience,
+        seatAgeMs: AUDIENCE_SEAT_GRACE_MS - 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReleaseAudienceWatchSeat({
+        ...audience,
+        seatAgeMs: AUDIENCE_SEAT_GRACE_MS,
+      }),
+    ).toBe(true);
+    // Unknown age is treated as old: the backstop keeps working for a
+    // caller that has no clock, which is what every caller was before.
+    expect(shouldReleaseAudienceWatchSeat({ ...audience, seatAgeMs: null })).toBe(
+      true,
+    );
+  });
+
+  it("still releases a mic seat inside the grace once the party has ended", () => {
+    expect(
+      shouldReleaseAudienceWatchSeat({
+        ...audience,
+        isAudienceSeat: false,
+        hasLiveStream: true,
+        streamEnded: false,
+        partyState: "ended",
+        seatAgeMs: 500,
+      }),
+    ).toBe(true);
   });
 
   it("is false while the party is live and the stream is present", () => {

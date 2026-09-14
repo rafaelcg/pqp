@@ -5,6 +5,7 @@ import { checkReady, type ReadyReport } from "./ready.js";
 import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
+import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
 import {
   isLiveHlsEnabled,
   liveHlsActivity,
@@ -366,6 +367,15 @@ export interface AdminMetrics {
     configured: boolean;
     /** Whether `LIVE_HLS_SERVER_ALLOWLIST` confines it to named servers. */
     allowlisted: boolean;
+    /**
+     * `watchParty.state` frames since boot: `relayed` is what this instance
+     * published for the other machine after a party changed state here,
+     * `fromBus` is what it applied. Both zero on one machine; on two, both
+     * climb with every party going live, ending or changing guests. The
+     * stream's own relay is `voice.liveHls.audienceFramesRelayed` /
+     * `audienceFramesFromBus`.
+     */
+    stateFrames: { relayed: number; fromBus: number };
     /** Rung names this deployment would encode, lowest first. */
     ladder: string[];
     sessions: number;
@@ -1097,6 +1107,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       enabled: hlsFlag.enabled,
       configured: isLiveHlsEnabled(),
       allowlisted: hlsFlag.allowlisted,
+      stateFrames: watchPartyStateFrameCounters(),
       ladder: hlsFlag.ladder.map((rung) => rung.name),
       sessions: hlsActivity.sessions,
       maxSessions: hlsActivity.maxSessions,

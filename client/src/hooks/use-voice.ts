@@ -560,6 +560,16 @@ export interface VoiceState {
 export interface ChannelLive {
   stream: LiveHlsStream | null;
   watching: number;
+  /**
+   * `stream` is null because the server SAID SO, not because nothing has
+   * arrived yet: a `channel-live { stream: null }` that followed a stream
+   * this client had seen, or the one-time `GET /api/channels/:id/live`
+   * answering null. Absent or false on an entry that has only ever carried
+   * null from a frame means "not told yet". Read by the audience-seat
+   * backstop (`shouldReleaseAudienceWatchSeat`), which must not hang up a
+   * seat over a frame that is merely late.
+   */
+  streamEnded?: boolean;
 }
 
 /** One ringing invitation, as shown on the incoming-call surface. */
@@ -4539,15 +4549,44 @@ export function createVoiceController(transport: RealtimeTransport) {
         // URL treatment as `voice-stream`; the room's own `liveStream` is
         // left to that frame so the two never disagree about the room we
         // are actually in.
-        state.channelLive = {
-          ...state.channelLive,
-          [message.channelId]: {
-            stream: message.stream
-              ? resolveLiveHlsStream(message.stream)
-              : null,
-            watching: message.watching,
-          },
-        };
+        {
+          const previous = state.channelLive[message.channelId];
+          // A NULL WITHOUT `ended` NEVER DROPS A STREAM WE HOLD. The server
+          // sets `ended` on a null it can vouch for (its maps and the session
+          // table both empty, or the session it just ended). A null without
+          // it is a server that could not check, and on 2026-09-14 it was an
+          // API machine reading its own empty map for a party live on the
+          // other machine: every viewer there had the right stream from
+          // `GET /live`, lost it to this frame, and was hung up by the seat
+          // backstop. Keep the stream, take the count.
+          if (
+            !message.stream &&
+            previous?.stream != null &&
+            message.ended !== true
+          ) {
+            state.channelLive = {
+              ...state.channelLive,
+              [message.channelId]: { ...previous, watching: message.watching },
+            };
+            emit();
+            break;
+          }
+          state.channelLive = {
+            ...state.channelLive,
+            [message.channelId]: {
+              stream: message.stream
+                ? resolveLiveHlsStream(message.stream)
+                : null,
+              watching: message.watching,
+              // "Ended" is the server's word, or one it already gave: a null
+              // that was never vouched for is a channel we have not been
+              // told about, and the seat backstop must not read it as over.
+              streamEnded: message.stream
+                ? false
+                : message.ended === true || previous?.streamEnded === true,
+            },
+          };
+        }
         emit();
         break;
     }
@@ -6118,6 +6157,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         [channelId]: {
           stream: live.stream ? resolveLiveHlsStream(live.stream) : null,
           watching: live.watching,
+          // The route asked the server outright (and, since #598, the
+          // database behind it), so a null here is an answer, not silence.
+          streamEnded: live.stream == null,
         },
       };
       emit();
