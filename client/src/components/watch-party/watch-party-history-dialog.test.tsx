@@ -12,10 +12,17 @@ import type { WatchPartyHistoryEntry } from "@/lib/watch-party-history-api";
  * network mock. The dialog shell around it (fetching, the player swap) is
  * covered end to end, same as the rest of the watch-party surface
  * (`docs/WATCH_PARTY.md`).
+ *
+ * Grouping itself (available vs. folded, "short" vs. "unavailable") is
+ * `lib/watch-party-history-grouping.test.ts`'s job; this file only pins that
+ * the list actually renders what that function hands it -- the title
+ * fallback lives server-side (`server/src/api/watch-party-history.test.ts`),
+ * this only pins that whatever `title` the API sends is what shows.
  */
 
 const ENDED: WatchPartyHistoryEntry = {
   sessionId: "1700000000000",
+  title: "Filme da sexta",
   startedAt: "2026-09-12T21:00:00.000Z",
   endedAt: "2026-09-12T23:30:00.000Z",
   durationSeconds: 9_000,
@@ -43,21 +50,35 @@ describe("WatchPartyHistoryList", () => {
     expect(html).toContain("No broadcasts yet.");
   });
 
-  it("offers Watch and the keep-replay toggle for an ended, available broadcast", () => {
+  it("shows the title and offers Watch and the keep-replay toggle for an ended, available broadcast", () => {
     const html = render([ENDED]);
+    expect(html).toContain("Filme da sexta");
     expect(html).toContain("Watch");
     expect(html).toContain("Alice");
     expect(html).not.toContain("LIVE");
     expect(html).not.toContain("no longer available");
+    // Not in the folded accordion.
+    expect(html).not.toContain("Older recordings");
   });
 
-  it("hides Watch and the toggle once the recording is gone, and says so", () => {
+  it("folds an unavailable broadcast under the collapsed 'Older recordings' accordion, hides its Watch button and says why", () => {
     const html = render([{ ...ENDED, replayAvailable: false }]);
+    expect(html).toContain("Older recordings (1)");
     expect(html).not.toContain(">Watch<");
     expect(html).toContain("Recording no longer available");
+    // Collapsed by default: the row is in the DOM but hidden.
+    expect(html).toMatch(/<ul hidden(?:=""|[\s>])[^>]*data-testid="watch-party-history-older-list"/);
   });
 
-  it("shows a LIVE badge and no controls for a broadcast still running", () => {
+  it("folds a sub-minute broadcast as a 'Restart', not as an unavailable recording, even while it is still available", () => {
+    const html = render([{ ...ENDED, durationSeconds: 12 }]);
+    expect(html).toContain("Older recordings (1)");
+    expect(html).toContain("Restart");
+    expect(html).not.toContain("Recording no longer available");
+    expect(html).not.toContain(">Watch<");
+  });
+
+  it("shows a LIVE badge and no controls for a broadcast still running, and never folds it away", () => {
     const html = render([
       {
         ...ENDED,
@@ -69,9 +90,11 @@ describe("WatchPartyHistoryList", () => {
     expect(html).toContain("LIVE");
     expect(html).toContain("In progress");
     expect(html).not.toContain(">Watch<");
-    // A LIVE broadcast is not "gone" -- it just is not a replay yet, and
-    // must not say so.
+    // A LIVE broadcast is not "gone" -- it just is not a replay yet -- and
+    // it is not "old" either: it stays in the main list, plain, never behind
+    // the "Older recordings" accordion.
     expect(html).not.toContain("no longer available");
+    expect(html).not.toContain("Older recordings");
   });
 
   it("falls back to an unknown-presenter label rather than inventing a name", () => {
@@ -88,5 +111,14 @@ describe("WatchPartyHistoryList", () => {
   it("never renders a peak-viewer figure (the type carries none)", () => {
     const html = render([ENDED]);
     expect(html).not.toMatch(/peak/i);
+  });
+
+  it("counts the folded accordion across several broadcasts of either fold reason", () => {
+    const html = render([
+      ENDED,
+      { ...ENDED, sessionId: "2", replayAvailable: false },
+      { ...ENDED, sessionId: "3", durationSeconds: 5 },
+    ]);
+    expect(html).toContain("Older recordings (2)");
   });
 });

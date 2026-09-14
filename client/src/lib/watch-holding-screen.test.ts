@@ -94,3 +94,56 @@ describe("resolveHoldingScreenReason", () => {
     ).toBe("dead");
   });
 });
+
+/**
+ * A replay's playlist is a fixed, ended media sequence: it is SUPPOSED to
+ * stop advancing once fully buffered, which live's `sequence-stuck` reads as
+ * a dead egress. `mode: "vod"` gets a whole different vocabulary rather than
+ * the live one with different labels -- see the file header.
+ */
+describe("resolveHoldingScreenReason (mode: vod)", () => {
+  const buffering = {
+    phase: "playing" as const,
+    hasFrame: false,
+    stallReason: null,
+    authGraceActive: false,
+    mode: "vod" as const,
+  };
+
+  it("says nothing while a frame is actually playing", () => {
+    expect(
+      resolveHoldingScreenReason({ ...buffering, hasFrame: true }),
+    ).toBeNull();
+  });
+
+  it("is plain buffering before the first frame, never the live restart copy", () => {
+    expect(resolveHoldingScreenReason(buffering)).toBe("buffering");
+  });
+
+  it("never reads sequence-stuck as a dead egress: a VOD playlist's sequence never moves", () => {
+    expect(
+      resolveHoldingScreenReason({ ...buffering, stallReason: "sequence-stuck" }),
+    ).toBe("buffering");
+  });
+
+  it("every other stall reason is still plain buffering, not the live 'stalled, reconnecting' copy", () => {
+    for (const stallReason of ["fatal", "stall", null] as const) {
+      expect(
+        resolveHoldingScreenReason({ ...buffering, stallReason }),
+        `stallReason=${stallReason}`,
+      ).toBe("buffering");
+    }
+  });
+
+  it("stays silent about a fresh auth failure, same as live", () => {
+    expect(
+      resolveHoldingScreenReason({ ...buffering, authGraceActive: true }),
+    ).toBe("silent");
+  });
+
+  it("the watchdog giving up is 'unavailable' -- the recording is gone, not 'the stream died'", () => {
+    expect(
+      resolveHoldingScreenReason({ ...buffering, phase: "dead" }),
+    ).toBe("unavailable");
+  });
+});

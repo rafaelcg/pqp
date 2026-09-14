@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HlsStallWatch, channelIdFromHlsUrl, type HlsStallDecision } from "./hls-stall";
+import { resolveHoldingScreenReason } from "./watch-holding-screen";
 
 const T0 = 1_000_000;
 
@@ -270,6 +271,52 @@ describe("HlsStallWatch", () => {
       expect(decisions).toContain("dead");
       expect(decisions).not.toContain("rebuild");
       expect(decision).toBe("dead");
+    });
+  });
+
+  describe("a VOD replay whose fragments keep failing (Farol review, PR 573)", () => {
+    it("reaches the ladder's terminal decision, and the holding screen calls it unavailable rather than lingering on a spinner", () => {
+      // `HlsStallWatch` has no concept of `mode`/`isVod` at all -- `isVod`
+      // only changes what the PLAYER does with each decision (skip the
+      // live-edge seek in the recovery step, skip the live-channel refetch
+      // in `reconnect()`), never whether the ladder itself escalates. A
+      // replay whose fragments never load is exactly the live case's
+      // "stall" reason: repeated `onWaiting` with no `onPlaying` to cancel
+      // it. This pins that the escalation reaches its bound regardless, and
+      // that the terminal `"dead"` decision maps to the VOD-specific
+      // "gravação não está mais disponível" copy, not a stuck spinner.
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onWaiting(T0 + 1_000);
+      let now = T0;
+      let decision: HlsStallDecision = "none";
+      const decisions: HlsStallDecision[] = [];
+      // Generous headroom (60 one-second ticks); the assertions below check
+      // it actually stops well short of that rather than looping forever.
+      for (let i = 0; i < 60 && decision !== "dead"; i += 1) {
+        now += 1_000;
+        decision = watch.tick(now);
+        decisions.push(decision);
+      }
+      expect(decision).toBe("dead");
+      // Got there via at least one full rebuild cycle, not a short-circuit
+      // straight to dead -- a transient failure still gets its rebuild
+      // before the player gives up on it.
+      expect(decisions).toContain("rebuild");
+      expect(watch.lastReason).toBe("stall");
+
+      // The terminal state a VOD player actually shows: never the live
+      // "restarting"/"reconnecting" vocabulary, and never `null` (nothing
+      // wrong) -- "unavailable", the retry-button state.
+      expect(
+        resolveHoldingScreenReason({
+          phase: "dead",
+          hasFrame: false,
+          stallReason: watch.lastReason,
+          authGraceActive: false,
+          mode: "vod",
+        }),
+      ).toBe("unavailable");
     });
   });
 });

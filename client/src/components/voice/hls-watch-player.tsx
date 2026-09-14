@@ -13,6 +13,7 @@ import {
 import {
   Check,
   Crop,
+  Loader2,
   Maximize2,
   MessageSquare,
   Minimize2,
@@ -59,6 +60,7 @@ import {
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { drainJitterMs } from "@/lib/reconnect-jitter";
+import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
@@ -184,6 +186,7 @@ export function HlsWatchPlayer({
   actions,
   layout = "tile",
   dualDeviceWarning = false,
+  mode = "live",
 }: {
   src: string;
   /**
@@ -249,8 +252,27 @@ export function HlsWatchPlayer({
    * corner player, which has no room for a second line of chrome.
    */
   dualDeviceWarning?: boolean;
+  /**
+   * `"live"` (the default) is a watch party in progress: the stall watchdog
+   * treats a playlist that stops advancing as a dead egress and reconnects
+   * to `GET /api/channels/:id/live`, the top-left corner carries a permanent
+   * "Ao vivo" badge, and "jump to live" replaces the ordinary transport row.
+   *
+   * `"vod"` is a finished broadcast's replay (`watch-party-history-dialog.tsx`):
+   * the playlist is a fixed, ENDED `#EXT-X-MEDIA-SEQUENCE` that is SUPPOSED
+   * to stop advancing once fully buffered, so the live watchdog's read of
+   * that -- a dead egress, reconnect, and eventually "A transmissão caiu" --
+   * is simply wrong here and used to restart a perfectly healthy replay
+   * every ~20s until it gave up for good. This mode turns that reading off:
+   * no reconnect-via-live-fetch, no live badge, no "jump to live", a plain
+   * buffering spinner instead of the "hold tight, it's starting" holding
+   * screen, "A gravação não está mais disponível" instead of "A transmissão
+   * caiu" if playback cannot recover, and a real seek bar in its place.
+   */
+  mode?: "live" | "vod";
 }) {
   const { t } = useTranslation();
+  const isVod = mode === "vod";
   const fit = useVideoFit("watch");
   const whole = fit.fit === "contain";
   const innerRef = useRef<HTMLVideoElement | null>(null);
@@ -272,6 +294,11 @@ export function HlsWatchPlayer({
   const [pipAvailable, setPipAvailable] = useState(false);
   const [isPip, setIsPip] = useState(false);
   const [behindLive, setBehindLive] = useState(false);
+  // A replay's own transport: `null` until `loadedmetadata` gives a real
+  // duration. Unused (and never subscribed to) outside `mode: "vod"` -- a
+  // live playlist's `duration` is `Infinity` and has nothing to scrub.
+  const [vodCurrentTime, setVodCurrentTime] = useState(0);
+  const [vodDuration, setVodDuration] = useState<number | null>(null);
   // Mirrors the element's own paused flag so the bar's play/pause button
   // agrees with hardware media keys, the lock screen and a tap on the frame.
   const [paused, setPaused] = useState(false);
@@ -498,6 +525,17 @@ export function HlsWatchPlayer({
         reconnectInFlightRef.current = true;
       }
       setPhase("reconnecting");
+      // Only the live-channel refetch is VOD-specific, and it is skipped
+      // here by construction rather than by an early return: a replay's
+      // URL (`/api/voice/hls-replay/<channel>/<startedAt>`) matches neither
+      // the live proxy nor the raw bucket shape `channelIdFromHlsUrl`
+      // knows, so `channelId` is null, `next` stays null, and every branch
+      // below runs the same for both -- a person's "try again" still falls
+      // through to `setAttempt` (a same-URL re-attach re-fetches the signed
+      // playlist proxy, which mints fresh presigned segment URLs; there is
+      // no `GET .../live` for a finished session to poll), and the
+      // overlap/generation guards above cost nothing extra since there is
+      // no network round trip for them to race against.
       const channelId = channelIdFromHlsUrl(activeSrc);
       let next: string | null = null;
       try {
@@ -652,16 +690,27 @@ export function HlsWatchPlayer({
       return;
     }
     if (video.paused) {
-      jumpToLive();
+      // A replay resumes wherever it was paused -- Twitch's "back to the
+      // edge" rule is a live-only affordance. `jumpToLive` against a VOD
+      // element's `seekable` end is not "catch up", it is "skip to the
+      // final second", which is what actually happened here before this
+      // guard: `mediaSeekableEnd` reads the replay's own duration.
+      if (!isVod) {
+        jumpToLive();
+      }
       void video.play();
       return;
     }
     video.pause();
-  }, [getVideo, jumpToLive]);
+  }, [getVideo, isVod, jumpToLive]);
 
   // Behind-live polling. `timeupdate` fires roughly 4x/s, which is plenty
   // for a badge nobody needs to the millisecond, and also drives the B1.1
-  // catch-up curve below.
+  // catch-up curve below. A no-op for a replay: hls.js never sets
+  // `liveSyncPosition` on a VOD manifest, so `resolveLiveEdge` always
+  // answers null and this never flips `behindLive` true -- kept running
+  // anyway rather than special-cased, since a false negative here is
+  // exactly the state a replay wants.
   useEffect(() => {
     const video = getVideo();
     if (!video) {
@@ -714,6 +763,42 @@ export function HlsWatchPlayer({
       video.playbackRate = 1;
     };
   }, [getVideo, src]);
+
+  // The replay's own transport. Not wired at all outside `mode: "vod"`: a
+  // live element's `duration` is `Infinity` and nothing here should read it.
+  useEffect(() => {
+    if (!isVod) {
+      return;
+    }
+    const video = getVideo();
+    if (!video) {
+      return;
+    }
+    const onTimeUpdate = () => setVodCurrentTime(video.currentTime);
+    const onDuration = () => {
+      setVodDuration(Number.isFinite(video.duration) ? video.duration : null);
+    };
+    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("durationchange", onDuration);
+    video.addEventListener("loadedmetadata", onDuration);
+    onDuration();
+    return () => {
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("durationchange", onDuration);
+      video.removeEventListener("loadedmetadata", onDuration);
+    };
+  }, [getVideo, isVod, src, attempt]);
+
+  const seekTo = useCallback(
+    (seconds: number) => {
+      const video = getVideo();
+      if (!video || vodDuration === null) {
+        return;
+      }
+      video.currentTime = Math.min(Math.max(0, seconds), vodDuration);
+    },
+    [getVideo, vodDuration],
+  );
 
   // Picture-in-Picture: standard API where it exists, Safari's
   // presentation-mode fallback otherwise. Neither is relied on to
@@ -803,18 +888,20 @@ export function HlsWatchPlayer({
     navigator.mediaSession.setActionHandler("pause", () => {
       video?.pause();
     });
-    try {
-      // Not in every TS lib.dom version; guarded by the try/catch and the
-      // `"seektolive" in` style check isn't reliable across browsers, so we
-      // just swallow an unsupported-action exception.
-      navigator.mediaSession.setActionHandler(
-        // @ts-expect-error -- "seektolive" is a valid MediaSessionAction the
-        // TS DOM lib does not list yet.
-        "seektolive",
-        jumpToLive,
-      );
-    } catch {
-      // Not supported here; the on-screen "Pular pro ao vivo" button covers it.
+    if (!isVod) {
+      try {
+        // Not in every TS lib.dom version; guarded by the try/catch and the
+        // `"seektolive" in` style check isn't reliable across browsers, so we
+        // just swallow an unsupported-action exception.
+        navigator.mediaSession.setActionHandler(
+          // @ts-expect-error -- "seektolive" is a valid MediaSessionAction the
+          // TS DOM lib does not list yet.
+          "seektolive",
+          jumpToLive,
+        );
+      } catch {
+        // Not supported here; the on-screen "Pular pro ao vivo" button covers it.
+      }
     }
     return () => {
       navigator.mediaSession.setActionHandler("play", null);
@@ -826,7 +913,7 @@ export function HlsWatchPlayer({
         // ignore
       }
     };
-  }, [hasFrame, mediaTitle, communityName, coverUrl, getVideo, jumpToLive]);
+  }, [hasFrame, mediaTitle, communityName, coverUrl, getVideo, jumpToLive, isVod]);
 
   useEffect(() => {
     const el = videoRef?.current ?? innerRef.current;
@@ -977,11 +1064,27 @@ export function HlsWatchPlayer({
         clearPendingReconnect();
         const hls = hlsRef.current;
         console.warn(`[hls] stream stalled (${watch.lastReason}), ${decision}`);
-        const target = liveSeekTarget({
-          currentTime: video.currentTime,
-          liveSyncPosition: hls?.liveSyncPosition ?? null,
-          seekableEnd: mediaSeekableEnd(video),
-        });
+        // Only the seek is VOD-specific -- a VOD manifest has no live edge
+        // to seek back to: `liveSyncPosition` is null (hls.js never sets it
+        // on a non-live playlist) and `mediaSeekableEnd` reads the replay's
+        // own duration, so `liveSeekTarget` would return a point near the
+        // END of the recording -- the Chrome-back-buffer jump this seek
+        // exists to correct, applied to a stall that has nothing to do with
+        // it. `applyHlsRecoveryStep` below still runs unconditionally
+        // (a decode error still wants `recoverMediaError`, a stuck fragment
+        // still wants `startLoad`, whichever the ladder picked), and this
+        // tick never decides the terminal `"rebuild"`/`"dead"` outcome --
+        // that stays entirely in `watch.tick()`'s own escalation, read at
+        // the top of this handler, so a replay whose fragments keep
+        // failing still reaches the ladder's bound the same as a live
+        // stream would.
+        const target = isVod
+          ? null
+          : liveSeekTarget({
+              currentTime: video.currentTime,
+              liveSyncPosition: hls?.liveSyncPosition ?? null,
+              seekableEnd: mediaSeekableEnd(video),
+            });
         applyHlsRecoveryStep(hls, decision);
         if (target !== null) {
           video.currentTime = target;
@@ -1074,20 +1177,34 @@ export function HlsWatchPlayer({
         setSlowStartNotice(true);
       }
       const player = new Hls({
-        ...hlsLivePlayerConfig(),
+        // `hlsLivePlayerConfig()` is entirely live-sync tuning
+        // (`liveSyncDurationCount`, `liveMaxLatencyDurationCount`, buffer
+        // lengths sized to a live sliding window) -- hls.js already treats a
+        // playlist with `#EXT-X-ENDLIST` as VOD and picks its own sensible
+        // buffering for it, and `maxLiveSyncPlaybackRate` (the live catch-up
+        // speed-up) has nothing to turn off on a manifest that is not live.
+        ...(isVod ? {} : hlsLivePlayerConfig()),
         enableWorker: true,
         capLevelToPlayerSize: true,
-        // 1 = off, deliberately, and still. 1.5 sped playback up (and
-        // pitched music) whenever the playhead drifted past the sync point,
-        // which on the old 10 s window was most of the time. Catch-up now
-        // lives OUTSIDE hls.js entirely (`catchUpPlaybackRate`, the
-        // "Behind-live polling" effect below), keyed on actual distance from
-        // the target rather than a single flat multiplier hls.js applies
-        // whenever it judges itself behind; leaving this at 1 is what stops
-        // the two fighting over the same `video.playbackRate`. A viewer far
-        // enough behind that the gentle curve caps out still gets the
-        // "jump to live" affordance.
-        maxLiveSyncPlaybackRate: 1,
+        ...(isVod
+          ? {}
+          : {
+              // 1 = off, deliberately, and still. 1.5 sped playback up (and
+              // pitched music) whenever the playhead drifted past the sync
+              // point, which on the old 10 s window was most of the time.
+              // Catch-up now lives OUTSIDE hls.js entirely
+              // (`catchUpPlaybackRate`, the "Behind-live polling" effect
+              // below), keyed on actual distance from the target rather
+              // than a single flat multiplier hls.js applies whenever it
+              // judges itself behind; leaving this at 1 is what stops the
+              // two fighting over the same `video.playbackRate`. A viewer
+              // far enough behind that the gentle curve caps out still gets
+              // the "jump to live" affordance. Not applicable to a VOD
+              // manifest at all -- there is no live sync point to drift
+              // from -- so the whole key is skipped there rather than left
+              // at a value that means nothing.
+              maxLiveSyncPlaybackRate: 1,
+            }),
         startLevel: start.startLevel,
         abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
         // Playlist is written after the first 2 s segment. Retry the
@@ -1175,6 +1292,19 @@ export function HlsWatchPlayer({
         }
       });
       player.on(Hls.Events.LEVEL_UPDATED, (_event, data) => {
+        // A VOD manifest's EXT-X-MEDIA-SEQUENCE is fixed the moment it loads
+        // -- it is SUPPOSED to stop advancing once the whole recording is
+        // buffered, which `watch.onMediaSequence` (and the sequence-stuck
+        // watchdog reading it) exists specifically to call a dead LIVE
+        // egress. Feeding it a replay's frozen sequence restarted a healthy
+        // recording's playback every ~20s (see the `mode` prop's doc
+        // comment). Skipping the call is enough: `HlsStallWatch` only checks
+        // `sequenceSeenAt`/`lastSequence` once `onMediaSequence` has set
+        // them, so leaving them untouched leaves that branch permanently
+        // unreachable, which is exactly the point for a replay.
+        if (isVod) {
+          return;
+        }
         // The live playlist's EXT-X-MEDIA-SEQUENCE. A dead egress leaves
         // the playlist answering but never advancing; this is how the
         // watchdog tells that apart from a slow network.
@@ -1252,7 +1382,7 @@ export function HlsWatchPlayer({
       video.load();
       setHlsPlaybackStats(null);
     };
-  }, [activeSrc, attempt]);
+  }, [activeSrc, attempt, isVod]);
 
   // Twitch-style chrome: sits on the picture, fades after the pointer rests,
   // comes back on move / tap. Same controller the call stage uses, so the
@@ -1318,6 +1448,7 @@ export function HlsWatchPlayer({
     hasFrame,
     stallReason,
     authGraceActive,
+    mode,
   });
   const holdingCaption =
     holdingReason === "restarting"
@@ -1454,12 +1585,16 @@ export function HlsWatchPlayer({
           </button>
         </div>
       ) : null}
-      {holdingReason === "dead" ? (
+      {holdingReason === "dead" || holdingReason === "unavailable" ? (
         <div
-          data-testid="hls-dead"
+          data-testid={holdingReason === "unavailable" ? "hls-replay-dead" : "hls-dead"}
           className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper"
         >
-          <span>{t("voice.hls.dead")}</span>
+          <span>
+            {holdingReason === "unavailable"
+              ? t("voice.hls.replayDead")
+              : t("voice.hls.dead")}
+          </span>
           <button
             type="button"
             className="rounded-full bg-paper/15 px-3 py-1.5 font-medium text-paper hover:bg-paper/25"
@@ -1474,6 +1609,21 @@ export function HlsWatchPlayer({
         // than flashing a stall overlay over a hiccup nobody needs to know
         // about. Past `AUTH_GRACE_MS` this falls through to the branch below.
         null
+      ) : holdingReason === "buffering" ? (
+        // A replay's plain "loading" state. Deliberately NOT the live
+        // `StreamStartingSoon` holding screen: that bubbles loop and its
+        // rotating "hold tight, it's about to start" lines describe a watch
+        // party that has not gone live yet, which is never true of a
+        // finished broadcast simply buffering its next segment.
+        <div
+          data-testid="hls-vod-loading"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/40"
+        >
+          <Loader2
+            className="h-8 w-8 animate-spin text-paper/80"
+            aria-hidden="true"
+          />
+        </div>
       ) : holdingReason !== null ? (
         <div
           data-testid={
@@ -1488,7 +1638,7 @@ export function HlsWatchPlayer({
           <StreamStartingSoon caption={holdingCaption} />
         </div>
       ) : null}
-      {cinema && hasFrame ? (
+      {cinema && hasFrame && !isVod ? (
         // Plain and permanent, deliberately OUTSIDE `chromeClass` below: that
         // bar fades on idle (Twitch-style autohide), and a badge that
         // vanishes the moment the pointer rests is the "hover-only" shape
@@ -1617,7 +1767,36 @@ export function HlsWatchPlayer({
               className="h-1 w-20 cursor-pointer accent-signal sm:w-24"
             />
             </div>
-            {behindLive || (paused && hasFrame) ? (
+            {isVod ? (
+              // A replay's real transport: no live edge to chase, a
+              // beginning and an end instead. `vodDuration` is null until
+              // `loadedmetadata` fires, which is also the only time a range
+              // input with an unknown max would be meaningless to show.
+              <div
+                data-testid="hls-vod-seek"
+                className="flex min-w-0 flex-1 items-center gap-2 pl-1"
+              >
+                <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-paper/80">
+                  {formatCallDuration(vodCurrentTime * 1000)}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={vodDuration ?? 0}
+                  step={1}
+                  value={Math.min(vodCurrentTime, vodDuration ?? 0)}
+                  disabled={vodDuration === null}
+                  aria-label={t("voice.hls.seek")}
+                  onChange={(event) => seekTo(Number(event.target.value))}
+                  className="h-1 min-w-0 flex-1 cursor-pointer accent-signal disabled:cursor-default disabled:opacity-50"
+                />
+                <span className="w-9 shrink-0 text-[11px] tabular-nums text-paper/80">
+                  {vodDuration === null
+                    ? "--:--"
+                    : formatCallDuration(vodDuration * 1000)}
+                </span>
+              </div>
+            ) : behindLive || (paused && hasFrame) ? (
               <button
                 type="button"
                 data-testid="watch-stage-jump-live"
