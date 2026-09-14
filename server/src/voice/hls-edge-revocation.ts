@@ -14,38 +14,50 @@
  * kick, a role losing VIEW -- rare, human-triggered moderation events, not a
  * hot path.
  *
- * WHY KEYED BY userId:channelId, NOT userId ALONE. A party pass is scoped
- * to one channel (`mintHlsPartyPass` binds `channelId` into its signed
- * claims), and `hls-revocation.ts`'s own model is per-channel too -- a
- * viewer kicked from one channel keeps a still-valid pass (and an
- * unaffected `?t=`) for any OTHER channel they can legitimately watch.
- * `hlsEdgeRevocationKey` matches exactly what the Worker's gate looks up.
- * A SEPARATE `channel:<channelId>` key (`hlsEdgeChannelRevocationKey`)
- * covers the "everyone" case -- a channel deleted or gone private for the
- * whole audience -- which has no fixed list of userIds to key per-viewer
- * entries by; `writeHlsEdgeChannelRevocation` is that hook, called from
- * `revokeHlsAccess` whenever a revocation carries no `only` scope. The
- * Worker's gate checks BOTH keys and takes the newer of the two -- see
- * `party-pass-revocation.js`.
+ * APPEND-ONLY, NOT READ-MODIFY-WRITE. An earlier version of this file kept
+ * ONE mutable key per (userId, channelId) and tried to keep it monotonic by
+ * reading the current value before every PUT and only writing a strictly
+ * newer one. That is a real race, not a theoretical one: two evictions
+ * racing each other (a kick immediately followed by a ban, or the same
+ * eviction replicated to two instances over the cluster bus) can each read
+ * the SAME "nothing here yet" snapshot before either PUT lands, and if the
+ * OLDER write's PUT happens to reach Cloudflare after the NEWER write's PUT
+ * -- pure network reordering, nothing exotic -- the older, smaller
+ * timestamp overwrites the newer one that already landed, silently
+ * un-revoking a viewer who is still supposed to be locked out (Farol,
+ * 2026-09-14). Read-then-conditionally-write is not atomic against a
+ * concurrent writer doing the same thing; no client-side check can fix
+ * that without a real compare-and-swap, which the KV REST API does not
+ * offer.
  *
- * MONOTONIC, NOT LAST-WRITE-WINS. The value stored at a key is a
- * revocation TIMESTAMP, not a boolean: the Worker's gate compares it
- * against the credential's own `issuedAt` claim ("was this credential
- * minted before or after the most recent revocation"), the same rule
- * `hls-revocation.ts`'s own `isHlsAccessRevoked` already applies in memory
- * (`entry.at <= tokenIssuedAt` survives). Two evictions of the same
- * (userId, channelId) pair racing each other over the network -- a kick
- * immediately followed by a ban, say, or two instances handling the same
- * eviction on a bus-replicated event -- must never let the OLDER timestamp
- * clobber a NEWER one that already landed, or a viewer re-admitted after
- * the first eviction would read as still-revoked by a write that arrives
- * late. `writeMonotonic` below is a read-modify-write: GET the current
- * value, PUT only when this write's `now` is actually newer. That is a
- * race in itself (two concurrent writers can both read the same "current"
- * value before either PUTs), but the failure mode of losing that race is
- * "the record is exactly as fresh as it would have been if this write lost
- * outright", never staler than not writing at all -- the same shape as
- * `hls-revocation.ts`'s own high-water TTL mark, which only ever grows.
+ * The fix removes the race by removing the READ from the write path
+ * entirely: every eviction writes to its OWN key,
+ * `<userId>:<channelId>:<revokedAtMs>` (or `channel:<channelId>:<revokedAtMs>`
+ * for the unscoped case), an unconditional PUT with no GET first. Two
+ * concurrent writers for the same (userId, channelId) now write two
+ * DIFFERENT keys, so there is nothing to race -- both survive regardless of
+ * which PUT lands first, each retried independently on failure. The
+ * Worker's gate (`party-pass-revocation.js`) reads the whole set back with
+ * `kv.list({ prefix })` and takes the newest, comparing it against the
+ * credential's own `issuedAt` claim, so the READ side is where "which one
+ * is newest" gets decided -- a question a single snapshot read can always
+ * answer correctly, unlike a write trying to guess it in advance. Each key
+ * self-expires after `LIVE_HLS_PARTY_PASS_MAX_TTL_MS`, so a burst of
+ * evictions for one (userId, channelId) pair inside one 6 h window costs a
+ * few extra small KV objects, never an unbounded pile.
+ *
+ * WHY KEYED BY userId:channelId:revokedAtMs, NOT userId ALONE. A party pass
+ * is scoped to one channel (`mintHlsPartyPass` binds `channelId` into its
+ * signed claims), and `hls-revocation.ts`'s own model is per-channel too --
+ * a viewer kicked from one channel keeps a still-valid pass (and an
+ * unaffected `?t=`) for any OTHER channel they can legitimately watch.
+ * `hlsEdgeRevocationKey` matches exactly the prefix shape the Worker's gate
+ * lists. A SEPARATE `channel:<channelId>:<revokedAtMs>` key
+ * (`hlsEdgeChannelRevocationKey`) covers the "everyone" case -- a channel
+ * deleted or gone private for the whole audience -- which has no fixed
+ * list of userIds to key per-viewer entries by; `writeHlsEdgeChannelRevocation`
+ * is that hook, called from `revokeHlsAccess` whenever a revocation carries
+ * no `only` scope.
  */
 
 import { logEvent } from "../lib/log.js";
@@ -56,10 +68,12 @@ const KV_REQUEST_TIMEOUT_MS = 4_000;
 /**
  * A small pool, not zero and not unbounded. A mass moderation action (a
  * raid ban, a bulk kick) can fire dozens of evictions in the same tick;
- * letting every one of them open its own pair of Cloudflare requests at
- * once is both a burst this process does not need to inflict on itself and
- * an easy way to exhaust outbound sockets under load. Four in flight is
- * enough to keep the queue draining quickly without that burst.
+ * letting every one of them open its own Cloudflare request at once is
+ * both a burst this process does not need to inflict on itself and an easy
+ * way to exhaust outbound sockets under load. Four in flight is enough to
+ * keep the queue draining quickly without that burst. Only ever guards
+ * PUTs now (the read-before-write GET this used to also bound is gone with
+ * it -- see the module doc comment).
  */
 const MAX_CONCURRENT_KV_REQUESTS = 4;
 let activeKvRequests = 0;
@@ -104,14 +118,14 @@ function kvConfig(): KvConfig | null {
   return { accountId, namespaceId, apiToken };
 }
 
-/** The exact per-viewer key `PartyPassRevocationGate.check` looks up on the Worker side. */
-export function hlsEdgeRevocationKey(userId: string, channelId: string): string {
-  return `${userId}:${channelId}`;
+/** The exact per-viewer key this write lands at -- `PartyPassRevocationGate` lists the `<userId>:<channelId>:` prefix on the Worker side. */
+export function hlsEdgeRevocationKey(userId: string, channelId: string, revokedAtMs: number): string {
+  return `${userId}:${channelId}:${revokedAtMs}`;
 }
 
 /** The channel-wide key -- see the module doc comment for when this fires instead. */
-export function hlsEdgeChannelRevocationKey(channelId: string): string {
-  return `channel:${channelId}`;
+export function hlsEdgeChannelRevocationKey(channelId: string, revokedAtMs: number): string {
+  return `channel:${channelId}:${revokedAtMs}`;
 }
 
 /** Injectable for tests only; every production caller uses the global `fetch`. */
@@ -133,61 +147,21 @@ function kvValueUrl(config: KvConfig, key: string): string {
  * unnoticed until a raid ban somewhere leaves a pile of half-drained
  * sockets behind it.
  */
-async function drain(response: Response): Promise<string> {
+async function drain(response: Response): Promise<void> {
   try {
-    return await response.text();
+    await response.text();
   } catch {
-    return "";
+    // already unusable -- nothing left to drain
   }
 }
 
 /**
- * `null` for "no record" (a fresh 404, or a value that failed to parse --
- * treated the same as absent, never as a crash) and `undefined` for "could
- * not find out" (network failure, timeout, non-2xx/404 status) -- the two
- * are different answers: a caller MAY proceed treating `null` as "nothing
- * to beat", but `undefined` means the read itself is untrustworthy, so a
- * write built on top of it must not claim to know it is newer than
- * whatever might already be there.
+ * A single unconditional PUT. No GET first: see the module doc comment for
+ * why a read-before-write was the bug, and why append-only removes the
+ * need for one. Idempotent by construction (the same key with the same
+ * value), which is exactly what makes retrying this safe.
  */
-async function kvGetTimestamp(
-  config: KvConfig,
-  key: string,
-  fetchImpl: FetchLike,
-): Promise<number | null | undefined> {
-  return withKvConcurrencyLimit(async () => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), KV_REQUEST_TIMEOUT_MS);
-    try {
-      const response = await fetchImpl(kvValueUrl(config, key), {
-        method: "GET",
-        headers: { Authorization: `Bearer ${config.apiToken}` },
-        signal: controller.signal,
-      });
-      if (response.status === 404) {
-        await drain(response);
-        return null;
-      }
-      const text = await drain(response);
-      if (!response.ok) {
-        return undefined;
-      }
-      const parsed = Number(text);
-      return Number.isFinite(parsed) ? parsed : null;
-    } catch {
-      return undefined;
-    } finally {
-      clearTimeout(timeout);
-    }
-  });
-}
-
-async function kvPutTimestamp(
-  config: KvConfig,
-  key: string,
-  value: number,
-  fetchImpl: FetchLike,
-): Promise<boolean> {
+async function kvPut(config: KvConfig, key: string, value: number, fetchImpl: FetchLike): Promise<boolean> {
   return withKvConcurrencyLimit(async () => {
     // At least the party pass's own ceiling (the CONSTANT ceiling,
     // `LIVE_HLS_PARTY_PASS_MAX_TTL_MS`, not whatever `LIVE_HLS_PARTY_PASS_TTL_MS`
@@ -219,89 +193,69 @@ async function kvPutTimestamp(
 }
 
 /**
- * Read-modify-write: writes `now` only if nothing already there is at
- * least as new. A read failure (`undefined`) is treated as "unknown, might
- * already be newer" and skips straight to a plain write attempt rather
- * than risking a stale value winning a race it never actually needed to
- * enter -- KV's own PUT already always wins the LAST write, so the worst
- * case here is identical to not having read first at all, not worse.
- */
-async function writeMonotonic(
-  config: KvConfig,
-  key: string,
-  now: number,
-  fetchImpl: FetchLike,
-): Promise<boolean> {
-  const existing = await kvGetTimestamp(config, key, fetchImpl);
-  if (typeof existing === "number" && existing >= now) {
-    // Already at least this fresh -- not a failure, nothing to write.
-    return true;
-  }
-  return kvPutTimestamp(config, key, now, fetchImpl);
-}
-
-/**
- * Backoff between retries of the SAME (key, now) write, after the first
- * attempt (made synchronously by the caller, see `deliver` below) has
- * already failed once. Three tries past the first -- about 30 s of total
- * retrying -- covers a transient blip without holding a revocation write
- * open indefinitely; `RETRY_QUEUE_MAX` bounds how many are ever in
- * backoff at once, so a sustained Cloudflare outage during a mass-ban
- * degrades to "some revocations arrive late" rather than an unbounded pile
- * of suspended timers.
+ * Backoff between retries of the SAME key, after the first attempt (made
+ * synchronously by the caller, see `deliver` below) has already failed
+ * once. Three tries past the first -- about 30 s of total retrying --
+ * covers a transient blip without holding a revocation write open
+ * indefinitely.
  */
 let retryDelaysMs: readonly number[] = [2_000, 8_000, 20_000];
-const RETRY_QUEUE_MAX = 200;
-let pendingRetries = 0;
+
+/**
+ * Bounds the TOTAL number of revocation deliveries (first attempt plus any
+ * retries still in backoff) this process holds open at once, across every
+ * key -- not just how many are actively hitting the network
+ * (`MAX_CONCURRENT_KV_REQUESTS` already bounds that separately). A
+ * sustained Cloudflare outage during a mass-ban used to let every one of
+ * potentially hundreds of evictions queue its own independent retry chain
+ * with no shared ceiling; past this bound a NEW delivery is dropped
+ * outright rather than queued, logged once via
+ * `voice.hlsEdgeRevocationQueueFull` -- the same "drop and count" shape
+ * `rejectionLog` and `partyPassRevocationCache` already use elsewhere in
+ * this feature for an attacker- or incident-sized burst. A dropped write
+ * degrades to "this one revocation's edge record never lands", not a
+ * memory or socket leak; the in-memory `hls-revocation.ts` set (and the
+ * WebSocket eviction it runs alongside) are unaffected either way.
+ */
+const MAX_PENDING_DELIVERIES = 1_000;
+const pendingDeliveries = new Map<string, Promise<void>>();
 
 async function deliver(
   config: KvConfig,
   key: string,
   now: number,
-  channelId: string,
   fetchImpl: FetchLike,
   attempt = 0,
 ): Promise<void> {
-  const ok = await writeMonotonic(config, key, now, fetchImpl).catch(() => false);
+  const ok = await kvPut(config, key, now, fetchImpl).catch(() => false);
   if (ok) {
     return;
   }
   if (attempt >= retryDelaysMs.length) {
-    logEvent("voice.hlsEdgeRevocationWriteFailed", { channelId, attempts: attempt + 1 });
+    logEvent("voice.hlsEdgeRevocationWriteFailed", { key, attempts: attempt + 1 });
     return;
   }
-  if (pendingRetries >= RETRY_QUEUE_MAX) {
-    logEvent("voice.hlsEdgeRevocationWriteFailed", {
-      channelId,
-      reason: "retry-queue-overflow",
-      attempts: attempt + 1,
-    });
-    return;
-  }
-  pendingRetries += 1;
-  try {
-    await new Promise<void>((resolve) => setTimeout(resolve, retryDelaysMs[attempt]));
-  } finally {
-    pendingRetries -= 1;
-  }
-  return deliver(config, key, now, channelId, fetchImpl, attempt + 1);
+  await new Promise<void>((resolve) => setTimeout(resolve, retryDelaysMs[attempt]));
+  return deliver(config, key, now, fetchImpl, attempt + 1);
 }
 
 /**
- * Writes one KV key, monotonically, retrying on failure through the bounded
- * in-process queue above. The full attempt sequence (first try plus every
- * retry) is awaited end to end by THIS function -- what is NOT awaited is
- * this function's own caller (`writeHlsEdgeRevocationForScope`, called from
- * the synchronous `revokeHlsAccess`): the eviction path that removes a
- * viewer from a channel view must not block on a Cloudflare round trip to
- * do it, so it fires this with `void` and moves on. Never throws. No-ops
- * silently (not even a log line) when unconfigured, which is the expected
- * shape for every deployment that has not provisioned the edge KV
- * namespace -- most of them.
+ * Writes one KV key, retrying on failure. The full attempt sequence (first
+ * try plus every retry) is awaited end to end by THIS function -- what is
+ * NOT awaited is this function's own caller (`writeHlsEdgeRevocationForScope`,
+ * called from the synchronous `revokeHlsAccess`): the eviction path that
+ * removes a viewer from a channel view must not block on a Cloudflare
+ * round trip to do it, so it fires this with `void` and moves on. Never
+ * throws. No-ops silently (not even a log line) when unconfigured, which
+ * is the expected shape for every deployment that has not provisioned the
+ * edge KV namespace -- most of them. `pendingDeliveries` is the fan-out
+ * bound described above; an entry occupies its slot for the FULL
+ * attempt-plus-retry lifetime, so it is what actually caps how much
+ * concurrent work (network requests AND suspended backoff timers) this
+ * mechanism can ever be holding at once.
  */
 export async function writeHlsEdgeRevocationAt(
   key: string,
-  channelId: string,
   now = Date.now(),
   fetchImpl: FetchLike = fetch,
 ): Promise<void> {
@@ -309,7 +263,17 @@ export async function writeHlsEdgeRevocationAt(
   if (!config) {
     return;
   }
-  await deliver(config, key, now, channelId, fetchImpl);
+  if (pendingDeliveries.size >= MAX_PENDING_DELIVERIES) {
+    logEvent("voice.hlsEdgeRevocationQueueFull", { key, pending: pendingDeliveries.size });
+    return;
+  }
+  const promise = deliver(config, key, now, fetchImpl);
+  pendingDeliveries.set(key, promise);
+  try {
+    await promise;
+  } finally {
+    pendingDeliveries.delete(key);
+  }
 }
 
 /** Per-viewer write -- see `hlsEdgeRevocationKey`. */
@@ -319,7 +283,7 @@ export async function writeHlsEdgeRevocation(
   now = Date.now(),
   fetchImpl: FetchLike = fetch,
 ): Promise<void> {
-  return writeHlsEdgeRevocationAt(hlsEdgeRevocationKey(userId, channelId), channelId, now, fetchImpl);
+  return writeHlsEdgeRevocationAt(hlsEdgeRevocationKey(userId, channelId, now), now, fetchImpl);
 }
 
 /** Channel-wide write -- see `hlsEdgeChannelRevocationKey` and the module doc comment. */
@@ -328,7 +292,7 @@ export async function writeHlsEdgeChannelRevocation(
   now = Date.now(),
   fetchImpl: FetchLike = fetch,
 ): Promise<void> {
-  return writeHlsEdgeRevocationAt(hlsEdgeChannelRevocationKey(channelId), channelId, now, fetchImpl);
+  return writeHlsEdgeRevocationAt(hlsEdgeChannelRevocationKey(channelId, now), now, fetchImpl);
 }
 
 /**
@@ -358,4 +322,9 @@ export function setHlsEdgeRevocationRetryDelaysForTests(delays: readonly number[
 /** Test-only: restores the production backoff schedule. */
 export function resetHlsEdgeRevocationRetryDelaysForTests(): void {
   retryDelaysMs = [2_000, 8_000, 20_000];
+}
+
+/** Test-only: how many deliveries this process currently holds open, for asserting the fan-out bound. */
+export function hlsEdgeRevocationPendingCountForTests(): number {
+  return pendingDeliveries.size;
 }

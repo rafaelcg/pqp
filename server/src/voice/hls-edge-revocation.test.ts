@@ -2,24 +2,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hlsEdgeChannelRevocationKey,
   hlsEdgeRevocationKey,
+  hlsEdgeRevocationPendingCountForTests,
   resetHlsEdgeRevocationRetryDelaysForTests,
   setHlsEdgeRevocationRetryDelaysForTests,
   writeHlsEdgeChannelRevocation,
   writeHlsEdgeRevocation,
+  writeHlsEdgeRevocationAt,
   writeHlsEdgeRevocationForScope,
 } from "./hls-edge-revocation.js";
 
 /**
  * The API-side half of the edge Worker's KV denylist: this is what actually
- * writes the keys `PartyPassRevocationGate` (Worker side,
- * `tools/hls-edge/src/party-pass-revocation.js`) reads. What has to be
- * right: the key shapes match exactly, a write never regresses an already-
- * recorded newer revocation (monotonic), a failed write retries through a
- * bounded in-process queue rather than being silently lost, KV requests
- * never pile up unbounded, response bodies are always drained, and the
+ * writes the append-only keys `PartyPassRevocationGate` (Worker side,
+ * `tools/hls-edge/src/party-pass-revocation.js`) lists back. What has to be
+ * right: the key shapes match exactly, every write is a plain unconditional
+ * PUT (no read first -- that read-before-write was the bug Farol caught,
+ * see the module doc comment), two concurrent writers for the same
+ * (userId, channelId) both survive regardless of which PUT lands first, a
+ * failed write retries through a bounded queue rather than being silently
+ * lost, the total number of in-flight deliveries is bounded (not just the
+ * KV request concurrency), response bodies are always drained, and the
  * whole thing stays a no-op (not even a log line) when the three
- * `HLS_EDGE_KV_*` env vars are not all set -- which is every deployment
- * that has not provisioned the edge KV namespace.
+ * `HLS_EDGE_KV_*` env vars are not all set.
  */
 const ACCOUNT_ID = "acct-123";
 const NAMESPACE_ID = "ns-456";
@@ -37,38 +41,35 @@ function clearKvEnv(): void {
   delete process.env.HLS_EDGE_KV_API_TOKEN;
 }
 
-/** A fake KV REST backend: GET returns whatever was last PUT (or 404), matching real semantics closely enough to test read-modify-write. */
-function fakeKvBackend(initial: Record<string, string> = {}) {
-  const store = new Map(Object.entries(initial));
-  const calls: Array<{ method: string; url: string }> = [];
+/** A fake KV REST backend: PUT stores under the key, GET/LIST are not used by the write path any more but are modeled for completeness. */
+function fakeKvBackend() {
+  const store = new Map<string, string>();
   const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const urlStr = String(url);
-    calls.push({ method, url: urlStr });
     const key = decodeURIComponent(urlStr.split("/values/")[1]!.split("?")[0]!);
-    if (method === "GET") {
-      const value = store.get(key);
-      if (value === undefined) {
-        return new Response("", { status: 404 });
-      }
-      return new Response(value, { status: 200 });
-    }
     if (method === "PUT") {
       store.set(key, String(init?.body));
       return new Response(JSON.stringify({ success: true }), { status: 200 });
     }
     throw new Error(`unexpected method ${method}`);
   });
-  return { fetchImpl, store, calls };
+  return { fetchImpl, store };
 }
 
 describe("hlsEdgeRevocationKey / hlsEdgeChannelRevocationKey", () => {
-  it("matches the Worker gate's own per-viewer key shape: userId:channelId", () => {
-    expect(hlsEdgeRevocationKey("user-1", "chan-1")).toBe("user-1:chan-1");
+  it("is append-only: userId:channelId:revokedAtMs", () => {
+    expect(hlsEdgeRevocationKey("user-1", "chan-1", 1_000)).toBe("user-1:chan-1:1000");
   });
 
-  it("matches the Worker gate's own channel-wide key shape: channel:<channelId>", () => {
-    expect(hlsEdgeChannelRevocationKey("chan-1")).toBe("channel:chan-1");
+  it("channel-wide key is append-only too: channel:channelId:revokedAtMs", () => {
+    expect(hlsEdgeChannelRevocationKey("chan-1", 2_000)).toBe("channel:chan-1:2000");
+  });
+
+  it("two revocations of the same (userId, channelId) at different times get two DIFFERENT keys -- the whole point", () => {
+    expect(hlsEdgeRevocationKey("user-1", "chan-1", 1_000)).not.toBe(
+      hlsEdgeRevocationKey("user-1", "chan-1", 2_000),
+    );
   });
 });
 
@@ -98,15 +99,15 @@ describe("writeHlsEdgeRevocation", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("reads then PUTs the exact key, TTL and bearer token the Worker's KV namespace expects", async () => {
+  it("PUTs the exact key, TTL and bearer token the Worker's KV namespace expects -- no GET first", async () => {
     setKvEnv();
     const { fetchImpl, store } = fakeKvBackend();
     await writeHlsEdgeRevocation("user-1", "chan-1", 1_726_000_000_000, fetchImpl);
-    expect(store.get("user-1:chan-1")).toBe("1726000000000");
-    const putCall = fetchImpl.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT")!;
-    const [url, init] = putCall;
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // one PUT, no read-before-write
+    expect(store.get("user-1:chan-1:1726000000000")).toBe("1726000000000");
+    const [url, init] = fetchImpl.mock.calls[0]!;
     expect(String(url)).toBe(
-      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/storage/kv/namespaces/${NAMESPACE_ID}/values/user-1%3Achan-1?expiration_ttl=21600`,
+      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/storage/kv/namespaces/${NAMESPACE_ID}/values/user-1%3Achan-1%3A1726000000000?expiration_ttl=21600`,
     );
     expect((init as RequestInit).method).toBe("PUT");
     expect(((init as RequestInit).headers as Record<string, string>).Authorization).toBe(
@@ -120,69 +121,84 @@ describe("writeHlsEdgeRevocation", () => {
     process.env.LIVE_HLS_PARTY_PASS_TTL_MS = "60000"; // 1 minute -- must not shrink the KV TTL
     const { fetchImpl } = fakeKvBackend();
     await writeHlsEdgeRevocation("user-1", "chan-1", 1_000, fetchImpl);
-    const putCall = fetchImpl.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT")!;
-    expect(String(putCall[0])).toContain("expiration_ttl=21600");
+    expect(String(fetchImpl.mock.calls[0]![0])).toContain("expiration_ttl=21600");
     delete process.env.LIVE_HLS_PARTY_PASS_TTL_MS;
   });
 
-  describe("monotonic writes", () => {
-    it("writes a newer timestamp over an older recorded one", async () => {
+  describe("append-only under concurrent writers", () => {
+    it("two racing writes for the same (userId, channelId) BOTH survive, regardless of which PUT lands first", async () => {
       setKvEnv();
-      const { fetchImpl, store } = fakeKvBackend({ "user-1:chan-1": "1000" });
-      await writeHlsEdgeRevocation("user-1", "chan-1", 2_000, fetchImpl);
-      expect(store.get("user-1:chan-1")).toBe("2000");
+      const { store } = fakeKvBackend();
+      // Simulate network reordering: the OLDER write's PUT is issued but
+      // resolves AFTER the NEWER write's PUT already landed -- the exact
+      // interleaving Farol's finding described. With one mutable key and a
+      // read-then-write, the older write could clobber the newer one; with
+      // append-only keys there is nothing to clobber.
+      let resolveOlderPut!: () => void;
+      const olderPutGate = new Promise<void>((resolve) => {
+        resolveOlderPut = resolve;
+      });
+      const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const key = decodeURIComponent(String(url).split("/values/")[1]!.split("?")[0]!);
+        if (key.includes(":1000")) {
+          // the OLDER write -- held open until the newer one below finishes
+          await olderPutGate;
+        }
+        store.set(key, String(init?.body));
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      });
+      const older = writeHlsEdgeRevocation("user-1", "chan-1", 1_000, fetchImpl);
+      const newer = writeHlsEdgeRevocation("user-1", "chan-1", 2_000, fetchImpl);
+      await newer; // the newer write's PUT lands first
+      resolveOlderPut(); // now let the older write's PUT land
+      await older;
+      // BOTH keys exist -- the Worker's gate lists the prefix and takes the
+      // max, so this is correct regardless of arrival order.
+      expect(store.get("user-1:chan-1:1000")).toBe("1000");
+      expect(store.get("user-1:chan-1:2000")).toBe("2000");
     });
 
-    it("does not regress an already-newer recorded timestamp -- a late-arriving older write loses", async () => {
+    it("an in-memory fake with interleaved concurrent writers never loses a key", async () => {
       setKvEnv();
-      const { fetchImpl, store, calls } = fakeKvBackend({ "user-1:chan-1": "5000" });
-      await writeHlsEdgeRevocation("user-1", "chan-1", 1_000, fetchImpl);
-      expect(store.get("user-1:chan-1")).toBe("5000");
-      // Read-only: no PUT was even attempted once the GET showed a newer value.
-      expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
-    });
-
-    it("treats an equal timestamp as already-recorded (no write, no failure)", async () => {
-      setKvEnv();
-      const { fetchImpl, calls } = fakeKvBackend({ "user-1:chan-1": "5000" });
-      await writeHlsEdgeRevocation("user-1", "chan-1", 5_000, fetchImpl);
-      expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
-    });
-
-    it("writes plainly when nothing is recorded yet (a 404 GET)", async () => {
-      setKvEnv();
-      const { fetchImpl, store } = fakeKvBackend();
-      await writeHlsEdgeRevocation("user-1", "chan-1", 4_000, fetchImpl);
-      expect(store.get("user-1:chan-1")).toBe("4000");
+      const { store, fetchImpl } = fakeKvBackend();
+      // 20 concurrent evictions for the same (userId, channelId), all
+      // different timestamps, fired without awaiting each other -- the
+      // shape a burst of moderation actions or a bus-replicated eviction
+      // storm would actually produce.
+      await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          writeHlsEdgeRevocation("user-1", "chan-1", 1_000 + i, fetchImpl),
+        ),
+      );
+      for (let i = 0; i < 20; i++) {
+        expect(store.get(`user-1:chan-1:${1_000 + i}`)).toBe(String(1_000 + i));
+      }
     });
   });
 
   describe("retry on failure", () => {
-    it("retries after a network error and succeeds on a later attempt", async () => {
+    it("retries after a network error and succeeds on a later attempt, then the SAME key (idempotent PUT)", async () => {
       setKvEnv();
       let attempt = 0;
-      const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-        const method = init?.method ?? "GET";
-        if (method === "GET") {
-          return new Response("", { status: 404 });
-        }
+      let putKey: string | undefined;
+      const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
         attempt += 1;
+        putKey = decodeURIComponent(String(url).split("/values/")[1]!.split("?")[0]!);
         if (attempt < 2) {
           throw new Error("network down");
         }
+        expect((init as RequestInit).body).toBe("1000"); // same value every attempt
         return new Response(JSON.stringify({ success: true }), { status: 200 });
       });
       await writeHlsEdgeRevocation("user-1", "chan-1", 1_000, fetchImpl);
       expect(attempt).toBe(2);
+      expect(putKey).toBe("user-1:chan-1:1000");
     });
 
     it("gives up after exhausting retries and logs once with the attempt count", async () => {
       setKvEnv();
       const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-      const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-        if ((init?.method ?? "GET") === "GET") {
-          return new Response("", { status: 404 });
-        }
+      const fetchImpl = vi.fn(async () => {
         throw new Error("still down");
       });
       await writeHlsEdgeRevocation("user-1", "chan-1", 1_000, fetchImpl);
@@ -202,30 +218,23 @@ describe("writeHlsEdgeRevocation", () => {
         writeHlsEdgeRevocation("user-1", "chan-1", 1_000, networkFail),
       ).resolves.toBeUndefined();
 
-      const rejected = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
-        (init?.method ?? "GET") === "GET"
-          ? new Response("", { status: 404 })
-          : new Response("forbidden", { status: 403 }),
-      );
+      const rejected = vi.fn(async () => new Response("forbidden", { status: 403 }));
       await expect(
         writeHlsEdgeRevocation("user-1", "chan-1", 1_000, rejected),
       ).resolves.toBeUndefined();
     });
   });
 
-  describe("bounded concurrency", () => {
+  describe("bounded fan-out", () => {
     it("never has more than a small number of KV requests in flight at once", async () => {
       setKvEnv();
       let inFlight = 0;
       let maxInFlight = 0;
-      const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const fetchImpl = vi.fn(async () => {
         inFlight += 1;
         maxInFlight = Math.max(maxInFlight, inFlight);
         await new Promise((resolve) => setTimeout(resolve, 5));
         inFlight -= 1;
-        if ((init?.method ?? "GET") === "GET") {
-          return new Response("", { status: 404 });
-        }
         return new Response(JSON.stringify({ success: true }), { status: 200 });
       });
       await Promise.all(
@@ -234,7 +243,41 @@ describe("writeHlsEdgeRevocation", () => {
         ),
       );
       expect(maxInFlight).toBeLessThanOrEqual(4);
-      expect(fetchImpl).toHaveBeenCalledTimes(40); // 20 GETs + 20 PUTs
+      expect(fetchImpl).toHaveBeenCalledTimes(20); // one PUT per write, no GET
+    });
+
+    it("drops a new delivery and logs once the pending-delivery bound is reached, without throwing", async () => {
+      setKvEnv();
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      // Hold every PUT open forever so nothing ever settles and frees a slot.
+      let release!: () => void;
+      const neverSettles = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const fetchImpl = vi.fn(async () => {
+        await neverSettles;
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      });
+      // Fill the bound directly through the exported hook rather than
+      // 1,000 real writes -- exercises the same guard cheaply.
+      const fills = Array.from({ length: 1_000 }, (_, i) =>
+        writeHlsEdgeRevocationAt(`fill-${i}`, 1_000, fetchImpl),
+      );
+      // Give them a turn to register in the pending map.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(hlsEdgeRevocationPendingCountForTests()).toBe(1_000);
+
+      const overflowFetch = vi.fn();
+      await writeHlsEdgeRevocationAt("overflow-key", 1_000, overflowFetch);
+      expect(overflowFetch).not.toHaveBeenCalled();
+      const overflowLine = logSpy.mock.calls
+        .map((c) => String(c[0]))
+        .find((line) => line.includes("voice.hlsEdgeRevocationQueueFull"));
+      expect(overflowLine).toBeTruthy();
+
+      release();
+      await Promise.all(fills);
+      logSpy.mockRestore();
     });
   });
 });
@@ -244,12 +287,11 @@ describe("writeHlsEdgeChannelRevocation", () => {
     clearKvEnv();
   });
 
-  it("writes the channel-wide key, not a per-viewer one", async () => {
+  it("writes the channel-wide append-only key, not a per-viewer one", async () => {
     setKvEnv();
     const { fetchImpl, store } = fakeKvBackend();
     await writeHlsEdgeChannelRevocation("chan-1", 3_000, fetchImpl);
-    expect(store.get("channel:chan-1")).toBe("3000");
-    expect(store.has("chan-1")).toBe(false);
+    expect(store.get("channel:chan-1:3000")).toBe("3000");
   });
 });
 
@@ -269,8 +311,8 @@ describe("writeHlsEdgeRevocationForScope", () => {
       writeHlsEdgeRevocationForScope("chan-1", ["alice", "bob"], 1_000);
       // Fire-and-forget: give the microtask/timer queue a couple of turns.
       await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(store.get("alice:chan-1")).toBe("1000");
-      expect(store.get("bob:chan-1")).toBe("1000");
+      expect(store.get("alice:chan-1:1000")).toBe("1000");
+      expect(store.get("bob:chan-1:1000")).toBe("1000");
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -17,25 +17,38 @@
  * own (already accepted, TTL-bounded) trade-off -- see README.md "What this
  * Worker does NOT make faster" for that distinction.
  *
- * TWO KEYS PER CHECK, NOT ONE. `userId:channelId` (a kick, a ban, a role
- * losing VIEW -- one viewer) and `channel:channelId` (a channel deleted, or
- * gone private for the whole audience -- no fixed viewer list to key by,
- * see `hls-edge-revocation.ts`'s module doc comment on the origin side).
- * `mintHlsPartyPass` binds `channelId` into a pass's signed claims, so a
- * viewer kicked from one channel must not lose a still-valid pass for
- * another channel they legally hold -- neither key is ever userId alone.
+ * TWO PREFIXES PER CHECK, NOT ONE. `<userId>:<channelId>:` (a kick, a ban, a
+ * role losing VIEW -- one viewer) and `channel:<channelId>:` (a channel
+ * deleted, or gone private for the whole audience -- no fixed viewer list
+ * to key by, see `hls-edge-revocation.ts`'s module doc comment on the
+ * origin side). `mintHlsPartyPass` binds `channelId` into a pass's signed
+ * claims, so a viewer kicked from one channel must not lose a still-valid
+ * pass for another channel they legally hold -- neither prefix is ever
+ * userId alone.
  *
- * THE STORED VALUE IS A TIMESTAMP, NOT A BOOLEAN, AND REVOCATION IS A
- * COMPARISON, NOT A PRESENCE CHECK. A credential names its own `issuedAt`;
- * it is revoked when EITHER key's stored revocation time is newer than
- * that -- the same "was this minted before or after the most recent
- * eviction" rule `hls-revocation.ts`'s in-memory `isHlsAccessRevoked`
- * already applies on the origin. A viewer banned and later un-banned mints
- * a FRESH credential with a newer `issuedAt` than the old ban record, so
- * `check()` correctly reads them as not-revoked again without waiting out
- * the ban record's own TTL -- treating presence alone as revoked (the
- * pre-2026-09-14 shape) would have locked a re-admitted viewer out for up
- * to the party pass's own 6 h ceiling regardless of the un-ban.
+ * APPEND-ONLY KEYS, LISTED AND MAXED, NOT ONE MUTABLE KEY READ. Each
+ * eviction on the origin writes its OWN key,
+ * `<prefix><revokedAtMs>` -- `hls-edge-revocation.ts` never overwrites an
+ * existing key, so there is no read-modify-write race to lose (Farol,
+ * 2026-09-14: an earlier single-mutable-key design let an older write's
+ * PUT clobber a newer one that had already landed, on pure network
+ * reordering between two concurrent evictions). `kv.list({ prefix })`
+ * reads back every key under a prefix and this gate takes the newest
+ * `revokedAtMs` suffix among them -- correct regardless of which PUT
+ * landed first, because a `list` is a snapshot read, not a race with a
+ * writer the way a conditional PUT would be.
+ *
+ * REVOCATION IS A COMPARISON, NOT A PRESENCE CHECK. A credential names its
+ * own `issuedAt`; it is revoked when the newest listed timestamp under
+ * EITHER prefix is newer than that -- the same "was this minted before or
+ * after the most recent eviction" rule `hls-revocation.ts`'s in-memory
+ * `isHlsAccessRevoked` already applies on the origin. A viewer banned and
+ * later un-banned mints a FRESH credential with a newer `issuedAt` than the
+ * old ban record, so `check()` correctly reads them as not-revoked again
+ * without waiting out the ban record's own TTL -- treating ANY match as
+ * revoked (the pre-2026-09-14 shape) would have locked a re-admitted
+ * viewer out for up to the party pass's own 6 h ceiling regardless of the
+ * un-ban.
  *
  * TWO DIFFERENT KINDS OF "NO ANSWER", TWO DIFFERENT DEFAULTS -- unchanged
  * from the pre-sign-off TODO this replaces. An UNCONFIGURED binding (no KV
@@ -47,15 +60,26 @@
  * shared cache, or (for a `?t=` viewer) the origin's own always-current
  * check.
  *
- * CACHED, NOT READ ON EVERY POLL. `PARTY_PASS_REVOCATION_CACHE_TTL_MS` (30 s)
- * bounds how stale a cached answer can be -- the combined (user, channel)
- * revocation timestamp is cached, not a boolean, so the same cache entry
- * answers correctly for two different credentials with two different
- * `issuedAt` claims polling inside the same 30 s window. Without this, a
- * synchronized-expiry event turns into hundreds of KV reads a second
- * landing on KV instead of the Cache API hit this whole Worker exists to
- * serve (Farol flagged the unbounded version of this as a MEDIUM
+ * CACHED, NOT LISTED ON EVERY POLL. `PARTY_PASS_REVOCATION_CACHE_TTL_MS`
+ * (30 s) bounds how stale a cached answer can be -- the MAX revocation
+ * timestamp under a prefix is what gets cached, not a boolean, so the same
+ * cache entry answers correctly for two different credentials with two
+ * different `issuedAt` claims polling inside the same 30 s window. Without
+ * this, a synchronized-expiry event turns into hundreds of KV list calls a
+ * second landing on KV instead of the Cache API hit this whole Worker
+ * exists to serve (Farol flagged the unbounded version of this as a MEDIUM
  * performance regression).
+ *
+ * LIST IS NOT PAGINATED HERE ON PURPOSE. A real eviction is a rare,
+ * human-triggered event (a kick, a ban) and each key self-expires after
+ * the party pass's own 6 h ceiling, so the number of live keys under one
+ * prefix is bounded by how many times ONE (userId, channelId) pair (or ONE
+ * channel) was evicted inside the last 6 hours -- a handful at most, well
+ * inside Cloudflare's default `list` page size. This gate reads the first
+ * page and takes the max of what it sees; missing a stray key past that
+ * page would only ever make a check MORE permissive by a few keys' worth
+ * of margin in a pathological case this design does not expect to hit, not
+ * less safe than the single-key design it replaced.
  */
 
 export const PARTY_PASS_REVOCATION_CACHE_TTL_MS = 30_000;
@@ -67,16 +91,20 @@ export const PARTY_PASS_REVOCATION_CACHE_MAX_ENTRIES = 10_000;
  * so a test can hold its own instance instead of racing shared state across
  * `node --test`'s parallel test files.
  */
+
 /**
- * @param {unknown} raw
+ * The `revokedAtMs` suffix of an append-only key, given the prefix it was
+ * listed under (`<userId>:<channelId>:` or `channel:<channelId>:`) -- 0 for
+ * anything that fails to parse as a positive number, so a malformed or
+ * unexpected key name can only ever be ignored, never read as a
+ * revocation.
+ * @param {string} keyName
+ * @param {string} prefix
  * @returns {number}
  */
-function parseTimestamp(raw) {
-  if (raw === null || raw === undefined) {
-    return 0;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
+function suffixTimestamp(keyName, prefix) {
+  const parsed = Number(keyName.slice(prefix.length));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 export class PartyPassRevocationGate {
@@ -113,35 +141,43 @@ export class PartyPassRevocationGate {
   }
 
   /**
-   * The most recent revocation timestamp recorded at `key`, or 0 if there
-   * is none -- 0 rather than `null` because every comparison against it is
-   * `revokedAt > issuedAt`, and a real `issuedAt` is always a positive
-   * epoch millisecond value, so 0 can never itself read as "revoked".
-   * @param {{ get(key: string): Promise<unknown> }} kv
-   * @param {string} key
+   * The newest revocation timestamp among every key listed under `prefix`,
+   * or 0 if there are none -- 0 rather than `null` because every
+   * comparison against it is `revokedAt > issuedAt`, and a real `issuedAt`
+   * is always a positive epoch millisecond value, so 0 can never itself
+   * read as "revoked".
+   * @param {{ list(opts: { prefix: string }): Promise<{ keys: { name: string }[] }> }} kv
+   * @param {string} prefix
    * @param {number} now
    * @returns {Promise<{ revokedAt: number; kvError: boolean }>}
    */
-  async _readOne(kv, key, now) {
-    const cached = this._cached(key, now);
+  async _readMaxForPrefix(kv, prefix, now) {
+    const cached = this._cached(prefix, now);
     if (cached) {
       return { revokedAt: cached.revokedAt, kvError: false };
     }
-    let revokedAt;
+    let listed;
     try {
-      revokedAt = parseTimestamp(await kv.get(key));
+      listed = await kv.list({ prefix });
     } catch {
       // Bound but unreachable: fail CLOSED (see the module doc comment).
       // Not cached -- a real outage should not pin every request to
       // "revoked" for the next 30 s once the namespace recovers.
       return { revokedAt: Number.POSITIVE_INFINITY, kvError: true };
     }
-    this._remember(key, revokedAt, now);
+    let revokedAt = 0;
+    for (const key of listed?.keys ?? []) {
+      const ts = suffixTimestamp(key.name, prefix);
+      if (ts > revokedAt) {
+        revokedAt = ts;
+      }
+    }
+    this._remember(prefix, revokedAt, now);
     return { revokedAt, kvError: false };
   }
 
   /**
-   * @param {{ get(key: string): Promise<unknown> } | null | undefined} kv
+   * @param {{ list(opts: { prefix: string }): Promise<{ keys: { name: string }[] }> } | null | undefined} kv
    * @param {string} userId
    * @param {string} channelId
    * @param {number} issuedAt The credential's own `issuedAt` claim.
@@ -153,8 +189,8 @@ export class PartyPassRevocationGate {
       return { revoked: false, kvError: false };
     }
     const [user, channel] = await Promise.all([
-      this._readOne(kv, `${userId}:${channelId}`, now),
-      this._readOne(kv, `channel:${channelId}`, now),
+      this._readMaxForPrefix(kv, `${userId}:${channelId}:`, now),
+      this._readMaxForPrefix(kv, `channel:${channelId}:`, now),
     ]);
     if (user.kvError || channel.kvError) {
       return { revoked: true, kvError: true };

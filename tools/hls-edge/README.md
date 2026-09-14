@@ -172,23 +172,36 @@ Three things worth being precise about:
    above, with one extra rule for production.** `PartyPassRevocationGate`
    (`src/party-pass-revocation.js`) checks `HLS_REVOKED_USERS` before
    honoring a party pass — the SAME gate and the SAME 30 s bound as the
-   rendition-route check above. TWO keys, not one: `userId:channelId` (a
-   kick, a ban, a role losing VIEW for one viewer) and `channel:channelId`
-   (a channel deleted or gone private for the whole audience, which has no
-   fixed viewer list to key per-viewer entries by). Both store a
-   REVOCATION TIMESTAMP, not a flag, compared against the credential's own
-   `issuedAt` claim — the same "minted before or after the most recent
-   eviction" rule `hls-revocation.ts`'s in-memory check already applies, so
-   a viewer banned and later un-banned mints a fresh credential that reads
-   as not-revoked again immediately, rather than staying locked out for the
-   old ban record's remaining TTL. Written to by
+   rendition-route check above. TWO prefixes, not one: `<userId>:<channelId>:`
+   (a kick, a ban, a role losing VIEW for one viewer) and
+   `channel:<channelId>:` (a channel deleted or gone private for the whole
+   audience, which has no fixed viewer list to key per-viewer entries by).
+   Each EVICTION writes its OWN key under the relevant prefix —
+   `<prefix><revokedAtMs>`, append-only, never overwritten — and the gate
+   `list()`s every key under both prefixes and takes the newest, compared
+   against the credential's own `issuedAt` claim — the same "minted before
+   or after the most recent eviction" rule `hls-revocation.ts`'s in-memory
+   check already applies, so a viewer banned and later un-banned mints a
+   fresh credential that reads as not-revoked again immediately, rather
+   than staying locked out for the old ban record's remaining TTL.
+   Append-only on purpose, not one mutable key kept "monotonic" by reading
+   before writing: a read-then-conditionally-write design was tried first
+   and Farol (2026-09-14) caught the real race in it — two evictions racing
+   each other can each read the same "nothing here yet" snapshot before
+   either PUT lands, and if the OLDER write's PUT happens to reach
+   Cloudflare after the NEWER one already did, the older, smaller
+   timestamp silently overwrites it. Giving every eviction its own key
+   removes the race outright: two concurrent writers for the same
+   (userId, channelId) write two DIFFERENT keys, so there is nothing to
+   clobber regardless of arrival order, and each key self-expires on its
+   own after the party pass's own 6 h ceiling. Written to by
    `server/src/voice/hls-edge-revocation.ts` the moment `hls-revocation.ts`
    records an eviction (a kick, a ban, a role losing VIEW, a channel going
-   private or being deleted), monotonically (a write can only raise a
-   key's recorded timestamp, never lower it, so two racing writes can never
-   have an older one clobber a newer one that already landed) and retried
-   through a small bounded in-process queue on failure. See "Enabling in
-   production" below for the exact provisioning steps. The extra rule:
+   private or being deleted), retried through a small bounded in-process
+   queue on failure (capped at 1,000 total pending deliveries across every
+   key, `voice.hlsEdgeRevocationQueueFull` if that bound is ever hit). See
+   "Enabling in production" below for the exact provisioning steps. The
+   extra rule:
    because a party pass's ceiling (6 h) is so much wider than a `?t=`
    token's, **honoring one with NO KV behind it at all in production is a
    materially different exposure than the `?t=` trade-off ever was** — so

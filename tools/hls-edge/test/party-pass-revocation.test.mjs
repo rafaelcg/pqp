@@ -6,18 +6,24 @@ import {
   partyPassRequiresKvInProduction,
 } from "../src/party-pass-revocation.js";
 
-/** A minimal `KVNamespace`-shaped fake: only `get` is ever called. */
-function fakeKv(entries = {}) {
+/**
+ * A minimal `KVNamespace`-shaped fake backed by a plain object, matching
+ * the append-only key shape `hls-edge-revocation.ts` writes:
+ * `<userId>:<channelId>:<revokedAtMs>` or `channel:<channelId>:<revokedAtMs>`.
+ * Only `list` is ever called by the gate now -- `get` is not part of the
+ * read path any more (see the module doc comment for why).
+ */
+function fakeKv(keyNames = []) {
   return {
-    async get(key) {
-      return Object.prototype.hasOwnProperty.call(entries, key) ? entries[key] : null;
+    async list({ prefix }) {
+      return { keys: keyNames.filter((name) => name.startsWith(prefix)).map((name) => ({ name })) };
     },
   };
 }
 
 function throwingKv(error = new Error("kv unavailable")) {
   return {
-    async get() {
+    async list() {
       throw error;
     },
   };
@@ -31,74 +37,104 @@ test("no KV bound: fails open, not revoked, no error", async () => {
   assert.deepEqual(result, { revoked: false, kvError: false });
 });
 
-test("KV bound, neither key present: not revoked", async () => {
+test("KV bound, no keys under either prefix: not revoked", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv();
+  const kv = fakeKv([]);
   const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
   assert.deepEqual(result, { revoked: false, kvError: false });
 });
 
-test("KV bound, per-viewer key revoked AFTER issuedAt: revoked", async () => {
+test("KV bound, a per-viewer key AFTER issuedAt: revoked", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv({ "user-1:chan-1": String(ISSUED_AT + 1) });
+  const kv = fakeKv([`user-1:chan-1:${ISSUED_AT + 1}`]);
   const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
   assert.deepEqual(result, { revoked: true, kvError: false });
 });
 
-test("KV bound, per-viewer key revoked BEFORE issuedAt: NOT revoked -- a fresh credential outruns an old ban record", async () => {
+test("KV bound, a per-viewer key BEFORE issuedAt: NOT revoked -- a fresh credential outruns an old ban record", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv({ "user-1:chan-1": String(ISSUED_AT - 1) });
+  const kv = fakeKv([`user-1:chan-1:${ISSUED_AT - 1}`]);
   const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
   assert.deepEqual(result, { revoked: false, kvError: false });
 });
 
 test("a revocation exactly AT issuedAt does not revoke -- ties go to the fresh grant, same rule as hls-revocation.ts", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv({ "user-1:chan-1": String(ISSUED_AT) });
+  const kv = fakeKv([`user-1:chan-1:${ISSUED_AT}`]);
   const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
   assert.equal(result.revoked, false);
 });
 
-test("channel-wide key revoked after issuedAt also revokes, even with no per-viewer record", async () => {
+test("channel-wide key revoked after issuedAt also revokes, even with no per-viewer key", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv({ "channel:chan-1": String(ISSUED_AT + 1) });
+  const kv = fakeKv([`channel:chan-1:${ISSUED_AT + 1}`]);
   const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
   assert.deepEqual(result, { revoked: true, kvError: false });
 });
 
-test("takes the max of the two keys when both are present", async () => {
+test("takes the MAX across multiple append-only keys under the same prefix, not just the first listed", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv({
-    "user-1:chan-1": String(ISSUED_AT - 100),
-    "channel:chan-1": String(ISSUED_AT + 1),
-  });
+  // Three separate evictions for the same viewer, in an arbitrary listed
+  // order -- append-only means all three keys persist.
+  const kv = fakeKv([
+    `user-1:chan-1:${ISSUED_AT - 5_000}`,
+    `user-1:chan-1:${ISSUED_AT + 2_000}`,
+    `user-1:chan-1:${ISSUED_AT - 1_000}`,
+  ]);
+  const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
+  assert.equal(result.revoked, true); // the +2000 key wins
+});
+
+test("takes the max of the per-viewer prefix and the channel-wide prefix together", async () => {
+  const gate = new PartyPassRevocationGate();
+  const kv = fakeKv([
+    `user-1:chan-1:${ISSUED_AT - 100}`,
+    `channel:chan-1:${ISSUED_AT + 1}`,
+  ]);
   const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
   assert.equal(result.revoked, true);
 });
 
 test("keyed by userId:channelId -- a per-viewer revocation on one channel does not leak to another", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv({ "user-1:chan-1": String(ISSUED_AT + 1) });
+  const kv = fakeKv([`user-1:chan-1:${ISSUED_AT + 1}`]);
   assert.equal((await gate.check(kv, "user-1", "chan-2", ISSUED_AT)).revoked, false);
   assert.equal((await gate.check(kv, "user-2", "chan-1", ISSUED_AT)).revoked, false);
 });
 
-test("KV bound but throws on either key: fails CLOSED (revoked: true), and reports the error", async () => {
+test("a channelId that is a PREFIX of another channelId does not collide (the trailing colon protects it)", async () => {
+  const gate = new PartyPassRevocationGate();
+  const kv = fakeKv([`user-1:chan-12:${ISSUED_AT + 1}`]); // a DIFFERENT channel, "chan-12"
+  const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
+  assert.equal(result.revoked, false);
+});
+
+test("concurrent writers that land in either order still both show up in the same list -- nothing to race on the read side", async () => {
+  const gate = new PartyPassRevocationGate();
+  // Simulates two evictions (older, newer) whose PUTs reached the store in
+  // reverse chronological order -- append-only means the list still
+  // contains both regardless, and the gate still finds the newer one.
+  const kv = fakeKv([`user-1:chan-1:${ISSUED_AT + 500}`, `user-1:chan-1:${ISSUED_AT - 500}`]);
+  const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
+  assert.equal(result.revoked, true);
+});
+
+test("KV bound but throws on list: fails CLOSED (revoked: true), and reports the error", async () => {
   const gate = new PartyPassRevocationGate();
   const kv = throwingKv();
   const result = await gate.check(kv, "user-1", "chan-1", ISSUED_AT);
   assert.deepEqual(result, { revoked: true, kvError: true });
 });
 
-test("a KV error is not cached -- the next call re-reads once the namespace recovers", async () => {
+test("a KV error is not cached -- the next call re-lists once the namespace recovers", async () => {
   const gate = new PartyPassRevocationGate();
   let shouldThrow = true;
   const kv = {
-    async get() {
+    async list() {
       if (shouldThrow) {
         throw new Error("still down");
       }
-      return null;
+      return { keys: [] };
     },
   };
   const now = 1_000_000;
@@ -111,41 +147,34 @@ test("a KV error is not cached -- the next call re-reads once the namespace reco
   assert.deepEqual(second, { revoked: false, kvError: false });
 });
 
-test("caches the revocation timestamp for PARTY_PASS_REVOCATION_CACHE_TTL_MS, reused correctly across two different issuedAt values", async () => {
+test("caches the max timestamp for PARTY_PASS_REVOCATION_CACHE_TTL_MS, reused correctly across two different issuedAt values", async () => {
   const gate = new PartyPassRevocationGate();
-  let reads = 0;
+  let listCalls = 0;
   const kv = {
-    async get(key) {
-      reads += 1;
-      return key === "user-1:chan-1" ? String(ISSUED_AT + 500) : null;
+    async list({ prefix }) {
+      listCalls += 1;
+      return prefix === "user-1:chan-1:" ? { keys: [{ name: `user-1:chan-1:${ISSUED_AT + 500}` }] } : { keys: [] };
     },
   };
   const now = 1_000_000;
-  // A credential issued before the recorded revocation: revoked.
   assert.equal((await gate.check(kv, "user-1", "chan-1", ISSUED_AT, now)).revoked, true);
-  // A DIFFERENT credential (later issuedAt) checked inside the same cache
-  // window: the cached TIMESTAMP is compared fresh against ITS issuedAt,
-  // not a stale cached boolean -- so this one reads correctly as NOT
-  // revoked without a second KV read.
   assert.equal(
     (await gate.check(kv, "user-1", "chan-1", ISSUED_AT + 1_000, now + 1)).revoked,
     false,
   );
-  assert.equal(reads, 2); // one per distinct key (user, channel), not per call
-  // Still within the window: no new reads.
+  assert.equal(listCalls, 2); // one per distinct prefix, not per call
+  // Still within the window: no new list calls.
   await gate.check(kv, "user-1", "chan-1", ISSUED_AT, now + PARTY_PASS_REVOCATION_CACHE_TTL_MS - 1);
-  assert.equal(reads, 2);
-  // Past the window: re-reads both keys.
+  assert.equal(listCalls, 2);
+  // Past the window: re-lists both prefixes.
   await gate.check(kv, "user-1", "chan-1", ISSUED_AT, now + PARTY_PASS_REVOCATION_CACHE_TTL_MS + 1);
-  assert.equal(reads, 4);
+  assert.equal(listCalls, 4);
 });
 
 test("evicts the oldest entry once the cache is full, rather than growing without bound", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv();
+  const kv = fakeKv([]);
   const now = 1_000_000;
-  // Fill past the cap (10,000) with distinct per-viewer keys (one KV key
-  // each, since the channel key is shared and only adds one more entry).
   const CAP = 10_000;
   for (let i = 0; i < CAP; i++) {
     await gate.check(kv, `user-${i}`, "chan-1", ISSUED_AT, now);
@@ -156,7 +185,7 @@ test("evicts the oldest entry once the cache is full, rather than growing withou
 
 test("partyPassRequiresKvInProduction: false when KV is bound, regardless of ENVIRONMENT", () => {
   assert.equal(
-    partyPassRequiresKvInProduction({ ENVIRONMENT: "production", HLS_REVOKED_USERS: fakeKv() }),
+    partyPassRequiresKvInProduction({ ENVIRONMENT: "production", HLS_REVOKED_USERS: fakeKv([]) }),
     false,
   );
 });
