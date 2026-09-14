@@ -77,9 +77,38 @@ type Session struct {
 
 	audioMixer        *audiomix.Mixer
 	screenAudioSource *audiomix.Source
-	audioEncoder      *aacenc.Encoder
-	audioFrag         *pipeline.AudioFragmenter
-	audioRing         *ring.Ring
+	// audioEncoder holds a remuxEncoder (atomic.Value, not
+	// atomic.Pointer[aacenc.Encoder]: an interface lets
+	// audio_robustness_test.go substitute a fake encoder whose writes
+	// fail on command, without spawning real ffmpeg). runAudioPacer is
+	// the sole writer, swapping it inside recoverAudioEncoder for the one
+	// restart attempt that function allows; Close (a different
+	// goroutine, on process shutdown) reads it to know which encoder to
+	// stop. Loaded/stored only through loadEncoder/storeEncoder, which
+	// centralize the type assertion.
+	audioEncoder atomic.Value
+	// audioNextPTS is the audio track's own running sample-position
+	// counter, atomic (not a runAudioPacer-local variable) so it survives
+	// an encoder restart unbroken: internal/pipeline.AudioFragmenter's
+	// tfdt must never go backwards, and a plain local would reset to 0 in
+	// a freshly started readEncoderFrames goroutine.
+	audioNextPTS atomic.Int64
+	// audioReaderDone is the currently-running readEncoderFrames
+	// goroutine's completion signal. Touched only from runAudioPacer's
+	// own goroutine (set once in EnableAudio before that goroutine
+	// starts, then read-and-replaced inside recoverAudioEncoder, which
+	// runs on it) — see recoverAudioEncoder's doc comment for why waiting
+	// on it before starting a replacement matters.
+	audioReaderDone chan struct{}
+	audioFrag       *pipeline.AudioFragmenter
+	audioRing       *ring.Ring
+	// audioDead is set once, permanently, when the audio pipeline gives
+	// up (a WriteSamples failure survives the one allowed restart):
+	// Health() reports it so a broken pipe that still "looks alive" (the
+	// shape pitfall 15 already cost this repo a debugging afternoon on)
+	// is visible on /healthz instead of silent.
+	audioDead         atomic.Bool
+	audioRestarts     atomic.Uint64
 	audioPartsWritten atomic.Uint64
 	audioBytesWritten atomic.Uint64
 
@@ -111,6 +140,36 @@ func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requeste
 	}
 	return s
 }
+
+// remuxEncoder is the full surface this file needs from an AAC encoder:
+// write PCM in, read frames/errors out, close it down. *aacenc.Encoder
+// satisfies this structurally (Go needs no explicit declaration for
+// that); audio_robustness_test.go substitutes a fake to exercise
+// write-failure, restart and shutdown-ordering behaviour without a real
+// ffmpeg subprocess.
+type remuxEncoder interface {
+	WriteSamples(pcm []float32) error
+	Frames() <-chan aacenc.Frame
+	Errs() <-chan error
+	Close() error
+}
+
+// newEncoderFunc abstracts aacenc.New so tests can substitute a fake
+// encoder factory (see audio_robustness_test.go); production code never
+// reassigns this.
+var newEncoderFunc = func(ctx context.Context, cfg aacenc.Config) (remuxEncoder, error) {
+	return aacenc.New(ctx, cfg)
+}
+
+func (s *Session) loadEncoder() remuxEncoder {
+	v := s.audioEncoder.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(remuxEncoder)
+}
+
+func (s *Session) storeEncoder(enc remuxEncoder) { s.audioEncoder.Store(enc) }
 
 // AudioConfig is everything EnableAudio needs to wire L1.3's audio
 // pipeline onto an already-constructed video Session.
@@ -145,7 +204,7 @@ type AudioConfig struct {
 // Call at most once; ctx's cancellation stops both goroutines this starts
 // and (via aacenc.New's own exec.CommandContext) the ffmpeg subprocess.
 func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
-	enc, err := aacenc.New(ctx, cfg.Encoder)
+	enc, err := newEncoderFunc(ctx, cfg.Encoder)
 	if err != nil {
 		return fmt.Errorf("session: starting the AAC encoder: %w", err)
 	}
@@ -154,7 +213,7 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 	s.screenAudioSource = audiomix.NewSource()
 	s.audioMixer.AddSource("screen", s.screenAudioSource)
 
-	s.audioEncoder = enc
+	s.storeEncoder(enc)
 	s.audioFrag = pipeline.NewAudioFragmenter(pipeline.AudioConfig{
 		Timescale:       aacenc.SampleRate,
 		SegmentDuration: cfg.SegmentTicks,
@@ -176,8 +235,10 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 	s.audioRing.SetInit(audioInit)
 	s.enqueueR2("audio-init.mp4", audioInit, "audio/mp4")
 
-	go s.runAudioPacer(ctx)
-	go s.readEncoderFrames()
+	done := make(chan struct{})
+	s.audioReaderDone = done
+	go s.readEncoderFrames(enc, done)
+	go s.runAudioPacer(ctx, cfg)
 
 	return nil
 }
@@ -297,8 +358,8 @@ func (s *Session) Finish() {
 // already has rather than racing a final in-flight write against the
 // pipe this closes.
 func (s *Session) Close() {
-	if s.audioEncoder != nil {
-		s.audioEncoder.Close()
+	if enc := s.loadEncoder(); enc != nil {
+		enc.Close()
 	}
 }
 
@@ -312,14 +373,21 @@ func (s *Session) publish(frag *pipeline.Fragment) {
 	if !s.initSet.Load() {
 		return
 	}
+	sealedIndex := -1
 	if frag.IsSegmentStart && frag.SegmentIndex > 0 {
-		// The segment this fragment's arrival just sealed: every part it
-		// will ever have is already in the ring (Push only marks it
-		// sealed below; it never adds bytes to an already-closed
-		// segment), so fetching it now, before Push, is safe and exact.
-		s.uploadVideoSegment(frag.SegmentIndex - 1)
+		sealedIndex = frag.SegmentIndex - 1
 	}
+	// Push FIRST, upload second: Ring.Push is what actually marks the
+	// previous segment sealed (Ring.updateTargetDuration, the sealed
+	// flag Playlist() reads), so calling the upload only after Push
+	// returns is what makes "uploaded" and "sealed" the same fact rather
+	// than two events whose relative order depends on reading Ring's
+	// internals correctly by inspection. See
+	// TestSession_R2UploadHappensOnlyAfterSegmentSeals.
 	s.ring.Push(frag)
+	if sealedIndex >= 0 {
+		s.uploadVideoSegment(sealedIndex)
+	}
 	s.partsWritten.Add(1)
 	s.bytesWritten.Add(uint64(len(frag.Bytes)))
 	s.lastPartAtMs.Store(s.elapsedMs())
@@ -432,8 +500,13 @@ func (s *Session) NewMicSink(identity string) micAudioSink {
 // cursor (Mixer.Pull), but *when* a chunk is requested is re-derived from
 // time.Since(s.epoch) every tick, so a late tick catches up immediately
 // rather than letting the whole session's audio fall progressively behind
-// video. Stops when ctx is done.
-func (s *Session) runAudioPacer(ctx context.Context) {
+// video. Stops when ctx is done, or when the audio pipeline is marked
+// dead (see recoverAudioEncoder).
+//
+// This is the sole writer to s.audioEncoder (via Store, inside
+// recoverAudioEncoder) and to s.audioReaderDone, so neither needs a lock
+// beyond audioEncoder's own atomic.Pointer.
+func (s *Session) runAudioPacer(ctx context.Context, cfg AudioConfig) {
 	// Finer than one AAC frame (1024/48000 ~= 21.3ms) so a tick's own
 	// jitter is caught up within roughly one tick, not one frame.
 	const tick = 10 * time.Millisecond
@@ -441,22 +514,103 @@ func (s *Session) runAudioPacer(ctx context.Context) {
 	defer ticker.Stop()
 
 	var emittedFrames int
+	restarted := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if s.audioDead.Load() {
+				return
+			}
 			n := framesElapsed(time.Since(s.epoch), aacenc.SamplesPerFrame, emittedFrames)
 			for i := 0; i < n; i++ {
 				pcm := s.audioMixer.Pull(aacenc.SamplesPerFrame)
-				if err := s.audioEncoder.WriteSamples(pcm); err != nil {
-					log.Printf("pqp-remux: writing PCM to the AAC encoder: %v", err)
+				enc := s.loadEncoder()
+				if enc == nil {
+					s.markAudioDead()
 					return
+				}
+				if err := enc.WriteSamples(pcm); err != nil {
+					log.Printf("pqp-remux: writing PCM to the AAC encoder: %v", err)
+					if !s.recoverAudioEncoder(ctx, cfg, &restarted) {
+						s.markAudioDead()
+						return
+					}
+					// The chunk that failed to write is lost (ffmpeg
+					// never saw it), but emittedFrames must still
+					// advance: it tracks the session's own sample clock
+					// against wall-clock elapsed time (framesElapsed), not
+					// how many chunks were actually delivered, so a lost
+					// chunk here is a brief, bounded glitch rather than a
+					// clock that falls behind and never catches up.
+					emittedFrames++
+					continue
 				}
 				emittedFrames++
 			}
 		}
 	}
+}
+
+// recoverAudioEncoder is called from runAudioPacer's own goroutine after a
+// WriteSamples failure: a broken pipe reported as "fine" by everything
+// downstream is exactly pitfall 15's shape (see CLAUDE.md), so this
+// process attempts exactly ONE replacement ffmpeg subprocess before
+// giving up, rather than silently continuing to look alive while
+// producing nothing.
+//
+// It closes the broken encoder and waits for its reader goroutine to
+// fully finish (via audioReaderDone) BEFORE starting a replacement: two
+// readEncoderFrames goroutines racing to call the single-writer
+// s.audioFrag.Push at once, however briefly, is exactly the kind of bug
+// this ordering exists to make impossible rather than merely unlikely
+// (aacenc.Encoder.Close's own doc comment covers the first half of this —
+// the ffmpeg subprocess and its internal ADTS reader are both fully done
+// by the time Close returns — audioReaderDone covers the second half,
+// this session's own consumer of that now-closed encoder).
+//
+// restarted is the pacer's own "have I already used my one restart"
+// flag, passed by reference so both this call and the next tick's checks
+// share it. Returns true if a replacement encoder is now running (the
+// caller should keep going), false if a restart was already spent or the
+// new subprocess itself failed to start.
+func (s *Session) recoverAudioEncoder(ctx context.Context, cfg AudioConfig, restarted *bool) bool {
+	if old := s.loadEncoder(); old != nil {
+		old.Close()
+	}
+	if s.audioReaderDone != nil {
+		<-s.audioReaderDone
+	}
+
+	if *restarted {
+		log.Print("pqp-remux: AAC encoder failed again after its one allowed restart; giving up on audio for this session")
+		return false
+	}
+	*restarted = true
+
+	enc, err := newEncoderFunc(ctx, cfg.Encoder)
+	if err != nil {
+		log.Printf("pqp-remux: restarting the AAC encoder failed: %v", err)
+		return false
+	}
+	s.audioRestarts.Add(1)
+	s.storeEncoder(enc)
+	done := make(chan struct{})
+	s.audioReaderDone = done
+	go s.readEncoderFrames(enc, done)
+	log.Print("pqp-remux: AAC encoder restarted after a write failure")
+	return true
+}
+
+// markAudioDead permanently flags the audio pipeline as unavailable:
+// Health().AudioDead reports it so a broken pipe that would otherwise
+// still "look enabled" (audioFrag stays non-nil) is visible on /healthz
+// instead of silently producing nothing — pitfall 15's lesson applied to
+// this task's own failure mode.
+func (s *Session) markAudioDead() {
+	s.audioDead.Store(true)
+	log.Print("pqp-remux: audio pipeline marked dead; video passthrough is unaffected")
 }
 
 // framesElapsed returns how many whole frameSamples-sized frames should
@@ -476,30 +630,54 @@ func framesElapsed(elapsed time.Duration, frameSamples, emitted int) int {
 
 // readEncoderFrames is the single goroutine that ever calls
 // s.audioFrag.Push (see AudioFragmenter's own "not safe for concurrent
-// use" doc comment): it reads each AAC frame the encoder produces, in
-// order, assigns it the next 1024-sample slot on the audio track's own
-// timeline, and publishes the resulting CMAF fragment exactly like
-// HandleVideoPacket does for video. Returns once the encoder's Frames()
-// channel closes (Session.Close was called, or the ffmpeg subprocess
-// exited).
-func (s *Session) readEncoderFrames() {
-	var pts int64
+// use" doc comment) for one encoder generation: it reads each AAC frame
+// enc produces, in order, assigns it the next 1024-sample slot on the
+// audio track's own timeline (from the session-wide, restart-surviving
+// audioNextPTS counter), and publishes the resulting CMAF fragment
+// exactly like HandleVideoPacket does for video. Closes done (exactly
+// once, via defer) when it returns, which is either encoder's Frames()
+// channel closing (Session.Close was called, or the ffmpeg subprocess
+// exited) or — see the loop body — never on Errs() alone, since Errs()
+// closing only means no more error reports will ever arrive, not that
+// Frames() is done delivering already-buffered data.
+func (s *Session) readEncoderFrames(enc remuxEncoder, done chan struct{}) {
+	defer close(done)
+
+	framesCh := enc.Frames()
+	errsCh := enc.Errs()
 	for {
 		select {
-		case frame, ok := <-s.audioEncoder.Frames():
+		case frame, ok := <-framesCh:
 			if !ok {
-				return
+				return // the only definitive "no more data, ever" signal
 			}
+			pts := s.audioNextPTS.Add(aacenc.SamplesPerFrame) - aacenc.SamplesPerFrame
 			frag := s.audioFrag.Push(pts, aacenc.SamplesPerFrame, frame.Data)
-			pts += aacenc.SamplesPerFrame
 
+			sealedIndex := -1
 			if frag.IsSegmentStart && frag.SegmentIndex > 0 {
-				s.uploadAudioSegment(frag.SegmentIndex - 1)
+				sealedIndex = frag.SegmentIndex - 1
 			}
-			s.audioRing.Push(frag)
+			s.audioRing.Push(frag) // seals sealedIndex, if any; see publish's matching comment
+			if sealedIndex >= 0 {
+				s.uploadAudioSegment(sealedIndex)
+			}
 			s.audioPartsWritten.Add(1)
 			s.audioBytesWritten.Add(uint64(len(frag.Bytes)))
-		case err := <-s.audioEncoder.Errs():
+		case err, ok := <-errsCh:
+			if !ok {
+				// Errs() will never send again, but Frames() may still
+				// have buffered frames (or more to come, if this
+				// happened mid-session rather than at shutdown): stop
+				// selecting this channel (a nil channel blocks forever
+				// in a select, so this case simply never fires again)
+				// instead of returning, which would drop that data, and
+				// instead of leaving it selectable, which would busy-loop
+				// this case forever once closed (every receive on a
+				// closed channel is immediately ready).
+				errsCh = nil
+				continue
+			}
 			log.Printf("pqp-remux: AAC encode: %v", err)
 		}
 	}
@@ -524,6 +702,8 @@ func (s *Session) Health() serve.Health {
 	if s.audioFrag != nil {
 		h.AudioPartsWritten = s.audioPartsWritten.Load()
 		h.AudioBytesWritten = s.audioBytesWritten.Load()
+		h.AudioDead = s.audioDead.Load()
+		h.AudioRestarts = s.audioRestarts.Load()
 	}
 	if s.r2Writer != nil {
 		h.R2Uploaded = s.r2Writer.Uploaded()
