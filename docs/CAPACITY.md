@@ -186,10 +186,16 @@ replaces is certainly wrong now and should not be quoted. The TLS relay on
 5349 is still dead and still unused, and nothing depends on it; the reason it
 is dead (Caddy owns 443) is unchanged.
 
-**Co-tenancy note.** Redis and LiveKit Egress (for HLS) run on `sfu-pqp`
-alongside LiveKit itself, installed 2026-09-08; the box has always run the TURN
-relay too. If watch parties running HLS become routine, the clean split is a
-separate small egress box, not a bigger SFU.
+**Co-tenancy note, corrected 2026-09-13.** This used to say Egress ran
+alongside LiveKit on `sfu-pqp`, installed 2026-09-08. That stopped being true
+on 2026-09-12: HLS egress now runs on its own dedicated box, `216.238.108.42`
+(container `pqp-egress-prod`, config `/opt/sfu/hls/egress.prod.yaml`), which is
+exactly the "separate small egress box, not a bigger SFU" this note used to
+say was the clean split if watch parties became routine — they did, so it
+shipped. `sfu-pqp` (`216.238.114.79`) keeps LiveKit itself, the TURN relay and
+Redis; nothing about those three moved. `docs/plans/BROADCAST_PIPELINE.md`
+§B0.1 is the audit that caught every doc still saying co-located, this one
+included.
 
 The transcode cost itself used to be a guess here ("roughly one core on moving
 content"). It is now measured, on 2026-09-09, on the staging media box, which

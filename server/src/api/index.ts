@@ -123,6 +123,7 @@ import {
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
+  liveHlsTelemetryBatchSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -141,12 +142,25 @@ import {
 import {
   buildMasterPlaylistFor,
   buildSignedPlaylist,
+  hlsPlaylistAgeMs,
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
+  resolveHlsSessionId,
 } from "../voice/hls-playlist-proxy.js";
 import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
 import {
+  recordHlsLatencySample,
+  recordHlsTelemetryBatchAccepted,
+  recordHlsTelemetryBatchRejectedRateLimit,
+  recordHlsTelemetryBatchRejectedSchema,
+  recordHlsTelemetryBatchRejectedSession,
+  recordHlsTelemetryBatchRejectedSessionLookupTimeout,
+} from "../voice/hls-latency-metrics.js";
+import { isKnownHlsRung } from "../voice/hls-ladder.js";
+import { createHlsSessionLookupGuard } from "../voice/hls-telemetry-session-guard.js";
+import {
+  decodeHlsViewerToken,
   describeHlsViewerToken,
   HLS_VIEWER_TOKEN_PARAM,
   mintHlsViewerToken,
@@ -769,6 +783,51 @@ const feedbackLimiter = createRateLimiter({
   refillPerSecond: 0.05,
 });
 /**
+ * BROADCAST_PIPELINE B0.5. Only ~10% of viewers are sampled at all
+ * (`isSampledForHlsTelemetry`, client-side), and a sampled viewer flushes at
+ * most once per `LIVE_HLS_TELEMETRY_FLUSH_MS` (30s), so even a large party
+ * should never come close to this. Roomy enough that a client racing to
+ * catch up after a dropped connection (a few queued flushes) is not the thing
+ * that trips it; a script pretending to be many viewers from one account is.
+ */
+const liveHlsTelemetryLimiter = createRateLimiter({
+  capacity: 10,
+  refillPerSecond: 0.2,
+});
+/**
+ * The same budget as `liveHlsTelemetryLimiter` above, keyed by SESSION
+ * instead of by user (a Farol finding, 2026-09-13: the route only capped one
+ * caller's own rate, not how much one session's worth of traffic could add
+ * up to across many accounts watching the same party). One party with a very
+ * large audience still fits comfortably under this: at the 10% sample rate
+ * and one flush per `LIVE_HLS_TELEMETRY_FLUSH_MS` (30s), even a thousand
+ * sampled viewers average under four batches a second, well inside a refill
+ * this roomy. What it bounds is a script hammering ONE session id (real or
+ * made up) from many accounts at once, which no ordinary audience does.
+ */
+const liveHlsTelemetrySessionLimiter = createRateLimiter({
+  capacity: 120,
+  refillPerSecond: 10,
+});
+/**
+ * How long a signed telemetry batch's `resolveHlsSessionId` lookup may run
+ * before the route gives up on it, and how long that session's key is then
+ * assumed still struggling before the next batch tries again -- see
+ * `hls-telemetry-session-guard.ts`'s own doc comment for the two Farol
+ * findings (2026-09-14) this closes. 500ms is generous for a warm cache hit
+ * (the common case: the session's own viewers are already polling the
+ * master playlist) and still short enough that a stuck pool costs one
+ * request, not an open connection held indefinitely. 30s is roughly the
+ * time a real outage takes a human to notice on the dashboard, not a number
+ * tuned to any specific incident.
+ */
+const HLS_SESSION_LOOKUP_TIMEOUT_MS = 500;
+const HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS = 30_000;
+const hlsSessionLookupGuard = createHlsSessionLookupGuard({
+  timeoutMs: HLS_SESSION_LOOKUP_TIMEOUT_MS,
+  negativeCacheMs: HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS,
+});
+/**
  * Post-call ratings. Roomier than feedback because this one is *asked for*:
  * somebody who genuinely has ten short calls in an evening should be able to
  * answer every prompt, and the client already refuses to ask more than once
@@ -858,6 +917,9 @@ export function resetApiRateLimits(): void {
   publicCommunityLimiter.reset();
   voiceLeaveLimiter.reset();
   bulkDeleteLimiter.reset();
+  liveHlsTelemetryLimiter.reset();
+  liveHlsTelemetrySessionLimiter.reset();
+  hlsSessionLookupGuard.reset();
   // Keyed on the string "machine" rather than a user id, so unlike every
   // bucket above it is shared by every test in a file and would otherwise
   // drain across them.
@@ -2365,6 +2427,16 @@ async function hlsPlaylistResponse(
   // per-session render cache in `hls-playlist-proxy.ts`.
   res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Vary", "Authorization");
+  // BROADCAST_PIPELINE B0.3: how stale, in milliseconds, the freshest
+  // segment in this render already was when it was signed -- the T5-T6 span
+  // ("in the bucket, to listed in the playlist a viewer polls"), which is the
+  // one nothing watched before this. Read from the SAME render just above,
+  // so it reflects this exact response body. Not a viewer-facing number: no
+  // UI reads this header, only telemetry and an operator's network panel.
+  const ageMs = hlsPlaylistAgeMs(channelId, parsedStartedAt, options.rung);
+  if (ageMs !== null) {
+    res.setHeader("X-Pqp-Playlist-Age-Ms", String(ageMs));
+  }
   return new RawResponse(body, "application/vnd.apple.mpegurl");
 }
 
@@ -7718,6 +7790,201 @@ function feedbackIdParam(value: string | undefined): string {
   }
   return value;
 }
+
+/**
+ * BROADCAST_PIPELINE B0.5: sampled, batched, droppable client playback
+ * telemetry for a live watch party. Authenticated (the normal Bearer flow,
+ * CLAUDE.md pitfall #8) and rate-limited, but deliberately NOT gated on
+ * channel access via a database round trip: this is an aggregate operational
+ * metric, not a read of anything sensitive, and a query here is a cost this
+ * doc's whole premise is to avoid.
+ *
+ * SESSION IDENTITY IS BOUND TO THE VIEWER TOKEN, NOT TRUSTED AS FREE TEXT (a
+ * Farol finding, 2026-09-13: "authenticated users can submit telemetry for
+ * arbitrary sessions", permitting cross-session log/metric poisoning).
+ * `batch.sessionToken` is the SAME `?t=` capability the client's playlist
+ * request carried (`hls-viewer-token.ts`), which already names a user, a
+ * channel and a `startedAt` and is signed by this server -- so verifying it
+ * here costs one HMAC, not a query, and the channel/session it reports is
+ * the one the token's own signature vouches for rather than whatever the
+ * client typed. A token that does not verify, or that names a user other
+ * than the one this request authenticated as, is rejected outright: a wrong
+ * token is a stronger signal of a caller lying about its session than
+ * omitting one. The verified `channelId`/`startedAt` is then resolved to the
+ * ACTUAL `hls_sessions.id` (`resolveHlsSessionId`, sharing the playlist
+ * proxy's own cache) so the id this route records is the identical string
+ * the master playlist's `#EXT-X-PQP-SESSION` tag carries and `voice.hlsStarted`
+ * logs -- a p95 per session can join against the egress log by equality (a
+ * second Farol finding, 2026-09-14: the earlier `channelId:startedAt` pair
+ * read the same to a human but was never the same string).
+ *
+ * NO SESSION LABEL AT ALL WITHOUT A TOKEN (a third Farol finding,
+ * 2026-09-14). `LIVE_HLS_SIGNED_URLS=false` mints no viewer token
+ * (`stampViewerStream`) and that configuration is fully supported, but a
+ * batch with no token to verify gets no session identity either: `sessionId`
+ * is recorded as the literal string `"unsigned"`, and the per-session rate
+ * limit below is skipped entirely (the per-USER limit above already bounds
+ * this caller). Anything else -- accepting the client's own `sessionId` as a
+ * label, or as a rate-limit key -- reopens the exact unbounded,
+ * attacker-controlled key space the `rung` whitelist (3dde4d4a) closed on
+ * the histogram side of this same route.
+ *
+ * A REJECTED BATCH IS A NO-OP THE CLIENT NEVER RETRIES (see
+ * `client/src/lib/hls-playback.ts`'s telemetry queue): this is a measurement,
+ * not an event anything downstream is waiting on, so there is no retry
+ * machinery here to abuse and no reason to build one.
+ */
+router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!liveHlsTelemetryLimiter.take(key)) {
+    recordHlsTelemetryBatchRejectedRateLimit();
+    res.setHeader("Retry-After", String(liveHlsTelemetryLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  let batch: ReturnType<typeof liveHlsTelemetryBatchSchema.parse>;
+  try {
+    batch = liveHlsTelemetryBatchSchema.parse(await readJsonBody(req));
+  } catch (error) {
+    recordHlsTelemetryBatchRejectedSchema();
+    throw error;
+  }
+  // `sessionVerified` says whether `sessionId` below is this server's own
+  // resolved, signature-backed identity (trustworthy for the log line, and
+  // the key the per-session rate limit uses) or the fixed `"unsigned"`
+  // bucket a tokenless batch gets instead of a caller-chosen label.
+  let sessionId = "unsigned";
+  let sessionVerified = false;
+  if (batch.sessionToken !== undefined) {
+    const claims = decodeHlsViewerToken(batch.sessionToken);
+    if (!claims || claims.userId !== user.id) {
+      recordHlsTelemetryBatchRejectedSession();
+      throw new HttpError(400, "Invalid session token");
+    }
+    // The verified pair, needing no query of its own: the cheap check below
+    // gates the database work, not the other way around (a Farol finding,
+    // 2026-09-14). It also outlives `resolveHlsSessionId`'s own answer, so
+    // it is what the per-session rate limit is keyed on throughout, not the
+    // resolved row id -- both name the same session, but this one is
+    // available before any lookup runs.
+    const compositeKey = `${claims.channelId}:${claims.startedAt}`;
+    sessionVerified = true;
+    sessionId = compositeKey;
+
+    const sessionKey = `session:${compositeKey}`;
+    if (!liveHlsTelemetrySessionLimiter.take(sessionKey)) {
+      recordHlsTelemetryBatchRejectedRateLimit();
+      res.setHeader(
+        "Retry-After",
+        String(liveHlsTelemetrySessionLimiter.retryAfter(sessionKey)),
+      );
+      throw new HttpError(429, "Slow down");
+    }
+
+    // `hlsSessionLookupGuard` bounds the query to
+    // `HLS_SESSION_LOOKUP_TIMEOUT_MS` and negatively caches a struggling key
+    // for `HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS` -- see its own doc comment
+    // for the two Farol findings this closes. A resolution miss that is NOT
+    // a timeout (the session just ended, or its rung rows have not landed
+    // yet) still deserves a batch that JOINS on repetition, even if it
+    // cannot join against the egress log for this one -- so that case falls
+    // back to `compositeKey` rather than the shared `"unsigned"` bucket,
+    // which would wrongly lump a real, verified session in with every
+    // tokenless one.
+    const lookup = await hlsSessionLookupGuard.resolve(compositeKey, () =>
+      resolveHlsSessionId(claims.channelId, claims.startedAt),
+    );
+    if (lookup.outcome === "timeout") {
+      recordHlsTelemetryBatchRejectedSessionLookupTimeout();
+      throw new HttpError(503, "Session lookup timed out");
+    }
+    if (lookup.outcome === "resolved") {
+      sessionId = lookup.sessionId ?? compositeKey;
+    }
+    // "negatively-cached": no lookup was attempted; `sessionId` stays the
+    // composite fallback already assigned above.
+  }
+  // `recordHlsLatencySample` refuses a rung it does not recognise on its
+  // own (a caller-independent guard against an authenticated account
+  // growing the per-rung histogram map without bound -- a Farol finding,
+  // 2026-09-13), but the log line below is built here too, so it filters
+  // the same way first: otherwise a batch full of garbage rung names would
+  // still produce a clean-looking log line while every sample inside it was
+  // silently dropped from the histogram.
+  // Every sample goes through `recordHlsLatencySample`, unfiltered: it is
+  // the one place that counts `samplesRejectedUnknownRung`, and pre-filtering
+  // here (a Farol finding, 2026-09-13) fed it only the samples it would have
+  // accepted anyway, so a batch full of garbage rungs recorded nothing AND
+  // never incremented the counter meant to say so.
+  for (const sample of batch.samples) {
+    recordHlsLatencySample(sample.rung, sample.latencyMs);
+  }
+  // `knownSamples` is for the log line below ONLY -- it must not name a rung
+  // this build refused, but it plays no part in what got recorded above.
+  const knownSamples = batch.samples.filter((sample) =>
+    isKnownHlsRung(sample.rung),
+  );
+  recordHlsTelemetryBatchAccepted();
+  // One structured line per batch (not per sample): a live party's worth of
+  // these is meant to be readable by a human during an event, not a second
+  // copy of the histogram in the log shipper. `medianLatencyMs` is a numeric
+  // field so Loki's `quantile_over_time` can chart a live trend
+  // (`docs/MONITORING.md` B0.6); it is the median of THIS batch's own
+  // samples, not the rung's real p50 across every viewer -- that number,
+  // correctly bucketed per rung, is `GET /api/admin/metrics`'s
+  // `liveHls.latency.byRung`, which this line is a rough live preview of and
+  // not a replacement for.
+  const sortedLatencies = knownSamples
+    .map((sample) => sample.latencyMs)
+    .sort((a, b) => a - b);
+  // The schema also accepts `bufferSeconds`/`stalls`/`rebufferMs`/
+  // `startupMs`/`playerRebuildCount`, and until this line they were parsed,
+  // validated and then thrown away entirely (a Farol finding, 2026-09-13):
+  // the request returned 200 while none of that reached anywhere a human or
+  // a panel could read it. There is no per-field histogram for these -- that
+  // is more than a live party's log line needs -- so they are folded into
+  // one summary per batch instead, which is enough to say "the audience is
+  // stalling" or "rebuilding the player a lot" during an event.
+  const totalStalls = batch.samples.reduce(
+    (sum, sample) => sum + (sample.stalls ?? 0),
+    0,
+  );
+  const maxRebufferMs = batch.samples.reduce(
+    (max, sample) => Math.max(max, sample.rebufferMs ?? 0),
+    0,
+  );
+  const maxPlayerRebuildCount = batch.samples.reduce(
+    (max, sample) => Math.max(max, sample.playerRebuildCount ?? 0),
+    0,
+  );
+  const startupMs = batch.samples.find((sample) => sample.startupMs !== undefined)
+    ?.startupMs;
+  const bufferSecondsValues = batch.samples
+    .map((sample) => sample.bufferSeconds)
+    .filter((value): value is number => value !== undefined);
+  const avgBufferSeconds =
+    bufferSecondsValues.length > 0
+      ? bufferSecondsValues.reduce((sum, value) => sum + value, 0) /
+        bufferSecondsValues.length
+      : undefined;
+  logEvent("voice.hlsTelemetryBatch", {
+    sessionId,
+    sessionVerified,
+    samples: batch.samples.length,
+    droppedUnknownRungSamples: batch.samples.length - knownSamples.length,
+    rungs: [...new Set(knownSamples.map((sample) => sample.rung))],
+    medianLatencyMs:
+      sortedLatencies.length > 0
+        ? sortedLatencies[Math.floor(sortedLatencies.length / 2)]
+        : undefined,
+    totalStalls,
+    maxRebufferMs,
+    maxPlayerRebuildCount,
+    startupMs,
+    avgBufferSeconds:
+      avgBufferSeconds !== undefined ? Math.round(avgBufferSeconds * 10) / 10 : undefined,
+  });
+  return { ok: true };
+});
 
 /**
  * The settings box. Rate-limited like reports — it is the same "small text

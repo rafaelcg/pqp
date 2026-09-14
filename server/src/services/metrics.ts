@@ -15,6 +15,10 @@ import {
   hlsKeepWarmLoopsActive,
   hlsKeepWarmRenders,
 } from "../voice/hls-playlist-proxy.js";
+import {
+  hlsTelemetryActivity,
+  type HlsTelemetryActivity,
+} from "../voice/hls-latency-metrics.js";
 import { processRole, runsColdJobs } from "../lib/process-role.js";
 import { getPresenceFanoutStats } from "../ws/chat.js";
 import {
@@ -384,6 +388,15 @@ export interface AdminMetrics {
     keepWarmLoops: number;
     /** Warm (non-viewer) renders performed by those loops since boot. */
     keepWarmRenders: number;
+    /**
+     * BROADCAST_PIPELINE B0.5/B0.6: what sampled viewers report about their
+     * own playback. `byRung[].p50Ms`/`p95Ms` are encode-to-paint, computed
+     * from `hls-latency-metrics.ts`'s histogram, never mixed with the
+     * capture-to-encode estimate (that estimate is not reported here at all
+     * -- see the T0-T4 row of B0.3's table). In-process only: a restart
+     * clears it, same as `keepWarmRenders` above.
+     */
+    latency: HlsTelemetryActivity;
   };
   topServers24h: {
     name: string;
@@ -1024,6 +1037,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       sweepsHere: runsColdJobs(processRole()),
       keepWarmLoops: hlsKeepWarmLoopsActive(),
       keepWarmRenders: hlsKeepWarmRenders(),
+      latency: hlsTelemetryActivity(),
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,

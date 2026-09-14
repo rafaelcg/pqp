@@ -16,6 +16,9 @@ import {
   ladderMaxFramerate,
   parseLadder,
   rungEncodingOptions,
+  hlsRungVideoKbps,
+  isKnownHlsRung,
+  withPqpSessionTag,
   type LadderRung,
 } from "./hls-ladder.js";
 
@@ -388,6 +391,40 @@ describe("buildMasterPlaylist", () => {
     expect(body.match(/#EXT-X-STREAM-INF/g)).toHaveLength(1);
     expect(body.endsWith("\n")).toBe(true);
   });
+
+  it("tags the master with the session id (BROADCAST_PIPELINE B0.4) when one is given", () => {
+    const body = buildMasterPlaylist(variants, "session-123");
+    const lines = body.split("\n");
+    expect(lines[0]).toBe("#EXTM3U");
+    expect(lines[1]).toBe("#EXT-X-PQP-SESSION:session-123");
+  });
+
+  it("omits the session tag entirely when none is given", () => {
+    const body = buildMasterPlaylist(variants);
+    expect(body).not.toContain("#EXT-X-PQP-SESSION");
+  });
+});
+
+describe("withPqpSessionTag", () => {
+  it("inserts the tag right after #EXTM3U", () => {
+    const playlist = "#EXTM3U\n#EXT-X-VERSION:3\nfoo.ts\n";
+    expect(withPqpSessionTag(playlist, "abc-123")).toBe(
+      "#EXTM3U\n#EXT-X-PQP-SESSION:abc-123\n#EXT-X-VERSION:3\nfoo.ts\n",
+    );
+  });
+
+  it("prepends the tag when the playlist does not start with #EXTM3U", () => {
+    expect(withPqpSessionTag("#EXT-X-VERSION:3\n", "abc-123")).toBe(
+      "#EXT-X-PQP-SESSION:abc-123\n#EXT-X-VERSION:3\n",
+    );
+  });
+
+  it("is a no-op for a null, undefined or empty id", () => {
+    const playlist = "#EXTM3U\nfoo.ts\n";
+    expect(withPqpSessionTag(playlist, null)).toBe(playlist);
+    expect(withPqpSessionTag(playlist, undefined)).toBe(playlist);
+    expect(withPqpSessionTag(playlist, "")).toBe(playlist);
+  });
 });
 
 describe("decideCameraEgress", () => {
@@ -556,5 +593,44 @@ describe("the camera rung", () => {
       framerate: 30,
       videoKbps: 400,
     });
+  });
+});
+
+describe("isKnownHlsRung / hlsRungVideoKbps", () => {
+  it("recognises every ladder rung and the camera rung", () => {
+    for (const rung of Object.keys(LADDER_RUNGS)) {
+      expect(isKnownHlsRung(rung)).toBe(true);
+      expect(hlsRungVideoKbps(rung)).toBe(LADDER_RUNGS[rung]!.videoKbps);
+    }
+    expect(isKnownHlsRung(CAMERA_RUNG_NAME)).toBe(true);
+    expect(hlsRungVideoKbps(CAMERA_RUNG_NAME)).toBe(CAMERA_RUNG.videoKbps);
+  });
+
+  it("refuses an arbitrary string", () => {
+    expect(isKnownHlsRung("some-made-up-rung")).toBe(false);
+    expect(hlsRungVideoKbps("some-made-up-rung")).toBeNull();
+  });
+
+  it("refuses every inherited Object.prototype property name -- the exact bypass a plain object literal lookup allows", () => {
+    // A Farol finding, 2026-09-13: `({...})[key]` for an attacker-controlled
+    // `key` like "toString" or "constructor" returns a real, truthy value
+    // off the prototype chain rather than undefined, which let a client
+    // send `rung: "toString"` and have it accepted as a known rung.
+    for (const key of [
+      "toString",
+      "constructor",
+      "hasOwnProperty",
+      "valueOf",
+      "__proto__",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+    ]) {
+      expect(isKnownHlsRung(key)).toBe(false);
+      expect(hlsRungVideoKbps(key)).toBeNull();
+    }
+  });
+
+  it("empty string is not a known rung", () => {
+    expect(isKnownHlsRung("")).toBe(false);
   });
 });

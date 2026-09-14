@@ -752,6 +752,55 @@ the other three stay at zero, which is the same "did the flag actually take"
 check pitfall 12 in `CLAUDE.md` describes for the roster delta counter: read
 the counter that proves the code path ran, not just that the flag is set.
 
+### Watch-party glass-to-glass latency (BROADCAST_PIPELINE B0.6)
+
+Where the number actually lives: `GET /api/admin/metrics`'s `liveHls.latency`
+block (`server/src/voice/hls-latency-metrics.ts`), fed by sampled client
+telemetry (`POST /api/live-hls/telemetry`, `docs/plans/BROADCAST_PIPELINE.md`
+B0.5). `byRung[].p50Ms`/`p95Ms` are correctly bucketed **per rung** from every
+sampled viewer's own readings; that is the number to trust, and it is what the
+acceptance criterion below points at. It is in-process and resets on a
+restart, the same as `voice.seats`'s counters above.
+
+Grafana has no direct line to that endpoint — it only sees log lines, the same
+constraint every other panel on this dashboard works under — so the panel
+here is a LIVE APPROXIMATION built from `voice.hlsTelemetryBatch`, one line
+per accepted batch:
+
+```
+[pqp] voice.hlsTelemetryBatch sessionId=chan-1:1700000000000 samples=4 \
+      rungs=["720p30"] medianLatencyMs=8200
+```
+
+`medianLatencyMs` is the median of THAT ONE BATCH's own samples (one viewer,
+one 30s flush window) — a coarse, batch-sized estimate, not the rung's real
+p50 across the audience. `quantile_over_time` over many batches converges
+toward the true distribution as more viewers report, but during a small party
+(few sampled viewers) it can be noisy in a way the histogram-backed number
+above is not. Use this panel to watch a live party trend in real time; use
+`GET /api/admin/metrics` for the number that goes in an incident writeup.
+
+| What | LogQL |
+|---|---|
+| Median latency trend, all rungs | `quantile_over_time(0.5, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \| logfmt \| unwrap medianLatencyMs [5m])` |
+| p95 of the batch medians (a rough upper bound) | `quantile_over_time(0.95, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \| logfmt \| unwrap medianLatencyMs [5m])` |
+| Batches accepted per minute (viewer volume, roughly `sampled viewers / 30s`) | `sum(count_over_time({fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" [1m]))` |
+| Batches refused, by reason | `sum(count_over_time({fly_app_name="pqp-api"} \|= "voice.hlsPlaylistRejected" [5m]))` for playlist auth; schema/rate-limit rejections on the telemetry route itself are not logged individually (only counted — see `liveHls.latency.batchesRejectedSchema`/`batchesRejectedRateLimit` on `/api/admin/metrics`), because a broken client retrying into a 400 wall is exactly the flood pitfall 16 warns a per-line log invites |
+| One rung's trend (720p30 example) | `quantile_over_time(0.5, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \|= "720p30" \| logfmt \| unwrap medianLatencyMs [5m])` — imprecise for a viewer who ever switched rungs mid-batch, which is rare but not impossible |
+
+Panel setup (same steps as "Adding a panel" below): a time series with the
+median-trend query above, one series per rung name filtered the same way the
+last row does, legend `{{rung}}` is not available (the rung is not a Loki
+label, it is inside the log line), so name each series by hand per rung
+instead.
+
+**Acceptance criterion for B0:** during one live party, `GET
+/api/admin/metrics`'s `liveHls.latency.byRung` shows p50 and p95
+encode-to-paint for every rung a viewer is actually watching, and the count on
+each is high enough (more than a handful) to trust the percentile rather than
+a couple of noisy readings. `voice.hlsTelemetryBatch`'s log trend should track
+the same shape, if noisier, in real time on the dashboard above.
+
 ### Adding a panel
 
 1. Explore, datasource `grafanacloud-logs`, get the query right there first.

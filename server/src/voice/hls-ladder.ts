@@ -234,6 +234,42 @@ export const VOICE_RUNG: LadderRung = {
 };
 
 /**
+ * Every rung name this build can ever produce a transcode under, ladder plus
+ * camera. The thing to check a CLIENT-SUPPLIED rung name against before it
+ * touches anything keyed on it (a Farol B0.5 finding, 2026-09-13): without
+ * this, `POST /api/live-hls/telemetry`'s `rung` field is a free-form 1-16
+ * character string an authenticated caller controls, and every accepted
+ * value becomes its own permanent key in `hls-latency-metrics.ts`'s
+ * per-rung histogram map -- one authenticated account sending distinct
+ * garbage rungs grows that map without bound for the life of the process.
+ */
+// `Object.create(null)` on purpose, not `{}`: a plain object literal
+// inherits `Object.prototype`, so a bracket lookup with an ATTACKER-CONTROLLED
+// key like `"toString"` or `"constructor"` returns a real (truthy) function
+// off the prototype chain instead of `undefined` -- a second Farol finding,
+// 2026-09-13, on the exact line meant to close the first one. A prototype-less
+// object has no such inherited properties to leak through the lookup.
+const ALL_KNOWN_RUNGS: Readonly<Record<string, LadderRung>> = Object.assign(
+  Object.create(null) as Record<string, LadderRung>,
+  LADDER_RUNGS,
+  { [CAMERA_RUNG_NAME]: CAMERA_RUNG },
+);
+
+export function isKnownHlsRung(rung: string): boolean {
+  return Object.hasOwn(ALL_KNOWN_RUNGS, rung);
+}
+
+/**
+ * The bitrate a rung name sorts by, lowest first -- what "lowest bitrate
+ * first" actually means, rather than `localeCompare` on the name (which puts
+ * `1080p30` before `720p30`). Null for a name this build does not know at
+ * all, so a caller can put those last rather than guessing where they sort.
+ */
+export function hlsRungVideoKbps(rung: string): number | null {
+  return isKnownHlsRung(rung) ? ALL_KNOWN_RUNGS[rung]!.videoKbps : null;
+}
+
+/**
  * The default ladder. One 720p30 rung: 1080p30 tiled HLS hit RTP gaps and
  * egress CPU on the media box, so watch party ships at 720p30. Named 1080
  * and 60 fps rungs stay in `LADDER_RUNGS` for an operator who wants them
@@ -580,6 +616,32 @@ export interface MasterVariant {
 }
 
 /**
+ * `#EXT-X-PQP-SESSION:<id>` — our own comment tag naming the `hls_sessions`
+ * row a playlist came from (BROADCAST_PIPELINE B0.4). Deliberately not a
+ * standard HLS tag and deliberately not a status: it names identity only, so
+ * a client's telemetry batch and this server's own `voice.hls*` logs can be
+ * stitched together on one id instead of a reader guessing from a time
+ * window. CLAUDE.md already explains why `hls_sessions` gets no status enum
+ * of its own; this is the same rule applied to the playlist.
+ *
+ * A comment tag (`#EXT-X-...` with no player-defined meaning) is ignored by
+ * every HLS parser this product ships against: hls.js skips unknown tags,
+ * and so does `AVPlayer`.
+ */
+export function withPqpSessionTag(
+  playlist: string,
+  sessionId: string | null | undefined,
+): string {
+  if (!sessionId) {
+    return playlist;
+  }
+  const lines = playlist.split("\n");
+  const insertAt = lines[0] === "#EXTM3U" ? 1 : 0;
+  lines.splice(insertAt, 0, `#EXT-X-PQP-SESSION:${sessionId}`);
+  return lines.join("\n");
+}
+
+/**
  * The master playlist: one `EXT-X-STREAM-INF` per rendition that actually
  * started, highest bitrate LAST so the list reads the conventional way and a
  * player that ignores ABR entirely lands on the lowest rung rather than the
@@ -594,7 +656,10 @@ export interface MasterVariant {
  * one code path, and hls.js handles a one-level master identically to a bare
  * media playlist.
  */
-export function buildMasterPlaylist(variants: readonly MasterVariant[]): string {
+export function buildMasterPlaylist(
+  variants: readonly MasterVariant[],
+  sessionId?: string | null,
+): string {
   const ordered = [...variants].sort(
     (a, b) => a.rung.videoKbps - b.rung.videoKbps,
   );
@@ -609,5 +674,5 @@ export function buildMasterPlaylist(variants: readonly MasterVariant[]): string 
     );
     lines.push(variant.uri);
   }
-  return `${lines.join("\n")}\n`;
+  return withPqpSessionTag(`${lines.join("\n")}\n`, sessionId);
 }

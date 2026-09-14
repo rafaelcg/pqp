@@ -31,8 +31,15 @@ import {
 import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
+  createHlsTelemetryQueue,
+  encodeToPaintLatencyMs,
   hasHlsViewerToken,
+  hlsFallbackRungLabel,
+  hlsRungFromPlaylistUrl,
   hlsSessionKey,
+  hlsTelemetryIdentityFromToken,
+  hlsTelemetrySessionKey,
+  hlsViewerTokenFromUrl,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
   nextFreshPlaylistUrl,
@@ -40,9 +47,12 @@ import {
   resolveHlsUrl,
   sameHlsSession,
   sampleVideoPlaybackQuality,
+  sendHlsTelemetryBatch,
   setHlsPlaybackStats,
+  type HlsTelemetryQueue,
   withFreshHlsToken,
 } from "@/lib/hls-playback";
+import { isSampledForHlsTelemetry } from "@pqp/shared";
 import {
   applyHlsRecoveryStep,
   buildMediaSessionMetadata,
@@ -277,6 +287,13 @@ export function HlsWatchPlayer({
   const whole = fit.fit === "contain";
   const innerRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<HlsHandle | null>(null);
+  // BROADCAST_PIPELINE B0.5: how many times the attach effect below has run
+  // for this mounted player, i.e. how many times the instance has been torn
+  // down and rebuilt. Never reset across `activeSrc`/`attempt` changes within
+  // one mount -- the whole point is to see whether B1.3 (never rebuild
+  // unless unrecoverable) is working, and a counter that resets on every
+  // rebuild could never show that.
+  const rebuildCountRef = useRef(0);
   const [hasFrame, setHasFrame] = useState(false);
   // Autoplay with sound was refused (a tab that resumed the call without a
   // click, Safari's default). The picture runs muted and one tap fixes it.
@@ -940,6 +957,32 @@ export function HlsWatchPlayer({
         reconnectJitterTimer = null;
       }
     };
+    // BROADCAST_PIPELINE B0.3/B0.5. Set on every `FRAG_CHANGED` so a later
+    // periodic sample can turn "what media time is painted right now" into
+    // a wall clock. `currentRung` names the rendition the same way the
+    // server does (the playlist path segment), read once alongside it.
+    let currentFrag: { programDateTimeMs: number; startSeconds: number } | null =
+      null;
+    let currentRung: string | null = null;
+    let stallsSinceLastSample = 0;
+    let startupMsPending: number | null = null;
+    // Distinct from `startupMsPending` being null, which also means "already
+    // reported": this stops a LATER `playing` event (after a stall recovers,
+    // say) from recomputing "startup" as the time since attach, minutes in.
+    let startupMsComputed = false;
+    const attachStartedAt = Date.now();
+    rebuildCountRef.current += 1;
+    const rebuildCountAtAttach = rebuildCountRef.current;
+    let telemetryQueue: HlsTelemetryQueue | null = null;
+    let telemetrySampleTimer: number | null = null;
+    // Farol finding, 2026-09-13: a naive "call requestVideoFrameCallback
+    // every 5s" schedules a NEW one even while a previous one is still
+    // outstanding (paused, backgrounded, or a stalled stream never paints a
+    // fresh frame), so callbacks pile up and all fire at once when playback
+    // resumes -- a burst of duplicate samples and a CPU/memory spike. This
+    // tracks the one outstanding handle so at most one is ever pending, and
+    // is cancelled on cleanup so a torn-down player cannot fire into it.
+    let pendingRvfcHandle: number | null = null;
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -957,11 +1000,120 @@ export function HlsWatchPlayer({
       void getAuthToken().then((token) => {
         if (!cancelled) {
           authToken = token;
+          // Keeps the queue's own cached copy current too, so a flush --
+          // including the unmount one -- reads a token synchronously rather
+          // than fetching one (Farol finding, 2026-09-14; see
+          // `sendHlsTelemetryBatch`'s doc comment).
+          telemetryQueue?.setToken(token);
         }
       });
     };
     refreshAuthToken();
     const authTokenTimer = window.setInterval(refreshAuthToken, 30_000);
+
+    // BROADCAST_PIPELINE B0.5: sampled, batched, droppable playback
+    // telemetry. The sampling decision is made once per attach, off whatever
+    // `authToken` has resolved to by the time this first runs (a few hundred
+    // ms after `refreshAuthToken()` above, well before the first segment
+    // loads) -- a viewer whose token is not ready yet on this particular
+    // tick simply never gets sampled for THIS attach, which matters far less
+    // than never blocking playback on it.
+    const TELEMETRY_SAMPLE_INTERVAL_MS = 5_000;
+    function ensureTelemetryQueue(): void {
+      if (telemetryQueue !== null || cancelled) {
+        return;
+      }
+      const identity = hlsTelemetryIdentityFromToken(authToken);
+      if (!identity || !isSampledForHlsTelemetry(identity)) {
+        return;
+      }
+      const sessionId = hlsTelemetrySessionKey(activeSrc);
+      if (!sessionId) {
+        return;
+      }
+      telemetryQueue = createHlsTelemetryQueue({
+        sessionId,
+        // The server verifies this and, when it checks out, uses the
+        // channel/session it names instead of `sessionId` above -- see the
+        // route's own comment in `server/src/api/index.ts` (Farol finding,
+        // 2026-09-13). Null on the `LIVE_HLS_SIGNED_URLS=false` config,
+        // which mints no such token; the batch still goes out on `sessionId`.
+        sessionToken: hlsViewerTokenFromUrl(activeSrc),
+        // Seeded from the closure variable this function already required to
+        // be non-null (`identity` above comes off it) -- kept current after
+        // this by `refreshAuthToken`'s own `telemetryQueue?.setToken` call,
+        // not by fetching one at flush time (Farol finding, 2026-09-14).
+        token: authToken,
+        send: sendHlsTelemetryBatch,
+      });
+    }
+    function pushTelemetrySample(paintedMediaTimeSeconds: number): void {
+      if (!telemetryQueue || !currentFrag || !currentRung) {
+        return;
+      }
+      const latencyMs = encodeToPaintLatencyMs(currentFrag, paintedMediaTimeSeconds);
+      if (latencyMs === null) {
+        return;
+      }
+      const bufferSeconds =
+        video.buffered.length > 0
+          ? Math.max(
+              0,
+              video.buffered.end(video.buffered.length - 1) - video.currentTime,
+            )
+          : undefined;
+      telemetryQueue.push({
+        rung: currentRung,
+        latencyMs: Math.round(latencyMs),
+        bufferSeconds,
+        stalls: stallsSinceLastSample,
+        startupMs: startupMsPending ?? undefined,
+        playerRebuildCount: rebuildCountAtAttach - 1,
+      });
+      stallsSinceLastSample = 0;
+      startupMsPending = null;
+    }
+    function sampleTelemetryOnce(): void {
+      ensureTelemetryQueue();
+      if (!telemetryQueue || cancelled) {
+        return;
+      }
+      // A paused (or stalled-with-no-new-frame) video is showing a static
+      // picture: "encode-to-paint" has no meaning for a frame that is not
+      // newly arriving, and the fallback path below would otherwise report a
+      // growing latency for the same painted frame for as long as the pause
+      // lasts. Resuming playback picks sampling back up on the next tick.
+      if (video.paused) {
+        return;
+      }
+      const videoWithRvfc = video as HTMLVideoElement & {
+        requestVideoFrameCallback?: (
+          callback: (now: number, metadata: { mediaTime: number }) => void,
+        ) => number;
+        cancelVideoFrameCallback?: (handle: number) => void;
+      };
+      if (typeof videoWithRvfc.requestVideoFrameCallback !== "function") {
+        pushTelemetrySample(video.currentTime);
+        return;
+      }
+      // At most one outstanding request at a time: a stalled stream that
+      // never paints a new frame would otherwise accumulate one callback per
+      // tick, all firing together (for the same frame) the moment playback
+      // recovers.
+      if (pendingRvfcHandle !== null) {
+        return;
+      }
+      pendingRvfcHandle = videoWithRvfc.requestVideoFrameCallback((_now, metadata) => {
+        pendingRvfcHandle = null;
+        if (!cancelled) {
+          pushTelemetrySample(metadata.mediaTime);
+        }
+      });
+    }
+    telemetrySampleTimer = window.setInterval(
+      sampleTelemetryOnce,
+      TELEMETRY_SAMPLE_INTERVAL_MS,
+    );
 
     const reportSize = () => {
       if (cancelled || video.videoWidth === 0 || video.videoHeight === 0) {
@@ -1001,10 +1153,17 @@ export function HlsWatchPlayer({
         // earlier tick fired. That response is now stale -- cancel it rather
         // than reloading a player that just came back (Farol review).
         clearPendingReconnect();
+        // First real frame of this attach: report it on the NEXT telemetry
+        // sample and then forget it, rather than on every sample.
+        if (!startupMsComputed) {
+          startupMsComputed = true;
+          startupMsPending = Date.now() - attachStartedAt;
+        }
       }
     };
     const onWaiting = () => {
       watch.onWaiting(Date.now());
+      stallsSinceLastSample += 1;
     };
     const onMediaError = () => {
       // The native player (no hls.js), or an MSE decode failure that
@@ -1322,6 +1481,40 @@ export function HlsWatchPlayer({
       player.on(Hls.Events.FRAG_LOADED, () => {
         hlsFragmentLoaded = true;
       });
+      // BROADCAST_PIPELINE B0.3: which fragment is the one about to be
+      // painted, and its own wall clock (`#EXT-X-PROGRAM-DATE-TIME`, real
+      // from the egress or synthesised by the proxy -- either way hls.js
+      // parses it onto `frag.programDateTime` the same way). `FRAG_CHANGED`
+      // fires when playback actually MOVES onto a fragment, which is closer
+      // to "this is what's on screen now" than `FRAG_LOADED`, which fires on
+      // download and can run well ahead of the playhead.
+      player.on(Hls.Events.FRAG_CHANGED, (_event, data) => {
+        const frag = data.frag as {
+          programDateTime?: number | null;
+          start: number;
+          level: number;
+        };
+        currentFrag = {
+          programDateTimeMs: frag.programDateTime ?? NaN,
+          startSeconds: frag.start,
+        };
+        const level = player.levels[frag.level] as
+          | { url?: string[] | string; height?: number; frameRate?: number }
+          | undefined;
+        const levelUrl = Array.isArray(level?.url) ? level.url[0] : level?.url;
+        // The proxy path names the rung directly; a level whose URL is not
+        // our proxy at all (a raw public bucket URL, `LIVE_HLS_SIGNED_URLS=
+        // false`) falls back to naming it from the level's own resolution
+        // and framerate instead of reporting no rung -- and therefore never
+        // sending telemetry -- for an otherwise fully supported stream.
+        currentRung =
+          hlsRungFromPlaylistUrl(levelUrl) ??
+          hlsFallbackRungLabel({
+            height: level?.height,
+            framerate: level?.frameRate,
+          }) ??
+          currentRung;
+      });
       player.loadSource(activeSrc);
       player.attachMedia(video);
       player.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
@@ -1356,6 +1549,22 @@ export function HlsWatchPlayer({
       if (reconnectJitterTimer !== null) {
         window.clearTimeout(reconnectJitterTimer);
       }
+      if (telemetrySampleTimer !== null) {
+        window.clearInterval(telemetrySampleTimer);
+      }
+      if (pendingRvfcHandle !== null) {
+        (
+          video as HTMLVideoElement & {
+            cancelVideoFrameCallback?: (handle: number) => void;
+          }
+        ).cancelVideoFrameCallback?.(pendingRvfcHandle);
+        pendingRvfcHandle = null;
+      }
+      // The window since the last flush is worth sending: it is the tail
+      // end of a viewer's session, exactly the part a fixed 30s timer would
+      // otherwise lose on every navigate-away.
+      telemetryQueue?.flush();
+      telemetryQueue?.stop();
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onWaiting);

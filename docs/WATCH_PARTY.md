@@ -2561,7 +2561,7 @@ feature off, and only two of them have a symptom you would notice.
 | 3 | `LIVE_HLS_DELAY_SECONDS` | `pqp-api` | set |
 | 4 | `LIVE_HLS_PUBLIC_BASE_URL` | `pqp-api` | **not set, and correct**: signed mode is the default, the bucket stays private, and this is only read with `LIVE_HLS_SIGNED_URLS=false`. Never point it at `r2.dev` |
 | 5 | `LIVEKIT_URL` / `_API_KEY` / `_API_SECRET` | `pqp-api` | set, `/ready` green |
-| 6 | LiveKit **Egress** and Redis running beside the SFU | the media box | running (`livekit/egress:v1.14.1`, `redis:7-alpine`) |
+| 6 | LiveKit **Egress** and Redis running beside the SFU | the media box | running (`livekit/egress:v1.14.1`, `redis:7-alpine`). **Stale since 2026-09-12** (corrected 2026-09-13, BROADCAST_PIPELINE B0.1): Egress moved off the SFU box onto a dedicated 4 vCPU Vultr worker, `216.238.108.42`, container `pqp-egress-prod`, config `/opt/sfu/hls/egress.prod.yaml`. Redis stayed behind on `sfu-pqp` (`216.238.114.79`), which is also still where LiveKit and the TURN relay run. See `docs/CAPACITY.md` §6b for the current split |
 | 7 | `VITE_WATCH_PARTY_CHANNELS=true` at **web build time** | `deploy-web.yml` | **missing**. See "Client flag" below. This is the one no server setting can substitute for |
 | 8 | `LIVE_HLS_S3_*` **and** `LIVEKIT_*` on `pqp-worker` | `pqp-worker` | **missing**, so the retention sweep cannot run anywhere. See "How you know it is running" |
 | 9 | `LIVE_HLS_SERVER_ALLOWLIST` | `pqp-api` | unset, which means **every** server. It is now the *fallback* under `servers.live_hls_enabled`, which the operator dashboard writes with no restart. Either one keeps the create control off 908 other servers; the column is the one you can change at 21h on a Saturday. See below |
