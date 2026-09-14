@@ -179,3 +179,95 @@ func TestFromEnv_RejectsNonIntegerEnv(t *testing.T) {
 		t.Fatal("expected an error for a non-integer RING_SEGMENTS")
 	}
 }
+
+func TestFromEnv_AudioAndR2Defaults(t *testing.T) {
+	var c Config
+	var err error
+	withEnv(t, baseEnv(), func() { c, err = FromEnv() })
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if c.AACBitrateKbps != DefaultAACBitrateKbps {
+		t.Fatalf("AACBitrateKbps = %d, want %d", c.AACBitrateKbps, DefaultAACBitrateKbps)
+	}
+	if c.Rung != DefaultRung {
+		t.Fatalf("Rung = %q, want %q", c.Rung, DefaultRung)
+	}
+	if c.ChannelID != "room-1" {
+		t.Fatalf("ChannelID = %q, want ROOM's value (room-1): server/src/voice/hls-egress.ts's roomName IS the channel id", c.ChannelID)
+	}
+	if c.StartedAtMs <= 0 {
+		t.Fatalf("StartedAtMs = %d, want a positive default (this process's own start time)", c.StartedAtMs)
+	}
+	if c.R2UploadQueueDepth != DefaultR2QueueDepth || c.R2UploadMaxRetries != DefaultR2MaxRetries {
+		t.Fatalf("unexpected R2 defaults: queue=%d retries=%d", c.R2UploadQueueDepth, c.R2UploadMaxRetries)
+	}
+	if c.LiveHlsS3Configured() {
+		t.Fatal("LiveHlsS3Configured() should be false with no LIVE_HLS_S3_* set")
+	}
+}
+
+func TestFromEnv_ChannelIDOverride(t *testing.T) {
+	env := baseEnv()
+	env["CHANNEL_ID"] = "override-channel"
+	var c Config
+	var err error
+	withEnv(t, env, func() { c, err = FromEnv() })
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if c.ChannelID != "override-channel" {
+		t.Fatalf("ChannelID = %q, want the CHANNEL_ID override", c.ChannelID)
+	}
+}
+
+func TestFromEnv_StartedAtMsOverride(t *testing.T) {
+	env := baseEnv()
+	env["STARTED_AT_MS"] = "1700000000000"
+	var c Config
+	var err error
+	withEnv(t, env, func() { c, err = FromEnv() })
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if c.StartedAtMs != 1700000000000 {
+		t.Fatalf("StartedAtMs = %d, want the override", c.StartedAtMs)
+	}
+}
+
+func TestFromEnv_LiveHlsS3Configured(t *testing.T) {
+	env := baseEnv()
+	env["LIVE_HLS_S3_ENDPOINT"] = "http://localhost:9000"
+	env["LIVE_HLS_S3_BUCKET"] = "bucket"
+	env["LIVE_HLS_S3_ACCESS_KEY_ID"] = "key"
+	env["LIVE_HLS_S3_SECRET_ACCESS_KEY"] = "secret"
+	var c Config
+	var err error
+	withEnv(t, env, func() { c, err = FromEnv() })
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if !c.LiveHlsS3Configured() {
+		t.Fatal("expected LiveHlsS3Configured() to be true with every LIVE_HLS_S3_* field set")
+	}
+}
+
+func TestFromEnv_RejectsBadAACBitrate(t *testing.T) {
+	env := baseEnv()
+	env["AAC_BITRATE_KBPS"] = "0"
+	var err error
+	withEnv(t, env, func() { _, err = FromEnv() })
+	if err == nil {
+		t.Fatal("expected an error for AAC_BITRATE_KBPS=0")
+	}
+}
+
+func TestFromEnv_RejectsBadStartedAtMs(t *testing.T) {
+	env := baseEnv()
+	env["STARTED_AT_MS"] = "not-a-number"
+	var err error
+	withEnv(t, env, func() { _, err = FromEnv() })
+	if err == nil {
+		t.Fatal("expected an error for a non-integer STARTED_AT_MS")
+	}
+}

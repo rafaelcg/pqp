@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
 )
@@ -36,6 +37,19 @@ type Health struct {
 	BytesWritten uint64 `json:"bytesWritten"`
 	LastPartAtMs int64  `json:"lastPartAtMs,omitempty"`
 	LastIdrAtMs  int64  `json:"lastIdrAtMs,omitempty"`
+
+	// AudioPartsWritten/AudioBytesWritten are zero (and omitted) until
+	// EnableAudio (L1.3, internal/session) has successfully started; they
+	// report the audio track's own ring the same way
+	// PartsWritten/BytesWritten report the video track's.
+	AudioPartsWritten uint64 `json:"audioPartsWritten,omitempty"`
+	AudioBytesWritten uint64 `json:"audioBytesWritten,omitempty"`
+
+	// R2Uploaded/R2Failed/R2Dropped mirror internal/r2.Writer's own
+	// counters (L1.4), zero and omitted until EnableR2 has been called.
+	R2Uploaded uint64 `json:"r2Uploaded,omitempty"`
+	R2Failed   uint64 `json:"r2Failed,omitempty"`
+	R2Dropped  uint64 `json:"r2Dropped,omitempty"`
 }
 
 // HealthSource is polled fresh on every GET /healthz; the pipeline
@@ -49,6 +63,14 @@ type Server struct {
 	ring   *ring.Ring
 	health HealthSource
 	mux    *http.ServeMux
+
+	// audioRing is nil until SetAudioRing is called (L1.3: EnableAudio
+	// builds the audio ring only once the AAC encoder has actually
+	// started, which can happen after New — main.go may call serve.New
+	// before or after session.EnableAudio). An atomic.Pointer because it
+	// is written from main's setup goroutine and read from HTTP handler
+	// goroutines.
+	audioRing atomic.Pointer[ring.Ring]
 }
 
 // New builds a Server backed by r. health may be nil (then GET /healthz
@@ -58,10 +80,19 @@ func New(r *ring.Ring, health HealthSource) *Server {
 	s := &Server{ring: r, health: health, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/init.mp4", s.handleInit)
 	s.mux.HandleFunc("/playlist.m3u8", s.handlePlaylist)
+	s.mux.HandleFunc("/audio-init.mp4", s.handleAudioInit)
+	s.mux.HandleFunc("/audio-playlist.m3u8", s.handleAudioPlaylist)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/", s.handleFragmentOrNotFound)
 	return s
 }
+
+// SetAudioRing wires the audio track's ring in, once EnableAudio has
+// built one; /audio-*.mp4 and /audio-*.m4s answer 503 until this is
+// called, matching how /init.mp4 answers 503 before the video's own init
+// segment exists. Safe to call at most once, concurrently with requests
+// already being served.
+func (s *Server) SetAudioRing(r *ring.Ring) { s.audioRing.Store(r) }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
 
@@ -83,6 +114,32 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(s.ring.Playlist()))
 }
 
+func (s *Server) handleAudioInit(w http.ResponseWriter, r *http.Request) {
+	ar := s.audioRing.Load()
+	if ar == nil {
+		http.Error(w, "audio is not enabled on this session", http.StatusServiceUnavailable)
+		return
+	}
+	b, ok := ar.Init()
+	if !ok {
+		http.Error(w, "audio init segment not ready yet", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "audio/mp4")
+	w.Write(b)
+}
+
+func (s *Server) handleAudioPlaylist(w http.ResponseWriter, r *http.Request) {
+	ar := s.audioRing.Load()
+	if ar == nil {
+		http.Error(w, "audio is not enabled on this session", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write([]byte(ar.Playlist()))
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	h := Health{Status: "starting"}
 	if s.health != nil {
@@ -92,12 +149,25 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(h)
 }
 
-// handleFragmentOrNotFound serves /part-<seq>.m4s and /seg-<n>.m4s: the
-// two file families the ring keys by a plain integer, kept off the mux's
-// pattern matching (Go 1.22's ServeMux doesn't do typed path params) with a
-// small manual parse instead.
+// handleFragmentOrNotFound serves /part-<seq>.m4s, /seg-<n>.m4s and their
+// audio-prefixed equivalents (/audio-part-<seq>.m4s, /audio-seg-<n>.m4s):
+// the file families the two rings key by a plain integer, kept off the
+// mux's pattern matching (Go 1.22's ServeMux doesn't do typed path params)
+// with a small manual parse instead.
 func (s *Server) handleFragmentOrNotFound(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
+
+	targetRing, contentType, path := s.ring, "video/mp4", path
+	if rest, ok := strings.CutPrefix(path, "audio-"); ok {
+		path = rest
+		contentType = "audio/mp4"
+		ar := s.audioRing.Load()
+		if ar == nil {
+			http.Error(w, "audio is not enabled on this session", http.StatusServiceUnavailable)
+			return
+		}
+		targetRing = ar
+	}
 
 	switch {
 	case strings.HasPrefix(path, "part-") && strings.HasSuffix(path, ".m4s"):
@@ -107,12 +177,12 @@ func (s *Server) handleFragmentOrNotFound(w http.ResponseWriter, r *http.Request
 			http.NotFound(w, r)
 			return
 		}
-		b, ok := s.ring.Part(uint32(seq))
+		b, ok := targetRing.Part(uint32(seq))
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Type", contentType)
 		w.Write(b)
 
 	case strings.HasPrefix(path, "seg-") && strings.HasSuffix(path, ".m4s"):
@@ -122,12 +192,12 @@ func (s *Server) handleFragmentOrNotFound(w http.ResponseWriter, r *http.Request
 			http.NotFound(w, r)
 			return
 		}
-		b, ok := s.ring.Segment(idx)
+		b, ok := targetRing.Segment(idx)
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Type", contentType)
 		w.Write(b)
 
 	default:

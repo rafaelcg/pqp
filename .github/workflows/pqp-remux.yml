@@ -36,6 +36,14 @@ jobs:
         with:
           go-version-file: tools/pqp-remux/go.mod
           cache-dependency-path: tools/pqp-remux/go.sum
+      # L1.3 (internal/aacenc) shells out to ffmpeg for AAC-LC encoding
+      # (see its package doc comment for why) and its own tests, plus
+      # internal/session's audio integration test, exercise the real
+      # subprocess rather than skip when it's missing. ubuntu-latest
+      # ships ffmpeg already; this line makes that an explicit dependency
+      # of this workflow instead of an implicit fact about the runner
+      # image, and is a no-op (fast) when it's already present.
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: make vet
       - run: make test
       - run: make fmtcheck

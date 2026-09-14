@@ -58,6 +58,26 @@ func TestIsScreenShareAudio(t *testing.T) {
 	}
 }
 
+func TestIsMicrophone(t *testing.T) {
+	cases := []struct {
+		name string
+		pub  fakePublication
+		want bool
+	}{
+		{"microphone", fakePublication{lksdk.TrackKindAudio, livekit.TrackSource_MICROPHONE}, true},
+		{"microphone (wrong kind, shouldn't happen)", fakePublication{lksdk.TrackKindVideo, livekit.TrackSource_MICROPHONE}, false},
+		{"screen share audio", fakePublication{lksdk.TrackKindAudio, livekit.TrackSource_SCREEN_SHARE_AUDIO}, false},
+		{"camera", fakePublication{lksdk.TrackKindVideo, livekit.TrackSource_CAMERA}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isMicrophone(c.pub); got != c.want {
+				t.Errorf("isMicrophone(%+v) = %v, want %v", c.pub, got, c.want)
+			}
+		})
+	}
+}
+
 func TestBuildToken_RequiresAllFields(t *testing.T) {
 	if _, err := Connect(Config{}, Handlers{}); err == nil {
 		t.Fatal("expected an error connecting with an empty Config")

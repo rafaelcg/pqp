@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/livekit/protocol v1.49.0
 	github.com/livekit/server-sdk-go/v2 v2.18.1
+	github.com/pion/opus v0.1.0
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.15
 )
