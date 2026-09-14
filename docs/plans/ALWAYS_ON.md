@@ -86,6 +86,21 @@ exactly one: the mesh guard hanging up cross-instance calls, fixed the same
 night - see `MULTI_INSTANCE_VOICE.md`'s "2026-09-08" notes). Budget a day for
 whatever equivalent shows up before trusting A0.3 in production.
 
+**A0.5 - Cross-instance cache audit, done ahead of A0.1 rather than waited for.**
+A0.4 above budgets a day for whatever the rehearsal finds; PR #593 (M6
+rehearsal 2, 2026-09-14) found exactly this bug shape ahead of schedule - a
+per-process cache of mutable state (the 18+ age-gate status) with no
+cross-instance invalidation, closing real WS auth for the length of its TTL
+on roughly 1 in 3 joins with three machines. `docs/plans/CROSS_INSTANCE_CACHES.md`
+is the full inventory this prompted: every in-memory cache under `server/src`,
+whether a write on another instance can move its answer, whether that write
+path already reaches every instance over the cluster bus, and the verdict.
+One more of the same shape was found and fixed there (the watch-party seat
+snapshot gating who may take a voice seat - unbounded, not even TTL-bounded,
+unlike the age gate). Read it before trusting any "safe" verdict a rehearsal
+seems to confirm: every verdict in that document assumes `CLUSTER_BUS` is
+actually on, which is exactly the condition A0.1 is the first real test of.
+
 **One dependency worth stating now, resolved by A3.1 below:** a load
 balancer or Caddy routing on `/health` only helps if `/health` can go
 unhealthy *per box* without every box going unhealthy *at once* on a shared
