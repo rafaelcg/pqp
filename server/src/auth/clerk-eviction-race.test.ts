@@ -1,0 +1,240 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * The narrower race Farol's review of #603 flagged (MEDIUM, both findings):
+ * `forgetAuthUser` deletes a cache map entry, but deleting a map entry does
+ * not cancel a promise that is already in flight. A `loadProfile` or
+ * `resolveDbUser` call that started before an eviction can still be sitting
+ * on an `await` to Clerk or Postgres when the eviction runs, and without a
+ * guard its completion writes straight back into the cache entry the
+ * eviction just cleared — for `resolveDbUser`, after `upsertUser` has already
+ * recreated the row `DELETE FROM users` just removed.
+ *
+ * `evictionGeneration` in `clerk.ts` closes this: `loadProfile`/`resolveDbUser`
+ * snapshot a per-identity generation counter before starting their async
+ * work, `forgetAuthUser` bumps it, and neither writes its result into the
+ * cache if the generation moved while it was running.
+ *
+ * Everything Clerk/Postgres-shaped is mocked here on purpose — the point is
+ * to control exactly when each async step resolves relative to the eviction,
+ * which a real network call or a real `upsertUser` round trip cannot promise.
+ */
+
+const stubs = vi.hoisted(() => ({
+  upsertUser: vi.fn(),
+  getUser: vi.fn(),
+  verifyToken: vi.fn(),
+}));
+
+vi.mock("../services/users.js", () => ({
+  looksLikeEmailAddress: () => false,
+  placeholderDisplayName: (clerkId: string) => `User ${clerkId}`,
+  upsertUser: stubs.upsertUser,
+}));
+
+vi.mock("../services/age-gate.js", () => ({
+  getAgeGateStatus: async () => "passed" as const,
+}));
+
+vi.mock("./load-test.js", () => ({
+  assertLoadTestAuthConfig: () => {},
+  isLoadTestAuthEnabled: () => false,
+  loadTestIdentity: () => null,
+}));
+
+vi.mock("../services/characters.js", () => ({
+  CHARACTER_TOKEN_PREFIX: "character:",
+  isCharacterAccountsEnabled: () => false,
+  resolveCharacterToken: async () => null,
+}));
+
+vi.mock("@clerk/backend", () => ({
+  createClerkClient: () => ({ users: { getUser: stubs.getUser } }),
+  verifyToken: stubs.verifyToken,
+}));
+
+const {
+  forgetAuthUser,
+  authCacheSizes,
+  clearAuthCaches,
+  resolveAuthUser,
+  sweepAuthCaches,
+  evictionTombstoneCount,
+  EVICTION_TOMBSTONE_TTL_MS,
+} = await import("./clerk.js");
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+function dbUser(clerkId: string) {
+  return {
+    id: `db_${clerkId}`,
+    clerk_id: clerkId,
+    display_name: "Race",
+    username: null,
+    discriminator: null,
+    avatar_url: null,
+  };
+}
+
+describe("auth cache eviction race (Farol review of #603)", () => {
+  beforeEach(() => {
+    clearAuthCaches();
+    stubs.upsertUser.mockReset();
+    stubs.getUser.mockReset();
+    stubs.verifyToken.mockReset();
+    stubs.getUser.mockResolvedValue({
+      fullName: "Race",
+      username: null,
+      imageUrl: null,
+      emailAddresses: [],
+    });
+  });
+
+  it("does not let a slow upsertUser repopulate userCache after an eviction lands mid-flight", async () => {
+    const clerkId = "clerk_race_userCache";
+    stubs.verifyToken.mockResolvedValue({ sub: clerkId });
+    const gate = deferred<ReturnType<typeof dbUser>>();
+    stubs.upsertUser.mockReturnValue(gate.promise);
+
+    const inFlight = resolveAuthUser("Bearer real-token");
+
+    // Wait until execution has actually reached `upsertUser` — past
+    // `loadProfile`'s own await — before the eviction lands, so this pins
+    // the "eviction during resolveDbUser" half of the race specifically.
+    await vi.waitFor(() => expect(stubs.upsertUser).toHaveBeenCalled());
+
+    forgetAuthUser(clerkId);
+    expect(authCacheSizes().users).toBe(0);
+
+    // The slow upsert finally resolves — with the fix, this must not
+    // resurrect the entry the eviction just cleared.
+    gate.resolve(dbUser(clerkId));
+    await inFlight;
+
+    expect(authCacheSizes().users).toBe(0);
+  });
+
+  /**
+   * A first version of `evictionGeneration` expired its entries after
+   * `PROFILE_TTL_MS` (5 minutes), the same TTL `profileCache`/`userCache`
+   * use — a review of that version caught what the TTL actually meant: a
+   * lookup slow enough to outlive it would find its tombstone gone, read the
+   * generation back as the pre-eviction value, and repopulate the cache
+   * anyway. Fixed by tying the tombstone's clock to "nothing left in flight
+   * for this id" instead of a fixed deadline from eviction — see
+   * `evictionGeneration`'s doc comment. This pins it directly: run the
+   * sweep, with the clock pushed an hour past this file's own
+   * `EVICTION_TOMBSTONE_TTL_MS`, WHILE the lookup is still in flight, and
+   * confirm both the tombstone and the eviction it guards survive it.
+   */
+  it("a lookup started before eviction still does not write after the sweep has run", async () => {
+    const clerkId = "clerk_race_sweptTombstone";
+    stubs.verifyToken.mockResolvedValue({ sub: clerkId });
+    const gate = deferred<ReturnType<typeof dbUser>>();
+    stubs.upsertUser.mockReturnValue(gate.promise);
+
+    const inFlight = resolveAuthUser("Bearer real-token");
+    await vi.waitFor(() => expect(stubs.upsertUser).toHaveBeenCalled());
+
+    forgetAuthUser(clerkId);
+
+    // Far enough past the tombstone's own TTL that a clock started at
+    // eviction would already have expired it — but the clock has not
+    // started, because a lookup is still in flight.
+    sweepAuthCaches(Date.now() + EVICTION_TOMBSTONE_TTL_MS + 60 * 60_000);
+    expect(evictionTombstoneCount()).toBe(1);
+    expect(authCacheSizes().users).toBe(0);
+
+    // The lookup that started before the eviction — and survived the sweep —
+    // finally resolves. It must still not repopulate the cache.
+    gate.resolve(dbUser(clerkId));
+    await inFlight;
+
+    expect(authCacheSizes().users).toBe(0);
+  });
+
+  it("drops the tombstone once nothing is in flight and the TTL has passed — it does not hold forever", async () => {
+    const clerkId = "clerk_race_idleTombstone";
+    stubs.verifyToken.mockResolvedValue({ sub: clerkId });
+    const gate = deferred<ReturnType<typeof dbUser>>();
+    stubs.upsertUser.mockReturnValue(gate.promise);
+
+    const inFlight = resolveAuthUser("Bearer real-token");
+    await vi.waitFor(() => expect(stubs.upsertUser).toHaveBeenCalled());
+    forgetAuthUser(clerkId);
+
+    // Still in flight: the tombstone's clock has not started, so even a far
+    // future sweep must not drop it yet.
+    sweepAuthCaches(Date.now() + EVICTION_TOMBSTONE_TTL_MS + 60 * 60_000);
+    expect(evictionTombstoneCount()).toBe(1);
+
+    // The lookup finishes — this is what starts the clock.
+    gate.resolve(dbUser(clerkId));
+    await inFlight;
+
+    // Immediately after: the TTL has not elapsed yet, so the tombstone must
+    // still be held.
+    sweepAuthCaches(Date.now());
+    expect(evictionTombstoneCount()).toBe(1);
+
+    // Once nothing has been in flight for longer than the TTL, the sweep
+    // reclaims it — this map does not hold every terminated identity
+    // forever.
+    sweepAuthCaches(Date.now() + EVICTION_TOMBSTONE_TTL_MS + 1);
+    expect(evictionTombstoneCount()).toBe(0);
+  });
+
+  it("does not let a slow Clerk profile lookup repopulate profileCache after an eviction lands mid-flight", async () => {
+    const clerkId = "clerk_race_profileCache";
+    stubs.verifyToken.mockResolvedValue({ sub: clerkId });
+    stubs.upsertUser.mockResolvedValue(dbUser(clerkId));
+    const gate = deferred<{
+      fullName: string;
+      username: null;
+      imageUrl: null;
+      emailAddresses: never[];
+    }>();
+    stubs.getUser.mockReturnValue(gate.promise);
+
+    const inFlight = resolveAuthUser("Bearer real-token");
+
+    await vi.waitFor(() => expect(stubs.getUser).toHaveBeenCalled());
+
+    forgetAuthUser(clerkId);
+    expect(authCacheSizes().profiles).toBe(0);
+
+    gate.resolve({
+      fullName: "Race",
+      username: null,
+      imageUrl: null,
+      emailAddresses: [],
+    });
+    await inFlight;
+
+    expect(authCacheSizes().profiles).toBe(0);
+  });
+
+  it("still answers the caller waiting on the in-flight lookup, even though the result is not cached", async () => {
+    const clerkId = "clerk_race_answer";
+    stubs.verifyToken.mockResolvedValue({ sub: clerkId });
+    const gate = deferred<ReturnType<typeof dbUser>>();
+    stubs.upsertUser.mockReturnValue(gate.promise);
+
+    const inFlight = resolveAuthUser("Bearer real-token");
+    await vi.waitFor(() => expect(stubs.upsertUser).toHaveBeenCalled());
+    forgetAuthUser(clerkId);
+    gate.resolve(dbUser(clerkId));
+
+    const session = await inFlight;
+    expect(session?.user.id).toBe(`db_${clerkId}`);
+  });
+});

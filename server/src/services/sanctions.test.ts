@@ -52,6 +52,12 @@ vi.mock("../auth/clerk.js", () => ({
   invalidateUserCache: () => {},
   clearAuthCaches: () => {},
   forgetAuthUser: () => {},
+  // `deleteAccount` (services/account.js, not mocked here) calls this instead
+  // of `forgetAuthUser` directly — see `evictUserAcrossCluster` in
+  // auth/clerk.ts. This suite is not exercising the cluster relay itself
+  // (that is `auth/clerk-cluster.test.ts`), only that operator termination
+  // still completes.
+  evictUserAcrossCluster: () => {},
   deleteClerkUser: async () => {},
   resolveAuthUser: async () => (actor ? { user: actor } : null),
   resolveAuthSession: async () =>

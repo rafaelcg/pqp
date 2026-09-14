@@ -12,7 +12,7 @@
 import { formatUserTag, type UserPreferences } from "@pqp/shared";
 import { getPool } from "../db.js";
 import type { PublicUser } from "@pqp/shared";
-import { deleteClerkUser, forgetAuthUser } from "../auth/clerk.js";
+import { deleteClerkUser, evictUserAcrossCluster } from "../auth/clerk.js";
 import { listBlocks } from "./blocks.js";
 import { exportAttachments, type ExportAttachment } from "./export.js";
 import { getPreferences } from "./preferences.js";
@@ -827,7 +827,13 @@ export async function deleteAccount(
   }
 
   await getPool().query(`DELETE FROM users WHERE id = $1`, [userId]);
-  forgetAuthUser(clerkId);
+  // Closes this account's sockets and drops its auth caches on THIS instance,
+  // and — with `CLUSTER_BUS` on — on every other one too. Both `DELETE /api/me`
+  // and the operator termination route funnel through here, so this one call
+  // covers both termination paths without either route touching a socket map
+  // directly (see the audit note this closes: a socket or a cache entry on a
+  // sibling instance used to outlive the account it belonged to).
+  evictUserAcrossCluster(userId, clerkId, "account deleted");
 
   return { attachmentKeys };
 }
@@ -892,7 +898,11 @@ export async function sweepPendingAccountDeletions(): Promise<number> {
     }
     const keys = await accountAttachmentKeys(row.id);
     await getPool().query(`DELETE FROM users WHERE id = $1`, [row.id]);
-    forgetAuthUser(row.clerk_id);
+    // Same reasoning as the primary path above: a deletion that was only
+    // interrupted long enough to need the sweeper still has to close this
+    // account's sockets everywhere, not just wherever the sweeper's timer
+    // happens to fire.
+    evictUserAcrossCluster(row.id, row.clerk_id, "pending deletion swept");
     finished += 1;
     if (keys.length > 0) {
       console.warn(

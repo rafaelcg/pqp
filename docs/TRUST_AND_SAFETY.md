@@ -489,10 +489,17 @@ allows a month. Work to the shorter one — the pages say we do.
    does.
 
    **Live sessions.** The request closes the deleted user's WebSockets and drops
-   them from voice on **the instance that served it only**. On a multi-replica
-   deploy a socket held elsewhere survives until it drops on its own. Closing
-   that gap needs a cluster-bus eviction frame in `server/src/ws/chat.ts`; it is
-   not built.
+   them from voice, and the account's auth caches (`userCache`, `profileCache`
+   in `server/src/auth/clerk.ts`) are dropped too, so a fresh request cannot
+   re-authenticate the identity from a stale entry — nor can `upsertUser`
+   recreate the row from one. On a multi-replica deploy, closing sockets and
+   forgetting caches used to happen only on the instance that served the
+   request; a sibling instance kept a chat socket open and kept authenticating
+   the identity from cache for up to its TTL. `evictUserAcrossCluster` (same
+   file) closes that gap: it publishes an `auth.evictUser` frame over
+   `CLUSTER_BUS`, and every instance applies the same close + cache-forget it
+   would have applied locally. Voice seats are a separate registry
+   (`VOICE_REGISTRY`) with their own cross-instance story, unaffected here.
 
 5. **Record** what was requested, what was done, and when. Note that neither
    self-serve route writes an audit entry: `audit_log.server_id` is `NOT NULL`
