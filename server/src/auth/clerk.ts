@@ -172,13 +172,8 @@ export function sweepAuthCaches(now = Date.now()): void {
       userCache.delete(key);
     }
   }
-  // Same TTL as the caches it guards — see `evictionGeneration`'s doc
-  // comment for why that bound is safe to reuse here.
-  for (const [key, entry] of evictionGeneration) {
-    if (entry.updatedAt + PROFILE_TTL_MS <= now) {
-      evictionGeneration.delete(key);
-    }
-  }
+  // `evictionGeneration` is deliberately NOT swept here — see its own doc
+  // comment for why a TTL on that map defeats the guard it exists to provide.
 }
 
 /** Test helper: how many entries each cache is holding. */
@@ -359,23 +354,30 @@ export function invalidateUserCache(clerkId: string): void {
  * genuinely valid when it started; what they refuse is repopulating a cache
  * entry for everyone after. (Farol review of #603.)
  *
- * Bounded the same way `profileCache`/`userCache` are: swept out after
- * `PROFILE_TTL_MS`, which is already far longer than any realistic in-flight
- * Clerk/Postgres round trip, so the guard is live for every request that
- * could plausibly still be running when an eviction lands.
+ * NEVER SWEPT, UNLIKE `profileCache`/`userCache` — deliberately. A first pass
+ * of this guard expired entries after `PROFILE_TTL_MS`, and Farol's review
+ * caught what that TTL actually meant: an unusually slow Clerk or Postgres
+ * completion that outlives five minutes would find its tombstone already
+ * gone, read the generation back as the pre-eviction value, and repopulate
+ * the cache anyway — the exact write this map exists to refuse. There is no
+ * TTL that is provably longer than every in-flight lookup, so this entry has
+ * to survive for the rest of the process's life once an identity has been
+ * evicted at all. That is safe to do unconditionally, unlike the two caches
+ * above: those hold one entry per identity that has EVER SIGNED IN (already
+ * flagged once, see `sweepAuthCaches`'s doc comment, for growing with the
+ * total number of accounts ever, not the number online), while this one
+ * holds an entry only for an identity that has been TERMINATED at least
+ * once — a much rarer event, bounded by how many accounts this process has
+ * ever deleted or force-invalidated, not by how many have ever logged in.
  */
-const evictionGeneration = new Map<
-  string,
-  { generation: number; updatedAt: number }
->();
+const evictionGeneration = new Map<string, number>();
 
 function bumpEvictionGeneration(clerkId: string): void {
-  const next = (evictionGeneration.get(clerkId)?.generation ?? 0) + 1;
-  evictionGeneration.set(clerkId, { generation: next, updatedAt: Date.now() });
+  evictionGeneration.set(clerkId, (evictionGeneration.get(clerkId) ?? 0) + 1);
 }
 
 function currentEvictionGeneration(clerkId: string): number {
-  return evictionGeneration.get(clerkId)?.generation ?? 0;
+  return evictionGeneration.get(clerkId) ?? 0;
 }
 
 /**

@@ -53,8 +53,13 @@ vi.mock("@clerk/backend", () => ({
   verifyToken: stubs.verifyToken,
 }));
 
-const { forgetAuthUser, authCacheSizes, clearAuthCaches, resolveAuthUser } =
-  await import("./clerk.js");
+const {
+  forgetAuthUser,
+  authCacheSizes,
+  clearAuthCaches,
+  resolveAuthUser,
+  sweepAuthCaches,
+} = await import("./clerk.js");
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -110,6 +115,41 @@ describe("auth cache eviction race (Farol review of #603)", () => {
 
     // The slow upsert finally resolves — with the fix, this must not
     // resurrect the entry the eviction just cleared.
+    gate.resolve(dbUser(clerkId));
+    await inFlight;
+
+    expect(authCacheSizes().users).toBe(0);
+  });
+
+  /**
+   * A first version of `evictionGeneration` expired its entries after
+   * `PROFILE_TTL_MS` (5 minutes), the same TTL `profileCache`/`userCache`
+   * use — Farol's review of that version caught what the TTL actually meant:
+   * a lookup slow enough to outlive it would find its tombstone gone, read
+   * the generation back as the pre-eviction value, and repopulate the cache
+   * anyway. Fixed by never sweeping this map at all (see its doc comment for
+   * why that is safe here). This pins it directly: run the sweep, with the
+   * clock pushed well past any TTL that map ever had, WHILE the lookup is
+   * still in flight, and confirm the eviction still holds once it completes.
+   */
+  it("a lookup started before eviction still does not write after the sweep has run", async () => {
+    const clerkId = "clerk_race_sweptTombstone";
+    stubs.verifyToken.mockResolvedValue({ sub: clerkId });
+    const gate = deferred<ReturnType<typeof dbUser>>();
+    stubs.upsertUser.mockReturnValue(gate.promise);
+
+    const inFlight = resolveAuthUser("Bearer real-token");
+    await vi.waitFor(() => expect(stubs.upsertUser).toHaveBeenCalled());
+
+    forgetAuthUser(clerkId);
+
+    // Far enough past any TTL `profileCache`/`userCache` use that a
+    // time-bounded tombstone would already be gone.
+    sweepAuthCaches(Date.now() + 60 * 60_000);
+    expect(authCacheSizes().users).toBe(0);
+
+    // The lookup that started before the eviction — and survived the sweep —
+    // finally resolves. It must still not repopulate the cache.
     gate.resolve(dbUser(clerkId));
     await inFlight;
 
