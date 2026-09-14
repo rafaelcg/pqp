@@ -164,6 +164,21 @@ test("rejects a sessionId that is not shaped like a UUID -- unescaped into playl
   }
 });
 
+test("rejects an otherwise-valid sessionId/uri with a trailing newline appended -- \"value\\n\" must not slip past the $ anchor", () => {
+  const validSessionId = "5a1b2c3d-1234-5678-9abc-1234567890ab";
+  for (const suffix of ["\n", "\r\n", "\r", "\n\n"]) {
+    const raw = fixtureState({ sessionId: validSessionId + suffix });
+    assert.equal(parseLlState(raw), null, `sessionId with suffix ${JSON.stringify(suffix)}`);
+  }
+
+  const validUri = "seg-41.m4s";
+  for (const suffix of ["\n", "\r\n", "\r", "\n\n"]) {
+    const raw = fixtureState();
+    raw.video.segments[0].uri = validUri + suffix;
+    assert.equal(parseLlState(raw), null, `uri with suffix ${JSON.stringify(suffix)}`);
+  }
+});
+
 test("rejects a uri containing path separators, .., or control characters (playlist injection / origin-fetch escape)", () => {
   for (const badUri of ["../../secret", "a/b.m4s", "seg 41.m4s", "seg\n41.m4s", "http://evil.example/x", ""]) {
     const badInitUri = fixtureState();
@@ -199,8 +214,31 @@ test("rejects mediaSequence that does not match the video track's oldest segment
   assert.equal(parseLlState(raw), null);
 });
 
-test("rejects a complete segment whose duration exceeds targetDurationSecs", () => {
-  const raw = fixtureState({ targetDurationSecs: 1 }); // segment 0 claims durationSecs 4.016
+test("rejects a complete segment whose duration exceeds the rendered target duration by more than the jitter tolerance", () => {
+  const raw = fixtureState({ targetDurationSecs: 1 }); // segment 0 claims durationSecs 4.016, way past 1 + 0.5
+  assert.equal(parseLlState(raw), null);
+});
+
+test("accepts a segment slightly past a whole-second targetDurationSecs -- ordinary encoder jitter, not a malformed snapshot", () => {
+  // The exact shape RFC 8216bis players already tolerate: a 2.0s target
+  // renders EXT-X-TARGETDURATION:2, and a real segment landing at 2.04s
+  // (a few ms of encoder/keyframe jitter) still renders a legal EXTINF.
+  // Comparing the segment's raw duration against the RAW targetDurationSecs
+  // (rather than the rendered, ceiling'd value, with a small allowance for
+  // this exact kind of jitter) rejected this legitimate snapshot outright.
+  const raw = fixtureState({ targetDurationSecs: 2 });
+  raw.video.segments[0].durationSecs = 2.04;
+  // segments[1] and the live segment/parts must stay internally consistent
+  // (contiguous MSNs, preloadHint placement) -- only segment 0's duration
+  // is under test here, so shrink the others to fit comfortably under the
+  // same target too.
+  raw.video.segments[1].durationSecs = 2.0;
+  assert.ok(parseLlState(raw));
+});
+
+test("still rejects a segment many multiples of the target -- the tolerance does not swallow a genuinely malformed duration", () => {
+  const raw = fixtureState({ targetDurationSecs: 2 });
+  raw.video.segments[0].durationSecs = 20; // 10x the target, not encoder jitter
   assert.equal(parseLlState(raw), null);
 });
 

@@ -107,9 +107,12 @@
  *    words ("MSN of the OLDEST segment in video.segments") and nothing
  *    previously checked.
  *  - Every COMPLETE segment's `durationSecs`, on either track, must not
- *    exceed `targetDurationSecs` — `EXT-X-TARGETDURATION` is a ceiling RFC
- *    8216bis requires every `EXTINF` to respect; a response that violates it
- *    is already malformed, not merely awkward to render.
+ *    exceed the RENDERED `EXT-X-TARGETDURATION` (`Math.ceil(targetDurationSecs)`,
+ *    matching `ll-playlist.js`) by more than `MAX_SEGMENT_OVERAGE_SECS` —
+ *    that tag is a ceiling RFC 8216bis requires every `EXTINF` to respect,
+ *    but a small allowance past it absorbs ordinary encoder-timing jitter
+ *    a real player already tolerates rather than rejecting a legitimate
+ *    snapshot outright.
  *  - The track's OWN live edge must have something to play: if the last
  *    (possibly incomplete) segment has zero parts, `preloadHint` must be
  *    present — a live segment with neither parts nor a hint at what is
@@ -168,6 +171,24 @@ function isNonEmptyString(value) {
 }
 
 /**
+ * Rejects any embedded or TRAILING carriage-return or newline. JS's `$`
+ * anchor (without the `m` flag, which none of this file's patterns set)
+ * already matches only the true end of the string — unlike some other
+ * regex dialects, it has no "matches before a final newline" special case,
+ * so `/^[A-Za-z0-9]+$/.test("seg.m4s\n")` is `false` on the V8 engine both
+ * this Worker and its test suite run on. This check exists anyway, as a
+ * second, explicit line of defense that does not lean on that anchor
+ * semantics alone — see `isSafeUriSegment`/`isUuidLike`, both of which are
+ * rendered UNESCAPED into playlist text where a stray `\r`/`\n` would
+ * inject a line.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function containsLineTerminator(value) {
+  return value.indexOf("\n") !== -1 || value.indexOf("\r") !== -1;
+}
+
+/**
  * A safe origin-supplied "file name" — no `/`, no `..`, no query/fragment,
  * no whitespace or control characters, nothing a template literal could
  * turn into a playlist-line injection or a `new URL(path, base)` escape.
@@ -184,7 +205,7 @@ function isNonEmptyString(value) {
  */
 const URI_SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$/;
 function isSafeUriSegment(value) {
-  return typeof value === "string" && URI_SEGMENT_PATTERN.test(value);
+  return typeof value === "string" && URI_SEGMENT_PATTERN.test(value) && !containsLineTerminator(value);
 }
 
 /**
@@ -197,7 +218,7 @@ function isSafeUriSegment(value) {
  */
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isUuidLike(value) {
-  return typeof value === "string" && SESSION_ID_PATTERN.test(value);
+  return typeof value === "string" && SESSION_ID_PATTERN.test(value) && !containsLineTerminator(value);
 }
 
 /**
@@ -460,13 +481,34 @@ export function parseLlState(raw) {
       return null;
     }
   }
-  // No COMPLETE segment, on either track, may claim a duration longer than
-  // the playlist's own advertised ceiling -- EXT-X-TARGETDURATION is a
-  // ceiling every EXTINF must respect (RFC 8216bis), and a response that
-  // violates it is malformed, not merely awkward to render.
+  // No COMPLETE segment, on either track, may claim a duration much longer
+  // than the RENDERED EXT-X-TARGETDURATION -- a ceiling every EXTINF must
+  // respect (RFC 8216bis), but not a millisecond-exact one. Two things,
+  // both from Farol's second review:
+  //
+  //  1. `ll-playlist.js`'s `buildLlRenditionPlaylist` does not render
+  //     `targetDurationSecs` as-is: it emits
+  //     `Math.max(1, Math.ceil(state.targetDurationSecs))`, an INTEGER per
+  //     the tag's own grammar. Comparing against the raw fractional
+  //     `targetDurationSecs` was already stricter than what the renderer
+  //     itself produces, so mirror that SAME formula here.
+  //  2. Even against that ceiling, ordinary encoder-timing jitter can push
+  //     a real, legal segment slightly past a whole-second target --
+  //     `targetDurationSecs: 2` with a 2.04s segment renders
+  //     `EXT-X-TARGETDURATION:2` / `EXTINF:2.04`, which every real LL-HLS
+  //     player already tolerates as normal rounding noise, not a
+  //     malformed response. `MAX_SEGMENT_OVERAGE_SECS` is that tolerance --
+  //     generous enough for jitter, nowhere near generous enough to hide a
+  //     segment that is actually many multiples of the target (the shape a
+  //     genuinely malformed or hostile snapshot would take).
+  const renderedTargetDuration = Math.max(1, Math.ceil(value.targetDurationSecs));
+  const MAX_SEGMENT_OVERAGE_SECS = 0.5;
   for (const track of audio ? [video, audio] : [video]) {
     for (const segment of track.segments) {
-      if (segment.complete && /** @type {number} */ (segment.durationSecs) > value.targetDurationSecs) {
+      if (
+        segment.complete &&
+        /** @type {number} */ (segment.durationSecs) > renderedTargetDuration + MAX_SEGMENT_OVERAGE_SECS
+      ) {
         return null;
       }
     }
