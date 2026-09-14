@@ -257,6 +257,22 @@ describe("buildSignedPlaylist", () => {
     expect(url.searchParams.get("X-Amz-Expires")).toBe("900");
   });
 
+  it("signs every segment for an immutable response, since a segment never changes once written", async () => {
+    // The egress cannot set Cache-Control at PUT time (LiveKit egress 1.14's
+    // S3Upload has no such field -- see the doc comment on
+    // SEGMENT_CACHE_CONTROL). This is the fallback: an S3 `response-*`
+    // override, signed into the URL, that makes THIS GET answer immutable
+    // regardless of what (if anything) is stored on the object.
+    const body = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    // Index 6, not 5 -- the egress's #EXT-X-PROGRAM-DATE-TIME line (B0.2)
+    // sits at index 4, same as the other tests in this file.
+    const segmentLine = body.split("\n")[6]!;
+    const url = new URL(segmentLine);
+    expect(url.searchParams.get("response-cache-control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
+  });
+
   it("throws HlsPlaylistNotFound when no session row matches (e.g. cleaned up already)", async () => {
     pool.rowCount = 0;
     await expect(buildSignedPlaylist(CHANNEL, STARTED_AT)).rejects.toThrow(

@@ -139,6 +139,58 @@ channel, session) is unrelated to revocation and is unaffected by caching at
 all — a stolen or expired token is refused exactly as reliably with this
 Worker in front as without it.
 
+## The party pass: a longer-lived credential, and a sharper version of the same trade-off
+
+`?t=` expires in an hour by default (`LIVE_HLS_VIEWER_TOKEN_TTL_MS` on the
+API); a three-hour film then needs the reactive refresh through the client's
+stall watchdog to keep going, which is a real (if self-healing) interruption.
+`?pp=`, the **party pass**, exists so THIS Worker specifically can keep
+serving the rendition route for up to `LIVE_HLS_PARTY_PASS_MAX_TTL_MS` (6 h)
+without needing a fresh `?t=` at all — see `mintHlsPartyPass`'s doc comment in
+`server/src/voice/hls-viewer-token.ts` for the full design and
+`src/hls-party-pass.js` for this Worker's verification of it.
+
+Three things worth being precise about:
+
+1. **It only ever gates the cached rendition route.** The session/master
+   route (no `rung` in the path) is fetched once per viewer join, always
+   forwarded with the caller's own `?t=`, and never cached — there is nothing
+   for a longer-lived credential to buy there, so this Worker does not even
+   look at `?pp=` on that route.
+2. **It cannot make this Worker ask the origin for anything.** A cache MISS
+   still has to forward a request the ORIGIN can verify, and the origin
+   cannot verify a party pass at all — a different secret, by design (see the
+   doc comment above `partySecret()`). A viewer authorised here only by a
+   party pass rides the shared cache for as long as some OTHER viewer's
+   still-fresh `?t=` keeps refilling it; on a genuine miss with no usable
+   `?t=` in hand, this Worker answers a retryable 503
+   (`hlsEdge.partyPassMissWithoutToken` / `hlsEdge.partyPassOriginMissRefused`
+   in the logs), not a 401 — the caller is not unauthorized, there is simply
+   no fresh copy this specific request can produce. In a live party with more
+   than a handful of viewers this is a corner, not a common path.
+3. **Revocation is WEAKER here than the trade-off described above, not the
+   same one.** The short-lived `?t=` trade-off is bounded by that token's own
+   TTL even if the shared cache never runs dry (a revoked viewer's own next
+   request, at latest an hour later, fails on expiry if nothing else catches
+   it sooner). A party pass has no such backstop: it verifies purely on
+   signature, channel, session and its own `e` claim, with **no path at all**
+   to `hls-revocation.ts`, which lives only in the API process's memory. A
+   viewer banned or losing VIEW mid-party keeps a valid party pass working
+   for up to 6 hours after the fact, full stop, unless something closes that
+   gap. `isPartyPassRevoked` in `src/index.ts` is that hook: given a KV
+   namespace (`HLS_REVOKED_USERS`, commented out in `wrangler.jsonc`,
+   deliberately not provisioned yet) written to by `hls-revocation.ts` on
+   every eviction, this Worker would refuse a party pass whose `userId`
+   appears there. Nothing writes to it today — the function always answers
+   "not revoked" when the binding is absent, so this Worker's behavior is
+   unchanged until an operator decides the gap is worth building the write
+   path for. See the TODO on that function for exactly what remains.
+
+An operator who is not ready to accept trade-off #3 sets
+`LIVE_HLS_PARTY_PASS_TTL_MS=0` on the API: no pass is minted, `?pp=` never
+appears on a stream URL, and this Worker's gate is exactly what it was before
+this feature existed.
+
 ## Why a port, and why plain JS
 
 `src/hls-viewer-token.js` is deliberately not a shared import from
@@ -197,6 +249,25 @@ this Worker is the derivation of THAT string, not the literal string:
 node -e 'console.log(require("crypto").createHmac("sha256", "pqp-dev-hls-viewer").update("pqp-hls-viewer").digest("base64url"))'
 ```
 
+`HLS_PARTY_PASS_SECRET` is the same idea, a SECOND derived value from the
+same root secret, with a different `info` string (`partySecret()` in
+`server/src/voice/hls-viewer-token.ts`):
+
+```
+partySecret() = base64url( HMAC-SHA256(CLERK_SECRET_KEY, "pqp-hls-party-pass") )
+```
+
+```bash
+node -e 'console.log(require("crypto").createHmac("sha256", process.env.CLERK_SECRET_KEY).update("pqp-hls-party-pass").digest("base64url"))'
+```
+
+It is deliberately NOT the same value as `HLS_VIEWER_TOKEN_SECRET` — see "The
+party pass" above for why a second, unrelated key (rather than a claim on the
+same token) is what makes "the origin cannot verify a party pass" true by
+construction. Leaving this unset is a supported configuration: `?pp=` then
+never verifies, and this Worker gates purely on `?t=`, same as before the
+party pass existed.
+
 ## Deploying
 
 ```bash
@@ -204,6 +275,7 @@ cd tools/hls-edge
 npm install
 npx wrangler login          # once, if not already authenticated
 npx wrangler secret put HLS_VIEWER_TOKEN_SECRET   # value from above
+npx wrangler secret put HLS_PARTY_PASS_SECRET     # value from above; omit to leave the party pass off
 npx wrangler deploy
 ```
 

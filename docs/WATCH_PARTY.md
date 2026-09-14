@@ -2807,6 +2807,7 @@ cd tools/hls-edge
 npm install
 npx wrangler login                                 # once
 npx wrangler secret put HLS_VIEWER_TOKEN_SECRET     # see README.md for the value -- NOT CLERK_SECRET_KEY
+npx wrangler secret put HLS_PARTY_PASS_SECRET       # optional -- see README.md "The party pass"; omit to leave it off
 npx wrangler deploy
 ```
 
@@ -2844,6 +2845,37 @@ next session started goes straight back to API-relative URLs. The Worker
 itself needs no rollback of its own — with the flag unset, nothing ever points
 at it, and it can be left deployed and idle.
 
+### Two TTLs, two audiences: `LIVE_HLS_VIEWER_TOKEN_TTL_MS` and `LIVE_HLS_PARTY_PASS_TTL_MS`
+
+`restarts-api` for either.
+
+`LIVE_HLS_VIEWER_TOKEN_TTL_MS` moves the `?t=` token's lifetime off its
+hardcoded hour (`HLS_VIEWER_TOKEN_TTL_MS` in `hls-viewer-token.ts`) without a
+code change. `hls-revocation.ts` reads the same live value for how long it
+remembers an eviction, so the two move together on purpose — raising the TTL
+without also widening revocation's memory would let a stale grant outlive the
+record of why it should not have.
+
+`LIVE_HLS_PARTY_PASS_TTL_MS` sizes a SECOND, separate credential, `?pp=`,
+that only the edge Worker ever checks (see `tools/hls-edge/README.md` "The
+party pass" for the full design and its sharper revocation trade-off). It
+defaults to and is hard-capped at six hours
+(`LIVE_HLS_PARTY_PASS_MAX_TTL_MS`) regardless of what the env says — an
+operator can shorten this window, never lengthen it past the ceiling, because
+the ceiling bounds how long a leaked pass can cost a channel, not merely how
+long a party is expected to run. Setting it to `0` disables the party pass
+outright: nothing is minted, `?pp=` never appears on a stream URL, and the
+edge Worker gates purely on `?t=`, exactly as before this existed. This is
+the setting to reach for first if the revocation gap in the README is not
+acceptable for an instance, short of building the KV denylist hook it
+describes.
+
+Neither env affects the other's credential: the API's own playlist proxy
+(`hls-playlist-proxy.ts`) never looks at `?pp=`, by construction -- a party
+pass is signed with a completely different derived key
+(`partySecret()` vs `viewerSecret()`), so the origin cannot verify one even
+if a caller pastes it into the `?t=` slot directly.
+
 ### What to watch
 
 `voice.hlsPlaylistRejected` (the API's own counter) stays exactly what it was:
@@ -2865,6 +2897,88 @@ Worker doing its job), and `hlsEdge.playlistRejected` (a bad token at the
 edge, rate-limited the same shape as the API's own rejection log). See
 `tools/hls-edge/README.md` "Load shape" for what one Worker invocation costs
 and what the numbers should look like at party scale.
+
+If the party pass is on, two more lines belong at or near zero:
+`hlsEdge.partyPassMissWithoutToken` and `hlsEdge.partyPassOriginMissRefused`
+-- both mean a viewer authorised only by a party pass hit a cache miss with
+no origin-verifiable `?t=` in hand (see `tools/hls-edge/README.md` "The party
+pass", point 2). Either fires occasionally on an idle rung with few viewers;
+either fires often on a busy rung, which is worth investigating rather than
+just watching, since a busy rung should almost never run its cache dry.
+
+## Segments at the edge (design, not built)
+
+**Not built. Everything in this section is a decision recorded ahead of the
+work, per `docs/plans/BROADCAST_PIPELINE.md` B1.4, not a change that shipped.**
+Playlists at the edge (above) fixes the polling cost; the segment BYTES
+still go straight from every viewer's browser to R2, on a URL signed for that
+one viewer alone (`hls-playlist-proxy.ts`, `signRequest` with `forRead:
+true`). Two viewers of the same segment never share a cache entry anywhere,
+because their URLs differ by SigV4 signature, and Cloudflare never sees the
+request at all -- there is no custom domain in front of the bucket
+(`LIVE_HLS_PUBLIC_BASE_URL` is deliberately unset, see "Attachments" env
+notes in `CLAUDE.md`). R2 has never been the bottleneck (under 200 ms
+measured live on 2026-09-12), which is why this is ranked low and left as a
+design rather than built now.
+
+**What the egress cannot do.** LiveKit egress 1.14's `S3Upload`
+(`livekit.S3Upload` in `@livekit/protocol`) has no `Cache-Control` field, and
+tracing it through to the actual PUT (`livekit/storage`'s `s3Storage.upload`,
+`s3.go`) confirms the `s3.PutObjectInput` it builds never sets one either --
+only `Metadata` (arbitrary `x-amz-meta-*` pairs, not a real header), an
+optional `Tagging`, and `ContentDisposition` (defaulted to `"inline"`). There
+is no config knob on the egress side, full stop; forking egress to add one
+is out of proportion to what B1.4 is worth (see the plan doc). What DOES
+already happen on the GET side: this proxy signs every segment URL with a
+`response-cache-control=public, max-age=31536000, immutable` override (S3's
+per-request response-header override, which R2 honors on `GetObject`), so
+each viewer's OWN repeat fetches of a segment (a seek backward, a stall
+retry) are answered from THAT viewer's browser cache. That is real and
+shipped; it is not the same thing as the cross-viewer, CDN-level sharing this
+section is about.
+
+**The two ways to close the cross-viewer gap, and which one to build.**
+
+1. **A Worker on GET, serving segment bytes off its own R2 credentials.**
+   `tools/hls-edge/` already validates a viewer's token on every playlist
+   request; the same Worker would answer `/{stream_id}/{rung}/{seq}.ts`
+   itself from an R2 binding (ALWAYS_ON A1.2, not yet landed), set
+   `Cache-Control: public, max-age=31536000, immutable`, and cache the
+   response in the Workers Cache API keyed on the PATH alone, never the
+   token — a segment is the same bytes for every viewer, so one colo fetch
+   serves the whole city. The bucket stays private: no custom domain, no
+   `r2.dev`, no signed URL ever reaches a browser. The playlist rewriter
+   stops signing segment lines and emits Worker-relative paths instead,
+   exactly the same swap `LIVE_HLS_PLAYLIST_BASE_URL` already does for
+   playlists.
+2. **A Cloudflare Cache Rule on a custom domain in front of the bucket.**
+   R2 supports Custom Domains: point a hostname (e.g. `hls-cdn.pqp.gg`) at
+   the bucket, then a zone-level Cache Rule matching the segment path
+   (`*.ts$`) sets Edge TTL / Browser TTL to a year, overriding whatever (or
+   nothing) the origin sends via `Cache Eligibility: Eligible for cache` plus
+   an explicit Edge TTL -- R2 does not need to answer `Cache-Control` at all
+   for this to work, since the rule can force caching independent of it.
+   This is genuinely simpler to turn on (a DNS record and a dashboard rule,
+   no Worker code) but it requires the bucket to be reachable at a public
+   hostname, which is what `LIVE_HLS_PUBLIC_BASE_URL` staying unset has
+   deliberately avoided so far, and it still leaves the presigned-URL
+   question open: either the custom domain serves the bucket UNAUTHENTICATED
+   (anyone with a segment's URL can fetch it forever, no viewer-token check
+   at all -- a materially different exposure than today's per-viewer signed
+   URL) or it still requires a signature, at which point the same
+   per-viewer-URL problem that defeats caching today is back, just under a
+   friendlier hostname.
+
+**Chosen: option 1, the Worker.** It is the only one of the two that keeps
+the bucket private AND gets cross-viewer sharing, because it puts a
+viewer-token check back in front of the cache instead of removing the check
+to get the cache. It costs more to build (the R2 binding, a route, tests) and
+depends on ALWAYS_ON A1.2's credentials landing in `tools/hls-edge/` first;
+option 2 is recorded here so a future reviewer does not re-propose it as a
+quicker path without knowing what it trades away. Build it as B1.4 describes,
+after A1.1 and A1.2: `docs/plans/BROADCAST_PIPELINE.md` §3, and
+`docs/plans/ALWAYS_ON.md` task A1.x for the R2 credential seam this depends
+on.
 
 ## Client flag
 

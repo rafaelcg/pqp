@@ -9,12 +9,28 @@
   "name": "pqp-hls-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
-  // Non-secret configuration. HLS_VIEWER_TOKEN_SECRET is set with
-  // `wrangler secret put` and never lives in this file — see README.md for
-  // what value it takes (NOT the raw CLERK_SECRET_KEY).
+  // Non-secret configuration. HLS_VIEWER_TOKEN_SECRET and HLS_PARTY_PASS_SECRET
+  // are set with `wrangler secret put` and never live in this file — see
+  // README.md for what value each takes (NOT the raw CLERK_SECRET_KEY, and
+  // NOT the same value as each other: they are two different derived keys,
+  // see `partySecret()` in `server/src/voice/hls-viewer-token.ts`).
   "vars": {
     "ORIGIN_BASE": "https://api.pqp.gg"
   },
+
+  // Party-pass revocation hook (not provisioned): a KV namespace this Worker
+  // would read to refuse a party pass minted for a user who has since been
+  // banned or lost VIEW -- see `isPartyPassRevoked`'s TODO in src/index.ts
+  // for what would need to write to it (`hls-revocation.ts` on the API,
+  // which has no path to Cloudflare today). Left commented out for the same
+  // reason as the ALWAYS-ON bindings below: an unbound KV bound in code
+  // already fails open (`isPartyPassRevoked` treats a missing binding as
+  // "not revoked"), so there is nothing to gain from provisioning the
+  // namespace before something writes to it.
+  //
+  // "kv_namespaces": [
+  //   { "binding": "HLS_REVOKED_USERS", "id": "<create with `wrangler kv namespace create`>" }
+  // ],
 
   // ALWAYS-ON (not built yet): the owner wants a watch party to keep playing
   // when the API is down. That needs a SECOND `PlaylistOrigin`

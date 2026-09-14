@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   isHlsAccessRevoked,
   resetHlsRevocationsForTests,
@@ -76,5 +76,41 @@ describe("hls revocation", () => {
     revokeHlsAccess(CHANNEL, { onlyUserIds: [BOB] }, T0 + 10);
     expect(isHlsAccessRevoked(ALICE, CHANNEL, T0 - 1, T0 + 20)).toBe(true);
     expect(isHlsAccessRevoked(BOB, CHANNEL, T0 - 1, T0 + 20)).toBe(true);
+  });
+
+  describe("lowering LIVE_HLS_VIEWER_TOKEN_TTL_MS while an old, longer-lived token is still outstanding", () => {
+    afterEach(() => {
+      delete process.env.LIVE_HLS_VIEWER_TOKEN_TTL_MS;
+    });
+
+    it("still remembers a revocation past the NEW, shorter TTL, because a token minted under the OLD TTL is still valid that long", () => {
+      // A token minted under the default hour-long TTL, revoked five minutes in.
+      revokeHlsAccess(CHANNEL, { onlyUserIds: [ALICE] }, T0);
+      // The operator lowers the TTL to one minute. Without the high-water
+      // mark, `prune()` would forget this revocation a minute after T0 --
+      // long before the OLD token (minted under the hour-long TTL, so valid
+      // until T0 + one hour) actually expires.
+      process.env.LIVE_HLS_VIEWER_TOKEN_TTL_MS = "60000";
+      const justPastTheNewShortTtl = T0 + 60_000 + 1;
+      expect(
+        isHlsAccessRevoked(ALICE, CHANNEL, T0 - 1, justPastTheNewShortTtl),
+      ).toBe(true);
+      // Once genuinely past where even the OLD, longer TTL would have
+      // expired the token, forgetting it is correct again.
+      const pastEvenTheOldTtl = T0 + 60 * 60 * 1000 + 1;
+      expect(isHlsAccessRevoked(ALICE, CHANNEL, T0 - 1, pastEvenTheOldTtl)).toBe(
+        false,
+      );
+    });
+
+    it("raising the TTL back up does not need any special handling -- it only ever widens the window", () => {
+      process.env.LIVE_HLS_VIEWER_TOKEN_TTL_MS = "60000";
+      revokeHlsAccess(CHANNEL, { onlyUserIds: [ALICE] }, T0);
+      process.env.LIVE_HLS_VIEWER_TOKEN_TTL_MS = String(2 * 60 * 60 * 1000);
+      const pastTheOldOneMinuteWindow = T0 + 60_000 + 1;
+      expect(
+        isHlsAccessRevoked(ALICE, CHANNEL, T0 - 1, pastTheOldOneMinuteWindow),
+      ).toBe(true);
+    });
   });
 });

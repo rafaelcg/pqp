@@ -21,6 +21,39 @@ import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
+ * A MEDIA SEGMENT NEVER CHANGES ONCE THE EGRESS WRITES IT, so every fetch of
+ * one is a request for the same bytes forever -- the textbook case for
+ * `Cache-Control: immutable`. Nothing in the write path can say so today:
+ * LiveKit egress 1.14's `S3Upload` (`livekit.S3Upload` in
+ * `@livekit/protocol`) carries `metadata` (arbitrary `x-amz-meta-*` pairs,
+ * not a real HTTP header), `tagging` and `content_disposition`, and no field
+ * for `Cache-Control` at all -- confirmed against the actual PUT, not just
+ * the protobuf: `livekit/storage`'s `s3Storage.upload` (`s3.go`) builds its
+ * `s3.PutObjectInput` from exactly `Body`, `Bucket`, `ContentType`, `Key`,
+ * `Metadata` and `ContentDisposition` (defaulted to `"inline"`), nothing
+ * else. So this cannot be set at PUT time without forking egress.
+ *
+ * This proxy is a GET path, not the PUT path, but S3's `GetObject` (which R2
+ * implements) accepts a `response-cache-control` query override that
+ * controls only the header THIS response carries, independent of what (if
+ * anything) was stored on the object -- exactly the "Worker on GET" shape
+ * `docs/plans/BROADCAST_PIPELINE.md` B1.4 asks for, minus a Worker: the
+ * override rides on the presigned URL the client already fetches directly
+ * from R2, so every viewer's own repeat requests (a seek backward, a stall
+ * retry) hit their OWN browser cache instead of R2 again. It does NOT give
+ * two different viewers a shared cache entry -- their URLs differ by SigV4
+ * signature (`?X-Amz-Signature=...`), so a CDN sitting in front of the raw R2
+ * endpoint (there isn't one today) would still see distinct URLs per viewer
+ * per signing bucket. Cross-viewer sharing needs either an R2-side rule tied
+ * to a stable, unsigned path, or the edge Worker serving segment bytes itself
+ * off its own R2 credentials -- both out of scope for this change; see
+ * `docs/WATCH_PARTY.md` §"Segments at the edge" for the design and why the
+ * Worker option is the one to build when `LIVE_HLS_S3_*` credentials reach
+ * `tools/hls-edge/`.
+ */
+const SEGMENT_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
+/**
  * THE CLOCK A SEGMENT URL IS SIGNED WITH, AND WHY IT IS NOT `Date.now()`.
  *
  * A SEGMENT'S URL MUST NOT CHANGE WHILE IT IS LISTED. RFC 8216 6.2.1 allows a
@@ -614,6 +647,7 @@ async function renderSignedPlaylist(
         forRead: true,
         config,
         now: signedAt,
+        query: { "response-cache-control": SEGMENT_CACHE_CONTROL },
       }).url;
       memo.set(key, { url, signedAtMs: signedAt.getTime() });
       return url;

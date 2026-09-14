@@ -40,7 +40,7 @@
  * entry, so a rejoin works without waiting anything out.
  */
 
-import { HLS_VIEWER_TOKEN_TTL_MS } from "./hls-viewer-token.js";
+import { hlsViewerTokenTtlMs } from "./hls-viewer-token.js";
 
 interface Revocation {
   /** When access was taken away. Tokens minted at or after this survive. */
@@ -55,7 +55,39 @@ interface Revocation {
  * Nothing older than a token's own lifetime can matter: any token it could
  * still catch has expired on its own by then. So the map is bounded by the
  * number of channels that had an eviction in the last token lifetime.
+ *
+ * "A token's own lifetime" is `hlsViewerTokenTtlMs()`, the LIVE value
+ * (`LIVE_HLS_VIEWER_TOKEN_TTL_MS` or its default) -- but the HIGH-WATER MARK
+ * of it, `pruneWindowMs()` below, not whatever the env says at THIS instant.
+ * A token minted a moment ago carries an expiry baked in from the TTL that
+ * was live when it was minted, not from whatever the env says now: an
+ * operator who LOWERS `LIVE_HLS_VIEWER_TOKEN_TTL_MS` while older,
+ * longer-lived tokens are still outstanding must not have this map start
+ * forgetting revocations sooner than those tokens actually expire, or a
+ * viewer banned under the old TTL becomes un-bannable again once the
+ * shorter window has passed -- Farol caught this as a MEDIUM. Raising the
+ * TTL is symmetric and already safe without tracking anything (a bigger
+ * pruning window only ever keeps MORE entries), so the mark only ever needs
+ * to grow, never shrink, and growing it costs nothing but a few extra
+ * `Revocation` entries kept a little longer than the CURRENT setting alone
+ * would justify. It resets to the process's own compiled-in default on
+ * restart, same as the revocation map itself, which is fine: a restart
+ * already drops every revocation this map is tracking, there is nothing left
+ * for the mark to protect from before that instant.
+ *
+ * This deliberately says nothing about the party pass
+ * (`hls-viewer-token.ts`'s `mintHlsPartyPass`) -- that credential is checked
+ * only by the edge Worker, which has no path to this map at all, and
+ * extending this pruning window would not reach it. See the party pass's own
+ * doc comment for that trade-off.
  */
+let highWaterTtlMs = hlsViewerTokenTtlMs();
+
+function pruneWindowMs(): number {
+  highWaterTtlMs = Math.max(highWaterTtlMs, hlsViewerTokenTtlMs());
+  return highWaterTtlMs;
+}
+
 const byChannel = new Map<string, Revocation[]>();
 
 function prune(channelId: string, now: number): Revocation[] {
@@ -63,7 +95,7 @@ function prune(channelId: string, now: number): Revocation[] {
   if (!entries) {
     return [];
   }
-  const kept = entries.filter((entry) => now - entry.at < HLS_VIEWER_TOKEN_TTL_MS);
+  const kept = entries.filter((entry) => now - entry.at < pruneWindowMs());
   if (kept.length === 0) {
     byChannel.delete(channelId);
   } else if (kept.length !== entries.length) {
@@ -138,4 +170,7 @@ export function isHlsAccessRevoked(
 
 export function resetHlsRevocationsForTests(): void {
   byChannel.clear();
+  // Same as a real restart: the high-water mark forgets every TTL it has
+  // ever observed and starts again from whatever the env says right now.
+  highWaterTtlMs = hlsViewerTokenTtlMs();
 }
