@@ -26,8 +26,10 @@ import {
   voiceParticipantSchema,
   voiceRoomTransportSchema,
   watchPartyStateSchema,
+  musicStateSchema,
   liveReactionCountSchema,
   type MeshVideoKind,
+  type MusicState,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type LiveHlsStream,
@@ -114,6 +116,7 @@ import {
 import { readSfuStats } from "../voice/sfu-stats.js";
 import {
   adoptVoicePeer,
+  clearMusicIfEmpty,
   clearWatchPartyIfEmpty,
   countIdleVoiceSeats,
   countVoicePeerUsersByChannel,
@@ -129,9 +132,11 @@ import {
   listVoiceRoster,
   listVoiceRosters,
   markVoicePeerOrphaned,
+  persistMusic,
   persistWatchParty,
   claimVoiceRoomTransport,
   promoteVoiceRoomTransport,
+  readMusic,
   readWatchParty,
   reconcileVoiceRegistry,
   retireVoicePeerId,
@@ -175,6 +180,7 @@ import {
 } from "./watch-party.js";
 import { musicWriteAllowed } from "@pqp/shared";
 import {
+  adoptMusicState,
   applyMusicWrite,
   channelMusicTrack,
   endMusic,
@@ -1325,7 +1331,28 @@ function onLiveRoomMaybeEmpty(
       state: null,
     });
   }
-  if (endMusic(voiceChannelId)) {
+  endMusicForEmptyRoom(voiceChannelId, notifySocket);
+}
+
+/**
+ * The room emptied HERE. Whether that means the music is over depends on
+ * whether the room is only here.
+ *
+ * Registry off, a room lives on one instance and the two questions are the
+ * same one: forget the queue, tell the channel's sidebar and tell the socket
+ * that just left. Registry on, this instance having nobody left says nothing
+ * about the other machine, and announcing `channel-music: null` on that basis
+ * would blank the sidebar pill for every viewer here while the song is still
+ * playing for the people still in the call. So the cache goes either way
+ * (nobody here is listening to it) and the announcement waits on the rows,
+ * which after `settledRowWrites` are the cluster's answer.
+ */
+function endMusicForEmptyRoom(
+  voiceChannelId: string,
+  notifySocket?: WebSocket,
+): void {
+  const had = endMusic(voiceChannelId);
+  const announce = () => {
     void broadcastChannelMusic(voiceChannelId);
     if (notifySocket) {
       send(notifySocket, {
@@ -1334,7 +1361,42 @@ function onLiveRoomMaybeEmpty(
         state: null,
       });
     }
+  };
+  if (!registryOn()) {
+    if (had) {
+      announce();
+    }
+    return;
   }
+  // WHETHER THIS PROCESS HELD A CACHE ENTRY SAYS NOTHING ABOUT THE ROW, so
+  // the cleanup does not ask. An instance that missed every `voice.music`
+  // frame for a room can perfectly well be the last one out of it, and
+  // returning early on an empty cache would leave the queue on the row for
+  // the next call in the channel to inherit. `clearMusicIfEmpty` is a no-op
+  // when there is nothing to clear, and it is the statement that decides:
+  // its own `NOT EXISTS` is the second, authoritative half of the emptiness
+  // check below.
+  void (async () => {
+    await settledRowWrites(voiceChannelId);
+    const remaining = await listVoicePeersInRoom(voiceChannelId);
+    if (remaining.length > 0) {
+      // Still a call on another machine. The row keeps the queue; this
+      // instance simply has nobody to play it to any more.
+      return;
+    }
+    const cleared = await clearMusicIfEmpty(voiceChannelId);
+    if (had || cleared) {
+      announce();
+    }
+  })().catch((error: unknown) => {
+    logEvent("voice.registryWriteFailed", {
+      op: "musicEnd",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    if (had) {
+      announce();
+    }
+  });
 }
 
 /**
@@ -1471,6 +1533,12 @@ export interface VoiceActivitySnapshot {
   cluster: {
     framesRelayed: number;
     framesReceived: number;
+    /**
+     * The music queue's share of the two above: writes published for the
+     * other machine, and writes from it applied here. See `musicCluster`.
+     */
+    musicRelayed: number;
+    musicAdopted: number;
   };
   /**
    * `voice.registry.writesPerMinute`: registry writes actually issued
@@ -1737,6 +1805,8 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
     cluster: {
       framesRelayed: clusterFrames.relayed,
       framesReceived: clusterFrames.received,
+      musicRelayed: musicCluster.relayed,
+      musicAdopted: musicCluster.adopted,
     },
     registry: {
       writesPerMinute: registryOn() ? voiceRegistryWritesPerMinute() : 0,
@@ -2446,6 +2516,17 @@ async function remintHlsAudienceTokens(
  */
 const clusterFrames = { relayed: 0, received: 0 };
 
+/**
+ * The music queue's own half of that, because the aggregate cannot tell a
+ * relay that runs from one that does not. `relayed` is a write this instance
+ * accepted and published; `adopted` is a write from the other machine this
+ * instance applied to its half of the room. Both zero on one machine, both
+ * climbing on two as soon as anybody presses play — and `relayed` climbing
+ * while `adopted` stays at zero on every instance is the shape of pitfall 12
+ * in CLAUDE.md: a path that ships, publishes, and is never once applied.
+ */
+const musicCluster = { relayed: 0, adopted: 0 };
+
 function publishVoice(topic: string, frame: unknown): void {
   clusterFrames.relayed += 1;
   publishToCluster(topic, frame);
@@ -2492,6 +2573,8 @@ export function resetRosterSequences(): void {
   hlsTokenRemint.tokens = 0;
   clusterFrames.relayed = 0;
   clusterFrames.received = 0;
+  musicCluster.relayed = 0;
+  musicCluster.adopted = 0;
 }
 
 /** The sequence a socket should adopt from a full roster of this channel. */
@@ -4344,6 +4427,50 @@ function planVoiceResume(
   };
 }
 
+/**
+ * Take the room's queue off the row on the way into a call.
+ *
+ * A joiner cannot ask for the queue — there is no request frame in the
+ * contract — so the row is the only thing standing between them and a silent
+ * player beside a room three minutes into a song. But the joiner is not the
+ * only one who benefits: reaching the row is also THE RECONCILIATION for a
+ * `voice.music` frame this instance never received. The bus is fire and
+ * forget by design (`lib/bus.ts`), so a dropped frame leaves everybody
+ * already in the room here on the old queue with nothing coming to correct
+ * them. If the row turns out to be ahead of the cache, the room hears it,
+ * not only the person who just walked in.
+ *
+ * Read in the welcome's existing `Promise.all`, so it costs no extra round
+ * trip on the join path.
+ */
+function adoptMusicFromRow(
+  voiceChannelId: string,
+  held: MusicState | null,
+  joinerPeerId: string,
+): void {
+  const previous = getMusicState(voiceChannelId);
+  const unchanged =
+    previous === null
+      ? held === null
+      : held !== null &&
+        held.rev === previous.rev &&
+        held.actorId === previous.actorId;
+  if (unchanged || !adoptMusicState(voiceChannelId, held)) {
+    return;
+  }
+  const before = previous?.current?.videoId ?? null;
+  // The joiner is excluded: `welcomeVoicePeer` hands it the state itself, a
+  // moment later and in the order the contract wants (after `welcome`).
+  broadcastToRoom(
+    voiceChannelId,
+    { type: "music", channelId: voiceChannelId, state: held },
+    joinerPeerId,
+  );
+  if ((held?.current?.videoId ?? null) !== before) {
+    void broadcastChannelMusic(voiceChannelId);
+  }
+}
+
 async function welcomeVoicePeer(
   peer: VoicePeer,
   resumed: boolean,
@@ -4361,17 +4488,35 @@ async function welcomeVoicePeer(
   const byId = new Map<string, VoiceParticipant>();
   let party = getWatchPartyState(peer.voiceChannelId);
   if (registryOn()) {
-    // The room's other instances' peers, and the party the room holds. One
-    // read each, both best effort: a failed read leaves the local view,
-    // which is what a single machine would have shown. The raised hand is
-    // folded into this roster (the LEFT JOIN on `voice_raised_hands`): after
-    // the peer row exists there is no second round trip for it.
+    // The room's other instances' peers, the party the room holds and the
+    // queue it is playing. One read each, all best effort: a failed read
+    // leaves the local view, which is what a single machine would have
+    // shown. The raised hand is folded into this roster (the LEFT JOIN on
+    // `voice_raised_hands`): after the peer row exists there is no second
+    // round trip for it.
+    //
+    // THE MUSIC READ CATCHES ITS OWN FAILURE rather than riding the `try`
+    // below. All three are in one `Promise.all` to keep the join to a single
+    // round trip, but a rejection there would abandon the other two results
+    // — and a socket seated with no roster and no watch party because the
+    // music query hiccuped would be a far worse trade than a silent player.
+    // `undefined` is already "no row to adopt" on this path.
     try {
       await settledRowWrites(peer.voiceChannelId);
-      const [room, held] = await Promise.all([
+      const [room, held, heldMusic] = await Promise.all([
         listVoiceRoster(peer.voiceChannelId),
         readWatchParty(peer.voiceChannelId),
+        readMusic(peer.voiceChannelId).catch((error: unknown) => {
+          logEvent("voice.registryReadFailed", {
+            op: "welcomeMusic",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return undefined;
+        }),
       ]);
+      if (heldMusic !== undefined) {
+        adoptMusicFromRow(peer.voiceChannelId, heldMusic, peer.id);
+      }
       noteRemoteTransport(peer.voiceChannelId, room?.transport ?? null);
       for (const row of room?.peers ?? []) {
         if (row.userId === peer.userId) {
@@ -5721,8 +5866,10 @@ export async function handleVoiceMessage(
 
   // --- music queue ---
   //
-  // Same audience and same echo-as-acknowledgement as the watch party above.
-  // Not mirrored into the registry: a room lives on one instance today.
+  // Same audience, same echo-as-acknowledgement and, since the room can span
+  // machines, the same three-step tail as the watch party above: the cache
+  // decides, the row decides again for the cluster, and `voice.music` tells
+  // the other instance to catch its half of the room up.
   if (payload.type === "set-music") {
     if (!existingPeerId) {
       return;
@@ -5784,11 +5931,54 @@ export async function handleVoiceMessage(
       });
       return;
     }
+    // The row is the room's queue when the flag is on, and the write is the
+    // ordering the cache just applied, run again against what the cluster
+    // holds. A write that lost there (this instance missed a frame, or two
+    // people hit skip in the same instant on two machines) is handed the
+    // row's winner, exactly as a local loser is handed the held state above.
+    // A failed write degrades to the local decision, like every registry
+    // write.
+    if (registryOn()) {
+      let persisted: Awaited<ReturnType<typeof persistMusic>> | null = null;
+      try {
+        persisted = await persistMusic(peer.voiceChannelId, write.state);
+      } catch (error) {
+        logEvent("voice.registryWriteFailed", {
+          op: "music",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (persisted?.kind === "stale") {
+        adoptMusicState(peer.voiceChannelId, persisted.held);
+        // TO THE ROOM, NOT ONLY TO THE LOSER. This instance lost in the row
+        // because it had missed the frame that put the winner there, which
+        // means every peer here is on the stale queue and not just the
+        // person who wrote. Correcting the writer alone would leave them
+        // watching a different track from the people sitting next to them.
+        // The frame is an absolute state at a higher `rev`, so a peer that
+        // somehow had it already is unaffected.
+        broadcastToRoom(peer.voiceChannelId, {
+          type: "music",
+          channelId: peer.voiceChannelId,
+          state: persisted.held,
+        });
+        // The sidebar was told about a track this instance no longer holds.
+        void broadcastChannelMusic(peer.voiceChannelId);
+        return;
+      }
+    }
     broadcastToRoom(peer.voiceChannelId, {
       type: "music",
       channelId: peer.voiceChannelId,
       state: write.state,
     });
+    if (clusterOn()) {
+      musicCluster.relayed += 1;
+      publishVoice(VOICE_MUSIC_TOPIC, {
+        channelId: peer.voiceChannelId,
+        state: write.state,
+      } satisfies VoiceMusicFrame);
+    }
     return;
   }
 
@@ -7442,6 +7632,7 @@ async function attemptPromotion(
 export const VOICE_ROOM_TOPIC = "voice.room";
 export const VOICE_IDENTITY_TOPIC = "voice.identity";
 export const VOICE_WATCH_TOPIC = "voice.watch";
+export const VOICE_MUSIC_TOPIC = "voice.music";
 export const VOICE_CALL_TOPIC = "voice.call";
 export const VOICE_MODERATION_TOPIC = "voice.moderation";
 export const VOICE_REACTIONS_TOPIC = "voice.reactions";
@@ -7504,6 +7695,20 @@ const voiceWatchFrameSchema = z.object({
   state: watchPartyStateSchema.nullable(),
 });
 type VoiceWatchFrame = z.infer<typeof voiceWatchFrameSchema>;
+
+/**
+ * `voice.music`: the room's queue changed, published by the instance that
+ * accepted the write after `persistMusic` agreed. A hint about a row like
+ * every other voice topic here — an instance that misses this frame still
+ * reads the queue on its next join — and what the frame buys is that the
+ * other half of the room hears the play, the pause or the skip NOW instead of
+ * whenever somebody next walks in.
+ */
+const voiceMusicFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  state: musicStateSchema.nullable(),
+});
+type VoiceMusicFrame = z.infer<typeof voiceMusicFrameSchema>;
 
 /**
  * `voice.call` (M4, plan section 5.5). Two directions on one topic. From the
@@ -7952,6 +8157,39 @@ subscribeToCluster(VOICE_WATCH_TOPIC, (data) => {
     return;
   }
   broadcastToRoom(channelId, { type: "watch-party", channelId, state });
+});
+
+subscribeToCluster(VOICE_MUSIC_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceMusicFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId, state } = parsed.data;
+  // Only rooms this instance has somebody in, for the same reason the watch
+  // party's handler says so: the cache is per room and is torn down when the
+  // local room empties, so adopting for a room nobody here is in would be an
+  // entry nothing ever removes. The sidebar pill for a viewer on a machine
+  // with nobody in the call is not covered by this and never was — it is
+  // drawn from `musicChannels()`, which is this instance's rooms.
+  if (getRoomPeers(channelId).length === 0) {
+    return;
+  }
+  noteClusterFrameReceived();
+  const before = channelMusicTrack(channelId)?.videoId ?? null;
+  if (!adoptMusicState(channelId, state)) {
+    // Older than what is held (a straggler behind a frame that already
+    // landed, or behind the row a joiner just read). The room has the newer
+    // queue already; repeating the older one would roll it back.
+    return;
+  }
+  musicCluster.adopted += 1;
+  broadcastToRoom(channelId, { type: "music", channelId, state });
+  if ((state?.current?.videoId ?? null) !== before) {
+    void broadcastChannelMusic(channelId);
+  }
 });
 
 // --- end the cluster bus ------------------------------------------------------

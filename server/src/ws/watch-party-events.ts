@@ -25,6 +25,8 @@ import { getChannelAudience } from "../services/servers.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket, userHasAuthenticatedSocket } from "./sockets.js";
+import { hasClusterSocket } from "./status.js";
+import { logEvent } from "../lib/log.js";
 import { noteWatchPartyState } from "./watch-party-live.js";
 
 /**
@@ -343,16 +345,113 @@ export async function onHostSocketOpened(userId: string): Promise<void> {
 }
 
 /**
- * A socket closed. If it was this person's LAST socket and they host a live
- * party, start the grace clock.
+ * How often this instance declined to start a grace clock because the host
+ * was still connected on ANOTHER machine. Zero on one machine, and on two it
+ * is the number that says this check is doing something — the shape of
+ * pitfall 12 in CLAUDE.md, where a cross-instance path shipped and never once
+ * ran. Read by the tests; the `watchParty.hostSocketElsewhere` line beside it
+ * is what says so in production's logs.
+ */
+const hostPresence = { heldElsewhere: 0 };
+
+/** Test seam. */
+export function readHostPresenceCounters(): { heldElsewhere: number } {
+  return { ...hostPresence };
+}
+
+export function resetHostPresenceCountersForTests(): void {
+  hostPresence.heldElsewhere = 0;
+  for (const timer of recheckTimers.values()) {
+    clearTimeout(timer);
+  }
+  recheckTimers.clear();
+}
+
+/**
+ * Whether the host is still connected ANYWHERE — this process or any other.
+ *
+ * THE LOCAL MAP IS ASKED FIRST AND IS STILL THE FAST ANSWER: it is exact for
+ * this process with no window, since `deleteAuthenticatedSocket` has already
+ * run by the time we are called. What it cannot see is the other machine, and
+ * on two API instances a host with the laptop on A and the phone on B closing
+ * the laptop used to read, on B, as a host who had gone away: B started the
+ * grace clock and the sweep ended a party whose host was sitting right there.
+ *
+ * The cluster half is the status registry, which merges every instance's
+ * contribution over the bus and is the same source `push.ts` asks before it
+ * wakes somebody's phone. With one machine (or the bus off) it can only see
+ * this process's own sockets, so the answer is exactly what it always was.
+ */
+function hostIsConnectedAnywhere(userId: string): boolean {
+  if (userHasAuthenticatedSocket(userId)) {
+    return true;
+  }
+  if (!hasClusterSocket(userId)) {
+    return false;
+  }
+  hostPresence.heldElsewhere += 1;
+  logEvent("watchParty.hostSocketElsewhere", { userId });
+  return true;
+}
+
+/**
+ * How long after "still connected elsewhere" to ask again.
+ *
+ * THE ONE RACE A MERGED PRESENCE VIEW INTRODUCES. Each instance's
+ * contribution reaches the others over the bus, so it is behind by the
+ * propagation delay — and if the host's last socket on A and their last
+ * socket on B close in the same instant, each process can have removed its
+ * own and still be holding the other's not-yet-withdrawn contribution. Both
+ * answer "connected", neither stamps, and nothing else in the system would
+ * ever ask again: the party stays live with no grace clock and the sweep
+ * never ends it. Asking once more, after long enough for the withdrawal to
+ * have landed, closes it. `markWatchPartyHostGone` is idempotent
+ * (`host_disconnected_at IS NULL`), so the common case — a host who really
+ * does still have a tab open — costs one presence read and writes nothing.
+ */
+let hostPresenceRecheckMs = 5_000;
+
+/** Test seam: the re-check is a clock, and a test needs it to be short. */
+export function setHostPresenceRecheckMsForTests(ms: number): void {
+  hostPresenceRecheckMs = ms;
+}
+
+/** One pending re-check per person, so N closing tabs cost one timer. */
+const recheckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleHostPresenceRecheck(userId: string): void {
+  if (recheckTimers.has(userId)) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    recheckTimers.delete(userId);
+    if (hostIsConnectedAnywhere(userId)) {
+      return;
+    }
+    void markWatchPartyHostGone(userId)
+      .then(announceChannels)
+      .catch((error: unknown) => {
+        console.error("[watch-party] host presence re-check failed:", error);
+      });
+  }, hostPresenceRecheckMs);
+  // Never a reason to keep the process alive: a shutdown drops every socket
+  // anyway, and the next instance to see this host answers the question.
+  timer.unref?.();
+  recheckTimers.set(userId, timer);
+}
+
+/**
+ * A socket closed. If it was this person's LAST socket ANYWHERE and they host
+ * a live party, start the grace clock.
  *
  * THE "LAST SOCKET" CHECK IS WHY THIS IS NOT IN THE SERVICE. Somebody with
  * the app open on a laptop and a phone closes one of them constantly; only
- * the transition to zero sockets is a host going away, and the socket
- * registry is the only thing that knows.
+ * the transition to zero sockets is a host going away, and the presence
+ * registries are the only thing that knows.
  */
 export async function onHostSocketClosed(userId: string): Promise<void> {
-  if (userHasAuthenticatedSocket(userId)) {
+  if (hostIsConnectedAnywhere(userId)) {
+    scheduleHostPresenceRecheck(userId);
     return;
   }
   const channels = await markWatchPartyHostGone(userId);

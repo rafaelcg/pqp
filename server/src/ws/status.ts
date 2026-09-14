@@ -212,6 +212,28 @@ export function isPresentForHere(userId: string): boolean {
 }
 
 /**
+ * DOES THIS ACCOUNT HOLD A SOCKET ANYWHERE IN THE CLUSTER?
+ *
+ * Not "are they online": this is the raw presence question, before
+ * `externalStatus` turns it into something a third party may be told. That
+ * distinction is the whole reason this exists next to `resolveStatus` rather
+ * than being spelled as one — an INVISIBLE user resolves to `offline` while
+ * being very much connected, and a caller asking "is anybody still holding
+ * this session" must not be told no because of a privacy choice. `push.ts`
+ * spells the same question as `resolveStatus(...) !== "offline" ||
+ * isInvisible(...)`; this is that, said once.
+ *
+ * Merged across instances, so a laptop on machine A and a phone on machine B
+ * are one answer. The counterpart in `sockets.ts`,
+ * `userHasAuthenticatedSocket`, only ever sees THIS process's map, which is
+ * the right answer for "can I send them a frame from here" and the wrong one
+ * for "have they gone away".
+ */
+export function hasClusterSocket(userId: string): boolean {
+  return mergedFor(userId) !== undefined;
+}
+
+/**
  * The bulk form, for a member list. Builds the cluster-wide view once and then
  * looks each id up in it, so a 500-member server costs one pass over the remote
  * contributions instead of 500.

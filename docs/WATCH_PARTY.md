@@ -154,7 +154,12 @@ which is exactly what an invisible object must not do.
   only on a party that is `live`. The "last socket" check is why this lives in
   `server/src/ws/watch-party-events.ts` and not in the service: a person with
   a laptop and a phone closes one of them constantly, and only the transition
-  to zero sockets is a host leaving.
+  to zero sockets is a host leaving. **Last anywhere**, not last here: the
+  process's own socket map is asked first and the cluster-merged status
+  registry second, because on two API machines the laptop and the phone land
+  wherever the proxy puts them, and a machine that only ever saw one of them
+  would start the clock on a host who is sitting right there. The
+  `watchParty.hostSocketElsewhere` log line is that second answer firing.
 - While the clock runs, the party **stays live**. The audience is watching
   either way, and cutting them off to make a point about ownership helps
   nobody. What the clock changes is that a co-host now sees **Assumir**.

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
+import type { MusicState, VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import { countedQuery } from "../lib/db-tx-metrics.js";
@@ -1100,6 +1100,95 @@ export function clearWatchPartyIfEmpty(channelId: string): Promise<unknown> {
     ),
     "clearWatchParty",
   );
+}
+
+// --- music queue ------------------------------------------------------------
+//
+// The watch party's twin, column for column and rule for rule: `music` /
+// `music_rev` on the room row are the queue with the flag on, the map in
+// `ws/music.ts` becomes a per-instance cache of it, and the contract's own
+// ordering (higher `rev` wins, ties break on `actorId`) is the WHERE clause,
+// so the write is the coalescing point across instances. Kept a separate pair
+// of columns rather than folded into the party's: a room can be watching a
+// film and playing nothing, or the other way round, and one `rev` shared
+// between two independent logical clocks would have each write refusing the
+// other's.
+
+export type MusicPersist =
+  | { kind: "updated" }
+  | { kind: "stale"; held: MusicState | null }
+  /** No room row: the room emptied under the writer. Nothing to hold. */
+  | { kind: "missing" };
+
+export async function persistMusic(
+  channelId: string,
+  state: MusicState | null,
+): Promise<MusicPersist> {
+  const pool = getPool();
+  if (state === null) {
+    // A teardown is structural and last-wins, exactly as in memory: the held
+    // queue is forgotten and the clock restarts, so the next queue's first
+    // write (rev 1 from a client that has heard nothing) is not refused.
+    const result = await pool.query(
+      `UPDATE voice_rooms SET music = NULL, music_rev = 0
+        WHERE channel_id = $1`,
+      [channelId],
+    );
+    return (result.rowCount ?? 0) > 0
+      ? { kind: "updated" }
+      : { kind: "missing" };
+  }
+  const result = await pool.query(
+    `UPDATE voice_rooms
+        SET music = $2::jsonb, music_rev = $3
+      WHERE channel_id = $1
+        AND (music_rev < $3
+             OR (music_rev = $3 AND (music->>'actorId') <= $4))`,
+    [channelId, JSON.stringify(state), state.rev, state.actorId],
+  );
+  if ((result.rowCount ?? 0) > 0) {
+    return { kind: "updated" };
+  }
+  const held = await readMusic(channelId);
+  if (held === undefined) {
+    return { kind: "missing" };
+  }
+  return { kind: "stale", held };
+}
+
+/** The row's queue: null when the room has none, undefined when there is no room. */
+export async function readMusic(
+  channelId: string,
+): Promise<MusicState | null | undefined> {
+  const result = await getPool().query<{ music: MusicState | null }>(
+    `SELECT music FROM voice_rooms WHERE channel_id = $1`,
+    [channelId],
+  );
+  if (result.rows.length === 0) {
+    return undefined;
+  }
+  return result.rows[0]?.music ?? null;
+}
+
+/**
+ * Forget a room's queue once nobody is in it anywhere. The same safety net as
+ * `clearWatchPartyIfEmpty`, for the same race: the last peer's delete normally
+ * takes the room row (and the queue with it), and this covers the row the
+ * concurrent-last-leave race in `deleteVoicePeer` can leave behind, so the
+ * next call in the channel does not inherit a playlist nobody put on.
+ */
+export function clearMusicIfEmpty(channelId: string): Promise<boolean> {
+  return track(
+    getPool().query(
+      `UPDATE voice_rooms r
+          SET music = NULL, music_rev = 0
+        WHERE r.channel_id = $1
+          AND r.music IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM voice_peers p WHERE p.channel_id = r.channel_id)`,
+      [channelId],
+    ),
+    "clearMusic",
+  ).then((result) => (result?.rowCount ?? 0) > 0);
 }
 
 // --- adopt ------------------------------------------------------------------
