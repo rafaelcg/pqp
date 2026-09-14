@@ -73,3 +73,60 @@ export function shouldReleaseAudienceWatchSeat(input: {
   }
   return true;
 }
+
+/**
+ * WHEN THE CURRENT SEAT WAS TAKEN, for the grace above.
+ *
+ * Kept here, and pure, because the rule is easy to get subtly wrong in an
+ * effect and impossible to test there. It was wrong: the clock was keyed on
+ * the ROOM alone, so somebody already in the voice room who then pressed
+ * "Entrar no palco" kept the timestamp from when they joined the room. A tab
+ * that had been sitting in the channel for a minute therefore took an
+ * audience seat with its grace already spent, which is the one case the
+ * grace exists for. Taking (or giving up) a seat is itself the event: the
+ * clock restarts whenever `isAudienceSeat` changes, not only when the room
+ * does.
+ */
+export interface AudienceSeatClock {
+  channelId: string;
+  isAudienceSeat: boolean;
+  /** `Date.now()` when this seat began. */
+  at: number;
+}
+
+export function nextAudienceSeatClock(
+  previous: AudienceSeatClock | null,
+  input: {
+    channelId: string | null | undefined;
+    isAudienceSeat: boolean;
+    voiceStatus: string;
+    now: number;
+  },
+): AudienceSeatClock | null {
+  if (!input.channelId || input.voiceStatus === "idle") {
+    return null;
+  }
+  if (
+    previous &&
+    previous.channelId === input.channelId &&
+    previous.isAudienceSeat === input.isAudienceSeat
+  ) {
+    // The same seat in the same room: a re-render, a roster frame, a
+    // reconnect. Not a new seat, so not a new grace.
+    return previous;
+  }
+  return {
+    channelId: input.channelId,
+    isAudienceSeat: input.isAudienceSeat,
+    at: input.now,
+  };
+}
+
+/** How long this channel's seat has been held; null when it is not this one. */
+export function audienceSeatAgeMs(
+  clock: AudienceSeatClock | null,
+  channelId: string,
+  now: number,
+): number | null {
+  return clock && clock.channelId === channelId ? now - clock.at : null;
+}

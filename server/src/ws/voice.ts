@@ -2182,6 +2182,12 @@ function rememberChannelStream(
   channelId: string,
   stream: LiveHlsStream | null,
 ): void {
+  // Bumped BEFORE the write, so a query already in flight can see that it has
+  // been overtaken (`readChannelStreamFromDb`). Without it the losing race is
+  // the bug itself: the relay says the party stopped, deletes the memo, and
+  // the row read that started a moment earlier lands afterwards and puts the
+  // ended stream back for the rest of the TTL.
+  streamGeneration.set(channelId, (streamGeneration.get(channelId) ?? 0) + 1);
   if (stream) {
     dbStreamMemo.set(channelId, { at: Date.now(), stream });
   } else {
@@ -2189,6 +2195,13 @@ function rememberChannelStream(
   }
   pruneLiveChannelState();
 }
+
+/**
+ * How many authoritative answers this process has installed for a channel.
+ * Only ever compared for equality across one `await`; the number itself means
+ * nothing.
+ */
+const streamGeneration = new Map<string, number>();
 
 /**
  * Both per-channel maps are keyed by every channel that has ever gone live or
@@ -2214,6 +2227,7 @@ function pruneLiveChannelState(): void {
     for (const [channelId, at] of relayedLiveAt) {
       if (now - at > RELAYED_LIVE_AT_MAX_AGE_MS && !hlsAudience.stream(channelId)) {
         relayedLiveAt.delete(channelId);
+        streamGeneration.delete(channelId);
       }
     }
   }
@@ -2244,8 +2258,17 @@ async function resolveChannelStream(
 async function readChannelStreamFromDb(
   channelId: string,
 ): Promise<{ stream: LiveHlsStream | null; known: boolean }> {
+  const generation = streamGeneration.get(channelId) ?? 0;
   try {
     const stream = await liveHlsStreamFromDb(channelId, { strict: true });
+    if ((streamGeneration.get(channelId) ?? 0) !== generation) {
+      // AN AUTHORITATIVE ANSWER LANDED WHILE WE WERE ASKING, and it is newer
+      // than this row by construction: the machine running the egress ends
+      // the session and only then says so. Answer from what it installed
+      // (`null` after a stop, which is a positive `ended`), and do not put
+      // this row in the memo, where it would outlive the stop it lost to.
+      return { stream: channelStreamFor(channelId), known: true };
+    }
     dbStreamMemo.set(channelId, { at: Date.now(), stream });
     pruneLiveChannelState();
     return { stream, known: true };
@@ -2432,6 +2455,7 @@ export function resetHlsAudience(): void {
   relayedLiveAt.clear();
   dbStreamMemo.clear();
   dbStreamInFlight.clear();
+  streamGeneration.clear();
 }
 
 /**
@@ -4594,7 +4618,18 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
         console.error("[voice] channel-live membership check failed:", error);
         return;
       }
-      send(socket, await channelLiveFrame(channelId, user.id));
+      // THE AUDIENCE'S OWN ANSWER, never a query. This walk is over
+      // `hlsAudience.liveChannels()`, which is exactly the channels this
+      // process holds a stream for, so resolving would find it in memory
+      // anyway -- but it would also put a Postgres fallback one refactor away
+      // from a path that runs once per socket, and a reconnect storm after a
+      // deploy is hundreds of sockets in a few seconds (2026-09-12: 141 tabs
+      // pinned the pool). Discovery belongs to the paths a person triggers.
+      const stream = hlsAudience.stream(channelId);
+      send(
+        socket,
+        channelLiveFrameWith(channelId, user.id, stream, stream !== null),
+      );
       hlsAudienceFramesSent.frames += 1;
     }),
   );

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AUDIENCE_SEAT_GRACE_MS,
+  audienceSeatAgeMs,
+  nextAudienceSeatClock,
   shouldReleaseAudienceWatchSeat,
 } from "./watch-party-seat";
 
@@ -156,5 +158,94 @@ describe("shouldReleaseAudienceWatchSeat", () => {
         hasLiveStream: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("nextAudienceSeatClock", () => {
+  const CHANNEL = "c1";
+
+  it("restarts the grace when the stage seat is taken in a room this tab was already in", () => {
+    // The 2026-09-14 shape, one layer down: this tab had been in the channel
+    // for a minute before pressing "Entrar no palco". Keyed on the room alone
+    // (what this replaced) the seat would be born a minute old and the
+    // backstop could hang it up on the first late frame.
+    const sitting = nextAudienceSeatClock(null, {
+      channelId: CHANNEL,
+      isAudienceSeat: false,
+      voiceStatus: "connected",
+      now: 0,
+    });
+    expect(sitting).toEqual({
+      channelId: CHANNEL,
+      isAudienceSeat: false,
+      at: 0,
+    });
+    const seated = nextAudienceSeatClock(sitting, {
+      channelId: CHANNEL,
+      isAudienceSeat: true,
+      voiceStatus: "connected",
+      now: 60_000,
+    });
+    expect(seated?.at).toBe(60_000);
+    expect(audienceSeatAgeMs(seated, CHANNEL, 61_000)).toBe(1_000);
+    expect(
+      shouldReleaseAudienceWatchSeat({
+        ...audience,
+        seatAgeMs: audienceSeatAgeMs(seated, CHANNEL, 61_000),
+      }),
+    ).toBe(false);
+  });
+
+  it("is the same seat across a re-render, and no seat at all once idle", () => {
+    const seated = nextAudienceSeatClock(null, {
+      channelId: CHANNEL,
+      isAudienceSeat: true,
+      voiceStatus: "connected",
+      now: 0,
+    });
+    expect(
+      nextAudienceSeatClock(seated, {
+        channelId: CHANNEL,
+        isAudienceSeat: true,
+        voiceStatus: "connected",
+        now: 5_000,
+      }),
+    ).toBe(seated);
+    expect(
+      nextAudienceSeatClock(seated, {
+        channelId: CHANNEL,
+        isAudienceSeat: true,
+        voiceStatus: "idle",
+        now: 5_000,
+      }),
+    ).toBeNull();
+    expect(
+      nextAudienceSeatClock(seated, {
+        channelId: null,
+        isAudienceSeat: true,
+        voiceStatus: "connected",
+        now: 5_000,
+      }),
+    ).toBeNull();
+    // Another room is another seat.
+    expect(
+      nextAudienceSeatClock(seated, {
+        channelId: "c2",
+        isAudienceSeat: true,
+        voiceStatus: "connected",
+        now: 5_000,
+      })?.at,
+    ).toBe(5_000);
+  });
+
+  it("an age it cannot know is not a young seat", () => {
+    expect(audienceSeatAgeMs(null, CHANNEL, 1_000)).toBeNull();
+    expect(
+      audienceSeatAgeMs(
+        { channelId: "c2", isAudienceSeat: true, at: 0 },
+        CHANNEL,
+        1_000,
+      ),
+    ).toBeNull();
   });
 });

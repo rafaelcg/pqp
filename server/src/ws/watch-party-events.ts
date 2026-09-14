@@ -176,25 +176,29 @@ const WATCH_PARTY_RELAY_ATTEMPTS = 4;
 const WATCH_PARTY_RELAY_BACKOFF_MS = 500;
 
 function applyRelayedWatchPartyState(sessionId: string, attempt: number): void {
+  const again = (why: string) => {
+    if (attempt >= WATCH_PARTY_RELAY_ATTEMPTS) {
+      console.error("[watch-party] relayed state dropped:", sessionId, why);
+      return;
+    }
+    setTimeout(
+      () => applyRelayedWatchPartyState(sessionId, attempt + 1),
+      WATCH_PARTY_RELAY_BACKOFF_MS * attempt,
+    ).unref?.();
+  };
   void broadcastWatchParty(sessionId, { fromBus: true })
-    .then((read) => {
-      if (read) {
-        return;
+    .then((told) => {
+      if (!told) {
+        again("row or audience unreadable");
       }
-      if (attempt >= WATCH_PARTY_RELAY_ATTEMPTS) {
-        console.error(
-          "[watch-party] relayed state dropped, session row unreadable:",
-          sessionId,
-        );
-        return;
-      }
-      setTimeout(
-        () => applyRelayedWatchPartyState(sessionId, attempt + 1),
-        WATCH_PARTY_RELAY_BACKOFF_MS * attempt,
-      ).unref?.();
     })
+    // A REJECTION IS A FAILED WALK TOO. `broadcastWatchParty` reports the two
+    // failures it expects, but the permission and cohost reads inside it can
+    // still throw; a caught-and-logged rejection would consume this machine's
+    // only notice of the party exactly as a swallowed `false` would.
     .catch((error: unknown) => {
       console.error("[watch-party] relayed state broadcast failed:", error);
+      again("broadcast threw");
     });
 }
 

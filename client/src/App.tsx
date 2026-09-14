@@ -171,7 +171,10 @@ import {
 } from "@/lib/watch-party-channels";
 import {
   AUDIENCE_SEAT_GRACE_MS,
+  audienceSeatAgeMs,
+  nextAudienceSeatClock,
   shouldReleaseAudienceWatchSeat,
+  type AudienceSeatClock,
 } from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
@@ -4283,20 +4286,23 @@ function MainAppContent({
    * party is over (including a mic that was handed out mid-show).
    */
   // When the current seat was taken, so the backstop below can tell a
-  // `channel-live` that is merely late from a stream that ended. Keyed on the
-  // room: a new room is a new seat, a reconnect into the same one is not.
-  const seatTakenAtRef = useRef<{ channelId: string; at: number } | null>(null);
+  // `channel-live` that is merely late from a stream that ended. The rule is
+  // `nextAudienceSeatClock`, where it can be tested: taking the stage is a new
+  // seat even in a room this tab was already sitting in.
+  const seatTakenAtRef = useRef<AudienceSeatClock | null>(null);
   const [seatGraceTick, setSeatGraceTick] = useState(0);
   useEffect(() => {
-    const channelId = voiceState.voiceChannelId;
-    if (!channelId || voiceState.status === "idle") {
-      seatTakenAtRef.current = null;
-      return;
-    }
-    if (seatTakenAtRef.current?.channelId !== channelId) {
-      seatTakenAtRef.current = { channelId, at: Date.now() };
-    }
-  }, [voiceState.status, voiceState.voiceChannelId]);
+    seatTakenAtRef.current = nextAudienceSeatClock(seatTakenAtRef.current, {
+      channelId: voiceState.voiceChannelId,
+      isAudienceSeat: voiceState.isAudienceSeat,
+      voiceStatus: voiceState.status,
+      now: Date.now(),
+    });
+  }, [
+    voiceState.isAudienceSeat,
+    voiceState.status,
+    voiceState.voiceChannelId,
+  ]);
   useEffect(() => {
     const channelId = voiceState.voiceChannelId;
     if (!channelId || voiceState.status === "idle") {
@@ -4312,9 +4318,11 @@ function MainAppContent({
         ? party.state
         : undefined;
     const live = voiceState.channelLive[channelId];
-    const takenAt = seatTakenAtRef.current;
-    const seatAgeMs =
-      takenAt?.channelId === channelId ? Date.now() - takenAt.at : null;
+    const seatAgeMs = audienceSeatAgeMs(
+      seatTakenAtRef.current,
+      channelId,
+      Date.now(),
+    );
     if (
       !shouldReleaseAudienceWatchSeat({
         channelType: seated?.type,
