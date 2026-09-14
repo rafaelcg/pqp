@@ -441,11 +441,14 @@ describe("starting and stopping a session", () => {
     );
   });
 
-  it("reuses a session the box already holds for the room instead of starting a duplicate", async () => {
-    // Simulates a retried start after an ambiguous first POST: the box
-    // already has a session for this room (from a request whose response
-    // was lost), and this attempt must find and adopt it rather than create
-    // a second one.
+  it("does NOT reuse a stale session found only by channelId, with no pending attempt of its own", async () => {
+    // A leftover session for this room that THIS process never itself
+    // attempted (it survived an ended party's failed teardown, say) must
+    // never be silently adopted as if it were a fresh start -- the Farol
+    // finding (second round) that replaced "any session for this
+    // channelId" with "the specific sessionId I am waiting to confirm".
+    // Cleaning up a genuine leftover like this one is `adoptLlHlsSessions`'s
+    // job on the next boot, not a live start's.
     enableLL();
     const server = createFakeRemuxServer();
     server.sessions.set("00000000-0000-4000-8000-0000000000e1", {
@@ -465,15 +468,90 @@ describe("starting and stopping a session", () => {
     const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
 
     expect(stream).not.toBeNull();
-    expect(server.created).toHaveLength(0);
+    // A brand-new session was started; the stale one was left exactly as it
+    // was, not touched or reused.
+    expect(server.created).toHaveLength(1);
+    expect(server.created[0]).not.toBe("00000000-0000-4000-8000-0000000000e1");
+    expect(server.sessions.size).toBe(2);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsLlStartFoundExisting",
+      expect.anything(),
+    );
+  });
+
+  it("resumes an ambiguous start on the next attempt instead of minting a duplicate", async () => {
+    // The POST reaches the box, but this process never sees the response
+    // (a dropped connection, a timeout on the way back). The NEXT attempt
+    // for the same channel must find and confirm that exact session rather
+    // than starting a second one.
+    enableLL();
+    const server = createFakeRemuxServer();
+    let dropNextPostResponse = true;
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        const method = (init.method ?? "GET").toUpperCase();
+        if (method === "POST" && dropNextPostResponse) {
+          dropNextPostResponse = false;
+          await server.fetchImpl(url, init); // lands on the box
+          throw new Error("ETIMEDOUT"); // but never reaches this caller
+        }
+        return server.fetchImpl(url, init);
+      },
+    });
+
+    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    expect(first).toBeNull();
+    expect(server.created).toHaveLength(1);
+    expect(llHasRoom(CHANNEL)).toBe(false);
+
+    const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(second).not.toBeNull();
+    expect(server.created).toHaveLength(1); // no second POST
     expect(server.sessions.size).toBe(1);
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlStartFoundExisting",
-      expect.objectContaining({
-        channelId: CHANNEL,
-        sessionId: "00000000-0000-4000-8000-0000000000e1",
-      }),
+      expect.objectContaining({ channelId: CHANNEL, sessionId: server.created[0] }),
     );
+  });
+
+  it("finishes an unresolved rollback before starting anything new for the room", async () => {
+    enableLL();
+    const server = createFakeRemuxServer();
+    let failInsert = true;
+    let failDelete = true;
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO hls_sessions") && failInsert) {
+        throw new Error("db down");
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        if (failDelete && (init.method ?? "GET").toUpperCase() === "DELETE") {
+          throw new Error("ETIMEDOUT");
+        }
+        return server.fetchImpl(url, init);
+      },
+    });
+
+    const first = await reconcileLlHlsNow(CHANNEL, "peer-1");
+    expect(first).toBeNull();
+    // The session is still running: recording failed AND the rollback
+    // DELETE also failed, so nothing tore it down yet.
+    expect(server.sessions.size).toBe(1);
+    expect(server.created).toHaveLength(1);
+
+    failDelete = false;
+    failInsert = false;
+    const second = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(second).not.toBeNull();
+    // The stuck session was cleaned up first, then a genuinely fresh one
+    // was started -- not the same id resurrected, and not a second one
+    // running alongside the first.
+    expect(server.created).toHaveLength(2);
+    expect(server.sessions.size).toBe(1);
   });
 
   it("stops the session it just started/found and refuses to publish when the row cannot be recorded", async () => {
@@ -689,10 +767,9 @@ describe("boot adoption", () => {
     expect(updateCalled).toBe(true);
   });
 
-  it("stops orphan sessions in parallel, not one at a time", async () => {
+  it("stops orphan sessions in parallel, BOUNDED, not one at a time and not all at once", async () => {
     enableLL();
     const server = createFakeRemuxServer();
-    const stopOrder: string[] = [];
     let concurrentInFlight = 0;
     let maxConcurrent = 0;
     setHlsRemuxTestHooks({
@@ -702,17 +779,19 @@ describe("boot adoption", () => {
           concurrentInFlight += 1;
           maxConcurrent = Math.max(maxConcurrent, concurrentInFlight);
           await new Promise((resolve) => setTimeout(resolve, 5));
-          stopOrder.push(new URL(url).pathname);
           concurrentInFlight -= 1;
         }
         return server.fetchImpl(url, init);
       },
     });
-    for (const id of [
-      "00000000-0000-4000-8000-0000000000d1",
-      "00000000-0000-4000-8000-0000000000d2",
-      "00000000-0000-4000-8000-0000000000d3",
-    ]) {
+    // More orphans than the concurrency bound, so an unbounded
+    // `Promise.allSettled` over the whole set (the Farol finding this test
+    // pins) would show every one of them in flight at once.
+    const ids = Array.from(
+      { length: 12 },
+      (_, i) => `00000000-0000-4000-8000-00000000d${String(i).padStart(3, "0")}`,
+    );
+    for (const id of ids) {
       server.sessions.set(id, {
         sessionId: id,
         room: OTHER_CHANNEL,
@@ -729,8 +808,9 @@ describe("boot adoption", () => {
 
     const result = await adoptLlHlsSessions();
 
-    expect(result).toEqual({ adopted: 0, ended: 0, stopped: 3 });
+    expect(result).toEqual({ adopted: 0, ended: 0, stopped: 12 });
     expect(maxConcurrent).toBeGreaterThan(1);
+    expect(maxConcurrent).toBeLessThanOrEqual(5);
   });
 });
 

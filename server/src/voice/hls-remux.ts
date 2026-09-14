@@ -487,22 +487,47 @@ export function llStreamFor(channelId: string): LiveHlsStream | null {
 
 /**
  * Reuse a session the box already holds for this room rather than start a
- * second one. This is the guard against a retried start after an ambiguous
- * POST (the request reached the box, but the response was lost or timed
- * out): with no durable "I already asked" state on this side, the next
- * attempt asks the box FIRST whether `channelId` already has a session, and
- * only issues `POST /sessions` when it genuinely does not. Best-effort: a
- * `GET /sessions` failure here is not fatal, it just means this attempt
- * skips the check and starts fresh (the pre-existing risk, not a new one).
+ * second one, an ambiguous POST (the request reached the box, but the
+ * response was lost or timed out).
+ *
+ * MATCHED BY sessionId, NEVER BY channelId ALONE. A first version of this
+ * function asked "does the box have ANY session for this room" and reused
+ * whatever it found — which also reuses a genuinely STALE session: one this
+ * process already told a viewer had ended (a row with `ended_at` set,
+ * excluded from `adoptLlHlsSessions`'s own adoption exactly because it is
+ * not owned) that simply never got torn down on the box, for reasons this
+ * process cannot see (a Farol finding on PR #580, second round). Matching
+ * only a `sessionId` THIS process itself minted and is still waiting to
+ * confirm (`pendingStarts`) closes that hole: a leftover session with a
+ * different id is invisible to this check and is left for a future
+ * `adoptLlHlsSessions` boot sweep to find and stop, never silently reused as
+ * if it were a fresh party.
  */
-async function findExistingRemuxSession(channelId: string): Promise<RemuxSessionInfo | null> {
+async function findRemuxSessionById(sessionId: string): Promise<RemuxSessionInfo | null> {
   try {
     const sessions = await remuxListSessions();
-    return sessions.find((session) => session.channelId === channelId) ?? null;
+    return sessions.find((session) => session.sessionId === sessionId) ?? null;
   } catch {
     return null;
   }
 }
+
+/**
+ * One outstanding attempt per channel, kept only across the (in-process)
+ * lifetime of an ambiguous request -- a restart clears it, and
+ * `adoptLlHlsSessions`'s boot sweep is what resolves anything left dangling
+ * across that boundary instead.
+ *
+ *  - `needsStop: false` — this sessionId was (or may have been) started and
+ *    is waiting for its `hls_sessions` row to be confirmed. The next attempt
+ *    for this channel checks whether it actually landed before minting a
+ *    new one.
+ *  - `needsStop: true` — recording the row failed AND the rollback `DELETE`
+ *    also failed, so a session is running on the box that nothing durable
+ *    tracks. The next attempt must finish tearing THIS ONE down before it
+ *    is allowed to start anything else for the room.
+ */
+const pendingStarts = new Map<string, { sessionId: string; needsStop: boolean }>();
 
 async function startLlSession(
   channelId: string,
@@ -514,20 +539,44 @@ async function startLlSession(
     logEvent("voice.hlsLlStartFailed", { channelId, reason: "not-configured" });
     return null;
   }
+  const pending = pendingStarts.get(channelId);
+  if (pending?.needsStop) {
+    try {
+      await remuxStopSession(pending.sessionId);
+      pendingStarts.delete(channelId);
+    } catch (error) {
+      llStartFailures += 1;
+      logEvent("voice.hlsLlStartFailed", {
+        channelId,
+        reason: "pending-cleanup-failed",
+        sessionId: pending.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Do not start anything new for this room while an earlier attempt's
+      // teardown is still unresolved: that would be a second untracked
+      // session on top of the first.
+      return null;
+    }
+  }
   const startedAt = Date.now();
   const cfg = remuxSessionConfig();
   let info: RemuxSessionInfo;
   try {
-    const existing = await findExistingRemuxSession(channelId);
+    const stillPending = pendingStarts.get(channelId);
+    const existing = stillPending ? await findRemuxSessionById(stillPending.sessionId) : null;
     if (existing) {
       logEvent("voice.hlsLlStartFoundExisting", { channelId, sessionId: existing.sessionId });
       info = existing;
     } else {
-      info = await remuxStartSession(
-        buildStartRequest({ sessionId: randomUUID(), channelId }),
-      );
+      const sessionId = stillPending?.sessionId ?? randomUUID();
+      pendingStarts.set(channelId, { sessionId, needsStop: false });
+      info = await remuxStartSession(buildStartRequest({ sessionId, channelId }));
     }
   } catch (error) {
+    // `pendingStarts` is deliberately left as it was set just above (same
+    // sessionId, `needsStop: false`): the POST may still have landed despite
+    // the error reaching us, so the NEXT attempt checks THIS SAME id via
+    // `findRemuxSessionById` before minting another one.
     llStartFailures += 1;
     logEvent("voice.hlsLlStartFailed", {
       channelId,
@@ -552,7 +601,13 @@ async function startLlSession(
     llStartFailures += 1;
     try {
       await remuxStopSession(info.sessionId);
+      pendingStarts.delete(channelId);
     } catch (error) {
+      // The rollback itself failed: a session is now running that NOTHING
+      // tracks unless `pendingStarts` remembers it. Mark it `needsStop` so
+      // the next call here finishes the teardown before trying anything
+      // else for this room (a Farol finding on PR #580, second round).
+      pendingStarts.set(channelId, { sessionId: info.sessionId, needsStop: true });
       logEvent("voice.hlsLlStartRollbackFailed", {
         channelId,
         sessionId: info.sessionId,
@@ -561,6 +616,7 @@ async function startLlSession(
     }
     return null;
   }
+  pendingStarts.delete(channelId);
   const stream: LiveHlsStream = {
     hlsUrl: llPlaylistUrl(channelId, startedAt),
     startedAt,
@@ -675,6 +731,9 @@ export async function reconcileLlHlsNow(
 // Boot adoption
 // ---------------------------------------------------------------------------
 
+/** How many orphan `DELETE`s the boot sweep holds in flight at once. */
+const ORPHAN_STOP_CONCURRENCY = 5;
+
 interface StaleLlRow {
   id: string;
   channel_id: string;
@@ -788,27 +847,35 @@ export async function adoptLlHlsSessions(): Promise<{
     });
   }
 
-  // Bounded parallel cleanup, not one round trip per orphan in a row: this
-  // runs before `listen()` (a Farol finding on PR #580 — a few dozen slow
-  // stops would otherwise delay readiness by however long that many
-  // sequential 5 s timeouts take).
-  const stopResults = await Promise.allSettled(
-    toStop.map(({ sessionId }) => remuxStopSession(sessionId)),
-  );
+  // Bounded parallel cleanup, not one round trip per orphan in a row and NOT
+  // every orphan fired at once either. This runs before `listen()`, so a
+  // handful of slow stops in a row would delay readiness by however long
+  // that many sequential 5 s timeouts take -- the original bug -- but firing
+  // every one of a large stale set at once is its own version of the same
+  // problem (a Farol finding on PR #580, second round): an unbounded
+  // control-plane/network fan-out at exactly the moment the process is also
+  // trying to come up. `ORPHAN_STOP_CONCURRENCY` chunks keep this parallel
+  // AND bounded.
   let stopped = 0;
-  stopResults.forEach((result, index) => {
-    const { sessionId, reason } = toStop[index]!;
-    if (result.status === "fulfilled") {
-      stopped += 1;
-      logEvent("voice.hlsLlOrphanStopped", { sessionId, reason });
-    } else {
-      logEvent("voice.hlsLlOrphanStopFailed", {
-        sessionId,
-        error:
-          result.reason instanceof Error ? result.reason.message : String(result.reason),
-      });
-    }
-  });
+  for (let i = 0; i < toStop.length; i += ORPHAN_STOP_CONCURRENCY) {
+    const batch = toStop.slice(i, i + ORPHAN_STOP_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(({ sessionId }) => remuxStopSession(sessionId)),
+    );
+    results.forEach((result, index) => {
+      const { sessionId, reason } = batch[index]!;
+      if (result.status === "fulfilled") {
+        stopped += 1;
+        logEvent("voice.hlsLlOrphanStopped", { sessionId, reason });
+      } else {
+        logEvent("voice.hlsLlOrphanStopFailed", {
+          sessionId,
+          error:
+            result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    });
+  }
 
   const staleIds = rows.rows
     .filter((row) => !(row.remux_session_id && remoteById.has(row.remux_session_id)))
@@ -842,6 +909,7 @@ export function resetHlsRemuxForTests(): void {
   nowImpl = () => Date.now();
   llRooms.clear();
   requestedHlsMode.clear();
+  pendingStarts.clear();
   llStartFailures = 0;
   llDemoted = 0;
 }
