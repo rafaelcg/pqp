@@ -5170,17 +5170,39 @@ router.get(
 );
 
 router.patch("/api/watch-parties/:sessionId", async ({ req, user }, { sessionId }) => {
-  const { row, actor } = await requireWatchParty(sessionId!, user.id, "edit");
+  const { row, actor, role } = await requireWatchParty(sessionId!, user.id, "edit");
   const body = updateWatchPartySchema.parse(await readJsonBody(req));
   if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
     throw new HttpError(400, "startsAt must be in the future");
+  }
+  // "Baixa latência (beta)" IS HOST-ONLY, AND `edit` (this route's own gate)
+  // ALSO ALLOWS A CO-HOST OR A MANAGER. Every other field on
+  // `watchPartyOptionsSchema` is fine for any of them to set -- this one
+  // reaches the server only through the host's own `goLive`
+  // (`requestedHlsModeForChannel` in `hls-remux.ts`), so a co-host's or
+  // manager's request here would be silently overwritten by the host's next
+  // "Ir ao vivo" ANYWAY, but dropping it here rather than trusting that
+  // timing is what makes the client's own host-only gate (`watch-party-
+  // options.tsx`) an actual rule instead of a suggestion. The key is
+  // OMITTED, not set to `undefined`: `updateWatchParty` merges this object
+  // onto the party's EXISTING options before re-parsing, and
+  // `watchPartyOptionsSchema`'s `.default(false)` treats an explicit
+  // `undefined` exactly like a missing key -- setting it would have reset
+  // the host's own saved preference to `false` rather than leaving it
+  // untouched. Omitted this way, the merge never touches it at all. The rest
+  // of a bundled patch (slow mode, reactions) still lands for a co-host who
+  // never asked to change this field in the first place.
+  let options = body.options;
+  if (options && role !== "host" && "lowLatency" in options) {
+    const { lowLatency: _lowLatency, ...rest } = options;
+    options = rest;
   }
   try {
     const updated = await updateWatchParty(sessionId!, {
       name: body.name,
       description: body.description,
       startsAt: body.startsAt,
-      options: body.options,
+      options,
     });
     // The options are editable WHILE the party runs, and a host moving "quem
     // pode falar" from `everyone` to `hosts_only` mid-show has to take effect

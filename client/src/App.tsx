@@ -4515,11 +4515,16 @@ function MainAppContent({
       // other switch) only reaches the server at THIS moment: `goLive` is
       // the one write `requestedHlsModeForChannel` ever reads, so a party
       // going live again always states its own request rather than
-      // inheriting whatever the last one asked for.
+      // inheriting whatever the last one asked for. Re-read from the store
+      // rather than the `party` snapshot captured above: the switch's own
+      // PATCH applies optimistically and synchronously
+      // (`handleWatchPartyOptions`), so a host who flips it and presses Ir
+      // ao vivo in the same beat must not have that press race a `party`
+      // that predates it.
       const answer = await apiSetWatchPartyState(
         party.id,
         "live",
-        party.options.lowLatency,
+        currentWatchParty()?.options.lowLatency ?? party.options.lowLatency,
       );
       if (answer.party) {
         watchParties.put(answer.party);
