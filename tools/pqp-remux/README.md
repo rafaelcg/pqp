@@ -512,15 +512,22 @@ why ffmpeg is a real, not incidental, dependency of this module now).
   which `readEncoderFrames` turns into the same `recoverAudioEncoder` call
   a write failure triggers — an unrequested ffmpeg exit used to close
   `Frames()` silently and look exactly like a clean, successful end of the
-  audio track. "Intentional" covers **two** paths, both of which mark the
-  same `intentionalClose` flag before anything downstream can observe the
-  resulting exit: an explicit `Close()` call, and — since
-  `internal/session`'s own shutdown cancels `ctx` *before* calling
-  `Close()` (see `Session.Close`'s doc comment) — a dedicated goroutine
-  that watches that same `ctx` and marks the flag the instant it's
-  cancelled. Missing the second path was a real Farol finding: without it,
-  an ordinary session shutdown could observe its own ctx-triggered kill as
-  an "unexpected exit" and misfire a restart mid-teardown. `Encoder.Close`
+  audio track. "Intentional" covers **two** paths: an explicit `Close()`
+  call (sets `intentionalClose`), and — since `internal/session`'s own
+  shutdown cancels `ctx` *before* calling `Close()` (see `Session.Close`'s
+  doc comment) — `ctx` being cancelled, checked directly (`ctx.Err() !=
+  nil`) rather than via a second flag set by a separately racing
+  goroutine: `context.CancelFunc` closes `ctx`'s `Done` channel
+  synchronously, strictly before `exec.CommandContext`'s own asynchronous
+  kill-the-process machinery ever runs, so any code path that could
+  observe "the process died because ctx was cancelled" already has
+  `ctx.Err() != nil` by construction, not by timing luck. (An earlier
+  version of this fix used a watcher goroutine racing to set a flag
+  instead, which Farol correctly flagged as still leaving a window —
+  checking `ctx` directly has none.) Missing intentional-ctx-cancellation
+  handling at all was the original finding: without it, an ordinary
+  session shutdown could observe its own ctx-triggered kill as an
+  "unexpected exit" and misfire a restart mid-teardown. `Encoder.Close`
   is deadlock-free regardless of whether anything is still reading
   `Frames()` — its frame-delivery loop only ever blocks up to a bounded
   stall timeout (2s) waiting for channel room, not on `Close` having been
@@ -528,9 +535,16 @@ why ffmpeg is a real, not incidental, dependency of this module now).
   legitimate consumer is still draining the encoder's final output
   (`Session.Close`'s own segment flush): tying the bailout to `Close`
   itself, an earlier version of this fix, risked dropping exactly those
-  final frames. `Close` always waits for the process's own exit and its
-  ADTS reader to fully finish before returning, so no two generations'
-  readers can ever race each other into the CMAF muxer.
+  final frames. When the stall timeout *does* fire (a consumer that has
+  genuinely stopped, not merely fallen behind), the reader also kills the
+  ffmpeg process before returning — without that, `cmd.Wait()` right
+  after has nothing to wake it up if `Close` was never called either
+  (exactly the "consumer stopped, nothing else happened" case), and every
+  later `Close` waiting on the same signal would hang forever too; a
+  second Farol finding on the first version of this fix. `Close` always
+  waits for the process's own exit and its ADTS reader to fully finish
+  before returning, so no two generations' readers can ever race each
+  other into the CMAF muxer.
 - **The session ending closes the audio track's last segment too**:
   before this, only a mid-session roll-over ever called
   `uploadAudioSegment` — audio shorter than one `SEGMENT_MS` target (or

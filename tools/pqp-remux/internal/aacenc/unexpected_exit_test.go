@@ -150,6 +150,68 @@ func TestEncoderContextCancellationIsTreatedAsIntentional(t *testing.T) {
 	}
 }
 
+// TestEncoderStalledConsumerKillsTheProcessRatherThanHangingWait is the
+// regression test for Farol's second finding on the stall-timeout fix:
+// giving up on frame delivery stopped readADTS's own loop, but nothing
+// terminated the still-running ffmpeg process, so the cmd.Wait() call
+// immediately afterward (and every future Close(), which waits on the
+// same processDone signal) could block forever -- a stalled consumer
+// that never triggers an explicit Close would otherwise leave the
+// encoder, and anything waiting on it, stuck indefinitely. This test
+// never reads Frames() at all, the exact "consumer stopped" shape the
+// stall timeout exists for, and never calls Close either, to isolate
+// the stall path from Close's own (already-tested) shutdown behaviour.
+func TestEncoderStalledConsumerKillsTheProcessRatherThanHangingWait(t *testing.T) {
+	requireFFmpeg(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	enc, err := New(ctx, Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Plenty of audio to overflow the 32-frame buffer if nothing ever
+	// drains it. Fire-and-forget: this write may itself block on ffmpeg's
+	// own backpressure once nothing downstream is reading, and that is
+	// fine -- the test does not wait on it.
+	pcm := sineWavePCM(5.0)
+	go func() { _ = enc.WriteSamples(pcm) }()
+
+	// Deliberately read nothing until well past the stall timeout: from
+	// readADTS's point of view, this is indistinguishable from "the
+	// consumer stopped".
+	time.Sleep(frameDeliveryStallTimeout + 2*time.Second)
+
+	// If the process was correctly killed once the stall was detected,
+	// draining whatever is left reaches a closed channel promptly.
+	drained := false
+	deadline := time.After(3 * time.Second)
+	for !drained {
+		select {
+		case _, ok := <-enc.Frames():
+			if !ok {
+				drained = true
+			}
+		case <-deadline:
+			t.Fatal("Frames() is still open long after the stall timeout: the process was not killed")
+		}
+	}
+
+	// And Close must now return promptly: the process is already gone,
+	// so the cmd.Wait() inside Close has nothing left to block on.
+	done := make(chan struct{})
+	go func() {
+		enc.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung -- the stalled-consumer path did not actually terminate the process")
+	}
+}
+
 // TestEncoderCloseNeverHangsWhenNobodyReadsFrames is the regression test
 // for the "Close can deadlock" finding: readADTS's blocking send would
 // previously wait forever on a full, unread Frames() channel, and Close
