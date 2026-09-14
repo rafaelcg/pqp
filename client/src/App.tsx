@@ -4336,6 +4336,29 @@ function MainAppContent({
   }
 
   /**
+   * THE GO-LIVE SHARE'S LAST STEP, WHEREVER IT LANDS (Farol, 2026-09-14).
+   * `startScreenShareGated` has two ways to resolve `"started"`: at once, or
+   * after the disclosure sheet a host's FIRST ever HLS-capable share raises
+   * (`HlsHostAckSheet`). The immediate route used to be the only one that
+   * ever reached the mic prompt; a go-live share stalled behind the sheet
+   * resolved to `wentOut === false` on the spot (the gate only reports
+   * "asked", not the eventual outcome) and nothing downstream ever
+   * finished the handoff once the host confirmed and the capture actually
+   * started. Both routes call this now, so the prompt arms exactly once,
+   * only on a share that genuinely went out, regardless of which one got
+   * there.
+   */
+  function finishWatchPartyGoLiveShare(wentOut: boolean) {
+    if (!wentOut) {
+      return;
+    }
+    const party = currentWatchParty();
+    if (party && voice.getState().isMuted) {
+      setMicPromptPartyId(party.id);
+    }
+  }
+
+  /**
    * Ir ao vivo. One press, three things, in this order and no other:
    *
    * 1. the party's state changes, so the room's sidebar gets the block;
@@ -4386,13 +4409,11 @@ function MainAppContent({
     // THE MIC PROMPT WAITS FOR THE SHARE TO ACTUALLY LAND (Farol, 2026-09-14).
     // This used to arm the moment the share was ASKED for, so a host who
     // cancelled the picker or had the OS refuse the capture still got "Ativar
-    // o mic?" for a broadcast that never started. It is also the only path
-    // that ever calls `setMicPromptPartyId`, and only from this one, real
-    // go-live transition — never from picking a source in the setup preview.
+    // o mic?" for a broadcast that never started. `finishWatchPartyGoLiveShare`
+    // is also what the disclosure-sheet route below calls once IT knows the
+    // outcome, so the two routes end in the same transition.
     const wentOut = await startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
-    if (wentOut && voice.getState().isMuted) {
-      setMicPromptPartyId(party.id);
-    }
+    finishWatchPartyGoLiveShare(wentOut);
   }
 
   /**
@@ -8329,7 +8350,22 @@ function MainAppContent({
           }
           // Same audio choice and capture intent the person asked for
           // before the sheet, through the same gate (now acknowledged).
-          startScreenShareGated(pending.request.audio, pending.request.intent);
+          //
+          // ONLY A GO-LIVE SHARE FINISHES THE HANDOFF (Farol, 2026-09-14).
+          // `intent.stream` is the signal handed only by
+          // `handleWatchPartyGoLive` (an already-approved preview capture);
+          // every other caller through this same gate — the ordinary call
+          // share button, a mid-show reshare — has none, and must never pop
+          // the watch-party mic prompt on THEIR confirm.
+          const isGoLiveShare = pending.request.intent?.stream != null;
+          void startScreenShareGated(
+            pending.request.audio,
+            pending.request.intent,
+          ).then((wentOut) => {
+            if (isGoLiveShare) {
+              finishWatchPartyGoLiveShare(wentOut);
+            }
+          });
         }}
         onClose={() => setHlsHostAck(null)}
       />

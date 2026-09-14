@@ -747,6 +747,42 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     expect(goLive).not.toContain("getAudioTracks().length > 0");
 
   });
+
+  /**
+   * THE DISCLOSURE ROUTE (Farol, 2026-09-14). A go-live share can resolve
+   * two ways: at once, or after `HlsHostAckSheet`'s "you are responsible for
+   * what you transmit" sheet, for a host's first ever HLS-capable share. Both
+   * have to end in the same place — `finishWatchPartyGoLiveShare`, which is
+   * what arms the mic prompt — or a presenter who happens to hit the sheet on
+   * their very first watch party never gets asked to turn their mic on.
+   *
+   * Source-scanned, like the sibling tests in this describe block: `App.tsx`
+   * is not mounted in this suite.
+   */
+  it("finishes the go-live mic handoff from both the immediate and the disclosure-sheet routes", () => {
+    const source = readFileSync(
+      new URL("../../App.tsx", import.meta.url),
+      "utf8",
+    );
+
+    const goLive = source.slice(
+      source.indexOf("async function handleWatchPartyGoLive"),
+      source.indexOf("async function handleWatchPartyReminder"),
+    );
+    expect(goLive).toContain("finishWatchPartyGoLiveShare(wentOut)");
+
+    const ackSheetStart = source.indexOf("<HlsHostAckSheet");
+    const ackSheet = source.slice(
+      ackSheetStart,
+      source.indexOf("<ConfirmDialog", ackSheetStart),
+    );
+    // Only a go-live share finishes the handoff: `intent.stream` is the
+    // signal `handleWatchPartyGoLive` alone hands the gate. An ordinary call
+    // share or a mid-show reshare stalled behind the same sheet must never
+    // pop the watch-party mic prompt on ITS confirm.
+    expect(ackSheet).toContain("intent?.stream != null");
+    expect(ackSheet).toContain("finishWatchPartyGoLiveShare(wentOut)");
+  });
 });
 
 /**
