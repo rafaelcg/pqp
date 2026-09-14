@@ -358,5 +358,256 @@ than adding to it:
 
 ---
 
+## Gap closure (evening, 2026-09-14)
+
+The five named gaps from "Functional matrix" above, plus the client-continuity scaling test, closed
+live against `pqp-api-staging` at **2 machines** (staging's state at the start of this session), scaling
+to 3 only where a check needed it and back to 2 immediately after. No forked agents, no parallel session
+on this box — the whole reason the process-incident section above exists. Harness scripts are scratch,
+under `tools/watch-party-load/gap{1..6}-*.mjs` and `scratch-lib.mjs`, uncommitted (matching this
+document's own precedent for `m6r3-*.mjs`).
+
+### 1. Watch-party HLS pipeline across machines — **PASS**, one real defect found and fixed
+
+A real presenter (the harness's own real LiveKit publish path: `@livekit/rtc-node`, a genuine 640×360
+screen-share-sourced video track plus a microphone track, both confirmed client-side via
+`trackPublications` before proceeding) joined a fresh `watch_party` channel's voice room pinned to
+machine A, declared `set-sharing-screen`. First finding: **`GET /api/channels/:channelId/live`
+(`getChannelLiveState`) answered from three in-process maps only — `liveHlsStreamFor`'s `rooms`,
+`llStreamFor`, `hlsAudience.stream` — none of them shared over `CLUSTER_BUS`.** A viewer pinned to
+machine B polled `GET /live` for 60s and never saw the stream, even though `fly logs` on A showed
+`voice.hlsStarted ... playlistReady=true egressIds=["EG_..."]` and the `hls_sessions` row existed in
+Postgres (queryable identically from either machine, since it's Postgres). This is the exact shape of
+gap the two-machine rehearsal exists to catch — invisible on one machine, real on two.
+
+**Fixed and shipped**: `liveHlsStreamFromDb` (`server/src/voice/hls-egress.ts`) is a fourth, last-resort
+source in `getChannelLiveState` — one query against `hls_sessions`, the table `adoptLiveHlsSession`
+already reads after a restart for the identical cross-instance reason, reconstructing just the fields a
+viewer's `GET /live` needs (`hlsUrl` via the now-exported `viewerPlaylistUrl`, `startedAt`,
+`presenterPeerId`). Only reached when the three in-process sources are already empty, so the instance
+actually running the egress never pays a Postgres round trip on this read. **PR #598**, tests included
+(`server/src/voice/hls-live-state-db-fallback.test.ts`, real Postgres, 6 new tests; 21 existing tests in
+`voice-hls-audience.test.ts` updated for the new `async` signature), `tsc` clean, `eslint` clean, full
+`src/ws/voice` suite (360 tests) and `src/voice/hls-egress` (107 tests) green. CI green
+(`Build, test and lint`, `checks`, all 6 `e2e` jobs). **Deployed to staging and re-verified live**: the
+identical reproduction (presenter on A, viewer pinned to B) now reports the stream on B immediately.
+`restarts-api` — left open for Rafael, not merged to `main` (touches production-restart-worthy
+`server/src/ws/voice.ts` / `server/src/voice/hls-egress.ts`; per the merge policy, a PR that restarts the
+API waits for a trough rather than being merged mid-session).
+
+With the fix live, the rest of the named checks:
+- **Playlist advances on B**: media-playlist segment count grew 0→0→3→5→7→9→12→14 across an 8-poll, ~30s
+  window (fetched with `fly-force-instance-id` pinned to B throughout, playlist URL included). The
+  `#EXT-X-MEDIA-SEQUENCE` number itself stayed at 0 in this short window — correct HLS behavior before
+  the live sync window has rolled past its first few segments, not a stall; segment-count growth is the
+  right signal for a window this short.
+- **`voice.hlsStarted` logs on A only**: confirmed via `fly logs` grep on both channel ids used, both
+  runs — every `voice.hlsStarted` line carries machine A's id, never B's.
+- **Ending the party on A ends it for B**: `set-sharing-screen sharing:false` from the presenter, then
+  `hls_sessions.ended_at` was stamped **~5.1s later** — the documented `HLS_NO_SHARER_GRACE_MS` (default
+  5000ms) anti-flap window (`server/src/ws/voice.ts`), not a bug. A same-second check on B's `GET /live`
+  can catch the tail end of that grace window and still read `stream` non-null; the DB row proves the
+  broadcast genuinely ends on schedule.
+- **Restart machine A while live, `adoptLiveHlsSession` keeps the party (pitfall 15 reasons)**:
+  `fly machine restart` on A mid-party. `fly logs`, in order: `[shutdown] SIGINT — draining` →
+  `ws.drainBatch`/`ws.drained` (the presenter's one app socket) → `voice.orphan` (the peer enters the 90s
+  resume window; the LiveKit RTC connection itself runs on the separate SFU/egress box and was never
+  touched by the API restart) → **9 seconds after the restart**, `voice.hlsSessionAdopted
+  channelId=... egressId=EG_kqFXDP5YG7Uv startedAt=... presenterPeerId=... rung=720p30
+  rungs=["720p30"]` → `voice.hlsBootReconciled adopted=1 ended=0 stopped=0` → `[hls] boot: adopted 1 live
+  session(s), stopped 0 orphan egress(es), ended 0 stale row(s)`. Machine A re-adopted its own
+  still-running session on reboot — textbook pitfall-15 shape, and the egress itself (on the separate SFU
+  box) was never interrupted by the pqp-api restart at all.
+- **Viewer token remint (50-min loop, #527) scheduled once**: verified by **code inspection**, not a
+  live WS-audience-subscribe observation — this session's test viewers polled `GET /live` and the
+  playlist over plain HTTP, not the WS `watch-live` subscribe path `reconcileRemintTimer`
+  (`server/src/ws/hls-audience.ts`) actually gates. Read directly: the function keys one `setInterval`
+  per session by `startedAt`; a new `startedAt` tears down and restarts it, the *same* session ticking
+  along (repeated `setStream` calls with an unchanged stream) leaves the existing schedule alone. Correct
+  by inspection; flagged as not independently reproduced live, honestly rather than folded into the pass.
+
+### 2. Attachments across machines — **PASS**
+
+One real upload (presign → `PUT` to the `pqp-attachments-staging` R2 bucket, `200` → claim via the
+`message-create` WS frame's `attachmentIds`) and one remote GIF (`POST
+/api/channels/:id/attachments/gif`), sender on machine A, viewer pinned to machine B. Upload message
+arrived on B in **570ms**; GIF message arrived in **315ms**. Both well under the 2s bar.
+
+### 3. Mesh transport explicit assertion — **PASS**
+
+A server with two members (owner + one invited), voice channel left at its **default** transport (no
+`voiceTransport` override — the earlier matrix's own `welcome.transport:"livekit"` findings, both in
+this session's own rehearsal-2/3 reading and the finding below, trace to `index.ts`'s `prepare()`
+explicitly PATCHing the channel to `voiceTransport: "livekit"` for its own 500-person contract, not to
+membership size). A joined pinned to machine A, B pinned to machine B. `welcome.transport` was `"mesh"`
+on both; A's roster picked up B via `voice-roster`/delta. `fly logs`: `voice.transportPinned
+channelId=... transport=mesh reason=small` on **both** machines, `voice.meshPinAdopted` on B's machine,
+clean `voice.join`/`voice.leave` on both, no `voice-join-refused` anywhere, no LiveKit room ever created
+for this channel.
+
+### 4. Sustained eviction resweep — **PASS**
+
+A private `watch_party` channel: a real LiveKit participant (a genuine pqp voice peer, real
+`POST /api/voice/token` mint, real `@livekit/rtc-node` connect) plus a second, directly-connected real
+LiveKit participant whose identity is `EG_gap4-transcoder-<ts>` (self-minted `AccessToken` via
+`livekit-server-sdk`, bypassing pqp's own mint entirely — the same way LiveKit's own
+Track/RoomComposite egress attaches itself to a room). The channel was then narrowed (`PUT
+/api/channels/:id/overwrites`, deny `VIEW_CHANNEL` for `@everyone`), which schedules the resweep
+(`RESWEEP_WINDOW_MS = TOKEN_TTL_SECONDS × 1000` = 15 minutes, comfortably covering the 3-minute
+window). Watched for **~3.3 minutes** (40 ticks at the documented 5s cadence):
+
+- The script's own LiveKit connection to the `EG_` identity stayed `CONNECTED` with the speaker visible
+  as a remote participant across all 13 of its own 15s samples — never dropped.
+- `fly logs`: **40× `voice.sfuEvictSkippedEgress room=... identity=EG_gap4-transcoder-...
+  reason=channel-private`**, one per tick, **every single timestamp carrying exactly one machine's line**
+  (27 on one machine, 13 on the other, zero timestamp collisions across the whole window) — direct,
+  literal proof the resweep claim is exclusive, one winner per tick, no duplicate sweeps.
+- Zero `voice.sfuEvicted` lines for the whole window (the ordinary invited participant was never evicted
+  either — outside this gap's own asked criteria, not chased further; does not affect the EG_-survival,
+  counted-skip, or exclusivity findings, which are exactly what was asked).
+
+### 5. Real outgoing webhook delivery — **PASS**
+
+A webhook registered on a channel (`POST /api/servers/:id/outgoing-webhooks`, target a
+`webhook.site` receiver this session stood up and controlled), a message sent over the WS on machine A.
+**Exactly one delivery** reached the receiver: `POST`, `200`, signed (`webhook-signature`,
+`webhook-timestamp`, `webhook-id` headers present). Confirmed independently in
+`outgoing_webhook_deliveries`: `status=delivered attempt_count=1 last_status_code=200`, `created_at` to
+`updated_at` under one second. **Poller-on-worker-only**: confirmed by **code path**, not by log-line
+absence (there is no success-path logging on either side, so an absence of lines on the API machines is
+consistent either way and is not treated as proof on its own) — `startOutgoingWebhookPoller` is started
+only inside `startColdJobs()`, and `runsColdJobs("api")` is `false` (pinned by
+`server/src/lib/process-role.test.ts`); `enqueueOutgoingMessageCreated`
+(`server/src/services/outgoing-webhooks.ts`) calls `notifyOutgoingWebhookEnqueued` — a Postgres
+`NOTIFY` — **precisely when** `!runsColdJobs(processRole())`, i.e. on the API machines, to wake whichever
+process (the worker) holds the `LISTEN`. `WORKER_MODE=api` confirmed live via `fly secrets list` on
+`pqp-api-staging` throughout.
+
+### 6. Client continuity across 3 → 2 → 3, 50 harness sockets — **PASS**
+
+Run against a stable 3-machine baseline (staging was briefly at 3 for gap 4/1's real-media checks and
+the auto-stop fix below; the sequence exercised is literally 3 → 2 → 3, not a relabeled 2 → 3 → 2). 50
+reconnecting app sockets (own scratch harness, `gap6-continuity.mjs`; resume pair captured off each
+`welcome`, reconnect-on-close with backoff, every close/reconnect timestamped) joined a shared voice
+channel, held at 3 machines, then:
+
+- **`fly scale count 2`** (destroyed one machine): 17 sockets dropped (`code 1001`, a clean drain-close,
+  not a crash), **all 17 reconnected, all 17 `resumed:true`**, zero failed reconnects — back to 50/50
+  within ~10s. Held stable at 50/50 for a further ~70s (multiple 10s snapshots, unchanged counters).
+- **`fly scale count 3`** (added a machine back): pure addition, zero further drops, stayed 50/50
+  throughout.
+- Cross-instance roster/presence: `GET /api/admin/metrics` mid-run showed `voice.cluster.framesRelayed`
+  and `.framesReceived` **both non-zero** (57 / 42) and `roster.deltas: 247` — the bus actively carrying
+  this room's roster across instances, the same signal earlier rehearsals used for "the counters climb."
+  (The dashboard's own `participants` count read 46 against the harness's own directly-measured 50 at
+  that exact moment — read as a caching/sampling artifact of the admin snapshot rather than a real
+  discrepancy, since the harness's own accounting — every socket's own `welcome`/close/reconnect
+  lifecycle — is the more direct and immediately-consistent source for this specific claim.)
+
+**Totals for the run that counts** (the clean 3→2→3 pass, discarding an earlier attempt invalidated by
+the mid-test `ops/m6-gap-closure-noautostop2` deploy's own restart cycle, restarted clean instead of
+folded in): 50 connected throughout, 17 drops, 17 reconnects, 17/17 `resumed:true`, 0 failed reconnects.
+
+### Incident: staging DB (`pqp-db-staging-lite`) genuine resource exhaustion at the 256MB tier
+
+Not a test-script bug — a real, reproduced-live event, worth recording plainly. Around the point gap 4's
+real LiveKit resweep test and repeated gap 1 attempts were running concurrently with the **leftover
+`PG_POOL_MAX=60`** (rehearsal 3's own 3-machine-era number, never re-derived for 2 machines or for this
+256MB box), `pqp-db-staging-lite`'s Fly health check reported *"Your instance has hit resource limits"*
+and `/ready`'s `postgres` check went `false`. Lowering `PG_POOL_MAX` to 10 via `fly secrets set` (which
+restarts both API machines) recovered it within ~15s — but **not durably**: it hit
+`database_unavailable` again within about 4 minutes, all three DB health checks critical
+("context deadline exceeded"). Read as the box still being in a compromised post-incident state (disk/
+memory pressure, HA tooling struggling) rather than proof `PG_POOL_MAX=10` itself is unsafe — not
+proven either way with full certainty, flagged honestly. Recovered fully, matching the exact move
+rehearsal 2/3 already document as normal for this box, by temporarily bumping
+`pqp-db-staging-lite` to `shared-cpu-2x`/1GB for the remainder of this session's testing, reverted to
+`shared-cpu-1x`/256MB at the very end (see "Final state" below) — confirmed stable there for a full
+2-minute watch window at the final `PG_POOL_MAX` value before declaring done.
+
+**`PG_POOL_MAX` for 2 machines at the 256MB tier — the formula, and where it stops being clean.**
+`max_connections = 300` (this box's Postgres default, a config ceiling — `DB_RUNBOOK.md` explicitly
+warns this is not a memory-safe target on its own). `DB_RUNBOOK.md`'s own comfortable-backends table
+covers only 1GB (~30) and 2GB (~50) — 256MB is off the bottom of it. A rough linear-with-intercept
+extrapolation from those two points (slope 20/GB, intercept 10) puts a 256MB comfortable ceiling around
+~15 total backends — and this session now has **direct, reproduced evidence** that this tier is
+genuinely fragile under real (not synthetic-stress) concurrent load, which the extrapolation alone could
+not have proven. Measured baseline non-API overhead (idle): `flypgadmin`×3 + `repmgr`×1 = 4.
+`WORKER_MODE=api` means the webhook-poller `LISTEN` moved to the worker (confirmed by the code path in
+gap 5), so each of the 2 API machines holds exactly one dedicated `LISTEN` (`CLUSTER_BUS`) + its pool.
+The raw formula (`floor((15 − 4 − worker's own ~3) / 2) − 1` ≈ 3) is defensible but would make ordinary
+staging QA between load tests uncomfortably tight. **Landed on `PG_POOL_MAX=10` per API machine** —
+matching the pre-existing, already-considered-safe single-machine committed default in
+`fly.staging.toml`'s own `[env]` block, well below the leftover 60 that caused the incident, and
+empirically confirmed stable (`/ready` green, `postgres` single-digit ms) for a 2-minute watch window
+under ambient/idle load at the final 256MB tier. This is a judgment call under real uncertainty, not a
+clean formula output — recorded as such rather than dressed up as more certain than it is. **Worth a
+deliberate follow-up**: re-run gap 6's own 50-socket shape (or the `seat-churn.ts` harness) against the
+resting 256MB/`PG_POOL_MAX=10` state specifically, since everything this session measured at that exact
+combination was under idle/ambient load only, not real concurrent write traffic.
+
+### A second, smaller incident: a fix-verification deploy silently reverted auto-stop mid-rehearsal
+
+Deploying PR #598's branch via `deploy-staging.yml` (needed to verify the HLS fix live) used the
+**committed** `fly.staging.toml` — `auto_stop_machines = "stop"`, `min_machines_running = 0` — regardless
+of the live machine count, which is a fact `docs/STAGING.md` already states for VM *size* but had not
+been called out this plainly for auto-stop/min-machines. This surfaced mid-gap-6: with 50 sockets
+connected and freshly scaled to 3, the newly-added third machine (genuinely idle from this session's own
+traffic) got auto-stopped by Fly. Caught within a couple of `fly machines list` checks, `fly machine
+start` brought it back immediately, but continuing the test on an auto-stop-armed config would have
+mixed an uncontrolled variable into every subsequent drop/reconnect count. Fixed the same way the M6
+rehearsals already fix this class of problem: a throwaway branch (`ops/m6-gap-closure-noautostop2`,
+based on the fix branch so the deploy carried both), `fly.staging.toml` edited locally
+(`auto_stop_machines = "off"`, `min_machines_running = 3`), deployed, **never merged**; gap 6 itself was
+killed and restarted clean afterward rather than folding a deploy-triggered restart cycle into its own
+numbers. **Worth a line in `docs/STAGING.md`**: a fix-verification deploy mid-rehearsal reverts BOTH
+machine size and auto-stop/min-machines to the committed single-machine shape, unless the deployed ref
+itself carries the edited `fly.staging.toml` — exactly the moment this bites, and exactly what happened
+here.
+
+### Final state
+
+- `pqp-api-staging`: **2 machines**, both healthy, both on the fix commit
+  (`031f148f428a671a7c66f97c207773a21b119b5b`, PR #598's HEAD), both `shared-cpu-1x`/1024MB — the
+  committed `fly.staging.toml` default, restored by deploying the fix branch alone (no toml edits) as
+  the very last API deploy of this session. `CLUSTER_BUS`, `VOICE_REGISTRY`, `LIVEKIT_*` all confirmed
+  still live via `fly secrets list`.
+- `PG_POOL_MAX=10` (down from the leftover 60), confirmed via `/ready`'s `pool.max` and a 2-minute
+  stability watch at the final config.
+- `pqp-worker-staging`: running, healthy (`{"ok":true,"role":"worker"}`).
+- `pqp-db-staging-lite`: reverted to `shared-cpu-1x`/**256MB**, `3/3` Fly health checks passing, `/ready`
+  green throughout the final watch window.
+- Load-test data (accounts, servers, messages, webhooks, the gap 1–6 channels) **not purged** — same
+  standing precedent `docs/STAGING.md` and every prior rehearsal in this document already use.
+- `docs/staging.toml` overrides from both throwaway ops branches (`ops/m6-gap-closure-noautostop2` for
+  the auto-stop-off window) live only on that unmerged branch; the next ordinary `deploy-staging.yml` run
+  from `staging` or any other ref without an edited `fly.staging.toml` keeps the committed single-machine
+  shape.
+
+### Blockers before production
+
+None of the six named gaps are open. Two items carried over verbatim from the earlier "Blockers before
+production" section above are unaffected by tonight's work and still apply as stated there (#595's
+specific co-host/stage-revocation scenario, the `docs/deploy-fly.md` §6a-bis shadow-secret trap note).
+New from tonight, worth deliberate attention before or shortly after the flip, neither blocking it:
+
+1. **PR #598 (the HLS cross-instance fix) is open, CI-green, verified live on staging, not merged to
+   `main`.** `restarts-api` on production when it lands — merge at a trough, not blindly, per the
+   standing merge policy.
+2. **`PG_POOL_MAX=10` on staging is a judgment call under real, only-partially-resolved uncertainty**
+   about this specific 256MB box's stability under concurrent load (see the incident section above), not
+   a clean re-derivation of the DB_RUNBOOK formula (which does not cover this tier at all). Worth a
+   deliberate follow-up load test at the resting config before leaning on the number.
+3. **`docs/STAGING.md` doesn't yet say that a fix-verification deploy mid-rehearsal reverts
+   auto-stop/min-machines-running**, only VM size. A one-line addition would have saved the mid-gap-6
+   scramble this session hit.
+
+---
+
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01LptYkv7RTzV6WVQNEWNYUv
+
+---
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01LptYkv7RTzV6WVQNEWNYUv
