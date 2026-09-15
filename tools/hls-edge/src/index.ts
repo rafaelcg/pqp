@@ -57,6 +57,12 @@
  *    viewer's revocation status. So this route is always forwarded with the
  *    caller's own token, never cached. It is also fetched once per viewer
  *    join, not polled, so the cost this Worker exists to cut was never here.
+ *    **`?mode=ll` on this route is what selects the low-latency master**
+ *    (`requestsLlMode`, `playlist-route.ts`): the API stamps it onto an LL
+ *    session's URL, and without it this Worker does not so much as look at
+ *    the remux origin. It used to decide by probing, which meant a session
+ *    whose first `state.json` was still a moment away read as "conventional"
+ *    — the whole of 2026-09-15, written out at that branch.
  *  - `/:channelId/:startedAt/:rung/:name` — an LL session's MEDIA BYTES
  *    (`ll-media.ts`, task L2.3): the part, segment and init files an LL
  *    playlist's own URIs point at, fetched from the remux box and cached
@@ -98,7 +104,7 @@ import { PartyPassRevocationGate } from "./party-pass-revocation.js";
 import { authorizeViewer, logRejection, statusForRejection } from "./viewer-access.js";
 import { cacheKeyRequest, safeCacheMatch, safeCachePut } from "./edge-cache.js";
 import { handleLlMediaRequest } from "./ll-media.js";
-import { parsePlaylistPath } from "./playlist-route.js";
+import { parsePlaylistPath, requestsLlMode } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { LlPlaylistOrigin } from "./ll-playlist-origin.js";
 import { applyLlRenditionCredential } from "./ll-playlist.js";
@@ -230,6 +236,94 @@ function noteCacheHit(channelId: string, rung: string): void {
   }
 }
 
+/**
+ * How long a viewer whose LL master is not ready yet is told to wait. One
+ * second: `pqp-remux` writes a part roughly every 500 ms once it has
+ * subscribed, so a session that is warming is usually ready within one or
+ * two of these, and a player that comes back sooner would only re-ask an
+ * origin the `notReadyCache` is already shielding.
+ */
+const LL_NOT_READY_RETRY_AFTER_SECONDS = 1;
+
+/**
+ * `503`, with a `Retry-After` and a reason, for an LL master this Worker
+ * cannot build YET.
+ *
+ * WHY A RETRYABLE REFUSAL AND NOT THE CONVENTIONAL LADDER. There is no
+ * conventional ladder for an LL session: the API stops one driver when it
+ * starts the other (`reconcileLiveHlsNow`), so "fall back" would hand the
+ * audience a master for renditions nothing is writing — which is exactly
+ * what happened on 2026-09-15 and looked, from every log this Worker keeps,
+ * like a healthy request. A 503 is a fact the player can act on: hls.js
+ * retries a manifest on any status outside 4xx (`retryForHttpStatus`), the
+ * web client widens `manifestLoadPolicy` for LL so the warm-up window is
+ * ridden out and paces its retries to THIS `Retry-After` rather than as fast
+ * as hls.js will go (`LL_HLS_MANIFEST_RETRY_DELAY_MS`), and
+ * `useLiveHlsReady` keeps polling once a second until the master parses as
+ * live.
+ *
+ * `no-store` because the answer is true for about a second by construction,
+ * and caching it anywhere between here and the viewer would outlive the
+ * condition it describes.
+ */
+function llNotReady(reason: string): Response {
+  return new Response(`LL playlist not ready (${reason})`, {
+    status: 503,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Retry-After": String(LL_NOT_READY_RETRY_AFTER_SECONDS),
+      "Cache-Control": "no-store",
+      "X-HLS-Edge-Mode": "ll",
+      "X-HLS-Edge-LL-Not-Ready": reason,
+    },
+  });
+}
+
+/**
+ * `hlsEdge.llMasterNotReady`, at most once per (channel, reason) per
+ * `LL_NOT_READY_LOG_WINDOW_MS`, carrying how many it stood in for.
+ *
+ * Every viewer of a warming party re-asks for the master once a second
+ * (`useLiveHlsReady`), so logging each refusal would be pitfall 16's
+ * write-amplifier: five hundred people joining one party would write five
+ * hundred lines a second about one fact. Bounded the same way
+ * `logRejection`'s table is (`viewer-access.ts`) — `channelId` is an
+ * attacker-controlled path segment, so the map needs a ceiling, not just a
+ * window.
+ */
+const LL_NOT_READY_LOG_WINDOW_MS = 10_000;
+const LL_NOT_READY_LOG_MAX_ENTRIES = 500;
+const llNotReadyLog = new Map<string, { at: number; suppressed: number }>();
+
+function noteLlMasterNotReady(channelId: string, reason: string): void {
+  const key = `${channelId}:${reason}`;
+  const now = Date.now();
+  const seen = llNotReadyLog.get(key);
+  if (seen && now - seen.at < LL_NOT_READY_LOG_WINDOW_MS) {
+    seen.suppressed += 1;
+    return;
+  }
+  logEvent("hlsEdge.llMasterNotReady", {
+    channelId,
+    reason,
+    suppressed: seen?.suppressed ?? 0,
+  });
+  if (!seen && llNotReadyLog.size >= LL_NOT_READY_LOG_MAX_ENTRIES) {
+    for (const [existingKey, entry] of llNotReadyLog) {
+      if (now - entry.at >= LL_NOT_READY_LOG_WINDOW_MS) {
+        llNotReadyLog.delete(existingKey);
+      }
+    }
+    if (llNotReadyLog.size >= LL_NOT_READY_LOG_MAX_ENTRIES) {
+      const oldestKey = llNotReadyLog.keys().next().value;
+      if (oldestKey !== undefined) {
+        llNotReadyLog.delete(oldestKey);
+      }
+    }
+  }
+  llNotReadyLog.set(key, { at: now, suppressed: 0 });
+}
+
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -315,20 +409,29 @@ export async function handlePlaylistRequest(
   // `t` (party pass is skipped when `rung` is unset), so `token` here is
   // never null.
   if (!rung) {
-    // LL-HLS multivariant playlist (task L2.2, `ll-playlist-origin.ts`).
-    // Tried FIRST, straight against the remux origin, never the API: only
-    // an LL session's master needs to look any different from what the API
-    // already answers (`docs/plans/LL_HLS.md` §4, "the master playlist
-    // lists the LL rung beside the 720p30 rung" — full mixing with the
-    // conventional ladder is a later task; for now an LL session's master
-    // is LL-only). `fetchMultivariantPlaylist` returns `null` for every
-    // failure mode -- `LL_ORIGIN_BASE` unset, this specific session isn't
-    // LL, the origin is unreachable, a malformed `state.json` or init
-    // segment -- so a bug or an outage in the LL path can only ever fall
-    // through to the EXACT byte-for-byte-unchanged API forward below, never
-    // turn a conventional session's master into an error. See
-    // `ll-playlist-origin.ts`'s header, "FAILS TOWARD...".
-    if (origins.ll.ready) {
+    // WHICH MASTER THIS SESSION GETS IS A PROPERTY OF THE REQUEST, NOT OF A
+    // RACE. `requestsLlMode` reads the `?mode=ll` the API stamps onto an LL
+    // session's `hlsUrl` (`llPlaylistUrl` in `server/src/voice/hls-remux.ts`,
+    // `LIVE_HLS_MODE_PARAM` in `packages/shared/src/live-hls.ts`).
+    //
+    // What this replaced, and why. This branch used to run the LL path for
+    // EVERY master request once `LL_ORIGIN_BASE` was set, ask the remux
+    // origin whether a `state.json` existed, and read "no state" as "this
+    // party is conventional, forward to the API". Those are different
+    // things. Low-latency was enabled in production four times on
+    // 2026-09-15 and no viewer was ever handed the low-latency stream: in
+    // the last attempt the audience's only master request arrived 300 ms
+    // into an LL session, `state.json` was not written yet, and this Worker
+    // answered with the conventional ladder's master — for a session whose
+    // conventional ladder the API had deliberately not started. The player
+    // fetched `/720p30`, got nothing, and the audience read "A transmissão
+    // caiu". Nothing logged a failure, because from here it was not one.
+    //
+    // So: no marker, no LL. A conventional master request never touches the
+    // LL origin at all and is the byte-for-byte API forward it was before
+    // any of this existed. With the marker, the LL path is the ONLY path —
+    // a not-ready origin answers `503 Retry-After`, never the other ladder.
+    if (requestsLlMode(url)) {
       // REVOCATION, FOR THIS PATH ONLY. The conventional forward below
       // always reaches the API live, which runs its own always-current
       // `isHlsAccessRevoked` check on every request -- that is why the
@@ -340,11 +443,9 @@ export async function handlePlaylistRequest(
       // rendition route uses (`PartyPassRevocationGate`) here, before
       // trusting the LL origin -- a revoked viewer must not get a working
       // LL master (and, through it, LL rendition URLs) just because the LL
-      // path skips the API. Refused outright rather than falling through to
-      // the API forward below: that forward carries the SAME token, so it
-      // would be refused there too, and silently downgrading a revoked
-      // viewer to non-LL playback instead of rejecting them would be its
-      // own kind of leak.
+      // path skips the API. `403`, not the conventional forward: this branch
+      // does not fall through any more (see above), and a revoked viewer
+      // quietly served SOMETHING would be its own kind of leak.
       const { revoked, kvError } = await partyPassRevocationGate.check(
         env.HLS_REVOKED_USERS,
         verified.userId,
@@ -358,13 +459,31 @@ export async function handlePlaylistRequest(
         logRejection(channelId, rung, "revoked");
         return json(statusForRejection("revoked"), { error: "Unauthorized", reason: "revoked" });
       }
-      const llResponse = await origins.ll.fetchMultivariantPlaylist(channelId, startedAt, token!);
-      if (llResponse) {
-        const headers = new Headers(llResponse.headers);
+      // MISCONFIGURED, NOT CONVENTIONAL. The API only ever stamps `mode=ll`
+      // when it has a remux control plane AND an edge playlist front
+      // configured (`resolveHlsMode`), so reaching this with an unready LL
+      // origin means this Worker was deployed without `LL_ORIGIN_BASE` while
+      // the API was already selecting LL. Answering from the API instead
+      // would 404 (it has never known how to render a `mode = 'll'` row) and
+      // would do it silently; a loud, retryable 503 is what gets the secret
+      // set. Checked HERE rather than in the `requestsLlMode` condition so
+      // the two cases keep separate log lines.
+      if (!origins.ll.ready) {
+        noteLlMasterNotReady(channelId, "origin-not-configured");
+        return llNotReady("origin-not-configured");
+      }
+      const llResult = await origins.ll.fetchMultivariantPlaylist(channelId, startedAt, token!);
+      if (llResult.kind === "ready") {
+        const headers = new Headers(llResult.response.headers);
         headers.set("X-HLS-Edge-Cache", "BYPASS");
         headers.set("X-HLS-Edge-Mode", "ll");
-        return new Response(llResponse.body, { status: llResponse.status, headers });
+        return new Response(llResult.response.body, {
+          status: llResult.response.status,
+          headers,
+        });
       }
+      noteLlMasterNotReady(channelId, llResult.reason);
+      return llNotReady(llResult.reason);
     }
     let originResponse: Response;
     try {

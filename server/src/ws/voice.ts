@@ -1981,6 +1981,53 @@ function logNoSharer(voiceChannelId: string, presenterPeerId: string): void {
   });
 }
 
+/**
+ * Whether the room owes everybody a fresh `voice-stream` / `channel-live`.
+ *
+ * Pure and exported so the rule can be read and tested without a room, a
+ * socket or a transcode: it is the gate in front of a per-recipient fan-out
+ * that re-mints a token for every peer, so getting it wrong is either a
+ * rebuffer for everybody (too eager) or a player left on a playlist nobody
+ * is writing (too lazy).
+ *
+ * FIVE FIELDS, AND EACH ONE IS SOMETHING A PLAYER HAS TO ACT ON.
+ *
+ *  - `hlsUrl`: a different session, or a different delivery mode's master.
+ *  - `presenterPeerId`: somebody else is presenting.
+ *  - `cameraHlsUrl`: the camera rung is additive to the session
+ *    (`docs/WATCH_PARTY.md`, "The presenter's camera, floating over the
+ *    film"), so `hlsUrl` and the presenter are both identical either side of
+ *    a host switching their webcam on; without this the frame carrying
+ *    `cameraHlsUrl` would simply never be sent.
+ *  - `mode`: the LL DEMOTION (`sweepLlDemotions` -> `notifyChanged` ->
+ *    `pushLiveHls`). The player has to reload onto the conventional ladder,
+ *    not sit polling a torn-down LL playlist until it gives up and the
+ *    audience reads "A transmissão caiu". `hlsUrl` almost always moves with
+ *    it -- a demotion mints a new `startedAt`, and an LL master carries
+ *    `?mode=ll` where a conventional one carries no marker at all -- so this
+ *    is belt and braces. It is here anyway because `mode` IS the field the
+ *    client keys its engine configuration on, and a frame that changed it
+ *    without saying so is the failure this rule exists to stop.
+ *  - `partTargetMs`: sizes the LL player's hold-back and its stall watchdog.
+ *
+ * Everything ELSE `LiveHlsStream` can carry (`topHeight`, `hasAudio`,
+ * `delaySeconds`, ...) is deliberately not here: those are read once when a
+ * player attaches, and re-sending the room over one of them would be a
+ * per-peer fan-out for something nobody re-reads.
+ */
+export function liveHlsFrameChanged(
+  prev: LiveHlsStream | null,
+  next: LiveHlsStream | null,
+): boolean {
+  return (
+    (prev?.hlsUrl ?? null) !== (next?.hlsUrl ?? null) ||
+    (prev?.presenterPeerId ?? null) !== (next?.presenterPeerId ?? null) ||
+    (prev?.cameraHlsUrl ?? null) !== (next?.cameraHlsUrl ?? null) ||
+    (prev?.mode ?? null) !== (next?.mode ?? null) ||
+    (prev?.partTargetMs ?? null) !== (next?.partTargetMs ?? null)
+  );
+}
+
 async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
     return;
@@ -2101,17 +2148,7 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       serverId,
       sharer?.sourceHeight ?? null,
     );
-    const changed =
-      (prev?.hlsUrl ?? null) !== (next?.hlsUrl ?? null) ||
-      (prev?.presenterPeerId ?? null) !== (next?.presenterPeerId ?? null) ||
-      // THE CAMERA APPEARING OR DISAPPEARING IS A CHANGE. It is additive to
-      // the session on purpose (`docs/WATCH_PARTY.md`, "The presenter's
-      // camera, floating over the film"), so `hlsUrl` and the presenter are
-      // both identical either side of a host switching their webcam on, and
-      // without this line the frame that carries `cameraHlsUrl` would simply
-      // never be sent.
-      (prev?.cameraHlsUrl ?? null) !== (next?.cameraHlsUrl ?? null);
-    if (!changed) {
+    if (!liveHlsFrameChanged(prev, next)) {
       return;
     }
     // STAMPED HERE, BEFORE THE FAN-OUT'S AWAITS. `publishChannelLive` used to

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  LIVE_HLS_MODE_LL,
+  LIVE_HLS_MODE_PARAM,
   liveHlsStreamSchema,
   playlistLooksLive,
   voiceStreamMessageSchema,
@@ -84,6 +86,41 @@ describe("voice-stream is an optional addition to the wire", () => {
     expect(
       liveHlsStreamSchema.parse({ ...stream, mode: "ll" }).mode,
     ).toBe("ll");
+  });
+
+  it("carries partTargetMs, so a player sizes its buffer to the session, not to a guess", () => {
+    expect(
+      liveHlsStreamSchema.parse({ ...stream, mode: "ll", partTargetMs: 500 })
+        .partTargetMs,
+    ).toBe(500);
+  });
+
+  it("partTargetMs is optional and must be a positive integer when present", () => {
+    // Optional: iOS and Android parse the frame and may ignore it, and a
+    // conventional session has no parts at all. Positive integer: it is a
+    // millisecond cadence, and a client derives its whole live-edge target
+    // from it (`validPartTargetMs` in the web client re-checks the band on
+    // top of this, because the client does not run the schema).
+    expect(liveHlsStreamSchema.parse(stream).partTargetMs).toBeUndefined();
+    expect(() =>
+      liveHlsStreamSchema.parse({ ...stream, partTargetMs: 0 }),
+    ).toThrow();
+    expect(() =>
+      liveHlsStreamSchema.parse({ ...stream, partTargetMs: -500 }),
+    ).toThrow();
+    expect(() =>
+      liveHlsStreamSchema.parse({ ...stream, partTargetMs: 500.5 }),
+    ).toThrow();
+  });
+
+  it("names the URL marker that makes the edge serve the LL master", () => {
+    // Two literals the edge Worker ports rather than imports
+    // (`tools/hls-edge/src/playlist-route.ts`, which deploys separately).
+    // Renaming either side without the other is what this pins: the whole
+    // point of the marker is that the delivery mode is STATED, and a
+    // mismatched name is a statement nobody hears.
+    expect(LIVE_HLS_MODE_PARAM).toBe("mode");
+    expect(LIVE_HLS_MODE_LL).toBe("ll");
   });
 
   it("rejects an unknown mode", () => {

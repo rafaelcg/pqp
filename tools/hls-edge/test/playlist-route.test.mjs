@@ -12,7 +12,12 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
-import { parsePlaylistPath } from "../dist/playlist-route.js";
+import {
+  LL_MODE_PARAM,
+  LL_MODE_VALUE,
+  parsePlaylistPath,
+  requestsLlMode,
+} from "../dist/playlist-route.js";
 
 const BASE = "/api/voice/hls-playlist/chan_abc123/1757865600000";
 
@@ -79,4 +84,50 @@ test("anything that is not this route at all is still null", () => {
   ]) {
     assert.equal(parsePlaylistPath(pathname), null, pathname);
   }
+});
+
+/**
+ * `requestsLlMode` — the one signal that decides which master a session
+ * gets. These literals are a port of `LIVE_HLS_MODE_PARAM` /
+ * `LIVE_HLS_MODE_LL` in `packages/shared/src/live-hls.ts`; the first case
+ * below is written against the exact URL `llPlaylistUrl`
+ * (`server/src/voice/hls-remux.ts`) builds, with the viewer token appended
+ * the way `stampViewerStream` appends it, so a rename on either side fails
+ * here rather than in production.
+ */
+const LL_URL_AS_THE_API_BUILDS_IT =
+  "https://hls.pqp.gg/api/voice/hls-playlist/chan_abc123/1757865600000" +
+  "?mode=ll&t=payload.signature";
+
+test("requestsLlMode: the exact URL the API hands an LL viewer", () => {
+  assert.equal(requestsLlMode(new URL(LL_URL_AS_THE_API_BUILDS_IT)), true);
+  assert.equal(LL_MODE_PARAM, "mode");
+  assert.equal(LL_MODE_VALUE, "ll");
+});
+
+test("requestsLlMode: a conventional session's URL carries no marker at all", () => {
+  assert.equal(
+    requestsLlMode(
+      new URL(`https://hls.pqp.gg${BASE}?t=payload.signature`),
+    ),
+    false,
+  );
+});
+
+test("requestsLlMode: only exactly `ll` counts", () => {
+  for (const value of ["", "LL", "conventional", "ll2", "l", "true", "1"]) {
+    assert.equal(
+      requestsLlMode(new URL(`https://hls.pqp.gg${BASE}?mode=${value}`)),
+      false,
+      `mode=${value} must not be read as low latency`,
+    );
+  }
+});
+
+test("requestsLlMode: a repeated parameter reads the first value, deterministically", () => {
+  // Not a security boundary (the marker is not a capability -- `?t=` is),
+  // but it must be ONE answer rather than something that depends on which
+  // part of the stack parses it. `URLSearchParams.get` takes the first.
+  assert.equal(requestsLlMode(new URL(`https://hls.pqp.gg${BASE}?mode=ll&mode=x`)), true);
+  assert.equal(requestsLlMode(new URL(`https://hls.pqp.gg${BASE}?mode=x&mode=ll`)), false);
 });

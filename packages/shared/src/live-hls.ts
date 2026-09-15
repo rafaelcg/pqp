@@ -118,12 +118,61 @@ export const liveHlsStreamSchema = z.object({
    * `conventional` — every session before this field existed, and every one
    * this deployment will ever produce while `LIVE_HLS_LL` is off.
    *
-   * This is a player-selection hint, not a viewer-facing claim: the LL
-   * playlist front (`EXT-X-SERVER-CONTROL`, blocking reload) is `L2.x`, not
-   * built yet, so a client has nothing different to do with `ll` today.
+   * THIS FIELD AND `hlsUrl` ARE ONE STATEMENT, NOT TWO. An `ll` session's
+   * `hlsUrl` carries `?mode=ll` (`LIVE_HLS_MODE_PARAM` below), which is what
+   * makes the edge Worker serve the LL multivariant playlist for that
+   * request instead of guessing from a probe. The two are stamped together
+   * by whoever builds the stream, so a client that reads only one of them
+   * still cannot end up on the wrong playlist: the URL decides what the
+   * bytes are, `mode` decides how the player is configured.
+   *
+   * Low-latency was enabled in production four times on 2026-09-15 and no
+   * viewer was ever handed the low-latency stream, because the mode was
+   * decided by timing (the Worker probed the remux for state, found none
+   * 300 ms into a session, and quietly answered with the conventional
+   * ladder's master). Nothing said `ll` on the wire, so nothing could be
+   * wrong out loud. See `docs/plans/LL_HLS.md` §4.
    */
   mode: z.enum(["conventional", "ll"]).optional(),
+  /**
+   * The remux's part target in milliseconds (`hls_sessions.part_target_ms`,
+   * `LIVE_HLS_REMUX_PART_MS`), so a player can size its own buffer and
+   * hold-back to the cadence this session actually writes at instead of
+   * assuming the deployment default.
+   *
+   * Only meaningful with `mode: "ll"` — a conventional session has no parts
+   * — and optional there too: a client that does not get one falls back to
+   * `LL_HLS_DEFAULT_PART_TARGET_MS` (`client/src/lib/hls-live-edge.ts`),
+   * which mirrors the same env default. iOS and Android parse the frame and
+   * may ignore it.
+   */
+  partTargetMs: z.number().int().positive().optional(),
 });
+
+/**
+ * The query parameter an LL session's `hlsUrl` carries, and the one value it
+ * ever takes. Read by the edge Worker's master route
+ * (`tools/hls-edge/src/playlist-route.ts`, which ports these two literals —
+ * it deploys separately and shares no module boundary with this package).
+ *
+ * WHY THE MODE IS ON THE WIRE AND NOT INFERRED. The Worker used to decide
+ * whether a session was LL by asking the remux origin for its `state.json`
+ * and treating "no state" as "this party is conventional". Those are not the
+ * same thing: a session two hundred milliseconds old has no state yet and IS
+ * low-latency, and answering it with the conventional master means the
+ * audience plays a ladder that, for an LL session, nothing is writing. The
+ * API knows the mode exactly — it is the thing that chose it — so it says
+ * so, and the Worker obeys the request rather than a race.
+ *
+ * NOT A CAPABILITY, DELIBERATELY UNSIGNED. `?t=` (`hls-viewer-token.ts`) is
+ * what authorises the path, and it names the user, the channel and the
+ * session; this parameter only selects which of two renderings of THAT
+ * session the holder is served. Forging it on a conventional session buys a
+ * `503 Retry-After` loop for the forger alone, and the Worker's own
+ * not-ready memo bounds what it costs the remux origin.
+ */
+export const LIVE_HLS_MODE_PARAM = "mode";
+export const LIVE_HLS_MODE_LL = "ll";
 
 export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;
 

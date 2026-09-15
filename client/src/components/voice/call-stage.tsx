@@ -40,16 +40,12 @@ import {
   type SyntheticEvent,
 } from "react";
 import { flushSync } from "react-dom";
-import {
-  MESH_VOICE_WARNING,
-  type LiveHlsStream,
-} from "@pqp/shared";
+import { MESH_VOICE_WARNING } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import {
   hlsModeOf,
   hlsPartTargetMs,
   watchPlayerMode,
-  type LlHlsStreamFields,
 } from "@/lib/hls-live-edge";
 import type { VideoQuality } from "@/lib/video-quality";
 import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
@@ -1431,13 +1427,13 @@ function ActiveCall({
           mode={
             cinemaTile.mode ??
             hlsModeOf(
-              voiceState.liveStream as (LiveHlsStream & LlHlsStreamFields) | null,
+              voiceState.liveStream,
             )
           }
           partTargetMs={
             cinemaTile.partTargetMs ??
             hlsPartTargetMs(
-              voiceState.liveStream as (LiveHlsStream & LlHlsStreamFields) | null,
+              voiceState.liveStream,
             )
           }
           mediaTitle={title}

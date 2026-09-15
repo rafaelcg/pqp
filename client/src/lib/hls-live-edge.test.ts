@@ -15,6 +15,9 @@ import {
   HLS_PLAYER_CUSHION_SECONDS,
   LL_HLS_BACK_BUFFER_SECONDS,
   LL_HLS_DEFAULT_PART_TARGET_MS,
+  LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS,
+  LL_HLS_MANIFEST_RETRY_COUNT,
+  LL_HLS_MANIFEST_RETRY_DELAY_MS,
   LL_HLS_MAX_LATENCY_PARTS,
   LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
   LL_HLS_MAX_BUFFER_LENGTH_SECONDS,
@@ -586,7 +589,40 @@ describe("llHlsConfig", () => {
       maxMaxBufferLength: 10,
       backBufferLength: 4,
       startLevel: -1,
+      manifestLoadPolicy: {
+        default: {
+          maxTimeToFirstByteMs: Infinity,
+          maxLoadTimeMs: 20_000,
+          timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 },
+          errorRetry: {
+            maxNumRetry: LL_HLS_MANIFEST_RETRY_COUNT,
+            retryDelayMs: LL_HLS_MANIFEST_RETRY_DELAY_MS,
+            maxRetryDelayMs: LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS,
+          },
+        },
+      },
     });
+  });
+
+  it("rides out a warming LL master: more than hls.js's stock one manifest retry", () => {
+    // The edge Worker answers `503 Retry-After: 1` until `pqp-remux` has
+    // written a session's first `state.json` -- on purpose, because the
+    // alternative (quietly serving the conventional ladder's master for an
+    // LL session) is what left four production parties with no picture on
+    // 2026-09-15. hls.js's stock budget is ONE retry, which is two 503s and
+    // a fatal error on a session that takes two seconds to subscribe.
+    const retry = llHlsConfig(500).manifestLoadPolicy.default.errorRetry;
+    expect(retry.maxNumRetry).toBeGreaterThan(1);
+    // Long enough to cover a real subscribe-and-first-part, short enough
+    // that a dead origin still reaches the player's own recovery ladder.
+    expect(retry.maxNumRetry * retry.retryDelayMs).toBeGreaterThanOrEqual(3_000);
+    expect(retry.maxNumRetry * retry.maxRetryDelayMs).toBeLessThanOrEqual(20_000);
+    // AND NEVER FASTER THAN THE EDGE ASKED FOR (a Farol finding on this PR).
+    // `llNotReady` in the Worker sends `Retry-After: 1`; retrying inside
+    // that is the client half of a thundering herd, and the Worker's memo
+    // bounds what reaches the remux, not what reaches the Worker.
+    expect(retry.retryDelayMs).toBeGreaterThanOrEqual(1_000);
+    expect(retry.maxRetryDelayMs).toBeGreaterThanOrEqual(retry.retryDelayMs);
   });
 });
 
@@ -605,6 +641,10 @@ describe("hlsLivePlayerConfig (conventional, byte-identical)", () => {
       startLevel: -1,
       nudgeMaxRetry: HLS_NUDGE_MAX_RETRY,
     });
+    // And no `manifestLoadPolicy`: the widened LL retry budget must never
+    // leak onto the conventional path, which has no 503 warm-up window to
+    // ride out and whose numbers this snapshot exists to freeze.
+    expect("manifestLoadPolicy" in hlsLivePlayerConfig()).toBe(false);
   });
 });
 

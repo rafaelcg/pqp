@@ -167,30 +167,26 @@ export const HLS_ABR_DEFAULT_ESTIMATE_BPS = 3_500_000;
 export type HlsMode = "conventional" | "ll";
 
 /**
- * `LiveHlsStream.mode` (PR 580, `feat/llhls-l1-5-control-plane`, not yet
- * merged to `main`) and `LiveHlsStream.partTargetMs`, which does not exist
- * on that branch's wire type EITHER as of this PR -- `hls-remux.ts` there
- * stores `part_target_ms` on the `hls_sessions` row and never puts it on the
- * `LiveHlsStream` it hands back. `packages/shared/src/live-hls.ts` on `main`
- * carries neither field today.
+ * The two LL fields of `LiveHlsStream`, as a structural minimum.
  *
- * This client does not validate incoming `channel-live`/`voice-stream`
- * frames or `GET /api/channels/:id/live` answers against the shared zod
- * schema at all (`client/src/lib/realtime.ts`'s `JSON.parse(...) as
+ * BOTH ARE ON THE WIRE TYPE NOW (`packages/shared/src/live-hls.ts`): `mode`
+ * since PR 580, `partTargetMs` since the change that made the delivery mode
+ * a statement rather than a guess. This interface no longer exists to paper
+ * over a missing type -- it exists so the readers below (`hlsModeOf`,
+ * `hlsPartTargetMs`) accept anything carrying those two fields: a whole
+ * `LiveHlsStream`, a `collectScreenTiles` tile, or a test fixture that has
+ * no business constructing a full stream.
+ *
+ * Kept deliberately narrow for a second reason. This client does not
+ * validate incoming `channel-live`/`voice-stream` frames against the shared
+ * zod schema at all (`client/src/lib/realtime.ts`'s `JSON.parse(...) as
  * ChatServerMessage | VoiceSignalingMessage` is a type assertion, not a
- * parse) -- so a server that DOES send `mode`/`partTargetMs` on the wire
- * already reaches this object at runtime; only the TypeScript type is
- * missing them. This interface is the narrow, local fix for that: every read
- * site casts through it rather than widening `LiveHlsStream` itself, which
- * this task is not allowed to touch (client-only; see `CLAUDE.md`).
- *
- * TODO(PR 580): once `mode` (and a `partTargetMs`, once something wires it
- * onto the wire type) land on `packages/shared/src/live-hls.ts`, delete this
- * interface and read the fields straight off `LiveHlsStream`.
+ * parse), so `partTargetMs` arriving as something absurd is a real runtime
+ * possibility -- which is what `validPartTargetMs` below is for, and why
+ * nothing reads the raw field directly.
  */
 export interface LlHlsStreamFields {
   mode?: HlsMode;
-  /** Absent until `partTargetMs` exists on the wire type; see above. */
   partTargetMs?: number;
 }
 
@@ -369,7 +365,63 @@ export interface HlsLLPlayerConfig {
   maxMaxBufferLength: number;
   backBufferLength: number;
   startLevel: number;
+  /**
+   * THE MASTER PLAYLIST OF A WARMING LL SESSION IS A RETRYABLE 503, and
+   * hls.js's default budget for that is one retry.
+   *
+   * The edge Worker answers `503 Retry-After: 1` while `pqp-remux` has not
+   * written its first `state.json` for a session -- deliberately, because
+   * the alternative is what shipped before: quietly serving the
+   * conventional ladder's master for an LL session, whose conventional
+   * ladder the API never started (`tools/hls-edge/src/index.ts`,
+   * `llNotReady`). Riding that window out is the player's half of the
+   * bargain, and hls.js's stock `manifestLoadPolicy.default.errorRetry` is
+   * `maxNumRetry: 1` -- two 503s and the manifest load is fatal, which on a
+   * session that needs two seconds to subscribe is most of them.
+   *
+   * Verified against `hls.mjs`: `retryForHttpStatus` retries any status
+   * outside 4xx, so a 503 IS retried; only the budget was too small. The
+   * delays are paced to the edge's own `Retry-After` rather than as fast as
+   * hls.js will go -- see `LL_HLS_MANIFEST_RETRY_DELAY_MS`.
+   * Everything but `errorRetry` here is hls.js's own default for this
+   * policy, restated because the config is replaced wholesale, not merged.
+   * LL only -- the conventional path never sees this branch and keeps the
+   * stock policy it has always had.
+   */
+  manifestLoadPolicy: {
+    default: {
+      maxTimeToFirstByteMs: number;
+      maxLoadTimeMs: number;
+      timeoutRetry: { maxNumRetry: number; retryDelayMs: number; maxRetryDelayMs: number };
+      errorRetry: { maxNumRetry: number; retryDelayMs: number; maxRetryDelayMs: number };
+    };
+  };
 }
+
+/**
+ * How many times an LL master load is retried before hls.js calls it fatal,
+ * and how long between tries.
+ *
+ * PACED TO THE EDGE'S OWN `Retry-After`, NOT FASTER (a Farol finding on this
+ * PR: a first draft retried every 500 ms, which at party scale is the client
+ * half of a thundering herd -- the Worker's not-ready memo bounds what
+ * reaches the REMUX, and bounds nothing about what reaches the Worker). The
+ * Worker answers `Retry-After: 1`, so the first retry waits a second; hls.js
+ * then backs off toward `maxRetryDelayMs`, giving 1 + 2 + 2 + 2 + 2 + 2 ≈
+ * 11 s of patience for at most seven requests per viewer. Two hundred people
+ * joining a session that takes ten seconds to warm up is therefore ~1400
+ * Worker requests spread over eleven seconds, and still one `state.json`
+ * fetch a second against the box.
+ *
+ * Eleven seconds is chosen against what it is waiting FOR: `pqp-remux` has
+ * to subscribe to the LiveKit track and write one part. A start slower than
+ * that is not a warm-up, and letting the load go fatal hands the viewer to
+ * the player's own recovery ladder, which is where a genuinely broken
+ * session belongs.
+ */
+export const LL_HLS_MANIFEST_RETRY_COUNT = 6;
+export const LL_HLS_MANIFEST_RETRY_DELAY_MS = 1_000;
+export const LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS = 2_000;
 
 /**
  * The LL hls.js config, pure and derived entirely from `partTargetMs` --
@@ -390,6 +442,18 @@ export function llHlsConfig(partTargetMs: number): HlsLLPlayerConfig {
     maxMaxBufferLength: LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
     backBufferLength: LL_HLS_BACK_BUFFER_SECONDS,
     startLevel: -1,
+    manifestLoadPolicy: {
+      default: {
+        maxTimeToFirstByteMs: Infinity,
+        maxLoadTimeMs: 20_000,
+        timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 },
+        errorRetry: {
+          maxNumRetry: LL_HLS_MANIFEST_RETRY_COUNT,
+          retryDelayMs: LL_HLS_MANIFEST_RETRY_DELAY_MS,
+          maxRetryDelayMs: LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS,
+        },
+      },
+    },
   };
 }
 
