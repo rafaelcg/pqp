@@ -4,11 +4,12 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactElement,
   type ReactNode,
-  type RefObject,
   type TransitionEvent,
 } from "react";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
@@ -34,7 +35,7 @@ import { cn } from "@/lib/utils";
  * built to this slot. The stage renders nothing in its own place; the composer
  * renders the bar in its. One decision, one bar, two possible homes.
  *
- * The handoff is a React element published through context (a layout effect,
+ * The handoff is a React element published through a store (a layout effect,
  * so the composer has it before the first paint). A DOM portal would have been
  * the other shape, and it cannot animate the exit: the moment the person
  * hangs up, `CallStage` unmounts and a portal's children go with it, leaving
@@ -46,10 +47,9 @@ import { cn } from "@/lib/utils";
  * key its first render after a switch would briefly see the previous
  * channel's bar.
  *
- * Speaking ticks rebuild the bar. The channel key is what the provider
- * holds in state; the live element lives on a ref the outlet reads, so a
- * roster or timer update does not change the context value or walk the
- * conversation tree a second time before paint.
+ * Speaking ticks rebuild the bar. The store notifies only the outlet, and
+ * the provider's React state holds just the channel key, so a roster update
+ * does not walk the conversation tree a second time before paint.
  */
 export interface CallDockContent {
   channelId: string;
@@ -59,12 +59,49 @@ export interface CallDockContent {
 type Publish = (content: CallDockContent | null) => void;
 type ReportOccupied = (occupied: boolean) => void;
 
+type DockStore = {
+  subscribe: (listener: () => void) => () => void;
+  getSnapshot: () => CallDockContent | null;
+  set: (next: CallDockContent | null) => void;
+};
+
+function createDockStore(): DockStore {
+  let snapshot: CallDockContent | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot() {
+      return snapshot;
+    },
+    set(next) {
+      if (snapshot === next) {
+        return;
+      }
+      if (
+        snapshot !== null &&
+        next !== null &&
+        snapshot.channelId === next.channelId &&
+        snapshot.node === next.node
+      ) {
+        return;
+      }
+      snapshot = next;
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+
 const PublishContext = createContext<Publish | null>(null);
-const ChannelContext = createContext<string | null>(null);
-const NodeRefContext = createContext<RefObject<ReactElement | null> | null>(
-  null,
-);
+const StoreContext = createContext<DockStore | null>(null);
 const OccupiedContext = createContext<ReportOccupied | null>(null);
+
+const subscribeNone = () => () => {};
+const snapshotNone = () => null;
 
 export function CallDockProvider({
   children,
@@ -89,17 +126,20 @@ export function CallDockProvider({
    */
   onOccupiedChange?: (occupied: boolean) => void;
 }) {
+  const store = useMemo(() => createDockStore(), []);
   const [publishedChannelId, setPublishedChannelId] = useState<string | null>(
     null,
   );
-  const nodeRef = useRef<ReactElement | null>(null);
-  const publish = useCallback<Publish>((next) => {
-    nodeRef.current = next?.node ?? null;
-    setPublishedChannelId((previous) => {
-      const id = next?.channelId ?? null;
-      return previous === id ? previous : id;
-    });
-  }, []);
+  const publish = useCallback<Publish>(
+    (next) => {
+      store.set(next);
+      setPublishedChannelId((previous) => {
+        const id = next?.channelId ?? null;
+        return previous === id ? previous : id;
+      });
+    },
+    [store],
+  );
   const [barVisible, setBarVisible] = useState(false);
   const occupied =
     barVisible &&
@@ -121,11 +161,7 @@ export function CallDockProvider({
   return (
     <PublishContext.Provider value={publish}>
       <OccupiedContext.Provider value={setBarVisible}>
-        <ChannelContext.Provider value={publishedChannelId}>
-          <NodeRefContext.Provider value={nodeRef}>
-            {children}
-          </NodeRefContext.Provider>
-        </ChannelContext.Provider>
+        <StoreContext.Provider value={store}>{children}</StoreContext.Provider>
       </OccupiedContext.Provider>
     </PublishContext.Provider>
   );
@@ -143,12 +179,10 @@ export function useCallDockPublisher(): Publish | null {
 /**
  * Renders nothing here and puts `children` in the dock instead.
  *
- * The live bar is written into the provider's ref during render so the
- * outlet (later in the tree) can read this pass's speaking ring or clock
- * without a new context value. The layout effect only announces the
- * channel, which is what occupancy and the first-paint handoff need.
- * Cleanup publishes null so the dock closes when the stage goes away or
- * stops being collapsed.
+ * Publishes in a layout effect so the outlet has the bar before the first
+ * paint. The store identity stays put; only the outlet subscribes, so a
+ * speaking tick does not rebuild the conversation tree. Cleanup publishes
+ * null so the dock closes when the stage goes away or stops being collapsed.
  */
 export function CallDockPortal({
   channelId,
@@ -159,17 +193,9 @@ export function CallDockPortal({
   publish: Publish;
   children: ReactElement;
 }) {
-  const nodeRef = useContext(NodeRefContext);
-  if (nodeRef) {
-    nodeRef.current = children;
-  }
   useLayoutEffect(() => {
-    const node = nodeRef?.current;
-    if (!node) {
-      return;
-    }
-    publish({ channelId, node });
-  }, [channelId, nodeRef, publish]);
+    publish({ channelId, node: children });
+  }, [channelId, children, publish]);
   useLayoutEffect(() => () => publish(null), [publish]);
   return null;
 }
@@ -193,19 +219,23 @@ const EXIT_BACKSTOP_MS = 600;
  * list above scroll-anchors to the bottom throughout (`MessageList` watches
  * its own height with a ResizeObserver).
  *
- * While a bar is live it is drawn from the node ref the portal writes during
- * render: the stage rebuilds the element every speaking tick, and copying it
- * into state here would cost a second render pass each time. State only
- * enters on the way out, to hold the last bar for its closing transition.
+ * While a bar is live it is drawn from the store the stage publishes into:
+ * the stage rebuilds the element every speaking tick, and copying it into
+ * outlet state would cost a second render pass each time. State only enters
+ * on the way out, to hold the last bar for its closing transition.
  *
  * Under reduced motion the row snaps both ways.
  */
 export function CallDockOutlet({ channelId }: { channelId: string }) {
-  const publishedChannelId = useContext(ChannelContext);
-  const nodeRef = useContext(NodeRefContext);
+  const store = useContext(StoreContext);
+  const published = useSyncExternalStore(
+    store ? store.subscribe : subscribeNone,
+    store ? store.getSnapshot : snapshotNone,
+    snapshotNone,
+  );
   const content =
-    publishedChannelId === channelId && nodeRef?.current != null
-      ? nodeRef.current
+    published !== null && published.channelId === channelId
+      ? published.node
       : null;
   const active = content !== null;
   const reducedMotion = usePrefersReducedMotion();

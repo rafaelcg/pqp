@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, memo, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -80,6 +80,27 @@ const render = (props: Parameters<typeof Screen>[0]) =>
 const LOBBY = { channelId: "lobby", label: "Dev User" };
 
 describe("CallDockOutlet", () => {
+  it("still draws the bar when a memo parent sits between the provider and the outlet", () => {
+    const MemoComposer = memo(function MemoComposer({
+      children,
+    }: {
+      children: ReactNode;
+    }) {
+      return <div data-composer>{children}</div>;
+    });
+    act(() =>
+      root.render(
+        <CallDockProvider viewingChannelId="lobby">
+          <Stage channelId="lobby" label="Dev User" />
+          <MemoComposer>
+            <CallDockOutlet channelId="lobby" />
+          </MemoComposer>
+        </CallDockProvider>,
+      ),
+    );
+    expect(composerText()).toBe("Dev User");
+  });
+
   it("draws the bar in the composer and nothing where the stage stands", () => {
     render({ viewing: "lobby", call: LOBBY });
     expect(composerText()).toBe("Dev User");
