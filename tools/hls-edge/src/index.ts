@@ -95,12 +95,7 @@
  */
 
 import { PartyPassRevocationGate } from "./party-pass-revocation.js";
-import {
-  authorizeViewer,
-  logRejection,
-  statusForRejection,
-  type ViewerAccessEnv,
-} from "./viewer-access.js";
+import { authorizeViewer, logRejection, statusForRejection } from "./viewer-access.js";
 import { cacheKeyRequest, safeCacheMatch, safeCachePut } from "./edge-cache.js";
 import { handleLlMediaRequest } from "./ll-media.js";
 import { parsePlaylistPath } from "./playlist-route.js";
