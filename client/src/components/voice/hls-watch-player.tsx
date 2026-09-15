@@ -1533,14 +1533,12 @@ export function HlsWatchPlayer({
       // so hls.js defers to the manifest's own `PART-HOLD-BACK`
       // (`docs/plans/LL_HLS.md` §4; see that function's own comment).
       const llConfig = effectiveMode === "ll" ? llHlsConfig() : null;
-      // A FUNCTION, SO THERE IS SOMETHING TO FALL BACK TO. hls.js validates
-      // the constructor config and refuses a bad combination by THROWING
-      // (`mergeConfig`). Inside this async `attach()` that is a rejected
-      // promise and nothing else: no source, no request, nothing in the UI
-      // but the stall overlay laid over a player that was never built. It
-      // shipped exactly that way (`applyLlLatencyCeiling`). The LL tuning is
-      // the only part of this config that is ever new, so a refusal drops it
-      // and plays the party on the conventional engine rather than not at all.
+      // A FUNCTION ONLY SO THE REFUSAL PATH BELOW HAS A NAME FOR IT. hls.js
+      // validates the constructor config and refuses a bad combination by
+      // THROWING (`mergeConfig`). Inside this async `attach()` that is a
+      // rejected promise and nothing else: no source, no request, nothing in
+      // the UI but the stall overlay laid over a player that was never built.
+      // It shipped exactly that way (`applyLlLatencyCeiling`).
       const buildPlayer = (ll: HlsLLPlayerConfig | null) =>
         new Hls({
           // `hlsLivePlayerConfig()`/`ll` are entirely live-sync tuning
@@ -1644,20 +1642,36 @@ export function HlsWatchPlayer({
           },
         });
       let player: ReturnType<typeof buildPlayer>;
-      let llApplied = llConfig !== null;
       try {
         player = buildPlayer(llConfig);
       } catch (error) {
-        // Said out loud, always: an unhandled rejection in here is what
-        // made the original failure invisible for a whole party.
+        // Said out loud, always: an unhandled rejection in here is what made
+        // the original failure invisible for a whole party.
         console.error("[hls] config error", error);
-        if (!llConfig) {
+        if (cancelled) {
+          return;
+        }
+        if (!llConfig || pinnedToConventionalRef.current) {
+          // Nothing left to drop. Let it reach the caller's `.catch`, which
+          // at least names it, rather than half-building a player.
           throw error;
         }
-        llApplied = false;
-        player = buildPlayer(null);
+        // DOWN THE SAME SEAM §4's PIN ALREADY USES, and not by quietly
+        // building a conventional engine here (a Farol finding on this PR):
+        // `effectiveMode` is computed at the top of this effect and every
+        // mode-dependent thing after it -- `watch.configureForMode`, the
+        // badge, `liveSeekOffsetSeconds`, the pin rule's own arming -- was
+        // already set up for `"ll"`. A second instance built inside this
+        // catch would run conventional live-sync under LL stall thresholds,
+        // which is a different wrong answer. Pinning and re-running the
+        // effect makes all of them agree. The pin is sticky for the session,
+        // so this can happen at most once and the branch above is the floor.
+        pinnedToConventionalRef.current = true;
+        setPinnedToConventional(true);
+        setAttempt((n) => n + 1);
+        return;
       }
-      if (llApplied) {
+      if (llConfig) {
         // AFTER the constructor, never inside it: hls.js `mergeConfig`
         // throws on `liveMaxLatencyDuration` in a config that does not also
         // set `liveSyncDuration`, and setting that is exactly what would

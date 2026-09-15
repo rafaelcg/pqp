@@ -29,6 +29,8 @@ import { HlsWatchPlayer } from "./hls-watch-player";
 
 const loadSource = vi.fn();
 const attachMedia = vi.fn();
+/** Makes the fake hls.js refuse an LL constructor config, the way the real one did. */
+const refuseLowLatency = { on: false };
 
 vi.mock("hls.js", async () => {
   const actual = await vi.importActual<typeof import("hls.js")>("hls.js");
@@ -40,6 +42,9 @@ vi.mock("hls.js", async () => {
     static Events = RealHls.Events;
     config: Record<string, unknown>;
     constructor(config: Record<string, unknown>) {
+      if (refuseLowLatency.on && config.lowLatencyMode === true) {
+        throw new Error('Illegal hls.js config: "liveMaxLatencyDuration"');
+      }
       // The real merge, including the validation that threw. Destroyed
       // immediately: nothing here should touch media.
       const probe = new RealHls(config as never);
@@ -82,6 +87,7 @@ describe("HlsWatchPlayer attaches an ll stream", () => {
   let root: Root;
 
   beforeEach(() => {
+    refuseLowLatency.on = false;
     loadSource.mockClear();
     attachMedia.mockClear();
     container = document.createElement("div");
@@ -119,6 +125,29 @@ describe("HlsWatchPlayer attaches an ll stream", () => {
     });
     expect(loadSource).toHaveBeenCalledWith(PRODUCTION_LL_SRC);
     expect(attachMedia).toHaveBeenCalled();
+  });
+
+  it("falls back to the conventional engine when hls.js refuses the LL config", async () => {
+    // Not by building a second instance inside the catch -- that would run
+    // conventional live-sync under LL stall thresholds. The session is pinned
+    // and the whole effect re-runs, so every mode-dependent thing agrees.
+    refuseLowLatency.on = true;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await mount({
+        src: PRODUCTION_LL_SRC,
+        mode: "ll",
+        partTargetMs: 500,
+      });
+      expect(errors).toHaveBeenCalledWith(
+        "[hls] config error",
+        expect.any(Error),
+      );
+      // The viewer still gets a player, on the same URL.
+      expect(loadSource).toHaveBeenCalledWith(PRODUCTION_LL_SRC);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("still attaches a conventional stream", async () => {
