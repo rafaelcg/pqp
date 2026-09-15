@@ -35,6 +35,7 @@ costs nothing per listener.
 | `repeat` | `off`, `one` (this track again), or `all` (finished tracks go to the end of the queue). Default `off` |
 | `skipVotes` | user ids that have voted to skip the current track. Any change of `current` clears it |
 | `history` | the last ten finished tracks, most recent first. A repeat of the same `videoId` moves that row to the front |
+| `autoplay` | when true and the queue is empty, the room keeps going with a related track. Only a manager writes it. A write that omits it keeps what the room already holds. A track the room picked itself carries `autoplayed: true` |
 
 Last-writer-wins, no host: whoever acted most recently controls the player,
 with `rev = seen + 1` and the peer id breaking ties. This is the contract the
@@ -45,9 +46,9 @@ instead of dropping them, tear down with the room).
 
 Frames: `set-music` client to server, `music` server to the room, sender
 included as the acknowledgement. A joiner is handed the state after
-`welcome`. A write that omits `openControls`, `repeat`, `skipVotes` or
-`history` keeps the room's values, so an older client that only samples
-position cannot wipe them.
+`welcome`. A write that omits `openControls`, `repeat`, `skipVotes`,
+`history` or `autoplay` keeps the room's values, so an older client that
+only samples position cannot wipe them.
 
 With `VOICE_REGISTRY=postgres` the queue is the watch party's twin, column
 for column: `voice_rooms.music` / `voice_rooms.music_rev` are the room's
@@ -84,7 +85,8 @@ already holds `MUTE_MEMBERS` and to the seeded Moderator, never to
 | remove a song you added | being in the call |
 | start music when nothing is on | `SPEAK` (your own song) |
 | skip, pause, resume, reorder, shuffle, remove others' songs, "Parar para todos" | `MANAGE_MUSIC`, or SPEAK while `openControls` is on |
-| flip "Todo mundo controla" (`openControls`) or set repeat | `MANAGE_MUSIC` |
+| flip "Todo mundo controla" (`openControls`), set repeat, or flip "Continuar com parecidas" (`autoplay`) | `MANAGE_MUSIC` |
+| autoplay the next related track when the queue ran out | being in the call, while `autoplay` is on, the queue is empty, and the current track has run out. The write must put on your own track with `autoplayed: true`, playing at 0, history as `musicAdvance` would, votes cleared |
 | vote to skip | being in the call. A member may only add their own user id. The next write that matches `musicAdvance` is accepted once `held.skipVotes` plus that vote reaches `max(2, ceil(roomSize / 2))` |
 | play a history row again | `SPEAK` (it is an ordinary own-append under your name) |
 
@@ -138,6 +140,19 @@ renderers rarely do, so `collectVideos` finds them wherever they are. When
 every client fails, the public results and playlist pages are scraped as the
 last resort, which is where the feature started. Metadata only: no stream
 URL is ever requested, which is the half of InnerTube that PO tokens guard.
+
+### Related videos
+
+`GET /api/music/related?videoId=` asks InnerTube `next` (`youtubei/v1/next`
+with `{ videoId }`) for the watch-next list. Same two-client fallback and
+the same walk-based `collectVideos`: WEB answers `compactVideoRenderer`,
+TVHTML5 answers `lockupViewModel`. The seed video is dropped. Remembered
+for six hours, keyed by video id, like search. The client then runs
+`musicAutoplayCandidate`: drop the finishing id, anything already in
+`history` or the queue, and anything shorter than 60 s or longer than 12
+minutes when duration is known (a clip or a film, not a song). Unknown
+duration is kept. The first remaining is minted under the writer and
+written with `autoplayed: true`.
 
 Around it: a per-user limiter (20 burst, then one every two seconds), an
 upstream budget across everybody on the process (300 burst, 10 a second)
@@ -214,6 +229,10 @@ samples their position every 10 s so a joiner lands close, and nobody else
 writes unprompted. Every write samples the live player position, so a queue
 edit never carries a stale one. A track ending advances the queue, guarded
 on the id so a straggler cannot skip the track the room already moved to.
+When `autoplay` is on, the queue is empty and repeat is off, the actor
+fetches `/api/music/related` and writes a related track with
+`autoplayed: true`. If the actor has left, any member does the same after
+1.5 s.
 
 Autoplay can be refused until the page has a gesture; the dock shows
 "Toque para tocar" when the player has not started two seconds after being
