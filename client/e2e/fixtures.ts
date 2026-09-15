@@ -212,8 +212,18 @@ export async function waitUntilVoiceConnected(page: Page): Promise<void> {
  * and poison the next spec (two share tiles, or Share disabled).
  */
 export async function leaveVoiceIfConnected(page: Page): Promise<void> {
-  const leave = page.getByRole("button", { name: "Leave", exact: true });
-  if (!(await leave.isVisible().catch(() => false))) {
+  // Two controls hang up: "Leave" on the call bar (on the stage, or docked
+  // in the composer) and "Disconnect from voice" on the sidebar strip.
+  // Either will do. An instant `isVisible` on the bar's alone came back
+  // false on a slow runner while the bar re-laid itself out after a room
+  // emptied, so the seat was never released and orphaned for 90s, and the
+  // next spec joined a room that was not empty (see camera-stage.spec.ts).
+  const leave = page
+    .getByRole("button", { name: /^(Leave|Disconnect from voice)$/ })
+    .first();
+  try {
+    await leave.waitFor({ state: "visible", timeout: 1_500 });
+  } catch {
     return;
   }
   await leave.click();
