@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { CheckRow } from "@/components/ui/check-row";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { useAppearance } from "@/hooks/use-appearance";
@@ -472,6 +473,8 @@ function PrimitiveSheet() {
   const { t } = useTranslation();
   const [switchOn, setSwitchOn] = useState(true);
   const [checked, setChecked] = useState(false);
+  const [scrub, setScrub] = useState(42);
+  const [volume, setVolume] = useState(70);
 
   return (
     <div className="flex flex-col gap-6">
@@ -565,6 +568,45 @@ function PrimitiveSheet() {
         <Tooltip label={t("qaUi.tooltip.railLabel")} tone="rail" side="right">
           <Button variant="secondary">{t("qaUi.tooltip.railTrigger")}</Button>
         </Tooltip>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="flex flex-col gap-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.scrub")}
+          </span>
+          <Slider
+            variant="scrub"
+            value={scrub}
+            max={100}
+            aria-label={t("qaUi.slider.scrub")}
+            onValueChange={setScrub}
+          />
+        </label>
+        <label className="flex flex-col gap-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.volume")}
+          </span>
+          <Slider
+            variant="volume"
+            value={volume}
+            max={100}
+            aria-label={t("qaUi.slider.volume")}
+            onValueChange={setVolume}
+          />
+        </label>
+        <label className="flex flex-col gap-2 sm:col-span-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.readOnly")}
+          </span>
+          <Slider
+            variant="scrub"
+            readOnly
+            value={scrub}
+            max={100}
+            aria-label={t("qaUi.slider.readOnly")}
+          />
+        </label>
       </div>
     </div>
   );
