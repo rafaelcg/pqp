@@ -142,6 +142,35 @@ type watchdogState struct {
 	// a static slide would log twice a second for as long as the slide
 	// is up.
 	idleLogged bool
+	// quiet is true from the first tick of a quiet episode until a real
+	// decoded FRAME ends it. Deliberately not idleLogged, which is only
+	// a log rate limiter: RTP packets resuming with nothing coming out
+	// of the depacketizer is the "packets but no frames" case, a real
+	// fault the ladder must still act on, and using the log flag as the
+	// episode marker would have let a wedged depacketizer end the
+	// episode and buy itself another PART_STUCK_MS of forgiveness
+	// (Farol review, PR #629).
+	quiet bool
+	// idleEndedAt is when the LAST quiet episode ended: the first tick
+	// on which a decoded frame arrived again after the source had been
+	// idle. Zero until a quiet episode has both begun and ended.
+	//
+	// WHY THE LADDER NEEDS IT. A part boundary is decided by the arrival
+	// of the NEXT access unit, so the first thing a quiet source owes
+	// the ladder after it resumes is one frame interval -- and at the
+	// 1.4 frames/s a static Chrome tab produces, that is 700ms, on top
+	// of however long the silence itself lasted. Production, 2026-09-15
+	// 15:23:07 UTC: three seconds of silence were correctly classed idle
+	// at 15:23:05, frames came back (`lastFrame=45ms`, a fresh IDR
+	// `lastIdr=84ms`), and this watchdog demoted the party two seconds
+	// later on `part-stuck-second-stall` because `lastPart` was 4.4s
+	// old -- an age accumulated entirely INSIDE the silence it had just
+	// forgiven. "Frames present, no part yet" is the normal state
+	// immediately after a quiet episode, not a stall, so the part clock
+	// (and the IDR clock, for the same reason: a quiet source has no
+	// keyframes either) restarts from the end of the silence rather
+	// than from whatever happened before it.
+	idleEndedAt time.Time
 }
 
 // evaluateWatchdog is pure: no clock, no IO, no goroutine. Given a
@@ -241,6 +270,7 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 			// them and costs the other a keyframe.
 			return stallLadder(h, cfg, st, now, "source-idle-too-long", "source-idle-too-long-second-stall")
 		}
+		st.quiet = true
 		if !st.idleLogged {
 			st.idleLogged = true
 			return watchdogResult{actionLog, "video-source-idle", stallDetail(h, now)}
@@ -248,10 +278,23 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 		return watchdogResult{actionNone, "", ""}
 	}
 	st.idleLogged = false
+	// A quiet episode ends when a decoded FRAME arrives, not when
+	// packets do. Packets back with nothing coming out of the
+	// depacketizer is the case the ladder is for, and must keep being
+	// judged on its own clocks; only a real access unit means the
+	// pipeline owes us a part again, and only then does the part clock
+	// restart -- see idleEndedAt and quiet.
+	if st.quiet && !h.LastVideoFrameAt.IsZero() && now.Sub(h.LastVideoFrameAt) <= stuckThreshold {
+		st.quiet = false
+		st.idleEndedAt = now
+	}
 
 	idrRef := h.LastIdrAt
 	if idrRef.IsZero() {
 		idrRef = h.LastPartAt
+	}
+	if st.idleEndedAt.After(idrRef) {
+		idrRef = st.idleEndedAt
 	}
 	segDur := msDuration(int64(segmentMs))
 	idrGap := now.Sub(idrRef)
@@ -269,7 +312,11 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 		st.idrWarnLogged = false
 	}
 
-	if now.Sub(h.LastPartAt) <= stuckThreshold {
+	partRef := h.LastPartAt
+	if st.idleEndedAt.After(partRef) {
+		partRef = st.idleEndedAt
+	}
+	if now.Sub(partRef) <= stuckThreshold {
 		return watchdogResult{actionNone, "", ""}
 	}
 

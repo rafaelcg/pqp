@@ -66,28 +66,65 @@ type Fragmenter struct {
 	pending      *h264.AccessUnit
 	lastDuration uint32
 
-	// pendingPTS is f.pending's PTS ON THIS FRAGMENTER'S OWN TIMELINE,
-	// which is the incoming AU's PTS plus ptsOffset. It exists because
-	// IdleFlush publishes a part whose media time was derived from the
-	// WALL clock rather than from a next access unit that has not
-	// arrived, and the resumed AU afterwards has to be placed exactly
-	// where that published part ended -- see ptsOffset.
+	// pendingPTS is where f.pending's sample is PUBLISHED on this
+	// fragmenter's timeline: the instant its tfdt places it, and the
+	// instant the next sample's duration is measured from. It is the
+	// access unit's own true instant (pendingTruePTS) in every ordinary
+	// case, and only differs immediately after an IdleFlush -- see
+	// pendingTruePTS.
 	pendingPTS int64
+	// pendingTruePTS is where f.pending really belongs on the
+	// publisher's clock (its PTS plus ptsOffset). The two separate for
+	// exactly one sample after an IdleFlush: that flush published media
+	// through resumePTS without knowing when the next frame would
+	// arrive, so the frame that ends the quiet spell is PUBLISHED at
+	// resumePTS (no hole, no rewind) while its TRUE instant is later.
+	// Its duration then runs from resumePTS to the following frame's
+	// true instant, which pays the difference back instead of erasing
+	// it, and the timeline is exactly on the publisher's clock again
+	// from that frame on.
+	//
+	// THIS IS THE 2026-09-15 DRIFT, AND WHY THE DISTINCTION EXISTS. The
+	// first version of the keep-alive re-derived ptsOffset on resume
+	// (ptsOffset = resumePTS - au.PTS), which slides the WHOLE timeline
+	// back so the resumed AU lands on resumePTS. That hides the gap by
+	// throwing the gap away: every quiet second published only the
+	// ~0.5s the flush had guessed and discarded the rest. Production,
+	// 15:10-15:15 UTC that day, on a Chrome tab share at 1.4 frames/s:
+	// the video timeline advanced 29.0s of media in 53.8s of wall
+	// (ratio 0.54) while audio, which never idles, ran at 0.98. A/V
+	// drift apart without bound, the player's buffer accounting breaks,
+	// and every blocking playlist reload times out because "the next
+	// part" takes a whole wall second to appear. The rule that replaces
+	// it: media time is the publisher's clock, ptsOffset never
+	// DECREASES, and no interval of wall time is ever dropped from the
+	// timeline.
+	pendingTruePTS int64
 	// ptsOffset is added to every incoming AU's PTS. It is zero for a
-	// session that never goes idle (the overwhelmingly common case, and
-	// the one every pre-existing test exercises), and is re-derived on
-	// the first access unit after an IdleFlush so that AU lands exactly
-	// on resumePTS: the flush already published media up to that
-	// instant, and the publisher's own RTP clock has no idea we did
-	// that. Without the re-derivation the resumed AU would either
-	// overlap the published part (tfdt going backwards, which no player
-	// tolerates) or leave a hole in the timeline.
+	// session whose publisher clock never contradicts what we already
+	// published, which is every ordinary session. It is RAISED (never
+	// lowered) when an access unit lands before media this fragmenter
+	// has already published -- a resume whose RTP timestamp is older
+	// than the keep-alive's estimate, or a publisher whose clock jumps
+	// backwards -- because a tfdt going backwards is a corrupt stream
+	// and no player tolerates it. Raising it shifts the timeline
+	// forward by a constant, which costs nothing: media time still
+	// advances one second per second, which is the only property that
+	// matters. LOWERING it is what stole time, and is what this type no
+	// longer does anywhere. See pendingTruePTS.
 	ptsOffset int64
 	// resumePTS is the fragmenter-timeline instant the last IdleFlush
 	// published up to, and therefore where the next part must begin.
 	// Meaningful only while pending == nil and haveFirstIDR is true.
 	resumePTS int64
 }
+
+// minSampleTicks is the shortest duration a sample may carry. A sample of
+// zero (or, through uint32 conversion, of four billion) ticks is what an
+// access unit whose PTS did not advance would otherwise produce, and
+// llstate floors a part at a millisecond for the same reason: a
+// degenerate sample must not be able to blank a stream.
+const minSampleTicks = 1
 
 // NewFragmenter returns a Fragmenter using cfg. The first segment emitted
 // is index 0.
@@ -152,16 +189,28 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 		f.partStart = au.PTS
 		f.pending = au
 		f.pendingPTS = au.PTS
+		f.pendingTruePTS = au.PTS
 		return nil, nil
 	}
 
 	if f.pending == nil {
-		// Resuming after an IdleFlush: that flush already published
-		// media through resumePTS, so this AU opens the next part
-		// exactly there. Re-derive ptsOffset rather than trusting the
-		// publisher's clock, which knows nothing about the part we
-		// synthesized -- see the ptsOffset field's doc comment.
-		f.ptsOffset = f.resumePTS - au.PTS
+		// Resuming after an IdleFlush. That flush published media
+		// through resumePTS without being able to know when the next
+		// frame would come, so this AU's SAMPLE opens there -- never
+		// before it (a tfdt going backwards is a corrupt stream) and
+		// never after it (a hole). Its own true instant is normally
+		// later than that, and the difference is paid back through
+		// this sample's duration when the NEXT frame arrives, not
+		// erased by sliding the timeline (see pendingTruePTS).
+		//
+		// ptsOffset only rises, and only far enough to keep the
+		// publisher's clock from landing behind media already
+		// published: a frame captured before the flush instant but
+		// delivered after it (an ordinary latency spike) or a
+		// publisher whose clock jumped backwards.
+		if au.PTS+f.ptsOffset < f.resumePTS {
+			f.ptsOffset = f.resumePTS - au.PTS
+		}
 		f.partStart = f.resumePTS
 		// A quiet source also spends real time inside the open segment,
 		// so the segment target can pass while nothing is arriving. If
@@ -178,10 +227,23 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 		}
 		f.pending = au
 		f.pendingPTS = f.resumePTS
+		f.pendingTruePTS = au.PTS + f.ptsOffset
 		return nil, nil
 	}
 
 	pts := au.PTS + f.ptsOffset
+	// The timeline never stands still and never rewinds. An access unit
+	// whose PTS did not advance past the sample already open (a repeated
+	// timestamp, a publisher clock that stepped back) would otherwise
+	// produce a zero-tick sample or, through the uint32 conversion
+	// below, a four-billion-tick one. Clamping here and NOT touching
+	// ptsOffset is deliberate: the clamp is local to this sample, so a
+	// publisher whose clock merely stumbled is back on its own timeline
+	// as soon as it passes what we published, rather than carrying a
+	// permanent shift.
+	if pts < f.pendingPTS+minSampleTicks {
+		pts = f.pendingPTS + minSampleTicks
+	}
 	prev := f.pending
 	duration := uint32(pts - f.pendingPTS)
 	f.lastDuration = duration
@@ -201,22 +263,29 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 		f.segmentStart = pts
 		f.partStart = pts
 		f.nextIsSegmentStart = true
-		f.pending = au
-		f.pendingPTS = pts
+		f.setPending(au, pts)
 		return frag, nil
 
 	case partElapsed >= uint64(f.cfg.PartDuration):
 		frag := f.closePart(uint32(partElapsed))
 		f.partStart = pts
-		f.pending = au
-		f.pendingPTS = pts
+		f.setPending(au, pts)
 		return frag, nil
 
 	default:
-		f.pending = au
-		f.pendingPTS = pts
+		f.setPending(au, pts)
 		return nil, nil
 	}
+}
+
+// setPending holds au as the next sample, published at pts. Off the
+// ordinary path the published instant IS the true one: only a resume
+// after an IdleFlush separates the two (see pendingTruePTS), and that
+// branch sets both itself.
+func (f *Fragmenter) setPending(au *h264.AccessUnit, pts int64) {
+	f.pending = au
+	f.pendingPTS = pts
+	f.pendingTruePTS = pts
 }
 
 // HasPending reports whether an access unit is currently held, waiting for
@@ -225,9 +294,9 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 func (f *Fragmenter) HasPending() bool { return f.pending != nil }
 
 // IdleFlush publishes the currently open part EARLY, without waiting for
-// the next access unit to arrive, stretching the held AU to cover heldTicks
-// (how long that AU has been held, measured on the wall clock and converted
-// into this fragmenter's timescale by the caller).
+// the next access unit to arrive, stretching the held AU to cover
+// heldTicks (how long that AU has been held, measured on the wall clock
+// and converted into this fragmenter's timescale by the caller).
 //
 // WHY THIS EXISTS. Everything else in this file is access-unit driven: a
 // part closes when an AU arrives past the part target, because only the NEXT
@@ -240,42 +309,68 @@ func (f *Fragmenter) HasPending() bool { return f.pending != nil }
 // then demoted the party off the low-latency rung -- for a source that was
 // behaving perfectly normally.
 //
-// The content it publishes is EXACTLY what the ordinary path would have
-// published anyway: `Push` gives the held AU a duration of `next.PTS -
-// held.PTS`, which for a five-second freeze is a five-second sample. This
-// only emits it sooner, so a player's buffer covers the freeze instead of
-// ending at its start. Nothing is duplicated and nothing is invented: one
-// access unit is published exactly once, with the duration it really had.
+// IT IS A LAST RESORT, NOT A CADENCE. The caller (internal/session's
+// idleTick) waits a whole idle allowance -- two part targets, floored at a
+// second -- before it calls this at all, so an ordinary slow source (a
+// slide deck, a paused film, the 1.4 frames/s a static Chrome tab
+// produces) never reaches it: its parts simply close on the next real
+// frame and carry that frame's true duration, which means they may run
+// LONGER than PART-TARGET. That is the honest answer and it is the point.
+// Publishing on a fixed cadence instead means guessing a duration, and a
+// guessed duration is a lie the timeline has to pay for somewhere.
+//
+// WHAT IT PUBLISHES, AND WHY NOTHING IS LOST. The held AU is emitted once,
+// with the duration it really had up to this instant: from where its
+// sample was published (pendingPTS) to where the publisher's clock has
+// reached (pendingTruePTS + heldTicks). The frame that eventually ends the
+// quiet spell opens the next part exactly where this one ended and carries
+// the remainder in ITS duration -- see Push's resume branch. So over any
+// window the media published equals the wall time that passed, whatever
+// the frame rate. Nothing is duplicated and nothing is invented: one
+// access unit, published exactly once, and never a second of wall time
+// dropped.
 //
 // It returns nil (does nothing at all) when there is no held AU, before the
-// session's first IDR, or when heldTicks has not yet reached the part
-// target -- so a caller may tick it as often as it likes.
+// session's first IDR, or when the part target has not been reached -- so a
+// caller may tick it as often as it likes.
 //
 // LIMIT, STATED PLAINLY: this publishes the held AU ONCE per idle episode.
-// A freeze much longer than the part target leaves the video timeline
+// A freeze much longer than the idle allowance leaves the video timeline
 // held at that frame while the audio track (which is paced off the wall
 // clock and so never goes idle) keeps producing parts. Publishing more
 // video parts than that would mean emitting a coded frame the publisher
 // never sent twice, which is only safe for an IDR and is not something
-// this fragmenter does.
+// this fragmenter does. The frame that ends the freeze closes that gap in
+// one part, so the timeline is whole again the moment the source speaks.
 func (f *Fragmenter) IdleFlush(heldTicks int64) *Fragment {
 	if !f.haveFirstIDR || f.pending == nil || heldTicks <= 0 {
 		return nil
 	}
-	nowPTS := f.pendingPTS + heldTicks
+	// Extrapolate from where the held AU really belongs on the
+	// publisher's clock, not from where its sample was published: those
+	// differ for exactly one sample after a previous flush (see
+	// pendingTruePTS), and measuring from the published instant is how
+	// consecutive quiet spells each lost the time between the last
+	// flush and the frame that followed it.
+	from := f.pendingTruePTS
+	if f.pendingPTS > from {
+		from = f.pendingPTS
+	}
+	nowPTS := from + heldTicks
 	partElapsed := nowPTS - f.partStart
 	if partElapsed < int64(f.cfg.PartDuration) {
 		return nil
 	}
+	sampleTicks := nowPTS - f.pendingPTS
 	// A sample duration and a fragment duration are both uint32 ticks, so
 	// refuse rather than wrap. Only reachable if the process was
 	// suspended for hours between ticks (the caller ticks every 100ms and
-	// flushes at the first tick past the part target, so heldTicks is
-	// ordinarily a part target plus a tick). Refusing leaves the access
+	// flushes at the first tick past the idle allowance, so heldTicks is
+	// ordinarily an allowance plus a tick). Refusing leaves the access
 	// unit held, which is exactly the pre-keep-alive behaviour: the
 	// ordinary Push path still gives it its true duration when a frame
 	// finally arrives.
-	if heldTicks > maxFragmentTicks || partElapsed > maxFragmentTicks {
+	if sampleTicks > maxFragmentTicks || partElapsed > maxFragmentTicks {
 		return nil
 	}
 
@@ -283,7 +378,7 @@ func (f *Fragmenter) IdleFlush(heldTicks int64) *Fragment {
 	// for a trailing sample with no successor, and the real inter-frame
 	// gap is a far better estimate of that than however long this
 	// particular freeze happened to last.
-	f.partSamples = append(f.partSamples, toSample(f.pending, uint32(heldTicks)))
+	f.partSamples = append(f.partSamples, toSample(f.pending, uint32(sampleTicks)))
 
 	frag := f.closePart(uint32(partElapsed))
 	f.partStart = nowPTS

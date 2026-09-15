@@ -352,6 +352,24 @@ session writes one stats line every five seconds carrying packets, frames,
 keyframes, PLIs, parts, segments, depacketizer drops and upload latency, so
 the next one of these is read off a line instead of guessed at.
 
+**The keep-alive's first version stole media time, and the same afternoon
+showed it.** It fired on the PART target and re-derived `ptsOffset` on
+resume, which lands the frame that ends a gap exactly on the guess and
+deletes the rest of the gap. A Chrome tab share at ~1.4 frames/s has gaps
+between the 500 ms part target and a second, so every one of them was
+guessed: 15:10–15:15 UTC the video timeline advanced **29.0 s of media in
+53.8 s of wall clock** (0.54) beside audio at 0.98, and every viewer's
+blocking playlist reload eventually timed out. The rule now is that the
+publisher's clock IS the timeline — `ptsOffset` only ever rises, a quiet
+source's part waits for the frame that really ends it and carries that
+frame's true duration (so parts may exceed `PART_MS`, and `state.json`
+reports the real `partTargetMs`), and a keep-alive's guess is paid back
+through the duration of the frame that follows it. `timelineRatio` is on
+the stats line per track, and belongs at 1.00. The watchdog learned the
+same day that a quiet episode ending is not a stall: `idleEndedAt` restarts
+the part-stuck and IDR-gap clocks when the source comes back, because a
+part cannot close until the frame AFTER the first one back arrives.
+
 **Both sweeps get a case for their own rows**, pitfall 13's lesson, which this plan
 may not re-learn. The remux tears down any session in its map whose channel the API
 has not heartbeat about for 60 s; the API tears down any session `/healthz` reports
