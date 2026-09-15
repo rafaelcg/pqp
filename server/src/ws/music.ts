@@ -1,10 +1,12 @@
 import {
+  completeMusicState,
   musicWriteAllowed,
   musicWriteIsStale,
   musicWriteIsStructural,
   type ChannelMusicTrack,
   type MusicRights,
   type MusicState,
+  type MusicStateWrite,
 } from "@pqp/shared";
 import { logEvent } from "../lib/log.js";
 import { createDividedRateLimiter } from "../lib/cluster-rate-limit.js";
@@ -60,11 +62,19 @@ export function musicChannels(): string[] {
   return [...rooms.keys()];
 }
 
-/** What the sidebar is told: the current track, nothing else. */
-export function channelMusicTrack(voiceChannelId: string): ChannelMusicTrack | null {
+/** What the sidebar is told: the current track, and who is listening. */
+export function channelMusicTrack(
+  voiceChannelId: string,
+  listeners?: number,
+): ChannelMusicTrack | null {
   const current = rooms.get(voiceChannelId)?.current;
   return current
-    ? { videoId: current.videoId, title: current.title, thumbnailUrl: current.thumbnailUrl }
+    ? {
+        videoId: current.videoId,
+        title: current.title,
+        thumbnailUrl: current.thumbnailUrl,
+        ...(listeners !== undefined ? { listeners } : {}),
+      }
     : null;
 }
 
@@ -115,27 +125,28 @@ export type MusicWrite =
 
 export function applyMusicWrite(
   voiceChannelId: string,
-  incoming: MusicState | null,
+  incoming: MusicStateWrite | null,
   rights: MusicRights,
 ): MusicWrite {
   const actorUserId = rights.userId;
   const held = getMusicState(voiceChannelId);
-  if (musicWriteIsStale(held, incoming)) {
+  const next = incoming === null ? null : completeMusicState(held, incoming);
+  if (musicWriteIsStale(held, next)) {
     return { kind: "stale", held: held as MusicState };
   }
-  if (!musicWriteAllowed(held, incoming, rights)) {
+  if (!musicWriteAllowed(held, next, rights)) {
     logEvent("voice.musicRefused", { voiceChannelId, userId: actorUserId });
     return { kind: "refused", held };
   }
-  const structural = musicWriteIsStructural(held, incoming);
+  const structural = musicWriteIsStructural(held, next);
   const withinBudget = writeLimiter.take(actorUserId);
   if (!structural && !withinBudget) {
-    if (incoming) {
-      rooms.set(voiceChannelId, incoming);
+    if (next) {
+      rooms.set(voiceChannelId, next);
     }
     return { kind: "coalesced" };
   }
-  if (incoming === null) {
+  if (next === null) {
     endMusic(voiceChannelId);
     return { kind: "accepted", state: null };
   }
@@ -143,9 +154,9 @@ export function applyMusicWrite(
     logEvent("voice.musicStart", {
       voiceChannelId,
       userId: actorUserId,
-      videoId: incoming.current?.videoId ?? null,
+      videoId: next.current?.videoId ?? null,
     });
   }
-  rooms.set(voiceChannelId, incoming);
-  return { kind: "accepted", state: incoming };
+  rooms.set(voiceChannelId, next);
+  return { kind: "accepted", state: next };
 }

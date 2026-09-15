@@ -6,8 +6,14 @@ import {
   getMusicSnapshot,
   moveTrackTo,
   receiveMusic,
+  readdFromHistory,
   resetMusicStoreForTests,
+  setListening,
   setMusicSession,
+  setOpenControls,
+  setRepeat,
+  shuffle,
+  voteSkip,
 } from "./music-store";
 
 const CHANNEL = "11111111-1111-4111-8111-111111111111";
@@ -23,9 +29,11 @@ const resolved = (videoId: string): MusicResolved => ({
 
 describe("music store writes", () => {
   const sent: Array<MusicState | null> = [];
+  const listeningSent: boolean[] = [];
   beforeEach(() => {
     resetMusicStoreForTests();
     sent.length = 0;
+    listeningSent.length = 0;
     setMusicSession({
       channelId: CHANNEL,
       peerId: "peer-a",
@@ -33,6 +41,9 @@ describe("music store writes", () => {
       displayName: "Ana",
       send: (state) => {
         sent.push(state);
+      },
+      sendListening: (listening) => {
+        listeningSent.push(listening);
       },
     });
   });
@@ -80,5 +91,65 @@ describe("music store writes", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(addTrack(resolved("a"))).toBe("no-session");
     expect(getMusicSnapshot().state).toBeNull();
+  });
+
+  it("votes to skip and advances when the room has enough votes", () => {
+    addTrack(resolved("a"));
+    addTrack(resolved("b"));
+    voteSkip(2);
+    expect(getMusicSnapshot().state?.skipVotes).toEqual(["u1"]);
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("a");
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      skipVotes: ["u2"],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    voteSkip(2);
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("b");
+    expect(getMusicSnapshot().state?.skipVotes).toEqual([]);
+  });
+
+  it("writes repeat, openControls, and a shuffled queue", () => {
+    addTracks([resolved("a"), resolved("b"), resolved("c"), resolved("d")]);
+    setRepeat("all");
+    expect(getMusicSnapshot().state?.repeat).toBe("all");
+    setOpenControls(true);
+    expect(getMusicSnapshot().state?.openControls).toBe(true);
+    const before = getMusicSnapshot().state!.queue.map((t) => t.videoId);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    shuffle();
+    const after = getMusicSnapshot().state!.queue.map((t) => t.videoId);
+    expect(after).toHaveLength(before.length);
+    expect(new Set(after)).toEqual(new Set(before));
+    expect(after).not.toEqual(before);
+  });
+
+  it("re-adds a history row as a new track under this user", () => {
+    addTrack(resolved("a"));
+    const finished = getMusicSnapshot().state!.current!;
+    receiveMusic(CHANNEL, {
+      ...getMusicSnapshot().state!,
+      current: {
+        ...finished,
+        id: "other",
+        videoId: "bbbbbbbbbbb",
+        title: "Track bbbbbbbbbbb",
+      },
+      history: [finished],
+      rev: getMusicSnapshot().state!.rev + 1,
+      actorId: "peer-b",
+    });
+    expect(readdFromHistory(finished.id)).toBe("queued");
+    const queued = getMusicSnapshot().state!.queue.at(-1);
+    expect(queued?.videoId).toBe("a");
+    expect(queued?.id).not.toBe(finished.id);
+    expect(queued?.addedByUserId).toBe("u1");
+  });
+
+  it("tells the session when this machine stops listening", () => {
+    setListening(false);
+    expect(getMusicSnapshot().listening).toBe(false);
+    expect(listeningSent).toEqual([false]);
   });
 });
