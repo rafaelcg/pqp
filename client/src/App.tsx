@@ -4504,28 +4504,29 @@ function MainAppContent({
    * says so in words to everyone. The other order would leave a picture going
    * out from a party the room has never been told about.
    */
-  async function handleWatchPartyGoLive(stream: MediaStream | null) {
+  async function handleWatchPartyGoLive(
+    stream: MediaStream | null,
+    lowLatency: boolean,
+  ) {
     const party = currentWatchParty();
     if (!party) {
       return;
     }
     try {
-      // The host's standing "Baixa latência (beta)" preference
-      // (`party.options.lowLatency`, set through the options panel like any
-      // other switch) only reaches the server at THIS moment: `goLive` is
-      // the one write `requestedHlsModeForChannel` ever reads, so a party
-      // going live again always states its own request rather than
-      // inheriting whatever the last one asked for. Re-read from the store
-      // rather than the `party` snapshot captured above: the switch's own
-      // PATCH applies optimistically and synchronously
-      // (`handleWatchPartyOptions`), so a host who flips it and presses Ir
-      // ao vivo in the same beat must not have that press race a `party`
-      // that predates it.
-      const answer = await apiSetWatchPartyState(
-        party.id,
-        "live",
-        currentWatchParty()?.options.lowLatency ?? party.options.lowLatency,
-      );
+      // The host's standing "Baixa latência (beta)" preference only reaches
+      // the server at THIS moment: `goLive` is the one write
+      // `requestedHlsModeForChannel` ever reads, so a party going live again
+      // always states its own request rather than inheriting whatever the
+      // last one asked for. `lowLatency` is a PARAMETER, not re-read from
+      // `currentWatchParty()` here: this function's own await below means
+      // whatever runs after it can be reached with a different channel
+      // selected (Farol, PR #617, third round), and `currentWatchParty()`
+      // answers for the SELECTED channel, not necessarily the party this
+      // press was for. The caller (`watch-party-panel.tsx`) already has the
+      // right `party.options.lowLatency` in its own props at the moment of
+      // the click, which is the only copy of this value that is ever
+      // correct for this specific go-live.
+      const answer = await apiSetWatchPartyState(party.id, "live", lowLatency);
       if (answer.party) {
         watchParties.put(answer.party);
       }

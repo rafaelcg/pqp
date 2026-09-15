@@ -753,13 +753,23 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
    * LOW LATENCY IS A STANDING OPTION, NOT A ONE-OFF ASK. The switch in
    * `watch-party-options.tsx` only ever PATCHes `party.options.lowLatency`;
    * the one place that preference reaches the server's
-   * `channel_sessions.low_latency_requested` column is this call, because
-   * `requestedHlsModeForChannel` is only ever consulted at `goLive`
+   * `channel_sessions.low_latency_requested` column is `goLive`, because
+   * `requestedHlsModeForChannel` is only ever consulted there
    * (`server/src/voice/hls-remux.ts`). A go-live that forgot to forward it
    * would leave the switch doing nothing at all — silently, since the party
    * still goes live, just always on the conventional ladder.
+   *
+   * PASSED AS A PARAMETER, NOT RE-READ FROM SELECTION STATE (Farol, PR #617,
+   * third round). `handleWatchPartyGoLive` awaits `apiSetWatchPartyState`
+   * before anything else runs, so anything after that await can be reached
+   * with a different channel selected; re-querying "whatever party is
+   * current" at that point would answer for the wrong party.
+   * `watch-party-go-live-lowlatency.test.tsx` is the behavioural test for
+   * that (two parties mounted at once, clicking one never reads the
+   * other's value); this one just pins that the parameter, not
+   * `currentWatchParty()`, is what reaches the request.
    */
-  it("forwards the party's lowLatency option on every go-live", () => {
+  it("forwards lowLatency as a parameter, not a fresh read of the selected party", () => {
     const source = readFileSync(
       new URL("../../App.tsx", import.meta.url),
       "utf8",
@@ -768,9 +778,35 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
       source.indexOf("async function handleWatchPartyGoLive"),
       source.indexOf("async function handleWatchPartyReminder"),
     );
+    expect(goLive).toContain(
+      "async function handleWatchPartyGoLive(\n    stream: MediaStream | null,\n    lowLatency: boolean,\n  )",
+    );
     expect(goLive).toContain("apiSetWatchPartyState(");
     expect(goLive).toContain('"live"');
-    expect(goLive).toContain("party.options.lowLatency");
+    expect(goLive).toContain("apiSetWatchPartyState(party.id, \"live\", lowLatency)");
+    // Never reaches back into the store for this value inside the handler.
+    expect(goLive).not.toContain("currentWatchParty()?.options.lowLatency");
+    expect(goLive).not.toContain("currentWatchParty().options.lowLatency");
+  });
+
+  /**
+   * THE PANEL IS WHERE THE VALUE ACTUALLY LIVES. Both places that call
+   * `onGoLive` -- the setup surface's own button and the scheduled card's
+   * "Ir ao vivo" -- read `party.options.lowLatency` off THIS component's own
+   * `party` prop at the moment of the click, which is the only copy of the
+   * value that is guaranteed to be for the party the button belongs to.
+   */
+  it("passes party.options.lowLatency from its own props into onGoLive, at both call sites", () => {
+    const source = readFileSync(
+      new URL("./watch-party-panel.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain(
+      "await props.onGoLive(handing, party.options.lowLatency);",
+    );
+    expect(source).toContain(
+      "onClick={() => void props.onGoLive(null, party.options.lowLatency)}",
+    );
   });
 
   /**

@@ -143,7 +143,17 @@ export interface WatchPartyPanelProps {
   /** Everyone watching, seated or not, presenter excluded. */
   audienceCount: number;
   onCreate: () => void;
-  onGoLive: (stream: MediaStream | null) => Promise<void>;
+  /**
+   * `lowLatency` is `party.options.lowLatency` from THIS component's own
+   * `party` prop, not read back out of global selection state inside the
+   * handler (Farol, PR #617, third round): the handler that ends up in
+   * `App.tsx` runs after an await, by which point a different channel could
+   * be selected, and re-querying "whatever party is current" at that point
+   * would answer for the wrong party. Passing it through the call ties the
+   * value to the party this specific press was for, not to whatever the
+   * sidebar happens to show when the request lands.
+   */
+  onGoLive: (stream: MediaStream | null, lowLatency: boolean) => Promise<void>;
   /**
    * The host putting a picture up on a party that is already live: join the
    * room if needed and open the picker. Without it the waiting screen told
@@ -1239,7 +1249,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       const handing = stream;
       // Handed off, not stopped: the call now owns these tracks.
       setStream(null);
-      await props.onGoLive(handing);
+      await props.onGoLive(handing, party.options.lowLatency);
     } finally {
       setBusy(false);
     }
@@ -1784,7 +1794,7 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             <Button
               type="button"
               className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto"
-              onClick={() => void props.onGoLive(null)}
+              onClick={() => void props.onGoLive(null, party.options.lowLatency)}
               data-watch-party-go-live
             >
               <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
