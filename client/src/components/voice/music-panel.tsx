@@ -79,6 +79,19 @@ export function musicActivityFromDiff(
   return null;
 }
 
+/** Own actions are already visible; only other people's writes get a line. */
+export function musicActivityForViewer(
+  prev: MusicState | null,
+  next: MusicState | null,
+  peerId: string | null,
+): MusicActivityKind | null {
+  const actorId = next?.actorId ?? prev?.actorId ?? null;
+  if (actorId && actorId === peerId) {
+    return null;
+  }
+  return musicActivityFromDiff(prev, next);
+}
+
 function MusicActivityLine({
   voiceState,
   state,
@@ -93,7 +106,7 @@ function MusicActivityLine({
   useEffect(() => {
     const previous = prev.current;
     prev.current = state;
-    const diff = musicActivityFromDiff(previous, state);
+    const diff = musicActivityForViewer(previous, state, voiceState.peerId);
     if (!diff) {
       return;
     }
@@ -204,7 +217,10 @@ export function MusicPanel({
             </Tooltip>
           </div>
 
-          <div className="space-y-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0 text-left text-[11px] tabular-nums text-text-tertiary">
+              {formatMusicClock(position)}
+            </span>
             <Slider
               variant="scrub"
               readOnly={!canManage || !durationKnown}
@@ -213,6 +229,7 @@ export function MusicPanel({
               min={0}
               max={durationKnown ? duration : 1}
               step={250}
+              className="min-w-0 flex-1"
               aria-label={canManage && durationKnown ? t("music.seek") : t("music.progress")}
               onValueChange={(value) => {
                 if (canManage && durationKnown) {
@@ -226,10 +243,9 @@ export function MusicPanel({
                 }
               }}
             />
-            <div className="flex justify-between text-[11px] tabular-nums text-text-tertiary">
-              <span>{formatMusicClock(position)}</span>
-              <span>{formatMusicClockOrUnknown(durationKnown ? duration : null)}</span>
-            </div>
+            <span className="shrink-0 text-right text-[11px] tabular-nums text-text-tertiary">
+              {formatMusicClockOrUnknown(durationKnown ? duration : null)}
+            </span>
           </div>
 
           <div className="flex items-center justify-center gap-2">
@@ -243,46 +259,49 @@ export function MusicPanel({
                 {t("music.tapToPlay")}
               </button>
             ) : (
-              <Tooltip
-                label={playing ? t("music.pause") : t("music.play")}
-                detail={canManage ? undefined : t("music.noManage")}
-              >
-                <button
-                  type="button"
-                  className={cn(
-                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent",
-                    canManage ? "hover:bg-accent-hover" : "opacity-40",
-                  )}
-                  aria-pressed={playing}
-                  aria-disabled={!canManage || undefined}
-                  onClick={() => {
-                    if (canManage) {
-                      onPlayPause();
-                    }
-                  }}
+              <>
+                <span className="inline-flex h-8 w-8 shrink-0" aria-hidden="true" />
+                <Tooltip
+                  label={playing ? t("music.pause") : t("music.play")}
+                  detail={canManage ? undefined : t("music.noManage")}
                 >
-                  {playing ? (
-                    <Pause className="h-4 w-4" aria-hidden="true" />
-                  ) : (
-                    <Play className="ml-0.5 h-4 w-4" aria-hidden="true" />
-                  )}
-                </button>
-              </Tooltip>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent",
+                      canManage ? "hover:bg-accent-hover" : "opacity-40",
+                    )}
+                    aria-pressed={playing}
+                    aria-disabled={!canManage || undefined}
+                    onClick={() => {
+                      if (canManage) {
+                        onPlayPause();
+                      }
+                    }}
+                  >
+                    {playing ? (
+                      <Pause className="h-4 w-4" aria-hidden="true" />
+                    ) : (
+                      <Play className="ml-0.5 h-4 w-4" aria-hidden="true" />
+                    )}
+                  </button>
+                </Tooltip>
+                <Tooltip label={t("music.skip")} detail={canManage ? undefined : t("music.noManage")}>
+                  <button
+                    type="button"
+                    className={cn(ghostIconButton, !canManage && "opacity-40")}
+                    aria-disabled={!canManage || undefined}
+                    onClick={() => {
+                      if (canManage) {
+                        onSkip();
+                      }
+                    }}
+                  >
+                    <SkipForward className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </Tooltip>
+              </>
             )}
-            <Tooltip label={t("music.skip")} detail={canManage ? undefined : t("music.noManage")}>
-              <button
-                type="button"
-                className={cn(ghostIconButton, !canManage && "opacity-40")}
-                aria-disabled={!canManage || undefined}
-                onClick={() => {
-                  if (canManage) {
-                    onSkip();
-                  }
-                }}
-              >
-                <SkipForward className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </Tooltip>
           </div>
 
           <div className="flex min-w-0 items-center gap-2">

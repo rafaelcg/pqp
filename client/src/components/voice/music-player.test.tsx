@@ -11,7 +11,7 @@ import {
 } from "@/lib/music-store";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { MusicBarButton } from "@/components/voice/music-bar-button";
-import { MusicPanel, musicActivityFromDiff } from "@/components/voice/music-panel";
+import { MusicPanel, musicActivityForViewer, musicActivityFromDiff } from "@/components/voice/music-panel";
 import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
 import { shouldReportUnknownDuration } from "@/components/voice/music-player-embed";
 import {
@@ -136,6 +136,14 @@ describe("musicActivityFromDiff", () => {
 
   it("treats a torn-down room as stopped", () => {
     expect(musicActivityFromDiff(state(), null)).toEqual({ kind: "stopped" });
+  });
+
+  it("does not announce the local peer's own actions", () => {
+    const playing = state({ actorId: "peer-me" });
+    expect(musicActivityForViewer(playing, state({ actorId: "peer-me", status: "paused" }), "peer-me")).toBeNull();
+    expect(musicActivityForViewer(playing, state({ actorId: "peer-rafa", status: "paused" }), "peer-me")).toEqual({
+      kind: "paused",
+    });
   });
 });
 
@@ -302,12 +310,14 @@ describe("MusicPanel", () => {
     expect(html).toContain("data-slider=\"scrub\"");
     expect(html).toContain("data-indeterminate");
     expect(html).toContain("–:––");
+    expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*–:––/);
   });
 
   it("lets a manager seek once duration is known", () => {
     const html = renderPanel(180_000);
     expect(html).toContain("data-slider=\"scrub\"");
     expect(html).not.toContain("data-indeterminate");
+    expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
   });
 });
 

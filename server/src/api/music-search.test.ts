@@ -78,6 +78,26 @@ describe("GET /api/music/search", () => {
     expect(stubs.searchMusicCandidates).toHaveBeenCalledWith("legia");
   });
 
+  it("keeps ã and ç in the JSON body", async () => {
+    stubs.searchMusicCandidates.mockResolvedValue([
+      {
+        provider: "youtube",
+        videoId: "bbbbbbbbbbb",
+        title: "Canção da Legião",
+        sourceUrl: null,
+        thumbnailUrl: null,
+        durationMs: 180_000,
+      },
+    ]);
+    const response = await fetch(`${baseUrl}/api/music/search?q=cancao`, {
+      headers: { Authorization: "Bearer test" },
+    });
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(text).toContain("Canção da Legião");
+    expect(JSON.parse(text).tracks[0].title).toBe("Canção da Legião");
+  });
+
   it("answers 400 when q is missing", async () => {
     const res = await call("/api/music/search");
     expect(res.status).toBe(400);

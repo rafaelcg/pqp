@@ -21,7 +21,7 @@ describe("searchMusicCandidates", () => {
     innertube.innertubeSearch.mockResolvedValue([
       {
         videoId: "aaaaaaaaaaa",
-        title: "Primeira",
+        title: "Canção da Legião",
         durationMs: 180_000,
         thumbnailUrl: "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg",
       },
@@ -37,7 +37,7 @@ describe("searchMusicCandidates", () => {
       {
         provider: "youtube",
         videoId: "aaaaaaaaaaa",
-        title: "Primeira",
+        title: "Canção da Legião",
         sourceUrl: null,
         thumbnailUrl: "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg",
         durationMs: 180_000,
