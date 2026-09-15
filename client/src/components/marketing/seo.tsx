@@ -3,6 +3,10 @@ import { useEffect } from "react";
 interface SeoProps {
   title: string;
   description: string;
+  /** Paste-card title. Falls back to `title` when omitted. */
+  ogTitle?: string;
+  /** Paste-card description. Falls back to `description` when omitted. */
+  ogDescription?: string;
   path?: string;
   noIndex?: boolean;
 }
@@ -11,13 +15,23 @@ const SITE_URL = "https://pqp.gg";
 
 
 
-export function Seo({ title, description, path = "/", noIndex = false }: SeoProps) {
+export function Seo({
+  title,
+  description,
+  ogTitle,
+  ogDescription,
+  path = "/",
+  noIndex = false,
+}: SeoProps) {
+  const socialTitle = ogTitle ?? title;
+  const socialDescription = ogDescription ?? description;
+
   useEffect(() => {
     document.title = title;
 
     setMeta("description", description);
-    setMeta("og:title", title, "property");
-    setMeta("og:description", description, "property");
+    setMeta("og:title", socialTitle, "property");
+    setMeta("og:description", socialDescription, "property");
     setMeta("og:url", `${SITE_URL}${path}`, "property");
     setMeta("og:type", "website", "property");
     setMeta("og:image", `${SITE_URL}/images/og-image.jpg`, "property");
@@ -31,8 +45,8 @@ export function Seo({ title, description, path = "/", noIndex = false }: SeoProp
     setLink("alternate", `${SITE_URL}${path}?lang=pt-BR`, "pt-BR");
     setLink("alternate", `${SITE_URL}${path}?lang=en`, "en");
     setMeta("twitter:card", "summary_large_image");
-    setMeta("twitter:title", title);
-    setMeta("twitter:description", description);
+    setMeta("twitter:title", socialTitle);
+    setMeta("twitter:description", socialDescription);
     setMeta("twitter:image", `${SITE_URL}/images/og-image.jpg`);
     setLink("canonical", `${SITE_URL}${path}`);
 
@@ -41,7 +55,7 @@ export function Seo({ title, description, path = "/", noIndex = false }: SeoProp
     } else {
       setMeta("robots", "index, follow");
     }
-  }, [title, description, path, noIndex]);
+  }, [title, description, socialTitle, socialDescription, path, noIndex]);
 
   return null;
 }

@@ -96,6 +96,15 @@ interface PageCopy {
   canonicalPath: string;
   title: Record<MarketingLocale, string>;
   description: Record<MarketingLocale, string>;
+  /**
+   * Paste-card title. When omitted, `title` is reused for og and twitter.
+   * `/tela` is the only page that splits search words from the card.
+   */
+  ogTitle?: Record<MarketingLocale, string>;
+  /**
+   * Paste-card description. When omitted, `description` is reused.
+   */
+  ogDescription?: Record<MarketingLocale, string>;
 }
 
 /**
@@ -131,13 +140,21 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/tela": {
     canonicalPath: "/tela",
     title: {
-      "pt-BR": "Alternativa ao Discord para compartilhar tela | pqp",
-      en: "A Discord alternative for sharing your screen | pqp",
+      "pt-BR": "Compartilhar tela no navegador | pqp",
+      en: "Share your screen in the browser | pqp",
     },
     description: {
       "pt-BR":
-        "Compartilhe a tela com os amigos sem Discord, direto do navegador e com som. Comparação honesta do que funciona hoje no Brasil. Grátis e de código aberto.",
-      en: "Share your screen with friends without Discord, straight from the browser, with audio. An honest comparison of what works today in Brazil. Free and open source.",
+        "Compartilhe a tela com som, direto do navegador. Sem instalar. Funciona no Brasil. Manda o link e a galera entra.",
+      en: "Share your screen with sound, straight from the browser. Nothing to install. Works in Brazil. Send the link and people join.",
+    },
+    ogTitle: {
+      "pt-BR": "Compartilhar tela agora (funciona no BR)",
+      en: "Share your screen now (works in Brazil)",
+    },
+    ogDescription: {
+      "pt-BR": "Abre no navegador. Sem instalar. A galera entra pelo link.",
+      en: "Opens in the browser. Nothing to install. People join from the link.",
     },
   },
   "/beta": {
@@ -396,6 +413,12 @@ export const TELA_FAQ: Record<
 > = {
   "pt-BR": [
     {
+      question:
+        "Por que o compartilhamento de tela do Discord está suspenso no Brasil?",
+      answer:
+        "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord. Esta página é sobre o que dá pra usar agora, não conselho jurídico.",
+    },
+    {
       question: "Precisa baixar alguma coisa?",
       answer:
         "Não. O pqp roda no navegador, no desktop e no Android. Tem app de desktop se você quiser, e um beta de iOS pelo TestFlight, mas nenhum dos dois é obrigatório.",
@@ -427,6 +450,11 @@ export const TELA_FAQ: Record<
     },
   ],
   en: [
+    {
+      question: "Why is Discord screen share suspended in Brazil?",
+      answer:
+        "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement. This page is about what you can use right now, not legal advice.",
+    },
     {
       question: "Do I need to download anything?",
       answer:
@@ -477,7 +505,7 @@ export function escapeHtml(value: string): string {
  * (`applicationCategory`, a zero-price Offer) and, since the redesign, its
  * own FAQPage. `/vs-discord` adds FAQPage too, whose questions are the FAQ
  * section actually rendered on the page — schema for copy a visitor can
- * read, never schema alone. `/tela` does the same with its own six.
+ * read, never schema alone. `/tela` does the same with its own seven.
  */
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
@@ -541,6 +569,8 @@ export function renderMarketingHead(
   const url = `${CANONICAL_ORIGIN}${copy.canonicalPath === "/" ? "/" : copy.canonicalPath}`;
   const title = copy.title[locale];
   const description = copy.description[locale];
+  const ogTitle = copy.ogTitle?.[locale] ?? title;
+  const ogDescription = copy.ogDescription?.[locale] ?? description;
   const image = `${CANONICAL_ORIGIN}/images/og-image.jpg`;
   const e = escapeHtml;
   const langSuffix = url.includes("?") ? "&" : "?";
@@ -555,12 +585,12 @@ export function renderMarketingHead(
     `<meta property="og:type" content="website" />`,
     `<meta property="og:site_name" content="pqp" />`,
     `<meta property="og:url" content="${e(url)}" />`,
-    `<meta property="og:title" content="${e(title)}" />`,
-    `<meta property="og:description" content="${e(description)}" />`,
+    `<meta property="og:title" content="${e(ogTitle)}" />`,
+    `<meta property="og:description" content="${e(ogDescription)}" />`,
     `<meta property="og:image" content="${e(image)}" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
-    `<meta name="twitter:title" content="${e(title)}" />`,
-    `<meta name="twitter:description" content="${e(description)}" />`,
+    `<meta name="twitter:title" content="${e(ogTitle)}" />`,
+    `<meta name="twitter:description" content="${e(ogDescription)}" />`,
     `<meta name="twitter:image" content="${e(image)}" />`,
     `<meta name="robots" content="index, follow" />`,
     // The locale this document was negotiated in, for the client bundle to
