@@ -2511,22 +2511,40 @@ async function relayedLlStillOpen(
   if (inFlight) {
     return inFlight;
   }
+  /**
+   * NEVER BACKWARDS. Two sessions of one channel can be in flight at once
+   * during a turnover, and the older query can land last; letting it stamp
+   * the memo would leave the entry naming a session nobody holds, so the new
+   * one re-queries on every caller until the stale entry expires (a Farol
+   * finding on this PR). The memo is not load-bearing for correctness —
+   * `llVerifyDue` compares the session before trusting it — so the whole cost
+   * of getting this wrong is queries, which is exactly what the memo is for.
+   */
+  const remember = (ttl: number) => {
+    const existing = llVerifiedAt.get(channelId);
+    if (existing && existing.startedAt > stream.startedAt) {
+      return;
+    }
+    // Nor for a session the channel has already moved past: the entry would
+    // be about nothing, and the one slot is the session that IS held.
+    const current = hlsAudience.stream(channelId);
+    if (current && current.startedAt > stream.startedAt) {
+      return;
+    }
+    llVerifiedAt.set(channelId, {
+      startedAt: stream.startedAt,
+      at: Date.now(),
+      ttl,
+    });
+  };
   const query = isHlsSessionOpen(channelId, stream.startedAt)
     .then((answer) => {
       if (!answer.ok) {
-        llVerifiedAt.set(channelId, {
-          startedAt: stream.startedAt,
-          at: Date.now(),
-          ttl: LL_SESSION_VERIFY_BACKOFF_MS,
-        });
+        remember(LL_SESSION_VERIFY_BACKOFF_MS);
         return true;
       }
       if (answer.open) {
-        llVerifiedAt.set(channelId, {
-          startedAt: stream.startedAt,
-          at: Date.now(),
-          ttl: LL_SESSION_VERIFY_MS,
-        });
+        remember(LL_SESSION_VERIFY_MS);
         return true;
       }
       // Only this session's own memo: a newer one installed while the row was
@@ -2612,21 +2630,22 @@ async function resolveChannelStream(
   }
   const relayed = hlsAudience.stream(channelId);
   if (relayed) {
-    if (await relayedLlStillOpen(channelId, relayed)) {
-      // RE-READ, never `relayed`: the check above may have awaited a row, and
-      // a stop or a replacement can have landed in that gap. Whatever is held
-      // NOW is the answer; nothing at all falls through to the row below.
-      const current =
-        liveHlsStreamFor(channelId) ??
-        llStreamFor(channelId) ??
-        hlsAudience.stream(channelId);
-      if (current) {
-        return { stream: current, known: true };
-      }
-    } else {
+    if (!(await relayedLlStillOpen(channelId, relayed))) {
+      // A no-op when the channel moved on while the row was being read; the
+      // re-read below is then the whole of this branch.
       clearEndedLlStream(channelId, relayed);
     }
-    // and fall through: the row below says what, if anything, replaced it.
+    // RE-READ, NEVER `relayed`, EITHER WAY. The check above awaited a row, and
+    // a stop or a replacement can have landed in that gap. Whatever is held
+    // NOW is the answer; only when nothing is held at all does the row below
+    // get asked what, if anything, replaced it.
+    const current =
+      liveHlsStreamFor(channelId) ??
+      llStreamFor(channelId) ??
+      hlsAudience.stream(channelId);
+    if (current) {
+      return { stream: current, known: true };
+    }
   }
   const memo = dbStreamMemo.get(channelId);
   if (

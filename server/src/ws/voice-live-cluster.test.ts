@@ -176,6 +176,19 @@ const llControl: { mode: "conventional" | "ll"; startedAt: number } = {
   startedAt: 0,
 };
 
+/**
+ * A stand-in for the `hls_sessions` row check, so a test can hold one open
+ * across a session turnover. Null leaves the real query in place.
+ */
+const sessionOpenHook: {
+  fn:
+    | null
+    | ((
+        channelId: string,
+        startedAt: number,
+      ) => Promise<{ ok: true; open: boolean } | { ok: false }>);
+} = { fn: null };
+
 interface Frame {
   type: string;
   [key: string]: unknown;
@@ -227,6 +240,10 @@ async function bootInstance(connected = true): Promise<Instance> {
       ...actual,
       isLiveHlsEnabled: () => true,
       isLiveHlsEnabledForServer: async () => true,
+      isHlsSessionOpen: async (channelId: string, startedAt: number) =>
+        sessionOpenHook.fn
+          ? sessionOpenHook.fn(channelId, startedAt)
+          : actual.isHlsSessionOpen(channelId, startedAt),
       setLiveHlsChangeListener: (
         listener: (channelId: string, reason: string) => void,
       ) => {
@@ -428,6 +445,7 @@ describeDb("watch party stream and state across two instances", () => {
     accessGate.blockFrom = 0;
     llControl.mode = "conventional";
     llControl.startedAt = 0;
+    sessionOpenHook.fn = null;
     vi.spyOn(console, "log").mockImplementation(() => {});
     await pools[0]!
       .getPool()
@@ -1161,6 +1179,84 @@ describeDb("watch party stream and state across two instances", () => {
       // Nothing said, because nothing changed.
       expect(frames(sidebarOnB, "channel-live")).toHaveLength(1);
       expect(logLines("voice.hlsLlStreamCleared")).toHaveLength(0);
+    });
+
+    it("an older session's late verification does not overwrite the newer session's memo", async () => {
+      // Two sessions of one channel can be in flight at once during a
+      // turnover, and the older row read can land last. It must not stamp the
+      // memo: the entry would name a session nobody holds, so the one that IS
+      // held would go back to the database on every welcome, keyframe,
+      // re-mint and `GET /live` until the stale entry expired.
+      const channel = await plantChannel();
+      const first = Date.now();
+      const second = first + 1_000;
+      llControl.mode = "ll";
+      llControl.startedAt = first;
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = watcher(b);
+
+      const asked: number[] = [];
+      let releaseFirst: () => void = () => {};
+      const firstHeld = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      sessionOpenHook.fn = async (_channelId, startedAt) => {
+        asked.push(startedAt);
+        if (startedAt === first) {
+          await firstHeld;
+        }
+        return { ok: true, open: true };
+      };
+
+      const host = await join(a, randomUUID(), channel);
+      await setSharing(a, host, true);
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 1,
+        "the first LL stream on B",
+      );
+
+      // B starts asking about the first session, and the row read hangs.
+      const pending = b.voice.getChannelLiveState(channel);
+      await waitFor(() => asked.length === 1, "the first row read");
+
+      // The party turns over while that query is still in flight.
+      await setSharing(a, host, false);
+      llControl.startedAt = second;
+      await setSharing(a, host, true);
+      await waitFor(
+        () =>
+          (
+            frames(sidebarOnB, "channel-live").at(-1)!.stream as
+              | LiveHlsStream
+              | null
+          )?.startedAt === second,
+        "the second LL stream on B",
+      );
+
+      // B verifies the SECOND session, which answers at once and is memoised.
+      expect((await b.voice.getChannelLiveState(channel)).stream?.startedAt).toBe(
+        second,
+      );
+      expect(asked).toEqual([first, second]);
+
+      // Now the first session's read finally lands. It must change nothing.
+      releaseFirst();
+      const late = await pending;
+      expect(late.stream?.startedAt).toBe(second);
+
+      // The proof the memo still names the second session: nothing asks again.
+      expect((await b.voice.getChannelLiveState(channel)).stream?.startedAt).toBe(
+        second,
+      );
+      expect(asked).toEqual([first, second]);
+      // The turnover's own stop is logged (`no-share`, from A); the late read
+      // is not allowed to add a `row-ended` on top of it.
+      expect(
+        logLines("voice.hlsLlStreamCleared").filter((line) =>
+          line.includes("reason=row-ended"),
+        ),
+      ).toHaveLength(0);
     });
 
     it("a demotion replaces the LL stream with the conventional one in one fan-out", async () => {
