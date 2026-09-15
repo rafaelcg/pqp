@@ -6,6 +6,7 @@ import {
   MAX_ACTIVE_POLL_LOOPS,
   MAX_POLL_STATE_ENTRIES,
   MAX_WAITERS_PER_RENDITION,
+  VIDEO_RUNG_HOLD_BUDGET_MS,
   awaitBlockingReload,
   handleBlockingReload,
   isMsnPartAvailable,
@@ -14,6 +15,7 @@ import {
   parseLiveEdge,
   resetBlockingReloadStateForTests,
 } from "../src/hls-blocking-reload.js";
+import { LL_AUDIO_RUNG, LL_VIDEO_RUNG } from "../src/ll-state.js";
 
 /**
  * A fake wall clock: `sleep(ms)` advances it and resolves on the next
@@ -349,6 +351,73 @@ test("awaitBlockingReload: times out at 3x the part target and returns the curre
   assert.equal(outcome.playlist.status, 200);
 
   const expectedTimeoutMs = 30 * 3; // PLAYLIST_A_FAST's PART-TARGET is 0.03s
+  assert.ok(elapsed >= expectedTimeoutMs, `expected at least ${expectedTimeoutMs}ms, took ${elapsed}ms`);
+  assert.ok(elapsed < expectedTimeoutMs + 300, `expected close to ${expectedTimeoutMs}ms (real-timer slack), took ${elapsed}ms`);
+  assert.ok(fetchCalls >= 2, "should have polled more than once before giving up");
+});
+
+test("VIDEO_RUNG_HOLD_BUDGET_MS is pinned at 6s -- the remux's ~5s worst case plus margin", () => {
+  assert.equal(VIDEO_RUNG_HOLD_BUDGET_MS, 6_000);
+});
+
+test("awaitBlockingReload: the video rung (deps.rung === LL_VIDEO_RUNG) outlives the plain 3x-part-target formula's deadline", async () => {
+  resetBlockingReloadStateForTests();
+  // Real timers on purpose (no `now`/`sleep` injected), like the other
+  // multi-tick real-timer tests above -- the fake clock's `sleep` advances
+  // its clock synchronously at CALL time, which makes it unsuitable for
+  // racing a several-second deadline against an instantly-resolving fetch
+  // (the fetch's `.then` always wins the microtask race before the
+  // "deadline" promise's own `.then` ever gets a turn). A real ~6s wait to
+  // prove the exact budget is too slow for a unit suite, so this proves the
+  // FIX (not timing out around the old ~1.5s formula, which is exactly what
+  // stalled production on 2026-09-15) by holding past that mark and then
+  // aborting, rather than waiting out the full budget.
+  const controller = new AbortController();
+  const deps = {
+    // PLAYLIST_A's PART-TARGET is 0.5s, so the plain formula (3x) would have
+    // timed this out at ~1500ms before this change.
+    fetchRendition: async () => toFetched(PLAYLIST_A),
+    rung: LL_VIDEO_RUNG,
+    signal: controller.signal,
+  };
+
+  // msn 103 is never satisfied by PLAYLIST_A (live edge 101) and is not too
+  // far ahead (101 + 2 = 103), so this holds until aborted or timed out.
+  const pending = awaitBlockingReload("rendition-video-real-budget", { msn: 103 }, deps);
+  let settled = false;
+  pending.then(() => {
+    settled = true;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 1_800));
+  assert.equal(
+    settled,
+    false,
+    "the video rung must still be held at ~1.8s -- the plain formula would already have timed it out by ~1.5s",
+  );
+
+  controller.abort();
+  const outcome = await pending;
+  assert.equal(outcome.kind, "aborted");
+});
+
+test("awaitBlockingReload: the audio rung (LL_AUDIO_RUNG) keeps the plain 3x-part-target formula, unlike the video rung", async () => {
+  resetBlockingReloadStateForTests();
+  let fetchCalls = 0;
+  const deps = {
+    fetchRendition: async () => {
+      fetchCalls += 1;
+      return toFetched(PLAYLIST_A_FAST);
+    },
+    rung: LL_AUDIO_RUNG,
+  };
+
+  const start = Date.now();
+  const outcome = await awaitBlockingReload("rendition-audio-budget", { msn: 103 }, deps);
+  const elapsed = Date.now() - start;
+  assert.equal(outcome.kind, "timeout");
+
+  const expectedTimeoutMs = 30 * 3; // PLAYLIST_A_FAST's PART-TARGET is 0.03s, unaffected by the video budget
   assert.ok(elapsed >= expectedTimeoutMs, `expected at least ${expectedTimeoutMs}ms, took ${elapsed}ms`);
   assert.ok(elapsed < expectedTimeoutMs + 300, `expected close to ${expectedTimeoutMs}ms (real-timer slack), took ${elapsed}ms`);
   assert.ok(fetchCalls >= 2, "should have polled more than once before giving up");

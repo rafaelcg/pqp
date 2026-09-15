@@ -180,7 +180,35 @@
  *    capability itself, so nothing changes for a client that never asks.
  *  - `EXT-X-PART` / `EXT-X-PRELOAD-HINT` playlist generation — also L2.2.
  *  - Serving PART byte ranges themselves through this Worker — L2.3.
+ *
+ * IMPORTS `LL_VIDEO_RUNG` FROM `ll-state.js`, NOTHING ELSE. That module has
+ * no imports of its own, so this stays a one-way, non-circular edge purely
+ * to reuse the ONE constant that names the video rung, rather than
+ * hardcoding the string `"ll"` a second time here.
+ *
+ * THE VIDEO RUNG'S HOLD BUDGET IS NOT THE PLAIN 3x-PART-TARGET FORMULA. PR
+ * #629 (merged b06cf621, `tools/pqp-remux`) made the remux honest about a
+ * quiet video source: on a static tab share a video part may take up to ~1s
+ * to appear, and after a genuine freeze the next video part waits on the
+ * keyframe gate -- a PLI every 4s, answered in ~1s -- so the next part can be
+ * ~5s away. The plain formula (3 x the 500ms default PART-TARGET = 1.5s) is
+ * nowhere near that, and it timed out in production
+ * (`hlsEdge.blockingReloadTimeout`, 2026-09-15 15:10:40 UTC), stalling the
+ * player. `VIDEO_RUNG_HOLD_BUDGET_MS` replaces the formula for exactly the
+ * VIDEO rung (`ll`, `LL_VIDEO_RUNG`) with a flat 6s -- the ~5s worst case
+ * plus margin, still well inside RFC 8216bis's own ceiling of
+ * `3 x TARGETDURATION` (~18s here). See that constant's own doc comment for
+ * the mechanics: it replaces the deadline calculation only, never the poll
+ * cadence (`currentPollIntervalMs`, unchanged), and it is never
+ * "provisional" the way the plain formula's deadline is -- there is nothing
+ * to correct once a real `PART-TARGET` is known, because the video budget
+ * never depended on it. `ll-audio` (`LL_AUDIO_RUNG`) never idles this way and
+ * keeps the plain formula, and so does the conventional (non-LL) path, which
+ * never reaches this file at all regardless (see "THE PROBLEM THIS
+ * REPLACES" above).
  */
+
+import { LL_VIDEO_RUNG } from "./ll-state.js";
 
 /** Query parameter names, verbatim from RFC 8216bis §6.2.5.2. */
 export const HLS_MSN_PARAM = "_HLS_msn";
@@ -196,8 +224,23 @@ export const HLS_PART_PARAM = "_HLS_part";
  */
 export const DEFAULT_PART_TARGET_SECONDS = 0.5;
 
-/** The hold's hard timeout, in units of the target part duration, per L2.1's spec. */
+/** The hold's hard timeout, in units of the target part duration, per L2.1's spec. Used for every rendition except the video rung -- see `VIDEO_RUNG_HOLD_BUDGET_MS`. */
 const TIMEOUT_PART_MULTIPLIER = 3;
+
+/**
+ * The VIDEO rung's (`ll`, `LL_VIDEO_RUNG`) own hold budget, replacing
+ * `TIMEOUT_PART_MULTIPLIER x PART-TARGET` for that one rendition. See the
+ * module doc comment, "THE VIDEO RUNG'S HOLD BUDGET IS NOT THE PLAIN
+ * 3x-PART-TARGET FORMULA", for the full derivation -- in short: a quiet tab
+ * share's next video part can lag up to ~1s, and a part that follows a
+ * genuine freeze waits on a PLI/keyframe round trip (a PLI every 4s,
+ * answered in ~1s), putting the next part as much as ~5s away. 6s is that
+ * ~5s worst case plus margin, and still comfortably inside RFC 8216bis's own
+ * ceiling of `3 x TARGETDURATION` (~18s at this deployment's 4s
+ * TARGETDURATION). `ll-audio` never idles this way and keeps the plain
+ * multiplier above.
+ */
+export const VIDEO_RUNG_HOLD_BUDGET_MS = 6_000;
 
 /** Guards against a pathological (zero or tiny) PART-TARGET turning the poll loop into a busy-wait. */
 const MIN_POLL_INTERVAL_MS = 20;
@@ -490,6 +533,7 @@ export function isMsnTooFarAhead(edge, requested) {
  *   signal?: AbortSignal,
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
+ *   rung?: string,
  * }} BlockingReloadDeps
  */
 
@@ -624,12 +668,15 @@ function insertPollState(key, state) {
 /**
  * Holds one request's Promise open until `renditionKey`'s playlist advances
  * to contain `requested`, the request turns out to be too far ahead of the
- * live edge, the caller's `signal` aborts, or `TIMEOUT_PART_MULTIPLIER` part
- * durations pass — whichever comes first. Never issues an origin fetch
- * itself; every fetch goes through `deps.fetchRendition`, which `index.ts`
- * wires to its existing single-flight `fetchRenditionCoalesced`, so this
- * function's only job is deciding WHEN to call that closure and WHO to wake
- * up with the result.
+ * live edge, the caller's `signal` aborts, or the hold's own deadline passes
+ * — whichever comes first. That deadline is `TIMEOUT_PART_MULTIPLIER` part
+ * durations for every rendition except `deps.rung === LL_VIDEO_RUNG`, which
+ * gets the flat `VIDEO_RUNG_HOLD_BUDGET_MS` instead — see the module doc
+ * comment, "THE VIDEO RUNG'S HOLD BUDGET IS NOT THE PLAIN 3x-PART-TARGET
+ * FORMULA". Never issues an origin fetch itself; every fetch goes through
+ * `deps.fetchRendition`, which `index.ts` wires to its existing
+ * single-flight `fetchRenditionCoalesced`, so this function's only job is
+ * deciding WHEN to call that closure and WHO to wake up with the result.
  *
  * @param {string} renditionKey
  * @param {BlockingReloadDirectives} requested
@@ -718,7 +765,19 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
   // `partTargetSeconds`, unlike the rest of `lastEdge`, is trusted even when
   // stale -- see the module doc comment, "PROVISIONAL TIMEOUTS".
   const knownPartTargetSeconds = state.lastEdge?.partTargetSeconds ?? null;
-  const timeoutMs = currentPollIntervalMs(state.lastEdge) * TIMEOUT_PART_MULTIPLIER;
+  // The video rung gets a flat, larger budget instead of the plain formula
+  // -- see the module doc comment, "THE VIDEO RUNG'S HOLD BUDGET IS NOT THE
+  // PLAIN 3x-PART-TARGET FORMULA", and `VIDEO_RUNG_HOLD_BUDGET_MS`'s own doc
+  // comment. Every other rendition (including `ll-audio` and the
+  // conventional path) is unaffected: `deps.rung` is only ever
+  // `LL_VIDEO_RUNG` for a request `index.ts` already identified as the video
+  // rendition (`context.rung` in `handleBlockingReload`, forwarded here
+  // unchanged), and every existing caller that does not pass `rung` at all
+  // (tests, and any future caller) keeps today's formula exactly.
+  const isVideoRung = deps.rung === LL_VIDEO_RUNG;
+  const timeoutMs = isVideoRung
+    ? VIDEO_RUNG_HOLD_BUDGET_MS
+    : currentPollIntervalMs(state.lastEdge) * TIMEOUT_PART_MULTIPLIER;
 
   return new Promise((resolve, reject) => {
     /** @type {Waiter} */
@@ -745,7 +804,12 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
       requested,
       registeredAt: nowMs,
       deadlineAt: nowMs + timeoutMs,
-      provisional: knownPartTargetSeconds === null,
+      // The video rung's deadline never needs correcting -- it does not
+      // depend on `PART-TARGET` in the first place, unlike the plain
+      // formula's provisional guess (see "PROVISIONAL TIMEOUTS"). Marking it
+      // non-provisional keeps `fixProvisionalDeadlines` from ever touching
+      // it once a real `PART-TARGET` becomes known.
+      provisional: !isVideoRung && knownPartTargetSeconds === null,
       settle,
       fail,
     };
@@ -1041,7 +1105,11 @@ export function resetBlockingReloadStateForTests() {
 export async function handleBlockingReload(renditionKey, directives, fetchRendition, logEvent, context, signal) {
   let outcome;
   try {
-    outcome = await awaitBlockingReload(renditionKey, directives, { fetchRendition, signal });
+    // `context.rung` is what selects `VIDEO_RUNG_HOLD_BUDGET_MS` over the
+    // plain formula inside `awaitBlockingReload` -- see that function and
+    // the module doc comment, "THE VIDEO RUNG'S HOLD BUDGET IS NOT THE
+    // PLAIN 3x-PART-TARGET FORMULA".
+    outcome = await awaitBlockingReload(renditionKey, directives, { fetchRendition, signal, rung: context.rung });
   } catch {
     logEvent("hlsEdge.blockingReloadOriginError", { channelId: context.channelId, rung: context.rung });
     return new Response("Origin fetch failed", {
