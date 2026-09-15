@@ -944,6 +944,32 @@ describeDb("hls_sessions ownership across two API machines", () => {
       );
     });
 
+    it("a co-host taking over is not served the previous presenter's answer", async () => {
+      // The five-second decision cache exists so a room filling up does not
+      // put a row read and a `ListEgress` behind every join. It is keyed by
+      // the presenter too, because every answer it caches is about one person:
+      // a `stand-down` decided while one host was sharing says nothing about
+      // the next, and serving it would make a handover wait for no reason.
+      await heartbeat(machineA, 2);
+      await liveLadderRows(machineA);
+      const { start } = boxRunning(["EG_low", "EG_high", "EG_mic"]);
+
+      // The owner is alive, so this presenter stands down and nothing starts.
+      expect(await reconcileLiveHls(channelA, PRESENTER, serverA)).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+
+      // A second later, somebody else is presenting. Same channel, same
+      // window: a channel-keyed cache would hand them the stand-down.
+      const stream = await reconcileLiveHls(channelA, "peer-co-host", serverA);
+
+      expect(start).toHaveBeenCalled();
+      expect(stream?.startedAt).not.toBe(STARTED_AT);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsResumeNotAdopted",
+        expect.objectContaining({ kind: "fresh", reason: "presenter-changed" }),
+      );
+    });
+
     it("with VOICE_REGISTRY off, a single process still adopts its own leftovers", async () => {
       // The self-host: one process, no heartbeats worth reading. A row naming
       // a previous boot must not make a live transcode unadoptable.

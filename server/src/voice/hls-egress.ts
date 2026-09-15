@@ -1682,8 +1682,14 @@ interface BoxCountOptions {
    * a second time to price the ladder (a Farol finding on this PR). Already
    * filtered to alive by `listActiveEgresses`, which changes no verdict here:
    * `healthFromListing` answers "ended" for an id the listing does not carry.
+   *
+   * `null` is the OTHER half of that saving, and it is not the same as
+   * omitting the field: it says the caller already tried to list the box and
+   * could not. Listing again on the same tick would only fail again, one
+   * serial RPC later, so the count falls straight back to the in-process
+   * floor -- which is exactly what its own failure branch does.
    */
-  listing?: EgressListing[];
+  listing?: EgressListing[] | null;
 }
 
 /** What `planSupersededEgresses` worked out, for one start. */
@@ -1868,6 +1874,11 @@ export async function activeBoxEgressCount(
   options: BoxCountOptions = {},
 ): Promise<number> {
   const localFloor = runningRungCount(options);
+  if (options.listing === null) {
+    // The caller already asked the media server and it could not answer. See
+    // `BoxCountOptions.listing`.
+    return localFloor;
+  }
   const egress = getEgress();
   if (!egress?.listEgress && !options.listing) {
     return localFloor;
@@ -3260,7 +3271,8 @@ type ResumeAdoption =
   | { kind: "stand-down"; reason: string };
 
 /**
- * The last non-adopted answer per channel, and when it was decided.
+ * The last non-adopted answer per channel AND PRESENTER, and when it was
+ * decided.
  *
  * `reconcileLiveHlsNow` reaches the adoption on EVERY roster event for a
  * channel with a local sharer and no local room. An adoption that succeeds is
@@ -3271,12 +3283,26 @@ type ResumeAdoption =
  * `ListEgress` behind every join and leave in the room. Five seconds is
  * shorter than any of those conditions lasts and longer than a burst of
  * roster events, so a party joining en masse asks once.
+ *
+ * THE PRESENTER IS PART OF THE KEY (a Farol finding on this PR). Every answer
+ * this function gives is about one person: `presenter-changed` is literally a
+ * comparison against them, and a `stand-down` decided while A was sharing says
+ * nothing about B. Keyed by the channel alone, a co-host taking over inside
+ * the window would be served A's answer and wait five seconds for a party that
+ * is ready now.
  */
 const resumeDecisionCache = new Map<
   string,
   { at: number; decision: ResumeAdoption }
 >();
 const RESUME_DECISION_TTL_MS = 5_000;
+/**
+ * Sweep only past this many entries, not on every miss. The sweep is O(size)
+ * and a burst of first-time channels would otherwise be quadratic in it; past
+ * this the map is worth walking once, and below it the whole thing is smaller
+ * than the sweep's own bookkeeping.
+ */
+const RESUME_DECISION_MAX_ENTRIES = 128;
 
 /** One open `hls_sessions` row, as the resume adoption below reads it. */
 interface OpenHlsSessionRow {
@@ -3331,17 +3357,20 @@ export async function adoptRunningLiveHlsSession(
   if (!isLiveHlsEnabled() || rooms.has(channelId)) {
     return { kind: "fresh" };
   }
-  const cached = resumeDecisionCache.get(channelId);
+  const decisionKey = `${channelId}:${presenterPeerId}`;
+  const cached = resumeDecisionCache.get(decisionKey);
   if (cached && now - cached.at < RESUME_DECISION_TTL_MS) {
     return cached.decision;
   }
   const remember = (decision: ResumeAdoption): ResumeAdoption => {
-    for (const [seen, entry] of resumeDecisionCache) {
-      if (now - entry.at >= RESUME_DECISION_TTL_MS) {
-        resumeDecisionCache.delete(seen);
+    if (resumeDecisionCache.size > RESUME_DECISION_MAX_ENTRIES) {
+      for (const [seen, entry] of resumeDecisionCache) {
+        if (now - entry.at >= RESUME_DECISION_TTL_MS) {
+          resumeDecisionCache.delete(seen);
+        }
       }
     }
-    resumeDecisionCache.set(channelId, { at: now, decision });
+    resumeDecisionCache.set(decisionKey, { at: now, decision });
     return decision;
   };
   let rows: OpenHlsSessionRow[];
@@ -4880,7 +4909,10 @@ async function startRoom(
     // stop; its listing is reused so the box is not listed twice.
     runningRungs: await activeLadderEgressCount({
       supersededEgressIds: supersede.egressIds,
-      ...(supersede.listing ? { listing: supersede.listing } : {}),
+      // Including `null`, which says "already asked, could not be answered"
+      // rather than "not asked": a second `ListEgress` on the same tick would
+      // only fail again.
+      listing: supersede.listing,
     }),
     sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
     ladderBudgetMbps: ladderBudgetMbps(),
