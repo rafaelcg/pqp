@@ -372,3 +372,19 @@ func AudioSegments(videoSegments int) int {
 	}
 	return videoSegments * audioRingHeadroom
 }
+
+// LastSegmentIndex returns the index of the newest segment this ring
+// holds -- the one still open, in a live session -- and false when
+// nothing has been pushed yet. It exists so a caller can name that
+// segment without asking the FRAGMENTER for it: a fragmenter is not safe
+// for concurrent use and a shutdown path may be racing the goroutine that
+// owns it, while this answer is taken under the ring's own lock (Farol
+// review, PR #623; internal/session.Close).
+func (r *Ring) LastSegmentIndex() (int, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.segments) == 0 {
+		return 0, false
+	}
+	return r.segments[len(r.segments)-1].index, true
+}

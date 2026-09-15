@@ -538,3 +538,62 @@ func TestSession_CloseFlushesThePartStillAccumulating(t *testing.T) {
 		t.Fatal("the flushed part never reached the audio ring")
 	}
 }
+
+// TestSession_CloseDoesNotTouchTheFragmenterAfterADrainTimeout is Farol's
+// finding on PR #623. Close waits a BOUNDED time for the audio reader to
+// drain, then carries on -- and the flush the PART_MS batching added is
+// only safe once that reader has actually returned, because
+// AudioFragmenter is explicitly not safe for concurrent use. On the
+// timeout branch the reader may still be inside Push, so Close must
+// leave the fragmenter alone entirely. Run under -race, this is the test
+// that would report the race the finding describes.
+func TestSession_CloseDoesNotTouchTheFragmenterAfterADrainTimeout(t *testing.T) {
+	origDeadline := audioCloseFlushDeadline
+	audioCloseFlushDeadline = 50 * time.Millisecond
+	t.Cleanup(func() { audioCloseFlushDeadline = origDeadline })
+
+	var mu sync.Mutex
+	var built []*fakeEncoder
+	withFakeEncoderFactory(t, func(ctx context.Context, cfg aacenc.Config) (remuxEncoder, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		// Close() that does NOT close Frames(): the reader goroutine
+		// stays blocked, which is exactly the stuck-downstream case the
+		// deadline exists for.
+		fe := newFakeEncoder()
+		fe.closed = true
+		built = append(built, fe)
+		return fe, nil
+	})
+
+	s := New(45000, 360000, ring.New(6, 90000), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	audioRing := ring.New(6, 48000)
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: audioRing, PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
+		t.Fatalf("EnableAudio: %v", err)
+	}
+
+	mu.Lock()
+	fe := built[0]
+	mu.Unlock()
+
+	// Two frames in, sitting inside the fragmenter's open part.
+	for i := 0; i < 2; i++ {
+		fe.frames <- aacenc.Frame{Data: []byte{byte(i), 0x21}}
+	}
+	waitFor(t, 2*time.Second, func() bool { return s.audioNextPTS.Load() == 2*aacenc.SamplesPerFrame })
+
+	cancel()
+	s.Close() // times out waiting for the reader, which is still parked on Frames()
+
+	if got := s.audioPartsWritten.Load(); got != 0 {
+		t.Fatalf("audioPartsWritten = %d: Close flushed the fragmenter while the reader could still be pushing into it", got)
+	}
+
+	// Let the reader out so the goroutine does not outlive the test.
+	fe.mu.Lock()
+	close(fe.frames)
+	fe.mu.Unlock()
+}

@@ -505,10 +505,22 @@ func (s *Session) Close() {
 	// tail of the audio track. Bounded (not "wait forever") for the same
 	// reason r2.Writer.Close is: shutdown must complete even if something
 	// downstream is unexpectedly stuck.
+	//
+	// drained records whether that wait actually SUCCEEDED, which is a
+	// different question from whether it finished, and the difference is
+	// load bearing: the only thing that makes audioFrag safe to touch
+	// from this goroutine is the reader having returned (AudioFragmenter
+	// is explicitly not safe for concurrent use, and audioClosed --
+	// already set above, under audioMu -- is what stops a replacement
+	// reader from ever starting). On the timeout branch the reader may
+	// still be inside Push, so nothing below may look at the fragmenter
+	// at all. Farol review, PR #623.
+	drained := true
 	if readerDone != nil {
 		select {
 		case <-readerDone:
 		case <-time.After(audioCloseFlushDeadline):
+			drained = false
 			log.Printf("pqp-remux: timed out after %s waiting for the audio reader to drain during shutdown; the final segment may be incomplete", audioCloseFlushDeadline)
 		}
 	}
@@ -517,20 +529,32 @@ func (s *Session) Close() {
 	// open) segment, in the same sense Finish does for video: nothing
 	// else will ever start a *next* segment to trigger the ordinary
 	// roll-over upload.
-	if s.audioFrag != nil {
+	if s.audioFrag == nil {
+		return
+	}
+	if drained {
 		// Drain the part still accumulating inside the fragmenter
 		// BEFORE uploading the final segment: since parts batch to
 		// PART_MS, up to half a second of already-encoded audio is held
 		// there at any instant, and it belongs in the segment this
-		// upload is about to seal. Safe to touch audioFrag from this
-		// goroutine only because the wait above proves the one goroutine
-		// that ever calls Push has returned, and audioClosed (set under
-		// audioMu, checked under it by recoverAudioEncoder) proves no
-		// replacement reader can start.
+		// upload is about to seal. Only reachable with drained true --
+		// see its declaration.
 		if frag := s.audioFrag.Flush(); frag != nil {
 			s.publishAudioPart(frag)
 		}
-		s.uploadAudioSegment(s.audioFrag.CurrentSegmentIndex())
+	}
+	// Which segment to upload is asked of the RING, not of the
+	// fragmenter. The ring answers under its own lock, so this is
+	// correct on the timeout branch too -- where the racing reader is
+	// also the thing still pushing into it, and the ring's own last
+	// segment is exactly as up to date as that reader has managed to
+	// make it. (It used to be audioFrag.CurrentSegmentIndex(), an
+	// unsynchronized read of the same not-concurrency-safe type.)
+	if s.audioRing == nil {
+		return
+	}
+	if index, ok := s.audioRing.LastSegmentIndex(); ok {
+		s.uploadAudioSegment(index)
 	}
 }
 
@@ -556,7 +580,11 @@ func (s *Session) publishAudioPart(frag *pipeline.Fragment) {
 // finish draining the encoder's final output. Generous next to a single
 // AAC frame's own cadence (~21ms) but still short enough not to
 // meaningfully delay process shutdown if the reader is ever stuck.
-const audioCloseFlushDeadline = 5 * time.Second
+//
+// A var, not a const, only so a test can exercise the TIMEOUT branch --
+// the one where Close must not touch the fragmenter at all -- without
+// spending five real seconds on it. Production never assigns it.
+var audioCloseFlushDeadline = 5 * time.Second
 
 // publish is HandleVideoPacket and Finish's shared tail: a fragment is
 // only written into the ring once a valid init segment exists. Publishing
