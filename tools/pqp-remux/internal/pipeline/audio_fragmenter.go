@@ -45,6 +45,9 @@ type AudioFragmenter struct {
 
 	segmentStart int64
 	nextPTS      int64
+	// started is false until the first Push -- see Push's own comment on
+	// why "have the counters moved" is not the same question.
+	started bool
 }
 
 // NewAudioFragmenter returns an AudioFragmenter using cfg. The first
@@ -63,6 +66,21 @@ func NewAudioFragmenter(cfg AudioConfig) *AudioFragmenter {
 // after NewAudioFragmenter and before the first Push.
 func (f *AudioFragmenter) SetStartSegmentIndex(index int) { f.segmentIndex = index }
 
+// SetStartSequence is the audio counterpart of
+// pipeline.Fragmenter.SetStartSequence -- see that method's doc comment
+// for why a replacement pipeline must not hand out part names its
+// predecessor already used. Call it, if at all, immediately after
+// NewAudioFragmenter and before the first Push.
+func (f *AudioFragmenter) SetStartSequence(next uint32) {
+	if next > 0 {
+		f.seq = next - 1
+	}
+}
+
+// CurrentSequence returns the sequence number of the LAST part this
+// AudioFragmenter emitted (0 before the first one).
+func (f *AudioFragmenter) CurrentSequence() uint32 { return f.seq }
+
 // Push feeds one AAC frame (aacenc.SamplesPerFrame samples, already
 // stripped of its ADTS header) at pts (in Timescale ticks -- the caller's
 // own running sample counter, so consecutive calls are expected to differ
@@ -70,8 +88,16 @@ func (f *AudioFragmenter) SetStartSegmentIndex(index int) { f.segmentIndex = ind
 // video Fragmenter, there is no "waiting for the first IDR" state to pass
 // through first.
 func (f *AudioFragmenter) Push(pts int64, durationTicks uint32, data []byte) *Fragment {
-	if f.segmentIndex == 0 && f.seq == 0 && f.nextIsSegmentStart {
+	if !f.started {
+		// The first frame anchors the first segment, whatever the
+		// counters say. This used to test `segmentIndex == 0 && seq == 0`,
+		// which is only true for a session's FIRST pipeline: after a
+		// watchdog restart resumes either counter past zero, the anchor
+		// was never set, segmentStart stayed 0, and the replacement's
+		// very first frame rolled the segment immediately because
+		// `nextPTS - 0` is already past any target.
 		f.segmentStart = pts
+		f.started = true
 	}
 
 	f.seq++

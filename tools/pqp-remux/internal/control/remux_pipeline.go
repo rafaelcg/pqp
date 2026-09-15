@@ -101,6 +101,9 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 	if cfg.StartVideoSegmentIndex > 0 {
 		sess.SetStartSegmentIndex(cfg.StartVideoSegmentIndex)
 	}
+	if cfg.StartVideoPartSeq > 0 {
+		sess.SetStartPartSequence(cfg.StartVideoPartSeq)
+	}
 
 	if r2Writer != nil {
 		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, rung)
@@ -116,6 +119,7 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 			BitrateKbps: global.AACBitrateKbps,
 		},
 		StartSegmentIndex: cfg.StartAudioSegmentIndex,
+		StartSequence:     cfg.StartAudioPartSeq,
 	}); err != nil {
 		audioEnabled = false
 		log.Printf("pqp-remux: control: session %s: audio mixing disabled: %v", cfg.SessionID, err)
@@ -230,6 +234,8 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		AudioRestarts:     h.AudioRestarts,
 		VideoSegmentIndex: p.sess.CurrentVideoSegmentIndex(),
 		AudioSegmentIndex: p.sess.CurrentAudioSegmentIndex(),
+		VideoPartSeq:      p.sess.CurrentVideoPartSequence(),
+		AudioPartSeq:      p.sess.CurrentAudioPartSequence(),
 	}
 	started := p.sess.Started()
 	if p.sess.HasPart() {

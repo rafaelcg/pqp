@@ -280,3 +280,53 @@ func TestFragmenter_SetStartSegmentIndexAppliesToFirstSegment(t *testing.T) {
 		t.Fatalf("expected CurrentSegmentIndex to report 7 before any rollover, got %d", got)
 	}
 }
+
+// A watchdog restart replaces the pipeline but not the session, and the
+// edge Worker caches part bytes by their path alone -- so a replacement
+// must never hand out a part name its predecessor already used. See
+// SetStartSequence's own doc comment.
+func TestFragmenter_SetStartSequenceResumesNumbering(t *testing.T) {
+	f := NewFragmenter(Config{Timescale: 90000, PartDuration: 45000, SegmentDuration: 360000})
+	if got := f.CurrentSequence(); got != 0 {
+		t.Fatalf("a fresh fragmenter has emitted nothing: got %d", got)
+	}
+	f.SetStartSequence(164)
+
+	var seqs []uint32
+	for i := 0; i < 40; i++ {
+		frag, _ := f.Push(&h264.AccessUnit{PTS: int64(i) * 3000, IsIDR: true})
+		if frag != nil {
+			seqs = append(seqs, frag.SequenceNumber)
+		}
+	}
+	if len(seqs) == 0 {
+		t.Fatal("no fragment emitted")
+	}
+	if seqs[0] != 164 {
+		t.Fatalf("first resumed part = %d, want 164", seqs[0])
+	}
+	for i := 1; i < len(seqs); i++ {
+		if seqs[i] != seqs[i-1]+1 {
+			t.Fatalf("sequence numbers not contiguous: %v", seqs)
+		}
+	}
+	if got := f.CurrentSequence(); got != seqs[len(seqs)-1] {
+		t.Fatalf("CurrentSequence = %d, want the last emitted %d", got, seqs[len(seqs)-1])
+	}
+}
+
+// Zero means "no predecessor", which is the default -- never "number the
+// first part 0", since there is no part zero.
+func TestFragmenter_SetStartSequenceZeroIsANoop(t *testing.T) {
+	f := NewFragmenter(Config{Timescale: 90000, PartDuration: 45000, SegmentDuration: 360000})
+	f.SetStartSequence(0)
+	var first uint32
+	for i := 0; i < 40 && first == 0; i++ {
+		if frag, _ := f.Push(&h264.AccessUnit{PTS: int64(i) * 3000, IsIDR: true}); frag != nil {
+			first = frag.SequenceNumber
+		}
+	}
+	if first != 1 {
+		t.Fatalf("first part = %d, want 1", first)
+	}
+}

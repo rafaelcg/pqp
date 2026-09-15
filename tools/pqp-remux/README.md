@@ -393,6 +393,19 @@ Three things worth knowing before changing it:
   an error it logs per probe. "No part has landed yet" is the ordinary first
   second of every session.
 
+- **A watchdog restart resumes part numbering, not just segment
+  numbering.** Segment indices have been carried across a restart since
+  PR #584, because re-using one overwrote an already-uploaded R2 object.
+  Part sequence numbers were not, and it did not matter while a part's name
+  never left this process. It matters now: the edge Worker advertises
+  `part-<seq>.m4s` to players and caches those bytes by path, with the
+  viewer token deliberately dropped from the key, so a replacement pipeline
+  numbering from 1 again would publish names whose bytes are already cached
+  from its predecessor. `restart` sets `StartVideoPartSeq`/
+  `StartAudioPartSeq` alongside the two segment indices
+  (`internal/pipeline`'s `SetStartSequence`), pinned by
+  `TestManagedSession_RestartNeverReusesPartName`.
+
 Blocking reload (`_HLS_msn`/`_HLS_part`) is **not** implemented here and is
 not meant to be: those directives never reach this box.
 `LlPlaylistOrigin` builds the origin URL from the session id alone and

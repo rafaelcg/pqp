@@ -90,3 +90,37 @@ func TestAudioFragmenterSequenceNumbersIncreaseMonotonically(t *testing.T) {
 		pts += 1024
 	}
 }
+
+// A resumed pipeline's counters are not at zero, and the first segment's
+// anchor must still be set by the first frame -- the anchor test used to
+// be "both counters are still at zero", which silently failed for every
+// watchdog restart that resumed either one, leaving segmentStart at 0 so
+// the very first frame rolled the segment immediately.
+func TestAudioFragmenter_ResumedCountersStillAnchorTheFirstSegment(t *testing.T) {
+	f := NewAudioFragmenter(AudioConfig{Timescale: 48000, SegmentDuration: 48000}) // 1s segments
+	f.SetStartSegmentIndex(7)
+	f.SetStartSequence(31)
+
+	const frameTicks = 1024
+	basePTS := int64(48000 * 600) // ten minutes in, as a restarted session would be
+
+	first := f.Push(basePTS, frameTicks, []byte{0x01})
+	if first.SequenceNumber != 31 {
+		t.Fatalf("first resumed part = %d, want 31", first.SequenceNumber)
+	}
+	if first.SegmentIndex != 7 {
+		t.Fatalf("first resumed segment = %d, want 7", first.SegmentIndex)
+	}
+	// One frame is 1024/48000 s, nowhere near the 1s target: the segment
+	// must still be open. Before the anchor fix this had already rolled.
+	second := f.Push(basePTS+frameTicks, frameTicks, []byte{0x02})
+	if second.SegmentIndex != 7 {
+		t.Fatalf("segment rolled after one 21ms frame (index %d): the first segment was never anchored", second.SegmentIndex)
+	}
+	if second.IsSegmentStart {
+		t.Fatal("the second frame must not open a segment")
+	}
+	if got := f.CurrentSequence(); got != 32 {
+		t.Fatalf("CurrentSequence = %d, want 32", got)
+	}
+}

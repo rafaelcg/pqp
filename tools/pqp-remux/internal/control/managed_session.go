@@ -165,8 +165,10 @@ func (m *ManagedSession) evaluateTick(now time.Time) {
 // promised to a replacement that never got built.
 //
 // The new pipeline's config is m.cfg with StartVideoSegmentIndex/
-// StartAudioSegmentIndex overridden to the OLD pipeline's own final (now
-// sealed) segment index **plus one** (Farol review, PR #584) -- never the
+// StartAudioSegmentIndex (and, since PR #621, StartVideoPartSeq/
+// StartAudioPartSeq) overridden to the OLD pipeline's own final (now
+// sealed) segment index and part sequence **plus one** (Farol review,
+// PR #584) -- never the
 // bare index, and never left at m.cfg's original zero value. "Plus one"
 // matters because the old pipeline's own teardown (old.Close, below)
 // finalizes and enqueues an R2 upload for whatever segment was still open
@@ -212,6 +214,17 @@ func (m *ManagedSession) restart() {
 		oldHealth := old.Health()
 		cfg.StartVideoSegmentIndex = oldHealth.VideoSegmentIndex + 1
 		cfg.StartAudioSegmentIndex = oldHealth.AudioSegmentIndex + 1
+		// And the same handoff one level down, for PART names. Segment
+		// indices were carried across from the start because an R2 key
+		// collision overwrote real content; part sequence numbers were
+		// not, because nothing outside this process could see a part's
+		// name. state.json changed that: the edge Worker advertises
+		// "part-<seq>.m4s" to players and caches it by path with the
+		// token dropped, so a replacement starting back at 1 would serve
+		// its predecessor's bytes under its own names for as long as
+		// that cache lives (Farol review, PR #621).
+		cfg.StartVideoPartSeq = oldHealth.VideoPartSeq + 1
+		cfg.StartAudioPartSeq = oldHealth.AudioPartSeq + 1
 
 		m.mu.Lock()
 		m.current = nil
