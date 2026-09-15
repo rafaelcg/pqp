@@ -36,6 +36,7 @@ lands on the same Worker, so the code is already split along that line:
 | `src/ll-media.ts` | The LL MEDIA route (`L2.3`): part/segment/init bytes off the remux box, immutably cached per colo | No — a second origin would land in `ll-playlist-origin.ts`, not here |
 | `src/viewer-access.ts` | The one credential check (token, party pass, revocation) every route calls | No |
 | `src/edge-cache.ts` | The Cache API wrapped so losing it never costs a request, and the one definition of a cache key | No |
+| `src/coalesced-fetch.js` | One in-flight fetch per key, shared — with every join bounded and detachable, so a joiner never depends on a request context it does not own | No — it is about promises, not about where the bytes come from |
 | `src/index.ts` | Routing, the cache-or-forward decision, CORS, logging | No, or minimally — it is written against the `PlaylistOrigin` interface, not against "the API" |
 
 `playlist-origin.ts` today has exactly one implementation, `ApiPlaylistOrigin`
@@ -198,6 +199,59 @@ module makes; and a disconnected viewer's `AbortSignal` (threaded through
 from `index.ts`) removes their waiter immediately instead of polling on
 their behalf until the timeout. See `src/hls-blocking-reload.js`'s module
 doc comment for the full detail on each.
+
+**Nothing is ever parked without a live loop or a live timer of its own
+(2026-09-15).** A production session of three and a half minutes had thirteen
+requests killed by the Workers runtime with *"your Worker's code had hung and
+would never generate a response"* — each after a wall time of one to thirteen
+milliseconds, which is the tell: the runtime says that when a request's
+promise is unsettled and the request's OWN context has no pending I/O at all.
+The cause is a Workers rule this module was written as if it did not exist: a
+`fetch()` and a `setTimeout()` belong to the request context that created
+them, and when that request's handler returns, its pending I/O is cancelled
+and its timers stop firing. So the poll loop — whose timers and origin fetch
+belong to whichever request happened to start it — died the moment that
+request was answered or its viewer navigated away, its `finally` never ran,
+`state.polling` stayed `true` forever, and every later request for that
+rendition joined a loop that no longer existed. Four changes, layered so that
+no one of them has to be right on its own:
+
+1. **`ctx.waitUntil` on the producer.** `index.ts` hands both the poll loop
+   and the shared origin fetch to `ctx.waitUntil`, so the context that owns
+   the work outlives the response that started it. This is the fix; the three
+   below are what happens when it is not enough (a viewer who navigates away
+   takes their context with them regardless).
+2. **`loopResumeBy`, not a boolean.** The loop republishes, before every
+   `await`, the instant it is due back by. A request that finds a claimed but
+   overdue loop starts a replacement, bumping `loopGeneration` so the zombie —
+   if it ever does resume — exits without settling the new loop's waiters or
+   clearing its `polling` flag. Counted as
+   `hlsEdge.blockingReloadLoopRevived`.
+3. **A per-waiter timer**, armed in the waiter's own request context. Even
+   with both mechanisms above wrong, the request holds a live timer (so the
+   runtime never declares it hung) and answers itself with the retained
+   playlist within 250 ms of its own deadline. Counted as
+   `hlsEdge.blockingReloadWaiterSelfTimeout`, which belongs at zero.
+4. **A last-resort `Promise.race`** in `handleBlockingReload`, at the hold's
+   budget plus a second, answering with the current playlist. Counted as
+   `hlsEdge.blockingReloadHardTimeout`, also at zero: it exists so the next
+   race nobody has thought of degrades into a slightly stale playlist instead
+   of a 500.
+
+The same afternoon produced five `hlsEdge.blockingReloadOriginError` 502s
+while every origin request in the window was a 200 in about a millisecond —
+the other half of the same rule, on the shared-fetch side: a joiner was
+awaiting a fetch whose owner's context died, and inherited its abort.
+`src/coalesced-fetch.js` is the shared answer for every in-flight map in this
+Worker (`index.ts`'s rendition fetches and `LlPlaylistOrigin`'s `state.json`
+probes alike): a joiner arms its OWN bound, and on expiry — or on a rejection
+it did not cause — **detaches and fetches for itself** rather than the shared
+fetch being aborted out from under whoever is still attached. Detaching
+joiners collapse onto one retry, not one each, so a genuinely sick origin
+still sees at most one extra request per key. Counted as
+`hlsEdge.originJoinDetached` / `hlsEdge.llOriginJoinDetached`, both of which
+belong at zero and, when they are not, say that a context died rather than
+that the origin refused anything.
 
 **Three ceilings, not one, and a second review round (2026-09-14) that
 closed the gaps between them.** `MAX_POLL_STATE_ENTRIES` (500) bounds how

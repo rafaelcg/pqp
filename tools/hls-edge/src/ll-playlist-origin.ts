@@ -74,6 +74,7 @@ import {
 } from "./ll-state.js";
 import type { PlaylistFetch, PlaylistOrigin } from "./playlist-origin.js";
 import { logEvent } from "./log.js";
+import { coalesceFetch } from "./coalesced-fetch.js";
 
 /** Bound on the per-session video-codec cache — same shape as `index.ts`'s `rejectionLog`: a churn of many short LL sessions must not grow this forever. */
 const VIDEO_CODEC_CACHE_MAX_ENTRIES = 200;
@@ -233,17 +234,26 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    * `finally` runs, means one timeout covers the ENTIRE exchange — the same
    * fix `ApiPlaylistOrigin.fetchPlaylist` already applies, for the same
    * reason (see that method's own doc comment).
+   *
+   * NEVER AWAITED UNBOUNDEDLY BY A JOINER (2026-09-15). The in-flight map
+   * shares one fetch between concurrent callers, and in Workers those callers
+   * are usually different REQUESTS — so a joiner used to be betting its own
+   * response on a fetch owned by a context it does not control, and on the
+   * single `AbortController` that context armed. When the owner returned, its
+   * fetch was cancelled and the joiner saw an abort-shaped rejection from a
+   * perfectly healthy origin (five 502s that afternoon), or nothing at all.
+   * `coalesceFetch` bounds the join and lets a joiner DETACH and fetch for
+   * itself — with its own controller and its own timer — rather than
+   * aborting the shared fetch out from under whoever is still attached. See
+   * `coalesced-fetch.js`'s header.
    */
-  private fetchFromOrigin(path: string): Promise<BufferedOriginResponse> {
-    const existing = this.inFlight.get(path);
-    if (existing) {
-      return existing;
-    }
-    const promise = this.fetchFromOriginUncoalesced(path);
-    this.inFlight.set(path, promise);
-    return promise.finally(() => {
-      this.inFlight.delete(path);
+  private async fetchFromOrigin(path: string): Promise<BufferedOriginResponse> {
+    const coalesced = await coalesceFetch(this.inFlight, path, () => this.fetchFromOriginUncoalesced(path), {
+      onDetach: ({ reason, attempt }) => {
+        logEvent("hlsEdge.llOriginJoinDetached", { path, reason, attempt });
+      },
     });
+    return coalesced.result;
   }
 
   private async fetchFromOriginUncoalesced(path: string): Promise<BufferedOriginResponse> {

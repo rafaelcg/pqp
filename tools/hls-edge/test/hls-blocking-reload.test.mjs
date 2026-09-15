@@ -11,6 +11,7 @@ import {
   VIDEO_RUNG_HOLD_BUDGET_MS,
   awaitBlockingReload,
   handleBlockingReload,
+  hardTimeoutBudgetMs,
   isMsnPartAvailable,
   isMsnTooFarAhead,
   parseBlockingReloadParams,
@@ -1180,4 +1181,364 @@ test("handleBlockingReload: an already-aborted signal wins over a warm retained 
 
   assert.equal(response.status, 499);
   assert.equal(fetchCalls, 0, "an aborted request must never be served the retained playlist body");
+});
+
+// ---------------------------------------------------------------------------
+// A WAITER IS NEVER PARKED WITHOUT A LIVE LOOP OR A LIVE TIMER
+//
+// The production failure of 2026-09-15: thirteen requests killed by the
+// Workers runtime with "your Worker's code had hung and would never generate
+// a response", each after a wall time of one to thirteen milliseconds -- the
+// signature of a request awaiting a promise with no pending I/O of its own.
+// See the block comment above `LOOP_RESUME_SLACK_MS` in the module under test
+// for the mechanism. Every test below would HANG (not fail) against the code
+// that shipped that afternoon, which is why each of them asserts settlement
+// through `settledWithin` rather than a bare `await`.
+// ---------------------------------------------------------------------------
+
+/** A timer nothing fires but the test: no real `setTimeout`, so a deadline elapses exactly when the test says so. */
+function makeTimers() {
+  /** @type {Set<{ ms: number, cb: () => void }>} */
+  const armed = new Set();
+  return {
+    setTimer: (ms, cb) => {
+      const entry = { ms, cb };
+      armed.add(entry);
+      return () => armed.delete(entry);
+    },
+    get pending() {
+      return armed.size;
+    },
+    /** Fires every armed timer matching `predicate` -- e.g. only the last-resort one, not the waiter's own. */
+    fireMatching(predicate) {
+      let fired = 0;
+      for (const entry of [...armed]) {
+        if (!predicate(entry)) {
+          continue;
+        }
+        armed.delete(entry);
+        entry.cb();
+        fired += 1;
+      }
+      return fired;
+    },
+    fireAll() {
+      return this.fireMatching(() => true);
+    },
+  };
+}
+
+/** Lets every already-scheduled microtask and promise callback run. */
+async function flush(turns = 8) {
+  for (let i = 0; i < turns; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+/** `{ v }` / `{ e }` if `promise` settled within a few turns, `null` if it is still parked. */
+async function settledWithin(promise) {
+  let outcome = null;
+  promise.then(
+    (v) => {
+      outcome = { v };
+    },
+    (e) => {
+      outcome = { e };
+    },
+  );
+  await flush();
+  return outcome;
+}
+
+/** The deps of a request whose context has died: its fetch and its timers will never fire again. */
+function deadContextDeps(clock, timers, rung) {
+  return {
+    fetchRendition: () => new Promise(() => {}),
+    now: clock.now,
+    sleep: () => new Promise(() => {}),
+    setTimer: timers.setTimer,
+    rung,
+  };
+}
+
+test("awaitBlockingReload: a request arriving after the poll loop's owner died is served, not parked forever", async () => {
+  resetBlockingReloadStateForTests();
+  const key = "rendition-zombie-loop";
+  const clock = makeClock();
+  const timers = makeTimers();
+
+  // Request A starts the loop and then its request context dies: neither its
+  // origin fetch nor its pacing timer will ever resume. `state.polling` is
+  // stuck `true` with nothing behind it -- the zombie.
+  const stranded = awaitBlockingReload(key, { msn: 103 }, deadContextDeps(clock, timers, LL_AUDIO_RUNG));
+  await flush(2);
+  assert.equal(await settledWithin(stranded), null, "the stranded request is exactly the state being reproduced");
+
+  // Time passes; the loop is now well past the instant it promised to be back by.
+  clock.advance(10_000);
+
+  /** @type {string[]} */
+  const events = [];
+  let fetchCalls = 0;
+  // `settledWithin`, never a bare `await`: against the code that shipped on
+  // 2026-09-15 this request registers a waiter, starts no loop, arms no timer
+  // and NEVER settles -- awaiting it would hang CI instead of failing it.
+  const outcome = await settledWithin(
+    awaitBlockingReload(key, { msn: 100 }, {
+      fetchRendition: async () => {
+        fetchCalls += 1;
+        return toFetched(PLAYLIST_A);
+      },
+      now: clock.now,
+      sleep: clock.sleep,
+      setTimer: timers.setTimer,
+      logEvent: (event) => events.push(event),
+      rung: LL_AUDIO_RUNG,
+    }),
+  );
+
+  assert.ok(outcome, "a request on a rendition whose loop died must be answered, not parked");
+  assert.equal(outcome.v.kind, "available");
+  assert.equal(fetchCalls, 1, "the replacement loop must actually poll -- a revived claim with no fetch is the same bug");
+  assert.ok(
+    events.includes("hlsEdge.blockingReloadLoopRevived"),
+    "reviving a dead loop must be visible on a dashboard, not silent",
+  );
+});
+
+test("awaitBlockingReload: the stranded waiter of a dead loop is answered by its OWN timer, with the retained playlist", async () => {
+  resetBlockingReloadStateForTests();
+  const key = "rendition-self-timeout";
+  const clock = makeClock();
+  const timers = makeTimers();
+
+  // One healthy hold first, so the isolate has a playlist retained for this
+  // rendition -- the thing a self-timeout has to fall back to.
+  const warm = await awaitBlockingReload(key, { msn: 100 }, {
+    fetchRendition: async () => toFetched(PLAYLIST_A),
+    now: clock.now,
+    sleep: clock.sleep,
+    rung: LL_AUDIO_RUNG,
+  });
+  assert.equal(warm.kind, "available");
+
+  // Past `FAST_PATH_FRESHNESS_MS` so the retained edge cannot answer directly,
+  // but well inside the idle sweep's own interval so the state is still there.
+  clock.advance(3_000);
+
+  /** @type {string[]} */
+  const events = [];
+  const pending = awaitBlockingReload(key, { msn: 103 }, {
+    ...deadContextDeps(clock, timers, LL_AUDIO_RUNG),
+    logEvent: (event) => events.push(event),
+  });
+  await flush(2);
+  assert.equal(await settledWithin(pending), null, "still held: nothing has reached its deadline yet");
+
+  assert.equal(timers.pending, 1, "a waiter must arm exactly one timer of its own");
+  // Its own deadline passes, and the loop that owes it an answer never comes.
+  clock.advance(2_000);
+  timers.fireAll();
+
+  const outcome = await settledWithin(pending);
+  assert.ok(outcome, "the belt must answer a waiter whose loop never comes back");
+  assert.equal(outcome.v.kind, "timeout");
+  assert.equal(new TextDecoder().decode(outcome.v.playlist.body), PLAYLIST_A);
+  assert.ok(events.includes("hlsEdge.blockingReloadWaiterSelfTimeout"));
+});
+
+test("awaitBlockingReload: a waiter arriving on a rendition whose loop has already torn down starts a fresh one", async () => {
+  resetBlockingReloadStateForTests();
+  const key = "rendition-after-teardown";
+  const clock = makeClock();
+  let fetchCalls = 0;
+  const deps = {
+    fetchRendition: async () => {
+      fetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    now: clock.now,
+    sleep: clock.sleep,
+    rung: LL_AUDIO_RUNG,
+  };
+
+  assert.equal((await awaitBlockingReload(key, { msn: 100 }, deps)).kind, "available");
+  assert.equal(fetchCalls, 1);
+
+  // The loop has exited and the retained edge has gone stale; the next
+  // arrival must poll again rather than join a loop that is over.
+  clock.advance(3_000);
+  const second = await awaitBlockingReload(key, { msn: 101 }, deps);
+  assert.equal(second.kind, "available");
+  assert.equal(fetchCalls, 2, "a torn-down loop is not a loop to join");
+});
+
+test("awaitBlockingReload: a zombie loop that wakes up late does not disown the loop that replaced it", async () => {
+  resetBlockingReloadStateForTests();
+  const key = "rendition-generation-guard";
+  const clock = makeClock();
+  const timers = makeTimers();
+
+  // A loop whose pacing sleep this test controls, standing in for one whose
+  // context stalled and then, unexpectedly, resumed.
+  let releaseZombie = () => {};
+  const zombieSleep = () => new Promise((resolve) => {
+    releaseZombie = resolve;
+  });
+  const stranded = awaitBlockingReload(key, { msn: 103 }, {
+    fetchRendition: () => new Promise(() => {}),
+    now: clock.now,
+    sleep: zombieSleep,
+    setTimer: timers.setTimer,
+    rung: LL_AUDIO_RUNG,
+  });
+  await flush(2);
+  clock.advance(10_000);
+
+  let fetchCalls = 0;
+  const liveDeps = {
+    fetchRendition: async () => {
+      fetchCalls += 1;
+      return toFetched(PLAYLIST_A);
+    },
+    now: clock.now,
+    sleep: clock.sleep,
+    setTimer: timers.setTimer,
+    rung: LL_AUDIO_RUNG,
+  };
+  const replacement = await settledWithin(awaitBlockingReload(key, { msn: 100 }, liveDeps));
+  assert.ok(replacement, "the replacement loop must answer -- a bare await here would hang, not fail");
+  assert.equal(replacement.v.kind, "available");
+  assert.equal(fetchCalls, 1);
+
+  // The zombie finally resumes. Its generation is stale, so it must exit
+  // without clearing `polling`, without settling anyone, and without a tick.
+  releaseZombie();
+  await flush();
+
+  const third = await settledWithin(awaitBlockingReload(key, { msn: 101 }, liveDeps));
+  assert.ok(third, "the rendition still answers after the zombie unwound");
+  assert.equal(third.v.kind, "available");
+
+  // The orphan is ADOPTED, not abandoned: it never left `state.waiters`, so
+  // the replacement loop settles it on the same pass it settles its own --
+  // long past its deadline by now, hence a timeout with the current playlist
+  // rather than a hang.
+  const orphan = await settledWithin(stranded);
+  assert.ok(orphan, "the dead loop's waiter must be answered by the loop that replaced it");
+  assert.equal(orphan.v.kind, "timeout");
+});
+
+test("handleBlockingReload: a hold that hangs anyway degrades to the current playlist and counts it", async () => {
+  resetBlockingReloadStateForTests();
+  const key = "rendition-hard-timeout";
+  const context = { channelId: "chan-1", rung: LL_AUDIO_RUNG };
+
+  const warm = await handleBlockingReload(
+    key,
+    { msn: 100 },
+    async () => toFetched(PLAYLIST_A),
+    () => {},
+    context,
+  );
+  assert.equal(warm.status, 200);
+
+  const timers = makeTimers();
+  /** @type {Array<{ event: string, fields: Record<string, unknown> }>} */
+  const events = [];
+  const hardBudgetMs = hardTimeoutBudgetMs(key, LL_AUDIO_RUNG);
+  const pending = handleBlockingReload(
+    key,
+    { msn: 103 },
+    () => new Promise(() => {}),
+    (event, fields) => events.push({ event, fields }),
+    context,
+    undefined,
+    { setTimer: timers.setTimer, sleep: () => new Promise(() => {}) },
+  );
+  await flush(2);
+  assert.equal(await settledWithin(pending), null);
+
+  // Fire ONLY the last-resort guard -- not the waiter's own self-timer,
+  // which is armed a full `HARD_TIMEOUT_SLACK_MS` earlier. This is the
+  // "some future race nobody has thought of" case the guard exists for.
+  assert.equal(timers.fireMatching((t) => t.ms >= hardBudgetMs), 1);
+
+  const outcome = await settledWithin(pending);
+  assert.ok(outcome, "the last-resort guard must answer rather than let the runtime kill the request");
+  assert.equal(outcome.v.status, 200);
+  assert.equal(outcome.v.headers.get("X-HLS-Edge-Cache"), "BLOCKING-HARD-TIMEOUT");
+  assert.equal(outcome.v.headers.get("Cache-Control"), "no-store");
+  assert.equal(await outcome.v.text(), PLAYLIST_A);
+
+  const logged = events.find((entry) => entry.event === "hlsEdge.blockingReloadHardTimeout");
+  assert.ok(logged, "hlsEdge.blockingReloadHardTimeout is how a future regression becomes visible");
+  assert.equal(logged.fields.channelId, "chan-1");
+  assert.equal(logged.fields.rung, LL_AUDIO_RUNG);
+  assert.equal(logged.fields.budgetMs, hardBudgetMs);
+});
+
+test("handleBlockingReload: the last-resort guard falls back to the plain path when nothing is retained", async () => {
+  resetBlockingReloadStateForTests();
+  const timers = makeTimers();
+  const pending = handleBlockingReload(
+    "rendition-hard-timeout-cold",
+    { msn: 103 },
+    () => new Promise(() => {}),
+    () => {},
+    { channelId: "chan-1", rung: LL_AUDIO_RUNG },
+    undefined,
+    { setTimer: timers.setTimer, sleep: () => new Promise(() => {}) },
+  );
+  await flush(2);
+  timers.fireMatching((t) => t.ms >= hardTimeoutBudgetMs("rendition-hard-timeout-cold", LL_AUDIO_RUNG));
+
+  const outcome = await settledWithin(pending);
+  assert.ok(outcome);
+  assert.equal(outcome.v, null, "`null` sends the caller down its own cache-or-forward path, which has real I/O");
+});
+
+test("handleBlockingReload: the poll loop it starts is handed to keepAlive, so ctx.waitUntil can outlive the response", async () => {
+  resetBlockingReloadStateForTests();
+  /** @type {Promise<unknown>[]} */
+  const kept = [];
+  const response = await handleBlockingReload(
+    "rendition-keepalive",
+    { msn: 100 },
+    async () => toFetched(PLAYLIST_A),
+    () => {},
+    { channelId: "chan-1", rung: LL_AUDIO_RUNG },
+    undefined,
+    { keepAlive: (promise) => kept.push(promise) },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(kept.length, 1, "without this the loop dies with the request that started it -- the zombie above");
+  await kept[0];
+});
+
+test("hardTimeoutBudgetMs: the guard always sits PAST the deadline it backs up, cold rendition included", async () => {
+  resetBlockingReloadStateForTests();
+  const coldKey = "rendition-budget-cold";
+
+  // Nothing known about this rendition yet, so a waiter's own deadline is
+  // still provisional and `fixProvisionalDeadlines` may push it out. The
+  // guard must not be derived from the default part target, or it would fire
+  // BEFORE the deadline it exists to back up.
+  const cold = hardTimeoutBudgetMs(coldKey, LL_AUDIO_RUNG);
+  assert.ok(cold > 3 * 1_000, `a cold guard of ${cold}ms must outlast a 1s PART-TARGET's own 3x deadline`);
+
+  // Once the real PART-TARGET is known, the guard tracks it instead.
+  const clock = makeClock();
+  await awaitBlockingReload(coldKey, { msn: 100 }, {
+    fetchRendition: async () => toFetched(PLAYLIST_A),
+    now: clock.now,
+    sleep: clock.sleep,
+    rung: LL_AUDIO_RUNG,
+  });
+  const warm = hardTimeoutBudgetMs(coldKey, LL_AUDIO_RUNG);
+  assert.equal(warm, 500 * 3 + 1_000, "PART-TARGET=0.5 -> a 1.5s hold plus the guard's own second");
+
+  // The video rung's flat budget is unaffected by either.
+  assert.equal(hardTimeoutBudgetMs(coldKey, LL_VIDEO_RUNG), VIDEO_RUNG_HOLD_BUDGET_MS + 1_000);
 });
