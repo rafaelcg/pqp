@@ -35,11 +35,13 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { InvitePaste } from "@/components/layout/invite-paste";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   applyDiscordImport,
+  createInvite,
   createServer,
   previewDiscordImport,
 } from "@/lib/api";
@@ -114,6 +116,7 @@ export function CreateServerDialog({
   const [done, setDone] = useState<{
     serverName: string;
     invite: Invite;
+    fromImport: boolean;
   } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const copyTimer = useRef<number | null>(null);
@@ -164,7 +167,15 @@ export function CreateServerDialog({
     try {
       const created = await createServer(trimmed);
       await onCreated(created);
-      onClose();
+      try {
+        const { invite } = await createInvite(created.server.id, {
+          expiresInHours: 168,
+        });
+        setDone({ serverName: created.server.name, invite, fromImport: false });
+        setStep("done");
+      } catch {
+        onClose();
+      }
     } catch (err) {
       setError(
         err instanceof Error ? err.message : t("importDiscord.error.createFailed"),
@@ -202,7 +213,11 @@ export function CreateServerDialog({
     try {
       const created = await applyDiscordImport(source.trim());
       await onCreated({ server: created.server, channels: created.channels });
-      setDone({ serverName: created.server.name, invite: created.invite });
+      setDone({
+        serverName: created.server.name,
+        invite: created.invite,
+        fromImport: true,
+      });
       setStep("done");
     } catch (err) {
       setError(
@@ -243,12 +258,16 @@ export function CreateServerDialog({
       : step === "preview"
         ? t("importDiscord.preview.subtitle", { name: plan?.serverName ?? "" })
         : step === "done"
-          ? t("importDiscord.done.body")
+          ? done?.fromImport
+            ? t("importDiscord.done.body")
+            : t("invite.done.body")
           : t("communities.create.body");
 
   const size = step === "preview" || step === "done" ? "lg" : "md";
   const eyebrow =
-    step === "paste" || step === "preview" || step === "done"
+    step === "paste" ||
+    step === "preview" ||
+    (step === "done" && done?.fromImport)
       ? t("importDiscord.eyebrow")
       : undefined;
   const link = done ? inviteLink(done.invite.code) : "";
@@ -415,6 +434,7 @@ export function CreateServerDialog({
                 <Button
                   type="button"
                   variant="secondary"
+                  className="min-w-[6.5rem] shrink-0"
                   onClick={() => void copyText("invite", link)}
                 >
                   {copied === "invite" ? (
@@ -428,6 +448,11 @@ export function CreateServerDialog({
                 </Button>
               </div>
             </label>
+            <InvitePaste
+              code={done.invite.code}
+              onCopyFailed={() => setError(t("importDiscord.error.copyFailed"))}
+            />
+            {done.fromImport && (
             <label className="block text-sm text-paper">
               {t("importDiscord.done.pasteLabel")}
               <textarea
@@ -452,6 +477,7 @@ export function CreateServerDialog({
                   : t("importDiscord.done.copyMessage")}
               </Button>
             </label>
+            )}
           </div>
         )}
 
