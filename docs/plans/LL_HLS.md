@@ -578,6 +578,18 @@ rendition had been 404ing from the edge since `L2.2` while the video rung
 worked. What is left in `L2` before a viewer can actually play an LL session is
 `L2.4`, the three players.
 
+**Status, 2026-09-15 (evening): `L2.2` decided the mode by probing, and that was
+the bug.** Four production attempts, no viewer ever handed the low-latency
+stream. The Worker asked the remux whether a `state.json` existed and read "not
+yet" as "this party is conventional" — for sessions that were milliseconds old.
+Fixed by putting the mode ON THE WIRE: `?mode=ll` on `hlsUrl`
+(`LIVE_HLS_MODE_PARAM`), `mode` + `partTargetMs` on the stream frame, the
+Worker's master route keyed on the marker and answering `503 Retry-After: 1`
+(never the conventional ladder) while the remux warms up. §4's "the audience
+needs no signal" is struck through with the reasoning. The conventional master
+route no longer probes at all, which also retires the two Farol findings about
+what the probe cost a conventional viewer.
+
 **L2.1 Blocking playlist reload in the Worker** (2 d). `_HLS_msn`/`_HLS_part`
 parsing, one in-flight origin request per (session, rung, part) per colo with every
 waiting viewer resolved from it, and a hard timeout falling back to a non-blocking
