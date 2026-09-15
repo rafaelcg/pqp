@@ -7,11 +7,19 @@ import {
   addTrack,
   getMusicSnapshot,
   resetMusicStoreForTests,
+  setListening,
+  setMusicOpen,
   setMusicSession,
 } from "@/lib/music-store";
+import { resetMusicPrefsForTests } from "@/lib/music-prefs";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { MusicBarButton } from "@/components/voice/music-bar-button";
+import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { MusicPanel, musicActivityFromDiff } from "@/components/voice/music-panel";
+import {
+  insertMusicStageTile,
+  MUSIC_STAGE_TILE_ID,
+} from "@/components/voice/music-stage-tile";
 import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
 import { shouldReportUnknownDuration } from "@/components/voice/music-player-embed";
 import {
@@ -309,6 +317,33 @@ describe("MusicPanel", () => {
     expect(html).toContain("data-slider=\"scrub\"");
     expect(html).not.toContain("data-indeterminate");
   });
+
+  it("names the stage and ducking controls", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicPanel
+          current={track("now")}
+          music={snapshot(180_000)}
+          voiceState={voiceState()}
+          canManage
+          playing
+          needsTap={false}
+          showVideo={false}
+          volume={40}
+          muted={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          onMute={() => {}}
+          onVolume={() => {}}
+          onToggleVideo={() => {}}
+          onWatchOnStage={() => {}}
+          onToggleDucking={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("role=\"switch\"");
+  });
 });
 
 describe("ChannelMusicCard", () => {
@@ -324,6 +359,93 @@ describe("ChannelMusicCard", () => {
     );
     expect(html).toContain("data-channel-music");
     expect(html).toContain("Legião");
+  });
+});
+
+describe("insertMusicStageTile", () => {
+  it("takes the featured slot when nothing else is featured", () => {
+    const tiles = [{ id: "cam-1" }];
+    const staged = insertMusicStageTile(tiles, false, true);
+    expect(staged.tiles[0]).toEqual({ kind: "music", id: MUSIC_STAGE_TILE_ID });
+    expect(staged.featured).toBe(true);
+    expect(staged.tiles.map((tile) => tile.id)).toEqual([MUSIC_STAGE_TILE_ID, "cam-1"]);
+  });
+
+  it("sits in the grid when something is already featured", () => {
+    const tiles = [{ id: "share-1" }, { id: "cam-1" }];
+    const staged = insertMusicStageTile(tiles, true, true);
+    expect(staged.tiles.map((tile) => tile.id)).toEqual([
+      "share-1",
+      MUSIC_STAGE_TILE_ID,
+      "cam-1",
+    ]);
+    expect(staged.featured).toBe(true);
+  });
+});
+
+describe("MusicMiniPlayer", () => {
+  beforeEach(() => {
+    resetMusicStoreForTests();
+    resetMusicPrefsForTests();
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-me",
+      userId: "33333333-3333-4333-8333-333333333333",
+      displayName: "Eu",
+      send: () => {},
+    });
+  });
+
+  it("draws nothing in the footer when nothing is playing", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toBe("");
+  });
+
+  it("opens the add box when the panel is open and nothing is on", () => {
+    setMusicOpen(true);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain('data-music-mini-player="start"');
+    expect(html).toContain("data-music-search");
+    expect(html).not.toContain('data-music-mini-player="empty"');
+  });
+
+  it("still opens the add box in the icons-only sidebar", () => {
+    setMusicOpen(true);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} compact />
+      </TooltipProvider>,
+    );
+    expect(html).toContain('data-music-mini-player="start"');
+    expect(html).toContain("data-music-search");
+  });
+
+  it("tidies the pill when the viewer is not listening", () => {
+    addTrack({
+      provider: "youtube",
+      videoId: "aaaaaaaaaaa",
+      title: "Legião Urbana",
+      sourceUrl: null,
+      thumbnailUrl: "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg",
+      durationMs: 1,
+    });
+    setListening(false);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain('data-music-mini-player="dismissed"');
+    expect(html).toContain("h-5 w-5");
+    expect(html).toContain("Legião Urbana");
   });
 });
 

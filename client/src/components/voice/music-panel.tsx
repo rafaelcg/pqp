@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ListMusic,
+  MonitorPlay,
   Pause,
   Play,
   SkipForward,
@@ -15,6 +16,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
@@ -134,12 +136,16 @@ export function MusicPanel({
   showVideo,
   volume,
   muted,
+  onStage = false,
+  ducking = true,
   onPlayPause,
   onSkip,
   onTapToPlay,
   onMute,
   onVolume,
   onToggleVideo,
+  onWatchOnStage,
+  onToggleDucking,
 }: {
   current: MusicTrack;
   music: MusicSnapshot;
@@ -150,12 +156,16 @@ export function MusicPanel({
   showVideo: boolean;
   volume: number;
   muted: boolean;
+  onStage?: boolean;
+  ducking?: boolean;
   onPlayPause: () => void;
   onSkip: () => void;
   onTapToPlay: () => void;
   onMute: () => void;
   onVolume: (value: number) => void;
   onToggleVideo: () => void;
+  onWatchOnStage?: () => void;
+  onToggleDucking?: (value: boolean) => void;
 }) {
   const { t } = useTranslation();
   const addedBy = lookupAddedBy(voiceState, current.addedByUserId, current.addedByName);
@@ -323,7 +333,29 @@ export function MusicPanel({
                 )}
               </button>
             </Tooltip>
+            {onWatchOnStage && (
+              <Tooltip label={t("music.stage.watch")}>
+                <button
+                  type="button"
+                  className={cn(ghostIconButton, "h-7 w-7")}
+                  aria-pressed={onStage}
+                  aria-label={t("music.stage.watch")}
+                  onClick={onWatchOnStage}
+                >
+                  <MonitorPlay className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </Tooltip>
+            )}
           </div>
+
+          {onToggleDucking && (
+            <Switch
+              checked={ducking}
+              onCheckedChange={onToggleDucking}
+              label={t("music.duck")}
+              className="px-0"
+            />
+          )}
 
           <MusicSearchPicker compact canManage={canManage} />
 

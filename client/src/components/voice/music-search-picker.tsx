@@ -46,10 +46,12 @@ export function MusicSearchPicker({
   compact = false,
   variant = "queue",
   canManage = false,
+  autoFocus = false,
 }: {
   compact?: boolean;
   variant?: "start" | "queue";
   canManage?: boolean;
+  autoFocus?: boolean;
 }) {
   const { t } = useTranslation();
   const listId = useId();
@@ -200,6 +202,7 @@ export function MusicSearchPicker({
       <div className="flex items-center gap-1.5">
         <Input
           value={query}
+          autoFocus={autoFocus}
           onChange={(event) => {
             setQuery(event.target.value);
             if (results) {

@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
+import {
+  MUSIC_DUCK_TICK_MS,
+  musicShouldDuck,
+  stepDuckGain,
+} from "@/lib/music-duck";
 import {
   advance,
   expectedPositionMs,
@@ -12,6 +18,7 @@ import {
   YT_STATE,
   type YTPlayer,
 } from "@/lib/youtube-iframe";
+import { getMusicEmbedHost } from "@/components/voice/music-embed-host";
 
 /**
  * The embed, and the loop that keeps it where the room is.
@@ -59,12 +66,20 @@ export function MusicPlayer({
   volume,
   playerRef,
   onNeedsTap,
+  duckEnabled = false,
+  speakingPeerCount = 0,
+  transmitting = false,
+  deafened = false,
 }: {
   music: MusicSnapshot;
   isActor: boolean;
   volume: number;
   playerRef: MutableRefObject<YTPlayer | null>;
   onNeedsTap: (needs: boolean) => void;
+  duckEnabled?: boolean;
+  speakingPeerCount?: number;
+  transmitting?: boolean;
+  deafened?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const musicRef = useRef(music);
@@ -265,13 +280,56 @@ export function MusicPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, status, music.receivedAt]);
 
-  useEffect(() => {
-    playerRef.current?.setVolume(volume);
-  }, [volume, playerRef, ready]);
+  const duckSpeech = musicShouldDuck({
+    duckEnabled,
+    deafened,
+    speakingPeerCount,
+    transmitting,
+  });
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
+  const speechRef = useRef(duckSpeech);
+  speechRef.current = duckSpeech;
+  const gainRef = useRef(1);
 
-  return (
-    <div className="relative aspect-video max-h-[135px] w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-0">
-      <div ref={hostRef} className="absolute inset-0 [&>div]:h-full [&>div]:w-full [&_iframe]:h-full [&_iframe]:w-full" />
+  useEffect(() => {
+    if (!ready) {
+      return;
+    }
+    const apply = () => {
+      playerRef.current?.setVolume(volumeRef.current * gainRef.current);
+    };
+    if (!duckEnabled) {
+      gainRef.current = 1;
+      apply();
+      return;
+    }
+    const idle = !speechRef.current && gainRef.current >= 1;
+    if (idle) {
+      apply();
+      return;
+    }
+    let last = Date.now();
+    apply();
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const dt = now - last;
+      last = now;
+      gainRef.current = stepDuckGain(gainRef.current, speechRef.current, dt);
+      apply();
+      if (!speechRef.current && gainRef.current >= 1) {
+        window.clearInterval(timer);
+      }
+    }, MUSIC_DUCK_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [ready, duckEnabled, duckSpeech, volume, playerRef]);
+
+  const frame = (
+    <div className="relative h-full w-full overflow-hidden bg-surface-0">
+      <div
+        ref={hostRef}
+        className="absolute inset-0 [&>div]:h-full [&>div]:w-full [&_iframe]:h-full [&_iframe]:w-full"
+      />
       {failed && (
         <p className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] text-text-tertiary">
           {t("music.error.playback")}
@@ -279,4 +337,9 @@ export function MusicPlayer({
       )}
     </div>
   );
+
+  if (typeof document === "undefined") {
+    return frame;
+  }
+  return createPortal(frame, getMusicEmbedHost());
 }

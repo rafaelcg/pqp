@@ -1,8 +1,14 @@
-import { Music } from "lucide-react";
+import { ChevronDown, Music } from "lucide-react";
 import { useRef, useState } from "react";
-import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
+import { Button } from "@/components/ui/button";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
+import {
+  setMusicDucking,
+  setMusicPlacement,
+  useMusicJoinGate,
+  useMusicPrefs,
+} from "@/lib/music-prefs";
 import {
   advance,
   setListening,
@@ -10,28 +16,24 @@ import {
   toggleMusicOpen,
   useMusic,
 } from "@/lib/music-store";
-import { MusicNowPlaying } from "@/components/voice/music-now-playing";
+import {
+  ghostIconButton,
+  MusicNowPlaying,
+} from "@/components/voice/music-now-playing";
 import { MusicPanel } from "@/components/voice/music-panel";
 import { MusicPlayer } from "@/components/voice/music-player-embed";
 import { MusicSearchPicker } from "@/components/voice/music-search-picker";
+import { MusicEmbedOutlet, useMusicEmbedDock } from "@/components/voice/music-embed-host";
+import { cn } from "@/lib/utils";
 import type { YTPlayer } from "@/lib/youtube-iframe";
 
 /**
  * THE PLAYER, AT THE BOTTOM OF THE SIDEBAR, ABOVE THE CALL CONTROLS.
  *
- * At rest it is one card: artwork, title, who added it, a thin progress
- * bar, play/pause and skip. The card opens (the chevron, artwork, title,
- * or the button on the call bar) into the panel: scrubber, volume, search
- * results, the queue, and two text actions at the bottom.
- *
- * "PARAR DE OUVIR" IS PERSONAL. It unmounts this machine's embed, which is
- * what silences it, and leaves a one-line pill with the way back. The
- * room's queue is untouched. "Parar para todos" is the room-wide stop,
- * behind a confirm.
- *
- * The video is folded by default; this is a music queue. The embed stays
- * mounted at zero height while folded, which keeps the audio going. The
- * choice is remembered per browser.
+ * Nothing playing: the footer is empty. The note on the call bar opens this
+ * panel with the add box focused. A track on, and "parar de ouvir", leaves
+ * a one-line pill. The embed is mounted once and portalled between this
+ * dock, the panel's video slot, and the call-stage tile.
  */
 
 const VOLUME_KEY = "pqp:music-volume";
@@ -68,6 +70,9 @@ export function MusicMiniPlayer({
 }) {
   const { t } = useTranslation();
   const music = useMusic();
+  const prefs = useMusicPrefs();
+  useMusicJoinGate();
+  const dockRef = useMusicEmbedDock();
   const [volume, setVolume] = useState(readVolume);
   const [muted, setMuted] = useState(false);
   const [showVideo, setShowVideo] = useState(() => readStored(VIDEO_KEY) === "1");
@@ -80,7 +85,7 @@ export function MusicMiniPlayer({
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
   const canManage = voiceState.canManageMusic;
-  const musicHintEnabled = useFeatureHintEnabled("music");
+  const onStage = prefs.placement === "stage" && Boolean(current) && music.listening;
 
   if (!inCall) {
     return null;
@@ -94,41 +99,48 @@ export function MusicMiniPlayer({
         volume={muted ? 0 : volume}
         playerRef={playerRef}
         onNeedsTap={setNeedsTap}
+        duckEnabled={prefs.ducking}
+        speakingPeerCount={voiceState.speakingPeerIds.length}
+        transmitting={voiceState.isTransmitting}
+        deafened={voiceState.isDeafened}
       />
     ) : null;
 
-  if (compact) {
-    return current && music.listening ? (
-      <div data-music-mini-player="compact" className="h-0 overflow-hidden">
-        {embed}
-      </div>
-    ) : null;
-  }
-
   if (!current) {
+    if (!music.open) {
+      return compact ? (
+        <div data-music-mini-player="compact" className="h-0 overflow-hidden">
+          <div ref={dockRef} data-music-embed-dock="" />
+        </div>
+      ) : null;
+    }
     return (
       <div
-        data-music-mini-player="empty"
-        className="border-t border-border bg-surface-0 px-3 py-3"
+        data-music-mini-player="start"
+        className="border-t border-border bg-surface-0 px-3 py-2"
       >
-        {musicHintEnabled && (
-          <div className="mb-2">
-            <FeatureHint
-              id="music"
-              enabled
-              title={t("featureHint.music.title")}
-              body={t("featureHint.music.body")}
-            />
-          </div>
-        )}
-        <div className="flex flex-col items-center gap-2 text-center">
-          <Music className="h-6 w-6 text-accent" aria-hidden="true" />
+        <div className="mb-1.5 flex items-center justify-between gap-2">
           <p className="text-sm font-medium text-text">{t("music.empty.title")}</p>
-          <div className="w-full text-left">
-            <MusicSearchPicker compact variant="start" canManage={canManage} />
-          </div>
-          <p className="text-[11px] text-text-tertiary">{t("music.empty.hint")}</p>
+          <button
+            type="button"
+            className={cn(ghostIconButton, "h-7 w-7")}
+            aria-expanded
+            aria-label={t("music.collapse")}
+            onClick={() => toggleMusicOpen()}
+          >
+            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
+        <MusicSearchPicker compact variant="start" canManage={canManage} autoFocus />
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div data-music-mini-player="compact" className="h-0 overflow-hidden">
+        <div ref={dockRef} data-music-embed-dock="" />
+        {embed}
       </div>
     );
   }
@@ -137,19 +149,21 @@ export function MusicMiniPlayer({
     return (
       <div
         data-music-mini-player="dismissed"
-        className="flex items-center gap-2 border-t border-border bg-surface-0 px-3 py-2 text-[11px] text-text-secondary"
+        className="flex items-center gap-2 border-t border-border bg-surface-0 px-3 py-2"
       >
-        <Music className="h-3 w-3 shrink-0 text-accent" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate" title={current.title}>
-          {current.title}
+        <span className="relative h-5 w-5 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-2">
+          {current.thumbnailUrl ? (
+            <img src={current.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <Music className="m-auto h-3 w-3 text-accent" aria-hidden="true" />
+          )}
         </span>
-        <button
-          type="button"
-          className="shrink-0 font-semibold text-accent hover:underline"
-          onClick={() => setListening(true)}
-        >
+        <span className="min-w-0 flex-1 truncate text-[11px] text-text-secondary" title={current.title}>
+          {t("music.pill.playing", { title: current.title })}
+        </span>
+        <Button size="sm" onClick={() => setListening(true)}>
           {t("music.listen")}
-        </button>
+        </Button>
       </div>
     );
   }
@@ -161,20 +175,37 @@ export function MusicMiniPlayer({
     });
   };
 
+  const showPanelVideo = music.open && showVideo && !onStage;
+  const showStagePlaceholder = music.open && onStage;
+
   return (
     <div
       data-music-mini-player=""
-      data-video={showVideo ? "shown" : "folded"}
+      data-video={showPanelVideo ? "shown" : "folded"}
+      data-music-placement={prefs.placement}
       className="border-t border-border bg-surface-0 text-xs"
     >
+      <div ref={dockRef} data-music-embed-dock="" className="h-0 overflow-hidden">
+        {embed}
+      </div>
+      {showStagePlaceholder && (
+        <p
+          data-music-stage-placeholder=""
+          className="px-3 pt-2 text-[11px] text-text-secondary"
+        >
+          {t("music.stage.playing")}
+        </p>
+      )}
       <div
         className={
-          music.open && showVideo
+          showPanelVideo
             ? "max-h-[135px] overflow-hidden px-2 pt-2"
             : "h-0 overflow-hidden"
         }
       >
-        {embed}
+        <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-0">
+          {showPanelVideo ? <MusicEmbedOutlet home={dockRef} /> : null}
+        </div>
       </div>
 
       {music.open ? (
@@ -188,6 +219,8 @@ export function MusicMiniPlayer({
           showVideo={showVideo}
           volume={volume}
           muted={muted}
+          onStage={onStage}
+          ducking={prefs.ducking}
           onPlayPause={() => setPlaying(!playing)}
           onSkip={() => advance()}
           onTapToPlay={() => {
@@ -201,6 +234,8 @@ export function MusicMiniPlayer({
             writeStored(VOLUME_KEY, String(next));
           }}
           onToggleVideo={toggleVideo}
+          onWatchOnStage={() => setMusicPlacement(onStage ? "panel" : "stage")}
+          onToggleDucking={setMusicDucking}
         />
       ) : (
         <MusicNowPlaying
