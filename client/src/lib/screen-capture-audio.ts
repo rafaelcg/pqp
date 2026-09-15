@@ -60,6 +60,7 @@ import {
   desktopShareCapabilities,
   getDesktop,
   isDesktopApp,
+  type DesktopShareCapabilities,
 } from "./desktop";
 import {
   cursorConstraintFor,
@@ -319,8 +320,9 @@ export function screenCaptureEnvironment(
     isDesktopShell,
     shellPlatform,
     supportsRestrictOwnAudio,
-    osCanExcludeCallAudio:
-      extras.osCanExcludeCallAudio ?? osCanExcludeCallAudioCache === true,
+    osCanExcludeCallAudio: resolveOsCanExcludeCallAudio(
+      extras.osCanExcludeCallAudio,
+    ),
     sharePickerOffersAudio: extras.sharePickerOffersAudio === true,
     shellSystemAudio: extras.shellSystemAudio ?? null,
     shellRestrictOwnAudio: extras.shellRestrictOwnAudio ?? null,
@@ -349,7 +351,7 @@ export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
       getDesktop()?.sharePickerOffersAudio === true,
     shellSystemAudio: capabilities?.systemAudio ?? null,
     shellRestrictOwnAudio: capabilities?.restrictOwnAudio ?? null,
-    osCanExcludeCallAudio: osCanExcludeCallAudioCache === true,
+    osCanExcludeCallAudio: resolveOsCanExcludeCallAudio(undefined, capabilities),
   });
 }
 
@@ -363,6 +365,46 @@ export function liveScreenCaptureEnvironment(): ScreenCaptureEnvironment {
 export const WINDOWS_11_NT_BUILD = 22000;
 
 let osCanExcludeCallAudioCache: boolean | undefined;
+
+/**
+ * What the Electron shell already decided from `os.release()`.
+ *
+ * UA-CH is a browser hint. In the shell the main process parsed the NT
+ * build and published loopback only when exclude can run. Trust that
+ * object when it exists: Electron often has no `userAgentData`, and a
+ * false cache would hide computer sound on Windows 11.
+ *
+ * `undefined` means this is not a current shell. The UA-CH cache stays
+ * the source.
+ */
+export function osCanExcludeCallAudioFromCapabilities(
+  capabilities: Pick<
+    DesktopShareCapabilities,
+    "systemAudio" | "restrictOwnAudio"
+  > | null,
+): boolean | undefined {
+  if (!capabilities) {
+    return undefined;
+  }
+  return (
+    capabilities.systemAudio === "loopback" &&
+    capabilities.restrictOwnAudio === true
+  );
+}
+
+function resolveOsCanExcludeCallAudio(
+  override?: boolean,
+  capabilities: DesktopShareCapabilities | null = desktopShareCapabilities(),
+): boolean {
+  if (override !== undefined) {
+    return override;
+  }
+  const fromShell = osCanExcludeCallAudioFromCapabilities(capabilities);
+  if (fromShell !== undefined) {
+    return fromShell;
+  }
+  return osCanExcludeCallAudioCache === true;
+}
 
 export function resetOsCanExcludeCallAudioForTests(): void {
   osCanExcludeCallAudioCache = undefined;
@@ -424,6 +466,13 @@ async function probeOsCanExcludeCallAudio(): Promise<boolean> {
  * computer sound until we know this OS can exclude the call.
  */
 export async function ensureOsCanExcludeCallAudio(): Promise<boolean> {
+  const fromShell = osCanExcludeCallAudioFromCapabilities(
+    desktopShareCapabilities(),
+  );
+  if (fromShell !== undefined) {
+    osCanExcludeCallAudioCache = fromShell;
+    return fromShell;
+  }
   if (osCanExcludeCallAudioCache !== undefined) {
     return osCanExcludeCallAudioCache;
   }

@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
+  ensureOsCanExcludeCallAudio,
+  liveScreenCaptureEnvironment,
   needsShareAudioPrompt,
   offersBrowserSystemAudio,
   offersShellSystemAudio,
-  liveScreenCaptureEnvironment,
+  osCanExcludeCallAudioFromCapabilities,
   osCanExcludeCallFromUa,
+  resetOsCanExcludeCallAudioForTests,
   screenCaptureOptions,
+  setOsCanExcludeCallAudioForTests,
   shouldStripLeakedSystemAudio,
   shareStreamHasAudio,
   shellCarriesScreenAudio,
@@ -603,9 +607,34 @@ describe("shouldStripLeakedSystemAudio", () => {
  * picker was ready to offer the box. A capability the page forgets to pass is a
  * capability the shell does not have, so there is one reader now and this is it.
  */
+describe("osCanExcludeCallAudioFromCapabilities", () => {
+  it("is true only when the shell offers loopback and restrictOwnAudio", () => {
+    expect(
+      osCanExcludeCallAudioFromCapabilities({
+        systemAudio: "loopback",
+        restrictOwnAudio: true,
+      }),
+    ).toBe(true);
+    expect(
+      osCanExcludeCallAudioFromCapabilities({
+        systemAudio: "none",
+        restrictOwnAudio: true,
+      }),
+    ).toBe(false);
+    expect(
+      osCanExcludeCallAudioFromCapabilities({
+        systemAudio: "loopback",
+        restrictOwnAudio: false,
+      }),
+    ).toBe(false);
+    expect(osCanExcludeCallAudioFromCapabilities(null)).toBeUndefined();
+  });
+});
+
 describe("liveScreenCaptureEnvironment", () => {
   afterEach(() => {
     delete (globalThis as { window?: unknown }).window;
+    resetOsCanExcludeCallAudioForTests();
   });
 
   function setShell(shell: unknown): void {
@@ -665,5 +694,44 @@ describe("liveScreenCaptureEnvironment", () => {
     expect(env.shellPlatform).toBeNull();
     expect(env.shellSystemAudio).toBeNull();
     expect(steersAtBrowserTab(env, { preferBrowserTab: true })).toBe(true);
+  });
+
+  it("takes Win11 exclude from the shell, not the UA-CH cache", () => {
+    resetOsCanExcludeCallAudioForTests();
+    setShell({
+      isElectron: true,
+      platform: "win32",
+      capabilities: {
+        displayMedia: true,
+        systemAudio: "loopback",
+        restrictOwnAudio: true,
+        pickerOffersAudio: true,
+        version: "0.1.6",
+      },
+    });
+    expect(liveScreenCaptureEnvironment().osCanExcludeCallAudio).toBe(true);
+  });
+
+  it("refuses computer sound when the shell says loopback is off", () => {
+    setOsCanExcludeCallAudioForTests(true);
+    setShell({
+      isElectron: true,
+      platform: "win32",
+      capabilities: {
+        displayMedia: true,
+        systemAudio: "none",
+        restrictOwnAudio: false,
+        pickerOffersAudio: false,
+        version: "0.1.6",
+      },
+    });
+    expect(liveScreenCaptureEnvironment().osCanExcludeCallAudio).toBe(false);
+  });
+
+  it("keeps the UA-CH cache in a browser", async () => {
+    setShell(undefined);
+    setOsCanExcludeCallAudioForTests(true);
+    expect(liveScreenCaptureEnvironment().osCanExcludeCallAudio).toBe(true);
+    expect(await ensureOsCanExcludeCallAudio()).toBe(true);
   });
 });
