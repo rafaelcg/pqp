@@ -144,6 +144,47 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     expect(pt).toContain(ptBR["tela.seo.description"]!);
   });
 
+  it("tela paste-card OG copy matches the catalogue and differs from the search title", () => {
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+    ] as const) {
+      const head = renderMarketingHead("/tela", locale);
+      const ogTitle = (catalogue as Record<string, string>)["tela.seo.ogTitle"];
+      const ogDescription = (catalogue as Record<string, string>)[
+        "tela.seo.ogDescription"
+      ];
+      expect(ogTitle).toBeTruthy();
+      expect(ogDescription).toBeTruthy();
+      expect(ogTitle).not.toBe(
+        (catalogue as Record<string, string>)["tela.seo.title"],
+      );
+      expect(head).toContain(`<meta property="og:title" content="${ogTitle}" />`);
+      expect(head).toContain(
+        `<meta property="og:description" content="${ogDescription}" />`,
+      );
+      expect(head).toContain(`<meta name="twitter:title" content="${ogTitle}" />`);
+      expect(head).toContain(
+        `<meta name="twitter:description" content="${ogDescription}" />`,
+      );
+    }
+  });
+
+  it("pages without OG overrides reuse title and description on the paste card", () => {
+    const head = renderMarketingHead("/vs-discord", "pt-BR");
+    const title = ptBR["vsDiscord.seo.title"];
+    const description = ptBR["vsDiscord.seo.description"]!;
+    expect(head).toContain(`<title>${title}</title>`);
+    expect(head).toContain(`<meta property="og:title" content="${title}" />`);
+    expect(head).toContain(
+      `<meta property="og:description" content="${description}" />`,
+    );
+    expect(head).toContain(`<meta name="twitter:title" content="${title}" />`);
+    expect(head).toContain(
+      `<meta name="twitter:description" content="${description}" />`,
+    );
+  });
+
   it("claim title and description, under both routes", () => {
     for (const page of ["/garanta", "/claim"] as const) {
       expect(renderMarketingHead(page, "en")).toContain(
@@ -193,7 +234,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
 
   it("every /tela FAQ pair matches its tela.faq.* twin, both locales", () => {
     // Same rule as above: page order, and the JSON-LD must be the same list.
-    const ids = ["download", "vpn", "people", "free", "mobile", "data"] as const;
+    const ids = ["why", "download", "vpn", "people", "free", "mobile", "data"] as const;
     expect(TELA_FAQ.en).toHaveLength(ids.length);
     expect(TELA_FAQ["pt-BR"]).toHaveLength(ids.length);
     ids.forEach((id, index) => {
@@ -337,5 +378,16 @@ describe("injectMarketingHead", () => {
     // is the bar every failure path in this feature is held to.
     const bare = "<html><body>no head here</body></html>";
     expect(injectMarketingHead(bare, "/vs-discord", "pt-BR")).toBe(bare);
+  });
+
+  it("splits /tela search title from the paste card in pt-BR", () => {
+    const html = injectMarketingHead(INDEX_HTML, "/tela", "pt-BR");
+    expect(html).toContain(`<title>${ptBR["tela.seo.title"]}</title>`);
+    expect(html).toContain(
+      `<meta property="og:title" content="${ptBR["tela.seo.ogTitle"]}" />`,
+    );
+    expect(ptBR["tela.seo.title"]).not.toBe(ptBR["tela.seo.ogTitle"]);
+    expect(html.match(/<title>/g)).toHaveLength(1);
+    expect(html.match(/property="og:title"/g)).toHaveLength(1);
   });
 });
