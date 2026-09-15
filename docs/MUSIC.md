@@ -200,6 +200,29 @@ are not in show a card under their occupants instead
 (`channel-music-card.tsx`, off `voiceState.channelMusic`): artwork, the
 title, and an "Ouvir" that joins the call.
 
+"Assistir na tela" moves that same embed onto the call stage as a 16:9
+tile, through the one-mount portal `watch-dock.tsx` already uses: a
+detached host is `appendChild`'d between the panel's video slot and
+`MusicStageTile`. The iframe never remounts, so the sound does not stop.
+The tile joins the stage grid (featured when nothing else is, in the
+grid otherwise), keeps a title overlay and "Voltar pra barra", and uses
+the existing fullscreen control. Navigating to a text channel rescues
+the host back to the sidebar dock; the placement is remembered per
+browser in `client/src/lib/music-prefs.ts`.
+
+Ducking is personal. `music-duck.ts` ramps the embed from full volume to
+35% over 200 ms when someone is speaking (`speakingPeerIds` or this
+machine's transmit gate) and back over 800 ms when they stop. The
+preference is "Abaixar quando alguém fala", on by default; a deafened
+listener is not ducked, because nobody is audible to them.
+
+Nothing playing means the footer is empty. The note on the call bar is
+the way in, and it focuses the add box. A room that starts music still
+opens the player by default. Settings > Voz has "Entrar na música da
+call automaticamente"; off means that transition shows the one-line
+pill instead, and "Ouvir" is how you join. "Parar de ouvir" keeps you
+out for the rest of that seat.
+
 Sync rules in the player: a new track loads at the room's expected position; a
 status change plays or pauses; every two seconds a non-actor compares the
 player's clock with the room's and seeks when more than 2.5 s off; the actor
@@ -214,7 +237,6 @@ told to.
 
 ## Not done yet
 
-- Ducking the music under speech, like the watch-party stream mixer.
 - A "now playing" line in the channel, and on o recado.
 - Vote skip, a DJ permission bit, per-server history.
 - iOS and Android: the frame is shared, the players are not written.
