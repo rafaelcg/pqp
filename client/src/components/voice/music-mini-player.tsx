@@ -16,6 +16,7 @@ import {
   toggleMusicOpen,
   useMusic,
 } from "@/lib/music-store";
+import { effectiveCanManageMusic } from "@/components/voice/music-extras";
 import {
   ghostIconButton,
   MusicNowPlaying,
@@ -84,7 +85,7 @@ export function MusicMiniPlayer({
   const current = state?.current ?? null;
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
-  const canManage = voiceState.canManageMusic;
+  const canManage = effectiveCanManageMusic(voiceState, state);
   const onStage = prefs.placement === "stage" && Boolean(current) && music.listening;
 
   if (!inCall) {
