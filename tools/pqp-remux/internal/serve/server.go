@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/llstate"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
 )
 
@@ -81,6 +82,14 @@ type Server struct {
 	// is written from main's setup goroutine and read from HTTP handler
 	// goroutines.
 	audioRing atomic.Pointer[ring.Ring]
+
+	// llMeta is nil until SetLlState is called, and GET /state.json is a
+	// 404 until then. Only pqp-remuxd sets it: the session identity
+	// state.json must carry (a UUID the edge Worker derives independently
+	// and validates the shape of) is a control-plane concept the
+	// single-session binary has no equivalent for -- it knows a room and a
+	// channel, never a session id. See handleState.
+	llMeta atomic.Pointer[llstate.Meta]
 }
 
 // New builds a Server backed by r. health may be nil (then GET /healthz
@@ -92,6 +101,7 @@ func New(r *ring.Ring, health HealthSource) *Server {
 	s.mux.HandleFunc("/playlist.m3u8", s.handlePlaylist)
 	s.mux.HandleFunc("/audio-init.mp4", s.handleAudioInit)
 	s.mux.HandleFunc("/audio-playlist.m3u8", s.handleAudioPlaylist)
+	s.mux.HandleFunc("/state.json", s.handleState)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/", s.handleFragmentOrNotFound)
 	return s
@@ -103,6 +113,12 @@ func New(r *ring.Ring, health HealthSource) *Server {
 // segment exists. Safe to call at most once, concurrently with requests
 // already being served.
 func (s *Server) SetAudioRing(r *ring.Ring) { s.audioRing.Store(r) }
+
+// SetLlState turns GET /state.json on for this session, with the identity
+// and targets the document carries (internal/llstate). Called once, by
+// control.NewRemuxPipeline, right after the rings exist; never by the
+// single-session binary (see the llMeta field's own doc comment).
+func (s *Server) SetLlState(meta llstate.Meta) { s.llMeta.Store(&meta) }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
 
@@ -152,6 +168,46 @@ func (s *Server) handleAudioPlaylist(w http.ResponseWriter, r *http.Request) {
 	// names Playlist() would emit for the video ring's own routes: an
 	// unprefixed audio playlist told a player to fetch the video's URLs.
 	w.Write([]byte(ar.PlaylistWithURIPrefix("audio-")))
+}
+
+// handleState answers GET /state.json: the document tools/hls-edge reads
+// before it can render an LL playlist at all (internal/llstate's package
+// comment has the full why, including the 2026-09-15 08:01 UTC production
+// stall this route closes).
+//
+// no-store, unconditionally, including on the 404. This document changes
+// every part (~500ms) and the Worker's blocking-reload hold re-reads it in
+// a loop precisely to notice that change -- a cached copy anywhere between
+// the two is a viewer frozen at whatever edge the cache captured. The
+// Worker does its OWN in-flight de-duplication (one fetch per session per
+// instant, however many viewers are waiting), which is where the load
+// saving belongs; it is deliberately not done with a TTL here.
+//
+// 404, not 503, when there is nothing to describe yet. The Worker treats a
+// 404 as "this session is not LL, serve it conventionally" and re-probes a
+// few seconds later, while any other non-2xx is an error it logs as
+// hlsEdge.llStateFetchFailed on every single probe. "The first part has
+// not landed yet" is the ordinary first second of every session, not a
+// failure worth a log line per viewer.
+func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	meta := s.llMeta.Load()
+	if meta == nil {
+		http.Error(w, "state.json is not enabled on this session", http.StatusNotFound)
+		return
+	}
+	var audio *ring.Snapshot
+	if ar := s.audioRing.Load(); ar != nil {
+		snap := ar.Snapshot()
+		audio = &snap
+	}
+	state, ok := llstate.Build(*meta, s.ring.Snapshot(), audio)
+	if !ok {
+		http.Error(w, "no part has been written yet", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(state)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

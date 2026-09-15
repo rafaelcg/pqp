@@ -522,6 +522,22 @@ API does not reap a healthy remux session.
 
 Every task here depends on `A1.1` (PR #559 merged), and `L2.3` also on `A1.2`.
 
+**Status, 2026-09-15.** `L2.1` and `L2.2` shipped in PR #583: the Worker parses
+`_HLS_msn`/`_HLS_part`, holds one poll loop per rendition, and renders the LL
+playlist itself from a `state.json` document it fetches from the remux. The
+producer half of that document did not exist, and a live party at 08:01 UTC found
+out the expensive way: the API selected LL mode, `pqp-remuxd` started the session
+and answered 200 on `playlist.m3u8`, `init.mp4` and `audio-playlist.m3u8`, and every
+viewer stalled, because the Worker asks for `GET {LL_ORIGIN_BASE}/s/:id/state.json`
+FIRST and got a 404 (`hlsEdge.llStateFetchFailed` on every probe). **That endpoint
+now exists** (`tools/pqp-remux/internal/llstate`, served by `internal/serve` and
+mounted per session by `internal/control` behind the existing `X-Pqp-Origin-Key`
+gate), for both the video rendition and the audio twin, cross-checked against the
+Worker's own `parseLlState` by a committed golden file. What is left in `L2` before
+a viewer can actually play an LL session is `L2.3`: the Worker does not yet proxy
+the part and segment bytes its own playlists point at
+(`/{basePath}/{rung}/{name}`), so those URIs still 404 from the edge.
+
 **L2.1 Blocking playlist reload in the Worker** (2 d). `_HLS_msn`/`_HLS_part`
 parsing, one in-flight origin request per (session, rung, part) per colo with every
 waiting viewer resolved from it, and a hard timeout falling back to a non-blocking

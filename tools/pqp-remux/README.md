@@ -357,7 +357,55 @@ lifetime) — never a subprocess, never a container per session.
 | `POST /sessions` | yes | Start a session. Body: `sessionId`, `room`, `channelId`, `partMs`, `segmentMs`, `ringSegments`, `keyframePolicy`, `pliPaceMs`, `pliGateFactor` — one field per `pqp-remux` config knob (see Config above). 201 with the session's info, or 409 with the SAME info if `sessionId` already names a session (idempotent retry). |
 | `DELETE /sessions/:id` | yes | Stop a session. 204 always, including "already gone" — stopping is idempotent. |
 | `GET /sessions` | yes | Every session this process currently holds. |
-| `GET /s/:id/*` | origin key (see below) | That session's media: `init.mp4`, `playlist.m3u8`, `part-N.m4s`, `seg-N.m4s` and their `audio-*` twins — the exact route shapes `internal/serve.Server` already answers, mounted per session under one prefix so `L2.3`'s edge Worker has one origin path shape regardless of how many sessions are live. Never HMAC-signed like `/sessions` (a viewer's player cannot produce that signature, and does not need to reach this route through anything but the edge Worker in a real deployment) — see "Access control" below for what actually gates it. |
+| `GET /s/:id/*` | origin key (see below) | That session's media: `init.mp4`, `playlist.m3u8`, `state.json` (see below), `part-N.m4s`, `seg-N.m4s` and their `audio-*` twins — the exact route shapes `internal/serve.Server` already answers, mounted per session under one prefix so `L2.3`'s edge Worker has one origin path shape regardless of how many sessions are live. Never HMAC-signed like `/sessions` (a viewer's player cannot produce that signature, and does not need to reach this route through anything but the edge Worker in a real deployment) — see "Access control" below for what actually gates it. |
+
+#### `GET /s/:id/state.json`
+
+The document `tools/hls-edge` reads **before it can render an LL playlist at
+all**. That Worker renders the low-latency playlist itself
+(`EXT-X-SERVER-CONTROL`, `EXT-X-PART-INF`, `EXT-X-PART`,
+`EXT-X-PRELOAD-HINT`) rather than forwarding text this box wrote — `GET
+/playlist.m3u8` here is, and stays, a conventional playlist of sealed
+segments — so it needs the numbers those tags encode: which segments and
+parts exist, how long each is, which part starts on an IDR, and the name of
+the part that has not been written yet. `internal/llstate` renders exactly
+that from the live ring (both renditions: video, and the audio twin under
+its `audio-` names), `internal/serve` serves it at `/state.json`, and the
+contract it answers is the module doc comment of
+`tools/hls-edge/src/ll-state.js`, whose `parseLlState` is its validator.
+
+Three things worth knowing before changing it:
+
+- **The URIs are the ones this binary actually serves.** A part is
+  `part-<global CMAF sequence>.m4s` (`part-9.m4s`), a segment is
+  `seg-<index>.m4s`, and the audio twin is the same with an `audio-`
+  prefix — the names `internal/serve.Server` routes on. A part's `index`
+  field is its position within its own segment, which is a different number
+  and is what the preload hint's arithmetic uses on the Worker's side.
+- **`Cache-Control: no-store`, on the 404 too.** The document changes every
+  part (~500 ms) and the Worker's blocking-reload hold re-reads it in a loop
+  precisely to notice; a cached copy anywhere in between is a viewer frozen
+  at whatever edge the cache captured. The Worker does its own in-flight
+  de-duplication (one fetch per session per instant, however many viewers
+  are waiting), which is where the saving belongs.
+- **404 before the first part, not 503.** The Worker reads a 404 as "this
+  session is conventional, re-probe in a few seconds" and anything else as
+  an error it logs per probe. "No part has landed yet" is the ordinary first
+  second of every session.
+
+Blocking reload (`_HLS_msn`/`_HLS_part`) is **not** implemented here and is
+not meant to be: those directives never reach this box.
+`LlPlaylistOrigin` builds the origin URL from the session id alone and
+attaches no query string, and the hold lives entirely in the Worker's own
+poll loop, which re-fetches this document and re-renders until the requested
+msn/part appears. What this endpoint owes the hold is freshness, which is
+what rendering from the live ring per request, uncached, buys.
+
+Why it exists now: on **2026-09-15 at 08:01 UTC** a live party had the API
+select LL mode, this box start the session and answer 200 on
+`playlist.m3u8`, `init.mp4` and `audio-playlist.m3u8` — and every viewer
+stalled, because the Worker asks for `state.json` first and got a 404.
+Media on disk is not media a player can find.
 
 `ringSegments` is bounded (`2`..`60`, `internal/control/types.go`'s
 `minRingSegments`/`maxRingSegments`) rather than merely "a positive
@@ -895,7 +943,9 @@ why ffmpeg is a real, not incidental, dependency of this module now).
   conventional media playlist listing sealed segments. There is no
   `EXT-X-SERVER-CONTROL`, `EXT-X-PART`, `EXT-X-PRELOAD-HINT`, and no
   blocking-reload support; that is entirely the edge Worker's job in `L2.1`
-  and `L2.2`.
+  and `L2.2`. What this box now provides is the *input* to that rendering,
+  `GET /s/:id/state.json` (see "Control API" above) — structured state, not
+  playlist text, and still no `_HLS_msn`/`_HLS_part` hold of its own.
 - **Production serving surface**: `internal/serve` (the single-session
   binary's own `LISTEN`) is still explicitly a local test surface, unchanged
   by this task. `pqp-remuxd`'s `/s/:id/*` (see "Control API" above) is

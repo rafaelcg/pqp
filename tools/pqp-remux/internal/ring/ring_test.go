@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/pipeline"
 )
@@ -152,5 +153,76 @@ func TestRing_PlaylistWithURIPrefix(t *testing.T) {
 	plain := r.Playlist()
 	if !strings.Contains(plain, `URI="init.mp4"`) || !strings.Contains(plain, "seg-0.m4s") {
 		t.Fatalf("Playlist() must still emit unprefixed URIs:\n%s", plain)
+	}
+}
+
+func TestSnapshot(t *testing.T) {
+	r := New(3, 90000)
+	stamp := time.Date(2026, 9, 15, 8, 1, 0, 0, time.UTC)
+	r.SetClock(func() time.Time { return stamp })
+
+	if snap := r.Snapshot(); snap.HasInit || len(snap.Segments) != 0 || snap.HaveParts {
+		t.Fatalf("a fresh ring must snapshot empty: %+v", snap)
+	}
+
+	r.SetInit([]byte("init"))
+	r.Push(&pipeline.Fragment{SequenceNumber: 1, SegmentIndex: 0, IsSegmentStart: true, DurationTicks: 45000, Bytes: []byte("a")})
+	stamp = stamp.Add(500 * time.Millisecond)
+	r.Push(&pipeline.Fragment{SequenceNumber: 2, SegmentIndex: 0, DurationTicks: 45000, Bytes: []byte("b")})
+	stamp = stamp.Add(500 * time.Millisecond)
+	r.Push(&pipeline.Fragment{SequenceNumber: 3, SegmentIndex: 1, IsSegmentStart: true, DurationTicks: 45000, Bytes: []byte("c")})
+
+	snap := r.Snapshot()
+	if !snap.HasInit || snap.Timescale != 90000 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	if len(snap.Segments) != 2 {
+		t.Fatalf("segments = %d, want 2", len(snap.Segments))
+	}
+	if !snap.Segments[0].Sealed || snap.Segments[1].Sealed {
+		t.Fatalf("sealed flags wrong: %+v", snap.Segments)
+	}
+	// The segment's anchor is stamped when its FIRST part lands, never
+	// per part: both parts of segment 0 share 08:01:00.
+	if got := snap.Segments[0].OpenedAt; !got.Equal(time.Date(2026, 9, 15, 8, 1, 0, 0, time.UTC)) {
+		t.Fatalf("segment 0 openedAt = %v", got)
+	}
+	if got := snap.Segments[1].OpenedAt; !got.Equal(time.Date(2026, 9, 15, 8, 1, 1, 0, time.UTC)) {
+		t.Fatalf("segment 1 openedAt = %v", got)
+	}
+	// Independence is the fragmenter's own IsSegmentStart, carried
+	// through -- not inferred from a part's position.
+	if !snap.Segments[0].Parts[0].Independent || snap.Segments[0].Parts[1].Independent {
+		t.Fatalf("independence not carried through: %+v", snap.Segments[0].Parts)
+	}
+	if !snap.HaveParts || snap.NextPartSeq != 4 {
+		t.Fatalf("NextPartSeq = %d (haveParts=%v), want 4", snap.NextPartSeq, snap.HaveParts)
+	}
+}
+
+// Eviction drops parts from the ring, but the NEXT part's sequence number
+// must keep counting up: a preload hint that pointed back at an evicted
+// name would send a player after bytes this process no longer holds.
+func TestSnapshotNextPartSeqSurvivesEviction(t *testing.T) {
+	r := New(2, 90000)
+	r.SetInit([]byte("init"))
+	for i := 0; i < 5; i++ {
+		r.Push(&pipeline.Fragment{
+			SequenceNumber: uint32(i + 1),
+			SegmentIndex:   i,
+			IsSegmentStart: true,
+			DurationTicks:  45000,
+			Bytes:          []byte("x"),
+		})
+	}
+	snap := r.Snapshot()
+	if len(snap.Segments) != 2 {
+		t.Fatalf("segments = %d, want the 2 retained", len(snap.Segments))
+	}
+	if snap.Segments[0].Index != 3 || snap.Segments[1].Index != 4 {
+		t.Fatalf("retained indices = %d,%d, want 3,4", snap.Segments[0].Index, snap.Segments[1].Index)
+	}
+	if snap.NextPartSeq != 6 {
+		t.Fatalf("NextPartSeq = %d, want 6", snap.NextPartSeq)
 	}
 }

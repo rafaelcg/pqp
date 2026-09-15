@@ -16,11 +16,20 @@
  * encode — which segments and parts exist, how long each is, which part
  * starts on an IDR — structured enough to read without parsing anyone's
  * playlist text. `state.json` is that source of truth, and this file is its
- * contract: THE REMUX MUST IMPLEMENT THIS (`L1.6`/`L2.3`) for the LL rung to
- * ever serve real media; until then, `ll-playlist-origin.ts` gets a 404 or a
- * connection failure from every real deployment, which is the same "wired
- * but dark" shape `docs/plans/LL_HLS.md` uses throughout (flags, allowlists,
- * `origin_base_url` unset).
+ * contract.
+ *
+ * **THE REMUX IMPLEMENTS IT** since 2026-09-15:
+ * `tools/pqp-remux/internal/llstate` renders the document from the live
+ * ring and `internal/serve`'s `GET /state.json` serves it, mounted per
+ * session at `GET /s/:id/state.json` behind the same `X-Pqp-Origin-Key`
+ * gate as every other media route. It did not, for one live party: on
+ * 2026-09-15 at 08:01 UTC the API selected LL mode, `pqp-remuxd` started
+ * the session and served parts, segments and `init.mp4` with a 200 apiece,
+ * and every viewer stalled anyway, because this Worker asks for
+ * `state.json` FIRST and got a 404 — `hlsEdge.llStateFetchFailed` on every
+ * probe and no playlist ever built. The producer half is pinned against
+ * this parser by `test/ll-state-remux-golden.test.mjs`, which feeds it the
+ * golden document the Go renderer actually emits.
  *
  * ## The shape
  *
@@ -48,8 +57,15 @@
  *         "programDateTime": "2026-09-14T18:03:21.114Z",
  *         "uri": "seg-41.m4s",        // required when complete; omit/null otherwise
  *         "parts": [
- *           { "index": 0, "durationSecs": 0.501, "independent": true,  "uri": "part-41.0.m4s" },
- *           { "index": 1, "durationSecs": 0.498, "independent": false, "uri": "part-41.1.m4s" }
+ *           // `index` is the part's position within THIS segment; the URI is
+ *           // whatever file the origin serves it from, and `pqp-remux` names
+ *           // parts by their GLOBAL CMAF sequence number (`part-<seq>.m4s`,
+ *           // `internal/serve`), never by segment-and-index. Both are legal
+ *           // here — a URI only has to be a safe relative name this Worker
+ *           // can fetch back — and the names below are the shape a real
+ *           // deployment produces.
+ *           { "index": 0, "durationSecs": 0.501, "independent": true,  "uri": "part-164.m4s" },
+ *           { "index": 1, "durationSecs": 0.498, "independent": false, "uri": "part-165.m4s" }
  *         ]
  *       },
  *       {
@@ -57,15 +73,15 @@
  *         "complete": false,          // the segment currently being assembled — NEVER gets an EXTINF line, only its parts
  *         "programDateTime": "2026-09-14T18:03:33.114Z",
  *         "parts": [
- *           { "index": 0, "durationSecs": 0.502, "independent": true, "uri": "part-44.0.m4s" }
+ *           { "index": 0, "durationSecs": 0.502, "independent": true, "uri": "part-176.m4s" }
  *         ]
  *       }
  *     ],
- *     "preloadHint": { "msn": 44, "part": 1, "uri": "part-44.1.m4s" }  // next unwritten part, or null
+ *     "preloadHint": { "msn": 44, "part": 1, "uri": "part-177.m4s" }  // next unwritten part, or null
  *   },
  *   "audio": {                        // null/absent entirely until a stage source has spoken (mirrors `tools/pqp-remux/README.md`'s own audio-is-optional framing)
  *     "initUri": "audio-init.mp4",
- *     "segments": [ /* same shape, "audio-seg-<n>.m4s" / "audio-part-<seq>.m4s" — see pqp-remux's R2 writer for the naming precedent * / ],
+ *     "segments": [ /* same shape, "audio-seg-<n>.m4s" / "audio-part-<seq>.m4s" — the names pqp-remux's own audio ring is served under * / ],
  *     "preloadHint": { ... } | null
  *   }
  * }
@@ -197,7 +213,7 @@ function containsLineTerminator(value) {
  * pattern's charset makes that construction impossible, closing both the
  * playlist-injection and the origin-redirect readings of the same
  * underlying gap. Every legitimate name in `state.json`'s own contract
- * (`init.mp4`, `seg-41.m4s`, `part-41.0.m4s`, `audio-init.mp4`, ...) is well
+ * (`init.mp4`, `seg-41.m4s`, `part-164.m4s`, `audio-init.mp4`, ...) is well
  * inside it; 191 characters is generous headroom over anything the remux
  * actually writes.
  * @param {unknown} value
@@ -434,9 +450,8 @@ function parseTrack(raw) {
 
 /**
  * Validates and reshapes one `state.json` response. Returns `null` on
- * anything malformed — a producer bug, a corrupt response, or (today, since
- * nothing implements this endpoint yet) a caller that pointed this parser
- * at the wrong thing entirely — rather than throwing, so callers can log the
+ * anything malformed — a producer bug, a corrupt response, or a caller that
+ * pointed this parser at the wrong thing entirely — rather than throwing, so callers can log the
  * "which field" detail themselves if they want it and otherwise just treat
  * `null` the same as "origin has nothing for this session."
  *

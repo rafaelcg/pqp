@@ -361,8 +361,26 @@ this port needs no secret: a session id is not a capability). This Worker
 computes the id itself; the remux never needs to be asked for it, only to
 serve `state.json` under the id it was already started with.
 
-**Nothing implements this endpoint yet** — `ll-state.js`'s module doc
-comment carries the full JSON shape with a worked example; the summary:
+**`pqp-remuxd` implements this** (since 2026-09-15):
+`tools/pqp-remux/internal/llstate` renders the document from the session's
+live ring, `internal/serve`'s `GET /state.json` serves it, and
+`internal/control`'s `GET /s/:id/*` mounts it per session behind the same
+`X-Pqp-Origin-Key` gate as every other media route, `Cache-Control:
+no-store`. Before it existed, a live party on 2026-09-15 at 08:01 UTC had
+the API select LL mode, `pqp-remuxd` start the session and answer 200 on
+`playlist.m3u8`, `init.mp4` and `audio-playlist.m3u8` — and every viewer
+stall, because this Worker asks for `state.json` FIRST and got a 404
+(`hlsEdge.llStateFetchFailed` per probe, no playlist ever built).
+`test/ll-state-remux-golden.test.mjs` is the cross-check: it reads the
+golden document the Go renderer emits
+(`tools/pqp-remux/internal/llstate/testdata/state-golden.json`, regenerated
+with `go test ./internal/llstate -update-golden`) and asserts `parseLlState`
+accepts it and `ll-playlist.js` renders playable LL playlists from it —
+every other test here feeds the parser a fixture this half wrote, which
+proves nothing about the producer.
+
+`ll-state.js`'s module doc comment carries the full JSON shape with a worked
+example; the summary:
 
 ```jsonc
 {
@@ -385,12 +403,27 @@ comment carries the full JSON shape with a worked example; the summary:
 ```
 
 All origin-relative filenames (`seg-<n>.m4s`, `part-<seq>.m4s`, `init.mp4`,
-and their `audio-` counterparts, matching `tools/pqp-remux/README.md`'s R2
-writer naming) — fetched by THIS Worker at `{LL_ORIGIN_BASE}/s/:sessionId/<name>`,
-never handed to a viewer directly (see "Why this Worker talks to the remux
-box directly" above). `ll-state.js`'s `parseLlState` is the validator: a
-malformed document is treated exactly like "origin unreachable" by every
-caller, never a crash.
+and their `audio-` counterparts) — fetched by THIS Worker at
+`{LL_ORIGIN_BASE}/s/:sessionId/<name>`, never handed to a viewer directly
+(see "Why this Worker talks to the remux box directly" above). They are the
+names `internal/serve` genuinely answers: a part is named by its GLOBAL CMAF
+sequence number (`part-9.m4s`), NOT by segment-and-index the way the example
+in an earlier draft of `ll-state.js` drew it — a part's `index` field still
+carries its position within its own segment, because that is what the
+preload hint's arithmetic is expressed in. `ll-state.js`'s `parseLlState` is
+the validator: a malformed document is treated exactly like "origin
+unreachable" by every caller, never a crash.
+
+**The blocking-reload hold is this Worker's, not the origin's.**
+`_HLS_msn`/`_HLS_part` never reach `pqp-remuxd`: `LlPlaylistOrigin` builds
+the origin URL from the session id alone and attaches no query string, and
+`hls-blocking-reload.js`'s poll loop re-runs `fetchPlaylist` — re-fetching
+`state.json` and re-rendering — until the requested msn/part appears or the
+hold times out. So `state.json` owes the hold exactly one thing, freshness:
+it is rendered from the live ring per request and served `no-store`. The
+cross-check test also pins the round trip, asserting `parseLiveEdge` reads
+the same live edge back out of the rendered playlist that the golden
+document published.
 
 ### `LL_ORIGIN_KEY`: this Worker's credential against the remux origin
 

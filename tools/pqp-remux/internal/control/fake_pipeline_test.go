@@ -13,10 +13,11 @@ import (
 // behavior testable end to end without a live room -- see
 // registry_test.go and server_test.go.
 type fakePipeline struct {
-	mu     sync.Mutex
-	health PipelineHealth
-	body   string
-	closed bool
+	mu       sync.Mutex
+	health   PipelineHealth
+	body     string
+	closed   bool
+	lastPath string
 }
 
 func newFakePipeline(h PipelineHealth) *fakePipeline {
@@ -38,8 +39,17 @@ func (f *fakePipeline) setHealth(h PipelineHealth) {
 func (f *fakePipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	body := f.body
+	// The path as the SESSION sees it, after handleMedia strips
+	// /s/:id -- what a real *serve.Server would route on.
+	f.lastPath = r.URL.Path
 	f.mu.Unlock()
 	w.Write([]byte(body))
+}
+
+func (f *fakePipeline) path() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastPath
 }
 
 func (f *fakePipeline) setBody(body string) {

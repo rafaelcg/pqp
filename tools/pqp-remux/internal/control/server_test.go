@@ -474,6 +474,47 @@ func TestServer_MediaRoute_ProxiesUnsignedToSession(t *testing.T) {
 	}
 }
 
+// state.json is the FIRST thing the edge Worker asks for, and on
+// 2026-09-15 08:01 UTC it was the one media route this box did not answer
+// -- every other one returned 200 while every viewer stalled. This pins
+// the seam handleMedia owns: the path reaches the session unchanged, under
+// the SAME origin-key gate as every other /s/:id/* route (refused without
+// the header, served with it).
+func TestServer_MediaRoute_StateJSONReachesTheSession(t *testing.T) {
+	secret := "topsecret"
+	originKey := "origin-key-value"
+	spy := &pipelineSpy{}
+	srv, _ := newTestServerWithOriginKey(t, secret, originKey, spy.factory())
+
+	startBody, _ := json.Marshal(testStartReq(sessA, chanA, chanA))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, signedHTTPRequest(t, secret, http.MethodPost, "/sessions", startBody))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rec.Code)
+	}
+	spy.last().setBody(`{"sessionId":"x"}`)
+
+	noKey := httptest.NewRecorder()
+	srv.ServeHTTP(noKey, httptest.NewRequest(http.MethodGet, "/s/"+sessA+"/state.json", nil))
+	if noKey.Code != http.StatusUnauthorized {
+		t.Fatalf("state.json without the origin key = %d, want 401", noKey.Code)
+	}
+	if got := spy.last().path(); got != "" {
+		t.Fatalf("a refused request still reached the session at %q", got)
+	}
+
+	withKey := httptest.NewRequest(http.MethodGet, "/s/"+sessA+"/state.json", nil)
+	withKey.Header.Set(OriginKeyHeader, originKey)
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, withKey)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("state.json = %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if got := spy.last().path(); got != "/state.json" {
+		t.Fatalf("the session saw %q, want /state.json", got)
+	}
+}
+
 func TestServer_MediaRoute_UnknownSessionIs404(t *testing.T) {
 	secret := "topsecret"
 	srv, _ := newTestServer(t, secret, failingFactory)
