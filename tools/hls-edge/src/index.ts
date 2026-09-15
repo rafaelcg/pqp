@@ -34,8 +34,9 @@
  *     session/master route — see below), sharing one answer across every
  *     viewer who asks in the same window, and never caching a failure.
  *
- * TWO ROUTES, TWO CACHING RULES, because the two playlist bodies are not the
- * same kind of thing:
+ * TWO PLAYLIST ROUTES, TWO CACHING RULES, because the two playlist bodies
+ * are not the same kind of thing (and, since task L2.3, a THIRD route that
+ * is not a playlist at all — see below):
  *
  *  - `/:channelId/:startedAt/:rung` — a RENDITION's media playlist. Its body
  *    depends on nothing but (channel, session, rung, time), never on who
@@ -56,6 +57,16 @@
  *    viewer's revocation status. So this route is always forwarded with the
  *    caller's own token, never cached. It is also fetched once per viewer
  *    join, not polled, so the cost this Worker exists to cut was never here.
+ *  - `/:channelId/:startedAt/:rung/:name` — an LL session's MEDIA BYTES
+ *    (`ll-media.ts`, task L2.3): the part, segment and init files an LL
+ *    playlist's own URIs point at, fetched from the remux box and cached
+ *    per colo as `immutable` for a year. A conventional rung's segments
+ *    never come through here — those are presigned R2 URLs the player
+ *    fetches straight from storage — so this route exists only because the
+ *    remux box is a private origin with nothing to presign. Dispatched in
+ *    `fetch` below, before `handlePlaylistRequest`, because it shares only
+ *    ONE thing with the playlist routes: the credential check, which is why
+ *    that is what moved into `viewer-access.ts`.
  *
  * WHAT STAYS AUTHORITATIVE, AND THE ONE THING THAT DOES NOT. The token check
  * (signature, expiry, channel, session) runs in THIS Worker, on every
@@ -83,24 +94,14 @@
  * numbers this Worker exists to cut in the first place.
  */
 
-import {
-  HLS_VIEWER_TOKEN_PARAM,
-  describeHlsViewerToken,
-  verifyHlsViewerToken,
-} from "./hls-viewer-token.js";
-import {
-  HLS_PARTY_PASS_PARAM,
-  describeHlsPartyPass,
-  verifyHlsPartyPass,
-} from "./hls-party-pass.js";
-import {
-  PartyPassRevocationGate,
-  partyPassRequiresKvInProduction,
-} from "./party-pass-revocation.js";
+import { PartyPassRevocationGate } from "./party-pass-revocation.js";
+import { authorizeViewer, logRejection, statusForRejection } from "./viewer-access.js";
+import { cacheKeyRequest, safeCacheMatch, safeCachePut } from "./edge-cache.js";
+import { handleLlMediaRequest } from "./ll-media.js";
 import { parsePlaylistPath } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { LlPlaylistOrigin } from "./ll-playlist-origin.js";
-import { applyLlRenditionToken } from "./ll-playlist.js";
+import { applyLlRenditionCredential } from "./ll-playlist.js";
 import { playlistOriginKindForRung } from "./ll-state.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
@@ -201,81 +202,6 @@ const CACHE_TTL_SECONDS = 2;
 const UPSTREAM_TIMEOUT_MS = 8_000;
 
 /**
- * `X-HLS-Edge-Cache: 401`-shaped rejections are rate-limited the same way
- * `logHlsPlaylistRejection` is on the origin, so a broken client cannot turn
- * its own bug into a log write amplifier.
- *
- * `channelId` is an attacker-controlled path segment (up to 64 characters,
- * `playlist-route.ts`'s own bound, not this map's), so an attacker cycling
- * through distinct channel ids on every request would otherwise grow this
- * map forever — nothing ever deleted an entry, only added or updated one.
- * Two bounds, in `logRejection` below: an ACTIVE sweep drops every entry
- * whose `REJECTION_LOG_WINDOW_MS` has already closed (so ordinary traffic
- * settles back near zero entries once a flood stops), throttled to once per
- * `REJECTION_LOG_SWEEP_INTERVAL_MS` rather than on every new key — a full
- * scan is O(map size), and running it on every previously-unseen key would
- * turn a sustained stream of unique invalid requests into its own CPU cost
- * on the request hot path, which is exactly the kind of amplification this
- * whole rejection log exists to avoid elsewhere. `REJECTION_LOG_MAX_ENTRIES`
- * is the hard ceiling in between sweeps, checked (cheaply, O(1)) on every
- * new key regardless of the throttle: past it, the oldest entry (by
- * insertion order) is evicted — an approximation of LRU, not a precise one,
- * which is enough for a hostile-traffic bound on a log dedupe table, not a
- * cache whose eviction policy anyone depends on.
- */
-const REJECTION_LOG_WINDOW_MS = 30_000;
-const REJECTION_LOG_MAX_ENTRIES = 1_000;
-const REJECTION_LOG_SWEEP_INTERVAL_MS = 10_000;
-const rejectionLog = new Map<string, { at: number; suppressed: number }>();
-let rejectionLogLastSweptAt = 0;
-
-function logRejection(
-  channelId: string,
-  rung: string | undefined,
-  reason: string,
-): void {
-  const key = `${channelId}:${rung ?? "-"}:${reason}`;
-  const now = Date.now();
-  const seen = rejectionLog.get(key);
-  if (seen && now - seen.at < REJECTION_LOG_WINDOW_MS) {
-    seen.suppressed += 1;
-    return;
-  }
-  logEvent("hlsEdge.playlistRejected", {
-    channelId,
-    rung: rung ?? null,
-    reason,
-    suppressed: seen?.suppressed ?? 0,
-  });
-  if (!seen) {
-    // Active expiry, throttled: at most one full scan per
-    // `REJECTION_LOG_SWEEP_INTERVAL_MS`, regardless of how many new keys
-    // arrive in between -- see the doc comment above for why an unthrottled
-    // scan on every new key would itself be a hot-path cost.
-    if (now - rejectionLogLastSweptAt >= REJECTION_LOG_SWEEP_INTERVAL_MS) {
-      for (const [existingKey, entry] of rejectionLog) {
-        if (now - entry.at >= REJECTION_LOG_WINDOW_MS) {
-          rejectionLog.delete(existingKey);
-        }
-      }
-      rejectionLogLastSweptAt = now;
-    }
-    if (rejectionLog.size >= REJECTION_LOG_MAX_ENTRIES) {
-      // Still over the cap after expiry (a sustained flood of genuinely
-      // fresh unique keys): fall back to evicting the oldest by insertion
-      // order, an approximation of LRU that is enough for a hostile-traffic
-      // bound on a log dedupe table, not a cache anyone depends on for
-      // eviction precision.
-      const oldestKey = rejectionLog.keys().next().value;
-      if (oldestKey !== undefined) {
-        rejectionLog.delete(oldestKey);
-      }
-    }
-  }
-  rejectionLog.set(key, { at: now, suppressed: 0 });
-}
-
-/**
  * Cache hits are the common case at party scale and logging every one would
  * be exactly the write-amplifier pitfall 16 warns about, so they are counted
  * and flushed as one summary line periodically instead of one line each.
@@ -318,23 +244,6 @@ function text(status: number, body: string): Response {
   });
 }
 
-/** 401 for "not a valid credential at all", 403 for "valid, but not for this resource". */
-function statusForRejection(reason: string): number {
-  return reason === "wrong-channel" ||
-    reason === "wrong-session" ||
-    reason === "revoked" ||
-    reason === "party-pass-kv-unconfigured"
-    ? 403
-    : 401;
-}
-
-/** The cache-key request for a rendition: path only, no query — the token never varies the body. */
-function cacheKeyRequest(request: Request): Request {
-  const url = new URL(request.url);
-  url.search = "";
-  return new Request(url.toString(), { method: "GET" });
-}
-
 /**
  * Exported for `test/index.test.mjs` ONLY, the same convention
  * `ll-playlist-origin.ts` documents on its own class: this function reaches
@@ -355,72 +264,29 @@ export async function handlePlaylistRequest(
   rung: string | undefined,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const token = url.searchParams.get(HLS_VIEWER_TOKEN_PARAM);
-  const secret = env.HLS_VIEWER_TOKEN_SECRET ?? null;
-  const expected = { channelId, startedAt: Number(startedAt) };
-
-  let verified = await verifyHlsViewerToken(token, expected, secret);
-  // The party pass gates ONLY the rendition route (`rung` set). The
-  // session/master route below is always forwarded fresh with the caller's
-  // own token and never cached, so there is nothing for the pass's longer
-  // life to buy there -- see the module doc comment and `mintHlsPartyPass`'s
-  // in `hls-viewer-token.ts`.
-  let usedPartyPass = false;
-  // Set only on the party-pass path, so the final rejection block below can
-  // report the REAL reason a well-formed pass was refused -- without this,
-  // a revoked-but-otherwise-valid pass fell through to `describeHlsPartyPass`,
-  // which knows nothing about revocation and answered "malformed" for a
-  // pass that was not malformed at all.
-  let partyPassRejectReason: "revoked" | "party-pass-kv-unconfigured" | null = null;
-  if (!verified && rung) {
-    const partyPass = url.searchParams.get(HLS_PARTY_PASS_PARAM);
-    const partySecret = env.HLS_PARTY_PASS_SECRET ?? null;
-    const passVerified = await verifyHlsPartyPass(partyPass, expected, partySecret);
-    if (passVerified) {
-      if (partyPassRequiresKvInProduction(env)) {
-        // See README.md "Enabling in production": a party pass is a 6 h
-        // credential this Worker alone checks, and in production that is
-        // too wide a gap to accept with no KV denylist behind it at all --
-        // refuse outright rather than silently falling open.
-        partyPassRejectReason = "party-pass-kv-unconfigured";
-      } else {
-        const { revoked, kvError } = await partyPassRevocationGate.check(
-          env.HLS_REVOKED_USERS,
-          passVerified.userId,
-          channelId,
-          passVerified.issuedAt,
-        );
-        if (kvError) {
-          logEvent("hlsEdge.partyPassRevocationCheckError", { channelId });
-        }
-        if (revoked) {
-          partyPassRejectReason = "revoked";
-        }
-      }
-      if (!partyPassRejectReason) {
-        verified = passVerified;
-        usedPartyPass = true;
-      }
-    }
+  // One credential check for every route this Worker answers --
+  // `viewer-access.ts`, which is where this block used to live inline (see
+  // that module's header for why it moved). `allowPartyPass` is scoped to
+  // the RENDITION route: the session/master route below is always forwarded
+  // fresh with the caller's own token and never cached, so there is nothing
+  // for the pass's longer life to buy there. `checkTokenRevocation` stays
+  // false because this route's token-path revocation check runs LATER, after
+  // the blocking-reload directive is validated -- see "THE FIX FOR..."
+  // below.
+  const access = await authorizeViewer({
+    url,
+    env,
+    gate: partyPassRevocationGate,
+    channelId,
+    startedAt,
+    rung,
+    allowPartyPass: Boolean(rung),
+    checkTokenRevocation: false,
+  });
+  if (!access.ok) {
+    return json(access.status, { error: "Unauthorized", reason: access.reason });
   }
-  if (!verified) {
-    // Describe whichever credential was actually offered: a revoked/refused
-    // party pass reports that outcome directly (it verified fine as a
-    // signature; the KV check is what said no); otherwise the token if
-    // present (the common case, and what most rejections are about), the
-    // party pass only when the caller sent NO token at all.
-    const reason =
-      partyPassRejectReason ??
-      (token
-        ? ((await describeHlsViewerToken(token, expected, secret)) ?? "malformed")
-        : ((await describeHlsPartyPass(
-            url.searchParams.get(HLS_PARTY_PASS_PARAM),
-            expected,
-            env.HLS_PARTY_PASS_SECRET ?? null,
-          )) ?? "malformed"));
-    logRejection(channelId, rung, reason);
-    return json(statusForRejection(reason), { error: "Unauthorized", reason });
-  }
+  const { verified, usedPartyPass, token, credential } = access;
 
   if (!origins.api.ready) {
     logEvent("hlsEdge.originNotConfigured", { channelId, rung: rung ?? null });
@@ -608,7 +474,7 @@ export async function handlePlaylistRequest(
     // served the ordinary way below -- the non-blocking cache-or-forward
     // path -- rather than evicting or starving something already active.
     if (blockingResponse) {
-      return isLlRendition ? await stampLlToken(blockingResponse, token!) : blockingResponse;
+      return isLlRendition ? await stampLlToken(blockingResponse, credential) : blockingResponse;
     }
   }
 
@@ -620,7 +486,7 @@ export async function handlePlaylistRequest(
     const headers = new Headers(cached.headers);
     headers.set("X-HLS-Edge-Cache", "HIT");
     const response = new Response(cached.body, { status: cached.status, headers });
-    return isLlRendition ? await stampLlToken(response, token!) : response;
+    return isLlRendition ? await stampLlToken(response, credential) : response;
   }
 
   // A CACHE MISS NEEDS AN ORIGIN-VERIFIABLE TOKEN, AND A PARTY PASS IS NOT
@@ -707,7 +573,7 @@ export async function handlePlaylistRequest(
   // -- stamping only happens here, on the copy actually leaving the Worker
   // for THIS request, never on what other viewers will later read back out
   // of the cache.
-  return isLlRendition ? await stampLlToken(response, token!) : response;
+  return isLlRendition ? await stampLlToken(response, credential) : response;
 }
 
 /**
@@ -721,58 +587,16 @@ export async function handlePlaylistRequest(
  * conventional body never contains the placeholder, so calling this on one
  * would just be a wasted read-and-rebuild of every conventional response.
  */
-async function stampLlToken(response: Response, token: string): Promise<Response> {
+async function stampLlToken(
+  response: Response,
+  credential: { param: string; value: string },
+): Promise<Response> {
   const text = await response.text();
   const headers = new Headers(response.headers);
-  return new Response(applyLlRenditionToken(text, token), { status: response.status, headers });
-}
-
-/**
- * `cache.match` failing (a transient Cache API error) must read as a MISS,
- * not as a thrown error that fails the whole request — this cache is an
- * optimization, and losing it for one request is a much smaller problem than
- * turning a Cache API hiccup into a 500 for every viewer of a rung.
- */
-async function safeCacheMatch(cache: Cache, key: Request): Promise<Response | undefined> {
-  try {
-    return await cache.match(key);
-  } catch {
-    logEvent("hlsEdge.cacheReadError", {});
-    return undefined;
-  }
-}
-
-/**
- * Same reasoning in the other direction: a failed `cache.put` must not
- * become an unhandled rejection under `ctx.waitUntil` (which Cloudflare
- * treats as a Worker error) when the response it was populating the cache
- * FOR has already been served successfully.
- *
- * ONE RETRY, NOT ZERO. This is the producer's ONLY attempt at populating
- * the shared cache for this window (see "ONLY THE PRODUCER WRITES THE
- * CACHE" at the call site) — every OTHER caller sharing the coalesced fetch
- * already has its own copy of the bytes and returns successfully to its own
- * viewer regardless, so a bare `cache.put` failure was invisible to every
- * individual request while still meaning NOBODY populated the shared cache
- * for the rest of the window, undoing exactly the collapse this Worker
- * exists for. A transient Cache API error is the common failure shape here
- * (`cache.match` gets the identical treatment above), so one immediate
- * retry recovers most of them; `hlsEdge.cacheWriteError` now fires only
- * once BOTH attempts have failed, with `attempts: 2` to tell it apart from
- * a single-attempt failure if this ever needs a third try later.
- */
-async function safeCachePut(cache: Cache, key: Request, response: Response): Promise<void> {
-  try {
-    await cache.put(key, response.clone());
-    return;
-  } catch {
-    // fall through to the retry below
-  }
-  try {
-    await cache.put(key, response);
-  } catch {
-    logEvent("hlsEdge.cacheWriteError", { attempts: 2 });
-  }
+  return new Response(applyLlRenditionCredential(text, credential.param, credential.value), {
+    status: response.status,
+    headers,
+  });
 }
 
 interface FetchedPlaylist {
@@ -920,6 +744,32 @@ export default {
     // `ll-playlist-origin.ts` and the `Env.LL_ORIGIN_BASE` doc comment above.
     const apiOrigin = new ApiPlaylistOrigin(env.ORIGIN_BASE, UPSTREAM_TIMEOUT_MS);
     const llOrigin = getLlOrigin(env.LL_ORIGIN_BASE, UPSTREAM_TIMEOUT_MS, env.LL_ORIGIN_KEY);
+
+    // THE LL MEDIA ROUTE (task L2.3, `ll-media.ts`): a fourth path segment
+    // means the caller is asking for the BYTES an LL playlist's own URI
+    // named (`.../:rung/part-164.m4s`), not for a playlist. Dispatched here
+    // rather than inside `handlePlaylistRequest` because it is a different
+    // kind of response with a different cache lifetime (a year, immutable,
+    // versus two seconds) -- the one thing the two share is the credential
+    // check, which is why THAT is the part that moved into its own module
+    // (`viewer-access.ts`) instead.
+    if (match.media !== undefined && match.rung !== undefined) {
+      const mediaResponse = await handleLlMediaRequest(
+        request,
+        llOrigin,
+        caches.default,
+        ctx,
+        env,
+        partyPassRevocationGate,
+        {
+          channelId: match.channelId,
+          startedAt: match.startedAt,
+          rung: match.rung,
+          name: match.media,
+        },
+      );
+      return withCors(mediaResponse, env, request);
+    }
 
     const response = await handlePlaylistRequest(
       request,

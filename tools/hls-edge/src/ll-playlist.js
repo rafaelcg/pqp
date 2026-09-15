@@ -35,12 +35,13 @@
  * plus `/{rung}/{name}`. These are DELIBERATELY NEVER the remux origin's own
  * host — `hls-remux.ts`'s doc comment on `llPlaylistUrl` explains why a raw
  * origin URL must never reach a client: it is a bearer link nothing can
- * revoke short of ending the session. `/{rung}/{name}` is the shape
- * `docs/plans/LL_HLS.md` task `L2.3` ("Proxy `/{session}/{rung}/{seq}.{n}.m4s`
- * from the box") will make resolvable; until then a client fetching one of
- * these gets a 404 from THIS Worker (no route matches it yet) rather than a
- * bypass URL, which is the same "wired, not yet reachable" shape the rest of
- * this plan uses throughout (flags, allowlists, `origin_base_url` unset).
+ * revoke short of ending the session. `/{rung}/{name}` is answered by THIS
+ * Worker, in `ll-media.ts` (`docs/plans/LL_HLS.md` task `L2.3`, shipped):
+ * the token on the URI is checked the same way it is on this playlist, and
+ * the bytes are fetched from `{LL_ORIGIN_BASE}/s/{sessionId}/{name}` and
+ * cached per colo, immutably. Until that route existed every URI this file
+ * emitted 404'd, which is why `L2.2` shipped a playlist that was correct
+ * and unplayable.
  *
  * THE TOKEN, AND WHY `buildLlRenditionPlaylist` NEVER TAKES ONE. PR #572's
  * party-lifetime pass established that the viewer's own `?t=` token stays on
@@ -124,7 +125,37 @@ function withToken(uri, token) {
  * @returns {string}
  */
 export function applyLlRenditionToken(playlistText, token) {
-  return playlistText.split(LL_TOKEN_PLACEHOLDER).join(encodeURIComponent(token));
+  return applyLlRenditionCredential(playlistText, HLS_VIEWER_TOKEN_PARAM, token);
+}
+
+/**
+ * The same substitution, for a viewer whose credential is NOT a `?t=` token.
+ *
+ * WHY THIS EXISTS. A rendition is authorized by either a viewer token or a
+ * party pass (`index.ts`, `viewer-access.ts`) — and a party-pass viewer may
+ * have no `?t=` at all, or one that has since expired. Stamping "their
+ * token" into every URI then wrote the string `null`, or a token that no
+ * longer verifies, into the init/segment/part URIs of a playlist that had
+ * just been served to them successfully. Nothing noticed while those URIs
+ * 404'd from this Worker anyway; task `L2.3` made them real, and a media
+ * request is authorized by exactly the same two credentials the playlist
+ * request was. So the credential that got the viewer THIS body is the one
+ * stamped into it, whichever of the two it was.
+ *
+ * Replaces the whole `param=placeholder` pair, not just the placeholder, so
+ * a party pass comes back as `?pp=...` rather than a pass smuggled in under
+ * the token's own parameter name (which `verifyHlsViewerToken` would refuse,
+ * by construction).
+ *
+ * @param {string} playlistText
+ * @param {string} param
+ * @param {string} value
+ * @returns {string}
+ */
+export function applyLlRenditionCredential(playlistText, param, value) {
+  return playlistText
+    .split(`${HLS_VIEWER_TOKEN_PARAM}=${LL_TOKEN_PLACEHOLDER}`)
+    .join(`${param}=${encodeURIComponent(value)}`);
 }
 
 /**

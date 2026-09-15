@@ -216,11 +216,17 @@ function containsLineTerminator(value) {
  * (`init.mp4`, `seg-41.m4s`, `part-164.m4s`, `audio-init.mp4`, ...) is well
  * inside it; 191 characters is generous headroom over anything the remux
  * actually writes.
+ *
+ * EXPORTED since task `L2.3`: the media route
+ * (`playlist-route.ts`'s fourth path segment, `LlPlaylistOrigin.fetchMedia`)
+ * accepts exactly the names a `state.json` could legally have named, so the
+ * door the Worker opens is no wider than the document on the other side of
+ * it — one pattern, checked at both ends.
  * @param {unknown} value
  * @returns {value is string}
  */
 const URI_SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$/;
-function isSafeUriSegment(value) {
+export function isSafeUriSegment(value) {
   return typeof value === "string" && URI_SEGMENT_PATTERN.test(value) && !containsLineTerminator(value);
 }
 
