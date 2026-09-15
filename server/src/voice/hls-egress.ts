@@ -3357,7 +3357,12 @@ export async function adoptRunningLiveHlsSession(
   if (!isLiveHlsEnabled() || rooms.has(channelId)) {
     return { kind: "fresh" };
   }
-  const decisionKey = `${channelId}:${presenterPeerId}`;
+  // LENGTH-PREFIXED, not `a:b`. Both halves are ids this process is handed
+  // rather than ids it mints, so a separator either of them could contain
+  // would let two different pairs share one key and hand a presenter an
+  // answer decided about somebody else -- the very thing keying by presenter
+  // is here to stop. The length makes the split unambiguous for any string.
+  const decisionKey = `${channelId.length}:${channelId}:${presenterPeerId}`;
   const cached = resumeDecisionCache.get(decisionKey);
   if (cached && now - cached.at < RESUME_DECISION_TTL_MS) {
     return cached.decision;
