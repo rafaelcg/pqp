@@ -40,6 +40,11 @@ export const musicTrackSchema = z.object({
 
 export type MusicTrack = z.infer<typeof musicTrackSchema>;
 
+export const MUSIC_HISTORY_LIMIT = 10;
+
+export const musicRepeatSchema = z.enum(["off", "one", "all"]);
+export type MusicRepeat = z.infer<typeof musicRepeatSchema>;
+
 export const musicStateSchema = z.object({
   /** What is playing. Null with a non-empty queue is a transient the next write fixes. */
   current: musicTrackSchema.nullable(),
@@ -51,13 +56,52 @@ export const musicStateSchema = z.object({
   /** Logical clock. Higher wins; ties break on `actorId`. */
   rev: z.number().int().nonnegative(),
   actorId: z.string().min(1).max(128),
+  /**
+   * While true, anyone with SPEAK is treated as a manager. Only a manager
+   * writes this. Defaulted so a frame from an older client still parses.
+   */
+  openControls: z.boolean().default(false),
+  repeat: musicRepeatSchema.default("off"),
+  /** User ids that have voted to skip the current track. */
+  skipVotes: z.array(z.string().min(1).max(128)).max(64).default([]),
+  /** Most recent first. */
+  history: z.array(musicTrackSchema).max(MUSIC_HISTORY_LIMIT).default([]),
 });
 
 export type MusicState = z.infer<typeof musicStateSchema>;
 
+/**
+ * A `set-music` write. The new fields are optional so a frame from an
+ * older client still parses, and omitted keys stay omitted (`.default`
+ * would fill them and wipe the room's votes, history and switches on
+ * the next position sample).
+ */
+export const musicStateWriteSchema = musicStateSchema.extend({
+  openControls: z.boolean().optional(),
+  repeat: musicRepeatSchema.optional(),
+  skipVotes: z.array(z.string().min(1).max(128)).max(64).optional(),
+  history: z.array(musicTrackSchema).max(MUSIC_HISTORY_LIMIT).optional(),
+});
+
+export type MusicStateWrite = z.infer<typeof musicStateWriteSchema>;
+
+/** Fill fields an older writer omitted from what the room already holds. */
+export function completeMusicState(
+  held: MusicState | null,
+  incoming: MusicStateWrite,
+): MusicState {
+  return {
+    ...incoming,
+    openControls: incoming.openControls ?? held?.openControls ?? false,
+    repeat: incoming.repeat ?? held?.repeat ?? "off",
+    skipVotes: incoming.skipVotes ?? held?.skipVotes ?? [],
+    history: incoming.history ?? held?.history ?? [],
+  };
+}
+
 export const setMusicMessageSchema = z.object({
   type: z.literal("set-music"),
-  state: musicStateSchema.nullable(),
+  state: musicStateWriteSchema.nullable(),
 });
 
 export type SetMusicMessage = z.infer<typeof setMusicMessageSchema>;
@@ -87,6 +131,8 @@ export const channelMusicTrackSchema = z.object({
   videoId: z.string().min(1).max(64),
   title: z.string().min(1).max(200),
   thumbnailUrl: z.string().url().max(2048).nullable(),
+  /** Seated peers whose player is on. Absent on an older server. */
+  listeners: z.number().int().nonnegative().optional(),
 });
 
 export type ChannelMusicTrack = z.infer<typeof channelMusicTrackSchema>;
@@ -148,7 +194,28 @@ export function musicWriteIsStructural(
   if (held.queue.length !== incoming.queue.length) {
     return true;
   }
-  return held.queue.some((track, index) => track.id !== incoming.queue[index]?.id);
+  if (held.queue.some((track, index) => track.id !== incoming.queue[index]?.id)) {
+    return true;
+  }
+  if ((held.openControls ?? false) !== (incoming.openControls ?? false)) {
+    return true;
+  }
+  if ((held.repeat ?? "off") !== (incoming.repeat ?? "off")) {
+    return true;
+  }
+  if (!sameIdList(held.skipVotes ?? [], incoming.skipVotes ?? [])) {
+    return true;
+  }
+  if ((held.history ?? []).length !== (incoming.history ?? []).length) {
+    return true;
+  }
+  return (held.history ?? []).some(
+    (track, index) => track.id !== (incoming.history ?? [])[index]?.id,
+  );
+}
+
+function sameIdList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
 // ------------------------------------------------------------------ rights
@@ -166,6 +233,126 @@ export interface MusicRights {
   canManage: boolean;
   /** `Permission.SPEAK`: may put songs on. */
   canAdd: boolean;
+  /** People seated in the call, the same count the roster uses. */
+  roomSize: number;
+}
+
+/** Votes needed to skip: half the room, at least two. */
+export function musicSkipVotesNeeded(roomSize: number): number {
+  return Math.max(2, Math.ceil(roomSize / 2));
+}
+
+function withMusicDefaults(
+  state: MusicState,
+): MusicState {
+  return {
+    ...state,
+    openControls: state.openControls ?? false,
+    repeat: state.repeat ?? "off",
+    skipVotes: state.skipVotes ?? [],
+    history: state.history ?? [],
+  };
+}
+
+function pushHistory(history: MusicTrack[], finished: MusicTrack): MusicTrack[] {
+  const without = history.filter((track) => track.videoId !== finished.videoId);
+  return [finished, ...without].slice(0, MUSIC_HISTORY_LIMIT);
+}
+
+/**
+ * Canonical next state when the current track ends or is skipped.
+ * `rev` / `actorId` / `atMs` are the writer's to fill.
+ */
+export function musicAdvance(
+  held: MusicState,
+): Omit<MusicState, "rev" | "actorId" | "atMs"> {
+  const state = withMusicDefaults(held);
+  const finished = state.current;
+  const history = finished ? pushHistory(state.history, finished) : state.history;
+  const skipVotes: string[] = [];
+  const openControls = state.openControls;
+  const repeat = state.repeat;
+
+  if (repeat === "one" && finished) {
+    return {
+      current: finished,
+      queue: state.queue,
+      status: "playing",
+      positionMs: 0,
+      openControls,
+      repeat,
+      skipVotes,
+      history,
+    };
+  }
+
+  const rotated =
+    repeat === "all" && finished ? [...state.queue, finished] : [...state.queue];
+  const next = rotated[0] ?? null;
+  return {
+    current: next,
+    queue: next ? rotated.slice(1) : rotated,
+    status: next ? "playing" : "paused",
+    positionMs: 0,
+    openControls,
+    repeat,
+    skipVotes,
+    history,
+  };
+}
+
+function sameSkipVotes(a: string[], b: string[]): boolean {
+  return sameIdList(a, b);
+}
+
+function sameHistory(a: MusicTrack[], b: MusicTrack[]): boolean {
+  return sameTracks(a, b);
+}
+
+function controlsUnchanged(held: MusicState, incoming: MusicStateWrite): boolean {
+  return (
+    (held.openControls ?? false) === (incoming.openControls ?? false) &&
+    (held.repeat ?? "off") === (incoming.repeat ?? "off")
+  );
+}
+
+/** Incoming is held plus only this user's id, nothing removed, nobody else's id added. */
+function isOwnSkipVoteAdd(
+  heldVotes: string[],
+  incomingVotes: string[],
+  userId: string,
+): boolean {
+  const heldSet = new Set(heldVotes);
+  const incomingSet = new Set(incomingVotes);
+  if (incomingSet.size !== heldSet.size + 1) {
+    return false;
+  }
+  if (!incomingSet.has(userId) || heldSet.has(userId)) {
+    return false;
+  }
+  for (const id of heldSet) {
+    if (!incomingSet.has(id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function matchesAdvance(held: MusicState, incoming: MusicStateWrite): boolean {
+  const expected = musicAdvance(held);
+  const positionOk =
+    incoming.positionMs === 0 ||
+    incoming.positionMs === expected.positionMs;
+  return (
+    positionOk &&
+    incoming.status === expected.status &&
+    sameOrNull(expected.current, incoming.current) &&
+    sameTracks(expected.queue, incoming.queue) &&
+    (incoming.openControls ?? false) === expected.openControls &&
+    (incoming.repeat ?? "off") === expected.repeat &&
+    sameSkipVotes(incoming.skipVotes ?? [], expected.skipVotes) &&
+    sameHistory(incoming.history ?? [], expected.history)
+  );
 }
 
 function ids(tracks: MusicTrack[]): string[] {
@@ -207,41 +394,61 @@ function sameOrNull(a: MusicTrack | null, b: MusicTrack | null): boolean {
  * Whether one `set-music` write is within the sender's rights. The server
  * decides on this; the client uses it to draw only what will be allowed.
  *
- * A manager may do anything. Anybody else may: put on the first song when
- * nothing is on (and only their own); append their own songs to the end;
- * remove their own; move the queue along once the current track has run
- * out (the only advance the server can tell from a skip: the last sample
- * says the track is within `MUSIC_END_GRACE_MS` of its end); and, as the
- * room's last writer, sample position and fill in the duration. Pausing,
- * skipping, reordering, touching other people's songs and ending it for
- * the room are the manager's.
+ * A manager may do anything. `openControls` on the held state promotes
+ * anyone with SPEAK to that same bar. Anybody else may: put on the first
+ * song when nothing is on (and only their own); append their own songs to
+ * the end; remove their own; add their own skip vote; move the queue along
+ * once the current track has run out or enough skip votes are in; and, as
+ * the room's last writer, sample position and fill in the duration.
+ * Pausing, skipping, reordering, touching other people's songs, flipping
+ * the room switches and ending it for the room are the manager's.
  */
 export function musicWriteAllowed(
   held: MusicState | null,
-  incoming: MusicState | null,
+  incoming: MusicStateWrite | null,
   rights: MusicRights,
 ): boolean {
-  if (rights.canManage) {
+  const canManage =
+    rights.canManage || (held?.openControls === true && rights.canAdd);
+  if (canManage) {
     return true;
   }
   if (incoming === null) {
     return false;
   }
+  incoming = completeMusicState(held, incoming);
   const own = (track: MusicTrack) => track.addedByUserId === rights.userId;
   if (held === null) {
     return (
       rights.canAdd &&
       incoming.current !== null &&
       own(incoming.current) &&
-      incoming.queue.every(own)
+      incoming.queue.every(own) &&
+      (incoming.openControls ?? false) === false &&
+      (incoming.repeat ?? "off") === "off" &&
+      (incoming.skipVotes ?? []).length === 0 &&
+      (incoming.history ?? []).length === 0
     );
   }
   const sameCurrent = sameOrNull(held.current, incoming.current);
   const sameStatus = held.status === incoming.status;
+  const historyHeld = held.history ?? [];
+  const historyIncoming = incoming.history ?? [];
+  const votesHeld = held.skipVotes ?? [];
+  const votesIncoming = incoming.skipVotes ?? [];
   if (sameCurrent && sameStatus) {
-    // Position sample, or the duration being filled in.
+    if (!controlsUnchanged(held, incoming) || !sameHistory(historyHeld, historyIncoming)) {
+      return false;
+    }
+    // Position sample, duration fill, and/or this person's skip vote.
     if (sameTracks(held.queue, incoming.queue)) {
-      return true;
+      if (sameSkipVotes(votesHeld, votesIncoming)) {
+        return true;
+      }
+      return isOwnSkipVoteAdd(votesHeld, votesIncoming, rights.userId);
+    }
+    if (!sameSkipVotes(votesHeld, votesIncoming)) {
+      return false;
     }
     // Append own to the end, the front untouched.
     const prefixSame =
@@ -256,20 +463,17 @@ export function musicWriteAllowed(
     const removed = held.queue.filter((track) => !incomingIds.has(track.id));
     return removed.length > 0 && removed.every(own) && sameTracks(kept, incoming.queue);
   }
-  // The track ran out while playing: the next one comes on at 0, nothing
-  // else moved. A paused track has not run out, however far along it is.
-  const next = held.queue[0] ?? null;
-  const advanced =
-    held.status === "playing" &&
-    incoming.status === (next ? "playing" : "paused") &&
-    sameOrNull(next, incoming.current) &&
-    sameTracks(held.queue.slice(1), incoming.queue) &&
-    incoming.positionMs === 0;
-  if (advanced && held.current) {
-    const duration = held.current.durationMs;
-    return duration !== null && held.positionMs >= duration - MUSIC_END_GRACE_MS;
+  if (!matchesAdvance(held, incoming)) {
+    return false;
   }
-  return false;
+  const ranOut =
+    held.status === "playing" &&
+    held.current !== null &&
+    held.current.durationMs !== null &&
+    held.positionMs >= held.current.durationMs - MUSIC_END_GRACE_MS;
+  const votes = new Set([...votesHeld, rights.userId]);
+  const votedOut = votes.size >= musicSkipVotesNeeded(rights.roomSize);
+  return ranOut || votedOut;
 }
 
 // ------------------------------------------------------------- link parsing
