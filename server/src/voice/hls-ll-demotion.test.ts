@@ -725,19 +725,76 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       noteLlDemotion(`party-${i}`);
     }
 
-    expect(llMemoSizesForTests().entriesScanned).toBe(0);
-    // Bounded without a sweep: the cap evicts the least recently written key
-    // in constant time, so memory never depends on how many parties this
-    // process has demoted.
-    for (let i = 0; i < 1000; i += 1) {
-      noteLlDemotion(`more-${i}`);
-    }
     const sizes = llMemoSizesForTests();
     expect(sizes.entriesScanned).toBe(0);
-    expect(sizes.demotedParties).toBeLessThanOrEqual(1024);
-    // The oldest went first and the newest is still there.
-    expect(llDemotedRecently("party-0")).toBe(false);
-    expect(llDemotedRecently("more-999")).toBe(true);
+    expect(sizes.demotedParties).toBe(1000);
+    expect(llDemotedRecently("party-0")).toBe(true);
+    expect(llDemotedRecently("party-999")).toBe(true);
+  });
+
+  /**
+   * A CAP MAY NEVER COST A LIVE VETO.
+   *
+   * Evicting the least recently written entry is only safe when it has
+   * expired. Dropping a live one hands the party it is about straight back
+   * onto LL inside the window the memo exists to cover -- and the condition
+   * that fills this map is a burst of demotions, which is the database
+   * failure the memo is the belt for (a Farol finding on this PR).
+   */
+  it("(1b-octies) refuses LL for everyone rather than drop a live veto", async () => {
+    for (let i = 0; i < 1024; i += 1) {
+      noteLlDemotion(`live-${i}`);
+    }
+    expect(llMemoSizesForTests().demotedParties).toBe(1024);
+
+    noteLlDemotion("overflow");
+
+    // Nothing was lost, and nothing grew.
+    expect(llMemoSizesForTests()).toMatchObject({
+      demotedParties: 1024,
+      entriesScanned: 0,
+    });
+    expect(llDemotedRecently("live-0")).toBe(true);
+    expect(llDemotedRecently("live-1023")).toBe(true);
+    // And the party that could not be recorded is refused anyway: with the
+    // memo saturated the answer for every party is no, until a sweep makes
+    // room. Fail closed beats guessing which veto was safe to lose.
+    expect(llDemotedRecently("overflow")).toBe(true);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlDemotionMemoFull",
+      expect.objectContaining({ partySessionId: "overflow", cap: 1024 }),
+    );
+
+    // Once the entries expire, the sweep prunes them and the saturation goes
+    // with the condition: a fresh party is eligible again.
+    await sweepLlDemotions(Date.now() + 6 * 60_000);
+    expect(llMemoSizesForTests().demotedParties).toBe(0);
+    expect(llDemotedRecently("overflow")).toBe(false);
+  });
+
+  it("(1b-nonies) evicts an EXPIRED entry to make room, rather than saturating", async () => {
+    const old = Date.now() - 6 * 60_000;
+    noteLlDemotion("stale", old);
+    for (let i = 0; i < 1023; i += 1) {
+      noteLlDemotion(`live-${i}`);
+    }
+    expect(llMemoSizesForTests().demotedParties).toBe(1024);
+
+    noteLlDemotion("fresh");
+
+    // The expired one made way, in one constant-time look: insertion order
+    // is write order, so the least recently written entry is the only
+    // candidate that needs testing.
+    expect(llMemoSizesForTests()).toMatchObject({
+      demotedParties: 1024,
+      entriesScanned: 0,
+    });
+    expect(llDemotedRecently("fresh")).toBe(true);
+    expect(llDemotedRecently("live-0")).toBe(true);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsLlDemotionMemoFull",
+      expect.anything(),
+    );
   });
 
   it("(1c) never stops a demoted session whose row another live instance has taken", async () => {

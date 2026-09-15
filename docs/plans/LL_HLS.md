@@ -420,10 +420,15 @@ a prolonged attribution failure is exactly the condition that produces an
 unattributed demotion in the first place, and an expiry shorter than the
 repair reopens the window mid-failure.
 
-Both memos are bounded in constant time rather than by sweeping on the write:
-a write is `rememberBounded` (three Map operations plus, at the cap, a single
-eviction of the least recently written key), and the full sweep runs only on
-the health tick and a lazy unref'd timer. A threshold-triggered sweep on the
+Both memos are bounded in constant time rather than by sweeping on the write,
+and the full sweep runs only on the health tick and a lazy unref'd timer. The
+log memo evicts the least recently written key at its cap, because losing one
+costs an extra line. The demotion memo may only evict an EXPIRED entry (one
+constant-time look: insertion order is write order, so if the least recently
+written entry is live, none is) -- dropping a live veto would hand the party it
+is about straight back onto LL inside the window the memo covers. A memo full
+of live vetoes fails closed instead: `voice.hlsLlDemotionMemoFull`, and every
+party is refused LL until a sweep makes room. A threshold-triggered sweep on the
 write path is the same quadratic shape one threshold further out, which is
 what two rounds of Farol on this change were about.
 

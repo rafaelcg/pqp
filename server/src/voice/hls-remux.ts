@@ -341,7 +341,65 @@ const llDemotedAt = new Map<string, number>();
  * ends takes its entry with it within five minutes either way.
  */
 export function noteLlDemotion(partySessionId: string, now = Date.now()): void {
-  rememberBounded(llDemotedAt, partySessionId, now, MAX_LL_DEMOTION_MEMOS);
+  ensureMemoPruneTimer();
+  if (llDemotedAt.has(partySessionId)) {
+    // Re-noting the same party: refresh it and move it to the end, so
+    // insertion order stays write order for the eviction rule below.
+    llDemotedAt.delete(partySessionId);
+    llDemotedAt.set(partySessionId, now);
+    return;
+  }
+  if (llDemotedAt.size >= MAX_LL_DEMOTION_MEMOS) {
+    // THE CAP MAY ONLY TAKE AN EXPIRED ENTRY. Evicting the oldest outright
+    // discards a LIVE veto, and the party it is about is then free to be
+    // handed LL again inside the very window the memo exists to cover -- the
+    // database-failure window, which is exactly when a burst of demotions
+    // would fill this map in the first place (a Farol finding on this PR).
+    //
+    // One look answers it: insertion order is write order, so if the least
+    // recently written entry is not expired, nothing else is either.
+    const oldest = llDemotedAt.entries().next();
+    if (!oldest.done && now - oldest.value[1] > LL_DEMOTION_MEMO_MS) {
+      llDemotedAt.delete(oldest.value[0]);
+    } else {
+      // A thousand live demotions inside five minutes is a catastrophe, not
+      // a busy evening. Nothing is dropped and the answer for every party
+      // becomes "no LL until the sweep prunes this" -- fail closed, because
+      // the alternative is guessing which veto was safe to lose.
+      noteDemotionMemoFull(partySessionId, now);
+      return;
+    }
+  }
+  llDemotedAt.set(partySessionId, now);
+}
+
+/**
+ * The memo is full of vetoes that are all still live. Until the sweep can
+ * prune it, `llDemotedRecently` answers yes for every party: the one thing
+ * that must not happen is a demoted party being handed LL again because its
+ * entry lost a race for a slot.
+ */
+let memoSaturatedAt: number | null = null;
+const MEMO_FULL_LOG_WINDOW_MS = 60_000;
+let memoFullLoggedAt = 0;
+
+function noteDemotionMemoFull(partySessionId: string, now: number): void {
+  memoSaturatedAt = now;
+  if (now - memoFullLoggedAt < MEMO_FULL_LOG_WINDOW_MS) {
+    return;
+  }
+  memoFullLoggedAt = now;
+  logEvent("voice.hlsLlDemotionMemoFull", {
+    partySessionId,
+    entries: llDemotedAt.size,
+    cap: MAX_LL_DEMOTION_MEMOS,
+  });
+}
+
+function demotionMemoSaturated(now: number): boolean {
+  return (
+    memoSaturatedAt !== null && now - memoSaturatedAt < LL_DEMOTION_MEMO_MS
+  );
 }
 
 /**
@@ -397,6 +455,10 @@ function ensureMemoPruneTimer(): void {
  * keeps its original insertion position on an overwrite, so without it the
  * eviction below would drop the key that has been written most often rather
  * than the one written longest ago.
+ *
+ * ONLY FOR `lastModeResolved`, whose entries are a log rate limit: losing one
+ * costs an extra line and nothing else. `llDemotedAt` holds vetoes and refuses
+ * to drop a live one, so it has its own rule in `noteLlDemotion`.
  */
 function rememberBounded<V>(
   map: Map<string, V>,
@@ -417,6 +479,9 @@ function rememberBounded<V>(
 
 function pruneLlMemos(now: number): void {
   memoEntriesScanned += llDemotedAt.size + lastModeResolved.size;
+  // Whatever it was, it is not saturated once the sweep below has run and
+  // left room: the fail-closed answer lasts exactly as long as the condition.
+  memoSaturatedAt = null;
   for (const [id, at] of llDemotedAt) {
     if (now - at > LL_DEMOTION_MEMO_MS) {
       llDemotedAt.delete(id);
@@ -440,6 +505,9 @@ export function llDemotedRecently(
 ): boolean {
   if (partySessionId === null) {
     return false;
+  }
+  if (demotionMemoSaturated(now)) {
+    return true;
   }
   const at = llDemotedAt.get(partySessionId);
   return at !== undefined && now - at < LL_DEMOTION_MEMO_MS;
@@ -2373,6 +2441,8 @@ export function resetHlsRemuxForTests(): void {
     memoPruneTimer = null;
   }
   memoEntriesScanned = 0;
+  memoSaturatedAt = null;
+  memoFullLoggedAt = 0;
   pendingDemotions.clear();
   llStartFailures = 0;
   llStopFailures = 0;
