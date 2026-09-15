@@ -57,8 +57,8 @@ import {
  *   `sequenceStuckMs`.
  *
  *   LL keeps the older three-step in-place ladder, then the same
- *   `"reconnect"` backoff. Do not fold the conventional hold into LL — #646
- *   tried a broader live-edge recovery and #650 had to revert it after it
+ *   `"reconnect"` backoff. Do not fold the conventional hold into LL — PR 646
+ *   tried a broader live-edge recovery and PR 650 had to revert it after it
  *   broke conventional playback.
  *
  *   `"reconnect"` checks back off (doubling, capped at

@@ -167,7 +167,7 @@ describe("HlsStallWatch", () => {
     });
 
     it("ll: still walks the three-step in-place ladder, then reconnects on a backoff", () => {
-      // #650: do not fold the conventional hold into LL. LL keeps the
+      // PR 650: do not fold the conventional hold into LL. LL keeps the
       // older ladder; only conventional skips it for the restart window.
       const watch = new HlsStallWatch();
       watch.onSourceChanged(T0);
