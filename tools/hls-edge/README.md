@@ -599,8 +599,10 @@ as the `state.json` probe does it.
    colo produce ONE origin fetch, which is this task's stated acceptance
    test and what `test/ll-media.test.mjs` asserts first. Concurrent misses
    on the same part are coalesced onto one in-flight promise
-   (`inFlightMediaFetches`, the same pattern `fetchRenditionCoalesced`
-   uses), and only the producer writes the cache entry.
+   (`inFlightMediaFetches`, through the same `coalesceFetch` helper
+   `fetchRenditionCoalesced` uses), and only the producer writes the cache
+   entry — see "The joiner and the context it does not own" below for why
+   that join is bounded and detachable rather than a bare `await`.
    `Cache-Control: public, max-age=31536000, immutable` because a part, a
    segment and an init segment are written once and never rewritten: their
    names carry a sequence number, so a changed byte is always a new name.
@@ -653,6 +655,50 @@ rendition matched no route at all and 404'd from the edge before a line of
 LL code ran — the video rung worked, which is exactly the shape that makes
 this kind of thing hard to see. Pinned now by
 `test/playlist-route.test.mjs`.
+
+### The joiner and the context it does not own (2026-09-15)
+
+The evening after PR #645 fixed this on the playlist path, five **media**
+requests were killed by the Workers runtime with *"your Worker's code had hung
+and would never generate a response"*, each after a wall time of **5-6 ms**:
+`ll/part-941.m4s`, `ll/part-1004.m4s`, `ll-audio/audio-part-1020.m4s`,
+`ll-audio/audio-part-1030.m4s`, `ll-audio/audio-part-1475.m4s`. The origin
+behind them answered 3,093 requests over the same window with two legitimate
+404s and a max of 691 ms.
+
+Same rule, one layer over (see "Blocking reload" above for the derivation): a
+`fetch()` and a `setTimeout()` belong to the request context that created
+them. `ll-media.ts` had `ctx.waitUntil` on the producer and read as covered,
+but `waitUntil` anchors the producer and does nothing for the **joiner** —
+and this route's joiners are not an edge case. Two players on one LL session
+(a viewer and the host's own "Público" preview) ask for the same part within
+about 15 ms all evening, so one produces and one joins; hls.js cancels a part
+request the moment it decides it has stalled, which takes the producing
+request's context with it, and the joiner was parked on two promises that
+context owned: the origin fetch, and the cache write it waits for before
+reading the entry back.
+
+Four layers, same shape as #645's:
+
+1. **`coalesceFetch`** replaces the hand-rolled in-flight map: a bounded,
+   detachable join with the producer anchored by `ctx.waitUntil` and a single
+   producer per key elected at settlement. `hlsEdge.llMediaJoinDetached`.
+2. **The wait on the producer's cache write is bounded too**
+   (`DEFAULT_MEDIA_WRITE_JOIN_BOUND_MS`, 1 s), by a timer in the joiner's own
+   context, and a write that misses its bound is dropped from the map so the
+   next arrival does not queue behind the same dead context.
+   `hlsEdge.llMediaWriteJoinTimeout`.
+3. **The write is published from inside the shared chain**, the instant the
+   origin answers, so an arrival always has either the in-flight fetch or the
+   in-flight write to join — the window Farol caught on this route's first
+   commit, which `coalesceFetch` deleting its map entry at settlement would
+   otherwise have reopened.
+4. **A last-resort `Promise.race`** over the whole served path
+   (`DEFAULT_MEDIA_HARD_TIMEOUT_MS`, 5 s), armed in this request's own
+   context. It is what makes the hang detector structurally unreachable here:
+   the request always holds live pending I/O of its own. When it fires, the
+   request answers itself by fetching the part directly.
+   `hlsEdge.llMediaHardTimeout`, which belongs at zero.
 
 ## Why the cache key drops the token
 
