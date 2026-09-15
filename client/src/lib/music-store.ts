@@ -1,11 +1,17 @@
 import { useSyncExternalStore } from "react";
 import {
   MUSIC_QUEUE_LIMIT,
+  completeMusicState,
+  musicAdvance,
+  musicSkipVotesNeeded,
   musicWriteIsStale,
+  type MusicRepeat,
   type MusicResolved,
   type MusicState,
   type MusicTrack,
 } from "@pqp/shared";
+
+export { musicSkipVotesNeeded };
 
 /**
  * THE ROOM'S MUSIC QUEUE, ON THIS MACHINE.
@@ -29,6 +35,7 @@ export interface MusicSession {
   userId: string;
   displayName: string;
   send: (state: MusicState | null) => void;
+  sendListening?: (listening: boolean) => void;
 }
 
 export interface MusicSnapshot {
@@ -87,6 +94,9 @@ export function setMusicSession(next: MusicSession | null): void {
     snapshot = { ...snapshot, listening: true, open: false };
   }
   set(null, next?.channelId ?? null);
+  if (next && !snapshot.listening) {
+    next.sendListening?.(false);
+  }
 }
 
 /** The room this machine may write to right now, or null. */
@@ -100,6 +110,7 @@ export function setListening(listening: boolean): void {
   }
   snapshot = { ...snapshot, listening };
   emit();
+  session?.sendListening?.(listening);
 }
 
 /** A `music` frame from the server (join, echo, another person's write). */
@@ -115,10 +126,11 @@ export function receiveMusic(
   }
   // A refusal hands back what the server holds; our optimistic copy is
   // ahead of it by one `rev` and would otherwise call the correction stale.
-  if (!forced && state !== null && musicWriteIsStale(snapshot.state, state)) {
+  const next = state === null ? null : completeMusicState(snapshot.state, state);
+  if (!forced && next !== null && musicWriteIsStale(snapshot.state, next)) {
     return;
   }
-  set(state, channelId);
+  set(next, channelId);
 }
 
 export function subscribeMusic(listener: () => void): () => void {
@@ -195,6 +207,10 @@ function base(): Omit<MusicState, "rev" | "actorId" | "atMs"> {
     queue: held?.queue ?? [],
     status: held?.status ?? "paused",
     positionMs: livePositionMs(held),
+    openControls: held?.openControls ?? false,
+    repeat: held?.repeat ?? "off",
+    skipVotes: held?.skipVotes ?? [],
+    history: held?.history ?? [],
   };
 }
 
@@ -249,6 +265,7 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
   const fits = rest.slice(0, Math.max(0, room));
   const dropped = rest.length - fits.length;
   write({
+    ...held,
     current,
     queue: [...held.queue, ...fits],
     status: startedPlaying ? "playing" : held.status,
@@ -265,7 +282,7 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
   }
   const held = base();
   if (held.current === null) {
-    write({ current: track, queue: held.queue, status: "playing", positionMs: 0 });
+    write({ ...held, current: track, queue: held.queue, status: "playing", positionMs: 0 });
     return "playing";
   }
   if (held.queue.length >= MUSIC_QUEUE_LIMIT) {
@@ -317,16 +334,68 @@ export function reportPosition(positionMs: number, durationMs?: number): void {
  * must not skip the one now playing.
  */
 export function advance(endedTrackId?: string): void {
-  const held = base();
+  const held = snapshot.state;
+  if (!held) {
+    return;
+  }
   if (endedTrackId && held.current?.id !== endedTrackId) {
     return;
   }
-  const [next, ...rest] = held.queue;
-  write({
-    current: next ?? null,
-    queue: rest,
-    status: next ? "playing" : "paused",
-    positionMs: 0,
+  write(musicAdvance({ ...held, positionMs: livePositionMs(held) }));
+}
+
+export function voteSkip(roomSize: number): void {
+  if (!session) {
+    return;
+  }
+  const held = snapshot.state;
+  if (!held?.current) {
+    return;
+  }
+  const votes = held.skipVotes ?? [];
+  if (votes.includes(session.userId)) {
+    return;
+  }
+  const nextVotes = [...votes, session.userId];
+  if (new Set(nextVotes).size >= musicSkipVotesNeeded(roomSize)) {
+    write(musicAdvance({ ...held, positionMs: livePositionMs(held) }));
+    return;
+  }
+  write({ ...base(), skipVotes: nextVotes });
+}
+
+export function setRepeat(mode: MusicRepeat): void {
+  write({ ...base(), repeat: mode });
+}
+
+export function shuffle(): void {
+  const held = base();
+  const queue = [...held.queue];
+  for (let i = queue.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const current = queue[i]!;
+    queue[i] = queue[j]!;
+    queue[j] = current;
+  }
+  write({ ...held, queue });
+}
+
+export function setOpenControls(on: boolean): void {
+  write({ ...base(), openControls: on });
+}
+
+export function readdFromHistory(trackId: string): MusicAddOutcome {
+  const entry = snapshot.state?.history?.find((track) => track.id === trackId);
+  if (!entry) {
+    return "no-session";
+  }
+  return addTrack({
+    provider: entry.provider,
+    videoId: entry.videoId,
+    title: entry.title,
+    sourceUrl: entry.sourceUrl,
+    thumbnailUrl: entry.thumbnailUrl,
+    durationMs: entry.durationMs,
   });
 }
 
