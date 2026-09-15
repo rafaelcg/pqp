@@ -652,6 +652,9 @@ function schedulePttTone(ctx: AudioContext, dest: GainNode, kind: PttBeepKind): 
  * Local press/release cue. Master mute and the device-local PTT toggle both
  * gate it. A second press (or release) while that same tone is still playing
  * is dropped so a mash cannot stack oscillators.
+ *
+ * Never throws: a failed AudioContext or oscillator must not block the mic
+ * or leave this kind marked busy.
  */
 export function playPttBeep(kind: PttBeepKind): void {
   if (!isPttBeepAllowed(state, pttBeepEnabled)) {
@@ -668,20 +671,21 @@ export function playPttBeep(kind: PttBeepKind): void {
     if (ctx.state === "suspended") {
       void ctx.resume().catch(() => {});
     }
-    pttBusy[kind] = true;
     schedulePttTone(ctx, master, kind);
+    pttBusy[kind] = true;
     const holdMs = Math.ceil((PTT_BEEP[kind].duration + 0.02) * 1000);
-    if (pttBusyTimers[kind] !== null) {
-      clearTimeout(pttBusyTimers[kind]);
-    }
     if (typeof setTimeout === "function") {
+      if (pttBusyTimers[kind] !== null) {
+        clearTimeout(pttBusyTimers[kind]);
+      }
       pttBusyTimers[kind] = setTimeout(() => {
         pttBusyTimers[kind] = null;
         pttBusy[kind] = false;
       }, holdMs);
+    } else {
+      clearPttBusy(kind);
     }
   } catch {
-    // A failed cue must never stick the busy latch or escape to the mic path.
     clearPttBusy(kind);
   }
 }
@@ -712,7 +716,11 @@ export function applyPttHeldChange(
   apply: (held: boolean) => void,
 ): void {
   apply(held);
-  playPttHeldChange(held);
+  try {
+    playPttHeldChange(held);
+  } catch {
+    // The mic transition already happened.
+  }
 }
 
 /** Settings preview: press, then release, without joining a call. */
