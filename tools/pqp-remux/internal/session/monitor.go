@@ -189,7 +189,11 @@ func (s *Session) RunMonitor(ctx context.Context, label string) {
 // parts and hold the video timeline" half of the two options. Publishing
 // more video than that would mean sending a coded frame the publisher
 // never sent twice, which is safe only for an IDR and is not something
-// this pipeline does.
+// this pipeline does. What the timeline does NOT do is lose that held
+// time: the frame that ends the freeze publishes the whole of it (see
+// pipeline.Fragmenter's pendingTruePTS), so the ratio comes back to 1.00
+// the moment the source speaks rather than drifting a little further
+// behind on every quiet spell.
 func (s *Session) idleTick(now time.Time) bool {
 	lastFrame := s.lastVideoFrameAtNs.Load()
 	if lastFrame == 0 {
