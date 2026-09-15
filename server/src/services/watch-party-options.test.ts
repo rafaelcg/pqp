@@ -115,6 +115,7 @@ interface PartyBody {
     guests: string;
     slowModeSeconds: number;
     reactionsEnabled: boolean;
+    lowLatency: boolean;
   };
   stage: {
     invited: StagePerson[];
@@ -379,6 +380,7 @@ describeDb("watch party options and the stage", () => {
       guests: "off",
       slowModeSeconds: 0,
       reactionsEnabled: true,
+      lowLatency: false,
     });
     // And the same object the shared module hands the client, so the panel
     // and the row cannot disagree about what "untouched" means.
@@ -794,6 +796,62 @@ describeDb("watch party options and the stage", () => {
     expect(byManager.status).toBe(200);
     expect(byManager.body.party.options.guests).toBe("off");
     expect(await everyoneSpeakDenied()).toBe(false);
+  });
+
+  /**
+   * "BAIXA LATÊNCIA (BETA)" IS HOST-ONLY, AND THE CLIENT'S OWN HIDING OF THE
+   * SWITCH IS NOT ENFORCEMENT (Farol, PR #617). `lowLatency` reaches the
+   * server only through the host's own `goLive`
+   * (`requestedHlsModeForChannel` in `hls-remux.ts`), so unlike every other
+   * row in this panel, a co-host or a manager must not be able to set it
+   * through the general options PATCH -- not refused outright (the rest of
+   * a bundled patch still has to land), just silently dropped, leaving
+   * whatever the host last asked for untouched.
+   */
+  it("drops lowLatency from a co-host's or a manager's options patch, but keeps the rest", async () => {
+    const party = await draft();
+    expect(party.options.lowLatency).toBe(false);
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+
+    expect(
+      (
+        await call(host, "POST", `/api/watch-parties/${party.id}/cohosts`, {
+          userId: second.id,
+          cohost: true,
+        })
+      ).status,
+    ).toBe(200);
+
+    const byCohost = await patchOptions(second, party.id, {
+      lowLatency: true,
+      slowModeSeconds: 10,
+    });
+    expect(byCohost.status).toBe(200);
+    // The field they were not supposed to touch: silently unchanged.
+    expect(byCohost.body.party.options.lowLatency).toBe(false);
+    // The field they WERE allowed to touch: still applied, in the same
+    // request, so a co-host bundling both is not refused wholesale for
+    // reaching too far on one of them.
+    expect(byCohost.body.party.options.slowModeSeconds).toBe(10);
+
+    const byManager = await patchOptions(manager, party.id, {
+      lowLatency: true,
+    });
+    expect(byManager.status).toBe(200);
+    expect(byManager.body.party.options.lowLatency).toBe(false);
+
+    // The host's own request for the same field: honoured.
+    const byHost = await patchOptions(host, party.id, { lowLatency: true });
+    expect(byHost.status).toBe(200);
+    expect(byHost.body.party.options.lowLatency).toBe(true);
+
+    // And a co-host turning it back off again: also dropped, the host's
+    // `true` from the line above survives untouched.
+    const byCohostOff = await patchOptions(second, party.id, {
+      lowLatency: false,
+    });
+    expect(byCohostOff.status).toBe(200);
+    expect(byCohostOff.body.party.options.lowLatency).toBe(true);
   });
 
   it("runs the guest queue: a request, an approval via accept, and a request nobody else sees", async () => {

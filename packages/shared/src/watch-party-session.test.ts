@@ -400,6 +400,7 @@ describe("the options", () => {
       guests: "off",
       slowModeSeconds: 0,
       reactionsEnabled: true,
+      lowLatency: false,
     });
   });
 

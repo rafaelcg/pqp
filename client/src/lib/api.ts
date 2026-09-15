@@ -611,6 +611,13 @@ export interface LiveHlsConfig {
    * offers the "separada" choice when this is true.
    */
   voiceTrack?: boolean;
+  /**
+   * Whether this deployment can carry a party's picture over LL-HLS
+   * (`LIVE_HLS_LL`, plus its own allowlist). Absent on a server that
+   * predates the field, which reads as unavailable — the host panel only
+   * offers "Baixa latência (beta)" when this is true.
+   */
+  lowLatency?: { available: boolean };
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>

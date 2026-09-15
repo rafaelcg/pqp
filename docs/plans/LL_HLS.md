@@ -419,6 +419,16 @@ beside `HLS_CAMERA_MBPS`, an estimate until `L3.2` measures it.
 `LIVE_HLS_SERVER_ALLOWLIST` for the first single-server party. Off means the toggle
 is not rendered at all, not rendered and refused.
 
+**The host switch shipped** (2026-09-14), in the options panel
+(`watch-party-options.tsx`) rather than the setup-surface checklist §4
+sketched: "Baixa latência (beta)", host-only, present only when
+`GET /api/live-hls/config`'s `lowLatency.available` says this server may ask
+at all. It saves the preference like any other option (`options.lowLatency`);
+`handleWatchPartyGoLive` is the one place that reaches the server with it, on
+every "Ir ao vivo", which is also the only moment `resolveHlsMode` is ever
+asked -- so a change made while already live shows its own note
+("vale a partir da próxima transmissão") rather than doing nothing silently.
+
 **Staging first**, with the harness. `tools/watch-party-load/src/hls-audience.ts`
 polls the playlist the way hls.js 1.7 does and needs a parts mode: blocking reloads
 with `_HLS_msn`/`_HLS_part`, part fetches instead of segment fetches. Its

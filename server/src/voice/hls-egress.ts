@@ -45,6 +45,7 @@ import {
 } from "../lib/s3.js";
 import {
   isLiveHlsLLEnabled,
+  liveHlsLLAvailable,
   llDemotedRecently,
   llHasRoom,
   llStreamFor,
@@ -1377,6 +1378,15 @@ export interface LiveHlsConfig {
    * actually carry it. False whenever HLS is off for this answer.
    */
   voiceTrack: boolean;
+  /**
+   * Whether the client may offer "Baixa latência (beta)" at all
+   * (`LIVE_HLS_LL` plus, when set, `LIVE_HLS_LL_ALLOWLIST`). Same rule as
+   * `micArchive`/`voiceTrack`: a client must never infer this from a build
+   * flag, and the switch stays hidden wherever this is false, whatever the
+   * host's saved preference already says. See `liveHlsLLAvailable` in
+   * `hls-remux.ts`.
+   */
+  lowLatency: { available: boolean };
 }
 
 /**
@@ -1392,6 +1402,7 @@ export function liveHlsConfig(): LiveHlsConfig {
     allowlisted: allowlist !== null,
     micArchive: isLiveHlsEnabled() && micArchiveEnabled(),
     voiceTrack: isLiveHlsEnabled() && liveHlsVoiceTrackEnabled(),
+    lowLatency: { available: liveHlsLLAvailable(null) },
     ladder: liveHlsLadder().map((rung) => ({
       name: rung.name,
       width: rung.width,
@@ -1425,6 +1436,12 @@ export async function liveHlsConfigForServer(
     // asked to publish a track for it.
     micArchive: enabled && micArchiveEnabled(),
     voiceTrack: enabled && liveHlsVoiceTrackEnabled(),
+    // Independent of `enabled`/`allowlisted` above (those gate the egress
+    // itself, `LIVE_HLS_ENABLED` / `live_hls_enabled`): LL-HLS has its own
+    // flag and its own allowlist, so a server with ordinary HLS on can still
+    // be off the LL allowlist, and vice versa in a self-host that runs
+    // `pqp-remux` everywhere.
+    lowLatency: { available: liveHlsLLAvailable(serverId) },
   };
 }
 

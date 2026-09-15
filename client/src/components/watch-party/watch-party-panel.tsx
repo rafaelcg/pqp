@@ -143,7 +143,17 @@ export interface WatchPartyPanelProps {
   /** Everyone watching, seated or not, presenter excluded. */
   audienceCount: number;
   onCreate: () => void;
-  onGoLive: (stream: MediaStream | null) => Promise<void>;
+  /**
+   * `lowLatency` is `party.options.lowLatency` from THIS component's own
+   * `party` prop, not read back out of global selection state inside the
+   * handler (Farol review, third round): the handler that ends up in
+   * `App.tsx` runs after an await, by which point a different channel could
+   * be selected, and re-querying "whatever party is current" at that point
+   * would answer for the wrong party. Passing it through the call ties the
+   * value to the party this specific press was for, not to whatever the
+   * sidebar happens to show when the request lands.
+   */
+  onGoLive: (stream: MediaStream | null, lowLatency: boolean) => Promise<void>;
   /**
    * The host putting a picture up on a party that is already live: join the
    * room if needed and open the picker. Without it the waiting screen told
@@ -228,6 +238,14 @@ export interface WatchPartyPanelProps {
   voiceTrackMode?: VoiceTrackMode;
   onVoiceTrackModeChange?: (mode: VoiceTrackMode) => void;
   voiceTrackAvailable?: boolean;
+  /**
+   * `GET /api/live-hls/config`'s `lowLatency.available` for this server
+   * (`useLiveHlsConfig(serverId)?.lowLatency?.available`), threaded down to
+   * `WatchPartyOptionsPanel` so "Baixa latência (beta)" stays out of the
+   * panel entirely on a deployment with `LIVE_HLS_LL` unset or this server
+   * off its allowlist.
+   */
+  lowLatencyAvailable?: boolean;
   /** Apply a mic-gain choice to the running mix at once. See `StreamMixControl`. */
   onMicGainChange?: (value: number) => void;
   /** Same as `onMicGainChange`, for the display (tab-audio) branch. */
@@ -571,6 +589,9 @@ function WatchPartyOptionsDialog({
           options={party.options}
           audienceCount={props.audienceCount}
           onChange={(patch) => void props.onOptionsChange(patch)}
+          isHost={party.viewerRole === "host"}
+          lowLatencyAvailable={props.lowLatencyAvailable}
+          live={party.state === "live"}
         />
         {/* THIS COMPUTER'S SWITCH, not the party's: whether the share carries
             the host's own voice to the people watching from outside. Off,
@@ -1228,7 +1249,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       const handing = stream;
       // Handed off, not stopped: the call now owns these tracks.
       setStream(null);
-      await props.onGoLive(handing);
+      await props.onGoLive(handing, party.options.lowLatency);
     } finally {
       setBusy(false);
     }
@@ -1545,6 +1566,9 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                   audienceCount={props.audienceCount}
                   onChange={(patch) => void props.onOptionsChange(patch)}
                   stacked
+                  isHost={party.viewerRole === "host"}
+                  lowLatencyAvailable={props.lowLatencyAvailable}
+                  live={party.state === "live"}
                 />
                 {(props.onMicInStreamChange || canPutPictureUp) && (
                   <OptionGroup title={t("watchParty.options.streamTitle")}>
@@ -1770,7 +1794,7 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             <Button
               type="button"
               className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto"
-              onClick={() => void props.onGoLive(null)}
+              onClick={() => void props.onGoLive(null, party.options.lowLatency)}
               data-watch-party-go-live
             >
               <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />

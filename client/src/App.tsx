@@ -4504,13 +4504,29 @@ function MainAppContent({
    * says so in words to everyone. The other order would leave a picture going
    * out from a party the room has never been told about.
    */
-  async function handleWatchPartyGoLive(stream: MediaStream | null) {
+  async function handleWatchPartyGoLive(
+    stream: MediaStream | null,
+    lowLatency: boolean,
+  ) {
     const party = currentWatchParty();
     if (!party) {
       return;
     }
     try {
-      const answer = await apiSetWatchPartyState(party.id, "live");
+      // The host's standing "Baixa latência (beta)" preference only reaches
+      // the server at THIS moment: `goLive` is the one write
+      // `requestedHlsModeForChannel` ever reads, so a party going live again
+      // always states its own request rather than inheriting whatever the
+      // last one asked for. `lowLatency` is a PARAMETER, not re-read from
+      // `currentWatchParty()` here: this function's own await below means
+      // whatever runs after it can be reached with a different channel
+      // selected (Farol review, third round), and `currentWatchParty()`
+      // answers for the SELECTED channel, not necessarily the party this
+      // press was for. The caller (`watch-party-panel.tsx`) already has the
+      // right `party.options.lowLatency` in its own props at the moment of
+      // the click, which is the only copy of this value that is ever
+      // correct for this specific go-live.
+      const answer = await apiSetWatchPartyState(party.id, "live", lowLatency);
       if (answer.party) {
         watchParties.put(answer.party);
       }
@@ -6982,6 +6998,7 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
+            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -7169,6 +7186,7 @@ function MainAppContent({
             voiceTrackMode={voiceState.voiceTrackMode}
             onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
             voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
+            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}

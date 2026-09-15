@@ -95,6 +95,7 @@ const liveParty: WatchParty = {
     raiseHand: true,
     slowModeSeconds: 0,
     reactionsEnabled: true,
+    lowLatency: false,
   },
   viewerRole: "host",
   reminding: false,
