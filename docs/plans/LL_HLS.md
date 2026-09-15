@@ -414,7 +414,11 @@ is outstanding, `llDemotionPendingAttribution` refuses LL for the channel — bu
 only for a party that could BE the demoted one, bounded by the demoted
 session's own start, so a party created afterwards is never caught by it. It is
 self-limiting: attribution runs at the bottom of the same sweep and fails
-closed onto the live party after three attempts.
+closed onto the live party after three attempts, which is what ends the veto.
+It lasts as long as the queued demotion does rather than five minutes, because
+a prolonged attribution failure is exactly the condition that produces an
+unattributed demotion in the first place, and an expiry shorter than the
+repair reopens the window mid-failure.
 
 **And the decision says why.** `resolveHlsModeForChannel` (`hls-remux.ts`) is
 the whole mode branch in one place — the party's request, the party-scoped

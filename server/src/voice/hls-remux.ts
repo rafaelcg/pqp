@@ -341,18 +341,35 @@ const llDemotedAt = new Map<string, number>();
  * ends takes its entry with it within five minutes either way.
  */
 export function noteLlDemotion(partySessionId: string, now = Date.now()): void {
+  if (llDemotedAt.size > MEMO_PRUNE_THRESHOLD) {
+    pruneLlMemos(now);
+  }
   llDemotedAt.set(partySessionId, now);
 }
 
 /**
- * BOTH MEMOS SHRINK ON THE TICK, NOT ON THE NEXT WRITE. Keyed by party and
- * by channel, these maps used to be swept only when something was written to
- * them, so a burst of demotions followed by a quiet evening left every
- * historical party id in memory until the next demotion happened to sweep
- * them (a Farol finding on this PR). `sweepLlDemotions` runs on the health
- * monitor's ten-second tick whether or not anything is demoted, which is
- * where state that expires on a clock belongs.
+ * WHEN A MAP KEYED ON A CLOCK ACTUALLY SHRINKS.
+ *
+ * Both of these expire on time rather than on an event, and the first
+ * version swept them only when something was written to them: a burst of
+ * demotions followed by a quiet evening left every historical party id in
+ * memory until the next demotion happened to sweep it, and logging one
+ * channel's decision walked every other channel's entry, which is O(C^2)
+ * across a burst (two Farol findings on this PR).
+ *
+ * So they are swept from `sweepLlDemotions`, on the health monitor's
+ * ten-second tick, whether or not anything is demoted -- and BEFORE that
+ * function's own configuration check, because "LL is on but the remux
+ * control URL is missing" is a deployment that still resolves modes, still
+ * fills `lastModeResolved`, and used to get no pruning at all (a third).
+ *
+ * The write paths keep an amortised backstop for the case where the monitor
+ * is not running at all: they sweep only once a map is past
+ * `MEMO_PRUNE_THRESHOLD`, so the common write stays O(1) and no single
+ * caller can be made to pay for every other channel.
  */
+const MEMO_PRUNE_THRESHOLD = 256;
+
 function pruneLlMemos(now: number): void {
   for (const [id, at] of llDemotedAt) {
     if (now - at > LL_DEMOTION_MEMO_MS) {
@@ -398,21 +415,29 @@ export function llDemotedRecently(
  * but only a party that could actually BE the demoted one. A party created
  * after the demoted session started emphatically could not (the same bound
  * `attributeDemotion` uses), so the newer-party downgrade this whole change
- * exists to prevent stays prevented, on either machine. Self-limiting:
- * attribution resolves on the very next `runPendingDemotions`, which is the
- * bottom of the same sweep, and fails closed onto the live party after three
- * attempts; the veto is bounded by the memo window either way.
+ * exists to prevent stays prevented, on either machine.
+ *
+ * IT LASTS AS LONG AS THE DEMOTION DOES, not five minutes. A first version
+ * expired this with `LL_DEMOTION_MEMO_MS` while the entry could still be
+ * queued for retry for half an hour, so a prolonged attribution failure --
+ * the very thing that produces an unattributed demotion in the first place --
+ * reopened the window at the five minute mark and let LL restart into the
+ * session the box had given up on (a Farol finding on this PR). The honest
+ * rule is the one the entry itself states: while a demotion on this channel
+ * does not know whose party it was, a party that could be it is refused.
+ *
+ * Self-limiting even so: attribution resolves on the very next
+ * `runPendingDemotions`, which is the bottom of the same sweep, and fails
+ * closed onto the live party after three attempts, which sets
+ * `partySessionId` and ends this branch. The entry is dropped on completion
+ * and abandoned after `DEMOTION_RETRY_TTL_MS` regardless.
  */
 export function llDemotionPendingAttribution(
   channelId: string,
   partyCreatedAtMs: number | null,
-  now = Date.now(),
 ): boolean {
   const entry = pendingDemotions.get(channelId);
   if (!entry || entry.partySessionId !== null || partyCreatedAtMs === null) {
-    return false;
-  }
-  if (now - entry.queuedAt >= LL_DEMOTION_MEMO_MS) {
     return false;
   }
   return partyCreatedAtMs <= entry.startedAtMs;
@@ -539,9 +564,13 @@ function logHlsModeResolved(fields: {
   if (last && last.key === key && now - last.at < MODE_RESOLVED_LOG_WINDOW_MS) {
     return;
   }
-  // No sweep here: one channel's log line must not walk every other
-  // channel's entry (a Farol finding on this PR). `pruneLlMemos` does it on
-  // the health tick, where a clock-expiry job belongs.
+  // No unconditional sweep here: one channel's log line must not walk every
+  // other channel's entry (a Farol finding on this PR). `pruneLlMemos` does
+  // it on the health tick, and past the threshold this amortised backstop
+  // covers a process whose monitor never started.
+  if (lastModeResolved.size > MEMO_PRUNE_THRESHOLD) {
+    pruneLlMemos(now);
+  }
   lastModeResolved.set(fields.channelId, { key, at: now });
   logEvent("voice.hlsModeResolved", fields);
 }
@@ -621,6 +650,21 @@ function demotionBackoffMs(attempts: number): number {
 /** For the dashboard and the tests: demotions whose cleanup is not finished. */
 export function pendingLlDemotionCount(): number {
   return pendingDemotions.size;
+}
+
+/**
+ * How much the two clock-expiry memos are actually holding. Only a test asks:
+ * "an expired entry is ignored" and "an expired entry is gone" read the same
+ * from every other seam, and it was the second one Farol was right about.
+ */
+export function llMemoSizesForTests(): {
+  demotedParties: number;
+  modeDecisions: number;
+} {
+  return {
+    demotedParties: llDemotedAt.size,
+    modeDecisions: lastModeResolved.size,
+  };
 }
 
 function queueDemotion(entry: PendingDemotion): void {
@@ -1802,11 +1846,16 @@ async function reconcileLlHlsNowLocked(
  * module and must never be imported back (see `llObjectPrefix`).
  */
 export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
+  // BEFORE THE CONFIGURATION CHECK, not after it. Both maps are filled by
+  // mode resolution, which runs on `LIVE_HLS_LL` alone; a deployment with
+  // the flag on and no remux control URL returns below without ever having
+  // demoted anything and would never sweep them (a Farol finding on this
+  // PR). In-memory work on a ten-second tick, so it costs nothing to do it
+  // unconditionally.
+  pruneLlMemos(now);
   if (!isLiveHlsLLEnabled() || !remuxControlUrl() || !remuxControlSecret()) {
     return [];
   }
-  // Both clock-expiry maps, on the tick rather than on their own write paths.
-  pruneLlMemos(now);
   // DETECTION IS GATED ON HAVING A SESSION; THE REPAIR IS NOT. A cleanup step
   // that failed belongs to a demotion this process has already acted on, and
   // `llRooms` is empty precisely because it did -- gating the queue on a live

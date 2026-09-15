@@ -61,6 +61,9 @@ const {
   pendingLlDemotionCount,
   setRequestedHlsMode,
   llDemotedRecently,
+  llDemotionPendingAttribution,
+  llMemoSizesForTests,
+  noteLlDemotion,
   llHasRoom,
   llHlsActivity,
   llStreamFor,
@@ -658,6 +661,16 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       demotionUnattributed: true,
     });
 
+    // AND IT DOES NOT LAPSE WHILE THE DEMOTION IS STILL BEING RETRIED. The
+    // first version expired this with the five-minute memo window while the
+    // queue entry lives for half an hour, so a prolonged attribution failure
+    // -- the very thing that produces an unattributed demotion -- reopened
+    // the window at the five minute mark (a Farol finding on this PR).
+    expect(pendingLlDemotionCount()).toBe(1);
+    expect(
+      llDemotionPendingAttribution(channelA, Date.now() - 60 * 60_000),
+    ).toBe(true);
+
     // A party created AFTER the demoted session started could not be the one
     // it belonged to, so the same outstanding demotion does not touch it.
     const newerId = await startNewerParty();
@@ -665,6 +678,36 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       mode: "ll",
       partySessionId: newerId,
       demotionUnattributed: false,
+    });
+  });
+
+  /**
+   * Both memos expire on a clock, so something that is not a write to them
+   * has to sweep them -- including on a deployment with `LIVE_HLS_LL` on and
+   * no remux control URL, which resolves modes (filling `lastModeResolved`)
+   * and never demotes anything (a Farol finding on this PR).
+   */
+  it("(1b-sexies) sweeps both expiring memos on the tick, control URL or not", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    noteLlDemotion(partyId);
+    await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
+    expect(llMemoSizesForTests()).toEqual({
+      demotedParties: 1,
+      modeDecisions: 1,
+    });
+
+    // A deployment with the flag on and no remux control URL resolves modes
+    // -- filling the log memo -- and demotes nothing, so it returns below
+    // without ever reaching a sweep placed after that check.
+    delete process.env.LIVE_HLS_REMUX_CONTROL_URL;
+    expect(await sweepLlDemotions(Date.now() + 6 * 60_000)).toEqual([]);
+
+    // GONE, not merely ignored. Every other seam reads an expired entry and
+    // an absent one the same way; the difference is a map that grows with
+    // every party this process has ever demoted.
+    expect(llMemoSizesForTests()).toEqual({
+      demotedParties: 0,
+      modeDecisions: 0,
     });
   });
 
