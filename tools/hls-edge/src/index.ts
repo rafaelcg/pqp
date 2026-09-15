@@ -179,6 +179,25 @@ export interface Env {
    * viewer, the same rule `LL_ORIGIN_BASE` documents above.
    */
   LL_ORIGIN_KEY?: string;
+  /**
+   * How many part targets of `PART-HOLD-BACK` an LL rendition playlist
+   * advertises — `ll-playlist.js`'s `DEFAULT_PART_HOLD_BACK_PARTS` (6) when
+   * unset, which at the remux's 500 ms part target is a 3.0 s hold-back.
+   *
+   * A STRING, LIKE EVERY `vars` ENTRY, and deliberately forgiving: anything
+   * that is not a finite number is ignored and the default stands, because a
+   * typo in a tuning knob must never be able to render an invalid playlist to
+   * a live audience. The floor and the ceiling are enforced where the value
+   * is used (`partHoldBackSeconds`): never below RFC 8216bis 4.4.3.8's
+   * `3 x PART-TARGET`, never above `TARGETDURATION`.
+   *
+   * It exists because the right number is a property of where the viewers
+   * are, not of this repo: the default was three parts (1.5 s) until viewers
+   * in the UK watching a box in São Paulo — ~200 ms of round trip, ~400 ms
+   * blocking reloads — spent the first seconds of every stream fighting the
+   * live edge.
+   */
+  LL_PART_HOLD_BACK_PARTS?: string;
   // ALWAYS-ON (not yet built, see playlist-origin.ts and
   // docs/plans/ALWAYS_ON.md task A1.x): a future R2-backed PlaylistOrigin
   // would add its own bindings here (an R2Bucket, a DurableObjectNamespace).
@@ -795,14 +814,40 @@ const inFlightRenditionFetches = new Map<string, Promise<FetchedPlaylist>>();
 let llOriginSingleton: LlPlaylistOrigin | null = null;
 let llOriginSingletonBase: string | undefined;
 let llOriginSingletonKey: string | undefined;
+let llOriginSingletonHoldBackParts: number | undefined;
 
-function getLlOrigin(originBase: string | undefined, timeoutMs: number, originKey: string | undefined): LlPlaylistOrigin {
-  if (!llOriginSingleton || llOriginSingletonBase !== originBase || llOriginSingletonKey !== originKey) {
-    llOriginSingleton = new LlPlaylistOrigin(originBase, timeoutMs, originKey);
+function getLlOrigin(
+  originBase: string | undefined,
+  timeoutMs: number,
+  originKey: string | undefined,
+  partHoldBackParts: number | undefined,
+): LlPlaylistOrigin {
+  if (
+    !llOriginSingleton ||
+    llOriginSingletonBase !== originBase ||
+    llOriginSingletonKey !== originKey ||
+    llOriginSingletonHoldBackParts !== partHoldBackParts
+  ) {
+    llOriginSingleton = new LlPlaylistOrigin(originBase, timeoutMs, originKey, partHoldBackParts);
     llOriginSingletonBase = originBase;
     llOriginSingletonKey = originKey;
+    llOriginSingletonHoldBackParts = partHoldBackParts;
   }
   return llOriginSingleton;
+}
+
+/**
+ * `LL_PART_HOLD_BACK_PARTS`, or `undefined` for anything that is not a finite
+ * number — an empty string, a typo, a negative. `undefined` means
+ * "`ll-playlist.js`'s default", never "zero", which is the one reading that
+ * would put an invalid `PART-HOLD-BACK` in front of a live audience.
+ */
+function parsePartHoldBackParts(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 async function fetchRenditionCoalesced(
@@ -883,7 +928,12 @@ export default {
     // task L2.2's LL origin -- ready only when `LL_ORIGIN_BASE` is set; see
     // `ll-playlist-origin.ts` and the `Env.LL_ORIGIN_BASE` doc comment above.
     const apiOrigin = new ApiPlaylistOrigin(env.ORIGIN_BASE, UPSTREAM_TIMEOUT_MS);
-    const llOrigin = getLlOrigin(env.LL_ORIGIN_BASE, UPSTREAM_TIMEOUT_MS, env.LL_ORIGIN_KEY);
+    const llOrigin = getLlOrigin(
+      env.LL_ORIGIN_BASE,
+      UPSTREAM_TIMEOUT_MS,
+      env.LL_ORIGIN_KEY,
+      parsePartHoldBackParts(env.LL_PART_HOLD_BACK_PARTS),
+    );
 
     // THE LL MEDIA ROUTE (task L2.3, `ll-media.ts`): a fourth path segment
     // means the caller is asking for the BYTES an LL playlist's own URI

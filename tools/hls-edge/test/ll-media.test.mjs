@@ -144,7 +144,7 @@ function mediaRequest(channelId, startedAt, rung, name, token) {
   return new Request(url, { method: "GET" });
 }
 
-function callMedia(request, origin, cache, ctx, env, route) {
+function callMedia(request, origin, cache, ctx, env, route, timers = {}) {
   return handleLlMediaRequest(
     request,
     origin,
@@ -153,6 +153,7 @@ function callMedia(request, origin, cache, ctx, env, route) {
     env,
     new PartyPassRevocationGate(),
     route,
+    timers,
   );
 }
 
@@ -584,4 +585,385 @@ test("a coalesced waiter is served the cached copy, and the entry is warm the mo
   );
   assert.equal(third.headers.get("X-HLS-Edge-Cache"), "HIT");
   assert.equal(origin.calls, 1);
+});
+
+// ---------------------------------------------------------------------------
+// THE JOINER, AND THE CONTEXT IT DOES NOT OWN (production, 2026-09-15 21:29-21:41
+// UTC, the evening AFTER PR #645 fixed the same bug class on the playlist path).
+//
+// Five media requests were killed by the Workers runtime with "your Worker's
+// code had hung and would never generate a response", each after a WALL TIME OF
+// 5-6 ms -- `ll/part-941.m4s`, `ll/part-1004.m4s`, `ll-audio/audio-part-1020.m4s`,
+// `ll-audio/audio-part-1030.m4s`, `ll-audio/audio-part-1475.m4s` -- while the
+// origin behind them answered 3,093 requests in the same window with two
+// legitimate 404s and a max of 691 ms. Two players on one LL session ask for the
+// same part within ~15 ms (`ll/part-1622.m4s` at 21:41:36.295 and .310), so this
+// route's coalescing runs constantly: one produces, one joins, and hls.js
+// cancels a part request the moment it decides to stall, which takes the
+// producer's context -- and with it every promise the joiner was parked on.
+//
+// Every test below would HANG, not fail, against the code that shipped that
+// evening, which is why each asserts settlement through `settledWithin` rather
+// than a bare `await`.
+// ---------------------------------------------------------------------------
+
+/** A timer nothing fires but the test -- same helper, same reasoning, as `hls-blocking-reload.test.mjs`. */
+function makeTimers() {
+  const armed = new Set();
+  return {
+    setTimer: (ms, cb) => {
+      const entry = { ms, cb };
+      armed.add(entry);
+      return () => armed.delete(entry);
+    },
+    get pending() {
+      return armed.size;
+    },
+    /** Fires every armed timer matching `predicate` -- the bounds are given distinct values so a test can pick one. */
+    fireMatching(predicate) {
+      let fired = 0;
+      for (const entry of [...armed]) {
+        if (!predicate(entry)) {
+          continue;
+        }
+        armed.delete(entry);
+        entry.cb();
+        fired += 1;
+      }
+      return fired;
+    },
+  };
+}
+
+/** Distinct on purpose: `fireMatching` picks a bound by its duration. */
+const JOIN_BOUND_MS = 111;
+const WRITE_BOUND_MS = 222;
+const HARD_TIMEOUT_MS = 333;
+const BOUNDS = {
+  joinBoundMs: JOIN_BOUND_MS,
+  writeJoinBoundMs: WRITE_BOUND_MS,
+  hardTimeoutMs: HARD_TIMEOUT_MS,
+};
+
+/** Lets every already-scheduled microtask and promise callback run. */
+async function flush(turns = 12) {
+  for (let i = 0; i < turns; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+/** `{ v }` / `{ e }` if `promise` settled within a few turns, `null` if it is still parked. */
+async function settledWithin(promise) {
+  let outcome = null;
+  promise.then(
+    (v) => {
+      outcome = { v };
+    },
+    (e) => {
+      outcome = { e };
+    },
+  );
+  await flush();
+  return outcome;
+}
+
+/**
+ * An origin whose Nth call behaves as the Nth entry says. `"dead"` is a
+ * request context that was torn down mid-fetch: a promise nothing will ever
+ * settle, which is exactly what a joiner inherits.
+ */
+function scriptedOrigin(script, bytes = [7, 7, 7, 7]) {
+  let calls = 0;
+  return {
+    ready: true,
+    get calls() {
+      return calls;
+    },
+    async fetchMedia() {
+      const step = script[calls] ?? "serve";
+      calls += 1;
+      if (step === "dead") {
+        return new Promise(() => {});
+      }
+      return { status: 200, ok: true, body: new Uint8Array(bytes).buffer };
+    },
+  };
+}
+
+/**
+ * An origin that answers only when the test says so -- so "everybody joined
+ * before it resolved" is a fact the test establishes, not a race it hopes for.
+ */
+function gatedOrigin(bytes = [7, 7, 7, 7]) {
+  let calls = 0;
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return {
+    ready: true,
+    get calls() {
+      return calls;
+    },
+    release,
+    async fetchMedia() {
+      calls += 1;
+      await gate;
+      return { status: 200, ok: true, body: new Uint8Array(bytes).buffer };
+    },
+  };
+}
+
+/** A `Cache` whose `put` never completes -- the producer's write dying with its context. */
+function hangingPutCache() {
+  const inner = fakeCache();
+  return {
+    get size() {
+      return inner.size;
+    },
+    keys: () => inner.keys(),
+    match: (request) => inner.match(request),
+    put: () => new Promise(() => {}),
+  };
+}
+
+test("a joiner parked on an owner whose context died is answered by its own fetch, never hung", async () => {
+  const channelId = "chan-dead-owner";
+  const startedAt = "1726000100020";
+  const name = "part-941.m4s";
+  // Call 1 is the producer's, and its context dies with it. Call 2 is the
+  // joiner's own, after it detaches.
+  const origin = scriptedOrigin(["dead"], [9, 9, 9, 9]);
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
+  const timers = makeTimers();
+
+  const producer = callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+    { ...BOUNDS, setTimer: timers.setTimer },
+  );
+  assert.equal(await settledWithin(producer), null, "the producer is the request whose context is dying");
+
+  const joiner = callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+    { ...BOUNDS, setTimer: timers.setTimer },
+  );
+  assert.equal(
+    await settledWithin(joiner),
+    null,
+    "still attached: this is the production state, and where the old code stopped forever",
+  );
+  assert.equal(origin.calls, 1, "the joiner really did join rather than fetch");
+
+  // THE FIX: the joiner armed a bound OF ITS OWN, in its OWN context, so the
+  // runtime always sees pending I/O for it and it can take itself back.
+  assert.equal(timers.fireMatching((t) => t.ms === JOIN_BOUND_MS), 1, "the joiner armed its own join bound");
+
+  const answered = await settledWithin(joiner);
+  assert.ok(answered, "the joiner must be answered, not left parked on a dead context");
+  assert.equal(answered.v.status, 200);
+  assert.equal(answered.v.headers.get("X-HLS-Edge-Cache"), "MISS", "it detached and produced for itself");
+  assert.deepEqual([...new Uint8Array(await answered.v.arrayBuffer())], [9, 9, 9, 9]);
+  assert.equal(origin.calls, 2, "exactly one extra fetch -- the joiner's own, never the shared one aborted");
+});
+
+test("the last-resort guard answers a request whose own fetch will never settle", async () => {
+  const channelId = "chan-hard-timeout";
+  const startedAt = "1726000100021";
+  const name = "audio-part-1020.m4s";
+  const origin = scriptedOrigin(["dead"], [4, 5, 6]);
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_AUDIO_RUNG, name };
+  const timers = makeTimers();
+
+  // A PRODUCER has no join to bound: it awaits its own fetch. The guard is the
+  // only thing between it and the hang detector, which is the whole reason it
+  // exists (`DEFAULT_MEDIA_HARD_TIMEOUT_MS`).
+  const pending = callMedia(
+    mediaRequest(channelId, startedAt, LL_AUDIO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+    { ...BOUNDS, setTimer: timers.setTimer },
+  );
+  assert.equal(await settledWithin(pending), null);
+  assert.equal(timers.fireMatching((t) => t.ms === HARD_TIMEOUT_MS), 1, "the guard is armed in this request's own context");
+
+  const answered = await settledWithin(pending);
+  assert.ok(answered, "the guard must settle the request");
+  assert.equal(answered.v.status, 200);
+  assert.equal(answered.v.headers.get("X-HLS-Edge-Cache"), "HARD-TIMEOUT");
+  assert.deepEqual([...new Uint8Array(await answered.v.arrayBuffer())], [4, 5, 6]);
+  assert.equal(origin.calls, 2, "the guard answers by fetching the part for THIS request");
+  // `flush`, never `ctx.drain()`: this request's FIRST fetch is still parked
+  // (that is the scenario), so draining every `waitUntil` would hang the test
+  // on the very promise the guard exists to stop waiting for.
+  await flush();
+  assert.equal(cache.size, 1, "and the bytes it had to go and get are left warm for the next viewer");
+});
+
+test("twelve viewers of one part still produce exactly ONE origin fetch, and all twelve settle", async () => {
+  const channelId = "chan-twelve";
+  const startedAt = "1726000100022";
+  const name = "part-1622.m4s";
+  const origin = gatedOrigin([1, 6, 2, 2]);
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
+  const timers = makeTimers();
+
+  const all = Promise.all(
+    Array.from({ length: 12 }, (_, i) =>
+      callMedia(
+        mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor(`viewer-${i}`, channelId, startedAt)),
+        origin,
+        cache,
+        ctx,
+        env,
+        route,
+        { ...BOUNDS, setTimer: timers.setTimer },
+      ),
+    ),
+  );
+  // No bound is ever fired: nothing here is sick, so the bounded join must
+  // still be a plain join. A regression that answers joiners by detaching
+  // would show up as more than one origin call.
+  assert.equal(await settledWithin(all), null, "nobody is served until the origin answers");
+  assert.equal(origin.calls, 1, "all twelve are attached to ONE fetch before it resolves");
+  origin.release();
+  const settled = await settledWithin(all);
+  assert.ok(settled, "all twelve settle without any bound firing");
+  assert.equal(origin.calls, 1, "one origin fetch per key, however many viewers ask");
+  for (const response of settled.v) {
+    assert.equal(response.status, 200);
+  }
+  assert.equal(cache.size, 1, "and one cache entry, written by the producer only");
+  assert.equal(timers.pending, 0, "every bound this request armed is cancelled once it is answered");
+});
+
+test("a viewer arriving while the producer's write is in flight joins the WRITE, not the origin", async () => {
+  // The window Farol caught on this route's first commit, which
+  // `coalesceFetch` clearing its map entry at settlement would have reopened:
+  // between the origin answering and the cache being populated, an arrival
+  // must have something to join.
+  const channelId = "chan-write-window";
+  const startedAt = "1726000100023";
+  const name = "part-1004.m4s";
+  const origin = fakeMediaOrigin({ bytes: [3, 1, 4, 1, 5] });
+  let releaseWrite = () => {};
+  const gate = new Promise((resolve) => {
+    releaseWrite = resolve;
+  });
+  const inner = fakeCache();
+  const cache = {
+    get size() {
+      return inner.size;
+    },
+    keys: () => inner.keys(),
+    match: (request) => inner.match(request),
+    put: async (request, response) => {
+      await gate;
+      return inner.put(request, response);
+    },
+  };
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
+  const timers = makeTimers();
+
+  const producer = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+    { ...BOUNDS, setTimer: timers.setTimer },
+  );
+  assert.equal(producer.headers.get("X-HLS-Edge-Cache"), "MISS");
+  assert.equal(inner.size, 0, "the write has not landed yet -- this is the window");
+
+  const arrival = callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+    { ...BOUNDS, setTimer: timers.setTimer },
+  );
+  assert.equal(await settledWithin(arrival), null, "attached to the write, bounded by its own timer");
+  assert.equal(origin.calls, 1, "it must NOT have started a second real fetch against the box");
+
+  releaseWrite();
+  const answered = await settledWithin(arrival);
+  assert.ok(answered, "the arrival is served once the write lands");
+  assert.equal(answered.v.status, 200);
+  assert.equal(answered.v.headers.get("X-HLS-Edge-Cache"), "COALESCED");
+  assert.deepEqual([...new Uint8Array(await answered.v.arrayBuffer())], [3, 1, 4, 1, 5]);
+  assert.equal(origin.calls, 1);
+});
+
+test("a producer's cache write that never lands does not park the joiner either", async () => {
+  const channelId = "chan-dead-write";
+  const startedAt = "1726000100024";
+  const name = "audio-part-1475.m4s";
+  const origin = gatedOrigin([2, 7, 1, 8]);
+  const cache = hangingPutCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_AUDIO_RUNG, name };
+  const timers = makeTimers();
+
+  const both = Promise.all([
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_AUDIO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      route,
+      { ...BOUNDS, setTimer: timers.setTimer },
+    ),
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_AUDIO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      route,
+      { ...BOUNDS, setTimer: timers.setTimer },
+    ),
+  ]);
+  assert.equal(await settledWithin(both), null, "nobody is served until the origin answers");
+  assert.equal(origin.calls, 1, "the joiner joined rather than fetched");
+  origin.release();
+  assert.equal(await settledWithin(both), null, "the joiner is waiting on a write nothing will finish");
+  assert.equal(timers.fireMatching((t) => t.ms === WRITE_BOUND_MS), 1, "the joiner bounded that wait, in its own context");
+
+  const answered = await settledWithin(both);
+  assert.ok(answered, "the joiner falls back to the shared buffer rather than waiting forever");
+  const [producerResponse, joinerResponse] = answered.v;
+  assert.equal(producerResponse.status, 200);
+  assert.equal(joinerResponse.status, 200);
+  assert.deepEqual([...new Uint8Array(await joinerResponse.arrayBuffer())], [2, 7, 1, 8]);
+  assert.equal(cache.size, 0, "nothing was ever written -- the bytes came out of the shared buffer");
+  assert.equal(origin.calls, 1, "and it did not pay for a second fetch to find that out");
 });

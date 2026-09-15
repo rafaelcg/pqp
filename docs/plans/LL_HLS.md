@@ -114,9 +114,9 @@ ms parts served from the box. Neither is measured end to end yet, which is what
 | Publish to where a viewer can reach it | R2 PUT 600 to 1000 ms, then two serialised playlist PUTs of 600 to 1000 ms each before the segment is listed | tmpfs write, served by Caddy: under 5 ms | `hls-egress.ts:534-545`, measured |
 | Playlist discovery | poll every 4 s plus up to 2 s of edge cache: 0 to 6000, mean 3000 | blocking reload, the request is already open: 0 | `RELOAD_STORM.md`, RFC 8216bis |
 | Byte fetch | segment from R2 through a cache miss, ~200 ms | part (~200 KB) from a warm colo, 20 to 60 ms | R2 under 200 ms, 2026-09-12 |
-| Player hold-back | `liveSyncDurationCount` 5 x 4 s = **20 000 ms** | `PART-HOLD-BACK` 3 x 500 ms = **1500 ms** | `hls-live-edge.ts:25-38`; RFC 8216bis 4.4.3.8 |
-| **Total, p50** | **~26 s** | **~2.0 s** | |
-| **Total, p95** | **~32 s** | **~3.5 s** | |
+| Player hold-back | `liveSyncDurationCount` 5 x 4 s = **20 000 ms** | `PART-HOLD-BACK` 6 x 500 ms = **3000 ms** (was 3 x, see below) | `hls-live-edge.ts:25-38`; RFC 8216bis 4.4.3.8 |
+| **Total, p50** | **~26 s** | **~3.5 s** | |
+| **Total, p95** | **~32 s** | **~5.0 s** | |
 
 The target is **2 to 4 s**, and the honest reading of the table is that **the
 cushion is 20 of today's 26 seconds**. LL-HLS is worth building only because that
@@ -124,7 +124,21 @@ cushion cannot simply be lowered on the conventional path: it is 5 segments of s
 against a 60 s window, and 2026-09-12 measured seventeen window misses in four
 minutes when it was tighter. A 1.5 s hold-back is safe only because a part arrives
 every 500 ms, so three parts of slack is three chances to recover inside a second
-and a half instead of one inside twenty. If the part target falls back to 1 s
+and a half instead of one inside twenty.
+
+**The hold-back went to six parts on 2026-09-15**, which is the 1.5 s the p50 and
+p95 rows above gained. Three is RFC 8216bis 4.4.3.8's FLOOR, not its
+recommendation, and the floor only holds when the player is near the origin.
+Production is not: viewers in the UK, the remux box in Sao Paulo, ~200 ms of round
+trip, parts fetched by the edge Worker in ~170 ms and blocking reloads answered in
+~400 ms. Three parts of budget against a 400 ms reload leaves nothing for one
+retransmit, and the symptom was the viewer "struggling until it settles" at the
+start of every stream. Six parts is 3.0 s, still a seventh of the conventional
+ladder's hold-back and still inside the 2-to-4 s target at p50. It is
+`LL_PART_HOLD_BACK_PARTS` on the Worker (`tools/hls-edge/wrangler.jsonc`), not a
+constant, because the right number is a property of where the audience is.
+
+If the part target falls back to 1 s
 (section 3), the container-close and hold-back lines roughly double: p50 ~3.5 s, p95
 ~5.5 s. Better than 26, outside "2 to 4", and the go-live copy must say so rather
 than ship a different promise.
