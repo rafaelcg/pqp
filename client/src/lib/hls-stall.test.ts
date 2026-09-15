@@ -6,8 +6,11 @@ import {
   type HlsStallDecision,
 } from "./hls-stall";
 import { resolveHoldingScreenReason } from "./watch-holding-screen";
+import { LL_HLS_STARTUP_GRACE_MS } from "./hls-live-edge";
 
 const T0 = 1_000_000;
+/** The LL startup grace, which every part-rule assertion has to clear. */
+const GRACE = LL_HLS_STARTUP_GRACE_MS;
 
 describe("HlsStallWatch", () => {
   it("is quiet while the picture plays and the playlist advances", () => {
@@ -454,15 +457,17 @@ describe("HlsStallWatch", () => {
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
-      watch.onPartAdvance("10.0", T0);
+      // Past the startup grace, which is where this rule has anything to
+      // say at all -- see its own describe block below.
+      watch.onPartAdvance("10.0", T0 + GRACE);
       // 4 * 500ms = 2000ms.
-      expect(watch.tick(T0 + 1_999)).toBe("none");
-      expect(watch.tick(T0 + 2_000)).toBe("start-load");
+      expect(watch.tick(T0 + GRACE + 1_999)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 2_000)).toBe("start-load");
       // One-shot: the SAME stall episode does not fire it again, and does
       // not escalate to a ladder of its own -- it stays "none" until the
       // segment-based rule's own (much later) threshold takes over.
-      expect(watch.tick(T0 + 2_500)).toBe("none");
-      expect(watch.tick(T0 + 11_000)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 2_500)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 11_000)).toBe("none");
     });
 
     it("re-arms for a later stall episode once a part actually advances", () => {
@@ -470,14 +475,14 @@ describe("HlsStallWatch", () => {
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
-      watch.onPartAdvance("10.0", T0);
-      expect(watch.tick(T0 + 2_000)).toBe("start-load");
+      watch.onPartAdvance("10.0", T0 + GRACE);
+      expect(watch.tick(T0 + GRACE + 2_000)).toBe("start-load");
       // A genuinely new part arrives -- the stream recovered.
-      watch.onPartAdvance("10.1", T0 + 2_100);
-      expect(watch.tick(T0 + 2_200)).toBe("none");
+      watch.onPartAdvance("10.1", T0 + GRACE + 2_100);
+      expect(watch.tick(T0 + GRACE + 2_200)).toBe("none");
       // It stalls again from this new point: the one-shot fires again.
-      expect(watch.tick(T0 + 4_099)).toBe("none");
-      expect(watch.tick(T0 + 4_100)).toBe("start-load");
+      expect(watch.tick(T0 + GRACE + 4_099)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 4_100)).toBe("start-load");
     });
 
     it("never fires while a segment-based reason is already flagged -- it only gets a turn when nothing else is", () => {
@@ -497,12 +502,72 @@ describe("HlsStallWatch", () => {
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
-      watch.onPartAdvance("10.0", T0);
-      watch.onPartAdvance("10.0", T0 + 1_000);
-      watch.onPartAdvance("10.0", T0 + 1_900);
-      // Still counts from the FIRST time "10.0" was seen (T0), not the
-      // repeated calls -- a duplicate playlist fetch is not a new part.
-      expect(watch.tick(T0 + 2_000)).toBe("start-load");
+      watch.onPartAdvance("10.0", T0 + GRACE);
+      watch.onPartAdvance("10.0", T0 + GRACE + 1_000);
+      watch.onPartAdvance("10.0", T0 + GRACE + 1_900);
+      // Still counts from the FIRST time "10.0" was seen, not the repeated
+      // calls -- a duplicate playlist fetch is not a new part.
+      expect(watch.tick(T0 + GRACE + 2_000)).toBe("start-load");
+    });
+  });
+
+  /**
+   * THE FIRST SECONDS OF AN LL STREAM LOOK EXACTLY LIKE A STALLED ONE.
+   *
+   * 2026-09-15, the first sustained LL run: viewers "struggled until it
+   * settled". A player waiting out the edge's `503 Retry-After: 1` while the
+   * remux warms up has no part yet, and `LL_HLS_PART_STUCK_PARTS` is two
+   * seconds -- so the watchdog nudged (`startLoad`) a load that was going
+   * perfectly well, before the first part had ever landed.
+   */
+  describe("the LL startup grace", () => {
+    it("says nothing about a part that has not arrived yet", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      // No `onPartAdvance` at all: the manifest is still being fetched.
+      // Long past both the part threshold AND the grace -- there is nothing
+      // to be stuck when nothing has ever advanced.
+      expect(watch.tick(T0 + 2_000)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 5_000)).toBe("none");
+    });
+
+    it("holds the part-stuck nudge until the grace is over", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      // One part landed early and then nothing: the rule's own threshold
+      // (2 s) passes inside the grace and must still be quiet.
+      watch.onPartAdvance("1.0", T0 + 500);
+      expect(watch.tick(T0 + 3_000)).toBe("none");
+      expect(watch.tick(T0 + GRACE - 1)).toBe("none");
+      // The grace ends and the rule gets its one nudge.
+      expect(watch.tick(T0 + GRACE)).toBe("start-load");
+    });
+
+    it("holds the buffering stall too", () => {
+      const watch = new HlsStallWatch({ stallMs: 1_000 });
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onWaiting(T0);
+      expect(watch.tick(T0 + 3_000)).toBe("none");
+      expect(watch.tick(T0 + GRACE)).toBe("start-load");
+    });
+
+    it("never graces a fatal error -- a source gone at second two is gone", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onError({ fatal: true });
+      expect(watch.tick(T0 + 100)).toBe("recover-media-error");
+    });
+
+    it("is off on conventional: byte-identical to before it existed", () => {
+      const watch = new HlsStallWatch({ stallMs: 1_000 });
+      watch.onSourceChanged(T0);
+      watch.configureForMode("conventional");
+      watch.onWaiting(T0);
+      expect(watch.tick(T0 + 1_000)).toBe("start-load");
     });
   });
 });
