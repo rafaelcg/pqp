@@ -146,7 +146,7 @@ export interface WatchPartyPanelProps {
   /**
    * `lowLatency` is `party.options.lowLatency` from THIS component's own
    * `party` prop, not read back out of global selection state inside the
-   * handler (Farol, PR #617, third round): the handler that ends up in
+   * handler (Farol review, third round): the handler that ends up in
    * `App.tsx` runs after an await, by which point a different channel could
    * be selected, and re-querying "whatever party is current" at that point
    * would answer for the wrong party. Passing it through the call ties the

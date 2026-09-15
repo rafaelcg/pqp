@@ -4520,7 +4520,7 @@ function MainAppContent({
       // last one asked for. `lowLatency` is a PARAMETER, not re-read from
       // `currentWatchParty()` here: this function's own await below means
       // whatever runs after it can be reached with a different channel
-      // selected (Farol, PR #617, third round), and `currentWatchParty()`
+      // selected (Farol review, third round), and `currentWatchParty()`
       // answers for the SELECTED channel, not necessarily the party this
       // press was for. The caller (`watch-party-panel.tsx`) already has the
       // right `party.options.lowLatency` in its own props at the moment of
