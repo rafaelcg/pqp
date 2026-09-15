@@ -624,14 +624,21 @@ exactly as before, from the shared cache and from storage.
 been a worse bug than the one it fixes: the owner arms a loop only when a
 viewer polls IT, so an audience of two that both landed on the other machine —
 or an owner whose own loop idled out hours into a party — would leave nobody
-warming at all. So the machine standing down publishes `voice.hlsKeepWarm` and
-the owner arms its own loop on hearing it, the same shape as
-`voice.hlsReconcile`: the instance that cannot do the work asks the one that
-can. Every instance hears the frame and only the one whose ownership answer is
-"not somebody else's" acts, so a third machine stays quiet instead of arming a
-loop that would stand down and re-publish. The non-owner re-publishes each time
-its 30s ownership answer expires, for as long as viewers keep polling it, which
-is well inside the owner's ten-minute idle window.
+warming at all. So the machine that cannot do the work asks the one that can
+(`voice.hlsKeepWarm`), the same shape as `voice.hlsReconcile`. Every instance
+hears the ask and only the one whose ownership answer is "not somebody else's"
+acts, so a third machine stays quiet instead of arming a loop that would stand
+down and re-publish.
+
+**And it keeps warming until the owner answers.** A publish is fire-and-forget
+and the transport drops rather than buffers while it is reconnecting, so "I
+published a hand-over" is not "somebody is warming this", and nothing local can
+tell a dropped frame from a delivered one. The owner replies
+`voice.hlsKeepWarmTaken` once its own loop is actually running, and only that
+reply stops the asker's loop; no reply — a dropped frame, a bus that is down,
+an owner that went away between the row and the frame — means the asker goes on
+warming, which is the fail-open rule applied to the one case that cannot be
+detected locally. The ask repeats on a slow cadence while it goes unanswered.
 
 Warming is the fail-open side throughout: an unstamped row, `VOICE_REGISTRY`
 off, a bus that is off (nobody to hand the job to) or a lookup that could not be
@@ -656,7 +663,11 @@ is now a row: `automod_alert_cooldowns`, claimed by a conditional UPSERT whose
 `rowCount` is the verdict, so Postgres serialises the two machines and exactly
 one can win. Both sides of that comparison are `NOW()`, the database's own
 clock: a peer running eleven seconds fast would otherwise satisfy its own
-`WHERE` and claim a window that had not elapsed. The claim is single-flighted
+`WHERE` and claim a window that had not elapsed. The instant the row carries
+travels back as the TEXT Postgres printed and returns as `$3::timestamptz`,
+never as a JS `Date` — `TIMESTAMPTZ` has microsecond resolution and a `Date`
+has milliseconds, so a value that made that round trip is a different instant
+and the conditional release below would match nothing at all. The claim is single-flighted
 per key, so a flood of hits for one author shares one query instead of queueing
 a hundred UPSERTs on the same primary-key row; the cluster frame is published
 only after the alert row commits; and a post that fails releases the window

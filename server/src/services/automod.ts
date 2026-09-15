@@ -108,8 +108,16 @@ interface AlertClaim {
    * The instant the row now carries, so a release can be conditional on it.
    * `null` when the database could not be asked at all and this process
    * decided on its own — there is then no row to undo.
+   *
+   * KEPT AS THE TEXT POSTGRES PRINTED, never a JS `Date`. `TIMESTAMPTZ` has
+   * microsecond resolution and a `Date` has milliseconds, so a value that made
+   * the round trip through JavaScript is a DIFFERENT instant ~999 times out of
+   * 1000: the conditional DELETE below would match no row, and the release
+   * would silently do nothing — the exact failure the release exists to
+   * prevent, with a passing test if that test only ever used whole
+   * milliseconds. The string goes back as `$3::timestamptz` unchanged.
    */
-  at: Date | null;
+  at: string | null;
 }
 
 /**
@@ -121,13 +129,13 @@ interface AlertClaim {
  * one of them gets the claim — the same coalescing the playlist proxy does for
  * a stampede of identical reads.
  */
-const inflightClaims = new Map<string, Promise<Date | false | null>>();
+const inflightClaims = new Map<string, Promise<string | false | null>>();
 
 async function claimAlertWindow(
   serverId: string,
   authorId: string,
   key: string,
-): Promise<Date | false | null> {
+): Promise<string | false | null> {
   const existing = inflightClaims.get(key);
   if (existing) {
     // Somebody else is already asking. Whatever the answer, it is not this
@@ -135,19 +143,19 @@ async function claimAlertWindow(
     await existing.catch(() => null);
     return false;
   }
-  const inflight = (async (): Promise<Date | false | null> => {
+  const inflight = (async (): Promise<string | false | null> => {
     try {
-      const result = await getPool().query<{ last_alert_at: Date }>(
+      const result = await getPool().query<{ at: string }>(
         `INSERT INTO automod_alert_cooldowns (server_id, author_id, last_alert_at)
          VALUES ($1, $2, NOW())
          ON CONFLICT (server_id, author_id) DO UPDATE
            SET last_alert_at = NOW()
            WHERE automod_alert_cooldowns.last_alert_at
                  <= NOW() - ($3::bigint * INTERVAL '1 millisecond')
-         RETURNING last_alert_at`,
+         RETURNING last_alert_at::text AS at`,
         [serverId, authorId, ALERT_COOLDOWN_MS],
       );
-      return result.rows[0]?.last_alert_at ?? false;
+      return result.rows[0]?.at ?? false;
     } catch (error) {
       console.error("[automod] alert cooldown claim failed:", error);
       return null;
@@ -186,7 +194,7 @@ async function claimAlert(
   // Claimed, or the database could not be asked and this process is deciding
   // on its own. Either way this instance is about to post.
   rememberAlert(key, now);
-  return { key, at: claimed instanceof Date ? claimed : null };
+  return { key, at: typeof claimed === "string" ? claimed : null };
 }
 
 /**
@@ -219,7 +227,8 @@ async function releaseAlertClaim(
   try {
     await getPool().query(
       `DELETE FROM automod_alert_cooldowns
-        WHERE server_id = $1 AND author_id = $2 AND last_alert_at = $3`,
+        WHERE server_id = $1 AND author_id = $2
+          AND last_alert_at = $3::timestamptz`,
       [serverId, authorId, claim.at],
     );
   } catch (error) {

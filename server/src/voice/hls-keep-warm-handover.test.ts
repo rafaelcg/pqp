@@ -20,11 +20,16 @@ import { createMemoryHub } from "../lib/bus.js";
  * owner's own loop can have idled out hours into a party). Nobody would be
  * warming at all.
  *
- * So the machine standing down says so on the bus and the owner picks the job
- * up — the same shape as `voice.hlsReconcile`. Two real module graphs over one
- * memory hub, because "the owner arms its own loop" is a claim about a
- * different process, and a real Postgres with `VOICE_REGISTRY=postgres`
- * because that is the flag that makes ownership mean anything (pitfall 12).
+ * So the machine that cannot do the work asks the one that can, on the bus —
+ * the same shape as `voice.hlsReconcile` — and keeps warming until the owner
+ * answers that it has the job. A publish is fire-and-forget and the transport
+ * drops while it reconnects, so the ANSWER is what stops the loop, never the
+ * ask.
+ *
+ * Two real module graphs over one memory hub, because "the owner arms its own
+ * loop" is a claim about a different process, and a real Postgres with
+ * `VOICE_REGISTRY=postgres` because that is the flag that makes ownership mean
+ * anything (pitfall 12).
  */
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -188,7 +193,6 @@ describeDb("the owner picks up the keep-warm job it was handed", () => {
       "the edge to stand down",
     );
     expect(edge.proxy.hlsKeepWarmDeclined()).toBe(1);
-    expect(edge.proxy.hlsKeepWarmRenders()).toBe(0);
 
     // THE POINT: exactly one machine is warming, and it is the owner, which
     // no viewer has ever polled.
@@ -199,5 +203,14 @@ describeDb("the owner picks up the keep-warm job it was handed", () => {
     expect(owner.proxy.hlsKeepWarmLoopsActive()).toBe(1);
     expect(owner.proxy.hlsKeepWarmAdopted()).toBe(1);
     expect(edge.proxy.hlsKeepWarmLoopsActive()).toBe(0);
+
+    // The edge warms until it is relieved and not one tick longer: whatever it
+    // had rendered by the hand-over stands still from here on, while the
+    // owner's count keeps climbing.
+    const edgeRenders = edge.proxy.hlsKeepWarmRenders();
+    const ownerRenders = owner.proxy.hlsKeepWarmRenders();
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(edge.proxy.hlsKeepWarmRenders()).toBe(edgeRenders);
+    expect(owner.proxy.hlsKeepWarmRenders()).toBeGreaterThan(ownerRenders);
   });
 });

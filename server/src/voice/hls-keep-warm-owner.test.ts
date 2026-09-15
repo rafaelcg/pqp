@@ -96,7 +96,20 @@ async function settle(ms: number): Promise<void> {
 
 describeDb("the keep-warm loop runs only on the machine that owns the session", () => {
   let channelId: string;
+  let hub: ReturnType<typeof createMemoryHub>;
+  let frames: { origin: string; topic: string; data: unknown }[];
   const otherInstance = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+
+  /** The owner's answer, as the other machine's transport would deliver it. */
+  function ownerAnswers(startedAt: number): void {
+    for (const listener of [...hub.listeners]) {
+      listener({
+        origin: "the-owner",
+        topic: "voice.hlsKeepWarmTaken",
+        data: { channelId, startedAt },
+      });
+    }
+  }
 
   beforeAll(async () => {
     await initDb();
@@ -126,10 +139,13 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
     );
     channelId = channel.rows[0]!.id;
     process.env.VOICE_REGISTRY = "postgres";
-    // A bus with nobody else on it: enough for the decline path to have
-    // somewhere to hand the session over to, which is what it requires before
-    // it will stand down at all.
-    setBusTransport(createMemoryTransport(createMemoryHub()));
+    // A bus with nobody else on it: enough for the hand-over to have somewhere
+    // to go, which is what this process requires before it will consider
+    // standing down at all. The test plays the owner by answering on `hub`.
+    hub = createMemoryHub();
+    frames = [];
+    hub.listeners.add((frame) => frames.push(frame));
+    setBusTransport(createMemoryTransport(hub));
     enableHls();
     resetHlsPlaylistCacheForTests();
     resetHlsOwnershipForTests();
@@ -174,7 +190,7 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
     );
   }
 
-  it("stops the loop when a live machine owns the session, and serves the viewer anyway", async () => {
+  it("stands down only once the owner answers, and serves the viewer throughout", async () => {
     await liveSession(otherInstance);
     await heartbeat(otherInstance, 1);
 
@@ -184,18 +200,37 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
     expect(hlsKeepWarmLoopsActive()).toBe(1);
 
     await waitFor(
-      () => hlsKeepWarmLoopsActive() === 0,
-      "the loop to stand down for the owner",
+      () => frames.some((f) => f.topic === "voice.hlsKeepWarm"),
+      "the hand-over to be published",
     );
+    // STILL WARMING. An unanswered ask is not a warmer: the publish may have
+    // been dropped by a transport that is reconnecting, and this machine
+    // cannot tell that apart from one that arrived.
+    expect(hlsKeepWarmLoopsActive()).toBe(1);
+
+    ownerAnswers(STARTED_AT);
+    expect(hlsKeepWarmLoopsActive()).toBe(0);
     expect(hlsKeepWarmDeclined()).toBe(1);
-    // Not one warm render: the bucket was never polled on this machine's clock.
-    expect(hlsKeepWarmRenders()).toBe(0);
 
     // And the next viewer does not re-arm it: the answer is remembered, so a
     // party with an audience on this machine does not re-decide every poll.
     await buildSignedPlaylist(channelId, STARTED_AT, RUNG);
     expect(hlsKeepWarmLoopsActive()).toBe(0);
     expect(hlsKeepWarmDeclined()).toBe(1);
+  });
+
+  it("keeps warming for as long as the owner never answers", async () => {
+    await liveSession(otherInstance);
+    await heartbeat(otherInstance, 1);
+
+    await buildSignedPlaylist(channelId, STARTED_AT, RUNG);
+    // Nobody answers. The stream must not be left with no warmer at all.
+    await waitFor(
+      () => hlsKeepWarmRenders() > 0,
+      "a warm render while the hand-over goes unanswered",
+    );
+    expect(hlsKeepWarmLoopsActive()).toBe(1);
+    expect(hlsKeepWarmDeclined()).toBe(0);
   });
 
   it("keeps warming when the owner's heartbeat has expired", async () => {
@@ -225,26 +260,20 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
     expect(hlsKeepWarmDeclined()).toBe(0);
   });
 
-  it("hands the session to the owner over the bus before standing down", async () => {
+  it("names the session in the hand-over it publishes", async () => {
     await liveSession(otherInstance);
     await heartbeat(otherInstance, 1);
 
-    const frames: { topic: string; data: unknown }[] = [];
-    const hub = createMemoryHub();
-    hub.listeners.add((frame) => frames.push(frame));
-    setBusTransport(createMemoryTransport(hub));
-
     await buildSignedPlaylist(channelId, STARTED_AT, RUNG);
     await waitFor(
-      () => hlsKeepWarmLoopsActive() === 0,
-      "the loop to stand down for the owner",
+      () => frames.some((f) => f.topic === "voice.hlsKeepWarm"),
+      "the hand-over to be published",
     );
 
     // THE HAND-OVER IS THE POINT. Standing down alone would leave nobody
     // warming a party whose whole audience landed on this machine.
-    const handover = frames.find((f) => f.topic === "voice.hlsKeepWarm");
-    expect(handover).toBeDefined();
-    expect(handover!.data).toMatchObject({ channelId, startedAt: STARTED_AT });
+    const handover = frames.find((f) => f.topic === "voice.hlsKeepWarm")!;
+    expect(handover.data).toMatchObject({ channelId, startedAt: STARTED_AT });
   });
 
   it("keeps warming when there is no bus to hand the session over on", async () => {

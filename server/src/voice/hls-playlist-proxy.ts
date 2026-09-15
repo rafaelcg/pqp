@@ -245,6 +245,7 @@ export function resetHlsPlaylistCacheForTests(): void {
   segmentUrlMemo.clear();
   stopAllKeepWarmLoops();
   keepWarmOwnership.clear();
+  keepWarmHandovers.clear();
   keepWarmRenders = 0;
   keepWarmDeclined = 0;
   keepWarmAdopted = 0;
@@ -444,12 +445,18 @@ async function renderCachedPlaylist(
  * worse bug than the one this fixes. The owner only arms a loop when a VIEWER
  * polls IT, so an audience that all landed on the other machine (two viewers,
  * or an owner whose own loop idled out hours into a party) would leave NOBODY
- * warming. So the machine that stands down first says so on the bus
- * (`voice.hlsKeepWarm`), and the owner arms its own loop on hearing it — the
- * same shape as `voice.hlsReconcile`: the instance that cannot do the work
- * asks the one that can. The non-owner re-publishes every time its ownership
- * answer expires (`KEEP_WARM_OWNER_TTL_MS`, 30s) for as long as viewers keep
- * polling it, which is well inside the owner's own `HLS_KEEP_WARM_IDLE_MS`.
+ * warming. So the machine that cannot do the work asks the one that can
+ * (`voice.hlsKeepWarm`), the same shape as `voice.hlsReconcile`.
+ *
+ * AND IT DOES NOT STAND DOWN UNTIL THE OWNER SAYS IT HAS THE JOB. A publish is
+ * fire-and-forget and the transport DROPS rather than buffers while it is
+ * reconnecting, so "I published a hand-over" is not "somebody is warming
+ * this": a frame lost in that window would take the stream's only warmer with
+ * it, silently. The owner answers `voice.hlsKeepWarmTaken` once its own loop
+ * is running, and only that answer stops this loop. No answer — a dropped
+ * frame, a bus that is down, an owner that went away between the row and the
+ * frame — means this machine keeps warming, which is the fail-open rule below
+ * applied to the one case that cannot be detected locally.
  *
  * WARMING IS THE FAIL-OPEN SIDE. An unstamped row, the registry off, a bus
  * that is off (nobody to hand the job to), or a lookup this process could not
@@ -496,6 +503,23 @@ let keepWarmAdopted = 0;
  */
 const HLS_KEEP_WARM_TOPIC = "voice.hlsKeepWarm";
 
+/**
+ * "I have it" — the owner's answer, and the only thing that stops a non-owner's
+ * loop. See the `STANDING DOWN` note above for why an unacknowledged hand-over
+ * must not.
+ */
+const HLS_KEEP_WARM_TAKEN_TOPIC = "voice.hlsKeepWarmTaken";
+
+/**
+ * How often a machine waiting to be relieved re-asks. The ask is one small
+ * frame and the answer ends it, so this only repeats while frames are being
+ * lost — precisely when repeating is the point.
+ */
+const HLS_KEEP_WARM_HANDOVER_RETRY_MS = 6_000;
+
+/** Per session, when this process last asked the owner to take over. */
+const keepWarmHandovers = new Map<string, number>();
+
 /** Loops handed to the owner over the bus. For metrics. */
 export function hlsKeepWarmAdopted(): number {
   return keepWarmAdopted;
@@ -517,10 +541,26 @@ const keepWarmOwnership = new Map<string, { ownedElsewhere: boolean; at: number 
  * tick and written once per session per TTL, so the sweep is cheap and there
  * is no case where an entry outlives its own expiry by more than one write.
  */
+const KEEP_WARM_OWNERSHIP_MAX = 256;
+
 function pruneKeepWarmOwnership(now: number): void {
+  // AMORTISED, not per refresh. Scanning the whole map on every refresh is
+  // O(N) work per session per TTL — quadratic in the number of sessions a box
+  // holds at once, for a map that in practice has single digits in it. Past
+  // the bound (far above any real concurrent-session count) one scan clears
+  // every expired entry at once, so the cost per write is O(1) amortised and
+  // the map is still bounded by what is genuinely live.
+  if (keepWarmOwnership.size <= KEEP_WARM_OWNERSHIP_MAX) {
+    return;
+  }
   for (const [key, entry] of keepWarmOwnership) {
     if (now - entry.at >= KEEP_WARM_OWNER_TTL_MS) {
       keepWarmOwnership.delete(key);
+    }
+  }
+  for (const [key, at] of keepWarmHandovers) {
+    if (now - at >= KEEP_WARM_OWNER_TTL_MS) {
+      keepWarmHandovers.delete(key);
     }
   }
 }
@@ -627,15 +667,18 @@ async function runKeepWarmTick(
       now,
     );
     if (ownedElsewhere === true && isBusEnabled()) {
-      // HAND IT OVER BEFORE STANDING DOWN. Published first and unconditionally:
-      // if this is dropped the owner may never learn there is an audience at
-      // all, and the cost of one extra frame every 30s is nothing next to a
-      // party nobody is warming. With the bus off there is nobody to tell, so
-      // this machine keeps warming instead (the fail-open rule above).
-      publishToCluster(HLS_KEEP_WARM_TOPIC, { channelId, startedAt });
-      keepWarmDeclined += 1;
-      stopKeepWarmLoop(key);
-      return;
+      // ASK, AND KEEP WARMING UNTIL THE ANSWER COMES. Stopping here on the
+      // strength of a fire-and-forget publish is how a stream ends up with no
+      // warmer at all: the transport drops frames while it reconnects, and
+      // nothing local can tell that apart from a frame that arrived. The loop
+      // stops in the `voice.hlsKeepWarmTaken` handler and nowhere else.
+      // Re-asked on a slow cadence so a lost frame is retried without turning
+      // a two-second tick into a two-second publish.
+      const askedAt = keepWarmHandovers.get(key) ?? 0;
+      if (now - askedAt >= HLS_KEEP_WARM_HANDOVER_RETRY_MS) {
+        keepWarmHandovers.set(key, now);
+        publishToCluster(HLS_KEEP_WARM_TOPIC, { channelId, startedAt });
+      }
     }
     let rungs: (string | undefined)[];
     try {
@@ -707,8 +750,10 @@ subscribeToCluster(HLS_KEEP_WARM_TOPIC, (data) => {
   const key = keepWarmSessionKey(channelId, startedAt);
   if (keepWarmLoops.has(key)) {
     // Already warming it. Count the hand-over as a touch so the owner's idle
-    // timer follows the audience on the OTHER machine, not just its own.
+    // timer follows the audience on the OTHER machine, not just its own, and
+    // answer: the asker is still warming it too until it hears this.
     keepWarmLoops.get(key)!.lastRequestedAt = Date.now();
+    publishToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, { channelId, startedAt });
     return;
   }
   void keepWarmOwnedElsewhere(channelId, startedAt, key, Date.now())
@@ -720,11 +765,50 @@ subscribeToCluster(HLS_KEEP_WARM_TOPIC, (data) => {
       }
       keepWarmAdopted += 1;
       touchKeepWarmSession(channelId, startedAt, Date.now());
+      // Answered only once the loop is actually running, never on intent: the
+      // asker stops warming on this frame, so it has to mean what it says.
+      if (keepWarmLoops.has(key)) {
+        publishToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, { channelId, startedAt });
+      }
     })
     .catch(() => {
       // The probe swallows its own failures; this is belt and braces so a
       // rejection can never reach the bus dispatcher.
     });
+});
+
+/**
+ * The owner has the job. THE ONE PLACE A NON-OWNER'S LOOP STOPS: everything
+ * else about this hand-over is fire-and-forget, and a loop that stops on an
+ * unanswered ask is a stream nobody is warming.
+ */
+subscribeToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, (data) => {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof (data as { channelId?: unknown }).channelId !== "string" ||
+    typeof (data as { startedAt?: unknown }).startedAt !== "number"
+  ) {
+    return;
+  }
+  const { channelId, startedAt } = data as {
+    channelId: string;
+    startedAt: number;
+  };
+  const key = keepWarmSessionKey(channelId, startedAt);
+  if (!keepWarmLoops.has(key)) {
+    return;
+  }
+  // Only the machine that asked stands down, and only while it still believes
+  // the session is somebody else's. Without this check the OWNER would stop
+  // its own loop on hearing a third machine's answer.
+  const known = keepWarmOwnership.get(key);
+  if (!known?.ownedElsewhere) {
+    return;
+  }
+  keepWarmDeclined += 1;
+  keepWarmHandovers.delete(key);
+  stopKeepWarmLoop(key);
 });
 
 async function renderSignedPlaylist(
