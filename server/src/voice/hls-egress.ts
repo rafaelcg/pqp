@@ -18,6 +18,7 @@ import {
   VOICE_RUNG,
   decideCameraEgress,
   decideLadder,
+  hlsRungVideoKbps,
   HLS_CAMERA_MBPS,
   HLS_VOICE_ONLY_MBPS,
   LADDER_RUNGS,
@@ -29,11 +30,16 @@ import {
 import { logEvent } from "../lib/log.js";
 import { getPool } from "../db.js";
 import {
+  claimHlsSessionRow,
+  claimHlsSessionRows,
   egressIdsOwnedElsewhere,
+  ensureHlsOwnerHeartbeat,
   hlsOwnerInstanceId,
   hlsSkippedOwnedElsewhereCount,
   forgetPendingHlsSessionClaims,
+  liveOtherInstances,
   noteHlsSkippedOwnedElsewhere,
+  ownedByLiveOtherInstance,
   resetHlsOwnershipForTests,
   retryPendingHlsSessionClaims,
   sessionIdsOwnedElsewhere,
@@ -972,6 +978,31 @@ export function sessionPrefixPattern(
 }
 
 /**
+ * `live/<channelId>/<startedAt>-<rung>` -> startedAt, and the rung beside it:
+ * `hlsObjectPrefix` read backwards, and it lives beside it so the two can
+ * never drift apart.
+ *
+ * The rung suffix is why this cannot be a bare `Number(tail)`: with a ladder
+ * every prefix ends `-1080p30` or similar, `Number` answers NaN, and a row
+ * that cannot be parsed is treated as unadoptable and its egress STOPPED.
+ * That would kill a live watch party on every deploy, which is the exact
+ * failure the boot reconcile was written to stop.
+ */
+export function parseHlsObjectPrefix(
+  prefix: string,
+): { startedAt: number; rung: string | null } | null {
+  const tail = prefix.split("/").pop() ?? "";
+  const dash = tail.indexOf("-");
+  const startedAtPart = dash === -1 ? tail : tail.slice(0, dash);
+  const rung = dash === -1 ? null : tail.slice(dash + 1);
+  const parsed = Number(startedAtPart);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return { startedAt: parsed, rung: rung || null };
+}
+
+/**
  * One row per rendition: each has its own objects, egress and retention.
  *
  * `reopen` IS THE CAMERA'S, AND IT IS NOT AN OPTIMISATION.
@@ -1593,6 +1624,8 @@ export function resetLiveHlsForTests(): void {
   }
   cameraProbeRetryTimers.clear();
   cameraProbeRetryAttempts.clear();
+  resumeRefusalLoggedAt.clear();
+  resumeDecisionCache.clear();
   changeListener = null;
   sfuLoadReader = null;
   stopLiveHlsMonitor();
@@ -1616,11 +1649,106 @@ export function setLiveHlsSfuLoadReader(
   sfuLoadReader = reader;
 }
 
+/**
+ * WHAT A START IS ABOUT TO SUPERSEDE, and why a count has to be told.
+ *
+ * `endSupersededSessions` stops EVERY active egress on the channel it is
+ * starting for, except the ids of that very start. So at the moment
+ * `decideLadder` is priced, whatever the box is running for THIS channel is
+ * already condemned: counting it charges the new ladder for the transcode it
+ * is replacing. Production, 2026-09-15, mid rolling deploy: a resumed party
+ * was priced against its own two still-running egresses, `ladderMbps` came
+ * out at 600 against a 450 budget, and `720p30` was refused with
+ * `ladder-budget` on a box that was about to be two rungs emptier.
+ *
+ * AN EXPLICIT SET OF IDS, NOT A CHANNEL (a Farol finding on this PR). "Every
+ * egress on the channel" is a prediction, and two things falsify it: an id
+ * whose last `StopEgress` failed is sitting in `orphanStopBackoff` precisely
+ * because the box would not let go of it, and an id whose `hls_sessions` row
+ * belongs to a machine that is still answering is not this process's to stop
+ * at all. Discounting either prices the new ladder as though a transcode that
+ * is still running had gone. `planSupersededEgresses` builds the set with both
+ * questions asked, and anything it could not establish stays in the count.
+ */
+interface BoxCountOptions {
+  /**
+   * Egress ids this start has established it may stop and is about to: not
+   * counted, here or in the in-process floor.
+   */
+  supersededEgressIds?: ReadonlySet<string>;
+  /**
+   * An `listEgress({active:true})` answer the caller already has, so a start
+   * that had to list the box to build `supersededEgressIds` does not list it
+   * a second time to price the ladder (a Farol finding on this PR). Already
+   * filtered to alive by `listActiveEgresses`, which changes no verdict here:
+   * `healthFromListing` answers "ended" for an id the listing does not carry.
+   *
+   * `null` is the OTHER half of that saving, and it is not the same as
+   * omitting the field: it says the caller already tried to list the box and
+   * could not. Listing again on the same tick would only fail again, one
+   * serial RPC later, so the count falls straight back to the in-process
+   * floor -- which is exactly what its own failure branch does.
+   */
+  listing?: EgressListing[] | null;
+}
+
+/** What `planSupersededEgresses` worked out, for one start. */
+interface SupersedePlan {
+  /** The box listing it read, or null when LiveKit could not be asked. */
+  listing: EgressListing[] | null;
+  /** The ids on this channel this start may stop, and is about to. */
+  egressIds: Set<string>;
+}
+
+/**
+ * Which of this channel's running egresses this start is entitled to
+ * supersede, and the box listing that answered it.
+ *
+ * FAIL CLOSED IN BOTH DIRECTIONS. A listing it could not fetch, or an
+ * ownership lookup it could not run, yields an EMPTY set: the budget then
+ * counts everything, which costs the new ladder a rung it might have had and
+ * never lets it start one the box has no room for. That is the same trade
+ * every guard in this file makes, and the one `listActiveEgresses` states.
+ */
+async function planSupersededEgresses(
+  channelId: string,
+  now = Date.now(),
+): Promise<SupersedePlan> {
+  const listing = await listActiveEgresses();
+  if (listing === null) {
+    return { listing: null, egressIds: new Set() };
+  }
+  const onThisChannel = listing
+    .filter((info) => info.roomName === channelId)
+    .map((info) => info.egressId);
+  if (onThisChannel.length === 0) {
+    return { listing, egressIds: new Set() };
+  }
+  const ownedElsewhere = await egressIdsOwnedElsewhere(onThisChannel);
+  if (ownedElsewhere === null) {
+    return { listing, egressIds: new Set() };
+  }
+  return {
+    listing,
+    egressIds: new Set(
+      onThisChannel.filter(
+        (egressId) =>
+          !ownedElsewhere.has(egressId) && !orphanStopHeld(egressId, now),
+      ),
+    ),
+  };
+}
+
 /** Renditions this process has running, across every channel. */
-export function runningRungCount(): number {
+export function runningRungCount(options: BoxCountOptions = {}): number {
   let total = 0;
   for (const room of rooms.values()) {
-    total += room.rungs.length;
+    for (const entry of room.rungs) {
+      if (options.supersededEgressIds?.has(entry.egressId)) {
+        continue;
+      }
+      total += 1;
+    }
   }
   return total;
 }
@@ -1741,20 +1869,32 @@ function isGhostCandidate(
   return noLiveSession && !withinGracePeriod;
 }
 
-export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
-  const localFloor = runningRungCount();
+export async function activeBoxEgressCount(
+  now = Date.now(),
+  options: BoxCountOptions = {},
+): Promise<number> {
+  const localFloor = runningRungCount(options);
+  if (options.listing === null) {
+    // The caller already asked the media server and it could not answer. See
+    // `BoxCountOptions.listing`.
+    return localFloor;
+  }
   const egress = getEgress();
-  if (!egress?.listEgress) {
+  if (!egress?.listEgress && !options.listing) {
     return localFloor;
   }
   let listing: EgressListing[];
-  try {
-    listing = await egress.listEgress({ active: true });
-  } catch (error) {
-    logEvent("voice.hlsBoxBudgetListFailed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return localFloor;
+  if (options.listing) {
+    listing = options.listing;
+  } else {
+    try {
+      listing = await egress!.listEgress!({ active: true });
+    } catch (error) {
+      logEvent("voice.hlsBoxBudgetListFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return localFloor;
+    }
   }
   const roomNames = [
     ...new Set(
@@ -1792,6 +1932,13 @@ export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
     }
   }
   for (const info of listing) {
+    if (options.supersededEgressIds?.has(info.egressId)) {
+      // CONDEMNED, SO NOT CHARGED. See `BoxCountOptions`: these are the ids
+      // `planSupersededEgresses` established this start may stop and is about
+      // to, so pricing the ladder against them refuses rungs the box is a
+      // second away from having room for.
+      continue;
+    }
     if (healthFromListing(info.egressId, listing) !== "alive") {
       continue;
     }
@@ -1855,8 +2002,13 @@ export async function activeBoxEgressCount(now = Date.now()): Promise<number> {
  * process itself knows it is running" — and it can never undercount: the
  * subtraction is floored at zero.
  */
-async function activeLadderEgressCount(): Promise<number> {
-  return Math.max(0, (await activeBoxEgressCount()) - runningCameraCount());
+async function activeLadderEgressCount(
+  options: BoxCountOptions = {},
+): Promise<number> {
+  return Math.max(
+    0,
+    (await activeBoxEgressCount(Date.now(), options)) - runningCameraCount(),
+  );
 }
 
 /**
@@ -3080,6 +3232,420 @@ export function adoptLiveHlsMicArchive(input: {
     startedAt: input.startedAt,
   });
   return true;
+}
+
+/**
+ * When each channel last narrated a refused resume adoption, per reason.
+ *
+ * RATE LIMITED PER CHANNEL PER REASON, which is pitfall 16's own fix applied
+ * where it applies again: `reconcileLiveHlsNow` reaches the adoption on every
+ * roster event for a channel this process has a sharer in and no room for, so
+ * a channel whose fresh start is itself being refused (the restart budget's
+ * cooldown, the session cap) would repeat one line for every join and leave
+ * until it clears. A refusal that cannot be read is worse than no refusal at
+ * all, and a line repeated a hundred times is one nobody reads.
+ */
+const resumeRefusalLoggedAt = new Map<string, number>();
+const RESUME_REFUSAL_LOG_THROTTLE_MS = 60_000;
+
+/**
+ * WHAT A RESUME ADOPTION ANSWERS, AND WHY "NO" IS TWO DIFFERENT ANSWERS.
+ *
+ * `fresh` is a genuine restart: nothing to inherit, a different presenter, an
+ * egress LiveKit no longer lists. The caller starts a ladder, which is what it
+ * did before this existed.
+ *
+ * `stand-down` is NOT that. It is "somebody else alive is driving this, or the
+ * question could not be answered" -- and starting a ladder on either is the
+ * incident this whole change is about, one step further along: `startRoom`
+ * would mint a new `startedAt` and `endSupersededSessions` would stop the
+ * healthy egresses of the session the other machine had just claimed. So the
+ * caller does NOTHING this reconcile and asks again on the next roster event.
+ * If the other machine really is gone, its heartbeat lapses and the very next
+ * attempt adopts; if it is there, its own `pushLiveHls` owns the party and
+ * relays the stream over `voice.live`.
+ */
+type ResumeAdoption =
+  | { kind: "adopted"; stream: LiveHlsStream | null }
+  | { kind: "fresh" }
+  | { kind: "stand-down"; reason: string };
+
+/**
+ * The last non-adopted answer per channel AND PRESENTER, and when it was
+ * decided.
+ *
+ * `reconcileLiveHlsNow` reaches the adoption on EVERY roster event for a
+ * channel with a local sharer and no local room. An adoption that succeeds is
+ * asked once (`rooms.has` short-circuits every later call), but one that
+ * answers `fresh` or `stand-down` while the start itself is also failing --
+ * the restart cooldown, the session cap, the other machine still holding the
+ * rows -- would put a `hls_sessions` read, an instance lookup and a full
+ * `ListEgress` behind every join and leave in the room. Five seconds is
+ * shorter than any of those conditions lasts and longer than a burst of
+ * roster events, so a party joining en masse asks once.
+ *
+ * THE PRESENTER IS PART OF THE KEY (a Farol finding on this PR). Every answer
+ * this function gives is about one person: `presenter-changed` is literally a
+ * comparison against them, and a `stand-down` decided while A was sharing says
+ * nothing about B. Keyed by the channel alone, a co-host taking over inside
+ * the window would be served A's answer and wait five seconds for a party that
+ * is ready now.
+ */
+const resumeDecisionCache = new Map<
+  string,
+  { at: number; decision: ResumeAdoption }
+>();
+const RESUME_DECISION_TTL_MS = 5_000;
+/**
+ * Sweep only past this many entries, not on every miss. The sweep is O(size)
+ * and a burst of first-time channels would otherwise be quadratic in it; past
+ * this the map is worth walking once, and below it the whole thing is smaller
+ * than the sweep's own bookkeeping.
+ */
+const RESUME_DECISION_MAX_ENTRIES = 128;
+
+/** One open `hls_sessions` row, as the resume adoption below reads it. */
+interface OpenHlsSessionRow {
+  id: string;
+  object_prefix: string;
+  egress_id: string | null;
+  presenter_peer_id: string | null;
+  video_track_id: string | null;
+  audio_track_id: string | null;
+  rung: string | null;
+  instance_id: string | null;
+}
+
+/**
+ * THE PRESENTER MOVED MACHINES; THE TRANSCODE DID NOT.
+ *
+ * A rolling deploy drains one `pqp-api` machine at a time, and a presenter
+ * whose socket is closed with 1001 resumes on the sibling within a second,
+ * keeping their peer id (`voice.resumeAdopted`). The egresses are not on
+ * either machine: they run on the LiveKit box, and an API process only
+ * monitors them. But `rooms` is per process, so the machine the presenter
+ * lands on found nothing for the channel and took the only path it had —
+ * `startRoom`, a brand-new `startedAt`, a brand-new ladder, and
+ * `endSupersededSessions` stopping the perfectly healthy egresses it had just
+ * replaced. Production, 2026-09-15: two machines restarted one after the
+ * other, three healthy rungs became two, then one, every viewer rebuffered
+ * twice in two minutes, and the second restart refused `720p30` outright.
+ *
+ * `adoptLiveHlsSession` already knows how to inherit a live session — that is
+ * what the boot reconcile does with a dead owner's rows. This is the same act
+ * asked at the same moment the SEAT is adopted rather than at boot: the rows
+ * are open, the egresses are alive, the presenter is the same person, and the
+ * owner is not answering its heartbeat, so the session changes hands with no
+ * new transcode, no new `startedAt` and nothing for a viewer to notice.
+ *
+ * WHAT IT REFUSES, and each refusal falls through to an ordinary fresh start:
+ * a different presenter (a genuine handover), an egress LiveKit no longer
+ * lists (a genuine restart), an owner that is still answering (not ours), and
+ * any question that could not be asked at all. A refusal says which, because
+ * a path that silently declines is a path nobody can debug (pitfall 16).
+ *
+ * DELIBERATELY NOT GATED ON `LIVE_HLS_MAX_SESSIONS` OR THE RESTART BUDGET.
+ * Both exist to stop this process asking the box for MORE work; adoption asks
+ * for none. Refusing here would leave a live transcode with no monitor and an
+ * open row with a dead owner, which is strictly worse than taking it.
+ */
+export async function adoptRunningLiveHlsSession(
+  channelId: string,
+  presenterPeerId: string,
+  now = Date.now(),
+): Promise<ResumeAdoption> {
+  if (!isLiveHlsEnabled() || rooms.has(channelId)) {
+    return { kind: "fresh" };
+  }
+  // LENGTH-PREFIXED, not `a:b`. Both halves are ids this process is handed
+  // rather than ids it mints, so a separator either of them could contain
+  // would let two different pairs share one key and hand a presenter an
+  // answer decided about somebody else -- the very thing keying by presenter
+  // is here to stop. The length makes the split unambiguous for any string.
+  const decisionKey = `${channelId.length}:${channelId}:${presenterPeerId}`;
+  const cached = resumeDecisionCache.get(decisionKey);
+  if (cached && now - cached.at < RESUME_DECISION_TTL_MS) {
+    return cached.decision;
+  }
+  const remember = (decision: ResumeAdoption): ResumeAdoption => {
+    if (resumeDecisionCache.size > RESUME_DECISION_MAX_ENTRIES) {
+      for (const [seen, entry] of resumeDecisionCache) {
+        if (now - entry.at >= RESUME_DECISION_TTL_MS) {
+          resumeDecisionCache.delete(seen);
+        }
+      }
+    }
+    resumeDecisionCache.set(decisionKey, { at: now, decision });
+    return decision;
+  };
+  let rows: OpenHlsSessionRow[];
+  try {
+    const result = await getPool().query<OpenHlsSessionRow>(
+      `SELECT id, object_prefix, egress_id, presenter_peer_id,
+              video_track_id, audio_track_id, rung, instance_id
+         FROM hls_sessions
+        WHERE channel_id = $1
+          AND ended_at IS NULL
+          AND cleaned_at IS NULL
+          -- An LL row names a pqp-remux session, not an egress id, and has
+          -- its own claim-before-you-act resume in reconcileLlHlsNow. This
+          -- pass decides a row fate by whether LiveKit still lists its
+          -- egress, which an LL row can never match.
+          AND mode <> 'll'
+          AND egress_id IS NOT NULL`,
+      [channelId],
+    );
+    rows = result.rows;
+  } catch (error) {
+    logEvent("voice.hlsResumeLookupFailed", {
+      channelId,
+      presenterPeerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // COULD NOT ASK IS NOT "NOTHING TO INHERIT". A database blip here must not
+    // become a fresh ladder on top of a session that is still running.
+    return remember({ kind: "stand-down", reason: "lookup-failed" });
+  }
+  if (rows.length === 0) {
+    // The ordinary case for a share that is starting: nothing to inherit, and
+    // nothing worth a log line on every first push in the deployment.
+    return remember({ kind: "fresh" });
+  }
+  const refuse = (
+    kind: ResumeAdoption["kind"] & ("fresh" | "stand-down"),
+    reason: string,
+    detail: Record<string, unknown> = {},
+  ): ResumeAdoption => {
+    const key = `${channelId}:${reason}`;
+    const now = Date.now();
+    for (const [seen, at] of resumeRefusalLoggedAt) {
+      if (now - at > RESUME_REFUSAL_LOG_THROTTLE_MS) {
+        resumeRefusalLoggedAt.delete(seen);
+      }
+    }
+    const previous = resumeRefusalLoggedAt.get(key);
+    if (previous === undefined || now - previous >= RESUME_REFUSAL_LOG_THROTTLE_MS) {
+      resumeRefusalLoggedAt.set(key, now);
+      logEvent("voice.hlsResumeNotAdopted", {
+        channelId,
+        presenterPeerId,
+        kind,
+        reason,
+        ...detail,
+      });
+    }
+    return remember(
+      kind === "fresh" ? { kind: "fresh" } : { kind: "stand-down", reason },
+    );
+  };
+
+  // THE NEWEST SESSION, AND ONLY IT. `object_prefix` embeds the `startedAt`
+  // every rung of one session shares, so a channel with rows from more than
+  // one session (a previous start whose rows were never closed) is read as
+  // the latest one plus stragglers, exactly as `liveHlsStreamFromDb` reads it.
+  const parsed = rows.flatMap((row) => {
+    const session = parseHlsObjectPrefix(row.object_prefix);
+    return session
+      ? [{ row, startedAt: session.startedAt, rung: row.rung ?? session.rung }]
+      : [];
+  });
+  if (parsed.length === 0) {
+    return refuse("fresh", "unparsable-prefix");
+  }
+  const startedAt = Math.max(...parsed.map((entry) => entry.startedAt));
+  const session = parsed.filter((entry) => entry.startedAt === startedAt);
+  if (session.some((entry) => entry.row.presenter_peer_id !== presenterPeerId)) {
+    // A DIFFERENT PERSON IS PRESENTING NOW. A resume keeps its peer id, so a
+    // mismatch here is a genuine handover and deserves its own session.
+    return refuse("fresh", "presenter-changed", {
+      startedAt,
+      was: session[0]?.row.presenter_peer_id ?? null,
+    });
+  }
+
+  const liveOthers = await liveOtherInstances();
+  if (liveOthers === null) {
+    return refuse("stand-down", "owner-lookup-failed", { startedAt });
+  }
+  const heldElsewhere = session.find((entry) =>
+    ownedByLiveOtherInstance(entry.row.instance_id, liveOthers),
+  );
+  if (heldElsewhere) {
+    // NOT OURS. The other machine is answering its heartbeat, so it still has
+    // a monitor on these egresses; taking them would put two monitors on one
+    // transcode, which is the failure `hls-ownership.ts` exists to stop.
+    noteHlsSkippedOwnedElsewhere({
+      site: "resume-adopt",
+      channelId,
+      sessionId: heldElsewhere.row.id,
+      egressId: heldElsewhere.row.egress_id,
+      ownerInstanceId: heldElsewhere.row.instance_id,
+    });
+    // AND THE CALLER STARTS NOTHING EITHER. A fresh ladder here would be
+    // `endSupersededSessions` stopping a live machine's egresses, which is
+    // exactly the failure `hls-ownership.ts` exists to stop, reached from a
+    // different direction.
+    return remember({ kind: "stand-down", reason: "owned-elsewhere" });
+  }
+
+  const active = await listActiveEgresses();
+  if (active === null) {
+    return refuse("stand-down", "list-egress-failed", { startedAt });
+  }
+  const listed = new Map(active.map((info) => [info.egressId, info]));
+  const stillRunning = (row: OpenHlsSessionRow): boolean => {
+    const info = row.egress_id ? listed.get(row.egress_id) : undefined;
+    // The ROW already says which channel the egress belongs to; the listing
+    // only has to confirm it is alive. A listing that states a DIFFERENT room
+    // is a disagreement, not a confirmation, and is refused.
+    return info !== undefined && (info.roomName ?? channelId) === channelId;
+  };
+  const running = session.filter((entry) => stillRunning(entry.row));
+  const ladder = running.filter(
+    (entry) => entry.rung !== MIC_ARCHIVE_RUNG && entry.rung !== CAMERA_RUNG_NAME,
+  );
+  if (ladder.length === 0) {
+    // Nothing of the film is still being written. That is a genuine restart,
+    // and the caller's `startRoom` is the right answer to it.
+    return refuse("fresh", "no-live-rung", { startedAt, openRows: session.length });
+  }
+  // Lowest bitrate first, the order `adoptLiveHlsSession` builds the room in
+  // and the order the master playlist lists. A rung name this build does not
+  // know sorts last rather than guessing where it belongs.
+  ladder.sort(
+    (a, b) =>
+      (hlsRungVideoKbps(a.rung ?? "") ?? Number.MAX_SAFE_INTEGER) -
+      (hlsRungVideoKbps(b.rung ?? "") ?? Number.MAX_SAFE_INTEGER),
+  );
+
+  // THE CLAIM IS THE VERDICT, not a repair afterwards. Two machines can reach
+  // this at the same moment during a rolling deploy — both reading an owner
+  // whose heartbeat has lapsed — and only one may drive the session. The
+  // heartbeat goes first for the reason `ensureHlsOwnerHeartbeat` states: a
+  // claimant that cannot say it is alive is one the other machine is entitled
+  // to take the row straight back from.
+  if (!(await ensureHlsOwnerHeartbeat())) {
+    return refuse("stand-down", "heartbeat-unavailable", { startedAt });
+  }
+  const primary = ladder[0]!;
+  const claim = await claimHlsSessionRow(primary.row.id);
+  if (claim !== "claimed") {
+    // A CLAIM THIS PROCESS LOST IS NOT A RESTART. `refused` means the row was
+    // taken by a machine that is answering, or ended under us between the read
+    // and the write; `failed` means the write could not be issued at all.
+    // Falling through to `startRoom` on either would have the loser of a
+    // two-machine race mint a second ladder and supersede the winner's healthy
+    // egresses, which is the incident this function exists to end.
+    return refuse("stand-down", `claim-${claim}`, {
+      startedAt,
+      sessionId: primary.row.id,
+    });
+  }
+
+  // THE RUNGS FIRST, THEN THE CAMERA, THEN THE ARCHIVE — the boot reconcile's
+  // order, and for its reason: both siblings attach to a room that a ladder
+  // rung creates rather than creating one themselves.
+  for (const entry of ladder) {
+    adoptLiveHlsSession({
+      channelId,
+      egressId: entry.row.egress_id!,
+      startedAt,
+      presenterPeerId,
+      videoTrackId: entry.row.video_track_id ?? "",
+      rung: entry.rung,
+    });
+  }
+  for (const entry of running) {
+    if (entry.rung === CAMERA_RUNG_NAME) {
+      adoptLiveHlsSession({
+        channelId,
+        egressId: entry.row.egress_id!,
+        startedAt,
+        presenterPeerId,
+        videoTrackId: entry.row.video_track_id ?? "",
+        audioTrackId: entry.row.audio_track_id,
+        rung: CAMERA_RUNG_NAME,
+      });
+    }
+  }
+  for (const entry of running) {
+    if (entry.rung === MIC_ARCHIVE_RUNG) {
+      adoptLiveHlsMicArchive({
+        channelId,
+        egressId: entry.row.egress_id!,
+        startedAt,
+        trackId: entry.row.video_track_id ?? "",
+      });
+    }
+  }
+  const adoptedIds = new Set(running.map((entry) => entry.row.id));
+  const rest = [...adoptedIds].filter((id) => id !== primary.row.id);
+  if (rest.length > 0) {
+    // The primary's claim decided the session; these are the repair shape,
+    // which is what `claimHlsSessionRows` is for.
+    await claimHlsSessionRows(rest);
+  }
+
+  // END WHAT IS PROVABLY FINISHED, AND STOP NOTHING.
+  //
+  // TWO DIFFERENT RULES, because "still listed by LiveKit" means opposite
+  // things either side of the session line, and one rule for both left an old
+  // session open for ever (a Farol finding on this PR).
+  //
+  //  - A ROW OF AN EARLIER SESSION is superseded by definition: this channel
+  //    is serving `startedAt` now, so nothing will ever play that one again.
+  //    It is ended whether or not a leftover egress is still writing to it,
+  //    because otherwise retention can never collect its objects and the row
+  //    sits open for the life of the deployment.
+  //  - A ROW OF THIS SESSION is ended only when its egress is GONE: a rung
+  //    that died is dropped from the master, and one that is still running is
+  //    the film.
+  //
+  // In both cases the EGRESS is left alone. Stopping one is
+  // `reapForeignEgresses` on the monitor's tick, which asks who owns an id
+  // before it stops it, and which now runs for this channel because this
+  // process holds the room. Doing it inline is what `endSupersededSessions`
+  // does on a fresh start, and doing that across machines is the bug above.
+  const finished = rows
+    .filter((row) => !adoptedIds.has(row.id))
+    .filter((row) => !ownedByLiveOtherInstance(row.instance_id, liveOthers))
+    .filter((row) => {
+      const parsedRow = parseHlsObjectPrefix(row.object_prefix);
+      const olderSession = parsedRow === null || parsedRow.startedAt !== startedAt;
+      return olderSession || !stillRunning(row);
+    })
+    .map((row) => row.id);
+  if (finished.length > 0) {
+    try {
+      await getPool().query(
+        `UPDATE hls_sessions SET ended_at = NOW()
+          WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,
+        [finished],
+      );
+    } catch (error) {
+      logEvent("voice.hlsResumeStaleEndFailed", {
+        channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const stream = rooms.get(channelId)?.stream ?? null;
+  // Not remembered in `resumeDecisionCache`: an adoption is answered once and
+  // every later call short-circuits on `rooms.has(channelId)` above, so
+  // caching it could only ever serve a stale stream to a channel this process
+  // has since torn down.
+  logEvent("voice.hlsSessionResumeAdopted", {
+    channelId,
+    presenterPeerId,
+    startedAt,
+    from: primary.row.instance_id,
+    rungs: ladder.map((entry) => entry.rung),
+    egressIds: running.map((entry) => entry.row.egress_id),
+    sessionIds: [...adoptedIds],
+    endedStale: finished.length,
+  });
+  return { kind: "adopted", stream };
 }
 
 function isTrackSource(source: unknown, wanted: TrackSource): boolean {
@@ -4324,6 +4890,11 @@ async function startRoom(
     logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
     return { stream: null };
   }
+  // WHAT THIS START IS ENTITLED TO SUPERSEDE, decided once and used twice:
+  // to price the ladder below without charging it for the transcode it is
+  // replacing, and to spare `activeBoxEgressCount` a second `ListEgress` of
+  // the whole box on the same tick.
+  const supersede = await planSupersededEgresses(channelId);
   const ladder = liveHlsLadder();
   const decisions = decideLadder({
     rungs: ladder,
@@ -4333,7 +4904,21 @@ async function startRoom(
     // them — but `activeBoxEgressCount` counts every active egress as a full
     // rendition, cameras included, so passing it here on top of
     // `runningCameraMbps()` below would price every running camera twice.
-    runningRungs: await activeLadderEgressCount(),
+    //
+    // AND NOT THE RUNGS THIS START IS ABOUT TO END. `endSupersededSessions`
+    // below stops every active egress on this channel that is not one of the
+    // ids started here, so counting them would charge the new ladder for the
+    // transcode it is replacing -- which on 2026-09-15 refused a live party's
+    // `720p30` with `ladder-budget` on a box that emptied a second later.
+    // `supersede.egressIds` is the set it has actually established it may
+    // stop; its listing is reused so the box is not listed twice.
+    runningRungs: await activeLadderEgressCount({
+      supersededEgressIds: supersede.egressIds,
+      // Including `null`, which says "already asked, could not be answered"
+      // rather than "not asked": a second `ListEgress` on the same tick would
+      // only fail again.
+      listing: supersede.listing,
+    }),
     sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
     ladderBudgetMbps: ladderBudgetMbps(),
     boxBudgetMbps: promotionBudgetMbps(),
@@ -4707,6 +5292,39 @@ async function reconcileLiveHlsNow(
       return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
     }
     await stopRoom(channelId, "presenter-changed");
+  } else {
+    // NOTHING LOCAL, BUT MAYBE NOT NOTHING AT ALL. This process holds no room
+    // for a channel it has never presented -- and also for one whose
+    // presenter has just RESUMED here off a machine that is draining for a
+    // deploy, while the egresses carry on untouched on the LiveKit box. The
+    // two look identical from here and only one of them wants a new ladder.
+    // Gated on `current` having been absent, so a genuine handover
+    // (`presenter-changed` above, which has just ended this channel's rows)
+    // still falls through to a fresh start.
+    const resumed = await adoptRunningLiveHlsSession(channelId, presenterPeerId);
+    if (resumed.kind === "adopted") {
+      // No `cameraTrackId` on purpose: adoption restores the camera slot from
+      // the row it was recorded under, and the caller reconciles cameras only
+      // when this field is present. The next push for this channel takes the
+      // same-presenter path above, probes the tracks and reconciles it then.
+      return { stream: resumed.stream };
+    }
+    if (resumed.kind === "stand-down") {
+      // SOMEBODY ELSE ALIVE IS DRIVING THIS, OR THE QUESTION COULD NOT BE
+      // ANSWERED. Starting a ladder on either would have `startRoom` mint a
+      // new `startedAt` and `endSupersededSessions` stop egresses this
+      // process has no business stopping. Do nothing at all and ask again on
+      // the next roster event; a genuinely dead owner's heartbeat lapses and
+      // the next attempt adopts, while a live one is publishing the stream
+      // over `voice.live` already.
+      //
+      // Not logged again here: the decision narrated itself where it was made
+      // (`voice.hlsResumeNotAdopted` with `kind: "stand-down"` and the reason,
+      // or `voice.hlsSkippedOwnedElsewhere` for the owner case), throttled per
+      // channel per reason. A second line on every roster event would repeat
+      // the same fact until the condition clears.
+      return { stream: null };
+    }
   }
   return startRoom(channelId, presenterPeerId, undefined, sourceHeight);
 }

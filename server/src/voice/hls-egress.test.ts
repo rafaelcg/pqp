@@ -997,6 +997,169 @@ describe("live HLS egress", () => {
       await reconcileLiveHls(CHANNEL, null, SERVER);
       expect(stop.mock.calls.map((call) => call[0])).toEqual(["EG_1", "EG_2"]);
     });
+
+    /**
+     * Production, 2026-09-15, mid rolling deploy. A watch party's presenter
+     * drained off one machine and resumed on the sibling; the sibling had no
+     * room for the channel, so it started a fresh ladder -- and priced it
+     * against the very egresses `endSupersededSessions` was a line away from
+     * stopping. `ladderMbps=600 ladderBudgetMbps=450`, and `720p30` was
+     * refused with `ladder-budget` on a box that emptied a second later.
+     *
+     * The rungs a start is about to supersede are not competition for it.
+     */
+    describe("the rungs this start is about to supersede", () => {
+      function withRunningEgresses(
+        running: { egressId: string; roomName: string }[],
+        heights: string[],
+      ) {
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: fakeEgress(heights),
+            stopEgress: vi.fn(),
+            listEgress: async () =>
+              running.map((entry) => ({
+                egressId: entry.egressId,
+                status: EgressStatus.EGRESS_ACTIVE,
+                roomName: entry.roomName,
+                startedAt: Date.now(),
+              })),
+          },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+      }
+
+      it("are not counted against the ladder budget", async () => {
+        resetLiveHlsForTests();
+        enableHls();
+        process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+        delete process.env.LIVE_HLS_MAX_LADDER_MBPS; // the 450 default
+        const heights: string[] = [];
+        // The two the previous session left running on THIS channel: 300 of
+        // the 450 budget if they are counted, nothing if they are not.
+        withRunningEgresses(
+          [
+            { egressId: "EG_old_a", roomName: CHANNEL },
+            { egressId: "EG_old_b", roomName: CHANNEL },
+          ],
+          heights,
+        );
+        logEvent.mockClear();
+
+        expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+
+        expect(heights).toEqual(["720", "1080"]);
+        expect(logEvent).not.toHaveBeenCalledWith(
+          "voice.hlsRungRefused",
+          expect.objectContaining({ refusal: "ladder-budget" }),
+        );
+      });
+
+      it("but another channel's rungs still are", async () => {
+        // The guard is "these two are condemned", not "stop counting the
+        // box": a party on a DIFFERENT channel is real competition and a
+        // start that ignored it would oversubscribe the media box.
+        resetLiveHlsForTests();
+        enableHls();
+        process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+        delete process.env.LIVE_HLS_MAX_LADDER_MBPS;
+        const heights: string[] = [];
+        withRunningEgresses(
+          [
+            { egressId: "EG_other_a", roomName: OTHER_CHANNEL },
+            { egressId: "EG_other_b", roomName: OTHER_CHANNEL },
+          ],
+          heights,
+        );
+        logEvent.mockClear();
+
+        expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+
+        expect(heights).toEqual(["720"]);
+        expect(logEvent).toHaveBeenCalledWith(
+          "voice.hlsRungRefused",
+          expect.objectContaining({
+            rung: "1080p30",
+            refusal: "ladder-budget",
+            ladderMbps: 600,
+          }),
+        );
+      });
+
+      it("activeBoxEgressCount subtracts exactly the ids it is given", async () => {
+        resetLiveHlsForTests();
+        enableHls();
+        const heights: string[] = [];
+        withRunningEgresses(
+          [
+            { egressId: "EG_mine_a", roomName: CHANNEL },
+            { egressId: "EG_mine_b", roomName: CHANNEL },
+            { egressId: "EG_theirs", roomName: OTHER_CHANNEL },
+          ],
+          heights,
+        );
+
+        expect(await activeBoxEgressCount()).toBe(3);
+        expect(
+          await activeBoxEgressCount(Date.now(), {
+            supersededEgressIds: new Set(["EG_mine_a", "EG_mine_b"]),
+          }),
+        ).toBe(1);
+      });
+
+      it("an id whose stop keeps failing is still counted", async () => {
+        // `planSupersededEgresses` leaves it out of the set, because the box
+        // has already refused to let go of it once: pricing the new ladder as
+        // though it had stopped is how both end up running.
+        resetLiveHlsForTests();
+        enableHls();
+        process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+        delete process.env.LIVE_HLS_MAX_LADDER_MBPS;
+        const heights: string[] = [];
+        const start = fakeEgress(heights);
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: start,
+            // Every stop fails, which is what puts an id in the backoff.
+            stopEgress: vi.fn(async () => {
+              throw new Error("no response from servers");
+            }),
+            listEgress: async () => [
+              {
+                egressId: "EG_stuck_a",
+                status: EgressStatus.EGRESS_ACTIVE,
+                roomName: CHANNEL,
+                startedAt: Date.now(),
+              },
+              {
+                egressId: "EG_stuck_b",
+                status: EgressStatus.EGRESS_ACTIVE,
+                roomName: CHANNEL,
+                startedAt: Date.now(),
+              },
+            ],
+          },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+
+        // First start: the two are condemned, so both rungs fit, and the two
+        // stops fail and enter the backoff.
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        await reconcileLiveHls(CHANNEL, null, SERVER);
+        heights.length = 0;
+        logEvent.mockClear();
+
+        // Second start: the same two ids are still ACTIVE and now known not to
+        // stop, so they count and the top rung is refused.
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        expect(heights).toEqual(["720"]);
+        expect(logEvent).toHaveBeenCalledWith(
+          "voice.hlsRungRefused",
+          expect.objectContaining({ refusal: "ladder-budget" }),
+        );
+      });
+    });
   });
 
   /**
