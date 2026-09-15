@@ -23,6 +23,25 @@ const {
   sliderToVadThreshold,
 } = await import("./settings-modal");
 
+describe("loadLocalSettings pttBeep", () => {
+  afterEach(() => {
+    store.clear();
+  });
+
+  it("defaults on and keeps a stored off", () => {
+    expect(defaultLocalSettings.pttBeep).toBe(true);
+    expect(loadLocalSettings().pttBeep).toBe(true);
+
+    store.set("pqp-local-settings", JSON.stringify({ pttBeep: false }));
+    expect(loadLocalSettings().pttBeep).toBe(false);
+  });
+
+  it("ignores junk and stays on", () => {
+    store.set("pqp-local-settings", JSON.stringify({ pttBeep: "off" }));
+    expect(loadLocalSettings().pttBeep).toBe(true);
+  });
+});
+
 describe("loadLocalSettings vadThreshold", () => {
   afterEach(() => {
     store.clear();
