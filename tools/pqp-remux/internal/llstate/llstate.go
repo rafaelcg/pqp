@@ -204,8 +204,52 @@ func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
 			state.Audio = audioTrack
 		}
 	}
+	state.PartTargetMs = partTargetMs(meta.PartTargetMs, videoTrack, state.Audio)
 	state.TargetDurationSecs = targetDuration(videoTrack, state.Audio, video.TargetSecs, audioTargetSecs(audio))
 	return state, true
+}
+
+// partTargetMs is what #EXT-X-PART-INF:PART-TARGET is rendered from: the
+// configured PART_MS, raised to cover the longest part actually listed.
+// Same shape and same reason as targetDuration below, one level down.
+//
+// A PART-TARGET is a promise about the MAXIMUM part duration (RFC 8216bis
+// section 4.4.3.7), and a part may legitimately run past PART_MS in two
+// ways. The small one has always been there: a part is cut on the first
+// access unit at or past the target, so a 30fps source overshoots by up to
+// one frame. The large one arrived with the 2026-09-15 drift fix: a quiet
+// source's part now waits for the frame that really ends the gap and
+// carries that frame's TRUE duration rather than a guessed one, so a
+// Chrome tab share at 1.4 frames/s publishes parts of about a second
+// against a 500ms PART_MS. Understating the target there is not a
+// cosmetic lie: the edge Worker times its blocking playlist reloads at
+// three part targets, so a stale 500ms would hold a viewer's request for
+// 1.5s against a part that cannot arrive for a wall second, and time out
+// on a stream that is perfectly healthy. Reporting the real figure lets
+// that hold widen by itself, with no second configuration knob to keep in
+// sync.
+func partTargetMs(configured int, tracks ...*Track) int {
+	longest := configured
+	for _, track := range tracks {
+		if track == nil {
+			continue
+		}
+		for _, seg := range track.Segments {
+			for _, part := range seg.Parts {
+				if ms := int(math.Ceil(part.DurationSecs * 1000)); ms > longest {
+					longest = ms
+				}
+			}
+		}
+	}
+	if longest <= 0 {
+		// parseLlState refuses a document whose partTargetMs is not a
+		// positive integer, and refusing the whole document stalls every
+		// viewer. A caller that configured nothing sensible gets a
+		// millisecond rather than a blank stream.
+		longest = 1
+	}
+	return longest
 }
 
 // buildTrack renders one rendition. allIndependent is the audio override:

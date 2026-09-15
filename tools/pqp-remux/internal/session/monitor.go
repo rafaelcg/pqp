@@ -52,10 +52,31 @@ const statsInterval = 5 * time.Second
 const monitorTick = 100 * time.Millisecond
 
 // videoIdleAfter returns how long with no completed access unit counts as
-// "the source has gone quiet" for this session's own logging. Two part
-// targets, floored at a second: shorter than that and an ordinary
-// low-frame-rate screen share (a slide, a paused video) would flap in and
-// out of "idle" on every frame.
+// "the source has gone quiet" -- both for this session's own logging and,
+// since the 2026-09-15 drift fix, as the keep-alive deadline: the point
+// past which idleTick stops waiting for a real frame and publishes the
+// held one. Two part targets, floored at a second: shorter than that and
+// an ordinary low-frame-rate screen share (a slide, a paused video) would
+// flap in and out of "idle" on every frame.
+//
+// ONE THRESHOLD, TWO USES, ON PURPOSE. Waiting a whole allowance before
+// publishing early is what keeps an ordinary quiet source exact. A Chrome
+// tab share of a nearly static page sends about 1.4 frames a second, so
+// its frame gaps sit between the 500ms part target and this allowance:
+// under the old rule (publish at the part target) every single one of
+// those gaps was published early with a guessed duration, and the
+// keep-alive became the ONLY way parts were ever produced -- production's
+// 15:23 UTC watchdog detail read `parts=74 keepalive=74`. Now those gaps
+// close on the frame that really ends them and carry its true duration,
+// so their parts run longer than PART-TARGET and the timeline is exact;
+// only a genuine freeze, longer than this allowance, reaches the
+// keep-alive at all.
+//
+// NOT THE SAME QUESTION AS internal/control's `sourceIdle`, which gates
+// the restart/demote ladder and asks for no frames AND NO PACKETS for
+// PART_STUCK_MS (3s). This one is "should we stop waiting for a frame";
+// that one is "is the ladder allowed to run". Both are named idle and
+// they are deliberately different lengths.
 func (s *Session) videoIdleAfter() time.Duration {
 	d := 2 * ticksToDuration(int64(s.partTicks))
 	if d < time.Second {
@@ -145,17 +166,21 @@ func (s *Session) RunMonitor(ctx context.Context, label string) {
 }
 
 // idleTick is the static-source fix. When no access unit has completed for
-// a part target's worth of time, the fragmenter is holding one with nowhere
-// to put it -- every part boundary in internal/pipeline is decided by the
-// NEXT access unit's arrival, and a Chrome tab share of a page that is not
-// repainting never sends one. IdleFlush publishes the held one, with the
-// duration it really had, so the playlist keeps advancing and a viewer's
-// video buffer covers the freeze instead of ending at the start of it.
+// a whole idle allowance (videoIdleAfter), the fragmenter is holding one
+// with nowhere to put it -- every part boundary in internal/pipeline is
+// decided by the NEXT access unit's arrival, and a Chrome tab share of a
+// page that is not repainting never sends one. IdleFlush publishes the
+// held one, with the duration it really had, so the playlist keeps
+// advancing and a viewer's video buffer covers the freeze instead of
+// ending at the start of it.
 //
-// It returns true when it published a part. A source that is sending
-// normally never reaches the flush at all (the held AU is younger than the
-// part target on every tick), so this costs one atomic load and a
-// comparison per tick in the ordinary case.
+// It returns true when it published a part. A source that is sending at
+// any ordinary rate, fast or slow, never reaches the flush at all (the
+// held AU is younger than the allowance on every tick), so this costs one
+// atomic load and a comparison per tick in the ordinary case -- and its
+// parts close on real frames with real durations, which is why the media
+// timeline tracks the wall clock at 1.4 frames/s exactly as it does at
+// 30.
 //
 // THE LIMIT, STATED: one part per idle episode (see
 // pipeline.Fragmenter.IdleFlush). Past that the video timeline is HELD at
@@ -180,7 +205,7 @@ func (s *Session) idleTick(now time.Time) bool {
 			held.Round(time.Millisecond), s.videoPacketsSeen.Load(), s.videoFramesSeen.Load(), s.elapsedMs()-s.lastIdrAtMs.Load())
 	}
 
-	if held < ticksToDuration(int64(s.partTicks)) {
+	if held < s.videoIdleAfter() {
 		return false
 	}
 
@@ -195,7 +220,7 @@ func (s *Session) idleTick(now time.Time) bool {
 	lastFrame = s.lastVideoFrameAtNs.Load()
 	held = now.Sub(time.Unix(0, lastFrame))
 	var frag *pipeline.Fragment
-	if held >= ticksToDuration(int64(s.partTicks)) {
+	if held >= s.videoIdleAfter() {
 		frag = s.frag.IdleFlush(durationToTicks(held))
 	}
 	if frag != nil {
@@ -262,6 +287,12 @@ type Stats struct {
 	VideoSegmentsWritten uint64
 	KeepAlivePartsWrites uint64
 	VideoIdle            bool
+	// VideoMediaMs/AudioMediaMs and the anchors below are what
+	// `timelineRatio` is computed from: how much MEDIA each track has
+	// published against how much WALL clock has passed since that
+	// track's first part. See Session.videoMediaMs.
+	VideoMediaMs     int64
+	VideoMediaAnchor time.Time
 
 	AudioPacketsSeen     uint64
 	AudioFramesSeen      uint64
@@ -271,6 +302,8 @@ type Stats struct {
 	AudioEnabled         bool
 	AudioDead            bool
 	AudioRestarts        uint64
+	AudioMediaMs         int64
+	AudioMediaAnchor     time.Time
 
 	Keyframe keyframe.Stats
 
@@ -297,7 +330,11 @@ type Stats struct {
 // Stats snapshots this session. Safe to call from any goroutine; every
 // field behind it is an atomic or an already-synchronized read.
 func (s *Session) Stats() Stats {
-	now := time.Now()
+	// s.now, not time.Now: a test that drives the video path and the
+	// keep-alive tick off one synthetic clock must read the same clock
+	// back out, or `timelineRatio` compares two unrelated timelines --
+	// the exact mistake the `now` field exists to prevent.
+	now := s.now()
 	st := Stats{
 		Subscribed:           s.subscribed.Load(),
 		VideoPacketsSeen:     s.videoPacketsSeen.Load(),
@@ -309,12 +346,20 @@ func (s *Session) Stats() Stats {
 		VideoSegmentsWritten: s.videoSegmentsWritten.Load(),
 		KeepAlivePartsWrites: s.keepAlivePartsWritten.Load(),
 		VideoIdle:            s.videoIdle.Load(),
+		VideoMediaMs:         s.videoMediaMs.Load(),
 		AudioPacketsSeen:     s.audioPacketsSeen.Load(),
 		Now:                  now,
 		StartedAt:            s.started,
 	}
+	if ns := s.videoTimelineAnchorNs.Load(); ns != 0 {
+		st.VideoMediaAnchor = time.Unix(0, ns)
+	}
+	if ns := s.audioTimelineAnchorNs.Load(); ns != 0 {
+		st.AudioMediaAnchor = time.Unix(0, ns)
+	}
 	if s.audioFrag != nil {
 		st.AudioEnabled = true
+		st.AudioMediaMs = s.audioMediaMs.Load()
 		st.AudioFramesSeen = s.audioFramesSeen.Load()
 		st.AudioPartsWritten = s.audioPartsWritten.Load()
 		st.AudioBytesWritten = s.audioBytesWritten.Load()
@@ -380,12 +425,14 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 	if cur.OpenSegmentValid {
 		fmt.Fprintf(&b, " openSeg=%dms", cur.OpenSegmentMs)
 	}
+	fmt.Fprintf(&b, " timelineRatio=%s", timelineRatio(cur.Now, cur.VideoMediaAnchor, cur.VideoMediaMs))
 	if cur.AudioEnabled {
-		fmt.Fprintf(&b, " | audio pkts=+%d frames=+%d parts=+%d (%.1f/s) segs=+%d dead=%t restarts=%d",
+		fmt.Fprintf(&b, " | audio pkts=+%d frames=+%d parts=+%d (%.1f/s) segs=+%d timelineRatio=%s dead=%t restarts=%d",
 			cur.AudioPacketsSeen-prev.AudioPacketsSeen,
 			cur.AudioFramesSeen-prev.AudioFramesSeen,
 			cur.AudioPartsWritten-prev.AudioPartsWritten, rate(prev.AudioPartsWritten, cur.AudioPartsWritten),
 			cur.AudioSegmentsWritten-prev.AudioSegmentsWritten,
+			timelineRatio(cur.Now, cur.AudioMediaAnchor, cur.AudioMediaMs),
 			cur.AudioDead, cur.AudioRestarts)
 	} else {
 		fmt.Fprintf(&b, " | audio off pkts=+%d", cur.AudioPacketsSeen-prev.AudioPacketsSeen)
@@ -399,6 +446,24 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 			cur.R2Queued, cur.R2InFlight, cur.R2LastLatencyMs, cur.R2MaxLatencyMs)
 	}
 	return b.String()
+}
+
+// timelineRatio renders how much media a track has published against how
+// much wall clock passed while it did: 1.00 is a timeline keeping time,
+// and anything meaningfully below it means media time is being dropped
+// somewhere -- which is what a Chrome tab share did for five minutes on
+// 2026-09-15 (0.54 on video beside 0.98 on audio) while every count on
+// this line looked healthy. "n/a" until the track has published its first
+// part; there is no ratio before there is a timeline.
+func timelineRatio(now, anchor time.Time, mediaMs int64) string {
+	if anchor.IsZero() {
+		return "n/a"
+	}
+	wallMs := now.Sub(anchor).Milliseconds()
+	if wallMs <= 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2f", float64(mediaMs)/float64(wallMs))
 }
 
 // ago renders "how long ago" for a possibly-never timestamp. "never" is a

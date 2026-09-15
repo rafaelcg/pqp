@@ -126,6 +126,25 @@ type Session struct {
 	audioFramesSeen       atomic.Uint64
 	audioSegmentsWritten  atomic.Uint64
 	keepAlivePartsWritten atomic.Uint64
+	// videoMediaMs/audioMediaMs are the total MEDIA time each track has
+	// published (the sum of every part's own duration), and
+	// videoTimelineAnchorNs/audioTimelineAnchorNs are the wall-clock
+	// instant that media started from -- the first part's publish
+	// instant minus that part's own duration, so the two are directly
+	// comparable. Their ratio is `timelineRatio` on the stats line.
+	//
+	// WHY A COUNTER FOR THIS. On 2026-09-15 the video timeline advanced
+	// 0.54 seconds of media per second of wall clock for five minutes
+	// (see pipeline.Fragmenter's pendingTruePTS) while every other
+	// number on the stats line looked healthy: parts were being
+	// published, segments were closing, audio was fine. A timeline that
+	// runs slow is invisible in counts and obvious in one ratio, and it
+	// is the kind of bug that comes back, so the ratio is on the line
+	// whether or not anyone is looking for it. It belongs at 1.00.
+	videoMediaMs          atomic.Int64
+	audioMediaMs          atomic.Int64
+	videoTimelineAnchorNs atomic.Int64
+	audioTimelineAnchorNs atomic.Int64
 	// lastVideoPacketAtNs/lastVideoFrameAtNs are wall-clock UnixNano (0
 	// = never). Wall clock, not the elapsed-ms convention the rest of
 	// this type uses for its health fields, because the two questions
@@ -685,6 +704,7 @@ func (s *Session) publishAudioPart(frag *pipeline.Fragment) {
 	}
 	s.audioPartsWritten.Add(1)
 	s.audioBytesWritten.Add(uint64(len(frag.Bytes)))
+	s.recordMedia(&s.audioMediaMs, &s.audioTimelineAnchorNs, frag.DurationTicks, aacenc.SampleRate)
 }
 
 // audioCloseFlushDeadline bounds Close's wait for the audio reader to
@@ -729,6 +749,24 @@ func (s *Session) publish(frag *pipeline.Fragment) {
 	s.partsWritten.Add(1)
 	s.bytesWritten.Add(uint64(len(frag.Bytes)))
 	s.lastPartAtMs.Store(s.elapsedMs())
+	s.recordMedia(&s.videoMediaMs, &s.videoTimelineAnchorNs, frag.DurationTicks, h264.ClockRate)
+}
+
+// recordMedia adds one published part's own duration to a track's media
+// total, anchoring the track's wall clock on the first part. See the
+// videoMediaMs field.
+func (s *Session) recordMedia(mediaMs *atomic.Int64, anchorNs *atomic.Int64, durationTicks uint32, timescale uint32) {
+	if timescale == 0 {
+		return
+	}
+	ms := int64(durationTicks) * 1000 / int64(timescale)
+	if anchorNs.Load() == 0 {
+		// The first part's media began one part-duration before we
+		// published it, which is what makes media and wall directly
+		// comparable from here on.
+		anchorNs.Store(s.now().Add(-time.Duration(ms) * time.Millisecond).UnixNano())
+	}
+	mediaMs.Add(ms)
 }
 
 func (s *Session) uploadVideoSegment(index int) {

@@ -363,16 +363,53 @@ session and demoted the party off the LL rung.
 
 `Fragmenter.IdleFlush` (driven by `Session.RunMonitor`'s 100 ms tick, via
 `idleTick`) publishes the held access unit early, once the source has been
-quiet for a part target's worth of time. **Nothing is invented and nothing
-is duplicated**: the ordinary path would have given that same access unit
-a duration of `next.PTS - held.PTS` anyway — for a five-second freeze,
-a five-second sample — and this only emits it sooner, so the buffer covers
+quiet for a whole **idle allowance** — two part targets, floored at a
+second (`videoIdleAfter`). **Nothing is invented and nothing is
+duplicated**: the ordinary path would have given that same access unit a
+duration of `next.PTS - held.PTS` anyway — for a five-second freeze, a
+five-second sample — and this only emits it sooner, so the buffer covers
 the freeze instead of ending at the start of it. When frames resume, the
-next part begins exactly where the flushed one ended: `ptsOffset` is
-re-derived from the publisher's own clock on the first frame back, so the
-timeline neither rewinds (a `tfdt` going backwards is a corrupt stream)
-nor gains a hole. A segment still closes only on an IDR at or past the
-segment target — the keep-alive never closes one.
+next part begins exactly where the flushed one ended, so the timeline
+neither rewinds (a `tfdt` going backwards is a corrupt stream) nor gains a
+hole. A segment still closes only on an IDR at or past the segment
+target — the keep-alive never closes one.
+
+**A last resort, not a cadence, and why that matters.** The first version
+of this fired on the PART target and re-derived `ptsOffset` on resume so
+the frame that ended the gap landed exactly on the guess. That hides the
+gap by throwing the gap away. A Chrome tab share of a nearly static page
+sends about **1.4 frames a second**, so its frame gaps sit between the
+500 ms part target and the allowance: every single one of them was
+published early with a guessed ~0.5 s duration and the rest of the second
+was deleted. Production, 2026-09-15 15:10–15:15 UTC: the video timeline
+advanced **29.0 s of media in 53.8 s of wall clock** (ratio 0.54) beside
+audio at 0.98, every part was a keep-alive (`parts=74 keepalive=74`), and
+the viewer's blocking playlist reloads timed out for good after 40 s.
+
+The rules that replace it, all of them in service of one property — **media
+time tracks the wall clock, whatever the frame rate**:
+
+- **The publisher's clock is the timeline.** `ptsOffset` is only ever
+  RAISED, never lowered, and only far enough to stop an access unit landing
+  behind media already published (a frame delivered after a latency spike,
+  a publisher clock that stepped back). Raising it shifts the timeline
+  forward by a constant, which costs nothing; lowering it is what stole
+  time.
+- **A quiet source's part waits for the frame that really ends the gap**
+  and carries that frame's true duration, so **parts may run longer than
+  `PART_MS`** — about a second on a static tab. `state.json` reports the
+  real figure in `partTargetMs` (the configured `PART_MS` raised to cover
+  the longest listed part), because `PART-TARGET` is a promise about the
+  maximum and the edge Worker times its blocking playlist reloads at three
+  of them.
+- **A keep-alive pays itself back.** The frame that ends the quiet spell is
+  published where the flush ended, and its own duration runs to the
+  *following* frame's true instant — so the wall time the flush could not
+  know about is published rather than erased, and the timeline is exactly
+  on the publisher's clock again from that frame on.
+
+`timelineRatio` on the stats line is that property, measured: media
+published over wall clock passed, per track. It belongs at `1.00`.
 
 **The limit, stated plainly.** One part per quiet episode. Past that the
 video timeline is HELD at the last frame while the **audio** track — paced
@@ -407,7 +444,9 @@ pqp-remux: stats session=<id> window=5s subscribed=true
   | video pkts=+1200 (240.0/s) frames=+150 (30.0/s) idr=+2 drops=+7
     parts=+10 (2.0/s) segs=+1 keepalive=+0 idle=false
     lastPkt=8ms lastFrame=12ms lastIdr=1.9s lastPart=210ms openSeg=2100ms
-  | audio pkts=+250 frames=+234 parts=+10 (2.0/s) segs=+1 dead=false restarts=0
+    timelineRatio=1.00
+  | audio pkts=+250 frames=+234 parts=+10 (2.0/s) segs=+1 timelineRatio=1.00
+    dead=false restarts=0
   | pli sent=+0 total=4 unanswered=0 lastPli=1m12s
   | r2 ok=+11 fail=+0 drop=+0 queued=0 inflight=1 lastMs=87 maxMs=940
 ```
@@ -415,7 +454,10 @@ pqp-remux: stats session=<id> window=5s subscribed=true
 Read it as: **packets but no frames** is the depacketizer; **frames but no
 parts** is the muxer; **neither** is a quiet source (and `idle=true` says
 so outright); **parts flowing with `r2 queued` climbing and `lastMs` high**
-is the bucket. `maxMs` is a high-water mark and deliberately never reset —
+is the bucket; **`timelineRatio` below 1.00 on one track and at it on the
+other** is the timeline itself losing time, which no count on this line can
+show (2026-09-15: 0.54 on video, 0.98 on audio, everything else healthy).
+`maxMs` is a high-water mark and deliberately never reset —
 "did this bucket ever go slow" is a different question from "is it slow
 now", which `lastMs` already answers.
 
@@ -651,6 +693,23 @@ IO — driven by `managed_session.go`'s ticker), which:
    with `no-video`. Meanwhile the media side keeps the
    playlist alive rather than freezing it — see **Keep-alive: a static
    source still publishes** below.
+1-ter. **The clocks restart when the source comes back, not when it went
+   quiet.** #626 shipped rule 1-bis and half an hour later this watchdog
+   demoted a party anyway — on the tick *after* the silence ended.
+   Production, 2026-09-15: `video-source-idle` at 15:23:05
+   (`lastFrame=3.006s`), and at 15:23:07 `demoting
+   (part-stuck-second-stall)` with `lastFrame=45ms lastIdr=84ms
+   lastPart=4.448s`. Frames were back, with a fresh keyframe, and the
+   ladder ran on a `lastPart` age accumulated **entirely inside the
+   silence it had just forgiven**. A part boundary needs the arrival of
+   the NEXT access unit, so "frames present, no part yet" is the normal
+   state for one frame interval after every quiet episode — 700 ms at the
+   1.4 frames/s a static tab produces. `watchdogState.idleEndedAt` records
+   when the source came back, and both the part-stuck clock and the IDR-gap
+   clock are measured from the later of that and their own last event. It
+   is a restart of the clock, not an exemption: a source that is genuinely
+   sending and genuinely publishing nothing still reaches the ladder
+   `PART_STUCK_MS` after the silence ended.
 2. **The IDR-gap ladder takes precedence and skips the restart entirely.**
    No IDR for more than 2× the segment target → log once per gap (rate
    limited; resets the moment a real IDR arrives). Past 3× with still no
