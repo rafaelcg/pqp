@@ -133,8 +133,83 @@ test("coalesceFetch: a joiner whose bound fires first detaches and fetches for i
   // THE POINT OF THE TEST: the shared fetch was never cancelled by the
   // joiner giving up, so the caller still attached to it gets the origin's
   // real answer -- no AbortError, no 502.
+  //
+  // It does NOT get `isProducer`, though: it is no longer the current fetch
+  // for this key, and letting it write the cache would overwrite the newer
+  // playlist its replacement already stored with an older snapshot, for the
+  // rest of the cache TTL (Farol, PR #645).
   slow.resolve("shared-body");
-  assert.deepEqual(await settled(producer), { v: { result: "shared-body", isProducer: true } });
+  assert.deepEqual(await settled(producer), { v: { result: "shared-body", isProducer: false } });
+});
+
+test("coalesceFetch: a superseded fetch that finishes late is not a cache writer", async () => {
+  /** @type {Map<string, Promise<string>>} */
+  const inFlight = new Map();
+  const timers = makeTimers();
+  const slow = deferred();
+  let produced = 0;
+  const produce = () => {
+    produced += 1;
+    return produced === 1 ? slow.promise : Promise.resolve("newer-playlist");
+  };
+
+  const superseded = coalesceFetch(inFlight, "rung", produce, { setTimer: timers.setTimer });
+  await flush(1);
+  const joiner = coalesceFetch(inFlight, "rung", produce, { setTimer: timers.setTimer });
+  await flush(1);
+  timers.fireOne();
+  await flush();
+
+  const replacement = await settled(joiner);
+  assert.equal(replacement.v.isProducer, true, "the current fetch writes the cache");
+
+  // Only NOW does the older one finish, with an older live edge behind it.
+  slow.resolve("older-playlist");
+  const late = await settled(superseded);
+  assert.equal(late.v.result, "older-playlist", "its own caller still gets an answer");
+  assert.equal(late.v.isProducer, false, "but it must not overwrite the newer entry");
+});
+
+test("coalesceFetch: joiners that all detach in the same instant elect ONE producer, not one each", async () => {
+  // Farol, PR #645: an earlier draft produced unconditionally after the join
+  // loop, so a fetch stalled past the bound turned into one retry per waiter
+  // -- the exact fan-in this Worker exists to collapse.
+  /** @type {Map<string, Promise<string>>} */
+  const inFlight = new Map();
+  const timers = makeTimers();
+  const stalled = deferred();
+  let produced = 0;
+  const produce = () => {
+    produced += 1;
+    return produced === 1 ? stalled.promise : Promise.resolve("retry-body");
+  };
+
+  const producer = coalesceFetch(inFlight, "rung", produce, { setTimer: timers.setTimer });
+  await flush(1);
+  const joiners = Array.from({ length: 25 }, () =>
+    coalesceFetch(inFlight, "rung", produce, { setTimer: timers.setTimer }),
+  );
+  await flush(1);
+  assert.equal(timers.pending, 25, "every joiner arms its own bound");
+
+  // Every one of their bounds fires at once, which is what a stalled origin
+  // and a synchronized poll cadence actually produce.
+  timers.fireAll();
+  await flush();
+
+  for (const joiner of joiners) {
+    assert.equal((await settled(joiner)).v.result, "retry-body");
+  }
+  assert.equal(produced, 2, "one stalled fetch plus exactly one retry, for twenty-five waiters");
+
+  const producers = [];
+  for (const joiner of joiners) {
+    producers.push((await settled(joiner)).v.isProducer);
+  }
+  assert.equal(producers.filter(Boolean).length, 1, "exactly one of the twenty-five writes the cache");
+
+  stalled.resolve("eventually");
+  assert.equal((await settled(producer)).v.isProducer, false);
 });
 
 test("coalesceFetch: a shared fetch that dies with its owner's request context does not fail the joiner", async () => {

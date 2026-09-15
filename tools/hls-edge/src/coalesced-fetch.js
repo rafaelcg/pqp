@@ -41,13 +41,22 @@
  * slow-but-alive owner still gets to finish and still serves whoever is
  * still attached.
  *
- * WHAT KEEPS THE RETRY FROM BECOMING A HERD. A detaching joiner re-reads the
- * map first: if some OTHER joiner has already started a fresh attempt, it
- * joins that one rather than starting a third. Only the first joiner to
- * notice produces. With `MAX_JOIN_ATTEMPTS` (2) that bounds a pathological
- * key at two extra origin fetches total, not one per waiter, and bounds any
- * single request's wait at `MAX_JOIN_ATTEMPTS * joinBoundMs` before it goes
- * to the origin itself.
+ * WHAT KEEPS THE RETRY FROM BECOMING A HERD. The in-flight map is re-read at
+ * the TOP of every attempt, and a caller only produces when it sees an EMPTY
+ * slot. So when N joiners of one stalled fetch detach in the same instant,
+ * the first continuation to run clears the slot and produces, and the other
+ * N-1 see that fresh promise and join it: one retry per key, never one per
+ * waiter. `MAX_JOIN_ATTEMPTS` (2) then bounds any single request's wait at
+ * `MAX_JOIN_ATTEMPTS * joinBoundMs` before it goes to the origin itself,
+ * which is the one deliberate exception to "only an empty slot produces" -- a
+ * request that is never answered is worse than one more origin fetch, and
+ * `onDetach` has counted every attempt that got it there.
+ *
+ * AND ONLY THE CURRENT FETCH WRITES THE CACHE. `isProducer` is decided when
+ * a fetch SETTLES ("am I still this key's entry?"), not when it starts, so a
+ * slow fetch that finishes after its replacement reads `false`. Otherwise a
+ * detach would let an older playlist snapshot overwrite the newer one its own
+ * retry had already stored, for the rest of the cache TTL.
  *
  * THE OTHER HALF OF THE FIX IS NOT HERE. Bounding the joiner makes a dead
  * owner survivable; `ctx.waitUntil` on the producer's side (see
@@ -179,20 +188,38 @@ function produceAndShare(inFlight, key, produce, keepAlive) {
     return Promise.reject(err);
   }
   inFlight.set(key, promise);
-  const forget = () => {
-    if (inFlight.get(key) === promise) {
-      inFlight.delete(key);
-    }
-  };
-  const settled = promise.then(forget, forget);
+  const settled = promise.then(
+    (result) => {
+      // `isProducer` IS "am I still the current fetch for this key", decided
+      // here rather than asserted at the top. A detaching joiner replaces the
+      // map entry, so a slower fetch that finishes AFTER its replacement
+      // reads `false` and does not write the cache, which is what stops an
+      // older playlist snapshot from overwriting the newer one a retry
+      // already stored, for the rest of the cache TTL (Farol, PR #645).
+      const current = inFlight.get(key) === promise;
+      if (current) {
+        inFlight.delete(key);
+      }
+      return { result, isProducer: current };
+    },
+    (err) => {
+      if (inFlight.get(key) === promise) {
+        inFlight.delete(key);
+      }
+      throw err;
+    },
+  );
   // The producer's request context is what owns this fetch; extending it
   // past the response is what lets a joiner's share actually complete. See
   // this module's header.
   if (keepAlive) {
-    keepAlive(settled);
+    keepAlive(settled.then(noop, noop));
   }
-  return promise.then((result) => ({ result, isProducer: true }));
+  return settled;
 }
+
+/** @returns {void} */
+function noop() {}
 
 /**
  * Shares one in-flight `produce()` per `key`, with every join bounded and
@@ -217,8 +244,28 @@ export async function coalesceFetch(inFlight, key, produce, options = {}) {
   const joinBoundMs = options.joinBoundMs ?? DEFAULT_JOIN_BOUND_MS;
   const setTimer = options.setTimer ?? defaultSetTimer;
 
-  let existing = inFlight.get(key);
-  for (let attempt = 0; existing && attempt < MAX_JOIN_ATTEMPTS; attempt += 1) {
+  // ONLY A CALLER THAT SEES AN EMPTY SLOT PRODUCES. The map is re-read at
+  // the TOP of every iteration, never carried over from the previous one, so
+  // when N joiners of one stalled fetch all detach in the same instant, the
+  // first continuation to run clears the slot and produces and every other
+  // one sees that fresh promise and joins it. An earlier draft advanced a
+  // carried-over `existing` and then produced unconditionally after the
+  // loop, which is one retry PER WAITER rather than per key (Farol, PR
+  // #645): exactly the fan-in this Worker exists to collapse.
+  for (let attempt = 0; ; attempt += 1) {
+    const existing = inFlight.get(key);
+    if (!existing) {
+      // Nobody is fetching this key, so this caller is the producer.
+      break;
+    }
+    if (attempt >= MAX_JOIN_ATTEMPTS) {
+      // Deliberate escape hatch: this caller has now watched
+      // `MAX_JOIN_ATTEMPTS` separate fetches fail to answer it inside their
+      // bound, and a request that is never answered is worse than one more
+      // origin fetch. `onDetach` counted every one of those, so this is
+      // never silent.
+      break;
+    }
     const joined = await joinBounded(existing, joinBoundMs, setTimer);
     if (joined.kind === "settled") {
       return { result: joined.value, isProducer: false };
@@ -227,15 +274,11 @@ export async function coalesceFetch(inFlight, key, produce, options = {}) {
       options.onDetach({ reason: joined.kind, attempt });
     }
     if (inFlight.get(key) === existing) {
-      // Nobody else has noticed yet: this caller owns the retry. Dropping
-      // the entry first means a request arriving a microsecond from now
-      // joins the fresh attempt rather than the one just abandoned.
+      // Still the current entry, so nobody else has noticed it is dead yet.
+      // Dropping it here is what lets the next iteration (and any request
+      // arriving a microsecond from now) see an empty slot instead of
+      // joining the fetch just abandoned.
       inFlight.delete(key);
-      existing = undefined;
-    } else {
-      // Some other detaching joiner already started a fresh attempt — join
-      // that instead of opening a third connection to the same origin path.
-      existing = inFlight.get(key);
     }
   }
 

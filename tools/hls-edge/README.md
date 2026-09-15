@@ -247,8 +247,13 @@ Worker (`index.ts`'s rendition fetches and `LlPlaylistOrigin`'s `state.json`
 probes alike): a joiner arms its OWN bound, and on expiry — or on a rejection
 it did not cause — **detaches and fetches for itself** rather than the shared
 fetch being aborted out from under whoever is still attached. Detaching
-joiners collapse onto one retry, not one each, so a genuinely sick origin
-still sees at most one extra request per key. Counted as
+joiners collapse onto one retry, not one each — the map is re-read at the top
+of every attempt and a caller only produces when it sees an empty slot — so a
+genuinely sick origin still sees at most one extra request per key. And
+`isProducer` (which is what elects the single cache writer in `index.ts`) is
+decided when a fetch *settles*, not when it starts, so a slow fetch that
+finishes after its replacement cannot overwrite the newer playlist its own
+retry already stored. Counted as
 `hlsEdge.originJoinDetached` / `hlsEdge.llOriginJoinDetached`, both of which
 belong at zero and, when they are not, say that a context died rather than
 that the origin refused anything.

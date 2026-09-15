@@ -1476,6 +1476,18 @@ test("handleBlockingReload: a hold that hangs anyway degrades to the current pla
   assert.equal(logged.fields.channelId, "chan-1");
   assert.equal(logged.fields.rung, LL_AUDIO_RUNG);
   assert.equal(logged.fields.budgetMs, hardBudgetMs);
+
+  // AND THE HOLD IT GAVE UP ON IS CANCELLED, not merely stopped being
+  // awaited (Farol, PR #645). The waiter's own self-timer is cancelled with
+  // it, so nothing is left armed and nothing is left in `state.waiters` to
+  // keep a loop polling on behalf of a request that is already answered.
+  assert.equal(timers.pending, 0, "the abandoned waiter's timer must be cancelled with the waiter");
+  timers.fireAll();
+  await flush();
+  assert.ok(
+    !events.some((entry) => entry.event === "hlsEdge.blockingReloadWaiterSelfTimeout"),
+    "a waiter that is still registered would settle itself later -- this one must be gone",
+  );
 });
 
 test("handleBlockingReload: the last-resort guard falls back to the plain path when nothing is retained", async () => {

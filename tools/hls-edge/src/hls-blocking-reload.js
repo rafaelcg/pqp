@@ -1588,6 +1588,28 @@ export async function handleBlockingReload(renditionKey, directives, fetchRendit
   const noteEvent = (event, fields) =>
     logEvent(event, { channelId: context.channelId, rung: context.rung, ...fields });
   const hardBudgetMs = hardTimeoutBudgetMs(renditionKey, context.rung);
+
+  // THE HOLD'S OWN CANCELLATION HANDLE. Giving up on a promise is not the
+  // same as cancelling the work behind it: without this, a hard timeout (or
+  // a 502) would return while the waiter it abandoned stayed in
+  // `state.waiters` -- keeping a rendition's loop polling on behalf of a
+  // request that is already answered, and holding waiter/loop capacity that
+  // nothing will ever release if the loop is the dead one that caused the
+  // timeout in the first place (Farol, PR #645). `awaitBlockingReload`
+  // already knows how to unregister a waiter on an abort, so this reuses
+  // that path rather than inventing a second one: the incoming request's
+  // signal is chained into it, and it is aborted unconditionally once the
+  // outcome is decided (a no-op for a waiter the loop already settled).
+  const hold = new AbortController();
+  const forwardAbort = () => hold.abort();
+  if (signal) {
+    if (signal.aborted) {
+      hold.abort();
+    } else {
+      signal.addEventListener("abort", forwardAbort, { once: true });
+    }
+  }
+
   let outcome;
   try {
     // `context.rung` is what selects `VIDEO_RUNG_HOLD_BUDGET_MS` over the
@@ -1605,7 +1627,7 @@ export async function handleBlockingReload(renditionKey, directives, fetchRendit
     outcome = await raceHardTimeout(
       awaitBlockingReload(renditionKey, directives, {
         fetchRendition,
-        signal,
+        signal: hold.signal,
         rung: context.rung,
         logEvent: noteEvent,
         keepAlive: deps.keepAlive,
@@ -1622,6 +1644,14 @@ export async function handleBlockingReload(renditionKey, directives, fetchRendit
       status: 502,
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
+  } finally {
+    // The outcome is decided; nothing reads this hold any more. Aborting
+    // unregisters the waiter if one is still parked (the hard-timeout and
+    // 502 cases) and does nothing at all if the loop already settled it.
+    if (signal) {
+      signal.removeEventListener("abort", forwardAbort);
+    }
+    hold.abort();
   }
 
   if (outcome.kind === "hard-timeout") {
