@@ -4,6 +4,11 @@ import type { LiveHlsStream } from "@pqp/shared";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
+import {
+  hlsModeOf,
+  hlsPartTargetMs,
+  watchPlayerMode,
+} from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -168,11 +173,21 @@ export function WatchPartyPresenterStage({
           }
         >
           {liveStream && monitorOn ? (
+            // `hlsUrl` and `mode`/`partTargetMs` are one statement
+            // (`packages/shared` LiveHlsStream): the URL picks the LL
+            // bytes, the props pick the LL player. Omitting them left the
+            // host's "Público" preview on conventional hls.js against an
+            // LL playlist — abort/retry storms of `part-*.m4s` /
+            // `ll?_HLS_msn=` while WebRTC publish stayed healthy
+            // (2026-09-16 ~00:30 Europe/London). Every audience path
+            // already threads both; this is the same seam.
             <HlsWatchPlayer
               src={liveStream.hlsUrl}
               layout="mini"
               forceMuted
               delaySeconds={liveStream.delaySeconds}
+              mode={watchPlayerMode(hlsModeOf(liveStream))}
+              partTargetMs={hlsPartTargetMs(liveStream)}
               className="h-full w-full"
             />
           ) : (
