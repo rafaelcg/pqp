@@ -31,6 +31,11 @@ costs nothing per listener.
 | `status` | `playing` or `paused` |
 | `positionMs`, `atMs` | a position sample; the receiver measures elapsed time from its own arrival clock, never from `atMs` (see `watchPartyStateSchema.atMs` for why) |
 | `rev`, `actorId` | the logical clock and its tie-break |
+| `openControls` | when true, anyone with SPEAK is treated as a manager. Only a manager writes it. A write that omits it keeps what the room already holds |
+| `repeat` | `off`, `one` (this track again), or `all` (finished tracks go to the end of the queue). Default `off` |
+| `skipVotes` | user ids that have voted to skip the current track. Any change of `current` clears it |
+| `history` | the last ten finished tracks, most recent first. A repeat of the same `videoId` moves that row to the front |
+| `autoplay` | when true and the queue is empty, the room keeps going with a related track. Only a manager writes it. A write that omits it keeps what the room already holds. A track the room picked itself carries `autoplayed: true` |
 
 Last-writer-wins, no host: whoever acted most recently controls the player,
 with `rev = seen + 1` and the peer id breaking ties. This is the contract the
@@ -41,7 +46,9 @@ instead of dropping them, tear down with the room).
 
 Frames: `set-music` client to server, `music` server to the room, sender
 included as the acknowledgement. A joiner is handed the state after
-`welcome`.
+`welcome`. A write that omits `openControls`, `repeat`, `skipVotes`,
+`history` or `autoplay` keeps the room's values, so an older client that
+only samples position cannot wipe them.
 
 With `VOICE_REGISTRY=postgres` the queue is the watch party's twin, column
 for column: `voice_rooms.music` / `voice_rooms.music_rev` are the room's
@@ -77,7 +84,15 @@ already holds `MUTE_MEMBERS` and to the seeded Moderator, never to
 | add a song, or a list, to the end | `SPEAK` |
 | remove a song you added | being in the call |
 | start music when nothing is on | `SPEAK` (your own song) |
-| skip, pause, resume, reorder, remove others' songs, "Parar para todos" | `MANAGE_MUSIC` |
+| skip, pause, resume, reorder, shuffle, remove others' songs, "Parar para todos" | `MANAGE_MUSIC`, or SPEAK while `openControls` is on |
+| flip "Todo mundo controla" (`openControls`), set repeat, or flip "Continuar com parecidas" (`autoplay`) | `MANAGE_MUSIC` |
+| autoplay the next related track when the queue ran out | being in the call, while `autoplay` is on, the queue is empty, and the current track has run out. The write must put on your own track with `autoplayed: true`, playing at 0, history as `musicAdvance` would, votes cleared |
+| vote to skip | being in the call. A member may only add their own user id. The next write that matches `musicAdvance` is accepted once `held.skipVotes` plus that vote reaches `max(2, ceil(roomSize / 2))` |
+| play a history row again | `SPEAK` (it is an ordinary own-append under your name) |
+
+`channel-music` also carries `listeners`: how many seated peers have `listeningMusic` true. That flag lives on `voice_peers.listening_music` (default true) and on the roster as `listeningMusic`, the same way `sharingScreen` does. A client that predates `set-music-listening` never turns it off, so they still count. The count is sent again when it changes.
+
+The next track after an end or a skip is `musicAdvance` in `packages/shared/src/music.ts`. Repeat-one keeps the current track at position 0. Repeat-all appends the finished track to the queue and pops the head. Otherwise the head is popped. The finished track is prepended to `history` (cap 10, duplicates by `videoId` dropped). Votes are cleared. Both the client and the rights check use that function, so a member's advance can be compared field for field.
 
 Enforced on the server, not only in the UI. The write is a whole state
 object, so `musicWriteAllowed` (`packages/shared/src/music.ts`) diffs it
@@ -125,6 +140,19 @@ renderers rarely do, so `collectVideos` finds them wherever they are. When
 every client fails, the public results and playlist pages are scraped as the
 last resort, which is where the feature started. Metadata only: no stream
 URL is ever requested, which is the half of InnerTube that PO tokens guard.
+
+### Related videos
+
+`GET /api/music/related?videoId=` asks InnerTube `next` (`youtubei/v1/next`
+with `{ videoId }`) for the watch-next list. Same two-client fallback and
+the same walk-based `collectVideos`: WEB answers `compactVideoRenderer`,
+TVHTML5 answers `lockupViewModel`. The seed video is dropped. Remembered
+for six hours, keyed by video id, like search. The client then runs
+`musicAutoplayCandidate`: drop the finishing id, anything already in
+`history` or the queue, and anything shorter than 60 s or longer than 12
+minutes when duration is known (a clip or a film, not a song). Unknown
+duration is kept. The first remaining is minted under the writer and
+written with `autoplayed: true`.
 
 Around it: a per-user limiter (20 burst, then one every two seconds), an
 upstream budget across everybody on the process (300 burst, 10 a second)
@@ -175,24 +203,61 @@ smaller cap.
 position sample does not re-render the call stage; `use-voice.ts` feeds it
 and registers a sender on every `welcome`. `components/voice/music-bar-button.tsx`
 is the control on the call bar beside camera and screen share ("Tocar
-música", lit while something plays); `components/voice/music-dock.tsx` is the
-line on the call strip and the popover both open: the add box and the queue
-with reorder and remove. The player itself is
-`components/voice/music-mini-player.tsx`, pinned at the bottom of the
-sidebar above the call controls, shaped like a music app's mini player. At
-rest it is one card: artwork, title (scrolls on hover), who added it,
-play/pause and skip. It opens (the chevron, or the button on the call bar)
-into the video toggle, volume with mute, the add box, the queue with
-reorder and remove, and two text actions: "Parar de ouvir", which unmounts
-this machine's embed and leaves a one-line pill with "Ouvir" as the way
-back while the room's queue carries on, and "Parar para todos", the
-room-wide stop. It is mounted for the whole call whatever the reader is
-looking at, because unmounting the embed is what stops the sound; the video
-is folded to zero height by default and the choice is remembered. Rooms you
+música", lit while something plays, with a small equaliser while the room
+is playing). `components/voice/music-dock.tsx` is the title line on the
+call strip; a click unfolds the player in the sidebar. The player itself
+is `components/voice/music-mini-player.tsx`, pinned at the bottom of the
+sidebar above the call controls. At rest it is one card: artwork, title
+(scrolls on hover), who added it (avatar and name, or "Tocando
+parecidas" when the room picked the track), a 2px progress bar,
+play/pause and skip. A member without manage rights sees vote skip
+(`1/3`) instead of a dimmed skip. It opens in place into a panel: a
+56px artwork row (title, who added it, and "N ouvindo"), an optional
+16:9 video capped at about 135px, a scrubber that stays up even before
+duration is known (managers seek; everyone else sees progress), a
+transport row with repeat and shuffle on the left for effective
+managers, play/pause in the centre and skip (or vote skip) on the
+right, volume with mute, an activity line ("Rafa pulou"), a search box
+that shows the top five results under the input, the queue with
+thumbnail, duration, who added it, drag reorder, play next, remove and
+"Abrir no YouTube" / "Abrir no Spotify", a "Tocadas" list (collapsed to
+the count when the queue has rows), "Opções da fila" for effective
+managers ("Todo mundo controla" and "Continuar com parecidas"), and two
+text actions: "Parar de ouvir", which unmounts this machine's embed and
+leaves a one-line pill with "Ouvir" as the way back while the room's
+queue carries on, and "Parar pra todos" behind a confirm, the
+room-wide stop. A pasted link still goes through `GET /api/music/resolve`.
+Typed text goes through `GET /api/music/search` and the person picks a
+row. The embed is mounted for the whole call whatever the reader is
+looking at, because unmounting it is what stops the sound; the video is
+folded to zero height by default and the choice is remembered. Rooms you
 are not in show a card under their occupants instead
-(`channel-music-card.tsx`, off `voiceState.channelMusic`), whose title joins
-the call. `components/voice/music-dock.tsx` is only the title on the call
-strip.
+(`channel-music-card.tsx`, off `voiceState.channelMusic`): artwork, the
+title, "N ouvindo" when the count is present and above zero, and an
+"Ouvir" that joins the call.
+
+"Assistir na tela" moves that same embed onto the call stage as a 16:9
+tile, through the one-mount portal `watch-dock.tsx` already uses: a
+detached host is `appendChild`'d between the panel's video slot and
+`MusicStageTile`. The iframe never remounts, so the sound does not stop.
+The tile joins the stage grid (featured when nothing else is, in the
+grid otherwise), keeps a title overlay and "Voltar pra barra", and uses
+the existing fullscreen control. Navigating to a text channel rescues
+the host back to the sidebar dock; the placement is remembered per
+browser in `client/src/lib/music-prefs.ts`.
+
+Ducking is personal. `music-duck.ts` ramps the embed from full volume to
+35% over 200 ms when someone is speaking (`speakingPeerIds` or this
+machine's transmit gate) and back over 800 ms when they stop. The
+preference is "Abaixar quando alguém fala", on by default; a deafened
+listener is not ducked, because nobody is audible to them.
+
+Nothing playing means the footer is empty. The note on the call bar is
+the way in, and it focuses the add box. A room that starts music still
+opens the player by default. Settings > Voz has "Entrar na música da
+call automaticamente"; off means that transition shows the one-line
+pill instead, and "Ouvir" is how you join. "Parar de ouvir" keeps you
+out for the rest of that seat.
 
 Sync rules in the player: a new track loads at the room's expected position; a
 status change plays or pauses; every two seconds a non-actor compares the
@@ -201,6 +266,10 @@ samples their position every 10 s so a joiner lands close, and nobody else
 writes unprompted. Every write samples the live player position, so a queue
 edit never carries a stale one. A track ending advances the queue, guarded
 on the id so a straggler cannot skip the track the room already moved to.
+When `autoplay` is on, the queue is empty and repeat is off, the actor
+fetches `/api/music/related` and writes a related track with
+`autoplayed: true`. If the actor has left, any member does the same after
+1.5 s.
 
 Autoplay can be refused until the page has a gesture; the dock shows
 "Toque para tocar" when the player has not started two seconds after being
@@ -208,9 +277,7 @@ told to.
 
 ## Not done yet
 
-- Ducking the music under speech, like the watch-party stream mixer.
 - A "now playing" line in the channel, and on o recado.
-- Vote skip, a DJ permission bit, per-server history.
 - iOS and Android: the frame is shared, the players are not written.
 - Persisting the queue across an API restart (the row survives a restart
   only while somebody is still seated; an empty room takes it with it).

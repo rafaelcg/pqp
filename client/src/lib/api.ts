@@ -674,6 +674,20 @@ export const resolveMusic = (query: string, signal?: AbortSignal) =>
     signal ? { signal } : {},
   );
 
+/** Top search hits for the add box. Text queries, not pasted links. */
+export const searchMusic = (query: string, signal?: AbortSignal) =>
+  apiFetch<{ tracks: MusicResolved[] }>(
+    `/api/music/search?q=${encodeURIComponent(query)}`,
+    signal ? { signal } : {},
+  );
+
+/** Related videos for autoplay when the queue runs out. */
+export const relatedMusic = (videoId: string, signal?: AbortSignal) =>
+  apiFetch<{ tracks: MusicResolved[] }>(
+    `/api/music/related?videoId=${encodeURIComponent(videoId)}`,
+    signal ? { signal } : {},
+  );
+
 // -------------------------------------------------------------- attachments
 
 /**
