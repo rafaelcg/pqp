@@ -60,6 +60,8 @@ export interface SliderProps
    * Managers use the interactive `scrub` variant to seek.
    */
   readOnly?: boolean;
+  /** Track only, no fill. Used while duration is still unknown. */
+  indeterminate?: boolean;
 }
 
 /**
@@ -76,6 +78,7 @@ export function Slider({
   step = 1,
   disabled,
   readOnly = false,
+  indeterminate = false,
   onValueChange,
   onValueCommit,
   ...props
@@ -91,18 +94,21 @@ export function Slider({
       <div
         role="progressbar"
         aria-valuemin={min}
-        aria-valuemax={max}
-        aria-valuenow={Math.round(clamped)}
+        aria-valuemax={indeterminate ? undefined : max}
+        aria-valuenow={indeterminate ? undefined : Math.round(clamped)}
         data-slider={variant}
         data-readonly=""
+        data-indeterminate={indeterminate ? "" : undefined}
         className={cn(root({ variant }), className)}
         {...(props as HTMLAttributes<HTMLDivElement>)}
       >
         <div className={track({ variant })}>
-          <div
-            className="absolute h-full bg-accent"
-            style={{ width: `${fill}%` }}
-          />
+          {!indeterminate && (
+            <div
+              className="absolute h-full bg-accent"
+              style={{ width: `${fill}%` }}
+            />
+          )}
         </div>
       </div>
     );

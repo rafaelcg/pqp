@@ -11,8 +11,9 @@ import {
 } from "@/lib/music-store";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { MusicBarButton } from "@/components/voice/music-bar-button";
-import { musicActivityFromDiff } from "@/components/voice/music-panel";
-import { MusicNowPlaying } from "@/components/voice/music-now-playing";
+import { MusicPanel, musicActivityFromDiff } from "@/components/voice/music-panel";
+import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
+import { shouldReportUnknownDuration } from "@/components/voice/music-player-embed";
 import {
   queueResolvedNext,
   shouldResolveQuery,
@@ -184,6 +185,51 @@ describe("track source link", () => {
   });
 });
 
+describe("formatMusicClockOrUnknown", () => {
+  it("draws a dash clock when duration is missing", () => {
+    expect(formatMusicClockOrUnknown(null)).toBe("–:––");
+    expect(formatMusicClockOrUnknown(0)).toBe("–:––");
+    expect(formatMusicClockOrUnknown(65_000)).toBe("1:05");
+  });
+});
+
+describe("shouldReportUnknownDuration", () => {
+  it("fires once per track for the actor while duration is empty", () => {
+    expect(
+      shouldReportUnknownDuration({
+        isActor: true,
+        trackId: "t1",
+        durationMs: null,
+        reportedTrackId: null,
+      }),
+    ).toBe(true);
+    expect(
+      shouldReportUnknownDuration({
+        isActor: true,
+        trackId: "t1",
+        durationMs: null,
+        reportedTrackId: "t1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldReportUnknownDuration({
+        isActor: true,
+        trackId: "t1",
+        durationMs: 180_000,
+        reportedTrackId: null,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReportUnknownDuration({
+        isActor: false,
+        trackId: "t1",
+        durationMs: null,
+        reportedTrackId: null,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("MusicNowPlaying", () => {
   it("shows the adder and dims skip when the viewer cannot manage", () => {
     const html = renderToStaticMarkup(
@@ -211,6 +257,57 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("Ana");
     expect(html).toContain("data-music-now-playing");
     expect(html).toContain("opacity-40");
+    expect(html).toContain("role=\"progressbar\"");
+    expect(html.match(/aria-expanded/g)?.length).toBe(2);
+  });
+});
+
+describe("MusicPanel", () => {
+  const snapshot = (durationMs: number | null) => ({
+    channelId: CHANNEL,
+    state: state({ current: track("now", { durationMs }) }),
+    receivedAt: Date.now(),
+    open: true,
+    listening: true,
+  });
+
+  const renderPanel = (durationMs: number | null) =>
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicPanel
+          current={track("now", { durationMs })}
+          music={snapshot(durationMs)}
+          voiceState={voiceState()}
+          canManage
+          playing
+          needsTap={false}
+          showVideo={false}
+          volume={40}
+          muted={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          onMute={() => {}}
+          onVolume={() => {}}
+          onToggleVideo={() => {}}
+        />
+      </TooltipProvider>,
+    );
+
+  it("keeps a compact artwork row and a scrubber while duration is unknown", () => {
+    const html = renderPanel(null);
+    expect(html).toContain("data-music-panel");
+    expect(html).toContain("h-14 w-14");
+    expect(html).not.toContain("aspect-square");
+    expect(html).toContain("data-slider=\"scrub\"");
+    expect(html).toContain("data-indeterminate");
+    expect(html).toContain("–:––");
+  });
+
+  it("lets a manager seek once duration is known", () => {
+    const html = renderPanel(180_000);
+    expect(html).toContain("data-slider=\"scrub\"");
+    expect(html).not.toContain("data-indeterminate");
   });
 });
 

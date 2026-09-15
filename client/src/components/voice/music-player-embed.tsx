@@ -25,6 +25,21 @@ const DRIFT_MS = 2_500;
 const REPORT_MS = 10_000;
 const VOLUME_KEY = "pqp:music-volume";
 
+/** Actor fills duration as soon as YouTube starts, not on the 10 s sample. */
+export function shouldReportUnknownDuration(args: {
+  isActor: boolean;
+  trackId: string | null | undefined;
+  durationMs: number | null | undefined;
+  reportedTrackId: string | null;
+}): boolean {
+  return Boolean(
+    args.isActor &&
+      args.trackId &&
+      args.durationMs == null &&
+      args.reportedTrackId !== args.trackId,
+  );
+}
+
 function readStored(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -62,6 +77,7 @@ export function MusicPlayer({
   const videoId = music.state?.current?.videoId ?? null;
   const trackId = music.state?.current?.id ?? null;
   const status = music.state?.status ?? "paused";
+  const durationReportedFor = useRef<string | null>(null);
 
   // Build the player once.
   useEffect(() => {
@@ -119,6 +135,28 @@ export function MusicPlayer({
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);
+                const current = snap.state?.current;
+                if (
+                  shouldReportUnknownDuration({
+                    isActor: isActorRef.current,
+                    trackId: current?.id,
+                    durationMs: current?.durationMs,
+                    reportedTrackId: durationReportedFor.current,
+                  })
+                ) {
+                  let at = 0;
+                  let duration = 0;
+                  try {
+                    at = event.target.getCurrentTime() * 1000;
+                    duration = event.target.getDuration() * 1000;
+                  } catch {
+                    duration = 0;
+                  }
+                  if (duration > 0 && current) {
+                    durationReportedFor.current = current.id;
+                    reportPosition(at, duration);
+                  }
+                }
               }
             },
             onError: (event) => {
@@ -232,7 +270,7 @@ export function MusicPlayer({
   }, [volume, playerRef, ready]);
 
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-0">
+    <div className="relative aspect-video max-h-[135px] w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-0">
       <div ref={hostRef} className="absolute inset-0 [&>div]:h-full [&>div]:w-full [&_iframe]:h-full [&_iframe]:w-full" />
       {failed && (
         <p className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] text-text-tertiary">

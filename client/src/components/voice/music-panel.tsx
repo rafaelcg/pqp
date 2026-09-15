@@ -1,4 +1,14 @@
-import { ChevronDown, ListMusic, Pause, Play, SkipForward, Volume2, VolumeX } from "lucide-react";
+import {
+  ChevronDown,
+  ListMusic,
+  Pause,
+  Play,
+  SkipForward,
+  Video,
+  VideoOff,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { MusicState, MusicTrack } from "@pqp/shared";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -19,6 +29,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   formatMusicClock,
+  formatMusicClockOrUnknown,
   ghostIconButton,
   lookupActorName,
   lookupAddedBy,
@@ -120,7 +131,6 @@ export function MusicPanel({
   canManage,
   playing,
   needsTap,
-  showArtwork,
   showVideo,
   volume,
   muted,
@@ -137,7 +147,6 @@ export function MusicPanel({
   canManage: boolean;
   playing: boolean;
   needsTap: boolean;
-  showArtwork: boolean;
   showVideo: boolean;
   volume: number;
   muted: boolean;
@@ -156,12 +165,33 @@ export function MusicPanel({
   const duration = progress.durationMs ?? 0;
   const position = scrub ?? progress.position;
   const queue = music.state?.queue ?? [];
+  const durationKnown = progress.known;
 
   return (
-    <div data-music-panel="" className="flex max-h-[60vh] flex-col">
+    <div data-music-panel="" className="flex max-h-[60vh] flex-col overflow-x-hidden">
       <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-2.5 px-2 pb-2.5">
-          <div className="flex justify-end">
+        <div className="space-y-2 px-2 pb-2">
+          <div className="flex items-center gap-2">
+            <span className="relative h-14 w-14 shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2">
+              {current.thumbnailUrl ? (
+                <img src={current.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <ListMusic className="m-auto h-5 w-5 text-accent" aria-hidden="true" />
+              )}
+            </span>
+            <div className="min-w-0 flex-1">
+              <MarqueeText text={current.title} className="text-[13px] font-medium text-text" />
+              <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-text-secondary">
+                <UserAvatar
+                  name={addedBy.name}
+                  avatarUrl={addedBy.avatarUrl}
+                  className="h-3.5 w-3.5"
+                  fallbackClassName="bg-accent-soft text-[9px] text-on-accent-soft"
+                  rounded="full"
+                />
+                <span className="truncate">{t("music.addedBy", { name: addedBy.name })}</span>
+              </span>
+            </div>
             <Tooltip label={t("music.collapse")}>
               <button
                 type="button"
@@ -173,64 +203,34 @@ export function MusicPanel({
               </button>
             </Tooltip>
           </div>
-          {showArtwork && (
-            <div className="overflow-hidden rounded-[var(--radius-card)] bg-surface-2">
-              {current.thumbnailUrl ? (
-                <img
-                  src={current.thumbnailUrl}
-                  alt=""
-                  className="aspect-square w-full object-cover"
-                />
-              ) : (
-                <div className="flex aspect-square items-center justify-center text-accent">
-                  <ListMusic className="h-10 w-10" aria-hidden="true" />
-                </div>
-              )}
-            </div>
-          )}
 
-          <div className="min-w-0">
-            <MarqueeText text={current.title} className="text-[13px] font-medium text-text" />
-            <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-text-secondary">
-              <UserAvatar
-                name={addedBy.name}
-                avatarUrl={addedBy.avatarUrl}
-                className="h-3.5 w-3.5"
-                fallbackClassName="bg-accent-soft text-[9px] text-on-accent-soft"
-                rounded="full"
-              />
-              <span className="truncate">{t("music.addedBy", { name: addedBy.name })}</span>
-            </span>
+          <div className="space-y-1">
+            <Slider
+              variant="scrub"
+              readOnly={!canManage || !durationKnown}
+              indeterminate={!durationKnown}
+              value={position}
+              min={0}
+              max={durationKnown ? duration : 1}
+              step={250}
+              aria-label={canManage && durationKnown ? t("music.seek") : t("music.progress")}
+              onValueChange={(value) => {
+                if (canManage && durationKnown) {
+                  setScrub(value);
+                }
+              }}
+              onValueCommit={(value) => {
+                if (canManage && durationKnown) {
+                  seekTo(value);
+                  setScrub(null);
+                }
+              }}
+            />
+            <div className="flex justify-between text-[11px] tabular-nums text-text-tertiary">
+              <span>{formatMusicClock(position)}</span>
+              <span>{formatMusicClockOrUnknown(durationKnown ? duration : null)}</span>
+            </div>
           </div>
-
-          {progress.known && (
-            <div className="space-y-1">
-              <Slider
-                variant="scrub"
-                readOnly={!canManage}
-                value={position}
-                min={0}
-                max={duration}
-                step={250}
-                aria-label={canManage ? t("music.seek") : t("music.progress")}
-                onValueChange={(value) => {
-                  if (canManage) {
-                    setScrub(value);
-                  }
-                }}
-                onValueCommit={(value) => {
-                  if (canManage) {
-                    seekTo(value);
-                    setScrub(null);
-                  }
-                }}
-              />
-              <div className="flex justify-between text-[11px] tabular-nums text-text-tertiary">
-                <span>{formatMusicClock(position)}</span>
-                <span>{formatMusicClock(duration)}</span>
-              </div>
-            </div>
-          )}
 
           <div className="flex items-center justify-center gap-2">
             {needsTap ? (
@@ -285,7 +285,7 @@ export function MusicPanel({
             </Tooltip>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <Tooltip label={muted ? t("music.unmute") : t("music.mute")}>
               <button
                 type="button"
@@ -306,21 +306,28 @@ export function MusicPanel({
               min={0}
               max={100}
               aria-label={t("music.volume")}
+              className="min-w-0 flex-1"
               onValueChange={onVolume}
             />
-            <button
-              type="button"
-              className="shrink-0 rounded-[var(--radius-control)] px-2 py-1 text-[11px] text-text-tertiary hover:bg-surface-2 hover:text-text"
-              aria-pressed={showVideo}
-              onClick={onToggleVideo}
-            >
-              {showVideo ? t("music.video.hide") : t("music.video.show")}
-            </button>
+            <Tooltip label={showVideo ? t("music.video.hide") : t("music.video.show")}>
+              <button
+                type="button"
+                className={cn(ghostIconButton, "h-7 w-7")}
+                aria-pressed={showVideo}
+                onClick={onToggleVideo}
+              >
+                {showVideo ? (
+                  <Video className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <VideoOff className="h-4 w-4" aria-hidden="true" />
+                )}
+              </button>
+            </Tooltip>
           </div>
 
-          <MusicActivityLine voiceState={voiceState} state={music.state} />
-
           <MusicSearchPicker compact canManage={canManage} />
+
+          <MusicActivityLine voiceState={voiceState} state={music.state} />
 
           {queue.length > 0 && (
             <div>
@@ -332,27 +339,27 @@ export function MusicPanel({
               <MusicQueueList queue={queue} voiceState={voiceState} canManage={canManage} />
             </div>
           )}
-
-          <div className="flex items-center justify-between text-[11px]">
-            <button
-              type="button"
-              className="rounded-[var(--radius-control)] px-2 py-1 text-text-tertiary hover:bg-surface-2 hover:text-text"
-              onClick={() => setListening(false)}
-            >
-              {t("music.dismiss")}
-            </button>
-            {canManage && (
-              <button
-                type="button"
-                className="rounded-[var(--radius-control)] px-2 py-1 text-text-tertiary hover:bg-danger-soft hover:text-on-danger-soft"
-                onClick={() => setConfirmStop(true)}
-              >
-                {t("music.stopAll")}
-              </button>
-            )}
-          </div>
         </div>
       </ScrollArea>
+
+      <div className="flex shrink-0 items-center justify-between gap-1 px-2 py-1.5 text-[11px]">
+        <button
+          type="button"
+          className="shrink-0 whitespace-nowrap rounded-[var(--radius-control)] px-1.5 py-1 text-text-tertiary hover:bg-surface-2 hover:text-text"
+          onClick={() => setListening(false)}
+        >
+          {t("music.dismiss")}
+        </button>
+        {canManage && (
+          <button
+            type="button"
+            className="shrink-0 whitespace-nowrap rounded-[var(--radius-control)] px-1.5 py-1 text-text-tertiary hover:bg-danger-soft hover:text-on-danger-soft"
+            onClick={() => setConfirmStop(true)}
+          >
+            {t("music.stopAll")}
+          </button>
+        )}
+      </div>
 
       <ConfirmDialog
         open={confirmStop}

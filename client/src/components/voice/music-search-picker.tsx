@@ -217,6 +217,9 @@ export function MusicSearchPicker({
           }
           className="h-8 text-xs"
           disabled={busy}
+          onFocus={(event) => {
+            event.currentTarget.scrollIntoView({ block: "nearest" });
+          }}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown" && results && results.length > 0) {
               event.preventDefault();

@@ -479,7 +479,8 @@ scrollbar would draw OS chrome over the design.
 - **`scrub`.** A 2px track. The thumb appears on hover or focus, so a progress
   bar does not grow a knob until someone means to move it. `readOnly` draws the
   same fill with `role="progressbar"` and no thumb: that is the bar a person
-  without `MANAGE_MUSIC` sees.
+  without `MANAGE_MUSIC` sees. `indeterminate` is the same track with no fill,
+  used while duration is still unknown.
 - **`volume`.** A slightly thicker track with the thumb always visible.
 - **States.** The fill is `accent` on `surface-3`. Focus uses the usual ring.
   Disabled is 40% opacity.

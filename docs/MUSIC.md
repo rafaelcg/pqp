@@ -181,15 +181,17 @@ call strip; a click unfolds the player in the sidebar. The player itself
 is `components/voice/music-mini-player.tsx`, pinned at the bottom of the
 sidebar above the call controls. At rest it is one card: artwork, title
 (scrolls on hover), who added it (avatar and name), a 2px progress bar,
-play/pause and skip. It opens in place into a panel: large artwork or the
-video, a scrubber (managers seek; everyone else sees progress), volume
-with mute, an activity line ("Rafa pulou"), a search box that shows the
-top five results, the queue with thumbnail, duration, who added it, drag
-reorder, play next, remove and "Abrir no YouTube" / "Abrir no Spotify",
-and two text actions: "Parar de ouvir", which unmounts this machine's
-embed and leaves a one-line pill with "Ouvir" as the way back while the
-room's queue carries on, and "Parar para todos" behind a confirm, the
-room-wide stop. A pasted link still goes through `GET /api/music/resolve`.
+play/pause and skip. It opens in place into a panel: a 56px artwork
+row (title and who added it), an optional 16:9 video capped at about
+135px, a scrubber that stays up even before duration is known
+(managers seek; everyone else sees progress), volume with mute, an
+activity line ("Rafa pulou"), a search box that shows the top five
+results under the input, the queue with thumbnail, duration, who added
+it, drag reorder, play next, remove and "Abrir no YouTube" / "Abrir no
+Spotify", and two text actions: "Parar de ouvir", which unmounts this
+machine's embed and leaves a one-line pill with "Ouvir" as the way back
+while the room's queue carries on, and "Parar pra todos" behind a
+confirm, the room-wide stop. A pasted link still goes through `GET /api/music/resolve`.
 Typed text goes through `GET /api/music/search` and the person picks a
 row. The embed is mounted for the whole call whatever the reader is
 looking at, because unmounting it is what stops the sound; the video is

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Music, Pause, Play, SkipForward } from "lucide-react";
+import { Music, Pause, Play, SkipForward } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { MusicTrack, VoiceParticipant } from "@pqp/shared";
 import { MarqueeText } from "@/components/ui/marquee-text";
@@ -53,14 +53,21 @@ export function lookupActorName(voiceState: VoiceState, peerId: string | null): 
   return musicRoomPeople(voiceState).find((entry) => entry.peerId === peerId)?.displayName ?? null;
 }
 
-/** ~4 fps while playing, only when a duration is known. */
+export function formatMusicClockOrUnknown(ms: number | null | undefined): string {
+  if (ms == null || ms <= 0) {
+    return "–:––";
+  }
+  return formatMusicClock(ms);
+}
+
+/** ~4 fps while playing. Elapsed still ticks when duration is unknown. */
 export function usePlaybackProgress(music: MusicSnapshot, durationMs: number | null) {
   const playing = music.state?.status === "playing";
   const known = durationMs !== null && durationMs > 0;
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!playing || !known) {
+    if (!playing) {
       return;
     }
     let frame = 0;
@@ -74,7 +81,7 @@ export function usePlaybackProgress(music: MusicSnapshot, durationMs: number | n
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [playing, known, music.receivedAt]);
+  }, [playing, music.receivedAt]);
 
   const position = Math.max(0, expectedPositionMs(music, now));
   const capped = known ? Math.min(position, durationMs) : position;
@@ -114,7 +121,7 @@ export function MusicNowPlaying({
     <div data-music-now-playing="" className="relative flex items-center gap-2.5 px-2 py-2">
       {progress.known && (
         <div
-          className="absolute inset-x-0 top-0 h-0.5 bg-surface-3"
+          className="absolute inset-x-0 top-0 z-10 h-0.5 bg-accent/30"
           role="progressbar"
           aria-label={t("music.progress")}
           aria-valuemin={0}
@@ -204,20 +211,6 @@ export function MusicNowPlaying({
           }}
         >
           <SkipForward className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </Tooltip>
-      <Tooltip label={expandLabel}>
-        <button
-          type="button"
-          className={cn(ghostIconButton, "h-7 w-7")}
-          aria-expanded={music.open}
-          onClick={onExpand}
-        >
-          {music.open ? (
-            <ChevronDown className="h-4 w-4" aria-hidden="true" />
-          ) : (
-            <ChevronUp className="h-4 w-4" aria-hidden="true" />
-          )}
         </button>
       </Tooltip>
     </div>

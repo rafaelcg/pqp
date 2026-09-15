@@ -167,7 +167,13 @@ export function MusicMiniPlayer({
       data-video={showVideo ? "shown" : "folded"}
       className="border-t border-border bg-surface-0 text-xs"
     >
-      <div className={music.open && showVideo ? "px-2 pt-2" : "h-0 overflow-hidden"}>
+      <div
+        className={
+          music.open && showVideo
+            ? "max-h-[135px] overflow-hidden px-2 pt-2"
+            : "h-0 overflow-hidden"
+        }
+      >
         {embed}
       </div>
 
@@ -179,7 +185,6 @@ export function MusicMiniPlayer({
           canManage={canManage}
           playing={playing}
           needsTap={needsTap}
-          showArtwork={!showVideo}
           showVideo={showVideo}
           volume={volume}
           muted={muted}

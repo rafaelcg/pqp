@@ -13,6 +13,22 @@ describe("Slider", () => {
     expect(html).toContain("aria-valuenow=\"30\"");
   });
 
+  it("draws an indeterminate scrubber as a track with no fill", () => {
+    const html = renderToStaticMarkup(
+      <Slider
+        variant="scrub"
+        readOnly
+        indeterminate
+        value={0}
+        max={1}
+        aria-label="Andamento"
+      />,
+    );
+    expect(html).toContain("data-indeterminate");
+    expect(html).not.toContain("aria-valuenow");
+    expect(html).not.toContain("bg-accent");
+  });
+
   it("keeps the volume variant interactive", () => {
     const html = renderToStaticMarkup(
       <Slider variant="volume" value={70} max={100} aria-label="Volume" />,
