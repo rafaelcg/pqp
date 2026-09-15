@@ -9,7 +9,6 @@ import {
   hlsPartTargetMs,
   watchPlayerMode,
   type HlsMode,
-  type LlHlsStreamFields,
 } from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -558,10 +557,8 @@ export function WatchChannelStage({
         cameraHasVideo={stream?.cameraHasVideo ?? true}
         cameraHasVoiceAudio={stream?.cameraHasVoiceAudio ?? false}
         delaySeconds={stream?.delaySeconds}
-        mode={hlsModeOf(stream as (LiveHlsStream & LlHlsStreamFields) | null)}
-        partTargetMs={hlsPartTargetMs(
-          stream as (LiveHlsStream & LlHlsStreamFields) | null,
-        )}
+        mode={hlsModeOf(stream)}
+        partTargetMs={hlsPartTargetMs(stream)}
         audienceCount={watchAudienceCount(
           live,
           voiceState.occupancy[channelId],

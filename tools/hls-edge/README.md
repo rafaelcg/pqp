@@ -268,18 +268,43 @@ playlists from `ApiPlaylistOrigin`.
 
 **How a request is routed** (`index.ts`):
 
-- The session/master route (no `:rung`) tries the LL path FIRST, whenever
-  `LL_ORIGIN_BASE` is configured: it derives the remux `sessionId` and asks
-  for `state.json` (see the contract below). Found → this Worker renders and
-  returns an LL-only multivariant playlist (video + the audio group), never
-  touching the API for that response. Not found, unreachable, or malformed
-  in any way → falls straight through to the EXACT byte-for-byte-unchanged
-  API forward that has always served this route. A bug or an outage
-  anywhere in the LL path can therefore only ever downgrade a request to
-  "conventional, like before" — never turn a working conventional session's
-  master into an error. `playlistOriginKindForRung` (`ll-state.js`) is the
-  pure, unit-tested rule for the RENDITION half of this same guarantee:
-  every rung name except `ll`/`ll-audio` stays on the API's origin, always.
+- The session/master route (no `:rung`) takes the LL path **if and only if
+  the request says `?mode=ll`** (`requestsLlMode`, `playlist-route.ts` — a
+  port of `LIVE_HLS_MODE_PARAM`/`LIVE_HLS_MODE_LL` in
+  `packages/shared/src/live-hls.ts`, which the API stamps onto an LL
+  session's `hlsUrl` in `llPlaylistUrl`). With the marker: derive the remux
+  `sessionId`, ask for `state.json` (see the contract below), render an
+  LL-only multivariant playlist, never touch the API. Without it: the
+  byte-for-byte-unchanged API forward that has always served this route, and
+  the LL origin is not consulted at all.
+
+  **This used to be a probe, and the probe was wrong four times in
+  production.** Until 2026-09-15 this branch ran the LL path for EVERY
+  master request once `LL_ORIGIN_BASE` was set, and read "no `state.json`"
+  as "this party is conventional". Those are different things: a session
+  300 ms old has no state yet AND IS low-latency. Low latency was enabled
+  four times that day and no viewer was ever handed the low-latency stream;
+  in the last attempt the audience's only master request arrived 300 ms into
+  the session, got the conventional ladder's master — for a party whose
+  conventional ladder the API had deliberately not started — fetched
+  `/720p30`, got nothing, and read "A transmissão caiu". Nothing logged a
+  failure, because from here there was none. A marker the API puts in the
+  URL is a statement; a probe is a race.
+
+  **So an LL master that cannot be built is a `503` with `Retry-After: 1`,
+  never the other ladder** (`llNotReady` in `index.ts`), with the reason on
+  `X-HLS-Edge-LL-Not-Ready` and in `hlsEdge.llMasterNotReady`
+  (rate-limited per channel per reason): `no-state` (warming up),
+  `probe-timeout`, `origin-error`, `build-failed`, or
+  `origin-not-configured` (this Worker deployed without `LL_ORIGIN_BASE`
+  while the API already selects LL — a deploy-order mistake, and loud on
+  purpose). `LlPlaylistOrigin` memoes a not-ready answer for one second, so
+  a warming party costs the remux about one `state.json` fetch a second no
+  matter how many people joined.
+
+  `playlistOriginKindForRung` (`ll-state.js`) is the pure, unit-tested rule
+  for the RENDITION half: every rung name except `ll`/`ll-audio` stays on
+  the API's origin, always.
 - A rendition route for `:rung` = `ll` or `ll-audio` renders that ONE
   track's LL media playlist from the same `state.json`. This is the text a
   real player then polls or blocking-reloads exactly the way

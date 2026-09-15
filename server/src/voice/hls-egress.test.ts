@@ -563,8 +563,17 @@ describe("live HLS egress", () => {
 
       process.env.LIVE_HLS_LL = "true";
       process.env.LIVE_HLS_LL_ALLOWLIST = OTHER_SERVER;
-      // On the LL flag, but this server is not on the LL allowlist -- even
-      // though it IS on the ordinary one.
+      // THE FLAG IS NOT ENOUGH: the edge Worker is the only thing that can
+      // render an LL playlist, so with no `LIVE_HLS_PLAYLIST_BASE_URL` the
+      // switch must not be offered to a host at all (the same rule
+      // `resolveHlsMode` applies when the party actually asks).
+      expect((await liveHlsConfigForServer(OTHER_SERVER)).lowLatency).toEqual({
+        available: false,
+      });
+
+      process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+      // On the LL flag with an edge front, but this server is not on the LL
+      // allowlist -- even though it IS on the ordinary one.
       expect((await liveHlsConfigForServer(SERVER)).lowLatency).toEqual({
         available: false,
       });
@@ -573,6 +582,7 @@ describe("live HLS egress", () => {
       });
       delete process.env.LIVE_HLS_LL;
       delete process.env.LIVE_HLS_LL_ALLOWLIST;
+      delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
     });
 
     it("reconcile does not start an egress for an unlisted server, and stops one that was running", async () => {

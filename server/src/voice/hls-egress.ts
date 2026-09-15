@@ -54,6 +54,7 @@ import {
   liveHlsLLAvailable,
   llDemotedRecently,
   llHasRoom,
+  llPlaylistUrl,
   llStreamFor,
   reconcileLlHlsNow,
   requestedHlsModeForChannel,
@@ -1543,15 +1544,21 @@ export async function liveHlsStreamFromDb(
   } = {},
 ): Promise<LiveHlsStream | null> {
   let row:
-    | { started_at: Date; presenter_peer_id: string | null; mode: string }
+    | {
+        started_at: Date;
+        presenter_peer_id: string | null;
+        mode: string;
+        part_target_ms: number | null;
+      }
     | undefined;
   try {
     const result = await getPool().query<{
       started_at: Date;
       presenter_peer_id: string | null;
       mode: string;
+      part_target_ms: number | null;
     }>(
-      `SELECT started_at, presenter_peer_id, mode
+      `SELECT started_at, presenter_peer_id, mode, part_target_ms
          FROM hls_sessions
         WHERE channel_id = $1 AND ended_at IS NULL AND cleaned_at IS NULL
         ORDER BY started_at DESC
@@ -1573,11 +1580,25 @@ export async function liveHlsStreamFromDb(
     return null;
   }
   const startedAt = row.started_at.getTime();
+  // THE URL AND THE MODE ARE ONE STATEMENT (`packages/shared/src/live-hls.ts`,
+  // `LIVE_HLS_MODE_PARAM`). This path used to say `mode: "ll"` and hand out
+  // `viewerPlaylistUrl`'s conventional-ladder path for it -- the two halves
+  // disagreeing, on the exact read a viewer whose socket landed on the
+  // machine NOT running the transcode depends on. `llPlaylistUrl` is the one
+  // place either driver builds an LL master URL, marker included.
+  if (row.mode === "ll") {
+    return {
+      hlsUrl: llPlaylistUrl(channelId, startedAt),
+      startedAt,
+      presenterPeerId: row.presenter_peer_id,
+      mode: "ll" as const,
+      ...(row.part_target_ms ? { partTargetMs: row.part_target_ms } : {}),
+    };
+  }
   return {
     hlsUrl: viewerPlaylistUrl(channelId, startedAt),
     startedAt,
     presenterPeerId: row.presenter_peer_id,
-    ...(row.mode === "ll" ? { mode: "ll" as const } : {}),
   };
 }
 

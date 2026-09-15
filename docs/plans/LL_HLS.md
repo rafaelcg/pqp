@@ -247,9 +247,28 @@ and not for a film should not change a setting twice. It is stored on the
 `hls_sessions` row, stated in the go-live summary, and while live the stage carries
 a "baixa latência" badge.
 
-**The audience needs no signal.** hls.js 1.7 enables `lowLatencyMode` from
-`EXT-X-SERVER-CONTROL`, and AVPlayer and Media3 read it natively. The client work is
-not "turn LL on", it is **stop overriding it**. Web: `hlsLivePlayerConfig()` pins
+**The audience needs no signal.** ~~hls.js 1.7 enables `lowLatencyMode` from
+`EXT-X-SERVER-CONTROL`, and AVPlayer and Media3 read it natively.~~
+
+**Wrong, and it cost four production attempts (2026-09-15).** That paragraph is
+true about the PLAYER and false about the DELIVERY, and the difference is the
+whole bug. The manifest can only configure a player that has the manifest; what
+decides WHICH manifest a viewer is handed is the edge Worker's master route, and
+with no signal on the wire that route was left inferring the mode by probing the
+remux for `state.json` and reading "not written yet" as "this party is
+conventional". A session two hundred milliseconds old has no state and IS
+low-latency. Low latency was enabled four times that day and no viewer was ever
+handed the low-latency stream; in the last attempt the audience's only master
+request landed 300 ms in, got the conventional ladder's master — for a party
+whose conventional ladder the API had deliberately not started — fetched
+`/720p30`, got nothing, and read "A transmissão caiu" for five minutes.
+
+So the mode IS on the wire now, in both halves of one statement: `?mode=ll` on
+`hlsUrl` (`LIVE_HLS_MODE_PARAM`, read by `requestsLlMode` at the edge) and
+`mode: "ll"` plus `partTargetMs` on the stream frame. The Worker serves the LL
+master because the request says so; a warming remux is a `503 Retry-After: 1`,
+never the other ladder. The rest of this section still holds: **the client work
+is not "turn LL on", it is stop overriding it** — Web: `hlsLivePlayerConfig()` pins
 `liveSyncDurationCount` to 5, which on an LL manifest fights `PART-HOLD-BACK`, so it
 must defer to the manifest when one is present. iOS: `WatchLiveEdge.swift:118-128`
 clamps `recommendedTimeOffsetFromLive` to a 1 to 8 s band **precisely because** a
@@ -258,7 +277,14 @@ that clamp fires on a correct reading; the file already names LL-HLS as the case
 guards against, and that guard becomes a branch. Android: `HlsLiveEdge.kt` and
 `HlsWatchdog.kt` get the same treatment.
 
-**Fallback is a rendition, not a reload.** The conventional ladder keeps running for
+**Fallback is a rendition, not a reload.** *(Not what shipped. `L2.2` serves an
+LL-only master — the API stops one driver when it starts the other, so there is
+no conventional ladder running underneath an LL session to switch down to, and a
+demotion is therefore a reload: `sweepLlDemotions` starts the conventional
+ladder and `pushLiveHls` publishes a fresh frame whose `hlsUrl` and `mode` have
+both changed, which is what `liveHlsFrameChanged` exists to notice. Kept here as
+written because the paragraph below it, the pin rule, did ship.)* The
+conventional ladder keeps running for
 the whole rollout, so the master playlist lists the LL rung beside the 720p30 rung
 and a failure is an ordinary ABR switch: no new session, no torn-down player. Plus
 one explicit rule: **two part-load errors inside 10 s pin the player to a

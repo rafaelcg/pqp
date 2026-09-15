@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { LIVE_HLS_MODE_LL, LIVE_HLS_MODE_PARAM } from "@pqp/shared";
 
 /**
  * `GET /api/channels/:channelId/live` across two instances, the M6 gap this
@@ -59,13 +60,15 @@ async function insertSession(
     endedAt: Date | null;
     presenterPeerId: string | null;
     mode: string;
+    partTargetMs: number | null;
   }> = {},
 ): Promise<void> {
   const startedAt = overrides.startedAt ?? new Date();
   await getPool().query(
     `INSERT INTO hls_sessions
-       (channel_id, object_prefix, started_at, ended_at, presenter_peer_id, mode)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+       (channel_id, object_prefix, started_at, ended_at, presenter_peer_id, mode,
+        part_target_ms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       channelId,
       `live/${channelId}/${startedAt.getTime()}-720p30-${randomUUID()}`,
@@ -75,6 +78,7 @@ async function insertSession(
         ? randomUUID()
         : overrides.presenterPeerId,
       overrides.mode ?? "conventional",
+      overrides.partTargetMs ?? null,
     ],
   );
 }
@@ -125,6 +129,50 @@ describeDb("live HLS state, a second instance's fallback to hls_sessions", () =>
     expect(stream!.hlsUrl).toBe(
       viewerPlaylistUrl(channelId, startedAt.getTime()),
     );
+  });
+
+  it("liveHlsStreamFromDb hands an LL row the LL master URL, marker and part target included", async () => {
+    // THE CROSS-MACHINE HALF OF THE 2026-09-15 FAILURE. This path said
+    // `mode: "ll"` and then built `viewerPlaylistUrl` -- the conventional
+    // ladder's path -- for it. The two halves of one statement disagreeing,
+    // on the exact read a viewer whose socket landed on the machine NOT
+    // running the transcode depends on. A marker-less URL is a conventional
+    // master at the edge, which for an LL session is a ladder nothing is
+    // writing.
+    const channelId = randomUUID();
+    const presenterPeerId = randomUUID();
+    const startedAt = new Date("2026-09-15T11:57:02.742Z");
+    await insertChannel(channelId);
+    await insertSession(channelId, {
+      startedAt,
+      presenterPeerId,
+      mode: "ll",
+      partTargetMs: 500,
+    });
+
+    const stream = await liveHlsStreamFromDb(channelId);
+    expect(stream!.mode).toBe("ll");
+    expect(stream!.partTargetMs).toBe(500);
+    expect(stream!.hlsUrl).toBe(
+      `/api/voice/hls-playlist/${channelId}/${startedAt.getTime()}` +
+        `?${LIVE_HLS_MODE_PARAM}=${LIVE_HLS_MODE_LL}`,
+    );
+    expect(stream!.hlsUrl).not.toBe(
+      viewerPlaylistUrl(channelId, startedAt.getTime()),
+    );
+  });
+
+  it("liveHlsStreamFromDb leaves a conventional row byte-for-byte as it was: no marker, no part target", async () => {
+    const channelId = randomUUID();
+    const startedAt = new Date("2026-09-15T12:02:24.000Z");
+    await insertChannel(channelId);
+    await insertSession(channelId, { startedAt });
+
+    const stream = await liveHlsStreamFromDb(channelId);
+    expect(stream!.hlsUrl).toBe(viewerPlaylistUrl(channelId, startedAt.getTime()));
+    expect(stream!.hlsUrl).not.toContain(LIVE_HLS_MODE_PARAM);
+    expect(stream!.mode).toBeUndefined();
+    expect(stream!.partTargetMs).toBeUndefined();
   });
 
   it("liveHlsStreamFromDb picks the most recent live row when more than one exists (a restart mid-party)", async () => {

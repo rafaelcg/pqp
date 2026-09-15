@@ -7,6 +7,8 @@ import {
   REMUX_CONTROL_NONCE_HEADER,
   REMUX_CONTROL_SIGNATURE_HEADER,
   REMUX_CONTROL_TIMESTAMP_HEADER,
+  LIVE_HLS_MODE_LL,
+  LIVE_HLS_MODE_PARAM,
   type LiveHlsStream,
   type RemuxKeyframePolicy,
   type RemuxSessionInfo,
@@ -96,10 +98,31 @@ export function liveHlsLLAllowlist(): Set<string> | null {
 }
 
 /**
+ * Whether anything can actually SERVE an LL session's playlists.
+ *
+ * There is exactly one renderer for the LL multivariant playlist and the two
+ * LL rungs, and it is the edge Worker (`tools/hls-edge`, `L2.1`/`L2.2`) —
+ * this API's own playlist proxy has never known what a `mode = 'll'` row is
+ * and answers "not found" for one, by design (see `llPlaylistUrl`). So
+ * `LIVE_HLS_PLAYLIST_BASE_URL` being unset does not mean "serve LL a
+ * slower way", it means "there is no LL". Picking `ll` anyway is how a party
+ * ends up live, correct in every log, and black for everybody watching.
+ *
+ * Read from `process.env` directly rather than through `playlistBaseUrl()`
+ * in `hls-egress.ts`: that module imports THIS one, and the dependency
+ * between the two drivers stays one-way (see `llObjectPrefix`).
+ */
+function llPlaylistFrontConfigured(): boolean {
+  return envTrimmed("LIVE_HLS_PLAYLIST_BASE_URL") !== null;
+}
+
+/**
  * Pure, so the whole matrix is testable with no environment and no database:
  * flag off -> `conventional`, whatever was requested. Flag on but the party
  * did not ask -> `conventional` (the default `docs/plans/LL_HLS.md` §4
- * requires). Flag on, asked, and either no allowlist or this server is on
+ * requires). No edge playlist front configured -> `conventional`, because
+ * nothing else can serve an LL playlist at all (`llPlaylistFrontConfigured`).
+ * Flag on, asked, a front, and either no allowlist or this server is on
  * it -> `ll`. Asked, flag on, allowlist set, server not on it ->
  * `conventional`, silently: the request is not a promise the client's ask
  * can enforce on its own.
@@ -112,6 +135,9 @@ export function resolveHlsMode(input: {
     return "conventional";
   }
   if (!isLiveHlsLLEnabled()) {
+    return "conventional";
+  }
+  if (!llPlaylistFrontConfigured()) {
     return "conventional";
   }
   const allowlist = liveHlsLLAllowlist();
@@ -132,7 +158,7 @@ export function resolveHlsMode(input: {
  * answer for every other field here.
  */
 export function liveHlsLLAvailable(serverId: string | null | undefined): boolean {
-  if (!isLiveHlsLLEnabled()) {
+  if (!isLiveHlsLLEnabled() || !llPlaylistFrontConfigured()) {
     return false;
   }
   const allowlist = liveHlsLLAllowlist();
@@ -943,19 +969,31 @@ function llObjectPrefix(channelId: string, startedAt: number): string {
  * refusal of a request with no valid token applies here too (see
  * `hls-playlist-route.test.ts`).
  *
- * This does NOT mean an LL session is playable today: `renderSignedPlaylist`
- * has no idea what a `mode: 'll'` row is (`rung IS NULL` for one, so
- * `sessionRungs` treats it as a pre-ladder single-rendition session and goes
- * looking for a LiveKit-shaped object that was never written) and answers
- * "not found" rather than serving anything -- which is the honest, SAFE
- * failure this task's scope should produce: no client treats `mode: "ll"`
- * specially yet (`L2.4`), and the playlist front that would make this URL
- * actually resolve is `L2.1`/`L2.2`. What matters for L1.5 is that nothing
- * this server hands out can be played by someone the access check would
- * have refused, and that no response ever names the origin host.
+ * THE `?mode=ll` MARKER IS THE POINT OF THIS FUNCTION NOW.
+ * `LIVE_HLS_MODE_PARAM` (`packages/shared/src/live-hls.ts`) is what tells the
+ * edge Worker's master route that THIS request is for an LL session, so it
+ * renders the LL multivariant playlist because the URL says so rather than
+ * because a probe of the remux origin happened to find `state.json` already
+ * written. Without it the Worker guessed, and a session two hundred
+ * milliseconds old — which has no state yet and is unambiguously LL — was
+ * answered with the conventional ladder's master four times in production on
+ * 2026-09-15. See that constant's doc comment for the whole argument, and
+ * `resolveHlsMode` for why an API with no edge front never picks `ll` at all.
+ *
+ * `stampViewerStream` appends `?t=` with `&` once this has already put a
+ * query string on the path, and `extractChannelId` there matches on the path
+ * prefix, so neither needed changing.
+ *
+ * This API's OWN proxy still has no idea what a `mode = 'll'` row is
+ * (`renderSignedPlaylist`: `rung IS NULL`, so `sessionRungs` treats it as a
+ * pre-ladder single-rendition session and goes looking for a LiveKit-shaped
+ * object that was never written) and answers "not found" rather than serving
+ * anything. That is why `resolveHlsMode` refuses `ll` with no edge front: the
+ * honest failure is never picking the mode, not handing out a URL only a
+ * component that is not deployed could answer.
  */
-function llPlaylistUrl(channelId: string, startedAt: number): string {
-  return `/api/voice/hls-playlist/${channelId}/${startedAt}`;
+export function llPlaylistUrl(channelId: string, startedAt: number): string {
+  return `/api/voice/hls-playlist/${channelId}/${startedAt}?${LIVE_HLS_MODE_PARAM}=${LIVE_HLS_MODE_LL}`;
 }
 
 async function recordLlSessionStarted(
@@ -1090,6 +1128,15 @@ interface OpenLlRow {
   instanceId: string | null;
   /** The `channel_sessions` row that asked for LL. NULL on a pre-column row. */
   watchPartySessionId: string | null;
+  /**
+   * `part_target_ms` AS STORED, which is what a resume must hand the
+   * audience rather than whatever `LIVE_HLS_REMUX_PART_MS` says right now:
+   * the box session being resumed is still writing at the cadence it was
+   * started with, and an operator who changed the env between the two would
+   * otherwise have every viewer size their buffer for a cadence nothing is
+   * producing. NULL on a row written before the column had a value.
+   */
+  partTargetMs: number | null;
 }
 
 /**
@@ -1117,9 +1164,10 @@ async function findOpenLlRow(
       stop_attempts: number;
       instance_id: string | null;
       watch_party_session_id: string | null;
+      part_target_ms: number | null;
     }>(
       `SELECT id, started_at, remux_session_id, presenter_peer_id, stopping_at,
-              stop_attempts, instance_id, watch_party_session_id
+              stop_attempts, instance_id, watch_party_session_id, part_target_ms
        FROM hls_sessions
        WHERE channel_id = $1 AND mode = 'll' AND ended_at IS NULL
        ORDER BY started_at DESC
@@ -1141,6 +1189,7 @@ async function findOpenLlRow(
         stopAttempts: row.stop_attempts,
         instanceId: row.instance_id,
         watchPartySessionId: row.watch_party_session_id,
+        partTargetMs: row.part_target_ms,
       },
     };
   } catch (error) {
@@ -1281,6 +1330,12 @@ async function startLlSession(
 
   let startedAt: number;
   let sessionId: string;
+  // The cadence the AUDIENCE is told about. A fresh session writes at
+  // whatever `LIVE_HLS_REMUX_PART_MS` says now; a resumed one is still the
+  // box session that was started earlier, so its row's stored value is the
+  // truth (see `OpenLlRow.partTargetMs`). A NULL on a pre-column row falls
+  // back to today's config, which is what it would have been written with.
+  let partTargetMs = cfg.partMs;
   if (openRow) {
     // Our own unresolved attempt for this exact presenter: resume it
     // deterministically. `remuxSessionId` should already be set (the INSERT
@@ -1288,6 +1343,7 @@ async function startLlSession(
     // -- that recomputability is the whole point (see `deriveLlSessionId`).
     startedAt = openRow.startedAtMs;
     sessionId = openRow.remuxSessionId ?? deriveLlSessionId(channelId, startedAt);
+    partTargetMs = openRow.partTargetMs ?? cfg.partMs;
   } else {
     startedAt = Date.now();
     sessionId = deriveLlSessionId(channelId, startedAt);
@@ -1338,6 +1394,13 @@ async function startLlSession(
     presenterPeerId,
     delaySeconds: llDelaySeconds(),
     mode: "ll",
+    // THE CADENCE THIS SESSION ACTUALLY WRITES AT, not the deployment
+    // default a player would otherwise have to assume: it is what sizes
+    // hls.js's hold-back and the stall watchdog's part timer
+    // (`client/src/lib/hls-live-edge.ts`). The same number went onto the
+    // row at `recordLlSessionStarted`, so a resume reads back what it
+    // started with.
+    partTargetMs,
   };
   llRooms.set(channelId, { sessionId, startedAt, presenterPeerId, stream });
   logEvent("voice.hlsLlStarted", { channelId, sessionId, subscribed: info.subscribed });
@@ -1643,6 +1706,7 @@ interface StaleLlRow {
   /** Which API process last started or adopted it. NULL = nobody's. */
   instance_id: string | null;
   watch_party_session_id: string | null;
+  part_target_ms: number | null;
 }
 
 function toOpenLlRow(row: StaleLlRow): OpenLlRow {
@@ -1655,6 +1719,7 @@ function toOpenLlRow(row: StaleLlRow): OpenLlRow {
     stopAttempts: row.stop_attempts,
     instanceId: row.instance_id,
     watchPartySessionId: row.watch_party_session_id,
+    partTargetMs: row.part_target_ms,
   };
 }
 
@@ -1739,7 +1804,7 @@ export async function adoptLlHlsSessions(): Promise<{
 
   const rows = await getPool().query<StaleLlRow>(
     `SELECT id, channel_id, started_at, ended_at, remux_session_id, presenter_peer_id,
-            stopping_at, stop_attempts, instance_id, watch_party_session_id
+            stopping_at, stop_attempts, instance_id, watch_party_session_id, part_target_ms
      FROM hls_sessions
      WHERE mode = 'll' AND cleaned_at IS NULL
        AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
@@ -1856,6 +1921,10 @@ export async function adoptLlHlsSessions(): Promise<{
         presenterPeerId: row.presenter_peer_id,
         delaySeconds: llDelaySeconds(),
         mode: "ll",
+        // OFF THE ROW, not off this process's own config: an adopted
+        // session was started by somebody else (a previous boot, the other
+        // machine) and is still writing at the cadence it was started with.
+        partTargetMs: row.part_target_ms ?? remuxSessionConfig().partMs,
       },
     });
     adopted += 1;

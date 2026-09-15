@@ -57,3 +57,35 @@ export function parsePlaylistPath(pathname: string): PlaylistRouteMatch | null {
   }
   return { channelId: match[1]!, startedAt: match[2]!, rung: match[3], media: match[4] };
 }
+
+/**
+ * `LIVE_HLS_MODE_PARAM` / `LIVE_HLS_MODE_LL` in
+ * `packages/shared/src/live-hls.ts`, ported here for the same reason
+ * `hls-viewer-token.js` and `ll-session.js` port their halves: this Worker
+ * deploys separately from the API, in a different repo boundary, with no
+ * module boundary to share across. Two string literals, pinned by
+ * `test/playlist-route.test.mjs` against the exact URL the API builds
+ * (`llPlaylistUrl` in `server/src/voice/hls-remux.ts`).
+ */
+export const LL_MODE_PARAM = "mode";
+export const LL_MODE_VALUE = "ll";
+
+/**
+ * Whether THIS request asks for the low-latency rendering of its session.
+ *
+ * The one and only signal. The Worker used to answer that question by
+ * probing the remux origin for a `state.json` and reading "no state" as
+ * "this party is conventional" — which is false for every LL session in its
+ * first second, and is why low-latency was enabled in production four times
+ * on 2026-09-15 and no viewer was ever handed the low-latency stream. The
+ * API chose the mode; the API now says so in the URL it hands out, and this
+ * function is where that statement is read.
+ *
+ * Anything other than exactly `mode=ll` is conventional, including a
+ * repeated or unparseable parameter (`URLSearchParams.get` returns the
+ * FIRST value, so `?mode=ll&mode=x` still reads `ll` and `?mode=x&mode=ll`
+ * does not — either way one deterministic answer, never a probe).
+ */
+export function requestsLlMode(url: URL): boolean {
+  return url.searchParams.get(LL_MODE_PARAM) === LL_MODE_VALUE;
+}

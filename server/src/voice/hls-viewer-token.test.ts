@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { LIVE_HLS_MODE_LL, LIVE_HLS_MODE_PARAM } from "@pqp/shared";
 import {
   HLS_PARTY_PASS_PARAM,
   HLS_VIEWER_TOKEN_TTL_MS,
@@ -103,6 +104,69 @@ describe("HLS viewer token", () => {
 
     const publicStream = { ...stream, hlsUrl: "https://live.example.test/x.m3u8" };
     expect(stampViewerStream(publicStream, USER)).toEqual(publicStream);
+  });
+
+  it("keeps an LL session's `?mode=ll` marker and appends the token beside it", () => {
+    // ONE URL, TWO QUERY PARAMETERS, AND NEITHER MAY EAT THE OTHER. The
+    // marker is what makes the edge Worker serve the LL master for this
+    // request (`LIVE_HLS_MODE_PARAM`); the token is what authorises it. The
+    // marker arrives already on the path, so `appendParam` has to join with
+    // `&` -- a `?` here would produce a URL whose token is part of the mode
+    // value and whose mode is unreadable, i.e. a viewer silently demoted to
+    // the conventional master, which is the exact failure this marker
+    // exists to end.
+    const stream = {
+      hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}?${LIVE_HLS_MODE_PARAM}=${LIVE_HLS_MODE_LL}`,
+      startedAt: STARTED_AT,
+      presenterPeerId: "peer-1",
+      mode: "ll" as const,
+      partTargetMs: 500,
+    };
+    const stamped = stampViewerStream(stream, USER);
+    const url = new URL(stamped.hlsUrl, "https://api.example.test");
+    expect(url.pathname).toBe(`/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}`);
+    expect(url.searchParams.get(LIVE_HLS_MODE_PARAM)).toBe(LIVE_HLS_MODE_LL);
+    expect(
+      verifyHlsViewerToken(url.searchParams.get("t"), {
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toEqual({ userId: USER, issuedAt: expect.any(Number) });
+    // And the two fields the client configures its engine from survive the
+    // stamping untouched.
+    expect(stamped.mode).toBe("ll");
+    expect(stamped.partTargetMs).toBe(500);
+  });
+
+  it("extracts the channel from a marker-carrying URL, so the token names the right session", () => {
+    // `extractChannelId` matches on the path prefix, which the marker sits
+    // AFTER -- but a token minted for the wrong channel verifies nowhere, so
+    // this is worth stating rather than assuming.
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    const stamped = stampViewerStream(
+      {
+        hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}?${LIVE_HLS_MODE_PARAM}=${LIVE_HLS_MODE_LL}`,
+        startedAt: STARTED_AT,
+        presenterPeerId: "peer-1",
+        mode: "ll" as const,
+      },
+      USER,
+    );
+    const url = new URL(stamped.hlsUrl);
+    expect(url.origin).toBe("https://hls.example.test");
+    expect(url.searchParams.get(LIVE_HLS_MODE_PARAM)).toBe(LIVE_HLS_MODE_LL);
+    expect(
+      verifyHlsViewerToken(url.searchParams.get("t"), {
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).not.toBeNull();
+    expect(
+      verifyHlsViewerToken(url.searchParams.get("t"), {
+        channelId: OTHER,
+        startedAt: STARTED_AT,
+      }),
+    ).toBeNull();
   });
 
   it("stamps the camera playlist with the SAME token, not a second one", () => {

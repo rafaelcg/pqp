@@ -191,14 +191,14 @@ test("audio appears later: the master playlist grows an audio group on a LATER r
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
 
     const firstMaster = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-1");
-    assert.ok(firstMaster);
-    const firstText = await firstMaster.text();
+    assert.equal(firstMaster.kind, "ready");
+    const firstText = await firstMaster.response.text();
     assert.doesNotMatch(firstText, /EXT-X-MEDIA:TYPE=AUDIO/, "no stage source has spoken yet");
 
     withAudio = true; // the session's state.json now reports an audio track
     const secondMaster = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-2");
-    assert.ok(secondMaster);
-    const secondText = await secondMaster.text();
+    assert.equal(secondMaster.kind, "ready");
+    const secondText = await secondMaster.response.text();
     assert.match(secondText, /EXT-X-MEDIA:TYPE=AUDIO/, "the audio group must appear once state.json reports one");
     assert.match(secondText, /CODECS="avc1\.640028,mp4a\.40\.2"/);
 
@@ -227,7 +227,7 @@ test("N concurrent master requests for the same session produce exactly one stat
     );
     assert.equal(results.length, N);
     for (const r of results) {
-      assert.ok(r, "every concurrent master request should still resolve to a playlist");
+      assert.equal(r.kind, "ready", "every concurrent master request should still resolve to a playlist");
     }
     assert.equal(stub.calls.state, 1, `expected exactly 1 state.json fetch for ${N} concurrent joins, got ${stub.calls.state}`);
     assert.equal(stub.calls.init, 1, `expected exactly 1 init.mp4 fetch for ${N} concurrent joins, got ${stub.calls.init}`);
@@ -276,25 +276,31 @@ test("a request for the ll-audio rung 404s cleanly once audio genuinely does not
   }
 });
 
-test("a session with no LL state at all (plain 404) makes the master route return null, not throw", async () => {
+test("a session whose state.json is not written YET answers `not-ready: no-state`, never a conventional fallback", async () => {
+  // THE 2026-09-15 BUG, pinned. A 404 on state.json used to be read as
+  // "this party is conventional" and resolved to `null`, which `index.ts`
+  // turned into the API's conventional master. For an LL session — and by
+  // the time this method is called, `requestsLlMode` has already said the
+  // request IS for one — that is a ladder nothing is writing. The only
+  // honest answer is "not yet", with a reason.
   const original = globalThis.fetch;
   globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
   try {
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
     const result = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
-    assert.equal(result, null);
+    assert.deepEqual(result, { kind: "not-ready", reason: "no-state" });
   } finally {
     globalThis.fetch = original;
   }
 });
 
-test("a conventional session's master request does not wait out the full origin timeout -- MASTER_PROBE_TIMEOUT_MS bounds it", async () => {
+test("a slow origin does not hold an LL master request out to the full origin timeout -- MASTER_PROBE_TIMEOUT_MS bounds it", async () => {
   // A generously long origin timeout (5000ms) that would normally govern
-  // this fetch -- state.json itself answers 404 (no LL session), but only
-  // after a delay well PAST the master route's own short probe deadline.
-  // Without the probe bound, `fetchMultivariantPlaylist` would wait the
-  // full STATE_DELAY_MS before falling back to the API; with it, THIS
-  // request must come back quickly regardless.
+  // this fetch -- state.json itself answers 404, but only after a delay
+  // well PAST the master route's own short probe deadline. Without the
+  // probe bound, `fetchMultivariantPlaylist` would wait the full
+  // STATE_DELAY_MS before answering; with it, THIS request must come back
+  // quickly and tell the player to retry.
   const STATE_DELAY_MS = 2_500; // comfortably past the module's MASTER_PROBE_TIMEOUT_MS (1_500ms), well inside the 5000ms origin timeout below
   const original = globalThis.fetch;
   let calls = 0;
@@ -308,7 +314,7 @@ test("a conventional session's master request does not wait out the full origin 
     const startedAt = Date.now();
     const result = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
     const elapsedMs = Date.now() - startedAt;
-    assert.equal(result, null, "a conventional (no-LL) session must still fall back to the API");
+    assert.deepEqual(result, { kind: "not-ready", reason: "probe-timeout" });
     assert.ok(
       elapsedMs < STATE_DELAY_MS,
       `expected the master probe's own short deadline to win before the ${STATE_DELAY_MS}ms origin delay (got ${elapsedMs}ms)`,
@@ -319,7 +325,11 @@ test("a conventional session's master request does not wait out the full origin 
   }
 });
 
-test("a negative probe is cached: a second master request for the same conventional session skips the origin entirely", async () => {
+test("a not-ready answer is memoed: a second master request inside the TTL skips the origin, and the memo expires", async () => {
+  // The bound that keeps five hundred people joining a WARMING party from
+  // being five hundred state.json fetches a second against the remux. One
+  // second, not five: see `NOT_READY_CACHE_TTL_MS`'s doc comment for why a
+  // longer memo would add that long to the start of every LL party.
   const original = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => {
@@ -329,18 +339,25 @@ test("a negative probe is cached: a second master request for the same conventio
   try {
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
     const first = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-1");
-    assert.equal(first, null);
+    assert.deepEqual(first, { kind: "not-ready", reason: "no-state" });
     assert.equal(calls, 1, "the first request has to ask the origin");
 
     const second = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-2");
-    assert.equal(second, null);
-    assert.equal(calls, 1, "a second request within the cache TTL must not ask the origin again");
+    assert.deepEqual(second, { kind: "not-ready", reason: "no-state" });
+    assert.equal(calls, 1, "a second request within the memo TTL must not ask the origin again");
 
     // A DIFFERENT session (channel) is unaffected by the first session's
-    // cached negative -- the cache key includes channelId/startedAt.
+    // memo -- the key includes channelId/startedAt.
     const otherChannel = await origin.fetchMultivariantPlaylist("chan_other", STARTED_AT, "token-3");
-    assert.equal(otherChannel, null);
+    assert.deepEqual(otherChannel, { kind: "not-ready", reason: "no-state" });
     assert.equal(calls, 2, "a different session must still be probed on its own");
+
+    // AND IT LETS GO. A memo that outlived the warm-up would be the bug
+    // this whole change is about, one layer down: the session becomes
+    // ready and nobody notices.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-4");
+    assert.equal(calls, 3, "past the TTL the origin must be asked again");
   } finally {
     globalThis.fetch = original;
   }
@@ -353,9 +370,9 @@ test("a stalled body is bounded by the timeout, not just the headers wait", asyn
   // caller's `.arrayBuffer()`/`.json()` read afterward had no deadline at
   // all -- this master request would have hung for the full body delay
   // (or forever, against a genuinely stuck connection) instead of failing
-  // fast. `fetchMultivariantPlaylist` swallows the resulting error and
-  // resolves to `null` (see this file's "FAILS TOWARD..." doc comment), so
-  // what this test can observe is TIMING: it must come back well inside the
+  // fast. `fetchMultivariantPlaylist` turns the resulting error into a
+  // `not-ready` (see this file's "FAILS TOWARD..." doc comment), so what
+  // this test can observe is TIMING: it must come back well inside the
   // stall, not after it.
   const TIMEOUT_MS = 50;
   const BODY_STALL_MS = 2000;
@@ -369,7 +386,7 @@ test("a stalled body is bounded by the timeout, not just the headers wait", asyn
     const startedAt = Date.now();
     const result = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
     const elapsedMs = Date.now() - startedAt;
-    assert.equal(result, null, "a stalled remux body must fail the master request, not hang it");
+    assert.equal(result.kind, "not-ready", "a stalled remux body must fail the master request, not hang it");
     assert.ok(
       elapsedMs < BODY_STALL_MS / 2,
       `expected the abort to bound the body read well under the ${BODY_STALL_MS}ms stall (got ${elapsedMs}ms)`,
@@ -436,9 +453,9 @@ test("the origin key is never forwarded to a viewer: the rendered response carri
   try {
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000, "remux-shared-secret");
     const master = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token");
-    assert.ok(master);
-    assert.equal(master.headers.get("X-Pqp-Origin-Key"), null);
-    assert.equal(master.headers.get("Content-Type"), "application/vnd.apple.mpegurl; charset=utf-8");
+    assert.equal(master.kind, "ready");
+    assert.equal(master.response.headers.get("X-Pqp-Origin-Key"), null);
+    assert.equal(master.response.headers.get("Content-Type"), "application/vnd.apple.mpegurl; charset=utf-8");
 
     const rendition = await origin.fetchPlaylist({
       channelId: CHANNEL_ID,

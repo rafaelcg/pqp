@@ -1,6 +1,10 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { remuxControlSignaturePayload } from "@pqp/shared";
+import {
+  LIVE_HLS_MODE_LL,
+  LIVE_HLS_MODE_PARAM,
+  remuxControlSignaturePayload,
+} from "@pqp/shared";
 
 const logEvent = vi.hoisted(() => vi.fn());
 vi.mock("../lib/log.js", () => ({ logEvent }));
@@ -41,17 +45,38 @@ const SERVER = "00000000-0000-4000-8000-0000000000ee";
 const OTHER_SERVER = "00000000-0000-4000-8000-0000000000ff";
 const CONTROL_URL = "https://egress.example.test:8443";
 const ORIGIN_URL = "https://hls-origin.example.test";
+/**
+ * `LIVE_HLS_PLAYLIST_BASE_URL`. Not decoration: the edge Worker is the ONLY
+ * thing that can render an LL playlist (this API's own proxy answers "not
+ * found" for a `mode = 'll'` row, by design), so `resolveHlsMode` refuses
+ * `ll` without one -- see `llPlaylistFrontConfigured`.
+ */
+const EDGE_BASE_URL = "https://hls.example.test";
 const SECRET = "test-remux-secret";
 
 function enableLL() {
   process.env.LIVE_HLS_LL = "true";
+  process.env.LIVE_HLS_PLAYLIST_BASE_URL = EDGE_BASE_URL;
   process.env.LIVE_HLS_REMUX_CONTROL_URL = CONTROL_URL;
   process.env.LIVE_HLS_REMUX_CONTROL_SECRET = SECRET;
   process.env.LIVE_HLS_REMUX_ORIGIN_URL = ORIGIN_URL;
 }
 
+/**
+ * The flag AND an edge playlist front. Both are required before `ll` is ever
+ * on the table (`llPlaylistFrontConfigured`): the edge Worker is the only
+ * thing that can render an LL playlist, so an API with no edge host picking
+ * `ll` would mean a party live, correct in every log, and black for
+ * everybody watching.
+ */
+function enableMode() {
+  process.env.LIVE_HLS_LL = "true";
+  process.env.LIVE_HLS_PLAYLIST_BASE_URL = EDGE_BASE_URL;
+}
+
 function disableLL() {
   delete process.env.LIVE_HLS_LL;
+  delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
   delete process.env.LIVE_HLS_LL_ALLOWLIST;
   delete process.env.LIVE_HLS_REMUX_CONTROL_URL;
   delete process.env.LIVE_HLS_REMUX_CONTROL_SECRET;
@@ -336,32 +361,32 @@ describe("resolveHlsMode: flag off means conventional, whatever was asked", () =
   });
 
   it("stays conventional when the flag is on but nothing asked for it", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     expect(resolveHlsMode({ serverId: SERVER, requestedMode: false })).toBe("conventional");
   });
 
   it("is ll when the flag is on, requested, and there is no allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     expect(isLiveHlsLLEnabled()).toBe(true);
     expect(liveHlsLLAllowlist()).toBeNull();
     expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("ll");
   });
 
   it("is ll for a server on the allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     process.env.LIVE_HLS_LL_ALLOWLIST = `${OTHER_SERVER},${SERVER}`;
     expect(liveHlsLLAllowlist()).toEqual(new Set([OTHER_SERVER, SERVER]));
     expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("ll");
   });
 
   it("stays conventional for a server NOT on the allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     process.env.LIVE_HLS_LL_ALLOWLIST = OTHER_SERVER;
     expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("conventional");
   });
 
   it("stays conventional with no server id and an allowlist set", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
     expect(resolveHlsMode({ serverId: null, requestedMode: true })).toBe("conventional");
   });
@@ -374,7 +399,7 @@ describe("liveHlsLLAvailable: the client's gate for showing the switch at all", 
   });
 
   it("is true for any server when the flag is on and there is no allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     expect(liveHlsLLAvailable(SERVER)).toBe(true);
     expect(liveHlsLLAvailable(OTHER_SERVER)).toBe(true);
     // The deployment-wide answer, asked before a client knows its server:
@@ -384,7 +409,7 @@ describe("liveHlsLLAvailable: the client's gate for showing the switch at all", 
   });
 
   it("is true only for a server on the allowlist", () => {
-    process.env.LIVE_HLS_LL = "true";
+    enableMode();
     process.env.LIVE_HLS_LL_ALLOWLIST = SERVER;
     expect(liveHlsLLAvailable(SERVER)).toBe(true);
     expect(liveHlsLLAvailable(OTHER_SERVER)).toBe(false);
@@ -651,7 +676,62 @@ describe("the LL playlist URL never names the origin host (item 1)", () => {
     await adoptLlHlsSessions();
 
     expect(llStreamFor(CHANNEL)?.hlsUrl).not.toMatch(/^https?:\/\//);
-    expect(llStreamFor(CHANNEL)?.hlsUrl).toBe(`/api/voice/hls-playlist/${CHANNEL}/1725000000000`);
+    expect(llStreamFor(CHANNEL)?.hlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/1725000000000?${LIVE_HLS_MODE_PARAM}=${LIVE_HLS_MODE_LL}`,
+    );
+  });
+});
+
+describe("the delivery mode is stated on the wire, not inferred at the edge", () => {
+  /**
+   * THE 2026-09-15 FAILURE, PINNED AT ITS SOURCE. Low latency was enabled in
+   * production four times and no viewer was ever handed the low-latency
+   * stream: the edge Worker decided the mode by probing the remux for
+   * `state.json`, a session 300 ms old had none, and it quietly answered
+   * with the conventional ladder's master -- for a party whose conventional
+   * ladder the API had deliberately not started. The fix is that the API,
+   * which CHOSE the mode, says so in the URL it hands out.
+   */
+  it("an LL session's hlsUrl carries the mode marker, and says `ll` beside it", async () => {
+    enableLL();
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(stream?.mode).toBe("ll");
+    expect(stream?.hlsUrl).toContain(`${LIVE_HLS_MODE_PARAM}=${LIVE_HLS_MODE_LL}`);
+    // The marker rides on a URL `stampViewerStream` then appends `?t=` to
+    // with an `&`, so the whole thing has to parse as one query string.
+    const url = new URL(`https://api.example.test${stream!.hlsUrl}`);
+    expect(url.searchParams.get(LIVE_HLS_MODE_PARAM)).toBe(LIVE_HLS_MODE_LL);
+  });
+
+  it("states the part target the session actually writes at", async () => {
+    enableLL();
+    process.env.LIVE_HLS_REMUX_PART_MS = "320";
+    const db = createFakeDb();
+    query.mockImplementation(db.queryImpl);
+    const server = createFakeRemuxServer();
+    setHlsRemuxTestHooks({ fetch: server.fetchImpl });
+
+    const stream = await reconcileLlHlsNow(CHANNEL, "peer-1");
+
+    expect(stream?.partTargetMs).toBe(320);
+  });
+
+  it("refuses `ll` outright when there is no edge front to render it", () => {
+    // `LIVE_HLS_LL` on, the party asked, no allowlist -- and no
+    // `LIVE_HLS_PLAYLIST_BASE_URL`. The only renderer of an LL playlist is
+    // the edge Worker; this API's own proxy answers "not found" for a
+    // `mode = 'll'` row. Picking the mode anyway is a party that is live,
+    // correct in every log, and black for everybody watching.
+    process.env.LIVE_HLS_LL = "true";
+    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    expect(resolveHlsMode({ serverId: SERVER, requestedMode: true })).toBe("conventional");
+    expect(liveHlsLLAvailable(SERVER)).toBe(false);
   });
 });
 

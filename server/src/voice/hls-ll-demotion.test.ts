@@ -9,6 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { LIVE_HLS_MODE_LL, LIVE_HLS_MODE_PARAM } from "@pqp/shared";
 
 /**
  * THE FIRST REAL LL-HLS PARTY IN PRODUCTION, AND THE THREE THINGS IT BROKE.
@@ -62,6 +63,7 @@ const {
   llDemotedRecently,
   llHasRoom,
   llHlsActivity,
+  llStreamFor,
   reconcileLlHlsNow,
   requestedHlsModeForChannel,
   resetHlsRemuxForTests,
@@ -329,6 +331,34 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     );
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0]!.ended_at).not.toBeNull();
+  });
+
+  it("(1a-ter) what the AUDIENCE is handed changes: an LL-marked master, then nothing from this driver", async () => {
+    // The demotion contract's LAST mile, and the one that was still missing
+    // on 2026-09-15. Ending the row and clearing the request is bookkeeping;
+    // what a viewer's player does depends entirely on the frame reaching
+    // them. So: while the session is live the URL it is handed IS an LL
+    // master (`?mode=ll` — the edge Worker serves the LL playlist because
+    // the request says so), it states its part target, and once the box has
+    // given up this driver hands out nothing at all, which is what lets
+    // `hls-egress.ts` start the conventional ladder and `pushLiveHls`
+    // publish a frame whose `mode` has changed (`liveHlsFrameChanged`).
+    const stream = await reconcileLlHlsNow(channelA, "peer-1");
+    expect(stream?.mode).toBe("ll");
+    expect(stream?.partTargetMs).toBeGreaterThan(0);
+    const url = new URL(`https://api.example.test${stream!.hlsUrl}`);
+    expect(url.searchParams.get(LIVE_HLS_MODE_PARAM)).toBe(LIVE_HLS_MODE_LL);
+    expect(llStreamFor(channelA)?.hlsUrl).toBe(stream!.hlsUrl);
+
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "part-stuck",
+    });
+    await sweepLlDemotions();
+
+    expect(llStreamFor(channelA)).toBeNull();
   });
 
   it("(1a-bis) treats a session the box no longer holds the same way, healing the in-memory map", async () => {

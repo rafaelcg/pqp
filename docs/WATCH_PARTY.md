@@ -1571,8 +1571,26 @@ option, but it only ever reaches the server at the next "Ir ao vivo" — the one
 moment `requestedHlsModeForChannel` is read (`server/src/voice/hls-remux.ts`)
 — so flipping it on a party that is already live shows its own note ("vale a
 partir da próxima transmissão") instead of silently doing nothing. The server
-still has the final word: off deployment-wide, or this server not on the
-allowlist, downgrades the request to conventional without complaint.
+still has the final word: off deployment-wide, this server not on the
+allowlist, or **no `LIVE_HLS_PLAYLIST_BASE_URL`** — the edge Worker is the
+only thing that renders an LL playlist, so an API with no edge front never
+picks the mode at all — downgrades the request to conventional without
+complaint.
+
+**The delivery mode is stated on the wire, not inferred.** An `ll` session's
+`hlsUrl` carries `?mode=ll` (`LIVE_HLS_MODE_PARAM`,
+`packages/shared/src/live-hls.ts`) and the stream frame carries `mode: "ll"`
+beside it, plus `partTargetMs` so the player sizes its hold-back to the
+cadence the remux actually writes at. The Worker serves the LL master because
+the request says so; when the remux has not written its first state yet it
+answers `503 Retry-After: 1` and the player comes back, rather than being
+handed the conventional ladder's master for a ladder nothing is writing.
+That last sentence is the whole of 2026-09-15: low latency was enabled four
+times, the Worker probed for state, a session 300 ms old had none, and every
+viewer got a conventional master and then "A transmissão caiu". A demotion
+(§"A low-latency session the remux box gives up on") reaches viewers as a
+fresh frame with the conventional URL and mode, because `liveHlsFrameChanged`
+(`server/src/ws/voice.ts`) counts `mode` as a change.
 
 ## What the stream carries, and what it does not
 
