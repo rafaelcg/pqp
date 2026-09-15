@@ -156,7 +156,25 @@ interface Instance {
   token: TokenModule;
   /** This graph's own `rooms` map. Empty on the machine not transcoding. */
   egress: Map<string, LiveHlsStream>;
+  /**
+   * This graph's own `llRooms` map (`hls-remux.ts`), the second driver. Kept
+   * apart from `egress` for the same reason production keeps them apart: a
+   * reader that only knows about one of them is exactly the 2026-09-15 bug.
+   */
+  ll: Map<string, LiveHlsStream>;
+  /** What `setLiveHlsChangeListener` registered, so a test can be the monitor. */
+  changeListeners: ((channelId: string, reason: string) => void)[];
 }
+
+/**
+ * Which delivery mode the faked reconcile hands back, and the `startedAt` an
+ * LL session is pinned to so a test can plant the matching `hls_sessions`
+ * row. Shared by both graphs: it describes the party, not the machine.
+ */
+const llControl: { mode: "conventional" | "ll"; startedAt: number } = {
+  mode: "conventional",
+  startedAt: 0,
+};
 
 interface Frame {
   type: string;
@@ -190,13 +208,34 @@ async function bootInstance(connected = true): Promise<Instance> {
    * row for it to find.
    */
   const egress = new Map<string, LiveHlsStream>();
+  const ll = new Map<string, LiveHlsStream>();
+  const changeListeners: ((channelId: string, reason: string) => void)[] = [];
+  // THE SECOND DRIVER, PER GRAPH, for the same reason as the first. `voice.ts`
+  // reads `llStreamFor` and nothing else out of this module, and the real one
+  // answers from a process-wide `llRooms`; spread the rest so `hls-egress.ts`
+  // (imported for real above) still finds every export it names.
+  vi.doMock("../voice/hls-remux.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../voice/hls-remux.js")>();
+    return {
+      ...actual,
+      llStreamFor: (channelId: string) => ll.get(channelId) ?? null,
+    };
+  });
   vi.doMock("../voice/hls-egress.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../voice/hls-egress.js")>();
     return {
       ...actual,
       isLiveHlsEnabled: () => true,
       isLiveHlsEnabledForServer: async () => true,
-      setLiveHlsChangeListener: () => {},
+      setLiveHlsChangeListener: (
+        listener: (channelId: string, reason: string) => void,
+      ) => {
+        // Captured rather than dropped: the egress monitor's
+        // `notifyChanged(channelId, "ll-demoted")` is how a demotion reaches
+        // `pushLiveHls` in production, and the demotion test has to be able
+        // to be the monitor.
+        changeListeners.push(listener);
+      },
       setLiveHlsSfuLoadReader: () => {},
       liveHlsStreamFor: (channelId: string) => egress.get(channelId) ?? null,
       reconcileLiveHls: async (
@@ -205,8 +244,30 @@ async function bootInstance(connected = true): Promise<Instance> {
       ) => {
         if (!presenterPeerId) {
           egress.delete(channelId);
+          ll.delete(channelId);
           return null;
         }
+        if (llControl.mode === "ll") {
+          // The mode branch of `reconcileLiveHlsNow`: one driver at a time.
+          egress.delete(channelId);
+          const live = ll.get(channelId);
+          if (live?.presenterPeerId === presenterPeerId) {
+            return live;
+          }
+          const startedAt = llControl.startedAt || Date.now();
+          const stream: LiveHlsStream = {
+            hlsUrl: `/api/voice/hls-playlist/${channelId}/${startedAt}?mode=ll`,
+            startedAt,
+            presenterPeerId,
+            mode: "ll",
+            partTargetMs: 500,
+            delaySeconds: 3,
+          };
+          ll.set(channelId, stream);
+          return stream;
+        }
+        // `if (llHasRoom(channelId)) await stopLlSession(channelId, "conventional-mode-selected")`.
+        ll.delete(channelId);
         const current = egress.get(channelId);
         if (current?.presenterPeerId === presenterPeerId) {
           return current;
@@ -233,7 +294,18 @@ async function bootInstance(connected = true): Promise<Instance> {
   if (connected) {
     bus.setBusTransport(bus.createMemoryTransport(hub));
   }
-  const instance = { bus, voice, sockets, registry, db, events, token, egress };
+  const instance = {
+    bus,
+    voice,
+    sockets,
+    registry,
+    db,
+    events,
+    token,
+    egress,
+    ll,
+    changeListeners,
+  };
   booted.push(instance);
   return instance;
 }
@@ -354,6 +426,8 @@ describeDb("watch party stream and state across two instances", () => {
     accessGate.wait = null;
     accessGate.calls = [];
     accessGate.blockFrom = 0;
+    llControl.mode = "conventional";
+    llControl.startedAt = 0;
     vi.spyOn(console, "log").mockImplementation(() => {});
     await pools[0]!
       .getPool()
@@ -846,6 +920,253 @@ describeDb("watch party stream and state across two instances", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(frames(sidebarOnB, "watch-party-update")).toHaveLength(0);
       expect(onTheWire).toEqual([]);
+    });
+  });
+
+  /**
+   * A LOW-LATENCY SESSION ENDING, WHICH UNTIL 2026-09-15 NOBODY WAS TOLD ABOUT.
+   *
+   * Channel `d5559e70`'s LL session ran 18:14:47 to 18:33:11 UTC and ended
+   * through the ordinary stop path. An hour later, at 19:36, the host's own
+   * freshly loaded page was still being handed that dead session in a
+   * `channel-live` frame every thirty seconds, on a machine that had never
+   * heard a stop and on the one that had made it. The edge Worker answered
+   * 503 "no-state" for the session (correctly), the player sat on "A
+   * transmissão travou, reconectando", and the host could not get past the
+   * watch surface to start a new party.
+   *
+   * The cause was one read: `pushLiveHls` took `prev` from
+   * `liveHlsStreamFor`, which is the CONVENTIONAL ladder's map and nothing
+   * else, so on the push that ended an LL session `prev` and `next` were both
+   * null, `liveHlsFrameChanged` said nothing had changed, and the entire
+   * fan-out under it — the per-peer `voice-stream`, the `channel-live` with
+   * `ended`, `hlsAudience.setStream(null)` (which is what stops the keyframe
+   * and the token re-mint), and `publishChannelLive` on the bus — was skipped.
+   */
+  describe("a low-latency session ending", () => {
+    /** A real `channels` row, because `hls_sessions.channel_id` has a foreign key. */
+    async function plantChannel(): Promise<string> {
+      vi.resetModules();
+      const db = (await import("../db.js")) as DbModule;
+      pools.push(db);
+      const { upsertUser } = await import("../services/users.js");
+      const { createServer, createChannel } = await import("../services/servers.js");
+      const host = await upsertUser({
+        clerkId: `clerk_${randomUUID()}`,
+        displayName: "Host",
+        avatarUrl: null,
+      });
+      const { server } = await createServer("Cinema", host.id);
+      const channel = await createChannel(server.id, "sala", "watch_party");
+      return channel.id;
+    }
+
+    /** The row `recordLlSessionStarted` would have written, open or already ended. */
+    async function plantLlRow(
+      channelId: string,
+      startedAt: number,
+      ended: boolean,
+    ): Promise<void> {
+      await pools[0]!.getPool().query(
+        `INSERT INTO hls_sessions
+           (channel_id, object_prefix, started_at, ended_at, mode,
+            remux_session_id, presenter_peer_id, part_target_ms)
+         VALUES ($1, $2, to_timestamp($3 / 1000.0),
+                 CASE WHEN $4 THEN NOW() ELSE NULL END,
+                 'll', $5, 'peer-1', 500)`,
+        [
+          channelId,
+          `live/${channelId}/${startedAt}-ll`,
+          startedAt,
+          ended,
+          randomUUID(),
+        ],
+      );
+    }
+
+    /** Let the fire-and-forget pushes and bus hops settle. */
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 20; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+
+    function logLines(event: string): string[] {
+      const spy = console.log as unknown as { mock: { calls: unknown[][] } };
+      return spy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes(event));
+    }
+
+    it("a stop on A clears the relayed stream on B, and B answers stream: null", async () => {
+      const channel = await plantChannel();
+      llControl.mode = "ll";
+      llControl.startedAt = Date.now();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnA = watcher(a);
+      const sidebarOnB = watcher(b);
+
+      const host = await join(a, randomUUID(), channel);
+      await setSharing(a, host, true);
+
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 1,
+        "the LL stream on B",
+      );
+      expect(
+        (frames(sidebarOnB, "channel-live")[0]!.stream as LiveHlsStream).mode,
+      ).toBe("ll");
+      // B holds it in `hlsAudience` and nowhere else: its own drivers are empty.
+      expect(b.egress.size).toBe(0);
+      expect(b.ll.size).toBe(0);
+
+      await setSharing(a, host, false);
+
+      // A's own audience hears the stop...
+      await waitFor(
+        () => frames(sidebarOnA, "channel-live").length === 2,
+        "the stop on A",
+      );
+      expect(frames(sidebarOnA, "channel-live")[1]).toMatchObject({
+        stream: null,
+        ended: true,
+      });
+      // ...and so does B's, over the bus.
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 2,
+        "the stop on B",
+      );
+      expect(frames(sidebarOnB, "channel-live")[1]).toMatchObject({
+        stream: null,
+        ended: true,
+      });
+
+      // And the answer `GET /api/channels/:id/live` gives is the same on both.
+      expect(await a.voice.getChannelLiveState(channel)).toMatchObject({
+        stream: null,
+        known: true,
+      });
+      expect(await b.voice.getChannelLiveState(channel)).toMatchObject({
+        stream: null,
+        known: true,
+      });
+
+      // One line, saying what happened and to how many sockets.
+      const cleared = logLines("voice.hlsLlStreamCleared");
+      expect(cleared).toHaveLength(1);
+      expect(cleared[0]).toContain("reason=no-share");
+      expect(cleared[0]).toMatch(/sockets=[1-9]/);
+    });
+
+    it("a cached LL stream whose session row has ended is never restated", async () => {
+      // The re-mint, the thirty-second audience keyframe and `GET /live` all
+      // ask `resolveChannelStream`, so this is the one gate that has to be
+      // able to say "that session is over" without a relay to tell it.
+      const channel = await plantChannel();
+      llControl.mode = "ll";
+      llControl.startedAt = Date.now();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = watcher(b);
+
+      const host = await join(a, randomUUID(), channel);
+      await setSharing(a, host, true);
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 1,
+        "the LL stream on B",
+      );
+
+      // The session ended on the box and the row was closed, and the stop
+      // frame never reached B: the bus is best-effort by design.
+      await plantLlRow(channel, llControl.startedAt, true);
+
+      expect(await b.voice.getChannelLiveState(channel)).toMatchObject({
+        stream: null,
+        known: true,
+      });
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 2,
+        "the clear on B",
+      );
+      expect(frames(sidebarOnB, "channel-live")[1]).toMatchObject({
+        stream: null,
+        ended: true,
+      });
+      expect(logLines("voice.hlsLlStreamCleared")[0]).toContain("reason=row-ended");
+    });
+
+    it("a cached LL stream whose session row is still open is left alone", async () => {
+      const channel = await plantChannel();
+      llControl.mode = "ll";
+      llControl.startedAt = Date.now();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = watcher(b);
+
+      const host = await join(a, randomUUID(), channel);
+      await setSharing(a, host, true);
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 1,
+        "the LL stream on B",
+      );
+      await plantLlRow(channel, llControl.startedAt, false);
+
+      const live = await b.voice.getChannelLiveState(channel);
+      expect(live.stream).not.toBeNull();
+      expect(live.stream?.mode).toBe("ll");
+      await settle();
+      // Nothing said, because nothing changed.
+      expect(frames(sidebarOnB, "channel-live")).toHaveLength(1);
+      expect(logLines("voice.hlsLlStreamCleared")).toHaveLength(0);
+    });
+
+    it("a demotion replaces the LL stream with the conventional one in one fan-out", async () => {
+      const channel = await plantChannel();
+      llControl.mode = "ll";
+      llControl.startedAt = Date.now();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = watcher(b);
+
+      const host = await join(a, randomUUID(), channel);
+      await setSharing(a, host, true);
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 1,
+        "the LL stream on B",
+      );
+      expect(a.ll.has(channel)).toBe(true);
+
+      // The box gave up on the session: `sweepLlDemotions` returned the
+      // channel and the egress monitor called `notifyChanged`, which is the
+      // production path into `pushLiveHls`. The reconcile now picks the
+      // conventional ladder and releases the LL room on its way past.
+      llControl.mode = "conventional";
+      expect(a.changeListeners.length).toBeGreaterThan(0);
+      for (const listener of a.changeListeners) {
+        listener(channel, "ll-demoted");
+      }
+
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 2,
+        "the conventional ladder on B",
+      );
+      await settle();
+      // ONE frame, not a stop followed by a start: a demotion is a
+      // replacement, and two frames is a rebuffer plus a moment of "A
+      // transmissão caiu" for everybody watching.
+      expect(frames(sidebarOnB, "channel-live")).toHaveLength(2);
+      const swapped = frames(sidebarOnB, "channel-live")[1]!;
+      expect(swapped.ended).toBeUndefined();
+      const stream = swapped.stream as LiveHlsStream;
+      expect(stream.mode).toBeUndefined();
+      expect(stream.hlsUrl).not.toContain("mode=ll");
+      expect(a.ll.has(channel)).toBe(false);
+      expect(a.egress.has(channel)).toBe(true);
+
+      const cleared = logLines("voice.hlsLlStreamCleared");
+      expect(cleared).toHaveLength(1);
+      expect(cleared[0]).toContain("reason=replaced");
     });
   });
 });
