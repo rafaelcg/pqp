@@ -420,6 +420,13 @@ a prolonged attribution failure is exactly the condition that produces an
 unattributed demotion in the first place, and an expiry shorter than the
 repair reopens the window mid-failure.
 
+Both memos are bounded in constant time rather than by sweeping on the write:
+a write is `rememberBounded` (three Map operations plus, at the cap, a single
+eviction of the least recently written key), and the full sweep runs only on
+the health tick and a lazy unref'd timer. A threshold-triggered sweep on the
+write path is the same quadratic shape one threshold further out, which is
+what two rounds of Farol on this change were about.
+
 **And the decision says why.** `resolveHlsModeForChannel` (`hls-remux.ts`) is
 the whole mode branch in one place — the party's request, the party-scoped
 demotion veto, the allowlist — and logs `voice.hlsModeResolved` with

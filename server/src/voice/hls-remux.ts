@@ -341,10 +341,7 @@ const llDemotedAt = new Map<string, number>();
  * ends takes its entry with it within five minutes either way.
  */
 export function noteLlDemotion(partySessionId: string, now = Date.now()): void {
-  if (llDemotedAt.size > MEMO_PRUNE_THRESHOLD) {
-    pruneLlMemos(now);
-  }
-  llDemotedAt.set(partySessionId, now);
+  rememberBounded(llDemotedAt, partySessionId, now, MAX_LL_DEMOTION_MEMOS);
 }
 
 /**
@@ -363,14 +360,63 @@ export function noteLlDemotion(partySessionId: string, now = Date.now()): void {
  * control URL is missing" is a deployment that still resolves modes, still
  * fills `lastModeResolved`, and used to get no pruning at all (a third).
  *
- * The write paths keep an amortised backstop for the case where the monitor
- * is not running at all: they sweep only once a map is past
- * `MEMO_PRUNE_THRESHOLD`, so the common write stays O(1) and no single
- * caller can be made to pay for every other channel.
+ * THE WRITE PATHS NEVER SCAN, NOT EVEN PAST A THRESHOLD. A first version
+ * swept from the write once a map was large, which is the same quadratic
+ * shape one threshold further out: with the map big, every demotion and
+ * every mode line walks every entry (a Farol finding on this PR). A write is
+ * `rememberBounded`, which is three constant-time Map operations and a
+ * single eviction of the least recently written key when the cap is hit --
+ * insertion order IS the eviction order, which is why a repeat write deletes
+ * before it sets. So memory is bounded whether or not anything ever sweeps,
+ * and nothing on the reconcile path is ever O(entries).
+ *
+ * A process with no monitor (the flag on, live HLS off, a test) gets a lazy
+ * unref'd timer on its first insert, so the maps still empty on a clock
+ * rather than merely staying under their cap.
  */
-const MEMO_PRUNE_THRESHOLD = 256;
+const MAX_LL_DEMOTION_MEMOS = 1024;
+const MAX_MODE_DECISION_MEMOS = 1024;
+const MEMO_PRUNE_INTERVAL_MS = 60_000;
+
+let memoPruneTimer: ReturnType<typeof setInterval> | null = null;
+/** Only a test reads it: what proves the write path does not walk the map. */
+let memoEntriesScanned = 0;
+
+function ensureMemoPruneTimer(): void {
+  if (memoPruneTimer) {
+    return;
+  }
+  memoPruneTimer = setInterval(() => {
+    pruneLlMemos(Date.now());
+  }, MEMO_PRUNE_INTERVAL_MS);
+  memoPruneTimer.unref?.();
+}
+
+/**
+ * Constant time, always. The delete before the set is not redundant: a Map
+ * keeps its original insertion position on an overwrite, so without it the
+ * eviction below would drop the key that has been written most often rather
+ * than the one written longest ago.
+ */
+function rememberBounded<V>(
+  map: Map<string, V>,
+  key: string,
+  value: V,
+  cap: number,
+): void {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > cap) {
+    const oldest = map.keys().next();
+    if (!oldest.done) {
+      map.delete(oldest.value);
+    }
+  }
+  ensureMemoPruneTimer();
+}
 
 function pruneLlMemos(now: number): void {
+  memoEntriesScanned += llDemotedAt.size + lastModeResolved.size;
   for (const [id, at] of llDemotedAt) {
     if (now - at > LL_DEMOTION_MEMO_MS) {
       llDemotedAt.delete(id);
@@ -564,14 +610,16 @@ function logHlsModeResolved(fields: {
   if (last && last.key === key && now - last.at < MODE_RESOLVED_LOG_WINDOW_MS) {
     return;
   }
-  // No unconditional sweep here: one channel's log line must not walk every
-  // other channel's entry (a Farol finding on this PR). `pruneLlMemos` does
-  // it on the health tick, and past the threshold this amortised backstop
-  // covers a process whose monitor never started.
-  if (lastModeResolved.size > MEMO_PRUNE_THRESHOLD) {
-    pruneLlMemos(now);
-  }
-  lastModeResolved.set(fields.channelId, { key, at: now });
+  // No sweep here at ANY size: one channel's log line must never walk every
+  // other channel's entry (a Farol finding on this PR, twice). The cap in
+  // `rememberBounded` bounds the map in constant time; `pruneLlMemos` empties
+  // it on the health tick or the lazy timer.
+  rememberBounded(
+    lastModeResolved,
+    fields.channelId,
+    { key, at: now },
+    MAX_MODE_DECISION_MEMOS,
+  );
   logEvent("voice.hlsModeResolved", fields);
 }
 
@@ -660,10 +708,13 @@ export function pendingLlDemotionCount(): number {
 export function llMemoSizesForTests(): {
   demotedParties: number;
   modeDecisions: number;
+  /** Entries any full sweep has walked since the last reset. */
+  entriesScanned: number;
 } {
   return {
     demotedParties: llDemotedAt.size,
     modeDecisions: lastModeResolved.size,
+    entriesScanned: memoEntriesScanned,
   };
 }
 
@@ -2317,6 +2368,11 @@ export function resetHlsRemuxForTests(): void {
   lastLookupFailureLoggedAt.clear();
   lastModeResolved.clear();
   llDemotedAt.clear();
+  if (memoPruneTimer) {
+    clearInterval(memoPruneTimer);
+    memoPruneTimer = null;
+  }
+  memoEntriesScanned = 0;
   pendingDemotions.clear();
   llStartFailures = 0;
   llStopFailures = 0;

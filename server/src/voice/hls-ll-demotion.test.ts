@@ -691,7 +691,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
     noteLlDemotion(partyId);
     await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
-    expect(llMemoSizesForTests()).toEqual({
+    expect(llMemoSizesForTests()).toMatchObject({
       demotedParties: 1,
       modeDecisions: 1,
     });
@@ -705,10 +705,39 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     // GONE, not merely ignored. Every other seam reads an expired entry and
     // an absent one the same way; the difference is a map that grows with
     // every party this process has ever demoted.
-    expect(llMemoSizesForTests()).toEqual({
+    expect(llMemoSizesForTests()).toMatchObject({
       demotedParties: 0,
       modeDecisions: 0,
     });
+  });
+
+  /**
+   * THE WRITE PATH NEVER WALKS THE MAP, AT ANY SIZE.
+   *
+   * A threshold-triggered sweep on the write is the same quadratic shape one
+   * threshold further out: once the map is large, every demotion pays for
+   * every entry, and demotions arrive in bursts (a Farol finding on this
+   * PR). `entriesScanned` counts what any full sweep has walked, so "the
+   * write path does not scan" is an assertion rather than a claim.
+   */
+  it("(1b-septies) remembers a thousand demotions without ever scanning the map", async () => {
+    for (let i = 0; i < 1000; i += 1) {
+      noteLlDemotion(`party-${i}`);
+    }
+
+    expect(llMemoSizesForTests().entriesScanned).toBe(0);
+    // Bounded without a sweep: the cap evicts the least recently written key
+    // in constant time, so memory never depends on how many parties this
+    // process has demoted.
+    for (let i = 0; i < 1000; i += 1) {
+      noteLlDemotion(`more-${i}`);
+    }
+    const sizes = llMemoSizesForTests();
+    expect(sizes.entriesScanned).toBe(0);
+    expect(sizes.demotedParties).toBeLessThanOrEqual(1024);
+    // The oldest went first and the newest is still there.
+    expect(llDemotedRecently("party-0")).toBe(false);
+    expect(llDemotedRecently("more-999")).toBe(true);
   });
 
   it("(1c) never stops a demoted session whose row another live instance has taken", async () => {
