@@ -1858,6 +1858,16 @@ export function HlsWatchPlayer({
     // something that refuses has to say why -- applied to our own attach.
     void attach().catch((error) => {
       console.error("[hls] attach failed", error);
+      if (cancelled) {
+        return;
+      }
+      // AND RECOVERED FROM, not merely logged (a Farol finding on this PR).
+      // An attach that threw leaves an element with no source, which is as
+      // fatal as hls.js declaring a source dead -- so it is handed to the one
+      // ladder that already owns that: the stall tick reads it on its next
+      // pass and escalates through reconnect / rebuild / "A transmissão
+      // caiu" exactly as it does for a source that died after attaching.
+      watch.onError({ fatal: true });
     });
     // `reconnect` lives on reconnectRef: listing it here re-created hls.js
     // on every restamp of the callback. `videoRef` is a parent object whose

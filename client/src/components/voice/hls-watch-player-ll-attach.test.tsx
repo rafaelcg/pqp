@@ -31,6 +31,8 @@ const loadSource = vi.fn();
 const attachMedia = vi.fn();
 /** Makes the fake hls.js refuse an LL constructor config, the way the real one did. */
 const refuseLowLatency = { on: false };
+/** Makes it refuse EVERY config, so there is nothing left to fall back to. */
+const refuseEverything = { on: false };
 
 vi.mock("hls.js", async () => {
   const actual = await vi.importActual<typeof import("hls.js")>("hls.js");
@@ -42,6 +44,9 @@ vi.mock("hls.js", async () => {
     static Events = RealHls.Events;
     config: Record<string, unknown>;
     constructor(config: Record<string, unknown>) {
+      if (refuseEverything.on) {
+        throw new Error("Illegal hls.js config: everything");
+      }
       if (refuseLowLatency.on && config.lowLatencyMode === true) {
         throw new Error('Illegal hls.js config: "liveMaxLatencyDuration"');
       }
@@ -88,6 +93,7 @@ describe("HlsWatchPlayer attaches an ll stream", () => {
 
   beforeEach(() => {
     refuseLowLatency.on = false;
+    refuseEverything.on = false;
     loadSource.mockClear();
     attachMedia.mockClear();
     container = document.createElement("div");
@@ -145,6 +151,27 @@ describe("HlsWatchPlayer attaches an ll stream", () => {
       );
       // The viewer still gets a player, on the same URL.
       expect(loadSource).toHaveBeenCalledWith(PRODUCTION_LL_SRC);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("says so when the attach cannot be rescued at all", async () => {
+    refuseEverything.on = true;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await mount({ src: PRODUCTION_LL_SRC, mode: "ll", partTargetMs: 500 });
+      // Both lines: the refusal itself, and the attach giving up. Silence
+      // here is the whole reason this PR exists.
+      expect(errors).toHaveBeenCalledWith(
+        "[hls] config error",
+        expect.any(Error),
+      );
+      expect(errors).toHaveBeenCalledWith(
+        "[hls] attach failed",
+        expect.any(Error),
+      );
+      expect(loadSource).not.toHaveBeenCalled();
     } finally {
       errors.mockRestore();
     }
