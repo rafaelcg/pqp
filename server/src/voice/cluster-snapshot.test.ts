@@ -124,6 +124,33 @@ describeDb("cluster snapshot", () => {
     expect(cluster.sockets).toBe(100);
   });
 
+  it("reports how old the oldest contributing beat actually is", async () => {
+    const fresh = randomUUID();
+    const older = randomUUID();
+    registerInstanceSnapshot(() => snapshot() as never);
+    await heartbeatVoiceInstance(fresh, "hash");
+    await heartbeatVoiceInstance(older, "hash");
+    await getPool().query(
+      `UPDATE voice_instances SET heartbeat_at = NOW() - INTERVAL '20 seconds'
+        WHERE instance_id = $1`,
+      [older],
+    );
+
+    const cluster = await readClusterSnapshot();
+    // Measured off the rows. Reporting the lease TTL here instead would call
+    // a sum that is seconds old 45 seconds stale, which is the kind of
+    // pessimism that gets a true number ignored.
+    expect(cluster.maxStalenessSeconds).toBeGreaterThanOrEqual(19);
+    expect(cluster.maxStalenessSeconds).toBeLessThanOrEqual(22);
+  });
+
+  it("is zero seconds stale when the only beat just happened", async () => {
+    registerInstanceSnapshot(() => snapshot() as never);
+    await heartbeatVoiceInstance(randomUUID(), "hash");
+    const cluster = await readClusterSnapshot();
+    expect(cluster.maxStalenessSeconds).toBe(0);
+  });
+
   it("shows a half-rolled deploy instead of averaging over it", async () => {
     registerInstanceSnapshot(() => snapshot({ version: "old" }) as never);
     await heartbeatVoiceInstance(randomUUID(), "hash");

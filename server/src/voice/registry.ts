@@ -65,6 +65,29 @@ export function isVoiceRegistryEnabled(): boolean {
   return voiceRegistryMode() === "postgres";
 }
 
+/**
+ * WHETHER `voice_instances` IS A TOPOLOGY SOURCE AT ALL.
+ *
+ * The lease row is written by the registry heartbeat, but the thing that
+ * makes it worth writing — "this deployment expects siblings" — is true for
+ * either flag. `docs/plans/MULTI_INSTANCE_VOICE.md` allows turning on the bus
+ * before the registry, and in that staged configuration there would otherwise
+ * be no way at all to know how many machines are live: the divided rate
+ * limiters would divide by one forever and the dashboard would report a
+ * cluster of one while two machines served traffic. So the bus-only case gets
+ * the lease and the snapshot, without the reconcile it has no rows for.
+ *
+ * `CLUSTER_BUS` is read from the environment rather than through
+ * `isBusEnabled()` on purpose: that one reports whether a transport is
+ * installed, which is true of the in-memory transport a test sets up, and a
+ * limiter's behaviour must not change because a test wired a hub.
+ */
+export function clusterTopologyTracked(): boolean {
+  return (
+    isVoiceRegistryEnabled() || (process.env.CLUSTER_BUS ?? "off") === "postgres"
+  );
+}
+
 /** How often this instance proves it is alive, and how long silence means dead. */
 export const INSTANCE_HEARTBEAT_MS = 15_000;
 export const INSTANCE_TTL_MS = 45_000;
@@ -1479,6 +1502,13 @@ export interface ClusterSnapshot {
   instances: number;
   /** Of those, how many wrote a snapshot the last time they beat. */
   reporting: number;
+  /**
+   * Age of the OLDEST contributing heartbeat, in seconds. Measured from the
+   * rows, never assumed from the TTL: immediately after a beat every row is
+   * seconds old, and reporting the worst case there would make a fresh sum
+   * look stale enough to distrust.
+   */
+  maxStalenessSeconds: number;
   sockets: number;
   compressedSockets: number;
   voiceParticipants: number;
@@ -1502,13 +1532,17 @@ export async function readClusterSnapshot(
   const result = await getPool().query<{
     instance_id: string;
     snapshot: InstanceSnapshot | null;
+    age_seconds: string;
   }>(
-    `SELECT instance_id, snapshot FROM voice_instances
+    `SELECT instance_id, snapshot,
+            EXTRACT(EPOCH FROM (NOW() - heartbeat_at))::text AS age_seconds
+       FROM voice_instances
       WHERE heartbeat_at > NOW() - ($1::bigint * INTERVAL '1 millisecond')`,
     [ttlMs],
   );
   const totals: ClusterSnapshot = {
     instances: result.rows.length,
+    maxStalenessSeconds: 0,
     reporting: 0,
     sockets: 0,
     compressedSockets: 0,
@@ -1525,6 +1559,10 @@ export async function readClusterSnapshot(
       continue;
     }
     totals.reporting += 1;
+    const age = Math.max(0, Math.round(Number(row.age_seconds) || 0));
+    if (age > totals.maxStalenessSeconds) {
+      totals.maxStalenessSeconds = age;
+    }
     totals.sockets += Number(snap.sockets) || 0;
     totals.compressedSockets += Number(snap.compressedSockets) || 0;
     totals.voiceParticipants += Number(snap.voiceParticipants) || 0;
@@ -1537,6 +1575,28 @@ export async function readClusterSnapshot(
   }
   totals.versions = [...versions].sort();
   return totals;
+}
+
+/**
+ * Drop leases nobody is renewing.
+ *
+ * `reconcileVoiceRegistry` already does this as part of spending a dead
+ * instance's peers, and that is the only caller that matters when the
+ * registry is on. This one exists for the staged configuration where
+ * `CLUSTER_BUS` is on and `VOICE_REGISTRY` is off: there are instance rows
+ * (the topology the divided limiters and the dashboard read) and no reconcile
+ * to age them out, so the heartbeat sweeps its own table.
+ */
+export async function sweepDeadVoiceInstances(
+  ttlMs = INSTANCE_TTL_MS,
+): Promise<number> {
+  const result = await getPool().query(
+    `DELETE FROM voice_instances
+      WHERE instance_id <> $1
+        AND heartbeat_at < NOW() - ($2::bigint * INTERVAL '1 millisecond')`,
+    [INSTANCE_ID, ttlMs],
+  );
+  return result.rowCount ?? 0;
 }
 
 export async function withdrawVoiceInstance(

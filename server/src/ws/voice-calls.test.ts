@@ -898,6 +898,34 @@ describeDb("rings across two instances", () => {
     expect(fakes.callPushes).toHaveLength(0);
   });
 
+  /**
+   * The budget is spent immediately before the ring is committed, not on the
+   * way in. A stale socket, a forged conversation id or a room where nobody
+   * is absent are all rejections, and letting any of them burn a token would
+   * let a misbehaving client spend somebody's five-per-five-minutes without a
+   * single ring being delivered — cluster-wide, so not even recoverable by
+   * reconnecting to the other machine.
+   */
+  it("does not spend the cluster token on a ring it refuses", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
+    const a = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    await joinOn(a, caller, CALLER);
+
+    // A conversation the caller holds no peer for: refused at the peer check,
+    // which is above the spend.
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: randomUUID() },
+    );
+
+    const rows = await pools[0]!.getPool().query(
+      `SELECT 1 FROM rate_limit_buckets WHERE bucket = $1 AND subject = $2`,
+      [a.voice.RING_BUDGET.bucket, CALLER],
+    );
+    expect(rows.rowCount).toBe(0);
+  });
+
   it("rings, and the cluster bucket is what it spent", async () => {
     fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
     const a = await bootInstance();

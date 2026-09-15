@@ -6916,14 +6916,13 @@ export function resetConversationCalls(): void {
  * socket.
  */
 async function takeSharedRingBudget(userId: string): Promise<boolean> {
-  // ONE MACHINE NEEDS NO SECOND DOOR. The in-memory bucket above is exact
-  // when there is only one of it, and a self-host or a local dev run should
-  // not pay a round trip — or own a table — for a budget that already holds.
-  // Both flags, because either one being set is what "this deployment expects
-  // siblings" looks like: the registry is the state and the bus is the
-  // fan-out, and `docs/plans/MULTI_INSTANCE_VOICE.md` allows turning on
-  // either first.
-  if (!clusterOn() && !registryOn()) {
+  // ONE MACHINE NEEDS NO SECOND DOOR. The in-memory bucket is exact when
+  // there is only one of it, and a self-host or a local dev run should not
+  // pay a round trip — or own a table — for a budget that already holds.
+  // `registryOn()` and not `clusterOn()`: the registry is what says this
+  // deployment has siblings, and `docs/plans/MULTI_INSTANCE_VOICE.md` allows
+  // it to be turned on before the bus.
+  if (!registryOn()) {
     return true;
   }
   try {
@@ -6985,14 +6984,10 @@ async function handleCallRing(
   conversationId: string,
 ): Promise<void> {
   const { socket, user } = session;
-  // Local first, then the cluster's. The order matters: the local bucket is
-  // free and refuses the repeat-tap case without a query, and `sharedRateLimit`
-  // fails open, so it can only ever be the second of two doors — never the
-  // one that lets somebody through a budget the first door already spent.
+  // The free door first: an in-memory bucket, no query, and it is what
+  // refuses the repeat-tap case. The cluster's budget is spent much further
+  // down, immediately before the ring is committed — see there for why.
   if (!ringLimiter.take(user.id)) {
-    return;
-  }
-  if (!(await takeSharedRingBudget(user.id))) {
     return;
   }
   // Only a live peer of exactly this room may ring it. The join is where
@@ -7060,6 +7055,30 @@ async function handleCallRing(
       (id) => !blockers.has(id) && resolveStatus(id) !== "dnd",
     ),
   );
+
+  // THE CLUSTER'S BUDGET IS SPENT HERE, not at the top of the function.
+  //
+  // Everything above this line is rejection-only: a stale socket, a forged
+  // conversation id, a ring already in flight, a room where nobody is absent.
+  // Spending a five-per-five-minutes token on any of those would let a
+  // misbehaving client burn somebody's ring budget without a single ring
+  // being delivered, and the budget is cluster-wide now, so it would not even
+  // be recoverable by reconnecting to the other machine. Below this line the
+  // ring is committed, so a spent token always bought a ring.
+  //
+  // `takeSharedRingBudget` fails open, so it can only ever be the second of
+  // two doors; and the `conversationRings` re-check is the window its await
+  // opens, closed the same way every other await in this function closes its
+  // own.
+  if (!(await takeSharedRingBudget(user.id))) {
+    return;
+  }
+  if (conversationRings.has(conversationId)) {
+    return;
+  }
+  if (socketToPeerId.get(socket) !== peerId || !peers.has(peerId!)) {
+    return;
+  }
 
   const ring: ConversationRing = {
     conversationId,

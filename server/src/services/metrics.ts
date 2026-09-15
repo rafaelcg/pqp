@@ -2,14 +2,17 @@ import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import {
-  INSTANCE_TTL_MS as VOICE_INSTANCE_TTL_MS,
+  clusterTopologyTracked,
   readClusterSnapshot,
 } from "../voice/registry.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { checkReady, type ReadyReport } from "./ready.js";
 import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
-import { getVoiceActivitySnapshot } from "../ws/voice.js";
+import {
+  getVoiceActivitySnapshot,
+  localVoicePeerCount,
+} from "../ws/voice.js";
 import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
 import {
   isLiveHlsEnabled,
@@ -90,7 +93,13 @@ export interface ClusterMetrics {
   instances: number;
   /** How many of those wrote a snapshot on their last heartbeat. */
   reporting: number;
-  /** Seconds since the oldest contributing heartbeat could have been written. */
+  /**
+   * Age in seconds of the OLDEST contributing heartbeat, measured against the
+   * rows rather than assumed from the lease TTL. Zero when this process is the
+   * only contributor. It is the honest answer to "how old is this number",
+   * which matters because a sum built from 15-second beats is never `now` and
+   * a dashboard that implies it is would be lying by omission.
+   */
   maxStalenessSeconds: number;
   sockets: number;
   compressedSockets: number;
@@ -1408,7 +1417,10 @@ async function clusterMetrics(runtime: RuntimeMetrics): Promise<ClusterMetrics> 
     maxStalenessSeconds: 0,
     sockets: runtime.sockets,
     compressedSockets: runtime.compressedSockets,
-    voiceParticipants: 0,
+    // The local map, not a zero. A single-instance deployment is a cluster of
+    // one, and its voice peers are the cluster's voice peers; hard-coding 0
+    // would make the common configuration read as an empty service.
+    voiceParticipants: localVoicePeerCount(),
     hlsSessions: liveHlsActivity().sessions,
     poolBusy: runtime.pool.busy,
     poolMax: runtime.pool.max,
@@ -1417,6 +1429,13 @@ async function clusterMetrics(runtime: RuntimeMetrics): Promise<ClusterMetrics> 
       : [],
   });
   try {
+    // Rows left behind by a deployment that has since turned the registry off
+    // are still inside the TTL for 45 seconds, and summing them would show
+    // the operator the previous topology's numbers. The flag, not the rows,
+    // says whether this process has siblings.
+    if (!clusterTopologyTracked()) {
+      return alone();
+    }
     const snapshot = await readClusterSnapshot();
     if (snapshot.instances === 0) {
       return alone();
@@ -1424,9 +1443,7 @@ async function clusterMetrics(runtime: RuntimeMetrics): Promise<ClusterMetrics> 
     return {
       instances: snapshot.instances,
       reporting: snapshot.reporting,
-      // The lease TTL, which is the worst a contributing row can be: an
-      // instance about to be reconciled away beat 45 s ago.
-      maxStalenessSeconds: Math.round(VOICE_INSTANCE_TTL_MS / 1000),
+      maxStalenessSeconds: snapshot.maxStalenessSeconds,
       sockets: snapshot.sockets,
       compressedSockets: snapshot.compressedSockets,
       voiceParticipants: snapshot.voiceParticipants,

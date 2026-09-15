@@ -553,6 +553,19 @@ worst case and no round trip ever. Dividing a budget that refuses would have
 been a regression rather than a fix, since a user holds their socket on one
 machine and would simply have been handed half of what they had.
 
+Two details worth knowing. The ring token is spent immediately BEFORE the ring
+is committed, not on the way in: everything above that line is rejection-only
+(a stale socket, a forged conversation id, a room where nobody is absent), and
+a token burnt on one of those would be a cluster-wide budget spent with no ring
+delivered and no other machine to recover it from. And N comes from
+`voice_instances`, which the registry heartbeat writes — so in the staged
+configuration where `CLUSTER_BUS` is on and `VOICE_REGISTRY` is off there would
+otherwise be no topology source at all, and the divided limiters would divide
+by one forever while two machines served traffic. That configuration now writes
+the lease and the snapshot without the reconcile it has no rows for
+(`clusterTopologyTracked`), and sweeps leases nobody is renewing, since nothing
+else would age them out.
+
 **The status sampler.** `setInterval` in `index.ts` means "on every process
 that loads this file", so two API machines wrote two `status_samples` rows a
 minute — and those rows are AVERAGED into the uptime figure, so one machine
@@ -577,5 +590,11 @@ gains `instanceId`, `instanceCount` and a `cluster` block; `runtime` is
 unchanged and still local, because "is THIS machine in trouble" is a different
 question with a different answer. `cluster.reporting` says how many instances
 actually contributed, so a sum is readable as a floor rather than mistaken for
-a total, and `cluster.versions` makes a half-rolled deploy visible instead of
-averaging over it.
+a total; `cluster.maxStalenessSeconds` is measured off the rows rather than
+assumed from the lease TTL, because a sum that is seconds old should not be
+reported as 45 seconds stale; and `cluster.versions` makes a half-rolled deploy
+visible instead of averaging over it. With no topology source the block falls
+back to this process's own numbers labelled as a cluster of one — local voice
+peers included, since a single-instance deployment IS the cluster and a
+hard-coded zero there would make the common configuration read as an empty
+service.

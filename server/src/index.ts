@@ -17,7 +17,9 @@ import { seedDevHall } from "./services/dev-seed.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
 import { createPostgresBusTransport } from "./lib/bus-postgres.js";
 import {
+  clusterTopologyTracked,
   startVoiceInstanceHeartbeat,
+  sweepDeadVoiceInstances,
   voiceConfigHash,
 } from "./voice/registry.js";
 import { startVoiceHello } from "./ws/voice-hello.js";
@@ -476,23 +478,37 @@ const stopDbBreakerSampler = startDbBreakerSampler();
  * a duplicate row is noise and a missing row is a hole in the history that can
  * never be filled in afterwards.
  */
+/**
+ * The lease is short of the interval so the next tick is always claimable —
+ * a lease that outlived its own tick would let a minute go unsampled, and a
+ * hole in the history is the one failure that cannot be repaired afterwards.
+ * Five seconds of margin is enough because the sample itself is BOUNDED well
+ * under it: the GIF probe has an 8 s ceiling and is not awaited, the SFU read
+ * is cached, and the write is one INSERT. `sampling` closes the remaining
+ * window from this side, so a tick can never start a second sample beside one
+ * this process is still running; two processes overlapping needs a sample to
+ * take longer than 55 s, which would mean the probes themselves are wedged.
+ */
+let sampling = false;
 const STATUS_SAMPLE_LEASE_KEY = "status.sample";
 const STATUS_PRUNE_LEASE_KEY = "status.prune";
 const STATUS_PRUNE_INTERVAL_MS = 24 * 60 * 60_000;
 
 const statusSampler = setInterval(() => {
-  if (!servesTraffic(processRole())) {
+  if (!servesTraffic(processRole()) || sampling) {
     return;
   }
+  sampling = true;
   void claimSingletonTickOrRun(
     STATUS_SAMPLE_LEASE_KEY,
-    // Short of the interval so the next tick is always claimable, long enough
-    // that a slow probe cannot let a sibling start a second one beside it.
     STATUS_SAMPLE_INTERVAL_MS - 5_000,
   )
     .then((mine) => (mine ? recordStatusSamples() : undefined))
     .catch((error: unknown) => {
       console.error("[status] sample failed:", error);
+    })
+    .finally(() => {
+      sampling = false;
     });
 }, STATUS_SAMPLE_INTERVAL_MS);
 statusSampler.unref?.();
@@ -618,15 +634,25 @@ let coldJobs: ColdJobs | null = null;
  */
 function startVoiceRegistry(): (() => Promise<void>) | null {
   const raw = process.env.VOICE_REGISTRY ?? "off";
-  if (raw === "off") {
-    return null;
-  }
-  if (raw !== "postgres") {
+  if (raw !== "off" && raw !== "postgres") {
     console.warn(
       `[voice] unknown VOICE_REGISTRY=${raw}: registry stays off. ` +
         `Supported: "postgres", "off".`,
     );
-    return null;
+  }
+  if (raw !== "postgres") {
+    // The registry is off. The LEASE may still be worth writing: with
+    // `CLUSTER_BUS=postgres` this deployment expects siblings, and the lease
+    // is the only thing that can say how many there are — which the divided
+    // rate limiters divide by and the dashboard sums over. No reconcile,
+    // because there are no peer rows to reconcile; just the beat, the
+    // snapshot, and a sweep of leases nobody is renewing, since without the
+    // reconcile nothing else would age them out.
+    if (!clusterTopologyTracked()) {
+      return null;
+    }
+    logEvent("voice.instanceLeaseOnly", { instance: INSTANCE_ID });
+    return startVoiceInstanceHeartbeat(undefined, sweepDeadVoiceInstances);
   }
   logEvent("voice.registryEnabled", {
     instance: INSTANCE_ID,
