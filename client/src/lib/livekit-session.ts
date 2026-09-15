@@ -1,6 +1,11 @@
 import type { VoiceSessionInfo } from "@pqp/shared";
+// Type-only: erased at compile time, so this does not pull the (heavy,
+// dynamically-imported-below) livekit-client runtime into this module's
+// eager bundle.
+import type { ReconnectPolicy } from "livekit-client";
 import type { PeerConnectionState, RemotePeer } from "./peer-connection-manager";
 import type { ReceiveQuality } from "./receive-quality";
+import { drainJitterMs } from "./reconnect-jitter";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
 import { sfuIceServers } from "./sfu-ice-servers";
 import {
@@ -139,6 +144,51 @@ const VIDEO_MAX_FRAMERATE = 30;
  */
 export const MIC_ARCHIVE_TRACK_NAME = "mic-archive";
 
+/**
+ * The unambiguous, opt-in signal for `LIVE_HLS_VOICE_TRACK`'s "separada"
+ * mode: a SECOND publication of the processed mic, under this name, exactly
+ * the shape `MIC_ARCHIVE_TRACK_NAME` already is and for the same reason.
+ *
+ * WHY A SECOND PUBLICATION RATHER THAN READING THE ORDINARY MIC. The server
+ * could in principle attach the presenter's standing microphone publication
+ * to the camera/voice egress whenever it finds one — but that publication
+ * exists (muted or not) for every presenter with a mic, "separada" chosen or
+ * not, `LIVE_HLS_VOICE_TRACK` on or off. Its LiveKit mute state is not a safe
+ * proxy for "the host wants this on the stream" either: mute flips for
+ * push-to-talk, deafen and SPEAK being revoked, none of which are this
+ * decision. A Farol review on the first version of this feature caught
+ * exactly that: with the flag on, every host with a microphone got a
+ * camera+voice or voice-only egress regardless of which mode they had
+ * actually chosen, so a "junto" host was in `CAMERA_RUNG_WITH_VOICE` anyway.
+ * A distinctly-named publication, started and stopped exactly when the
+ * client's own `voiceTrackMode` and `isSharingMic` say so, is a fact the
+ * server can trust the same way it already trusts `MIC_ARCHIVE_TRACK_NAME`.
+ *
+ * Published ALONGSIDE the ordinary (unmuted, in "separada") mic publication,
+ * not instead of it: the room needs the ordinary one (this one is dropped
+ * and unsubscribed by every other client, exactly like the archive), and the
+ * server's camera/voice egress needs this one specifically, so it never has
+ * to guess which of a presenter's several microphone-sourced publications is
+ * the one meant for it.
+ */
+export const VOICE_TRACK_NAME = "voice-track";
+
+/**
+ * CONVIDADOS (`docs/plans/WATCH_PARTY_GUESTS.md` §5.2): the presenter's mixed
+ * bus — their own microphone plus every accepted guest's, built by
+ * `lib/stage-mix.ts` — published under this name in exactly the shape
+ * `VOICE_TRACK_NAME` is: a second `Microphone` source, told apart by name
+ * because a publish grant is an allowlist of *sources* (pitfall 14).
+ *
+ * MUTUALLY EXCLUSIVE WITH `VOICE_TRACK_NAME`, never both at once: `guests`
+ * being anything but `off` is what forces "separada" for the length of the
+ * party (§5.3), so `stage-mix` replaces `voice-track` as the presenter's
+ * carrier rather than sitting beside it. The server's picker prefers
+ * `stage-mix` over `voice-track` for exactly this reason (see
+ * `STAGE_MIX_TRACK_NAME` in `server/src/voice/hls-egress.ts`).
+ */
+export const STAGE_MIX_TRACK_NAME = "stage-mix";
+
 export interface LiveKitSession {
   /** Publish (or re-publish) the processed mic track. */
   publish(stream: MediaStream): Promise<void>;
@@ -161,6 +211,26 @@ export interface LiveKitSession {
   publishMicArchive(stream: MediaStream): Promise<void>;
   /** Stop publishing it. Safe to call when nothing is published. */
   unpublishMicArchive(): Promise<void>;
+  /**
+   * Publish the host's voice a second time, under the name `voice-track`, so
+   * `reconcileCameraEgress` can attach it to the camera/voice rung. Only ever
+   * called while `voiceTrackMode` is "separada" and the mic is meant to reach
+   * the audience (`isSharingMic`); a no-op call is harmless. See
+   * `VOICE_TRACK_NAME`.
+   */
+  publishVoiceTrack(stream: MediaStream): Promise<void>;
+  /** Stop publishing it. Safe to call when nothing is published. */
+  unpublishVoiceTrack(): Promise<void>;
+  /**
+   * Publish (or replace) the CONVIDADOS stage mix under `stage-mix`. Called
+   * every time the mixed bus's output track changes identity — a guest
+   * joining or leaving rebuilds the underlying `MediaStreamTrack` — so this
+   * always republishes with `replaceTrack` semantics, never leaving two
+   * `stage-mix` publications up at once. See `STAGE_MIX_TRACK_NAME`.
+   */
+  publishStageMix(stream: MediaStream): Promise<void>;
+  /** Stop publishing it. Safe to call when nothing is published. */
+  unpublishStageMix(): Promise<void>;
   /** Stop publishing the screen share, audio half included. */
   unpublishScreen(): Promise<void>;
   /** Withdraw only the screen's audio, leaving the picture published. */
@@ -291,7 +361,31 @@ export async function connectLiveKit({
     ConnectionState,
     VideoPreset,
     VideoQuality: LayerQuality,
+    DefaultReconnectPolicy,
   } = await import("livekit-client");
+
+  /**
+   * LiveKit's own engine reconnect (an already-connected room's link to the
+   * SFU drops — a media-box restart, a network blip) retries its FIRST
+   * attempt at 0ms (`DefaultReconnectPolicy`'s own delay table starts at 0;
+   * jitter is only added from the second retry on). A deploy that bounces
+   * the SFU alongside the API drops every open room's engine connection at
+   * once, so that immediate first retry is the same thundering herd as
+   * CLAUDE.md pitfall 10/11 and item C7 of
+   * docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md, just against the SFU
+   * instead of `/ws`. Spread only that first attempt, across the same
+   * window `realtime.ts` uses for a drain-shaped WS close; every later
+   * retry keeps LiveKit's own steady-state backoff untouched.
+   */
+  const defaultReconnectPolicy = new DefaultReconnectPolicy();
+  const reconnectPolicy: ReconnectPolicy = {
+    nextRetryDelayInMs(context) {
+      if (context.retryCount === 0) {
+        return drainJitterMs();
+      }
+      return defaultReconnectPolicy.nextRetryDelayInMs(context);
+    },
+  };
 
   /**
    * ADAPTIVE STREAM IS ON, AND HOW IT MEETS AN EXPLICIT CHOICE. Verified
@@ -315,6 +409,7 @@ export async function connectLiveKit({
   const room = new Room({
     adaptiveStream: true,
     dynacast: true,
+    reconnectPolicy,
   });
 
   /** The largest layer this viewer asks for. Applied to every subscription. */
@@ -350,6 +445,10 @@ export async function connectLiveKit({
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
   /** The watch-party voice archive publication, kept so it can be withdrawn. */
   let publishedMicArchive: InstanceType<typeof LocalAudioTrack> | null = null;
+  /** The "separada" voice-track publication, kept so it can be withdrawn. */
+  let publishedVoiceTrack: InstanceType<typeof LocalAudioTrack> | null = null;
+  /** The CONVIDADOS stage-mix publication, kept so it can be withdrawn. */
+  let publishedStageMix: InstanceType<typeof LocalAudioTrack> | null = null;
   /** Raw screen-share track we published, kept so we can unpublish it later. */
   let publishedScreenTrack: MediaStreamTrack | null = null;
   /** Raw camera track we published, kept so we can unpublish it later. */
@@ -658,7 +757,16 @@ export async function connectLiveKit({
       // stream with a duplicate and play them twice; leaving it subscribed
       // would cost every viewer in the room an extra audio stream for nothing.
       // So: not filed, not metered, and unsubscribed.
-      if (pub.trackName === MIC_ARCHIVE_TRACK_NAME) {
+      if (
+        pub.trackName === MIC_ARCHIVE_TRACK_NAME ||
+        pub.trackName === VOICE_TRACK_NAME ||
+        pub.trackName === STAGE_MIX_TRACK_NAME
+      ) {
+        // THE VOICE-TRACK AND STAGE-MIX PUBLICATIONS ARE THE SAME SHAPE OF
+        // DUPLICATE. Both arrive tagged `Microphone` like the presenter's
+        // real one, and the room already hears them (and every guest they
+        // mix in) through the room's own per-participant publications;
+        // filing this one too would play everyone on the mix twice.
         try {
           pub.setSubscribed(false);
         } catch {
@@ -2069,6 +2177,73 @@ export async function connectLiveKit({
       await room.localParticipant.unpublishTrack(track);
     },
 
+    async publishVoiceTrack(stream: MediaStream) {
+      const [audioTrack] = stream.getAudioTracks();
+      if (!audioTrack) {
+        return;
+      }
+      if (publishedVoiceTrack) {
+        await room.localParticipant.unpublishTrack(publishedVoiceTrack);
+        publishedVoiceTrack = null;
+      }
+      publishedVoiceTrack = new LocalAudioTrack(audioTrack);
+      await room.localParticipant.publishTrack(publishedVoiceTrack, {
+        // MICROPHONE, NOT AN INVENTED SOURCE — same reasoning as
+        // `publishMicArchive`: a grant is an allowlist of sources, and the
+        // name (`VOICE_TRACK_NAME`) is what carries the meaning instead.
+        source: Track.Source.Microphone,
+        name: VOICE_TRACK_NAME,
+        // A live watch-party voice, not a phone call: DTX gating the quiet
+        // passages would read as the host's mic cutting in and out to the
+        // camera/voice egress, and RED's redundancy is spent uplink for
+        // nothing the egress needs.
+        dtx: false,
+        red: false,
+      });
+    },
+
+    async unpublishVoiceTrack() {
+      if (!publishedVoiceTrack) {
+        return;
+      }
+      const track = publishedVoiceTrack;
+      publishedVoiceTrack = null;
+      await room.localParticipant.unpublishTrack(track);
+    },
+
+    async publishStageMix(stream: MediaStream) {
+      const [audioTrack] = stream.getAudioTracks();
+      if (!audioTrack) {
+        return;
+      }
+      if (publishedStageMix) {
+        await room.localParticipant.unpublishTrack(publishedStageMix);
+        publishedStageMix = null;
+      }
+      publishedStageMix = new LocalAudioTrack(audioTrack);
+      await room.localParticipant.publishTrack(publishedStageMix, {
+        // MICROPHONE, NOT AN INVENTED SOURCE — same reasoning as
+        // `publishVoiceTrack`: a grant is an allowlist of sources, and the
+        // name (`STAGE_MIX_TRACK_NAME`) is what carries the meaning instead.
+        source: Track.Source.Microphone,
+        name: STAGE_MIX_TRACK_NAME,
+        // Same reasoning as `publishVoiceTrack`: a live mix, not a phone
+        // call — DTX gating quiet passages reads as the bus cutting in and
+        // out to the egress, and RED's redundancy buys nothing here either.
+        dtx: false,
+        red: false,
+      });
+    },
+
+    async unpublishStageMix() {
+      if (!publishedStageMix) {
+        return;
+      }
+      const track = publishedStageMix;
+      publishedStageMix = null;
+      await room.localParticipant.unpublishTrack(track);
+    },
+
     async unpublishScreenAudio() {
       return enqueueScreenOp(async () => {
         if (!publishedScreenAudioTrack) {
@@ -2247,6 +2422,8 @@ export async function connectLiveKit({
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
       publishedMicArchive = null;
+      publishedVoiceTrack = null;
+      publishedStageMix = null;
       await room.disconnect();
     },
 

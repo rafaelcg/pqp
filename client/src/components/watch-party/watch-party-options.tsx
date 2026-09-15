@@ -1,13 +1,12 @@
 import {
   SLOWMODE_SECONDS_PRESETS,
-  WATCH_PARTY_STAGE_MODES,
   type WatchPartyOptions,
-  type WatchPartyStageMode,
 } from "@pqp/shared";
 import { useId, type ReactNode } from "react";
 import { Switch } from "@/components/ui/switch";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { WatchPartyGuestsSetting } from "./guests/watch-party-guests-setting";
 
 /**
  * The host's controls, in the setup surface before going live and again as an
@@ -19,12 +18,14 @@ import { cn } from "@/lib/utils";
  * immediately for people already watching is the dialog's own description
  * while the party runs, so this draws only controls.
  *
- * VOZ IS FIRST AND IS OFF BY DEFAULT. A watch party is a broadcast: the
- * audience is seatless, the transcode carries no microphone, and a room of
- * two hundred with open microphones is not a watch party. So the default is
- * no voice at all, and the whole of the stage machinery below hangs off this
- * one select. Turning it on is one click and the film night that wants it
- * pays exactly what it paid before.
+ * CONVIDADOS IS FIRST AND IS OFF BY DEFAULT (`docs/plans/
+ * WATCH_PARTY_GUESTS.md`). A watch party is a broadcast: the audience is
+ * seatless, and nobody but the host and co-hosts is ever in the room unless
+ * this is turned on. So the default is nobody, and the whole of the guest
+ * machinery hangs off this one radio group (`WatchPartyGuestsSetting`).
+ * Turning it on is one click and the film night that wants it pays exactly
+ * what "Voz: Todo mundo" used to cost, under a name that no longer promises
+ * an open microphone it cannot keep.
  *
  * FOUR CONTROLS AND A SENTENCE, and the sentence is deliberate. Who may WATCH
  * is not a control here: it is the channel's own permissions, and layering a
@@ -61,45 +62,6 @@ export function slowModeKey(seconds: number): MessageKey {
   return SLOWMODE_KEYS[seconds] ?? "channelMeta.slowMode.custom";
 }
 
-const STAGE_KEYS: Record<WatchPartyStageMode, MessageKey> = {
-  hosts_only: "watchParty.options.stage.hosts_only",
-  invited: "watchParty.options.stage.invited",
-  everyone: "watchParty.options.stage.everyone",
-};
-
-/**
- * The "off" entry of the Voz select, which is not a stage mode and must not
- * collide with one. Kept as a constant so the mapping below reads as one
- * decision rather than a string comparison in three places.
- */
-const VOICE_OFF = "off";
-
-/**
- * The select's value, and the patch each value produces.
- *
- * ONE CONTROL FOR TWO FIELDS, and it is the shape the product wants rather
- * than the shape the data has. Two products share this feature: six friends
- * watching a film genuinely want to talk over it, and five hundred people
- * watching a presentation do not. Off is the default, so the broadcast costs
- * zero clicks; "Todo mundo" is one click, which is what the film night costs
- * today. Two separate switches would have made the film night cost two, and
- * would have left a stored `stageMode` sitting on a voice-off party looking
- * like a rule when it is a preference nobody has activated.
- */
-function voiceValue(options: WatchPartyOptions): string {
-  return options.voiceEnabled ? options.stageMode : VOICE_OFF;
-}
-
-function voicePatch(value: string): Partial<WatchPartyOptions> {
-  if (value === VOICE_OFF) {
-    // `stageMode` is left exactly as it was. A host who turns voice off and
-    // on again gets back the floor they had chosen, and nothing is applied
-    // while it is off: `watchPartyFloorIsClosed` is false either way.
-    return { voiceEnabled: false };
-  }
-  return { voiceEnabled: true, stageMode: value as WatchPartyStageMode };
-}
-
 /**
  * A settings row: the name and its one-line reason on the left, the control
  * on the right, in a grouped list. The shape every settings screen on a phone
@@ -114,6 +76,7 @@ export function OptionRow({
   htmlFor,
   children,
   className,
+  stacked = false,
   ...rest
 }: {
   label: string;
@@ -122,11 +85,23 @@ export function OptionRow({
   htmlFor?: string;
   children?: ReactNode;
   className?: string;
+  /**
+   * Control under the label instead of beside it: for a narrow column (the
+   * setup card is 320px) where a select beside a two-line description leaves
+   * both squeezed.
+   */
+  stacked?: boolean;
 } & Record<`data-${string}`, string | number | boolean | undefined>) {
   const Label = htmlFor ? "label" : "span";
   return (
     <div
-      className={cn("flex items-center justify-between gap-4 px-3 py-2.5", className)}
+      className={cn(
+        "px-3 py-2.5",
+        stacked
+          ? "flex flex-col gap-1.5 [&>span:last-child]:w-full [&_select]:w-full [&_select]:max-w-none"
+          : "flex items-center justify-between gap-4",
+        className,
+      )}
       {...rest}
     >
       <Label htmlFor={htmlFor} className="min-w-0">
@@ -177,81 +152,67 @@ export function WatchPartyOptionsPanel({
   disabled = false,
   audienceCount,
   onChange,
+  stacked = false,
+  isHost = false,
+  lowLatencyAvailable = false,
+  live = false,
 }: {
   options: WatchPartyOptions;
   disabled?: boolean;
   /** Drives the "with a crowd, try 10 or 30 seconds" nudge. */
   audienceCount: number;
   onChange: (patch: Partial<WatchPartyOptions>) => void;
+  /** See `OptionRow.stacked`: the narrow-column layout the setup card uses. */
+  stacked?: boolean;
+  /**
+   * Only the host may ask for a different delivery mode, so
+   * "Baixa latência (beta)" stays out of a co-host's copy of this panel even
+   * when `lowLatencyAvailable` is true.
+   */
+  isHost?: boolean;
+  /**
+   * `GET /api/live-hls/config`'s `lowLatency.available` for this server
+   * (`useLiveHlsConfig` in `App.tsx`) -- the deployment's own answer, never
+   * a build flag. The row is absent, not disabled, when this is false: a
+   * self-host with `LIVE_HLS_LL` unset has nothing to offer, and a switch
+   * that is there but greyed out would be a promise the deployment cannot
+   * keep.
+   */
+  lowLatencyAvailable?: boolean;
+  /**
+   * Whether the party is live right now. The switch itself is always a
+   * standing preference (`options.lowLatency`, saved the moment it is
+   * flipped, same as every other row); this only decides whether the extra
+   * "vale a partir da próxima transmissão" line is worth showing, since a
+   * running broadcast never picks up the change -- `resolveHlsMode` is only
+   * consulted when a sharer's egress starts.
+   */
+  live?: boolean;
 }) {
   const { t } = useTranslation();
   // "Big" is where an open floor and an unthrottled chat stop being fine. The
   // 2026-09-05 spike put 212 people in a room in twenty minutes, so the nudge
   // wants to appear well before that rather than at it.
   const busy = audienceCount >= 20;
-  const voiceId = useId();
   const slowId = useId();
-
-  /**
-   * THE ONE-LINE SUMMARY UNDER "VOZ" (2026-09-13, Rafael): a plain sentence
-   * for whichever of the two states the select is in, ahead of the busy-room
-   * warning that already existed for `everyone`. Distinct keys from the
-   * older `watchParty.options.voiceOffBody` on purpose — a parallel PR
-   * (presenter guardrails, B4) touches this same row's copy, and two PRs
-   * writing different English into one key is a worse merge than two keys.
-   */
-  const voiceNote = !options.voiceEnabled
-    ? t("watchParty.options.voiceOffSummary")
-    : options.stageMode === "everyone" && busy
-      ? t("watchParty.options.stageWarnEveryone")
-      : t("watchParty.options.voiceOnSummary");
 
   return (
     <div className="flex flex-col gap-4" data-watch-party-options>
       <OptionGroup>
-        {/* VOICE IS OFF UNTIL A HOST SAYS OTHERWISE, and this is the control
-            that says it. First because it is the decision the rest depend
-            on: with voice off there is no floor, no queue and no microphone,
-            and the server writes no permission rule on the channel at all
-            (`watchPartyFloorIsClosed`). See docs/WATCH_PARTY.md. */}
-        <OptionRow
-          label={t("watchParty.options.voice")}
-          description={voiceNote}
-          tone={options.voiceEnabled && busy ? "warning" : "muted"}
-          htmlFor={voiceId}
-        >
-          <select
-            id={voiceId}
-            className={selectClass}
-            value={voiceValue(options)}
-            disabled={disabled}
-            onChange={(event) => onChange(voicePatch(event.target.value))}
-            data-watch-party-voice
-          >
-            <option value={VOICE_OFF}>{t("watchParty.options.voiceOff")}</option>
-            {WATCH_PARTY_STAGE_MODES.map((mode) => (
-              <option key={mode} value={mode}>
-                {t(STAGE_KEYS[mode])}
-              </option>
-            ))}
-          </select>
-        </OptionRow>
-
-        {/* Only for the invitation mode, and only with voice on at all.
-            Meaningless when everyone may already speak, pointless when only
-            the hosts ever will, and nonsense when nobody speaks. */}
-        {options.voiceEnabled && options.stageMode === "invited" && (
-          <div data-watch-party-raise-hand className="px-1 py-0.5">
-            <Switch
-              label={t("watchParty.options.raiseHand")}
-              checked={options.raiseHand}
-              disabled={disabled}
-              onCheckedChange={(checked) => onChange({ raiseHand: checked })}
-            />
-          </div>
-        )}
+        {/* CONVIDADOS IS OFF UNTIL A HOST SAYS OTHERWISE, and this is the
+            control that says it. First because every other row depends on
+            it: with guests off there is no floor, no queue and no
+            microphone, and the server writes no permission rule on the
+            channel at all (`watchPartyFloorIsClosed`). See
+            `docs/plans/WATCH_PARTY_GUESTS.md`. */}
+        <WatchPartyGuestsSetting
+          guests={options.guests}
+          disabled={disabled}
+          onChange={(mode) => onChange({ guests: mode })}
+        />
 
         <OptionRow
+          stacked={stacked}
           label={t("watchParty.options.slowMode")}
           description={
             busy && options.slowModeSeconds === 0
@@ -286,6 +247,33 @@ export function WatchPartyOptionsPanel({
             onCheckedChange={(checked) => onChange({ reactionsEnabled: checked })}
           />
         </div>
+
+        {/* HOST-ONLY, AND ABSENT WHEN THE DEPLOYMENT HAS NOTHING TO OFFER.
+            A co-host can flip every other row here; this one stays out of
+            their copy of the panel because the request only ever reaches
+            the server through the HOST's own "Ir ao vivo" (`goLive` forwards
+            `options.lowLatency`, `requestedHlsModeForChannel` in
+            `hls-remux.ts`). NOT APPLIED TO A RUNNING BROADCAST: the mode is
+            read only when a sharer's egress starts, so flipping this while
+            already live changes nothing until the next Ir ao vivo, which the
+            hint below says in words. */}
+        {lowLatencyAvailable && isHost && (
+          <div data-watch-party-low-latency className="px-1 py-0.5">
+            <Switch
+              label={t("watchParty.options.lowLatency")}
+              description={
+                live
+                  ? `${t("watchParty.options.lowLatencyBody")} ${t(
+                      "watchParty.options.lowLatencyNextBroadcast",
+                    )}`
+                  : t("watchParty.options.lowLatencyBody")
+              }
+              checked={options.lowLatency}
+              disabled={disabled}
+              onCheckedChange={(checked) => onChange({ lowLatency: checked })}
+            />
+          </div>
+        )}
 
         {/* A fact, not a lever: who can watch follows the channel. One quiet
             row at the end of the group, with the answer under the name. */}

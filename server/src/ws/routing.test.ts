@@ -143,4 +143,19 @@ describe("websocket frame routing", () => {
     });
     expect(chatFrames).toHaveLength(0);
   });
+
+  // `set-raised-hand` shipped in the client schema and in
+  // `handleVoiceMessage` (#406) but not in this router's own hand-kept set,
+  // so every real raise silently never arrived: `voice-raised-hands.test.ts`
+  // calls `handleVoiceMessage` directly and never caught it. Pinned here so
+  // the next frame added to `voiceClientMessageSchema` without a matching
+  // entry in `VOICE_MESSAGE_TYPES` fails a test instead of a live call.
+  it("hands a raised hand to the voice handler instead of dropping it", async () => {
+    const fake = await connected();
+    const frame = { type: "set-raised-hand", raised: true };
+    fake.deliver(frame);
+    await vi.waitFor(() => {
+      expect(voiceFrames).toEqual([frame]);
+    });
+  });
 });

@@ -128,6 +128,7 @@ function disableHls() {
   delete process.env.LIVE_HLS_REAP_ORPHANS;
   delete process.env.LIVE_HLS_MIC_ARCHIVE;
   delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+  delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
 }
 
 describe("live HLS egress", () => {
@@ -160,6 +161,11 @@ describe("live HLS egress", () => {
       // `LIVE_HLS_MIC_ARCHIVE` is unset, which is every deployment: the host's
       // browser is told not to publish the extra track.
       micArchive: false,
+      // `LIVE_HLS_VOICE_TRACK` is unset too: the client offers no "voz
+      // separada" choice, so the screen mix keeps folding the mic in.
+      voiceTrack: false,
+      // `LIVE_HLS_LL` is unset too: the switch stays hidden.
+      lowLatency: { available: false },
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
@@ -188,6 +194,47 @@ describe("live HLS egress", () => {
     expect(internal.host).toBe("pqp-live-test.s3.example.test");
     expect(internal.pathname).toBe(`/live/${CHANNEL}/${stream!.startedAt}.m3u8`);
     expect(internal.searchParams.get("X-Amz-Signature")).toBeTruthy();
+  });
+
+  it("never edge-prefixes the channel-wide stream itself, even when LIVE_HLS_PLAYLIST_BASE_URL is set", async () => {
+    // `viewerPlaylistUrl` builds the stream `liveHlsStreamFor` shares across
+    // every viewer -- the edge host goes on later, per recipient, in
+    // `stampViewerStream` (hls-viewer-token.ts), AFTER that function mints
+    // the `?t=` token. Prepending it here instead once made every viewer's
+    // URL absolute-but-tokenless: `stampViewerStream`'s "already absolute,
+    // leave it alone" check (correct for the raw-bucket case below) treated
+    // it the same way and skipped minting a token entirely, so the edge
+    // Worker 401'd "missing" on every request. See `hls-viewer-token.test.ts`
+    // for the per-recipient stamping this test deliberately does NOT cover.
+    enableHls();
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: vi.fn(async () => ({ egressId: "EG_1" })),
+        stopEgress: vi.fn(),
+      },
+      findTracks: async () => ({ videoTrackId: "TR_V" }),
+    });
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stream?.hlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}`,
+    );
+  });
+
+  it("does not point the raw public bucket URL at the edge host (LIVE_HLS_SIGNED_URLS=false wins)", async () => {
+    enableHls();
+    process.env.LIVE_HLS_SIGNED_URLS = "false";
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.pqp.gg";
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: vi.fn(async () => ({ egressId: "EG_1" })),
+        stopEgress: vi.fn(),
+      },
+      findTracks: async () => ({ videoTrackId: "TR_V" }),
+    });
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stream?.hlsUrl).toMatch(/^https:\/\/live\.example\.test\//);
+    delete process.env.LIVE_HLS_SIGNED_URLS;
   });
 
   it("is off without a public base only when LIVE_HLS_SIGNED_URLS=false", () => {
@@ -468,6 +515,8 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
+        lowLatency: { available: false },
       });
       expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
@@ -475,6 +524,8 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
+        lowLatency: { available: false },
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
@@ -482,6 +533,8 @@ describe("live HLS egress", () => {
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
         micArchive: false,
+        voiceTrack: false,
+        lowLatency: { available: false },
       });
     });
 
@@ -497,6 +550,29 @@ describe("live HLS egress", () => {
       // And the master switch still wins over the feature flag.
       delete process.env.LIVE_HLS_ENABLED;
       expect(liveHlsConfig().micArchive).toBe(false);
+    });
+
+    it("advertises lowLatency.available independently of the ordinary allowlist above", async () => {
+      enableHls();
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      // LL-HLS has its own flag; off is off, whatever the ordinary HLS
+      // allowlist says for this same server.
+      expect((await liveHlsConfigForServer(SERVER)).lowLatency).toEqual({
+        available: false,
+      });
+
+      process.env.LIVE_HLS_LL = "true";
+      process.env.LIVE_HLS_LL_ALLOWLIST = OTHER_SERVER;
+      // On the LL flag, but this server is not on the LL allowlist -- even
+      // though it IS on the ordinary one.
+      expect((await liveHlsConfigForServer(SERVER)).lowLatency).toEqual({
+        available: false,
+      });
+      expect((await liveHlsConfigForServer(OTHER_SERVER)).lowLatency).toEqual({
+        available: true,
+      });
+      delete process.env.LIVE_HLS_LL;
+      delete process.env.LIVE_HLS_LL_ALLOWLIST;
     });
 
     it("reconcile does not start an egress for an unlisted server, and stops one that was running", async () => {
@@ -2157,7 +2233,10 @@ describe("the mic archive picker", () => {
     const picked = pickScreenTracks([
       { identity: "peer-host", tracks: [MIC, SCREEN] },
     ]);
-    expect(picked).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+    expect(picked).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+    });
     expect("micArchiveTrackId" in picked!).toBe(false);
   });
 
@@ -2176,7 +2255,10 @@ describe("the mic archive picker", () => {
         ],
         "peer-host",
       ),
-    ).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+    });
   });
 
   it("does not mistake it for the share's audio", () => {
@@ -2198,6 +2280,85 @@ describe("the mic archive picker", () => {
       videoTrackId: "TR_screen",
       audioTrackId: "TR_screen_audio",
       micArchiveTrackId: "TR_mic_archive",
+    });
+  });
+});
+
+/**
+ * `LIVE_HLS_VOICE_TRACK`'s "separada" signal: picked BY NAME, exactly like
+ * the archive above, and for a second reason on top of pitfall 14 — the
+ * sharer's ORDINARY microphone (source `Microphone`, no special name) exists
+ * whether or not "separada" is chosen, so picking it up by source alone
+ * would attach it regardless of the host's actual mode (the bug a Farol
+ * review caught on the first version of this feature: every flagged host
+ * with a mic got a voice egress, "junto" or not).
+ */
+describe("the voice-track picker", () => {
+  const SCREEN = { source: TrackSource.SCREEN_SHARE, sid: "TR_screen" };
+  /** What the host's ordinary microphone looks like on the wire. */
+  const MIC = { source: TrackSource.MICROPHONE, sid: "TR_mic", name: "mic" };
+  /** The "separada" publication: same source, told apart by name alone. */
+  const VOICE_TRACK = {
+    source: TrackSource.MICROPHONE,
+    sid: "TR_voice_track",
+    name: "voice-track",
+  };
+
+  it("picks the publication named voice-track, not the ordinary microphone beside it", () => {
+    expect(
+      pickScreenTracks([
+        { identity: "peer-host", tracks: [MIC, SCREEN, VOICE_TRACK] },
+      ]),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+      voiceTrackId: "TR_voice_track",
+    });
+  });
+
+  it("leaves the field off entirely when the host has not chosen separada", () => {
+    // The ordinary mic is right there, unmuted or not — neither is the
+    // signal. Only the distinctly-named publication is.
+    const picked = pickScreenTracks([
+      { identity: "peer-host", tracks: [MIC, SCREEN] },
+    ]);
+    expect(picked).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+    });
+    expect("voiceTrackId" in picked!).toBe(false);
+  });
+
+  it("never takes it from a participant who is not the sharer", () => {
+    expect(
+      pickScreenTracks(
+        [
+          { identity: "peer-host", tracks: [MIC, SCREEN] },
+          { identity: "peer-cohost", tracks: [VOICE_TRACK] },
+        ],
+        "peer-host",
+      ),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+    });
+  });
+
+  it("never confuses it with the mic-archive publication", () => {
+    const ARCHIVE = {
+      source: TrackSource.MICROPHONE,
+      sid: "TR_mic_archive",
+      name: "mic-archive",
+    };
+    expect(
+      pickScreenTracks([
+        { identity: "peer-host", tracks: [SCREEN, ARCHIVE, VOICE_TRACK] },
+      ]),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+      micArchiveTrackId: "TR_mic_archive",
+      voiceTrackId: "TR_voice_track",
     });
   });
 });

@@ -173,13 +173,27 @@ comment — that hop is now Caddy on this box, not fly-proxy. Cloudflare in
 front of Caddy is invisible to `clientAddress()`, the same way Cloudflare
 proxied DNS in front of Fly already was.
 
-**Postgres.** If moving to Vultr Managed PostgreSQL, its connection string
-needs `sslmode=require` (Vultr's managed instances only accept TLS
-connections):
+**Postgres.** If moving to Vultr Managed PostgreSQL, its instances only
+accept TLS connections, but that TLS requirement belongs on `DATABASE_SSL`,
+not on the connection string. Do **not** put `?sslmode=require` on
+`DATABASE_URL` for the API/worker containers — this codebase's own pool
+(`pgSslConfig` in `server/src/db.ts`) turns TLS on from `DATABASE_SSL=true`
+(or `PGSSLMODE=require`) and always connects with `rejectUnauthorized:
+false`, which is what lets it accept a managed host's certificate at all;
+`sslmode=require` is a libpq-family query parameter for `psql` / `pg_dump`
+(and any other tool that reads connection strings the libpq way), not
+something this pool interprets itself, and it can quietly appear to take
+effect via `pg`'s own connection-string parsing while disagreeing with the
+config `pgSslConfig` sets:
 
 ```
-DATABASE_URL=postgres://<user>:<password>@<host>:16751/<db>?sslmode=require
+DATABASE_URL=postgres://<user>:<password>@<host>:16751/<db>
+DATABASE_SSL=true
 ```
+
+Reach for `sslmode=require` only when connecting by hand with `psql` or
+`pg_dump` (as `docs/DB_RUNBOOK.md` already does), never in the `.env` this
+box's containers read.
 
 Vultr Managed PostgreSQL's port is not 5432 by default — read it off the
 instance's **Connection Details** tab, don't assume it.
@@ -257,6 +271,27 @@ curl -sS https://api.pqp.gg/ready
 
 Fix anything here before touching DNS. `docker compose logs api worker
 caddy` on the box is the first thing to read when either check fails.
+
+**Run these checks from the box, not from your laptop.** `provision.sh` and
+`cloud-init.yaml` leave ufw denying 80/443 to everyone except Cloudflare's
+own published ranges (`api.pqp.gg` is proxied, orange-cloud), so a `curl`
+straight at the box's public IP or hostname from wherever you're sitting has
+its TCP connection dropped before TLS even starts — the same failure that
+hit the CI deploy workflow's own verification step. Do the pre-cutover
+health/ready checks the same way that workflow does now, over SSH:
+
+```bash
+ssh pqp@<ip> 'curl -sk --connect-to api.pqp.gg:443:127.0.0.1:443 https://api.pqp.gg/ready'
+ssh pqp@<ip> 'curl -sk --connect-to api.pqp.gg:443:127.0.0.1:443 https://api.pqp.gg/health'
+```
+
+`--connect-to` still forces the real TLS handshake for `api.pqp.gg` (SNI,
+cert, `Host` header) while dialing loopback instead of the public address,
+so this proves Caddy itself is serving the site rather than just that
+something answers on port 3001. `-k` is required with Caddyfile Mode A (the
+default): the box terminates TLS with a Cloudflare Origin CA certificate,
+which nothing but Cloudflare's own client trusts, so curl on the box would
+otherwise refuse its own reverse proxy's certificate.
 
 ## 6. Cutover
 

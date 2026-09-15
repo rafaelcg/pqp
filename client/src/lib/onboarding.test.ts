@@ -28,6 +28,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     preferences: {},
     dmPrivacy: "server_members",
     ageGate: "passed",
+    isInstanceModerator: false,
     ...overrides,
   };
 }

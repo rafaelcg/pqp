@@ -1597,3 +1597,267 @@ describe("presence deltas", () => {
     expect(chat.getPresence()).toHaveLength(3);
   });
 });
+
+describe("offline outbox", () => {
+  const store = new Map<string, string>();
+
+  beforeEach(() => {
+    store.clear();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stored(): Array<{ nonce: string; body: string }> {
+    const raw = store.get(`pqp:outbox:${ME.id}`);
+    return raw ? (JSON.parse(raw) as Array<{ nonce: string; body: string }>) : [];
+  }
+
+  it("holds an offline send in storage, marked queued, and does not put it on the wire", () => {
+    const { chat, sent, transport } = setup();
+    transport.connected = false;
+    const before = sent.length;
+
+    chat.sendMessage("typed on the train");
+
+    const [bubble] = chat.getMessages();
+    expect(bubble?.pending).toBe(true);
+    expect(bubble?.queued).toBe(true);
+    expect(sent.length).toBe(before);
+    expect(stored().map((entry) => entry.body)).toEqual(["typed on the train"]);
+    // No failure clock while offline: it would only invite a duplicate retry.
+    vi.advanceTimersByTime(11_000);
+    expect(chat.getMessages()[0]!.failed).toBeFalsy();
+  });
+
+  it("sends the outbox once the socket is ready and forgets it on the broadcast", () => {
+    const { chat, sent, transport } = setup();
+    transport.connected = false;
+    chat.sendMessage("later");
+    const nonce = chat.getMessages()[0]!.nonce!;
+
+    transport.connected = true;
+    chat.resubscribe();
+
+    const outgoing = sent.at(-1) as { type: string; nonce?: string; body?: string };
+    expect(outgoing.type).toBe("message-create");
+    expect(outgoing.nonce).toBe(nonce);
+    expect(chat.getMessages()[0]!.queued).toBe(false);
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({ body: "later" }),
+      nonce,
+    } as never);
+    expect(stored()).toEqual([]);
+    expect(chat.getMessages()[0]!.pending).toBeFalsy();
+  });
+
+  it("restores a saved send after a reload, as a queued bubble, and replays it", () => {
+    const { chat, transport } = setup();
+    transport.connected = false;
+    chat.sendMessage("before the reload");
+    const nonce = chat.getMessages()[0]!.nonce!;
+
+    // A fresh controller on the same account, the way a reload makes one.
+    const next = createTransport();
+    next.state.connected = false;
+    const reloaded = createChatController(next.transport);
+    reloaded.setCurrentUser(ME);
+    reloaded.joinChannel(CHANNEL);
+    reloaded.setMessages([serverMessage({ id: "stored-1", authorId: "someone" })]);
+
+    const bubbles = reloaded.getMessages();
+    expect(bubbles.map((message) => message.body)).toEqual(["hello", "before the reload"]);
+    expect(bubbles[1]!.nonce).toBe(nonce);
+    expect(bubbles[1]!.queued).toBe(true);
+
+    next.state.connected = true;
+    reloaded.flushOutbox();
+    const outgoing = next.sent.at(-1) as { type: string; nonce?: string };
+    expect(outgoing.type).toBe("message-create");
+    expect(outgoing.nonce).toBe(nonce);
+  });
+
+  it("forgets a send the server answered in another channel", () => {
+    const { chat, transport } = setup();
+    transport.connected = false;
+    chat.sendMessage("elsewhere");
+    const nonce = chat.getMessages()[0]!.nonce!;
+    chat.joinChannel("c0000000-0000-4000-8000-000000000002");
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({ body: "elsewhere" }),
+      nonce,
+    } as never);
+
+    expect(stored()).toEqual([]);
+  });
+
+  it("forgets a send that was rejected, timed out, or discarded", () => {
+    const { chat } = setup();
+    chat.sendMessage("one");
+    chat.sendMessage("two");
+    chat.sendMessage("three");
+    const [one, two, three] = chat.getMessages().map((message) => message.nonce!);
+    expect(stored()).toHaveLength(3);
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce: one,
+      reason: "cannot-send",
+    } as never);
+    chat.discardMessage(two!);
+    vi.advanceTimersByTime(11_000);
+    expect(chat.getMessages().find((m) => m.nonce === three)?.failed).toBe(true);
+
+    expect(stored()).toEqual([]);
+  });
+
+  it("does not keep a send that carries attachments", () => {
+    const { chat, transport } = setup();
+    transport.connected = false;
+    chat.sendMessage("with a file", null, [
+      {
+        attachmentId: "a1",
+        filename: "x.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: 1,
+        height: 1,
+        previewUrl: "blob:x",
+      },
+    ]);
+    expect(stored()).toEqual([]);
+    expect(chat.getMessages()[0]!.queued).toBeFalsy();
+  });
+});
+
+describe("offline outbox, review follow-ups", () => {
+  const store = new Map<string, string>();
+
+  beforeEach(() => {
+    store.clear();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("replays a send that was in flight when the socket dropped", () => {
+    const { chat, sent, transport } = setup();
+    chat.sendMessage("in flight");
+    const nonce = chat.getMessages()[0]!.nonce!;
+    const before = sent.length;
+
+    // The socket dropped and came back before the failure clock ran out.
+    transport.connected = false;
+    vi.advanceTimersByTime(3_000);
+    transport.connected = true;
+    chat.resubscribe();
+
+    const replayed = sent
+      .slice(before)
+      .filter((frame) => (frame as { type: string }).type === "message-create");
+    expect(replayed).toHaveLength(1);
+    expect((replayed[0] as { nonce: string }).nonce).toBe(nonce);
+    // The clock restarted with the replay: not failed at the old deadline,
+    // failed at the new one when nothing answers.
+    vi.advanceTimersByTime(8_000);
+    expect(chat.getMessages()[0]!.failed).toBeFalsy();
+    vi.advanceTimersByTime(3_000);
+    expect(chat.getMessages()[0]!.failed).toBe(true);
+    expect(chat.getOutbox()).toHaveLength(0);
+  });
+
+  it("keeps its bookkeeping no larger than the outbox", () => {
+    const { chat, transport } = setup();
+    transport.connected = false;
+    for (let i = 0; i < 260; i += 1) {
+      chat.sendMessage(`m${i}`);
+    }
+    expect(chat.getOutbox()).toHaveLength(200);
+    expect(chat.getOwnedNonceCount()).toBe(200);
+    transport.connected = true;
+    chat.flushOutbox();
+    vi.advanceTimersByTime(60_000);
+    // Everything timed out: rows, owners and generations all gone.
+    expect(chat.getOutbox()).toHaveLength(0);
+    expect(chat.getOwnedNonceCount()).toBe(0);
+    expect(chat.getTrackedSendCount()).toBe(0);
+  });
+
+  it("does not replay a send the current socket already carries", () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("once");
+    const before = sent.length;
+    chat.flushOutbox();
+    expect(sent.length).toBe(before);
+  });
+
+  it("drops the outbox from memory on sign-out and never flushes without an account", () => {
+    const { chat, sent, transport } = setup();
+    transport.connected = false;
+    chat.sendMessage("private");
+    expect(chat.getOutbox()).toHaveLength(1);
+
+    chat.setCurrentUser(null);
+    transport.connected = true;
+    const before = sent.length;
+    chat.flushOutbox();
+    chat.resubscribe();
+
+    expect(chat.getOutbox()).toHaveLength(0);
+    expect(
+      sent.slice(before).filter((f) => (f as { type: string }).type === "message-create"),
+    ).toHaveLength(0);
+    // Storage still has it for that person's next sign-in.
+    expect(store.get(`pqp:outbox:${ME.id}`)).toContain("private");
+  });
+
+  it("caps what it holds in memory and fails the oldest bubble", () => {
+    const { chat, transport } = setup();
+    transport.connected = false;
+    for (let i = 0; i < 201; i += 1) {
+      chat.sendMessage(`m${i}`);
+    }
+    expect(chat.getOutbox()).toHaveLength(200);
+    expect(chat.getOutbox()[0]!.body).toBe("m1");
+    const first = chat.getMessages().find((m) => m.body === "m0")!;
+    expect(first.failed).toBe(true);
+    expect(first.queued).toBeFalsy();
+  });
+
+  it("paces a large replay instead of sending it in one burst", () => {
+    const { chat, sent, transport } = setup();
+    transport.connected = false;
+    for (let i = 0; i < 50; i += 1) {
+      chat.sendMessage(`m${i}`);
+    }
+    const before = sent.length;
+    const creates = () =>
+      sent.slice(before).filter((f) => (f as { type: string }).type === "message-create")
+        .length;
+
+    transport.connected = true;
+    chat.flushOutbox();
+    expect(creates()).toBe(30);
+    vi.advanceTimersByTime(500);
+    expect(creates()).toBe(38);
+    vi.advanceTimersByTime(1_500);
+    expect(creates()).toBe(50);
+  });
+});

@@ -40,14 +40,17 @@ const PARTY: WatchParty = {
   cohosts: [],
   options: {
     voiceEnabled: false,
+    guests: "off",
     stageMode: "hosts_only",
     raiseHand: true,
     slowModeSeconds: 0,
     reactionsEnabled: true,
+    lowLatency: false,
   },
   viewerRole: "host",
   reminding: false,
   stage: { invited: [], hands: [], handRaised: false },
+  guests: { onAir: [], invited: [], requests: [], requestCount: 0, requested: false, position: null },
 };
 
 function person(n: number, over: Partial<CohostCandidate> = {}): CohostCandidate {
@@ -231,5 +234,26 @@ describe("the offer is a shortlist, not the membership", () => {
     // not "35 more", or it is describing a list nobody is looking at.
     const short = Array.from({ length: 5 }, (_, i) => person(i));
     expect(render({}, short)).not.toContain("data-watch-party-cohost-more");
+  });
+});
+
+/**
+ * WHO COMES FIRST (2026-09-13, Rafael): staff by cargo, then friends, then
+ * the rest, names within a tier, and the search keeps that order.
+ */
+describe("the order of the offer", () => {
+  it("puts staff first, friends next, everybody else after, by name inside each tier", () => {
+    const html = render({}, [
+      person(1, { displayName: "Zed" }),
+      person(2, { displayName: "Amy" }),
+      person(3, { displayName: "Mod Mia", priority: 2 }),
+      person(4, { displayName: "Friend Fay", priority: 3 }),
+      person(5, { displayName: "Adm Ana", priority: 1 }),
+    ]);
+    const at = (name: string) => html.indexOf(name);
+    expect(at("Adm Ana")).toBeLessThan(at("Mod Mia"));
+    expect(at("Mod Mia")).toBeLessThan(at("Friend Fay"));
+    expect(at("Friend Fay")).toBeLessThan(at("Amy"));
+    expect(at("Amy")).toBeLessThan(at("Zed"));
   });
 });

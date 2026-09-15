@@ -3,6 +3,7 @@ import type {
   CreateWatchPartyInput,
   UpdateWatchPartyInput,
   WatchParty,
+  WatchPartyGuestsRequest,
   WatchPartyPhase,
 } from "@pqp/shared";
 import { apiFetch } from "./api";
@@ -58,14 +59,24 @@ export function updateWatchParty(
  * The client names the state it wants, never the verb: the server owns the
  * transition table (`packages/shared/src/watch-party-session.ts`) and will
  * refuse a move that is not in it, so there is nothing here to keep in sync.
+ *
+ * `lowLatency` only means anything alongside `state: "live"` — the server
+ * ignores it otherwise (`watchPartyStateRequestSchema`) — and it is the ONE
+ * place the host's standing `options.lowLatency` preference actually reaches
+ * `channel_sessions.low_latency_requested`. The options PATCH
+ * (`updateWatchParty`) only ever saves the preference; this call is what
+ * turns it into the request `resolveHlsMode` reads when the egress starts.
  */
 export function setWatchPartyState(
   partyId: string,
   state: Exclude<WatchPartyPhase, "draft">,
+  lowLatency?: boolean,
 ): Promise<{ party: WatchParty | null }> {
   return apiFetch(`/api/watch-parties/${partyId}/state`, {
     method: "POST",
-    body: JSON.stringify({ state }),
+    body: JSON.stringify(
+      lowLatency !== undefined ? { state, lowLatency } : { state },
+    ),
   });
 }
 
@@ -113,6 +124,24 @@ export function setWatchPartyStage(
     | { action: "raise" | "lower" },
 ): Promise<{ party: WatchParty | null }> {
   return apiFetch(`/api/watch-parties/${partyId}/stage`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * CONVIDADOS: request/withdraw (viewer, on themselves), invite/accept/decline/
+ * remove (host or co-host, on somebody else), join/leave (the invited person,
+ * on themselves). One route, per `docs/plans/WATCH_PARTY_GUESTS.md` §5.8 —
+ * the server resolves which authority a given action needs. `/guests` is the
+ * route's new name; `/stage` (`setWatchPartyStage` above) still answers for
+ * one release, for a tab or a native build that has not shipped this yet.
+ */
+export function setWatchPartyGuestAction(
+  partyId: string,
+  input: WatchPartyGuestsRequest,
+): Promise<{ party: WatchParty | null }> {
+  return apiFetch(`/api/watch-parties/${partyId}/guests`, {
     method: "POST",
     body: JSON.stringify(input),
   });

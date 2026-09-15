@@ -193,8 +193,9 @@ jobs:
       # --ha=false IS LOAD-BEARING, not a cost tweak. Without it Fly happily
       # brings up an extra machine on its own. The machine count is a
       # deliberate manual step (`fly scale count N --region gru`, N being
-      # fly.toml's min_machines_running, 1 today), because a machine nobody
-      # decided to run has consequences the deploy log never shows (the
+      # fly.toml's min_machines_running, 2 as of the two-machine flip —
+      # docs/deploy-fly.md "Two machines in production"), because a machine
+      # nobody decided to run has consequences the deploy log never shows (the
       # min_machines_running comment in fly.toml, docs/deploy-fly.md 6a-bis);
       # the assertion after the deploy checks the number, never the deploy
       # itself.
@@ -224,8 +225,9 @@ jobs:
             -e APP_VERSION="${{ steps.commit.outputs.sha }}"
 
       # The machine-count invariant, asserted rather than assumed. The
-      # expected count is `min_machines_running` in fly.toml (1 today, by
-      # choice; docs/deploy-fly.md 6a-bis is the flip), or the repo variable
+      # expected count is `min_machines_running` in fly.toml (2 as of the
+      # two-machine flip; docs/deploy-fly.md "Two machines in production"),
+      # or the repo variable
       # PQP_API_MACHINES while a flip is in progress and the file and the app
       # briefly disagree (set it, flip, delete it). It can be broken by a
       # stray `fly scale count`, by someone dropping --ha, or by a bluegreen
@@ -278,28 +280,81 @@ jobs:
       # /api/ route answers 401 before it routes, so a stalled deploy is
       # indistinguishable from an unauthenticated request from the outside.
       # /health is the only surface that can tell you what code is running.
-      - name: Verify the deployed commit
+      #
+      # AT TWO MACHINES, THE LOAD-BALANCED HOSTNAME IS NOT ENOUGH. Curling
+      # $API_URL/health lands on whichever machine fly-proxy happens to route
+      # to, and a rolling deploy replaces one machine at a time — it is
+      # entirely possible for every attempt in a naive loop to land on the
+      # machine that already finished, "pass", and never once ask the machine
+      # still mid-rollout or stuck on the previous image. This step instead
+      # reads the machine ids straight from the assertion above's `flyctl
+      # machines list --json` and pins each request to one machine with the
+      # `fly-force-instance-id` header — the same technique
+      # docs/plans/M6_REHEARSAL_2026-09-14.md used to prove cross-instance
+      # behavior on staging — so every started machine has to individually
+      # report the expected commit before this step passes.
+      - name: Verify the deployed commit on every machine
         if: steps.relevant.outputs.needed == 'true'
         env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           API_URL: ${{ secrets.VITE_API_URL }}
           EXPECTED: ${{ steps.commit.outputs.sha }}
         run: |
+          set -uo pipefail
           if [ -z "$API_URL" ]; then
             echo "::warning::VITE_API_URL is not set, skipping the deployed-commit check"
             exit 0
           fi
-          for attempt in $(seq 1 40); do
-            body=$(curl -fsS --max-time 10 "$API_URL/health" || echo '{}')
-            got=$(printf '%s' "$body" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
-            if [ "$got" = "$EXPECTED" ]; then
-              echo "API is serving $got"
+
+          ids=$(flyctl machines list --app "$FLY_APP" --json \
+            | jq -r '[.[] | select(.state == "started") | .id] | .[]')
+          if [ -z "$ids" ]; then
+            echo "::error::No started machines to verify (the machine-count assertion above should have already caught this)."
+            exit 1
+          fi
+
+          # Probe every pending machine IN PARALLEL each attempt, not serially:
+          # with N machines a serial loop is N * (curl timeout + sleep) per
+          # attempt, so an N-machine flip made this check slower to fail in
+          # direct proportion to the machine count it exists to verify. An
+          # explicit wall-clock deadline is the backstop instead of a fixed
+          # attempt count, so the bound on total run time doesn't grow with N
+          # either.
+          pending="$ids"
+          deadline=$((SECONDS + 600))  # 10 minutes total, independent of N
+          attempt=0
+          while [ -n "$pending" ]; do
+            attempt=$((attempt + 1))
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out after 10 minutes waiting for these machines to report the deployed commit, and they are probably still serving the previous build: $pending"
+              exit 1
+            fi
+            tmpdir=$(mktemp -d)
+            for id in $pending; do
+              (
+                body=$(curl -fsS --max-time 10 -H "fly-force-instance-id: $id" "$API_URL/health" || echo '{}')
+                printf '%s' "$body" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' > "$tmpdir/$id"
+              ) &
+            done
+            wait
+            still=""
+            for id in $pending; do
+              got=$(cat "$tmpdir/$id" 2>/dev/null || echo "")
+              if [ "$got" = "$EXPECTED" ]; then
+                echo "machine $id is serving $got"
+              else
+                echo "attempt $attempt: machine $id serving '${got:-unknown}', want '$EXPECTED'"
+                still="$still $id"
+              fi
+            done
+            rm -rf "$tmpdir"
+            pending=$(printf '%s\n' "$still" | xargs -n1 2>/dev/null || true)
+            if [ -z "$pending" ]; then
+              echo "Every started machine is serving $EXPECTED."
               exit 0
             fi
-            echo "attempt $attempt: serving '${got:-unknown}', want '$EXPECTED'"
             sleep 15
           done
-          echo "::error::API never reported the deployed commit. It is probably still serving the previous build."
-          exit 1
 
       # The worker (fly.worker.toml): same image the step above just pushed,
       # under the label of this commit, so the two apps can never run two
@@ -342,3 +397,60 @@ jobs:
             echo "::error::Expected exactly 1 worker machine, found $live. Fix with: fly scale count 1 --region gru --app $WORKER_APP"
             exit 1
           fi
+
+      # A3.1 (docs/plans/ALWAYS_ON.md): `/health` above proves the process is
+      # up and serving this commit, but as of A3.1 it no longer touches
+      # Postgres at all — a release that can never reach the database now
+      # reports healthy instantly, which is exactly the guarantee the old
+      # DB-coupled `/health` used to give this workflow for free. `/ready`
+      # is the endpoint built to answer that question and is unaffected by
+      # A3.1, so it is what closes the gap: routing health and deploy safety
+      # checked by two different endpoints instead of one overloaded one.
+      #
+      # DELIBERATELY AFTER the worker deploy above, not before. A first
+      # review of this change caught that putting it earlier meant a failed
+      # readiness check (Postgres blip, LiveKit hiccup) failed the whole job
+      # before the worker step ever ran, leaving the worker on the previous
+      # commit while the API had already moved to the new one — the exact
+      # API/worker image split `jobs.ts` depends on never happening. Here,
+      # both apps are already on the same image by the time this can fail,
+      # so a readiness failure is a loud alert about the release, not a
+      # second problem (a stale worker) on top of it.
+      #
+      # SKIPPABLE ON PURPOSE, same call as its sibling above ("Verify the
+      # deployed commit"), not an oversight a later Farol pass should keep
+      # re-flagging: `VITE_API_URL` is a required secret on THIS repo's own
+      # `pqp-api` deploy (see CLAUDE.md's GitHub Actions secrets table) and
+      # is always set here, so the skip branch is dead on every run that
+      # matters to this project. It exists only for a fork or a self-host
+      # running this workflow against an app that has not set the secret —
+      # exactly the audience `docs/deploy-fly.md` is written for — where the
+      # alternative is a hard failure on every deploy for a check the fork
+      # has no way to satisfy yet. Made non-skippable, forks would either
+      # never merge this workflow file at all (silently losing every OTHER
+      # safety check in it) or set the secret to a throwaway value just to
+      # clear the gate, which is worse than the warning below. The 40-attempt
+      # deployed-commit check the sibling step runs and the machine
+      # count/region/image assertions above it are NOT skippable — this is
+      # the one check this repo cannot demand of an app it does not own.
+      - name: Verify the release is ready (Postgres reachable)
+        if: steps.relevant.outputs.needed == 'true'
+        env:
+          API_URL: ${{ secrets.VITE_API_URL }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::warning::VITE_API_URL is not set, skipping the readiness check"
+            exit 0
+          fi
+          for attempt in $(seq 1 10); do
+            status=$(curl -s -o /tmp/ready-body.json -w '%{http_code}' --max-time 10 "$API_URL/ready" || echo '000')
+            if [ "$status" = "200" ]; then
+              echo "API is ready: $(cat /tmp/ready-body.json)"
+              exit 0
+            fi
+            echo "attempt $attempt: /ready answered $status"
+            cat /tmp/ready-body.json 2>/dev/null || true
+            sleep 5
+          done
+          echo "::error::/ready never went healthy after the deploy — the release is up but cannot reach a dependency (Postgres, LiveKit or storage; see the last response body above). Check docs/MONITORING.md."
+          exit 1

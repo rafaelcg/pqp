@@ -1,14 +1,24 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildMasterPlaylist,
+  CAMERA_RUNG,
+  CAMERA_RUNG_NAME,
+  CAMERA_RUNG_WITH_VOICE,
+  VOICE_RUNG,
+  decideCameraEgress,
   decideLadder,
   DEFAULT_MAX_LADDER_MBPS,
+  HLS_CAMERA_MBPS,
   HLS_RUNG_MBPS,
+  HLS_VOICE_ONLY_MBPS,
   LADDER_RUNGS,
   ladderBudgetMbps,
   ladderMaxFramerate,
   parseLadder,
   rungEncodingOptions,
+  hlsRungVideoKbps,
+  isKnownHlsRung,
+  withPqpSessionTag,
   type LadderRung,
 } from "./hls-ladder.js";
 
@@ -380,5 +390,247 @@ describe("buildMasterPlaylist", () => {
     expect(body.startsWith("#EXTM3U\n")).toBe(true);
     expect(body.match(/#EXT-X-STREAM-INF/g)).toHaveLength(1);
     expect(body.endsWith("\n")).toBe(true);
+  });
+
+  it("tags the master with the session id (BROADCAST_PIPELINE B0.4) when one is given", () => {
+    const body = buildMasterPlaylist(variants, "session-123");
+    const lines = body.split("\n");
+    expect(lines[0]).toBe("#EXTM3U");
+    expect(lines[1]).toBe("#EXT-X-PQP-SESSION:session-123");
+  });
+
+  it("omits the session tag entirely when none is given", () => {
+    const body = buildMasterPlaylist(variants);
+    expect(body).not.toContain("#EXT-X-PQP-SESSION");
+  });
+});
+
+describe("withPqpSessionTag", () => {
+  it("inserts the tag right after #EXTM3U", () => {
+    const playlist = "#EXTM3U\n#EXT-X-VERSION:3\nfoo.ts\n";
+    expect(withPqpSessionTag(playlist, "abc-123")).toBe(
+      "#EXTM3U\n#EXT-X-PQP-SESSION:abc-123\n#EXT-X-VERSION:3\nfoo.ts\n",
+    );
+  });
+
+  it("prepends the tag when the playlist does not start with #EXTM3U", () => {
+    expect(withPqpSessionTag("#EXT-X-VERSION:3\n", "abc-123")).toBe(
+      "#EXT-X-PQP-SESSION:abc-123\n#EXT-X-VERSION:3\n",
+    );
+  });
+
+  it("is a no-op for a null, undefined or empty id", () => {
+    const playlist = "#EXTM3U\nfoo.ts\n";
+    expect(withPqpSessionTag(playlist, null)).toBe(playlist);
+    expect(withPqpSessionTag(playlist, undefined)).toBe(playlist);
+    expect(withPqpSessionTag(playlist, "")).toBe(playlist);
+  });
+});
+
+describe("decideCameraEgress", () => {
+  it("starts the camera when the box has room", () => {
+    expect(
+      decideCameraEgress({
+        runningRungs: 2,
+        sfuLoadMbps: 0,
+        boxBudgetMbps: DEFAULT_MAX_LADDER_MBPS * 2,
+      }),
+    ).toMatchObject({ start: true, refusal: null });
+  });
+
+  it("refuses on the box budget, never on the ladder's", () => {
+    // THE TRADE ONLY GOES ONE WAY. `LIVE_HLS_MAX_LADDER_MBPS` governs how many
+    // renditions of the SHARE a party gets, and a webcam must never be the
+    // reason a viewer loses a rung of the film. A box with nothing left simply
+    // gets no camera.
+    const decision = decideCameraEgress({
+      runningRungs: 4,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS * 4,
+    });
+    expect(decision).toMatchObject({ start: false, refusal: "box-budget" });
+    expect(decision.boxMbps).toBeGreaterThan(HLS_RUNG_MBPS * 4);
+  });
+
+  it("counts the WebRTC already on the box", () => {
+    // The cameras and screen shares on the same machine are priced by
+    // `promotion.ts`, and this must not pretend they are free.
+    const budget = HLS_RUNG_MBPS * 2;
+    expect(
+      decideCameraEgress({ runningRungs: 1, sfuLoadMbps: 0, boxBudgetMbps: budget }),
+    ).toMatchObject({ start: true });
+    expect(
+      decideCameraEgress({
+        runningRungs: 1,
+        sfuLoadMbps: HLS_RUNG_MBPS,
+        boxBudgetMbps: budget,
+      }),
+    ).toMatchObject({ start: false, refusal: "box-budget" });
+  });
+
+  it("is priced well under a full rendition", () => {
+    // `docs/CAPACITY.md` §2: 0.51 core at 720p30, 0.88 at 1080p30. A 360p30
+    // rendition is roughly a fifth of the 720p pixel rate, so 0.2 to 0.3 of a
+    // core, and the top of that range is what is charged.
+    expect(HLS_CAMERA_MBPS).toBeLessThan(HLS_RUNG_MBPS / 3);
+    expect(HLS_CAMERA_MBPS).toBeGreaterThan(0);
+  });
+
+  it("prices a voice-only slot well under a camera's own cost", () => {
+    // LIVE_HLS_VOICE_TRACK's audio-only shape (VOICE_RUNG, no camera
+    // published) has no frame to encode at all, so it must never be charged
+    // as if it were a webcam.
+    expect(HLS_VOICE_ONLY_MBPS).toBeLessThan(HLS_CAMERA_MBPS);
+    expect(HLS_VOICE_ONLY_MBPS).toBeGreaterThan(0);
+  });
+
+  it("defaults hasVideo to a camera's cost, unchanged for every caller before the flag", () => {
+    const withDefault = decideCameraEgress({
+      runningRungs: 0,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS,
+    });
+    const explicitVideo = decideCameraEgress({
+      runningRungs: 0,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS,
+      hasVideo: true,
+    });
+    expect(withDefault.boxMbps).toBe(explicitVideo.boxMbps);
+  });
+
+  it("charges the cheaper voice-only rate when hasVideo is false", () => {
+    const camera = decideCameraEgress({
+      runningRungs: 0,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS,
+      hasVideo: true,
+    });
+    const voiceOnly = decideCameraEgress({
+      runningRungs: 0,
+      sfuLoadMbps: 0,
+      boxBudgetMbps: HLS_RUNG_MBPS,
+      hasVideo: false,
+    });
+    expect(voiceOnly.boxMbps).toBeLessThan(camera.boxMbps);
+    expect(voiceOnly.boxMbps).toBeCloseTo(HLS_VOICE_ONLY_MBPS, 6);
+  });
+
+  it("can start a voice-only slot on a box a full camera would be refused on", () => {
+    // The whole point of pricing it separately: a box too tight for a 0.3-core
+    // webcam still has room for a 0.03-core voice-only rung.
+    const budget = HLS_RUNG_MBPS * 3 + HLS_CAMERA_MBPS * 0.5;
+    expect(
+      decideCameraEgress({
+        runningRungs: 3,
+        sfuLoadMbps: 0,
+        boxBudgetMbps: budget,
+        hasVideo: true,
+      }),
+    ).toMatchObject({ start: false, refusal: "box-budget" });
+    expect(
+      decideCameraEgress({
+        runningRungs: 3,
+        sfuLoadMbps: 0,
+        boxBudgetMbps: budget,
+        hasVideo: false,
+      }),
+    ).toMatchObject({ start: true, refusal: null });
+  });
+});
+
+describe("CAMERA_RUNG_WITH_VOICE and VOICE_RUNG", () => {
+  it("share CAMERA_RUNG_NAME with CAMERA_RUNG, so the slot's object prefix and playlist URL never move", () => {
+    // `RoomHls.camera` can hold any of the three shapes across the same
+    // party (mic added, camera turned off, both on) and the viewer-facing
+    // path must not change underneath them.
+    expect(CAMERA_RUNG_WITH_VOICE.name).toBe(CAMERA_RUNG_NAME);
+    expect(VOICE_RUNG.name).toBe(CAMERA_RUNG_NAME);
+  });
+
+  it("carries the camera's own picture plus a voice-sized audio bitrate", () => {
+    expect(CAMERA_RUNG_WITH_VOICE.width).toBe(CAMERA_RUNG.width);
+    expect(CAMERA_RUNG_WITH_VOICE.height).toBe(CAMERA_RUNG.height);
+    expect(CAMERA_RUNG_WITH_VOICE.videoKbps).toBe(CAMERA_RUNG.videoKbps);
+    expect(CAMERA_RUNG_WITH_VOICE.audioKbps).toBeGreaterThan(0);
+  });
+
+  it("is audio-only: no video bitrate to spend on a picture nobody published", () => {
+    expect(VOICE_RUNG.videoKbps).toBe(0);
+    expect(VOICE_RUNG.audioKbps).toBeGreaterThan(0);
+  });
+});
+
+describe("the camera rung", () => {
+  it("is not on the ladder, so no master playlist can list it", () => {
+    // `sessionRungs` filters stored rungs through `LADDER_RUNGS`. A camera in
+    // that table is a variant a viewer's ABR could climb onto, and they would
+    // watch a webcam instead of the film.
+    expect(LADDER_RUNGS[CAMERA_RUNG_NAME]).toBeUndefined();
+    expect(Object.values(LADDER_RUNGS)).not.toContain(CAMERA_RUNG);
+  });
+
+  it("asks the encoder for no audio at all", () => {
+    // Proto3: zero is unset, so `audioBitrate: 0` is the video-only request.
+    // The audience's sound comes off the main stream, which is the only place
+    // it is mixed.
+    expect(CAMERA_RUNG.audioKbps).toBe(0);
+    expect(rungEncodingOptions(CAMERA_RUNG)).toMatchObject({
+      width: 640,
+      height: 360,
+      framerate: 30,
+      videoBitrate: 400,
+      audioBitrate: 0,
+    });
+  });
+
+  it("matches the presenter's camera cap while presenting", () => {
+    // 640x360, 30 fps, 400 kbit/s. The egress transcodes from the published
+    // track, so a rung above it is a core spent inventing pixels.
+    expect(CAMERA_RUNG).toMatchObject({
+      width: 640,
+      height: 360,
+      framerate: 30,
+      videoKbps: 400,
+    });
+  });
+});
+
+describe("isKnownHlsRung / hlsRungVideoKbps", () => {
+  it("recognises every ladder rung and the camera rung", () => {
+    for (const rung of Object.keys(LADDER_RUNGS)) {
+      expect(isKnownHlsRung(rung)).toBe(true);
+      expect(hlsRungVideoKbps(rung)).toBe(LADDER_RUNGS[rung]!.videoKbps);
+    }
+    expect(isKnownHlsRung(CAMERA_RUNG_NAME)).toBe(true);
+    expect(hlsRungVideoKbps(CAMERA_RUNG_NAME)).toBe(CAMERA_RUNG.videoKbps);
+  });
+
+  it("refuses an arbitrary string", () => {
+    expect(isKnownHlsRung("some-made-up-rung")).toBe(false);
+    expect(hlsRungVideoKbps("some-made-up-rung")).toBeNull();
+  });
+
+  it("refuses every inherited Object.prototype property name -- the exact bypass a plain object literal lookup allows", () => {
+    // A Farol finding, 2026-09-13: `({...})[key]` for an attacker-controlled
+    // `key` like "toString" or "constructor" returns a real, truthy value
+    // off the prototype chain rather than undefined, which let a client
+    // send `rung: "toString"` and have it accepted as a known rung.
+    for (const key of [
+      "toString",
+      "constructor",
+      "hasOwnProperty",
+      "valueOf",
+      "__proto__",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+    ]) {
+      expect(isKnownHlsRung(key)).toBe(false);
+      expect(hlsRungVideoKbps(key)).toBeNull();
+    }
+  });
+
+  it("empty string is not a known rung", () => {
+    expect(isKnownHlsRung("")).toBe(false);
   });
 });

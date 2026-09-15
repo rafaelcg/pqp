@@ -1,22 +1,64 @@
-import { getPool } from "../db.js";
+import { getPool, DatabaseUnavailableError } from "../db.js";
 import { signRequest } from "../lib/s3.js";
-import { verifyHlsViewerToken } from "./hls-viewer-token.js";
+import { mintHlsPartyPass, verifyHlsViewerToken } from "./hls-viewer-token.js";
 import {
   hlsObjectPrefix,
   hlsUrlTtlSeconds,
   liveHlsStorageConfig,
   internalPlaylistUrl,
+  playlistBaseUrl,
   sessionPrefixPattern,
 } from "./hls-egress.js";
 import {
   buildMasterPlaylist,
+  hlsRungVideoKbps,
   LADDER_RUNGS,
+  withPqpSessionTag,
   type MasterVariant,
 } from "./hls-ladder.js";
-import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
+import { HLS_PARTY_PASS_PARAM, HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
+import { hlsSessionOwnedElsewhere } from "./hls-ownership.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * A MEDIA SEGMENT NEVER CHANGES ONCE THE EGRESS WRITES IT, so every fetch of
+ * one is a request for the same bytes forever -- the textbook case for
+ * `Cache-Control: immutable`. Nothing in the write path can say so today:
+ * LiveKit egress 1.14's `S3Upload` (`livekit.S3Upload` in
+ * `@livekit/protocol`) carries `metadata` (arbitrary `x-amz-meta-*` pairs,
+ * not a real HTTP header), `tagging` and `content_disposition`, and no field
+ * for `Cache-Control` at all -- confirmed against the actual PUT, not just
+ * the protobuf: `livekit/storage`'s `s3Storage.upload` (`s3.go`) builds its
+ * `s3.PutObjectInput` from exactly `Body`, `Bucket`, `ContentType`, `Key`,
+ * `Metadata` and `ContentDisposition` (defaulted to `"inline"`), nothing
+ * else. So this cannot be set at PUT time without forking egress.
+ *
+ * This proxy is a GET path, not the PUT path, but S3's `GetObject` (which R2
+ * implements) accepts a `response-cache-control` query override that
+ * controls only the header THIS response carries, independent of what (if
+ * anything) was stored on the object -- exactly the "Worker on GET" shape
+ * `docs/plans/BROADCAST_PIPELINE.md` B1.4 asks for, minus a Worker: the
+ * override rides on the presigned URL the client already fetches directly
+ * from R2, so every viewer's own repeat requests (a seek backward, a stall
+ * retry) hit their OWN browser cache instead of R2 again. It does NOT give
+ * two different viewers a shared cache entry -- their URLs differ by SigV4
+ * signature (`?X-Amz-Signature=...`), so a CDN sitting in front of the raw R2
+ * endpoint (there isn't one today) would still see distinct URLs per viewer
+ * per signing bucket. Cross-viewer sharing needs either an R2-side rule tied
+ * to a stable, unsigned path, or the edge Worker serving segment bytes itself
+ * off its own R2 credentials -- both out of scope for this change; see
+ * `docs/WATCH_PARTY.md` §"Segments at the edge" for the design and why the
+ * Worker option is the one to build when `LIVE_HLS_S3_*` credentials reach
+ * `tools/hls-edge/`.
+ */
+const SEGMENT_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 /**
  * THE CLOCK A SEGMENT URL IS SIGNED WITH, AND WHY IT IS NOT `Date.now()`.
@@ -150,6 +192,28 @@ function segmentMemoFor(key: string): Map<string, MemoisedSegmentUrl> {
  */
 export const HLS_PLAYLIST_CACHE_TTL_MS = 1_000;
 
+/**
+ * A3.1's stale-while-the-breaker-is-open fallback (`renderCachedPlaylist`,
+ * `sessionRungs` below) is bounded to this long past the last render that
+ * actually confirmed the session live, and it exists for exactly one
+ * security reason: `DatabaseUnavailableError` means the `ended_at IS NULL`
+ * liveness/authorization check could not run, not that it ran and passed. A
+ * session can legitimately end (the write commits, `renderSignedPlaylist`
+ * would now 404) and the breaker can then open for an unrelated reason on
+ * the very next poll; without a bound, that poll would keep re-serving the
+ * pre-end body forever, and a viewer who should have lost access the moment
+ * the session ended keeps a working stream for as long as the outage lasts
+ * and their presigned segment URLs remain valid — minutes, on this
+ * deployment's own TTLs. Bounding it to 30s (this codebase's own live-window
+ * size — see `EGRESS_LIVE_WINDOW_SEGMENTS`/`hls-live-window.ts`) rides out
+ * the pool-queue and single-slow-probe blips this breaker is tuned to
+ * recover from within its own grace/cooldown windows, while a real,
+ * sustained outage degrades to the honest `database_unavailable` response
+ * within half a minute rather than serving a possibly-revoked stream
+ * indefinitely.
+ */
+export const STALE_ON_BREAKER_MAX_MS = 30_000;
+
 interface CachedPlaylist {
   /** Resolved body, once the render finished. */
   body?: string;
@@ -180,7 +244,12 @@ export function resetHlsPlaylistCacheForTests(): void {
   windowHistory.clear();
   segmentUrlMemo.clear();
   stopAllKeepWarmLoops();
+  keepWarmOwnership.clear();
+  keepWarmHandovers.clear();
+  keepWarmRelievedAt.clear();
   keepWarmRenders = 0;
+  keepWarmDeclined = 0;
+  keepWarmAdopted = 0;
 }
 
 /**
@@ -203,10 +272,17 @@ export function resolveHlsPlaylistViewer(input: {
   channelId: string;
   startedAt: number;
   now?: number;
+  /** See `ViewerClaims.p` in `hls-viewer-token.ts`. The replay proxy passes
+   * `"replay"` so an ordinary live-stream token cannot be reused against it. */
+  purpose?: "live" | "replay";
 }): { userId: string; issuedAt: number | null } | null {
   const fromToken = verifyHlsViewerToken(
     input.token,
-    { channelId: input.channelId, startedAt: input.startedAt },
+    {
+      channelId: input.channelId,
+      startedAt: input.startedAt,
+      purpose: input.purpose,
+    },
     input.now,
   );
   // A token that verifies but names somebody else than the authenticated
@@ -296,6 +372,30 @@ async function renderCachedPlaylist(
       return body;
     })
     .catch((error: unknown) => {
+      // A3.1 (docs/plans/ALWAYS_ON.md): the DB breaker is open, so the
+      // `ended_at IS NULL` liveness check inside `renderSignedPlaylist`
+      // fast-rejected instead of confirming the session either way. Rather
+      // than fail every viewer's next poll, keep answering with the last
+      // body this session actually rendered — the party survives a DB blip
+      // on whatever window it already had, same as `perf/read-cache`'s
+      // stale-while-revalidate for everything else. Scoped to exactly this
+      // error: a real `HlsPlaylistNotFound` (the session legitimately
+      // ended) must still 404, or a stale window would go on being served
+      // for a stream that is actually over — the one behaviour the comment
+      // on `buildSignedPlaylist` above promises callers.
+      if (
+        error instanceof DatabaseUnavailableError &&
+        cached?.body !== undefined &&
+        now - cached.at <= STALE_ON_BREAKER_MAX_MS
+      ) {
+        // Left at the cached `at`, not refreshed to `now`: the entry still
+        // reads as stale, so the very next poll tries a fresh render rather
+        // than being stuck on this fallback until the TTL logic forgets it
+        // was ever a fallback, and the `STALE_ON_BREAKER_MAX_MS` bound above
+        // still measures from the same, real last-confirmed-live instant.
+        playlistCache.set(key, { body: cached.body, at: cached.at });
+        return cached.body;
+      }
       // A failed render is not cached: the next viewer should retry rather
       // than inherit a 404 from a session that was mid-cleanup.
       playlistCache.delete(key);
@@ -331,6 +431,39 @@ async function renderCachedPlaylist(
  * (itself cached, so this costs nothing beyond what a master request already
  * costs), so a rung that starts mid-party is picked up on the next tick
  * without restarting anything.
+ *
+ * AND ONE LOOP PER SESSION PER CLUSTER, not per machine. The loop is armed by
+ * a VIEWER's request, and production runs two `pqp-api` machines behind a
+ * proxy with no session affinity, so both of them arm a loop for the same
+ * party within seconds of each other: two full ladder re-renders every two
+ * seconds, two listings, two sets of signatures, for one set of playlists in
+ * one bucket that neither machine's copy improves. Only the machine that owns
+ * the session's `hls_sessions` rows warms it (`hlsSessionOwnedElsewhere`); the
+ * other one serves every viewer exactly as before, from the shared cache and
+ * from storage, and simply does not poll on its own clock.
+ *
+ * STANDING DOWN IS NOT ENOUGH ON ITS OWN, and getting that wrong would be a
+ * worse bug than the one this fixes. The owner only arms a loop when a VIEWER
+ * polls IT, so an audience that all landed on the other machine (two viewers,
+ * or an owner whose own loop idled out hours into a party) would leave NOBODY
+ * warming. So the machine that cannot do the work asks the one that can
+ * (`voice.hlsKeepWarm`), the same shape as `voice.hlsReconcile`.
+ *
+ * AND IT DOES NOT STAND DOWN UNTIL THE OWNER SAYS IT HAS THE JOB. A publish is
+ * fire-and-forget and the transport DROPS rather than buffers while it is
+ * reconnecting, so "I published a hand-over" is not "somebody is warming
+ * this": a frame lost in that window would take the stream's only warmer with
+ * it, silently. The owner answers `voice.hlsKeepWarmTaken` once its own loop
+ * is running, and only that answer stops this loop. No answer — a dropped
+ * frame, a bus that is down, an owner that went away between the row and the
+ * frame — means this machine keeps warming, which is the fail-open rule below
+ * applied to the one case that cannot be detected locally.
+ *
+ * WARMING IS THE FAIL-OPEN SIDE. An unstamped row, the registry off, a bus
+ * that is off (nobody to hand the job to), or a lookup this process could not
+ * make all leave the loop running: a rung warmed twice costs money, a rung
+ * warmed by nobody costs the viewer who switches to it a third of a window
+ * (which is the bug this loop exists to fix).
  */
 export const HLS_KEEP_WARM_INTERVAL_MS = 2_000;
 
@@ -349,6 +482,142 @@ const keepWarmLoops = new Map<string, KeepWarmLoop>();
 
 /** Warm renders performed by the loop, for metrics. */
 let keepWarmRenders = 0;
+
+/**
+ * Loops this process declined to run (or stopped) because another live
+ * instance owns the session. Pitfall 12: a guard nobody can count is a guard
+ * nobody knows is running. Belongs at zero on one machine, and non-zero within
+ * a minute of a watch party running on two.
+ */
+let keepWarmDeclined = 0;
+
+/** Loops this process armed because the OTHER machine handed the job over. */
+let keepWarmAdopted = 0;
+
+/**
+ * "I have a viewer for this session and it is not mine to warm." Published by
+ * the machine standing down, acted on by the owner and by nobody else: every
+ * instance that hears it asks the same ownership question, and only the one
+ * whose answer is "not somebody else's" arms anything. A third machine
+ * therefore stays quiet instead of arming a loop that would only stand down
+ * again and re-publish.
+ */
+const HLS_KEEP_WARM_TOPIC = "voice.hlsKeepWarm";
+
+/**
+ * "I have it" — the owner's answer, and the only thing that stops a non-owner's
+ * loop. See the `STANDING DOWN` note above for why an unacknowledged hand-over
+ * must not.
+ */
+const HLS_KEEP_WARM_TAKEN_TOPIC = "voice.hlsKeepWarmTaken";
+
+/**
+ * How often a machine waiting to be relieved re-asks. The ask is one small
+ * frame and the answer ends it, so this only repeats while frames are being
+ * lost — precisely when repeating is the point.
+ */
+const HLS_KEEP_WARM_HANDOVER_RETRY_MS = 6_000;
+
+/** Per session, when this process last asked the owner to take over. */
+const keepWarmHandovers = new Map<string, number>();
+
+/** Per session, when the owner last relieved this process of it. */
+const keepWarmRelievedAt = new Map<string, number>();
+
+/**
+ * How long a machine that has been relieved stays stood down before a viewer
+ * request re-arms it and re-asks. This is the window in which an owner that
+ * dies leaves its stream unwarmed, so it is deliberately much shorter than the
+ * ownership answer's own TTL: the re-ask is cheap and self-cancelling (the
+ * owner answers in a round trip, long before the re-armed loop's first tick),
+ * while the alternative is a party going cold for half a minute every time a
+ * machine goes away.
+ */
+const KEEP_WARM_REARM_MS = 5_000;
+
+/** Loops handed to the owner over the bus. For metrics. */
+export function hlsKeepWarmAdopted(): number {
+  return keepWarmAdopted;
+}
+
+/**
+ * The ownership answer per session, so the decision costs one query per
+ * session per TTL rather than one per two-second tick. Short on purpose: the
+ * owner can change mid-party (a deploy hands the session to the machine that
+ * adopts it), and this is how long the new owner waits before warming.
+ */
+const KEEP_WARM_OWNER_TTL_MS = 30_000;
+const keepWarmOwnership = new Map<string, { ownedElsewhere: boolean; at: number }>();
+
+/**
+ * An entry is only useful while it is inside its TTL, and a process that runs
+ * for weeks sees every session the deployment ever streamed. Pruned on every
+ * write rather than on a timer of its own: the map is read on a two-second
+ * tick and written once per session per TTL, so the sweep is cheap and there
+ * is no case where an entry outlives its own expiry by more than one write.
+ */
+const KEEP_WARM_OWNERSHIP_MAX = 256;
+
+function pruneKeepWarmOwnership(now: number): void {
+  // AMORTISED, not per refresh. Scanning the whole map on every refresh is
+  // O(N) work per session per TTL — quadratic in the number of sessions a box
+  // holds at once, for a map that in practice has single digits in it. Past
+  // the bound (far above any real concurrent-session count) one scan clears
+  // every expired entry at once, so the cost per write is O(1) amortised and
+  // the map is still bounded by what is genuinely live.
+  if (keepWarmOwnership.size <= KEEP_WARM_OWNERSHIP_MAX) {
+    return;
+  }
+  for (const [key, entry] of keepWarmOwnership) {
+    if (now - entry.at >= KEEP_WARM_OWNER_TTL_MS) {
+      keepWarmOwnership.delete(key);
+    }
+  }
+  for (const [key, at] of keepWarmHandovers) {
+    if (now - at >= KEEP_WARM_OWNER_TTL_MS) {
+      keepWarmHandovers.delete(key);
+    }
+  }
+  for (const [key, at] of keepWarmRelievedAt) {
+    if (now - at >= KEEP_WARM_OWNER_TTL_MS) {
+      keepWarmRelievedAt.delete(key);
+    }
+  }
+}
+
+/** Sessions this process left to the machine that owns them. For metrics. */
+export function hlsKeepWarmDeclined(): number {
+  return keepWarmDeclined;
+}
+
+/**
+ * Is somebody else warming this session? Cached both ways for
+ * `KEEP_WARM_OWNER_TTL_MS`, and a failed lookup keeps the previous answer
+ * rather than inventing one: "could not ask" is not "nobody owns it", and it
+ * is not "somebody does" either.
+ */
+async function keepWarmOwnedElsewhere(
+  channelId: string,
+  startedAt: number,
+  key: string,
+  now: number,
+): Promise<boolean | null> {
+  const known = keepWarmOwnership.get(key);
+  if (known && now - known.at < KEEP_WARM_OWNER_TTL_MS) {
+    return known.ownedElsewhere;
+  }
+  const answer = await hlsSessionOwnedElsewhere({
+    channelId,
+    objectPrefix: hlsObjectPrefix(channelId, startedAt),
+    prefixPattern: sessionPrefixPattern(channelId, startedAt),
+  });
+  if (answer === null) {
+    return known?.ownedElsewhere ?? null;
+  }
+  pruneKeepWarmOwnership(now);
+  keepWarmOwnership.set(key, { ownedElsewhere: answer, at: now });
+  return answer;
+}
 
 function keepWarmSessionKey(channelId: string, startedAt: number): string {
   return `${channelId}/${startedAt}`;
@@ -370,6 +639,32 @@ function touchKeepWarmSession(channelId: string, startedAt: number, now: number)
   if (loop) {
     loop.lastRequestedAt = now;
     return;
+  }
+  // Handed over and relieved: serve this viewer from the shared cache and
+  // storage, and do not re-arm a loop the owner would only relieve again — but
+  // only for KEEP_WARM_REARM_MS, NOT for the whole ownership TTL.
+  //
+  // THE OWNER CAN DIE BETWEEN TWO OF THESE. If it does, nothing tells this
+  // process: the rows still name a machine whose heartbeat has not expired
+  // yet, and the audience is here. So it re-arms, and asks again AT ONCE
+  // rather than on the loop's first tick — a live owner answers in a round
+  // trip and this loop is stopped before it has rendered anything, while a
+  // dead one answers never and this machine simply keeps warming, which is the
+  // whole fail-open rule. The cost of an owner dying is then seconds instead
+  // of half a minute, and the cost of one that has not is one frame each way
+  // per `KEEP_WARM_REARM_MS`, whatever the audience does in between.
+  const known = keepWarmOwnership.get(key);
+  const elsewhere =
+    known?.ownedElsewhere === true && now - known.at < KEEP_WARM_OWNER_TTL_MS;
+  if (elsewhere) {
+    const relievedAt = keepWarmRelievedAt.get(key);
+    if (relievedAt !== undefined && now - relievedAt < KEEP_WARM_REARM_MS) {
+      return;
+    }
+    if (isBusEnabled()) {
+      keepWarmHandovers.set(key, now);
+      publishToCluster(HLS_KEEP_WARM_TOPIC, { channelId, startedAt });
+    }
   }
   const timer = setInterval(() => {
     void runKeepWarmTick(channelId, startedAt, key);
@@ -399,9 +694,33 @@ async function runKeepWarmTick(
   }
   loop.ticking = true;
   try {
+    // WHOSE SESSION IS THIS? Asked before anything is fetched, so a machine
+    // that is not the owner never touches the bucket on the loop's account.
+    // `null` (the lookup failed and nothing was known) leaves the loop running
+    // and tries again next tick: warming twice is the cheap mistake.
+    const ownedElsewhere = await keepWarmOwnedElsewhere(
+      channelId,
+      startedAt,
+      key,
+      now,
+    );
+    if (ownedElsewhere === true && isBusEnabled()) {
+      // ASK, AND KEEP WARMING UNTIL THE ANSWER COMES. Stopping here on the
+      // strength of a fire-and-forget publish is how a stream ends up with no
+      // warmer at all: the transport drops frames while it reconnects, and
+      // nothing local can tell that apart from a frame that arrived. The loop
+      // stops in the `voice.hlsKeepWarmTaken` handler and nowhere else.
+      // Re-asked on a slow cadence so a lost frame is retried without turning
+      // a two-second tick into a two-second publish.
+      const askedAt = keepWarmHandovers.get(key) ?? 0;
+      if (now - askedAt >= HLS_KEEP_WARM_HANDOVER_RETRY_MS) {
+        keepWarmHandovers.set(key, now);
+        publishToCluster(HLS_KEEP_WARM_TOPIC, { channelId, startedAt });
+      }
+    }
     let rungs: (string | undefined)[];
     try {
-      const list = await sessionRungs(channelId, startedAt, now);
+      const { rungs: list } = await sessionRungs(channelId, startedAt, now);
       // A pre-ladder session (no rung rows at all) still has one media
       // playlist to keep warm: `rung: undefined`.
       rungs = list.length > 0 ? list : [undefined];
@@ -444,6 +763,102 @@ function stopAllKeepWarmLoops(): void {
   }
 }
 
+/**
+ * The other machine has a viewer for a session it does not own. Every instance
+ * hears this; only the owner acts on it. `false` from the probe means "no LIVE
+ * instance other than me owns this", which on the machine holding the rows is
+ * exactly "mine", and on a third machine (A owns, C is neither) is `true`, so
+ * C stays quiet. A frame for a session whose rows are gone arms a loop that
+ * stops itself on its first render, which is the same self-limiting path an
+ * ended session already takes.
+ */
+subscribeToCluster(HLS_KEEP_WARM_TOPIC, (data) => {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof (data as { channelId?: unknown }).channelId !== "string" ||
+    typeof (data as { startedAt?: unknown }).startedAt !== "number"
+  ) {
+    return;
+  }
+  const { channelId, startedAt } = data as {
+    channelId: string;
+    startedAt: number;
+  };
+  const key = keepWarmSessionKey(channelId, startedAt);
+  // OWNERSHIP IS ASKED FIRST, EVEN WHEN THIS PROCESS IS ALREADY WARMING — and
+  // "I have a loop" is emphatically not a reason to answer. Three machines and
+  // an owner that has stopped reading its bus: B and C both ask, and a handler
+  // that answered on the strength of its own running loop would have B relieve
+  // C and C relieve B, both of them believing the session is A's, both
+  // stopping. Nobody would be warming and every counter would say the
+  // hand-over worked. Only an instance whose own answer is "not somebody
+  // else's" — the owner, and nobody else — may reply.
+  void keepWarmOwnedElsewhere(channelId, startedAt, key, Date.now())
+    .then((elsewhere) => {
+      // `null` (could not ask) is not "mine": guessing would put a second
+      // warmer back on the same session, which is the bug this file fixes.
+      if (elsewhere !== false) {
+        return;
+      }
+      if (keepWarmLoops.has(key)) {
+        // Already warming it. The hand-over counts as a touch, so the owner's
+        // idle timer follows the audience on the OTHER machine as well as its
+        // own.
+        keepWarmLoops.get(key)!.lastRequestedAt = Date.now();
+      } else {
+        keepWarmAdopted += 1;
+        touchKeepWarmSession(channelId, startedAt, Date.now());
+      }
+      // Answered only once the loop is actually running, never on intent: the
+      // asker stops warming on this frame, so it has to mean what it says.
+      if (keepWarmLoops.has(key)) {
+        publishToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, { channelId, startedAt });
+      }
+    })
+    .catch(() => {
+      // The probe swallows its own failures; this is belt and braces so a
+      // rejection can never reach the bus dispatcher.
+    });
+});
+
+/**
+ * The owner has the job. THE ONE PLACE A NON-OWNER'S LOOP STOPS: everything
+ * else about this hand-over is fire-and-forget, and a loop that stops on an
+ * unanswered ask is a stream nobody is warming.
+ */
+subscribeToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, (data) => {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof (data as { channelId?: unknown }).channelId !== "string" ||
+    typeof (data as { startedAt?: unknown }).startedAt !== "number"
+  ) {
+    return;
+  }
+  const { channelId, startedAt } = data as {
+    channelId: string;
+    startedAt: number;
+  };
+  const key = keepWarmSessionKey(channelId, startedAt);
+  if (!keepWarmLoops.has(key)) {
+    return;
+  }
+  // Only the machine that asked stands down, and only while it still believes
+  // the session is somebody else's. Without this check the OWNER would stop
+  // its own loop on hearing a third machine's answer.
+  const known = keepWarmOwnership.get(key);
+  if (!known?.ownedElsewhere) {
+    return;
+  }
+  keepWarmDeclined += 1;
+  // The ask is spent; the next re-arm asks again immediately. What holds that
+  // re-arm off for a few seconds is the relieved-at stamp, not this.
+  keepWarmHandovers.delete(key);
+  keepWarmRelievedAt.set(key, Date.now());
+  stopKeepWarmLoop(key);
+});
+
 async function renderSignedPlaylist(
   channelId: string,
   startedAt: number,
@@ -474,8 +889,8 @@ async function renderSignedPlaylist(
   // makes that true. A 404 is what the client's watchdog wants: it refetches
   // `GET /api/channels/:id/live` and follows the current session, which is
   // machinery that already exists and already works.
-  const session = await getPool().query(
-    `SELECT 1 FROM hls_sessions
+  const session = await getPool().query<{ id: string }>(
+    `SELECT id FROM hls_sessions
      WHERE channel_id = $1
        AND object_prefix = $2
        AND ended_at IS NULL
@@ -491,6 +906,7 @@ async function renderSignedPlaylist(
       `No live HLS session ${objectPrefix} for channel ${channelId}`,
     );
   }
+  const sessionId = session.rows?.[0]?.id ?? null;
   // A presigned endpoint-form GET: the bucket can be fully private and no
   // public base is needed (production runs that way).
   const playlistUrl = internalPlaylistUrl(channelId, startedAt, rung);
@@ -516,10 +932,8 @@ async function renderSignedPlaylist(
   // listed media behind the playhead stalls on every slow poll. The widened
   // body still carries the egress's own URI lines, so the rewrite below is
   // unchanged.
-  const body = widenLivePlaylist(
-    historyFor(cacheKey(channelId, startedAt, rung)),
-    await response.text(),
-  );
+  const history = historyFor(cacheKey(channelId, startedAt, rung));
+  const body = widenLivePlaylist(history, await response.text(), undefined, now);
   const ttl = hlsUrlTtlSeconds();
   // Quantised, never `new Date()`: see `segmentSigningTime` above. A segment
   // appearing for the first time is signed at this instant; one already in
@@ -560,6 +974,7 @@ async function renderSignedPlaylist(
         forRead: true,
         config,
         now: signedAt,
+        query: { "response-cache-control": SEGMENT_CACHE_CONTROL },
       }).url;
       memo.set(key, { url, signedAtMs: signedAt.getTime() });
       return url;
@@ -574,7 +989,30 @@ async function renderSignedPlaylist(
     }
   }
 
-  return rewritten;
+  return withPqpSessionTag(rewritten, sessionId);
+}
+
+/**
+ * `X-Pqp-Playlist-Age-Ms` (BROADCAST_PIPELINE B0.3): how stale, in
+ * milliseconds, the freshest segment in this render already was when it was
+ * served -- `now` minus the wall clock this process first saw that segment
+ * listed (`LiveWindowHistory.newestFirstSeenAt`). Null when nothing has been
+ * rendered for this rendition yet (a viewer's very first request, before
+ * `buildSignedPlaylist` has populated the history), in which case the route
+ * omits the header rather than sending a lie.
+ *
+ * Reads the same in-process history `buildSignedPlaylist` just populated, so
+ * call this AFTER awaiting it, not before.
+ */
+export function hlsPlaylistAgeMs(
+  channelId: string,
+  startedAt: number,
+  rung?: string,
+  now = Date.now(),
+): number | null {
+  const history = windowHistory.get(cacheKey(channelId, startedAt, rung));
+  const firstSeenAt = history?.newestFirstSeenAt ?? null;
+  return firstSeenAt === null ? null : Math.max(0, now - firstSeenAt);
 }
 
 /**
@@ -587,9 +1025,21 @@ async function renderSignedPlaylist(
  * viewer's own token and is therefore not shared. Building the string from a
  * cached list costs nothing.
  */
+interface SessionRungs {
+  rungs: string[];
+  /**
+   * One `hls_sessions.id` representing the whole party for the
+   * `#EXT-X-PQP-SESSION` tag on the master (BROADCAST_PIPELINE B0.4): the
+   * lowest-bitrate row, same tiebreak the rungs themselves are ordered by
+   * plus `id` for determinism when two rows share a `started_at`. Null only
+   * when there are no rungs at all.
+   */
+  sessionId: string | null;
+}
+
 const rungCache = new Map<
   string,
-  { rungs?: string[]; inflight?: Promise<string[]>; at: number }
+  { rungs?: SessionRungs; inflight?: Promise<SessionRungs>; at: number }
 >();
 
 /**
@@ -612,7 +1062,7 @@ async function sessionRungs(
   channelId: string,
   startedAt: number,
   now: number,
-): Promise<string[]> {
+): Promise<SessionRungs> {
   const key = cacheKey(channelId, startedAt, "master");
   const cached = rungCache.get(key);
   if (cached) {
@@ -630,30 +1080,96 @@ async function sessionRungs(
     }
   }
   const inflight = getPool()
-    .query<{ rung: string | null }>(
-      `SELECT rung FROM hls_sessions
+    .query<{ id: string; rung: string | null }>(
+      `SELECT id, rung FROM hls_sessions
        WHERE channel_id = $1
          AND object_prefix LIKE $2
          AND rung IS NOT NULL
          AND ended_at IS NULL
          AND cleaned_at IS NULL
-       ORDER BY started_at ASC`,
+       ORDER BY started_at ASC, id ASC`,
       [channelId, sessionPrefixPattern(channelId, startedAt)],
     )
     .then((rows) => {
-      const rungs = rows.rows
-        .map((row) => row.rung)
-        .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
-      rungCache.set(key, { rungs, at: now });
-      return rungs;
+      const known = (rows.rows ?? []).filter((row) =>
+        Boolean(row.rung && LADDER_RUNGS[row.rung]),
+      );
+      // The canonical session id is the LOWEST-bitrate rung's row -- the one
+      // `buildMasterPlaylistFor`'s callers always have a variant for and the
+      // one a viewer with no explicit pick lands on -- not whichever row this
+      // query happened to return first. `started_at, id` orders the SQL
+      // result deterministically; it says nothing about bitrate (a Farol
+      // finding, 2026-09-13: `ORDER BY started_at ASC, id ASC` was read as if
+      // it also meant "lowest bitrate first").
+      const byBitrate = [...known].sort((a, b) => {
+        const kbpsA = hlsRungVideoKbps(a.rung!) ?? Number.MAX_SAFE_INTEGER;
+        const kbpsB = hlsRungVideoKbps(b.rung!) ?? Number.MAX_SAFE_INTEGER;
+        return kbpsA !== kbpsB ? kbpsA - kbpsB : a.id.localeCompare(b.id);
+      });
+      const result: SessionRungs = {
+        rungs: known.map((row) => row.rung!),
+        sessionId: byBitrate[0]?.id ?? null,
+      };
+      rungCache.set(key, { rungs: result, at: now });
+      return result;
     })
     .catch((error: unknown) => {
+      // A3.1: the breaker is open. Same reasoning as `renderCachedPlaylist`'s
+      // fallback — the rung list rarely changes mid-party, so the last list
+      // this process read is still almost certainly right, and serving it
+      // keeps the master playlist (and therefore every rendition it points
+      // at) answering through a DB blip instead of 503ing viewers who are
+      // mid-ladder-switch.
+      if (
+        error instanceof DatabaseUnavailableError &&
+        cached?.rungs !== undefined &&
+        now - cached.at <= STALE_ON_BREAKER_MAX_MS
+      ) {
+        rungCache.set(key, { rungs: cached.rungs, at: cached.at });
+        return cached.rungs;
+      }
       // Same rule as the playlist cache: a failed read is not remembered.
       rungCache.delete(key);
       throw error;
     });
   rungCache.set(key, { ...cached, inflight, at: cached?.at ?? 0 });
   return inflight;
+}
+
+/**
+ * The canonical `hls_sessions.id` for a channel/`startedAt` pair -- the SAME
+ * string the master playlist's `#EXT-X-PQP-SESSION` tag carries
+ * (`buildMasterPlaylistFor` below reads it off this same `sessionRungs`) and
+ * `voice.hlsStarted` logs as `sessionId` (`primary.sessionId` in
+ * `hls-egress.ts`, the lowest-bitrate rung -- the same tiebreak this
+ * function's own sort uses). `hls-latency-metrics.ts`'s telemetry route
+ * calls this so an accepted batch's recorded session id is the one a human
+ * can actually join against the egress log by equality, rather than a
+ * `channelId:startedAt` pair that reads the same to a person but is a
+ * different string (a Farol finding, 2026-09-14). Null when the session has
+ * no known rungs right now -- ended, not yet recorded, or an operator
+ * downgraded past what this build's ladder knows -- in which case the
+ * caller falls back to its own opaque label rather than losing the batch.
+ *
+ * Shares `sessionRungs`'s cache, so this is a fresh query only on a cache
+ * miss: in practice never, because the same session's own viewers are
+ * already polling the master playlist (and so keeping the cache warm) at
+ * the same time they are sampled for telemetry.
+ */
+export async function resolveHlsSessionId(
+  channelId: string,
+  startedAt: number,
+  now: number = Date.now(),
+): Promise<string | null> {
+  try {
+    const { sessionId } = await sessionRungs(channelId, startedAt, now);
+    return sessionId;
+  } catch {
+    // A failed lookup (the pool is unhappy, say) must not turn a telemetry
+    // batch into a 500 -- this is a measurement, not a critical path. The
+    // caller's own fallback label covers it.
+    return null;
+  }
 }
 
 /**
@@ -667,7 +1183,27 @@ async function sessionRungs(
  * header-less player (Safari's native HLS, iOS) can authorise the second
  * request; and staying on this API's own origin is what makes hls.js attach
  * the Bearer header through `isOwnHlsPlaylistProxyUrl`. An absolute bucket
- * URL here would do neither.
+ * URL here would do neither. And because the URI is root-relative, a master
+ * served THROUGH the edge Worker (`LIVE_HLS_PLAYLIST_BASE_URL`) resolves its
+ * variant lines against the EDGE host, not this API — the same "no client
+ * rebuild" trick `stampViewerStream` relies on for the session URL itself.
+ *
+ * EVERY VARIANT ALSO CARRIES A FRESH PARTY PASS, NOT JUST THE TOKEN. This
+ * was a real gap, not a cosmetic one: `stampViewerStream` stamps `?pp=` onto
+ * the SESSION url a viewer is initially handed, but once that session has
+ * run a ladder, the session url IS this master, and the URIs a player
+ * actually polls every 2-4s are the VARIANT lines below -- which, before
+ * this, carried only `?t=`. A party pass that never reaches the edge
+ * Worker's rendition route is useless there, so for any session that ever
+ * ran a ladder (the normal case), `?pp=` was live on the initial fetch and
+ * then silently dropped from every subsequent poll the moment the master
+ * was rendered. Minting fresh here (rather than trying to forward the
+ * caller's own `?pp=`, which the edge Worker deliberately never looks at on
+ * THIS route -- see its own module doc comment) needs nothing from the
+ * caller: this function already has `userId` from the same access check
+ * that authorized the request. Gated on `playlistBaseUrl()` for the same
+ * reason `stampViewerStream` gates it: a pass nobody's Worker will ever
+ * check is wasted bytes on every variant line.
  *
  * A session with no rung rows at all is a pre-ladder session: its single
  * media playlist is served directly, so an in-flight viewer from before this
@@ -676,11 +1212,12 @@ async function sessionRungs(
 export async function buildMasterPlaylistFor(input: {
   channelId: string;
   startedAt: number;
+  userId: string;
   /** The `?t=` the request arrived with, stamped onto each variant. */
   token?: string | null;
   now?: number;
 }): Promise<string | null> {
-  const rungs = await sessionRungs(
+  const { rungs, sessionId } = await sessionRungs(
     input.channelId,
     input.startedAt,
     input.now ?? Date.now(),
@@ -688,14 +1225,28 @@ export async function buildMasterPlaylistFor(input: {
   if (rungs.length === 0) {
     return null;
   }
-  const query = input.token
-    ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(input.token)}`
-    : "";
+  const now = input.now ?? Date.now();
+  const partyPass = playlistBaseUrl()
+    ? mintHlsPartyPass({
+        userId: input.userId,
+        channelId: input.channelId,
+        startedAt: input.startedAt,
+        now,
+      })
+    : null;
+  const params = new URLSearchParams();
+  if (input.token) {
+    params.set(HLS_VIEWER_TOKEN_PARAM, input.token);
+  }
+  if (partyPass) {
+    params.set(HLS_PARTY_PASS_PARAM, partyPass);
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const variants: MasterVariant[] = rungs.map((rung) => ({
     rung: LADDER_RUNGS[rung]!,
     uri:
       `/api/voice/hls-playlist/${encodeURIComponent(input.channelId)}` +
       `/${input.startedAt}/${encodeURIComponent(rung)}${query}`,
   }));
-  return buildMasterPlaylist(variants);
+  return buildMasterPlaylist(variants, sessionId);
 }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { countedQuery, dbTxByPath, resetDbTxMetrics } from "./db-tx-metrics.js";
+import {
+  countedQuery,
+  dbQueriesByRoute,
+  dbQueryTotal,
+  dbTxByPath,
+  noteDbQuery,
+  resetDbTxMetrics,
+} from "./db-tx-metrics.js";
 
 function fakePool(rows: unknown[] = []) {
   const calls: { text: string; params: unknown[] | undefined }[] = [];
@@ -82,5 +89,33 @@ describe("db-tx-metrics", () => {
     resetDbTxMetrics();
 
     expect(dbTxByPath()).toEqual({});
+  });
+
+  describe("db.queries.total / db.queries.byRoute", () => {
+    it("starts at zero", () => {
+      resetDbTxMetrics();
+      expect(dbQueryTotal()).toBe(0);
+      expect(dbQueriesByRoute()).toEqual({});
+    });
+
+    it("counts every call regardless of route, and breaks it down by route", () => {
+      resetDbTxMetrics();
+      noteDbQuery("GET /api/servers/:serverId/members");
+      noteDbQuery("GET /api/servers/:serverId/members");
+      noteDbQuery("other");
+
+      expect(dbQueryTotal()).toBe(3);
+      expect(dbQueriesByRoute()).toEqual({
+        "GET /api/servers/:serverId/members": 2,
+        other: 1,
+      });
+    });
+
+    it("resetDbTxMetrics clears the total and the route breakdown too", () => {
+      noteDbQuery("GET /api/me");
+      resetDbTxMetrics();
+      expect(dbQueryTotal()).toBe(0);
+      expect(dbQueriesByRoute()).toEqual({});
+    });
   });
 });

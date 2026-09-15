@@ -3,6 +3,7 @@ import { Crown, Phone } from "lucide-react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { presenceAvatars, type CinemaStagePerson } from "@/lib/cinema-layout";
+import { watchPlayerMode, type HlsMode } from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
@@ -18,7 +19,12 @@ import { cn } from "@/lib/utils";
  */
 export function CinemaStage({
   hlsUrl,
+  cameraHlsUrl = null,
+  cameraHasVideo = true,
+  cameraHasVoiceAudio = false,
   delaySeconds,
+  mode,
+  partTargetMs,
   mediaTitle,
   communityName,
   coverUrl,
@@ -31,7 +37,17 @@ export function CinemaStage({
   className,
 }: {
   hlsUrl: string;
+  /** The presenter's camera, floated in a corner of the film. */
+  cameraHlsUrl?: string | null;
+  /** Whether `cameraHlsUrl` carries a picture. See `watch-stage.tsx`. */
+  cameraHasVideo?: boolean;
+  /** Whether `cameraHlsUrl` carries the presenter's mic. See `watch-stage.tsx`. */
+  cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
+  /** `LiveHlsStream.mode` (`docs/plans/LL_HLS.md`). Absent means conventional. */
+  mode?: HlsMode;
+  /** `LiveHlsStream.partTargetMs`, read only when `mode === "ll"`. */
+  partTargetMs?: number;
   mediaTitle?: string;
   communityName?: string | null;
   coverUrl?: string | null;
@@ -60,7 +76,12 @@ export function CinemaStage({
     <div className={cn("relative h-full w-full bg-black", className)}>
       <HlsWatchPlayer
         src={hlsUrl}
+        cameraSrc={cameraHlsUrl}
+        cameraHasVideo={cameraHasVideo}
+        cameraHasVoiceAudio={cameraHasVoiceAudio}
         delaySeconds={delaySeconds}
+        mode={mode ? watchPlayerMode(mode) : undefined}
+        partTargetMs={partTargetMs}
         mediaTitle={mediaTitle}
         communityName={communityName}
         coverUrl={coverUrl}
@@ -102,6 +123,7 @@ export function CinemaStage({
           canJoin ? (
             <button
               type="button"
+              data-testid="cinema-stage-join"
               className="flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-paper/20 px-2.5 py-1.5 text-xs font-medium text-paper/80 hover:bg-paper/15 hover:text-paper"
               onClick={onJoin}
             >

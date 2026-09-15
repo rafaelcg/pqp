@@ -28,7 +28,26 @@ const rows = vi.hoisted(() => ({
 
 vi.mock("../services/watch-parties.js", () => ({
   getWatchPartyRow: async () => rows.current,
+  invalidateActiveWatchParty: () => {},
   loadCohostRows: async () => [],
+  // Convidados: `broadcastWatchParty` loads the guest rows once per fan-out,
+  // prepares them once, and shapes per recipient. `mapWatchParty` is stubbed
+  // to `null` below regardless of what it is handed, so the exact shape here
+  // is never asserted on -- these only need to exist and not throw.
+  // `guests: "request"` (not `"off"`) so the guest-loading path is actually
+  // exercised rather than short-circuited by the off-party skip.
+  watchPartyOptionsOf: () => ({ guests: "request" }),
+  loadWatchPartyGuestRows: async () => ({ onAir: [], invited: [], requests: [] }),
+  prepareWatchPartyGuests: (rows: unknown) => rows,
+  shapeWatchPartyGuests: () => ({
+    onAir: [],
+    invited: [],
+    requests: [],
+    requestCount: 0,
+    requested: false,
+    position: null,
+  }),
+  legacyWatchPartyStageOf: () => ({ invited: [], hands: [], handRaised: false }),
   mapWatchParty: () => null,
   markWatchPartyHostBack: async () => {},
   markWatchPartyHostGone: async () => {},
@@ -134,10 +153,10 @@ describe("a party's state reaches the transcode", () => {
 describe("a party's state reaches the seat cache", () => {
   it("drops a live snapshot so the next join cannot keep a stale Voz setting", async () => {
     rememberWatchPartySeatSnapshot(CHANNEL, {
-      voiceEnabled: false,
+      guests: "off",
       hostUserId: "host",
       cohostIds: [],
-      invitedIds: [],
+      acceptedGuestIds: [],
     });
     rows.current.status = "live";
     await broadcastWatchParty("session-1");
@@ -146,10 +165,10 @@ describe("a party's state reaches the seat cache", () => {
 
   it("remembers there is no party after it ends", async () => {
     rememberWatchPartySeatSnapshot(CHANNEL, {
-      voiceEnabled: false,
+      guests: "off",
       hostUserId: "host",
       cohostIds: [],
-      invitedIds: [],
+      acceptedGuestIds: [],
     });
     rows.current.status = "ended";
     await broadcastWatchParty("session-1");

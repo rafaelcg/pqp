@@ -37,11 +37,13 @@ import { pruneResolvedReports } from "./services/reports.js";
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
   deliverDueOutgoingWebhooks,
   pruneDeliveredOutgoingWebhooks,
 } from "./services/outgoing-webhooks.js";
+import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -83,8 +85,14 @@ export const COMMUNITY_HOME_MEDIA_SWEEP_INTERVAL_MS = 30_000;
  * Outgoing webhook outbox. First attempt is also kicked from enqueue, in
  * whichever process enqueued; this loop owns retries, reclaim of a
  * `delivering` row whose process died, and pruning delivered receipts.
+ *
+ * The delivery loop itself is not a plain `every()` tick any more —
+ * `startOutgoingWebhookPoller` (services/outgoing-webhook-poller.ts) runs it
+ * on an adaptive interval (2s while there is work, backing off to 30s when
+ * idle, woken immediately by a Postgres NOTIFY on enqueue) instead of a
+ * fixed 2s poll that fires whether or not the outbox has anything in it. See
+ * that module for why.
  */
-export const OUTGOING_WEBHOOK_TICK_MS = 2_000;
 export const OUTGOING_WEBHOOK_PRUNE_INTERVAL_MS = 60 * 60_000;
 
 /**
@@ -133,11 +141,12 @@ async function sweepCommunityHomeMedia(): Promise<void> {
   }
 }
 
-function every(
-  ms: number,
-  label: string,
-  run: () => Promise<unknown>,
-): ReturnType<typeof setInterval> {
+/** A registered job's own cleanup. Most are `clearInterval` on a plain
+ *  timer; the outgoing webhook poller's is its own `stop()` (see below) —
+ *  same list, same accounting, one shape. */
+type Stopper = () => void;
+
+function every(ms: number, label: string, run: () => Promise<unknown>): Stopper {
   const timer = setInterval(() => {
     void run().catch((error) => {
       console.error(`[${label}] failed:`, error);
@@ -145,13 +154,13 @@ function every(
   }, ms);
   // A timer this long must not be the reason the process refuses to exit.
   timer.unref?.();
-  return timer;
+  return () => clearInterval(timer);
 }
 
 export interface ColdJobs {
   /** Clear every timer. Idempotent. */
   stop(): void;
-  /** For tests and logs: how many timers are live. */
+  /** For tests and logs: how many jobs are registered. */
   readonly count: number;
 }
 
@@ -165,7 +174,7 @@ export interface ColdJobs {
  * bucket cannot hold up whatever the caller does next.
  */
 export function startColdJobs(): ColdJobs {
-  const timers: ReturnType<typeof setInterval>[] = [
+  const stoppers: Stopper[] = [
     every(ATTACHMENT_SWEEP_INTERVAL_MS, "attachments", sweepAttachments),
     every(DAILY_MS, "audit", pruneAuditLog),
     // A resolved report holds a copy of reported content, so this is a privacy
@@ -181,6 +190,11 @@ export function startColdJobs(): ColdJobs {
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
+    // Refilled cluster rate-limit buckets carry no information. Rows, not
+    // disk pages: the table is bounded by "subjects who rang somebody in the
+    // last hour" rather than by "subjects ever". Nothing depends on this
+    // running — a refilled row is spent exactly like an absent one.
+    every(DAILY_MS, "rate-limits", sweepRateLimitBuckets),
     every(PENDING_DELETION_SWEEP_INTERVAL_MS, "account", async () => {
       const finished = await sweepPendingAccountDeletions();
       if (finished > 0) {
@@ -192,7 +206,10 @@ export function startColdJobs(): ColdJobs {
       "community-home",
       sweepCommunityHomeMedia,
     ),
-    every(OUTGOING_WEBHOOK_TICK_MS, "outgoing-webhooks", deliverDueOutgoingWebhooks),
+    (() => {
+      const poller = startOutgoingWebhookPoller(deliverDueOutgoingWebhooks);
+      return () => poller.stop();
+    })(),
     every(
       OUTGOING_WEBHOOK_PRUNE_INTERVAL_MS,
       "outgoing-webhooks",
@@ -244,12 +261,12 @@ export function startColdJobs(): ColdJobs {
         return;
       }
       stopped = true;
-      for (const timer of timers) {
-        clearInterval(timer);
+      for (const stop of stoppers) {
+        stop();
       }
     },
     get count() {
-      return stopped ? 0 : timers.length;
+      return stopped ? 0 : stoppers.length;
     },
   };
 }

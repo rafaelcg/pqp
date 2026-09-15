@@ -594,21 +594,32 @@ export async function deleteObject(
   }
 }
 
+/** One row of a `ListObjectsV2` answer. */
+export interface StorageObject {
+  key: string;
+  /** `<Size>` in bytes, as the bucket reports it. */
+  size: number;
+}
+
 /**
- * `ListObjectsV2` under one prefix, paginated. Used only by the Live HLS
+ * `ListObjectsV2` under one prefix, paginated. Used by the Live HLS
  * retention sweep (`voice/hls-cleanup.ts`) to enumerate a session's own
- * segment and playlist objects before deleting them, never by attachments,
- * which always knows its key up front.
+ * segment and playlist objects before deleting them, and by the past-broadcast
+ * download (`voice/hls-history.ts`) to price one before offering it. Never by
+ * attachments, which always knows its key up front.
  *
- * A minimal hand-rolled XML read (`<Key>` and the continuation markers) for
- * the same reason `signRequest` is hand-rolled SigV4: this is four
- * operations total, not a reason to add an XML parser dependency.
+ * A minimal hand-rolled XML read (`<Contents>` blocks and the continuation
+ * markers) for the same reason `signRequest` is hand-rolled SigV4: this is a
+ * handful of operations, not a reason to add an XML parser dependency. Keys
+ * are read INSIDE a `<Contents>` block rather than by scanning for `<Key>`
+ * across the whole body, because a size only means anything paired with the
+ * key it belongs to.
  */
-export async function listObjectKeys(
+export async function listObjects(
   prefix: string,
   config: StorageConfig,
-): Promise<string[]> {
-  const keys: string[] = [];
+): Promise<StorageObject[]> {
+  const objects: StorageObject[] = [];
   let continuationToken: string | undefined;
   for (;;) {
     const query: Record<string, string> = {
@@ -643,8 +654,17 @@ export async function listObjectKeys(
       );
     }
     const body = await response.text();
-    for (const match of body.matchAll(/<Key>([^<]*)<\/Key>/g)) {
-      keys.push(decodeXmlEntities(match[1]!));
+    for (const block of body.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+      const contents = block[1]!;
+      const key = contents.match(/<Key>([^<]*)<\/Key>/);
+      if (!key) {
+        continue;
+      }
+      const size = Number(contents.match(/<Size>(\d+)<\/Size>/)?.[1] ?? NaN);
+      objects.push({
+        key: decodeXmlEntities(key[1]!),
+        size: Number.isFinite(size) ? size : 0,
+      });
     }
     const truncated = /<IsTruncated>true<\/IsTruncated>/.test(body);
     if (!truncated) {
@@ -662,7 +682,15 @@ export async function listObjectKeys(
     }
     continuationToken = decodeXmlEntities(tokenMatch[1]!);
   }
-  return keys;
+  return objects;
+}
+
+/** `listObjects` for callers that only care which objects are there. */
+export async function listObjectKeys(
+  prefix: string,
+  config: StorageConfig,
+): Promise<string[]> {
+  return (await listObjects(prefix, config)).map((object) => object.key);
 }
 
 function decodeXmlEntities(value: string): string {

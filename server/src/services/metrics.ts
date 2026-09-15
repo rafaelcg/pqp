@@ -1,20 +1,34 @@
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
+import { INSTANCE_ID } from "../lib/bus.js";
+import {
+  clusterTopologyTracked,
+  readClusterSnapshot,
+} from "../voice/registry.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { checkReady, type ReadyReport } from "./ready.js";
 import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
-import { getVoiceActivitySnapshot } from "../ws/voice.js";
+import {
+  getVoiceActivitySnapshot,
+  localVoicePeerCount,
+} from "../ws/voice.js";
+import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
 import {
   isLiveHlsEnabled,
   liveHlsActivity,
   liveHlsConfig,
 } from "../voice/hls-egress.js";
 import { countDueSessions } from "../voice/hls-cleanup.js";
+import { llHlsActivity } from "../voice/hls-remux.js";
 import {
   hlsKeepWarmLoopsActive,
   hlsKeepWarmRenders,
 } from "../voice/hls-playlist-proxy.js";
+import {
+  hlsTelemetryActivity,
+  type HlsTelemetryActivity,
+} from "../voice/hls-latency-metrics.js";
 import { processRole, runsColdJobs } from "../lib/process-role.js";
 import { getPresenceFanoutStats } from "../ws/chat.js";
 import {
@@ -23,7 +37,12 @@ import {
   type AcquisitionReport,
   type RetentionReport,
 } from "./acquisition.js";
-import { dbTxByPath } from "../lib/db-tx-metrics.js";
+import {
+  dbQueriesByRoute,
+  dbQueryTotal,
+  dbTxByPath,
+} from "../lib/db-tx-metrics.js";
+import { readCacheMetrics } from "../lib/read-cache.js";
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
@@ -69,6 +88,33 @@ const CACHE_TTL_MS = 30_000;
 /** Accounts that are not people are excluded from every count here. */
 const EXCLUDED_ACCOUNTS = ["webhook", "character"] as const;
 
+export interface ClusterMetrics {
+  /** Live instances, this one included. 1 when the voice registry is off. */
+  instances: number;
+  /** How many of those wrote a snapshot on their last heartbeat. */
+  reporting: number;
+  /**
+   * Age in seconds of the OLDEST contributing heartbeat, measured against the
+   * rows rather than assumed from the lease TTL. Zero when this process is the
+   * only contributor. It is the honest answer to "how old is this number",
+   * which matters because a sum built from 15-second beats is never `now` and
+   * a dashboard that implies it is would be lying by omission.
+   */
+  maxStalenessSeconds: number;
+  sockets: number;
+  compressedSockets: number;
+  voiceParticipants: number;
+  hlsSessions: number;
+  poolBusy: number;
+  poolMax: number;
+  /**
+   * Distinct `APP_VERSION` values across live instances. More than one means
+   * a deploy is mid-roll, which is the honest explanation for two machines
+   * disagreeing about a counter and is otherwise invisible from here.
+   */
+  versions: string[];
+}
+
 export interface AdminMetrics {
   generatedAt: string;
   /**
@@ -89,6 +135,34 @@ export interface AdminMetrics {
    * pool's own counters); there is no query behind it. See lib/runtime.ts.
    */
   runtime: RuntimeMetrics;
+  /**
+   * Which machine answered this request.
+   *
+   * With one machine the question never came up. With two behind one hostname
+   * every number in `runtime` above belongs to whichever one the load balancer
+   * picked, and a dashboard that refreshes flips between two halves of the
+   * answer with nothing on the page to say so. This field is the "nothing on
+   * the page" half of that fixed.
+   */
+  instanceId: string;
+  /** Instances whose `voice_instances` lease is live. 1 when the registry is off. */
+  instanceCount: number;
+  /**
+   * THE SAME LIVE COUNTERS, SUMMED ACROSS THE CLUSTER.
+   *
+   * `runtime` stays exactly what it was — this machine, sampled now — because
+   * "is THIS machine in trouble" is a real question with a different answer.
+   * This block answers the other one: how big is the service. It is built from
+   * the per-instance snapshot each process writes into its own
+   * `voice_instances` row on its 15-second heartbeat (lib/instance-snapshot.ts),
+   * so it costs one small SELECT here and no extra write anywhere.
+   *
+   * Up to 15 seconds stale by construction, and `reporting` says how many of
+   * `instances` actually contributed — a worker holds no sockets and an
+   * instance that has not beaten since the column was added contributes
+   * nothing, so a sum with `reporting < instances` is a floor, not a total.
+   */
+  cluster: ClusterMetrics;
   /**
    * The verdict `GET /ready` gives an external monitor, verbatim, so the
    * dashboard and UptimeRobot never disagree. Not cached here: ready.ts
@@ -147,6 +221,55 @@ export interface AdminMetrics {
    */
   dbTx: {
     byPath: Record<string, number>;
+  };
+  /**
+   * `db.queries.total` and `db.queries.byRoute`: EVERY Postgres round trip
+   * this process has run since boot, wrapped once at the pool itself
+   * (`db.ts`'s `getPool`) rather than at individual call sites — unlike
+   * `dbTx.byPath` above, nothing has to remember to instrument a new query
+   * for this to see it. `byRoute` breaks the total down by the HTTP route
+   * the query happened inside (`GET /api/servers/:serverId/members`, the
+   * path template, never an interpolated id), via an AsyncLocalStorage
+   * context `handleApi` sets once per request (`lib/route-context.ts`). Two
+   * reserved labels stand outside the route table: `"auth"` is Bearer
+   * resolution and the age-gate/timeout gates, which run before any route
+   * has matched and are shared across every request rather than belonging
+   * to whichever endpoint follows — folding them into `"other"` would have
+   * hidden a real cost center (53k auth-resolution writes alone) behind the
+   * same label used for background work; `"other"` itself is left for a WS
+   * handler, a cold job, or anything at boot. Added alongside the 2026-09-13
+   * Vultr cutover cache work (member list, auth-write skip, webhook poll
+   * backoff, per-request permission caches) specifically so the drop from
+   * that work is a number on this endpoint, not a guess from query-log
+   * sampling the way the 785k figure that motivated it was.
+   */
+  dbQueries: {
+    total: number;
+    byRoute: Record<string, number>;
+  };
+  /**
+   * `read-cache.ts`'s counters, cumulative since boot: `coalesce` calls that
+   * found a fresh entry (`hits`), that had to run the loader (`misses`),
+   * that joined an already-running load instead of starting a second one
+   * (`coalesced` — the number that collapses during a reload storm), and
+   * that were served a stale-but-within-window value while a background
+   * refresh ran (`staleServed`). `size` is the current entry count and
+   * `bytes` the approximate resident size, each bounded by its own eviction
+   * trigger in the module (an entry-count LRU cap and a byte budget — a
+   * cache full of large message pages gives up entries sooner than one full
+   * of small watch-party rows would). Born from the same 2026-09-12
+   * postmortem (A2) as `dbTx` above: this is the read side of that fix,
+   * caching the latest message page, a server's channel list, and a
+   * channel's watch-party state. Off (falling back to `misses` for
+   * everything) when `READ_CACHE=off`.
+   */
+  readCache: {
+    hits: number;
+    misses: number;
+    coalesced: number;
+    staleServed: number;
+    size: number;
+    bytes: number;
   };
   /**
    * What the channel-presence fan-out is doing since the last deploy: frames
@@ -307,6 +430,15 @@ export interface AdminMetrics {
     configured: boolean;
     /** Whether `LIVE_HLS_SERVER_ALLOWLIST` confines it to named servers. */
     allowlisted: boolean;
+    /**
+     * `watchParty.state` frames since boot: `relayed` is what this instance
+     * published for the other machine after a party changed state here,
+     * `fromBus` is what it applied. Both zero on one machine; on two, both
+     * climb with every party going live, ending or changing guests. The
+     * stream's own relay is `voice.liveHls.audienceFramesRelayed` /
+     * `audienceFramesFromBus`.
+     */
+    stateFrames: { relayed: number; fromBus: number; retries: number };
     /** Rung names this deployment would encode, lowest first. */
     ladder: string[];
     sessions: number;
@@ -329,6 +461,20 @@ export interface AdminMetrics {
      */
     orphansStopped: number;
     /**
+     * `hls_sessions` rows this process did NOT adopt, end or stop because
+     * another API instance whose `voice_instances` heartbeat is still fresh
+     * owns them. Zero on a one-machine deployment; on two, a zero while a
+     * party is running through a deploy means the `instance_id` stamp is not
+     * landing and the boot sweep is free to kill the other machine's stream.
+     */
+    skippedOwnedElsewhere: number;
+    /**
+     * Teardowns waiting on an ownership answer because the lookup failed. Zero
+     * on a healthy deployment; anything else is a database that is not
+     * answering while this process wants to stop a transcode.
+     */
+    deferredStops: number;
+    /**
      * Live sessions writing the host's voice to its own file beside the
      * segments (`LIVE_HLS_MIC_ARCHIVE`). Zero while the flag is off, which is
      * every deployment until somebody sets it. Zero WITH the flag on and
@@ -338,6 +484,13 @@ export interface AdminMetrics {
      * (`voice.hlsMicArchiveFailed`).
      */
     micArchive: number;
+    /**
+     * Sessions carrying a SECOND, video-only 360p30 transcode of the
+     * presenter's camera, on top of that party's ladder: roughly 0.2 to 0.3 of
+     * a core apiece. What turns "the box feels slow" into "three hosts have
+     * their webcams on". Zero with `LIVE_HLS_CAMERA=false`.
+     */
+    cameraSessions: number;
     /** Sessions past retention that still hold objects. Belongs at zero. */
     uncleaned: number;
     /** Whether this process runs the retention sweep (`WORKER_MODE`). */
@@ -352,6 +505,46 @@ export interface AdminMetrics {
     keepWarmLoops: number;
     /** Warm (non-viewer) renders performed by those loops since boot. */
     keepWarmRenders: number;
+    /**
+     * BROADCAST_PIPELINE B0.5/B0.6: what sampled viewers report about their
+     * own playback. `byRung[].p50Ms`/`p95Ms` are encode-to-paint, computed
+     * from `hls-latency-metrics.ts`'s histogram, never mixed with the
+     * capture-to-encode estimate (that estimate is not reported here at all
+     * -- see the T0-T4 row of B0.3's table). In-process only: a restart
+     * clears it, same as `keepWarmRenders` above.
+     */
+    latency: HlsTelemetryActivity;
+    /**
+     * Live `pqp-remux` sessions (`docs/plans/LL_HLS.md` L1.5), this process,
+     * right now. Zero on every deployment with `LIVE_HLS_LL` unset, which is
+     * every deployment until an operator sets it -- this is the "is the
+     * flag doing anything" counter for the second delivery mode, the same
+     * role `sessions` plays for the conventional ladder.
+     */
+    llSessions: number;
+    /**
+     * `POST /sessions` to the control API failed, or the control plane was
+     * not configured at all, since this process started. Belongs at zero
+     * once configured; a start requested (the flag, the allowlist and the
+     * party's own toggle all say yes) that never produces a session shows up
+     * here rather than as a silent nothing.
+     */
+    llStartFailures: number;
+    /**
+     * A `DELETE /sessions/:id` to the control API failed, at either the
+     * normal stop path or a retry. Belongs at zero; a nonzero, growing
+     * number is a session `stopLlSession`/`retryStopOpenLlRow` cannot yet
+     * confirm the box has actually released.
+     */
+    llStopFailures: number;
+    /**
+     * An LL session was demoted back to the conventional ladder by `L1.6`'s
+     * watchdog, which does not exist yet -- this reads zero on every
+     * deployment until that task ships. Reserved here now so the dashboard
+     * panel and this counter's meaning are fixed before the code that
+     * increments it exists.
+     */
+    llDemoted: number;
   };
   topServers24h: {
     name: string;
@@ -547,7 +740,16 @@ function hoursAgo(column: string): string {
  * Expressed as a type rather than as a convention on purpose: it makes it
  * impossible to accidentally compute the live block inside the cached one.
  */
-type CachedMetrics = Omit<AdminMetrics, "runtime" | "ready" | "sfu">;
+/**
+ * Everything the 30-second cache holds. The live blocks are excluded because
+ * they are sampled per request, and the three cluster fields join them: a
+ * cached `instanceId` would name whichever machine happened to warm the cache
+ * rather than the one answering, which is worse than not saying at all.
+ */
+type CachedMetrics = Omit<
+  AdminMetrics,
+  "runtime" | "ready" | "sfu" | "instanceId" | "instanceCount" | "cluster"
+>;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
   const pool = getPool();
@@ -671,6 +873,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   // it falls back to -1, which reads as "could not ask" rather than "clean".
   const hlsFlag = liveHlsConfig();
   const hlsActivity = liveHlsActivity();
+  const llActivity = llHlsActivity();
   const hlsUncleaned = await countDueSessions().catch(() => -1);
 
   // The tab detail, in a second round of parallel queries. It is separate from
@@ -946,6 +1149,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     activeTextChannels24h: Number(m?.active_text_channels ?? 0),
     channels: channelCounts,
     dbTx: { byPath: dbTxByPath() },
+    dbQueries: { total: dbQueryTotal(), byRoute: dbQueriesByRoute() },
+    readCache: readCacheMetrics(),
     presence: getPresenceFanoutStats(),
     voice: {
       activeRooms: voice.activeRooms,
@@ -974,6 +1179,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       enabled: hlsFlag.enabled,
       configured: isLiveHlsEnabled(),
       allowlisted: hlsFlag.allowlisted,
+      stateFrames: watchPartyStateFrameCounters(),
       ladder: hlsFlag.ladder.map((rung) => rung.name),
       sessions: hlsActivity.sessions,
       maxSessions: hlsActivity.maxSessions,
@@ -981,11 +1187,26 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       oldestSessionMinutes: hlsActivity.oldestMinutes,
       silentSessions: hlsActivity.silentSessions,
       orphansStopped: hlsActivity.orphansStopped,
+      // Zero on one machine. On two it is the proof that the cross-machine
+      // owner guard runs at all: rows this process left alone because the
+      // other one is still driving them.
+      skippedOwnedElsewhere: hlsActivity.skippedOwnedElsewhere,
+      deferredStops: hlsActivity.deferredStops,
       micArchive: hlsActivity.micArchives,
+      // Each of these is a second, video-only 360p30 transcode of a
+      // presenter's camera, on top of that party's ladder: roughly 0.2 to 0.3
+      // of a core apiece. What turns "the box feels slow" into "three hosts
+      // have their webcams on". Zero with `LIVE_HLS_CAMERA=false`.
+      cameraSessions: hlsActivity.cameraSessions,
       uncleaned: hlsUncleaned,
       sweepsHere: runsColdJobs(processRole()),
       keepWarmLoops: hlsKeepWarmLoopsActive(),
       keepWarmRenders: hlsKeepWarmRenders(),
+      latency: hlsTelemetryActivity(),
+      llSessions: llActivity.sessions,
+      llStartFailures: llActivity.startFailures,
+      llStopFailures: llActivity.stopFailures,
+      llDemoted: llActivity.demoted,
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,
@@ -1115,6 +1336,22 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
         cached = { at: Date.now(), payload };
         return payload;
       })
+      .catch((error: unknown) => {
+        // A3.1: the operator needs this dashboard MOST during the outage
+        // it is reporting on. `computeAdminMetrics` is ~30 queries against
+        // the pool the breaker watches, so an open breaker fails all of them
+        // at once — serve the last good snapshot instead of taking the
+        // whole endpoint down over it. `getAdminMetrics` layers fresh
+        // `runtime` (which carries `db.breaker`), `ready` and `sfu` blocks
+        // on top of whatever this returns, live, every request, so the
+        // breaker's own state is never itself stale. Only when nothing has
+        // ever been cached (a fresh boot with a dead database) does this
+        // still propagate — there is no snapshot to fall back to.
+        if (cached) {
+          return cached.payload;
+        }
+        throw error;
+      })
       .finally(() => {
         inFlight = null;
       });
@@ -1149,7 +1386,75 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     checkReady(),
     readSfuStats(),
   ]);
-  return { ...payload, runtime: runtimeSnapshot(), ready, sfu };
+  const runtime = runtimeSnapshot();
+  const cluster = await clusterMetrics(runtime);
+  return {
+    ...payload,
+    runtime,
+    instanceId: INSTANCE_ID,
+    instanceCount: cluster.instances,
+    cluster,
+    ready,
+    sfu,
+  };
+}
+
+/**
+ * The cluster block, with the single-machine case as the fallback rather than
+ * as a special case.
+ *
+ * With `VOICE_REGISTRY` off there are no instance rows at all — a self-host,
+ * local dev, and `pqp-api` before the multi-instance work. Reporting zeroes
+ * there would be a lie of a different kind, so the answer is this process's
+ * own numbers labelled as a cluster of one. A failed read gets the same
+ * treatment: a metrics endpoint must never 500 over decoration (the same rule
+ * lib/runtime.ts states about its getters).
+ */
+async function clusterMetrics(runtime: RuntimeMetrics): Promise<ClusterMetrics> {
+  const alone = (): ClusterMetrics => ({
+    instances: 1,
+    reporting: 1,
+    maxStalenessSeconds: 0,
+    sockets: runtime.sockets,
+    compressedSockets: runtime.compressedSockets,
+    // The local map, not a zero. A single-instance deployment is a cluster of
+    // one, and its voice peers are the cluster's voice peers; hard-coding 0
+    // would make the common configuration read as an empty service.
+    voiceParticipants: localVoicePeerCount(),
+    hlsSessions: liveHlsActivity().sessions,
+    poolBusy: runtime.pool.busy,
+    poolMax: runtime.pool.max,
+    versions: process.env.APP_VERSION?.trim()
+      ? [process.env.APP_VERSION.trim()]
+      : [],
+  });
+  try {
+    // Rows left behind by a deployment that has since turned the registry off
+    // are still inside the TTL for 45 seconds, and summing them would show
+    // the operator the previous topology's numbers. The flag, not the rows,
+    // says whether this process has siblings.
+    if (!clusterTopologyTracked()) {
+      return alone();
+    }
+    const snapshot = await readClusterSnapshot();
+    if (snapshot.instances === 0) {
+      return alone();
+    }
+    return {
+      instances: snapshot.instances,
+      reporting: snapshot.reporting,
+      maxStalenessSeconds: snapshot.maxStalenessSeconds,
+      sockets: snapshot.sockets,
+      compressedSockets: snapshot.compressedSockets,
+      voiceParticipants: snapshot.voiceParticipants,
+      hlsSessions: snapshot.hlsSessions,
+      poolBusy: snapshot.poolBusy,
+      poolMax: snapshot.poolMax,
+      versions: snapshot.versions,
+    };
+  } catch {
+    return alone();
+  }
 }
 
 /** Test hook: forget the cached payload. */

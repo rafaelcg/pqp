@@ -7,15 +7,20 @@ import { describe, expect, it } from "vitest";
  *
  * `Dialog` does not pad its own children, because several dialogs fill the
  * panel edge to edge on purpose: the settings modals put a section rail
- * against the border, the attachment lightbox is one image, the search dialog
- * draws its own chrome. The cost is that an ordinary dialog has to remember
- * `px-5 py-4`, and one that forgets looks broken in a specific way: the copy
- * and the fields run flush into the border.
+ * against the border, the search dialog draws its own chrome. The cost is
+ * that an ordinary dialog has to remember `px-5 py-4`, and one that forgets
+ * looks broken in a specific way: the copy and the fields run flush into the
+ * border.
  *
  * A 2026-09-08 review found four dialogs doing exactly that, two of them added
  * that same day. So the rule is a test rather than a habit: a dialog body
  * either uses `DialogBody`, or carries its own horizontal padding, or is named
  * below as full bleed with a reason.
+ *
+ * The attachment lightbox used to be in this list — a `<Dialog>` holding one
+ * edge-to-edge image. As of 2026-09-14 it is its own full-viewport overlay
+ * (`chat/image-lightbox.tsx`) and does not use `Dialog` at all, so there is
+ * nothing here for it to be exempted from.
  */
 
 const ROOT = join(import.meta.dirname, "..");
@@ -28,7 +33,6 @@ const FULL_BLEED: Record<string, string> = {
   "layout/settings-modal.tsx": "section rail sits against the panel edge",
   "layout/server-settings-dialog.tsx": "section rail sits against the panel edge",
   "layout/channel-settings-dialog.tsx": "section rail sits against the panel edge",
-  "chat/attachment-grid.tsx": "the lightbox is one image, edge to edge",
   "search/search-dialog.tsx": "draws its own header and result chrome",
   "onboarding/onboarding-flow.tsx": "each step pads itself as it slides in",
 };

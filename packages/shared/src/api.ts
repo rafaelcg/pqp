@@ -151,6 +151,13 @@ export const notificationPreferencesSchema = z.object({
   default: notificationLevelSchema.optional(),
   servers: z.record(z.string().uuid(), notificationLevelSchema).optional(),
   channels: z.record(z.string().uuid(), notificationLevelSchema).optional(),
+  /** The MSN-style arrival card for a conversation message. Default true. */
+  arrivalToast: z.boolean().optional(),
+  /**
+   * Whether the sidebar's preview line and the arrival toast's second line may
+   * show message content. Default true. Off falls both back to a count.
+   */
+  previewInApp: z.boolean().optional(),
 });
 
 export type NotificationPreferences = z.infer<
@@ -249,6 +256,14 @@ export const userPreferencesSchema = z.object({
    * member at all.
    */
   status: manualStatusSchema.optional(),
+  /**
+   * The language this account reads the app in, written whenever the
+   * Language picker in Settings changes it. Read server-side for push copy
+   * (`server/src/services/push-copy.ts`) — there is no i18next on the
+   * server, so this is the one signal it has. Defaults to `"pt-BR"` when
+   * absent, the instance's own default rather than the browser's.
+   */
+  locale: z.enum(["pt-BR", "en"]).optional(),
   theme: themePreferenceSchema.optional(),
   appearance: appearancePreferenceSchema.optional(),
   contrast: contrastPreferenceSchema.optional(),
@@ -338,6 +353,20 @@ export const userPreferencesSchema = z.object({
    * once per browser. Absent means "never dismissed".
    */
   communityHomeIntroDismissedAt: z.string().optional(),
+  /**
+   * When the "Voz limpa" nudge (the one-time invitation to try advanced,
+   * RNNoise-based noise suppression — see `noiseSuppression.mode` in
+   * `client/src/lib/noise-suppression.ts`) was put away, as an ISO instant.
+   * Set on either button, "Ativar" or "Depois": both are an answer.
+   *
+   * A preference and not localStorage for the same reason as
+   * `communityHomeIntroDismissedAt`: it explains the feature once per person,
+   * not once per browser. Absent means "never answered", which also gates the
+   * NOVO dot on the setting itself (Settings > Voice > noise suppression) —
+   * that dot clears on this OR on the section being opened once, whichever
+   * comes first.
+   */
+  voiceCleanNudgeDismissedAt: z.string().optional(),
   /**
    * Personal favourite channels, keyed by server. The array is the order they
    * appear in that server's Favorites block.
@@ -481,6 +510,23 @@ export const userSchema = z.object({
    * not from a second one.
    */
   customStatus: z.string().nullable().default(null),
+  /**
+   * Whether this Clerk id is in `INSTANCE_MODERATOR_CLERK_IDS` — see
+   * `isInstanceModerator` in `server/src/services/reports.ts`, the one and
+   * only place that decides it. Rides down on `/api/me` rather than being
+   * learned by probing a route that answers 404 for everyone else: a probe
+   * fired for every account on every Settings open would put a 404 in every
+   * browser's network console for the near-totality of accounts that are not
+   * moderators, which is exactly the kind of console noise a "no console
+   * errors" check exists to catch. This is a client-side AFFORDANCE ONLY — it
+   * decides whether the Settings nav shows the door, nothing more. Every
+   * route the door leads to (`GET /api/reports/all`,
+   * `PATCH /api/reports/:id`, `POST /api/reports/:id/remove-message`) still
+   * runs its own `isInstanceModerator` check server-side and does not trust
+   * this field at all. Optional and defaulted false so a response from an API
+   * that predates it still parses.
+   */
+  isInstanceModerator: z.boolean().optional().default(false),
 });
 
 /**

@@ -7,12 +7,11 @@ import {
 } from "@clerk/clerk-react";
 import {
   CalendarClock,
-  Columns2,
+  History,
   Lock,
   Menu,
   Phone,
   Pin,
-  Rows2,
   Settings,
   Users,
   Video,
@@ -102,8 +101,13 @@ import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { ShortcutsHint } from "@/components/layout/shortcuts-hint";
+import {
+  VoiceCleanActivatedToast,
+  VoiceCleanHint,
+} from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
+import { uniformJitterMs } from "@/lib/reconnect-jitter";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
@@ -123,6 +127,10 @@ import {
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
+import {
+  shouldOfferVoiceCleanNudge,
+  voiceCleanNudgeDismissedPatch,
+} from "@/lib/voice-clean";
 import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
 import {
   hasUnseenWhatsNew,
@@ -161,19 +169,34 @@ import {
   isWatchPartyChannelType,
   isWatchPartyChannelsEnabled,
 } from "@/lib/watch-party-channels";
-import { shouldReleaseAudienceWatchSeat } from "@/lib/watch-party-seat";
+import {
+  AUDIENCE_SEAT_GRACE_MS,
+  audienceSeatAgeMs,
+  nextAudienceSeatClock,
+  shouldReleaseAudienceWatchSeat,
+  type AudienceSeatClock,
+} from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
+import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
+import { watchPartyHistoryCandidates } from "@/lib/watch-party-history-access";
+import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createServerWatchParty as apiCreateServerWatchParty,
   fetchChannelWatchParty as apiFetchChannelWatchParty,
   setWatchPartyCohost as apiSetWatchPartyCohost,
+  setWatchPartyGuestAction,
   setWatchPartyStage,
   setWatchPartyState as apiSetWatchPartyState,
   updateWatchParty as apiUpdateWatchParty,
 } from "@/lib/watch-parties-api";
+import {
+  WatchPartyGuestsOverlay,
+  type GuestAction,
+} from "@/components/watch-party/guests/watch-party-guests-overlay";
 import { endWatchParty } from "@/lib/watch-party-end";
+import { decideGoLiveMicPrompt } from "@/lib/watch-party-go-live";
 import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
 import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
 import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
@@ -208,6 +231,7 @@ import {
   type ChannelSidebarPreference,
 } from "@/lib/channel-sidebar-preference";
 import { useMdUp } from "@/hooks/use-md-up";
+import { useSmUp } from "@/hooks/use-sm-up";
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import {
   formatBinding,
@@ -433,6 +457,9 @@ import {
 } from "@/lib/screen-share-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { effectiveRoleIds } from "@/lib/member-groups";
+import { WatchPartyPresenterStage } from "@/components/watch-party/presenter-stage";
+import { slowModeKey } from "@/components/watch-party/watch-party-options";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -441,6 +468,29 @@ export type TokenResolver = (options?: {
 /** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
 const HEADER_ACTION_TILE =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
+
+/**
+ * A reconnect's message refetch (`transport.onReady`, `reconnected` branch)
+ * is spread across this window instead of firing the instant `ready` lands —
+ * same reasoning as the WS reconnect itself (`reconnect-jitter.ts`): every
+ * open tab on the channel just reconnected in the same window, so an
+ * unstaggered refetch re-concentrates the herd.
+ *
+ * Deliberately NOT skipped by a "fetched recently" freshness check: `GET
+ * /api/channels/:id/messages` is this client's only way to learn about a
+ * message sent while the socket was down — rejoining a channel
+ * (`chat.resubscribe`) only re-subscribes to what is broadcast *after* that
+ * point (`join-channel` in `server/src/ws/chat.ts` carries no history replay)
+ * — so treating "fetched a few seconds ago" as proof nothing arrived since
+ * would drop messages sent in that gap until some unrelated refresh caught
+ * them. What IS safe to skip is a second, overlapping request for the SAME
+ * channel: a pending timer or an in-flight fetch already covers whatever a
+ * later reconnect event would ask for (tracked per channel, not with one
+ * shared flag — a slow fetch for channel A must never block channel B's
+ * refetch after a mid-outage switch). See
+ * `scheduleReconnectMessagesRefetch` below.
+ */
+const RECONNECT_MESSAGES_JITTER_MAX_MS = 2_000;
 
 interface AppProps {
   devBypass?: boolean;
@@ -948,6 +998,8 @@ function MainAppContent({
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [newDmOpen, setNewDmOpen] = useState(false);
+  /** Whether any DM arrival card is currently up — see `effectiveCornerHint`. */
+  const [dmToastActive, setDmToastActive] = useState(false);
   const [showCreateServer, setShowCreateServer] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
   /**
@@ -961,6 +1013,15 @@ function MainAppContent({
    * something that just happened.
    */
   const [appNotice, setAppNotice] = useState<string | null>(null);
+  /**
+   * The server's "you have been alone for a while" notice, with the moment
+   * it will hang up. One button answers it. Cleared by the answer, by the
+   * hangup itself, and by leaving the room.
+   */
+  const [idleWarning, setIdleWarning] = useState<{
+    voiceChannelId: string;
+    disconnectAt: number;
+  } | null>(null);
   // Set only by a successful handle claim, so the share offer appears at the
   // one moment it is a celebration rather than a request. Cleared with the
   // notice it rides on.
@@ -1021,6 +1082,37 @@ function MainAppContent({
       }),
     [],
   );
+  /**
+   * A convenience deep link from the operator dashboard's "fila de
+   * denúncias" card: `?modAllReports=1` opens Settings straight on the
+   * moderation section. Deliberately its own tiny effect rather than folded
+   * into the arrival-intents handling further down — this is not an intent
+   * that needs to survive a signed-out round trip through Clerk, just a
+   * shortcut for an account that is already signed in. The section itself
+   * gates on `GET /api/reports/all`, so this silently does nothing for
+   * anyone who is not an instance moderator; there is nothing here worth
+   * guarding twice.
+   */
+  const modAllReportsLinkHandled = useRef(false);
+  useEffect(() => {
+    if (modAllReportsLinkHandled.current) {
+      return;
+    }
+    modAllReportsLinkHandled.current = true;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get("modAllReports")) {
+      return;
+    }
+    params.delete("modAllReports");
+    const rest = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`,
+    );
+    setSettingsSection("moderation");
+    setSettingsOpen(true);
+  }, []);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
@@ -1180,8 +1272,11 @@ function MainAppContent({
           : "side-by-side";
       // A watch party keeps its own answer: flipping the film night's layout
       // must not rearrange tomorrow's work call, and the other way round.
+      // The seated surface and the audience surface share that one answer
+      // (see `isWatchPartySplit`): a person who flips it while watching
+      // should not have it flip back the moment they take a seat.
       const next: CallSplitPreference =
-        kind === "watch"
+        kind === "watch" || kind === "watch-audience"
           ? { ...previous, watchOrientation: flipped }
           : { ...previous, orientation: flipped };
       saveCallSplit(next);
@@ -1192,6 +1287,11 @@ function MainAppContent({
   // The channel list as a strip of icons. `auto` follows the share until
   // somebody touches the toggle; after that it is theirs.
   const columnLayout = useMdUp();
+  // Voz limpa nudge: the card only shows `sm` and up (docs/ONBOARDING.md —
+  // below it the NOVO dot in Settings is the discoverability instead).
+  const voiceCleanDesktopViewport = useSmUp();
+  const [voiceCleanActivatedToast, setVoiceCleanActivatedToast] =
+    useState(false);
   const [channelSidebar, setChannelSidebar] =
     useState<ChannelSidebarPreference>("auto");
   useEffect(() => {
@@ -1358,6 +1458,13 @@ function MainAppContent({
     section: ChannelSettingsSectionId;
     forceAdvanced: boolean;
   } | null>(null);
+  // "Transmissões anteriores": past broadcasts for a watch-party channel.
+  // Its own dialog and its own trigger next to the settings gear, because
+  // START_WATCH_PARTY alone does not open `ChannelSettingsDialog` (that gear
+  // is MANAGE_CHANNELS / MANAGE_ROLES only) and the two groups who should
+  // reach this are the same OR the server route checks.
+  const [watchPartyHistoryChannelId, setWatchPartyHistoryChannelId] =
+    useState<string | null>(null);
   const [channelPrompt, setChannelPrompt] = useState<ChannelPromptState | null>(
     null,
   );
@@ -1496,7 +1603,33 @@ function MainAppContent({
     [transport],
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
+  // `useMemo` has no cleanup of its own, so a `transport` that ever changes
+  // (or the future reconnect path this is future-proofing for) would leave
+  // the OLD controller's `devicechange` listener firing forever, against a
+  // `pipeline` it can never touch again. Both calls are idempotent, so this
+  // is free the vast majority of the time `transport` never changes.
+  //
+  // BOTH, NOT JUST THE CLEANUP. React StrictMode replays this effect's
+  // cleanup and setup once more on every mount; a setup phase that did
+  // nothing would let that replay remove the listener the constructor
+  // attached and never put it back, for the rest of the controller's life —
+  // invisible here (StrictMode is dev-only), and everywhere else only ever
+  // seen as recovery quietly not working. `attachDeviceWatcher()` re-running
+  // is what makes the extra cleanup-then-setup a wash instead of a leak.
+  useEffect(() => {
+    voice.attachDeviceWatcher();
+    return () => {
+      voice.dispose();
+    };
+  }, [voice]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  // Leaving the room, or being moved out of it, ends the warning: the seat it
+  // was about is gone.
+  useEffect(() => {
+    if (idleWarning && voiceState.voiceChannelId !== idleWarning.voiceChannelId) {
+      setIdleWarning(null);
+    }
+  }, [idleWarning, voiceState.voiceChannelId]);
   /**
    * Somebody watching a live party without a seat is looking at a film. The
    * member column is the thing that eats the width the chat needs beside it,
@@ -1513,11 +1646,40 @@ function MainAppContent({
       voiceState.voiceChannelId === selectedChannelId &&
       voiceState.status !== "idle"
     );
+  /**
+   * THE PRESENTER'S LIVE LAYOUT (2026-09-13, the live-layout pass of
+   * `docs/plans/WATCH_PARTY_PRESENTER_UI.md`). Once the host's own share is
+   * up in a live party, the roster column is put away the same way it is
+   * for a viewer, and a chat the host had collapsed comes back: their job
+   * is now the room, and the members list is not the room.
+   */
+  const presentingAParty =
+    selectedChannelId !== null &&
+    watchParties.byChannel[selectedChannelId]?.state === "live" &&
+    voiceState.voiceChannelId === selectedChannelId &&
+    voiceState.isSharingScreen;
   useEffect(() => {
-    memberSidebar.suspend(watchingAParty);
+    memberSidebar.suspend(watchingAParty || presentingAParty);
     // `memberSidebar.suspend` is a stable callback from the hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchingAParty]);
+  }, [watchingAParty, presentingAParty]);
+  const wasPresenting = useRef(false);
+  useEffect(() => {
+    const rose = presentingAParty && !wasPresenting.current;
+    wasPresenting.current = presentingAParty;
+    if (rose && callSplit.collapsed === "chat") {
+      handleCallSplitChange({ ...callSplit, collapsed: "none" }, true);
+    }
+    // Only the rising edge matters; the split is read at that instant.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presentingAParty]);
+  /**
+   * "ATIVAR O MIC?" ONCE, AT GO-LIVE. The host always joins muted (see
+   * `handleWatchPartyGoLive`), which used to leave a permanent red strip
+   * saying so. One question at the moment it matters instead; the status
+   * row keeps the quiet reminder afterwards.
+   */
+  const [micPromptPartyId, setMicPromptPartyId] = useState<string | null>(null);
   const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
    * Audio consent for a Windows desktop shell whose picker cannot ask yet.
@@ -1679,7 +1841,7 @@ function MainAppContent({
   }
 
   const startScreenShareGated = useCallback(
-    (audio: boolean, intent?: ScreenCaptureIntent) => {
+    (audio: boolean, intent?: ScreenCaptureIntent): Promise<boolean> => {
       const withFps = {
         ...intent,
         maxFrameRate: intent?.maxFrameRate ?? shareMaxFrameRate(),
@@ -1687,18 +1849,25 @@ function MainAppContent({
       // Every share start in this file goes through here: the sidebar
       // button, the call stage, the "share without sound" retry, and the DM
       // stage. `screen-share-gate.test.ts` scans this file to keep it so.
-      void gateScreenShareStart<ScreenCaptureIntent>({
+      //
+      // RESOLVES TO WHETHER THE CAPTURE ITSELF SUCCEEDED (2026-09-14), not
+      // merely whether the gate let the request through: a caller that
+      // needs to know before acting further (the watch-party go-live mic
+      // prompt) awaits this instead of arming something on the strength of
+      // "the button was clicked". Most callers still fire and forget, which
+      // is unaffected: nothing here changed for them.
+      return gateScreenShareStart<ScreenCaptureIntent>({
         request: { audio, intent: withFps },
         serverId: selectedServerIdRef.current,
         hlsEnabled: liveHlsConfigRef.current?.enabled ?? null,
         checkNeedsAck: (serverId) => hlsHostAck.checkNeedsAck(serverId),
-        start: (request) => {
-          void voice.startScreenShare(request.audio, request.intent);
-        },
+        start: (request) => voice.startScreenShare(request.audio, request.intent),
         ask: (serverId, request) => {
           setHlsHostAck({ serverId, request });
         },
-      });
+      }).then(
+        (decision) => decision === "started" && voice.getState().isSharingScreen,
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [hlsHostAck],
@@ -1734,6 +1903,23 @@ function MainAppContent({
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
   permsRef.current = perms;
+  /**
+   * Every `watch_party` channel on the open server this viewer may see the
+   * history of, that actually has a broadcast to show -- see the long
+   * comment on `watchPartyHistoryCandidates`. Computed here, ahead of every
+   * conditional early return below (bootstrap error, age gate, onboarding),
+   * because it calls a hook and the Rules of Hooks do not bend for how deep
+   * in the component that hook's answer is actually used.
+   */
+  const watchPartyHistoryCandidateChannels = watchPartyHistoryCandidates(
+    channels,
+    (channelId) =>
+      perms.can(Permission.START_WATCH_PARTY, channelId) ||
+      perms.can(Permission.MANAGE_CHANNELS, channelId),
+  );
+  const watchPartyHistoryChannels = useWatchPartyHistoryAvailability(
+    watchPartyHistoryCandidateChannels,
+  );
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
   /**
@@ -2248,16 +2434,40 @@ function MainAppContent({
    * what the rest of this server calls that person and a picker that disagreed
    * with the member list would be a second name for the same face.
    */
-  const cohostCandidates = useMemo(
-    () =>
-      serverMembers.map((member) => ({
+  const cohostCandidates = useMemo(() => {
+    // STAFF FIRST, THEN FRIENDS, THEN EVERYBODY (2026-09-13, Rafael). The
+    // same ladder the member sidebar hoists by: cargos with `hoist`, highest
+    // position first, a person landing on the first one they hold. Friends
+    // take the tier after the last cargo. The rest carry no priority and
+    // sort by name inside `WatchPartyCohosts`.
+    const hoisted = [...serverRoles]
+      .filter((role) => role.hoist && !role.isEveryone)
+      .sort((a, b) => b.position - a.position);
+    const adminRoleId =
+      serverRoles.find((role) => role.systemKey === "admin")?.id ?? null;
+    const ownerRoleId =
+      serverRoles.find((role) => role.systemKey === "owner")?.id ?? null;
+    const friendTier = hoisted.length;
+    return serverMembers.map((member) => {
+      const held = new Set(effectiveRoleIds(member, adminRoleId, ownerRoleId));
+      const cargo = hoisted.findIndex((role) => held.has(role.id));
+      const priority =
+        member.role === "owner"
+          ? 0
+          : cargo >= 0
+            ? cargo
+            : memberSidebarFriendIds.has(member.id)
+              ? friendTier
+              : undefined;
+      return {
         userId: member.id,
         displayName: memberDisplayName(member),
         avatarUrl: member.avatarUrl,
         isCharacter: member.isCharacter,
-      })),
-    [serverMembers],
-  );
+        priority,
+      };
+    });
+  }, [serverMembers, serverRoles, memberSidebarFriendIds]);
 
   /**
    * What the profile card may do to somebody, in the server it was opened in.
@@ -2579,6 +2789,115 @@ function MainAppContent({
 
   useEffect(() => {
     let cancelled = false;
+    // The reconnect handler's message refetch (onReady below) is jittered
+    // and coalesced, PER CHANNEL: a shared "is anything pending" flag would
+    // let a slow fetch for one channel silently swallow a needed refetch for
+    // a different one after a mid-outage channel switch (Farol review, round
+    // 2). `again` covers the other gap that review found: a second reconnect
+    // landing while a fetch is already on the wire (a flap) can't be
+    // answered by that in-flight request, whose snapshot may predate it, so
+    // it is not simply dropped — one more refetch runs right after this one
+    // finishes.
+    const reconnectMessagesRefetchState = new Map<
+      string,
+      {
+        timer: ReturnType<typeof setTimeout> | null;
+        inFlight: boolean;
+        again: boolean;
+      }
+    >();
+
+    function getReconnectMessagesRefetchState(channelId: string) {
+      let state = reconnectMessagesRefetchState.get(channelId);
+      if (!state) {
+        state = { timer: null, inFlight: false, again: false };
+        reconnectMessagesRefetchState.set(channelId, state);
+      }
+      return state;
+    }
+
+    function scheduleReconnectMessagesRefetch(channelId: string) {
+      // Guards the `.finally()` retry path too (below): a fetch that was
+      // still in flight when this effect tore down must not schedule a
+      // fresh timer after the fact — cleanup already ran and nothing will
+      // ever clear that new one.
+      if (cancelled) {
+        return;
+      }
+      const state = getReconnectMessagesRefetchState(channelId);
+      if (state.inFlight) {
+        state.again = true;
+        return;
+      }
+      if (state.timer !== null) {
+        // Already queued for this channel — it will fetch a snapshot no
+        // older than the moment it actually runs, which covers this event
+        // too.
+        return;
+      }
+      // Spread the refetch itself: every open tab on this channel just
+      // reconnected within the same drain-jitter window (realtime.ts), so
+      // firing the HTTP request the instant `ready` lands would
+      // re-concentrate exactly the herd that window just spread out.
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        runReconnectMessagesRefetch(channelId, state);
+      }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
+    }
+
+    /**
+     * Drops `channelId`'s entry, but ONLY if `state` is still the object the
+     * map holds for it. `state` is a specific object this call's caller
+     * owns, passed down from `scheduleReconnectMessagesRefetch` rather than
+     * re-read from the map — so if that channel's slot has since moved on to
+     * a newer cycle (a fresh entry created after this one was already
+     * removed once), this stays a no-op instead of deleting state that
+     * belongs to that newer cycle (Farol review).
+     */
+    function dropReconnectMessagesRefetchStateIfCurrent(
+      channelId: string,
+      state: unknown,
+    ) {
+      if (reconnectMessagesRefetchState.get(channelId) === state) {
+        reconnectMessagesRefetchState.delete(channelId);
+      }
+    }
+
+    function runReconnectMessagesRefetch(
+      channelId: string,
+      state: { inFlight: boolean; again: boolean },
+    ) {
+      if (cancelled || selectedChannelIdRef.current !== channelId) {
+        // Nothing left for this channel's entry — drop it rather than keep a
+        // tiny idle record for every channel a long session ever reconnected
+        // on (Farol review: the map otherwise grows unbounded).
+        dropReconnectMessagesRefetchStateIfCurrent(channelId, state);
+        return;
+      }
+      state.inFlight = true;
+      void fetchMessages(channelId)
+        .then((page) => {
+          if (selectedChannelIdRef.current === channelId) {
+            chat.setMessages(page.messages, page.hasMore);
+            refresh();
+          }
+        })
+        .catch(() => {
+          // A flap that lands while this is in flight already sets `again`
+          // below regardless of outcome, so a failed fetch still gets
+          // retried; otherwise the next reconnect will.
+        })
+        .finally(() => {
+          state.inFlight = false;
+          if (state.again) {
+            state.again = false;
+            scheduleReconnectMessagesRefetch(channelId);
+          } else {
+            // Fully idle: no timer, not in flight, nothing else queued.
+            dropReconnectMessagesRefetchStateIfCurrent(channelId, state);
+          }
+        });
+    }
 
     async function init() {
       setBootstrapReady(false);
@@ -2763,6 +3082,10 @@ function MainAppContent({
               serverId?: string | null;
               /** Absent from an API that predates conversations. */
               kind?: ChannelKind;
+              /** Conversation-only, and absent when previews are off. */
+              preview?: string;
+              authorName?: string;
+              authorId?: string;
             };
             // Where this came from, taken from the frame rather than looked up.
             // The directory is only ever fed the SELECTED server's channel
@@ -2785,7 +3108,26 @@ function MainAppContent({
                 )
               ) {
                 setConversations((prev) =>
-                  touchConversation(prev, activity.channelId, now),
+                  touchConversation(
+                    prev,
+                    activity.channelId,
+                    now,
+                    // A frame with a preview is always plain text from
+                    // somebody else — this account never receives its own
+                    // activity, and an attachment/GIF-only message carries
+                    // no preview at all (falls back to the count, same as
+                    // the toast). `undefined` here leaves the row's existing
+                    // preview alone rather than blanking it.
+                    activity.preview && activity.authorId
+                      ? {
+                          authorId: activity.authorId,
+                          authorName: activity.authorName ?? "",
+                          preview: activity.preview,
+                          isAttachment: false,
+                          isGif: false,
+                        }
+                      : undefined,
+                  ),
                 );
               } else {
                 // Somebody opened a conversation with this account while it was
@@ -2810,13 +3152,22 @@ function MainAppContent({
             // channel with a backlog. Runs before the early return below so a
             // hidden tab still hears about the channel it left open.
             notifyChannelActivity(
-              describeActivity(activity.channelId, {
-                count: 1,
-                mentions: activity.mention ? 1 : 0,
-              }),
+              describeActivity(
+                activity.channelId,
+                { count: 1, mentions: activity.mention ? 1 : 0 },
+                {
+                  preview: activity.preview,
+                  authorName: activity.authorName,
+                  authorId: activity.authorId,
+                },
+              ),
               {
                 selectedChannelId: selectedChannelIdRef.current,
                 documentVisible: document.visibilityState === "visible",
+                windowFocused: document.hasFocus(),
+                immersive: document.documentElement.hasAttribute(
+                  "data-immersive-stage",
+                ),
               },
             );
             if (activity.channelId === selectedChannelIdRef.current) {
@@ -3050,8 +3401,15 @@ function MainAppContent({
                 ? translateMessage("voice.serverMuted.self")
                 : message.action === "unmuted"
                   ? translateMessage("voice.serverMuted.cleared")
-                  : message.message,
+                  : message.reason === "idle"
+                    ? translateMessage("voice.idle.disconnected", {
+                        count: message.aloneMinutes ?? 10,
+                      })
+                    : message.message,
             );
+            if (message.action === "disconnected") {
+              setIdleWarning(null);
+            }
             if (message.action === "moved" && message.movedToChannelId) {
               // Follow the move with an ordinary join: the server re-runs
               // every admission check (access, timeout, transport, room-full),
@@ -3067,6 +3425,36 @@ function MainAppContent({
             // "muted"/"unmuted": the roster's `serverMuted` flag does the
             // enforcing (see `serverMutedPeerIds` in `use-voice`); the banner
             // above is the explanation.
+            return;
+          }
+
+          // Alone in the room and about to be hung up. App behaviour, like
+          // the moderation frame above: the banner lives beside the other
+          // banners, and the answer is one client frame. Guarded to the room
+          // we are in for the same reason.
+          if (message.type === "voice-idle-warning") {
+            if (voice.getState().voiceChannelId !== message.voiceChannelId) {
+              return;
+            }
+            setIdleWarning({
+              voiceChannelId: message.voiceChannelId,
+              disconnectAt: message.disconnectAt,
+            });
+            return;
+          }
+
+          // The server itself took the warning back: somebody else joined,
+          // a live watch party started, or our own "still here" (or any
+          // other self-initiated frame) reached it and reset the clock.
+          // This, not the click that sent `voice-still-here`, is what
+          // clears the banner — see the schema note on
+          // `voiceIdleWarningCancelledMessageSchema` for why the
+          // confirmation has to come from the server rather than being
+          // assumed the moment the button is pressed.
+          if (message.type === "voice-idle-warning-cancelled") {
+            setIdleWarning((current) =>
+              current?.voiceChannelId === message.voiceChannelId ? null : current,
+            );
             return;
           }
 
@@ -3128,6 +3516,9 @@ function MainAppContent({
             if (initialChannelId) {
               void openChannel(initialChannelId);
             }
+            // Messages saved before a reload or a quit go out on the first
+            // ready socket; the reconnect path does the same via resubscribe.
+            chat.flushOutbox();
             return;
           }
           // Re-subscribe and re-sync: messages sent while we were offline were
@@ -3139,16 +3530,7 @@ function MainAppContent({
           // Join with resumePeerId before any other voice frames.
           const rejoin = voice.notifyReconnected();
           if (channelId) {
-            void fetchMessages(channelId)
-              .then((page) => {
-                if (selectedChannelIdRef.current === channelId) {
-                  chat.setMessages(page.messages, page.hasMore);
-                  refresh();
-                }
-              })
-              .catch(() => {
-                // Next reconnect will retry.
-              });
+            scheduleReconnectMessagesRefetch(channelId);
           }
           return rejoin;
         });
@@ -3173,6 +3555,11 @@ function MainAppContent({
 
     return () => {
       cancelled = true;
+      for (const state of reconnectMessagesRefetchState.values()) {
+        if (state.timer !== null) {
+          clearTimeout(state.timer);
+        }
+      }
       voice.leave();
       transport.disconnect();
     };
@@ -3328,6 +3715,10 @@ function MainAppContent({
           setShortcutOverlayOpen(false);
           setSettingsSection(null);
           setSettingsOpen(true);
+          return;
+        case "openNewDm":
+          setShortcutOverlayOpen(false);
+          setNewDmOpen(true);
           return;
         case "previousChannel":
         case "nextChannel":
@@ -3898,6 +4289,24 @@ function MainAppContent({
    * seats when the stream dies, and for anybody still seated once the
    * party is over (including a mic that was handed out mid-show).
    */
+  // When the current seat was taken, so the backstop below can tell a
+  // `channel-live` that is merely late from a stream that ended. The rule is
+  // `nextAudienceSeatClock`, where it can be tested: taking the stage is a new
+  // seat even in a room this tab was already sitting in.
+  const seatTakenAtRef = useRef<AudienceSeatClock | null>(null);
+  const [seatGraceTick, setSeatGraceTick] = useState(0);
+  useEffect(() => {
+    seatTakenAtRef.current = nextAudienceSeatClock(seatTakenAtRef.current, {
+      channelId: voiceState.voiceChannelId,
+      isAudienceSeat: voiceState.isAudienceSeat,
+      voiceStatus: voiceState.status,
+      now: Date.now(),
+    });
+  }, [
+    voiceState.isAudienceSeat,
+    voiceState.status,
+    voiceState.voiceChannelId,
+  ]);
   useEffect(() => {
     const channelId = voiceState.voiceChannelId;
     if (!channelId || voiceState.status === "idle") {
@@ -3912,6 +4321,12 @@ function MainAppContent({
       party?.state === "cancelled"
         ? party.state
         : undefined;
+    const live = voiceState.channelLive[channelId];
+    const seatAgeMs = audienceSeatAgeMs(
+      seatTakenAtRef.current,
+      channelId,
+      Date.now(),
+    );
     if (
       !shouldReleaseAudienceWatchSeat({
         channelType: seated?.type,
@@ -3919,14 +4334,26 @@ function MainAppContent({
         isSharingScreen: voiceState.isSharingScreen,
         voiceStatus: voiceState.status,
         partyState,
-        hasLiveStream: voiceState.channelLive[channelId]?.stream != null,
+        hasLiveStream: live?.stream != null,
+        streamEnded: live?.streamEnded === true,
+        seatAgeMs,
       })
     ) {
+      // A seat inside its grace is not judged yet. Nothing else re-runs this
+      // when the grace ends, so look again then with whatever has arrived.
+      if (seatAgeMs !== null && seatAgeMs < AUDIENCE_SEAT_GRACE_MS) {
+        const handle = window.setTimeout(
+          () => setSeatGraceTick((tick) => tick + 1),
+          AUDIENCE_SEAT_GRACE_MS - seatAgeMs + 50,
+        );
+        return () => window.clearTimeout(handle);
+      }
       return;
     }
     voice.leave();
   }, [
     channels,
+    seatGraceTick,
     voice,
     voiceState.channelLive,
     voiceState.isAudienceSeat,
@@ -4012,6 +4439,63 @@ function MainAppContent({
   }
 
   /**
+   * THE GO-LIVE SHARE'S LAST STEP, WHEREVER IT LANDS (Farol, 2026-09-14).
+   * `startScreenShareGated` has two ways to resolve `"started"`: at once, or
+   * after the disclosure sheet a host's FIRST ever HLS-capable share raises
+   * (`HlsHostAckSheet`). The immediate route used to be the only one that
+   * ever reached the mic prompt; a go-live share stalled behind the sheet
+   * resolved to `wentOut === false` on the spot (the gate only reports
+   * "asked", not the eventual outcome) and nothing downstream ever
+   * finished the handoff once the host confirmed and the capture actually
+   * started. Both routes call this now, so the prompt arms exactly once,
+   * only on a share that genuinely went out, regardless of which one got
+   * there.
+   *
+   * TAKES `partyId` AND `channelId` RATHER THAN RE-READING
+   * `currentWatchParty()` (Farol, 2026-09-14, round two). The disclosure
+   * sheet can sit open for as long as a host takes to read it, and the
+   * selected channel is free to change in that window; resolving "the
+   * party" at completion time would arm the prompt for whatever party
+   * happens to be on screen when the sheet is confirmed, not the one that
+   * actually asked for the share. Both callers pass the ids they captured
+   * when the share was FIRST requested.
+   *
+   * LOOKS THE PARTY UP FRESH AND BAILS QUIETLY IF IT IS GONE (Farol,
+   * 2026-09-14, round three). Carrying the id past the disclosure sheet
+   * fixed "the wrong party" — it does not fix "no party at all": the sheet
+   * can sit open long enough for the party to end on its own (the host
+   * closes it from another tab, the five-minute grace sweep times it out).
+   * A `MediaStream` publishing into a room that has moved on is not this
+   * function's problem to solve; not asking a now-nonexistent party's
+   * absent audience to hear an unmuted mic is. `decideGoLiveMicPrompt`
+   * (`lib/watch-party-go-live.ts`) is the actual decision, pure and unit
+   * tested; this is only the wiring — the fresh lookup and the one thing a
+   * pure function cannot do, showing the dialog.
+   */
+  function finishWatchPartyGoLiveShare(
+    partyId: string,
+    channelId: string,
+    wentOut: boolean,
+  ) {
+    const decision = decideGoLiveMicPrompt({
+      wentOut,
+      requestedPartyId: partyId,
+      party: watchParties.byChannel[channelId],
+      isMuted: voice.getState().isMuted,
+    });
+    if (!decision.arm) {
+      if (decision.reason === "party-gone") {
+        console.warn(
+          "[watch-party] go-live mic handoff skipped: party no longer live",
+          { partyId, channelId },
+        );
+      }
+      return;
+    }
+    setMicPromptPartyId(partyId);
+  }
+
+  /**
    * Ir ao vivo. One press, three things, in this order and no other:
    *
    * 1. the party's state changes, so the room's sidebar gets the block;
@@ -4024,13 +4508,29 @@ function MainAppContent({
    * says so in words to everyone. The other order would leave a picture going
    * out from a party the room has never been told about.
    */
-  async function handleWatchPartyGoLive(stream: MediaStream | null) {
+  async function handleWatchPartyGoLive(
+    stream: MediaStream | null,
+    lowLatency: boolean,
+  ) {
     const party = currentWatchParty();
     if (!party) {
       return;
     }
     try {
-      const answer = await apiSetWatchPartyState(party.id, "live");
+      // The host's standing "Baixa latência (beta)" preference only reaches
+      // the server at THIS moment: `goLive` is the one write
+      // `requestedHlsModeForChannel` ever reads, so a party going live again
+      // always states its own request rather than inheriting whatever the
+      // last one asked for. `lowLatency` is a PARAMETER, not re-read from
+      // `currentWatchParty()` here: this function's own await below means
+      // whatever runs after it can be reached with a different channel
+      // selected (Farol review, third round), and `currentWatchParty()`
+      // answers for the SELECTED channel, not necessarily the party this
+      // press was for. The caller (`watch-party-panel.tsx`) already has the
+      // right `party.options.lowLatency` in its own props at the moment of
+      // the click, which is the only copy of this value that is ever
+      // correct for this specific go-live.
+      const answer = await apiSetWatchPartyState(party.id, "live", lowLatency);
       if (answer.party) {
         watchParties.put(answer.party);
       }
@@ -4058,7 +4558,21 @@ function MainAppContent({
     // used to look like an opt-in to whole-computer sound. `preferBrowserTab`
     // matches the setup picker so a retry without a handed stream stays on
     // the echo-safe path.
-    startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
+    //
+    // THE MIC PROMPT WAITS FOR THE SHARE TO ACTUALLY LAND (Farol, 2026-09-14).
+    // This used to arm the moment the share was ASKED for, so a host who
+    // cancelled the picker or had the OS refuse the capture still got "Ativar
+    // o mic?" for a broadcast that never started. `finishWatchPartyGoLiveShare`
+    // is also what the disclosure-sheet route below calls once IT knows the
+    // outcome, so the two routes end in the same transition; `party` rides
+    // on the intent so that route still has both ids after the sheet closes.
+    const wentOut = await startScreenShareGated(false, {
+      preferBrowserTab: true,
+      watchParty: true,
+      stream,
+      party: { id: party.id, channelId: party.channelId },
+    });
+    finishWatchPartyGoLiveShare(party.id, party.channelId, wentOut);
   }
 
   /**
@@ -4183,6 +4697,32 @@ function MainAppContent({
   }
 
   /**
+   * Give a draft a time, or take it away. The server does the state move
+   * (`draft -> scheduled` on a time, `scheduled -> draft` on null), so this
+   * is the same PATCH as a rename with a different field. The setup card's
+   * "Quando" row is the only caller; the create dialog still sets a time at
+   * creation the way it always did.
+   */
+  async function handleWatchPartySchedule(startsAt: string | null) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await apiUpdateWatchParty(party.id, { startsAt });
+    // A rejected PATCH already throws (`apiFetch`); a 200 that somehow
+    // carries no party is the same failure in a different shape, and both
+    // have to reach the caller the same way. The setup card's Salvar button
+    // is what awaits this (Farol, 2026-09-14) and shows its own inline
+    // error, so this function does not also swallow the rejection into a
+    // global toast: one place says what went wrong, next to the control
+    // that asked.
+    if (!answer.party) {
+      throw new Error("Could not save the time");
+    }
+    watchParties.put(answer.party);
+  }
+
+  /**
    * Take a seat in a watch party's room WITHOUT a microphone.
    *
    * The default for anybody who is not running the show. `audienceOnly` opens
@@ -4226,6 +4766,129 @@ function MainAppContent({
       watchParties.put(answer.party);
     }
   }
+
+  /**
+   * CONVIDADOS: every guest action but `join`, which has its own flow right
+   * below (`handleWatchPartyGuestGoOnAir`) because going on air is not just a
+   * route call — it stops the player and opens the room first (§3.4).
+   */
+  /**
+   * `channelId` is optional and, when given, wins over the currently
+   * selected channel — the go-on-air/go-off-air flows below capture it
+   * BEFORE their own awaits (a mic prompt, a room join) specifically so a
+   * channel switch mid-flight sends the action to the party that was
+   * actually joined, not whatever the user has since navigated to.
+   */
+  async function handleWatchPartyGuestAction(
+    action: GuestAction,
+    channelId?: string,
+  ) {
+    const party = channelId
+      ? (watchParties.byChannel[channelId] ?? null)
+      : currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await setWatchPartyGuestAction(party.id, action);
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  /**
+   * `Entrar no ar`. THE SERVER SAYS YES FIRST, THEN THE ROOM. `mayGoOnAir`
+   * (both the client's read of it and `join-voice-room`'s own check) only
+   * lets an ACCEPTED guest in — `accepted_at IS NOT NULL` — and the guest
+   * `join` HTTP action is the one write that sets it, inside the transaction
+   * that also enforces `WATCH_PARTY_MAX_GUESTS`. Calling `voice.join` before
+   * that action lands asks the room to seat somebody the server does not yet
+   * consider a guest, which it correctly refuses
+   * (`voice.watchPartySeatRefused`) — every real join through this path used
+   * to fail invisibly on the very race it was written to handle (the
+   * invitation confirmed a beat after the room was asked for). So: the HTTP
+   * `join` first, which is also where the invitation-expired/cap-full errors
+   * surface with nobody's microphone open yet; only once the server has
+   * actually accepted this browser does it ask for the room.
+   *
+   * ROLLED BACK ON EITHER FAILURE. A `join` action that throws never reaches
+   * `voice.join` at all — nothing to roll back. A `voice.join` that fails
+   * AFTER the server accepted this guest (mic/camera refused, a room error)
+   * leaves the row `accepted_at`-set with nobody connected to it, so that
+   * path calls the guest `leave` action to undo it, best-effort, before the
+   * original error is re-thrown to the caller (the invite dialog keeps
+   * itself open on a failure it is told about). A `leave` that ALSO fails
+   * here is not silently dropped: the guest's own next disconnect and the
+   * ordinary voice-seat reconciliation still clear a row nobody is holding,
+   * so this is a UX rollback, not the only backstop.
+   */
+  async function handleWatchPartyGuestGoOnAir(channelId: string) {
+    await handleWatchPartyGuestAction({ action: "join" }, channelId);
+    try {
+      voiceServerIdRef.current = selectedServerId;
+      await voice.join(channelId, {
+        inputDeviceId: localSettings.inputDeviceId,
+        inputVolume: localSettings.inputVolume,
+        inputMode: localSettings.inputMode,
+        vadThreshold: localSettings.vadThreshold,
+        processing: localSettings.micProcessing,
+      });
+    } catch (err) {
+      try {
+        await handleWatchPartyGuestAction({ action: "leave" }, channelId);
+      } catch (rollbackErr) {
+        console.error(
+          "[watch-party] could not roll back an accepted guest slot after voice.join failed:",
+          rollbackErr,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * `Sair do ar`. Tell the party first, then leave — same order `onLeaveSeat`
+   * uses elsewhere — but `voice.leave()` runs in `finally`: a rejected
+   * `leave` action (a timeout, a dropped connection) must not strand the
+   * guest connected and transmitting just because the server never heard
+   * about it. The server-side row is cleaned up independently by the
+   * client's own eventual disconnect and the orphan sweep either way.
+   */
+  async function handleWatchPartyGuestGoOffAir(channelId: string) {
+    try {
+      await handleWatchPartyGuestAction({ action: "leave" }, channelId);
+    } finally {
+      voice.leave();
+    }
+  }
+
+  const presentingPartyId =
+    currentWatchParty()?.channelId === voiceState.voiceChannelId &&
+    voiceState.isSharingScreen
+      ? currentWatchParty()?.id
+      : null;
+  const presentingPartyGuests = presentingPartyId
+    ? currentWatchParty()?.options.guests
+    : undefined;
+  const presentingPartyOnAirKey = presentingPartyId
+    ? (currentWatchParty()?.guests.onAir.map((p) => p.userId).join(",") ?? "")
+    : "";
+  /**
+   * CONVIDADOS §5.2: tell `use-voice.ts`'s mixer what to carry, whenever a
+   * party's `guests` or `guests.onAir` changes for the channel THIS BROWSER
+   * IS PRESENTING. A no-op for anyone else — every other tab, every ordinary
+   * voice channel, gets `setWatchPartyGuests("off", [])`, which is what the
+   * mixer already treats as "carry nothing".
+   */
+  useEffect(() => {
+    if (!presentingPartyId || presentingPartyGuests === undefined) {
+      voice.setWatchPartyGuests("off", []);
+      return;
+    }
+    const onAirUserIds = presentingPartyOnAirKey
+      ? presentingPartyOnAirKey.split(",")
+      : [];
+    voice.setWatchPartyGuests(presentingPartyGuests, onAirUserIds);
+  }, [presentingPartyId, presentingPartyGuests, presentingPartyOnAirKey, voice]);
 
   /**
    * Promote or demote a co-host.
@@ -4856,6 +5519,73 @@ function MainAppContent({
       // Worst case the card is offered once more on the next bootstrap.
     });
   }, []);
+
+  /**
+   * The Voz limpa nudge is put away — same shape as `settleCommunityHomeIntro`,
+   * and it is what both "Ativar" and "Depois" call: either one is an answer,
+   * so neither should leave the card able to come back.
+   */
+  const settleVoiceCleanNudge = useCallback(() => {
+    const patch = voiceCleanNudgeDismissedPatch();
+    setUser((previous) =>
+      previous
+        ? { ...previous, preferences: { ...previous.preferences, ...patch } }
+        : previous,
+    );
+    void updatePreferences(patch).catch(() => {
+      // Worst case the card is offered once more on the next qualifying call.
+    });
+  }, []);
+
+  /**
+   * "Ativar" on the Voz limpa nudge: the same live-apply path Settings uses
+   * for the noise-suppression select, so a call already in progress hears
+   * the switch the same way it would from the modal. A plain function, not a
+   * `useCallback` — it calls `handleAudioSettingsLive`, itself redefined every
+   * render, and closes over `localSettings` directly rather than chasing that
+   * identity through a dependency array.
+   */
+  async function activateVoiceClean() {
+    // Dismissing the card is "the nudge was answered" and happens either
+    // way, immediately — same as "Depois". The toast is a different claim
+    // ("it is ON"), so it waits for confirmation below, and is not shown at
+    // all when the confirmation says the request fell back.
+    settleVoiceCleanNudge();
+    const next: LocalSettings = {
+      ...localSettings,
+      micProcessing: {
+        ...localSettings.micProcessing,
+        noiseSuppression: "advanced",
+      },
+    };
+    setLocalSettings(next);
+    saveLocalSettings(next);
+    // NOT `handleAudioSettingsLive`: it fires `voice.setMicProcessing`
+    // without awaiting it, and `setMicProcessing` no-ops on a processing
+    // value that already matches `audioOptions.processing` — so calling it a
+    // second time ourselves, to await it, would see its own first call's
+    // synchronous update and return immediately without ever waiting for the
+    // real pipeline swap. One call, awaited here, is what lets this function
+    // tell a real switch from a fallback: `createMicPipeline`'s "browser
+    // cannot run RNNoise" path (used whether or not a call is live — it is a
+    // no-op pipeline swap when idle, same as every other processing change)
+    // stamps this exact notice, so seeing it right after the call settles
+    // means the request did not actually turn Voz limpa on, and the toast
+    // must not say it did — the notice banner on the call stage already says
+    // why.
+    await voice.setMicProcessing(next.micProcessing);
+    if (voice.getState().notice !== t("voice.notice.noiseSuppressionUnsupported")) {
+      setVoiceCleanActivatedToast(true);
+    }
+  }
+
+  useEffect(() => {
+    if (!voiceCleanActivatedToast) {
+      return;
+    }
+    const timer = setTimeout(() => setVoiceCleanActivatedToast(false), 3000);
+    return () => clearTimeout(timer);
+  }, [voiceCleanActivatedToast]);
 
   /**
    * Walk in, rather than asking whether they meant to.
@@ -5510,19 +6240,51 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
-  /** A watch party room arranges its panes like a stream; a call does not. */
+  /**
+   * A watch party room arranges its panes like a stream; a call does not.
+   *
+   * And a watch party room is two different stages depending on who is
+   * looking at it. `"watch"` is the seated surface (`VoiceChannelStage`):
+   * the host, a co-host, anyone invited up, or an audience member who took a
+   * seat — the shared, proportional split a call already uses. `"watch-audience"`
+   * is everybody else: a seatless viewer watching the HLS picture
+   * (`WatchChannelStage`), the "party has not started" card and the "it
+   * ended" card `WatchPartyPanel` draws in the same spot — all three are the
+   * same pane, so they get the same Twitch-style default, chat pinned to
+   * about 340px rather than a third of an ultrawide. See `watchAudienceSide`
+   * in `lib/call-split.ts`.
+   */
+  const inSelectedWatchPartyCall =
+    selectedChannel?.kind === "server" &&
+    voiceState.voiceChannelId === selectedChannel.id &&
+    voiceState.status !== "idle";
   const splitKind: CallSplitKind =
     selectedChannel?.kind === "server" &&
     isWatchPartyChannelType(selectedChannel.type) &&
     isWatchPartyChannelsEnabled()
-      ? "watch"
+      ? inSelectedWatchPartyCall
+        ? "watch"
+        : "watch-audience"
       : "call";
+  /** Either watch-party pane kind — the one distinction most of the chrome
+   * around the split actually cares about is "is this a watch party room at
+   * all", not which of its two surfaces is currently up. */
+  const isWatchPartySplit =
+    splitKind === "watch" || splitKind === "watch-audience";
   // Baú gating is computed above the early returns (it owns a hook); see
   // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
   const meMember = serverMembers.find((member) => member.id === user?.id);
   const meVip = rankBadges(meMember?.roleIds, serverRoles).vipBadge;
   const canManageChannels = perms.can(Permission.MANAGE_CHANNELS);
   const canManageRoles = perms.can(Permission.MANAGE_ROLES);
+  // Same OR the server checks (`requireWatchPartyHistoryAccess` in
+  // `server/src/api/index.ts`): whoever may go live or whoever administers
+  // the channel, per-channel overwrites included.
+  const canViewWatchPartyHistory =
+    selectedChannel?.kind === "server" &&
+    isWatchPartyChannelType(selectedChannel.type) &&
+    (perms.can(Permission.START_WATCH_PARTY, selectedChannel.id) ||
+      perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id));
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
   const canManageWebhooks = perms.can(Permission.MANAGE_WEBHOOKS);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
@@ -5554,6 +6316,48 @@ function MainAppContent({
       selection.kind === "server" &&
       Boolean(selectedServerId),
   });
+  const voiceChannel =
+    voiceState.voiceChannelId
+      ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
+      : null;
+  // Hoisted above `sidebarIconsOnly`'s original spot (near the channel-list
+  // toggle further down) so the Voz limpa eligibility below can read it: the
+  // nudge is rendered only in the wide sidebar footer (`!compact` in
+  // `sidebarFooter`), so a compact rail must not be able to hold the corner
+  // queue's `voiceClean` slot for a card nothing mounts.
+  //
+  // `sidebarIconsOnly` is provably `!compact`'s complement for every render
+  // that can reach `VoiceCleanHint`: `sidebarFooter` has exactly three call
+  // sites, and `sidebarFooter(sidebarIconsOnly)` on `ChannelList` is the
+  // only one that can ever pass `compact={true}` — the other two
+  // (`DmList`, `WhatsNewView`) call `sidebarFooter()` with no argument, so
+  // their `compact` is always `false` regardless of `sidebarIconsOnly`.
+  // Gating `wantsVoiceCleanHint` on `!sidebarIconsOnly` is therefore never
+  // looser than the render guard for any of the three: it can only be
+  // *stricter* than necessary on the two branches where compact never
+  // applies, never looser than the one branch where it does.
+  const watchingAShare =
+    voiceState.status === "connected" &&
+    voiceState.screenSharePeerIds.some(
+      (peerId) => peerId !== voiceState.peerId,
+    );
+  const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
+    // A party's stream alone does NOT fold the list: the live party block
+    // lives in it, and it is the way back to the show for everybody else.
+    watchingAShare,
+    columnLayout,
+  });
+  const wantsVoiceCleanHint =
+    !sidebarIconsOnly &&
+    shouldOfferVoiceCleanNudge({
+      dismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
+      automated: isAutomatedBrowser(),
+      inCall: voiceState.status === "connected",
+      micOn: !voiceState.isMuted,
+      presentingWatchParty:
+        voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
+      isDesktopViewport: voiceCleanDesktopViewport,
+    });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
     communityHomePost: Boolean(
@@ -5561,6 +6365,7 @@ function MainAppContent({
         communityHomePostToast.serverId === selectedServerId,
     ),
     qg: qgHintWanted,
+    voiceClean: wantsVoiceCleanHint,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
     cargos:
@@ -5572,14 +6377,15 @@ function MainAppContent({
       shortcutsQuietReady &&
       attachedFeatureHint === null,
   });
+  // A DM arrival card and the bottom-right onboarding queue would collide on
+  // a phone, so a toast up wins the corner for its duration — same yield the
+  // update prompt already gets. The card records no impression while it
+  // yields (`docs/ONBOARDING.md` §Adding a card, rule 3): `enabled` goes
+  // false below, which every corner card already treats as "never rendered".
+  const effectiveCornerHint = dmToastActive ? null : cornerHint;
   const liveAttachedHint =
-    cornerHint === null || cornerHint === "shortcuts"
+    effectiveCornerHint === null || effectiveCornerHint === "shortcuts"
       ? attachedFeatureHint
-      : null;
-
-  const voiceChannel =
-    voiceState.voiceChannelId
-      ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
       : null;
   /** The conversation the active call lives in, when it is a DM call. */
   const voiceConversation = voiceState.voiceChannelId
@@ -5618,17 +6424,9 @@ function MainAppContent({
   // Taking the list away from the one person using it, at the moment they
   // start using it, is not a saving. The viewer, who has no reason to touch
   // the channel list while watching, is who this is for.
-  const watchingAShare =
-    voiceState.status === "connected" &&
-    voiceState.screenSharePeerIds.some(
-      (peerId) => peerId !== voiceState.peerId,
-    );
-  const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
-    // A party's stream alone does NOT fold the list: the live party block
-    // lives in it, and it is the way back to the show for everybody else.
-    watchingAShare,
-    columnLayout,
-  });
+  //
+  // (`watchingAShare` / `sidebarIconsOnly` themselves moved above the Voz
+  // limpa eligibility block — same values, computed once.)
   // A plain function, not a `useCallback`: it is read below the early returns
   // that this component is full of, and nothing takes it as a dependency.
   const toggleChannelSidebar = () => {
@@ -5654,10 +6452,26 @@ function MainAppContent({
    * controls that cannot wait (which call, and the way out) and the user panel
    * stacks. Nothing is dropped that has no second home.
    */
+  /**
+   * NO CALL STRIP FOR A LIVE WATCH PARTY (2026-09-13, presenter-UI plan
+   * §6.3). Section 10 of the setup plan retired the generic strip for a
+   * watch party and the in-pane one obeyed; this one kept rendering on
+   * `voiceState.status` alone, so a presenter had a red "Sair da call" in
+   * the sidebar one click from Encerrar, plus a third Compartilhar tela
+   * and a camera the stream never carries. The party bar and the dock say
+   * everything this strip said, in the party's words. Keyed on the room
+   * the person is SEATED in, not the channel they are looking at: leaving
+   * the channel must not bring the strip back for a seat that is still a
+   * party seat.
+   */
+  const seatedInLiveParty =
+    voiceState.status !== "idle" &&
+    voiceState.voiceChannelId !== null &&
+    watchParties.byChannel[voiceState.voiceChannelId]?.state === "live";
   const sidebarFooter = (compact = false) => (
     <>
       <MusicMiniPlayer voiceState={voiceState} compact={compact} />
-      {voiceState.status !== "idle" && (
+      {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar
           channelName={
             voiceChannel?.name ??
@@ -5722,6 +6536,19 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           compact={compact}
         />
+      )}
+      {/* Anchored above the user bar, never inside the icons-only rail:
+          `layout="inline"` clamps to the parent width, and 72px has no room
+          for either the card or the toast. */}
+      {!compact && (
+        <>
+          <VoiceCleanHint
+            enabled={cornerHint === "voiceClean"}
+            onActivate={activateVoiceClean}
+            onDismiss={settleVoiceCleanNudge}
+          />
+          <VoiceCleanActivatedToast show={voiceCleanActivatedToast} />
+        </>
       )}
       <UserPanel
         compact={compact}
@@ -5846,7 +6673,7 @@ function MainAppContent({
           {/* A watch party channel with a party on it has its own count on
               the bar ("N assistindo"); a second one here, of the seated
               room, says a different number about the same show. */}
-          {!(splitKind === "watch" && watchParties.byChannel[selectedChannel.id]) && (
+          {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) && (
             <p className="truncate text-[11px] text-paper-muted">
               {activeConversation
                 ? conversationSubtitle(activeConversation)
@@ -5946,42 +6773,9 @@ function MainAppContent({
                 </>
               );
             })()}
-          {/* The arrangement of the two panes, next to the roster toggle that
-              is already a layout control, and only while there is a picture to
-              arrange around. Unlike the channel list's switch, which moved to
-              the left of this row because it is furniture, this one really is
-              a call control: with no stage there is nothing to put beside the
-              chat, and `CallSplit` would refuse the arrangement anyway. */}
-          {splitState.canSideBySide && (
-            <Tooltip
-              label={
-                effectiveOrientation(callSplit, splitKind) === "side-by-side"
-                  ? t("call.split.stack")
-                  : t("call.split.sideBySide")
-              }
-              detail={t("call.split.orientationHint")}
-            >
-              <button
-                type="button"
-                data-call-split-toggle=""
-                aria-pressed={
-                  effectiveOrientation(callSplit, splitKind) === "side-by-side"
-                }
-                className={cn(
-                  HEADER_ACTION_TILE,
-                  effectiveOrientation(callSplit, splitKind) === "side-by-side" &&
-                    "text-paper",
-                )}
-                onClick={() => toggleSplitOrientation(splitKind)}
-              >
-                {effectiveOrientation(callSplit, splitKind) === "side-by-side" ? (
-                  <Rows2 className="h-4 w-4" />
-                ) : (
-                  <Columns2 className="h-4 w-4" />
-                )}
-              </button>
-            </Tooltip>
-          )}
+          {/* The side-by-side / stacked switch moved into the chat pane's
+              own header (2026-09-13), beside the hide controls it belongs
+              with. */}
           {isChannelSessionScheduleEnabled() &&
             canManageChannels &&
             selectedChannel.kind === "server" &&
@@ -6007,6 +6801,21 @@ function MainAppContent({
               <Pin className="h-4 w-4" />
             </button>
           </Tooltip>
+          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.watchPartyHistory")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-channel-header-watch-party-history=""
+                aria-label={t("chrome.watchPartyHistory")}
+                onClick={() =>
+                  setWatchPartyHistoryChannelId(selectedChannel.id)
+                }
+              >
+                <History className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
           {(canManageChannels || canManageRoles) &&
             selectedChannel.kind === "server" && (
             <Tooltip label={t("chrome.channelSettings")}>
@@ -6158,6 +6967,7 @@ function MainAppContent({
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
+            onSchedule={handleWatchPartySchedule}
             onClaimHost={handleWatchPartyClaimHost}
             onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
@@ -6189,6 +6999,10 @@ function MainAppContent({
             }
             micInStream={voiceState.micInStream}
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
+            voiceTrackMode={voiceState.voiceTrackMode}
+            onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
+            voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
+            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -6208,12 +7022,75 @@ function MainAppContent({
             slot="chrome"
           />
         )}
+      {/* CONVIDADOS (docs/plans/WATCH_PARTY_GUESTS.md). One mount line: every
+          new control lives in `guests/watch-party-guests-overlay.tsx`, which
+          is mounted here rather than threaded through `watch-party-panel.tsx`
+          (frozen ahead of PR 538's rewrite). */}
+      {selectedChannel.kind === "server" &&
+        isWatchPartyChannelType(selectedChannel.type) &&
+        isWatchPartyChannelsEnabled() &&
+        user && (
+          <WatchPartyGuestsOverlay
+            party={watchParties.byChannel[selectedChannel.id] ?? null}
+            currentUserId={user.id}
+            cohostCandidates={cohostCandidates}
+            inRoom={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status === "connected"
+            }
+            micOn={!voiceState.isMuted}
+            cameraOn={voiceState.isCameraOn}
+            onToggleMic={() => voice.toggleMute()}
+            onToggleCamera={() => void voice.toggleCamera()}
+            // THE PROMISE GOES THROUGH UNCAUGHT. The overlay's own callers
+            // decide how to react to a failure now: `decline` rolls its
+            // dialog back open, everything else logs through its own
+            // `fireGuestAction` wrapper. Catching and swallowing it here,
+            // as this used to, is exactly what made a failed decline
+            // indistinguishable from a successful one three lines up the
+            // call stack.
+            onGuestAction={(action) =>
+              handleWatchPartyGuestAction(action, selectedChannel.id)
+            }
+            onGoOnAir={() => handleWatchPartyGuestGoOnAir(selectedChannel.id)}
+            onGoOffAir={() => handleWatchPartyGuestGoOffAir(selectedChannel.id)}
+            className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
+          />
+        )}
       <CallSplit
         shape={stageShape}
         kind={splitKind}
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
+        chatHeader={{
+          title: t("chat.paneTitle"),
+          meta:
+            splitKind === "watch"
+              ? t("watchParty.live.viewers", {
+                  count: watchAudienceCount(
+                    voiceState.channelLive[selectedChannel.id],
+                    voiceState.occupancy[selectedChannel.id],
+                  ),
+                })
+              : undefined,
+          badge: (() => {
+            const seconds =
+              splitKind === "watch"
+                ? (watchParties.byChannel[selectedChannel.id]?.options
+                    .slowModeSeconds ?? 0)
+                : 0;
+            return seconds > 0
+              ? t("watchParty.summary.slow", { value: t(slowModeKey(seconds)) })
+              : undefined;
+          })(),
+          orientation: {
+            sideBySide:
+              effectiveOrientation(callSplit, splitKind) === "side-by-side",
+            canToggle: splitState.canSideBySide,
+            onToggle: () => toggleSplitOrientation(splitKind),
+          },
+        }}
         stage={
           <>
       {/* The conversation's call surface: invisible until a call exists, a
@@ -6278,6 +7155,7 @@ function MainAppContent({
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
+            onSchedule={handleWatchPartySchedule}
             onClaimHost={handleWatchPartyClaimHost}
             onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
@@ -6309,6 +7187,10 @@ function MainAppContent({
             }
             micInStream={voiceState.micInStream}
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
+            voiceTrackMode={voiceState.voiceTrackMode}
+            onVoiceTrackModeChange={(mode) => voice.setVoiceTrackMode(mode)}
+            voiceTrackAvailable={liveHlsConfig?.voiceTrack === true}
+            lowLatencyAvailable={liveHlsConfig?.lowLatency?.available === true}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -6359,6 +7241,30 @@ function MainAppContent({
               splitKind === "watch" &&
               watchParties.byChannel[selectedChannel.id]?.state === "live"
             }
+            // The channel's own type, not `watchParties.byChannel[...]?.state`:
+            // that store's own fetch/socket can still be catching up the
+            // instant a seat lands, and `VoiceChannelStage` never mounts
+            // `CallStage` before the seat does. See `CallStage.isWatchPartyChannel`.
+            isWatchPartyChannel={isWatchPartySplit}
+            presenterStage={(stream) => (
+              <WatchPartyPresenterStage
+                stream={stream}
+                liveStream={
+                  voiceState.channelLive[selectedChannel.id]?.stream ?? null
+                }
+                channelId={selectedChannel.id}
+                audienceCount={watchAudienceCount(
+                  voiceState.channelLive[selectedChannel.id],
+                  voiceState.occupancy[selectedChannel.id],
+                )}
+                hands={
+                  watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []
+                }
+                onInvite={(userId) =>
+                  void handleWatchPartyStage("invite", userId)
+                }
+              />
+            )}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
@@ -6373,6 +7279,7 @@ function MainAppContent({
             screenFrameRate={localSettings.screenFrameRate}
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
+            onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -6428,6 +7335,7 @@ function MainAppContent({
           }
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
+          onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onScreenFrameRateChange={handleScreenFrameRateChange}
@@ -6450,8 +7358,8 @@ function MainAppContent({
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
         channelId={selectedChannel.id}
-        variant={splitKind === "watch" ? "stream" : "default"}
-        streamBadges={splitKind === "watch" ? streamBadges : null}
+        variant={isWatchPartySplit ? "stream" : "default"}
+        streamBadges={isWatchPartySplit ? streamBadges : null}
         isLoading={messagesLoading}
         hasMore={chat.hasMoreHistory()}
         hasNewer={chat.hasNewerHistory()}
@@ -6528,7 +7436,7 @@ function MainAppContent({
         />
       )}
       <MessageComposer
-        variant={splitKind === "watch" ? "stream" : "default"}
+        variant={isWatchPartySplit ? "stream" : "default"}
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
@@ -6716,6 +7624,7 @@ function MainAppContent({
         conversations={conversations}
         selectedChannelId={selectedChannelId}
         onOpen={(channelId) => void selectConversation(channelId)}
+        onActiveChange={setDmToastActive}
       />
 
       {isChannelSessionScheduleEnabled() && (
@@ -6852,6 +7761,7 @@ function MainAppContent({
           unread={unread}
           isLoading={conversationsLoading}
           blockedUserIds={blockedUserIds}
+          viewerId={user?.id ?? null}
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
           onSelectConversation={(id) => void selectConversation(id)}
@@ -6860,6 +7770,7 @@ function MainAppContent({
           // is just deselecting the conversation.
           friendsSelected={!selectedChannelId}
           friendRequestCount={friends.data.incoming.length}
+          hasFriends={friends.data.friends.length > 0}
           onOpenFriends={selectHome}
           onHideConversation={(id) => void handleHideConversation(id)}
           pinnedChannelIds={pinnedChannelIds}
@@ -6924,6 +7835,10 @@ function MainAppContent({
             hasPermission: perms.can(Permission.START_WATCH_PARTY),
           })}
           onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
+          watchPartyHistoryChannels={watchPartyHistoryChannels}
+          onOpenWatchPartyHistory={(channelId) =>
+            setWatchPartyHistoryChannelId(channelId)
+          }
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}
@@ -7033,6 +7948,36 @@ function MainAppContent({
               onClick={() => setAppError(null)}
             >
               {t("connection.dismiss")}
+            </button>
+          </div>
+        )}
+
+        {idleWarning && (
+          <div className="flex items-start gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning">
+            <span className="flex-1">
+              {t("voice.idle.warning", {
+                count: Math.max(
+                  1,
+                  Math.round((idleWarning.disconnectAt - Date.now()) / 60_000),
+                ),
+              })}
+            </span>
+            <button
+              type="button"
+              className="shrink-0 text-xs underline underline-offset-2"
+              onClick={() => {
+                // Send and wait: the banner clears on the server's
+                // `voice-idle-warning-cancelled` confirmation, not on this
+                // click. A socket that is closed or mid-reconnect can drop
+                // this frame; clearing here regardless would tell the
+                // person they are safe while the server still counts down
+                // to the original deadline. Pressing again if nothing
+                // happens is harmless — the server treats a repeat
+                // `voice-still-here` exactly like the first one.
+                transport.sendVoice({ type: "voice-still-here" });
+              }}
+            >
+              {t("voice.idle.stillHere")}
             </button>
           </div>
         )}
@@ -7533,6 +8478,14 @@ function MainAppContent({
         }}
       />
 
+      {watchPartyHistoryChannelId && (
+        <WatchPartyHistoryDialog
+          open
+          channelId={watchPartyHistoryChannelId}
+          onClose={() => setWatchPartyHistoryChannelId(null)}
+        />
+      )}
+
       <PinnedMessagesPanel
         open={pinsOpen}
         channelId={selectedChannel?.id ?? null}
@@ -7588,11 +8541,52 @@ function MainAppContent({
           }
           // Same audio choice and capture intent the person asked for
           // before the sheet, through the same gate (now acknowledged).
-          startScreenShareGated(pending.request.audio, pending.request.intent);
+          //
+          // ONLY A GO-LIVE SHARE FINISHES THE HANDOFF, AND FOR THE PARTY IT
+          // WAS ACTUALLY FOR (Farol, 2026-09-14, three rounds). `intent.stream`
+          // is the signal handed only by `handleWatchPartyGoLive` (an
+          // already-approved preview capture); every other caller through
+          // this same gate — the ordinary call share button, a mid-show
+          // reshare — has none, and must never pop the watch-party mic
+          // prompt on THEIR confirm. `intent.party` travels with it rather
+          // than reading `currentWatchParty()` here, because the sheet can
+          // sit open for as long as the host takes to read it, the selected
+          // channel is free to change in that window, and
+          // `finishWatchPartyGoLiveShare` itself re-checks the party is
+          // still there and still live before arming anything.
+          const goLiveParty = pending.request.intent?.stream
+            ? pending.request.intent.party
+            : undefined;
+          void startScreenShareGated(
+            pending.request.audio,
+            pending.request.intent,
+          ).then((wentOut) => {
+            if (goLiveParty) {
+              finishWatchPartyGoLiveShare(
+                goLiveParty.id,
+                goLiveParty.channelId,
+                wentOut,
+              );
+            }
+          });
         }}
         onClose={() => setHlsHostAck(null)}
       />
 
+      <ConfirmDialog
+        open={micPromptPartyId !== null}
+        title={t("watchParty.live.micPromptTitle")}
+        description={t("watchParty.live.micPromptBody")}
+        confirmLabel={t("watchParty.live.micPromptConfirm")}
+        destructive={false}
+        onConfirm={() => {
+          if (voice.getState().isMuted) {
+            voice.toggleMute();
+          }
+          setMicPromptPartyId(null);
+        }}
+        onClose={() => setMicPromptPartyId(null)}
+      />
       <ConfirmDialog
         open={pendingDeleteChannelId !== null}
         title={t("chrome.deleteChannel")}
@@ -7651,29 +8645,29 @@ function MainAppContent({
       />
 
       <CargosHint
-        enabled={cornerHint === "cargos"}
+        enabled={effectiveCornerHint === "cargos"}
         onOpenRoles={() => {
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
         }}
       />
       <CommunityHomePostHint
-        enabled={cornerHint === "communityHomePost"}
+        enabled={effectiveCornerHint === "communityHomePost"}
         serverName={communityHomePostToast?.serverName ?? ""}
         onOpen={openCommunityHomePostToast}
         onDismiss={dismissCommunityHomePostToast}
       />
       <ShortcutsHint
-        enabled={cornerHint === "shortcuts"}
+        enabled={effectiveCornerHint === "shortcuts"}
         shortcutLabel={formatBinding(shortcutBindings.toggleOverlay)}
       />
       <WhatsNewPrompt
-        enabled={cornerHint === "whatsNew"}
+        enabled={effectiveCornerHint === "whatsNew"}
         onOpen={handleOpenWhatsNew}
       />
-      <MobileBetaHint enabled={cornerHint === "mobileBeta"} />
+      <MobileBetaHint enabled={effectiveCornerHint === "mobileBeta"} />
       <QgHint
-        enabled={cornerHint === "qg"}
+        enabled={effectiveCornerHint === "qg"}
         onWantedChange={handleQgHintWantedChange}
         onJoined={(result) => {
           if (result.joinedNow) {

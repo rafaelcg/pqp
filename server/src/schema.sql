@@ -541,6 +541,18 @@ CREATE INDEX IF NOT EXISTS idx_messages_reply_to
 -- than a JSON blob: votes need a real unique constraint per option and user.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS chance JSONB;
 
+-- Idempotent sends. A client that queued a message offline may deliver the
+-- same frame twice (a reconnect flush and a reload both replay it), so the
+-- nonce it already put on the wire is stored and made unique per author and
+-- channel. The insert is `ON CONFLICT DO NOTHING` and the existing row is
+-- re-broadcast to that sender only. NULL for HTTP sends, webhooks and every
+-- message older than the column: the partial index keeps those free.
+-- The unique index is NOT built here: this file is one transaction and a
+-- plain CREATE INDEX on `messages` would hold a write lock for the whole
+-- build on a table with history. `ensureConcurrentIndexes` in db.ts builds
+-- it CONCURRENTLY right after this file runs, before the server listens.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS nonce TEXT;
+
 CREATE TABLE IF NOT EXISTS polls (
   message_id UUID PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
   question TEXT NOT NULL,
@@ -1250,6 +1262,43 @@ CREATE TABLE IF NOT EXISTS status_samples (
 CREATE INDEX IF NOT EXISTS idx_status_samples_component
   ON status_samples (component, checked_at DESC);
 
+-- ---------------------------------------------------------------------------
+-- Cluster-wide singletons and cluster-wide budgets
+-- ---------------------------------------------------------------------------
+
+-- One tick, one process. A timer in `index.ts` fires on EVERY process that
+-- runs the entry point, so with two API machines the status probe ran twice a
+-- minute and a blip on one machine read as 50% uptime for the whole service.
+-- The claim below is what makes "once a minute" mean once: the UPDATE only
+-- fires when the current lease has expired, so exactly one caller per tick
+-- gets a row back and the losers do nothing.
+CREATE TABLE IF NOT EXISTS singleton_leases (
+  key            TEXT PRIMARY KEY,
+  claimed_until  TIMESTAMPTZ NOT NULL,
+  claimed_by     TEXT NOT NULL,
+  claimed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Token buckets that have to hold across machines.
+--
+-- Deliberately NOT every limiter: the in-memory buckets in `lib/rate-limit.ts`
+-- stay in memory, because a round trip on every chat message costs more than
+-- the limit is worth (the banner in that file says so at length). This table
+-- is for the handful of user-keyed budgets whose whole point is that they are
+-- SMALL and the action is loud — ringing a DM, today. One row per
+-- (bucket, subject); `tokens` is fractional and refilled from `updated_at` by
+-- the same statement that spends it, so there is no separate refill job.
+CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+  bucket      TEXT NOT NULL,
+  subject     TEXT NOT NULL,
+  tokens      DOUBLE PRECISION NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (bucket, subject)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_updated
+  ON rate_limit_buckets (updated_at);
+
 -- Reports: a member telling somebody whose job it is that a message or a person
 -- needs looking at.
 --
@@ -1413,8 +1462,16 @@ CREATE TABLE IF NOT EXISTS voice_rooms (
   transport         TEXT NOT NULL CHECK (transport IN ('mesh', 'livekit')),
   watch_party       JSONB,
   watch_party_rev   BIGINT NOT NULL DEFAULT 0,
+  music             JSONB,
+  music_rev         BIGINT NOT NULL DEFAULT 0,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- The music queue is the watch party's twin: same contract (`rev` wins, ties
+-- break on `actorId`), same two columns, same rule that a write only lands
+-- when it outranks the row. Added after the table existed, so an existing
+-- deployment picks them up here rather than in a migration.
+ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music JSONB;
+ALTER TABLE voice_rooms ADD COLUMN IF NOT EXISTS music_rev BIGINT NOT NULL DEFAULT 0;
 
 -- One row per voice peer anywhere in the cluster. `instance_id` says which
 -- process holds the socket; `orphaned_at` is set when that socket closed and
@@ -1494,6 +1551,19 @@ CREATE TABLE IF NOT EXISTS voice_instances (
   config_hash   TEXT NOT NULL,
   heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- What this instance was holding at its last heartbeat: open sockets, seated
+-- voice peers, live HLS sessions, pool pressure. Nullable and written by the
+-- same statement as the beat, so it costs no extra round trip and an instance
+-- that has not beaten since the column was added simply reads NULL.
+--
+-- It exists because every counter on `GET /api/admin/metrics` is a property of
+-- ONE process. With two machines behind one hostname the dashboard shows
+-- whichever machine the request happened to land on, so "412 sockets" is half
+-- the truth and refreshing flips between two numbers. `readClusterSnapshot`
+-- sums these rows over the live instances; the endpoint keeps the local
+-- reading as `runtime` and adds the sum as `cluster`.
+ALTER TABLE voice_instances ADD COLUMN IF NOT EXISTS snapshot JSONB;
 
 -- Singleton work: SFU re-sweeps that must run on exactly one instance. Created
 -- in M1 so the schema is complete; claimed and ticked from M4 on.
@@ -3810,10 +3880,105 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_channel_prefix
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS presenter_peer_id TEXT;
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS video_track_id TEXT;
 
+-- LIVE_HLS_VOICE_TRACK: the camera/voice slot's SEPARATE audio sid, when it
+-- has one (CAMERA_RUNG_WITH_VOICE or VOICE_RUNG). NULL for every ladder rung
+-- and for a plain, silent CAMERA_RUNG. Without this column a restart could
+-- only adopt a voice-carrying slot by guessing which of its two track ids
+-- video_track_id held, which is what left an adopted VOICE_RUNG mislabelled
+-- as a silent camera row until the next reconcile forced a restart to fix
+-- it — see the comment on adoptCameraEgress in hls-egress.ts.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS audio_track_id TEXT;
+
 -- The boot reconcile looks a session up by the egress the media server reports.
 CREATE INDEX IF NOT EXISTS idx_hls_sessions_egress
   ON hls_sessions (egress_id)
   WHERE egress_id IS NOT NULL AND cleaned_at IS NULL;
+
+-- WHICH API PROCESS OWNS THIS SESSION. NULL is "nobody in particular": every
+-- row written before this column, and every row on a single-process
+-- deployment (`VOICE_REGISTRY` off), which is what a self-host runs. It is
+-- stamped by the process that STARTS a session and re-stamped by the one that
+-- ADOPTS it at boot, and it is read against `voice_instances.heartbeat_at`:
+-- a row whose owner is still answering belongs to that owner, and a row that
+-- is unowned or whose owner's heartbeat has expired is free.
+--
+-- Without it, the boot reconcile's founding assumption ("this process owns no
+-- session at boot, so every open row is stale") is a promise that machine B
+-- will adopt machine A's live egresses and end the rows for anything LiveKit
+-- did not list for it, i.e. that every rolling deploy kills a live watch
+-- party. See `server/src/voice/hls-ownership.ts`.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS instance_id TEXT;
+
+-- The owner lookup: open rows, by owner.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_instance
+  ON hls_sessions (instance_id)
+  WHERE instance_id IS NOT NULL AND cleaned_at IS NULL;
+
+-- LL-HLS (docs/plans/LL_HLS.md, task L1.5). Which driver produced this row.
+-- 'conventional' is every row before this column existed, and every one this
+-- deployment will ever write while LIVE_HLS_LL is off: a `pqp-remux` session
+-- is never started unless the flag, the allowlist and the party's own
+-- request all say so (`resolveHlsMode` in `hls-remux.ts`). A 'll' row has no
+-- `egress_id` at all -- there is no LiveKit egress behind it -- and
+-- `remux_session_id` is its handle on the remux box's own control API
+-- instead (`POST/DELETE/GET /sessions`, `packages/shared/hls-remux-control.ts`).
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'conventional';
+
+DO $$
+BEGIN
+  ALTER TABLE hls_sessions DROP CONSTRAINT IF EXISTS hls_sessions_mode_check;
+  ALTER TABLE hls_sessions
+    ADD CONSTRAINT hls_sessions_mode_check
+    CHECK (mode IN ('conventional', 'll'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- The remux box's own id for the session (its `sessionId`, the idempotency
+-- key `POST /sessions` was called with). NULL for every 'conventional' row.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS remux_session_id TEXT;
+
+-- The two fields the LL playlist front (`L2.x`) will need and the ones
+-- `pqp-remux` was actually started with, stored rather than re-derived from
+-- environment at read time: an operator changing `LIVE_HLS_REMUX_ORIGIN_URL`
+-- mid-party must not rewrite the URL a viewer already has. `part_target_ms`
+-- is `PART_MS` from the start request; `origin_base_url` is where the parts
+-- and playlists this session writes are actually served from (the egress
+-- box's Caddy, `docs/plans/LL_HLS.md` §1 -- "Where the parts are served
+-- from"), distinct from `LIVE_HLS_REMUX_CONTROL_URL`, which is the control
+-- plane this row was started through and never serves media.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS part_target_ms INTEGER;
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS origin_base_url TEXT;
+
+-- WHICH WATCH PARTY ASKED FOR THIS SESSION, recorded when the session starts
+-- rather than looked up when it ends. A demotion has to clear
+-- `channel_sessions.low_latency_requested` for the party that asked, and
+-- "whatever is live on this channel right now" is a different question with
+-- the same answer only most of the time: a cleanup that runs late (a retry
+-- after a database failure, a slow monitor tick) would otherwise clear a
+-- NEWER party's request, silently downgrading a party that never had
+-- anything go wrong (a Farol finding on PR #618). NULL on every row written
+-- before this column, and on a session started with no live party row, in
+-- which case a demotion falls back to its five-minute in-memory memo and
+-- says so.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS watch_party_session_id UUID;
+
+-- The boot reconcile's LL half looks a session up by the remux box's own id,
+-- the same way the conventional half does by `egress_id`.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_remux
+  ON hls_sessions (remux_session_id)
+  WHERE remux_session_id IS NOT NULL AND cleaned_at IS NULL;
+
+-- A stop was requested but the box has not confirmed it (a failed or
+-- timed-out DELETE): the row is neither "running" nor "ended", it is
+-- "trying to end". `ended_at` stays NULL until the box actually confirms,
+-- so a row like this is never adopted as live (`hls-remux.ts` excludes it)
+-- and never silently forgotten either -- the next start attempt for the
+-- channel, or the next boot sweep, retries the DELETE, paced by
+-- `stop_attempts` (a Farol review of PR #580's third round: a failed DELETE
+-- must not just be dropped).
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stopping_at TIMESTAMPTZ;
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stop_attempts INTEGER NOT NULL DEFAULT 0;
 
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
@@ -3985,26 +4150,63 @@ ALTER TABLE channel_sessions
 ALTER TABLE channel_sessions
   ADD COLUMN IF NOT EXISTS stage_speak_applied BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- LL-HLS (`docs/plans/LL_HLS.md`, task L1.5): "Ir ao vivo com latência
+-- baixa", carried on the party row rather than kept in `pqp-api`'s process
+-- memory. Set by `POST /api/watch-parties/:id/state` on every `goLive`
+-- (unconditionally, so a party going live again without asking does not
+-- inherit a previous ask), read by `reconcileLiveHlsNow` once a sharer
+-- actually appears. Durable on purpose: an in-memory version of this was a
+-- Farol finding on PR #580 -- a restart mid-party made the very next
+-- reconcile resolve `conventional` and stop the LL session boot adoption had
+-- just brought back.
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS low_latency_requested BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- Who the host has personally put on the stage of a party whose floor is
--- closed (`stageMode = 'invited'`). One row per person per party; the row is
+-- closed (`guests != 'off'`). One row per person per party; the row is
 -- what makes the SPEAK allow overwrite on the channel removable again when
 -- the party ends, without having to guess which overwrites were ours.
+--
+-- CONVIDADOS (docs/plans/WATCH_PARTY_GUESTS.md §5.6): this table IS the
+-- guests table now, unchanged shape, one word wiser. `accepted_at` is what
+-- tells an "invited" row (called up, or approved off the request queue, has
+-- not confirmed) from an "onAir" one (`accepted_at IS NOT NULL`, the person
+-- pressed "Entrar no ar" and holds a slot). `WATCH_PARTY_MAX_GUESTS` bounds
+-- the accepted rows, never the invited ones — an unanswered invitation does
+-- not hold a slot.
 CREATE TABLE IF NOT EXISTS channel_session_stage_invites (
   session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   invited_by UUID REFERENCES users(id) ON DELETE SET NULL,
   invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  accepted_at TIMESTAMPTZ,
   PRIMARY KEY (session_id, user_id)
 );
 
+ALTER TABLE channel_session_stage_invites
+  ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_channel_session_stage_invites_onair
+  ON channel_session_stage_invites (session_id)
+  WHERE accepted_at IS NOT NULL;
+
 -- A viewer asking to come up. Deleted when the hand is lowered, when they are
--- put on the stage, and with the party.
+-- put on the stage, and with the party; kept (not deleted) when the host
+-- passes, so `declined_at` has a row to carry the five-minute cooldown on.
 CREATE TABLE IF NOT EXISTS channel_session_raised_hands (
   session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   raised_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (session_id, user_id)
 );
+
+-- CONVIDADOS: a declined request survives instead of being deleted, so the
+-- cooldown (`GUEST_REQUEST_COOLDOWN_MS`) has something to read. NULL means
+-- "pending or never declined"; the queue query is `WHERE declined_at IS
+-- NULL`. A withdraw still deletes the row outright — no cooldown for
+-- changing your own mind.
+ALTER TABLE channel_session_raised_hands
+  ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_channel_session_raised_hands_queue
   ON channel_session_raised_hands (session_id, raised_at);
@@ -4057,6 +4259,31 @@ ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS timeout_minutes INTEGER NOT N
 ALTER TABLE automod_rules DROP COLUMN IF EXISTS report_hits;
 -- The pqp half of the invite rule came a day after the Discord half.
 ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS block_pqp_invites BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- WHEN #MOD-LOG WAS LAST TOLD ABOUT THIS AUTHOR, so two API machines do not
+-- both tell it.
+--
+-- `services/automod.ts` rate limits its alert post to one per author per
+-- server per ten seconds, and that window used to live in a `Map` in one
+-- process. With two `pqp-api` machines behind one hostname the same author's
+-- next blocked message lands on whichever machine the proxy picks, and a map
+-- the other machine cannot see says "nobody has alerted about them": the same
+-- embed is posted twice, and a flood gets one copy per machine per window.
+--
+-- One row per (server, author) that has ever tripped a rule with an alert
+-- channel, reused by every later hit, so the table is bounded by that pair
+-- count rather than by traffic and needs no sweep of its own; both FKs cascade,
+-- so deleting the server or the account takes the row with it.
+--
+-- The claim is a conditional UPSERT whose `rowCount` is the verdict (see
+-- `claimAlertWindow`): Postgres serialises two machines racing for the same
+-- pair, so exactly one of them can win the window.
+CREATE TABLE IF NOT EXISTS automod_alert_cooldowns (
+  server_id     UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  author_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_alert_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, author_id)
+);
 
 -- Watch party live streaming, per server, as DATA rather than configuration.
 --

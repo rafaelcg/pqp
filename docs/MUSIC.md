@@ -41,8 +41,21 @@ instead of dropping them, tear down with the room).
 
 Frames: `set-music` client to server, `music` server to the room, sender
 included as the acknowledgement. A joiner is handed the state after
-`welcome`. Not mirrored into the voice registry: a room lives on one
-instance, and an API restart clears the queue.
+`welcome`.
+
+With `VOICE_REGISTRY=postgres` the queue is the watch party's twin, column
+for column: `voice_rooms.music` / `voice_rooms.music_rev` are the room's
+queue, the map in `server/src/ws/music.ts` is a per-instance cache of it,
+and the contract's ordering is the row's WHERE clause, so a write that lost
+across machines is handed the winner exactly as a local loser is. Accepted
+writes are relayed on the `voice.music` bus topic so the half of the room on
+the other machine hears the play, the pause or the skip now rather than on
+its next join, and the joiner snapshot reads the row. `voice.cluster.
+musicRelayed` and `voice.cluster.musicAdopted` on the operator dashboard are
+published-here and applied-from-there; relayed climbing while adopted stays
+at zero everywhere is a relay that is not landing. Registry off (the
+default) none of that runs, a room lives on one instance, and an API restart
+clears the queue.
 
 A third frame, `channel-music`, carries only the current track (id, title,
 thumbnail) to everyone who may view the channel, in or out of the call, the
@@ -199,4 +212,5 @@ told to.
 - A "now playing" line in the channel, and on o recado.
 - Vote skip, a DJ permission bit, per-server history.
 - iOS and Android: the frame is shared, the players are not written.
-- Persisting the queue across an API restart (registry row).
+- Persisting the queue across an API restart (the row survives a restart
+  only while somebody is still seated; an empty room takes it with it).

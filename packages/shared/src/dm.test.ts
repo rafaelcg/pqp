@@ -192,6 +192,45 @@ describe("channelActivitySchema", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("parses preview and authorName for a conversation", () => {
+    const parsed = channelActivitySchema.parse({
+      type: "channel-activity",
+      serverId: null,
+      kind: "dm",
+      channelId: UUID_A,
+      mention: false,
+      preview: "bora hoje?",
+      authorName: "Bo",
+    });
+    expect(parsed.preview).toBe("bora hoje?");
+    expect(parsed.authorName).toBe("Bo");
+  });
+
+  it("still parses a frame with no preview at all — an older server, or previews off", () => {
+    const parsed = channelActivitySchema.parse({
+      type: "channel-activity",
+      serverId: null,
+      kind: "group",
+      channelId: UUID_A,
+      mention: false,
+    });
+    expect(parsed.preview).toBeUndefined();
+    expect(parsed.authorName).toBeUndefined();
+  });
+
+  it("refuses a preview over 140 chars", () => {
+    expect(
+      channelActivitySchema.safeParse({
+        type: "channel-activity",
+        serverId: null,
+        kind: "dm",
+        channelId: UUID_A,
+        mention: false,
+        preview: "x".repeat(141),
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("conversationKindSchema", () => {
@@ -245,6 +284,7 @@ describe("dmSummarySchema", () => {
       participants: [participant],
       lastMessageAt: null,
       unread: { count: 3, mentions: 1 },
+      lastMessage: null,
     });
     expect(parsed.participants).toHaveLength(1);
     expect(parsed.lastMessageAt).toBeNull();
@@ -258,6 +298,7 @@ describe("dmSummarySchema", () => {
         participants: [participant],
         lastMessageAt: null,
         unread: { count: 0, mentions: 0 },
+        lastMessage: null,
       }).success,
     ).toBe(false);
   });
@@ -269,8 +310,63 @@ describe("dmSummarySchema", () => {
       participants: [{ ...participant, clerkId: "user_2abcdef" }],
       lastMessageAt: "2026-08-01T00:00:00.000Z",
       unread: { count: 0, mentions: 0 },
+      lastMessage: null,
     });
     expect("clerkId" in parsed.participants[0]!).toBe(false);
+  });
+
+  describe("lastMessage", () => {
+    const base = {
+      channelId: UUID_C,
+      kind: "dm" as const,
+      participants: [participant],
+      lastMessageAt: "2026-08-01T00:00:00.000Z",
+      unread: { count: 1, mentions: 0 },
+    };
+
+    it("is nullable — nobody has spoken yet, or previews are off", () => {
+      expect(dmSummarySchema.parse({ ...base, lastMessage: null }).lastMessage).toBeNull();
+    });
+
+    it("carries the redacted preview, capped at 140 chars", () => {
+      const parsed = dmSummarySchema.parse({
+        ...base,
+        lastMessage: {
+          authorId: UUID_B,
+          authorName: "Bo",
+          preview: "bora hoje?",
+          isAttachment: false,
+          isGif: false,
+        },
+      });
+      expect(parsed.lastMessage).toEqual({
+        authorId: UUID_B,
+        authorName: "Bo",
+        preview: "bora hoje?",
+        isAttachment: false,
+        isGif: false,
+      });
+    });
+
+    it("refuses a preview over 140 chars — the server must have already truncated it", () => {
+      expect(
+        dmSummarySchema.safeParse({
+          ...base,
+          lastMessage: {
+            authorId: UUID_B,
+            authorName: "Bo",
+            preview: "x".repeat(141),
+            isAttachment: false,
+            isGif: false,
+          },
+        }).success,
+      ).toBe(false);
+    });
+
+    it("is optional too — a server mid rolling-deploy that predates this field must still parse", () => {
+      const parsed = dmSummarySchema.parse({ ...base });
+      expect(parsed.lastMessage).toBeUndefined();
+    });
   });
 });
 

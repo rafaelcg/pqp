@@ -63,9 +63,9 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 
 | Check | Passes when | Why it exists |
 |---|---|---|
-| `api-health` | `https://api.pqp.gg/health` returns 200 with `ok:true` | The endpoint does a real `SELECT 1`, so a 200 means process **and** database. The reported `version` is the deployed commit. |
+| `api-health` | `https://api.pqp.gg/health` returns 200 with `ok:true` | As of A3.1 (`docs/plans/ALWAYS_ON.md`, CLAUDE.md pitfall #17) this is **process liveness only** — no database call. A 200 means the process is up and not draining; it does NOT mean the database is reachable, which is `/ready`'s job below. The reported `version` is still the deployed commit. |
 | `web-app` | `https://pqp.gg` returns 200 | The SPA on Cloudflare Pages. |
-| `websocket` | `wss://api.pqp.gg/ws` upgrades (101) and answers an invalid auth frame with close code 4401 | **The one a plain HTTP check misses.** Chat, presence and voice signalling all ride this socket; `/health` can be green while every WebSocket is dead. That is CLAUDE.md pitfall #9, verbatim. Needs no credential — an invalid token is enough to prove the upgrade, the message loop and the Clerk call all work. |
+| `websocket` | `wss://api.pqp.gg/ws` upgrades (101) and answers an invalid auth frame with close code 4401 | **The one a plain HTTP check misses.** Chat, presence and voice signalling all ride this socket; `/health` can be green while every WebSocket is dead. That is CLAUDE.md pitfall #9, verbatim, and more true than ever now that `/health` is liveness-only (A3.1) rather than a proxy for "the process can still do useful work". Needs no credential — an invalid token is enough to prove the upgrade, the message loop and the Clerk call all work. |
 | `fly-machines` | exactly **1** machine, `started`, in `gru` | The machine count is a decision (`fly.toml` `min_machines_running`, `docs/deploy-fly.md` 6a-bis), and this is the continuous half of asserting it: the deploy workflow checks the number at release time, this checks it between deploys, because a stray `fly scale count 2` or a machine Fly recreates after a host failure never goes through a deploy. One today by choice, until the two-machine rehearsal in `docs/STAGING.md` passes with `LIVEKIT_*` set; the code can share state (the bus and the registry are on, and mesh crosses the bus since 2026-09-08). When the flip lands, raise the count in `scripts/monitor/availability.mjs` in the same PR as `fly.toml`. |
 | `worker-image-drift` | `pqp-worker`'s started machine(s) run the same image as `pqp-api`'s | **Added 2026-09-08**, after the gap it would have caught: the deploy workflow's "Deploy the worker (same image)" step started failing silently (`FLY_API_TOKEN_WORKER` could not pull the API's image ref — an app-scoped token cannot read another app's registry), CI stayed red on a step everyone had learned to ignore, and `pqp-worker` sat on a two-day-old image while `pqp-api` redeployed two dozen times. Every job merged in that window — watch-party session reminders, the HLS retention sweep, voice occupancy sampling — was shipped and simply not running anywhere. Needs `FLY_ORG_TOKEN` to list a second app; skips (not fails) without it, and skips cleanly on a fork with no `pqp-worker`. |
 | `live-hls` | `/ready`'s `checks.liveHls` is ok, or the feature is off | The **watch-party** bucket (`LIVE_HLS_S3_*`), which nothing else here watches: `api-health` reads the shallow `/health`, and `status-components`' `storage` probe is the **attachment** bucket (`S3_*`). Two buckets, two key pairs, and one being green has never implied the other; production ran a week with the HLS secrets deployed and every check above green. `skip` while `LIVE_HLS_ENABLED` is off, which is the state it merges in, so it opens nothing until somebody flips the flag and starts watching by itself the moment they do. When it fails, no segment can be written and every watch party is a blank pane. Runbook: `docs/WATCH_PARTY.md`, "Turning it on in production". |
@@ -83,12 +83,18 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 
 Why it exists: on 2026-09-05 at 22:20Z production Postgres started cutting
 established connections and every database-backed request failed for about
-half an hour. Nothing fired. `/health` opens a fresh connection for its
-`SELECT 1`, which kept succeeding; `/status.json` answers 200 whatever it
-reports; Fly's machine check stayed green for the same reason `/health` did.
-What was actually broken was the **pool**: checked-out clients died
-mid-query, callers queued behind a full pool, and the queue never drained. A
-probe that only asks "can one more query be answered?" cannot see that.
+half an hour. Nothing fired. `/health` (at the time) opened a fresh
+connection for its own `SELECT 1`, which kept succeeding; `/status.json`
+answers 200 whatever it reports; Fly's machine check stayed green for the
+same reason `/health` did. What was actually broken was the **pool**:
+checked-out clients died mid-query, callers queued behind a full pool, and
+the queue never drained. A probe that only asks "can one more query be
+answered?" cannot see that — the same lesson a second incident (2026-09-12)
+taught from the other side: coupling `/health` to the database at all meant
+a real Postgres collapse failed the *routing* check too and took down
+WebSockets and everything else with it. Since A3.1 (CLAUDE.md pitfall #17)
+`/health` runs no query at all; this is the one endpoint that watches the
+database, unconditionally.
 
 `/ready` is the check that can. It answers `200` only when **every** check is
 ok and `503` otherwise, with a JSON body that names the failing one:
@@ -163,7 +169,7 @@ third-party monitor:
 
 | Endpoint | Why not |
 |---|---|
-| `/health` | **Fly's own health check** (`fly.toml`, 30s/5s), and it gates every release. Its semantics belong to the deploy, not to us. It also returns `version` — the deployed commit — which is fine for the platform and is not something to hand an anonymous poller forever. |
+| `/health` | **Fly's own health check** (`fly.toml`, 30s/5s), and it gates every release. Its semantics belong to the deploy, not to us — and since A3.1 those semantics are liveness only, no database call at all, so it answers a narrower question than `/up` or `/ready` even before the "not for a third party" reasoning below. It also returns `version` — the deployed commit — which is fine for the platform and is not something to hand an anonymous poller forever. |
 | `/status.json` | **Returns 200 while reporting components as down.** The state is in the JSON body, so a status-code monitor never fires. Our own GitHub check reads the body (`status-components` above), which is exactly why nobody noticed. |
 | `latencyMs` on `/status.json` | **Absent is not zero, and a missing field is not a fast probe.** A component whose health is inferred rather than measured omits the field entirely: the API cannot time its own round trip from inside itself, and mesh voice has no server-side media to time. A monitor that reads a missing `latencyMs` as `0` will report the fastest dependency on the instance. Read presence first. |
 
@@ -190,7 +196,12 @@ Things that are **deliberately still 200**:
   `tools/admin-dashboard/README.md`). Note the probe queues for a connection
   like everything else, so a pool jammed for longer than 45 seconds *does* go
   red — which is honest: if nothing can get a connection for a minute, the app
-  is not serving.
+  is not serving. The stampede itself is smaller than it used to be: after
+  item C7 of `docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md` (141 tabs
+  pinning the pool at 70 with 79 queued), the client's first reconnect after a
+  drain-shaped close (1001/1006/1012) waits a random 0.5-4s instead of
+  reconnecting at once, then backs off exponentially with full jitter on any
+  further attempt (`client/src/lib/realtime.ts`, `reconnect-jitter.ts`).
 - **A draining machine (SIGTERM).** Failing readiness while draining is the
   usual practice so a load balancer sheds traffic, but there is exactly one
   machine and nowhere to shed to. All it would produce is an alert on every
@@ -268,9 +279,10 @@ on a body change.
 **Why this group exists.** Everything in the availability group is
 *availability-shaped*: `/health` answers, the WebSocket upgrades, the app's own
 component probes are green. All of that can be true **while the API throws on
-every third request** — `/health` does a `SELECT 1` and returns 200; it does not
-know a route has been 500ing for an hour. Nothing read the logs, so nothing
-would have said so.
+every third request** — `/health` (liveness only since A3.1) has no way to see
+that, and did not know it even back when it ran a `SELECT 1`, since a 500 in a
+route is not a database failure. Nothing read the logs, so nothing would have
+said so.
 
 | Check | Passes when | Why it exists |
 |---|---|---|
@@ -716,6 +728,139 @@ rollback.
 The client half of the same bug is in the iOS app (#411) and only reaches
 people who update. This switch reaches every build already on a phone, which
 is the reason it exists.
+
+### Read cache
+
+`GET /api/admin/metrics` carries a `readCache` block (`server/src/lib/read-cache.ts`,
+polled, not logged, same as `dbTx` next to it): `hits`, `misses`, `coalesced`,
+`staleServed` and `size`, cumulative since boot. It exists for the same reason
+`dbTx.byPath` does — the 2026-09-12 postmortem (A2), where 141 reconnecting
+tabs each asked Postgres for the same channel's latest message page, the same
+server's channel list, and the same channel's watch-party state, and the pool
+queued 79 of them. `coalesced` is the number that matters during a reload
+storm: it is the count of callers who arrived while an identical query was
+already running and shared its answer instead of starting a second one, so it
+should jump exactly when a room full of people reconnects at once, and sit
+near zero the rest of the time. `hits` is a request answered from an
+unexpired entry with no query at all; `staleServed` is one answered from an
+entry past its TTL but still inside its stale-while-revalidate window (also
+no query, but a background refresh was kicked off); `misses` is every actual
+Postgres round trip this cache issued. `size` is bounded by the module's 5k-key
+LRU cap and is not itself a health signal. `READ_CACHE=off` (or `false`/`0`)
+is the rollback switch — with it set, `misses` grows to match every call and
+the other three stay at zero, which is the same "did the flag actually take"
+check pitfall 12 in `CLAUDE.md` describes for the roster delta counter: read
+the counter that proves the code path ran, not just that the flag is set.
+
+### Watch-party glass-to-glass latency (BROADCAST_PIPELINE B0.6)
+
+Where the number actually lives: `GET /api/admin/metrics`'s `liveHls.latency`
+block (`server/src/voice/hls-latency-metrics.ts`), fed by sampled client
+telemetry (`POST /api/live-hls/telemetry`, `docs/plans/BROADCAST_PIPELINE.md`
+B0.5). `byRung[].p50Ms`/`p95Ms` are correctly bucketed **per rung** from every
+sampled viewer's own readings; that is the number to trust, and it is what the
+acceptance criterion below points at. It is in-process and resets on a
+restart, the same as `voice.seats`'s counters above.
+
+Grafana has no direct line to that endpoint — it only sees log lines, the same
+constraint every other panel on this dashboard works under — so the panel
+here is a LIVE APPROXIMATION built from `voice.hlsTelemetryBatch`, one line
+per accepted batch:
+
+```
+[pqp] voice.hlsTelemetryBatch sessionId=chan-1:1700000000000 samples=4 \
+      rungs=["720p30"] medianLatencyMs=8200
+```
+
+`medianLatencyMs` is the median of THAT ONE BATCH's own samples (one viewer,
+one 30s flush window) — a coarse, batch-sized estimate, not the rung's real
+p50 across the audience. `quantile_over_time` over many batches converges
+toward the true distribution as more viewers report, but during a small party
+(few sampled viewers) it can be noisy in a way the histogram-backed number
+above is not. Use this panel to watch a live party trend in real time; use
+`GET /api/admin/metrics` for the number that goes in an incident writeup.
+
+| What | LogQL |
+|---|---|
+| Median latency trend, all rungs | `quantile_over_time(0.5, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \| logfmt \| unwrap medianLatencyMs [5m])` |
+| p95 of the batch medians (a rough upper bound) | `quantile_over_time(0.95, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \| logfmt \| unwrap medianLatencyMs [5m])` |
+| Batches accepted per minute (viewer volume, roughly `sampled viewers / 30s`) | `sum(count_over_time({fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" [1m]))` |
+| Batches refused, by reason | `sum(count_over_time({fly_app_name="pqp-api"} \|= "voice.hlsPlaylistRejected" [5m]))` for playlist auth; schema/rate-limit rejections on the telemetry route itself are not logged individually (only counted — see `liveHls.latency.batchesRejectedSchema`/`batchesRejectedRateLimit` on `/api/admin/metrics`), because a broken client retrying into a 400 wall is exactly the flood pitfall 16 warns a per-line log invites |
+| One rung's trend (720p30 example) | `quantile_over_time(0.5, {fly_app_name="pqp-api"} \|= "voice.hlsTelemetryBatch" \|= "720p30" \| logfmt \| unwrap medianLatencyMs [5m])` — imprecise for a viewer who ever switched rungs mid-batch, which is rare but not impossible |
+
+Panel setup (same steps as "Adding a panel" below): a time series with the
+median-trend query above, one series per rung name filtered the same way the
+last row does, legend `{{rung}}` is not available (the rung is not a Loki
+label, it is inside the log line), so name each series by hand per rung
+instead.
+
+**Acceptance criterion for B0:** during one live party, `GET
+/api/admin/metrics`'s `liveHls.latency.byRung` shows p50 and p95
+encode-to-paint for every rung a viewer is actually watching, and the count on
+each is high enough (more than a handful) to trust the percentile rather than
+a couple of noisy readings. `voice.hlsTelemetryBatch`'s log trend should track
+the same shape, if noisier, in real time on the dashboard above.
+
+### DB call budget (2026-09-13 Vultr cutover)
+
+The cutover's first 16.5h of Postgres query stats found four repeat
+offenders totalling roughly 785k of the queries in that window — a member
+list re-fetched on every open, an auth-resolution `UPDATE` that almost
+always wrote back what was already there, a webhook poller ticking at a
+fixed 2s whether or not there was anything to send, and three per-request
+permission lookups (age gate, a member's role, channel access) run fresh on
+every call. `GET /api/admin/metrics` carries the counters that say whether
+the fixes for each are actually running:
+
+- **`dbQueries.total` / `dbQueries.byRoute`.** Every Postgres round trip this
+  process has issued since boot, and the same total broken down by the HTTP
+  route it happened inside (`GET /api/servers/:serverId/members`, the path
+  template, never an interpolated id) — a WS handler, a cold job, or
+  anything at boot has no route and is counted under `"other"`. A reserved
+  `"auth"` label sits next to those two: Bearer resolution and the age-gate
+  and timeout gates run in `handleApi` before any route has matched, and
+  folding that work into `"other"` would have hidden a real cost center (the
+  53k auth-resolution writes below) behind the same bucket used for
+  background jobs. Wrapped once at the pool itself (`db.ts`), so unlike
+  `dbTx.byPath` next to it, nothing had to remember to instrument a new call
+  site for this to see it. This is the number the 785k figure should now be
+  read against — a route whose count did not drop after this shipped is a
+  route the caching missed.
+- **`readCache.*`** (documented above) now also covers the server member
+  list (`services/users.ts`'s `listServerMembers`, 30s TTL, keyed per
+  server) and the three per-request permission lookups: the age gate
+  (`services/age-gate.ts`, 30s, keyed per user), a member's role
+  (`services/users.ts`'s `getMemberRole`, 30s, keyed per server+user), and
+  the channel access check (`canAccessChannel`, same TTL, keyed per
+  channel+user). All four share this one counter with the three read-cache.ts
+  callers PR #560 shipped, so a spike in `misses` right after a deploy that
+  touched any of these seven call sites is expected — what should NOT happen
+  is `misses` climbing steadily during ordinary traffic once the process has
+  been up a few minutes.
+- **`readCache.size`** grew a corresponding amount once these four joined —
+  still bounded by the same 5k-entry LRU either way.
+- **The webhook poller no longer has its own counter** (it is not a cache),
+  but its effect shows up as `outgoing-webhooks.*`-labelled rows almost
+  disappearing from `dbQueries.byRoute`'s `"other"` bucket once idle for a
+  while: `deliverDueOutgoingWebhooks` ticks every 2s while it finds work,
+  doubling its wait on every empty tick up to 30s, and a Postgres NOTIFY
+  (`services/outgoing-webhook-poller.ts`, its own dedicated LISTEN channel,
+  not the cluster bus) wakes it immediately on a fresh enqueue rather than
+  leaving it to wait out its current backoff. Same instant delivery on the
+  single-machine deployment this instance runs today; the adaptive interval
+  only changes how often an EMPTY outbox gets polled between real events.
+
+Security note for the three permission caches: authorization is still
+checked on every request against a value that is at most 30s old, same as
+`readCache.ts`'s own rule for the caches PR #560 shipped — nothing here
+skips the check, it only skips re-asking Postgres the same question inside
+the TTL window. A kick, a ban, or a role/overwrite change invalidates the
+relevant cache immediately rather than waiting out the TTL (see the
+invalidation comments beside `invalidateServerAudienceLocally` in
+`services/servers.ts` and `notifyPermissionsUpdate` in `ws/chat.ts`, the two
+chokepoints all three ride), so a removed member is denied on their very
+next request, warm cache or not — `server/src/services/permission-caches.test.ts`
+pins that.
 
 ### Adding a panel
 

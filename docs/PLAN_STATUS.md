@@ -1,6 +1,7 @@
 # Plan status
 
 > **Handover (2026-08-25):** live URLs, secrets checklist, voice FIXED → [`HANDOVER.md`](./HANDOVER.md). Agent quickstart → [`../CLAUDE.md`](../CLAUDE.md).
+> **M6 rehearsal 3 (2026-09-14):** three fix PRs (#593, #595, #596) re-verified live on `pqp-api-staging` at three machines, production switch PR (#594) shape. 200-seat ramp 200/200 (was 65–67.5%), the watch-party WS-ordering race echoed on all three machines, rolling deploy under 150-seat load 0 failures, `/ready` never 503. See [`plans/M6_REHEARSAL_2026-09-14b.md`](./plans/M6_REHEARSAL_2026-09-14b.md) — includes a process-incident writeup worth reading before the next rehearsal of this shape.
 
 ## Original roadmap
 
@@ -10,7 +11,7 @@
 | 1 Auth + DB + API | Done | Clerk, Postgres, servers/channels |
 | 2 Text chat | Done | WS + markdown + presence |
 | 3 Voice per channel | Done | Mesh + chat on voice channels; cross-NAT FIXED (ExpressTURN / ICE, 2026-07-11) |
-| 4 Self-host / Fly | Done | Docker Compose + docs; hosted Pages + Fly (`pqp-api`, gru) live. Railway is retired; nothing points at it |
+| 4 Self-host / Fly | Done | Docker Compose + docs; hosted Pages + Fly (`pqp-api`, gru) live. Railway is retired; nothing points at it. Two-machine rolling deploys **executed live 2026-09-14 13:46–13:49 UTC** (blue-green `fly machine clone`, `docs/deploy-fly.md` §6a-bis): 34 sockets drained cleanly onto the new pair, zero proxy gap; `PQP_API_MACHINES=2` set live ahead of this PR's merge so `fly.toml` catches up to the shape already running |
 | 5 SFU | LiveKit **live in production** (self-hosted, `sfu.pqp.gg`) | First verified against a live server 2026-08-07: two headless Chromium participants joined a real LiveKit room through `livekit-session.ts` and exchanged audio both ways; mute, screen share, ban eviction, the mesh-cap bypass and the mesh-only 503 all checked. Verification found `revokeTokenTs` to be LiveKit-Cloud-only, so a ban could be defeated by reconnecting on the token already held — fixed with a re-sweep. Since then it has carried real traffic, including a watch party of over a hundred people on 2026-09-05, and `server/src/voice/transport-policy.ts` routes listed communities and servers of ten or more members onto it automatically. **Not** verified against LiveKit Cloud or cross-NAT on the SFU path. Details and exact scope: [`voice-backends.md`](./voice-backends.md#verification-status). Cloudflare Realtime still a stub |
 | 6 Electron + billing | Partial | Electron shell + CI artifacts + deep links wired end-to-end; no app icon, no Stripe UI |
 
@@ -117,6 +118,6 @@ purpose, so its scope reflected the full feature surface rather than guessing at
    per-peer volume are still untested against real hardware
 3. **`pqp.gg` is unregistered** — canonical/OG tags point at a domain nobody owns
 4. **Electron app icon** — no `electron/build` icons, so packaged apps ship the default Electron icon
-5. **Redis-backed rate limiting and presence** — both are in-process, so the API cannot scale past one instance
+5. ~~**Redis-backed rate limiting and presence**~~ — **presence and voice no longer block scaling past one instance.** `CLUSTER_BUS=postgres` + `VOICE_REGISTRY=postgres` (Postgres, not Redis — see `docs/plans/MULTI_INSTANCE_VOICE.md` §0) make chat, presence, voice rosters/resume/rings/moderation and watch-party state cluster-wide. Two-machine staging rehearsed 2026-09-13, three-machine staging rehearsed 2026-09-14 (`docs/plans/M6_REHEARSAL_2026-09-14.md`) — chat, DMs, group DMs, rings, mesh/LiveKit voice (including a moderator mute against real published media), raise hand, admin routes and the report queue all crossed instances; a rolling deploy and a 3→2→3 scale were exercised under load. Rate limiting (message/reaction/typing buckets, socket/connection buckets) is still per-instance by design (`server/src/lib/rate-limit.ts` header), an accepted multiplication at N machines, not a blocker. Production is still one `pqp-api` machine by choice (`fly.toml`, `docs/deploy-fly.md` §6a-bis) pending the items in the rehearsal doc's "Blockers before production."
 6. **Cloudflare Realtime SFU** adapter (LiveKit covers the SFU need today)
 7. **Plus/Pro billing** (Clerk Billing)

@@ -53,6 +53,44 @@ describe("voice-stream is an optional addition to the wire", () => {
       "/api/voice/hls-playlist/00000000-0000-4000-8000-0000000000aa/1725000000000",
     );
   });
+
+  it("carries the presenter's camera as an OPTIONAL second playlist", () => {
+    // Optional is the compatibility promise. iOS and Android parse this frame
+    // and know nothing about a camera; a required field would fail their parse
+    // and take the whole frame — and therefore the film — with it.
+    expect(liveHlsStreamSchema.parse(stream).cameraHlsUrl).toBeUndefined();
+    expect(
+      liveHlsStreamSchema.parse({
+        ...stream,
+        cameraHlsUrl:
+          "/api/voice/hls-playlist/00000000-0000-4000-8000-0000000000aa/1725000000000/cam360p30?t=x",
+      }).cameraHlsUrl,
+    ).toContain("cam360p30");
+    // An empty string is a URL nothing can play, and a PiP that renders a
+    // player for it is worse than no PiP.
+    expect(() =>
+      liveHlsStreamSchema.parse({ ...stream, cameraHlsUrl: "" }),
+    ).toThrow();
+  });
+
+  it("mode is absent by default and OPTIONAL, meaning conventional", () => {
+    // `docs/plans/LL_HLS.md` L1.5: every session before this field existed
+    // omits it, and a client that has never heard of LL-HLS must keep
+    // treating an absent `mode` as the conventional ladder it always was.
+    expect(liveHlsStreamSchema.parse(stream).mode).toBeUndefined();
+  });
+
+  it("accepts the ll mode a pqp-remux session sets", () => {
+    expect(
+      liveHlsStreamSchema.parse({ ...stream, mode: "ll" }).mode,
+    ).toBe("ll");
+  });
+
+  it("rejects an unknown mode", () => {
+    expect(() =>
+      liveHlsStreamSchema.parse({ ...stream, mode: "srt" }),
+    ).toThrow();
+  });
 });
 
 describe("playlistLooksLive", () => {

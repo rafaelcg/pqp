@@ -221,6 +221,13 @@ vi.mock("livekit-client", () => {
       this.isMuted = false;
     }
   }
+  // Real shape (nextRetryDelayInMs), never exercised in these tests — no
+  // reconnect scenario runs here, only `new DefaultReconnectPolicy()`.
+  class DefaultReconnectPolicy {
+    nextRetryDelayInMs() {
+      return 0;
+    }
+  }
   return {
     Room: FakeRoom,
     RoomEvent,
@@ -229,6 +236,7 @@ vi.mock("livekit-client", () => {
     ConnectionState: { Disconnected: "disconnected", Connected: "connected" },
     VideoPreset: FakePreset,
     VideoQuality: { LOW: 0, MEDIUM: 1, HIGH: 2 },
+    DefaultReconnectPolicy,
   };
 });
 
@@ -611,6 +619,84 @@ describe("the watch-party mic archive", () => {
     const presenter = room().join("presenter-2");
 
     room().subscribeAudio(presenter, Track.Source.Microphone, "mic-archive");
+
+    expect(peers.find((p) => p.peerId === "presenter-2")!.stream).toBeNull();
+  });
+});
+
+/**
+ * THE OTHER TRACK NOBODY PLAYS: `LIVE_HLS_VOICE_TRACK`'s "separada" signal.
+ *
+ * Same shape as the archive above, same pitfall-14 reasoning (a `Microphone`
+ * source, told apart from the presenter's ordinary one by name alone), and a
+ * second reason on top of it: an earlier version of this feature read the
+ * ordinary microphone's SOURCE instead of a dedicated name, so with
+ * `LIVE_HLS_VOICE_TRACK` on, every host with a mic got attached to the
+ * camera/voice egress regardless of which mode they had actually chosen — a
+ * "junto" host's voice reached the audience twice. The fix is exactly this
+ * shape: a publication that exists ONLY when the client itself decided
+ * "separada" is in force, so its mere presence is the fact the server needs.
+ */
+describe("the watch-party voice track", () => {
+  it("publishes it as a microphone, named, beside the real one", async () => {
+    const sfu = await session();
+
+    await sfu.publish(audioStream("mic").stream);
+    await sfu.publishVoiceTrack(audioStream("voice-track").stream);
+
+    expect(sourcesPublished()).toEqual([
+      Track.Source.Microphone,
+      Track.Source.Microphone,
+    ]);
+    expect(published[0]!.name).toBeUndefined();
+    expect(published[1]!.name).toBe("voice-track");
+    expect(unpublished).toEqual([]);
+  });
+
+  it("withdraws it without touching the live microphone", async () => {
+    const sfu = await session();
+    const mic = audioStream("mic");
+    const voiceTrack = audioStream("voice-track");
+    await sfu.publish(mic.stream);
+    await sfu.publishVoiceTrack(voiceTrack.stream);
+
+    await sfu.unpublishVoiceTrack();
+
+    expect(unpublished).toHaveLength(1);
+    expect((unpublished[0] as { track: unknown }).track).toBe(voiceTrack.track);
+    // Idempotent: a mode flip back to "junto" more than once must not throw.
+    await sfu.unpublishVoiceTrack();
+    expect(unpublished).toHaveLength(1);
+  });
+
+  it("never delivers a voice-track publication, and unsubscribes from it", async () => {
+    await session();
+    const presenter = room().join("presenter-2");
+
+    const voice = room().subscribeAudio(presenter, Track.Source.Microphone);
+    const separated = room().subscribeAudio(
+      presenter,
+      Track.Source.Microphone,
+      "voice-track",
+    );
+
+    const peer = peers.find((p) => p.peerId === "presenter-2")!;
+    // The ordinary microphone is still the one on the roster: this
+    // publication never displaces it, and every OTHER room participant
+    // hears the presenter exactly once.
+    expect(peer.stream).not.toBeNull();
+    expect(
+      (peer.stream!.getTracks()[0] as unknown as { id: string }).id,
+    ).toBe("presenter-2:microphone");
+    expect(separated.subscribedCalls).toEqual([false]);
+    expect(voice.subscribedCalls).toEqual([]);
+  });
+
+  it("does not become the presenter's voice when it arrives first", async () => {
+    await session();
+    const presenter = room().join("presenter-2");
+
+    room().subscribeAudio(presenter, Track.Source.Microphone, "voice-track");
 
     expect(peers.find((p) => p.peerId === "presenter-2")!.stream).toBeNull();
   });

@@ -33,14 +33,17 @@ const PARTY: WatchParty = {
   cohosts: [],
   options: {
     voiceEnabled: false,
+    guests: "off",
     stageMode: "hosts_only",
     raiseHand: true,
     slowModeSeconds: 0,
     reactionsEnabled: true,
+    lowLatency: false,
   },
   viewerRole: "viewer",
   reminding: false,
   stage: { invited: [], hands: [], handRaised: false },
+  guests: { onAir: [], invited: [], requests: [], requestCount: 0, requested: false, position: null },
 };
 
 function render(over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) {
@@ -506,10 +509,15 @@ describe("the persistent mic-muted warning (2026-09-13)", () => {
       ...over,
     });
 
-  it("warns, with an Ativar mic button, while presenting with the mic muted", () => {
+  it("warns on the status row while presenting with the mic muted, with Ativar mic inline", () => {
+    // Not a red strip of its own any more (2026-09-13): the amber end of the
+    // same line as the health dot, inside the transmission row.
     const html = live({ isPresenting: true, micState: "muted" });
-    expect(html).toContain("watch-party-mic-muted-warning");
-    expect(html).toContain("data-watch-party-activate-mic");
+    const tx = html.slice(html.indexOf('data-testid="watch-party-transmission"'));
+    const row = tx.slice(0, tx.indexOf('data-testid="watch-party-dock"'));
+    expect(row).toContain("watch-party-mic-muted-warning");
+    expect(row).toContain("data-watch-party-activate-mic");
+    expect(html).toContain('data-watch-party-mic="muted"');
   });
 
   it("says nothing while not presenting, muted or not", () => {
@@ -542,7 +550,7 @@ describe("a host on a phone", () => {
     expect(html).not.toContain("data-watch-party-go-live");
     expect(html).toContain("data-watch-party-discard");
     expect(html).toContain("data-watch-party-share");
-    expect(html).toContain("data-watch-party-options-toggle");
+    expect(html).toContain("watch-party-options-summary");
   });
 });
 
@@ -733,12 +741,131 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
       source.indexOf("async function handleWatchPartyGoLive"),
       source.indexOf("async function handleWatchPartyEnd"),
     );
-    expect(goLive).toContain(
-      "startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream })",
-    );
+    expect(goLive).toContain("startScreenShareGated(false, {");
+    expect(goLive).toContain("watchParty: true,");
+    expect(goLive).toContain("stream,");
     expect(goLive).toContain("startMuted: true");
     expect(goLive).not.toContain("getAudioTracks().length > 0");
 
+  });
+
+  /**
+   * LOW LATENCY IS A STANDING OPTION, NOT A ONE-OFF ASK. The switch in
+   * `watch-party-options.tsx` only ever PATCHes `party.options.lowLatency`;
+   * the one place that preference reaches the server's
+   * `channel_sessions.low_latency_requested` column is `goLive`, because
+   * `requestedHlsModeForChannel` is only ever consulted there
+   * (`server/src/voice/hls-remux.ts`). A go-live that forgot to forward it
+   * would leave the switch doing nothing at all — silently, since the party
+   * still goes live, just always on the conventional ladder.
+   *
+   * PASSED AS A PARAMETER, NOT RE-READ FROM SELECTION STATE (Farol, PR #617,
+   * third round). `handleWatchPartyGoLive` awaits `apiSetWatchPartyState`
+   * before anything else runs, so anything after that await can be reached
+   * with a different channel selected; re-querying "whatever party is
+   * current" at that point would answer for the wrong party.
+   * `watch-party-go-live-lowlatency.test.tsx` is the behavioural test for
+   * that (two parties mounted at once, clicking one never reads the
+   * other's value); this one just pins that the parameter, not
+   * `currentWatchParty()`, is what reaches the request.
+   */
+  it("forwards lowLatency as a parameter, not a fresh read of the selected party", () => {
+    const source = readFileSync(
+      new URL("../../App.tsx", import.meta.url),
+      "utf8",
+    );
+    const goLive = source.slice(
+      source.indexOf("async function handleWatchPartyGoLive"),
+      source.indexOf("async function handleWatchPartyReminder"),
+    );
+    expect(goLive).toContain(
+      "async function handleWatchPartyGoLive(\n    stream: MediaStream | null,\n    lowLatency: boolean,\n  )",
+    );
+    expect(goLive).toContain("apiSetWatchPartyState(");
+    expect(goLive).toContain('"live"');
+    expect(goLive).toContain("apiSetWatchPartyState(party.id, \"live\", lowLatency)");
+    // Never reaches back into the store for this value inside the handler.
+    expect(goLive).not.toContain("currentWatchParty()?.options.lowLatency");
+    expect(goLive).not.toContain("currentWatchParty().options.lowLatency");
+  });
+
+  /**
+   * THE PANEL IS WHERE THE VALUE ACTUALLY LIVES. Both places that call
+   * `onGoLive` -- the setup surface's own button and the scheduled card's
+   * "Ir ao vivo" -- read `party.options.lowLatency` off THIS component's own
+   * `party` prop at the moment of the click, which is the only copy of the
+   * value that is guaranteed to be for the party the button belongs to.
+   */
+  it("passes party.options.lowLatency from its own props into onGoLive, at both call sites", () => {
+    const source = readFileSync(
+      new URL("./watch-party-panel.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain(
+      "await props.onGoLive(handing, party.options.lowLatency);",
+    );
+    expect(source).toContain(
+      "onClick={() => void props.onGoLive(null, party.options.lowLatency)}",
+    );
+  });
+
+  /**
+   * THE DISCLOSURE ROUTE (Farol, 2026-09-14, three rounds). A go-live share
+   * can resolve two ways: at once, or after `HlsHostAckSheet`'s "you are
+   * responsible for what you transmit" sheet, for a host's first ever
+   * HLS-capable share. Both have to end in the same place —
+   * `finishWatchPartyGoLiveShare`, which is what arms the mic prompt — or a
+   * presenter who happens to hit the sheet on their very first watch party
+   * never gets asked to turn their mic on. The disclosure route has to carry
+   * the ids it started with rather than reading whatever party is selected
+   * once the host finally confirms the sheet (round two), and the eventual
+   * completion has to re-check the party is still there and still live
+   * before arming anything (round three — `decideGoLiveMicPrompt` in
+   * `lib/watch-party-go-live.test.ts` is the behavioural test for that part).
+   *
+   * Source-scanned, like the sibling tests in this describe block: `App.tsx`
+   * is not mounted in this suite.
+   */
+  it("finishes the go-live mic handoff from both the immediate and the disclosure-sheet routes", () => {
+    const source = readFileSync(
+      new URL("../../App.tsx", import.meta.url),
+      "utf8",
+    );
+
+    const goLive = source.slice(
+      source.indexOf("async function handleWatchPartyGoLive"),
+      source.indexOf("async function handleWatchPartyReminder"),
+    );
+    expect(goLive).toContain(
+      "finishWatchPartyGoLiveShare(party.id, party.channelId, wentOut)",
+    );
+    expect(goLive).toContain("party: { id: party.id, channelId: party.channelId }");
+
+    const ackSheetStart = source.indexOf("<HlsHostAckSheet");
+    const ackSheet = source.slice(
+      ackSheetStart,
+      source.indexOf("<ConfirmDialog", ackSheetStart),
+    );
+    // Only a go-live share finishes the handoff, and only for the party it
+    // was actually for: `intent.stream` is the signal `handleWatchPartyGoLive`
+    // alone hands the gate (an ordinary call share or a mid-show reshare
+    // stalled behind the same sheet has none and must never pop the
+    // watch-party mic prompt on ITS confirm), and `intent.party` — not
+    // `currentWatchParty()` — is what the deferred completion reads.
+    expect(ackSheet).toContain("intent?.stream");
+    expect(ackSheet).toContain("intent.party");
+    expect(ackSheet).toContain("finishWatchPartyGoLiveShare(");
+    expect(ackSheet).toContain("goLiveParty.id");
+    expect(ackSheet).toContain("goLiveParty.channelId");
+
+    // `finishWatchPartyGoLiveShare` itself: a fresh lookup through the pure,
+    // tested decision function, never a stale snapshot.
+    const helper = source.slice(
+      source.indexOf("function finishWatchPartyGoLiveShare"),
+      source.indexOf("async function handleWatchPartyGoLive"),
+    );
+    expect(helper).toContain("decideGoLiveMicPrompt(");
+    expect(helper).toContain("watchParties.byChannel[channelId]");
   });
 });
 
@@ -892,5 +1019,195 @@ describe("visibleRaisedHands", () => {
   it("hides nothing at exactly the cap", () => {
     const hands = Array.from({ length: 20 }, (_, i) => hand(i));
     expect(visibleRaisedHands(hands).hiddenCount).toBe(0);
+  });
+});
+
+/**
+ * TWO BARS (2026-09-13). Moonkase's party came back with "separate the
+ * streamer UI from the spectator UI" and "we need volume controls for the
+ * streamer and the film". The mixer already existed, inside a disclosure
+ * that defaults closed; the audience bar was the presenter's bar with most
+ * of it hidden. These pin the split and the mixer's new front door.
+ */
+describe("the live bar, by who is behind it", () => {
+  const chrome = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live" },
+      onToggleMute: () => {},
+      ...over,
+    });
+
+  it("gives the host a presenter bar with the audio mixer one press away", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "host" } });
+    expect(html).toContain('data-watch-party-bar="presenter"');
+    expect(html).toContain("data-watch-party-mixer-toggle");
+    expect(html).toContain("data-watch-party-options-toggle");
+    expect(html).toContain("data-watch-party-end");
+  });
+
+  it("gives a co-host the same presenter bar", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "cohost" } });
+    expect(html).toContain('data-watch-party-bar="presenter"');
+    expect(html).toContain("data-watch-party-mixer-toggle");
+  });
+
+  it("gives a viewer an audience bar: the party, the link, and nothing of the presenter's", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "viewer" } });
+    expect(html).toContain('data-watch-party-bar="audience"');
+    expect(html).toContain("data-watch-party-share");
+    expect(html).not.toContain("data-watch-party-mixer-toggle");
+    expect(html).not.toContain("data-watch-party-options-toggle");
+    expect(html).not.toContain("data-watch-party-bar-share");
+    expect(html).not.toContain("data-watch-party-end");
+    expect(html).not.toContain("watch-party-tx-toggle");
+  });
+
+  it("puts the presenter's output controls on the dock, not the header", () => {
+    const html = chrome({
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      micState: "everyone",
+      onShareScreen: async () => {},
+    });
+    const dockAt = html.indexOf('data-testid="watch-party-dock"');
+    const barAt = html.indexOf('data-watch-party-bar="presenter"');
+    expect(dockAt).toBeGreaterThan(barAt);
+    // On the dock: mic pill, share, mixer.
+    const dock = html.slice(dockAt);
+    expect(dock).toContain("data-watch-party-mic=");
+    expect(dock).toContain("data-watch-party-bar-share");
+    expect(dock).toContain("data-watch-party-mixer-toggle");
+    // On the header: link, gear, Encerrar, and not the output controls.
+    const bar = html.slice(barAt, dockAt);
+    expect(bar).toContain("data-watch-party-share");
+    expect(bar).toContain("data-watch-party-options-toggle");
+    expect(bar).toContain("data-watch-party-end");
+    expect(bar).not.toContain("data-watch-party-bar-share");
+    expect(bar).not.toContain("data-watch-party-mixer-toggle");
+    expect(bar).not.toContain("data-watch-party-mic=");
+  });
+
+  it("draws the transmission as a status line with a health dot, details in a dialog", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "host" } });
+    expect(html).toContain("watch-party-tx-health");
+    expect(html).toContain('data-tx-health="idle"');
+    expect(html).not.toContain("watch-party-tx-mixer-summary");
+  });
+
+  it("gives a viewer no dock", () => {
+    const html = chrome({ party: { ...PARTY, state: "live", viewerRole: "viewer" } });
+    expect(html).not.toContain("watch-party-dock");
+  });
+
+  it("keeps the checklist on the empty stage and drops its second share button", () => {
+    const html = render({
+      slot: "surface",
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      canStart: true,
+      onShareScreen: async () => {},
+    });
+    expect(html).toContain("watch-party-waiting");
+    expect(html).not.toContain("data-watch-party-share-screen");
+  });
+
+  it("keeps the mixer's sliders out of the chrome: the dialog owns them", () => {
+    // The transmission details render closed here, so the summary row is
+    // pinned in `watch-party-transmission.test.tsx` instead. What this
+    // guards is that nothing inline draws the sliders any more.
+    const html = chrome({
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      isPresenting: true,
+    });
+    expect(html).toContain("watch-party-transmission");
+    expect(html).not.toContain("watch-party-tx-mic-gain-slider");
+  });
+});
+
+/**
+ * THE SETUP CARD (2026-09-13): two columns, a numbered card, one button.
+ * The picker is the preview's content until something is picked, the
+ * settings are chips that open the options dialog, and the checklist has no
+ * box of its own inside the card.
+ */
+describe("the setup card", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getDisplayMedia: () => Promise.reject(new Error("test")) },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: undefined,
+      configurable: true,
+    });
+  });
+  const draft = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({
+      party: { ...PARTY, state: "draft", viewerRole: "host" },
+      ...over,
+    });
+
+  it("reads as three numbered steps ending in Go live", () => {
+    const html = draft();
+    expect(html).toContain("watch-party-setup-card");
+    expect(html).toContain('data-watch-party-step="1"');
+    expect(html).toContain('data-watch-party-step="2"');
+    expect(html).toContain('data-watch-party-step="3"');
+    const card = html.slice(html.indexOf("watch-party-setup-card"));
+    expect(card).toContain("data-watch-party-name");
+    expect(card).toContain('data-watch-party-source="none"');
+    expect(card).toContain("data-watch-party-go-live");
+    expect(card.indexOf("data-watch-party-name")).toBeLessThan(
+      card.indexOf("data-watch-party-go-live"),
+    );
+  });
+
+  it("puts the picker where the preview will be, as the primary action", () => {
+    const html = draft();
+    expect(html).toContain("data-watch-party-pick");
+    expect(html).toContain("going on screen?");
+    expect(html).not.toContain("watch-party-preview");
+  });
+
+  it("draws the options form inline, with no dialog to open on the draft", () => {
+    const html = draft({ onMicInStreamChange: () => {} });
+    const card = html.slice(html.indexOf("watch-party-setup-card"));
+    expect(card).toContain("watch-party-options-summary");
+    // The same form the live dialog renders: the Convidados radio group, the
+    // slow-mode select, the reactions switch, plus this computer's mic
+    // switch and the quality select.
+    expect(card).toContain("data-watch-party-guests-setting");
+    expect(card).toContain('role="switch"');
+    expect((card.match(/<select/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(card).toContain("data-watch-party-mic-in-stream");
+    expect(card).not.toContain("data-watch-party-options-toggle");
+    expect(html).not.toContain("watch-party-options-drawer");
+  });
+
+  it("offers a time on the draft, off by default, when the app can schedule", () => {
+    const html = draft({ onSchedule: async () => {} });
+    expect(html).toContain("watch-party-when");
+    expect(html).toContain("data-watch-party-when-toggle");
+    expect(html).not.toContain("data-watch-party-when-input");
+    expect(draft()).not.toContain("watch-party-when");
+  });
+
+  it("reads the checklist as a verdict: all clear, or the rows that need a hand first", () => {
+    const html = draft({ micState: "everyone" });
+    expect(html).toContain('data-watch-party-checklist="clear"');
+    const muted = draft({ micState: "muted" });
+    expect(muted).toContain('data-watch-party-checklist="attention"');
+    const list = muted.slice(muted.indexOf("watch-party-go-live-checklist"));
+    expect(list.indexOf('checklist-item="mic"')).toBeLessThan(
+      list.indexOf('checklist-item="browser"'),
+    );
+  });
+
+  it("draws the checklist inside the card without its own box", () => {
+    const html = draft();
+    const at = html.indexOf('data-testid="watch-party-go-live-checklist"');
+    const tag = html.slice(at - 60, at + 200);
+    expect(tag).not.toContain("rounded-lg border");
   });
 });

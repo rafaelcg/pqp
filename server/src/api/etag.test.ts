@@ -38,6 +38,7 @@ vi.mock("../auth/clerk.js", () => ({
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
+const { invalidateLatestMessages } = await import("../services/messages.js");
 
 let server: Server;
 let baseUrl: string;
@@ -145,6 +146,11 @@ describeDb("conditional reads (ETag / 304)", () => {
        VALUES ($1, $2, $3) RETURNING id`,
       [channelId, owner.id, body],
     );
+    // A raw SQL insert, unlike every real send path, does not go through
+    // `createMessage` — so it has to tell the read-cache what a real send
+    // would have, or a test that reads the page again within the same TTL
+    // window sees the cached pre-insert rows instead of what it just wrote.
+    invalidateLatestMessages(channelId);
     return result.rows[0]!.id;
   }
 

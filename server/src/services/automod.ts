@@ -11,6 +11,11 @@ import {
   type AutomodVerdict,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 import { logAudit } from "./audit.js";
 import { getHydratedMessage, type HydratedMessage } from "./messages.js";
 import { issueTimeout, type IssuedTimeout } from "./sanctions.js";
@@ -26,45 +31,252 @@ import { issueTimeout, type IssuedTimeout } from "./sanctions.js";
  * changes rarely, and is read on every message, so the rows are held in this
  * process for a short while. This is per-process state, which slow mode's
  * comment rightly warns about, and it is safe here for a different reason:
- * the cached thing is *configuration*, not a counter. On two machines an
- * edit takes at most `CACHE_TTL_MS` to reach the other one, and in that
- * window one machine enforces the old list. A refused send that should have
- * landed, or a landed send that should have been refused, for thirty
- * seconds after an owner edits the list, is the accepted cost. The write
- * path drops its own process's entry immediately.
+ * the cached thing is *configuration*, not a counter.
+ *
+ * THE INVALIDATION CROSSES THE CLUSTER. The write path drops its own
+ * process's entry and publishes `automod.rules`, so every other machine drops
+ * the same entry within a bus round trip instead of enforcing the old list
+ * for the rest of its `CACHE_TTL_MS`. `CACHE_TTL_MS` is what is left when the
+ * bus is off (a self-host, one process, where there is nobody to tell) or
+ * when a frame is lost, which is exactly the role it plays for every other
+ * cache in this codebase.
  */
 
 const CACHE_TTL_MS = 30_000;
+
+/**
+ * "This server's rules changed" and "this author has just had an alert
+ * posted", relayed so the second machine does not answer from a copy the
+ * first one already knows is wrong. Mirrors `PERMISSIONS_TOPIC` in
+ * `ws/chat.ts`: a content-free ping, the local half in its own function so
+ * the originating instance and every relayed one run exactly the same code.
+ */
+const AUTOMOD_RULES_TOPIC = "automod.rules";
+const AUTOMOD_ALERT_TOPIC = "automod.alert";
 
 /**
  * One alert post per author per server within this window; further hits in
  * the window are audited but not posted. A blocked send is refused before
  * slow mode charges it, so without this a member with a keyword and the
  * socket's send budget could put two hundred embeds a second into #mod-log.
- * Per process, like the rule cache, and for the same reason: an occasional
- * duplicate across two machines is a nuisance, not a hole.
+ *
+ * SHARED, not per process: see `claimAlertWindow` below. The map here is the
+ * fast gate in front of the row and the fallback behind it.
  */
 const ALERT_COOLDOWN_MS = 10_000;
 const lastAlertAt = new Map<string, number>();
 
-function alertAllowed(serverId: string, authorId: string, now: number): boolean {
-  const key = `${serverId}:${authorId}`;
-  const last = lastAlertAt.get(key);
-  if (last !== undefined && now - last < ALERT_COOLDOWN_MS) {
-    return false;
-  }
+function cooldownKey(serverId: string, authorId: string): string {
+  return `${serverId}:${authorId}`;
+}
+
+/**
+ * The gate map is swept at most once per cooldown window, however busy it
+ * gets. Sweeping on size alone was a trap at high cardinality: a thousand
+ * distinct offenders a second keeps the map ABOVE the bound even straight
+ * after a sweep, because everything in it is younger than the window and
+ * nothing is eligible to go — so every subsequent write rescanned the whole
+ * map and found nothing, on every API instance, turning a bounded cleanup
+ * into quadratic work exactly when the process is busiest. Time-gated, the
+ * scan happens once per window and the map stays bounded by what a window's
+ * worth of alerts can put in it, which is what it was ever bounded by.
+ */
+const ALERT_MAP_SWEEP_MIN = 10_000;
+let lastAlertSweepAt = 0;
+
+function rememberAlert(key: string, now: number): void {
   lastAlertAt.set(key, now);
-  if (lastAlertAt.size > 10_000) {
+  if (
+    lastAlertAt.size > ALERT_MAP_SWEEP_MIN &&
+    now - lastAlertSweepAt >= ALERT_COOLDOWN_MS
+  ) {
+    lastAlertSweepAt = now;
     for (const [k, at] of lastAlertAt) {
       if (now - at >= ALERT_COOLDOWN_MS) lastAlertAt.delete(k);
     }
   }
-  return true;
 }
+
+/**
+ * THE WINDOW IS THE CLUSTER'S, NOT THIS PROCESS'S.
+ *
+ * With two API machines the same author's next blocked message lands on
+ * whichever machine the proxy picks, and a per-process map says "nobody has
+ * alerted about them" on the machine that did not: #mod-log gets the same
+ * embed twice, and a flood gets one copy per machine per window. So the
+ * window lives in a row, and the claim is one conditional UPSERT whose
+ * `rowCount` IS the verdict — Postgres serialises two machines racing for the
+ * same `(server, author)` pair, so exactly one of them can win.
+ *
+ * ON THE DATABASE'S CLOCK, both sides of the comparison. Two machines' clocks
+ * agree to within a second in practice and are not required to: a peer running
+ * eleven seconds fast would otherwise satisfy its own `WHERE` and claim a
+ * window that has not elapsed at all. `NOW()` is one clock for every claimant,
+ * and the timestamp it wrote comes back so the caller can undo exactly the row
+ * it wrote and nothing else.
+ *
+ * The local map stays in front of it as a cheap first gate (an alert this
+ * process just posted needs no round trip to be refused) and as the fallback
+ * when the database cannot be asked: a duplicate alert during an outage is a
+ * nuisance, a swallowed one is a moderator not being told.
+ */
+interface AlertClaim {
+  key: string;
+  /**
+   * The instant the row now carries, so a release can be conditional on it.
+   * `null` when the database could not be asked at all and this process
+   * decided on its own — there is then no row to undo.
+   *
+   * KEPT AS THE TEXT POSTGRES PRINTED, never a JS `Date`. `TIMESTAMPTZ` has
+   * microsecond resolution and a `Date` has milliseconds, so a value that made
+   * the round trip through JavaScript is a DIFFERENT instant ~999 times out of
+   * 1000: the conditional DELETE below would match no row, and the release
+   * would silently do nothing — the exact failure the release exists to
+   * prevent, with a passing test if that test only ever used whole
+   * milliseconds. The string goes back as `$3::timestamptz` unchanged.
+   */
+  at: string | null;
+}
+
+/**
+ * ONE CLAIM IN FLIGHT PER KEY. A flood is many hits for the same
+ * `(server, author)` arriving together, and every one of them passes the local
+ * gate before the first has written anything: without this they would each
+ * issue an UPSERT and then serialise on the same primary-key row, turning a
+ * burst into a queue on the pool. They share one query instead, and exactly
+ * one of them gets the claim — the same coalescing the playlist proxy does for
+ * a stampede of identical reads.
+ */
+const inflightClaims = new Map<string, Promise<string | false | null>>();
+
+async function claimAlertWindow(
+  serverId: string,
+  authorId: string,
+  key: string,
+): Promise<string | false | null> {
+  const existing = inflightClaims.get(key);
+  if (existing) {
+    // Somebody else is already asking. Whatever the answer, it is not this
+    // caller's claim: one winner per query, and the row is the arbiter.
+    await existing.catch(() => null);
+    return false;
+  }
+  const inflight = (async (): Promise<string | false | null> => {
+    try {
+      const result = await getPool().query<{ at: string }>(
+        `INSERT INTO automod_alert_cooldowns (server_id, author_id, last_alert_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (server_id, author_id) DO UPDATE
+           SET last_alert_at = NOW()
+           WHERE automod_alert_cooldowns.last_alert_at
+                 <= NOW() - ($3::bigint * INTERVAL '1 millisecond')
+         RETURNING last_alert_at::text AS at`,
+        [serverId, authorId, ALERT_COOLDOWN_MS],
+      );
+      return result.rows[0]?.at ?? false;
+    } catch (error) {
+      console.error("[automod] alert cooldown claim failed:", error);
+      return null;
+    }
+  })();
+  inflightClaims.set(key, inflight);
+  try {
+    return await inflight;
+  } finally {
+    inflightClaims.delete(key);
+  }
+}
+
+/**
+ * May this instance post the alert? A claim back means yes and must be
+ * finished with exactly once: `confirmAlertClaim` after the post lands,
+ * `releaseAlertClaim` if it does not.
+ */
+async function claimAlert(
+  serverId: string,
+  authorId: string,
+  now: number,
+): Promise<AlertClaim | null> {
+  const key = cooldownKey(serverId, authorId);
+  const last = lastAlertAt.get(key);
+  if (last !== undefined && now - last < ALERT_COOLDOWN_MS) {
+    return null;
+  }
+  const claimed = await claimAlertWindow(serverId, authorId, key);
+  if (claimed === false) {
+    // Somebody else holds this window. Not remembered locally: the row is the
+    // authority on when it ends, and stamping our own map with `now` would
+    // extend it past what the row says.
+    return null;
+  }
+  // Claimed, or the database could not be asked and this process is deciding
+  // on its own. Either way this instance is about to post.
+  rememberAlert(key, now);
+  return { key, at: typeof claimed === "string" ? claimed : null };
+}
+
+/**
+ * The post landed. Only now are the other machines told, so a frame can never
+ * suppress an alert that was never written — the row already refuses them, and
+ * this is the belt to its braces that keeps working during a database blip.
+ */
+function confirmAlertClaim(serverId: string, authorId: string): void {
+  if (isBusEnabled()) {
+    publishToCluster(AUTOMOD_ALERT_TOPIC, { serverId, authorId });
+  }
+}
+
+/**
+ * THE POST DID NOT HAPPEN, SO THE WINDOW WAS NOT USED. Without this, an author
+ * lookup that threw or a message insert that failed would leave the row (and
+ * this machine's map) silencing the next ten seconds of alerts for a post
+ * nobody ever saw. Conditional on the exact instant this claim wrote, so a
+ * claim somebody else has legitimately taken in the meantime is left alone.
+ */
+async function releaseAlertClaim(
+  serverId: string,
+  authorId: string,
+  claim: AlertClaim,
+): Promise<void> {
+  lastAlertAt.delete(claim.key);
+  if (!claim.at) {
+    return;
+  }
+  try {
+    await getPool().query(
+      `DELETE FROM automod_alert_cooldowns
+        WHERE server_id = $1 AND author_id = $2
+          AND last_alert_at = $3::timestamptz`,
+      [serverId, authorId, claim.at],
+    );
+  } catch (error) {
+    // The window stands for its ten seconds. Worth a line, not a throw: the
+    // caller is already in a catch block for a failed alert.
+    console.error("[automod] alert cooldown release failed:", error);
+  }
+}
+
+subscribeToCluster(AUTOMOD_ALERT_TOPIC, (data) => {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof (data as { serverId?: string }).serverId !== "string" ||
+    typeof (data as { authorId?: string }).authorId !== "string"
+  ) {
+    return;
+  }
+  const { serverId, authorId } = data as { serverId: string; authorId: string };
+  // Stamped with THIS clock: the frame says "somebody posted one just now",
+  // and this map is only the fast gate in front of the row, which is the one
+  // thing that decides the window.
+  rememberAlert(cooldownKey(serverId, authorId), Date.now());
+});
 
 /** Test seam. */
 export function resetAutomodAlertCooldown(): void {
   lastAlertAt.clear();
+  inflightClaims.clear();
+  lastAlertSweepAt = 0;
 }
 
 interface RuleRow {
@@ -111,13 +323,41 @@ function mapRule(row: RuleRow): AutomodRule {
 
 const cache = new Map<string, { rules: AutomodRule[]; expiresAt: number }>();
 
-export function invalidateAutomodCache(serverId?: string): void {
+/**
+ * Drop this process's copy. The half that runs on EVERY instance: the write
+ * path calls `invalidateAutomodCache` (below), which calls this and then says
+ * so on the bus; the subscription calls this again on every other machine.
+ * Same shape, and for the same reason, as `deliverPermissionsUpdate` in
+ * `ws/chat.ts` — an invalidation placed only in the write path leaves every
+ * OTHER machine enforcing the old rule list for up to `CACHE_TTL_MS` after an
+ * owner edits it, which on two machines is a word filter that half the
+ * members still trip and half no longer do.
+ */
+export function invalidateAutomodCacheLocally(serverId?: string): void {
   if (serverId) {
     cache.delete(serverId);
   } else {
     cache.clear();
   }
 }
+
+export function invalidateAutomodCache(serverId?: string): void {
+  invalidateAutomodCacheLocally(serverId);
+  if (isBusEnabled()) {
+    publishToCluster(AUTOMOD_RULES_TOPIC, { serverId: serverId ?? null });
+  }
+}
+
+subscribeToCluster(AUTOMOD_RULES_TOPIC, (data) => {
+  if (!data || typeof data !== "object") {
+    return;
+  }
+  const serverId = (data as { serverId?: unknown }).serverId;
+  if (serverId !== null && typeof serverId !== "string") {
+    return;
+  }
+  invalidateAutomodCacheLocally(serverId ?? undefined);
+});
 
 export async function listAutomodRules(serverId: string): Promise<AutomodRule[]> {
   const result = await getPool().query<RuleRow>(
@@ -487,7 +727,12 @@ export async function recordAutomodHit(
     }
   }
 
-  if (rule.alertChannelId && alertAllowed(input.serverId, input.authorId, Date.now())) {
+  const claim = rule.alertChannelId
+    ? await claimAlert(input.serverId, input.authorId, Date.now())
+    : null;
+  if (rule.alertChannelId && claim) {
+    /** The embed is in the channel: past this the window has been used. */
+    let posted = false;
     try {
       const authorId = actorId;
       const author = await getPool().query<{ display_name: string; username: string | null; discriminator: string | null; name: string | null }>(
@@ -523,9 +768,27 @@ export async function recordAutomodHit(
          RETURNING id`,
         [rule.alertChannelId, authorId, JSON.stringify([embed])],
       );
+      // THE INSERT IS THE POST, AND THE LINE BELOW IT IS NOT. Everything up to
+      // here can fail with nothing written, and the window goes back. From
+      // here the embed is IN #mod-log, so the window has been used and must
+      // stand whatever else goes wrong — releasing it after a successful
+      // insert is how the next hit posts the same embed twice, which is the
+      // duplicate this whole mechanism exists to prevent. So the claim is
+      // confirmed the instant the row exists, and the hydration below gets a
+      // catch of its own.
+      confirmAlertClaim(input.serverId, input.authorId);
+      posted = true;
       effects.alert = await getHydratedMessage(inserted.rows[0]!.id);
     } catch (error) {
       console.error("[automod] alert post failed:", error);
+      if (!posted) {
+        // Nothing was posted, so nothing should be silenced: give the window
+        // back rather than swallowing the next ten seconds of alerts too.
+        await releaseAlertClaim(input.serverId, input.authorId, claim);
+      }
+      // Posted but not hydrated: the moderators have the embed, and the
+      // sockets watching #mod-log pick it up on their next read rather than
+      // live. Nothing to undo.
     }
   }
   return effects;

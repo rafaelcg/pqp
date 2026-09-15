@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
   canRenameHandle,
   deleteConfirmationMatches,
@@ -38,7 +38,10 @@ import { Input } from "@/components/ui/input";
 import { AvatarPicker } from "@/components/user/avatar-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
-import { useNotificationSettings } from "@/hooks/use-notifications";
+import {
+  useNotificationSettings,
+  useNotificationState,
+} from "@/hooks/use-notifications";
 import { useAccentHue } from "@/hooks/use-accent-hue";
 import { useAppearance } from "@/hooks/use-appearance";
 import { useChatDisplay } from "@/hooks/use-chat-display";
@@ -99,12 +102,19 @@ import {
 import { desktopContext, getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
+  isVoiceCleanSettingsSeen,
+  markVoiceCleanSettingsSeen,
+  shouldShowVoiceCleanSettingsBadge,
+} from "@/lib/voice-clean";
+import {
   SUPPORTED_LOCALES,
   setLocalePreference,
   type Locale,
 } from "@/lib/locale";
 import {
   adoptNotificationPreferences,
+  setArrivalToastEnabled,
+  setPreviewInAppEnabled,
   type NotificationLevel,
 } from "@/lib/notifications";
 import {
@@ -147,6 +157,7 @@ import {
   OwnedServersError,
   type BlockingOwnedServer,
 } from "@/lib/api";
+import { AllReportsSection } from "@/components/layout/all-reports-section";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { queuePreferenceSync } from "@/lib/preferences";
@@ -414,7 +425,8 @@ type SectionId =
   | "appearance"
   | "privacy"
   | "data"
-  | "feedback";
+  | "feedback"
+  | "moderation";
 
 /** For callers that open the dialog at a particular section (the user menu). */
 export type SettingsSectionId = SectionId;
@@ -481,6 +493,15 @@ const SECTIONS: SectionDef[] = [
     description: "settings.feedback.description",
     icon: Bug,
   },
+  // Hidden from the rail unless `canModerateInstance` resolves true — see
+  // `visibleSections` where `SettingsModal` filters this out for everyone
+  // else. Kept last so the tab order for every existing account never shifts.
+  {
+    id: "moderation",
+    label: "settings.section.moderation",
+    description: "settings.moderation.description",
+    icon: Siren,
+  },
 ];
 
 /**
@@ -494,11 +515,13 @@ const SECTIONS: SectionDef[] = [
  * have to know which one the CSS picked.
  */
 function SectionRail({
+  sections,
   active,
   onSelect,
   idFor,
   panelId,
 }: {
+  sections: SectionDef[];
   active: SectionId;
   onSelect: (id: SectionId) => void;
   idFor: (id: SectionId) => string;
@@ -508,8 +531,8 @@ function SectionRail({
   const railRef = useRef<HTMLDivElement>(null);
 
   function move(to: number) {
-    const index = (to + SECTIONS.length) % SECTIONS.length;
-    const next = SECTIONS[index]!;
+    const index = (to + sections.length) % sections.length;
+    const next = sections[index]!;
     onSelect(next.id);
     const tabs =
       railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
@@ -517,7 +540,7 @@ function SectionRail({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const current = SECTIONS.findIndex((section) => section.id === active);
+    const current = sections.findIndex((section) => section.id === active);
     switch (event.key) {
       case "ArrowRight":
       case "ArrowDown":
@@ -535,7 +558,7 @@ function SectionRail({
         break;
       case "End":
         event.preventDefault();
-        move(SECTIONS.length - 1);
+        move(sections.length - 1);
         break;
       default:
         break;
@@ -556,7 +579,7 @@ function SectionRail({
         "sm:w-56 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4",
       )}
     >
-      {SECTIONS.map((section) => {
+      {sections.map((section) => {
         const selected = section.id === active;
         const Icon = section.icon;
         return (
@@ -890,6 +913,7 @@ function VoiceSection({
   devicesError,
   voiceAnalyser,
   metering,
+  showVoiceCleanBadge,
 }: {
   draftLocal: LocalSettings;
   patchLocal: (partial: Partial<LocalSettings>) => void;
@@ -900,6 +924,8 @@ function VoiceSection({
   devicesError: string | null;
   voiceAnalyser: AnalyserNode | null;
   metering: boolean;
+  /** NOVO dot on the noise-suppression row; see `lib/voice-clean.ts`. */
+  showVoiceCleanBadge: boolean;
 }) {
   const { t } = useTranslation();
   const canSelectOutput = supportsAudioOutputSelection();
@@ -1080,8 +1106,13 @@ function VoiceSection({
           </label>
         ))}
         <label className="block">
-          <span className="mb-1 block text-sm">
+          <span className="mb-1 flex items-center gap-2 text-sm">
             {t("settings.voice.processing.noise")}
+            {showVoiceCleanBadge && (
+              <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
+                {t("voiceClean.badge")}
+              </span>
+            )}
           </span>
           <select
             value={draftLocal.micProcessing.noiseSuppression}
@@ -1769,6 +1800,12 @@ function LanguagePicker() {
       return;
     }
     setLocalePreference(next);
+    // Server-side too, not just this browser's localStorage: it is the one
+    // signal `server/src/services/push-copy.ts` has for which language a
+    // closed phone's push should read in, and there is no i18next there to
+    // ask instead. Immediate, not debounced — the reload two lines down
+    // would otherwise race the request and drop it.
+    queuePreferenceSync({ locale: next }, { immediate: true });
     await getDesktop()?.setLocale?.(next);
     try {
       const url = new URL(window.location.href);
@@ -2109,6 +2146,9 @@ const LEVEL_OPTIONS: { value: NotificationLevel; label: MessageKey }[] = [
 ];
 
 const SOUND_CUE_OPTIONS: { cue: SoundCue; label: MessageKey }[] = [
+  // First: the one sound a DM makes, which until now had no switch at all —
+  // the catalogue key already existed and was unreachable.
+  { cue: "message", label: "settings.notifications.sounds.message" },
   { cue: "mention", label: "settings.notifications.sounds.mention" },
   { cue: "voiceJoin", label: "settings.notifications.sounds.voiceJoin" },
   { cue: "voiceLeave", label: "settings.notifications.sounds.voiceLeave" },
@@ -2204,6 +2244,8 @@ function NotificationsSection() {
           })}
         </div>
       </Field>
+
+      <DirectMessagesSection />
 
       <Field
         label={t("settings.notifications.soundsLabel")}
@@ -2301,7 +2343,6 @@ function PushNotificationsSection() {
   const [availability, setAvailability] = useState<PushAvailability | null>(null);
   const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
   const [subscribed, setSubscribed] = useState(false);
-  const [dmDetails, setDmDetails] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2322,7 +2363,6 @@ function PushNotificationsSection() {
           return;
         }
         setServerEnabled(config.enabled);
-        setDmDetails(config.dmDetails);
         setSubscribed(subscription !== null);
       } catch {
         // The section renders nothing rather than a broken toggle.
@@ -2354,18 +2394,6 @@ function PushNotificationsSection() {
       setError(t("settings.push.unreachable"));
     } finally {
       setBusy(false);
-    }
-  };
-
-  const toggleDmDetails = async () => {
-    const next = !dmDetails;
-    // Optimistic — it is a checkbox, and the server answer below corrects it.
-    setDmDetails(next);
-    try {
-      const saved = await setPushDmDetails(next);
-      setDmDetails(saved.dmDetails);
-    } catch {
-      setDmDetails(!next);
     }
   };
 
@@ -2409,25 +2437,112 @@ function PushNotificationsSection() {
               {error}
             </p>
           ) : null}
-          {subscribed ? (
-            <label className="mt-3 flex items-start gap-2 text-sm text-paper">
-              <input
-                type="checkbox"
-                checked={dmDetails}
-                onChange={() => void toggleDmDetails()}
-                className="mt-0.5 accent-accent"
-              />
-              <span>
-                {t("settings.push.dmDetails")}
-                <span className="block text-xs text-paper-muted">
-                  {t("settings.push.dmDetailsHint")}
-                </span>
-              </span>
-            </label>
-          ) : null}
         </>
       )}
     </Field>
+  );
+}
+
+/**
+ * The three DM privacy choices, adjacent: the corner toast, its message
+ * preview, and whether a phone notification may name the sender. Previously
+ * `dmDetails` lived inside `PushNotificationsSection`, shown only once a
+ * device had subscribed — but it is a stored account preference, not a fact
+ * about this browser's subscription, so it belongs here with its siblings
+ * and stays visible whether or not push is on for this device.
+ */
+function DirectMessagesSection() {
+  const { t } = useTranslation();
+  const state = useNotificationState();
+  const [dmDetails, setDmDetails] = useState(false);
+  // Set the moment a person touches the switch, so the initial config fetch
+  // — which can resolve after that click — knows not to stomp a choice
+  // already in flight with whatever the server answered a moment earlier.
+  const touchedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getPushConfig()
+      .then((config) => {
+        if (!cancelled && !touchedRef.current) {
+          setDmDetails(config.dmDetails);
+        }
+      })
+      .catch(() => {
+        // No push configured on this server — the switch still renders (it
+        // is a preference independent of push), just starts at its default.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleDmDetails = () => {
+    touchedRef.current = true;
+    const next = !dmDetails;
+    setDmDetails(next);
+    void setPushDmDetails(next)
+      .then((saved) => setDmDetails(saved.dmDetails))
+      .catch(() => setDmDetails(!next));
+  };
+
+  return (
+    <Field label={t("settings.notifications.dm.label")}>
+      <div className="space-y-3">
+        <SwitchRow
+          label={t("settings.notifications.dm.arrivalToast")}
+          hint={t("settings.notifications.dm.arrivalToastHint")}
+          checked={state.arrivalToast}
+          onChange={setArrivalToastEnabled}
+        />
+        <SwitchRow
+          label={t("settings.notifications.dm.previewInApp")}
+          hint={t("settings.notifications.dm.previewInAppHint")}
+          checked={state.previewInApp}
+          disabled={!state.arrivalToast}
+          onChange={setPreviewInAppEnabled}
+        />
+        <SwitchRow
+          label={t("settings.push.dmDetails")}
+          hint={t("settings.push.dmDetailsHint")}
+          checked={dmDetails}
+          onChange={toggleDmDetails}
+        />
+      </div>
+      <p className="mt-3 text-xs text-paper-muted">
+        {t("settings.notifications.dndHint")}
+      </p>
+    </Field>
+  );
+}
+
+function SwitchRow({
+  label,
+  hint,
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className={cn("flex items-start gap-2 text-sm text-paper", disabled && "opacity-50")}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 accent-accent"
+      />
+      <span>
+        {label}
+        <span className="block text-xs text-paper-muted">{hint}</span>
+      </span>
+    </label>
   );
 }
 
@@ -3394,7 +3509,49 @@ export function SettingsModal({
   // Camera permission is asked once per open Settings session. Tabbing
   // through the Voice form must not blink the webcam LED on every focus.
   const camerasAskedRef = useRef(false);
-  const active = SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0]!;
+  // Whether this account is an instance moderator — `user.isInstanceModerator`
+  // rides down on every `/api/me`-shaped response (see `toOwnUser` on the
+  // server), computed server-side from `INSTANCE_MODERATOR_CLERK_IDS` and
+  // nothing the client can influence. This is an AFFORDANCE ONLY: it decides
+  // whether the nav shows the door, nothing more. Every route behind it
+  // (`GET /api/reports/all`, `PATCH /api/reports/:id`,
+  // `POST /api/reports/:id/remove-message`) re-checks `isInstanceModerator`
+  // itself and does not trust this flag.
+  //
+  // Deliberately NOT learned by probing a route that answers 404 for
+  // everyone else: firing that probe on every Settings open, for every
+  // account, would put a 404 in the network console of the near-totality of
+  // people who are not moderators — exactly the console noise
+  // `theme-switching.spec.ts`'s "no console errors" check exists to catch.
+  const canModerateInstance = user?.isInstanceModerator ?? false;
+
+  // A stale `requestedSection="moderation"` (the dashboard deep link landing
+  // on an account the flag says no to) must not strand the dialog on a door
+  // that does not exist for it — bounce to the same target ("profile") the
+  // rail's own out-of-bounds guard below uses.
+  useEffect(() => {
+    if (!canModerateInstance && section === "moderation") {
+      setSection("profile");
+    }
+  }, [canModerateInstance, section]);
+
+  // The whole nav, minus the moderation door for every account it did not
+  // open for. Derived per render rather than mutating the module-level
+  // `SECTIONS` constant, which every other settings dialog instance shares.
+  const visibleSections = useMemo(
+    () =>
+      canModerateInstance
+        ? SECTIONS
+        : SECTIONS.filter((entry) => entry.id !== "moderation"),
+    [canModerateInstance],
+  );
+
+  // A caller (or a stale sticky section from a previous session) pointing at
+  // "moderation" before the gate resolves true must not show a blank pane —
+  // land on Profile instead, exactly like an unknown section id would.
+  const active =
+    visibleSections.find((entry) => entry.id === section) ??
+    visibleSections[0]!;
   const tabIdPrefix = "settings-tab";
   const panelId = "settings-panel";
 
@@ -3407,6 +3564,26 @@ export function SettingsModal({
   // actually on screen. Under the old single column, merely opening settings to
   // change a display name prompted for the mic.
   const voiceVisible = settingsOpen && section === "voice";
+  // The NOVO dot on the noise-suppression row: owed until this section has
+  // been opened once, or the Voz limpa nudge card was acted on — whichever
+  // comes first (`lib/voice-clean.ts`).
+  const [showVoiceCleanBadge, setShowVoiceCleanBadge] = useState(() =>
+    shouldShowVoiceCleanSettingsBadge({
+      settingsSeen: isVoiceCleanSettingsSeen(),
+      nudgeDismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
+    }),
+  );
+  useEffect(() => {
+    if (voiceVisible) {
+      markVoiceCleanSettingsSeen();
+      setShowVoiceCleanBadge(false);
+    }
+  }, [voiceVisible]);
+  useEffect(() => {
+    if (user?.preferences?.voiceCleanNudgeDismissedAt) {
+      setShowVoiceCleanBadge(false);
+    }
+  }, [user?.preferences?.voiceCleanNudgeDismissedAt]);
 
   useEffect(() => {
     if (!open) {
@@ -3580,6 +3757,7 @@ export function SettingsModal({
       >
         <div className="flex h-full min-h-0 flex-col sm:flex-row">
           <SectionRail
+            sections={visibleSections}
             active={section}
             onSelect={setSection}
             idFor={(id) => `${tabIdPrefix}-${id}`}
@@ -3625,6 +3803,7 @@ export function SettingsModal({
                 devicesError={devicesError}
                 voiceAnalyser={voiceAnalyser}
                 metering={voiceVisible}
+                showVoiceCleanBadge={showVoiceCleanBadge}
               />
             )}
 
@@ -3664,6 +3843,19 @@ export function SettingsModal({
             )}
 
             {section === "feedback" && <FeedbackSection />}
+
+            {section === "moderation" &&
+              (canModerateInstance ? (
+                <AllReportsSection />
+              ) : (
+                // Only reachable for the one render before the effect above
+                // bounces off this section — a deep link can land here before
+                // React has run its effects. The nav entry itself never
+                // exists for an account the flag says no to.
+                <p role="status" aria-live="polite" className="text-sm text-paper-muted">
+                  {t("common.loading")}
+                </p>
+              ))}
 
             {error && (
               <p className="mt-4 text-sm text-danger" role="alert">

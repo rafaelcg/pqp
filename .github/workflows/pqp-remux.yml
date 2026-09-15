@@ -1,0 +1,49 @@
+name: pqp-remux
+
+# Its own workflow, not a job inside ci.yml: ci.yml's `on:` trigger applies
+# to the whole workflow, not per job, so folding this in there would mean
+# either running the Node/Postgres suite on a Go-only change or teaching
+# every job its own path filter. A separate workflow with its own `paths`
+# keeps this scoped to tools/pqp-remux/** and adds no time to any existing
+# job.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/pqp-remux/**"
+      - ".github/workflows/pqp-remux.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "tools/pqp-remux/**"
+      - ".github/workflows/pqp-remux.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pqp-remux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/pqp-remux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/pqp-remux/go.mod
+          cache-dependency-path: tools/pqp-remux/go.sum
+      # L1.3 (internal/aacenc) shells out to ffmpeg for AAC-LC encoding
+      # (see its package doc comment for why) and its own tests, plus
+      # internal/session's audio integration test, exercise the real
+      # subprocess rather than skip when it's missing. ubuntu-latest
+      # ships ffmpeg already; this line makes that an explicit dependency
+      # of this workflow instead of an implicit fact about the runner
+      # image, and is a no-op (fast) when it's already present.
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: make vet
+      - run: make test
+      - run: make fmtcheck

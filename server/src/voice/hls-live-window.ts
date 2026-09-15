@@ -33,9 +33,28 @@
  * survives; nothing is fetched to seed it, because the alternative (the
  * `-index.m3u8` event playlist) is uploaded less and less often as a session
  * ages, and a stale seed is worse than a short one.
+ *
+ * BROADCAST_PIPELINE B0.2 (probed against a real session copied onto
+ * `hls-live-window.test.ts`'s `egressPlaylist` fixture, staging bucket,
+ * 2026-09-12): the egress DOES write `#EXT-X-PROGRAM-DATE-TIME`, one per
+ * entry, so a viewer's own clock is enough to compute wall-clock latency with
+ * no server work at all. `render` below still synthesises one from
+ * `firstSeenAt` for any segment that somehow arrives without one, so a future
+ * LiveKit build or a self-host's own encoder that omits it degrades to a
+ * slightly later (never earlier) timestamp instead of leaving the client with
+ * nothing to compute from.
  */
 
-/** Default number of segments the proxy lists; 15 × 2 s = 30 s. */
+/**
+ * Default number of segments the proxy lists. This constant does not know
+ * the segment length: at the code's own local default (`LIVE_HLS_SEGMENT_SECONDS`
+ * unset, 2 s) that is 30 s, but production has run 4 s segments since #495
+ * (`LIVE_HLS_SEGMENT_SECONDS=4`, see `docs/WATCH_PARTY.md`), so the window a
+ * production viewer actually gets is 60 s. This comment used to just say
+ * "15 x 2 s = 30 s" as if that were universally true, which is the exact
+ * "stale the moment production changed and nothing here said so" pattern
+ * `docs/plans/BROADCAST_PIPELINE.md` B0.1 exists to stop.
+ */
 export const DEFAULT_LIVE_WINDOW_SEGMENTS = 15;
 
 /** The egress's own window; below this the proxy adds nothing. */
@@ -150,12 +169,26 @@ export function parseMediaPlaylist(body: string): ParsedMediaPlaylist {
   return { header, mediaSequence, segments, ended };
 }
 
+const PROGRAM_DATE_TIME_PREFIX = "#EXT-X-PROGRAM-DATE-TIME:";
+
+/** One remembered segment, plus the wall clock this process first saw it. */
+interface HistoryEntry {
+  segment: ParsedSegment;
+  /**
+   * `Date.now()` (or the caller's clock) the instant this segment was first
+   * merged in -- BROADCAST_PIPELINE B0.3's T5-T6 stamp: "in the bucket, to
+   * listed in the playlist a viewer polls". Never touched again once set, so
+   * every later render of this same segment reports the same age.
+   */
+  firstSeenAt: number;
+}
+
 /**
  * One rendition's remembered segments. `merge` takes each fresh playlist the
  * proxy fetched; `render` writes the window a viewer is handed.
  */
 export class LiveWindowHistory {
-  private readonly segments = new Map<number, ParsedSegment>();
+  private readonly segments = new Map<number, HistoryEntry>();
   private header: string[] = [];
   private ended = false;
   private newest = -1;
@@ -165,8 +198,12 @@ export class LiveWindowHistory {
    * OLDER than what this history already holds is a different stream under
    * the same name (an egress restarted its numbering); the history starts
    * over rather than splicing two timelines together.
+   *
+   * `now` is stamped onto any segment seen for the first time. Callers
+   * should pass the same clock they use everywhere else in one request so a
+   * test (and `X-Pqp-Playlist-Age-Ms`) can reason about it.
    */
-  merge(playlist: ParsedMediaPlaylist): void {
+  merge(playlist: ParsedMediaPlaylist, now = Date.now()): void {
     this.header = playlist.header;
     this.ended = playlist.ended;
     const last = playlist.segments[playlist.segments.length - 1];
@@ -176,7 +213,7 @@ export class LiveWindowHistory {
     }
     for (const segment of playlist.segments) {
       if (!this.segments.has(segment.seq)) {
-        this.segments.set(segment.seq, segment);
+        this.segments.set(segment.seq, { segment, firstSeenAt: now });
       }
       if (segment.seq > this.newest) {
         this.newest = segment.seq;
@@ -191,13 +228,17 @@ export class LiveWindowHistory {
    * number, and a shorter honest window beats a longer lying one.
    */
   window(windowSegments: number): ParsedSegment[] {
-    const out: ParsedSegment[] = [];
+    return this.windowEntries(windowSegments).map((entry) => entry.segment);
+  }
+
+  private windowEntries(windowSegments: number): HistoryEntry[] {
+    const out: HistoryEntry[] = [];
     for (let seq = this.newest; seq >= 0 && out.length < windowSegments; seq--) {
-      const segment = this.segments.get(seq);
-      if (!segment) {
+      const entry = this.segments.get(seq);
+      if (!entry) {
         break;
       }
-      out.push(segment);
+      out.push(entry);
     }
     return out.reverse();
   }
@@ -215,14 +256,36 @@ export class LiveWindowHistory {
   /**
    * A media playlist listing the window. Unsigned: the URI lines are the
    * egress's own, and the caller rewrites them exactly as it always did.
+   *
+   * BROADCAST_PIPELINE B0.2: if the egress already writes
+   * `#EXT-X-PROGRAM-DATE-TIME`, it is copied through untouched (it was
+   * already preserved as a segment tag before this). If a segment's tags
+   * carry none -- probed against a real production playlist and not
+   * currently true, but a future LiveKit build or a self-host's own encoder
+   * might not write one -- this synthesises one from `firstSeenAt`, the wall
+   * clock this process first saw the segment listed. That is a later instant
+   * than the segment's real encode time (T4), so a latency computed from a
+   * synthesised PDT is a slight OVER-estimate of encode-to-paint, never an
+   * under-estimate: the honest direction for a number nobody is meant to
+   * treat as more precise than it is.
    */
   render(windowSegments: number): string {
-    const entries = this.window(windowSegments);
+    const entries = this.windowEntries(windowSegments);
     const lines = [...this.header];
     const first = entries[0];
-    lines.push(`${MEDIA_SEQUENCE_TAG}${first ? first.seq : Math.max(this.newest, 0)}`);
-    for (const segment of entries) {
-      lines.push(...segment.tags, segment.uri);
+    lines.push(
+      `${MEDIA_SEQUENCE_TAG}${first ? first.segment.seq : Math.max(this.newest, 0)}`,
+    );
+    for (const entry of entries) {
+      const tags = entry.segment.tags.some((tag) =>
+        tag.startsWith(PROGRAM_DATE_TIME_PREFIX),
+      )
+        ? entry.segment.tags
+        : [
+            `${PROGRAM_DATE_TIME_PREFIX}${new Date(entry.firstSeenAt).toISOString()}`,
+            ...entry.segment.tags,
+          ];
+      lines.push(...tags, entry.segment.uri);
     }
     if (this.ended) {
       lines.push(ENDLIST_TAG);
@@ -239,6 +302,16 @@ export class LiveWindowHistory {
   get newestSequence(): number {
     return this.newest;
   }
+
+  /**
+   * When the newest segment currently listed was first seen by this process,
+   * or null when the history is empty. `X-Pqp-Playlist-Age-Ms` is `now` minus
+   * this: how stale the freshest thing this proxy can offer already is.
+   */
+  get newestFirstSeenAt(): number | null {
+    const entry = this.segments.get(this.newest);
+    return entry ? entry.firstSeenAt : null;
+  }
 }
 
 /**
@@ -250,8 +323,9 @@ export function widenLivePlaylist(
   history: LiveWindowHistory,
   body: string,
   windowSegments = liveWindowSegments(),
+  now = Date.now(),
 ): string {
-  history.merge(parseMediaPlaylist(body));
+  history.merge(parseMediaPlaylist(body), now);
   history.prune(windowSegments);
   return history.render(windowSegments);
 }

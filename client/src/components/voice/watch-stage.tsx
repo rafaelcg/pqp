@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Maximize2, Phone, X } from "lucide-react";
-import { liveStateFromStream } from "@pqp/shared";
+import { liveStateFromStream, type LiveHlsStream } from "@pqp/shared";
 import type { ChannelLive, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
 import { fetchChannelLive } from "@/lib/api";
+import {
+  hlsModeOf,
+  hlsPartTargetMs,
+  watchPlayerMode,
+  type HlsMode,
+  type LlHlsStreamFields,
+} from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
@@ -31,7 +38,12 @@ import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
  */
 export function WatchStage({
   hlsUrl,
+  cameraHlsUrl = null,
+  cameraHasVideo = true,
+  cameraHasVoiceAudio = false,
   delaySeconds,
+  mode,
+  partTargetMs,
   audienceCount,
   ended,
   onJoin,
@@ -48,7 +60,33 @@ export function WatchStage({
 }: {
   /** Playable playlist URL; null while nothing is live. */
   hlsUrl: string | null;
+  /**
+   * The presenter's camera, as its own playlist. Null unless the server is
+   * running a camera transcode beside the ladder; the player floats it in a
+   * corner. See `docs/WATCH_PARTY.md`, "The presenter's camera, floating over
+   * the film".
+   */
+  cameraHlsUrl?: string | null;
+  /**
+   * Whether `cameraHlsUrl` actually carries a picture. False is
+   * `LIVE_HLS_VOICE_TRACK`'s "separada" mode with no camera published: the
+   * playlist is audio-only, and the corner box should not render a black
+   * video frame for it. Defaults true, the shape every camera ever had
+   * before that flag.
+   */
+  cameraHasVideo?: boolean;
+  /**
+   * Whether `cameraHlsUrl` carries the presenter's MICROPHONE, separately
+   * from the film (`LIVE_HLS_VOICE_TRACK`, "separada" — see
+   * `docs/plans/WATCH_PARTY_SEPARATE_TRACKS.md`). Defaults false, which
+   * keeps every camera before that flag silent, exactly as it always was.
+   */
+  cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
+  /** `LiveHlsStream.mode` (`docs/plans/LL_HLS.md`). Absent means conventional. */
+  mode?: HlsMode;
+  /** `LiveHlsStream.partTargetMs`, read only when `mode === "ll"`. */
+  partTargetMs?: number;
   /** Everybody watching, seated or not, presenter excluded. */
   audienceCount: number;
   /** The stream this person was watching went away. Said, not just blank. */
@@ -171,7 +209,12 @@ export function WatchStage({
       {live ? (
         <HlsWatchPlayer
           src={hlsUrl}
+          cameraSrc={cameraHlsUrl}
+          cameraHasVideo={cameraHasVideo}
+          cameraHasVoiceAudio={cameraHasVoiceAudio}
           delaySeconds={delaySeconds}
+          mode={mode ? watchPlayerMode(mode) : undefined}
+          partTargetMs={partTargetMs}
           mediaTitle={mediaTitle}
           communityName={communityName}
           coverUrl={coverUrl}
@@ -336,7 +379,10 @@ export function WatchChannelStage({
   onLeaveParty?: () => void;
   onSetWatchingLive: (channelId: string, watching: boolean) => void;
   /** Where the one-time `GET /api/channels/:id/live` answer goes. */
-  onSeedChannelLive: (channelId: string, live: ChannelLive) => void;
+  onSeedChannelLive: (
+    channelId: string,
+    live: { stream: LiveHlsStream | null; watching: number; ended?: boolean },
+  ) => void;
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
   onShapeChange?: (shape: CallStageShape) => void;
@@ -366,7 +412,13 @@ export function WatchChannelStage({
   const inThisCall =
     voiceState.voiceChannelId === channelId && voiceState.status !== "idle";
   const live = voiceState.channelLive[channelId];
-  const known = live !== undefined;
+  // DESCRIBED, not merely present. An entry whose null the server could not
+  // vouch for is "we have not been told" (`streamEnded`), and cancelling the
+  // one-time GET on it would throw away the only authoritative answer this
+  // pane is ever going to get: the viewer would sit on "Preparando" until
+  // some later frame happened along.
+  const known =
+    live !== undefined && (live.stream !== null || live.streamEnded === true);
   const stream = inThisCall ? null : (live?.stream ?? null);
   const hasStream = stream !== null;
   const dualDeviceWarning = isSeatedOnAnotherDevice(
@@ -388,6 +440,7 @@ export function WatchChannelStage({
           onSeedChannelLive(channelId, {
             stream: answer.stream,
             watching: answer.watching,
+            ended: answer.ended,
           });
         }
       })
@@ -501,7 +554,14 @@ export function WatchChannelStage({
     >
       <WatchStage
         hlsUrl={stream?.hlsUrl ?? null}
+        cameraHlsUrl={stream?.cameraHlsUrl ?? null}
+        cameraHasVideo={stream?.cameraHasVideo ?? true}
+        cameraHasVoiceAudio={stream?.cameraHasVoiceAudio ?? false}
         delaySeconds={stream?.delaySeconds}
+        mode={hlsModeOf(stream as (LiveHlsStream & LlHlsStreamFields) | null)}
+        partTargetMs={hlsPartTargetMs(
+          stream as (LiveHlsStream & LlHlsStreamFields) | null,
+        )}
         audienceCount={watchAudienceCount(
           live,
           voiceState.occupancy[channelId],

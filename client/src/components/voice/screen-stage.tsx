@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { LiveReactionEmoji } from "@pqp/shared";
+import { validPartTargetMs, type HlsMode } from "@/lib/hls-live-edge";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { useLgUp } from "@/hooks/use-lg-up";
@@ -16,7 +17,20 @@ export interface ScreenShareTile {
   stream: MediaStream | null;
   /** LiveKit egress playlist for this presenter; remote tiles prefer it. */
   hlsUrl?: string | null;
+  /**
+   * The presenter's camera, as a second playlist. Only the cinema stage draws
+   * it: a webcam inside a grid tile is a picture in a picture in a picture.
+   */
+  cameraHlsUrl?: string | null;
+  /** Whether `cameraHlsUrl` carries a picture. Defaults true when omitted. */
+  cameraHasVideo?: boolean;
+  /** Whether `cameraHlsUrl` carries the presenter's mic (`LIVE_HLS_VOICE_TRACK`). */
+  cameraHasVoiceAudio?: boolean;
   delaySeconds?: number;
+  /** `LiveHlsStream.mode` (`docs/plans/LL_HLS.md`). Absent means conventional. */
+  mode?: HlsMode;
+  /** `LiveHlsStream.partTargetMs`, read only when `mode === "ll"`. */
+  partTargetMs?: number;
   presenterName: string;
   isSelf: boolean;
   /**
@@ -40,22 +54,51 @@ export function collectScreenTiles(args: {
   localStream: MediaStream | null;
   remotePeers: RemotePeer[];
   fallbackName: string;
-  liveStream?: { hlsUrl: string; presenterPeerId: string; delaySeconds?: number } | null;
+  liveStream?: {
+    hlsUrl: string;
+    cameraHlsUrl?: string;
+    cameraHasVideo?: boolean;
+    cameraHasVoiceAudio?: boolean;
+    presenterPeerId: string;
+    delaySeconds?: number;
+    /** See `ScreenShareTile.mode`'s comment -- absent on `LiveHlsStream` today. */
+    mode?: HlsMode;
+    partTargetMs?: number;
+  } | null;
 }): ScreenShareTile[] {
   return args.peerIds.map((peerId) => {
     const hls =
       args.liveStream && args.liveStream.presenterPeerId === peerId
         ? {
             hlsUrl: args.liveStream.hlsUrl,
+            cameraHlsUrl: args.liveStream.cameraHlsUrl ?? null,
+            cameraHasVideo: args.liveStream.cameraHasVideo,
+            cameraHasVoiceAudio: args.liveStream.cameraHasVoiceAudio,
             delaySeconds: args.liveStream.delaySeconds,
+            mode: args.liveStream.mode,
+            // Validated here, once, so every downstream reader of a tile's
+            // `partTargetMs` (the player, the stall config) already holds a
+            // sane value (Farol review, this PR) -- never the raw wire
+            // number, which nothing between the server and this map
+            // otherwise checks.
+            partTargetMs: validPartTargetMs(args.liveStream.partTargetMs),
           }
-        : { hlsUrl: null, delaySeconds: undefined };
+        : {
+            hlsUrl: null,
+            cameraHlsUrl: null,
+            cameraHasVideo: undefined,
+            cameraHasVoiceAudio: undefined,
+            delaySeconds: undefined,
+            mode: undefined,
+            partTargetMs: undefined,
+          };
     if (peerId === args.localPeerId) {
       return {
         peerId,
         stream: args.localStream,
         // A presenter watching themselves 10 s late is not useful.
         hlsUrl: null,
+        cameraHlsUrl: null,
         presenterName: args.localName,
         isSelf: true,
         userId: null,
@@ -68,13 +111,50 @@ export function collectScreenTiles(args: {
       peerId,
       stream: remote?.screenStream ?? null,
       hlsUrl: hls.hlsUrl,
+      cameraHlsUrl: hls.cameraHlsUrl,
+      cameraHasVideo: hls.cameraHasVideo,
+      cameraHasVoiceAudio: hls.cameraHasVoiceAudio,
       delaySeconds: hls.delaySeconds,
+      mode: hls.mode,
+      partTargetMs: hls.partTargetMs,
       presenterName: remote?.displayName ?? args.fallbackName,
       isSelf: false,
       userId: remote?.userId ?? null,
       hasAudio: remote?.screenAudioStream != null,
     };
   });
+}
+
+/**
+ * Which tiles are actually allowed to play over HLS instead of WebRTC.
+ *
+ * Kept pure and exported so the rule pins without mounting `HlsWatchPlayer`
+ * or its chrome: `CallStage` (`call-stage.tsx`) filters `hlsUrl` down to
+ * `null` for two independent reasons, and every one of the delay badge, the
+ * viewer pill, the quality menu and the holding screen lives *inside*
+ * `HlsWatchPlayer` — so a tile this returns with `hlsUrl: null` is a tile
+ * whose chrome cannot mount at all, because nothing else in the grid ever
+ * renders that component.
+ *
+ * 1. `readyHlsUrls` — the playlist has to be a live window, not a 404 or the
+ *    previous share's ENDLIST (a black video is not a watch party).
+ * 2. `watchPartyChrome` — once this account holds a seat in the room this
+ *    HLS egress belongs to, PR 551's rule applies: the SFU screen share is
+ *    the one and only picture, whoever is presenting. Cinema mode already
+ *    refuses itself in that case (`shouldShowCinema`'s `isWatchParty` gate);
+ *    this is the same rule for the ordinary grid, which carried `hlsUrl` on
+ *    a peer's tile regardless of anyone's seat until this function existed.
+ */
+export function resolveScreenTileSources<T extends { hlsUrl?: string | null }>(
+  tiles: T[],
+  readyHlsUrls: ReadonlySet<string>,
+  watchPartyChrome: boolean,
+): T[] {
+  return tiles.map((tile) =>
+    tile.hlsUrl && !watchPartyChrome && readyHlsUrls.has(tile.hlsUrl)
+      ? tile
+      : { ...tile, hlsUrl: null },
+  );
 }
 
 function ThumbVideo({ stream }: { stream: MediaStream | null }) {

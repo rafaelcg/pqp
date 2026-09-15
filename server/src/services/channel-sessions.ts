@@ -7,6 +7,12 @@ import {
 import { getPool } from "../db.js";
 import { pushChannelSessionReminder } from "./push.js";
 import { forEachAuthenticatedSocket } from "../ws/sockets.js";
+import {
+  isBusConnected,
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 
 /**
  * Watch party scheduling: a session attached to a channel, plus who asked to
@@ -413,19 +419,45 @@ async function fireReminders(kind: "before" | "live"): Promise<void> {
   }
 }
 
-function notifyChannelSessionSubscribers(event: {
+/**
+ * "Your session starts in ten minutes", relayed to the machines that hold the
+ * sockets.
+ *
+ * THE REMINDER TICK DOES NOT RUN WHERE THE PEOPLE ARE. `jobs.ts` runs on
+ * `pqp-worker` in production (`WORKER_MODE=worker`), a process with no
+ * `/ws` listener at all, so the socket loop below walks ZERO sockets there and
+ * the nudge reached nobody: Web Push landed and the open tab showed nothing
+ * until its next refresh. The comment this replaces called that "a harmless
+ * no-op loop", which was true of the loop and false of the feature.
+ *
+ * So the loop is relayed: the process that claimed the reminder publishes the
+ * whole event once, and every API machine delivers it to its own sockets.
+ * Push stays with the ORIGINATING process — it is addressed per user, not per
+ * socket, and sending it once per machine is how a phone gets three copies of
+ * one reminder.
+ */
+const CHANNEL_SESSION_REMINDER_TOPIC = "channel-session.reminder";
+
+interface ChannelSessionReminderEvent {
   sessionId: string;
   channelId: string;
   title: string;
   startsAt: string;
   userIds: string[];
   kind: "before" | "live";
-}): void {
+}
+
+/**
+ * The half that runs on EVERY instance: the claiming process calls it for its
+ * own sockets (zero, on the worker) and the subscription below calls it on
+ * each API machine. Same shape as `deliverPermissionsUpdate` in `ws/chat.ts`,
+ * and for the same reason — one function, so a relayed reminder and a local
+ * one cannot drift apart.
+ */
+export function deliverChannelSessionReminder(
+  event: ChannelSessionReminderEvent,
+): number {
   const recipients = new Set(event.userIds);
-  // Live WS nudge for whoever is connected on this process. In the
-  // single-process deployment (`WORKER_MODE` unset, today's default) this is
-  // every online recipient; in a split worker it is a harmless no-op loop
-  // over zero sockets, and push (below) is what reaches them instead.
   const frame = JSON.stringify({
     type: "channel-session-reminder",
     sessionId: event.sessionId,
@@ -434,14 +466,210 @@ function notifyChannelSessionSubscribers(event: {
     startsAt: event.startsAt,
     kind: event.kind,
   });
+  // HOW MANY SOCKETS ACTUALLY GOT IT, which is the only thing that makes this
+  // reminder "delivered" here. A relayed frame that lands while the one
+  // recipient is mid-reconnect reaches nobody, and the caller must be able to
+  // tell that apart from a delivery so it does not suppress the retry that
+  // would have caught them a moment later.
+  let sent = 0;
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && recipients.has(user.id)) {
       socket.send(frame);
+      sent += 1;
     }
   });
+  return sent;
+}
+
+/**
+ * Reminders this instance has already put on its sockets, so the retry above
+ * cannot show anybody the same nudge twice. Keyed by the reminder's identity
+ * — a session and which of its two one-shot reminders this is — because that
+ * is exactly what `fireReminders` claims once and for all in SQL. Held for
+ * long enough to cover the retry and swept on write, never a timer.
+ */
+const RELAYED_REMINDER_MEMORY_MS = 60_000;
+const relayedReminders = new Map<string, number>();
+/**
+ * Swept on the same terms as automod's gate map, and for the same reason: a
+ * scan per write is a scan per reminder on every instance, and at a catch-up
+ * burst none of it is old enough to remove yet. Time-gated past a size bound,
+ * the scan runs once a memory window however many reminders arrive, and the
+ * map stays bounded by what one window can put in it.
+ */
+const RELAYED_REMINDER_SWEEP_MIN = 1_000;
+let lastRelayedSweepAt = 0;
+
+function relayKey(sessionId: string, kind: string): string {
+  return `${sessionId}:${kind}`;
+}
+
+function wasRelayed(sessionId: string, kind: string, now: number): boolean {
+  const seen = relayedReminders.get(relayKey(sessionId, kind));
+  return seen !== undefined && now - seen < RELAYED_REMINDER_MEMORY_MS;
+}
+
+/**
+ * Remembered only once it has actually reached a socket. Recording it on
+ * ARRIVAL instead would make the dedupe defeat the retry it exists beside: a
+ * frame that lands while the one recipient is reconnecting reaches nobody,
+ * and the copy three seconds later — the copy that would have found them — is
+ * dropped as a duplicate of a delivery that never happened.
+ */
+function rememberRelayed(sessionId: string, kind: string, now: number): void {
+  relayedReminders.set(relayKey(sessionId, kind), now);
+  if (
+    relayedReminders.size > RELAYED_REMINDER_SWEEP_MIN &&
+    now - lastRelayedSweepAt >= RELAYED_REMINDER_MEMORY_MS
+  ) {
+    lastRelayedSweepAt = now;
+    for (const [old, at] of relayedReminders) {
+      if (now - at >= RELAYED_REMINDER_MEMORY_MS) {
+        relayedReminders.delete(old);
+      }
+    }
+  }
+}
+
+/** Test seam. */
+export function resetRelayedChannelSessionReminders(): void {
+  relayedReminders.clear();
+  lastRelayedSweepAt = 0;
+  queuedReminderRetries.length = 0;
+  if (reminderRetryTimer) {
+    clearTimeout(reminderRetryTimer);
+    reminderRetryTimer = null;
+  }
+}
+
+subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
+  const event = data as Partial<ChannelSessionReminderEvent> | null;
+  if (
+    !event ||
+    typeof event !== "object" ||
+    typeof event.sessionId !== "string" ||
+    typeof event.channelId !== "string" ||
+    typeof event.title !== "string" ||
+    typeof event.startsAt !== "string" ||
+    (event.kind !== "before" && event.kind !== "live") ||
+    !Array.isArray(event.userIds)
+  ) {
+    return;
+  }
+  const userIds = event.userIds.filter(
+    (id): id is string => typeof id === "string",
+  );
+  if (userIds.length === 0) {
+    return;
+  }
+  const now = Date.now();
+  if (wasRelayed(event.sessionId, event.kind, now)) {
+    // The publisher's one retry, or a duplicate frame: these sockets have
+    // already been shown this reminder.
+    return;
+  }
+  // No push here: the instance that claimed the reminder already sent it, and
+  // a second one would be a second notification on the same phone.
+  const sent = deliverChannelSessionReminder({
+    sessionId: event.sessionId,
+    channelId: event.channelId,
+    title: event.title,
+    startsAt: event.startsAt,
+    kind: event.kind,
+    userIds,
+  });
+  if (sent > 0) {
+    rememberRelayed(event.sessionId, event.kind, now);
+  }
+  // Nobody here to tell (the usual case — a recipient is on one machine, not
+  // both) or a socket that had just gone: nothing is remembered, so the
+  // publisher's retry gets a real second chance rather than being deduplicated
+  // against a delivery that did not happen.
+});
+
+/**
+ * How long to wait before the one retry below. Long enough for the Postgres
+ * transport's own reconnect (`RECONNECT_MIN_MS` is 500 ms and it backs off
+ * from there) to have got a connection back on the ordinary blip this covers,
+ * short enough that a reminder is still a reminder when it lands.
+ */
+const REMINDER_REPUBLISH_MS = 3_000;
+
+/**
+ * ONE RETRY, BECAUSE THIS FRAME NEVER COMES ROUND AGAIN.
+ *
+ * `publishToCluster` is fire-and-forget and the transport drops rather than
+ * buffers while it is reconnecting — the right trade for presence, the wrong
+ * one here: the reminder was CLAIMED in the same UPDATE that stamped
+ * `notified_before_at`, so nothing will ever try to send it again, and the
+ * person gets a push and an open tab that says nothing. If the bus was not
+ * connected at publish time, try once more after the transport has had a
+ * moment to come back.
+ *
+ * Deliberately not an outbox. A durable one would be the honest fix for a
+ * long outage and is a table, a sweep and a dedupe key of its own; this covers
+ * the case that actually happens (a reconnect measured in seconds) without
+ * pretending to cover the one that does not.
+ */
+/**
+ * ONE QUEUE AND ONE TIMER, however many reminders come due at once.
+ *
+ * A worker catching up after an outage can claim hundreds in a single tick.
+ * A timer each would be hundreds of timers holding a frame apiece, all firing
+ * in the same millisecond at a bus that is very likely still down; a cap on
+ * how many of those may exist fixes the burst by throwing away the retry for
+ * everything past it, which is the wrong half to give up — those reminders
+ * were claimed in SQL and will not come round again. Collecting them instead
+ * costs one timer and one array, and every reminder in the window gets its
+ * second attempt.
+ *
+ * The array is still bounded, because an unbounded retry buffer is a memory
+ * leak dressed as reliability (the same rule the transport itself follows).
+ * The oldest go first: they are the ones closest to being stale anyway.
+ */
+const MAX_QUEUED_REMINDER_RETRIES = 1_000;
+const queuedReminderRetries: ChannelSessionReminderEvent[] = [];
+let reminderRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushReminderRetries(): void {
+  reminderRetryTimer = null;
+  const batch = queuedReminderRetries.splice(0);
+  if (!isBusEnabled()) {
+    return;
+  }
+  for (const event of batch) {
+    publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, event);
+  }
+}
+
+function publishReminder(event: ChannelSessionReminderEvent): void {
+  publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, event);
+  if (isBusConnected()) {
+    return;
+  }
+  queuedReminderRetries.push(event);
+  if (queuedReminderRetries.length > MAX_QUEUED_REMINDER_RETRIES) {
+    queuedReminderRetries.shift();
+  }
+  if (reminderRetryTimer) {
+    return;
+  }
+  reminderRetryTimer = setTimeout(flushReminderRetries, REMINDER_REPUBLISH_MS);
+  // A pending retry must never be why a worker refuses to exit.
+  reminderRetryTimer.unref?.();
+}
+
+function notifyChannelSessionSubscribers(
+  event: ChannelSessionReminderEvent,
+): void {
+  const recipients = [...new Set(event.userIds)];
+  deliverChannelSessionReminder({ ...event, userIds: recipients });
+  if (isBusEnabled()) {
+    publishReminder({ ...event, userIds: recipients });
+  }
 
   pushChannelSessionReminder({
-    userIds: [...recipients],
+    userIds: recipients,
     title: event.title,
     channelId: event.channelId,
     kind: event.kind,

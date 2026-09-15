@@ -2,8 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LiveHlsStream } from "@pqp/shared";
 import {
+  cameraLiveOnStream,
   streamAudioState,
   StreamMixControl,
+  StreamMixSummary,
   StreamQualityControl,
   WatchPartyTransmission,
 } from "./watch-party-transmission";
@@ -54,6 +56,33 @@ function markup(over: Partial<LiveHlsStream> | null) {
     />,
   );
 }
+
+describe("the presenter's camera, told to the host", () => {
+  it("is on exactly when the server states a camera playlist", () => {
+    expect(
+      cameraLiveOnStream(
+        stream({ cameraHlsUrl: "/api/voice/hls-playlist/c/1/cam360p30" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("reads exactly like a server that predates the feature otherwise", () => {
+    // No webcam on, a box that refused the camera for budget,
+    // `LIVE_HLS_CAMERA=false`, or an API old enough to have never sent the
+    // field: all four must be indistinguishable to the host.
+    expect(cameraLiveOnStream(stream())).toBe(false);
+    expect(cameraLiveOnStream(null)).toBe(false);
+  });
+
+  it("says nothing while the panel is collapsed, like every other detail row", () => {
+    // Collapsed by default; the camera note sits beside the mixer and the
+    // quality picker inside the same `{open && ...}` block, never in the
+    // one-line summary the silent-audio pill deliberately escapes.
+    expect(
+      markup({ cameraHlsUrl: "/api/voice/hls-playlist/c/1/cam360p30" }),
+    ).not.toContain("watch-party-tx-camera");
+  });
+});
 
 describe("what the host is told the stream is carrying", () => {
   it("says the audience hears nothing when the transcode has no audio track", () => {
@@ -125,5 +154,20 @@ describe("StreamMixControl", () => {
     const html = renderToStaticMarkup(<StreamMixControl />);
     expect(html).toContain("watch-party-tx-mic-level");
     expect(html).toMatch(/watch-party-tx-mic-level[\s\S]*?width:\s*0%/);
+  });
+});
+
+/**
+ * The mixer's stand-in inside the transmission details (2026-09-13): the
+ * two levels as set, and the door to the dialog that owns the sliders.
+ */
+describe("StreamMixSummary", () => {
+  it("reads both levels and offers Ajustar, with no slider of its own", () => {
+    const html = renderToStaticMarkup(<StreamMixSummary onOpen={() => {}} />);
+    expect(html).toContain("watch-party-tx-mixer-summary");
+    expect(html).toContain("watch-party-tx-mixer-open");
+    expect(html).toContain("+6.0 dB");
+    expect(html).toContain("-3.1 dB");
+    expect(html).not.toContain("watch-party-tx-mic-gain-slider");
   });
 });

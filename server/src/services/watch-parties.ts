@@ -9,16 +9,25 @@ import {
   watchPartyOptionsSchema,
   watchPartyRole,
   withLegacyWatchPartyVoice,
+  withDerivedWatchPartyGuests,
+  deriveWatchPartyGuestsMode,
+  guestRequestQueue,
   WATCH_PARTY_DEFAULT_OPTIONS,
+  WATCH_PARTY_EMPTY_GUESTS,
+  WATCH_PARTY_MAX_GUESTS,
+  GUEST_REQUEST_LIST_LIMIT,
+  GUEST_REQUEST_COOLDOWN_MS,
   type WatchParty,
   type WatchPartyAction,
   type WatchPartyOptions,
   type WatchPartyRole,
   type WatchPartyPhase,
   type WatchPartyStage,
+  type WatchPartyGuests,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { logEvent } from "../lib/log.js";
+import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { getEveryoneRoleId } from "./permissions.js";
 import {
   deleteChannelOverwrite,
@@ -27,6 +36,7 @@ import {
 import {
   cachedWatchPartySeatSnapshot,
   watchPartySeatForUser,
+  type WatchPartySeatInfo,
   type WatchPartySeatSnapshot,
 } from "./watch-party-seat-cache.js";
 
@@ -126,6 +136,11 @@ const PARTY_FROM = `
 /** States a party occupies while it still matters to anybody. */
 const ACTIVE_STATES = "('draft', 'scheduled', 'live')";
 
+/** Public wrapper so a route can read a row's own parsed options directly. */
+export function watchPartyOptionsOf(row: WatchPartyRow): WatchPartyOptions {
+  return parseOptions(row.options);
+}
+
 function parseOptions(raw: unknown): WatchPartyOptions {
   // `withLegacyWatchPartyVoice` runs BEFORE the schema, and the order is the
   // whole point: a row stored before `voiceEnabled` existed has no such key,
@@ -133,7 +148,7 @@ function parseOptions(raw: unknown): WatchPartyOptions {
   // from a party set up when every watch party was a voice room. Presence of
   // the key is the test, so an explicit `false` written since is untouched.
   const parsed = watchPartyOptionsSchema.safeParse(
-    withLegacyWatchPartyVoice(raw ?? {}),
+    withDerivedWatchPartyGuests(withLegacyWatchPartyVoice(raw ?? {})),
   );
   // A row written by an older build, or by hand, must not take a channel's
   // sidebar down. Unknown or broken options read as the defaults.
@@ -151,6 +166,37 @@ function parseOptions(raw: unknown): WatchPartyOptions {
  */
 function floorIsClosed(row: WatchPartyRow): boolean {
   return watchPartyFloorIsClosed(parseOptions(row.options));
+}
+
+/**
+ * The WRITE-time half of the compatibility release (§2.2's table, run in the
+ * other direction). A caller that has not shipped `guests` yet — a native app,
+ * or an old tab whose form still posts `voiceEnabled`/`stageMode`/`raiseHand`
+ * — sends a patch with no `guests` key at all. Spreading it over the current
+ * options would leave `guests` exactly as it was, silently ignoring a host who
+ * just flipped "Quem pode falar" from their old Voz select expecting it to
+ * still mean something. So: when the patch touches any of the legacy triple
+ * and says nothing about `guests`, `guests` is RE-DERIVED from the merged
+ * result, the same table `withDerivedWatchPartyGuests` reads at load time.
+ * A patch that already carries `guests` (every build that has shipped this
+ * change) is untouched — the explicit field always wins.
+ */
+function withGuestsDerivedFromLegacyInput(
+  base: WatchPartyOptions,
+  patch: Partial<WatchPartyOptions>,
+): Partial<WatchPartyOptions> {
+  const merged: Partial<WatchPartyOptions> = { ...base, ...patch };
+  if (
+    !("guests" in patch) &&
+    ("voiceEnabled" in patch || "stageMode" in patch || "raiseHand" in patch)
+  ) {
+    merged.guests = deriveWatchPartyGuestsMode({
+      voiceEnabled: merged.voiceEnabled ?? base.voiceEnabled,
+      stageMode: merged.stageMode ?? base.stageMode,
+      raiseHand: merged.raiseHand ?? base.raiseHand,
+    });
+  }
+  return merged;
 }
 
 export interface WatchPartyCohostRow {
@@ -205,6 +251,7 @@ export function mapWatchParty(
   viewerRole: WatchPartyRole,
   reminding: boolean,
   stage: WatchPartyStage = { invited: [], hands: [], handRaised: false },
+  guests: WatchPartyGuests = WATCH_PARTY_EMPTY_GUESTS,
 ): WatchParty {
   return {
     id: row.id,
@@ -231,6 +278,7 @@ export function mapWatchParty(
     viewerRole,
     reminding,
     stage,
+    guests,
   };
 }
 
@@ -246,7 +294,39 @@ export async function getWatchPartyRow(
   return result.rows[0] ?? null;
 }
 
+const WATCH_PARTY_ACTIVE_TTL_MS = 2_000;
+
+function activeWatchPartyCacheKey(channelId: string): string {
+  return `watch-party:active:${channelId}`;
+}
+
+/** Drop the cached active-party row for a channel. `broadcastWatchParty`
+ *  (`ws/watch-party-events.ts`) is "THE ONE PLACE THAT SEES EVERY STATE
+ *  CHANGE" per its own comment, so calling this from there covers every
+ *  mutation — draft, go-live, stage changes, voice toggle, end — with one
+ *  hook rather than one at each of the seven write call sites. */
+export function invalidateActiveWatchParty(channelId: string): void {
+  invalidateReadCache(activeWatchPartyCacheKey(channelId));
+}
+
+/**
+ * The channel's active party row, before any per-viewer shaping
+ * (`watchPartyActor`, `presentWatchParty`) — identical for every caller with
+ * access to the channel, and exactly what `GET
+ * /api/channels/:channelId/watch-party` and a reconnecting sidebar ask for
+ * repeatedly during a reload storm. Cached; see `invalidateActiveWatchParty`.
+ */
 export async function getActiveWatchPartyRow(
+  channelId: string,
+): Promise<WatchPartyRow | null> {
+  return coalesce(
+    activeWatchPartyCacheKey(channelId),
+    WATCH_PARTY_ACTIVE_TTL_MS,
+    () => fetchActiveWatchPartyRow(channelId),
+  );
+}
+
+async function fetchActiveWatchPartyRow(
   channelId: string,
 ): Promise<WatchPartyRow | null> {
   const result = await getPool().query<WatchPartyRow>(
@@ -255,6 +335,38 @@ export async function getActiveWatchPartyRow(
     [channelId],
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * `status` for every channel in `channelIds` that currently has an active
+ * party, in one query — the idle-alone sweep's own door, deliberately
+ * bypassing `getActiveWatchPartyRow`'s per-channel cache. That cache
+ * coalesces repeat reads of ONE key; it does nothing for a tick that needs
+ * a DIFFERENT key per candidate room, which is exactly what made the sweep
+ * N+1 in the first place (one `getActiveWatchPartyRow` await per lone
+ * watch-party seat, every `IDLE_ALONE_SWEEP_MS`). A channel absent from the
+ * result has no active party — treat a missing key as "not live", not as
+ * unknown.
+ */
+export async function listActiveWatchPartyStatusesByChannel(
+  channelIds: readonly string[],
+): Promise<Map<string, WatchPartyPhase>> {
+  const statuses = new Map<string, WatchPartyPhase>();
+  if (channelIds.length === 0) {
+    return statuses;
+  }
+  const result = await getPool().query<{
+    channel_id: string;
+    status: WatchPartyPhase;
+  }>(
+    `SELECT channel_id, status FROM channel_sessions
+      WHERE channel_id = ANY($1) AND status IN ${ACTIVE_STATES}`,
+    [channelIds],
+  );
+  for (const row of result.rows) {
+    statuses.set(row.channel_id, row.status);
+  }
+  return statuses;
 }
 
 /**
@@ -274,12 +386,7 @@ export async function getActiveWatchPartyRow(
 export async function loadWatchPartySeat(
   channelId: string,
   userId: string,
-): Promise<{
-  voiceEnabled: boolean;
-  isHost: boolean;
-  isCohost: boolean;
-  isInvited: boolean;
-} | null> {
+): Promise<WatchPartySeatInfo | null> {
   const snapshot = await cachedWatchPartySeatSnapshot(
     channelId,
     fetchWatchPartySeatSnapshot,
@@ -299,7 +406,7 @@ async function fetchWatchPartySeatSnapshot(
     options: unknown;
     host_user_id: string;
     cohost_ids: unknown;
-    invited_ids: unknown;
+    accepted_guest_ids: unknown;
   }>(
     `SELECT s.options, s.host_user_id,
             COALESCE((SELECT array_agg(c.user_id)
@@ -307,7 +414,8 @@ async function fetchWatchPartySeatSnapshot(
                        WHERE c.session_id = s.id), ARRAY[]::uuid[]) AS cohost_ids,
             COALESCE((SELECT array_agg(i.user_id)
                         FROM channel_session_stage_invites i
-                       WHERE i.session_id = s.id), ARRAY[]::uuid[]) AS invited_ids
+                       WHERE i.session_id = s.id AND i.accepted_at IS NOT NULL),
+                     ARRAY[]::uuid[]) AS accepted_guest_ids
        FROM channel_sessions s
       WHERE s.channel_id = $1 AND s.status IN ${ACTIVE_STATES}`,
     [channelId],
@@ -317,10 +425,10 @@ async function fetchWatchPartySeatSnapshot(
     return null;
   }
   return {
-    voiceEnabled: parseOptions(row.options).voiceEnabled,
+    guests: parseOptions(row.options).guests,
     hostUserId: row.host_user_id,
     cohostIds: asIdList(row.cohost_ids),
-    invitedIds: asIdList(row.invited_ids),
+    acceptedGuestIds: asIdList(row.accepted_guest_ids),
   };
 }
 
@@ -373,42 +481,167 @@ export async function presentWatchParty(
   ) {
     return null;
   }
+  const guests = await presentGuests(row.id, role, viewer.userId);
   return mapWatchParty(
     row,
     list,
     role,
     await isReminding(row.id, viewer.userId),
-    await presentStage(row.id, role, viewer.userId),
+    legacyWatchPartyStageOf(guests),
+    guests,
   );
 }
 
 /**
- * The stage, as this person may see it.
- *
- * WHO IS UP is public: they are about to be audible, and a viewer wondering
- * why a stranger is talking deserves the answer. WHO IS ASKING is not: a
- * queue an audience can read is a queue where being passed over happens in
- * public, and that makes the room worse rather than better. Everyone is told
- * about their OWN hand, because a raise button that cannot show its own state
- * is a button people press twice.
+ * DEPRECATED, but genuinely populated for one release: the schema comment on
+ * `stage` promises "an accepted guest still shows up here too", and this is
+ * that promise kept rather than stated. The old model had no accept step (an
+ * invite WAS a seat), so the compat reading of "invited" is the new model's
+ * `onAir` (accepted_at IS NOT NULL) -- exactly what `watch-party-panel.tsx`'s
+ * `isInvited` needs to draw "Entrar no palco" for someone the host actually
+ * brought up. `hands`/`handRaised` are the same borrow of the old raise-hand
+ * vocabulary for the new request queue. Kept only so a stale tab or a native
+ * app that has not shipped `guests` yet parses a party it understands;
+ * delete alongside `watchPartyStageSchema` once #538 lands.
  */
-async function presentStage(
-  sessionId: string,
-  role: WatchPartyRole,
-  userId: string,
-): Promise<WatchPartyStage> {
-  const { invited, hands } = await loadWatchPartyStage(sessionId);
-  const runsTheParty = role === "host" || role === "cohost";
-  const person = (r: { user_id: string; display_name: string; avatar_url: string | null }) => ({
+export function legacyWatchPartyStageOf(guests: WatchPartyGuests): WatchPartyStage {
+  return {
+    invited: guests.onAir,
+    hands: guests.requests,
+    handRaised: guests.requested,
+  };
+}
+
+/**
+ * Convidados, as this person may see them -- the pure, no-query half of
+ * `presentGuests`, split out so a fan-out to N recipients (`broadcastWatchParty`)
+ * can run the two queries in `loadWatchPartyGuestRows` ONCE per mutation and
+ * reshape the same rows per viewer, rather than once per socket. Every reader
+ * of party.guests (the HTTP response to the actor, the WS broadcast to
+ * everyone else, `listActiveWatchPartiesForServer`'s sidebar block) must go
+ * through this one function, or a viewer's copy can silently disagree with
+ * the actor's -- which is exactly the shape of bug this replaced (the guest
+ * broadcast used to call `mapWatchParty` with no guests argument at all,
+ * so every socket but the actor's own HTTP response saw an empty queue).
+ *
+ * `onAir` is public: they are about to be audible, and a viewer wondering why
+ * a stranger is talking deserves the answer. `invited` and `requests` are
+ * host/co-host only — a queue an audience can read is a queue where being
+ * passed over happens in public — EXCEPT that an invited person always finds
+ * themselves in their own copy of `invited`, which is what draws the "you got
+ * called up" dialog on a plain viewer's screen without a second frame shape
+ * (`docs/plans/WATCH_PARTY_GUESTS.md` §5.8, closing paragraph). Everyone is
+ * told their own `requested`/`position`, same reasoning as the old hand.
+ */
+type GuestPerson = WatchPartyGuests["onAir"][number];
+
+/**
+ * The ONE-TIME work in `presentGuests`, split out from the per-recipient
+ * shaping below it so a fan-out to N recipients (`broadcastWatchParty`) pays
+ * for the sort, the position lookup and the person-mapping ONCE per
+ * broadcast rather than once per socket. `onAir` in particular is the exact
+ * same array for every recipient (it is public), so `shapeWatchPartyGuests`
+ * hands back this SAME reference rather than remapping it N times.
+ *
+ * `positionByUserId` replaces calling `raisedHandPosition` (a fresh sort
+ * plus a linear scan) per recipient: the sort happens once here, and every
+ * recipient's `requested`/`position` becomes a map lookup.
+ */
+export interface PreparedWatchPartyGuests {
+  // Not `readonly`: these arrays are handed straight through as
+  // `WatchPartyGuests`'s own (mutable-typed, never actually mutated) fields.
+  onAir: GuestPerson[];
+  invitedAll: GuestPerson[];
+  invitedOwn: ReadonlyMap<string, GuestPerson>;
+  requestsPage: GuestPerson[];
+  requestCount: number;
+  positionByUserId: ReadonlyMap<string, number>;
+}
+
+function guestPerson(r: {
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+}): GuestPerson {
+  return {
     userId: r.user_id,
     displayName: r.display_name,
     avatarUrl: r.avatar_url,
-  });
-  return {
-    invited: invited.map(person),
-    hands: runsTheParty ? hands.map(person) : [],
-    handRaised: hands.some((h) => h.user_id === userId),
   };
+}
+
+export function prepareWatchPartyGuests(rows: {
+  onAir: readonly WatchPartyGuestRow[];
+  invited: readonly WatchPartyGuestRow[];
+  requests: readonly WatchPartyGuestRow[];
+}): PreparedWatchPartyGuests {
+  const invitedAll = rows.invited.map(guestPerson);
+  const orderedRequests = guestRequestQueue(
+    rows.requests.map((r) => ({
+      userId: r.user_id,
+      handRaisedAt: r.raised_at.getTime(),
+      row: r,
+    })),
+  );
+  const positionByUserId = new Map(
+    orderedRequests.map((r, index) => [r.userId, index + 1]),
+  );
+  return {
+    onAir: rows.onAir.map(guestPerson),
+    invitedAll,
+    invitedOwn: new Map(invitedAll.map((p) => [p.userId, p])),
+    requestsPage: orderedRequests
+      .slice(0, GUEST_REQUEST_LIST_LIMIT)
+      .map((r) => guestPerson(r.row)),
+    requestCount: rows.requests.length,
+    positionByUserId,
+  };
+}
+
+/**
+ * Convidados, as this person may see them -- reshapes ALREADY-PREPARED rows
+ * (`prepareWatchPartyGuests`, one query pair and one sort per broadcast) for
+ * one recipient, no query and no sort of its own. Every reader of
+ * party.guests (the HTTP response to the actor, the WS broadcast to everyone
+ * else, `listActiveWatchPartiesForServer`'s sidebar block) must go through
+ * this one function, or a viewer's copy can silently disagree with the
+ * actor's -- which is exactly the shape of bug this replaced (the guest
+ * broadcast used to call `mapWatchParty` with no guests argument at all, so
+ * every socket but the actor's own HTTP response saw an empty queue).
+ *
+ * `onAir` is public: they are about to be audible, and a viewer wondering why
+ * a stranger is talking deserves the answer. `invited` and `requests` are
+ * host/co-host only — a queue an audience can read is a queue where being
+ * passed over happens in public — EXCEPT that an invited person always finds
+ * themselves in their own copy of `invited`, which is what draws the "you got
+ * called up" dialog on a plain viewer's screen without a second frame shape
+ * (`docs/plans/WATCH_PARTY_GUESTS.md` §5.8, closing paragraph). Everyone is
+ * told their own `requested`/`position`, same reasoning as the old hand.
+ */
+export function shapeWatchPartyGuests(
+  prepared: PreparedWatchPartyGuests,
+  role: WatchPartyRole,
+  userId: string,
+): WatchPartyGuests {
+  const runsTheParty = role === "host" || role === "cohost";
+  const own = prepared.invitedOwn.get(userId);
+  return {
+    onAir: prepared.onAir,
+    invited: runsTheParty ? prepared.invitedAll : own ? [own] : [],
+    requests: runsTheParty ? prepared.requestsPage : [],
+    requestCount: prepared.requestCount,
+    requested: prepared.positionByUserId.has(userId),
+    position: prepared.positionByUserId.get(userId) ?? null,
+  };
+}
+
+async function presentGuests(
+  sessionId: string,
+  role: WatchPartyRole,
+  userId: string,
+): Promise<WatchPartyGuests> {
+  const rows = await loadWatchPartyGuestRows(sessionId);
+  return shapeWatchPartyGuests(prepareWatchPartyGuests(rows), role, userId);
 }
 
 /**
@@ -516,10 +749,9 @@ export async function createWatchParty(input: {
   options: Partial<WatchPartyOptions>;
   hostUserId: string;
 }): Promise<WatchPartyRow> {
-  const options = watchPartyOptionsSchema.parse({
-    ...WATCH_PARTY_DEFAULT_OPTIONS,
-    ...input.options,
-  });
+  const options = watchPartyOptionsSchema.parse(
+    withGuestsDerivedFromLegacyInput(WATCH_PARTY_DEFAULT_OPTIONS, input.options),
+  );
   const status: WatchPartyPhase = input.startsAt ? "scheduled" : "draft";
   try {
     const inserted = await getPool().query<{ id: string }>(
@@ -600,10 +832,12 @@ export async function updateWatchParty(
     }
   }
   if (patch.options !== undefined) {
-    const merged = watchPartyOptionsSchema.parse({
-      ...parseOptions(existing.options),
-      ...patch.options,
-    });
+    const merged = watchPartyOptionsSchema.parse(
+      withGuestsDerivedFromLegacyInput(
+        parseOptions(existing.options),
+        patch.options,
+      ),
+    );
     sets.push(`options = $${i++}::jsonb`);
     values.push(JSON.stringify(merged));
   }
@@ -989,18 +1223,25 @@ export async function reconcileLiveWatchPartyOptions(
   await applyGoLiveOptions(row);
 }
 
-/** Everyone whose microphone this party is holding open. */
+/**
+ * Everyone whose microphone this party is holding open.
+ *
+ * ACCEPTED GUESTS ONLY (`accepted_at IS NOT NULL`), not everyone invited: an
+ * unanswered invitation has not confirmed, is not in the room, and granting
+ * it SPEAK would be a permission with nobody on the other end of it.
+ */
 async function stageMemberIds(row: WatchPartyRow): Promise<string[]> {
   const cohosts = await listCohostIds(row.id);
-  const invited = await getPool().query<{ user_id: string }>(
-    `SELECT user_id FROM channel_session_stage_invites WHERE session_id = $1`,
+  const onAir = await getPool().query<{ user_id: string }>(
+    `SELECT user_id FROM channel_session_stage_invites
+      WHERE session_id = $1 AND accepted_at IS NOT NULL`,
     [row.id],
   );
   return [
     ...new Set([
       row.host_user_id,
       ...cohosts,
-      ...invited.rows.map((r) => r.user_id),
+      ...onAir.rows.map((r) => r.user_id),
     ]),
   ];
 }
@@ -1168,39 +1409,130 @@ async function openTheFloor(
   }
 }
 
-// ------------------------------------------------------------- the stage
+// ------------------------------------------------------------- convidados
+//
+// docs/plans/WATCH_PARTY_GUESTS.md §5.8. `channel_session_stage_invites` IS
+// the guests table (comment renamed, shape unchanged plus `accepted_at`);
+// `channel_session_raised_hands` IS the request queue (plus `declined_at`).
+// A row's life: `request` inserts a raised_hands row → `accept` (or `invite`,
+// with no prior request) moves/creates a stage_invites row with
+// `accepted_at NULL` ("invited": called up, not yet confirmed) → `join`, run
+// by the invited person on themselves, sets `accepted_at`, INSIDE the
+// transaction that checks `WATCH_PARTY_MAX_GUESTS` — this is the one
+// operation two people can race, and the one place the cap is enforced,
+// because an unanswered invitation was never counted against it (§5.6).
+
+export class WatchPartyGuestsError extends Error {
+  constructor(
+    message: string,
+    readonly code: "not_found" | "full",
+  ) {
+    super(message);
+  }
+}
 
 /**
- * Put one person on the stage.
- *
- * THE SPEAK GRANT ONLY WHEN THE FLOOR IS ACTUALLY CLOSED, for the reason on
- * `addWatchPartyCohost`: it gives back what closing the floor took, and on an
- * open floor (a party with voice off, or one whose stage mode is `everyone`)
- * the guest already holds the channel's own SPEAK and the row would be a
- * permission rule written for nothing. The invitation still stands on the
- * party's own table, which is what `mayTakeWatchPartySeat` reads.
+ * The host calls somebody up, or approves a pending request. Either way the
+ * row lands the same: `accepted_at NULL`, waiting for the person themselves
+ * to confirm with `join`. Idempotent — inviting somebody already invited (or
+ * already on air) changes nothing.
  */
-export async function inviteToWatchPartyStage(
+export async function inviteWatchPartyGuest(
   row: WatchPartyRow,
   userId: string,
   invitedBy: string,
 ): Promise<void> {
   await getPool().query(
     `INSERT INTO channel_session_stage_invites (session_id, user_id, invited_by)
-     VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+     VALUES ($1, $2, $3)
+     ON CONFLICT (session_id, user_id) DO NOTHING`,
     [row.id, userId, invitedBy],
   );
   await getPool().query(
     `DELETE FROM channel_session_raised_hands WHERE session_id = $1 AND user_id = $2`,
     [row.id, userId],
   );
-  if (row.server_id && row.status === "live" && floorIsClosed(row)) {
-    await grantMemberSpeak(row.channel_id, row.server_id, userId);
+}
+
+/**
+ * The host approves a pending request specifically — same effect as
+ * `inviteWatchPartyGuest`, but refuses when there is no live request to
+ * approve, which is the distinction the route's `accept` action promises.
+ */
+export async function acceptWatchPartyGuestRequest(
+  row: WatchPartyRow,
+  userId: string,
+  actorId: string,
+): Promise<void> {
+  const pending = await getPool().query(
+    `SELECT 1 FROM channel_session_raised_hands
+      WHERE session_id = $1 AND user_id = $2 AND declined_at IS NULL`,
+    [row.id, userId],
+  );
+  if ((pending.rowCount ?? 0) === 0) {
+    throw new WatchPartyGuestsError("No pending request from that person", "not_found");
+  }
+  await inviteWatchPartyGuest(row, userId, actorId);
+}
+
+/**
+ * The host passes on a request. The row SURVIVES (`declined_at` set, not
+ * deleted) so `GUEST_REQUEST_COOLDOWN_MS` has something to read; a fresh
+ * `request` after the cooldown clears it.
+ */
+export async function declineWatchPartyGuestRequest(
+  sessionId: string,
+  userId: string,
+): Promise<void> {
+  const result = await getPool().query(
+    `UPDATE channel_session_raised_hands
+        SET declined_at = NOW()
+      WHERE session_id = $1 AND user_id = $2 AND declined_at IS NULL`,
+    [sessionId, userId],
+  );
+  if ((result.rowCount ?? 0) === 0) {
+    throw new WatchPartyGuestsError("No pending request from that person", "not_found");
   }
 }
 
-/** Take one person back off the stage. */
-export async function removeFromWatchPartyStage(
+/**
+ * Whether `userId` currently has any row (invited, not yet confirmed, or
+ * accepted) in this party's guest table.
+ *
+ * THE CHECK THE `remove` ROUTE MUST RUN FIRST. Muting, revoking a publish
+ * grant and evicting from the room are SFU/channel actions with a blast
+ * radius well past this feature — a host calling `remove` on somebody who
+ * was never a guest at all (a typo'd id, an ordinary member, a co-host who
+ * was never invited) must not silence or eject them on the strength of a
+ * feature they were never part of. `removeWatchPartyGuest` itself is safe to
+ * call idempotently either way (its `DELETE` is a no-op with no matching
+ * row), but the SFU calls the route makes BEFORE it are not — see
+ * `handleWatchPartyGuestsAction`'s `remove` branch.
+ */
+export async function isWatchPartyGuest(
+  sessionId: string,
+  userId: string,
+): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM channel_session_stage_invites WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Take a guest down, invited or on air, host-initiated.
+ *
+ * The caller (the route) is what handles the live SFU side — muting the
+ * publish grant and ejecting them from the room, in that order, BEFORE this
+ * runs — because this only ever touches rows, never a live connection. The
+ * route also verifies `isWatchPartyGuest` before any of that, which is what
+ * makes reaching this function at all mean the target was a real guest a
+ * moment ago (a benign TOCTOU: a guest who leaves between the check and this
+ * call just makes the `DELETE` a no-op, which is already this function's
+ * documented idempotent behaviour).
+ */
+export async function removeWatchPartyGuest(
   row: WatchPartyRow,
   userId: string,
 ): Promise<void> {
@@ -1208,8 +1540,9 @@ export async function removeFromWatchPartyStage(
     `DELETE FROM channel_session_stage_invites WHERE session_id = $1 AND user_id = $2`,
     [row.id, userId],
   );
-  // The host and the co-hosts are on the stage by role, not by invitation,
-  // and taking one of them off would be a demotion wearing the wrong button.
+  // The host and the co-hosts are on air by role, not by invitation, and
+  // taking one of them "off air" through this route would be a demotion
+  // wearing the wrong button.
   const byRole = await stageMemberIds(row);
   if (byRole.includes(userId)) {
     return;
@@ -1219,53 +1552,192 @@ export async function removeFromWatchPartyStage(
   }
 }
 
-export async function setWatchPartyRaisedHand(
+/** A viewer asks to speak. Refused (by the caller) unless `guests === "request"`. */
+export async function requestWatchPartyGuestSlot(
   sessionId: string,
   userId: string,
-  raised: boolean,
 ): Promise<void> {
-  if (raised) {
-    await getPool().query(
-      `INSERT INTO channel_session_raised_hands (session_id, user_id)
-       VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [sessionId, userId],
+  await getPool().query(
+    `INSERT INTO channel_session_raised_hands (session_id, user_id, raised_at, declined_at)
+     VALUES ($1, $2, NOW(), NULL)
+     ON CONFLICT (session_id, user_id)
+     DO UPDATE SET raised_at = NOW(), declined_at = NULL`,
+    [sessionId, userId],
+  );
+}
+
+/** A viewer gives up asking. No cooldown — same reasoning as lowering a hand. */
+export async function withdrawWatchPartyGuestRequest(
+  sessionId: string,
+  userId: string,
+): Promise<void> {
+  await getPool().query(
+    `DELETE FROM channel_session_raised_hands WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId],
+  );
+}
+
+/**
+ * How long ago a decline happened, for the cooldown, or null when the
+ * viewer has never been declined (or the cooldown has already cleared: a
+ * fresh `request` clears `declined_at`, so a row that still carries one is
+ * always live).
+ */
+export async function watchPartyGuestDeclinedAt(
+  sessionId: string,
+  userId: string,
+): Promise<Date | null> {
+  const result = await getPool().query<{ declined_at: Date | null }>(
+    `SELECT declined_at FROM channel_session_raised_hands
+      WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId],
+  );
+  return result.rows[0]?.declined_at ?? null;
+}
+
+export function guestRequestCooldownActive(
+  declinedAt: Date | null,
+  now: number = Date.now(),
+): boolean {
+  return declinedAt !== null && now - declinedAt.getTime() < GUEST_REQUEST_COOLDOWN_MS;
+}
+
+/**
+ * The invited person confirms and goes on air — THE ONE OPERATION THAT CAN
+ * RACE, so it is the one place `WATCH_PARTY_MAX_GUESTS` is enforced,
+ * transactionally: a row-level lock on the party itself (not on the
+ * individual invite rows, which is what actually serialises two people
+ * confirming the last slot at once) guards the count-then-write.
+ *
+ * Grants SPEAK the same way `inviteToWatchPartyStage` used to, once the
+ * write has actually landed: only while the floor is closed (`guests !==
+ * "off"`) and the party is live, so a party that flipped `guests` back to
+ * `off` between the invitation and the click writes nothing.
+ */
+export async function joinWatchPartyGuestSlot(
+  row: WatchPartyRow,
+  userId: string,
+): Promise<void> {
+  const client = await getPool().connect();
+  // Read UNDER THE LOCK below, not the caller's `row` (fetched before this
+  // transaction even opened, by the route's own `requireWatchParty`). The
+  // SPEAK grant after COMMIT has to answer "is the floor closed on a LIVE
+  // party right now", and `row.status`/`row.options` can have gone stale in
+  // the gap: the party ending, or a host flipping `guests` back to `off`,
+  // between the route's read and this write, would otherwise grant SPEAK on
+  // a party that no longer wants it granted at all. `FOR UPDATE` holds any
+  // concurrent writer to this row behind our own transaction, so whatever we
+  // read here is the value that was true at the moment `accepted_at` landed.
+  let freshStatus: WatchPartyPhase | null = null;
+  let freshOptions: unknown = null;
+  try {
+    await client.query("BEGIN");
+    const held = await client.query<{ status: WatchPartyPhase; options: unknown }>(
+      `SELECT status, options FROM channel_sessions WHERE id = $1 FOR UPDATE`,
+      [row.id],
     );
-  } else {
-    await getPool().query(
-      `DELETE FROM channel_session_raised_hands WHERE session_id = $1 AND user_id = $2`,
-      [sessionId, userId],
+    if (held.rowCount === 0) {
+      throw new WatchPartyGuestsError("Watch party not found", "not_found");
+    }
+    freshStatus = held.rows[0].status;
+    freshOptions = held.rows[0].options;
+    const invited = await client.query(
+      `SELECT accepted_at FROM channel_session_stage_invites
+        WHERE session_id = $1 AND user_id = $2`,
+      [row.id, userId],
     );
+    if (invited.rowCount === 0) {
+      throw new WatchPartyGuestsError("No invitation to accept", "not_found");
+    }
+    if (invited.rows[0].accepted_at !== null) {
+      // Already on air — the dialog fired twice, or a reload replayed the
+      // click. Nothing to do, and definitely not a second cap check.
+      await client.query("COMMIT");
+      return;
+    }
+    const count = await client.query<{ n: string }>(
+      `SELECT COUNT(*)::int AS n FROM channel_session_stage_invites
+        WHERE session_id = $1 AND accepted_at IS NOT NULL`,
+      [row.id],
+    );
+    if (Number(count.rows[0]?.n ?? 0) >= WATCH_PARTY_MAX_GUESTS) {
+      throw new WatchPartyGuestsError(
+        `There are already ${WATCH_PARTY_MAX_GUESTS} guests on air`,
+        "full",
+      );
+    }
+    await client.query(
+      `UPDATE channel_session_stage_invites SET accepted_at = NOW()
+        WHERE session_id = $1 AND user_id = $2`,
+      [row.id, userId],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  if (
+    row.server_id &&
+    freshStatus === "live" &&
+    watchPartyFloorIsClosed(parseOptions(freshOptions))
+  ) {
+    await grantMemberSpeak(row.channel_id, row.server_id, userId);
   }
 }
 
-export interface WatchPartyStageRow {
+/** The guest goes off air by their own choice. Same row, self-initiated. */
+export async function leaveWatchPartyGuestSlot(
+  row: WatchPartyRow,
+  userId: string,
+): Promise<void> {
+  await getPool().query(
+    `DELETE FROM channel_session_stage_invites WHERE session_id = $1 AND user_id = $2`,
+    [row.id, userId],
+  );
+  if (row.server_id) {
+    await revokeMemberSpeak(row.channel_id, row.server_id, userId);
+  }
+}
+
+export interface WatchPartyGuestRow {
   user_id: string;
   display_name: string;
   avatar_url: string | null;
+  raised_at: Date;
 }
 
-/** The queue, oldest hand first, and who is currently up. */
-export async function loadWatchPartyStage(sessionId: string): Promise<{
-  invited: WatchPartyStageRow[];
-  hands: WatchPartyStageRow[];
+/** Everyone on air, everyone invited-not-yet-confirmed, and the live queue. */
+export async function loadWatchPartyGuestRows(sessionId: string): Promise<{
+  onAir: WatchPartyGuestRow[];
+  invited: WatchPartyGuestRow[];
+  requests: WatchPartyGuestRow[];
 }> {
-  const invited = await getPool().query<WatchPartyStageRow>(
-    `SELECT i.user_id, u.display_name, u.avatar_url
+  const stage = await getPool().query<
+    WatchPartyGuestRow & { accepted_at: Date | null }
+  >(
+    `SELECT i.user_id, u.display_name, u.avatar_url, i.invited_at AS raised_at,
+            i.accepted_at
        FROM channel_session_stage_invites i
        JOIN users u ON u.id = i.user_id
       WHERE i.session_id = $1
       ORDER BY i.invited_at ASC`,
     [sessionId],
   );
-  const hands = await getPool().query<WatchPartyStageRow>(
-    `SELECT h.user_id, u.display_name, u.avatar_url
+  const requests = await getPool().query<WatchPartyGuestRow>(
+    `SELECT h.user_id, u.display_name, u.avatar_url, h.raised_at
        FROM channel_session_raised_hands h
        JOIN users u ON u.id = h.user_id
-      WHERE h.session_id = $1
+      WHERE h.session_id = $1 AND h.declined_at IS NULL
       ORDER BY h.raised_at ASC`,
     [sessionId],
   );
-  return { invited: invited.rows, hands: hands.rows };
+  return {
+    onAir: stage.rows.filter((r) => r.accepted_at !== null),
+    invited: stage.rows.filter((r) => r.accepted_at === null),
+    requests: requests.rows,
+  };
 }
 
 /**

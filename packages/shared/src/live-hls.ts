@@ -57,6 +57,72 @@ export const liveHlsStreamSchema = z.object({
    * film that is playing fine is worse than no warning.
    */
   hasAudio: z.boolean().optional(),
+  /**
+   * A SECOND playlist, carrying the presenter's camera and nothing else.
+   *
+   * The HLS audience is seatless — they never join the LiveKit room — so a
+   * camera published into the room reaches the seated participants over WebRTC
+   * and reaches nobody watching the playlist. And a Track Composite egress
+   * carries one video and one audio track, singular fields in the protocol, so
+   * the running transcode cannot be asked to also carry a face. The answer is
+   * a second, video-only 360p30 egress beside the ladder, writing under the
+   * SAME session prefix (`<startedAt>-cam360p30`).
+   *
+   * SAME SESSION, DELIBERATELY. The camera starts and stops inside the running
+   * session and never mints a new `startedAt`: a new one is a new playlist
+   * path, a new token and a new master, which re-attaches and rebuffers every
+   * viewer. Turning a webcam on must not do that to five hundred people.
+   *
+   * Stamped with the same `?t=` viewer token as `hlsUrl`. Absent means there
+   * is no camera in this broadcast right now: the presenter has none on, the
+   * media box refused it for budget, or the server predates this. **Optional
+   * on purpose** — iOS and Android parse the frame and ignore the field.
+   *
+   * There is no audio here and there never will be, UNLESS `cameraHasVoiceAudio`
+   * says otherwise (`LIVE_HLS_VOICE_TRACK`, see below) — with that flag off
+   * this field is exactly the video-only rendition it always was.
+   */
+  cameraHlsUrl: z.string().min(1).optional(),
+  /**
+   * Whether `cameraHlsUrl` actually carries a picture.
+   *
+   * Absent or true (the pre-2026-09-13 default) means the presenter's face is
+   * in it, same as always. False is the `LIVE_HLS_VOICE_TRACK` case where the
+   * presenter has no camera published but their microphone is still riding a
+   * Track Composite of its own (see `cameraHasVoiceAudio`): the rung exists,
+   * `cameraHlsUrl` is set, and there is nothing to draw — a player that
+   * ignores this field and tries to paint video from it gets a black frame
+   * from an audio-only stream, which is why the client checks it before
+   * mounting the PiP's `<video>`.
+   */
+  cameraHasVideo: z.boolean().optional(),
+  /**
+   * Whether `cameraHlsUrl` carries the presenter's MICROPHONE, separately
+   * from whatever `hlsUrl` (the film) carries.
+   *
+   * `LIVE_HLS_VOICE_TRACK`, dark by default. Off (absent/false): `cameraHlsUrl`
+   * is silent exactly as the doc above always said, and a host whose
+   * microphone reaches the audience at all does so mixed into `hlsUrl`
+   * (`lib/screen-mix.ts`, "junto"). On, and the presenter chose "separada":
+   * the screen mix stops folding the mic into the film, so `hlsUrl` carries
+   * film audio alone, and this rung carries the presenter's voice instead —
+   * beside their camera when they have one, alone (with `cameraHasVideo:
+   * false`) when they do not. A viewer who wants to hear the host levels or
+   * mutes THIS stream, independently of the film's own volume.
+   */
+  cameraHasVoiceAudio: z.boolean().optional(),
+  /**
+   * Which driver produced this session: the LiveKit Track Composite ladder
+   * (`conventional`, the only thing that has ever existed) or `pqp-remux`'s
+   * CMAF passthrough (`ll`, `docs/plans/LL_HLS.md`). Absent means
+   * `conventional` — every session before this field existed, and every one
+   * this deployment will ever produce while `LIVE_HLS_LL` is off.
+   *
+   * This is a player-selection hint, not a viewer-facing claim: the LL
+   * playlist front (`EXT-X-SERVER-CONTROL`, blocking reload) is `L2.x`, not
+   * built yet, so a client has nothing different to do with `ll` today.
+   */
+  mode: z.enum(["conventional", "ll"]).optional(),
 });
 
 export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;
@@ -110,6 +176,18 @@ export const channelLiveMessageSchema = z.object({
   stream: liveHlsStreamSchema.nullable(),
   /** Watch-mode viewers without a seat. Room participants are on the roster. */
   watching: z.number().int().nonnegative(),
+  /**
+   * With `stream: null`: the server is CERTAIN there is no live session in
+   * this channel (it checked its own maps and the session table, or it just
+   * ended the session itself). Absent on a null the server could not vouch
+   * for (the table was unreachable). A client holding a stream must not
+   * drop it on a null without this: on 2026-09-14 the API machine that was
+   * not running the egress said `null` for a party live on the other one,
+   * every viewer whose socket was there lost the stream they had, and the
+   * audience-seat backstop hung them up. Never set beside a stream.
+   * Optional on purpose: iOS and Android parse the frame and ignore it.
+   */
+  ended: z.boolean().optional(),
 });
 
 export type ChannelLiveMessage = z.infer<typeof channelLiveMessageSchema>;

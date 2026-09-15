@@ -131,23 +131,40 @@ export interface HealthVerdict {
 }
 
 /**
- * What `GET /health` answers. Draining wins over the database probe: a
- * process on its way out must read as unhealthy even while its pool is
- * fine, or the proxy keeps sending it people it is about to disconnect.
- * The probe is skipped while draining so the pool, which may already be
- * closing, is not touched.
+ * What `GET /health` answers — A3.1 of `docs/plans/ALWAYS_ON.md`.
+ *
+ * PROCESS LIVENESS ONLY, as of 2026-09-13. This used to run `SELECT 1` and
+ * report the database's health alongside the process's; on 2026-09-12 the
+ * database collapsed, the pool saturated, `/health` failed with it, and Fly
+ * stopped routing to the only machine — taking WebSockets, the HLS playlist
+ * proxy and every cached read down with it, none of which needed Postgres at
+ * that instant. The database's health now belongs entirely to `/ready`
+ * (`services/ready.ts`), which external monitors poll and which is
+ * deliberately NOT what `fly.toml` or the Docker healthcheck route on
+ * (`tools/api-host/compose.yaml`'s comment says the same). A DB-dependent
+ * HTTP route answers its own 503 instead — see `DatabaseUnavailableError`
+ * in `db.ts`.
+ *
+ * `isListening` names the one thing this function cannot verify on its own:
+ * that the HTTP server this handler is attached to is actually the one
+ * accepting connections. In practice a request cannot reach this handler at
+ * all unless that is already true, so the parameter mostly documents the
+ * claim and gives a test something to flip; pass `httpServer.listening`.
+ *
+ * `draining` wins over everything else: a process on its way out must read
+ * as unhealthy the moment `beginDrain()` runs, so fly-proxy (or the Vultr
+ * box's Caddy) stops sending it new connections and the reconnects land on
+ * whatever machine is staying up.
  */
-export async function healthVerdict(
-  probe: () => Promise<unknown>,
+export function healthVerdict(
+  isListening: boolean,
   version: string = process.env.APP_VERSION ?? "dev",
-): Promise<HealthVerdict> {
+): HealthVerdict {
   if (draining) {
     return { status: 503, body: { ok: false, error: "draining" } };
   }
-  try {
-    await probe();
-    return { status: 200, body: { ok: true, version } };
-  } catch {
-    return { status: 503, body: { ok: false, error: "database unavailable" } };
+  if (!isListening) {
+    return { status: 503, body: { ok: false, error: "not listening" } };
   }
+  return { status: 200, body: { ok: true, version } };
 }

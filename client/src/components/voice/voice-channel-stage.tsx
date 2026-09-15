@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
 import type { VideoQuality } from "@/lib/video-quality";
@@ -21,6 +22,7 @@ export function VoiceChannelStage({
   screenFrameRate,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -44,6 +46,8 @@ export function VoiceChannelStage({
   fill = false,
   onShapeChange,
   watchPartyChrome,
+  isWatchPartyChannel,
+  presenterStage,
 }: {
   channelId: string;
   channelName: string;
@@ -59,6 +63,7 @@ export function VoiceChannelStage({
   screenFrameRate?: ScreenFrameRate;
   onLeave: () => void;
   onToggleMute: () => void;
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -85,6 +90,10 @@ export function VoiceChannelStage({
   compactPeers?: boolean;
   /** See `CallStage.watchPartyChrome`. */
   watchPartyChrome?: boolean;
+  /** See `CallStage.isWatchPartyChannel`. */
+  isWatchPartyChannel?: boolean;
+  /** See `CallStage.presenterStage`. */
+  presenterStage?: (stream: MediaStream | null) => ReactNode;
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
   onShapeChange?: (shape: CallStageShape) => void;
@@ -107,6 +116,7 @@ export function VoiceChannelStage({
       screenFrameRate={screenFrameRate}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
+      onDismissMicFallbackNotice={onDismissMicFallbackNotice}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}
@@ -128,6 +138,8 @@ export function VoiceChannelStage({
       onLowerHand={onLowerHand}
       compactPeers={compactPeers}
       watchPartyChrome={watchPartyChrome}
+      isWatchPartyChannel={isWatchPartyChannel}
+      presenterStage={presenterStage}
       ringWhenAlone={false}
       fill={fill}
       onShapeChange={onShapeChange}

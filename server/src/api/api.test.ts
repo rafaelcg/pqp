@@ -2395,12 +2395,21 @@ describeDb("API authorization", () => {
       // The derived states are not settable, and that is enforced by the schema
       // rather than by the UI: `idle` is a measurement and `offline` is the
       // absence of a connection, so neither is anybody's to assert.
-      for (const status of ["idle", "offline", "away"]) {
+      for (const status of ["idle", "offline"]) {
         const res = await call(owner, "PATCH", "/api/me/preferences", { status });
         expect(res.status).toBe(400);
       }
       const unchanged = await call<PrefsBody>(owner, "GET", "/api/me");
       expect(unchanged.body.preferences).toEqual({ status: "invisible" });
+
+      // `away` IS settable — the fourth manual value: a declaration, sticky
+      // like `dnd`, that resolves to `idle` on the wire. See the note in
+      // `packages/shared/src/status.ts`.
+      const savedAway = await call<PrefsBody>(owner, "PATCH", "/api/me/preferences", {
+        status: "away",
+      });
+      expect(savedAway.status).toBe(200);
+      expect(savedAway.body.preferences).toEqual({ status: "away" });
     });
 
     it("rejects unauthenticated writes", async () => {

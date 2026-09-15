@@ -43,6 +43,7 @@ const stubs = vi.hoisted(() => ({
   actor: null as { id: string; clerk_id: string } | null,
   deleteClerkUser: vi.fn(async (_clerkId: string) => {}),
   forgetAuthUser: vi.fn(),
+  evictUserAcrossCluster: vi.fn(),
 }));
 
 vi.mock("../auth/clerk.js", () => ({
@@ -52,6 +53,13 @@ vi.mock("../auth/clerk.js", () => ({
   invalidateUserCache: () => {},
   clearAuthCaches: () => {},
   forgetAuthUser: stubs.forgetAuthUser,
+  // `deleteAccount` / `sweepPendingAccountDeletions` (services/account.js,
+  // not mocked here) call this instead of `forgetAuthUser` directly — see
+  // `evictUserAcrossCluster` in auth/clerk.ts. Stubbed the same way
+  // `deleteClerkUser` is: this suite is not exercising the cluster relay
+  // itself (that is `auth/clerk-cluster.test.ts`), only that account
+  // deletion still completes and reports the right status.
+  evictUserAcrossCluster: stubs.evictUserAcrossCluster,
   deleteClerkUser: stubs.deleteClerkUser,
   resolveAuthUser: async () => (stubs.actor ? { user: stubs.actor } : null),
   resolveAuthSession: async () =>
@@ -120,6 +128,7 @@ describeDb("LGPD art. 18 — own account", () => {
     stubs.deleteClerkUser.mockReset();
     stubs.deleteClerkUser.mockResolvedValue(undefined);
     stubs.forgetAuthUser.mockReset();
+    stubs.evictUserAcrossCluster.mockReset();
 
     // `reports` and `audit_log` are named explicitly: neither cascades from
     // `users` (both are SET NULL, which is the property under test), so

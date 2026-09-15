@@ -330,6 +330,28 @@ must be exactly `staging`; there is no local or production path in this file
 at all, unlike `index.ts`. `--speaking-publishers > 0` needs the same
 non-production `PQP_LOAD_SFU_HOST` guard as `index.ts`.
 
+**Pinning seats to specific machines** (`PQP_LOAD_MACHINE_IDS`, added for the
+M6 multi-instance rehearsal): a comma-separated list of Fly machine ids
+(`fly machines list -a pqp-api-staging`). When set, each seat's WS socket is
+opened with `fly-force-instance-id` set to `machineIds[slot % machineIds.length]`,
+so seats land on every listed machine deterministically instead of trusting
+the proxy's own balancing — needed to prove a moderator mute or an eviction
+resweep holds across instances with a *real* published track, not just a
+signaling-only identity. HTTP calls are never pinned (room state is
+cluster-wide via `CLUSTER_BUS`/`VOICE_REGISTRY`, so only the socket's home
+instance matters). Omit it and behavior is unchanged.
+
+Two things it cannot do, learned in M6 rehearsal 3 (`docs/plans/M6_REHEARSAL_2026-09-14b.md`):
+a seat whose slot is pinned to a machine that is later **destroyed** (`fly scale
+count` downward) keeps re-opening its socket with that dead id on every churn
+cycle, fly-proxy accepts the upgrade and never routes it, and the seat fails
+with "no voice welcome within 12s" — a harness artifact, since no real client
+sends the header; run the scale-down test with the pinning off, or expect and
+discount those failures. And this script neither reconnects a socket the
+server closed (a rolling deploy's 1001 drain) nor records that close as an
+event, so it cannot measure drops or reconnect time across a deploy; that
+needs a reconnecting probe beside it (the rehearsal doc describes one).
+
 ```sh
 cd tools/watch-party-load && pnpm install
 

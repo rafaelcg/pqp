@@ -1,0 +1,21 @@
+{
+  "name": "@pqp/hls-edge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Cloudflare Worker that collapses per-viewer HLS playlist polling into one origin fetch per rung per cache window",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit",
+    "pretest": "tsc -p tsconfig.test-build.json",
+    "test": "node --test test/*.test.mjs",
+    "dry-run": "wrangler deploy --dry-run --outdir .wrangler/dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260820.1",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.125.0"
+  }
+}

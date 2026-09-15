@@ -1,0 +1,89 @@
+{
+  // The HLS playlist edge: sits at hls.pqp.gg (proposed) and stands between
+  // 500 watch-party viewers and the API's playlist proxy. Validates the
+  // viewer token itself, then fetches a rendition's media playlist from the
+  // API once per 2 s per rung, shared across every viewer of that rung
+  // instead of once per viewer. See README.md and
+  // docs/plans/RELOAD_STORM.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pqp-hls-edge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  // Non-secret configuration. HLS_VIEWER_TOKEN_SECRET, HLS_PARTY_PASS_SECRET
+  // and LL_ORIGIN_KEY are all set with `wrangler secret put` and never live
+  // in this file — see README.md for what value each takes (NOT the raw
+  // CLERK_SECRET_KEY, and NOT the same value as each other: they are
+  // different derived keys / credentials, see `partySecret()` in
+  // `server/src/voice/hls-viewer-token.ts`). LL_ORIGIN_KEY is
+  // pqp-remuxd's MEDIA_ORIGIN_KEY, sent as X-Pqp-Origin-Key on every
+  // request LlPlaylistOrigin makes against LL_ORIGIN_BASE below (README.md
+  // "LL playlist (L2.2)").
+  //
+  // ENVIRONMENT="production" governs exactly one thing: whether a party
+  // pass may be honored with no `HLS_REVOKED_USERS` binding behind it --
+  // see `partyPassRequiresKvInProduction` in src/party-pass-revocation.js
+  // and README.md "Enabling in production". Override for a local
+  // `wrangler dev` run with `wrangler dev --var ENVIRONMENT:development`
+  // (or just leave it: unset/non-"production" keeps the pre-sign-off
+  // fail-open default, which is what local development needs to work with
+  // no KV namespace at all).
+  "vars": {
+    "ORIGIN_BASE": "https://api.pqp.gg",
+    "ENVIRONMENT": "production",
+    // LL-HLS (docs/plans/LL_HLS.md task L2.2): the remux box's own Caddy
+    // origin, e.g. "https://egress-1.pqp.gg:8443" -- NOT the same value as
+    // the API's `LIVE_HLS_REMUX_ORIGIN_URL`, even though both eventually
+    // point at the same box; the two processes never call into each other
+    // (see ll-playlist-origin.ts's header). Empty: `LlPlaylistOrigin` is
+    // never `ready`, every request behaves exactly as it did before L2.2 --
+    // no LL rung is ever offered. Set once a real box exists (L1.6/L2.3).
+    "LL_ORIGIN_BASE": "https://remux.pqp.gg"
+  },
+
+  // Party-pass (and now shared-rendition-cache) revocation denylist --
+  // signed off 2026-09-14, see README.md "Enabling in production" for the
+  // exact `wrangler kv namespace create` / binding steps and the API-side
+  // env vars that write to it (`server/src/voice/hls-edge-revocation.ts`).
+  // Left commented out here on purpose even after the sign-off: creating
+  // the namespace is an operator action against a real Cloudflare account,
+  // not something this repo can do on an operator's behalf, and an
+  // unbound KV already has a correct, tested default (fails open outside
+  // production, refuses party passes in production) -- uncomment and set a
+  // real `id` only once the namespace actually exists.
+  //
+  // "kv_namespaces": [
+  //   { "binding": "HLS_REVOKED_USERS", "id": "<from `wrangler kv namespace create HLS_REVOKED_USERS`>" }
+  // ],
+
+  // ALWAYS-ON (not built yet): the owner wants a watch party to keep playing
+  // when the API is down. That needs a SECOND `PlaylistOrigin`
+  // (src/playlist-origin.ts) that lists a session's segments straight from
+  // R2 and renders a media playlist itself, with a Durable Object per
+  // session remembering which segments it has seen -- the edge-side version
+  // of `hls-live-window.ts`'s in-process history on the API. See
+  // docs/plans/ALWAYS_ON.md task A1.x. Left commented out on purpose: a
+  // binding here with no code reading it is a silent no-op at best and, for
+  // the Durable Object migration, a deploy-time class Cloudflare has to
+  // provision for nothing at worst. Uncomment both together with the
+  // implementation that uses them, not before.
+  //
+  // "r2_buckets": [
+  //   { "binding": "SEGMENTS", "bucket_name": "pqp-live-hls" }
+  // ],
+  // "durable_objects": {
+  //   "bindings": [
+  //     { "name": "SESSION_WINDOW", "class_name": "SessionWindow" }
+  //   ]
+  // },
+  // "migrations": [
+  //   { "tag": "v1", "new_classes": ["SessionWindow"] }
+  // ],
+
+  "kv_namespaces": [
+    { "binding": "HLS_REVOKED_USERS", "id": "056d7e5a2f0748f6beafd60cf3b2b203" }
+  ],
+  "routes": [
+    { "pattern": "hls.pqp.gg", "custom_domain": true }
+  ],
+  "observability": { "enabled": true }
+}

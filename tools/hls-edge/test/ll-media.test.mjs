@@ -1,0 +1,587 @@
+/**
+ * The LL media route (`src/ll-media.ts`, task `L2.3`) — the bytes an LL
+ * playlist's own URIs point at.
+ *
+ * WHY THIS FILE CAN TEST THE WHOLE ROUTE, UNLIKE `index.test.mjs`. That
+ * file is scoped to the parts of `handlePlaylistRequest` that never reach
+ * `caches.default`, a Workers-only global `node --test` has no counterpart
+ * for. `handleLlMediaRequest` takes its `Cache` as an argument instead, so
+ * a plain Map-backed fake exercises the real cache-hit, cache-write and
+ * coalescing paths here — which is the whole point of the route, and what
+ * this task's acceptance test ("two viewers in one colo produce one origin
+ * fetch per part") is actually about.
+ *
+ * Imported from the compiled output (`npm test`'s pretest step) for the
+ * same reason `index.test.mjs` documents.
+ */
+
+import { strict as assert } from "node:assert";
+import { createHmac } from "node:crypto";
+import test from "node:test";
+
+import { handleLlMediaRequest } from "../dist/ll-media.js";
+import { PartyPassRevocationGate } from "../src/party-pass-revocation.js";
+import { HLS_VIEWER_TOKEN_PARAM } from "../src/hls-viewer-token.js";
+import { HLS_PARTY_PASS_PARAM } from "../src/hls-party-pass.js";
+import { LL_AUDIO_RUNG, LL_VIDEO_RUNG } from "../src/ll-state.js";
+
+const SECRET = "test-viewer-secret";
+const PARTY_SECRET = "test-party-secret";
+const NOW = Date.now();
+
+function sign(payload, secret) {
+  return createHmac("sha256", secret).update(payload).digest("base64url");
+}
+
+function tokenFor(userId, channelId, startedAt, issuedAt = NOW - 1_000) {
+  const claims = {
+    v: 1,
+    u: userId,
+    c: channelId,
+    s: Number(startedAt),
+    e: NOW + 60_000,
+    i: issuedAt,
+  };
+  const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+  return `${payload}.${sign(payload, SECRET)}`;
+}
+
+function fakeKv(keyNames = []) {
+  return {
+    async list({ prefix }) {
+      return { keys: keyNames.filter((name) => name.startsWith(prefix)).map((name) => ({ name })) };
+    },
+  };
+}
+
+function baseEnv(overrides = {}) {
+  return {
+    HLS_VIEWER_TOKEN_SECRET: SECRET,
+    HLS_PARTY_PASS_SECRET: undefined,
+    HLS_REVOKED_USERS: undefined,
+    ENVIRONMENT: "development",
+    ...overrides,
+  };
+}
+
+/**
+ * A `Cache`-shaped fake: `put` buffers the body (the real Cache API does
+ * too, which is why `safeCachePut` may hand it a `clone()`), `match`
+ * rebuilds a fresh `Response` per read, and the key is the request URL —
+ * so a test asserting "the token is not part of the key" only has to ask
+ * for the same path with a different `?t=`.
+ */
+function fakeCache() {
+  const entries = new Map();
+  return {
+    get size() {
+      return entries.size;
+    },
+    keys() {
+      return [...entries.keys()];
+    },
+    async match(request) {
+      const hit = entries.get(request.url);
+      if (!hit) {
+        return undefined;
+      }
+      return new Response(hit.body, { status: hit.status, headers: new Headers(hit.headers) });
+    },
+    async put(request, response) {
+      entries.set(request.url, {
+        status: response.status,
+        headers: [...response.headers],
+        body: await response.arrayBuffer(),
+      });
+    },
+  };
+}
+
+/** Collects `waitUntil` work so a test can await the cache write the route schedules. */
+function collectingCtx() {
+  const pending = [];
+  return {
+    waitUntil(promise) {
+      pending.push(Promise.resolve(promise).catch(() => {}));
+    },
+    async drain() {
+      await Promise.all(pending);
+      pending.length = 0;
+    },
+  };
+}
+
+function fakeMediaOrigin({ ready = true, status = 200, bytes = [1, 2, 3, 4], delayMs = 0 } = {}) {
+  let calls = 0;
+  const names = [];
+  return {
+    ready,
+    get calls() {
+      return calls;
+    },
+    get names() {
+      return names;
+    },
+    async fetchMedia(_channelId, _startedAt, name) {
+      calls += 1;
+      names.push(name);
+      if (delayMs) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      return {
+        status,
+        ok: status >= 200 && status < 300,
+        body: new Uint8Array(bytes).buffer,
+      };
+    },
+  };
+}
+
+function mediaRequest(channelId, startedAt, rung, name, token) {
+  const url =
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}/${rung}/${name}` +
+    `?${HLS_VIEWER_TOKEN_PARAM}=${token}`;
+  return new Request(url, { method: "GET" });
+}
+
+function callMedia(request, origin, cache, ctx, env, route) {
+  return handleLlMediaRequest(
+    request,
+    origin,
+    cache,
+    ctx,
+    env,
+    new PartyPassRevocationGate(),
+    route,
+  );
+}
+
+test("two concurrent viewers of the same part produce ONE origin fetch (the L2.3 acceptance test)", async () => {
+  const channelId = "chan-part-coalesce";
+  const startedAt = "1726000100000";
+  const name = "part-164.m4s";
+  const origin = fakeMediaOrigin({ delayMs: 20 });
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
+
+  // Two DIFFERENT viewers, two DIFFERENT tokens, same part -- exactly the
+  // shape a colo sees when a new part is announced.
+  const [first, second] = await Promise.all([
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      route,
+    ),
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      route,
+    ),
+  ]);
+
+  assert.equal(origin.calls, 1, "the second viewer must ride the first viewer's in-flight fetch");
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(first.headers.get("Cache-Control"), "public, max-age=31536000, immutable");
+  assert.equal(first.headers.get("Content-Type"), "video/iso.segment");
+  assert.deepEqual([...new Uint8Array(await first.arrayBuffer())], [1, 2, 3, 4]);
+  assert.deepEqual([...new Uint8Array(await second.arrayBuffer())], [1, 2, 3, 4]);
+
+  await ctx.drain();
+  assert.equal(cache.size, 1, "exactly one cache entry -- only the producer writes");
+  assert.equal(
+    cache.keys()[0],
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}/${LL_VIDEO_RUNG}/${name}`,
+    "the cache key is the path with NO query -- the token never varies the bytes",
+  );
+});
+
+test("a second request for the same part is served from the cache, with a DIFFERENT viewer's token", async () => {
+  const channelId = "chan-part-hit";
+  const startedAt = "1726000100001";
+  const name = "seg-41.m4s";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
+
+  const first = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+  );
+  assert.equal(first.headers.get("X-HLS-Edge-Cache"), "MISS");
+  await ctx.drain();
+
+  const second = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+  );
+
+  assert.equal(origin.calls, 1, "the warm entry must serve the second viewer");
+  assert.equal(second.status, 200);
+  assert.equal(second.headers.get("X-HLS-Edge-Cache"), "HIT");
+  assert.equal(second.headers.get("Cache-Control"), "public, max-age=31536000, immutable");
+  assert.deepEqual([...new Uint8Array(await second.arrayBuffer())], [1, 2, 3, 4]);
+});
+
+test("a part the box has not written yet passes 404 through, no-store, and is NEVER cached", async () => {
+  const channelId = "chan-part-missing";
+  const startedAt = "1726000100002";
+  // The preload-hint case: the playlist named it, the box has not finished
+  // writing it, the player asks a beat early. Ordinary, not an error.
+  const name = "part-177.m4s";
+  const origin = fakeMediaOrigin({ status: 404 });
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
+  const request = () =>
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt));
+
+  const first = await callMedia(request(), origin, cache, ctx, env, route);
+  assert.equal(first.status, 404);
+  assert.equal(first.headers.get("Cache-Control"), "no-store");
+  await ctx.drain();
+  assert.equal(cache.size, 0, "caching a 404 for a year would make the part permanently missing");
+
+  // And the retry genuinely reaches the box again -- which is the whole
+  // point of not caching it.
+  const second = await callMedia(request(), origin, cache, ctx, env, route);
+  assert.equal(second.status, 404);
+  assert.equal(origin.calls, 2);
+});
+
+test("a revoked viewer is refused BEFORE the origin or the cache is ever touched", async () => {
+  const channelId = "chan-part-revoked";
+  const startedAt = "1726000100003";
+  const userId = "viewer-revoked";
+  const issuedAt = NOW - 1_000;
+  const name = "part-164.m4s";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv({ HLS_REVOKED_USERS: fakeKv([`${userId}:${channelId}:${issuedAt + 500}`]) });
+
+  const response = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor(userId, channelId, startedAt, issuedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+  );
+
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).reason, "revoked");
+  assert.equal(origin.calls, 0, "a revoked viewer must never reach the remux box");
+  assert.equal(cache.size, 0);
+});
+
+test("an invalid token is refused before any origin fetch, and cannot warm the cache for anyone", async () => {
+  const channelId = "chan-part-badtoken";
+  const startedAt = "1726000100004";
+  const name = "part-164.m4s";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+
+  const response = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, "not-a-token"),
+    origin,
+    cache,
+    ctx,
+    baseEnv(),
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+  );
+
+  assert.equal(response.status, 401);
+  assert.equal(origin.calls, 0);
+  assert.equal(cache.size, 0);
+});
+
+test("a token for a DIFFERENT channel is refused (403), not quietly served this channel's bytes", async () => {
+  const channelId = "chan-part-wrongchannel";
+  const startedAt = "1726000100005";
+  const name = "part-164.m4s";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+
+  const response = await callMedia(
+    mediaRequest(
+      channelId,
+      startedAt,
+      LL_VIDEO_RUNG,
+      name,
+      tokenFor("viewer-a", "some-other-channel", startedAt),
+    ),
+    origin,
+    cache,
+    ctx,
+    baseEnv(),
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+  );
+
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).reason, "wrong-channel");
+  assert.equal(origin.calls, 0);
+});
+
+test("the audio twins are served the same way, under their own rung", async () => {
+  const channelId = "chan-part-audio";
+  const startedAt = "1726000100006";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const token = tokenFor("viewer-a", channelId, startedAt);
+
+  const part = await callMedia(
+    mediaRequest(channelId, startedAt, LL_AUDIO_RUNG, "audio-part-5.m4s", token),
+    origin,
+    cache,
+    ctx,
+    env,
+    { channelId, startedAt, rung: LL_AUDIO_RUNG, name: "audio-part-5.m4s" },
+  );
+  const init = await callMedia(
+    mediaRequest(channelId, startedAt, LL_AUDIO_RUNG, "audio-init.mp4", token),
+    origin,
+    cache,
+    ctx,
+    env,
+    { channelId, startedAt, rung: LL_AUDIO_RUNG, name: "audio-init.mp4" },
+  );
+
+  assert.equal(part.status, 200);
+  assert.equal(part.headers.get("Content-Type"), "video/iso.segment");
+  assert.equal(init.status, 200);
+  // An initialization segment is a plain fragmented-MP4 header, not a CMAF
+  // segment -- `EXT-X-MAP` points at it and players expect the mp4 type.
+  assert.equal(init.headers.get("Content-Type"), "video/mp4");
+  assert.deepEqual(
+    origin.names,
+    ["audio-part-5.m4s", "audio-init.mp4"],
+    "the name from the URI is the name asked of the box, unchanged",
+  );
+  await ctx.drain();
+  assert.equal(cache.size, 2, "the audio twins get their own cache entries, not the video rung's");
+});
+
+test("a CONVENTIONAL rung's media 404s here without any credential work -- those bytes live in R2", async () => {
+  const channelId = "chan-part-conventional";
+  const startedAt = "1726000100007";
+  const name = "seg-1.m4s";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+
+  const response = await callMedia(
+    mediaRequest(channelId, startedAt, "720p30", name, tokenFor("viewer-a", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    baseEnv(),
+    { channelId, startedAt, rung: "720p30", name },
+  );
+
+  assert.equal(response.status, 404);
+  assert.equal(origin.calls, 0);
+});
+
+test("LL origin not configured: 404, never a 502 -- no playlist ever pointed here", async () => {
+  const channelId = "chan-part-noorigin";
+  const startedAt = "1726000100008";
+  const name = "part-164.m4s";
+  const origin = fakeMediaOrigin({ ready: false });
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+
+  const response = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    baseEnv(),
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+  );
+
+  assert.equal(response.status, 404);
+  assert.equal(origin.calls, 0);
+});
+
+test("an origin 5xx is a 502 the player may retry, and is never cached", async () => {
+  const channelId = "chan-part-originerror";
+  const startedAt = "1726000100009";
+  const name = "part-164.m4s";
+  const origin = fakeMediaOrigin({ status: 503 });
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+
+  const response = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    baseEnv(),
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+  );
+
+  assert.equal(response.status, 502);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  await ctx.drain();
+  assert.equal(cache.size, 0);
+});
+
+test("a party-pass viewer with no token at all is served the bytes -- the pass authorizes media too", async () => {
+  // Otherwise a pass-holding viewer gets a playable rendition playlist whose
+  // every URI 403s, which is the half of the credential story `L2.3` made
+  // load-bearing: `stampLlToken` now writes the pass into those URIs
+  // (`applyLlRenditionCredential`), so this is the request they produce.
+  const channelId = "chan-part-partypass";
+  const startedAt = "1726000100010";
+  const name = "part-164.m4s";
+  const claims = {
+    v: 1,
+    u: "viewer-pass",
+    c: channelId,
+    s: Number(startedAt),
+    e: NOW + 600_000,
+    i: NOW - 1_000,
+  };
+  const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+  const pass = `${payload}.${sign(payload, PARTY_SECRET)}`;
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const url =
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}/${LL_VIDEO_RUNG}/${name}` +
+    `?${HLS_PARTY_PASS_PARAM}=${pass}`;
+
+  const response = await callMedia(
+    new Request(url, { method: "GET" }),
+    origin,
+    cache,
+    ctx,
+    baseEnv({ HLS_PARTY_PASS_SECRET: PARTY_SECRET }),
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(origin.calls, 1);
+  await ctx.drain();
+  assert.equal(
+    cache.keys()[0],
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}/${LL_VIDEO_RUNG}/${name}`,
+    "a pass-authorized request writes the SAME token-free cache entry a token-authorized one does",
+  );
+});
+
+test("a name outside the remux's own filename grammar never reaches the box", async () => {
+  // The amplifier Farol caught: a valid token plus an endless supply of
+  // path-safe names (`probe-1`, `probe-2`, ...) would be one uncached
+  // origin fetch each, since a name the box does not have 404s and a 404 is
+  // deliberately never cached.
+  const channelId = "chan-part-badname";
+  const startedAt = "1726000100011";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const token = tokenFor("viewer-a", channelId, startedAt);
+
+  for (const [rung, name] of [
+    [LL_VIDEO_RUNG, "probe-1"],
+    [LL_VIDEO_RUNG, "state.json"],
+    [LL_VIDEO_RUNG, "playlist.m3u8"],
+    [LL_VIDEO_RUNG, "part-164.mp4"],
+    // The rung and the name must agree: the video rung may not reach into
+    // the audio ring, nor the other way round.
+    [LL_VIDEO_RUNG, "audio-part-5.m4s"],
+    [LL_AUDIO_RUNG, "part-5.m4s"],
+  ]) {
+    const response = await callMedia(
+      mediaRequest(channelId, startedAt, rung, name, token),
+      origin,
+      cache,
+      ctx,
+      baseEnv(),
+      { channelId, startedAt, rung, name },
+    );
+    assert.equal(response.status, 404, `${rung}/${name}`);
+  }
+
+  assert.equal(origin.calls, 0, "not one of those may become an origin fetch");
+});
+
+test("a coalesced waiter is served the cached copy, and the entry is warm the moment the fetch settles", async () => {
+  // The window Farol caught: the in-flight entry used to be dropped as soon
+  // as the origin answered, with the cache write only scheduled afterwards,
+  // so a viewer arriving in between saw an empty cache AND an empty
+  // in-flight map and started a second real fetch.
+  const channelId = "chan-part-window";
+  const startedAt = "1726000100012";
+  const name = "part-999.m4s";
+  const origin = fakeMediaOrigin({ delayMs: 10 });
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
+
+  const [producer, waiter] = await Promise.all([
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      route,
+    ),
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      route,
+    ),
+  ]);
+
+  assert.equal(origin.calls, 1);
+  assert.equal(producer.headers.get("X-HLS-Edge-Cache"), "MISS");
+  assert.equal(
+    waiter.headers.get("X-HLS-Edge-Cache"),
+    "COALESCED",
+    "the waiter is served the cached copy, not its own copy of the shared buffer",
+  );
+  assert.deepEqual([...new Uint8Array(await waiter.arrayBuffer())], [1, 2, 3, 4]);
+  // Warm already, with no `drain()` -- the write happens inside the shared
+  // chain, not after it.
+  assert.equal(cache.size, 1);
+  const third = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-c", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+  );
+  assert.equal(third.headers.get("X-HLS-Edge-Cache"), "HIT");
+  assert.equal(origin.calls, 1);
+});

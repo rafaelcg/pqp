@@ -6,6 +6,7 @@ import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
 import { defaultMicProcessing } from "@/lib/audio-devices";
 import { setOsCanExcludeCallAudioForTests } from "@/lib/screen-capture-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
+import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -196,7 +197,7 @@ const { connectLiveKit } = await import("@/lib/livekit-session");
 
 const stoppedTracks: string[] = [];
 
-function fakeTrack(label: string) {
+function fakeTrack(label: string, deviceId?: string) {
   return {
     enabled: true,
     stop: () => stoppedTracks.push(label),
@@ -204,11 +205,16 @@ function fakeTrack(label: string) {
     // fallback paths call it best-effort with no guard, matching the shape a
     // browser actually hands back.
     applyConstraints: async () => {},
+    // Only when a test cares which physical device this stream claims to be
+    // (the fallback-notice suite, comparing ids rather than labels): most
+    // callers leave this off, matching a track with no `getSettings` at all
+    // rather than one that reports an empty id.
+    ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
   };
 }
 
-function fakeStream(label: string) {
-  const tracks = [fakeTrack(label)];
+function fakeStream(label: string, deviceId?: string) {
+  const tracks = [fakeTrack(label, deviceId)];
   return {
     getTracks: () => tracks,
     getAudioTracks: () => tracks,
@@ -1326,6 +1332,76 @@ describe("lobby presence sounds", () => {
     expect(voice.getState().error).toBeFalsy();
   });
 
+  it("tells the person why Voz limpa is off when the browser cannot run it", async () => {
+    // `advancedNoiseSuppressionSupportedMock` is false by default in this
+    // block: asking for "advanced" here is the "no AudioWorklet / no
+    // WebAssembly" fallback in `docs/NOISE_SUPPRESSION.md`, which used to be
+    // silent (a console.warn and nothing else). It must say so in the notice
+    // the call stage renders, in the product's own name for the feature.
+    const getUserMedia = vi.fn(async () => fakeStream("mic"));
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, {
+      processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+    });
+
+    expect(voice.getState().status).not.toBe("idle");
+    expect(voice.getState().notice).toContain("Clean voice");
+    expect(voice.getState().notice).not.toContain("RNNoise");
+  });
+
+  it("does not stamp the Voz limpa fallback notice for a join it already left", async () => {
+    // Farol review of #552: the fallback fires from inside `createMicPipeline`
+    // after `await loadRnnoiseBinary()` rejects — on the far side of an
+    // await, same as the device-retry ladder's own fallback notice just
+    // above. A `leave()` (or a second join) while that load is still pending
+    // must stop the rejection from writing into a `state` a newer, unrelated
+    // operation now owns.
+    advancedNoiseSuppressionSupportedMock.mockReturnValue(true);
+    let rejectBinary: (err: unknown) => void = () => {};
+    loadRnnoiseBinaryMock.mockImplementation(
+      () =>
+        new Promise<ArrayBuffer>((_resolve, reject) => {
+          rejectBinary = reject;
+        }),
+    );
+
+    const getUserMedia = vi.fn(async () => fakeStream("mic"));
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const joining = voice.join(CHANNEL, {
+      processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+    });
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+
+    voice.leave();
+    rejectBinary(new Error("wasm fetch failed"));
+    await joining;
+
+    // The abandoned join's own failure must not leak a notice into the idle
+    // state the leave already produced.
+    expect(voice.getState().status).toBe("idle");
+    expect(voice.getState().notice ?? "").not.toContain("Clean voice");
+  });
+
   it("falls back to a standard mic when the browser refuses a 48kHz AudioContext", async () => {
     // Farol #517: `new AudioContext({ sampleRate: 48000 })` threw outside any
     // try/catch, which aborted the whole join (or swap) instead of falling
@@ -1471,7 +1547,7 @@ describe("lobby presence sounds", () => {
     expect(getUserMedia).toHaveBeenCalledTimes(2);
     expect(voice.getState().status).not.toBe("idle");
     expect(voice.getState().error).toBeNull();
-    expect(voice.getState().notice).toContain("MacBook Pro Microphone");
+    expect(voice.getState().micFallback?.label).toBe("MacBook Pro Microphone");
   });
 
   it("walks the other microphones when the default will not start either", async () => {
@@ -1514,7 +1590,528 @@ describe("lobby presence sounds", () => {
     expect(asked).toEqual(["busy-headset", "default", "usb-interface"]);
     expect(voice.getState().status).not.toBe("idle");
     expect(voice.getState().error).toBeNull();
-    expect(voice.getState().notice).toBeTruthy();
+    expect(voice.getState().micFallback).toBeTruthy();
+  });
+
+  /**
+   * `voiceState.micFallback`'s whole lifecycle: reported 2026-09-14 as a
+   * notice that stayed up long after the saved microphone (NVIDIA Broadcast)
+   * came back, with no way to close it. `use-voice.ts`'s `setMicFallbackNotice`
+   * / `clearMicFallbackNotice` / `tryRecoverPreferredMic` /
+   * `dismissMicFallbackNotice` are the whole fix; these are the state
+   * transitions, independent of `MicFallbackNotice`'s rendering.
+   */
+  describe("the fallback-microphone notice", () => {
+    const BROADCAST_ID = "nvidia-broadcast";
+    const FIFINE_ID = "fifine-id";
+    const gone = Object.assign(new Error("Requested device not found"), {
+      name: "NotFoundError",
+    });
+
+    /**
+     * `getUserMedia` for the report's exact shape: a virtual device
+     * (NVIDIA Broadcast) that is only sometimes there, falling back to a
+     * physical one (fifine) when it is not. Real device ids on both tracks
+     * (`getSettings().deviceId`), not just labels: `resolveMicFallback`
+     * compares ids, and a test that never gives it any would not catch the
+     * bug it exists for (2026-09-14 fix-round finding #2).
+     *
+     * `addEventListener`/`removeEventListener` are a real (if tiny)
+     * `EventTarget`-shaped pair, list-backed, so `dispose()` can be proven
+     * against it rather than against a no-op.
+     */
+    function mediaDevicesForBroadcastMic() {
+      let broadcastAvailable = false;
+      const deviceChangeHandlers: Array<() => void> = [];
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === BROADCAST_ID) {
+          if (!broadcastAvailable) {
+            throw gone;
+          }
+          return fakeStream("NVIDIA Broadcast", BROADCAST_ID);
+        }
+        const stream = fakeStream("mic", FIFINE_ID);
+        Object.defineProperty(stream.getAudioTracks()[0]!, "label", {
+          value: "fifine Microphone",
+        });
+        return stream;
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () =>
+            broadcastAvailable
+              ? [
+                  {
+                    kind: "audioinput",
+                    deviceId: BROADCAST_ID,
+                    label: "NVIDIA Broadcast",
+                  },
+                ]
+              : [],
+          addEventListener: (type: string, handler: () => void) => {
+            if (type === "devicechange") {
+              deviceChangeHandlers.push(handler);
+            }
+          },
+          removeEventListener: (type: string, handler: () => void) => {
+            if (type !== "devicechange") {
+              return;
+            }
+            const index = deviceChangeHandlers.indexOf(handler);
+            if (index !== -1) {
+              deviceChangeHandlers.splice(index, 1);
+            }
+          },
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+      return {
+        getUserMedia,
+        setBroadcastAvailable: (next: boolean) => {
+          broadcastAvailable = next;
+        },
+        fireDeviceChange: () => {
+          for (const handler of deviceChangeHandlers) {
+            handler();
+          }
+        },
+        registeredDeviceChangeHandlers: deviceChangeHandlers,
+      };
+    }
+
+    it("clears itself once the saved device is reachable again", async () => {
+      const { setBroadcastAvailable, fireDeviceChange } =
+        mediaDevicesForBroadcastMic();
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback?.label).toBe("fifine Microphone");
+
+      // NVIDIA Broadcast reopens. The OS tells every tab a device changed;
+      // this is the one signal that the saved mic might be back.
+      setBroadcastAvailable(true);
+      fireDeviceChange();
+      await settle();
+
+      expect(voice.getState().micFallback).toBeNull();
+    });
+
+    it("does not adopt an unrelated device that merely appears", async () => {
+      // A devicechange for something else entirely (a webcam's mic, a
+      // different headset) must not be read as "the saved mic is back":
+      // `tryRecoverPreferredMic` only ever asks for the exact device id the
+      // fallback remembers.
+      const { fireDeviceChange } = mediaDevicesForBroadcastMic();
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback).toBeTruthy();
+
+      fireDeviceChange();
+      await settle();
+
+      // Still there: `enumerateDevices` never listed the broadcast id.
+      expect(voice.getState().micFallback?.label).toBe("fifine Microphone");
+    });
+
+    it("clears when the person picks a device by hand", async () => {
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === "busy-headset") {
+          throw gone;
+        }
+        return fakeStream("mic");
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () => [],
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+
+      await voice.join(CHANNEL, { inputDeviceId: "busy-headset" });
+      expect(voice.getState().micFallback).toBeTruthy();
+
+      // A device that just opens clean, asked for on purpose in Settings or
+      // the call bar: nothing left to explain.
+      await voice.setInputDevice("usb-interface");
+      expect(voice.getState().micFallback).toBeNull();
+    });
+
+    it("stays closed through a reconnect's recapture of the same fallback", async () => {
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      // Always refused, so every attempt at BROADCAST_ID falls back to the
+      // same default microphone with the same label.
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === BROADCAST_ID) {
+          throw gone;
+        }
+        const stream = fakeStream("mic");
+        Object.defineProperty(stream.getAudioTracks()[0]!, "label", {
+          value: "fifine Microphone",
+        });
+        return stream;
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () => [],
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback).toBeTruthy();
+
+      voice.dismissMicFallbackNotice();
+      expect(voice.getState().micFallback).toBeNull();
+
+      // A reconnect recaptures the mic on the same saved id. Same device
+      // asked for, same device that answered: the person already closed
+      // this exact notice, so it does not reopen.
+      await voice.setInputDevice(BROADCAST_ID);
+      expect(voice.getState().micFallback).toBeNull();
+
+      // A new call is not "the rest of the call" any more: it can show the
+      // notice again.
+      await voice.leave();
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback?.label).toBe("fifine Microphone");
+    });
+
+    /**
+     * Fix-round finding #2 (2026-09-14): a reconnect's mic recapture asks
+     * for whatever `audioOptions.inputDeviceId` already is, which
+     * `forgetInputDevice` blanks to "" the moment the fallback happens. So a
+     * recapture that lands on the SAME substitute again opens with no
+     * substitution this time (`onFallback` never fires) and used to read
+     * that as "the preferred device came back" and clear the notice. The fix
+     * compares the device that actually opened, by id, against the
+     * preferred id — never the label, and never merely "nothing failed this
+     * time".
+     */
+    it("does not read a reconnect's default as the preferred device answering, when it is really still the substitute", async () => {
+      mediaDevicesForBroadcastMic();
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback?.label).toBe("fifine Microphone");
+
+      // A reconnect's recapture, mimicked the same way a device swap is:
+      // whatever's already selected (here, "" — forgotten), asked for again.
+      await voice.setMicProcessing({
+        ...defaultMicProcessing,
+        echoCancellation: false,
+      });
+
+      // Still fifine, by id: nothing about the preferred device changed.
+      expect(voice.getState().micFallback?.label).toBe("fifine Microphone");
+    });
+
+    it("clears when a reconnect's default happens to be the preferred device itself", async () => {
+      let defaultIsPreferredNow = false;
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === BROADCAST_ID) {
+          // Asking for it BY ID is still refused; only "give me the
+          // default, whatever it is" can ever reach it in this test, which
+          // is exactly the shape a forgotten preference takes.
+          throw gone;
+        }
+        return defaultIsPreferredNow
+          ? fakeStream("NVIDIA Broadcast", BROADCAST_ID)
+          : fakeStream("fifine Microphone", FIFINE_ID);
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () => [],
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback).toBeTruthy();
+
+      defaultIsPreferredNow = true;
+      await voice.setMicProcessing({
+        ...defaultMicProcessing,
+        echoCancellation: false,
+      });
+
+      expect(voice.getState().micFallback).toBeNull();
+    });
+
+    /**
+     * Fix-round finding #1 (second pass): an explicit pick of a DIFFERENT
+     * microphone that itself falls back must be reported as its own fresh
+     * occurrence, even when the ladder happens to land on the OLD preferred
+     * device — comparing the opened id only against the standing
+     * `activeMicFallback.preferredDeviceId`, with no regard for what THIS
+     * attempt actually asked for, read that coincidence as "the preferred
+     * device answered" and silently cleared the notice, as if the person's
+     * new pick had worked instead of also failing.
+     */
+    it("does not read an explicit pick's own fallback onto the old preferred device as that device answering", async () => {
+      const OTHER_ID = "other-headset";
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === BROADCAST_ID || exact === OTHER_ID) {
+          throw gone;
+        }
+        // The ladder's un-chosen default candidate, which this test rigs to
+        // resolve to the OLD preferred device — the coincidence the bug
+        // depended on.
+        const stream = fakeStream("NVIDIA Broadcast", BROADCAST_ID);
+        Object.defineProperty(stream.getAudioTracks()[0]!, "label", {
+          value: "NVIDIA Broadcast",
+        });
+        return stream;
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () => [],
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback?.label).toBe("NVIDIA Broadcast");
+
+      // The person explicitly picks a THIRD device. It also fails, and the
+      // fallback ladder's next candidate (the plain default) happens to
+      // resolve to the OLD preferred device this time.
+      await voice.setInputDevice(OTHER_ID);
+
+      // A fresh occurrence for the NEW pick, not a cleared notice: the
+      // person's choice did not work, whatever it coincidentally opened
+      // instead.
+      expect(voice.getState().micFallback?.label).toBe("NVIDIA Broadcast");
+    });
+
+    /**
+     * Fix-round finding #1: a `devicechange`-driven recovery can race a
+     * device the user just selected. Two shapes, both covered:
+     *  - recovery already parked on `listAudioDevices()` when the pick
+     *    starts (the generation token, `micRecoveryGeneration`);
+     *  - a pick already open, still awaiting `getUserMedia`, when
+     *    `devicechange` fires (`manualMicPicksInFlight`, which the token
+     *    alone cannot see).
+     * Both are exercised here: `broadcastAttempts()` proves recovery never
+     * even asks for the preferred device again once it should have backed
+     * off, in either ordering.
+     */
+    it("a manual device pick always wins a race with automatic recovery, however the two are interleaved", async () => {
+      let broadcastReachable = false;
+      let releaseManualPick: (() => void) | null = null;
+      const manualPickGate = new Promise<void>((resolve) => {
+        releaseManualPick = resolve;
+      });
+      const deviceChangeHandlers: Array<() => void> = [];
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio as MediaTrackConstraints;
+        const exact = (audio?.deviceId as { exact?: string } | undefined)
+          ?.exact;
+        if (exact === BROADCAST_ID) {
+          if (!broadcastReachable) {
+            throw gone;
+          }
+          return fakeStream("NVIDIA Broadcast", BROADCAST_ID);
+        }
+        if (exact === "manual-pick") {
+          // The person's own choice: deliberately slow, so it is still open
+          // while recovery gets its turn.
+          await manualPickGate;
+          return fakeStream("Manual pick", "manual-pick");
+        }
+        return fakeStream("fifine Microphone", FIFINE_ID);
+      });
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          enumerateDevices: async () =>
+            broadcastReachable
+              ? [
+                  {
+                    kind: "audioinput",
+                    deviceId: BROADCAST_ID,
+                    label: "NVIDIA Broadcast",
+                  },
+                ]
+              : [],
+          addEventListener: (type: string, handler: () => void) => {
+            if (type === "devicechange") {
+              deviceChangeHandlers.push(handler);
+            }
+          },
+          removeEventListener: () => {},
+          getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+
+      function broadcastAttempts(): number {
+        return getUserMedia.mock.calls.filter(
+          (call) =>
+            ((call[0].audio as MediaTrackConstraints).deviceId as
+              | { exact?: string }
+              | undefined)?.exact === BROADCAST_ID,
+        ).length;
+      }
+
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(voice.getState().micFallback).toBeTruthy();
+      expect(broadcastAttempts()).toBe(1); // the join's own failed attempt
+
+      // The preferred device becomes reachable, but the person has ALREADY
+      // started picking their own — slow, gated, still open.
+      broadcastReachable = true;
+      const manualPick = voice.setInputDevice("manual-pick");
+
+      // While that is in flight, the OS says a device changed. Recovery
+      // wakes up, would find BROADCAST_ID reachable, and would happily
+      // reopen it if nothing stopped it.
+      for (const handler of deviceChangeHandlers) {
+        handler();
+      }
+      await settle();
+
+      // Recovery backed off without ever asking for BROADCAST_ID again —
+      // `manualMicPicksInFlight` refused it before `listAudioDevices` even
+      // ran.
+      expect(broadcastAttempts()).toBe(1);
+
+      // Let the manual pick finish, and let a SECOND `devicechange` land
+      // after it — this time recovery is free to run, but the person's
+      // choice is what it would be asking to swap away from.
+      releaseManualPick!();
+      await manualPick;
+      expect(voice.getState().micFallback).toBeNull();
+
+      for (const handler of deviceChangeHandlers) {
+        handler();
+      }
+      await settle();
+
+      // Still never asked for BROADCAST_ID again: there is no fallback
+      // active any more (the manual pick cleared it), so recovery has
+      // nothing to recover towards.
+      expect(broadcastAttempts()).toBe(1);
+
+      // And the device actually in use is still the manual pick, not
+      // BROADCAST_ID: asking for it again is a no-op (same id already
+      // selected), which only holds if recovery never swapped it out.
+      getUserMedia.mockClear();
+      await voice.setInputDevice("manual-pick");
+      expect(getUserMedia).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Fix-round finding #3: the `devicechange` listener behind recovery had
+     * no teardown, so a controller `App`'s `useMemo` ever replaced would go
+     * on firing `tryRecoverPreferredMic` against a `pipeline` it can never
+     * touch again — a leak for the lifetime of the page. `dispose()` is the
+     * fix; this proves it actually removes the listener it registered, and
+     * only that one.
+     */
+    it("dispose() removes the devicechange listener a replaced controller left behind", async () => {
+      const { getUserMedia, fireDeviceChange, registeredDeviceChangeHandlers } =
+        mediaDevicesForBroadcastMic();
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+
+      await voice.join(CHANNEL, { inputDeviceId: BROADCAST_ID });
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
+
+      // The app tears this controller down (its cleanup effect calling
+      // `dispose()`) the same moment a new one would take over.
+      voice.dispose();
+      expect(registeredDeviceChangeHandlers).toHaveLength(0);
+
+      // Idempotent: a second call is a no-op, not a double-remove or a throw.
+      expect(() => voice.dispose()).not.toThrow();
+
+      // Whatever the OS fires next reaches nobody: this controller's own
+      // recovery never runs again.
+      getUserMedia.mockClear();
+      fireDeviceChange();
+      await settle();
+      expect(getUserMedia).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Fix-round finding #3 (second pass): React StrictMode replays an
+     * effect's cleanup and setup once more on every mount. `App`'s cleanup
+     * effect calls `voice.attachDeviceWatcher()` from its own setup phase
+     * and `voice.dispose()` from its cleanup — this reproduces exactly that
+     * sequence (constructor attach, effect setup, forced cleanup, forced
+     * re-setup) and checks the listener count after each step, so a future
+     * change that makes either call non-idempotent, or drops the setup
+     * call and leaves only the cleanup, fails here rather than as "recovery
+     * quietly stopped working" three weeks later.
+     */
+    it("mount, StrictMode's forced cleanup, and its re-mount leave exactly one devicechange listener", () => {
+      const { registeredDeviceChangeHandlers } = mediaDevicesForBroadcastMic();
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+
+      // The constructor already attached one.
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
+
+      // The cleanup effect's own setup phase: a no-op, one already attached.
+      voice.attachDeviceWatcher();
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
+
+      // StrictMode's forced cleanup.
+      voice.dispose();
+      expect(registeredDeviceChangeHandlers).toHaveLength(0);
+
+      // StrictMode's forced re-mount: the setup phase runs again.
+      voice.attachDeviceWatcher();
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
+
+      // Calling either again, in either order, still leaves exactly one.
+      voice.attachDeviceWatcher();
+      expect(registeredDeviceChangeHandlers).toHaveLength(1);
+    });
   });
 
   it("names the fix when no microphone will start, and marks the error as a mic error", async () => {
@@ -2845,6 +3442,206 @@ describe("voice roster deltas", () => {
       "x",
     ]);
   });
+
+  /**
+   * A moderator's drag-and-drop move (`moveOccupantSeat` in
+   * `voice-occupant-dnd.ts`) paints the destination channel optimistically
+   * with the person's CURRENT peer id, because it cannot know the fresh one
+   * their reconnect will mint — and tags that entry `isOptimisticVoiceEntry`
+   * so the delta merge knows it is this client's own guess, not the room's
+   * word. If a stale entry like that survives past the real `joined` for the
+   * same person, `byId.size` never agrees with the server's count and every
+   * delta is refused (a wrong badge "for a few seconds" that, moved-and-back,
+   * becomes forever) — which is the reported bug: the sidebar keeps reading
+   * the abandoned peer id, `speakingPeerIds` only ever names the live one,
+   * and that person's ring never lights again.
+   */
+  it("collapses an OPTIMISTIC entry for the same user under a different peer id, so a delta converges instead of waiting on the next keyframe", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const channelB = "00000000-0000-4000-8000-0000000000bb";
+
+    // Friend starts seated in A, then the mover drags them to B: the
+    // optimistic paint carries the CURRENT ("stale-to-be") peer id into B,
+    // marked, exactly what a real drag does.
+    voice.handleSignaling(
+      snapshot(1, [person("stale", { userId: "user-friend" })], CHANNEL),
+    );
+    const moved = moveOccupantSeat(
+      voice.getState().occupancy,
+      "user-friend",
+      channelB,
+    );
+    voice.replaceOccupancy(moved.next);
+
+    // The room's real word: the same person, freshly reconnected into B
+    // under a different peer id — exactly what a moderator's move produces.
+    voice.handleSignaling(
+      delta(1, 1, { joined: [person("fresh", { userId: "user-friend" })] }, channelB),
+    );
+
+    expect(
+      (voice.getState().occupancy[channelB] ?? []).map((p) => p.peerId),
+    ).toEqual(["fresh"]);
+  });
+
+  /**
+   * Farol's second-round catch: `updated` frames are a fresh object every
+   * time (a mute toggle, a rename, anything), so if one lands on the SAME
+   * still-unconfirmed peer id an optimistic entry occupies, replacing it
+   * without carrying the tag forward would silently un-mark it — and the
+   * NEXT delta that actually needs to collapse that peer id (the real
+   * reconnect finally arriving) would find nothing to collapse, landing
+   * right back in the original bug for that one peer id.
+   */
+  it("keeps the optimistic tag across an `updated` for the still-unconfirmed peer id", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const channelB = "00000000-0000-4000-8000-0000000000bb";
+
+    voice.handleSignaling(
+      snapshot(1, [person("stale", { userId: "user-friend" })], CHANNEL),
+    );
+    const moved = moveOccupantSeat(
+      voice.getState().occupancy,
+      "user-friend",
+      channelB,
+    );
+    voice.replaceOccupancy(moved.next);
+
+    // Something updates the still-optimistic entry in place before the real
+    // reconnect lands — a fresh object at the same peer id.
+    voice.handleSignaling(
+      delta(
+        1,
+        1,
+        {
+          updated: [
+            person("stale", { userId: "user-friend", muted: true }),
+          ],
+        },
+        channelB,
+      ),
+    );
+    expect(
+      voice.getState().occupancy[channelB]?.find((p) => p.peerId === "stale")
+        ?.muted,
+    ).toBe(true);
+
+    // The room's real word finally arrives, under a genuinely different peer
+    // id. Without the tag surviving the `updated` above, this would sit
+    // beside "stale" forever instead of replacing it.
+    voice.handleSignaling(
+      delta(2, 1, { joined: [person("fresh", { userId: "user-friend" })] }, channelB),
+    );
+
+    expect(
+      (voice.getState().occupancy[channelB] ?? []).map((p) => p.peerId),
+    ).toEqual(["fresh"]);
+  });
+
+  /**
+   * Farol's catch on the first version of this fix: collapsing by user id
+   * ALONE would also swallow a second genuine session of the same person —
+   * two tabs, or a phone and a desktop, both seated in the same call at once
+   * is one user id legitimately holding two different peer ids. Neither
+   * entry here is `moveOccupantSeat`'s optimistic guess — both are the
+   * server's own word — so both must survive every delta untouched.
+   */
+  it("keeps both sessions when the same user id is legitimately seated under two peer ids at once", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+
+    voice.handleSignaling(
+      snapshot(1, [person("tab-1", { userId: "user-two-tabs" })]),
+    );
+    // A second real session for the same person joins — never routed through
+    // `moveOccupantSeat`, so never marked optimistic.
+    voice.handleSignaling(
+      delta(2, 2, { joined: [person("tab-2", { userId: "user-two-tabs" })] }),
+    );
+    expect(idsIn(voice)).toEqual(["tab-1", "tab-2"]);
+
+    // A later, unrelated delta (someone else present) must not disturb
+    // either session of the two-tab user.
+    voice.handleSignaling(
+      delta(3, 3, { joined: [person("someone-else")] }),
+    );
+    expect(idsIn(voice)).toEqual(["someone-else", "tab-1", "tab-2"]);
+
+    // And an `updated` for one of the two sessions (a mute toggle, say) must
+    // land on that session only, leaving the other alone.
+    voice.handleSignaling(
+      delta(
+        4,
+        3,
+        {
+          updated: [
+            person("tab-1", { userId: "user-two-tabs", muted: true }),
+          ],
+        },
+      ),
+    );
+    expect(idsIn(voice)).toEqual(["someone-else", "tab-1", "tab-2"]);
+    expect(
+      voice.getState().occupancy[CHANNEL]?.find((p) => p.peerId === "tab-1")
+        ?.muted,
+    ).toBe(true);
+    expect(
+      voice.getState().occupancy[CHANNEL]?.find((p) => p.peerId === "tab-2")
+        ?.muted,
+    ).toBe(false);
+  });
+
+  /**
+   * The full reported shape, end to end: drag friend out to another channel
+   * and back, using the same optimistic-then-reconciled choreography the app
+   * runs (`replaceOccupancy` for the paint, a delta for the server's word).
+   * Without the fix, channel A ends the sequence still keyed on friend's
+   * very first peer id ("x") — the one from before either move — because the
+   * optimism from the FIRST move survives the size-mismatch rejection on the
+   * way there and gets carried into the second move by `moveOccupantSeat`'s
+   * own `findIndex` lookup, one call in `App.tsx`'s `handleMoveVoiceOccupant`
+   * for both hops.
+   */
+  it("ends up on the current peer id after a move away and a move back, not the id from before either move", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const channelB = "00000000-0000-4000-8000-0000000000bb";
+
+    // Friend starts seated in A under their original peer id.
+    voice.handleSignaling(
+      snapshot(1, [person("x", { userId: "user-friend" })], CHANNEL),
+    );
+
+    // Move #1, A -> B: the mover's optimistic paint (`moveOccupantSeat`)
+    // carries the CURRENT entry ("x") into B ahead of the server.
+    const move1 = moveOccupantSeat(voice.getState().occupancy, "user-friend", channelB);
+    voice.replaceOccupancy(move1.next);
+
+    // The server's real word for both rooms: A empties, and friend reconnects
+    // into B under a brand-new peer id ("y") — the cold join a moved user
+    // always gets, never the id the mover's paint guessed at.
+    voice.handleSignaling(delta(2, 0, { left: ["x"] }, CHANNEL));
+    voice.handleSignaling(delta(1, 1, { joined: [person("y", { userId: "user-friend" })] }, channelB));
+
+    // Move #2, B -> A: the mover drags friend back, reading B's occupancy —
+    // which must already say "y", not the stale "x" from before move #1.
+    const move2 = moveOccupantSeat(voice.getState().occupancy, "user-friend", CHANNEL);
+    expect(move2.moved?.peerId).toBe("y");
+    voice.replaceOccupancy(move2.next);
+
+    // And the server's real word for the return: friend reconnects into A
+    // under yet another fresh peer id ("z"). Channel A emptied when "x" left
+    // it, which forgets its sequence (a room the server forgot too — see
+    // "forgets the sequence when the room empties" above), so this delta
+    // is the room's first again, seq 1, not a continuation of the seq 2 that
+    // emptied it.
+    voice.handleSignaling(delta(2, 0, { left: ["y"] }, channelB));
+    voice.handleSignaling(delta(1, 1, { joined: [person("z", { userId: "user-friend" })] }, CHANNEL));
+
+    expect(idsIn(voice)).toEqual(["z"]);
+  });
 });
 
 /**
@@ -2889,16 +3686,59 @@ describe("watch mode without a seat", () => {
     // The room we are in is `liveStream`'s business, untouched by this frame.
     expect(voice.getState().liveStream).toBeNull();
 
+    // A NULL THE SERVER DID NOT VOUCH FOR KEEPS THE STREAM. On 2026-09-14
+    // the API machine that was not running the egress sent exactly this for
+    // a party live on the other machine, and every viewer whose socket was
+    // there lost the stream `GET /live` had just given them. The count is
+    // still taken: it is per machine and always was.
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream: null,
+      watching: 2,
+    });
+    expect(voice.getState().channelLive[WATCHED]?.stream?.presenterPeerId).toBe(
+      "host",
+    );
+    expect(voice.getState().channelLive[WATCHED]?.watching).toBe(2);
+    expect(voice.getState().channelLive[WATCHED]?.streamEnded).toBe(false);
+
+    // The server's own word ends it.
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream: null,
+      watching: 0,
+      ended: true,
+    });
+    expect(voice.getState().channelLive[WATCHED]).toEqual({
+      stream: null,
+      watching: 0,
+      streamEnded: true,
+    });
+  });
+
+  it("a null for a channel never described is not an end, and the GET seed's null is", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
     voice.handleSignaling({
       type: "channel-live",
       channelId: WATCHED,
       stream: null,
       watching: 0,
     });
-    expect(voice.getState().channelLive[WATCHED]).toEqual({
-      stream: null,
-      watching: 0,
-    });
+    expect(voice.getState().channelLive[WATCHED]?.streamEnded).toBe(false);
+
+    // The route's null is an END only when it says so: `ended` is absent when
+    // the server could not reach the session table, and a failed query must
+    // not hang a viewer up.
+    const OTHER = "00000000-0000-4000-8000-0000000000ef";
+    voice.seedChannelLive(OTHER, { stream: null, watching: 0, ended: true });
+    expect(voice.getState().channelLive[OTHER]?.streamEnded).toBe(true);
+
+    const UNSURE = "00000000-0000-4000-8000-0000000000ee";
+    voice.seedChannelLive(UNSURE, { stream: null, watching: 0 });
+    expect(voice.getState().channelLive[UNSURE]?.streamEnded).toBe(false);
   });
 
   it("says watch-live once, takes it back once, and repeats neither", () => {

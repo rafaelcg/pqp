@@ -29,6 +29,7 @@ export function DmCallStage({
   onJoinCall,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -53,6 +54,7 @@ export function DmCallStage({
   onJoinCall: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -84,7 +86,7 @@ export function DmCallStage({
 
   if (!inThisCall) {
     return (
-      <div className="flex items-center gap-3 border-b border-ink-4/60 bg-ink-2/70 px-4 py-2">
+      <div className="flex items-center gap-3 border-b border-border/60 bg-surface-1/70 px-4 py-2">
         <OccupantFaces
           faces={occupants.map((person) => ({
             key: person.peerId,
@@ -92,12 +94,12 @@ export function DmCallStage({
             avatarUrl: person.avatarUrl,
           }))}
         />
-        <p className="min-w-0 flex-1 truncate text-sm text-paper-muted">
+        <p className="min-w-0 flex-1 truncate text-sm text-text-tertiary">
           {t("call.panel.inCall", { count: occupants.length })}
         </p>
         <button
           type="button"
-          className="flex items-center gap-1.5 rounded-md bg-success/90 px-3 py-1.5 text-xs font-semibold text-ink hover:bg-success"
+          className="flex items-center gap-1.5 rounded-md bg-success/90 px-3 py-1.5 text-xs font-semibold text-surface-0 hover:bg-success"
           onClick={onJoinCall}
         >
           <Phone className="h-3.5 w-3.5" />
@@ -132,6 +134,7 @@ export function DmCallStage({
       playOutgoingRingtone
       onLeave={onLeave}
       onToggleMute={onToggleMute}
+      onDismissMicFallbackNotice={onDismissMicFallbackNotice}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}

@@ -23,6 +23,7 @@ import {
 import { randomInt } from "node:crypto";
 import type { PoolClient } from "pg";
 import { getPool, type DbMessage, type DbUser } from "../db.js";
+import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { deleteObject } from "../lib/s3.js";
 import {
   claimAttachments,
@@ -270,6 +271,31 @@ async function hydrate(
   };
 }
 
+/**
+ * The read a client makes every time a channel is opened or reloaded, and
+ * the one a reload storm repeats identically hundreds of times: no cursor,
+ * viewer-independent (`viewerId` only affects `hydrate`'s per-viewer shaping,
+ * called below on the shared result). `MESSAGES_LATEST_TTL_MS` matches
+ * `read-cache.ts`'s default; named here rather than passed as a literal so
+ * `invalidateLatestMessages` below documents where it comes from.
+ */
+const MESSAGES_LATEST_TTL_MS = 2_000;
+
+function latestMessagesCacheKey(channelId: string, limit: number): string {
+  return `messages:latest:${channelId}:${limit}`;
+}
+
+/**
+ * Drop the cached latest-page rows for a channel, at every page size a
+ * client might have asked for. Called on every write that changes what the
+ * latest page contains: a new message, an edit (the cached rows carry the
+ * body), a delete, or a bulk delete/purge. The prefix has no trailing limit,
+ * so `invalidate` drops all of them in one call.
+ */
+export function invalidateLatestMessages(channelId: string): void {
+  invalidateReadCache(`messages:latest:${channelId}:`);
+}
+
 export async function listMessages(
   channelId: string,
   options: ListMessagesOptions = {},
@@ -323,8 +349,18 @@ export async function listMessages(
     return hydrate(page.rows.reverse(), page.overflow, true, viewerId);
   }
 
-  const page = await keysetPage(channelId, limit);
-  return hydrate(page.rows.reverse(), page.overflow, false, viewerId);
+  // The only branch that is identical for every viewer with access — no
+  // cursor means "the latest page", and nothing in `keysetPage`'s query
+  // depends on who is asking. Cached before `hydrate`'s per-viewer shaping
+  // (blocked authors, per-viewer reaction/poll state), which still runs on
+  // every call, cached or not. `page.rows` is shared across callers when
+  // this is a cache hit, so it is copied before `.reverse()` mutates it.
+  const page = await coalesce(
+    latestMessagesCacheKey(channelId, limit),
+    MESSAGES_LATEST_TTL_MS,
+    () => keysetPage(channelId, limit),
+  );
+  return hydrate([...page.rows].reverse(), page.overflow, false, viewerId);
 }
 
 /**
@@ -554,6 +590,13 @@ async function recordMentions(
  * this is the same rule re-checked once the answer is in — and the insert is
  * rolled back rather than leaving a blank message in the channel.
  */
+/**
+ * `duplicate` is true when the nonce had already been stored and the row is
+ * the earlier message: the caller must not fan it out, only answer the
+ * sender who asked twice.
+ */
+export type CreateMessageResult = HydratedMessage & { duplicate: boolean };
+
 export async function createMessage(
   channelId: string,
   author: DbUser,
@@ -562,10 +605,42 @@ export async function createMessage(
   attachmentIds?: string[],
   mentions?: MentionWrite,
   interactive?: MessageInteractive,
-): Promise<HydratedMessage | null> {
+  nonce?: string | null,
+): Promise<CreateMessageResult | null> {
   if (interactive?.chance && interactive.poll) {
     return null;
   }
+  let nonceAlreadyStored = false;
+  const created = await insertMessage(
+    channelId,
+    author,
+    body,
+    replyToId,
+    attachmentIds,
+    mentions,
+    interactive,
+    nonce ?? null,
+    () => {
+      nonceAlreadyStored = true;
+    },
+  );
+  if (created || !nonceAlreadyStored || !nonce) {
+    return created;
+  }
+  return findMessageByNonce(channelId, author.id, nonce);
+}
+
+async function insertMessage(
+  channelId: string,
+  author: DbUser,
+  body: string,
+  replyToId: string | null | undefined,
+  attachmentIds: string[] | undefined,
+  mentions: MentionWrite | undefined,
+  interactive: MessageInteractive | undefined,
+  nonce: string | null,
+  onNonceConflict: () => void,
+): Promise<CreateMessageResult | null> {
   let storedBody = clampChatNewlines(body);
   let chance: ChanceResult | null = null;
   const deckAction =
@@ -611,8 +686,9 @@ export async function createMessage(
     // parent lookup hangs off.
     const result = await client.query<DbMessage>(
       `WITH inserted AS (
-         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (channel_id, author_id, nonce) WHERE nonce IS NOT NULL DO NOTHING
          RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
                    mention_everyone, mention_here, chance
        )
@@ -630,11 +706,21 @@ export async function createMessage(
         mentions?.mentionEveryone === true,
         mentions?.mentionHere === true,
         chance ? JSON.stringify(chance) : null,
+        nonce ?? null,
       ],
     );
     // A message is never born pinned, so the columns above are left out rather
     // than joined for nothing — mapMessage already treats them as optional.
-    const message = result.rows[0]!;
+    const message = result.rows[0];
+    if (!message) {
+      // The nonce is already stored: this is the same send arriving again
+      // (an offline queue replayed after a reload). Nothing else in this
+      // transaction happened, so roll back; the first row is looked up once
+      // the connection is back in the pool.
+      await client.query("ROLLBACK");
+      onNonceConflict();
+      return null;
+    }
 
     const claimed = await claimAttachments(client, message.id, verified);
 
@@ -658,6 +744,7 @@ export async function createMessage(
     );
 
     await client.query("COMMIT");
+    invalidateLatestMessages(channelId);
 
     const polls = interactive?.poll
       ? await listPollsForMessages([message.id], author.id)
@@ -677,6 +764,7 @@ export async function createMessage(
       embeds: [],
       chance,
       poll: polls.get(message.id) ?? null,
+      duplicate: false,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -684,6 +772,30 @@ export async function createMessage(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Exported so a caller can check a nonce BEFORE running anything that should
+ * not apply twice to the same send — slow mode's charge, chiefly (see the
+ * call in `postChannelMessageAttempt`). `createMessage` also calls this
+ * internally, on the `ON CONFLICT DO NOTHING` path, for the replay that
+ * arrives concurrently with the original still in flight; this export
+ * covers the far more common case, a replay that lands after the original
+ * already committed.
+ */
+export async function findMessageByNonce(
+  channelId: string,
+  authorId: string,
+  nonce: string,
+): Promise<CreateMessageResult | null> {
+  const existing = await getPool().query<{ id: string }>(
+    `SELECT id FROM messages
+      WHERE channel_id = $1 AND author_id = $2 AND nonce = $3`,
+    [channelId, authorId, nonce],
+  );
+  const id = existing.rows[0]?.id;
+  const hydrated = id ? await getHydratedMessage(id) : null;
+  return hydrated ? { ...hydrated, duplicate: true } : null;
 }
 
 export async function updateMessageBody(
@@ -720,21 +832,40 @@ export async function updateMessageBody(
     return null;
   }
 
-  await getPool().query(`DELETE FROM message_mentions WHERE message_id = $1`, [
-    messageId,
-  ]);
-  // The reply mention is re-recorded too: an edit wipes the row set, and losing
-  // it would quietly downgrade the reply to decoration.
-  await recordMentions(
-    getPool(),
-    messageId,
-    message.channel_id,
-    message.author_id,
-    storedBody,
-    message.reply_to_id
-      ? { parentId: message.reply_to_id, authorId: message.author_id }
-      : undefined,
-  );
+  try {
+    await getPool().query(
+      `DELETE FROM message_mentions WHERE message_id = $1`,
+      [messageId],
+    );
+    // The reply mention is re-recorded too: an edit wipes the row set, and
+    // losing it would quietly downgrade the reply to decoration.
+    await recordMentions(
+      getPool(),
+      messageId,
+      message.channel_id,
+      message.author_id,
+      storedBody,
+      message.reply_to_id
+        ? { parentId: message.reply_to_id, authorId: message.author_id }
+        : undefined,
+    );
+  } finally {
+    // In `finally`, not after: the body update already committed in the CTE
+    // above, so a failure rewriting mentions must not leave that committed
+    // body sitting stale behind the cache for the rest of its TTL — this
+    // function still throws (the caller needs to know the mentions half
+    // failed), but the one thing this cache must never do, serve pre-edit
+    // text after the edit is durably on disk, is closed either way.
+    //
+    // Placed after both writes rather than right after the body UPDATE for
+    // the other half of the same reasoning: a concurrent reload landing
+    // between an earlier invalidation and the mentions rewrite could have
+    // repopulated the cache with the new body against a mention set that
+    // was mid-rewrite (briefly empty, or still the pre-edit rows) — a
+    // narrower mismatch than a stale body, but still one this cache should
+    // never produce. One invalidation, positioned to close both windows.
+    invalidateLatestMessages(message.channel_id);
+  }
 
   // An edit never touches attachments, but the broadcast it produces is a whole
   // message — dropping them here would blank the images out of every open tab
@@ -750,6 +881,16 @@ export async function updateMessageBody(
     listThreadsForMessages([messageId]),
     listPollsForMessages([messageId]),
   ]);
+  // Invalidated again now that every write this edit makes has landed
+  // (mentions included), on top of the call right after the UPDATE above.
+  // `read-cache.ts`'s `coalesce` already refuses to let a load that started
+  // before an `invalidate()` write its answer back over a fresher one (the
+  // "still ours" identity guard), so this second call is not closing a gap
+  // that fix leaves open — it is a second, independent line of defense
+  // against a mistake in that guard, cheap enough (one key-prefix scan over
+  // a capped map) to keep even though it should never do anything the first
+  // call didn't already.
+  invalidateLatestMessages(message.channel_id);
   return {
     ...message,
     reactions: reactions.get(messageId) ?? [],
@@ -770,12 +911,15 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
     [messageId],
   );
 
-  const result = await getPool().query(`DELETE FROM messages WHERE id = $1`, [
-    messageId,
-  ]);
-  const deleted = (result.rowCount ?? 0) > 0;
+  const result = await getPool().query<{ channel_id: string }>(
+    `DELETE FROM messages WHERE id = $1 RETURNING channel_id`,
+    [messageId],
+  );
+  const deletedRow = result.rows[0];
+  const deleted = deletedRow !== undefined;
 
   if (deleted) {
+    invalidateLatestMessages(deletedRow.channel_id);
     sweepAttachmentObjects(attached.rows.map((row) => row.storage_key));
   }
 
@@ -873,6 +1017,7 @@ export async function deleteMessagesBulk(
   const deleted = result.rows.map((row) => row.id);
 
   if (deleted.length > 0) {
+    invalidateLatestMessages(channelId);
     sweepAttachmentObjects(attached.rows.map((row) => row.storage_key));
   }
 

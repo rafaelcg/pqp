@@ -484,6 +484,17 @@ reading has landed. A zero renders as an impossibly fast probe and is
 indistinguishable at a glance from a real one, which is the bug this rule
 exists to prevent. Say what is actually known instead.
 
+Also on `/metrics`: **`instanceId`**, **`instanceCount`** and **`cluster`** —
+which machine answered this request, how many are live, and the same live
+counters (sockets, voice participants, HLS sessions, pool) SUMMED across them,
+built from the per-instance snapshot each process writes into its own
+`voice_instances` row on its 15-second heartbeat. `runtime` stays the local
+reading: with two machines behind `api.pqp.gg` a refresh lands wherever the
+proxy sends it, so "how big is the service" and "is this machine in trouble"
+are two questions and the page now has both. `cluster.reporting` below
+`cluster.instances` means the sum is a floor (a worker holds no sockets), and
+`cluster.versions` with more than one entry means a deploy is mid-roll.
+
 Also on `/metrics`, and only there: **`statusHistory`**, 24 hours of latency per
 component in 30-minute buckets plus that component's own p50 and p95. It draws
 the sparkline on each health row and decides the latency verdict, and it is

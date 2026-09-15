@@ -50,9 +50,18 @@ kill_timeout = 30
   # network.
   PORT = "3001"
   # The worker holds at most a handful of connections at once (one sweep in
-  # flight per job, and most jobs are daily). Keep the sum of this and
-  # fly.toml's PG_POOL_MAX under the database's max_connections.
+  # flight per job, and most jobs are daily), plus ONE for the bus below, which
+  # lives outside the pool. Keep the sum of this and fly.toml's PG_POOL_MAX
+  # under the database's max_connections.
   PG_POOL_MAX = "4"
+  # PUBLISH-ONLY. Some of the jobs here start a fan-out that finishes on a
+  # socket: the channel-session reminder tick and the watch-party host sweep
+  # both tell people something over `/ws`, and this process has none. With the
+  # same value fly.toml sets, the worker connects, NOTIFYs and never LISTENs,
+  # so those frames reach the API machines that do hold the sockets. See
+  # `startWorkerBus` in server/src/worker.ts. Unset, the worker behaves exactly
+  # as it did before and those two nudges reach only Web Push.
+  CLUSTER_BUS = "postgres"
 
 # Machine-level check: restart the worker whose pool went dead, the same way
 # the API's /health does through its http_service check. There is no public

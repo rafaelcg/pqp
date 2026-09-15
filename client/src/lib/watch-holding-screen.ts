@@ -28,12 +28,37 @@ import type { HlsStallReason } from "@/lib/hls-stall";
  * - `dead`: the watchdog gave up (`HlsStallWatch` `dead` decision) — the
  *   existing retry-button overlay, unchanged.
  * - `null`: nothing to say — a frame is playing.
+ *
+ * `restarting` is checked BEFORE the "a frame is playing" guard below
+ * (`BROADCAST_PIPELINE.md` B1.3): the player no longer tears hls.js down for
+ * a `sequence-stuck` egress, so `phase` stays `"playing"` and the last frame
+ * stays on screen — `hasFrame` and `phase` alone would say nothing is wrong.
+ * `stallReason` is the one signal that still says so, and `onPlaying`
+ * already clears it the moment a frame actually arrives again, so this
+ * cannot linger past the episode it describes.
+ *
+ * A REPLAY (`mode: "vod"`) GETS A DIFFERENT VOCABULARY ENTIRELY, not just a
+ * different label on the same states. A finished broadcast's playlist is a
+ * fixed, ended `#EXT-X-MEDIA-SEQUENCE`: it is SUPPOSED to stop advancing the
+ * moment the whole thing is buffered, which is exactly what `restarting`
+ * exists to call a dead egress. Handing a VOD player the live vocabulary
+ * restarts a perfectly healthy playback loop every ~20s and, after three of
+ * those, calls a fine recording "A transmissão caiu" -- copy that describes a
+ * live show falling over, not a clip that finished downloading. So a replay
+ * never sees `restarting` or the live flavour of `reconnecting`: ordinary
+ * buffering (no frame yet, nothing wrong) is `buffering`, plain and mute, and
+ * the watchdog giving up for real is `unavailable` -- "the recording is gone",
+ * never "the stream died". Note this also means the `mode === "vod"` check
+ * runs BEFORE the `stallReason === "sequence-stuck"` check below, so a
+ * replay never reaches the live `restarting` branch at all.
  */
 export type HoldingScreenReason =
   | "restarting"
   | "reconnecting"
   | "silent"
   | "dead"
+  | "buffering"
+  | "unavailable"
   | null;
 
 /** How long a fresh auth failure is given to resolve itself before the
@@ -49,18 +74,29 @@ export function resolveHoldingScreenReason(input: {
   stallReason: HlsStallReason;
   /** True for `AUTH_GRACE_MS` after a playlist request came back 401. */
   authGraceActive: boolean;
+  /** A finished broadcast's replay, not a live watch party. Defaults to
+   *  `"live"` so every existing caller keeps today's vocabulary. */
+  mode?: "live" | "vod";
 }): HoldingScreenReason {
-  if (input.phase === "playing" && input.hasFrame) {
-    return null;
-  }
   if (input.phase === "dead") {
-    return "dead";
+    return input.mode === "vod" ? "unavailable" : "dead";
   }
   if (input.authGraceActive) {
     return "silent";
   }
+  if (input.mode === "vod") {
+    // A replay still needs the "a frame is playing" guard -- it is simply
+    // never followed by the live `restarting`/`reconnecting` branches below.
+    if (input.phase === "playing" && input.hasFrame) {
+      return null;
+    }
+    return "buffering";
+  }
   if (input.stallReason === "sequence-stuck") {
     return "restarting";
+  }
+  if (input.phase === "playing" && input.hasFrame) {
+    return null;
   }
   return "reconnecting";
 }

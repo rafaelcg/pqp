@@ -21,6 +21,12 @@ import {
   resolveCharacterToken,
 } from "../services/characters.js";
 import type { DbUser } from "../db.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
+import { forEachAuthenticatedSocket } from "../ws/sockets.js";
 
 const clerk = createClerkClient({
   secretKey: process.env.CLERK_SECRET_KEY,
@@ -138,6 +144,9 @@ export function clearAuthCaches(): void {
   profileInflight.clear();
   userCache.clear();
   userInflight.clear();
+  evictionGeneration.clear();
+  evictionInFlightCount.clear();
+  evictionExpiresAt.clear();
 }
 
 /**
@@ -165,6 +174,11 @@ export function sweepAuthCaches(now = Date.now()): void {
       userCache.delete(key);
     }
   }
+  // Bounded the way `evictionGeneration`'s own doc comment describes: a
+  // tombstone whose clock has started (nothing left in flight for that id)
+  // and whose TTL has passed. One that is still mid-lookup is never touched
+  // here regardless of `now`.
+  sweepEvictionGenerations(now);
 }
 
 /** Test helper: how many entries each cache is holding. */
@@ -259,6 +273,12 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
     return existing;
   }
 
+  // Snapshot before the `await` below — see `evictionGeneration`'s doc
+  // comment. An eviction that lands while this lookup is in flight must not
+  // be undone by this lookup's own completion, and its tombstone must not
+  // expire while this lookup is still the reason it needs to hold.
+  const startGeneration = currentEvictionGeneration(clerkId);
+  beginEvictionLookup(clerkId);
   const request = (async () => {
     try {
       const user = await clerk.users.getUser(clerkId);
@@ -268,10 +288,12 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
         avatarUrl: user.imageUrl ?? null,
         emailDomains: verifiedEmailDomains(user.emailAddresses),
       };
-      profileCache.set(clerkId, {
-        user: profile,
-        expiresAt: Date.now() + PROFILE_TTL_MS,
-      });
+      if (currentEvictionGeneration(clerkId) === startGeneration) {
+        profileCache.set(clerkId, {
+          user: profile,
+          expiresAt: Date.now() + PROFILE_TTL_MS,
+        });
+      }
       return profile;
     } catch (error) {
       console.error("[auth] Clerk profile lookup failed:", error);
@@ -282,6 +304,7 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
       return cached?.user ?? null;
     } finally {
       profileInflight.delete(clerkId);
+      endEvictionLookup(clerkId);
     }
   })();
 
@@ -292,18 +315,179 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
 /**
  * The DB row for a Clerk id. Cached because `resolveAuthUser` runs on every
  * request and would otherwise issue an UPDATE each time.
+ *
+ * 60s rather than the 30s this held before 2026-09-13: `upsertUser` (in
+ * services/users.ts) now skips the UPDATE outright when nothing it would
+ * write actually differs, so what a longer TTL buys here is fewer of
+ * *those* no-op round trips too, not fresher data — a new avatar or a newly
+ * verified email domain still lands within one TTL window either way, same
+ * bound this cache always had.
  */
-const USER_TTL_MS = 30_000;
+const USER_TTL_MS = 60_000;
 const userCache = new Map<string, { user: DbUser; expiresAt: number }>();
 const userInflight = new Map<string, Promise<DbUser>>();
 
-/** Called after a profile write so the next request sees fresh data. */
+/**
+ * Called after a profile write so the next request sees fresh data.
+ *
+ * SINGLE-INSTANCE this was always enough: `userCache` lives on the process
+ * that just wrote the row. On two instances it is not — the write happens on
+ * whichever one served the request, and a sibling instance goes on serving the
+ * stale `DbUser` row (old display name, old avatar) for up to `USER_TTL_MS`
+ * with nothing on its side ever telling it to look again. So this both clears
+ * the local entry (unchanged behaviour) and, with a transport installed,
+ * relays the same invalidation to every other instance.
+ */
 export function invalidateUserCache(clerkId: string): void {
   userCache.delete(clerkId);
+  if (isBusEnabled()) {
+    publishToCluster(AUTH_INVALIDATE_TOPIC, { clerkId });
+  }
 }
 
 /**
- * Drop *every* cached trace of an identity — the DB row and the Clerk profile.
+ * Bumped every time `forgetAuthUser` runs for an identity — a local call, or
+ * an `auth.evictUser` frame from another instance applying here.
+ *
+ * Deleting a map entry does not cancel a promise already in flight: a
+ * `loadProfile`/`resolveDbUser` call that started before the eviction can
+ * still be sitting on an `await` to Clerk or Postgres when it lands, and
+ * without this guard its `.then()` would write straight back into the cache
+ * entry the eviction just cleared — or, for `resolveDbUser`, its `upsertUser`
+ * would have already recreated the row `DELETE FROM users` just removed by
+ * the time anyone checks. `loadProfile`/`resolveDbUser` snapshot the
+ * generation before starting their async work (via `beginEvictionLookup`)
+ * and refuse to cache a result whose generation has since moved — they still
+ * return the answer to the one caller waiting on that particular promise,
+ * since the lookup itself was genuinely valid when it started; what they
+ * refuse is repopulating a cache entry for everyone after. (Farol review of
+ * #603.)
+ *
+ * WHY THIS CANNOT USE A PLAIN TTL. A first pass expired entries after
+ * `PROFILE_TTL_MS` (5 minutes) like `profileCache`/`userCache` do, and a
+ * second review caught what that TTL actually meant: a Clerk or Postgres
+ * completion slow enough to outlive it would find its tombstone already
+ * gone, read the generation back as the pre-eviction value, and repopulate
+ * the cache anyway — the exact write this map exists to refuse. A second pass
+ * removed the sweep entirely — correct for the race, but then a THIRD review
+ * caught the cost: an entry every account this process has ever terminated
+ * holds forever is still a live, if slower, version of the same unbounded
+ * growth `sweepAuthCaches`'s own doc comment already flags for the two
+ * caches above.
+ *
+ * So the tombstone's clock does not start at eviction — it starts once
+ * nothing is still in flight for that identity. `evictionInFlightCount`
+ * tracks how many `loadProfile`/`resolveDbUser` calls are currently running
+ * per clerk id (`beginEvictionLookup`/`endEvictionLookup`, called around the
+ * same async work the generation snapshot brackets); `evictionExpiresAt`
+ * holds a sweep-eligible timestamp ONLY while that count is zero, cleared the
+ * instant a new lookup starts. `sweepAuthCaches` (the same 60s timer that
+ * sweeps the two caches above) drops a generation entry once its expiry has
+ * both been set and passed — never while anything for that id is still
+ * running, however long that turns out to take. `EVICTION_TOMBSTONE_MAX_ENTRIES`
+ * is a backstop under that, not the primary bound: a volume of terminations
+ * that could realistically hit it is not a shape this product has, but an
+ * unconditional cap costs nothing to have anyway.
+ */
+/** Exported for `clerk-eviction-race.test.ts`, so the test that pins the
+ *  sweep boundary does not hardcode a duplicate of this number. */
+export const EVICTION_TOMBSTONE_TTL_MS = 15 * 60_000;
+const EVICTION_TOMBSTONE_MAX_ENTRIES = 10_000;
+
+const evictionGeneration = new Map<string, number>();
+/** How many lookups are currently in flight for this identity — see the doc
+ *  comment on `evictionGeneration` above. */
+const evictionInFlightCount = new Map<string, number>();
+/** When a tombstone with nothing left in flight becomes sweep-eligible.
+ *  Absent while a lookup is running for that id (the clock has not started)
+ *  or while the identity has no tombstone at all. */
+const evictionExpiresAt = new Map<string, number>();
+
+function bumpEvictionGeneration(clerkId: string): void {
+  evictionGeneration.set(clerkId, (evictionGeneration.get(clerkId) ?? 0) + 1);
+  if ((evictionInFlightCount.get(clerkId) ?? 0) === 0) {
+    scheduleTombstoneExpiry(clerkId);
+  }
+  // Else: something is still in flight for this id. `endEvictionLookup`
+  // starts the clock once it (and everything else running right now for
+  // this id) finishes.
+}
+
+function scheduleTombstoneExpiry(clerkId: string): void {
+  // Re-inserts the key, which is what keeps `enforceTombstoneCap`'s
+  // insertion-order eviction tracking recency well enough for a backstop
+  // that is not expected to ever actually trigger.
+  evictionExpiresAt.delete(clerkId);
+  evictionExpiresAt.set(clerkId, Date.now() + EVICTION_TOMBSTONE_TTL_MS);
+  enforceTombstoneCap();
+}
+
+function enforceTombstoneCap(): void {
+  while (evictionGeneration.size > EVICTION_TOMBSTONE_MAX_ENTRIES) {
+    // Oldest sweep-eligible entry first. An id with nothing in
+    // `evictionExpiresAt` yet (still in flight) is never a candidate here.
+    const oldest = evictionExpiresAt.keys().next();
+    if (oldest.done) {
+      break; // Every remaining tombstone still has a lookup in flight.
+    }
+    evictionGeneration.delete(oldest.value);
+    evictionExpiresAt.delete(oldest.value);
+  }
+}
+
+function currentEvictionGeneration(clerkId: string): number {
+  return evictionGeneration.get(clerkId) ?? 0;
+}
+
+/**
+ * Call immediately before starting a Clerk/Postgres lookup whose completion
+ * will (if the generation has not moved by then) write into
+ * `profileCache`/`userCache`. Pairs with `endEvictionLookup` in that
+ * lookup's `finally`.
+ */
+function beginEvictionLookup(clerkId: string): void {
+  evictionInFlightCount.set(
+    clerkId,
+    (evictionInFlightCount.get(clerkId) ?? 0) + 1,
+  );
+  // A lookup just started: any tombstone for this id must not expire under
+  // it, whether or not it existed already.
+  evictionExpiresAt.delete(clerkId);
+}
+
+function endEvictionLookup(clerkId: string): void {
+  const remaining = (evictionInFlightCount.get(clerkId) ?? 1) - 1;
+  if (remaining > 0) {
+    evictionInFlightCount.set(clerkId, remaining);
+    return;
+  }
+  evictionInFlightCount.delete(clerkId);
+  if (evictionGeneration.has(clerkId)) {
+    // Nothing left in flight for this id — the tombstone's clock starts now.
+    scheduleTombstoneExpiry(clerkId);
+  }
+}
+
+function sweepEvictionGenerations(now: number): void {
+  for (const [clerkId, expiresAt] of evictionExpiresAt) {
+    if (expiresAt <= now) {
+      evictionExpiresAt.delete(clerkId);
+      evictionGeneration.delete(clerkId);
+    }
+  }
+}
+
+/** Test-only: how many identities currently hold an eviction tombstone. */
+export function evictionTombstoneCount(): number {
+  return evictionGeneration.size;
+}
+
+/**
+ * Drop *every* cached trace of an identity — the DB row and the Clerk profile
+ * — ON THIS INSTANCE ONLY. See `evictUserAcrossCluster` for the version that
+ * also closes sockets and reaches every other instance; this local half is
+ * what that function (and this file's own Clerk-deletion cleanup below) build
+ * on.
  *
  * `invalidateUserCache` is not enough for a deleted account: `profileCache`
  * holds a display name and avatar for up to five minutes, and `loadProfile`
@@ -317,7 +501,136 @@ export function forgetAuthUser(clerkId: string): void {
   profileInflight.delete(clerkId);
   userCache.delete(clerkId);
   userInflight.delete(clerkId);
+  bumpEvictionGeneration(clerkId);
 }
+
+// ------------------------------------------------------------ cluster bus
+//
+// Account termination has to reach every instance, not just the one that
+// handled the HTTP request: a WebSocket authenticates once at connect and
+// never re-checks, so a socket held open on a SIBLING instance would keep
+// delivering message bodies to a deleted account until it happened to drop,
+// and that instance's own `userCache`/`profileCache` would keep authenticating
+// the identity from cache — `upsertUser` can even recreate the row `DELETE FROM
+// users` just removed. See pitfalls (1)/(2) in the audit this closes.
+//
+// Same rules as every other cluster-bus handler in this codebase (`ws/chat.ts`):
+// inert with no transport installed, subscriptions registered at import time
+// regardless, and a handler calls the *local* half only — `bus.ts`'s origin
+// guard is what stops the instance that published a frame from ever running
+// its own subscriber.
+//
+// NOT DURABLE, ON PURPOSE, LIKE EVERY OTHER TOPIC ON THIS BUS. `bus.ts`
+// documents `publishToCluster` as fire-and-forget with no delivery guarantee —
+// a sibling that is mid-reconnect to Postgres when this frame is published
+// never sees it, same as a `chat.broadcast` or an `EVICT_TOPIC` channel
+// eviction published during that same window. A Farol review of this file
+// flagged that gap as HIGH and asked for a durable outbox with retry or
+// reconciliation; that would be a real feature (a persisted eviction log, a
+// sweep to replay missed ones) and a bigger, more invasive change than the
+// audit this file closes asked for, applied to every bus topic rather than
+// this one alone — tracked as a follow-up rather than built here. What IS in
+// scope, and done: `evictionGeneration` below closes the narrower, concrete
+// race Farol's other two findings pointed at, where a lookup already in
+// flight when a (successfully delivered) eviction frame arrives could
+// otherwise complete afterward and undo it.
+
+const AUTH_EVICT_TOPIC = "auth.evictUser";
+const AUTH_INVALIDATE_TOPIC = "auth.invalidateUser";
+
+/**
+ * The close code + reason used everywhere an account's own sockets are torn
+ * down because the account itself is gone — one constant so the local path
+ * and the cluster relay can never drift onto different wire values.
+ */
+const ACCOUNT_TERMINATED_CLOSE_CODE = 4003;
+const ACCOUNT_TERMINATED_CLOSE_REASON = "account deleted";
+
+/** How many `auth.evictUser` / `auth.invalidateUser` frames from OTHER
+ *  instances this process has applied. Proof the relay actually runs — see
+ *  pitfall 12 in CLAUDE.md, where a cluster-gated code path shipped and was
+ *  never once exercised because nothing counted it. */
+let clusterEvictionsApplied = 0;
+let clusterInvalidationsApplied = 0;
+
+/** Test-only visibility into the counters above. */
+export function authClusterRelayCounts(): {
+  evictions: number;
+  invalidations: number;
+} {
+  return {
+    evictions: clusterEvictionsApplied,
+    invalidations: clusterInvalidationsApplied,
+  };
+}
+
+/**
+ * The half that runs on EVERY instance holding this account's sockets: drop
+ * every cache trace (same as `forgetAuthUser`) and close every socket
+ * authenticated as this user, with the same close code the local termination
+ * path has always used.
+ */
+function evictUserLocally(userId: string, clerkId: string): void {
+  forgetAuthUser(clerkId);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (user.id === userId) {
+      socket.close(ACCOUNT_TERMINATED_CLOSE_CODE, ACCOUNT_TERMINATED_CLOSE_REASON);
+    }
+  });
+}
+
+/**
+ * Terminate an account everywhere it might be holding a live connection.
+ * Call this from a termination path instead of `forgetAuthUser` plus a bare
+ * `forEachAuthenticatedSocket` loop — that pair only ever reached the instance
+ * that took the HTTP request. `reason` is for the log line below, not the
+ * wire: what the client sees over the socket is always
+ * `ACCOUNT_TERMINATED_CLOSE_REASON`, on this instance and on every other one.
+ */
+export function evictUserAcrossCluster(
+  userId: string,
+  clerkId: string,
+  reason: string,
+): void {
+  evictUserLocally(userId, clerkId);
+  if (isBusEnabled()) {
+    publishToCluster(AUTH_EVICT_TOPIC, { userId, clerkId, reason });
+  }
+}
+
+function asRecord(data: unknown): Record<string, unknown> | null {
+  return typeof data === "object" && data !== null
+    ? (data as Record<string, unknown>)
+    : null;
+}
+
+subscribeToCluster(AUTH_EVICT_TOPIC, (data) => {
+  const frame = asRecord(data);
+  const userId = frame && typeof frame.userId === "string" ? frame.userId : null;
+  const clerkId =
+    frame && typeof frame.clerkId === "string" ? frame.clerkId : null;
+  if (!userId || !clerkId) {
+    return;
+  }
+  evictUserLocally(userId, clerkId);
+  clusterEvictionsApplied += 1;
+  const reason =
+    frame && typeof frame.reason === "string" ? frame.reason : "unknown";
+  console.warn(
+    `[auth] cluster evict applied for user ${userId} (reason: ${reason})`,
+  );
+});
+
+subscribeToCluster(AUTH_INVALIDATE_TOPIC, (data) => {
+  const frame = asRecord(data);
+  const clerkId =
+    frame && typeof frame.clerkId === "string" ? frame.clerkId : null;
+  if (!clerkId) {
+    return;
+  }
+  userCache.delete(clerkId);
+  clusterInvalidationsApplied += 1;
+});
 
 /** A Clerk user id that no longer exists there — see `deleteClerkUser`. */
 export class ClerkUserGoneError extends Error {}
@@ -378,16 +691,25 @@ async function resolveDbUser(auth: AuthUser): Promise<DbUser> {
     return existing;
   }
 
+  // Same guard as `loadProfile`, and the sharper half of it: without this an
+  // `upsertUser` that was already running when an eviction landed would
+  // repopulate `userCache` with the row it just fetched/wrote, for every
+  // caller after this one — not just answer the one request that started it.
+  const startGeneration = currentEvictionGeneration(auth.clerkId);
+  beginEvictionLookup(auth.clerkId);
   const request = upsertUser(auth)
     .then((user) => {
-      userCache.set(auth.clerkId, {
-        user,
-        expiresAt: Date.now() + USER_TTL_MS,
-      });
+      if (currentEvictionGeneration(auth.clerkId) === startGeneration) {
+        userCache.set(auth.clerkId, {
+          user,
+          expiresAt: Date.now() + USER_TTL_MS,
+        });
+      }
       return user;
     })
     .finally(() => {
       userInflight.delete(auth.clerkId);
+      endEvictionLookup(auth.clerkId);
     });
 
   userInflight.set(auth.clerkId, request);

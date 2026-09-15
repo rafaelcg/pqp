@@ -14,6 +14,8 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { HttpError } from "../lib/http.js";
+import { processRole, runsColdJobs } from "../lib/process-role.js";
+import { notifyOutgoingWebhookEnqueued } from "./outgoing-webhook-poller.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import {
   parseHttpUrl,
@@ -619,6 +621,17 @@ export async function enqueueOutgoingMessageCreated(input: {
     void deliverDueOutgoingWebhooks().catch((error: unknown) => {
       console.error("[outgoing-webhooks] delivery kick failed:", error);
     });
+    // The in-process kick above is the fast path on the common, single-
+    // machine deployment (`WORKER_MODE` unset), and it fully covers it: this
+    // same process runs `outgoing-webhook-poller.ts`'s adaptive loop too, so
+    // a NOTIFY to itself would be pure overhead — an extra query for every
+    // enqueue with nothing on the other end that the kick above did not
+    // already do. It only earns its cost in a split deployment, where the
+    // process enqueuing (the API) is not the one polling (`pqp-worker`,
+    // `WORKER_MODE=worker`) and has no loop of its own to notify.
+    if (!runsColdJobs(processRole())) {
+      void notifyOutgoingWebhookEnqueued(getPool());
+    }
   }
   return inserted;
 }

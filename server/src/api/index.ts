@@ -10,7 +10,7 @@ import {
   updateWatchPartySchema,
   watchPartyCohostRequestSchema,
   watchPartyHostRequestSchema,
-  watchPartyStageRequestSchema,
+  watchPartyGuestsRequestSchema,
   watchPartyStateRequestSchema,
   type WatchPartyAction,
   updateChannelSessionSchema,
@@ -123,6 +123,7 @@ import {
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
+  liveHlsTelemetryBatchSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -131,17 +132,46 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import { liveHlsConfigForServer } from "../voice/hls-egress.js";
+import { setRequestedHlsMode } from "../voice/hls-remux.js";
+import {
+  buildReplayMasterPlaylist,
+  buildReplaySignedPlaylist,
+  buildWatchPartyDownloadPlan,
+  checkWatchPartyReplayAccess,
+  isWatchPartyDownloadKind,
+  listWatchPartyHistory,
+  setWatchPartyKeepReplay,
+  streamWatchPartyDownload,
+  watchPartyDownloadSizes,
+  WATCH_PARTY_DOWNLOAD_KINDS,
+  type WatchPartyDownloadKind,
+  type WatchPartyDownloadPlan,
+} from "../voice/hls-history.js";
 import {
   buildMasterPlaylistFor,
   buildSignedPlaylist,
+  hlsPlaylistAgeMs,
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
+  resolveHlsSessionId,
 } from "../voice/hls-playlist-proxy.js";
 import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
 import {
+  recordHlsLatencySample,
+  recordHlsTelemetryBatchAccepted,
+  recordHlsTelemetryBatchRejectedRateLimit,
+  recordHlsTelemetryBatchRejectedSchema,
+  recordHlsTelemetryBatchRejectedSession,
+  recordHlsTelemetryBatchRejectedSessionLookupTimeout,
+} from "../voice/hls-latency-metrics.js";
+import { isKnownHlsRung } from "../voice/hls-ladder.js";
+import { createHlsSessionLookupGuard } from "../voice/hls-telemetry-session-guard.js";
+import {
+  decodeHlsViewerToken,
   describeHlsViewerToken,
   HLS_VIEWER_TOKEN_PARAM,
+  mintHlsViewerToken,
   stampViewerStream,
 } from "../voice/hls-viewer-token.js";
 import {
@@ -158,7 +188,6 @@ import {
   evictVoiceChannel,
   evictVoiceUser,
   evictVoiceUsersExcept,
-  forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
   applyAutomodEffects,
@@ -185,7 +214,7 @@ import {
 } from "../ws/voice.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
-import { setSfuUserMuted } from "../voice/admin.js";
+import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/admin.js";
 import {
   getVoicePeerRow,
   isVoiceRegistryEnabled,
@@ -207,6 +236,7 @@ import {
   recordAgeDeclaration,
 } from "../services/age-gate.js";
 import type { DbUser, MemberRole } from "../db.js";
+import { DatabaseUnavailableError } from "../db.js";
 import {
   clampLimit,
   corsHeaders,
@@ -216,6 +246,7 @@ import {
   readJsonBody,
   SECURITY_HEADERS,
   sendConditionalJson,
+  sendDatabaseUnavailable,
   sendError,
   sendJson,
 } from "../lib/http.js";
@@ -226,7 +257,12 @@ import {
   createRateLimiter,
   limitFromEnv,
 } from "../lib/rate-limit.js";
-import { createRouter, type RequestContext } from "../lib/router.js";
+import {
+  createRouter,
+  type RequestContext,
+  type RouteHandler,
+} from "../lib/router.js";
+import { AUTH_ROUTE_LABEL, runWithRoute } from "../lib/route-context.js";
 import {
   buildPersonalExport,
   deleteAccount,
@@ -310,15 +346,25 @@ import {
   getWatchPartyRow,
   listActiveWatchPartiesForServer,
   presentWatchParty,
-  inviteToWatchPartyStage,
+  acceptWatchPartyGuestRequest,
+  declineWatchPartyGuestRequest,
+  guestRequestCooldownActive,
+  inviteWatchPartyGuest,
+  isWatchPartyGuest,
+  joinWatchPartyGuestSlot,
+  leaveWatchPartyGuestSlot,
   reconcileLiveWatchPartyOptions,
-  removeFromWatchPartyStage,
+  removeWatchPartyGuest,
   removeWatchPartyCohost,
-  setWatchPartyRaisedHand,
+  requestWatchPartyGuestSlot,
   transferWatchPartyHost,
   transitionWatchParty,
   updateWatchParty,
+  watchPartyGuestDeclinedAt,
+  watchPartyOptionsOf,
+  withdrawWatchPartyGuestRequest,
   WatchPartyError,
+  WatchPartyGuestsError,
 } from "../services/watch-parties.js";
 import { broadcastWatchParty } from "../ws/watch-party-events.js";
 import { buildServerExport } from "../services/export.js";
@@ -468,6 +514,7 @@ import {
   getReport,
   getReportScope,
   isInstanceModerator,
+  listAllReports,
   listInstanceReports,
   listReportsByReporter,
   listServerReports,
@@ -544,6 +591,7 @@ import {
   findUserByTag,
   getMemberRole,
   getUserById,
+  invalidateMemberListsForUser,
   isServerMember,
   leaveServer,
   listServerMembers,
@@ -758,6 +806,51 @@ const feedbackLimiter = createRateLimiter({
   refillPerSecond: 0.05,
 });
 /**
+ * BROADCAST_PIPELINE B0.5. Only ~10% of viewers are sampled at all
+ * (`isSampledForHlsTelemetry`, client-side), and a sampled viewer flushes at
+ * most once per `LIVE_HLS_TELEMETRY_FLUSH_MS` (30s), so even a large party
+ * should never come close to this. Roomy enough that a client racing to
+ * catch up after a dropped connection (a few queued flushes) is not the thing
+ * that trips it; a script pretending to be many viewers from one account is.
+ */
+const liveHlsTelemetryLimiter = createRateLimiter({
+  capacity: 10,
+  refillPerSecond: 0.2,
+});
+/**
+ * The same budget as `liveHlsTelemetryLimiter` above, keyed by SESSION
+ * instead of by user (a Farol finding, 2026-09-13: the route only capped one
+ * caller's own rate, not how much one session's worth of traffic could add
+ * up to across many accounts watching the same party). One party with a very
+ * large audience still fits comfortably under this: at the 10% sample rate
+ * and one flush per `LIVE_HLS_TELEMETRY_FLUSH_MS` (30s), even a thousand
+ * sampled viewers average under four batches a second, well inside a refill
+ * this roomy. What it bounds is a script hammering ONE session id (real or
+ * made up) from many accounts at once, which no ordinary audience does.
+ */
+const liveHlsTelemetrySessionLimiter = createRateLimiter({
+  capacity: 120,
+  refillPerSecond: 10,
+});
+/**
+ * How long a signed telemetry batch's `resolveHlsSessionId` lookup may run
+ * before the route gives up on it, and how long that session's key is then
+ * assumed still struggling before the next batch tries again -- see
+ * `hls-telemetry-session-guard.ts`'s own doc comment for the two Farol
+ * findings (2026-09-14) this closes. 500ms is generous for a warm cache hit
+ * (the common case: the session's own viewers are already polling the
+ * master playlist) and still short enough that a stuck pool costs one
+ * request, not an open connection held indefinitely. 30s is roughly the
+ * time a real outage takes a human to notice on the dashboard, not a number
+ * tuned to any specific incident.
+ */
+const HLS_SESSION_LOOKUP_TIMEOUT_MS = 500;
+const HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS = 30_000;
+const hlsSessionLookupGuard = createHlsSessionLookupGuard({
+  timeoutMs: HLS_SESSION_LOOKUP_TIMEOUT_MS,
+  negativeCacheMs: HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS,
+});
+/**
  * Post-call ratings. Roomier than feedback because this one is *asked for*:
  * somebody who genuinely has ten short calls in an evening should be able to
  * answer every prompt, and the client already refuses to ask more than once
@@ -799,6 +892,18 @@ const publicCommunityLimiter = createRateLimiter({
 const voiceLeaveLimiter = createRateLimiter({
   capacity: 30,
   refillPerSecond: 2,
+});
+/**
+ * `request` / `withdraw` on a party's guest queue. Same shape as the mute
+ * toggle's own limiter (`stateLimiter` in `ws/voice.ts`, capacity 15,
+ * refill 3/s) per `docs/RAISED_HANDS.md`'s rule for a self-report of this
+ * kind, kept as its own bucket rather than sharing `writeLimiter` because a
+ * viewer mashing the button is a UI bug, not an attack, and should not spend
+ * the same budget a moderator's bulk delete does.
+ */
+const guestRequestLimiter = createRateLimiter({
+  capacity: 15,
+  refillPerSecond: 3,
 });
 /**
  * Bulk message delete. One call can remove a hundred rows and fan a frame out
@@ -846,7 +951,11 @@ export function resetApiRateLimits(): void {
   publicProfileLimiter.reset();
   publicCommunityLimiter.reset();
   voiceLeaveLimiter.reset();
+  guestRequestLimiter.reset();
   bulkDeleteLimiter.reset();
+  liveHlsTelemetryLimiter.reset();
+  liveHlsTelemetrySessionLimiter.reset();
+  hlsSessionLookupGuard.reset();
   // Keyed on the string "machine" rather than a user id, so unlike every
   // bucket above it is shared by every test in a file and would otherwise
   // drain across them.
@@ -1087,8 +1196,28 @@ router.post("/api/desktop/handoff", async ({ req, res, user }) => {
 
 // ---------------------------------------------------------------- profile
 
+/**
+ * `toPublicUser` plus the one field only the account's own owner may see that
+ * `services/users.ts` cannot compute itself: whether this Clerk id is an
+ * instance moderator. Kept here rather than inside `toPublicUser` to avoid a
+ * cycle — `reports.ts` (home of `isInstanceModerator`) already imports from
+ * `users.ts` for `canAccessChannel`.
+ *
+ * Every route that hands an account its own `User` shape back — not
+ * `toPublicUserSummary`, which strangers see — goes through this, or a
+ * moderator's Settings nav loses its "Moderação da instância" door the moment
+ * they save any profile field, since `userSchema.isInstanceModerator`
+ * defaults `false` when the key is simply missing from the response.
+ */
+async function toOwnUser(user: DbUser) {
+  return {
+    ...(await toPublicUser(user)),
+    isInstanceModerator: isInstanceModerator(user),
+  };
+}
+
 router.get("/api/me", async ({ user, ageGate }) => ({
-  ...(await toPublicUser(user)),
+  ...(await toOwnUser(user)),
   // Reachable while the gate is still pending or blocked — it is how the client
   // finds out which of the two it is looking at.
   ageGate,
@@ -1166,8 +1295,8 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
     customStatus: body.customStatus,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
-  return { ...(await toPublicUser(updated)), ageGate };
+  await announceProfile(updated);
+  return { ...(await toOwnUser(updated)), ageGate };
 });
 
 // ------------------------------------------------------------- avatars
@@ -1241,8 +1370,8 @@ router.post("/api/me/avatar/claim", async ({ req, user }) => {
     avatarKey: body.key,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
-  return { user: await toPublicUser(updated) };
+  await announceProfile(updated);
+  return { user: await toOwnUser(updated) };
 });
 
 /**
@@ -1260,8 +1389,8 @@ router.delete("/api/me/avatar", async ({ user }) => {
     avatarKey: null,
   });
   invalidateUserCache(updated.clerk_id);
-  announceProfile(updated);
-  return { user: await toPublicUser(updated) };
+  await announceProfile(updated);
+  return { user: await toOwnUser(updated) };
 });
 
 // ------------------------------------------------------------- user banners
@@ -1340,7 +1469,7 @@ router.post("/api/me/banner/claim", async ({ req, user }) => {
   if (updated.previousKey && updated.previousKey !== body.key) {
     void discardBannerObject(updated.previousKey);
   }
-  return { user: await toPublicUser(updated.user) };
+  return { user: await toOwnUser(updated.user) };
 });
 
 /**
@@ -1360,7 +1489,7 @@ router.delete("/api/me/banner", async ({ user }) => {
   if (updated.previousKey) {
     void discardBannerObject(updated.previousKey);
   }
-  return { user: await toPublicUser(updated.user) };
+  return { user: await toOwnUser(updated.user) };
 });
 
 /**
@@ -1369,7 +1498,28 @@ router.delete("/api/me/banner", async ({ user }) => {
  * the onboarding backfill call, and a broadcast belongs to a request somebody
  * made — not to every write of the row.
  */
-function announceProfile(updated: DbUser): void {
+async function announceProfile(updated: DbUser): Promise<void> {
+  // Awaited, not fire-and-forget: a member-list read that lands right after
+  // this request must see the new handle/name/avatar/status, not whatever
+  // was cached before it (`services/users.ts`'s `invalidateMemberListsForUser`).
+  //
+  // The profile row itself is already committed by the time this runs (every
+  // caller of `announceProfile` calls it after its own write), so a failure
+  // HERE must not turn into a failure response for a mutation that already
+  // succeeded — the caller would retry a write that has nothing left to do,
+  // and never learn the actual outcome. Logged and swallowed instead: the
+  // worst case is a member list serving a stale name/avatar/handle for up to
+  // the cache's 30s TTL, the same bound this cache already lives with for
+  // every other write it does not explicitly invalidate.
+  try {
+    await invalidateMemberListsForUser(updated.id);
+  } catch (error) {
+    console.error(
+      "[profile] member-list invalidation failed:",
+      updated.id,
+      error,
+    );
+  }
   broadcastProfileUpdate({
     type: "profile-update",
     userId: updated.id,
@@ -1611,19 +1761,13 @@ router.delete("/api/me", async ({ req, res, user }) => {
   // The account is gone from the database, but its live sockets are not: a
   // WebSocket authenticates once at connect and never re-checks, so without
   // this the deleted user keeps receiving message bodies until they happen to
-  // disconnect. `forEachAuthenticatedSocket` and `evictVoiceUser` are the
-  // already-exported handles for this; nothing here reaches into ws/.
-  //
-  // PROCESS-LOCAL. Both helpers walk this instance's own maps, so on a
-  // multi-replica deploy a socket held on *another* replica survives until it
-  // drops. Closing that gap needs a cluster-bus eviction frame, which lives in
-  // ws/chat.ts — see the note in docs/TRUST_AND_SAFETY.md §5.
+  // disconnect. `deleteAccount` (services/account.ts) already closed every
+  // chat socket for this account on this instance AND, with `CLUSTER_BUS` on,
+  // published an eviction that every other instance applies too — see
+  // `evictUserAcrossCluster` in auth/clerk.ts. Voice seats are a separate
+  // registry with its own cross-instance story (`VOICE_REGISTRY`); this call
+  // is still process-local for that part.
   evictVoiceUser(user.id);
-  forEachAuthenticatedSocket((socket, connected) => {
-    if (connected.id === user.id) {
-      socket.close(4003, "account deleted");
-    }
-  });
 
   // Nothing names these objects any more — the rows that did cascaded away with
   // the account, so the hourly orphan sweeper will never see them.
@@ -1704,13 +1848,10 @@ router.delete("/api/admin/users/:userId", async ({ user, res }, { userId }) => {
     throw error;
   }
 
-  // Same eviction and the same process-local caveat as `DELETE /api/me`.
+  // Same eviction as `DELETE /api/me` — `deleteAccount` already closed this
+  // account's chat sockets cluster-wide. Voice seats stay process-local here,
+  // same caveat as above.
   evictVoiceUser(target.id);
-  forEachAuthenticatedSocket((socket, connected) => {
-    if (connected.id === target.id) {
-      socket.close(4003, "account deleted");
-    }
-  });
   deleteObjectsInBackground(result.attachmentKeys);
 
   // No audit entry, and that is not an oversight: `audit_log` is server-scoped
@@ -2306,6 +2447,7 @@ async function hlsPlaylistResponse(
     const master = await buildMasterPlaylistFor({
       channelId,
       startedAt: parsedStartedAt,
+      userId,
       token: options.token,
     });
     if (master !== null) {
@@ -2334,6 +2476,16 @@ async function hlsPlaylistResponse(
   // per-session render cache in `hls-playlist-proxy.ts`.
   res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Vary", "Authorization");
+  // BROADCAST_PIPELINE B0.3: how stale, in milliseconds, the freshest
+  // segment in this render already was when it was signed -- the T5-T6 span
+  // ("in the bucket, to listed in the playlist a viewer polls"), which is the
+  // one nothing watched before this. Read from the SAME render just above,
+  // so it reflects this exact response body. Not a viewer-facing number: no
+  // UI reads this header, only telemetry and an operator's network panel.
+  const ageMs = hlsPlaylistAgeMs(channelId, parsedStartedAt, options.rung);
+  if (ageMs !== null) {
+    res.setHeader("X-Pqp-Playlist-Age-Ms", String(ageMs));
+  }
   return new RawResponse(body, "application/vnd.apple.mpegurl");
 }
 
@@ -2430,6 +2582,15 @@ async function serveHlsPlaylistWithToken(
     });
     res.end(result.body);
   } catch (error) {
+    // Reached only when the playlist proxy's own stale-cache fallback
+    // (`renderCachedPlaylist` / `sessionRungs` in hls-playlist-proxy.ts)
+    // had nothing to fall back to — a viewer's very first request for a
+    // session while the breaker is open. Every subsequent poll for the same
+    // session serves the cached window instead of reaching here.
+    if (error instanceof DatabaseUnavailableError) {
+      sendDatabaseUnavailable(res, req);
+      return;
+    }
     if (error instanceof HttpError) {
       sendError(res, error.status, error.message, req);
       return;
@@ -2510,11 +2671,33 @@ router.post("/api/voice/token", async ({ req, user }) => {
   const channel = await requireChannelAccess(body.voiceChannelId, user.id);
   // Resolved at mint time, not copied from the join: a role edit between the
   // two must land in the token. The SFU only ever consults the grant.
-  const { canSpeak, canStream } = await resolveVoicePublish(
-    channel,
-    body.voiceChannelId,
-    user.id,
-  );
+  //
+  // FAIL CLOSED, EXPLICITLY. `resolveVoicePublish` reads the watch-party seat
+  // cache for `canShowFace` on a watch-party channel, and a cache miss falls
+  // through to a real query with no local retry of its own
+  // (`cachedWatchPartySeatSnapshot`'s own doc: "failures are not stored
+  // either"). Left uncaught, a transient failure here — the seat cache's own
+  // query, or `computeMemberPermissions` underneath it — would fall through
+  // to `handleApi`'s generic `catch`, which answers a plain 500 for anything
+  // that is not a recognised `HttpError`: correct in that no token is minted
+  // either way (nothing below this line runs), but it tells the caller
+  // nothing about whether trying again is the right move, and a
+  // `DatabaseUnavailableError` from the breaker is the only failure shape
+  // that already carries that signal. Converting explicitly to a 503 here
+  // makes every failure of this specific, security-sensitive resolution
+  // retryable by contract, not by accident of which error happened to be
+  // thrown.
+  let publish: { canSpeak: boolean; canStream: boolean; canShowFace: boolean };
+  try {
+    publish = await resolveVoicePublish(channel, body.voiceChannelId, user.id);
+  } catch (error) {
+    console.error("[voice] could not resolve the publish grant:", error);
+    throw new HttpError(
+      503,
+      "Could not verify voice permissions, try again",
+    );
+  }
+  const { canSpeak, canStream, canShowFace } = publish;
   const displayName = await resolveMemberName(
     channel.kind === "server" ? (channel.server_id ?? null) : null,
     user,
@@ -2538,7 +2721,7 @@ router.post("/api/voice/token", async ({ req, user }) => {
       body.peerId,
       displayName,
       user.id,
-      { canSpeak, canStream },
+      { canSpeak, canStream, canShowFace },
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);
@@ -4537,9 +4720,13 @@ router.post(
  */
 router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
   await requireChannelAccess(channelId!, user.id);
-  const state = getChannelLiveState(channelId!);
+  const state = await getChannelLiveState(channelId!);
   return {
     stream: state.stream ? stampViewerStream(state.stream, user.id) : null,
+    // Absent on a null the server could not vouch for (the session table was
+    // unreachable), so the client holds what it has instead of reading one
+    // failed query as the party being over. Same contract as `channel-live`.
+    ...(state.stream === null && state.known ? { ended: true } : {}),
     watching: state.watching,
     participants: state.participants,
   };
@@ -4645,51 +4832,133 @@ router.delete(
 
 // ------------------------------------------------------- watch parties (event)
 /**
- * The stage: the host putting somebody up or taking them down, and a viewer
- * raising or lowering their own hand.
+ * CONVIDADOS: the guest queue. `docs/plans/WATCH_PARTY_GUESTS.md` §5.8.
  *
- * TWO DIFFERENT AUTHORISATIONS IN ONE ROUTE, which is why the body is a union
- * rather than one shape with an optional field. `invite` and `remove` are the
- * host's, and go through `promoteCohost`'s rule because putting somebody on
- * the stage is the same kind of act as promoting them, one show long.
- * `raise` and `lower` are the viewer's own and need nothing but the ability
- * to see the party, because a hand is a request and not a permission.
+ * `/guests` is the route's name; `/stage` is kept as an alias for one release
+ * (the compatibility window §2.2 describes) so a stale tab or a native app
+ * that has not shipped this yet keeps calling the URL it already knows,
+ * carrying the same eight-action body — `watchPartyGuestsRequestSchema` is
+ * `watchPartyStageRequestSchema`'s new name, not a new shape.
+ *
+ * THREE DIFFERENT AUTHORISATIONS, one per group of actions:
+ *  - `invite` / `accept` / `decline` / `remove` are the host's and co-hosts',
+ *    through the `manageGuests` action — host and co-host only, deliberately
+ *    NOT a manager: the roster of who is on air is the show's own call.
+ *  - `request` / `withdraw` are a viewer's own, rate-limited
+ *    (`guestRequestLimiter`) and refused unless `guests === "request"`.
+ *  - `join` / `leave` are the invited person's own, on their own row.
  */
-router.post(
-  "/api/watch-parties/:sessionId/stage",
-  async ({ req, user }, { sessionId }) => {
-    const body = watchPartyStageRequestSchema.parse(await readJsonBody(req));
-    const hostSide = body.action === "invite" || body.action === "remove";
+const handleWatchPartyGuestsAction: RouteHandler = async (
+  { req, user },
+  { sessionId },
+) => {
+    const body = watchPartyGuestsRequestSchema.parse(await readJsonBody(req));
+    const hostSide =
+      body.action === "invite" ||
+      body.action === "accept" ||
+      body.action === "decline" ||
+      body.action === "remove";
     const { row, actor } = await requireWatchParty(
       sessionId!,
       user.id,
-      hostSide ? "promoteCohost" : "view",
+      hostSide ? "manageGuests" : "view",
     );
+    const options = watchPartyOptionsOf(row);
+
     if (hostSide) {
       if (body.action === "invite") {
         if (!(await canAccessChannel(row.channel_id, body.userId))) {
           throw new HttpError(400, "That person cannot see this channel");
         }
-        await inviteToWatchPartyStage(row, body.userId, user.id);
+        await inviteWatchPartyGuest(row, body.userId, user.id);
+      } else if (body.action === "accept") {
+        try {
+          await acceptWatchPartyGuestRequest(row, body.userId, user.id);
+        } catch (error) {
+          if (error instanceof WatchPartyGuestsError) {
+            throw new HttpError(409, error.message);
+          }
+          throw error;
+        }
+      } else if (body.action === "decline") {
+        try {
+          await declineWatchPartyGuestRequest(sessionId!, body.userId);
+        } catch (error) {
+          if (error instanceof WatchPartyGuestsError) {
+            throw new HttpError(409, error.message);
+          }
+          throw error;
+        }
       } else {
-        await removeFromWatchPartyStage(row, body.userId);
+        // `remove`. VERIFY FIRST. Muting, revoking a publish grant and
+        // evicting from the room are SFU/channel actions whose blast radius
+        // is well past this feature — nothing upstream of this branch checks
+        // that `body.userId` is actually a guest of this party (`manageGuests`
+        // authorises the CALLER, not the target), so without this check a
+        // host could silence and eject anybody's live SFU session on the
+        // strength of a `userId` that was never invited at all.
+        if (!(await isWatchPartyGuest(row.id, body.userId))) {
+          throw new HttpError(404, "That person is not a guest of this party");
+        }
+        // Mute, then revoke the publish grant, then eject, THEN delete the
+        // row — in that order, per §3.6: ejecting first leaves a window
+        // where a client that has not processed the disconnect is still
+        // publishing.
+        if (getRoomTransport(row.channel_id) === "livekit") {
+          const identities = await findVoicePeerIdentities(
+            body.userId,
+            row.channel_id,
+          );
+          await setSfuUserMuted(row.channel_id, body.userId, true, identities);
+          await setSfuUserCanPublish(
+            row.channel_id,
+            body.userId,
+            { canSpeak: false, canStream: false, canShowFace: false },
+            identities,
+          );
+          await evictSfuUser(body.userId, [row.channel_id], identities);
+        }
+        await removeWatchPartyGuest(row, body.userId);
+      }
+    } else if (body.action === "request" || body.action === "withdraw") {
+      if (!guestRequestLimiter.take(user.id)) {
+        throw new HttpError(429, "Slow down");
+      }
+      if (body.action === "withdraw") {
+        await withdrawWatchPartyGuestRequest(sessionId!, user.id);
+      } else {
+        if (options.guests !== "request") {
+          throw new HttpError(403, "This party is not taking requests");
+        }
+        if (row.status !== "live") {
+          throw new HttpError(409, "This watch party is not live");
+        }
+        const declinedAt = await watchPartyGuestDeclinedAt(sessionId!, user.id);
+        if (guestRequestCooldownActive(declinedAt)) {
+          throw new HttpError(429, "Try again in a few minutes");
+        }
+        await requestWatchPartyGuestSlot(sessionId!, user.id);
+      }
+    } else if (body.action === "join") {
+      try {
+        await joinWatchPartyGuestSlot(row, user.id);
+      } catch (error) {
+        if (error instanceof WatchPartyGuestsError) {
+          throw new HttpError(error.code === "full" ? 409 : 404, error.message);
+        }
+        throw error;
       }
     } else {
-      // A hand is only meaningful while a show is running.
-      if (row.status !== "live") {
-        throw new HttpError(409, "This watch party is not live");
-      }
-      await setWatchPartyRaisedHand(
-        sessionId!,
-        user.id,
-        body.action === "raise",
-      );
+      // `leave`
+      await leaveWatchPartyGuestSlot(row, user.id);
     }
     void broadcastWatchParty(sessionId!);
     const updated = await getWatchPartyRow(sessionId!);
     return { party: updated ? await presentWatchParty(updated, actor) : null };
-  },
-);
+};
+
+router.post("/api/watch-parties/:sessionId/guests", handleWatchPartyGuestsAction);
+router.post("/api/watch-parties/:sessionId/stage", handleWatchPartyGuestsAction);
 
 
 
@@ -4901,17 +5170,39 @@ router.get(
 );
 
 router.patch("/api/watch-parties/:sessionId", async ({ req, user }, { sessionId }) => {
-  const { row, actor } = await requireWatchParty(sessionId!, user.id, "edit");
+  const { row, actor, role } = await requireWatchParty(sessionId!, user.id, "edit");
   const body = updateWatchPartySchema.parse(await readJsonBody(req));
   if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
     throw new HttpError(400, "startsAt must be in the future");
+  }
+  // "Baixa latência (beta)" IS HOST-ONLY, AND `edit` (this route's own gate)
+  // ALSO ALLOWS A CO-HOST OR A MANAGER. Every other field on
+  // `watchPartyOptionsSchema` is fine for any of them to set -- this one
+  // reaches the server only through the host's own `goLive`
+  // (`requestedHlsModeForChannel` in `hls-remux.ts`), so a co-host's or
+  // manager's request here would be silently overwritten by the host's next
+  // "Ir ao vivo" ANYWAY, but dropping it here rather than trusting that
+  // timing is what makes the client's own host-only gate (`watch-party-
+  // options.tsx`) an actual rule instead of a suggestion. The key is
+  // OMITTED, not set to `undefined`: `updateWatchParty` merges this object
+  // onto the party's EXISTING options before re-parsing, and
+  // `watchPartyOptionsSchema`'s `.default(false)` treats an explicit
+  // `undefined` exactly like a missing key -- setting it would have reset
+  // the host's own saved preference to `false` rather than leaving it
+  // untouched. Omitted this way, the merge never touches it at all. The rest
+  // of a bundled patch (slow mode, reactions) still lands for a co-host who
+  // never asked to change this field in the first place.
+  let options = body.options;
+  if (options && role !== "host" && "lowLatency" in options) {
+    const { lowLatency: _lowLatency, ...rest } = options;
+    options = rest;
   }
   try {
     const updated = await updateWatchParty(sessionId!, {
       name: body.name,
       description: body.description,
       startsAt: body.startsAt,
-      options: body.options,
+      options,
     });
     // The options are editable WHILE the party runs, and a host moving "quem
     // pode falar" from `everyone` to `hosts_only` mid-show has to take effect
@@ -4956,6 +5247,17 @@ router.post(
         body.state,
         row.status,
       );
+      // The LL-HLS request field (`docs/plans/LL_HLS.md` L1.5), persisted on
+      // the party's own row (`channel_sessions.low_latency_requested`) so
+      // `reconcileLiveHlsNow` can read it once a sharer actually appears --
+      // which can be well after this call returns, and can survive an API
+      // restart in between (a Farol finding on PR #580: an in-memory version
+      // did not). Set unconditionally, not only when true: a party going
+      // live again without `lowLatency` must not inherit a previous party's
+      // request for this channel.
+      if (action === "goLive") {
+        await setRequestedHlsMode(sessionId!, Boolean(body.lowLatency));
+      }
       // Going live is the moment the host's setup choices become the room's
       // rules. Slow mode is a channel field owned by the chat feature; the
       // party only carries what the host picked in the sheet so one press
@@ -5035,6 +5337,640 @@ router.post(
     }
   },
 );
+
+// ------------------------------------------- watch party history (replay)
+/**
+ * "Transmissões anteriores": past broadcasts for a watch-party channel, for
+ * the owner and moderators to find yesterday's stream. Gated on the
+ * channel's START_WATCH_PARTY (whoever can go live) or MANAGE_CHANNELS
+ * (whoever administers the room), the same pair `docs/WATCH_PARTY.md`
+ * already treats as "runs this room". `hls-history.ts` has the retention
+ * and grouping reasoning; this is just the HTTP surface over it.
+ */
+async function requireWatchPartyHistoryAccess(
+  channel: { server_id: string; id: string },
+  userId: string,
+): Promise<void> {
+  await requireServerMember(channel.server_id, userId);
+  const allowed =
+    (await memberHasPermission(
+      channel.server_id,
+      userId,
+      Permission.START_WATCH_PARTY,
+      channel.id,
+    )) ||
+    (await memberHasPermission(
+      channel.server_id,
+      userId,
+      Permission.MANAGE_CHANNELS,
+      channel.id,
+    ));
+  if (!allowed) {
+    throw new Forbidden("You do not have permission to do that");
+  }
+}
+
+/**
+ * The path segment is `:sessionAt` rather than `:sessionId` -- it carries the
+ * broadcast's `started_at` in epoch ms (see `hls-history.ts`'s
+ * `WatchPartyHistoryEntry.sessionId`, which is the same value, just named
+ * for the response body rather than the route). `router.ts` requires any
+ * param ending in `Id` to be a UUID and 404s otherwise, which a timestamp
+ * never is; naming it `sessionId` here would 404 every request before this
+ * function ever ran.
+ */
+function parseWatchPartyHistorySessionAt(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!raw || !/^\d{1,20}$/.test(raw) || !Number.isFinite(parsed)) {
+    throw new NotFound("Broadcast not found");
+  }
+  return parsed;
+}
+
+const HISTORY_PAGE_SIZE = 20;
+const HISTORY_PAGE_MAX = 50;
+
+router.get(
+  "/api/channels/:channelId/watch-party/history",
+  async ({ user, url }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const limit = clampLimit(
+      url.searchParams.get("limit"),
+      HISTORY_PAGE_SIZE,
+      HISTORY_PAGE_MAX,
+    );
+    return { broadcasts: await listWatchPartyHistory(channelId!, limit) };
+  },
+);
+
+const watchPartyHistoryPatchSchema = z.object({ keepReplay: z.boolean() });
+
+router.patch(
+  "/api/channels/:channelId/watch-party/history/:sessionAt",
+  async ({ req, user }, { channelId, sessionAt }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    const body = watchPartyHistoryPatchSchema.parse(await readJsonBody(req));
+    const result = await setWatchPartyKeepReplay(
+      channelId!,
+      startedAtMs,
+      body.keepReplay,
+    );
+    if (result === "not-found") {
+      throw new NotFound("Broadcast not found");
+    }
+    if (result === "unavailable") {
+      throw new HttpError(
+        409,
+        "This broadcast's recording is no longer available",
+      );
+    }
+    return {
+      broadcasts: await listWatchPartyHistory(channelId!, HISTORY_PAGE_MAX),
+    };
+  },
+);
+
+router.get(
+  "/api/channels/:channelId/watch-party/history/:sessionAt/replay",
+  async ({ user }, { channelId, sessionAt }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    const access = await checkWatchPartyReplayAccess(channelId!, startedAtMs);
+    if (access === "not-found") {
+      throw new NotFound("Broadcast not found");
+    }
+    if (access === "unavailable") {
+      throw new HttpError(
+        409,
+        "This broadcast's recording is no longer available",
+      );
+    }
+    const token = mintHlsViewerToken({
+      userId: user.id,
+      channelId: channelId!,
+      startedAt: startedAtMs,
+      purpose: "replay",
+    });
+    const query = token
+      ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(token)}`
+      : "";
+    return {
+      hlsUrl: `/api/voice/hls-replay/${encodeURIComponent(channelId!)}/${startedAtMs}${query}`,
+    };
+  },
+);
+
+// ---------------------------------------- watch party history (download)
+/**
+ * "Baixar": the same past broadcast as a file, in up to three pieces -- the
+ * film, the presenter's camera pip, and the host's voice archive. Same
+ * permission as everything else on this surface
+ * (`requireWatchPartyHistoryAccess`), same availability rule as replay (404
+ * unknown, 409 once the retention sweep has been through), and the same
+ * `?t=` capability in the URL.
+ *
+ * NOTHING IS TRANSCODED. The API hands back the objects the egress already
+ * wrote: the rung's MPEG-TS segments concatenated in playlist order, or the
+ * `.ogg` the Track Egress wrote, streamed through with backpressure and
+ * never buffered. `hls-history.ts`'s download section has the reasoning for
+ * why concatenated MPEG-TS is a real, playable file and what the one-line
+ * ffmpeg remux to mp4 is.
+ *
+ * A DOWNLOAD IS A NAVIGATION, NOT A `fetch`. The client cannot ask the
+ * browser to save a `fetch` response without buffering the whole broadcast
+ * into a Blob in the tab, so the link is a plain `<a href download>` -- and
+ * a navigation carries no `Authorization` header, cross-origin `download`
+ * is ignored by the browser anyway (the SPA and the API are different
+ * origins in production), and `Content-Disposition: attachment` is what
+ * actually makes it a download. So the byte route has the same two doors
+ * the replay proxy has, for the same reason: `?t=` alone is the shape the
+ * product produces, and the Bearer door exists for everything else.
+ */
+
+/**
+ * The handler wrote the whole response itself. `RawResponse` buffers its
+ * body, which is exactly what a multi-gigabyte broadcast must not do, so a
+ * streaming route answers with this instead and `handleApi` simply stops.
+ */
+class StreamedResponse {}
+
+/** `Um Servidor` + `sala-de-cinema` + a date, as something a file system is
+ * happy with. Never empty: the epoch date always survives the slug. */
+function downloadFilenameStem(
+  serverName: string,
+  channelName: string,
+  startedAtMs: number,
+): string {
+  const slug = (value: string): string =>
+    value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
+  const date = new Date(startedAtMs).toISOString().slice(0, 10);
+  return [slug(serverName), slug(channelName), date].filter(Boolean).join("-");
+}
+
+/** The camera and the voice get a suffix so all three can live in one
+ * downloads folder without overwriting each other. */
+function downloadFilename(stem: string, plan: WatchPartyDownloadPlan): string {
+  const suffix =
+    plan.kind === "camera" ? "-camera" : plan.kind === "voice" ? "-voice" : "";
+  return `${stem}${suffix}.${plan.extension}`;
+}
+
+interface PreparedWatchPartyDownload {
+  plan: WatchPartyDownloadPlan;
+  filename: string;
+}
+
+/**
+ * Everything that can still answer with a status code, done before a single
+ * byte is written: the permission (or the capability), the same
+ * availability check replay makes, and the object list itself. Once the head
+ * is out a failure can only truncate the file.
+ */
+async function prepareWatchPartyDownload(input: {
+  channelId: string;
+  startedAtMs: number;
+  kind: WatchPartyDownloadKind;
+  userId: string;
+  tokenIssuedAt: number | null;
+}): Promise<PreparedWatchPartyDownload> {
+  const channel = await requireServerChannel(input.channelId);
+  if (input.tokenIssuedAt === null) {
+    await requireWatchPartyHistoryAccess(channel, input.userId);
+  } else if (
+    isHlsAccessRevoked(input.userId, input.channelId, input.tokenIssuedAt)
+  ) {
+    throw new NotFound("Channel not found");
+  }
+  const access = await checkWatchPartyReplayAccess(
+    input.channelId,
+    input.startedAtMs,
+  );
+  if (access === "not-found") {
+    throw new NotFound("Broadcast not found");
+  }
+  if (access === "unavailable") {
+    throw new HttpError(
+      409,
+      "This broadcast's recording is no longer available",
+    );
+  }
+  let plan: WatchPartyDownloadPlan | null;
+  try {
+    plan = await buildWatchPartyDownloadPlan(
+      input.channelId,
+      input.startedAtMs,
+      input.kind,
+    );
+  } catch (error) {
+    if (error instanceof HlsPlaylistUnavailable) {
+      throw new HttpError(503, "Live HLS storage unavailable");
+    }
+    if (error instanceof HlsPlaylistNotFound) {
+      // The playlist names an object the bucket no longer has: a half-swept
+      // recording, which is the same thing to a moderator as a swept one and
+      // answers with the same 409. Caught HERE rather than mid-stream, which
+      // would hand back a file that looks complete and is not.
+      throw new HttpError(
+        409,
+        "This broadcast's recording is no longer available",
+      );
+    }
+    throw error;
+  }
+  if (!plan) {
+    throw new NotFound("This broadcast has no such file");
+  }
+  const server = await getServer(channel.server_id);
+  return {
+    plan,
+    filename: downloadFilename(
+      downloadFilenameStem(
+        server?.name ?? "pqp",
+        channel.name,
+        input.startedAtMs,
+      ),
+      plan,
+    ),
+  };
+}
+
+function sendWatchPartyDownload(
+  req: IncomingMessage,
+  res: ServerResponse,
+  prepared: PreparedWatchPartyDownload,
+): Promise<void> {
+  const { plan, filename } = prepared;
+  res.writeHead(200, {
+    "content-type": plan.contentType,
+    // The filename is a slug of `[a-z0-9-]` plus a date, so it needs no
+    // quoting beyond the quotes.
+    "content-disposition": `attachment; filename="${filename}"`,
+    // Exact: the plan refuses to exist unless the listing priced every
+    // object it names, so the browser's progress bar is never wrong.
+    "content-length": String(plan.bytes),
+    "cache-control": "private, no-store",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  return streamWatchPartyDownload(plan, res).then(
+    () => {
+      res.end();
+    },
+    (error: unknown) => {
+      // Mid-stream: the status line is long gone, so the only honest signal
+      // left is an aborted response, which every client reports as a failed
+      // download rather than a complete-looking truncated file.
+      console.error("[voice] watch party download failed mid-stream:", error);
+      res.destroy();
+    },
+  );
+}
+
+router.get(
+  "/api/channels/:channelId/watch-party/history/:sessionAt/download",
+  async ({ user }, { channelId, sessionAt }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    const access = await checkWatchPartyReplayAccess(channelId!, startedAtMs);
+    if (access === "not-found") {
+      throw new NotFound("Broadcast not found");
+    }
+    if (access === "unavailable") {
+      throw new HttpError(
+        409,
+        "This broadcast's recording is no longer available",
+      );
+    }
+    let sizes;
+    try {
+      sizes = await watchPartyDownloadSizes(channelId!, startedAtMs);
+    } catch (error) {
+      if (error instanceof HlsPlaylistUnavailable) {
+        // Not "there is no camera": storage would not answer. The dialog
+        // shows a retryable failure rather than claiming the night had no
+        // camera and no voice.
+        throw new HttpError(503, "Live HLS storage unavailable");
+      }
+      throw error;
+    }
+    const token = mintHlsViewerToken({
+      userId: user.id,
+      channelId: channelId!,
+      startedAt: startedAtMs,
+      purpose: "replay",
+    });
+    const query = token
+      ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(token)}`
+      : "";
+    const downloads: Record<
+      WatchPartyDownloadKind,
+      { bytes: number | null; url: string } | null
+    > = { film: null, camera: null, voice: null };
+    for (const kind of WATCH_PARTY_DOWNLOAD_KINDS) {
+      if (sizes[kind] === null) {
+        continue;
+      }
+      downloads[kind] = {
+        bytes: sizes[kind],
+        url:
+          `/api/channels/${encodeURIComponent(channelId!)}` +
+          `/watch-party/history/${startedAtMs}/download/${kind}${query}`,
+      };
+    }
+    return { downloads };
+  },
+);
+
+router.get(
+  "/api/channels/:channelId/watch-party/history/:sessionAt/download/:kind",
+  async ({ req, res, user, url }, { channelId, sessionAt, kind }) => {
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    if (!kind || !isWatchPartyDownloadKind(kind)) {
+      throw new NotFound("Broadcast not found");
+    }
+    const viewer = resolveHlsPlaylistViewer({
+      bearerUserId: user.id,
+      token: url.searchParams.get(HLS_VIEWER_TOKEN_PARAM),
+      channelId: channelId!,
+      startedAt: startedAtMs,
+      purpose: "replay",
+    });
+    await sendWatchPartyDownload(
+      req,
+      res,
+      await prepareWatchPartyDownload({
+        channelId: channelId!,
+        startedAtMs,
+        kind,
+        userId: viewer?.userId ?? user.id,
+        tokenIssuedAt: viewer?.issuedAt ?? null,
+      }),
+    );
+    return new StreamedResponse();
+  },
+);
+
+const WATCH_PARTY_DOWNLOAD_PATH =
+  /^\/api\/channels\/([0-9a-fA-F-]{36})\/watch-party\/history\/(\d{1,20})\/download\/([a-z]{1,16})$/;
+
+/**
+ * The header-less door for a download link, mirroring
+ * `tryHlsReplayCapabilityDoor`. A browser navigating to `<a href download>`
+ * sends no `Authorization`, so for the product's own link this door is the
+ * only one that ever answers.
+ */
+async function tryWatchPartyDownloadCapabilityDoor(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): Promise<boolean> {
+  const match = WATCH_PARTY_DOWNLOAD_PATH.exec(pathname);
+  if (!match) {
+    return false;
+  }
+  const kind = match[3]!;
+  if (!isWatchPartyDownloadKind(kind)) {
+    return false;
+  }
+  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+    HLS_VIEWER_TOKEN_PARAM,
+  );
+  const channelId = match[1]!;
+  const startedAtMs = Number(match[2]);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId: null,
+    token,
+    channelId,
+    startedAt: startedAtMs,
+    purpose: "replay",
+  });
+  if (!viewer) {
+    return false;
+  }
+  if (!apiLimiter.take(`user:${viewer.userId}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(apiLimiter.retryAfter(`user:${viewer.userId}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return true;
+  }
+  try {
+    await sendWatchPartyDownload(
+      req,
+      res,
+      await prepareWatchPartyDownload({
+        channelId,
+        startedAtMs,
+        kind,
+        userId: viewer.userId,
+        tokenIssuedAt: viewer.issuedAt ?? 0,
+      }),
+    );
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      sendDatabaseUnavailable(res, req);
+      return true;
+    }
+    if (error instanceof HttpError) {
+      sendError(res, error.status, error.message, req);
+      return true;
+    }
+    console.error("[voice] watch party download (token) failed:", error);
+    sendError(res, 500, "Internal server error", req);
+  }
+  return true;
+}
+
+/**
+ * The replay playlist proxy: the same rewrite-segments-into-signed-URLs job
+ * as the live one (`hlsPlaylistResponse` above), pointed at
+ * `hls-history.ts`'s replay builders instead. Kept as its own path rather
+ * than a mode on the live route on purpose -- see that file's header comment.
+ *
+ * BOTH DOORS CHECK THE HISTORY PERMISSION, NOT JUST CHANNEL ACCESS. A
+ * replay is the moderator-only surface (`requireWatchPartyHistoryAccess`
+ * gates the list, the toggle and the URL mint), and this proxy is the thing
+ * that actually hands out the bytes, so it has to hold the same line: an
+ * ordinary member who can see the channel (and so would pass
+ * `requireChannelAccess`) must not be able to reach a recording just by
+ * knowing or guessing a `startedAt`. The token door is closed the same way
+ * one level up, by only ever minting a `purpose: "replay"` token from the
+ * permission-checked mint route (`hls-viewer-token.ts`).
+ */
+async function hlsReplayResponse(
+  res: ServerResponse,
+  channelId: string,
+  startedAt: string,
+  userId: string,
+  tokenIssuedAt: number | null,
+  options: { rung?: string; token?: string | null } = {},
+): Promise<RawResponse> {
+  if (tokenIssuedAt === null) {
+    const channel = await requireServerChannel(channelId);
+    await requireWatchPartyHistoryAccess(channel, userId);
+  } else if (isHlsAccessRevoked(userId, channelId, tokenIssuedAt)) {
+    throw new NotFound("Channel not found");
+  }
+  const parsedStartedAt = Number(startedAt);
+  if (!Number.isFinite(parsedStartedAt)) {
+    throw new NotFound("No replay for this channel");
+  }
+  if (!options.rung) {
+    const master = await buildReplayMasterPlaylist({
+      channelId,
+      startedAt: parsedStartedAt,
+      token: options.token,
+    });
+    if (master !== null) {
+      res.setHeader("Cache-Control", "private, max-age=30");
+      res.setHeader("Vary", "Authorization");
+      return new RawResponse(master, "application/vnd.apple.mpegurl");
+    }
+  }
+  let body: string;
+  try {
+    body = await buildReplaySignedPlaylist(
+      channelId,
+      parsedStartedAt,
+      options.rung,
+    );
+  } catch (error) {
+    if (error instanceof HlsPlaylistNotFound) {
+      throw new NotFound("No replay for this channel");
+    }
+    if (error instanceof HlsPlaylistUnavailable) {
+      throw new HttpError(503, "Live HLS storage unavailable");
+    }
+    throw error;
+  }
+  res.setHeader("Cache-Control", "private, max-age=30");
+  res.setHeader("Vary", "Authorization");
+  return new RawResponse(body, "application/vnd.apple.mpegurl");
+}
+
+router.get(
+  "/api/voice/hls-replay/:channelId/:startedAt",
+  async ({ user, res, url }, { channelId, startedAt }) =>
+    hlsReplayRouteResponse(res, url, user.id, channelId!, startedAt!),
+);
+
+router.get(
+  "/api/voice/hls-replay/:channelId/:startedAt/:rung",
+  async ({ user, res, url }, { channelId, startedAt, rung }) =>
+    hlsReplayRouteResponse(res, url, user.id, channelId!, startedAt!, rung!),
+);
+
+function hlsReplayRouteResponse(
+  res: ServerResponse,
+  url: URL,
+  bearerUserId: string,
+  channelId: string,
+  startedAt: string,
+  rung?: string,
+): Promise<RawResponse> {
+  const token = url.searchParams.get(HLS_VIEWER_TOKEN_PARAM);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId,
+    token,
+    channelId,
+    startedAt: Number(startedAt),
+    purpose: "replay",
+  });
+  return hlsReplayResponse(
+    res,
+    channelId,
+    startedAt,
+    viewer?.userId ?? bearerUserId,
+    viewer?.issuedAt ?? null,
+    { rung, token },
+  );
+}
+
+// The rung is optional: without it the path names the broadcast (the master
+// playlist), with it one rendition. Mirrors `HLS_PLAYLIST_PATH` above.
+const HLS_REPLAY_PATH =
+  /^\/api\/voice\/hls-replay\/([^/]{1,64})\/(\d{1,20})(?:\/([A-Za-z0-9]{1,16}))?$/;
+
+/**
+ * The header-less door for a replay URL: our own client never attaches a
+ * Bearer header to one of these (the URL already carries `?t=`, and
+ * `isOwnHlsPlaylistProxyUrl` on the client only matches the live path
+ * anyway), so this door is the ONLY way a replay request is ever served, not
+ * a fallback. Mirrors `tryHlsCapabilityDoor`.
+ */
+async function tryHlsReplayCapabilityDoor(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): Promise<boolean> {
+  const match = HLS_REPLAY_PATH.exec(pathname);
+  if (!match) {
+    return false;
+  }
+  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+    HLS_VIEWER_TOKEN_PARAM,
+  );
+  const channelId = match[1]!;
+  const startedAt = Number(match[2]);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId: null,
+    token,
+    channelId,
+    startedAt,
+    purpose: "replay",
+  });
+  if (!viewer) {
+    return false;
+  }
+  if (!apiLimiter.take(`user:${viewer.userId}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(apiLimiter.retryAfter(`user:${viewer.userId}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return true;
+  }
+  try {
+    const result = await hlsReplayResponse(
+      res,
+      channelId,
+      match[2]!,
+      viewer.userId,
+      viewer.issuedAt ?? 0,
+      { rung: match[3], token },
+    );
+    res.writeHead(200, {
+      "content-type": result.contentType,
+      ...SECURITY_HEADERS,
+      ...corsHeaders(req),
+    });
+    res.end(result.body);
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      sendDatabaseUnavailable(res, req);
+      return true;
+    }
+    if (error instanceof HttpError) {
+      sendError(res, error.status, error.message, req);
+      return true;
+    }
+    console.error("[voice] hls replay (token) failed:", error);
+    sendError(res, 500, "Internal server error", req);
+  }
+  return true;
+}
 
 // -------------------------------------------------------------- webhooks
 
@@ -5274,6 +6210,8 @@ router.post(
             422,
             posted.automodMessage ?? "This message was blocked by AutoMod",
           );
+        case "database-unavailable":
+          throw new DatabaseUnavailableError();
         case "bad-reply":
           throw new HttpError(400, "Reply is not in this channel");
         case "empty":
@@ -7018,6 +7956,22 @@ router.get("/api/reports/instance", async ({ url, user }) => {
 });
 
 /**
+ * Every report on the instance — the read that closed the gap the operator
+ * dashboard's "abertas" count exposed: a two-member server's own automated
+ * gore flag, visible only to that server's owner and admins, with no screen
+ * an instance moderator could open to see or resolve it. Gated exactly like
+ * `/api/reports/instance` — `isInstanceModerator` and nothing an in-app role
+ * can grant — and 404 for anyone else for the same reason: whether this
+ * deployment has an instance moderator at all is not a fact to confirm.
+ */
+router.get("/api/reports/all", async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return listAllReports(reportListOptions(url));
+});
+
+/**
  * One server's queue. `requireManager`, like every other moderation read — and
  * it can only ever return reports about that server's own channels, because a
  * report about a conversation has no server id to match (see the `reports`
@@ -7038,10 +7992,18 @@ router.get(
 /**
  * Close a report, actioned or dismissed.
  *
- * Who may do so follows the report's own scope and nothing else: a server id
- * means a manager of that server, no server id means an instance moderator.
- * The scope is read before anything is returned, so an unauthorized caller
- * learns nothing about the report — not even that the id exists.
+ * Who may act follows the report's own scope, plus one override: a server id
+ * means a manager of that server OR an instance moderator (this is the gap
+ * `docs/CONTENT_SAFETY.md` §"Operator review of server queues" closes — a
+ * two-member server's automated flag had no screen an instance moderator
+ * could reach), no server id means an instance moderator. The scope is read
+ * before anything is returned, so an unauthorized caller learns nothing
+ * about the report — not even that the id exists.
+ *
+ * `canSanctionOnServer` is a NARROWER question than "may resolve", checked
+ * separately below: an instance moderator may close any report, but timing a
+ * member out is still a server-rank action, so an instance moderator with no
+ * standing in that particular server may resolve it and nothing more.
  */
 router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   const reportId = reportIdParam(report);
@@ -7049,14 +8011,30 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   if (!scope) {
     throw new NotFound("Report not found");
   }
-  let canActOnServer = false;
+  let canSanctionOnServer = false;
   if (scope.serverId) {
-    await requireAnyPermission(scope.serverId, user.id, [
-      Permission.KICK_MEMBERS,
-      Permission.BAN_MEMBERS,
-      Permission.MODERATE_MEMBERS,
-    ]);
-    canActOnServer = true;
+    if (isInstanceModerator(user)) {
+      // Resolving is allowed regardless; only note it down if they also
+      // happen to hold a real management role on this server, which is what
+      // the timeout branch below asks for.
+      try {
+        await requireAnyPermission(scope.serverId, user.id, [
+          Permission.KICK_MEMBERS,
+          Permission.BAN_MEMBERS,
+          Permission.MODERATE_MEMBERS,
+        ]);
+        canSanctionOnServer = true;
+      } catch {
+        // Not a manager of this particular server — still fine to resolve.
+      }
+    } else {
+      await requireAnyPermission(scope.serverId, user.id, [
+        Permission.KICK_MEMBERS,
+        Permission.BAN_MEMBERS,
+        Permission.MODERATE_MEMBERS,
+      ]);
+      canSanctionOnServer = true;
+    }
   } else if (!isInstanceModerator(user)) {
     throw new NotFound("Report not found");
   }
@@ -7072,7 +8050,7 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   // that is what happened. Either both happen or neither does.
   let timeoutTarget: string | null = null;
   if (body.timeoutMinutes != null) {
-    if (!scope.serverId || !canActOnServer) {
+    if (!scope.serverId) {
       // An instance-queue report is about a conversation, which has no server
       // and therefore no place to be timed out *in*. Silencing somebody's DMs
       // is not a sanction this product has, and inventing one here would hand
@@ -7081,6 +8059,13 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
         400,
         "A report with no server behind it cannot carry a timeout",
       );
+    }
+    if (!canSanctionOnServer) {
+      // An instance moderator resolving a server's report with no management
+      // standing there at all may still close it (above); a timeout is a
+      // server-rank sanction and stays refused, distinctly from the "no
+      // server at all" case above.
+      throw new Forbidden("You do not have permission to do that");
     }
     await requirePermission(
       scope.serverId,
@@ -7183,6 +8168,111 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   return { report: resolved };
 });
 
+/**
+ * Remove a flagged attachment's message — the operator action a moderator
+ * reading `GET /api/reports/all` has no other button for: closing the report
+ * says the queue entry was handled, it does not take the content down.
+ *
+ * A sibling route rather than a field on the PATCH above, on purpose: the two
+ * are independent actions with independent failure modes (a report can be
+ * resolved with nothing to remove — the message may already be gone, or the
+ * report may be a `user`/`server` subject with no message at all), and
+ * folding "also delete this" into the resolve body would make one request
+ * responsible for two very different kinds of refusal.
+ *
+ * Same authorization as the PATCH immediately above: a manager of the
+ * report's server, or — the gap this feature closes — an instance moderator
+ * regardless of their standing in that particular server.
+ */
+router.post(
+  "/api/reports/:report/remove-message",
+  async ({ user }, { report }) => {
+    const reportId = reportIdParam(report);
+    const scope = await getReportScope(reportId);
+    if (!scope) {
+      throw new NotFound("Report not found");
+    }
+    if (scope.serverId) {
+      if (!isInstanceModerator(user)) {
+        await requireAnyPermission(scope.serverId, user.id, [
+          Permission.KICK_MEMBERS,
+          Permission.BAN_MEMBERS,
+          Permission.MODERATE_MEMBERS,
+        ]);
+      }
+    } else if (!isInstanceModerator(user)) {
+      throw new NotFound("Report not found");
+    }
+
+    const full = await getReport(reportId);
+    if (!full || full.subjectType !== "message" || !full.messageId) {
+      // A `user` or `server` report names an account or a community, never a
+      // message — and a message report whose message is already gone (the
+      // ordinary delete path, or a previous call to this same route) reads
+      // `messageId: null` per the `messageDeleted` contract on the schema.
+      // Both are "nothing left to remove", not a server error.
+      throw new HttpError(
+        400,
+        "This report has no live message left to remove",
+      );
+    }
+
+    const existing = await getMessage(full.messageId);
+    if (!existing) {
+      // The row raced ahead of the report's own snapshot — deleted by its
+      // author, or by this same action from another tab, between the read
+      // above and this one.
+      throw new HttpError(400, "The reported message is already gone");
+    }
+
+    await deleteMessage(full.messageId);
+    broadcastToChannel(existing.channel_id, {
+      type: "message-delete",
+      channelId: existing.channel_id,
+      messageId: full.messageId,
+    });
+
+    // Deliberately unconditional and deliberately not only the DB row below:
+    // a conversation message has no server and therefore no `audit_log` row
+    // to carry it (that table's `server_id` is NOT NULL), so this line is the
+    // only trail that case gets. Shouty on purpose, same register as the
+    // `[content-safety]` lines this queue's automated reports come from.
+    console.log(
+      `[moderation] operator removed message — report ${reportId}, ` +
+        `message ${full.messageId}, moderator ${user.id}`,
+    );
+
+    if (existing.server_id) {
+      // Best-effort, deliberately, and AFTER the deletion has already
+      // committed and been broadcast: the message is gone either way, so an
+      // audit-log hiccup (a pooled connection blip, say) must not turn an
+      // already-completed removal into an error response — the client would
+      // show "failed", a retry would hit the "already gone" 400 above, and
+      // the operator would be left unsure whether the message was actually
+      // removed. Same shape as `escalateScanResult`'s `createAutomatedReport`
+      // call in `services/attachments.ts`.
+      try {
+        await logAudit({
+          serverId: existing.server_id,
+          actorId: user.id,
+          action: "message.delete",
+          targetType: "message",
+          targetId: full.messageId,
+          changes: [{ key: "report", old: null, new: reportId }],
+        });
+      } catch (error) {
+        console.error(
+          `[moderation] audit write failed after removing message ` +
+            `${full.messageId} (report ${reportId}):`,
+          error,
+        );
+      }
+    }
+
+    return { ok: true };
+  },
+);
+
 // ----------------------------------------------------------- call ratings
 
 /**
@@ -7219,6 +8309,201 @@ function feedbackIdParam(value: string | undefined): string {
   }
   return value;
 }
+
+/**
+ * BROADCAST_PIPELINE B0.5: sampled, batched, droppable client playback
+ * telemetry for a live watch party. Authenticated (the normal Bearer flow,
+ * CLAUDE.md pitfall #8) and rate-limited, but deliberately NOT gated on
+ * channel access via a database round trip: this is an aggregate operational
+ * metric, not a read of anything sensitive, and a query here is a cost this
+ * doc's whole premise is to avoid.
+ *
+ * SESSION IDENTITY IS BOUND TO THE VIEWER TOKEN, NOT TRUSTED AS FREE TEXT (a
+ * Farol finding, 2026-09-13: "authenticated users can submit telemetry for
+ * arbitrary sessions", permitting cross-session log/metric poisoning).
+ * `batch.sessionToken` is the SAME `?t=` capability the client's playlist
+ * request carried (`hls-viewer-token.ts`), which already names a user, a
+ * channel and a `startedAt` and is signed by this server -- so verifying it
+ * here costs one HMAC, not a query, and the channel/session it reports is
+ * the one the token's own signature vouches for rather than whatever the
+ * client typed. A token that does not verify, or that names a user other
+ * than the one this request authenticated as, is rejected outright: a wrong
+ * token is a stronger signal of a caller lying about its session than
+ * omitting one. The verified `channelId`/`startedAt` is then resolved to the
+ * ACTUAL `hls_sessions.id` (`resolveHlsSessionId`, sharing the playlist
+ * proxy's own cache) so the id this route records is the identical string
+ * the master playlist's `#EXT-X-PQP-SESSION` tag carries and `voice.hlsStarted`
+ * logs -- a p95 per session can join against the egress log by equality (a
+ * second Farol finding, 2026-09-14: the earlier `channelId:startedAt` pair
+ * read the same to a human but was never the same string).
+ *
+ * NO SESSION LABEL AT ALL WITHOUT A TOKEN (a third Farol finding,
+ * 2026-09-14). `LIVE_HLS_SIGNED_URLS=false` mints no viewer token
+ * (`stampViewerStream`) and that configuration is fully supported, but a
+ * batch with no token to verify gets no session identity either: `sessionId`
+ * is recorded as the literal string `"unsigned"`, and the per-session rate
+ * limit below is skipped entirely (the per-USER limit above already bounds
+ * this caller). Anything else -- accepting the client's own `sessionId` as a
+ * label, or as a rate-limit key -- reopens the exact unbounded,
+ * attacker-controlled key space the `rung` whitelist (3dde4d4a) closed on
+ * the histogram side of this same route.
+ *
+ * A REJECTED BATCH IS A NO-OP THE CLIENT NEVER RETRIES (see
+ * `client/src/lib/hls-playback.ts`'s telemetry queue): this is a measurement,
+ * not an event anything downstream is waiting on, so there is no retry
+ * machinery here to abuse and no reason to build one.
+ */
+router.post("/api/live-hls/telemetry", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!liveHlsTelemetryLimiter.take(key)) {
+    recordHlsTelemetryBatchRejectedRateLimit();
+    res.setHeader("Retry-After", String(liveHlsTelemetryLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  let batch: ReturnType<typeof liveHlsTelemetryBatchSchema.parse>;
+  try {
+    batch = liveHlsTelemetryBatchSchema.parse(await readJsonBody(req));
+  } catch (error) {
+    recordHlsTelemetryBatchRejectedSchema();
+    throw error;
+  }
+  // `sessionVerified` says whether `sessionId` below is this server's own
+  // resolved, signature-backed identity (trustworthy for the log line, and
+  // the key the per-session rate limit uses) or the fixed `"unsigned"`
+  // bucket a tokenless batch gets instead of a caller-chosen label.
+  let sessionId = "unsigned";
+  let sessionVerified = false;
+  if (batch.sessionToken !== undefined) {
+    const claims = decodeHlsViewerToken(batch.sessionToken);
+    if (!claims || claims.userId !== user.id) {
+      recordHlsTelemetryBatchRejectedSession();
+      throw new HttpError(400, "Invalid session token");
+    }
+    // The verified pair, needing no query of its own: the cheap check below
+    // gates the database work, not the other way around (a Farol finding,
+    // 2026-09-14). It also outlives `resolveHlsSessionId`'s own answer, so
+    // it is what the per-session rate limit is keyed on throughout, not the
+    // resolved row id -- both name the same session, but this one is
+    // available before any lookup runs.
+    const compositeKey = `${claims.channelId}:${claims.startedAt}`;
+    sessionVerified = true;
+    sessionId = compositeKey;
+
+    const sessionKey = `session:${compositeKey}`;
+    if (!liveHlsTelemetrySessionLimiter.take(sessionKey)) {
+      recordHlsTelemetryBatchRejectedRateLimit();
+      res.setHeader(
+        "Retry-After",
+        String(liveHlsTelemetrySessionLimiter.retryAfter(sessionKey)),
+      );
+      throw new HttpError(429, "Slow down");
+    }
+
+    // `hlsSessionLookupGuard` bounds the query to
+    // `HLS_SESSION_LOOKUP_TIMEOUT_MS` and negatively caches a struggling key
+    // for `HLS_SESSION_LOOKUP_NEGATIVE_CACHE_MS` -- see its own doc comment
+    // for the two Farol findings this closes. A resolution miss that is NOT
+    // a timeout (the session just ended, or its rung rows have not landed
+    // yet) still deserves a batch that JOINS on repetition, even if it
+    // cannot join against the egress log for this one -- so that case falls
+    // back to `compositeKey` rather than the shared `"unsigned"` bucket,
+    // which would wrongly lump a real, verified session in with every
+    // tokenless one.
+    const lookup = await hlsSessionLookupGuard.resolve(compositeKey, () =>
+      resolveHlsSessionId(claims.channelId, claims.startedAt),
+    );
+    if (lookup.outcome === "timeout") {
+      recordHlsTelemetryBatchRejectedSessionLookupTimeout();
+      throw new HttpError(503, "Session lookup timed out");
+    }
+    if (lookup.outcome === "resolved") {
+      sessionId = lookup.sessionId ?? compositeKey;
+    }
+    // "negatively-cached": no lookup was attempted; `sessionId` stays the
+    // composite fallback already assigned above.
+  }
+  // `recordHlsLatencySample` refuses a rung it does not recognise on its
+  // own (a caller-independent guard against an authenticated account
+  // growing the per-rung histogram map without bound -- a Farol finding,
+  // 2026-09-13), but the log line below is built here too, so it filters
+  // the same way first: otherwise a batch full of garbage rung names would
+  // still produce a clean-looking log line while every sample inside it was
+  // silently dropped from the histogram.
+  // Every sample goes through `recordHlsLatencySample`, unfiltered: it is
+  // the one place that counts `samplesRejectedUnknownRung`, and pre-filtering
+  // here (a Farol finding, 2026-09-13) fed it only the samples it would have
+  // accepted anyway, so a batch full of garbage rungs recorded nothing AND
+  // never incremented the counter meant to say so.
+  for (const sample of batch.samples) {
+    recordHlsLatencySample(sample.rung, sample.latencyMs);
+  }
+  // `knownSamples` is for the log line below ONLY -- it must not name a rung
+  // this build refused, but it plays no part in what got recorded above.
+  const knownSamples = batch.samples.filter((sample) =>
+    isKnownHlsRung(sample.rung),
+  );
+  recordHlsTelemetryBatchAccepted();
+  // One structured line per batch (not per sample): a live party's worth of
+  // these is meant to be readable by a human during an event, not a second
+  // copy of the histogram in the log shipper. `medianLatencyMs` is a numeric
+  // field so Loki's `quantile_over_time` can chart a live trend
+  // (`docs/MONITORING.md` B0.6); it is the median of THIS batch's own
+  // samples, not the rung's real p50 across every viewer -- that number,
+  // correctly bucketed per rung, is `GET /api/admin/metrics`'s
+  // `liveHls.latency.byRung`, which this line is a rough live preview of and
+  // not a replacement for.
+  const sortedLatencies = knownSamples
+    .map((sample) => sample.latencyMs)
+    .sort((a, b) => a - b);
+  // The schema also accepts `bufferSeconds`/`stalls`/`rebufferMs`/
+  // `startupMs`/`playerRebuildCount`, and until this line they were parsed,
+  // validated and then thrown away entirely (a Farol finding, 2026-09-13):
+  // the request returned 200 while none of that reached anywhere a human or
+  // a panel could read it. There is no per-field histogram for these -- that
+  // is more than a live party's log line needs -- so they are folded into
+  // one summary per batch instead, which is enough to say "the audience is
+  // stalling" or "rebuilding the player a lot" during an event.
+  const totalStalls = batch.samples.reduce(
+    (sum, sample) => sum + (sample.stalls ?? 0),
+    0,
+  );
+  const maxRebufferMs = batch.samples.reduce(
+    (max, sample) => Math.max(max, sample.rebufferMs ?? 0),
+    0,
+  );
+  const maxPlayerRebuildCount = batch.samples.reduce(
+    (max, sample) => Math.max(max, sample.playerRebuildCount ?? 0),
+    0,
+  );
+  const startupMs = batch.samples.find((sample) => sample.startupMs !== undefined)
+    ?.startupMs;
+  const bufferSecondsValues = batch.samples
+    .map((sample) => sample.bufferSeconds)
+    .filter((value): value is number => value !== undefined);
+  const avgBufferSeconds =
+    bufferSecondsValues.length > 0
+      ? bufferSecondsValues.reduce((sum, value) => sum + value, 0) /
+        bufferSecondsValues.length
+      : undefined;
+  logEvent("voice.hlsTelemetryBatch", {
+    sessionId,
+    sessionVerified,
+    samples: batch.samples.length,
+    droppedUnknownRungSamples: batch.samples.length - knownSamples.length,
+    rungs: [...new Set(knownSamples.map((sample) => sample.rung))],
+    medianLatencyMs:
+      sortedLatencies.length > 0
+        ? sortedLatencies[Math.floor(sortedLatencies.length / 2)]
+        : undefined,
+    totalStalls,
+    maxRebufferMs,
+    maxPlayerRebuildCount,
+    startupMs,
+    avgBufferSeconds:
+      avgBufferSeconds !== undefined ? Math.round(avgBufferSeconds * 10) / 10 : undefined,
+  });
+  return { ok: true };
+});
 
 /**
  * The settings box. Rate-limited like reports — it is the same "small text
@@ -7925,6 +9210,12 @@ export async function handleApi(
     if (await tryHlsCapabilityDoor(req, res, pathname)) {
       return;
     }
+    if (await tryHlsReplayCapabilityDoor(req, res, pathname)) {
+      return;
+    }
+    if (await tryWatchPartyDownloadCapabilityDoor(req, res, pathname)) {
+      return;
+    }
   }
 
   // The operator dashboard's machine token, for exactly two GETs and nothing
@@ -7953,7 +9244,9 @@ export async function handleApi(
     try {
       sendJson(res, 200, await machineRoute.run(req, query), req);
     } catch (error) {
-      if (error instanceof HttpError) {
+      if (error instanceof DatabaseUnavailableError) {
+        sendDatabaseUnavailable(res, req);
+      } else if (error instanceof HttpError) {
         sendError(res, error.status, error.message, req);
       } else if (
         error &&
@@ -7972,8 +9265,25 @@ export async function handleApi(
 
   let resolved: Awaited<ReturnType<typeof resolveAuthSession>> = null;
   try {
-    resolved = await resolveAuthSession(req.headers.authorization);
+    // Its own label, not the eventual route's: this runs before the router
+    // has matched anything (a 404 gets resolved too), and a Clerk/DB round
+    // trip here is shared account-resolution work, not business logic that
+    // belongs to whichever endpoint happens to follow it. Without this label
+    // every one of these queries — 53k UPDATEs in 16.5h of the 2026-09-13
+    // Vultr cutover alone — was silently folded into `dbQueries.byRoute`'s
+    // `"other"` bucket, hiding a real cost center behind the same label used
+    // for WS handlers and cold jobs.
+    resolved = await runWithRoute(AUTH_ROUTE_LABEL, () =>
+      resolveAuthSession(req.headers.authorization),
+    );
   } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      // The breaker is open: this rejected in milliseconds rather than
+      // hanging on the pool, and the caller gets the same shape every other
+      // DB-dependent route does instead of the generic message below.
+      sendDatabaseUnavailable(res, req);
+      return;
+    }
     console.error("[auth] resolve failed:", error);
     sendError(res, 503, "Authentication temporarily unavailable", req);
     return;
@@ -8007,6 +9317,18 @@ export async function handleApi(
     // strongest evidence available. Revocation is still checked against its
     // own issue time.
     if (req.method === "GET" && (await tryHlsCapabilityDoor(req, res, pathname))) {
+      return;
+    }
+    if (
+      req.method === "GET" &&
+      (await tryHlsReplayCapabilityDoor(req, res, pathname))
+    ) {
+      return;
+    }
+    if (
+      req.method === "GET" &&
+      (await tryWatchPartyDownloadCapabilityDoor(req, res, pathname))
+    ) {
       return;
     }
     // The metrics route answers 404 to everybody it refuses, whether that is a
@@ -8078,7 +9400,12 @@ export async function handleApi(
   // in. `findTimeoutForRequest` owns both rules — see the comment on
   // `TIMEOUT_EXEMPT_SUFFIXES` for the two writes that stay open.
   if (WRITE_METHODS.has(method)) {
-    const timeout = await findTimeoutForRequest(user.id, method, pathname);
+    // Same reasoning as the `resolveAuthSession` call above: a gate that
+    // runs ahead of every route, labelled as what it is rather than folded
+    // into "other".
+    const timeout = await runWithRoute(AUTH_ROUTE_LABEL, () =>
+      findTimeoutForRequest(user.id, method, pathname),
+    );
     if (timeout) {
       sendError(res, 403, timeoutMessage(timeout), req);
       return;
@@ -8094,7 +9421,9 @@ export async function handleApi(
     }
 
     const ctx: RequestContext = { req, res, url, user, ageGate: resolved.ageGate };
-    const result = await matched.handler(ctx, matched.params);
+    const result = await runWithRoute(`${method} ${matched.routePath}`, () =>
+      matched.handler(ctx, matched.params),
+    );
     // Conditional reads. Deliberately *here*, downstream of everything above:
     // the Bearer token has been resolved, the age gate and timeout gate have
     // run, the route matched, and the handler has finished — which means its
@@ -8111,6 +9440,12 @@ export async function handleApi(
       sendJson(res, 201, result.body, req);
       return;
     }
+    // The handler streamed its own answer (a past-broadcast download). There
+    // is nothing left to write, and `sendJson` would throw on a socket whose
+    // head went out long ago.
+    if (result instanceof StreamedResponse) {
+      return;
+    }
     if (result instanceof RawResponse) {
       res.writeHead(200, {
         "content-type": result.contentType,
@@ -8125,6 +9460,16 @@ export async function handleApi(
     }
     sendJson(res, 200, result, req);
   } catch (error) {
+    // A3.1: the breaker rejected a query in milliseconds rather than the
+    // route hanging on a saturated or unreachable pool for
+    // `connectionTimeoutMillis`. Checked ahead of `HttpErrorWithDetail` and
+    // `HttpError`, which it extends, for the same reason as the check below —
+    // the extra header this one carries would be silently dropped by the
+    // more general match.
+    if (error instanceof DatabaseUnavailableError) {
+      sendDatabaseUnavailable(res, req);
+      return;
+    }
     // Checked before the plain `HttpError` branch it extends, or the extra
     // fields would be silently dropped by the more general match.
     if (error instanceof HttpErrorWithDetail) {

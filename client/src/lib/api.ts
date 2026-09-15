@@ -63,6 +63,7 @@ import type {
   PublicCommunity,
   PublicProfile,
   PublicUser,
+  AllReportPage,
   Report,
   ReportPage,
   ReportStatus,
@@ -602,6 +603,21 @@ export interface LiveHlsConfig {
    * the room for nothing.
    */
   micArchive?: boolean;
+  /**
+   * Whether this deployment can carry the presenter's voice as its own
+   * playlist, separately from the film (`LIVE_HLS_VOICE_TRACK`). Absent on a
+   * server that predates the field or has it off, which is exactly the
+   * "junto" behaviour every deployment has always had — the host panel only
+   * offers the "separada" choice when this is true.
+   */
+  voiceTrack?: boolean;
+  /**
+   * Whether this deployment can carry a party's picture over LL-HLS
+   * (`LIVE_HLS_LL`, plus its own allowlist). Absent on a server that
+   * predates the field, which reads as unavailable — the host panel only
+   * offers "Baixa latência (beta)" when this is true.
+   */
+  lowLatency?: { available: boolean };
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>
@@ -619,6 +635,13 @@ export const fetchLiveHlsConfig = (serverId?: string) =>
 export const fetchChannelLive = (channelId: string) =>
   apiFetch<{
     stream: LiveHlsStream | null;
+    /**
+     * With `stream: null`: the server checked and there is nothing live.
+     * Absent when it could not check (the session table was unreachable), and
+     * the caller must then keep what it has rather than treat one failed
+     * query as the party being over. Same contract as `channel-live`.
+     */
+    ended?: boolean;
     watching: number;
     participants: number;
   }>(`/api/channels/${channelId}/live`);
@@ -1754,3 +1777,17 @@ export const resolveReport = (
   reportId: string,
   body: ResolveReportRequest,
 ) => patch<{ report: Report }>(`/api/reports/${reportId}`, body);
+
+/**
+ * Every report an instance moderator may see, across every server and the
+ * instance queue alike — the surface `/api/reports/instance` and a server's
+ * own `/api/servers/:id/reports` used to force apart. 200 for a moderator,
+ * anything else means "not visible", never just a 404.
+ */
+export const fetchAllReports = (
+  options: { before?: string; status?: ReportStatus } = {},
+) => apiFetch<AllReportPage>(`/api/reports/all${reportQuery(options)}`);
+
+/** Deletes the reported message. 400 when there is nothing live to remove. */
+export const removeReportedMessage = (reportId: string) =>
+  post<{ ok: true }>(`/api/reports/${reportId}/remove-message`, undefined);

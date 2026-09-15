@@ -153,30 +153,33 @@ describe("healthVerdict", () => {
     resetDrainForTests();
   });
 
-  it("is 200 with the version while the database answers", async () => {
+  /**
+   * A3.1: liveness only. No probe parameter exists any more to assert
+   * "never touches the pool" against — that guarantee is now structural
+   * (there is nothing here that could reach `db.ts` even by accident), and
+   * `index.ts`'s spy test covers the wiring one level up.
+   */
+  it("is 200 with the version while listening and not draining", () => {
     expect(isDraining()).toBe(false);
-    await expect(healthVerdict(async () => 1, "abc123")).resolves.toEqual({
+    expect(healthVerdict(true, "abc123")).toEqual({
       status: 200,
       body: { ok: true, version: "abc123" },
     });
   });
 
-  it("is 503 when the database probe fails", async () => {
-    await expect(
-      healthVerdict(async () => {
-        throw new Error("down");
-      }),
-    ).resolves.toMatchObject({ status: 503, body: { ok: false } });
+  it("is 503 when the HTTP server is not listening", () => {
+    expect(healthVerdict(false)).toMatchObject({
+      status: 503,
+      body: { ok: false, error: "not listening" },
+    });
   });
 
-  it("is 503 from the moment the drain begins, without touching the pool", async () => {
-    const probe = vi.fn(async () => 1);
+  it("is 503 from the moment the drain begins, even while still listening", () => {
     beginDrain();
     expect(isDraining()).toBe(true);
-    await expect(healthVerdict(probe)).resolves.toEqual({
+    expect(healthVerdict(true)).toEqual({
       status: 503,
       body: { ok: false, error: "draining" },
     });
-    expect(probe).not.toHaveBeenCalled();
   });
 });

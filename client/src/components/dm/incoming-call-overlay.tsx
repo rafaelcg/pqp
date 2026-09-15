@@ -53,20 +53,20 @@ export function IncomingCallOverlay({
               ? t("call.incoming.groupTitle")
               : t("call.incoming.title")
           }`}
-          className="pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-lg border border-ink-4/60 bg-ink-2 p-3 shadow-lg"
+          className="pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-[var(--radius-card)] border border-border/60 bg-surface-1 p-3 shadow-[var(--shadow-2)]"
         >
           <UserAvatar
             name={call.caller.displayName}
             avatarUrl={call.caller.avatarUrl}
             rounded="full"
             className="h-10 w-10"
-            fallbackClassName="bg-ink-4 text-sm text-paper"
+            fallbackClassName="bg-border text-sm text-text"
           />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-paper">
+            <p className="truncate text-sm font-semibold text-text">
               {call.caller.displayName}
             </p>
-            <p className="animate-pulse truncate text-xs text-paper-muted">
+            <p className="animate-pulse truncate text-xs text-text-tertiary">
               {call.kind === "group"
                 ? t("call.incoming.groupTitle")
                 : t("call.incoming.title")}
@@ -77,7 +77,7 @@ export function IncomingCallOverlay({
               type="button"
               title={t("call.incoming.accept")}
               aria-label={t("call.incoming.accept")}
-              className="rounded-full bg-success/90 p-2 text-ink hover:bg-success"
+              className="rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success"
               onClick={() => onAccept(call.conversationId)}
             >
               <Phone className="h-4 w-4" />
@@ -86,7 +86,7 @@ export function IncomingCallOverlay({
               type="button"
               title={t("call.incoming.decline")}
               aria-label={t("call.incoming.decline")}
-              className="rounded-full bg-danger/90 p-2 text-paper hover:bg-danger"
+              className="rounded-full bg-danger/90 p-2 text-text hover:bg-danger"
               onClick={() => onDecline(call.conversationId)}
             >
               <PhoneOff className="h-4 w-4" />
@@ -95,7 +95,7 @@ export function IncomingCallOverlay({
               type="button"
               title={t("call.incoming.ignore")}
               aria-label={t("call.incoming.ignore")}
-              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+              className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text"
               onClick={() => onDismiss(call.conversationId)}
             >
               <X className="h-4 w-4" />

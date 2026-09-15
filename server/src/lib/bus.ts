@@ -50,6 +50,19 @@ export interface BusTransport {
   publish(frame: BusFrame): void;
   /** Installed once, by `setBusTransport`. */
   onFrame(handler: (frame: BusFrame) => void): void;
+  /**
+   * Is this transport able to deliver right now? Optional, and absent means
+   * yes (the memory transport in tests is always up).
+   *
+   * `publish` is fire-and-forget and DROPS while the transport is
+   * reconnecting, which is the right trade for presence and typing — the next
+   * frame is along in a second. It is the wrong trade for a fan-out whose
+   * trigger was claimed in SQL and will never come round again, and those
+   * callers need to be able to ask. Nobody may use this to decide whether a
+   * frame was delivered: it says the transport was up when asked, nothing
+   * more.
+   */
+  connected?(): boolean;
   close(): Promise<void>;
 }
 
@@ -93,6 +106,23 @@ export function publishToCluster(topic: string, data: unknown): void {
   } catch (error) {
     console.error(`[bus] ${current.name} publish to ${topic} failed:`, error);
   }
+}
+
+/**
+ * Is the installed transport currently able to deliver? `false` with no
+ * transport at all, and `true` for one that does not answer the question.
+ *
+ * For the handful of callers whose frame is a ONE-SHOT: a reminder claimed in
+ * the same UPDATE that stamps it never comes round again, so "the bus was down
+ * when I published" is worth knowing and worth one retry. See
+ * `services/channel-sessions.ts`.
+ */
+export function isBusConnected(): boolean {
+  const current = transport;
+  if (!current) {
+    return false;
+  }
+  return current.connected?.() ?? true;
 }
 
 /**

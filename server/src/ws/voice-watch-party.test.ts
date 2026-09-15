@@ -88,10 +88,10 @@ vi.mock("../services/servers.js", () => ({
  */
 const party = vi.hoisted(() => ({
   seat: null as {
-    voiceEnabled: boolean;
+    guests: "off" | "invite" | "request";
     isHost: boolean;
     isCohost: boolean;
-    isInvited: boolean;
+    isGuest: boolean;
   } | null,
   /** Set when the gate refused to read it at all, to prove it fails open. */
   throws: false,
@@ -283,10 +283,10 @@ describe("who gets a seat in a watch party with no voice", () => {
   });
 
   const audience = {
-    voiceEnabled: false,
+    guests: "off" as const,
     isHost: false,
     isCohost: false,
-    isInvited: false,
+    isGuest: false,
   };
 
   it("refuses a viewer, and tells them so even on a cold join", async () => {
@@ -333,19 +333,30 @@ describe("who gets a seat in a watch party with no voice", () => {
     expect(party.calls).toBe(1);
   });
 
-  it("lets in somebody the host invited up to speak", async () => {
+  it("lets in an accepted guest", async () => {
     bits.byUser.set("guest", PERMISSION_DEFAULT_EVERYONE);
-    party.seat = { ...audience, isInvited: true };
+    party.seat = { ...audience, guests: "invite", isGuest: true };
     expect(frame(await join(recorder(), "guest", CINEMA), "welcome")).toBeDefined();
   });
 
-  it("lets everybody in once the host turns voice on", async () => {
-    // The film night. Six friends watching something together genuinely want
-    // to talk over it, and from here `stageMode` decides who may SPEAK
-    // through the ordinary overwrite, exactly as it did before.
+  it("refuses a merely-invited (not yet accepted) guest", async () => {
+    // CONVIDADOS: an invitation is not an acceptance. `isGuest` is
+    // `accepted_at IS NOT NULL` only, so somebody called up who has not
+    // pressed "Entrar no ar" yet is not in the room.
+    bits.byUser.set("invitee", PERMISSION_DEFAULT_EVERYONE);
+    party.seat = { ...audience, guests: "invite", isGuest: false };
+    const rec = await join(recorder(), "invitee", CINEMA);
+    expect(frame(rec, "welcome")).toBeUndefined();
+  });
+
+  it("refuses a plain viewer even though `guests` is on", async () => {
+    // THE MODEL CHANGE UNDER GUESTS: `guests !== "off"` no longer seats
+    // anybody by itself, unlike the old `voiceEnabled`. Nobody but the
+    // presenter and accepted guests is ever in the room.
     bits.byUser.set("viewer", PERMISSION_DEFAULT_EVERYONE);
-    party.seat = { ...audience, voiceEnabled: true };
-    expect(frame(await join(recorder(), "viewer", CINEMA), "welcome")).toBeDefined();
+    party.seat = { ...audience, guests: "request" };
+    const rec = await join(recorder(), "viewer", CINEMA);
+    expect(frame(rec, "welcome")).toBeUndefined();
   });
 
   it("leaves a watch party channel with no party running alone", async () => {

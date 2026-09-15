@@ -33,6 +33,12 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  *    substitution CONSTANT across both halves and moves only the seat, so it
  *    cannot pass by the stub failing to arrive: the picture has to appear,
  *    then go when the seat is taken, then come back when it is given up.
+ *    That same test also asserts the seated call surface never shows the
+ *    in-call cinema player (2026-09-13: a second, independent HLS instance
+ *    that used to double the picture and the soundtrack the moment a seat
+ *    landed) — CI has no real presenter to make that tile exist at all, so
+ *    the rule it is guarding is pinned properly at the unit level in
+ *    `client/src/lib/cinema-layout.test.ts`, and this is the outer contract.
  * 2. `withLiveHlsConfig`: `GET /api/live-hls/config`, the operator's
  *    per-server `LIVE_HLS_SERVER_ALLOWLIST` answer. `openAs` sets it to
  *    `enabled: true`, because the create control now follows it as well as
@@ -181,11 +187,12 @@ async function createParty(
   suffix: string,
   serverId: string,
   name: string,
+  options?: Record<string, unknown>,
 ): Promise<{ partyId: string; channelId: string }> {
   const res = await fetch(`${API}/api/servers/${serverId}/watch-parties`, {
     method: "POST",
     headers: headersFor(suffix),
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(options ? { name, options } : { name }),
   });
   if (!res.ok) {
     throw new Error(`could not create the party: ${res.status}`);
@@ -211,6 +218,29 @@ async function setPartyState(
   }
 }
 
+/** Add one more member to a server the owner already runs, past `seedServer`'s one guest. */
+async function addMember(
+  ownerSuffix: string,
+  serverId: string,
+  memberSuffix: string,
+): Promise<string> {
+  const userId = await materialiseAccount(memberSuffix);
+  const inviteRes = await fetch(`${API}/api/servers/${serverId}/invites`, {
+    method: "POST",
+    headers: headersFor(ownerSuffix),
+    body: JSON.stringify({}),
+  });
+  const { invite } = (await inviteRes.json()) as { invite: { code: string } };
+  const joined = await fetch(`${API}/api/invites/${invite.code}/join`, {
+    method: "POST",
+    headers: headersFor(memberSuffix),
+  });
+  if (!joined.ok) {
+    throw new Error(`${memberSuffix} could not join: ${joined.status}`);
+  }
+  return userId;
+}
+
 /** The host bringing somebody up to speak. The one path to a seat for a non-host. */
 async function inviteToStage(
   suffix: string,
@@ -225,6 +255,26 @@ async function inviteToStage(
   if (!res.ok) {
     throw new Error(`could not put them on the stage: ${res.status}`);
   }
+}
+
+/**
+ * CONVIDADOS: one guest action, on the real `/guests` route.
+ * `docs/plans/WATCH_PARTY_GUESTS.md` §5.8 — `request`/`withdraw`/`join`/
+ * `leave` take no `userId` (always the caller's own row); `invite`/`accept`/
+ * `decline`/`remove` always do.
+ */
+async function guestAction(
+  suffix: string,
+  partyId: string,
+  body:
+    | { action: "invite" | "accept" | "decline" | "remove"; userId: string }
+    | { action: "request" | "withdraw" | "join" | "leave" },
+): Promise<Response> {
+  return fetch(`${API}/api/watch-parties/${partyId}/guests`, {
+    method: "POST",
+    headers: headersFor(suffix),
+    body: JSON.stringify(body),
+  });
 }
 
 /**
@@ -632,7 +682,9 @@ test("an invited guest takes a seat and does not get the player twice", async ({
   const shared = await seedServer("wp-host3", "wp-seat");
   const here = `/app/server/${shared.serverId}/channel/${shared.textChannelId}`;
 
-  const party = await createParty("wp-host3", shared.serverId, "Cinemoon 3");
+  const party = await createParty("wp-host3", shared.serverId, "Cinemoon 3", {
+    guests: "invite",
+  });
   await setPartyState("wp-host3", party.partyId, "live");
   // THE ONLY WAY A NON-HOST GETS A SEAT NOW, and the reason this test moved
   // rather than being deleted: a plain viewer is offered nothing, so the
@@ -640,8 +692,19 @@ test("an invited guest takes a seat and does not get the player twice", async ({
   // invariant underneath is unchanged and still worth pinning: the HLS
   // player must go when the WebRTC screen arrives, or it is the same film
   // twice, seconds apart, with both soundtracks.
+  //
+  // CONVIDADOS: an invitation is not an acceptance (§3.3/§3.4). `inviteToStage`
+  // (still the `/stage` route, kept for one release) only calls the person
+  // up; `join` is the invited person confirming, which is what actually
+  // grants the seat now.
   const guestId = await materialiseAccount("wp-seat");
   await inviteToStage("wp-host3", party.partyId, guestId);
+  const joined = await guestAction("wp-seat", party.partyId, {
+    action: "join",
+  });
+  if (!joined.ok) {
+    throw new Error(`the invited guest could not join: ${joined.status}`);
+  }
 
   const second = await secondClient(browser);
   try {
@@ -676,6 +739,46 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     await viewer.locator("[data-watch-party-join-call]").click();
     await expect(stage).toHaveCount(0, { timeout: 20_000 });
     await expect(viewer.getByTestId("watch-stage-live")).toHaveCount(0);
+
+    // 2026-09-13 (Saturday's report): the seatless stage disappearing is only
+    // half the rule. `CallStage` used to land a freshly seated participant
+    // straight into its OWN cinema view — a second, independent HLS player
+    // beside the one that had just correctly unmounted above — so the video
+    // duplicated and the audio doubled at two different delays. CI has no
+    // real presenter (no LiveKit, no egress, and nobody in this room is
+    // actually publishing a screen over WebRTC), so `cinemaTile` can never
+    // populate here regardless of the fix; the rule itself
+    // (`shouldShowCinema`'s `isWatchParty` gate, in
+    // `client/src/lib/cinema-layout.test.ts`) is pinned at the unit level.
+    // This assertion is the outer contract: whatever the roster ever looks
+    // like, a watch party's own room never shows this surface once seated.
+    await expect(viewer.getByTestId("call-stage-cinema")).toHaveCount(0);
+    // 2026-09-13 (Rafael's live report, as host): "Na call · em watch-party"
+    // in the user panel, and the stage STILL offering "Entrar na chamada"
+    // beside it — two affordances for one state. `watchPartyChrome` (party
+    // `live` AND seated) can lag a fresh seat by a render because it comes
+    // off `watchParties.byChannel`'s own fetch/socket; `isWatchPartyChannel`
+    // (the channel's own `type`) cannot, and now gates the same button
+    // (`seatedInWatchPartyRoom`, `client/src/lib/cinema-layout.ts`). Implied
+    // by `call-stage-cinema` above once seated, but named so a regression
+    // says which control came back rather than only that the stage did.
+    await expect(viewer.getByTestId("cinema-stage-join")).toHaveCount(0);
+
+    // 2026-09-13, the SAME DAY as the fix above: the owner took the seat in
+    // his OWN party (host, already sharing) and got a black rectangle with
+    // the delay badge, the viewer pill and the one-time explainer piled on
+    // top of each other — the chrome `HlsWatchPlayer` carries, left mounted
+    // with nothing under it because a peer's grid TILE (not just the cinema
+    // surface above) could still carry an HLS source regardless of anyone's
+    // seat. `resolveScreenTileSources` (`screen-stage.tsx`) is the fix, and
+    // like `cinemaTile` above, CI cannot make a real one of these tiles
+    // exist (no LiveKit, no egress, nobody actually publishing); the pixel
+    // rule is pinned at the unit level in `screen-stage.test.ts`. What this
+    // asserts is the same outer contract: none of the chrome that only ever
+    // ships inside `HlsWatchPlayer` is on the stage once seated, whatever
+    // the roster looks like.
+    await expect(viewer.getByTestId("hls-delay-badge")).toHaveCount(0);
+    await expect(viewer.getByTestId("hls-delay-explainer")).toHaveCount(0);
 
     // The seat's exit is on the party bar, in the party's words; the call
     // strip and its Leave are not drawn in a watch party channel.
@@ -1423,9 +1526,12 @@ test("the people running the party keep their way into the room", async ({
   });
   // A WATCH PARTY IS NOT A LOBBY. With voice off the host is not offered a
   // seat as such: the way back into their own room is putting a picture up,
-  // which seats them, and that control is on the waiting surface.
+  // which seats them, and that control is on the presenter bar
+  // (`data-watch-party-bar-share`, the presenter/audience split's one share
+  // button — the empty stage's own second one, `data-watch-party-share-screen`,
+  // was retired alongside it).
   await expect(page.locator("[data-watch-party-join-call]")).toHaveCount(0);
-  await expect(page.locator("[data-watch-party-share-screen]")).toBeVisible();
+  await expect(page.locator("[data-watch-party-bar-share]")).toBeVisible();
 });
 
 test("a viewer can tell they are watching, and can stop", async ({
@@ -1459,11 +1565,13 @@ test("a viewer can tell they are watching, and can stop", async ({
     // implementation (a voice room with an HLS audience attached) and frames
     // the thing everybody came for as an abstention. Rafael: "how's that even
     // a thing in watch party lol". A playing film says they are watching; the
-    // row says the two things it cannot: how many people, and how far behind.
+    // row says the one thing it cannot: how many people. The delay figure
+    // that used to sit beside it is gone (2026-09-13): it printed a constant
+    // off the wire config rather than the stream's actual distance from
+    // live, which read as broken more often than informative.
     const state = viewer.getByTestId("watch-stage-state");
     await expect(state).toBeVisible({ timeout: 20_000 });
     await expect(state).toContainText("watching");
-    await expect(viewer.getByTestId("watch-stage")).toContainText("delay");
     await expect(viewer.getByText("without joining the call")).toHaveCount(0);
 
     // And the way out is beside the statement, which is honest about what
@@ -1718,106 +1826,299 @@ test("a viewer can put the film on the whole screen", async ({
   }
 });
 
-test("a party has no voice until the host turns it on, and the audience follows on the socket", async ({
+test("a party takes no requests until Convidados is on, and request-accept-join reaches the guest live", async ({
   page,
   browser,
 }) => {
   /**
-   * THE MODEL, END TO END, THROUGH THE ONE CONTROL THAT SETS IT.
+   * THE MODEL, END TO END, THROUGH THE ONE CONTROL THAT SETS IT
+   * (`docs/plans/WATCH_PARTY_GUESTS.md`).
    *
-   * A watch party has no voice by default: the audience is seatless, the
+   * A watch party has no guests by default: the audience is seatless, the
    * transcode carries no microphone, and a room of five hundred with open
    * microphones is not a watch party. The rest of this file proves the
    * DEFAULT (`a plain viewer is offered no way into the call, anywhere`), and
    * every one of those assertions is now resting on it. What is missing is
-   * the other half: that a host can turn voice ON, that it is one click, and
-   * that the audience finds out without reloading anything.
+   * the other half: that a host can turn Convidados to "Podem pedir pra
+   * falar" in one click, that the audience finds out without reloading
+   * anything, and that a request → accept → join actually reaches the guest
+   * on air.
    *
    * TWO REAL ACCOUNTS AND NO RELOAD BETWEEN THE HALVES. The guest's client
    * boots once and stays up, so an appearing control is the socket
-   * (`watch-party-update`) carrying an options change to a running page. A
-   * test that reloaded in the middle would pass with no broadcast at all,
-   * which is the failure this repo keeps shipping.
+   * (`watch-party-update`) carrying an options change to a running page.
    *
-   * THE CONTROL IS THE PRODUCT ARGUMENT. Six friends watching a film want to
-   * talk over it and get there in one click, exactly what it cost before this
-   * change; five hundred people watching a presentation pay zero clicks for
-   * the thing they want. That is why it is one select and not a switch plus a
-   * stage picker.
-   *
-   * WHAT APPEARS IS "PEDIR PARA FALAR", NOT A SEAT (2026-09-13). The
-   * audience never joins a call: turning Voz on offers a plain guest a stage
-   * REQUEST, the same raise-hand button `invited` mode already had, now for
-   * every stage mode. `data-watch-party-join-call` stays at zero for this
-   * guest the whole test; only the host's own way back into the room uses
-   * that control.
+   * AN INVITATION IS NOT AN ACCEPTANCE (§3.3/§3.4). Accepting a request only
+   * moves the person to "invited" — the dialog fires, and only pressing
+   * "Entrar no ar" there actually opens the microphone and confirms `join`.
    */
-  const shared = await seedServer("wp-voz-host", "wp-voz-guest");
-  const party = await createParty("wp-voz-host", shared.serverId, "Cinemoon");
-  await setPartyState("wp-voz-host", party.partyId, "live");
+  const shared = await seedServer("wp-guests-host", "wp-guests-viewer");
+  const party = await createParty(
+    "wp-guests-host",
+    shared.serverId,
+    "Cinemoon",
+  );
+  await setPartyState("wp-guests-host", party.partyId, "live");
   const room = `/app/server/${shared.serverId}/channel/${party.channelId}`;
 
-  const guest = page;
-  await openAs(guest, room, "wp-voz-guest");
-  await expect(guest.getByTestId("watch-party-bar")).toBeVisible({
+  const host = page;
+  await openAs(host, room, "wp-guests-host");
+  await expect(host.getByTestId("watch-party-bar")).toBeVisible({
     timeout: 20_000,
   });
-  // The default, from the guest's side: nothing offers a seat, anywhere on
-  // the page. Same count as `a plain viewer is offered no way into the call`,
-  // restated here because it is the baseline the two flips below have to
-  // move, and without it an appearing control proves nothing.
-  expect(await joinOffers(guest)).toHaveLength(0);
-  await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0);
-  await expect(guest.locator("[data-watch-party-raise]")).toHaveCount(0);
 
-  const hostClient = await secondClient(browser);
+  const guestClient = await secondClient(browser);
   try {
-    const host = hostClient.page;
-    await openAs(host, room, "wp-voz-host");
+    const guest = guestClient.page;
+    await installGumCounter(guest);
+    await openAs(guest, room, "wp-guests-viewer");
+    await expect(guest.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    // The default, from the guest's side: nothing offers a seat or a
+    // request, anywhere on the page.
+    expect(await joinOffers(guest)).toHaveLength(0);
+    await expect(guest.locator("[data-watch-party-guest-request]")).toHaveCount(
+      0,
+    );
+
+    // ONE CLICK. Convidados, "Podem pedir pra falar".
     await host.locator("[data-watch-party-options-toggle]").click();
     await expect(host.getByTestId("watch-party-options-drawer")).toBeVisible({
       timeout: 20_000,
     });
-
-    // OFF IS WHAT THE HOST SEES, on a party they created with no options at
-    // all. The select carries the server's answer, so this is the stored
-    // default read back through the API rather than a client constant.
-    const voice = host.locator("[data-watch-party-voice]");
-    await expect(voice).toHaveValue("off");
-    // And the stage machinery is not drawn under it: a queue for a party
-    // nobody can speak in is a control with nothing behind it.
-    await expect(host.locator("[data-watch-party-raise-hand]")).toHaveCount(0);
-
-    // ONE CLICK. The film night.
-    await voice.selectOption("everyone");
+    await expect(
+      host.locator('[data-watch-party-guests-option="off"] input'),
+    ).toBeChecked();
+    await host
+      .locator('[data-watch-party-guests-option="request"] input')
+      .click();
+    // Close the drawer: the dock control it sits on top of is behind it,
+    // and a covered element never becomes clickable.
+    await host.keyboard.press("Escape");
+    await expect(host.getByTestId("watch-party-options-drawer")).toHaveCount(
+      0,
+    );
 
     // THE GUEST'S PAGE HAS NOT RELOADED. This appearing is the PATCH, the
-    // broadcast and the affordance, in a client that was already open — and
-    // it is "Pedir para falar", never a seat: `join-call` stays at zero for
-    // this plain guest even though `join-voice-room` would let them in.
-    await expect(guest.locator("[data-watch-party-raise]")).toHaveCount(1, {
+    // broadcast and the affordance, in a client that was already open.
+    const requestButton = guest.locator(
+      '[data-watch-party-guest-request="idle"]',
+    );
+    await expect(requestButton).toBeVisible({ timeout: 20_000 });
+    await requestButton.click();
+    await expect(
+      guest.locator('[data-watch-party-guest-request="pending"]'),
+    ).toBeVisible();
+    // Watching and asking still opened no microphone.
+    expect(await gumCalls(guest)).toBe(0);
+
+    // The host sees the request from the dock and accepts it.
+    await host.locator("[data-watch-party-guests-dock]").click();
+    await expect(host.locator("[data-watch-party-guest-panel]")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0);
+    await host.locator("[data-watch-party-guest-accept]").first().click();
 
-    // And back off again, which is the path that also has to lift whatever
-    // the party wrote on the channel (`watch-party-options.test.ts` owns that
-    // half; this owns the affordance following it).
-    await voice.selectOption("off");
-    await expect(guest.locator("[data-watch-party-raise]")).toHaveCount(0, {
-      timeout: 20_000,
-    });
-    await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0);
-    expect(await joinOffers(guest)).toHaveLength(0);
+    // Accepted is not on air yet: the invitation dialog fires for the guest.
+    await expect(
+      guest.locator("[data-watch-party-guest-invite-dialog]"),
+    ).toBeVisible({ timeout: 20_000 });
+    await guest.locator("[data-watch-party-guest-invite-accept]").click();
 
-    // The stage mode was remembered rather than reset, so a host who changes
-    // their mind twice does not have to pick the floor again.
-    await expect(voice).toHaveValue("off");
-    await voice.selectOption("everyone");
-    await expect(voice).toHaveValue("everyone");
+    // THE GUEST HEARS "VOCÊ ESTÁ NO AR" ("YOU ARE ON AIR" in this suite's
+    // `?lang=en`) — the on-air strip, in words, never colour alone (§6.2).
+    await expect(guest.locator("[data-watch-party-on-air-strip]")).toContainText(
+      "YOU ARE ON AIR",
+      { timeout: 20_000 },
+    );
+    expect(await gumCalls(guest)).toBeGreaterThan(0);
+
+    // And off again.
+    await guest.locator("[data-watch-party-guest-leave]").click();
+    await expect(guest.locator("[data-watch-party-on-air-strip]")).toHaveCount(
+      0,
+      { timeout: 20_000 },
+    );
   } finally {
-    await hostClient.context.close();
+    await guestClient.context.close();
   }
+});
+
+test("a viewer sees no request button unless Convidados is taking requests", async ({
+  browser,
+}) => {
+  /**
+   * `invite` MEANS THE HOST CALLS PEOPLE UP; A VIEWER HAS NO BUTTON (§2.1).
+   * The request control exists only in one of the three Convidados modes,
+   * and the other two must never draw it, on or off camera.
+   */
+  const shared = await seedServer("wp-guests-off-host", "wp-guests-off-viewer");
+
+  const offParty = await createParty(
+    "wp-guests-off-host",
+    shared.serverId,
+    "Sem convidados",
+    { guests: "off" },
+  );
+  // The server's one hidden party room, not the general text channel: the
+  // bar this test checks for only ever renders on the party's own channel.
+  const room = `/app/server/${shared.serverId}/channel/${offParty.channelId}`;
+  await setPartyState("wp-guests-off-host", offParty.partyId, "live");
+
+  const viewerClient = await secondClient(browser);
+  try {
+    const viewer = viewerClient.page;
+    await openAs(viewer, room, "wp-guests-off-viewer");
+    await expect(viewer.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(
+      viewer.locator("[data-watch-party-guest-request]"),
+    ).toHaveCount(0);
+
+    // `invite` mode: still no button for a plain viewer, who can only be
+    // called up by name.
+    await setPartyState("wp-guests-off-host", offParty.partyId, "ended");
+    const inviteParty = await createParty(
+      "wp-guests-off-host",
+      shared.serverId,
+      "Só quem eu chamar",
+      { guests: "invite" },
+    );
+    await setPartyState("wp-guests-off-host", inviteParty.partyId, "live");
+    await viewer.reload();
+    await expect(viewer.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(
+      viewer.locator("[data-watch-party-guest-request]"),
+    ).toHaveCount(0);
+  } finally {
+    await viewerClient.context.close();
+  }
+});
+
+test("declining an invitation clears it, and the guest is offered it again on a fresh call up", async ({
+  page,
+  browser,
+}) => {
+  /**
+   * §3.4's "Agora não". `WatchPartyGuestsOverlay.decline` hides the dialog
+   * OPTIMISTICALLY, before the server confirms the `leave` request that
+   * actually clears the invite row -- this is the real request reaching a
+   * real server, so it proves the happy path lands (the row is genuinely
+   * gone, not just hidden on this one screen) rather than the rollback,
+   * which is a client-only concern with nothing on the wire to assert on a
+   * SUCCESSFUL call.
+   */
+  const shared = await seedServer("wp-decline-host", "wp-decline-guest");
+  const party = await createParty(
+    "wp-decline-host",
+    shared.serverId,
+    "Recuso",
+    { guests: "invite" },
+  );
+  await setPartyState("wp-decline-host", party.partyId, "live");
+  const room = `/app/server/${shared.serverId}/channel/${party.channelId}`;
+  const guestId = await materialiseAccount("wp-decline-guest");
+  await inviteToStage("wp-decline-host", party.partyId, guestId);
+
+  const host = page;
+  await openAs(host, room, "wp-decline-host");
+  await expect(host.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+
+  const guestClient = await secondClient(browser);
+  try {
+    const guest = guestClient.page;
+    await installGumCounter(guest);
+    await openAs(guest, room, "wp-decline-guest");
+    await expect(
+      guest.locator("[data-watch-party-guest-invite-dialog]"),
+    ).toBeVisible({ timeout: 20_000 });
+    await guest.locator("[data-watch-party-guest-invite-decline]").click();
+    await expect(
+      guest.locator("[data-watch-party-guest-invite-dialog]"),
+    ).toHaveCount(0);
+    // Never went on air: no microphone was ever opened for a declined call-up.
+    expect(await gumCalls(guest)).toBe(0);
+
+    // THE SERVER SIDE, not just this screen: the row is gone, so a fresh
+    // call-up dialogs again rather than silently doing nothing (which is
+    // what it would do if `decline` had only hidden the dialog locally
+    // while the invite row survived server-side).
+    await host.locator("[data-watch-party-guests-dock]").click();
+    await expect(host.locator("[data-watch-party-guest-panel]")).toBeVisible({
+      timeout: 20_000,
+    });
+    await host.locator("[data-watch-party-guest-invite-someone]").click();
+    await host.locator(`[data-watch-party-guest-invite="${guestId}"]`).click();
+    await host.keyboard.press("Escape");
+
+    await expect(
+      guest.locator("[data-watch-party-guest-invite-dialog]"),
+    ).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await guestClient.context.close();
+  }
+});
+
+test("Convidados stops accepting at three on air", async ({ page }) => {
+  /**
+   * `WATCH_PARTY_MAX_GUESTS = 3` (§3.5). Three tiles fill the stage rung
+   * exactly, and the panel disables both `Chamar` and `Chamar alguém` at the
+   * limit with the reason on the control rather than in a toast.
+   * `watch-party-guests.test.ts` pins the server's own 409; this is the
+   * control actually going disabled in the browser it runs in.
+   */
+  const shared = await seedServer("wp-guests-cap-host");
+  const party = await createParty(
+    "wp-guests-cap-host",
+    shared.serverId,
+    "Lotado",
+    { guests: "invite" },
+  );
+  await setPartyState("wp-guests-cap-host", party.partyId, "live");
+
+  const names = ["cap-a", "cap-b", "cap-c"];
+  for (const suffix of names) {
+    const userId = await addMember(
+      "wp-guests-cap-host",
+      shared.serverId,
+      suffix,
+    );
+    await inviteToStage("wp-guests-cap-host", party.partyId, userId);
+    const joined = await guestAction(suffix, party.partyId, {
+      action: "join",
+    });
+    if (!joined.ok) {
+      throw new Error(`${suffix} could not join: ${joined.status}`);
+    }
+  }
+
+  const host = page;
+  await openAs(
+    host,
+    `/app/server/${shared.serverId}/channel/${party.channelId}`,
+    "wp-guests-cap-host",
+  );
+  await expect(host.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+  await host.locator("[data-watch-party-guests-dock]").click();
+  const panel = host.locator("[data-watch-party-guest-panel]");
+  await expect(panel).toBeVisible({ timeout: 20_000 });
+  await expect(panel.locator("[data-watch-party-guest-on-air]")).toHaveCount(
+    3,
+    { timeout: 20_000 },
+  );
+  await expect(
+    panel.locator("[data-watch-party-guest-invite-someone]"),
+  ).toBeDisabled();
+  await expect(panel.locator("[data-watch-party-guests-at-limit]")).toBeVisible();
 });
 
 test("the host promotes a co-host from the member card", async ({
@@ -1888,6 +2189,21 @@ test("a watch party puts the chat beside the film, in stream shape", async ({
   const stage = page.getByTestId("watch-channel-stage");
   await expect(stage).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('[data-call-split="side-by-side"]')).toBeVisible();
+
+  // TWITCH'S SHAPE, NOT A PROPORTION. A call's shared side-by-side fraction
+  // (62% to the stage) would leave the chat well over 500px wide on this
+  // pane. The audience's own default instead pins the chat to about 340px
+  // and hands the film everything else, so a wider monitor grows the
+  // picture rather than the column beside it. The exact pane width here
+  // depends on the surrounding chrome (channel rail, sidebar), which is why
+  // this checks the chat's own width rather than a fraction of the viewport.
+  const chatBox = await page.locator("[data-call-split-chat]").boundingBox();
+  expect(chatBox).not.toBeNull();
+  expect(chatBox!.width).toBeGreaterThan(300);
+  expect(chatBox!.width).toBeLessThan(400);
+  const stageBox = await page.locator("[data-call-split-stage]").boundingBox();
+  expect(stageBox).not.toBeNull();
+  expect(stageBox!.width).toBeGreaterThan(chatBox!.width);
 
   // STREAM CHAT. Beside a film the transcript takes the shape every stream
   // has: no avatar, the name coloured and inline before the words.

@@ -34,6 +34,13 @@ import {
   stopEgressById,
   MIC_ARCHIVE_RUNG,
 } from "./hls-egress.js";
+import { CAMERA_RUNG_NAME } from "./hls-ladder.js";
+import {
+  claimHlsSessionRows,
+  liveOtherInstances,
+  noteHlsSkippedOwnedElsewhere,
+  ownedByLiveOtherInstance,
+} from "./hls-ownership.js";
 
 const SWEEP_BATCH = 25;
 
@@ -90,7 +97,11 @@ interface StaleSession {
   egress_id: string | null;
   presenter_peer_id: string | null;
   video_track_id: string | null;
+  /** `LIVE_HLS_VOICE_TRACK`'s camera/voice slot: the separate audio sid. */
+  audio_track_id: string | null;
   rung: string | null;
+  /** Which API process last started or adopted this session. NULL = nobody's. */
+  instance_id: string | null;
   still_open: boolean;
 }
 
@@ -222,10 +233,22 @@ async function deleteSessionObjects(
  * closed by the same process when the share ends; a process that died
  * mid-share (a deploy, a crash) leaves `ended_at NULL` forever, the sweep
  * never picks it up and its objects sit in the bucket for good. This
- * process owns no session at boot, so every open row is stale by
+ * process owns no session at boot, so a row nobody else owns is stale by
  * definition: end it now so retention runs, and stop the egress LiveKit may
  * still be running for it. Only the API process may call this; a worker
  * that ran it would end the API's live sessions.
+ *
+ * "NOBODY ELSE OWNS" IS THE WHOLE OF THE TWO-MACHINE FIX. The sentence above
+ * used to read "every open row is stale by definition", which is true of one
+ * machine and catastrophic on two: machine B boots on every rolling deploy,
+ * finds machine A's LIVE rows, adopts A's egresses (two monitors on one
+ * transcode, then a restart) and ends the rows LiveKit did not list for it,
+ * handing a live party's segments to the retention sweep. So a row is only
+ * this process's business when `instance_id` is NULL (pre-column, or a
+ * single-process self-host) or its owner's `voice_instances` heartbeat has
+ * expired -- the same expiry rule `reconcileVoiceRegistry` uses to free a
+ * dead instance's voice seats. A row owned by a machine that is still
+ * answering is neither adopted nor ended nor stopped: it is not ours.
  */
 export async function reconcileStaleHlsSessions(): Promise<{
   adopted: number;
@@ -242,37 +265,84 @@ export async function reconcileStaleHlsSessions(): Promise<{
     return { adopted: 0, ended: 0, stopped: 0 };
   }
 
+  // Before the rows, so a lookup we could not run stops the whole pass rather
+  // than letting it fall back to "nobody owns anything", which is exactly the
+  // assumption this function had to stop making.
+  const liveOthers = await liveOtherInstances();
+  if (liveOthers === null) {
+    logEvent("voice.hlsBootReconcileSkipped", { reason: "owner-lookup-failed" });
+    return { adopted: 0, ended: 0, stopped: 0 };
+  }
+
   const rows = await getPool().query<StaleSession>(
     `SELECT id, channel_id, object_prefix, egress_id, presenter_peer_id,
-            video_track_id, rung, ended_at IS NULL AS still_open
+            video_track_id, audio_track_id, rung, instance_id,
+            ended_at IS NULL AS still_open
      FROM hls_sessions
      WHERE cleaned_at IS NULL
+       -- AN LL ROW IS NOT THIS SWEEP'S BUSINESS, and reading it here was the
+       -- 2026-09-14 boot race. This pass decides a row's fate by whether
+       -- LiveKit still lists its egress_id; an LL row HAS no egress id (it
+       -- names a pqp-remux session instead, mode = 'll'), so it can never
+       -- match, is never adopted, and fell straight into toEnd — machine A
+       -- ended the row for a session machine B had just resumed, and
+       -- adoptLlHlsSessions then found a live remux session with no open
+       -- row and stopped it as an orphan (reason=no-row). The audience had
+       -- no picture until an unrelated restart. adoptLlHlsSessions in
+       -- hls-remux.ts is the only sweep that may judge these rows, because
+       -- it is the only one that asks the box that actually holds them.
+       AND mode <> 'll'
        AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
   );
   const byEgressId = new Map(
     rows.rows.filter((row) => row.egress_id).map((row) => [row.egress_id!, row]),
   );
+  const ownedElsewhere = (row: StaleSession): boolean =>
+    ownedByLiveOtherInstance(row.instance_id, liveOthers);
 
   let adopted = 0;
   let stopped = 0;
   const adoptedIds = new Set<string>();
+  /** Rows already counted as skipped, so one row is never counted twice. */
+  const skippedIds = new Set<string>();
 
-  // TWO PASSES, AND THE ORDER IS THE POINT. The host's voice archive
-  // (`rung = 'mic'`) is not a rendition: it attaches to a room that already
-  // exists rather than creating one, so it can only be adopted after the
-  // rungs of its session have rebuilt that room. `active` arrives in whatever
-  // order LiveKit answers in, so a single pass would attach it about half the
-  // time. See `adoptLiveHlsMicArchive` for why it cannot go through
-  // `adoptLiveHlsSession` at all.
+  // THREE PASSES, AND THE ORDER IS THE POINT. Both siblings here attach to a
+  // room that a LADDER RUNG creates rather than creating one themselves, so
+  // each can only be adopted after the rungs of its own session have
+  // rebuilt that room. `active` arrives in whatever order LiveKit answers
+  // in, so a single pass would attach either about half the time.
+  //
+  //   - the camera (`rung = 'cam360p30'`) still goes through
+  //     `adoptLiveHlsSession`, which special-cases that name internally
+  //     (`adoptCameraEgress`) rather than falling back to a fake 720p rung.
+  //   - the host's voice archive (`rung = 'mic'`) cannot go through
+  //     `adoptLiveHlsSession` at all — see `adoptLiveHlsMicArchive` for why —
+  //     so it gets its own dedicated call.
+  //
+  // Ownership (no row, no session, no presenter) is decided up front, before
+  // either deferral, so a camera or archive row with no owner is stopped
+  // exactly like an orphaned rung rather than queued for a pass that would
+  // just refuse it a second later.
+  const cameras: { info: (typeof active)[number]; row: StaleSession }[] = [];
   const micArchives: { info: (typeof active)[number]; row: StaleSession }[] = [];
 
   for (const info of active) {
     const row = byEgressId.get(info.egressId);
-    const session = row ? sessionFromPrefix(row.object_prefix) : null;
-    if (row && session !== null && row.rung === MIC_ARCHIVE_RUNG) {
-      micArchives.push({ info, row });
+    if (row && ownedElsewhere(row)) {
+      // ANOTHER MACHINE IS DRIVING THIS ONE. Not ours to adopt (it already has
+      // a monitor) and emphatically not ours to stop. Note it and move on; the
+      // `toEnd` filter below leaves its row open for the same reason.
+      skippedIds.add(row.id);
+      noteHlsSkippedOwnedElsewhere({
+        site: "boot-adopt",
+        channelId: row.channel_id,
+        egressId: info.egressId,
+        sessionId: row.id,
+        ownerInstanceId: row.instance_id,
+      });
       continue;
     }
+    const session = row ? sessionFromPrefix(row.object_prefix) : null;
     if (!row || session === null || !row.presenter_peer_id) {
       // Nobody owns this transcode: no session row, or one we cannot rebuild
       // a room from. Left running it burns a core of the media box forever.
@@ -287,8 +357,17 @@ export async function reconcileStaleHlsSessions(): Promise<{
       }
       continue;
     }
+    if (row.rung === MIC_ARCHIVE_RUNG) {
+      micArchives.push({ info, row });
+      continue;
+    }
+    if (row.rung === CAMERA_RUNG_NAME) {
+      cameras.push({ info, row });
+      continue;
+    }
     // Still running and still ours: take it back rather than killing a live
-    // watch party because the API happened to restart.
+    // watch party because the API happened to restart. An ordinary rung
+    // never answers null here — only the deferred camera pass below can.
     adoptLiveHlsSession({
       channelId: row.channel_id,
       egressId: info.egressId,
@@ -297,6 +376,31 @@ export async function reconcileStaleHlsSessions(): Promise<{
       videoTrackId: row.video_track_id ?? "",
       rung: row.rung ?? session.rung,
     });
+    adoptedIds.add(row.id);
+    adopted += 1;
+  }
+
+  for (const { info, row } of cameras) {
+    const session = sessionFromPrefix(row.object_prefix)!;
+    const stream = adoptLiveHlsSession({
+      channelId: row.channel_id,
+      egressId: info.egressId,
+      startedAt: session.startedAt,
+      presenterPeerId: row.presenter_peer_id!,
+      videoTrackId: row.video_track_id ?? "",
+      audioTrackId: row.audio_track_id,
+      rung: row.rung ?? session.rung,
+    });
+    if (stream === null) {
+      // Only a camera answers null, and only when the session it was filming
+      // did not come back. A transcode with no room is a core of the media box
+      // spent on a webcam nobody can reach.
+      const wasStopped = await stopEgressById(info.egressId, info.roomName);
+      if (wasStopped) {
+        stopped += 1;
+      }
+      continue;
+    }
     adoptedIds.add(row.id);
     adopted += 1;
   }
@@ -330,18 +434,40 @@ export async function reconcileStaleHlsSessions(): Promise<{
     }
   }
 
-  // Reopen the rows we adopted (a previous process may have ended them) and
-  // end the ones with no egress behind them any more, so retention runs.
+  // Reopen the rows we adopted (a previous process may have ended them), stamp
+  // them with THIS instance so the next machine to boot can see a live owner,
+  // and end the ones with no egress behind them any more, so retention runs.
   if (adoptedIds.size > 0) {
-    await getPool().query(
-      `UPDATE hls_sessions SET ended_at = NULL
-       WHERE id = ANY($1::uuid[]) AND ended_at IS NOT NULL`,
-      [[...adoptedIds]],
-    );
+    await claimHlsSessionRows([...adoptedIds], { reopen: true });
   }
+  const skippedEnds: StaleSession[] = [];
   const toEnd = rows.rows
     .filter((row) => row.still_open && !adoptedIds.has(row.id))
+    .filter((row) => {
+      if (ownedElsewhere(row)) {
+        skippedEnds.push(row);
+        return false;
+      }
+      return true;
+    })
     .map((row) => row.id);
+  for (const row of skippedEnds) {
+    if (skippedIds.has(row.id)) {
+      // Already counted on the adopt pass: one row, one skip.
+      continue;
+    }
+    skippedIds.add(row.id);
+    // An open row whose owner is alive is a session in progress somewhere
+    // else, not a leak. Ending it here would hand its segments to the
+    // retention sweep while the audience is still watching.
+    noteHlsSkippedOwnedElsewhere({
+      site: "boot-end",
+      channelId: row.channel_id,
+      sessionId: row.id,
+      egressId: row.egress_id,
+      ownerInstanceId: row.instance_id,
+    });
+  }
   let ended = 0;
   if (toEnd.length > 0) {
     const result = await getPool().query(
@@ -352,8 +478,53 @@ export async function reconcileStaleHlsSessions(): Promise<{
     ended = result.rowCount ?? 0;
   }
 
-  logEvent("voice.hlsBootReconciled", { adopted, ended, stopped });
+  // A SKIP IS NOT A DECISION FOR EVER. The owner was alive when this pass read
+  // the leases; if that machine dies a minute later its rows stay open and its
+  // egresses unmanaged, and on a single machine the boot pass was the only
+  // thing that ever looked. So a pass that skipped anything asks to be run
+  // again, and `reconcileSkippedHlsSessions` on the health monitor's tick does
+  // exactly that until a pass skips nothing.
+  revisitSkipped = skippedIds.size > 0;
+  // The clock starts HERE, so the first revisit is one interval after the pass
+  // that skipped rather than on the very next monitor tick: the owner was
+  // alive a moment ago and its heartbeat TTL has not even had time to lapse.
+  lastRevisitAt = Date.now();
+  logEvent("voice.hlsBootReconciled", {
+    adopted,
+    ended,
+    stopped,
+    skippedOwnedElsewhere: skippedIds.size,
+  });
   return { adopted, ended, stopped };
+}
+
+/** Whether the last pass left rows to somebody else, and when we last re-ran. */
+let revisitSkipped = false;
+let lastRevisitAt = 0;
+/** Not more than once a minute: the owner's heartbeat TTL is 45 s. */
+const REVISIT_INTERVAL_MS = 60_000;
+
+/** Test hook: forget that a pass skipped anything. */
+export function resetHlsReconcileRevisitForTests(): void {
+  revisitSkipped = false;
+  lastRevisitAt = 0;
+}
+
+/**
+ * Re-run the boot reconcile while, and only while, the last one left rows to
+ * an instance that was alive at the time. Called from the health monitor's
+ * tick; a no-op on the overwhelming majority of them, because a pass that
+ * skipped nothing sets nothing to do.
+ */
+export async function reconcileSkippedHlsSessions(
+  now = Date.now(),
+): Promise<boolean> {
+  if (!revisitSkipped || now - lastRevisitAt < REVISIT_INTERVAL_MS) {
+    return false;
+  }
+  lastRevisitAt = now;
+  await reconcileStaleHlsSessions();
+  return true;
 }
 
 /**

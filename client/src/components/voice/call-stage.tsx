@@ -34,6 +34,7 @@ import {
   useState,
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
   type SyntheticEvent,
@@ -41,8 +42,15 @@ import {
 import { flushSync } from "react-dom";
 import {
   MESH_VOICE_WARNING,
+  type LiveHlsStream,
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
+import {
+  hlsModeOf,
+  hlsPartTargetMs,
+  watchPlayerMode,
+  type LlHlsStreamFields,
+} from "@/lib/hls-live-edge";
 import type { VideoQuality } from "@/lib/video-quality";
 import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
@@ -77,6 +85,7 @@ import {
 } from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
+import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import { MusicDock } from "@/components/voice/music-dock";
 import { MusicBarButton } from "@/components/voice/music-bar-button";
@@ -105,9 +114,10 @@ import {
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { CinemaStage } from "@/components/voice/cinema-stage";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
-import { shouldShowCinema } from "@/lib/cinema-layout";
+import { seatedInWatchPartyRoom, shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
+  resolveScreenTileSources,
   type ScreenShareTile,
 } from "@/components/voice/screen-stage";
 import {
@@ -528,6 +538,11 @@ export interface CallStageProps {
   playOutgoingRingtone?: boolean;
   onLeave: () => void;
   onToggleMute: () => void;
+  /**
+   * The close (x) on `voiceState.micFallback`'s corner card. See
+   * `use-voice.ts`'s `dismissMicFallbackNotice` for the whole lifecycle.
+   */
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -595,12 +610,38 @@ export interface CallStageProps {
    * goes. See docs/plans/WATCH_PARTY_SETUP_UX.md section 10.
    */
   watchPartyChrome?: boolean;
+  /**
+   * This channel IS a watch party channel, full stop — the channel's own
+   * `type`, not whether its party is currently `live`. `watchPartyChrome`
+   * answers a narrower question (party live AND seated) and is what hides
+   * the ordinary call controls, so it is deliberately allowed to lag behind
+   * a fresh seat by a render: `watchParties.byChannel[id]?.state` comes off
+   * its own fetch/socket, independent of the voice join.
+   *
+   * The cinema landing view has no such excuse to wait. `CallStage` mounts
+   * (`VoiceChannelStage`'s `inThisCall` gate) ONLY once this account already
+   * holds the seat, so "audience view with a join button" can never be true
+   * for a watch party room the instant this component exists — the join
+   * already happened. Gating that specifically on the channel's own type
+   * removes the party-store race entirely: see the second half of the
+   * 2026-09-13 incident in `cinema-layout.ts`.
+   */
+  isWatchPartyChannel?: boolean;
+  /**
+   * THE PRESENTER'S OWN STAGE (2026-09-13). With `watchPartyChrome`, when the
+   * lone share on this stage is our own, the pane draws this instead of a
+   * full-size mirror of the host's tab: a small monitor, the audience's
+   * view, and the room's activity. See `WatchPartyPresenterStage`.
+   */
+  presenterStage?: (stream: MediaStream | null) => ReactNode;
 }
 
 export function CallStage({
   channelId,
   title,
   watchPartyChrome = false,
+  isWatchPartyChannel = false,
+  presenterStage,
   serverName = null,
   serverIconUrl = null,
   currentUser,
@@ -612,6 +653,7 @@ export function CallStage({
   playOutgoingRingtone = false,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -656,7 +698,9 @@ export function CallStage({
     <ActiveCall
       channelId={channelId}
       title={title}
+      presenterStage={presenterStage}
       watchPartyChrome={watchPartyChrome}
+      isWatchPartyChannel={isWatchPartyChannel}
       serverName={serverName}
       serverIconUrl={serverIconUrl}
       currentUser={currentUser}
@@ -674,6 +718,7 @@ export function CallStage({
       }}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
+      onDismissMicFallbackNotice={onDismissMicFallbackNotice}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onScreenFrameRateChange={onScreenFrameRateChange}
@@ -705,6 +750,8 @@ function ActiveCall({
   channelId,
   title,
   watchPartyChrome = false,
+  isWatchPartyChannel = false,
+  presenterStage,
   serverName = null,
   serverIconUrl = null,
   currentUser,
@@ -719,6 +766,7 @@ function ActiveCall({
   onSetCollapsed,
   onLeave,
   onToggleMute,
+  onDismissMicFallbackNotice,
   onToggleCamera,
   onVideoQualityChange,
   onScreenFrameRateChange,
@@ -746,6 +794,8 @@ function ActiveCall({
   channelId: string;
   title: string;
   watchPartyChrome?: boolean;
+  isWatchPartyChannel?: boolean;
+  presenterStage?: (stream: MediaStream | null) => ReactNode;
   serverName?: string | null;
   serverIconUrl?: string | null;
   currentUser: CallStageProps["currentUser"];
@@ -760,6 +810,7 @@ function ActiveCall({
   onSetCollapsed: (collapsed: boolean) => void;
   onLeave: () => void;
   onToggleMute: () => void;
+  onDismissMicFallbackNotice: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
@@ -908,12 +959,19 @@ function ActiveCall({
       .map((tile) => tile.hlsUrl)
       .filter((url): url is string => Boolean(url)),
   );
-  // Keep WebRTC on the tile until the playlist is a live window. A 404 or
-  // the previous share's ENDLIST is a black video, not a watch party.
-  const screenTiles = advertisedTiles.map((tile) =>
-    tile.hlsUrl && readyHlsUrls.has(tile.hlsUrl)
-      ? tile
-      : { ...tile, hlsUrl: null },
+  // `resolveScreenTileSources` (`screen-stage.tsx`) is the other half of
+  // PR 551 ("the SFU screen share is the one and only picture once a seat is
+  // held"): that fix stopped a seated participant's OWN room from landing in
+  // cinema mode, but this is the same room's ordinary grid, and a peer's
+  // tile here carried `hlsUrl` regardless of anyone's seat. Once seated in
+  // this watch party, every tile plays over the real WebRTC connection, so
+  // the HLS viewer chrome (the live badge, the quality menu, the holding
+  // screen) never mounts without one: it only ever ships inside the same
+  // `HlsWatchPlayer`, so refusing the HLS source here refuses the chrome too.
+  const screenTiles = resolveScreenTileSources(
+    advertisedTiles,
+    readyHlsUrls,
+    watchPartyChrome,
   );
   const watchingHls = screenTiles.some((tile) => Boolean(tile.hlsUrl));
   const focusedTile =
@@ -978,10 +1036,13 @@ function ActiveCall({
   const [pinnedTileId, setPinnedTileId] = useState(() =>
     stagePinnedKey(channelId),
   );
-  // Cinema is the landing view for a watch party: full-bleed picture, no
-  // roster or mic controls, until this person explicitly asks to join the
-  // call. Resets to audience whenever a stream goes live again, so leaving
-  // one party and walking into the next does not carry the choice over.
+  // `audienceMode` used to be a landing view for a watch party's own seated
+  // call: full-bleed HLS, no roster or mic controls. `shouldShowCinema`
+  // refuses it outright once this IS that party's own room (see
+  // `isWatchParty` there for the 2026-09-13 incident it caused — two
+  // pictures, two soundtracks, two delays). The state and its effect stay in
+  // case a non-watch-party room ever wants this landing view; they are inert
+  // wherever a watch party channel is involved.
   const [audienceMode, setAudienceMode] = useState(watchingHls);
   useEffect(() => {
     if (watchingHls) {
@@ -992,6 +1053,11 @@ function ActiveCall({
   const showCinema = shouldShowCinema({
     live: Boolean(cinemaTile),
     audience: audienceMode,
+    // See `seatedInWatchPartyRoom` and `isWatchPartyChannel`'s doc on
+    // `CallStageProps`: `watchPartyChrome` alone can lag a fresh seat by a
+    // render and briefly reopen "Entrar na chamada" for someone the party
+    // bar's "Entrar no palco" already seated.
+    isWatchParty: seatedInWatchPartyRoom(watchPartyChrome, isWatchPartyChannel),
   });
   const presenterPeerId = voiceState.liveStream?.presenterPeerId ?? null;
   const cinemaStagePeople = allPeople.map((person) => ({
@@ -1140,6 +1206,10 @@ function ActiveCall({
       ? null
       : (screenTiles.find((tile) => tile.peerId === fullscreen.soloPeerId) ??
         null);
+  // The presenter's own share in a watch party, for `presenterStage`: the
+  // ordinary (non-fullscreen) path renders the grid, and the grid is where
+  // a lone local share lives, so the swap happens ahead of it.
+  const localShare = screenTiles.find((tile) => tile.isSelf) ?? null;
   const soloPersonKey = fullscreen.soloPeerId
     ? personKeyFromCameraSoloId(fullscreen.soloPeerId)
     : null;
@@ -1354,7 +1424,22 @@ function ActiveCall({
       >
         <CinemaStage
           hlsUrl={cinemaTile.hlsUrl}
+          cameraHlsUrl={cinemaTile.cameraHlsUrl ?? null}
+          cameraHasVideo={cinemaTile.cameraHasVideo}
+          cameraHasVoiceAudio={cinemaTile.cameraHasVoiceAudio}
           delaySeconds={cinemaTile.delaySeconds ?? voiceState.liveStream?.delaySeconds}
+          mode={
+            cinemaTile.mode ??
+            hlsModeOf(
+              voiceState.liveStream as (LiveHlsStream & LlHlsStreamFields) | null,
+            )
+          }
+          partTargetMs={
+            cinemaTile.partTargetMs ??
+            hlsPartTargetMs(
+              voiceState.liveStream as (LiveHlsStream & LlHlsStreamFields) | null,
+            )
+          }
           mediaTitle={title}
           communityName={serverName}
           coverUrl={serverIconUrl}
@@ -1507,6 +1592,8 @@ function ActiveCall({
               onPin={() => togglePin(cameraSoloId(soloPerson.key))}
               pinned={pinnedTileId === cameraSoloId(soloPerson.key)}
             />
+          ) : soloTile && soloTile.isSelf && watchPartyChrome && presenterStage ? (
+            presenterStage(soloTile.stream)
           ) : soloTile ? (
             /* The same for a share. Switching between the two costs no
                platform call, which is why they share one solo id. */
@@ -1525,6 +1612,20 @@ function ActiveCall({
               communityName={serverName}
               coverUrl={serverIconUrl}
             />
+          ) : watchPartyChrome &&
+            presenterStage &&
+            localShare &&
+            // ONLY WHEN OURS IS THE ONLY SHARE (Farol, 2026-09-14). This used
+            // to fire on `localShare` alone, so a co-host or an invited guest
+            // sharing at the same time as the host lost their picture off the
+            // stage entirely the moment the host's own share substituted the
+            // presenter's monitor-and-activity layout for the grid. A watch
+            // party with more than one screen up is rare but not refused
+            // anywhere upstream (guests, `docs/plans/WATCH_PARTY_GUESTS.md`),
+            // so the grid — which already draws every tile, ours included —
+            // is what a second share falls back to correctly.
+            screenTiles.length === 1 ? (
+            presenterStage(localShare.stream)
           ) : stage.tiles.length > 0 ? (
             <ul
               data-testid="stage-grid"
@@ -1796,6 +1897,13 @@ function ActiveCall({
           "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
           (voiceState.error || voiceState.notice) && "mt-7",
+          // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
+          // (2026-09-13): the party header one row up already says the name,
+          // the count and the uptime, and "watch-party · 1 na chamada" over
+          // the host's own tab was the fifth strip between them and their
+          // picture. A phone cannot share, so the landscape toggle this
+          // overlay also holds is never wanted here.
+          watchPartyChrome && focusedIsLocal && "hidden",
         )}
       >
         <div className="min-w-0">
@@ -1818,7 +1926,11 @@ function ActiveCall({
                 {t("call.panel.declined", { name })}
               </span>
             ))}
-            {presenterName && screenStream && (
+            {/* NOT FOR A WATCH PARTY (2026-09-13): the presenter dock one row
+                up already says Trocar / Parar de compartilhar, which is this
+                sentence as buttons. Duplicate status on a fading overlay is
+                what the presenter-UI plan set out to remove. */}
+            {presenterName && screenStream && !watchPartyChrome && (
               <span className="ml-2 text-signal">
                 {focusedIsLocal
                   ? t("voice.share.youPresenting")
@@ -1925,6 +2037,11 @@ function ActiveCall({
         onFocusCapture={() => setBarFocused(true)}
         onBlurCapture={onBarBlur}
       >
+        <MicFallbackNotice
+          micFallback={voiceState.micFallback}
+          visible={!chrome.hidden}
+          onDismiss={onDismissMicFallbackNotice}
+        />
         <CapacityNotice
           voiceChannelId={voiceState.voiceChannelId}
           transport={voiceState.roomTransport}
@@ -3554,6 +3671,8 @@ export function ScreenTileFrame({
         <HlsWatchPlayer
           src={tile.hlsUrl}
           delaySeconds={tile.delaySeconds}
+          mode={tile.mode ? watchPlayerMode(tile.mode) : undefined}
+          partTargetMs={tile.partTargetMs}
           videoRef={videoRef}
           onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
           className={cn("h-full w-full", videoFitClass(fit.fit))}

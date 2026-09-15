@@ -11,17 +11,25 @@ import {
   isDevAuthBypassEnabled,
   sweepAuthCaches,
 } from "./auth/clerk.js";
-import { closePool, getPool, initDb } from "./db.js";
+import { closePool, initDb, startDbBreakerSampler } from "./db.js";
 import { closeApnsSessions } from "./services/apns.js";
 import { seedDevHall } from "./services/dev-seed.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
 import { createPostgresBusTransport } from "./lib/bus-postgres.js";
 import {
+  clusterTopologyTracked,
   startVoiceInstanceHeartbeat,
+  sweepDeadVoiceInstances,
   voiceConfigHash,
 } from "./voice/registry.js";
 import { startVoiceHello } from "./ws/voice-hello.js";
-import { runVoiceReconcile, sweepVoiceChannelAccessCache } from "./ws/voice.js";
+import {
+  IDLE_ALONE_SWEEP_MS,
+  localVoicePeerCount,
+  runVoiceReconcile,
+  sweepIdleAloneSeats,
+  sweepVoiceChannelAccessCache,
+} from "./ws/voice.js";
 import {
   assertCorsConfig,
   corsHeaders,
@@ -36,11 +44,14 @@ import {
   healthVerdict,
 } from "./lib/drain.js";
 import { logEvent } from "./lib/log.js";
+import { registerInstanceSnapshot } from "./lib/instance-snapshot.js";
 import {
   noteRuntimeSample,
   registerCompressedSocketCount,
   registerSocketCount,
+  runtimeSnapshot,
 } from "./lib/runtime.js";
+import { claimSingletonTickOrRun } from "./lib/singleton-lease.js";
 import { wsPerMessageDeflate } from "./lib/ws-compression.js";
 import {
   clientAddress,
@@ -54,12 +65,14 @@ import {
 import { sweepChannelAudiences } from "./services/servers.js";
 import { startColdJobs, type ColdJobs } from "./jobs.js";
 import { reconcileStaleHlsSessions } from "./voice/hls-cleanup.js";
+import { adoptLlHlsSessions, isLiveHlsLLEnabled } from "./voice/hls-remux.js";
 import {
   isLiveHlsEnabled,
+  liveHlsActivity,
   startLiveHlsMonitor,
   stopLiveHlsMonitor,
 } from "./voice/hls-egress.js";
-import { processRole, runsColdJobs } from "./lib/process-role.js";
+import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -184,23 +197,30 @@ const httpServer = createServer((req, res) => {
     const pathname = url.pathname;
 
     if (pathname === "/health") {
-      // FLY'S CHECK (fly.toml). Keep it exactly this shallow: one SELECT 1 and
-      // nothing else, because a dependency-aware answer here makes Fly restart
-      // the only machine on a Postgres blip. External monitors get /ready.
+      // FLY'S CHECK (fly.toml) AND THE VULTR BOX'S (tools/api-host/compose.yaml,
+      // Caddyfile). PROCESS LIVENESS ONLY — A3.1 of docs/plans/ALWAYS_ON.md.
       //
-      // Report unhealthy if the DB is unreachable so the platform can restart /
-      // route away instead of serving a process with a dead pool, and from the
-      // moment SIGTERM lands (`lib/drain.ts`), so a rolling deploy's proxy
-      // sends the reconnects to the machine that is staying up.
+      // This used to run a real `SELECT 1` here, so a 200 meant "process up
+      // AND database reachable". On 2026-09-12 that coupling was the whole
+      // incident: Postgres collapsed, the pool saturated, this endpoint
+      // failed with it, and the platform stopped routing here at all —
+      // taking WebSockets, the HLS playlist proxy and every cached read down
+      // too, none of which needed Postgres at that instant. The database's
+      // health now belongs entirely to `/ready`, which external monitors
+      // poll (`services/ready.ts`); a DB-dependent route answers its own 503
+      // via the breaker in `db.ts` instead of borrowing this one's verdict.
       //
-      // The 200 body carries the deployed commit, so "is the API actually
-      // running this code?" has an answer from outside. It did not, and a
-      // stalled deploy went unnoticed across five releases: every /api/ route
-      // answers 401 before it routes, so a missing route is indistinguishable
-      // from an unauthenticated one, and the client degrades quietly enough
-      // that the app still looks healthy. `/health` is the only
-      // unauthenticated surface, so the version belongs here.
-      const verdict = await healthVerdict(() => getPool().query("SELECT 1"));
+      // What is left to check here has no query in it: `isDraining()`
+      // (`lib/drain.ts`, flips the instant SIGTERM lands, so a rolling
+      // deploy's proxy sends reconnects to the machine staying up) and
+      // whether this HTTP server is the one actually accepting connections
+      // — which a request reaching this handler at all already proves, so
+      // `httpServer.listening` mostly documents the claim.
+      //
+      // The 200 body still carries the deployed commit, so "is the API
+      // actually running this code?" has an answer from outside — see
+      // CLAUDE.md pitfall #8's history on why that line exists.
+      const verdict = healthVerdict(httpServer.listening);
       res.writeHead(verdict.status, {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
@@ -348,6 +368,27 @@ registerCompressedSocketCount(() => {
   return compressed;
 });
 
+// The same three numbers, plus the pool, written into this instance's
+// `voice_instances` row on every heartbeat so the dashboard can SUM them.
+//
+// Read at beat time (15 s) rather than at request time, because the request
+// only ever reaches one machine and that is the whole problem. The local
+// reading stays exactly where it was, as `runtime`; this is what lets
+// `cluster` sit beside it. See lib/instance-snapshot.ts.
+registerInstanceSnapshot(() => {
+  const local = runtimeSnapshot();
+  return {
+    sockets: local.sockets,
+    compressedSockets: local.compressedSockets,
+    voiceParticipants: localVoicePeerCount(),
+    hlsSessions: liveHlsActivity().sessions,
+    poolBusy: local.pool.busy,
+    poolMax: local.pool.max,
+    role: processRole(),
+    version: process.env.APP_VERSION?.trim() || null,
+  };
+});
+
 wss.on("connection", (socket, req) => {
   // Take a peak sample here rather than on a timer: the maximum number of
   // concurrent sockets is always reached immediately after one opens, so
@@ -405,18 +446,86 @@ const statusLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 1 });
 // instants a minute apart".
 const stopReadySampler = startReadySampler();
 
+// A3.1's circuit breaker: its own `SELECT 1` timer, independent of whether
+// any external monitor is polling `/ready`. See `lib/db-breaker.ts`.
+const stopDbBreakerSampler = startDbBreakerSampler();
+
+/**
+ * ONE SAMPLE A MINUTE MEANS ONE, ACROSS THE WHOLE CLUSTER.
+ *
+ * These two timers used to be plain `setInterval`s, which is the same thing as
+ * "run on every process that loads this file". With two API machines and a
+ * worker that was three probes a minute writing three rows, and the damage is
+ * not the disk: `status_samples` is AVERAGED into the uptime figure on
+ * `/status.json`, so one machine failing a probe while the other two passed
+ * read as a service that was two thirds up. An outage of half the cluster is
+ * not a two-thirds-healthy service, and an outage of one machine out of two
+ * showing as 50% uptime is worse still — it is a number that looks measured.
+ *
+ * THE GATE IS `servesTraffic`, NOT `runsColdJobs`, and that is the whole
+ * design decision. Every other periodic job in this codebase moved to
+ * `jobs.ts` and runs on the worker; this one must not, because the first
+ * probe in the list is `api` and it answers `ok: true` unconditionally on the
+ * grounds that "reaching this line means the API is serving". Run it on
+ * `pqp-worker` and that sentence quietly becomes "the worker is serving",
+ * which is a green tile with nothing behind it — the exact shape of pitfalls 9
+ * and 12. The banner at the top of `jobs.ts` already said so; this is it
+ * enforced rather than merely written down.
+ *
+ * So the sampler stays with the processes that serve traffic, and the LEASE is
+ * what makes them one sampler instead of two. It fails OPEN — a tick that
+ * cannot claim because the database is unreachable is still attempted, because
+ * a duplicate row is noise and a missing row is a hole in the history that can
+ * never be filled in afterwards.
+ */
+/**
+ * The lease is short of the interval so the next tick is always claimable —
+ * a lease that outlived its own tick would let a minute go unsampled, and a
+ * hole in the history is the one failure that cannot be repaired afterwards.
+ * Five seconds of margin is enough because the sample itself is BOUNDED well
+ * under it: the GIF probe has an 8 s ceiling and is not awaited, the SFU read
+ * is cached, and the write is one INSERT. `sampling` closes the remaining
+ * window from this side, so a tick can never start a second sample beside one
+ * this process is still running; two processes overlapping needs a sample to
+ * take longer than 55 s, which would mean the probes themselves are wedged.
+ */
+let sampling = false;
+const STATUS_SAMPLE_LEASE_KEY = "status.sample";
+const STATUS_PRUNE_LEASE_KEY = "status.prune";
+const STATUS_PRUNE_INTERVAL_MS = 24 * 60 * 60_000;
+
 const statusSampler = setInterval(() => {
-  void recordStatusSamples().catch((error) => {
-    console.error("[status] sample failed:", error);
-  });
+  if (!servesTraffic(processRole()) || sampling) {
+    return;
+  }
+  sampling = true;
+  void claimSingletonTickOrRun(
+    STATUS_SAMPLE_LEASE_KEY,
+    STATUS_SAMPLE_INTERVAL_MS - 5_000,
+  )
+    .then((mine) => (mine ? recordStatusSamples() : undefined))
+    .catch((error: unknown) => {
+      console.error("[status] sample failed:", error);
+    })
+    .finally(() => {
+      sampling = false;
+    });
 }, STATUS_SAMPLE_INTERVAL_MS);
 statusSampler.unref?.();
 
 const statusPrune = setInterval(() => {
-  void pruneStatusSamples().catch((error) => {
-    console.error("[status] prune failed:", error);
-  });
-}, 24 * 60 * 60_000);
+  if (!servesTraffic(processRole())) {
+    return;
+  }
+  void claimSingletonTickOrRun(
+    STATUS_PRUNE_LEASE_KEY,
+    STATUS_PRUNE_INTERVAL_MS - 60_000,
+  )
+    .then((mine) => (mine ? pruneStatusSamples() : undefined))
+    .catch((error: unknown) => {
+      console.error("[status] prune failed:", error);
+    });
+}, STATUS_PRUNE_INTERVAL_MS);
 statusPrune.unref?.();
 
 /**
@@ -457,6 +566,13 @@ const communityHomeSweep = setInterval(() => {
   void sweepCommunityHomeSchedule();
 }, COMMUNITY_HOME_SCHEDULE_MS);
 communityHomeSweep.unref?.();
+
+// The idle hangup (`VOICE_IDLE_ALONE_MINUTES`): somebody alone in a voice
+// room past the limit is warned, then disconnected. See `sweepIdleAloneSeats`.
+const idleAloneSweep = setInterval(() => {
+  void sweepIdleAloneSeats();
+}, IDLE_ALONE_SWEEP_MS);
+idleAloneSweep.unref?.();
 
 /**
  * Multi-instance chat, off by default.
@@ -518,15 +634,25 @@ let coldJobs: ColdJobs | null = null;
  */
 function startVoiceRegistry(): (() => Promise<void>) | null {
   const raw = process.env.VOICE_REGISTRY ?? "off";
-  if (raw === "off") {
-    return null;
-  }
-  if (raw !== "postgres") {
+  if (raw !== "off" && raw !== "postgres") {
     console.warn(
       `[voice] unknown VOICE_REGISTRY=${raw}: registry stays off. ` +
         `Supported: "postgres", "off".`,
     );
-    return null;
+  }
+  if (raw !== "postgres") {
+    // The registry is off. The LEASE may still be worth writing: with
+    // `CLUSTER_BUS=postgres` this deployment expects siblings, and the lease
+    // is the only thing that can say how many there are — which the divided
+    // rate limiters divide by and the dashboard sums over. No reconcile,
+    // because there are no peer rows to reconcile; just the beat, the
+    // snapshot, and a sweep of leases nobody is renewing, since without the
+    // reconcile nothing else would age them out.
+    if (!clusterTopologyTracked()) {
+      return null;
+    }
+    logEvent("voice.instanceLeaseOnly", { instance: INSTANCE_ID });
+    return startVoiceInstanceHeartbeat(undefined, sweepDeadVoiceInstances);
   }
   logEvent("voice.registryEnabled", {
     instance: INSTANCE_ID,
@@ -590,6 +716,24 @@ async function main() {
       );
     }
     startLiveHlsMonitor();
+  }
+  // LL-HLS (`docs/plans/LL_HLS.md` L1.5), same reasoning as the conventional
+  // adoption above, one process behind it: `pqp-remux` runs on the egress
+  // box, not in this process, so a `pqp-api` restart never touches a live
+  // low-latency party either. Independent flag, independent boot step -- a
+  // deployment with `LIVE_HLS_LL` unset never calls the control API at all.
+  if (isLiveHlsLLEnabled()) {
+    const reconciledLl = await adoptLlHlsSessions().catch((error: unknown) => {
+      console.error("[hls-ll] boot reconcile failed:", error);
+      return null;
+    });
+    if (reconciledLl && (reconciledLl.adopted || reconciledLl.stopped)) {
+      console.log(
+        `[hls-ll] boot: adopted ${reconciledLl.adopted} live LL session(s), ` +
+          `stopped ${reconciledLl.stopped} orphan remux session(s), ` +
+          `ended ${reconciledLl.ended} stale row(s)`,
+      );
+    }
   }
 
   // The cold paths (attachment sweeps, prunes, retention, the webhook outbox:
@@ -656,6 +800,7 @@ async function shutdown(signal: string) {
   beginDrain();
   stopHeartbeat();
   stopReadySampler();
+  stopDbBreakerSampler();
   clearInterval(rateLimitSweep);
   clearInterval(communityHomeSweep);
   coldJobs?.stop();

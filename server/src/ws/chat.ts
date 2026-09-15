@@ -17,6 +17,7 @@ import {
   type ProfileUpdate,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
+import { DatabaseUnavailableError } from "../db.js";
 import {
   isBusEnabled,
   publishToCluster,
@@ -30,6 +31,7 @@ import {
 } from "../services/embeds.js";
 import {
   createMessage,
+  findMessageByNonce,
   getReplyParent,
   mapMessage,
 } from "../services/messages.js";
@@ -41,14 +43,20 @@ import {
   toggleReaction,
 } from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
+import { buildMessagePreview, type MessagePreview } from "../services/dm-preview.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
+import { getPreferencesForUsers } from "../services/preferences.js";
 import {
   findTimeoutForChannel,
   timeoutMessage,
   type ActiveTimeout,
 } from "../services/sanctions.js";
 import { pushChannelActivity } from "../services/push.js";
-import { getChannel, getChannelAudience } from "../services/servers.js";
+import {
+  getChannel,
+  getChannelAudience,
+  invalidateServerChannelList,
+} from "../services/servers.js";
 import {
   bumpPermissionsVersion,
   computeMemberPermissions,
@@ -63,7 +71,10 @@ import {
 import { listServerChannelIds } from "../services/servers.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
-import { canAccessChannel } from "../services/users.js";
+import {
+  canAccessChannel,
+  invalidateChannelAccessForServer,
+} from "../services/users.js";
 import {
   revokeHlsAccess,
   revokeHlsAccessForUser,
@@ -886,12 +897,49 @@ export function onPermissionsUpdate(
   };
 }
 
-/** Test seam and local half. Membership is passed in so unit tests need no DB. */
+/**
+ * Test seam and the half that runs on EVERY instance: the local bump calls
+ * this directly, and `subscribeToCluster(PERMISSIONS_TOPIC, ...)` below
+ * calls it again on every other instance once membership over there resolves
+ * — the same shape `servers.ts`'s `invalidateServerAudienceLocally` uses for
+ * the same reason. That is why the two cache invalidations below live here
+ * and not in `notifyPermissionsUpdate`: a call placed there only ever runs
+ * on the instance an overwrite change originated on, leaving every other
+ * instance's `canAccessChannel` cache (services/users.ts) answering with a
+ * revoked overwrite for up to 30s when `CLUSTER_BUS` is on. Membership is
+ * passed in so unit tests need no DB.
+ */
 export function deliverPermissionsUpdate(
   serverId: string,
   version: number,
   memberIds: readonly string[],
 ): void {
+  // An overwrite change can move `listChannels`' per-viewer answer without
+  // touching the `channels` table row itself, so nothing in `servers.ts`'s
+  // own write paths would otherwise catch it. Read-cache.ts's cached columns
+  // don't currently encode visibility, so this is a no-op query saved rather
+  // than a correctness fix today — but it keeps the invalidation table
+  // honest if that ever changes, and it costs one Map scan on an
+  // already-rare event.
+  //
+  // An overwrite change ALSO moves `canAccessChannel`'s answer, without
+  // touching `channel_members` or `is_private` — the one write this cache
+  // needs a hook for that `servers.ts`'s own invalidation chokepoints do not
+  // already cover (see `services/users.ts`).
+  //
+  // Guarded, not bare calls: this function is this file's own test seam
+  // (see the doc comment above), and a couple of suites in this file's test
+  // tree mock `../services/servers.js` down to the handful of exports they
+  // need to exercise the fan-out itself, predating these two invalidations
+  // — the identical problem, and the identical fix, as `onAudienceInvalidated`
+  // in `ws/voice.ts`: vitest's mock proxy throws on the mere property read
+  // of an export the factory never declared, even inside a `typeof` check.
+  try {
+    invalidateServerChannelList(serverId);
+    invalidateChannelAccessForServer();
+  } catch {
+    // Mocked without one or both exports — see above.
+  }
   for (const listener of permissionsListeners) {
     try {
       listener(serverId);
@@ -1082,6 +1130,15 @@ async function notifyChannelActivity(
     webPush?: boolean;
     mentionEveryone?: boolean;
     mentionHereUserIds?: readonly string[];
+    /**
+     * The redacted preview of the message that caused this activity, for a
+     * conversation only. Null/absent for a server channel, an
+     * attachment-only message, or a message this instance has no preview
+     * for (the cluster-bus relay, when it does not carry one). Whether an
+     * individual recipient actually sees it is still gated per-recipient
+     * below, on their own `notifications.previewInApp`.
+     */
+    preview?: { authorId: string; authorName: string } & MessagePreview;
   },
 ): Promise<void> {
   const [audience, blockers] = await Promise.all([
@@ -1098,6 +1155,34 @@ async function notifyChannelActivity(
   // be both larger and slower.
   const mentioned = new Set(mentions);
   const hereIds = new Set(options?.mentionHereUserIds ?? []);
+
+  // A conversation is small (at most nine other people), so a preference read
+  // per recipient here is a handful of queries on the rare frame that carries
+  // a preview — never the server-channel path, which never reaches this.
+  const canShowPreview =
+    options?.preview != null &&
+    !options.preview.isAttachment &&
+    (audience.kind === "dm" || audience.kind === "group");
+  // A failed preference read must not take the whole fan-out down with it —
+  // this is only the narrowing for whether a card's text is shown, not
+  // whether it is sent at all. Falling back to "nobody sees a preview this
+  // round" is the safe direction: the badge and the count still land.
+  const previewWantedBy = canShowPreview
+    ? await (async () => {
+        const recipientIds = audience.userIds.filter((id) => id !== authorId);
+        try {
+          const preferences = await getPreferencesForUsers(recipientIds);
+          return new Set(
+            recipientIds.filter(
+              (id) => preferences.get(id)?.notifications?.previewInApp !== false,
+            ),
+          );
+        } catch (error) {
+          console.error("[chat] preview preference read failed:", error);
+          return new Set<string>();
+        }
+      })()
+    : null;
 
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState !== 1 || user.id === authorId) {
@@ -1136,6 +1221,13 @@ async function notifyChannelActivity(
           Boolean(user.username && mentioned.has(user.username)) ||
           options?.mentionEveryone === true ||
           hereIds.has(user.id),
+        ...(previewWantedBy?.has(user.id)
+          ? {
+              preview: options!.preview!.preview,
+              authorName: options!.preview!.authorName,
+              authorId: options!.preview!.authorId,
+            }
+          : {}),
       }),
     );
   });
@@ -1285,12 +1377,82 @@ export type PostChannelMessageResult =
       automodMessage?: string;
     };
 
+/**
+ * A3.1: the DB breaker is open, so hand the sender a specific, immediate
+ * `database-unavailable` rejection (client copy: retry, not "gone forever")
+ * instead of leaving the optimistic bubble to time out after 10s with no
+ * information at all, or an unhandled rejection to reach the generic
+ * catch-and-log in `ws/index.ts`'s `onMessage`.
+ *
+ * ONLY translates a `DatabaseUnavailableError` thrown BEFORE `createMessage`
+ * commits. A first review of this change correctly flagged that wrapping the
+ * whole function meant a failure in a post-creation step (recording
+ * mentions, the thread-chip update) also came back as `database-unavailable`
+ * — which the client treats as retriable — even though the message had
+ * already landed, so a retry would double-post. `created` is the boundary:
+ * `postChannelMessageAttempt` fills it in the instant `createMessage`
+ * returns a row, and everything after that point is a real bug to fix on
+ * its own terms (idempotency, a distinct non-retriable signal), not
+ * something this catch may quietly relabel as "nothing happened yet".
+ */
 export async function postChannelMessage(
   input: PostChannelMessageInput,
+): Promise<PostChannelMessageResult> {
+  const created: { id?: string } = {};
+  try {
+    return await postChannelMessageAttempt(input, created);
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError && !created.id) {
+      return { ok: false, reason: "database-unavailable" };
+    }
+    throw error;
+  }
+}
+
+async function postChannelMessageAttempt(
+  input: PostChannelMessageInput,
+  created: { id?: string },
 ): Promise<PostChannelMessageResult> {
   if (!(await canAccessChannel(input.channelId, input.author.id))) {
     return { ok: false, reason: "no-access" };
   }
+
+  // An offline-outbox replay of a send whose original committed but whose
+  // broadcast never reached the sender (a dropped socket between COMMIT and
+  // the reply). Every check below this point — SEND_MESSAGES, the block
+  // guard, AutoMod, and especially slow mode's charge — exists to decide
+  // whether a NEW message may be created, and none of them apply to a nonce
+  // that already IS a message: charging slow mode for it would spend the
+  // sender's turn on a send that cost them nothing the first time, and on a
+  // channel where their cooldown is currently active for unrelated reasons,
+  // it would reject a replay of an already-delivered message outright — the
+  // client then discards the outbox row and shows a failure for a message
+  // that is sitting in the channel. `createMessage`'s own `ON CONFLICT DO
+  // NOTHING` still exists below for the narrower race where two replays (or
+  // a replay and the still-in-flight original) reach the insert concurrently;
+  // this is the far more common case, a replay that lands after the original
+  // already committed.
+  if (input.nonce) {
+    const existing = await findMessageByNonce(
+      input.channelId,
+      input.author.id,
+      input.nonce,
+    );
+    if (existing) {
+      const message = mapMessage(existing);
+      if (input.senderSocket && input.senderSocket.readyState === 1) {
+        input.senderSocket.send(
+          encode({
+            type: "message-broadcast",
+            message,
+            nonce: input.nonce,
+          }),
+        );
+      }
+      return { ok: true, message };
+    }
+  }
+
   const channel = await getChannel(input.channelId);
   let canMentionEveryone = false;
   let memberPerms = 0n;
@@ -1432,7 +1594,27 @@ export async function postChannelMessage(
     input.chance || input.poll
       ? { chance: input.chance, poll: input.poll }
       : undefined,
+    input.nonce,
   );
+  if (dbMessage?.duplicate) {
+    // The first copy was stored, fanned out and charged. Answer only the
+    // socket that asked again, so its optimistic bubble settles, and nobody
+    // else sees the message twice.
+    if (slowModeSeconds > 0) {
+      await refundSlowMode(input.channelId, input.author.id);
+    }
+    const message = mapMessage(dbMessage);
+    if (input.senderSocket && input.senderSocket.readyState === 1) {
+      input.senderSocket.send(
+        encode({
+          type: "message-broadcast",
+          message,
+          ...(input.nonce ? { nonce: input.nonce } : {}),
+        }),
+      );
+    }
+    return { ok: true, message };
+  }
   if (!dbMessage) {
     // Charged a turn for a message that never landed. Hand it back: the
     // sender posted nothing, so they owe nothing.
@@ -1441,6 +1623,10 @@ export async function postChannelMessage(
     }
     return { ok: false, reason: "empty" };
   }
+  // The boundary `postChannelMessage`'s catch reads: a `DatabaseUnavailableError`
+  // from here on is a bug in a post-creation step, not "nothing happened yet",
+  // and must not come back as the retriable `database-unavailable` rejection.
+  created.id = dbMessage.id;
 
   try {
     await enqueueOutgoingMessageCreated({
@@ -1477,6 +1663,21 @@ export async function postChannelMessage(
   );
 
   const mentions = extractMentionUsernames(input.body);
+  // Only a conversation's toast/preview reads message content — a server
+  // channel's `channel-activity` frame stays exactly the notification it
+  // always was (see the schema comment on `channelActivitySchema`).
+  const preview =
+    channel?.kind === "dm" || channel?.kind === "group"
+      ? {
+          authorId: input.author.id,
+          authorName: message.authorName,
+          ...buildMessagePreview({
+            body: message.body,
+            hasAttachments: (message.attachments?.length ?? 0) > 0,
+            isGifAttachment: message.attachments?.[0]?.contentType === "image/gif",
+          }),
+        }
+      : undefined;
   if (isBusEnabled()) {
     publishToCluster(ACTIVITY_TOPIC, {
       channelId: input.channelId,
@@ -1485,6 +1686,7 @@ export async function postChannelMessage(
       repliedToUserId: parent?.author_id ?? null,
       mentionEveryone,
       mentionHereUserIds: hereUserIds,
+      preview: preview ?? null,
     });
   }
   await notifyChannelActivity(
@@ -1492,7 +1694,7 @@ export async function postChannelMessage(
     input.author.id,
     mentions,
     parent?.author_id ?? null,
-    { mentionEveryone, mentionHereUserIds: hereUserIds },
+    { mentionEveryone, mentionHereUserIds: hereUserIds, preview },
   );
 
   const threadInfo = await getThreadInfo(input.channelId);
@@ -1896,6 +2098,33 @@ function asStringArray(value: unknown): string[] | undefined {
   return value.filter((entry): entry is string => typeof entry === "string");
 }
 
+/**
+ * The redacted preview as it crossed `CLUSTER_BUS`. Absent or malformed reads
+ * as "no preview" rather than a partial one — a frame from an instance that
+ * predates this field carries none at all.
+ */
+function asMessagePreview(
+  value: unknown,
+): ({ authorId: string; authorName: string } & MessagePreview) | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const authorId = asString(record.authorId);
+  const authorName = asString(record.authorName);
+  const preview = asString(record.preview);
+  if (authorId === null || authorName === null || preview === null) {
+    return undefined;
+  }
+  return {
+    authorId,
+    authorName,
+    preview,
+    isAttachment: record.isAttachment === true,
+    isGif: record.isGif === true,
+  };
+}
+
 function asPresenceUsers(value: unknown): PresenceUser[] | null {
   if (!Array.isArray(value)) {
     return null;
@@ -2014,6 +2243,7 @@ subscribeToCluster(ACTIVITY_TOPIC, (data) => {
       webPush: false,
       mentionEveryone: frame?.mentionEveryone === true,
       mentionHereUserIds,
+      preview: asMessagePreview(frame?.preview),
     },
   ).catch((error) => {
     console.error("[chat] cluster activity fan-out failed:", error);

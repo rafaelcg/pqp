@@ -175,10 +175,19 @@ function pickAutomatically(normalized) {
 /**
  * What macOS's screen-recording permission means for this attempt.
  *
- * `not-determined` is deliberately not "blocked": the first `getSources` call
- * is what makes macOS show its own permission prompt, so refusing before that
- * would mean the prompt never appears and the user can never grant it. Ask
- * first, then look again. `blocked` is only ever the answer we act on.
+ * `denied` is deliberately not "blocked" on macOS. Electron answers the
+ * screen question with a plain preflight that only knows yes or no, so a Mac
+ * that has NEVER been asked reports `denied`, exactly like one that refused.
+ * The first `getSources` call is what makes macOS show its own permission
+ * prompt and add the app to Privacy & Security, so refusing before that call
+ * means the prompt never appears, the app is never listed, and the user is
+ * sent to a Settings pane with nothing to turn on (2026-09-13, "pqp cannot
+ * see your screen" on a Mac where pqp was absent from the list). Ask first,
+ * then look again: the caller re-reads the status after listing, and only
+ * then does `denied` get treated as the final answer.
+ *
+ * `restricted` is the one state that really cannot be asked (a profile or
+ * parental control decided), so it stays blocked before the listing.
  *
  * Non-macOS platforms have no such gate. Windows and Linux either capture or
  * throw, and both of those are already handled where they happen.
@@ -187,10 +196,10 @@ function screenPermission(platform, status) {
   if (platform !== "darwin") {
     return "ok";
   }
-  if (status === "denied" || status === "restricted") {
+  if (status === "restricted") {
     return "blocked";
   }
-  if (status === "not-determined") {
+  if (status === "denied" || status === "not-determined") {
     return "undetermined";
   }
   // "granted", "unknown", and anything a future macOS invents. `unknown` is

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./fixtures";
+import { openApp, openServerSettings } from "./fixtures";
 
 /**
  * The Communities directory, driven end to end.
@@ -273,7 +273,7 @@ test.describe("Communities", () => {
     page,
   }) => {
     await openApp(page);
-    await page.getByRole("button", { name: "Community settings" }).click();
+    await openServerSettings(page);
 
     const section = page.locator("[data-community-settings]");
     await expect(section).toBeVisible();
@@ -393,7 +393,7 @@ test.describe("Communities", () => {
     await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
       timeout: 20_000,
     });
-    await page.getByRole("button", { name: "Community settings" }).click();
+    await openServerSettings(page);
     await expect(page.getByText(/Community name/i).first()).toBeVisible();
     await expect(page.locator("[data-community-settings]")).toHaveCount(0);
   });

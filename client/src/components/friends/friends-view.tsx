@@ -229,10 +229,19 @@ export function FriendsView({
     });
   }
 
-  const tabs: { id: FriendsTab; label: string; badge?: number }[] = [
+  const tabs: { id: FriendsTab; label: string }[] = [
     { id: "online", label: t("friends.tab.online") },
     { id: "all", label: t("friends.tab.all") },
-    { id: "pending", label: t("friends.tab.pending"), badge: pending },
+    {
+      id: "pending",
+      // A plain-text count, not a red pill: you are already looking at this
+      // tab, so a danger-coloured alarm about something already on screen is
+      // exactly what principle 3 forbids.
+      label:
+        pending > 0
+          ? t("friends.tab.pendingCount", { count: pending })
+          : t("friends.tab.pending"),
+    },
   ];
 
   return (
@@ -274,14 +283,6 @@ export function FriendsView({
               onClick={() => setTab(one.id)}
             >
               {one.label}
-              {(one.badge ?? 0) > 0 && (
-                <span
-                  className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-                  aria-label={t("friends.pendingBadge", { count: one.badge! })}
-                >
-                  {one.badge}
-                </span>
-              )}
             </button>
           ))}
         </div>

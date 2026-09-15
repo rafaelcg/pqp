@@ -1,7 +1,69 @@
 import { SERVER_BANNER_HEIGHT, SERVER_BANNER_WIDTH } from "@pqp/shared";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { cn } from "@/lib/utils";
+
+/**
+ * How long a failed banner load stays failed before the `<img>` gets another
+ * try.
+ *
+ * Bounded, not exponential: this is a decorative image, not a request worth
+ * backing off aggressively for, and the failure this guards against is
+ * ordinary — a CDN blip, a dropped connection — not a permanently dead URL.
+ * 20s is long enough that a real outage does not hammer anything, short
+ * enough that a viewer who leaves the header on screen sees the banner come
+ * back within the same sitting rather than needing a reload.
+ */
+const BANNER_RETRY_MS = 20_000;
+
+/**
+ * How many times a failed URL gets retried before this mount gives up on it
+ * for good.
+ *
+ * A CDN blip clears in one or two intervals; five (100s of retrying) is
+ * generous room for a real outage without ever becoming "unbounded". Without
+ * a cap, a banner URL that is simply gone — deleted, a bucket rotated out
+ * from under it — turns into a recurring request and image decode, every
+ * 20s, for as long as any viewer's tab stays on this server: multiplied
+ * across every viewer of a busy server, that is periodic, synchronized load
+ * for a resource that can never recover. Past the cap the strip just stays
+ * absent for the rest of this mount; a fresh mount (navigating away and
+ * back, or a reload) gets its own five tries.
+ */
+const BANNER_MAX_RETRIES = 5;
+
+/**
+ * The failed-URL bit `ServerBannerStrip` keeps, with the retry built in: once
+ * a URL fails, a timer clears the failure after `BANNER_RETRY_MS` so the next
+ * render's `<img>` gets a fresh attempt. If it fails again `onError` sets it
+ * right back and the timer restarts, up to `BANNER_MAX_RETRIES` times — a
+ * transient blip recovers within a couple of intervals with no remount and
+ * no reload required, and a permanently dead URL stops generating periodic
+ * work instead of retrying forever.
+ */
+function useRetryableImageFailure(): [string | null, (url: string) => void] {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const attemptsRef = useRef(0);
+
+  useEffect(() => {
+    if (!failedUrl) {
+      // A clean slate: either nothing has failed yet, or the last attempt
+      // just succeeded. Either way the next failure starts counting fresh.
+      attemptsRef.current = 0;
+      return;
+    }
+    if (attemptsRef.current >= BANNER_MAX_RETRIES) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      attemptsRef.current += 1;
+      setFailedUrl(null);
+    }, BANNER_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [failedUrl]);
+
+  return [failedUrl, setFailedUrl];
+}
 
 /**
  * A server's icon and its banner, and the monogram both fall back to.
@@ -84,15 +146,14 @@ export function ServerIcon({
 }
 
 /**
- * The wide image across the top of the channel-list column, with the server's
- * name over it.
+ * The tall banner with the server's name drawn over it.
  *
- * RENDERS NOTHING WITHOUT A BANNER, deliberately — not an empty band, not a
- * placeholder gradient. The header below it already names the server, so a
- * server that has set no banner keeps the layout it has always had and the
- * feature is invisible until somebody opts into it. That is also what makes the
- * fallback on a failed load correct rather than jarring: the band disappears and
- * the ordinary header is still there, saying the same thing.
+ * NOT what the channel sidebar draws above its header any more — see
+ * `ServerBannerStrip` below. This component's only caller today is the
+ * Server Settings preview, where the name over the artwork is correct
+ * because the artwork is the subject being previewed. RENDERS NOTHING
+ * WITHOUT A BANNER, deliberately — not an empty band, not a placeholder
+ * gradient.
  *
  * The name is drawn over a bottom-up scrim rather than over the raw image.
  * Contrast against an arbitrary photograph is not something a colour token can
@@ -141,6 +202,50 @@ export function ServerBanner({
       >
         {name}
       </p>
+    </div>
+  );
+}
+
+/**
+ * The 72px decorative strip above the channel sidebar's identity row.
+ *
+ * A short band, never a text backdrop: `object-fit: cover`, no text, no
+ * scrim, `aria-hidden`, rendered only when a banner has actually loaded. The
+ * identity row below it is a normal sibling that keeps the column's own
+ * background and never changes shape whether this strip is present or not —
+ * the server's name is drawn exactly once, by that row, never here.
+ *
+ * RENDERS NOTHING WITHOUT A BANNER, for the same reason `ServerBanner` does:
+ * the feature stays invisible until an owner opts into it, and a failed load
+ * (see `useRetryableImageFailure`) falls back to that same nothing rather
+ * than an empty grey band.
+ */
+export function ServerBannerStrip({
+  bannerUrl,
+}: {
+  bannerUrl: string | null | undefined;
+}) {
+  const [failedUrl, setFailedUrl] = useRetryableImageFailure();
+  const resolved = resolveUploadedImageUrl(bannerUrl);
+
+  if (!resolved || resolved === failedUrl) {
+    return null;
+  }
+
+  return (
+    <div
+      data-server-banner-strip=""
+      className="h-18 w-full shrink-0 overflow-hidden border-b border-border bg-surface-2"
+    >
+      <img
+        src={resolved}
+        alt=""
+        aria-hidden="true"
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className="h-full w-full object-cover object-center"
+        onError={() => setFailedUrl(resolved)}
+      />
     </div>
   );
 }

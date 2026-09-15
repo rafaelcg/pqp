@@ -6,6 +6,7 @@ import {
   CALL_SPLIT_DIVIDER_PX,
   MIN_CHAT_HEIGHT_PX,
   MIN_STAGE_HEIGHT_PX,
+  MIN_WATCH_CHAT_WIDTH_PX,
   type CallSplitPreference,
   type CallStageShape,
 } from "@/lib/call-split";
@@ -69,17 +70,21 @@ function split({
   shape: stageShape = "expanded" as CallStageShape,
   preference = DRAGGED as CallSplitPreference,
   paneSize = TALL,
+  kind,
 }: {
   shape?: CallStageShape;
   preference?: CallSplitPreference;
   paneSize?: { width: number; height: number };
+  kind?: "call" | "watch" | "watch-audience";
 } = {}) {
   return render(
     <CallSplit
       shape={stageShape}
+      kind={kind}
       preference={preference}
       onPreferenceChange={() => {}}
       paneSize={paneSize}
+      chatHeader={{ title: "Chat", meta: "3 watching" }}
       stage={
         <div data-testid="stage">
           <video data-testid="stage-video" />
@@ -333,7 +338,8 @@ describe("CallSplit puts a pane away without unmounting it", () => {
     // The transcript's own wrapper carries the attribute, not the stage's.
     expect(html).not.toMatch(/data-call-split-stage[^>]*hidden=""/);
     // The last element opened before the transcript is the one hidden.
-    expect(html).toMatch(/hidden=""[^>]*>\s*<div data-testid="chat"/);
+    // The chat header (2026-09-13) comes first inside that wrapper.
+    expect(html).toMatch(/hidden=""[^>]*>[\s\S]*?<div data-testid="chat"/);
   });
 
   it("hides exactly one pane, and neither by default", () => {
@@ -344,23 +350,33 @@ describe("CallSplit puts a pane away without unmounting it", () => {
     expect(both).not.toContain("data-call-split-collapsed");
   });
 
-  it("offers the way back from the boundary the pane was on", () => {
-    for (const [preference, which] of [
-      [COLLAPSED_STAGE, "stage"],
-      [COLLAPSED_CHAT, "chat"],
-    ] as const) {
-      const html = split({ preference });
-      expect(html).toContain(`data-call-split-restore="${which}"`);
-      expect(html).toContain(`data-call-split-collapsed="${which}"`);
-      // And no divider, because there are no longer two things to drag apart.
+  it("offers the way back where the eye is: a pill on the stage, a button in the chat header", () => {
+    // Chat hidden: the pill sits on the stage's corner (YouTube's "Show
+    // chat"). Video hidden: the chat header, which is still on screen,
+    // offers "Show the video". No edge strip either way (2026-09-13).
+    const chatAway = split({ preference: COLLAPSED_CHAT });
+    expect(chatAway).toContain('data-call-split-restore="chat"');
+    expect(chatAway).toContain('data-call-split-collapsed="chat"');
+    const stageAway = split({ preference: COLLAPSED_STAGE });
+    expect(stageAway).toContain('data-call-split-restore="stage"');
+    expect(stageAway).toContain('data-call-split-collapsed="stage"');
+    for (const html of [chatAway, stageAway]) {
       expect(html).not.toContain('data-testid="call-split-divider"');
     }
   });
 
-  it("offers both ends of the drag as buttons while the divider is there", () => {
+  it("puts hide-video and hide-chat in the chat header, and leaves the divider to the drag", () => {
     const html = split();
-    expect(html).toContain('data-testid="call-split-collapse-stage"');
-    expect(html).toContain('data-testid="call-split-collapse-chat"');
+    const header = html.slice(html.indexOf('data-testid="call-split-chat-header"'));
+    expect(header).toContain("Chat");
+    expect(header).toContain("3 watching");
+    expect(header).toContain('data-testid="call-split-collapse-stage"');
+    expect(header).toContain('data-testid="call-split-collapse-chat"');
+    const boundary = html.slice(
+      html.indexOf('data-call-split-boundary=""'),
+      html.indexOf('data-call-split-chat=""'),
+    );
+    expect(boundary).not.toContain("call-split-collapse-");
   });
 
   /**
@@ -475,13 +491,94 @@ describe("the collapse controls are findable without hovering", () => {
       expect(tag).not.toContain("group-hover");
     });
 
-    it(`gives the ${toward} control a target rather than a sliver`, () => {
+    it(`gives the ${toward} control a target and a name, not a sliver`, () => {
       const tag = collapseTag(split(), toward);
-      // 56px along the boundary, and a hit area that reaches 8px into each
-      // neighbouring pane. The cross axis is `CALL_SPLIT_DIVIDER_PX`, which
-      // every clamp in `lib/call-split.ts` is computed against.
-      expect(tag).toMatch(/w-14|h-14/);
-      expect(tag).toMatch(/before:-inset-[xy]-2/);
+      // A 28px button in the chat header (2026-09-13), with the action in
+      // its accessible name, rather than a chevron on the divider.
+      expect(tag).toMatch(/h-7 w-7/);
+      expect(tag).toContain("aria-label=");
     });
   }
+});
+
+/**
+ * THE AUDIENCE'S OWN COLUMN. A seatless viewer watching a watch party's HLS
+ * picture (`kind="watch-audience"`) gets a chat about 340px wide from the
+ * very first render — before anybody has dragged anything — rather than the
+ * shared `side` proportion a call and the in-call watch surface use.
+ */
+describe("CallSplit sizes the audience's chat as a column, not a proportion", () => {
+  it("gives the chat ~340px on a wide pane, straight away, unsized", () => {
+    const html = split({
+      kind: "watch-audience",
+      preference: CALL_SPLIT_DEFAULT,
+      paneSize: { width: 1800, height: 900 },
+    });
+    expect(html).toContain('data-call-split="side-by-side"');
+    expect(html).toContain("data-call-split-sized");
+    const match = /data-call-split-stage[^>]*style="width:\s*(\d+)px/.exec(
+      html,
+    );
+    expect(match).not.toBeNull();
+    const stagePx = Number(match![1]);
+    const usable = 1800 - CALL_SPLIT_DIVIDER_PX;
+    expect(usable - stagePx).toBe(MIN_WATCH_CHAT_WIDTH_PX);
+  });
+
+  it("grows the film, not the chat, on a wider pane", () => {
+    const narrow = split({
+      kind: "watch-audience",
+      preference: CALL_SPLIT_DEFAULT,
+      paneSize: { width: 1200, height: 900 },
+    });
+    const wide = split({
+      kind: "watch-audience",
+      preference: CALL_SPLIT_DEFAULT,
+      paneSize: { width: 2400, height: 900 },
+    });
+    const stagePx = (html: string) =>
+      Number(
+        /data-call-split-stage[^>]*style="width:\s*(\d+)px/.exec(html)![1],
+      );
+    // A call's shared 0.62 default would have made both the stage AND the
+    // chat grow with the window. Here only the stage does.
+    expect(stagePx(wide) - stagePx(narrow)).toBe(2400 - 1200);
+  });
+
+  it("leaves an ordinary call's shared column alone", () => {
+    const html = split({
+      kind: "call",
+      preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" },
+      paneSize: { width: 1800, height: 900 },
+    });
+    const stagePx = Number(
+      /data-call-split-stage[^>]*style="width:\s*(\d+)px/.exec(html)![1],
+    );
+    const usable = 1800 - CALL_SPLIT_DIVIDER_PX;
+    // The shared `side` fraction (0.62), not the audience's fixed column.
+    expect(usable - stagePx).not.toBe(MIN_WATCH_CHAT_WIDTH_PX);
+    expect(stagePx).toBe(Math.round(usable * 0.62));
+  });
+
+  it("stacks on a phone-width pane instead of shrinking the chat below its floor", () => {
+    const html = split({
+      kind: "watch-audience",
+      preference: CALL_SPLIT_DEFAULT,
+      paneSize: { width: 480, height: 900 },
+    });
+    expect(html).toContain('data-call-split="stacked"');
+  });
+
+  it("honours a drag: once stored, the column is an ordinary fraction again", () => {
+    const html = split({
+      kind: "watch-audience",
+      preference: { ...CALL_SPLIT_DEFAULT, watchAudienceSide: 0.5 },
+      paneSize: { width: 2000, height: 900 },
+    });
+    const stagePx = Number(
+      /data-call-split-stage[^>]*style="width:\s*(\d+)px/.exec(html)![1],
+    );
+    const usable = 2000 - CALL_SPLIT_DIVIDER_PX;
+    expect(stagePx).toBe(Math.round(usable * 0.5));
+  });
 });

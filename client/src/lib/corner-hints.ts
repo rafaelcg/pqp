@@ -1,10 +1,14 @@
 /**
- * One corner card at a time.
+ * One card at a time.
  *
  * The update card, QG, the Android/iOS beta invite, Novidades, and cargos
  * all pin to `right-4 bottom-4`. Showing two is a stack, not a queue: the
  * one underneath still records its impression, so the person never sees it.
- * First match in this list is the only one allowed to mount.
+ * First match in this list is the only one allowed to mount. Not every id
+ * here draws in that corner — `voiceClean` renders inline above the user
+ * bar (`components/voice/voice-clean-hint.tsx`) — but it shares this list
+ * because "never two cards on screen at once" is a product rule, not a
+ * layout one.
  *
  * Order is product, not recency:
  *  1. update — a waiting build beats every campaign (it is also mounted
@@ -12,16 +16,19 @@
  *  2. communityHomePost — a live Baú publish in the open server; not a
  *     campaign, so it beats the first-run cards and yields only to update
  *  3. qg — the house, first-run
- *  4. mobileBeta — phone browsers only; the campaign for the native apps
- *  5. whatsNew — Novidades now lives on the rail
- *  6. cargos — staff who can manage roles
- *  7. shortcuts — Cmd+/ map; last, and skipped while an attached feature
+ *  4. voiceClean — the one-time Voz limpa nudge, above the user bar; after
+ *     the first-run cards, before the app-invite campaigns (`lib/voice-clean.ts`)
+ *  5. mobileBeta — phone browsers only; the campaign for the native apps
+ *  6. whatsNew — Novidades now lives on the rail
+ *  7. cargos — staff who can manage roles
+ *  8. shortcuts — Cmd+/ map; last, and skipped while an attached feature
  *     hint is up (see `lib/feature-hints.ts`)
  */
 export const CORNER_HINT_ORDER = [
   "update",
   "communityHomePost",
   "qg",
+  "voiceClean",
   "mobileBeta",
   "whatsNew",
   "cargos",

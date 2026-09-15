@@ -119,8 +119,16 @@ vi.mock("../voice/hls-egress.js", () => ({
   setLiveHlsSfuLoadReader: () => {},
   isLiveHlsEnabled: () => true,
   isLiveHlsEnabledForServer: () => true,
+  // `stampViewerStream` (hls-viewer-token.ts) reads this to decide whether
+  // to prepend an edge host; unset here, same as every deployment today.
+  playlistBaseUrl: () => null,
   liveHlsStreamFor: (channelId: string) =>
     egress.streams.get(channelId) ?? null,
+  // Whether THIS instance holds the channel's transcode: what `pushLiveHls`
+  // reads to decide between reconciling here and relaying the intent to the
+  // machine that can. One machine in this file, and the fake egress above is
+  // its own, so a channel with a stream is a channel it owns.
+  liveHlsOwnsChannel: (channelId: string) => egress.streams.has(channelId),
   reconcileLiveHls: async (
     channelId: string,
     presenterPeerId: string | null,
@@ -149,7 +157,9 @@ vi.mock("../voice/hls-egress.js", () => ({
 
 const {
   getChannelLiveState,
+  getVoiceActivitySnapshot,
   handleVoiceMessage,
+  HLS_VIEWER_TOKEN_REMINT_MS,
   removeVoicePeerBySocket,
   resetVoicePeers,
   resetVoiceRateLimits,
@@ -623,7 +633,7 @@ describe("live HLS reaches the channel", () => {
 
     await watchLive(outsider, "outsider", true);
     expect(outsider.frames).toHaveLength(0);
-    expect(getChannelLiveState(CINEMA).watching).toBe(0);
+    expect((await getChannelLiveState(CINEMA)).watching).toBe(0);
   });
 
   it("watch-live counts a socket without a seat, answers it alone, and the audience hears the count on the keyframe", async () => {
@@ -646,7 +656,7 @@ describe("live HLS reaches the channel", () => {
     // Nobody else heard about it: no frame per subscribe.
     expect(frames(bia, "channel-live")).toHaveLength(1);
     expect(frames(host, "channel-live")).toHaveLength(1);
-    expect(getChannelLiveState(CINEMA)).toMatchObject({
+    expect(await getChannelLiveState(CINEMA)).toMatchObject({
       watching: 1,
       participants: 1,
     });
@@ -672,6 +682,72 @@ describe("live HLS reaches the channel", () => {
     expect(lastFrame(bia, "channel-live")!.watching).toBe(0);
   });
 
+  it("a watcher's token is re-minted on the 50-minute schedule, once per loop, without a DB-backed keyframe", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const ana = viewer("ana");
+    const bia = viewer("bia");
+    await goLive();
+    await watchLive(ana, "ana", true);
+    // Bia never calls watch-live: she is part of the channel's "may view"
+    // audience (and gets the ordinary 30 s keyframe, which also fires
+    // HLS_VIEWER_TOKEN_REMINT_MS / ROSTER_AUDIENCE_KEYFRAME_MS times across
+    // the advance below) but not a tracked watcher, so the remint loop must
+    // never count her.
+    const bframesBefore = frames(bia, "channel-live").length;
+    const before = await getVoiceActivitySnapshot();
+
+    await vi.advanceTimersByTimeAsync(HLS_VIEWER_TOKEN_REMINT_MS);
+    await settle();
+
+    const after = await getVoiceActivitySnapshot();
+    // Exactly one loop for exactly one elapsed interval, minting exactly
+    // one token: the single tracked watcher. A 500-viewer party is still
+    // one loop, and the count says so directly rather than by inference.
+    expect(after.liveHls.tokenRemintLoops - before.liveHls.tokenRemintLoops).toBe(1);
+    expect(after.liveHls.tokenRemints - before.liveHls.tokenRemints).toBe(1);
+    // Bia's frames all came from the keyframe (one per ROSTER_AUDIENCE_KEYFRAME_MS),
+    // never from the remint loop, which only ever addresses tracked watchers.
+    expect(frames(bia, "channel-live").length - bframesBefore).toBe(
+      HLS_VIEWER_TOKEN_REMINT_MS / ROSTER_AUDIENCE_KEYFRAME_MS,
+    );
+
+    const reply = lastFrame(ana, "channel-live")!;
+    expect(
+      verifyHlsViewerToken(
+        tokenOf((reply.stream as LiveHlsStream).hlsUrl),
+        { channelId: CINEMA, startedAt: egress.streams.get(CINEMA)!.startedAt },
+      ),
+    ).toEqual({ userId: "ana", issuedAt: expect.any(Number) });
+
+    // A second interval, same session: another single loop, another single
+    // token, still just the one tracked watcher.
+    await vi.advanceTimersByTimeAsync(HLS_VIEWER_TOKEN_REMINT_MS);
+    await settle();
+    const twice = await getVoiceActivitySnapshot();
+    expect(twice.liveHls.tokenRemintLoops - after.liveHls.tokenRemintLoops).toBe(1);
+    expect(twice.liveHls.tokenRemints - after.liveHls.tokenRemints).toBe(1);
+  });
+
+  it("the remint schedule stops when the broadcast ends and does not fire for a stopped session", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const ana = viewer("ana");
+    const host = await goLive();
+    await watchLive(ana, "ana", true);
+
+    await handleVoiceMessage(
+      { socket: host.socket, user: asUser("host") },
+      { type: "set-sharing-screen", sharing: false },
+    );
+    await settle();
+
+    const before = await getVoiceActivitySnapshot();
+    await vi.advanceTimersByTimeAsync(HLS_VIEWER_TOKEN_REMINT_MS * 2);
+    await settle();
+    const after = await getVoiceActivitySnapshot();
+    expect(after.liveHls.tokenRemintLoops).toBe(before.liveHls.tokenRemintLoops);
+    expect(after.liveHls.tokenRemints).toBe(before.liveHls.tokenRemints);
+  });
+
   it("the clock stops when the stream is gone and nobody is watching", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const ana = viewer("ana");
@@ -693,21 +769,21 @@ describe("live HLS reaches the channel", () => {
     await goLive();
     await watchLive(ana, "ana", true);
     await watchLive(bia, "bia", true);
-    expect(getChannelLiveState(CINEMA).watching).toBe(2);
+    expect((await getChannelLiveState(CINEMA)).watching).toBe(2);
 
     // Ana's tab closed: the ws close path, which runs for sockets without a peer.
     removeVoicePeerBySocket(ana.socket);
-    expect(getChannelLiveState(CINEMA).watching).toBe(1);
+    expect((await getChannelLiveState(CINEMA)).watching).toBe(1);
 
     // Bia pressed Entrar: the roster counts her now.
     await join(bia, "bia", CINEMA);
-    expect(getChannelLiveState(CINEMA)).toMatchObject({
+    expect(await getChannelLiveState(CINEMA)).toMatchObject({
       watching: 0,
       participants: 2,
     });
     // A seat that sends watch-live is not double counted.
     await watchLive(bia, "bia", true);
-    expect(getChannelLiveState(CINEMA).watching).toBe(0);
+    expect((await getChannelLiveState(CINEMA)).watching).toBe(0);
   });
 
   it("the join-time voice-stream and the socket-auth push are stamped for the recipient", async () => {

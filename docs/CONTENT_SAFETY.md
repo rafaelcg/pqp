@@ -218,6 +218,34 @@ second row is a deliberate refusal to automate, and it means an unattended
 deployment accumulates these rows indefinitely. That is intended: it is the one
 place in this codebase where a growing number is the correct alarm.
 
+### Operator review of server queues
+
+An automated report is filed the same way whether the channel it fired in
+belongs to a server or a conversation (see `createAutomatedReport` above),
+and until 2026-09-14 that mattered: a report about a server channel goes into
+*that server's own queue*, readable only by that server's owner and admins —
+the same rule a human-filed report follows. A gore flag inside a two-member
+server was therefore invisible to the instance moderator entirely, while the
+operator dashboard's "abertas" count summed it in anyway, because that count
+reads every server's queue at once. The dashboard said one was open; there
+was no screen to open it.
+
+`GET /api/reports/all` closes that gap:
+
+| Route | Gate | What it adds over the existing routes |
+|---|---|---|
+| `GET /api/reports/all` | `isInstanceModerator` — 404 for anyone else, route effectively absent with `INSTANCE_MODERATOR_CLERK_IDS` unset, same as `GET /api/reports/instance` | Every report on the instance in one page, server-scoped or not. Each row names its server (`serverId`/`serverName`, both null for the instance queue) and, for an automated report (`reporterId` null), the scanner's own evidence — `scan_status` / `scan_score` / `scan_labels` / `scan_provider`, content type, and whether the attachment is still attached to a live message — the same columns the SQL above reads by hand |
+| `PATCH /api/reports/:reportId` | Unchanged route, widened rule: a manager of the report's server, **or now also** an instance moderator regardless of standing in that server | An instance moderator may close any report. Issuing a **timeout** through the same request still requires an actual management permission in that particular server — a timeout is a server-rank sanction, and resolving the queue entry is not the same grant as silencing one of its members |
+| `POST /api/reports/:reportId/remove-message` | Same rule as the PATCH above | Deletes the reported message outright (the existing attachment sweep then removes any object it carried, same as any other message delete) and writes `[moderation] operator removed message` to the log with the report id, the message id and the moderator's id — unconditionally, because a conversation message has no server and therefore no `audit_log` row to carry the removal otherwise |
+
+The client surfaces this as **Moderação da instância** in Settings, visible
+only when `GET /api/reports/all` answers 200.
+
+Nothing here changes where a report is *filed* — that routing is still
+decided once, by `createReport`/`createAutomatedReport`, from the reported
+thing, never by the client. This only widens who may *read and close* what
+was already filed.
+
 ---
 
 ## What the operator must obtain

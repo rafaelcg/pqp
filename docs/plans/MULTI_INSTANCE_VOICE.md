@@ -10,7 +10,7 @@ Status: M1 to M5 landed in code, plus the three two-machine prerequisites the 20
 - **M3**: landed, PR `feat/voice-registry-m3` (stacked on M2). The adopt plan (5.2): a resume whose row another instance holds runs one conditional `UPDATE` (`adoptVoicePeer`) after the transport pin is settled, then takes the reattach path with the row's state (share, camera, mute carried over), and publishes `voice.room { kind: "adopted" }` so the old owner drops its local entry silently; a dead or an alive owner is treated the same, only logged differently (`voice.resumeAdopted`). The reconcile (`reconcileVoiceRegistry`, run by every instance after each heartbeat via `runVoiceReconcile` in `ws/voice.ts`): rows of a dead or leaseless instance are stamped `orphaned_at = heartbeat_at` (or now, when there is no lease row), deleted once that is `VOICE_RESUME_TTL_MS` old in one statement that also retires the id and unpins an emptied room, `peer-left` fanned out locally plus a `left` hint on the bus; room rows with no peers older than 30 s and dead lease rows are swept; the retired-id sweep moved here. `voice_retired_peers` is the only retired store with the flag on (`retiredPeerIds` is never written). `leaveVoiceByResumeToken` is async and answers for a foreign row (the beacon lands on whichever machine): row deleted, id retired, `adopted` then `left` on the bus so the owner forgets the seat before its room is told. `getRoomTransport` consults a per-process read-through cache of `voice_rooms.transport` (filled by every row read, dropped on every `voice.room` frame for the channel), so the synchronous hot paths answer for a room pinned elsewhere. Two details that differ from the sketch: the reconcile skips this instance's own rows entirely (alive by definition; its own orphan timers are the authority), and an orphan whose lease has been dead longer than the resume window is orphaned and removed in the same pass. No client change. Pinned by the "resume across instances" group of `voice-cluster.test.ts` and the flag-off additions to `voice-resume.test.ts`. Still inert in production.
 - **M4**: landed, PR `feat/voice-registry-m4` (stacked on M3). Rings (5.5): the ring stays owned by the instance holding the caller's socket (timers, `pending`, `rung`, `anyoneAnswered` all local); the fan-out crosses on `voice.call` as addressed frames (`deliver` for `call-incoming` / `call-ring-cancelled` by user id, `room` for `call-declined` to the call's peers), and `decline` / `answered` from a foreign instance are routed back and handled only by the owner, so `pushIncomingCall` and the missed-call message run once. `handleCallRing` does not ring somebody already in the call on the other machine (rows), and the empty-room grace reads the rows before ending a ring, because the caller may have come back on the other machine. Accepted degradation, documented in the code: an owner that dies mid-ring ends the ring with no `call-ring-cancelled` and no missed-call record (the push already went out; the client's own timeout ends the ring on screen). Moderation (5.8): every eviction publishes `voice.moderation` first (`notify`, `user` with an optional notice, `channel`, `except`), the instance holding the socket says the notice and forgets the peer silently, then the publisher releases each foreign row with `releaseForeignPeer` (row, retired id, `adopted` then `left` on the bus, so the departure is announced once) and runs the SFU half once with the rows' peer ids merged into the identity hint. Re-sweeps (5.4): `scheduleResweep` upserts `voice_resweeps` (the sweep is data, `scope` carries the kind, the room or user, the allowed ids and `knownIdentities`), `tickSfuResweeps` deletes expired rows and claims live unclaimed ones with the `UPDATE ... RETURNING` from 5.4 (`claimed_until = NOW() + 4 s`), sweeping only what it won; `runVoiceReconcile` ticks after every heartbeat on every instance, and a process that wrote a row also keeps one 5 s ticker alive while any row is live, so the acting instance keeps the 5 s cadence and a survivor takes over within a beat. The per-key `setInterval` remains the flag-off path. Pinned by the "moderation" group of `voice-cluster.test.ts`, the "rings across two instances" group of `voice-calls.test.ts` and `voice/admin-resweeps.test.ts` (two graphs tick, one `listParticipants` per key per claim window; a fresh graph picks up the row; identities ride in `scope`). Still inert in production.
 - **M5**: landed, PR `feat/voice-registry-m5` (stacked on M4). `fly.toml` says two machines (`min_machines_running = 2`, rolling one at a time, `/health` every 10 s, the single-machine banner replaced by the cluster invariants); the drain in `index.ts` and `lib/drain.ts` (SIGTERM flips `/health` to 503 at once, withdraws the voice lease ahead of the socket closes, settles 2 s, then 1001 in batches of 50 every 100 to 150 ms with a 10 s cap on the socket half and a 25 s cap on the whole, inside `kill_timeout = 30`; `/up` deliberately stays green); CI asserts the started machine count against `min_machines_running` (or the repo variable `PQP_API_MACHINES`, set to 1 until the flip), the region, and that every started machine runs one image (the dual-version probe); the mesh guard in `join-voice-room` (with the registry on and at least one other live lease, a room that would open on mesh opens on LiveKit, and a join into a room another instance holds on mesh, or any mesh join without an SFU, is refused with `voice-join-refused` + `reason: "mesh-multi-instance"`; a room this instance holds is never guarded; `voice.meshClusterUnsafe` warns once per episode after each heartbeat when two are live with `LIVEKIT_*` unset). Pinned by `server/src/lib/drain.test.ts` and the "mesh across instances" group of `voice-cluster.test.ts` (which replaced the "mesh guard (M5)" group on 2026-09-08, when the refusal went away; `guardMeshAcrossInstances` itself was deleted later that night, see the second 2026-09-08 note). Two details that differ from section 6: the settle before the first close is 2 s and the batches are 50 per 100 to 150 ms (a full 600-socket machine drains in under two seconds; the ramp the plan wanted is there, the eight to ten seconds were not needed), and the count assertion reads `fly.toml` rather than hard-coding 2. Not rehearsed on staging yet (checklist in `docs/STAGING.md`); the self-echo failing `/health` is still a follow-up. Flag off everywhere, and production is still one machine.
-- **M6**: not started. Rehearse on staging first (`docs/STAGING.md`, "Rehearsing two machines", with `LIVEKIT_*` set), then merge `min_machines_running = 2` in `fly.toml` and `fly scale count 2 --region gru --app pqp-api` (`docs/deploy-fly.md` 6a-bis has the exact order, including the `PQP_API_MACHINES` variable that keeps CI true in between).
+- **M6**: staging rehearsal step done, 2026-09-13 (`docs/plans/M6_REHEARSAL_2026-09-13.md`). Two `pqp-api-staging` machines, `LIVEKIT_*` set (pre-existing): bus/registry self-echo matched on both, chat and watch-party fan-out crossed instances, a LiveKit room spanned both machines with no refusals, small rooms (DM and small server) stayed mesh on both, cluster counters climbed on both, and a resume after `fly machine restart` landed on the survivor with the same peer id in both directions. Not fully clean: the moderator-mute and eviction-resweep checks need a rehearsal with real LiveKit media (this run was signaling-only) before they count as verified for two machines specifically, and no two-machine `deploy-staging.yml` rolling deploy was exercised end to end. Staging scaled back to one machine and `fly.staging.toml` reverted immediately after. Next: rerun the mute/resweep checks with real media, then merge `min_machines_running = 2` in `fly.toml` and `fly scale count 2 --region gru --app pqp-api` (`docs/deploy-fly.md` 6a-bis has the exact order, including the `PQP_API_MACHINES` variable that keeps CI true in between).
 
 **2026-09-07, the two-machine window (13:20Z to 15:59Z):** production ran two machines in `gru` with the bus, the registry and LiveKit live on both. No split: bus self-echo passed on both, six LiveKit rooms spanned both machines for up to 80 minutes, one cross-machine resume adopted live, zero app-level errors, zero user reports. Two-machine-specific: exactly four `voice.meshRefusedMultiInstance` refusals (each a hung-up call, one two-person call ended) and two unexplained proxy-side 1001 close bursts. Back to one machine by choice, `fly.toml` `min_machines_running = 1`, `--ha=false` on every deploy as before. What had to land before two again is in `docs/deploy-fly.md` 6a-bis: the guard adopting the pin instead of refusing, a cross-instance frames counter, `roomServerMutes` on the bus, a staging rehearsal with `LIVEKIT_*` set, then `min = 2` merged plus `fly scale count 2`.
 
@@ -23,6 +23,8 @@ Status: M1 to M5 landed in code, plus the three two-machine prerequisites the 20
 Pinned by the "mesh across instances" and "moderator mutes across instances" groups of `voice-cluster.test.ts`; each mechanism was broken on purpose (relay not published, pin adoption turned cold, mute row and frame each suppressed, each counter frozen) and its test failed, then restored.
 
 **2026-09-08, later, the guard goes (PR `fix/two-machines-keep-transport-policy`):** the first staging rehearsal passed every step above, but only with `LIVEKIT_*` unset, because `guardMeshAcrossInstances` still sent every unpinned room that would open on mesh to the SFU whenever an SFU was configured and another lease was live. Production has the SFU configured, so the flip would have moved every new room, however small, onto the one two-core media box; that night's peak was 41 rooms and 34 screen shares, almost all mesh, more than the box carries. The guard was a stand-in for the days when mesh could not cross instances, and it can now, so it is deleted: with the registry on and another instance live, an unpinned room gets exactly what `resolveVoiceTransport` says (DMs mesh, servers under ten mesh, communities and larger servers LiveKit, the per-channel override first) and pins it atomically in `voice_rooms`, on one machine or two alike. The pin adoption from the previous note is untouched, and `voice.meshPinAdopted` now comes from the atomic pin's outcome (`claimVoiceRoomTransport`, `won: false` on a mesh row) instead of a second read; `voice.meshGuardForcedSfu` and the extra lease count per mesh join are gone. The ceiling still counts the rows on both machines. What is left of "mesh across instances cannot work", read against `voice.signal` and the ceiling: (1) a signaling frame is dropped, on either side, for a peer id nobody holds, which covers the window between the `adopted` frame and the new owner seating a resumed peer; the resumed client re-offers after its `welcome`, so what is lost belongs to the old session; (2) the bus is best-effort, so a candidate can be lost while the LISTEN connection is reconnecting, which the client's ICE restart and Retry already cover for a lost candidate on one machine; (3) the read-then-write window on the ceiling between two simultaneous joins on two machines, a nine-person mesh for one call. None of those is a split, and none needed the blanket override. Pinned by three tests in the "mesh across instances" group: two live and an SFU, a small server room is mesh on both machines and the offer crosses; a community and a ten-member server still open on LiveKit and a small room next to them stays mesh; a mesh pin on A is adopted by a cold join on B whose own policy now says LiveKit. Broken on purpose (the force-SFU branch put back: the first and third fail, plus the small-room line of the second; the policy's community and large branches disabled: the second fails), then restored. The staging rehearsal must run with `LIVEKIT_*` set (`docs/STAGING.md`).
+
+**2026-09-14, the watch party did not cross (PR `fix/channel-live-cluster-bus`):** with two machines live, a party hosted on machine A was invisible to every viewer whose socket sat on machine B. Seen at 14:56 UTC: the host shared, B's audience stayed on a black "Preparando a transmissão" for the whole show, and a minute later somebody on B pressed "Entrar no palco", was seated, and was hung up one second afterwards. Three separate holes, all of the shape this plan keeps finding: a fan-out that walks `forEachAuthenticatedSocket` is this process's sockets and nobody else's. (1) `broadcastChannelLive` and `broadcastWatchParty` had no bus topic at all, so neither the playlist URL nor "the party went live" ever left the machine that computed it. They have one now: `voice.live` carries what `pushLiveHls` just resolved, UNSTAMPED (the URL's `?t=` names one viewer, so the receiving instance records the stream with `hlsAudience.setStream` and stamps it per socket itself), ordered by a publisher clock per channel with the ending session's `startedAt` so a straggler cannot roll a room back; `watchParty.state` carries a session id and nothing else, because the receiver re-reads the row. `voice.live` is the one voice topic NOT gated on `VOICE_REGISTRY`: the frame is the stream, not a pointer at a row. (2) The welcome's `voice-stream` and every `channel-live` read `liveHlsStreamFor`, the egress's own in-process map, so B told a joiner there was nothing live; they all resolve through the same chain `getChannelLiveState` uses now (local maps, the relayed stream, then the `hls_sessions` row, memoised per channel for 5 s), and the machine running the egress still never touches Postgres for it. (3) `stream: null` was indistinguishable from "this machine has not been told", on the wire and in the client, which is what turned a missing frame into a hangup: the frame now carries `ended: true` only on a null the server can vouch for, the client refuses to drop a stream it holds without it, and the audience-seat backstop ignores a seat younger than ten seconds. Counters: `voice.liveHls.audienceFramesRelayed` / `audienceFramesFromBus` and `liveHls.stateFrames` on `GET /api/admin/metrics`, both zero on one machine and climbing together on two (pitfall 12's reading: a `relayed` that climbs beside a `fromBus` stuck at zero is the bus not delivering). Pinned by `server/src/ws/voice-live-cluster.test.ts`, two module graphs over one memory hub on a real Postgres with the egress faked per graph, which is the detail that matters: a hoisted `vi.mock` is shared across graphs, and the first draft of those tests passed the welcome case for the wrong reason until each graph got its own `rooms` map.
 
 ## 0. Summary and recommendation
 
@@ -380,6 +382,34 @@ $2, watch_party_rev = $3 WHERE channel_id = $1 AND watch_party_rev < $3` (a
 `welcomeVoicePeer` reads the room row for the initial state. `endWatchParty`
 clears the columns when the room empties.
 
+**The HLS session rows needed an owner, and that one is done.** A watch party's
+transcode is recorded in `hls_sessions`, and until 2026-09-14 that row said
+nothing about which process started it, while `reconcileStaleHlsSessions`
+reasoned from the single-machine premise it stated out loud: "this process owns
+no session at boot, so every open row is stale by definition". On two machines
+that sentence is a promise that every rolling deploy kills a live stream --
+machine B boots, finds machine A's LIVE rows, adopts the egresses A is still
+driving (two monitors on one transcode, then a restart from whichever decides
+the playlist stalled first) and ends the rows LiveKit did not happen to list for
+it, handing a live party's segments to the retention sweep. `hls_sessions` now
+carries a nullable `instance_id`, stamped by the process that starts a session
+and re-stamped by the one that adopts it, and every guard that would adopt, end
+or stop something (`reconcileStaleHlsSessions`, `adoptLlHlsSessions`,
+`reapForeignEgresses`, the monitor's teardown path and the box-budget ghost
+filter) first asks whether the owner's `voice_instances` heartbeat is still
+fresh -- the same expiry rule `reconcileVoiceRegistry` uses to free a dead
+instance's seats. Unowned rows and rows whose owner has expired stay adoptable,
+so `VOICE_REGISTRY` off (a self-host, one process) behaves exactly as it always
+did, with no round trip. A lookup that fails is not permission: the pass does
+nothing and tries again later, and the two writes that can be left half-done --
+a teardown whose ownership could not be checked, and an adoption whose stamp
+did not land -- are parked and retried on the health monitor's tick rather than
+guessed at (`retryDeferredStops`, `retryPendingHlsSessionClaims`). `liveHls.skippedOwnedElsewhere` on
+`GET /api/admin/metrics`, and the `voice.hlsSkippedOwnedElsewhere` log line
+beside it, are how you tell from outside that the guard runs at all: zero on one
+machine, non-zero within a deploy of a party running on two. See
+`server/src/voice/hls-ownership.ts`.
+
 ### 5.8 Metrics and moderation targeting
 
 `getVoiceActivitySnapshot` rooms/participants from `voice_peers` (async; the
@@ -469,7 +499,7 @@ steps outside git.
 | Ghost seats after an instance dies | low (M3 landed) | Lease + reconcile in M3: orphaned at the dead lease's last heartbeat, removed 90 s later by whoever is alive |
 | Two instances pin a room differently | low | Atomic insert; `voice.hello` config hash |
 | Reconnect stampede on the surviving machine during a deploy | medium | Jittered batched 1001 closes; concurrency soft limit; client backoff jitter |
-| Rate limits multiply by 2 | certain, accepted | Documented in `lib/rate-limit.ts`; revisit only if abuse appears |
+| Rate limits multiply by 2 | was certain; now scoped | Address-keyed backstops still do, and are documented as per-machine in `lib/rate-limit.ts`. The user-keyed ones no longer: see §12 |
 | iOS/Android still drop voice on deploy | certain | Unchanged from today; a later plan adds resume tokens to the native clients |
 | Missed-call record lost if the ring owner dies mid-ring | low | Accepted; push already sent |
 | LiveKit Cloud cost creep past "Ship" included minutes | medium: every room is SFU today | Dashboard alert at 80% of 150k minutes; route small rooms to mesh (open question in 5.6); self-host per `docs/plans/SELF_HOSTED_LIVEKIT.md` |
@@ -493,3 +523,218 @@ rollback does not also break the next deploy.
   stops being enforced against a pre-ban token. The claims table fixes this.
 - `sendToUserSockets` for rings is local-only, so a callee on another machine
   would never ring.
+
+## 12. What was still per-process after M5, and what it cost (2026-09-15)
+
+Three things were written for one machine, kept working on two, and were
+wrong in ways nothing on the dashboard could show. All three are fixed in
+`lib/cluster-rate-limit.ts`, `lib/singleton-lease.ts` and
+`lib/instance-snapshot.ts`, and the shape of each fix was chosen by the
+traffic it sits on rather than by a rule.
+
+**Per-user rate limits.** The banner in `lib/rate-limit.ts` is right that a
+round trip per chat message costs more than the limit is worth, and that
+reasoning covers the hot limiters and the address-keyed backstops, which stay
+exactly as they are. It does not cover the small, rare, loud budgets. The ring
+limiter is five rings per five minutes, a number aimed at the person being
+buzzed, and a caller with a tab on each machine got ten. That one is now a
+single row in `rate_limit_buckets`, spent atomically: `ON CONFLICT DO UPDATE`
+takes the row lock, refills from `updated_at` and decrements inside it, and the
+trailing `WHERE` is what refuses — a read-then-write pair would let two
+machines through the last token. It is consulted only when `CLUSTER_BUS` or
+`VOICE_REGISTRY` is on, so a self-host pays nothing and owns no rows, and it
+fails OPEN behind the in-memory bucket, which stays as the backstop. The
+watch-party and music write budgets went the other way, on purpose: they sit on
+a per-frame path (a seek scrub emits continuously while a thumb is down) and
+they REFUSE NOTHING — past budget they only decide whether a position-only
+update is worth a fan-out. Those get DIVIDED capacity instead, `ceil(15 / N)`
+with N read from the heartbeat, which costs a slightly choppier scrub in the
+worst case and no round trip ever. Dividing a budget that refuses would have
+been a regression rather than a fix, since a user holds their socket on one
+machine and would simply have been handed half of what they had.
+
+Two details worth knowing. The ring token is spent immediately BEFORE the ring
+is committed, not on the way in: everything above that line is rejection-only
+(a stale socket, a forged conversation id, a room where nobody is absent), and
+a token burnt on one of those would be a cluster-wide budget spent with no ring
+delivered and no other machine to recover it from. And N comes from
+`voice_instances`, which the registry heartbeat writes — so in the staged
+configuration where `CLUSTER_BUS` is on and `VOICE_REGISTRY` is off there would
+otherwise be no topology source at all, and the divided limiters would divide
+by one forever while two machines served traffic. That configuration now writes
+the lease and the snapshot without the reconcile it has no rows for, and sweeps
+leases nobody is renewing, since nothing else would age them out.
+`clusterTopologyTracked` is the single predicate behind all of it — the lease,
+the shared ring budget and the dashboard's cluster block — because the moment
+they disagreed, a bus-only pair of machines wrote leases while the ring budget
+still asked about the registry and went back to five rings each.
+
+**The status sampler.** `setInterval` in `index.ts` means "on every process
+that loads this file", so two API machines wrote two `status_samples` rows a
+minute — and those rows are AVERAGED into the uptime figure, so one machine
+failing a probe while the other passed read as a service that was half up. A
+number that looks measured and is not is worse than no number. The fix is a
+lease (`singleton_leases`), claimed per tick, failing open so a sample is never
+silently skipped. Note which gate it got: `servesTraffic`, **not**
+`runsColdJobs`. The first probe in the list is `api` and it answers `ok: true`
+on the grounds that reaching that line means the API is serving; on
+`pqp-worker` that sentence is false, which is why this is the one periodic job
+that must not move to `jobs.ts`. The banner there already said so; there is now
+a test that reads `index.ts` and fails if somebody tidies it in.
+
+**Dashboard counters.** Every live number on `GET /api/admin/metrics` — open
+sockets, seated peers, HLS sessions, pool — is a property of the process that
+answered, and behind two machines the operator sees whichever one the proxy
+picked, with refreshing flipping between two halves of the answer and nothing
+on the page to say so. Each process now writes a small `snapshot` jsonb into
+its own `voice_instances` row on the heartbeat it was already sending, so the
+cluster-wide reading costs no extra write and one small SELECT. The response
+gains `instanceId`, `instanceCount` and a `cluster` block; `runtime` is
+unchanged and still local, because "is THIS machine in trouble" is a different
+question with a different answer. `cluster.reporting` says how many instances
+actually contributed, so a sum is readable as a floor rather than mistaken for
+a total; `cluster.maxStalenessSeconds` is measured off the rows rather than
+assumed from the lease TTL, because a sum that is seconds old should not be
+reported as 45 seconds stale; and `cluster.versions` makes a half-rolled deploy
+visible instead of averaging over it. With no topology source the block falls
+back to this process's own numbers labelled as a cluster of one — local voice
+peers included, since a single-instance deployment IS the cluster and a
+hard-coded zero there would make the common configuration read as an empty
+service.
+## 12. Three more per-process things, found in the 2026-09-15 audit
+
+All three are the same shape as §11's: code written when one process was the
+whole deployment, correct then, quietly wrong the moment a second machine (or
+the `pqp-worker` split) exists. None of them fails loudly.
+
+**The keep-warm loop ran once per machine, not once per stream.** The playlist
+proxy keeps every rung of a live session rendered on its own two-second clock
+so a rung nobody is watching still has a full window (`keepWarmLoops` in
+`server/src/voice/hls-playlist-proxy.ts`). It is armed by a VIEWER's request,
+and the proxy in front of `pqp-api` has no session affinity, so both machines
+armed a loop for the same party within seconds of each other: every tick was a
+second full ladder re-render, a second set of storage GETs and a second set of
+signatures, for one set of playlists in one bucket that neither copy improves.
+Now only the machine that owns the session's `hls_sessions` rows warms it, via
+`hlsSessionOwnedElsewhere` (the `instance_id` stamp and `voice_instances`
+heartbeat from the ownership work above); the other machine serves every viewer
+exactly as before, from the shared cache and from storage.
+
+**Standing down is only half of it**, and shipping just that half would have
+been a worse bug than the one it fixes: the owner arms a loop only when a
+viewer polls IT, so an audience of two that both landed on the other machine —
+or an owner whose own loop idled out hours into a party — would leave nobody
+warming at all. So the machine that cannot do the work asks the one that can
+(`voice.hlsKeepWarm`), the same shape as `voice.hlsReconcile`. Every instance
+hears the ask and only the one whose ownership answer is "not somebody else's"
+acts, so a third machine stays quiet instead of arming a loop that would stand
+down and re-publish.
+
+**And it keeps warming until the owner answers.** A publish is fire-and-forget
+and the transport drops rather than buffers while it is reconnecting, so "I
+published a hand-over" is not "somebody is warming this", and nothing local can
+tell a dropped frame from a delivered one. The owner replies
+`voice.hlsKeepWarmTaken` once its own loop is actually running, and only that
+reply stops the asker's loop; no reply — a dropped frame, a bus that is down,
+an owner that went away between the row and the frame — means the asker goes on
+warming, which is the fail-open rule applied to the one case that cannot be
+detected locally. The ask repeats on a slow cadence while it goes unanswered.
+
+Only an instance whose own ownership answer is "not somebody else's" may
+reply, and having a running loop is not a reason to: with three machines and an
+owner that has stopped reading its bus, a handler that answered on the strength
+of its own loop would have each fallback relieve the other, both stop, and
+every counter report a successful hand-over while nobody warmed anything.
+
+And being relieved lasts seconds, not the whole ownership TTL. Nothing tells a
+stood-down machine that the owner died a moment after answering — the rows
+still name a machine whose heartbeat has not expired — so a viewer request
+past `KEEP_WARM_REARM_MS` re-arms and re-asks, in the request itself rather
+than on the re-armed loop's first tick. A live owner answers in a round trip
+and the loop stops again having rendered nothing; a dead one never answers and
+the survivor keeps warming. The cost of a machine failing is then a few
+seconds of a cold rung instead of half a minute.
+
+Warming is the fail-open side throughout: an unstamped row, `VOICE_REGISTRY`
+off, a bus that is off (nobody to hand the job to) or a lookup that could not be
+made all leave the loop running, because a rung warmed twice costs money and a
+rung warmed by nobody costs the viewer who switches to it a third of a window.
+Counted by `hlsKeepWarmDeclined()` and `hlsKeepWarmAdopted()`, which belong at
+zero on one machine and non-zero within a minute of a party running on two.
+(The dashboard lines go in beside `keepWarmLoops` / `keepWarmRenders` in
+`services/metrics.ts`, which another change owned while this one was written.)
+
+**AutoMod's rule cache and alert cooldown were both per process.** The rule
+cache holds a server's list for 30 s and the write path dropped only its own
+entry, so the other machine went on enforcing yesterday's list for the rest of
+its TTL: a word filter half the members trip and half no longer do, depending
+on which machine the proxy picked. The invalidation now goes over the bus
+(`automod.rules`, mirroring `PERMISSIONS_TOPIC` in `ws/chat.ts`, with the local
+half in `invalidateAutomodCacheLocally` so the originating instance and every
+relayed one run the same code). The alert cooldown — one #mod-log post per
+author per server per ten seconds — lived in a `Map`, so two machines meant two
+maps and two copies of the same embed, one per machine per window. The window
+is now a row: `automod_alert_cooldowns`, claimed by a conditional UPSERT whose
+`rowCount` is the verdict, so Postgres serialises the two machines and exactly
+one can win. Both sides of that comparison are `NOW()`, the database's own
+clock: a peer running eleven seconds fast would otherwise satisfy its own
+`WHERE` and claim a window that had not elapsed. The instant the row carries
+travels back as the TEXT Postgres printed and returns as `$3::timestamptz`,
+never as a JS `Date` — `TIMESTAMPTZ` has microsecond resolution and a `Date`
+has milliseconds, so a value that made that round trip is a different instant
+and the conditional release below would match nothing at all. The claim is single-flighted
+per key, so a flood of hits for one author shares one query instead of queueing
+a hundred UPSERTs on the same primary-key row; the cluster frame is published
+only after the alert row commits; and a post that fails releases the window
+(conditional on the exact instant it wrote) rather than silencing ten seconds
+of alerts for something nobody ever saw. The release is careful about which
+failure it is undoing: the INSERT is the post, and anything that throws after
+it — the read back that turns the row into a live frame, say — leaves the
+embed sitting in #mod-log, so the window has been used and must stand.
+Releasing it there is how the next hit posts the same embed twice. The local
+gate map is swept at most once per window rather than on every write past a
+size bound, because at high cardinality nothing in it is old enough to remove
+and the scan would run on every alert, on every instance. The map stays in front of it as a
+cheap first gate and behind it as the fallback when the database cannot be
+asked — a duplicate alert during an outage is a nuisance, a swallowed one is a
+moderator not being told.
+
+**The worker had no bus at all, so two of its jobs finished nowhere.** `jobs.ts`
+runs on `pqp-worker` (`WORKER_MODE=worker`), a process with no `/ws` listener,
+and two of those jobs are the START of a fan-out: the channel-session reminder
+tick nudges everyone who asked to be reminded, and the watch-party host sweep
+ends a party whose host never came back and tells its audience through
+`broadcastWatchParty`. Both published into a bus that was never installed there
+— `isBusEnabled()` was false, so `publishToCluster` returned on its first line —
+and the socket half simply did not happen: the reminder landed as a Web Push and
+as nothing at all in the open tab. `worker.ts` now installs a **publish-only**
+Postgres transport (connect, NOTIFY, never LISTEN — `PostgresBusOptions.publishOnly`),
+gated on the same `CLUSTER_BUS=postgres` the API reads and set in
+`fly.worker.toml`. Subscribing there would be worse than useless: every handler
+in `ws/` would run against empty maps and zero sockets. The jobs start only
+once that transport is connected (bounded to ten seconds, and they start
+anyway if it is not): the transport drops rather than buffers while
+disconnected, by design, and a reminder tick claims its rows in the same UPDATE
+that stamps them, so a frame dropped during a cold-start race is a nudge nobody
+ever gets. `/health` listens first and never waits on any of it. For the same
+reason the reminder publish asks `isBusConnected()` and, if the answer is no,
+tries once more three seconds later, by which time the transport's own
+reconnect has usually landed; the receiving side remembers which reminders it
+has already put on its sockets (a session and which of its two one-shot
+reminders), so neither that retry nor a duplicate frame can show anybody the
+same nudge twice — and it remembers only once a socket has ACTUALLY been
+written to, because recording a frame that reached nobody (the recipient was
+between sockets, which is exactly when a reminder goes missing) would have the
+dedupe swallow the retry that exists to catch them. A worker catching up behind an outage collects its
+retries into one queue behind one timer rather than one timer each, so a
+hundred reminders coming due together cost one wake-up and every one of them
+still gets its second attempt. Deliberately not an outbox: a durable one is a
+table, a sweep and a dedupe key of its own, and this covers the outage that
+actually happens rather than pretending to cover the one that does not. Beside it, the reminder
+nudge itself is relayed (`channel-session.reminder`) so each API machine
+delivers it to its own sockets, while the Web Push stays with the process that
+claimed the row — sending it once per machine is how a phone gets three copies
+of one reminder. Pinned by
+`server/src/services/channel-session-reminder-cluster.test.ts` (a worker graph
+and an API graph over one hub, on a real Postgres) and
+`server/src/services/automod-cluster.test.ts`.
