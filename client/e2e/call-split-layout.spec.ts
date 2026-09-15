@@ -674,11 +674,15 @@ test("an empty stage is never given a column of its own", async ({ page }) => {
   });
 
   const empty = await paneGeometry(page);
-  // The slim bar is a full-width row above the transcript, not a column: it
-  // spans the pane and takes a bar's worth of height rather than a quarter of
-  // the window's width.
+  // The slim bar docks in the composer, so the stage's own row above the
+  // transcript is empty: still a full-width row, no longer a column, and
+  // holding nothing at all.
   expect(empty.stageWidth).toBeCloseTo(empty.paneWidth, 0);
-  expect(empty.stageHeight).toBeLessThan(empty.paneHeight / 2);
+  expect(empty.stageHeight).toBeLessThan(2);
+  await expect(page.locator("[data-call-dock]")).toHaveAttribute(
+    "data-state",
+    "open",
+  );
   // And the arrangement toggle goes with it: there is nothing to arrange.
   await expect(page.locator("[data-call-split-toggle]")).toHaveCount(0);
 

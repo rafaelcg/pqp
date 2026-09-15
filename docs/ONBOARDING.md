@@ -25,7 +25,8 @@ Adding one means adding a row here.
 | Call grew | `components/voice/capacity-notice.tsx` | Inline CornerCard above the call controls | the room's limits went up while you were sitting in it | `pqp:voice-capacity-<voiceChannelId>` (impression, `lib/voice-capacity.ts`) |
 | Fallback microphone | `components/voice/mic-fallback-notice.tsx` | Inline CornerCard above the call controls | the saved microphone would not start and the call is on a substitute (`VoiceState.micFallback`) | Close button (remembered per device pair for the call, `use-voice.ts`'s `dismissMicFallbackNotice`), or the saved device answering again on its own or by hand |
 | Composer format | `components/layout/feature-hint.tsx` in the composer | Inline CornerCard above Aa / + | first text channel, once | `pqp:feature-hint-composer-format-…` |
-| Watch party | `components/layout/feature-hint.tsx` on the call bar or the in-call strip | Inline CornerCard | first time in a call that can share | `pqp:feature-hint-watch-party-…` |
+| Call dock | `components/layout/feature-hint.tsx` in the call dock's hint slot (`CallControls`, collapsed) | Inline CornerCard above the dock's control row | first time the voice-only call bar docks in the composer, in a room you are connected to. First of the attached hints: every in-call hint below points at a control that now lives in the dock | `pqp:feature-hint-call-dock-…` (impression). Entendi, or pressing any control in the dock, closes it |
+| Watch party | `components/layout/feature-hint.tsx` in the call dock's hint slot or above the stage controls, and on the sidebar's voice bar | Inline CornerCard | first time in a call that can share | `pqp:feature-hint-watch-party-…` |
 | Watch party viewer | `components/watch-party/watch-party-panel.tsx` (live bar) | Inline CornerCard, under the party bar | first time watching a live party without a seat | `pqp:feature-hint-watch-party-viewer-…` |
 | Channel pin | `components/layout/feature-hint.tsx` in the channel list | Inline CornerCard | first time a server list is open | `pqp:feature-hint-channel-pin-…` |
 | Shortcuts | `components/layout/shortcuts-hint.tsx` | Corner card, last in the queue | `/app` on a keyboard, after a quiet beat, no attached hint up | `pqp:feature-hint-shortcuts-…` |
@@ -49,10 +50,13 @@ each, and one keypress silenced the update instead of the card the person was
 aiming at. Composer format, Watch party / share,
 and Fixar use the same `CornerCard` frame with `layout="inline"` next to the
 control; they share `lib/feature-hints.ts` so only one of those mounts, and they
-yield while a campaign owns the corner. The two watch party hints are first in
-`ATTACHED_FEATURE_HINT_ORDER` because they are moments (setting a show up,
-landing in one) rather than states, and must not queue behind the standing
-"share is on the call bar" tip that fires for anyone in any call.
+yield while a campaign owns the corner. "The call controls moved" is first in
+`ATTACHED_FEATURE_HINT_ORDER`: the voice-only call bar docks in the composer
+since September 2026, and every in-call hint points at a control that now
+lives there. The two watch party hints come next because they are moments
+(setting a show up, landing in one) rather than states, and must not queue
+behind the standing "share is on the call bar" tip that fires for anyone in
+any call.
 
 **One shell.** `CornerCard` owns the frame (radius, border, shadow, width,
 safe area), the entrance (`animate-pop-in`), the exit (`animate-pop-out`,

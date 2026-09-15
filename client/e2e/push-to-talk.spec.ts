@@ -197,7 +197,9 @@ test.describe("push-to-talk", () => {
 
     await expect(holdButton(page)).toHaveAttribute("aria-pressed", "false");
     // And the UI says why, instead of leaving someone pressing a dead key.
-    await expect(page.getByText(/window isn't focused/i)).toBeVisible();
+    await expect(
+      page.getByText(/key only works while this window is focused/i),
+    ).toBeVisible();
 
     // A stale keyup arriving afterwards must not un-close anything.
     await page.keyboard.up("Backquote");

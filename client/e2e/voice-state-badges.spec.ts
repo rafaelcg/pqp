@@ -80,8 +80,12 @@ test.describe("voice state badges", () => {
       await expect(occupants.first()).toBeVisible({ timeout: 20_000 });
       await expect(observer.getByLabel("Muted")).toHaveCount(0);
 
-      // The participant mutes; the observer's sidebar badge follows.
-      await page.getByRole("button", { name: "Mute microphone" }).click();
+      // The participant mutes (from the call dock in the composer; the user
+      // panel has a twin); the observer's sidebar badge follows.
+      await page
+        .getByTestId("call-stage-collapsed")
+        .getByRole("button", { name: "Mute microphone" })
+        .click();
       await expect(observer.getByLabel("Muted")).toBeVisible({
         timeout: 10_000,
       });

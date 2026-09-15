@@ -212,12 +212,48 @@ export async function waitUntilVoiceConnected(page: Page): Promise<void> {
  * and poison the next spec (two share tiles, or Share disabled).
  */
 export async function leaveVoiceIfConnected(page: Page): Promise<void> {
-  const leave = page.getByRole("button", { name: "Leave", exact: true });
-  if (!(await leave.isVisible().catch(() => false))) {
-    return;
+  // Two controls hang up: "Leave" on the call bar (on the stage, or docked
+  // in the composer) and "Disconnect from voice" on the sidebar strip.
+  // Either will do. An instant `isVisible` on the bar's alone came back
+  // false on a slow runner while the bar re-laid itself out after a room
+  // emptied, so the seat was never released and orphaned for 90s, and the
+  // next spec joined a room that was not empty (see camera-stage.spec.ts).
+  //
+  // The bar's Leave first. The sidebar's Disconnect is only a fallback, and
+  // only when it is actually on screen: on a phone it sits in a closed
+  // drawer, "visible" to Playwright but off the viewport, and clicking it
+  // would spin until the test timed out.
+  const leave = page.getByRole("button", { name: "Leave", exact: true }).first();
+  const disconnect = page
+    .getByRole("button", { name: "Disconnect from voice" })
+    .first();
+  let button = leave;
+  try {
+    await leave.waitFor({ state: "visible", timeout: 1_500 });
+  } catch {
+    const box = await disconnect
+      .boundingBox({ timeout: 500 })
+      .catch(() => null);
+    if (!box) {
+      return;
+    }
+    const viewport = page.viewportSize();
+    // A headed run can have no fixed viewport. The button is still in the
+    // DOM and has a box, so hang up. The in-viewport test is only for a
+    // phone drawer: Playwright calls that "visible" while it is off screen.
+    if (
+      viewport &&
+      (box.x < 0 ||
+        box.y < 0 ||
+        box.x + box.width > viewport.width ||
+        box.y + box.height > viewport.height)
+    ) {
+      return;
+    }
+    button = disconnect;
   }
-  await leave.click();
-  await expect(leave).toBeHidden({ timeout: 10_000 });
+  await button.click({ timeout: 10_000 });
+  await expect(button).toBeHidden({ timeout: 10_000 });
 }
 
 /** Read a resolved CSS custom property off :root. */
