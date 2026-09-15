@@ -113,6 +113,9 @@ interface FakeHlsRow {
   instance_id?: string | null;
 }
 
+/** Every fake party starts at the same instant; no test here turns on when. */
+const FAKE_PARTY_CREATED_AT_MS = 1_725_000_000_000;
+
 function createFakeDb() {
   const hlsRows: FakeHlsRow[] = [];
   const channelSessions = new Map<
@@ -191,7 +194,13 @@ function createFakeDb() {
       return {
         rowCount: found ? 1 : 0,
         rows: found
-          ? [{ id: found[0], low_latency_requested: found[1].low_latency_requested }]
+          ? [
+              {
+                id: found[0],
+                low_latency_requested: found[1].low_latency_requested,
+                created_at_ms: String(FAKE_PARTY_CREATED_AT_MS),
+              },
+            ]
           : [],
       };
     }
@@ -424,6 +433,7 @@ describe("the per-channel request field is durable, not process memory", () => {
     expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
       requested: false,
       partySessionId: null,
+      partyCreatedAtMs: null,
     });
   });
 
@@ -441,6 +451,7 @@ describe("the per-channel request field is durable, not process memory", () => {
     expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
       requested: true,
       partySessionId: "party-1",
+      partyCreatedAtMs: FAKE_PARTY_CREATED_AT_MS,
     });
   });
 
@@ -461,10 +472,12 @@ describe("the per-channel request field is durable, not process memory", () => {
     expect(await liveHlsRequestForChannel(OTHER_CHANNEL)).toEqual({
       requested: true,
       partySessionId: "party-2",
+      partyCreatedAtMs: FAKE_PARTY_CREATED_AT_MS,
     });
     expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
       requested: false,
       partySessionId: null,
+      partyCreatedAtMs: null,
     });
   });
 

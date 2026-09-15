@@ -405,6 +405,17 @@ the memo can only ever veto the one party it is a verdict about, on the one
 machine that reached that verdict. `forgetLlDemotion` is gone with the hole it
 patched.
 
+**A demotion whose party is not yet known still vetoes the channel.** Keying
+the memo by party opens a window the channel-keyed one covered by covering
+everything: a row with `watch_party_session_id = NULL` has no party to key by
+until `attributeDemotion` resolves one, and a reconcile in between would start
+LL straight back into the session the box just gave up on. So while attribution
+is outstanding, `llDemotionPendingAttribution` refuses LL for the channel — but
+only for a party that could BE the demoted one, bounded by the demoted
+session's own start, so a party created afterwards is never caught by it. It is
+self-limiting: attribution runs at the bottom of the same sweep and fails
+closed onto the live party after three attempts.
+
 **And the decision says why.** `resolveHlsModeForChannel` (`hls-remux.ts`) is
 the whole mode branch in one place — the party's request, the party-scoped
 demotion veto, the allowlist — and logs `voice.hlsModeResolved` with

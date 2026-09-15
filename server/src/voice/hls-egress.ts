@@ -2684,7 +2684,7 @@ export async function checkLiveHlsHealth(
   // ladder. `notifyChanged` is the same seam a dead egress uses
   // (`ws/voice.ts` turns it into a `pushLiveHls`, which re-resolves the mode
   // -- now `conventional`, because `sweepLlDemotions` has both cleared
-  // `low_latency_requested` and memoed the channel -- and starts the rungs).
+  // `low_latency_requested` and memoed the party -- and starts the rungs).
   for (const channelId of await sweepLlDemotions()) {
     notifyChanged(channelId, "ll-demoted");
   }

@@ -579,6 +579,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       partySessionId: partyId,
       requested: true,
       partyDemoted: true,
+      demotionUnattributed: false,
       llAvailable: true,
       mode: "conventional",
       sharing: true,
@@ -600,6 +601,71 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       "voice.hlsModeResolved",
       expect.objectContaining({ partySessionId: newerId, mode: "ll" }),
     );
+  });
+
+  /**
+   * THE GAP A PARTY-KEYED MEMO OPENS, AND WHAT CLOSES IT.
+   *
+   * `hls_sessions.watch_party_session_id` is NULL for two reasons a row
+   * cannot tell apart, so a demotion can be queued with no party to key the
+   * memo by. Keyed by channel that never mattered; keyed by party it leaves
+   * the window between the demotion and the attribution completely open, and
+   * a reconcile in there starts LL straight back into the session the box
+   * has just given up on (a Farol finding on this PR).
+   */
+  it("(1b-quinquies) holds LL off while a demotion has not yet learned whose party it was", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    await getPool().query(
+      `UPDATE hls_sessions SET watch_party_session_id = NULL
+        WHERE channel_id = $1 AND mode = 'll'`,
+      [channelA],
+    );
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "no-video",
+    });
+    // ONLY the attribution lookup fails -- the demotion itself is queued
+    // exactly as it would be, and the queue backs off and tries again on the
+    // next tick. Everything else still talks to the real database.
+    const pool = getPool();
+    const realQuery = pool.query.bind(pool) as typeof pool.query;
+    const failing = vi
+      .spyOn(pool, "query")
+      .mockImplementation(((sql: string, params?: unknown[]) =>
+        typeof sql === "string" && sql.includes("created_at <= to_timestamp")
+          ? Promise.reject(new Error("connection terminated"))
+          : realQuery(sql, params as never)) as typeof pool.query);
+    await sweepLlDemotions();
+    failing.mockRestore();
+
+    expect(pendingLlDemotionCount()).toBe(1);
+    // The party still says it wants LL, and nobody has memoed it, because
+    // nobody knows yet that it is the one.
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({
+      requested: true,
+      partySessionId: partyId,
+    });
+    expect(llDemotedRecently(partyId)).toBe(false);
+    // And it is still refused, because a demotion on this channel could be
+    // about this party and nothing has ruled that out.
+    expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+      mode: "conventional",
+      requested: true,
+      partyDemoted: false,
+      demotionUnattributed: true,
+    });
+
+    // A party created AFTER the demoted session started could not be the one
+    // it belonged to, so the same outstanding demotion does not touch it.
+    const newerId = await startNewerParty();
+    expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+      mode: "ll",
+      partySessionId: newerId,
+      demotionUnattributed: false,
+    });
   });
 
   it("(1c) never stops a demoted session whose row another live instance has taken", async () => {
