@@ -28,9 +28,8 @@ if (DATABASE_URL) {
 }
 
 const { getPool, initDb, closePool } = await import("../db.js");
-const { heartbeatVoiceInstance, readClusterSnapshot } = await import(
-  "./registry.js"
-);
+const { clusterTopologyTracked, heartbeatVoiceInstance, readClusterSnapshot } =
+  await import("./registry.js");
 const { registerInstanceSnapshot, resetInstanceSnapshot } = await import(
   "../lib/instance-snapshot.js"
 );
@@ -203,4 +202,50 @@ describeDb("cluster snapshot", () => {
       heartbeatVoiceInstance(randomUUID(), "hash"),
     ).resolves.toBeUndefined();
   });
+});
+
+/**
+ * ONE PREDICATE, THREE CALL SITES. The instance lease, the shared ring
+ * budget and the dashboard's cluster block all have to answer "does this
+ * deployment expect siblings" the same way, and the bug this pins is the one
+ * where they did not: the lease started writing for `CLUSTER_BUS=postgres`
+ * while the ring budget still asked about the registry, so a bus-only pair of
+ * machines went back to five rings each.
+ */
+describe("does this deployment expect siblings", () => {
+  const before = {
+    registry: process.env.VOICE_REGISTRY,
+    bus: process.env.CLUSTER_BUS,
+  };
+
+  afterAll(() => {
+    process.env.VOICE_REGISTRY = before.registry;
+    process.env.CLUSTER_BUS = before.bus;
+  });
+
+  const cases: [string | undefined, string | undefined, boolean][] = [
+    [undefined, undefined, false],
+    ["off", "off", false],
+    ["postgres", "off", true],
+    // The staged configuration the plan allows: the bus first, the registry
+    // later. It has siblings, so it gets the lease AND the shared budget.
+    ["off", "postgres", true],
+    ["postgres", "postgres", true],
+  ];
+
+  for (const [registry, bus, expected] of cases) {
+    it(`VOICE_REGISTRY=${registry ?? "unset"} CLUSTER_BUS=${bus ?? "unset"} -> ${expected}`, () => {
+      if (registry === undefined) {
+        delete process.env.VOICE_REGISTRY;
+      } else {
+        process.env.VOICE_REGISTRY = registry;
+      }
+      if (bus === undefined) {
+        delete process.env.CLUSTER_BUS;
+      } else {
+        process.env.CLUSTER_BUS = bus;
+      }
+      expect(clusterTopologyTracked()).toBe(expected);
+    });
+  }
 });

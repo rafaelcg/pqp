@@ -126,6 +126,7 @@ import {
   deleteVoicePeer,
   getVoicePeerRow,
   isVoicePeerRetired,
+  clusterTopologyTracked,
   isVoiceRegistryEnabled,
   getVoiceRaisedHand as getVoiceRaisedHandInRegistry,
   isVoiceServerMuted as isVoiceServerMutedInRegistry,
@@ -6919,10 +6920,15 @@ async function takeSharedRingBudget(userId: string): Promise<boolean> {
   // ONE MACHINE NEEDS NO SECOND DOOR. The in-memory bucket is exact when
   // there is only one of it, and a self-host or a local dev run should not
   // pay a round trip — or own a table — for a budget that already holds.
-  // `registryOn()` and not `clusterOn()`: the registry is what says this
-  // deployment has siblings, and `docs/plans/MULTI_INSTANCE_VOICE.md` allows
-  // it to be turned on before the bus.
-  if (!registryOn()) {
+  //
+  // THE SAME PREDICATE THE LEASE USES, deliberately: `clusterTopologyTracked`
+  // is the one answer to "does this deployment expect siblings", and either
+  // flag makes it true because `docs/plans/MULTI_INSTANCE_VOICE.md` allows
+  // turning on either first. Gating this on the registry alone would have
+  // left `CLUSTER_BUS=postgres` with `VOICE_REGISTRY=off` — a configuration
+  // that now writes instance leases precisely because it has siblings —
+  // enforcing five rings per machine again.
+  if (!clusterTopologyTracked()) {
     return true;
   }
   try {

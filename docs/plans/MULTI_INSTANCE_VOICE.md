@@ -562,9 +562,12 @@ delivered and no other machine to recover it from. And N comes from
 configuration where `CLUSTER_BUS` is on and `VOICE_REGISTRY` is off there would
 otherwise be no topology source at all, and the divided limiters would divide
 by one forever while two machines served traffic. That configuration now writes
-the lease and the snapshot without the reconcile it has no rows for
-(`clusterTopologyTracked`), and sweeps leases nobody is renewing, since nothing
-else would age them out.
+the lease and the snapshot without the reconcile it has no rows for, and sweeps
+leases nobody is renewing, since nothing else would age them out.
+`clusterTopologyTracked` is the single predicate behind all of it — the lease,
+the shared ring budget and the dashboard's cluster block — because the moment
+they disagreed, a bus-only pair of machines wrote leases while the ring budget
+still asked about the registry and went back to five rings each.
 
 **The status sampler.** `setInterval` in `index.ts` means "on every process
 that loads this file", so two API machines wrote two `status_samples` rows a
