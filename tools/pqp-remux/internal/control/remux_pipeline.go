@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/aacenc"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/h264"
@@ -40,6 +39,9 @@ type remuxPipeline struct {
 	sub  *subscriber.Session
 
 	cancel context.CancelFunc
+	// stopMonitor cancels the session's monitor goroutine and waits for
+	// it to return; see Close for why it runs first of all.
+	stopMonitor func()
 
 	r2Writer     *r2.Writer
 	audioEnabled bool
@@ -201,11 +203,20 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 		SegmentTargetMs: cfg.SegmentMs,
 	})
 
+	// The session's own always-on instrumentation and video keep-alive
+	// (internal/session.Session.StartMonitor): one stats line every few
+	// seconds, and the idle flush that stops a static screen share from
+	// looking like a stalled pipeline. Derived from ctx, so a process
+	// shutdown stops it too; stopMonitor is what Close uses to be sure it
+	// is finished before anything reads the fragmenter.
+	stopMonitor := sess.StartMonitor(ctx, "session="+cfg.SessionID)
+
 	return &remuxPipeline{
 		sess:         sess,
 		srv:          srv,
 		sub:          sub,
 		cancel:       cancel,
+		stopMonitor:  stopMonitor,
 		r2Writer:     r2Writer,
 		audioEnabled: audioEnabled,
 	}, nil
@@ -220,13 +231,20 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 // package never constructs an internal/config.Config at all).
 func msToTicks(ms int) uint64 { return uint64(ms) * uint64(h264.ClockRate) / 1000 }
 
-// msDuration converts internal/session.Session's own elapsed-milliseconds
-// convention into a time.Duration, for adding onto Session.Started() --
-// see Health's own doc comment on why that conversion happens here, once.
-func msDuration(ms int64) time.Duration { return time.Duration(ms) * time.Millisecond }
+// msDuration -- the one that converts internal/session.Session's own
+// elapsed-milliseconds convention into a time.Duration for adding onto
+// Session.Started() (see Health below) -- lives in watchdog.go, because
+// this package's OTHER callers of it convert operator-supplied env values
+// and need it to saturate rather than wrap. One definition, one behaviour.
 
 func (p *remuxPipeline) Health() PipelineHealth {
 	h := p.sess.Health()
+	// Stats() is the SAME snapshot internal/session's own periodic log
+	// line is rendered from (see its monitor.go): the numbers in a
+	// `part-stuck` verdict and the numbers on the routine stats line an
+	// operator reads beside it are the same numbers, by construction,
+	// rather than two hand-maintained lists that drift.
+	st := p.sess.Stats()
 	ph := PipelineHealth{
 		Subscribed:        h.Subscribed,
 		PartsWritten:      h.PartsWritten,
@@ -237,6 +255,24 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		AudioSegmentIndex: p.sess.CurrentAudioSegmentIndex(),
 		VideoPartSeq:      p.sess.CurrentVideoPartSequence(),
 		AudioPartSeq:      p.sess.CurrentAudioPartSequence(),
+
+		LastVideoPacketAt:    st.LastVideoPacket,
+		LastVideoFrameAt:     st.LastVideoFrame,
+		VideoPacketsSeen:     st.VideoPacketsSeen,
+		VideoFramesSeen:      st.VideoFramesSeen,
+		VideoKeyframesSeen:   st.VideoKeyframesSeen,
+		VideoDepacketizeErrs: st.VideoDepacketizeErrs,
+		KeepAliveParts:       st.KeepAlivePartsWrites,
+		AudioPartsWritten:    st.AudioPartsWritten,
+		PLIsSent:             st.Keyframe.PLIsSent,
+		PLIsSinceIdr:         st.Keyframe.PLIsSinceIDR,
+		R2Uploaded:           st.R2Uploaded,
+		R2Failed:             st.R2Failed,
+		R2Dropped:            st.R2Dropped,
+		R2Queued:             st.R2Queued,
+		R2InFlight:           st.R2InFlight,
+		R2LastLatencyMs:      st.R2LastLatencyMs,
+		R2MaxLatencyMs:       st.R2MaxLatencyMs,
 	}
 	started := p.sess.Started()
 	if p.sess.HasPart() {
@@ -256,7 +292,8 @@ func (p *remuxPipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) { p.sr
 
 // Close tears this pipeline down in the exact order
 // cmd/pqp-remux/main.go's runServer already established (and Farol already
-// found the bug in getting backwards once): sub.Close() first (stop new
+// found the bug in getting backwards once), with the monitor stopped and
+// joined ahead of all of it (see the body): sub.Close() (stop new
 // packets), then cancel() (stop the audio pacer writing more PCM), then
 // sess.Close() (drain the encoder and flush the final segments, enqueuing
 // their uploads), then r2Writer.Close() LAST, so those final uploads get a
@@ -272,6 +309,14 @@ func (p *remuxPipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) { p.sr
 // index, and it used to be able to still be running, on a goroutine this
 // method never waited for, after Close had already returned.
 func (p *remuxPipeline) Close() {
+	// FIRST, before the subscriber: the monitor's keep-alive tick is the
+	// only toucher of the fragmenter that is not joined by sub.Close, and
+	// managed_session.go's restart reads that fragmenter's final segment
+	// index and part sequence the instant this method returns. Stopping
+	// and JOINING it here means the rest of this teardown, and that read,
+	// run with exactly one other goroutine in the picture -- the RTP
+	// reader sub.Close already waits for (Farol review, PR #626).
+	p.stopMonitor()
 	p.sub.Close()
 	p.cancel()
 	p.sess.Close()

@@ -2,7 +2,9 @@ package keyframe
 
 import (
 	"context"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,9 +44,26 @@ type Requester struct {
 	send  PLISender
 	now   func() time.Time
 
+	// plisSent is the session total, read from other goroutines (the
+	// stats line and the watchdog's stall detail), hence an atomic
+	// rather than a field under mu.
+	plisSent atomic.Uint64
+
 	mu      sync.Mutex
 	lastIDR time.Time
 	lastPLI time.Time
+	// plisSinceIDR, firstPLISinceIDR and lastPLILoggedAt exist ONLY for
+	// the log line. Until 2026-09-15 nothing recorded whether a PLI was
+	// ever written or whether an IDR ever came back, so the production
+	// stall that day could not be told apart from "the browser sent
+	// nothing and we never asked" -- hypothesis (b) of that
+	// investigation, unanswerable from the log it left. See tick and
+	// OnIDR.
+	plisSinceIDR     uint64
+	firstPLISinceIDR time.Time
+	lastPLILoggedAt  time.Time
+	// logf is log.Printf in production; a test substitutes a collector.
+	logf func(format string, args ...any)
 }
 
 // NewRequester returns a Requester. cfg.Policy must be PolicyPLI for it to
@@ -52,7 +71,42 @@ type Requester struct {
 // fires, via Gater.ShouldSendPLI), but the caller should prefer not to
 // start the loop at all under PolicyNatural.
 func NewRequester(cfg Config, send PLISender) *Requester {
-	return &Requester{gater: NewGater(cfg), send: send, now: time.Now}
+	return &Requester{gater: NewGater(cfg), send: send, now: time.Now, logf: log.Printf}
+}
+
+// pliLogInterval throttles the "still asking" line inside one episode (a
+// run of PLIs with no IDR answering them). The FIRST PLI of an episode
+// and the IDR that ends it are always logged; everything in between is
+// capped at one line per interval, so a publisher that has genuinely
+// stopped answering produces a steady, readable trail rather than two
+// lines a second (PLI_PACE_MS's floor is 500ms).
+const pliLogInterval = 5 * time.Second
+
+// Stats is what a caller reports about this requester on the periodic
+// session stats line and in the watchdog's stall detail: how many PLIs
+// this session has written in total, how many of them are still
+// unanswered, and when the last one went out.
+type Stats struct {
+	PLIsSent     uint64
+	PLIsSinceIDR uint64
+	LastPLIAt    time.Time
+	LastIDRAt    time.Time
+}
+
+// Stats reports this requester's counters. Safe to call from any
+// goroutine.
+func (r *Requester) Stats() Stats {
+	if r == nil {
+		return Stats{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return Stats{
+		PLIsSent:     r.plisSent.Load(),
+		PLIsSinceIDR: r.plisSinceIDR,
+		LastPLIAt:    r.lastPLI,
+		LastIDRAt:    r.lastIDR,
+	}
 }
 
 // OnIDR records that an IDR arrived at t, resetting the pace timer: the
@@ -60,10 +114,28 @@ func NewRequester(cfg Config, send PLISender) *Requester {
 // not from whenever the last PLI happened to be sent.
 func (r *Requester) OnIDR(t time.Time) {
 	r.mu.Lock()
+	asked := r.plisSinceIDR
+	firstAsk := r.firstPLISinceIDR
 	r.lastIDR = t
 	r.lastPLI = time.Time{}
+	r.plisSinceIDR = 0
+	r.firstPLISinceIDR = time.Time{}
+	r.resetPLILogThrottle()
 	r.mu.Unlock()
+
+	// The other half of the PLI path, and the half that was invisible:
+	// an IDR arriving after we asked for one is the proof the request
+	// reached the publisher AND that it answered. Logged once per
+	// episode, never for the ordinary case where the publisher's own
+	// cadence supplied the keyframe with nobody asking.
+	if asked > 0 {
+		r.logf("pqp-remux: keyframe: IDR after %d PLI(s), %s after the first request", asked, t.Sub(firstAsk).Round(time.Millisecond))
+	}
 }
+
+// resetPLILogThrottle clears the in-episode throttle so the next episode's
+// first PLI always logs. Called with mu held.
+func (r *Requester) resetPLILogThrottle() { r.lastPLILoggedAt = time.Time{} }
 
 // tick evaluates the gate once at the current time and sends a PLI if due,
 // recording it. Exported as a method for tests; Run calls it on a fixed
@@ -79,13 +151,33 @@ func (r *Requester) tick() {
 	r.mu.Lock()
 	lastIDR, lastPLI := r.lastIDR, r.lastPLI
 	due := r.gater.ShouldSendPLI(now, lastIDR, lastPLI)
+	var episodeCount uint64
+	var shouldLog bool
 	if due {
 		r.lastPLI = now
+		r.plisSinceIDR++
+		episodeCount = r.plisSinceIDR
+		if r.firstPLISinceIDR.IsZero() {
+			r.firstPLISinceIDR = now
+		}
+		shouldLog = r.lastPLILoggedAt.IsZero() || now.Sub(r.lastPLILoggedAt) >= pliLogInterval
+		if shouldLog {
+			r.lastPLILoggedAt = now
+		}
+		r.plisSent.Add(1)
 	}
 	r.mu.Unlock()
 
 	if due {
 		r.send.RequestKeyframe()
+		if shouldLog {
+			gap := "never"
+			if !lastIDR.IsZero() {
+				gap = now.Sub(lastIDR).Round(time.Millisecond).String()
+			}
+			r.logf("pqp-remux: keyframe: PLI sent (no IDR for %s, gate %s, %d in this episode, %d this session)",
+				gap, r.gater.cfg.GateWindow().Round(time.Millisecond), episodeCount, r.plisSent.Load())
+		}
 	}
 }
 

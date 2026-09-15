@@ -166,6 +166,18 @@ func runServer(cfg config.Config) error {
 		go keyReq.Run(ctx)
 	}
 
+	// The session's own always-on instrumentation and video keep-alive
+	// (internal/session.Session.StartMonitor): one stats line every few
+	// seconds, and the idle flush that keeps a static screen share's
+	// playlist advancing. Started after EnableAudio/EnableR2 so the
+	// first line already reports them, and stopped-and-joined FIRST on
+	// the way down (this defer is registered after sub.Close's, so it
+	// executes before it) -- the keep-alive tick touches the fragmenter,
+	// and nothing else should still be doing that while the track's own
+	// teardown flushes the trailing fragment.
+	stopMonitor := sess.StartMonitor(ctx, "room="+cfg.Room)
+	defer stopMonitor()
+
 	srv := serve.New(r, sess)
 	if audioEnabled {
 		srv.SetAudioRing(audioRing)

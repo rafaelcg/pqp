@@ -135,15 +135,20 @@ func (m *ManagedSession) evaluateTick(now time.Time) {
 	result := evaluateWatchdog(h, m.cfg.SegmentMs, m.watchdogCfg, pStart, &m.wd, now)
 	m.wdMu.Unlock()
 
+	// Every verdict carries its detail (watchdog.go's stallDetail): which
+	// clocks stopped, how long ago, and what the source was doing. The
+	// 2026-09-15 incident logged `restarting (part-stuck)` and nothing
+	// else, which is exactly as much as `restarting` on its own would
+	// have been worth.
 	switch result.action {
 	case actionNone:
 	case actionLog:
-		log.Printf("pqp-remux: control: session %s: %s", m.req.SessionID, result.reason)
+		log.Printf("pqp-remux: control: session %s: %s: %s", m.req.SessionID, result.reason, result.detail)
 	case actionRestart:
-		log.Printf("pqp-remux: control: session %s: restarting (%s)", m.req.SessionID, result.reason)
+		log.Printf("pqp-remux: control: session %s: restarting (%s): %s", m.req.SessionID, result.reason, result.detail)
 		m.restart()
 	case actionDemote:
-		log.Printf("pqp-remux: control: session %s: demoting (%s)", m.req.SessionID, result.reason)
+		log.Printf("pqp-remux: control: session %s: demoting (%s): %s", m.req.SessionID, result.reason, result.detail)
 		m.demote(result.reason)
 	}
 }

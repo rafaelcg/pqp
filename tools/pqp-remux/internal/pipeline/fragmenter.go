@@ -30,6 +30,10 @@ type Fragment struct {
 	Bytes          []byte
 }
 
+// maxFragmentTicks is the largest tick count a Fragment's own duration
+// fields (uint32, 90 kHz) can carry: about 13.25 hours.
+const maxFragmentTicks = int64(^uint32(0))
+
 var (
 	// ErrWaitingForIDR is returned (not fatal) by Push while the
 	// fragmenter has not yet seen the first IDR of the session: nothing
@@ -61,6 +65,28 @@ type Fragmenter struct {
 
 	pending      *h264.AccessUnit
 	lastDuration uint32
+
+	// pendingPTS is f.pending's PTS ON THIS FRAGMENTER'S OWN TIMELINE,
+	// which is the incoming AU's PTS plus ptsOffset. It exists because
+	// IdleFlush publishes a part whose media time was derived from the
+	// WALL clock rather than from a next access unit that has not
+	// arrived, and the resumed AU afterwards has to be placed exactly
+	// where that published part ended -- see ptsOffset.
+	pendingPTS int64
+	// ptsOffset is added to every incoming AU's PTS. It is zero for a
+	// session that never goes idle (the overwhelmingly common case, and
+	// the one every pre-existing test exercises), and is re-derived on
+	// the first access unit after an IdleFlush so that AU lands exactly
+	// on resumePTS: the flush already published media up to that
+	// instant, and the publisher's own RTP clock has no idea we did
+	// that. Without the re-derivation the resumed AU would either
+	// overlap the published part (tfdt going backwards, which no player
+	// tolerates) or leave a hole in the timeline.
+	ptsOffset int64
+	// resumePTS is the fragmenter-timeline instant the last IdleFlush
+	// published up to, and therefore where the next part must begin.
+	// Meaningful only while pending == nil and haveFirstIDR is true.
+	resumePTS int64
 }
 
 // NewFragmenter returns a Fragmenter using cfg. The first segment emitted
@@ -125,16 +151,44 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 		f.segmentStart = au.PTS
 		f.partStart = au.PTS
 		f.pending = au
+		f.pendingPTS = au.PTS
 		return nil, nil
 	}
 
+	if f.pending == nil {
+		// Resuming after an IdleFlush: that flush already published
+		// media through resumePTS, so this AU opens the next part
+		// exactly there. Re-derive ptsOffset rather than trusting the
+		// publisher's clock, which knows nothing about the part we
+		// synthesized -- see the ptsOffset field's doc comment.
+		f.ptsOffset = f.resumePTS - au.PTS
+		f.partStart = f.resumePTS
+		// A quiet source also spends real time inside the open segment,
+		// so the segment target can pass while nothing is arriving. If
+		// the frame that ends the silence is itself an IDR, it starts
+		// the next segment here -- the ordinary branch below can never
+		// do it for this AU, since that branch judges the AU AFTER the
+		// pending one. Without this, a freeze longer than the segment
+		// target pushed the boundary out to the IDR after the next one,
+		// which is how EXT-X-TARGETDURATION creeps.
+		if au.IsIDR && f.resumePTS-f.segmentStart >= int64(f.cfg.SegmentDuration) {
+			f.segmentIndex++
+			f.segmentStart = f.resumePTS
+			f.nextIsSegmentStart = true
+		}
+		f.pending = au
+		f.pendingPTS = f.resumePTS
+		return nil, nil
+	}
+
+	pts := au.PTS + f.ptsOffset
 	prev := f.pending
-	duration := uint32(au.PTS - prev.PTS)
+	duration := uint32(pts - f.pendingPTS)
 	f.lastDuration = duration
 	f.partSamples = append(f.partSamples, toSample(prev, duration))
 
-	segmentElapsed := uint64(au.PTS - f.segmentStart)
-	partElapsed := uint64(au.PTS - f.partStart)
+	segmentElapsed := uint64(pts - f.segmentStart)
+	partElapsed := uint64(pts - f.partStart)
 
 	switch {
 	case au.IsIDR && segmentElapsed >= uint64(f.cfg.SegmentDuration):
@@ -144,22 +198,98 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 		// parts.
 		frag := f.closePart(uint32(partElapsed))
 		f.segmentIndex++
-		f.segmentStart = au.PTS
-		f.partStart = au.PTS
+		f.segmentStart = pts
+		f.partStart = pts
 		f.nextIsSegmentStart = true
 		f.pending = au
+		f.pendingPTS = pts
 		return frag, nil
 
 	case partElapsed >= uint64(f.cfg.PartDuration):
 		frag := f.closePart(uint32(partElapsed))
-		f.partStart = au.PTS
+		f.partStart = pts
 		f.pending = au
+		f.pendingPTS = pts
 		return frag, nil
 
 	default:
 		f.pending = au
+		f.pendingPTS = pts
 		return nil, nil
 	}
+}
+
+// HasPending reports whether an access unit is currently held, waiting for
+// the next one to give it a duration. False before the session's first IDR
+// and after an IdleFlush has published the held AU.
+func (f *Fragmenter) HasPending() bool { return f.pending != nil }
+
+// IdleFlush publishes the currently open part EARLY, without waiting for
+// the next access unit to arrive, stretching the held AU to cover heldTicks
+// (how long that AU has been held, measured on the wall clock and converted
+// into this fragmenter's timescale by the caller).
+//
+// WHY THIS EXISTS. Everything else in this file is access-unit driven: a
+// part closes when an AU arrives past the part target, because only the NEXT
+// AU can say how long the previous one lasted. A Chrome TAB share of static
+// content sends no new frames at all while nothing on the page changes, so
+// there is no next AU, so no part closes, so the playlist stops advancing
+// and the viewer's video buffer runs dry at the last published part. On
+// 2026-09-15 that also tripped the control plane's PART_STUCK_MS watchdog
+// (3s) twice on one production session, which restarted the pipeline and
+// then demoted the party off the low-latency rung -- for a source that was
+// behaving perfectly normally.
+//
+// The content it publishes is EXACTLY what the ordinary path would have
+// published anyway: `Push` gives the held AU a duration of `next.PTS -
+// held.PTS`, which for a five-second freeze is a five-second sample. This
+// only emits it sooner, so a player's buffer covers the freeze instead of
+// ending at its start. Nothing is duplicated and nothing is invented: one
+// access unit is published exactly once, with the duration it really had.
+//
+// It returns nil (does nothing at all) when there is no held AU, before the
+// session's first IDR, or when heldTicks has not yet reached the part
+// target -- so a caller may tick it as often as it likes.
+//
+// LIMIT, STATED PLAINLY: this publishes the held AU ONCE per idle episode.
+// A freeze much longer than the part target leaves the video timeline
+// held at that frame while the audio track (which is paced off the wall
+// clock and so never goes idle) keeps producing parts. Publishing more
+// video parts than that would mean emitting a coded frame the publisher
+// never sent twice, which is only safe for an IDR and is not something
+// this fragmenter does.
+func (f *Fragmenter) IdleFlush(heldTicks int64) *Fragment {
+	if !f.haveFirstIDR || f.pending == nil || heldTicks <= 0 {
+		return nil
+	}
+	nowPTS := f.pendingPTS + heldTicks
+	partElapsed := nowPTS - f.partStart
+	if partElapsed < int64(f.cfg.PartDuration) {
+		return nil
+	}
+	// A sample duration and a fragment duration are both uint32 ticks, so
+	// refuse rather than wrap. Only reachable if the process was
+	// suspended for hours between ticks (the caller ticks every 100ms and
+	// flushes at the first tick past the part target, so heldTicks is
+	// ordinarily a part target plus a tick). Refusing leaves the access
+	// unit held, which is exactly the pre-keep-alive behaviour: the
+	// ordinary Push path still gives it its true duration when a frame
+	// finally arrives.
+	if heldTicks > maxFragmentTicks || partElapsed > maxFragmentTicks {
+		return nil
+	}
+
+	// lastDuration is deliberately NOT updated: it is Flush's estimate
+	// for a trailing sample with no successor, and the real inter-frame
+	// gap is a far better estimate of that than however long this
+	// particular freeze happened to last.
+	f.partSamples = append(f.partSamples, toSample(f.pending, uint32(heldTicks)))
+
+	frag := f.closePart(uint32(partElapsed))
+	f.partStart = nowPTS
+	f.resumePTS = nowPTS
+	f.pending = nil
+	return frag
 }
 
 // Flush closes whatever part is still open, using the previous sample's
@@ -175,7 +305,7 @@ func (f *Fragmenter) Flush() (*Fragment, error) {
 		duration = f.cfg.Timescale / 30 // best-effort: assume 30fps
 	}
 	f.partSamples = append(f.partSamples, toSample(f.pending, duration))
-	total := uint32(uint64(f.pending.PTS) + uint64(duration) - uint64(f.partStart))
+	total := uint32(uint64(f.pendingPTS) + uint64(duration) - uint64(f.partStart))
 	frag := f.closePart(total)
 	f.pending = nil
 	return frag, nil
