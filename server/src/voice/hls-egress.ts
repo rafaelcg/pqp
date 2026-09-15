@@ -1540,9 +1540,29 @@ export function liveHlsOwnsChannel(channelId: string): boolean {
  * where an unthrottled log line becomes the write amplifier pitfall 16 warns
  * about. The condition is a deployment fact, not an event: one line a minute
  * is enough to find it, and the second one adds nothing.
+ *
+ * TWO BOUNDS, NOT ONE, AND THE FIRST DRAFT HAD NEITHER RIGHT (three Farol
+ * findings, one per dimension, on the same eight lines). Expiring entries
+ * whose window has closed is not a bound: a burst of N distinct channels
+ * inside ONE window expires nothing, so the map grows to N and stays there
+ * if traffic then stops. And sweeping on every previously-unseen key is
+ * O(map) per key, which makes that same burst quadratic on the event loop —
+ * the sweep being the expensive half of a defence against cheap writes.
+ *
+ * So, exactly the shape `logRejection` (`tools/hls-edge/src/viewer-access.ts`)
+ * already uses for the same problem: the sweep is THROTTLED to at most one
+ * full scan per `LL_UNSERVABLE_LOG_SWEEP_INTERVAL_MS`, and
+ * `LL_UNSERVABLE_LOG_MAX_ENTRIES` is a hard ceiling checked in O(1) on every
+ * new key regardless of that throttle, evicting the oldest by insertion
+ * order. That is an approximation of LRU rather than a precise one (a
+ * refreshed key keeps its original position), which is enough for a log
+ * dedupe table and not something anything depends on for eviction precision.
  */
 const LL_UNSERVABLE_LOG_WINDOW_MS = 60_000;
+const LL_UNSERVABLE_LOG_MAX_ENTRIES = 256;
+const LL_UNSERVABLE_LOG_SWEEP_INTERVAL_MS = 60_000;
 const llUnservableLoggedAt = new Map<string, number>();
+let llUnservableLastSweptAt = 0;
 
 function noteLlUnservable(channelId: string, startedAt: number): void {
   const now = Date.now();
@@ -1550,17 +1570,32 @@ function noteLlUnservable(channelId: string, startedAt: number): void {
   if (last !== undefined && now - last < LL_UNSERVABLE_LOG_WINDOW_MS) {
     return;
   }
-  // Bounded the same way every other per-channel map here is: a sweep of
-  // closed windows before the map can grow on a channel it has never seen.
-  if (llUnservableLoggedAt.size > 256) {
-    for (const [key, at] of llUnservableLoggedAt) {
-      if (now - at >= LL_UNSERVABLE_LOG_WINDOW_MS) {
-        llUnservableLoggedAt.delete(key);
+  logEvent("voice.hlsLlUnservableFromDb", { channelId, startedAt });
+  if (last === undefined) {
+    // Active expiry, throttled: one full scan per interval at most, however
+    // many new channels arrive in between.
+    if (now - llUnservableLastSweptAt >= LL_UNSERVABLE_LOG_SWEEP_INTERVAL_MS) {
+      for (const [key, at] of llUnservableLoggedAt) {
+        if (now - at >= LL_UNSERVABLE_LOG_WINDOW_MS) {
+          llUnservableLoggedAt.delete(key);
+        }
+      }
+      llUnservableLastSweptAt = now;
+    }
+    // The hard ceiling, O(1), whatever the sweep did or did not do.
+    if (llUnservableLoggedAt.size >= LL_UNSERVABLE_LOG_MAX_ENTRIES) {
+      const oldestKey = llUnservableLoggedAt.keys().next().value;
+      if (oldestKey !== undefined) {
+        llUnservableLoggedAt.delete(oldestKey);
       }
     }
   }
   llUnservableLoggedAt.set(channelId, now);
-  logEvent("voice.hlsLlUnservableFromDb", { channelId, startedAt });
+}
+
+/** Exported for `hls-live-state-db-fallback.test.ts`, which pins the ceiling. */
+export function llUnservableLogEntryCount(): number {
+  return llUnservableLoggedAt.size;
 }
 
 export async function liveHlsStreamFromDb(
@@ -1695,6 +1730,7 @@ export function resetLiveHlsForTests(): void {
   resetHlsOwnershipForTests();
   loggedGhostEgressIds.clear();
   llUnservableLoggedAt.clear();
+  llUnservableLastSweptAt = 0;
   cameraCooldownUntil.clear();
   voiceTrackSeparatedByChannel.clear();
   for (const timer of cameraProbeRetryTimers.values()) {
