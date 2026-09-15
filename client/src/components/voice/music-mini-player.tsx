@@ -17,6 +17,13 @@ import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MusicAddForm } from "@/components/voice/music-add-form";
+import {
+  MusicHistoryList,
+  MusicListeners,
+  MusicRoomSwitches,
+  MusicVoteSkipButton,
+  effectiveCanManageMusic,
+} from "@/components/voice/music-extras";
 import { useTranslation } from "@/lib/i18n";
 import {
   advance,
@@ -120,7 +127,15 @@ export function MusicMiniPlayer({
   const current = state?.current ?? null;
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
-  const canManage = voiceState.canManageMusic;
+  const canManage = effectiveCanManageMusic(
+    voiceState.canManageMusic,
+    state?.openControls === true,
+    voiceState.canSpeak,
+  );
+  const seated =
+    (voiceState.voiceChannelId
+      ? voiceState.occupancy[voiceState.voiceChannelId]
+      : undefined) ?? [];
   const musicHintEnabled = useFeatureHintEnabled("music");
 
   if (!inCall) {
@@ -278,20 +293,23 @@ export function MusicMiniPlayer({
             </button>
           </Tooltip>
         )}
-        <Tooltip label={t("music.skip")} detail={canManage ? undefined : t("music.noManage")}>
-          <button
-            type="button"
-            className={cn(ghostButton, !canManage && "opacity-40")}
-            aria-disabled={!canManage || undefined}
-            onClick={() => {
-              if (canManage) {
-                advance();
-              }
-            }}
-          >
-            <SkipForward className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </Tooltip>
+        {canManage ? (
+          <Tooltip label={t("music.skip")}>
+            <button
+              type="button"
+              className={ghostButton}
+              onClick={() => advance()}
+            >
+              <SkipForward className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </Tooltip>
+        ) : (
+          <MusicVoteSkipButton
+            skipVotes={state?.skipVotes ?? []}
+            userId={voiceState.self?.userId ?? null}
+            roomSize={seated.length}
+          />
+        )}
         <Tooltip label={music.open ? t("music.collapse") : t("music.expand")}>
           <button
             type="button"
@@ -310,6 +328,13 @@ export function MusicMiniPlayer({
 
       {music.open && (
         <div className="space-y-2.5 px-2 pb-2.5">
+          {canManage ? (
+            <MusicRoomSwitches
+              openControls={state?.openControls === true}
+              repeat={state?.repeat ?? "off"}
+            />
+          ) : null}
+          <MusicListeners participants={seated} />
           <div className="flex items-center gap-2">
             <Tooltip label={muted ? t("music.unmute") : t("music.mute")}>
               <button
@@ -365,6 +390,8 @@ export function MusicMiniPlayer({
               />
             </div>
           )}
+
+          <MusicHistoryList history={state?.history ?? []} />
 
           <div className="flex items-center justify-between text-[11px]">
             <button
