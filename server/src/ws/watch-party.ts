@@ -1,6 +1,6 @@
 import type { WatchPartyState } from "@pqp/shared";
 import { logEvent } from "../lib/log.js";
-import { createRateLimiter } from "../lib/rate-limit.js";
+import { createDividedRateLimiter } from "../lib/cluster-rate-limit.js";
 
 /**
  * THE ROOM'S WATCH-PARTY STATE, HELD HERE RATHER THAN RELAYED THROUGH.
@@ -51,7 +51,17 @@ const parties = new Map<string, WatchPartyState>();
  *
  * Keyed on the user id, like the other per-user limits in `voice.ts`.
  */
-const writeLimiter = createRateLimiter({ capacity: 15, refillPerSecond: 5 });
+/**
+ * DIVIDED, NOT SHARED. The budget is a cluster-wide 15, so with two machines
+ * this process holds 8 of it (see `createDividedRateLimiter`). That is
+ * approximate on purpose: this limiter is consulted on a per-frame path — a
+ * seek scrub emits continuously while a thumb is down — and a round trip per
+ * frame would cost more than the limit is worth. It is also the limiter that
+ * REFUSES NOTHING, so dividing it can only make a scrub slightly choppier in
+ * the worst case; a budget that refused would instead hand a single-tab user
+ * half of what they had, since their socket lives on one machine.
+ */
+const writeLimiter = createDividedRateLimiter({ capacity: 15, refillPerSecond: 5 });
 
 /** Test hook: refill every watch-party write budget. */
 export function resetWatchPartyLimits(): void {

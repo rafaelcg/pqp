@@ -499,7 +499,7 @@ steps outside git.
 | Ghost seats after an instance dies | low (M3 landed) | Lease + reconcile in M3: orphaned at the dead lease's last heartbeat, removed 90 s later by whoever is alive |
 | Two instances pin a room differently | low | Atomic insert; `voice.hello` config hash |
 | Reconnect stampede on the surviving machine during a deploy | medium | Jittered batched 1001 closes; concurrency soft limit; client backoff jitter |
-| Rate limits multiply by 2 | certain, accepted | Documented in `lib/rate-limit.ts`; revisit only if abuse appears |
+| Rate limits multiply by 2 | was certain; now scoped | Address-keyed backstops still do, and are documented as per-machine in `lib/rate-limit.ts`. The user-keyed ones no longer: see §12 |
 | iOS/Android still drop voice on deploy | certain | Unchanged from today; a later plan adds resume tokens to the native clients |
 | Missed-call record lost if the ring owner dies mid-ring | low | Accepted; push already sent |
 | LiveKit Cloud cost creep past "Ship" included minutes | medium: every room is SFU today | Dashboard alert at 80% of 150k minutes; route small rooms to mesh (open question in 5.6); self-host per `docs/plans/SELF_HOSTED_LIVEKIT.md` |
@@ -523,3 +523,59 @@ rollback does not also break the next deploy.
   stops being enforced against a pre-ban token. The claims table fixes this.
 - `sendToUserSockets` for rings is local-only, so a callee on another machine
   would never ring.
+
+## 12. What was still per-process after M5, and what it cost (2026-09-15)
+
+Three things were written for one machine, kept working on two, and were
+wrong in ways nothing on the dashboard could show. All three are fixed in
+`lib/cluster-rate-limit.ts`, `lib/singleton-lease.ts` and
+`lib/instance-snapshot.ts`, and the shape of each fix was chosen by the
+traffic it sits on rather than by a rule.
+
+**Per-user rate limits.** The banner in `lib/rate-limit.ts` is right that a
+round trip per chat message costs more than the limit is worth, and that
+reasoning covers the hot limiters and the address-keyed backstops, which stay
+exactly as they are. It does not cover the small, rare, loud budgets. The ring
+limiter is five rings per five minutes, a number aimed at the person being
+buzzed, and a caller with a tab on each machine got ten. That one is now a
+single row in `rate_limit_buckets`, spent atomically: `ON CONFLICT DO UPDATE`
+takes the row lock, refills from `updated_at` and decrements inside it, and the
+trailing `WHERE` is what refuses — a read-then-write pair would let two
+machines through the last token. It is consulted only when `CLUSTER_BUS` or
+`VOICE_REGISTRY` is on, so a self-host pays nothing and owns no rows, and it
+fails OPEN behind the in-memory bucket, which stays as the backstop. The
+watch-party and music write budgets went the other way, on purpose: they sit on
+a per-frame path (a seek scrub emits continuously while a thumb is down) and
+they REFUSE NOTHING — past budget they only decide whether a position-only
+update is worth a fan-out. Those get DIVIDED capacity instead, `ceil(15 / N)`
+with N read from the heartbeat, which costs a slightly choppier scrub in the
+worst case and no round trip ever. Dividing a budget that refuses would have
+been a regression rather than a fix, since a user holds their socket on one
+machine and would simply have been handed half of what they had.
+
+**The status sampler.** `setInterval` in `index.ts` means "on every process
+that loads this file", so two API machines wrote two `status_samples` rows a
+minute — and those rows are AVERAGED into the uptime figure, so one machine
+failing a probe while the other passed read as a service that was half up. A
+number that looks measured and is not is worse than no number. The fix is a
+lease (`singleton_leases`), claimed per tick, failing open so a sample is never
+silently skipped. Note which gate it got: `servesTraffic`, **not**
+`runsColdJobs`. The first probe in the list is `api` and it answers `ok: true`
+on the grounds that reaching that line means the API is serving; on
+`pqp-worker` that sentence is false, which is why this is the one periodic job
+that must not move to `jobs.ts`. The banner there already said so; there is now
+a test that reads `index.ts` and fails if somebody tidies it in.
+
+**Dashboard counters.** Every live number on `GET /api/admin/metrics` — open
+sockets, seated peers, HLS sessions, pool — is a property of the process that
+answered, and behind two machines the operator sees whichever one the proxy
+picked, with refreshing flipping between two halves of the answer and nothing
+on the page to say so. Each process now writes a small `snapshot` jsonb into
+its own `voice_instances` row on the heartbeat it was already sending, so the
+cluster-wide reading costs no extra write and one small SELECT. The response
+gains `instanceId`, `instanceCount` and a `cluster` block; `runtime` is
+unchanged and still local, because "is THIS machine in trouble" is a different
+question with a different answer. `cluster.reporting` says how many instances
+actually contributed, so a sum is readable as a floor rather than mistaken for
+a total, and `cluster.versions` makes a half-rolled deploy visible instead of
+averaging over it.

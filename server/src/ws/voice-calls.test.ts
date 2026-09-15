@@ -671,6 +671,7 @@ type VoiceModule = typeof import("./voice.js");
 type SocketsModule = typeof import("./sockets.js");
 type RegistryModule = typeof import("../voice/registry.js");
 type DbModule = typeof import("../db.js");
+type LimitsModule = typeof import("../lib/cluster-rate-limit.js");
 
 interface Instance {
   bus: BusModule;
@@ -678,6 +679,7 @@ interface Instance {
   sockets: SocketsModule;
   registry: RegistryModule;
   db: DbModule;
+  limits: LimitsModule;
 }
 
 describeDb("rings across two instances", () => {
@@ -693,8 +695,11 @@ describeDb("rings across two instances", () => {
     const voice = (await import("./voice.js")) as VoiceModule;
     const sockets = (await import("./sockets.js")) as SocketsModule;
     const registry = (await import("../voice/registry.js")) as RegistryModule;
+    const limits = (await import(
+      "../lib/cluster-rate-limit.js"
+    )) as LimitsModule;
     bus.setBusTransport(bus.createMemoryTransport(hub));
-    const instance = { bus, voice, sockets, registry, db };
+    const instance = { bus, voice, sockets, registry, db, limits };
     booted.push(instance);
     return instance;
   }
@@ -741,7 +746,7 @@ describeDb("rings across two instances", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     await pools[0]!
       .getPool()
-      .query(`TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`);
+      .query(`TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances, rate_limit_buckets`);
   });
 
   afterEach(async () => {
@@ -858,5 +863,65 @@ describeDb("rings across two instances", () => {
     expect(frame(calleeOnB, "call-incoming")).toBeDefined();
     expect(frame(thirdOnB, "call-incoming")).toBeUndefined();
     expect(fakes.callPushes[0]?.rungUserIds).toEqual([CALLEE]);
+  });
+
+  /**
+   * FIVE RINGS PER FIVE MINUTES IS A NUMBER AIMED AT THE PERSON BEING BUZZED,
+   * and until this it was five PER MACHINE. A caller with a tab on each got
+   * ten, and nothing anywhere said so — the in-memory limiter on A cannot see
+   * what B has spent, by construction.
+   *
+   * The budget is spent from B here and the ring attempted on A, because that
+   * is the only arrangement that fails when the bucket is per process and
+   * passes when it is shared. A's own limiter is untouched in both cases.
+   */
+  it("spends ONE ring budget across two machines", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const calleeOnB = authedOn(b, CALLEE);
+    await joinOn(a, caller, CALLER);
+
+    const budget = b.voice.RING_BUDGET;
+    for (let i = 0; i < budget.capacity; i += 1) {
+      expect(await b.limits.sharedRateLimit(budget, CALLER)).toBe(true);
+    }
+
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+
+    expect(a.voice.isConversationRinging(CONVERSATION)).toBe(false);
+    expect(frame(calleeOnB, "call-incoming")).toBeUndefined();
+    expect(fakes.callPushes).toHaveLength(0);
+  });
+
+  it("rings, and the cluster bucket is what it spent", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const calleeOnB = authedOn(b, CALLEE);
+    await joinOn(a, caller, CALLER);
+
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+    expect(frame(calleeOnB, "call-incoming")).toBeDefined();
+
+    // The row is the state, and the other machine reads the same row: four
+    // of five left, whichever machine asks next.
+    const row = await pools[0]!.getPool().query<{ tokens: string }>(
+      `SELECT tokens::text FROM rate_limit_buckets
+        WHERE bucket = $1 AND subject = $2`,
+      [a.voice.RING_BUDGET.bucket, CALLER],
+    );
+    expect(Number(row.rows[0]?.tokens)).toBeCloseTo(
+      a.voice.RING_BUDGET.capacity - 1,
+      1,
+    );
   });
 });

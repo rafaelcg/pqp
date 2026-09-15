@@ -1262,6 +1262,43 @@ CREATE TABLE IF NOT EXISTS status_samples (
 CREATE INDEX IF NOT EXISTS idx_status_samples_component
   ON status_samples (component, checked_at DESC);
 
+-- ---------------------------------------------------------------------------
+-- Cluster-wide singletons and cluster-wide budgets
+-- ---------------------------------------------------------------------------
+
+-- One tick, one process. A timer in `index.ts` fires on EVERY process that
+-- runs the entry point, so with two API machines the status probe ran twice a
+-- minute and a blip on one machine read as 50% uptime for the whole service.
+-- The claim below is what makes "once a minute" mean once: the UPDATE only
+-- fires when the current lease has expired, so exactly one caller per tick
+-- gets a row back and the losers do nothing.
+CREATE TABLE IF NOT EXISTS singleton_leases (
+  key            TEXT PRIMARY KEY,
+  claimed_until  TIMESTAMPTZ NOT NULL,
+  claimed_by     TEXT NOT NULL,
+  claimed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Token buckets that have to hold across machines.
+--
+-- Deliberately NOT every limiter: the in-memory buckets in `lib/rate-limit.ts`
+-- stay in memory, because a round trip on every chat message costs more than
+-- the limit is worth (the banner in that file says so at length). This table
+-- is for the handful of user-keyed budgets whose whole point is that they are
+-- SMALL and the action is loud — ringing a DM, today. One row per
+-- (bucket, subject); `tokens` is fractional and refilled from `updated_at` by
+-- the same statement that spends it, so there is no separate refill job.
+CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+  bucket      TEXT NOT NULL,
+  subject     TEXT NOT NULL,
+  tokens      DOUBLE PRECISION NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (bucket, subject)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_updated
+  ON rate_limit_buckets (updated_at);
+
 -- Reports: a member telling somebody whose job it is that a message or a person
 -- needs looking at.
 --
@@ -1514,6 +1551,19 @@ CREATE TABLE IF NOT EXISTS voice_instances (
   config_hash   TEXT NOT NULL,
   heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- What this instance was holding at its last heartbeat: open sockets, seated
+-- voice peers, live HLS sessions, pool pressure. Nullable and written by the
+-- same statement as the beat, so it costs no extra round trip and an instance
+-- that has not beaten since the column was added simply reads NULL.
+--
+-- It exists because every counter on `GET /api/admin/metrics` is a property of
+-- ONE process. With two machines behind one hostname the dashboard shows
+-- whichever machine the request happened to land on, so "412 sockets" is half
+-- the truth and refreshing flips between two numbers. `readClusterSnapshot`
+-- sums these rows over the live instances; the endpoint keeps the local
+-- reading as `runtime` and adds the sum as `cluster`.
+ALTER TABLE voice_instances ADD COLUMN IF NOT EXISTS snapshot JSONB;
 
 -- Singleton work: SFU re-sweeps that must run on exactly one instance. Created
 -- in M1 so the schema is complete; claimed and ticked from M4 on.

@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import type { MusicState, VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
+import { noteLiveInstanceCount } from "../lib/cluster-rate-limit.js";
 import { countedQuery } from "../lib/db-tx-metrics.js";
+import {
+  currentInstanceSnapshot,
+  type InstanceSnapshot,
+} from "../lib/instance-snapshot.js";
 import { logEvent } from "../lib/log.js";
 import {
   VOICE_RESUME_TOKEN_TTL_MS,
@@ -1439,15 +1444,99 @@ export async function heartbeatVoiceInstance(
   // holds; `reconcileVoiceRegistry` below is what spends that lease, and it
   // too batches across every peer a dead instance owned in one statement
   // rather than looping.
-  await countedQuery(
+  //
+  // The snapshot rides along in the SAME statement. It is what the dashboard
+  // sums to answer "how big is the service", and putting it here rather than
+  // in a timer of its own is the point: no extra round trip, and a row can
+  // never claim to be alive while carrying numbers from a different minute.
+  const snapshot = currentInstanceSnapshot();
+  const live = await countedQuery<{ live: string }>(
     getPool(),
     "registry.instanceHeartbeat",
-    `INSERT INTO voice_instances (instance_id, config_hash, heartbeat_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (instance_id) DO UPDATE
-       SET config_hash = EXCLUDED.config_hash, heartbeat_at = NOW()`,
-    [instanceId, configHash],
+    `WITH beat AS (
+       INSERT INTO voice_instances (instance_id, config_hash, heartbeat_at, snapshot)
+       VALUES ($1, $2, NOW(), $3::jsonb)
+       ON CONFLICT (instance_id) DO UPDATE
+         SET config_hash = EXCLUDED.config_hash,
+             heartbeat_at = NOW(),
+             snapshot = EXCLUDED.snapshot
+       RETURNING 1
+     )
+     SELECT COUNT(*)::text AS live FROM voice_instances
+      WHERE heartbeat_at > NOW() - ($4::bigint * INTERVAL '1 millisecond')`,
+    [instanceId, configHash, snapshot ? JSON.stringify(snapshot) : null, INSTANCE_TTL_MS],
   );
+  // The count is one statement older than the beat it rode with (the CTE and
+  // the SELECT share a snapshot, so this instance's own first beat is not in
+  // it) — which is why the floor is 1 rather than the raw number. It feeds
+  // the divided-capacity limiters, where being one low for 15 seconds after a
+  // deploy costs a little extra fan-out and nothing else.
+  noteLiveInstanceCount(Number(live.rows[0]?.live ?? 0) || 1);
+}
+
+export interface ClusterSnapshot {
+  /** Instances whose lease is still live, this one included. */
+  instances: number;
+  /** Of those, how many wrote a snapshot the last time they beat. */
+  reporting: number;
+  sockets: number;
+  compressedSockets: number;
+  voiceParticipants: number;
+  hlsSessions: number;
+  poolBusy: number;
+  poolMax: number;
+  /** Distinct `APP_VERSION` values across live instances: >1 is a half-deploy. */
+  versions: string[];
+}
+
+/**
+ * The cluster's live counters, summed over the instances whose lease has not
+ * expired. A row with no snapshot (an instance that has not beaten since the
+ * column was added, or the worker, which holds no sockets) contributes
+ * nothing but is still counted in `instances`, so `reporting` is what says
+ * whether the sums can be trusted.
+ */
+export async function readClusterSnapshot(
+  ttlMs = INSTANCE_TTL_MS,
+): Promise<ClusterSnapshot> {
+  const result = await getPool().query<{
+    instance_id: string;
+    snapshot: InstanceSnapshot | null;
+  }>(
+    `SELECT instance_id, snapshot FROM voice_instances
+      WHERE heartbeat_at > NOW() - ($1::bigint * INTERVAL '1 millisecond')`,
+    [ttlMs],
+  );
+  const totals: ClusterSnapshot = {
+    instances: result.rows.length,
+    reporting: 0,
+    sockets: 0,
+    compressedSockets: 0,
+    voiceParticipants: 0,
+    hlsSessions: 0,
+    poolBusy: 0,
+    poolMax: 0,
+    versions: [],
+  };
+  const versions = new Set<string>();
+  for (const row of result.rows) {
+    const snap = row.snapshot;
+    if (!snap) {
+      continue;
+    }
+    totals.reporting += 1;
+    totals.sockets += Number(snap.sockets) || 0;
+    totals.compressedSockets += Number(snap.compressedSockets) || 0;
+    totals.voiceParticipants += Number(snap.voiceParticipants) || 0;
+    totals.hlsSessions += Number(snap.hlsSessions) || 0;
+    totals.poolBusy += Number(snap.poolBusy) || 0;
+    totals.poolMax += Number(snap.poolMax) || 0;
+    if (snap.version) {
+      versions.add(snap.version);
+    }
+  }
+  totals.versions = [...versions].sort();
+  return totals;
 }
 
 export async function withdrawVoiceInstance(

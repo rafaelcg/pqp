@@ -1,5 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
+import { INSTANCE_ID } from "../lib/bus.js";
+import {
+  INSTANCE_TTL_MS as VOICE_INSTANCE_TTL_MS,
+  readClusterSnapshot,
+} from "../voice/registry.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { checkReady, type ReadyReport } from "./ready.js";
 import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
@@ -80,6 +85,27 @@ const CACHE_TTL_MS = 30_000;
 /** Accounts that are not people are excluded from every count here. */
 const EXCLUDED_ACCOUNTS = ["webhook", "character"] as const;
 
+export interface ClusterMetrics {
+  /** Live instances, this one included. 1 when the voice registry is off. */
+  instances: number;
+  /** How many of those wrote a snapshot on their last heartbeat. */
+  reporting: number;
+  /** Seconds since the oldest contributing heartbeat could have been written. */
+  maxStalenessSeconds: number;
+  sockets: number;
+  compressedSockets: number;
+  voiceParticipants: number;
+  hlsSessions: number;
+  poolBusy: number;
+  poolMax: number;
+  /**
+   * Distinct `APP_VERSION` values across live instances. More than one means
+   * a deploy is mid-roll, which is the honest explanation for two machines
+   * disagreeing about a counter and is otherwise invisible from here.
+   */
+  versions: string[];
+}
+
 export interface AdminMetrics {
   generatedAt: string;
   /**
@@ -100,6 +126,34 @@ export interface AdminMetrics {
    * pool's own counters); there is no query behind it. See lib/runtime.ts.
    */
   runtime: RuntimeMetrics;
+  /**
+   * Which machine answered this request.
+   *
+   * With one machine the question never came up. With two behind one hostname
+   * every number in `runtime` above belongs to whichever one the load balancer
+   * picked, and a dashboard that refreshes flips between two halves of the
+   * answer with nothing on the page to say so. This field is the "nothing on
+   * the page" half of that fixed.
+   */
+  instanceId: string;
+  /** Instances whose `voice_instances` lease is live. 1 when the registry is off. */
+  instanceCount: number;
+  /**
+   * THE SAME LIVE COUNTERS, SUMMED ACROSS THE CLUSTER.
+   *
+   * `runtime` stays exactly what it was — this machine, sampled now — because
+   * "is THIS machine in trouble" is a real question with a different answer.
+   * This block answers the other one: how big is the service. It is built from
+   * the per-instance snapshot each process writes into its own
+   * `voice_instances` row on its 15-second heartbeat (lib/instance-snapshot.ts),
+   * so it costs one small SELECT here and no extra write anywhere.
+   *
+   * Up to 15 seconds stale by construction, and `reporting` says how many of
+   * `instances` actually contributed — a worker holds no sockets and an
+   * instance that has not beaten since the column was added contributes
+   * nothing, so a sum with `reporting < instances` is a floor, not a total.
+   */
+  cluster: ClusterMetrics;
   /**
    * The verdict `GET /ready` gives an external monitor, verbatim, so the
    * dashboard and UptimeRobot never disagree. Not cached here: ready.ts
@@ -677,7 +731,16 @@ function hoursAgo(column: string): string {
  * Expressed as a type rather than as a convention on purpose: it makes it
  * impossible to accidentally compute the live block inside the cached one.
  */
-type CachedMetrics = Omit<AdminMetrics, "runtime" | "ready" | "sfu">;
+/**
+ * Everything the 30-second cache holds. The live blocks are excluded because
+ * they are sampled per request, and the three cluster fields join them: a
+ * cached `instanceId` would name whichever machine happened to warm the cache
+ * rather than the one answering, which is worse than not saying at all.
+ */
+type CachedMetrics = Omit<
+  AdminMetrics,
+  "runtime" | "ready" | "sfu" | "instanceId" | "instanceCount" | "cluster"
+>;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
   const pool = getPool();
@@ -1314,7 +1377,67 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     checkReady(),
     readSfuStats(),
   ]);
-  return { ...payload, runtime: runtimeSnapshot(), ready, sfu };
+  const runtime = runtimeSnapshot();
+  const cluster = await clusterMetrics(runtime);
+  return {
+    ...payload,
+    runtime,
+    instanceId: INSTANCE_ID,
+    instanceCount: cluster.instances,
+    cluster,
+    ready,
+    sfu,
+  };
+}
+
+/**
+ * The cluster block, with the single-machine case as the fallback rather than
+ * as a special case.
+ *
+ * With `VOICE_REGISTRY` off there are no instance rows at all — a self-host,
+ * local dev, and `pqp-api` before the multi-instance work. Reporting zeroes
+ * there would be a lie of a different kind, so the answer is this process's
+ * own numbers labelled as a cluster of one. A failed read gets the same
+ * treatment: a metrics endpoint must never 500 over decoration (the same rule
+ * lib/runtime.ts states about its getters).
+ */
+async function clusterMetrics(runtime: RuntimeMetrics): Promise<ClusterMetrics> {
+  const alone = (): ClusterMetrics => ({
+    instances: 1,
+    reporting: 1,
+    maxStalenessSeconds: 0,
+    sockets: runtime.sockets,
+    compressedSockets: runtime.compressedSockets,
+    voiceParticipants: 0,
+    hlsSessions: liveHlsActivity().sessions,
+    poolBusy: runtime.pool.busy,
+    poolMax: runtime.pool.max,
+    versions: process.env.APP_VERSION?.trim()
+      ? [process.env.APP_VERSION.trim()]
+      : [],
+  });
+  try {
+    const snapshot = await readClusterSnapshot();
+    if (snapshot.instances === 0) {
+      return alone();
+    }
+    return {
+      instances: snapshot.instances,
+      reporting: snapshot.reporting,
+      // The lease TTL, which is the worst a contributing row can be: an
+      // instance about to be reconciled away beat 45 s ago.
+      maxStalenessSeconds: Math.round(VOICE_INSTANCE_TTL_MS / 1000),
+      sockets: snapshot.sockets,
+      compressedSockets: snapshot.compressedSockets,
+      voiceParticipants: snapshot.voiceParticipants,
+      hlsSessions: snapshot.hlsSessions,
+      poolBusy: snapshot.poolBusy,
+      poolMax: snapshot.poolMax,
+      versions: snapshot.versions,
+    };
+  } catch {
+    return alone();
+  }
 }
 
 /** Test hook: forget the cached payload. */

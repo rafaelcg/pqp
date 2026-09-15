@@ -44,6 +44,7 @@ import {
   subscribeToCluster,
 } from "../lib/bus.js";
 import { logEvent } from "../lib/log.js";
+import { sharedRateLimit } from "../lib/cluster-rate-limit.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { listBlockersOf } from "../services/blocks.js";
 import {
@@ -1668,6 +1669,17 @@ export interface VoiceActivitySnapshot {
      */
     openedAt: string | null;
   }[];
+}
+
+/**
+ * Voice peers THIS PROCESS holds, for the per-instance snapshot the heartbeat
+ * writes. Deliberately the map and not the registry: summing every instance's
+ * map is what makes `voice_peers` auditable rather than merely trusted, and a
+ * row whose owner stopped holding a peer for it is exactly the ghost pitfall
+ * 13 was about.
+ */
+export function localVoicePeerCount(): number {
+  return peers.size;
 }
 
 function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
@@ -6863,8 +6875,27 @@ interface ConversationRing {
 
 const conversationRings = new Map<string, ConversationRing>();
 
-/** Ringing fans out to every participant's every socket; keep it rare. */
-const ringLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.2 });
+/**
+ * Ringing fans out to every participant's every socket; keep it rare.
+ *
+ * THE ONE LIMITER IN THIS FILE THAT IS NOT PER PROCESS. Five rings per five
+ * minutes is a budget aimed at the person being buzzed, and two API machines
+ * turned it into ten for anybody with a tab on each — the exact failure the
+ * banner in `lib/rate-limit.ts` describes and declines to fix for the hot
+ * paths. This path is neither hot nor harmless: one call, one round trip,
+ * spent atomically in `rate_limit_buckets`. The in-memory bucket below stays
+ * as the backstop, so a database that cannot be reached degrades to the
+ * per-machine behaviour rather than to no limit at all.
+ */
+export const RING_BUDGET = {
+  bucket: "voice.ring",
+  capacity: 5,
+  refillPerSecond: 0.2,
+} as const;
+const ringLimiter = createRateLimiter({
+  capacity: RING_BUDGET.capacity,
+  refillPerSecond: RING_BUDGET.refillPerSecond,
+});
 
 /** Test hook: forget every active ring and its timers. */
 export function resetConversationCalls(): void {
@@ -6876,6 +6907,33 @@ export function resetConversationCalls(): void {
   }
   conversationRings.clear();
   ringLimiter.reset();
+}
+
+/**
+ * The cluster half of the ring budget. Never throws: `sharedRateLimit` fails
+ * open on its own, and this wrapper keeps the promise for the caller so a
+ * database blip cannot turn "you may ring" into an exception on the voice
+ * socket.
+ */
+async function takeSharedRingBudget(userId: string): Promise<boolean> {
+  // ONE MACHINE NEEDS NO SECOND DOOR. The in-memory bucket above is exact
+  // when there is only one of it, and a self-host or a local dev run should
+  // not pay a round trip — or own a table — for a budget that already holds.
+  // Both flags, because either one being set is what "this deployment expects
+  // siblings" looks like: the registry is the state and the bus is the
+  // fan-out, and `docs/plans/MULTI_INSTANCE_VOICE.md` allows turning on
+  // either first.
+  if (!clusterOn() && !registryOn()) {
+    return true;
+  }
+  try {
+    return await sharedRateLimit(RING_BUDGET, userId);
+  } catch (error) {
+    logEvent("voice.ringBudgetFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
 }
 
 /** Whether a conversation currently has an unanswered ring (for tests/UI). */
@@ -6927,7 +6985,14 @@ async function handleCallRing(
   conversationId: string,
 ): Promise<void> {
   const { socket, user } = session;
+  // Local first, then the cluster's. The order matters: the local bucket is
+  // free and refuses the repeat-tap case without a query, and `sharedRateLimit`
+  // fails open, so it can only ever be the second of two doors — never the
+  // one that lets somebody through a budget the first door already spent.
   if (!ringLimiter.take(user.id)) {
+    return;
+  }
+  if (!(await takeSharedRingBudget(user.id))) {
     return;
   }
   // Only a live peer of exactly this room may ring it. The join is where

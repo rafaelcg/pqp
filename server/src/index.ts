@@ -23,6 +23,7 @@ import {
 import { startVoiceHello } from "./ws/voice-hello.js";
 import {
   IDLE_ALONE_SWEEP_MS,
+  localVoicePeerCount,
   runVoiceReconcile,
   sweepIdleAloneSeats,
   sweepVoiceChannelAccessCache,
@@ -41,11 +42,14 @@ import {
   healthVerdict,
 } from "./lib/drain.js";
 import { logEvent } from "./lib/log.js";
+import { registerInstanceSnapshot } from "./lib/instance-snapshot.js";
 import {
   noteRuntimeSample,
   registerCompressedSocketCount,
   registerSocketCount,
+  runtimeSnapshot,
 } from "./lib/runtime.js";
+import { claimSingletonTickOrRun } from "./lib/singleton-lease.js";
 import { wsPerMessageDeflate } from "./lib/ws-compression.js";
 import {
   clientAddress,
@@ -62,10 +66,11 @@ import { reconcileStaleHlsSessions } from "./voice/hls-cleanup.js";
 import { adoptLlHlsSessions, isLiveHlsLLEnabled } from "./voice/hls-remux.js";
 import {
   isLiveHlsEnabled,
+  liveHlsActivity,
   startLiveHlsMonitor,
   stopLiveHlsMonitor,
 } from "./voice/hls-egress.js";
-import { processRole, runsColdJobs } from "./lib/process-role.js";
+import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -361,6 +366,27 @@ registerCompressedSocketCount(() => {
   return compressed;
 });
 
+// The same three numbers, plus the pool, written into this instance's
+// `voice_instances` row on every heartbeat so the dashboard can SUM them.
+//
+// Read at beat time (15 s) rather than at request time, because the request
+// only ever reaches one machine and that is the whole problem. The local
+// reading stays exactly where it was, as `runtime`; this is what lets
+// `cluster` sit beside it. See lib/instance-snapshot.ts.
+registerInstanceSnapshot(() => {
+  const local = runtimeSnapshot();
+  return {
+    sockets: local.sockets,
+    compressedSockets: local.compressedSockets,
+    voiceParticipants: localVoicePeerCount(),
+    hlsSessions: liveHlsActivity().sessions,
+    poolBusy: local.pool.busy,
+    poolMax: local.pool.max,
+    role: processRole(),
+    version: process.env.APP_VERSION?.trim() || null,
+  };
+});
+
 wss.on("connection", (socket, req) => {
   // Take a peak sample here rather than on a timer: the maximum number of
   // concurrent sockets is always reached immediately after one opens, so
@@ -422,18 +448,68 @@ const stopReadySampler = startReadySampler();
 // any external monitor is polling `/ready`. See `lib/db-breaker.ts`.
 const stopDbBreakerSampler = startDbBreakerSampler();
 
+/**
+ * ONE SAMPLE A MINUTE MEANS ONE, ACROSS THE WHOLE CLUSTER.
+ *
+ * These two timers used to be plain `setInterval`s, which is the same thing as
+ * "run on every process that loads this file". With two API machines and a
+ * worker that was three probes a minute writing three rows, and the damage is
+ * not the disk: `status_samples` is AVERAGED into the uptime figure on
+ * `/status.json`, so one machine failing a probe while the other two passed
+ * read as a service that was two thirds up. An outage of half the cluster is
+ * not a two-thirds-healthy service, and an outage of one machine out of two
+ * showing as 50% uptime is worse still — it is a number that looks measured.
+ *
+ * THE GATE IS `servesTraffic`, NOT `runsColdJobs`, and that is the whole
+ * design decision. Every other periodic job in this codebase moved to
+ * `jobs.ts` and runs on the worker; this one must not, because the first
+ * probe in the list is `api` and it answers `ok: true` unconditionally on the
+ * grounds that "reaching this line means the API is serving". Run it on
+ * `pqp-worker` and that sentence quietly becomes "the worker is serving",
+ * which is a green tile with nothing behind it — the exact shape of pitfalls 9
+ * and 12. The banner at the top of `jobs.ts` already said so; this is it
+ * enforced rather than merely written down.
+ *
+ * So the sampler stays with the processes that serve traffic, and the LEASE is
+ * what makes them one sampler instead of two. It fails OPEN — a tick that
+ * cannot claim because the database is unreachable is still attempted, because
+ * a duplicate row is noise and a missing row is a hole in the history that can
+ * never be filled in afterwards.
+ */
+const STATUS_SAMPLE_LEASE_KEY = "status.sample";
+const STATUS_PRUNE_LEASE_KEY = "status.prune";
+const STATUS_PRUNE_INTERVAL_MS = 24 * 60 * 60_000;
+
 const statusSampler = setInterval(() => {
-  void recordStatusSamples().catch((error) => {
-    console.error("[status] sample failed:", error);
-  });
+  if (!servesTraffic(processRole())) {
+    return;
+  }
+  void claimSingletonTickOrRun(
+    STATUS_SAMPLE_LEASE_KEY,
+    // Short of the interval so the next tick is always claimable, long enough
+    // that a slow probe cannot let a sibling start a second one beside it.
+    STATUS_SAMPLE_INTERVAL_MS - 5_000,
+  )
+    .then((mine) => (mine ? recordStatusSamples() : undefined))
+    .catch((error: unknown) => {
+      console.error("[status] sample failed:", error);
+    });
 }, STATUS_SAMPLE_INTERVAL_MS);
 statusSampler.unref?.();
 
 const statusPrune = setInterval(() => {
-  void pruneStatusSamples().catch((error) => {
-    console.error("[status] prune failed:", error);
-  });
-}, 24 * 60 * 60_000);
+  if (!servesTraffic(processRole())) {
+    return;
+  }
+  void claimSingletonTickOrRun(
+    STATUS_PRUNE_LEASE_KEY,
+    STATUS_PRUNE_INTERVAL_MS - 60_000,
+  )
+    .then((mine) => (mine ? pruneStatusSamples() : undefined))
+    .catch((error: unknown) => {
+      console.error("[status] prune failed:", error);
+    });
+}, STATUS_PRUNE_INTERVAL_MS);
 statusPrune.unref?.();
 
 /**
