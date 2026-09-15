@@ -305,6 +305,68 @@ one explicit rule: **two part-load errors inside 10 s pin the player to a
 conventional rung for the rest of the session.** A viewer who cannot hold the edge
 should stop trying, not oscillate.
 
+**And the recovery has to land at the edge, which is not what `-1` means
+(2026-09-15, the first sustained LL run).** Five sporadic 500s from the edge
+Worker on media parts were the trigger; what followed was the bug. Every step
+of the player's recovery ladder called `hls.startLoad(-1)` on the strength of
+the name, and `StreamController.startLoad` overrides a `-1` with
+`lastCurrentTime` whenever the player has played at all — so each recovery
+resumed at the FROZEN playhead. On a conventional stream that is harmless
+inside a 60 s window. Against a ring of six segments with parts on the newest
+three it is fatal: at 21:37:47 and again at 21:40:59 the player requested
+`ll/part-699.m4s` with the live edge at part ~1,400 and ~1,600, the Worker
+answered 404 (`hlsEdge.llPartMissing`), hls.js never retries a 4xx and an
+LL-only master has no second level to fail over to, and the audience read "A
+transmissão caiu" about a broadcast that was still running. Three rules now,
+all client-side and **every one of them gated on `mode === "ll"`**: an LL
+recovery passes the live edge it is about to seek to
+(`applyHlsRecoveryStep`'s `startPosition`), so the loader and the element
+agree instead of the loader firing one doomed request first; **a 404/410 on a
+part or segment is "you fell behind", not "the stream is gone"** — one bounded
+jump to live (`isMissingFragmentError`, `canJumpToLiveEdge`, at most
+`LL_HLS_EDGE_JUMP_MAX` per attach), and past the budget, or with no edge to
+jump to, or on a 404 of the PLAYLIST itself, it escalates exactly as before;
+and `fragLoadPolicy` is paced to a part rather than to a 4 s segment, because
+hls.js's stock 1/2/4/8 s backoff spends a whole ring waiting to retry
+something that is already gone. The lesson is pitfall 12's shape one layer
+out: **a config value that reads like an intention is not one.** `-1` is
+documented, tested and named "default start position", and it means "resume
+where you were".
+
+**A player that is still starting is not a player that is stuck.** The same
+run's other symptom was viewers "struggling until it settles". The part-stuck
+rule is four parts, two seconds at a 500 ms target, and the first two seconds
+of an LL attach are spent waiting out the Worker's `503 Retry-After: 1` while
+the remux subscribes — so the watchdog nudged (`startLoad`) a load that was
+going fine, before one part had ever arrived. `HlsStallWatch` now requires a
+part to have actually advanced before it can be stuck at all, and holds its
+two SOFT rules for `LL_HLS_STARTUP_GRACE_MS` after an attach. A fatal error is
+never graced: a source that is gone at second two is gone. And the latency
+CEILING follows the manifest now rather than the part target alone
+(`llLatencyCeilingSeconds`): the edge raising `PART-HOLD-BACK` to ~3 s under
+the old part-derived 4 s ceiling would leave one second of slack, after which
+`synchronizeToLiveEdge` force-seeks — which empties a 6 s buffer, which is the
+next stall.
+
+**The first cut of all of that (#646) was reverted the same night (#650), and
+the gate above is why.** Ten minutes after it shipped a CONVENTIONAL party
+went black and then looped a second of content. The cause turned out to be
+the LiveKit egress dying — "playlist stuck for 20000 ms", libav decode errors
+from the presenter's packet loss — and not the PR at all, but #646 had
+applied "restart the loader at the live edge on every recovery step" to
+conventional streams too, and nothing in the repo could prove that had not
+turned a frozen playlist into a seek loop. It could not have, and now there
+is a test that says so:
+`client/src/components/voice/hls-watch-player-conventional-recovery.test.tsx`
+drives the conventional ladder with the same fake and asserts the exact
+`startLoad` arguments, seeks and merged hls.js config recorded off
+post-revert `main` — including thirty seconds of a frozen
+`EXT-X-MEDIA-SEQUENCE`, which spends three in-place steps with one seek each
+and then only polls for a fresher session. The lesson is the cheaper half of
+pitfall 12: **when a change is for one mode, gate it on that mode and pin the
+other one, or the next incident on the path you did not touch is still
+yours to disprove.**
+
 **Recordings are unaffected.** The LL rung PUTs the same full 4 s segments to R2 on
 the same prefix layout, and its `hls_sessions` row carries `rung = 'll'` as the
 microphone archive carries `rung = 'mic'`, so retention, `keep_replay` and
