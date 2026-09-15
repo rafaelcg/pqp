@@ -73,14 +73,26 @@ function baseEnv(overrides = {}) {
  */
 function fakeCache() {
   const entries = new Map();
+  let matches = 0;
   return {
     get size() {
       return entries.size;
+    },
+    /**
+     * How many reads this cache has answered. Every request makes exactly
+     * one before it can join or produce anything, so this is the signal a
+     * test AWAITS to know a second request has got as far as the coalescing
+     * it is there to exercise -- see `until` for why observing it at an
+     * event-loop boundary is enough.
+     */
+    get matches() {
+      return matches;
     },
     keys() {
       return [...entries.keys()];
     },
     async match(request) {
+      matches += 1;
       const hit = entries.get(request.url);
       if (!hit) {
         return undefined;
@@ -133,6 +145,34 @@ function fakeMediaOrigin({ ready = true, status = 200, bytes = [1, 2, 3, 4], del
         ok: status >= 200 && status < 300,
         body: new Uint8Array(bytes).buffer,
       };
+    },
+  };
+}
+
+/**
+ * An origin that answers only when the test says so -- so "everybody joined
+ * before it resolved" is a fact the test establishes, not a race it hopes
+ * for. Preferred over `fakeMediaOrigin`'s `delayMs` wherever a test needs a
+ * fetch to still be in flight when the next request arrives: a real sleep is
+ * a bet that the route's own async work (a `crypto.subtle` token check,
+ * among others) finishes inside it, and on a loaded runner it does not.
+ */
+function gatedOrigin(bytes = [7, 7, 7, 7]) {
+  let calls = 0;
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return {
+    ready: true,
+    get calls() {
+      return calls;
+    },
+    release,
+    async fetchMedia() {
+      calls += 1;
+      await gate;
+      return { status: 200, ok: true, body: new Uint8Array(bytes).buffer };
     },
   };
 }
@@ -539,30 +579,43 @@ test("a coalesced waiter is served the cached copy, and the entry is warm the mo
   const channelId = "chan-part-window";
   const startedAt = "1726000100012";
   const name = "part-999.m4s";
-  const origin = fakeMediaOrigin({ delayMs: 10 });
+  // GATED, NOT SLEPT: this test needs the producer's fetch to still be in
+  // flight when the waiter's cache read misses, and a real delay is a bet
+  // that the waiter's own token check finishes inside it. It does not on a
+  // loaded runner, and the waiter would then be served a plain HIT -- the
+  // test passing while testing nothing, or failing for no reason. Real
+  // timers everywhere else here on purpose: the guard `handleLlMediaRequest`
+  // arms on the default path has to be armed and cancelled for real.
+  const origin = gatedOrigin([1, 2, 3, 4]);
   const cache = fakeCache();
   const ctx = collectingCtx();
   const env = baseEnv();
   const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
 
-  const [producer, waiter] = await Promise.all([
-    callMedia(
-      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
-      origin,
-      cache,
-      ctx,
-      env,
-      route,
-    ),
-    callMedia(
-      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
-      origin,
-      cache,
-      ctx,
-      env,
-      route,
-    ),
-  ]);
+  const producerRequest = callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+  );
+  await until(() => origin.calls === 1, "the producer's fetch to be in flight");
+  const waiterRequest = callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+  );
+  // One cache read per request, and the waiter's is the last await between it
+  // and the in-flight map. Microtasks run to exhaustion before the next turn
+  // of `until`'s loop, so seeing the second read here means the waiter has
+  // already joined.
+  await until(() => cache.matches === 2, "the waiter's own cache read to miss");
+  origin.release();
+  const [producer, waiter] = await Promise.all([producerRequest, waiterRequest]);
 
   assert.equal(origin.calls, 1);
   assert.equal(producer.headers.get("X-HLS-Edge-Cache"), "MISS");
@@ -603,8 +656,10 @@ test("a coalesced waiter is served the cached copy, and the entry is warm the mo
 // producer's context -- and with it every promise the joiner was parked on.
 //
 // Every test below would HANG, not fail, against the code that shipped that
-// evening, which is why each asserts settlement through `settledWithin` rather
-// than a bare `await`.
+// evening, which is why each asserts settlement through `answeredWithin`
+// rather than a bare `await`, and reads "still parked" through
+// `settledWithin` only once `until` has awaited the attachment that makes the
+// answer deterministic.
 // ---------------------------------------------------------------------------
 
 /** A timer nothing fires but the test -- same helper, same reasoning, as `hls-blocking-reload.test.mjs`. */
@@ -618,6 +673,22 @@ function makeTimers() {
     },
     get pending() {
       return armed.size;
+    },
+    /**
+     * How many timers of exactly this duration are armed RIGHT NOW. A
+     * request arms its bound the instant it attaches to somebody else's
+     * promise, so this is the transition a test awaits (`until`) before it
+     * counts origin fetches or fires anything -- never a number of
+     * event-loop turns, which is what made this file's first draft flaky.
+     */
+    count(ms) {
+      let armedAt = 0;
+      for (const entry of armed) {
+        if (entry.ms === ms) {
+          armedAt += 1;
+        }
+      }
+      return armedAt;
     },
     /** Fires every armed timer matching `predicate` -- the bounds are given distinct values so a test can pick one. */
     fireMatching(predicate) {
@@ -652,7 +723,46 @@ async function flush(turns = 12) {
   }
 }
 
-/** `{ v }` / `{ e }` if `promise` settled within a few turns, `null` if it is still parked. */
+/**
+ * AWAITS A TRANSITION, RATHER THAN COUNTING EVENT-LOOP TURNS (CI,
+ * 2026-09-15, the morning after these tests landed). The joiner test below
+ * passed on its PR runner and failed twice on the shared runner for `main`
+ * with `expected: 1 actual: 0`, and nothing in between had touched this
+ * Worker. The cause was in the test, not the route: a request does REAL
+ * asynchronous work before it reaches the coalescing these tests are about
+ * -- `authorizeViewer` verifies the viewer token with `crypto.subtle`,
+ * which in Node dispatches to the thread pool -- so "the joiner has
+ * attached" is not a fixed number of turns away. It is however many turns
+ * away that machine needs, and `flush(12)` was a bet on twelve. A busier
+ * runner lost it, `origin.calls` was still 0, and the assertion that the
+ * joiner had joined read as a hang it never was.
+ *
+ * So every wait below is a wait for an OBSERVABLE FACT: the origin has been
+ * called, a bound of a given duration is armed, the cache has answered a
+ * read. Polling on `setImmediate` is what makes that sound -- microtasks
+ * run to exhaustion before the next macrotask, so a fact observed at a turn
+ * boundary carries with it every promise continuation that fact had already
+ * queued. The deadline exists only to turn "this will never happen" into a
+ * legible failure instead of a hung suite; no passing run ever waits on it.
+ */
+async function until(predicate, what, deadlineMs = 10_000) {
+  const deadline = Date.now() + deadlineMs;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, `timed out after ${deadlineMs} ms waiting for ${what}`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+/**
+ * `{ v }` / `{ e }` if `promise` has ALREADY settled, `null` if it is still
+ * parked.
+ *
+ * Only ever asked in a state where the answer cannot change by itself --
+ * after `until` has awaited the attachment, with every promise the request
+ * is parked on owned by a dead context and every timer it armed a fake one
+ * only the test fires. `null` there is a property of the code under test,
+ * not of how fast the machine is.
+ */
 async function settledWithin(promise) {
   let outcome = null;
   promise.then(
@@ -664,6 +774,31 @@ async function settledWithin(promise) {
     },
   );
   await flush();
+  return outcome;
+}
+
+/**
+ * Awaits the settlement a test has just made possible (fired the bound,
+ * released the gate) and returns it as `{ v }` / `{ e }`. The deadline is
+ * the failure path only: a joiner that hangs is what this file exists to
+ * catch, and it must fail with a sentence rather than by hanging CI.
+ */
+const NEVER_SETTLED = Symbol("never-settled");
+async function answeredWithin(promise, what, deadlineMs = 10_000) {
+  let handle;
+  const expiry = new Promise((resolve) => {
+    handle = setTimeout(() => resolve(NEVER_SETTLED), deadlineMs);
+    handle.unref?.();
+  });
+  const outcome = await Promise.race([
+    promise.then(
+      (v) => ({ v }),
+      (e) => ({ e }),
+    ),
+    expiry,
+  ]);
+  clearTimeout(handle);
+  assert.notEqual(outcome, NEVER_SETTLED, `still parked after ${deadlineMs} ms: ${what}`);
   return outcome;
 }
 
@@ -685,30 +820,6 @@ function scriptedOrigin(script, bytes = [7, 7, 7, 7]) {
       if (step === "dead") {
         return new Promise(() => {});
       }
-      return { status: 200, ok: true, body: new Uint8Array(bytes).buffer };
-    },
-  };
-}
-
-/**
- * An origin that answers only when the test says so -- so "everybody joined
- * before it resolved" is a fact the test establishes, not a race it hopes for.
- */
-function gatedOrigin(bytes = [7, 7, 7, 7]) {
-  let calls = 0;
-  let release = () => {};
-  const gate = new Promise((resolve) => {
-    release = resolve;
-  });
-  return {
-    ready: true,
-    get calls() {
-      return calls;
-    },
-    release,
-    async fetchMedia() {
-      calls += 1;
-      await gate;
       return { status: 200, ok: true, body: new Uint8Array(bytes).buffer };
     },
   };
@@ -749,6 +860,7 @@ test("a joiner parked on an owner whose context died is answered by its own fetc
     route,
     { ...BOUNDS, setTimer: timers.setTimer },
   );
+  await until(() => origin.calls === 1, "the producer's fetch to be in flight against the dying context");
   assert.equal(await settledWithin(producer), null, "the producer is the request whose context is dying");
 
   const joiner = callMedia(
@@ -760,6 +872,11 @@ test("a joiner parked on an owner whose context died is answered by its own fetc
     route,
     { ...BOUNDS, setTimer: timers.setTimer },
   );
+  // THE FIX, and the fact this whole test turns on: the joiner armed a bound
+  // OF ITS OWN, in its OWN context, so the runtime always sees pending I/O
+  // for it and it can take itself back. Awaited, because the joiner gets
+  // there when its token check does -- see `until`.
+  await until(() => timers.count(JOIN_BOUND_MS) === 1, "the joiner to arm its own join bound");
   assert.equal(
     await settledWithin(joiner),
     null,
@@ -767,11 +884,9 @@ test("a joiner parked on an owner whose context died is answered by its own fetc
   );
   assert.equal(origin.calls, 1, "the joiner really did join rather than fetch");
 
-  // THE FIX: the joiner armed a bound OF ITS OWN, in its OWN context, so the
-  // runtime always sees pending I/O for it and it can take itself back.
   assert.equal(timers.fireMatching((t) => t.ms === JOIN_BOUND_MS), 1, "the joiner armed its own join bound");
 
-  const answered = await settledWithin(joiner);
+  const answered = await answeredWithin(joiner, "the joiner must be answered, not left parked on a dead context");
   assert.ok(answered, "the joiner must be answered, not left parked on a dead context");
   assert.equal(answered.v.status, 200);
   assert.equal(answered.v.headers.get("X-HLS-Edge-Cache"), "MISS", "it detached and produced for itself");
@@ -802,19 +917,23 @@ test("the last-resort guard answers a request whose own fetch will never settle"
     route,
     { ...BOUNDS, setTimer: timers.setTimer },
   );
+  await until(
+    () => origin.calls === 1 && timers.count(HARD_TIMEOUT_MS) === 1,
+    "the request's own fetch to be in flight, under its own guard",
+  );
   assert.equal(await settledWithin(pending), null);
   assert.equal(timers.fireMatching((t) => t.ms === HARD_TIMEOUT_MS), 1, "the guard is armed in this request's own context");
 
-  const answered = await settledWithin(pending);
+  const answered = await answeredWithin(pending, "the guard must settle the request");
   assert.ok(answered, "the guard must settle the request");
   assert.equal(answered.v.status, 200);
   assert.equal(answered.v.headers.get("X-HLS-Edge-Cache"), "HARD-TIMEOUT");
   assert.deepEqual([...new Uint8Array(await answered.v.arrayBuffer())], [4, 5, 6]);
   assert.equal(origin.calls, 2, "the guard answers by fetching the part for THIS request");
-  // `flush`, never `ctx.drain()`: this request's FIRST fetch is still parked
+  // Awaited, never `ctx.drain()`: this request's FIRST fetch is still parked
   // (that is the scenario), so draining every `waitUntil` would hang the test
   // on the very promise the guard exists to stop waiting for.
-  await flush();
+  await until(() => cache.size === 1, "the guard's bytes to reach the colo");
   assert.equal(cache.size, 1, "and the bytes it had to go and get are left warm for the next viewer");
 });
 
@@ -844,11 +963,16 @@ test("twelve viewers of one part still produce exactly ONE origin fetch, and all
   );
   // No bound is ever fired: nothing here is sick, so the bounded join must
   // still be a plain join. A regression that answers joiners by detaching
-  // would show up as more than one origin call.
+  // would show up as more than one origin call. Eleven join bounds, because
+  // the twelfth request is the producer and has nothing to join.
+  await until(
+    () => origin.calls === 1 && timers.count(JOIN_BOUND_MS) === 11,
+    "all eleven joiners to attach to the one fetch",
+  );
   assert.equal(await settledWithin(all), null, "nobody is served until the origin answers");
   assert.equal(origin.calls, 1, "all twelve are attached to ONE fetch before it resolves");
   origin.release();
-  const settled = await settledWithin(all);
+  const settled = await answeredWithin(all, "all twelve settle without any bound firing");
   assert.ok(settled, "all twelve settle without any bound firing");
   assert.equal(origin.calls, 1, "one origin fetch per key, however many viewers ask");
   for (const response of settled.v) {
@@ -909,11 +1033,15 @@ test("a viewer arriving while the producer's write is in flight joins the WRITE,
     route,
     { ...BOUNDS, setTimer: timers.setTimer },
   );
+  // The write is released only once the arrival has BOUNDED its wait on it:
+  // releasing first would serve the arrival a plain cache HIT and quietly
+  // stop testing the window this test is named for.
+  await until(() => timers.count(WRITE_BOUND_MS) === 1, "the arrival to bound its wait on the producer's write");
   assert.equal(await settledWithin(arrival), null, "attached to the write, bounded by its own timer");
   assert.equal(origin.calls, 1, "it must NOT have started a second real fetch against the box");
 
   releaseWrite();
-  const answered = await settledWithin(arrival);
+  const answered = await answeredWithin(arrival, "the arrival is served once the write lands");
   assert.ok(answered, "the arrival is served once the write lands");
   assert.equal(answered.v.status, 200);
   assert.equal(answered.v.headers.get("X-HLS-Edge-Cache"), "COALESCED");
@@ -952,13 +1080,18 @@ test("a producer's cache write that never lands does not park the joiner either"
       { ...BOUNDS, setTimer: timers.setTimer },
     ),
   ]);
+  await until(
+    () => origin.calls === 1 && timers.count(JOIN_BOUND_MS) === 1,
+    "the joiner to attach to the producer's one fetch",
+  );
   assert.equal(await settledWithin(both), null, "nobody is served until the origin answers");
   assert.equal(origin.calls, 1, "the joiner joined rather than fetched");
   origin.release();
+  await until(() => timers.count(WRITE_BOUND_MS) === 1, "the joiner to bound its wait on the producer's write");
   assert.equal(await settledWithin(both), null, "the joiner is waiting on a write nothing will finish");
   assert.equal(timers.fireMatching((t) => t.ms === WRITE_BOUND_MS), 1, "the joiner bounded that wait, in its own context");
 
-  const answered = await settledWithin(both);
+  const answered = await answeredWithin(both, "the joiner falls back to the shared buffer rather than waiting forever");
   assert.ok(answered, "the joiner falls back to the shared buffer rather than waiting forever");
   const [producerResponse, joinerResponse] = answered.v;
   assert.equal(producerResponse.status, 200);
