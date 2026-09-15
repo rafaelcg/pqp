@@ -496,7 +496,12 @@ import {
   searchGifs,
   trendingGifs,
 } from "../services/gifs.js";
-import { MusicResolveError, resolveMusic, searchMusicCandidates } from "../services/music.js";
+import {
+  MusicResolveError,
+  relatedMusicTracks,
+  resolveMusic,
+  searchMusicCandidates,
+} from "../services/music.js";
 import {
   completeConnection,
   connectionsConfig,
@@ -2852,6 +2857,37 @@ router.get("/api/music/search", async (ctx) => {
     if (tracks.length === 0) {
       throw new MusicResolveError("not_found", `Nothing on YouTube for "${query}"`);
     }
+    return { tracks };
+  } catch (error) {
+    if (error instanceof MusicResolveError) {
+      if (error.code === "busy") {
+        ctx.res.setHeader("Retry-After", "5");
+        throw new HttpError(429, "Music search is busy, try again in a moment");
+      }
+      if (error.code === "upstream") {
+        console.error("[music] upstream failed:", error.message);
+        throw new HttpError(502, "Music provider unavailable");
+      }
+      throw new HttpError(error.code === "not_found" ? 404 : 400, error.message);
+    }
+    throw error;
+  }
+});
+
+const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+
+router.get("/api/music/related", async (ctx) => {
+  const key = `user:${ctx.user.id}`;
+  if (!musicResolveLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(musicResolveLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const videoId = (ctx.url.searchParams.get("videoId") ?? "").trim();
+  if (!YOUTUBE_VIDEO_ID.test(videoId)) {
+    throw new HttpError(400, "Invalid videoId");
+  }
+  try {
+    const tracks = await relatedMusicTracks(videoId);
     return { tracks };
   } catch (error) {
     if (error instanceof MusicResolveError) {
