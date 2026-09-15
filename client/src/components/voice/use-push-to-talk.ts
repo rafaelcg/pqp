@@ -85,12 +85,6 @@ export function usePushToTalk({
   }, [onHeldChange]);
 
   useEffect(() => {
-    return () => {
-      resetPttHeld();
-    };
-  }, []);
-
-  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }

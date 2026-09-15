@@ -2053,9 +2053,11 @@ function MainAppContent({
     if (inPushToTalk) {
       return;
     }
-    handlePushToTalk(false);
+    // Close the hold-to-talk button path without playing: the hook's
+    // teardown already released a held key and reset the latch after that.
+    voice.setPushToTalkActive(false);
     resetPttHeld();
-  }, [inPushToTalk, handlePushToTalk]);
+  }, [inPushToTalk, voice]);
 
   // The key binding lives here rather than in the panel because the panel is
   // unmounted the moment you navigate to a text channel, and push-to-talk has
