@@ -1,6 +1,7 @@
 package control
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -285,5 +286,57 @@ func TestStallDetail_SaysNeverRatherThanLying(t *testing.T) {
 		if !strings.Contains(full, want) {
 			t.Fatalf("stallDetail is missing %q: %q", want, full)
 		}
+	}
+}
+
+// A VIDEO_IDLE_MAX_MS so large it overflows time.Duration must not invert
+// the rule it configures. `time.Duration(ms) * time.Millisecond` wraps
+// past about 9.2e12 ms, so an absurd value used to produce a tiny or
+// negative bound and restart a quiet source on the FIRST quiet tick --
+// the exact inverse of "forgive it for a very long time" (Farol review,
+// PR #626). msDuration saturates instead.
+func TestEvaluateWatchdog_HugeIdleBoundDoesNotWrapIntoAnInstantRestart(t *testing.T) {
+	start := time.UnixMilli(0)
+	cfg := fixedWatchdogCfg()
+	cfg.VideoIdleMaxMs = math.MaxInt64 // the worst an int64 env value can be
+	var st watchdogState
+
+	quiet := start.Add(30 * time.Second)
+	h := PipelineHealth{
+		PartsWritten:      400,
+		LastPartAt:        quiet,
+		LastIdrAt:         quiet,
+		LastVideoFrameAt:  quiet,
+		LastVideoPacketAt: quiet,
+	}
+
+	if got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, quiet.Add(4*time.Second)); got.action != actionLog {
+		t.Fatalf("first quiet tick under a huge bound did %v (%s), want a log line", got.action, got.reason)
+	}
+	for _, elapsed := range []time.Duration{time.Minute, time.Hour, 72 * time.Hour} {
+		if got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, quiet.Add(elapsed)); got.action != actionNone {
+			t.Fatalf("under a huge bound, %s of silence did %v (%s), want nothing", elapsed, got.action, got.reason)
+		}
+	}
+	if !st.restartedAt.IsZero() {
+		t.Fatal("an overflowing idle bound consumed the session's one allowed restart")
+	}
+}
+
+// msDuration saturates at both ends rather than wrapping.
+func TestMsDuration_Saturates(t *testing.T) {
+	if got := msDuration(2000); got != 2*time.Second {
+		t.Fatalf("msDuration(2000) = %v, want 2s", got)
+	}
+	if got := msDuration(math.MaxInt64); got != time.Duration(math.MaxInt64) {
+		t.Fatalf("msDuration(MaxInt64) = %v, want the maximum Duration", got)
+	}
+	if got := msDuration(math.MinInt64); got != time.Duration(math.MinInt64) {
+		t.Fatalf("msDuration(MinInt64) = %v, want the minimum Duration", got)
+	}
+	// The boundary itself: one millisecond under the clamp still converts
+	// exactly, and is positive.
+	if got := msDuration(maxDurationMs - 1); got <= 0 {
+		t.Fatalf("msDuration(maxDurationMs-1) = %v, want a large positive duration", got)
 	}
 }

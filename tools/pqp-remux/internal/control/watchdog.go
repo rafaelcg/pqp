@@ -2,6 +2,7 @@ package control
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -50,6 +51,45 @@ type WatchdogConfig struct {
 	// is gone hits the new pipeline's own FirstPartTimeoutMs and demotes
 	// with "no-video".
 	VideoIdleMaxMs int64
+}
+
+// maxDurationMs is the largest millisecond count that still converts to a
+// time.Duration without wrapping: a Duration is int64 NANOseconds, so
+// anything past this multiplied by time.Millisecond overflows into a
+// small or negative value.
+const maxDurationMs = int64(math.MaxInt64 / int64(time.Millisecond))
+
+// msDuration converts a millisecond count into a Duration, SATURATING
+// instead of wrapping. It is this package's only such conversion:
+// remux_pipeline.go's Health uses it for internal/session's
+// elapsed-milliseconds convention, and everything below uses it for a
+// timer that came from the environment.
+//
+// Every timer this file reads is an int64 of milliseconds that ultimately
+// came from an environment variable, and `time.Duration(ms) *
+// time.Millisecond` silently wraps once ms passes about 9.2e12 (roughly
+// 292 years). The consequence is the exact inverse of what the operator
+// asked for: VIDEO_IDLE_MAX_MS set absurdly high -- a typo, a value in
+// nanoseconds, "effectively never" written as a big number instead of the
+// 0 this config actually defines for that -- wraps to a tiny or negative
+// bound, so `idleFor > idleMax` is true on the first quiet tick and a
+// quiet source is restarted IMMEDIATELY rather than forgiven for longer
+// (Farol review, PR #626). Saturating means a nonsensically large value
+// behaves like a very long one, which is what it reads as.
+//
+// LoadGlobalConfig refuses values this large outright (see
+// maxWatchdogMs), so production never reaches the clamp; this exists so
+// evaluateWatchdog is total for ANY WatchdogConfig, including one built
+// by hand, rather than correct only because a different file validated
+// its inputs.
+func msDuration(ms int64) time.Duration {
+	if ms >= maxDurationMs {
+		return time.Duration(math.MaxInt64)
+	}
+	if ms <= -maxDurationMs {
+		return time.Duration(math.MinInt64)
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // watchdogAction is what one evaluateWatchdog call decides to do.
@@ -151,14 +191,14 @@ type watchdogState struct {
 //     stallLadder below is that ladder, shared with phase 2's own bound.
 func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipelineStartedAt time.Time, st *watchdogState, now time.Time) watchdogResult {
 	if h.LastPartAt.IsZero() {
-		firstPartTimeout := time.Duration(cfg.FirstPartTimeoutMs) * time.Millisecond
+		firstPartTimeout := msDuration(cfg.FirstPartTimeoutMs)
 		if now.Sub(pipelineStartedAt) > firstPartTimeout {
 			return watchdogResult{actionDemote, "no-video", stallDetail(h, now)}
 		}
 		return watchdogResult{actionNone, "", ""}
 	}
 
-	stuckThreshold := time.Duration(cfg.PartStuckMs) * time.Millisecond
+	stuckThreshold := msDuration(cfg.PartStuckMs)
 
 	// PHASE 1.5, AND THE WHOLE POINT OF THIS BLOCK: a source that has
 	// gone quiet is not a stalled pipeline.
@@ -192,7 +232,7 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 	// rather than about it stalling, and neither of which this rule
 	// touches.
 	if idleFor, ok := sourceIdleFor(h, now, stuckThreshold); ok {
-		idleMax := time.Duration(cfg.VideoIdleMaxMs) * time.Millisecond
+		idleMax := msDuration(cfg.VideoIdleMaxMs)
 		if cfg.VideoIdleMaxMs > 0 && idleFor > idleMax {
 			// Forgiven long enough. This is where a quietly dead
 			// RECEIVE path (see VideoIdleMaxMs) stops being
@@ -213,7 +253,7 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 	if idrRef.IsZero() {
 		idrRef = h.LastPartAt
 	}
-	segDur := time.Duration(segmentMs) * time.Millisecond
+	segDur := msDuration(int64(segmentMs))
 	idrGap := now.Sub(idrRef)
 
 	switch {
@@ -242,7 +282,7 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 // VideoIdleMaxMs. Each names its own reasons so the log still says which
 // of the two happened.
 func stallLadder(h PipelineHealth, cfg WatchdogConfig, st *watchdogState, now time.Time, restartReason, demoteReason string) watchdogResult {
-	demoteWindow := time.Duration(cfg.DemoteWindowMs) * time.Millisecond
+	demoteWindow := msDuration(cfg.DemoteWindowMs)
 	if st.restartedAt.IsZero() || now.Sub(st.restartedAt) > demoteWindow {
 		// First stall (ever, or the last restart is old enough that this
 		// counts as a fresh episode, not "the same" one): use the one

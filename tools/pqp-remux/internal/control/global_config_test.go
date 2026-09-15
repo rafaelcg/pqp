@@ -220,3 +220,60 @@ func TestLoadGlobalConfig_DefaultR2SettingsAreValid(t *testing.T) {
 		t.Fatalf("expected default R2UploadMaxRetries %d, got %d", DefaultR2MaxRetries, cfg.R2UploadMaxRetries)
 	}
 }
+
+// A millisecond timer typed in the wrong unit is the operator error that
+// actually happens, and left alone it wraps time.Duration into the
+// INVERSE of what was asked for (Farol review, PR #626). Every one of the
+// four is refused at startup rather than quietly reinterpreted.
+func TestLoadGlobalConfig_RefusesAbsurdlyLargeWatchdogTimers(t *testing.T) {
+	base := map[string]string{
+		"REMUX_CONTROL_SECRET": "s",
+		"LIVEKIT_URL":          "wss://example",
+		"LIVEKIT_API_KEY":      "key",
+		"LIVEKIT_API_SECRET":   "sec",
+	}
+	for _, name := range []string{"FIRST_PART_TIMEOUT_MS", "PART_STUCK_MS", "DEMOTE_WINDOW_MS", "VIDEO_IDLE_MAX_MS"} {
+		t.Run(name, func(t *testing.T) {
+			// 9223372036854775807: what a "big number meaning never", or
+			// a value pasted in nanoseconds, looks like by the time it
+			// reaches here.
+			withEnv(t, base)
+			withEnv(t, map[string]string{name: "9223372036854775807"})
+			if _, err := LoadGlobalConfig(); err == nil {
+				t.Fatalf("expected LoadGlobalConfig to refuse %s at the int64 maximum", name)
+			}
+
+			// Exactly the bound is still accepted; one past it is not.
+			withEnv(t, map[string]string{name: "86400000"})
+			if _, err := LoadGlobalConfig(); err != nil {
+				t.Fatalf("%s=86400000 (24h, the bound itself) was refused: %v", name, err)
+			}
+			withEnv(t, map[string]string{name: "86400001"})
+			if _, err := LoadGlobalConfig(); err == nil {
+				t.Fatalf("expected LoadGlobalConfig to refuse %s one millisecond past the bound", name)
+			}
+		})
+	}
+}
+
+// ...and 0 remains the supported way to say "forgive a quiet source
+// forever", which is what the refusal above points an operator towards.
+func TestLoadGlobalConfig_AllowsZeroVideoIdleMax(t *testing.T) {
+	withEnv(t, map[string]string{
+		"REMUX_CONTROL_SECRET": "s",
+		"LIVEKIT_URL":          "wss://example",
+		"LIVEKIT_API_KEY":      "key",
+		"LIVEKIT_API_SECRET":   "sec",
+		"VIDEO_IDLE_MAX_MS":    "0",
+	})
+	cfg, err := LoadGlobalConfig()
+	if err != nil {
+		t.Fatalf("VIDEO_IDLE_MAX_MS=0 was refused: %v", err)
+	}
+	if cfg.VideoIdleMaxMs != 0 {
+		t.Fatalf("VideoIdleMaxMs = %d, want 0", cfg.VideoIdleMaxMs)
+	}
+	if cfg.WatchdogConfig().VideoIdleMaxMs != 0 {
+		t.Fatal("WatchdogConfig did not carry VideoIdleMaxMs through")
+	}
+}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/aacenc"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/h264"
@@ -232,10 +231,11 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 // package never constructs an internal/config.Config at all).
 func msToTicks(ms int) uint64 { return uint64(ms) * uint64(h264.ClockRate) / 1000 }
 
-// msDuration converts internal/session.Session's own elapsed-milliseconds
-// convention into a time.Duration, for adding onto Session.Started() --
-// see Health's own doc comment on why that conversion happens here, once.
-func msDuration(ms int64) time.Duration { return time.Duration(ms) * time.Millisecond }
+// msDuration -- the one that converts internal/session.Session's own
+// elapsed-milliseconds convention into a time.Duration for adding onto
+// Session.Started() (see Health below) -- lives in watchdog.go, because
+// this package's OTHER callers of it convert operator-supplied env values
+// and need it to saturate rather than wrap. One definition, one behaviour.
 
 func (p *remuxPipeline) Health() PipelineHealth {
 	h := p.sess.Health()

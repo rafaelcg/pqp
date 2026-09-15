@@ -56,6 +56,23 @@ const (
 	// review, PR #626).
 	DefaultVideoIdleMaxMs = 2 * 60 * 1000
 
+	// maxWatchdogMs bounds every watchdog timer this file reads. 24 hours
+	// is already absurd for a stall detector whose defaults are measured
+	// in seconds, and refusing past it catches the operator error that
+	// actually happens: a value typed in the wrong unit (nanoseconds, or
+	// a "big number meaning never") which, converted to a time.Duration,
+	// WRAPS -- turning "forgive a quiet source for a very long time" into
+	// "restart it on the first quiet tick", the exact inverse of what was
+	// asked for (Farol review, PR #626). VIDEO_IDLE_MAX_MS has a real way
+	// to say "never" and it is 0, not a large number.
+	//
+	// Refused rather than clamped, matching this file's rule throughout:
+	// an out-of-range value fails LoadGlobalConfig outright instead of
+	// being quietly reinterpreted as something else. evaluateWatchdog's
+	// own msDuration saturates as well, so the two together mean neither
+	// a validated nor a hand-built config can wrap.
+	maxWatchdogMs = 24 * 60 * 60 * 1000
+
 	DefaultAACBitrateKbps  = 128
 	DefaultR2QueueDepth    = 64
 	DefaultR2MaxRetries    = 3
@@ -206,6 +223,22 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	// reading. Negative does not mean anything at all.
 	if c.VideoIdleMaxMs < 0 {
 		return GlobalConfig{}, fmt.Errorf("control: VIDEO_IDLE_MAX_MS must not be negative, got %d", c.VideoIdleMaxMs)
+	}
+	// And an upper bound on all four, for the reason maxWatchdogMs gives.
+	for _, t := range []struct {
+		name  string
+		value int64
+	}{
+		{"FIRST_PART_TIMEOUT_MS", c.FirstPartTimeoutMs},
+		{"PART_STUCK_MS", c.PartStuckMs},
+		{"DEMOTE_WINDOW_MS", c.DemoteWindowMs},
+		{"VIDEO_IDLE_MAX_MS", c.VideoIdleMaxMs},
+	} {
+		if t.value > maxWatchdogMs {
+			return GlobalConfig{}, fmt.Errorf(
+				"control: %s=%d is more than %d ms (24 hours); these are millisecond timers, and a value this large is a unit mistake. For \"never\", VIDEO_IDLE_MAX_MS=0 is the supported way to say it",
+				t.name, t.value, maxWatchdogMs)
+		}
 	}
 	// R2_UPLOAD_QUEUE_DEPTH/R2_UPLOAD_MAX_RETRIES were read above with no
 	// bound check at all: envIntOr accepts any integer, including zero or
