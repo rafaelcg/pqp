@@ -218,9 +218,20 @@ describe("does this deployment expect siblings", () => {
     bus: process.env.CLUSTER_BUS,
   };
 
+  function restore(name: string, value: string | undefined): void {
+    // Assigning `undefined` to `process.env` stores the STRING "undefined",
+    // which is not "off" and not unset — it would leave the rest of the file
+    // running against a value no deployment can produce.
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+
   afterAll(() => {
-    process.env.VOICE_REGISTRY = before.registry;
-    process.env.CLUSTER_BUS = before.bus;
+    restore("VOICE_REGISTRY", before.registry);
+    restore("CLUSTER_BUS", before.bus);
   });
 
   const cases: [string | undefined, string | undefined, boolean][] = [
@@ -235,16 +246,8 @@ describe("does this deployment expect siblings", () => {
 
   for (const [registry, bus, expected] of cases) {
     it(`VOICE_REGISTRY=${registry ?? "unset"} CLUSTER_BUS=${bus ?? "unset"} -> ${expected}`, () => {
-      if (registry === undefined) {
-        delete process.env.VOICE_REGISTRY;
-      } else {
-        process.env.VOICE_REGISTRY = registry;
-      }
-      if (bus === undefined) {
-        delete process.env.CLUSTER_BUS;
-      } else {
-        process.env.CLUSTER_BUS = bus;
-      }
+      restore("VOICE_REGISTRY", registry);
+      restore("CLUSTER_BUS", bus);
       expect(clusterTopologyTracked()).toBe(expected);
     });
   }
