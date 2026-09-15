@@ -112,6 +112,7 @@ import { playlistOriginKindForRung } from "./ll-state.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
 import { handleBlockingReload, parseBlockingReloadParams } from "./hls-blocking-reload.js";
+import { coalesceFetch } from "./coalesced-fetch.js";
 
 export interface Env {
   /** The API origin this Worker fetches playlists from, e.g. https://api.pqp.gg (a var). */
@@ -573,7 +574,7 @@ export async function handlePlaylistRequest(
       // than changing `fetchRenditionCoalesced`'s return shape, which the
       // non-blocking cache-or-forward path below still needs whole.
       () =>
-        fetchRenditionCoalesced(cacheKeyRequest(request).url, origin, {
+        fetchRenditionCoalesced(cacheKeyRequest(request).url, origin, ctx, {
           channelId,
           startedAt,
           rung,
@@ -582,6 +583,15 @@ export async function handlePlaylistRequest(
       logEvent,
       { channelId, rung },
       request.signal,
+      // `ctx.waitUntil`, so the poll loop this request may START outlives
+      // this request's own response. Without it the loop's timers and its
+      // origin fetch die with this request's context the moment the hold is
+      // answered, leaving `state.polling` stuck true and every later request
+      // for the rendition parked on a loop that no longer exists -- the
+      // thirteen "your Worker's code had hung" 500s of 2026-09-15. See
+      // `hls-blocking-reload.js`, the block comment above
+      // `LOOP_RESUME_SLACK_MS`.
+      { keepAlive: (promise) => ctx.waitUntil(promise) },
     );
     // `null` is the fallback signal (`hls-blocking-reload.js`): this
     // isolate declined to hold THIS request open, for one of three reasons
@@ -637,7 +647,7 @@ export async function handlePlaylistRequest(
   let fetched: FetchedPlaylist;
   let isProducer: boolean;
   try {
-    const coalesced = await fetchRenditionCoalesced(cacheKey.url, origin, {
+    const coalesced = await fetchRenditionCoalesced(cacheKey.url, origin, ctx, {
       channelId,
       startedAt,
       rung,
@@ -798,14 +808,11 @@ function getLlOrigin(originBase: string | undefined, timeoutMs: number, originKe
 async function fetchRenditionCoalesced(
   cacheKeyUrl: string,
   origin: PlaylistOrigin,
+  ctx: ExecutionContext,
   req: { channelId: string; startedAt: string; rung: string; token: string },
 ): Promise<CoalescedFetch> {
-  const existing = inFlightRenditionFetches.get(cacheKeyUrl);
-  if (existing) {
-    return { result: await existing, isProducer: false };
-  }
   const startTime = Date.now();
-  const promise = (async (): Promise<FetchedPlaylist> => {
+  const produce = async (): Promise<FetchedPlaylist> => {
     let response: Response;
     let body: ArrayBuffer;
     try {
@@ -832,13 +839,27 @@ async function fetchRenditionCoalesced(
       });
     }
     return { status: response.status, headers: response.headers, body };
-  })();
-  inFlightRenditionFetches.set(cacheKeyUrl, promise);
-  try {
-    return { result: await promise, isProducer: true };
-  } finally {
-    inFlightRenditionFetches.delete(cacheKeyUrl);
-  }
+  };
+
+  // BOTH HALVES OF THE 2026-09-15 FIX (see `coalesced-fetch.js`'s header).
+  // `keepAlive` extends the PRODUCING request's context past its own
+  // response, so the fetch every joiner is sharing actually survives long
+  // enough to answer them -- without it, the producer returning is what
+  // cancelled the fetch and turned a healthy origin into five 502s. The
+  // bounded, detachable join inside `coalesceFetch` is the other half, for
+  // the joiners of a producer that dies anyway (a viewer navigating away
+  // takes its context with it whatever this Worker does).
+  return coalesceFetch(inFlightRenditionFetches, cacheKeyUrl, produce, {
+    keepAlive: (promise) => ctx.waitUntil(promise),
+    onDetach: ({ reason, attempt }) => {
+      logEvent("hlsEdge.originJoinDetached", {
+        channelId: req.channelId,
+        rung: req.rung,
+        reason,
+        attempt,
+      });
+    },
+  });
 }
 
 export default {

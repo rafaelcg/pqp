@@ -374,3 +374,102 @@ test("LL rendition route (ll): a CHANNEL-WIDE revocation (not just a per-viewer 
   assert.equal(body.reason, "revoked");
   assert.equal(ll.calls, 0);
 });
+
+// ---------------------------------------------------------------------------
+// THE PLAIN (NON-BLOCKING) RENDITION PATH UNDER CONCURRENCY
+//
+// Two of the thirteen requests the Workers runtime killed on 2026-09-15 were
+// PLAIN playlist requests with no `_HLS_*` directive at all, which is what
+// put `inFlightRenditionFetches` in scope alongside the blocking-reload
+// machinery: a caller joining a shared fetch owned by a request that has
+// already returned has no pending I/O of its own. This exercises that path
+// end to end -- the 2 s cache lookup, the coalesced origin fetch, the
+// response build -- with a burst of concurrent callers on one key, and
+// asserts that every one of them settles and that `ctx.waitUntil` is handed
+// the producer's fetch.
+// ---------------------------------------------------------------------------
+
+/** `caches.default` is a Workers global with no Node counterpart; this is the smallest thing `safeCacheMatch`/`safeCachePut` accept. */
+function withFakeCaches(run) {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "caches");
+  const previous = globalThis.caches;
+  const puts = [];
+  globalThis.caches = {
+    default: {
+      async match() {
+        return undefined;
+      },
+      async put(key, response) {
+        puts.push(key);
+        // Read the body the way the real cache does, so a response that
+        // cannot be consumed twice fails here rather than silently.
+        await response.arrayBuffer();
+      },
+    },
+  };
+  return run(puts).finally(() => {
+    if (had) {
+      globalThis.caches = previous;
+    } else {
+      delete globalThis.caches;
+    }
+  });
+}
+
+function renditionRequestFor(channelId, startedAt, rung, token) {
+  const url =
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}/${rung}` +
+    `?${HLS_VIEWER_TOKEN_PARAM}=${token}`;
+  return new Request(url, { method: "GET" });
+}
+
+test("the plain rendition path: a burst of concurrent viewers all settle on ONE origin fetch", async () => {
+  await withFakeCaches(async () => {
+    const channelId = "chan-plain-burst";
+    const startedAt = "1726000000000";
+    const rung = "720p30";
+    const token = tokenFor("user-plain-burst", channelId, startedAt);
+
+    let originCalls = 0;
+    const origin = {
+      ready: true,
+      async fetchPlaylist() {
+        originCalls += 1;
+        // Not instant: the whole point is that the later callers arrive
+        // while the first one's fetch is still in flight.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return new Response("#EXTM3U\n#EXT-X-TARGETDURATION:4\n", { status: 200 });
+      },
+    };
+
+    /** @type {Promise<unknown>[]} */
+    const kept = [];
+    const ctx = { waitUntil: (promise) => kept.push(Promise.resolve(promise).catch(() => {})) };
+
+    const responses = await Promise.all(
+      Array.from({ length: 12 }, () =>
+        handlePlaylistRequest(
+          renditionRequestFor(channelId, startedAt, rung, token),
+          { api: origin, ll: { ready: false } },
+          ctx,
+          baseEnv({ ORIGIN_BASE: "https://api.example" }),
+          channelId,
+          startedAt,
+          rung,
+        ),
+      ),
+    );
+
+    assert.equal(responses.length, 12);
+    for (const response of responses) {
+      assert.equal(response.status, 200, "every concurrent caller must get an answer");
+      assert.equal(await response.text(), "#EXTM3U\n#EXT-X-TARGETDURATION:4\n");
+    }
+    assert.equal(originCalls, 1, "twelve viewers, one origin fetch -- the whole reason this Worker exists");
+    assert.ok(
+      kept.length >= 1,
+      "the producing request must extend its own context past its response, or the fetch its joiners share dies with it",
+    );
+    await Promise.all(kept);
+  });
+});
