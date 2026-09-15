@@ -40,6 +40,7 @@ import {
   isBehindLive,
   isInPlaceModeDemotion,
   isLlPartLoadErrorDetail,
+  isPlaylistGoneError,
   isPipAvailable,
   jumpToLiveTime,
   liveSeekOffsetSeconds,
@@ -766,5 +767,43 @@ describe("shouldPinToConventionalRung / isLlPartLoadErrorDetail", () => {
     expect(isLlPartLoadErrorDetail("fragParsingError")).toBe(true);
     expect(isLlPartLoadErrorDetail("manifestLoadError")).toBe(false);
     expect(isLlPartLoadErrorDetail("bufferStalledError")).toBe(false);
+  });
+});
+
+describe("isPlaylistGoneError (conventional restart dead window)", () => {
+  it("is true for a 404/410 on the master or media playlist", () => {
+    expect(
+      isPlaylistGoneError({ details: "manifestLoadError", responseCode: 404 }),
+    ).toBe(true);
+    expect(
+      isPlaylistGoneError({ details: "levelLoadError", responseCode: 410 }),
+    ).toBe(true);
+  });
+
+  it("is false for a missing fragment — that is not a gone session", () => {
+    expect(
+      isPlaylistGoneError({ details: "fragLoadError", responseCode: 404 }),
+    ).toBe(false);
+  });
+
+  it("is false for timeouts and 5xx — those are not 'gone'", () => {
+    expect(
+      isPlaylistGoneError({
+        details: "manifestLoadError",
+        responseCode: 500,
+      }),
+    ).toBe(false);
+    expect(
+      isPlaylistGoneError({
+        details: "manifestLoadTimeOut",
+        responseCode: 404,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false without a response code or details", () => {
+    expect(isPlaylistGoneError({ details: "manifestLoadError" })).toBe(false);
+    expect(isPlaylistGoneError({ responseCode: 404 })).toBe(false);
+    expect(isPlaylistGoneError({})).toBe(false);
   });
 });

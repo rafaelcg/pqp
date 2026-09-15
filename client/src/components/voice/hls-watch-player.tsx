@@ -68,6 +68,7 @@ import {
   isInPlaceModeDemotion,
   isLlPartLoadErrorDetail,
   isPipAvailable,
+  isPlaylistGoneError,
   liveSeekOffsetSeconds,
   liveSeekTarget,
   llHlsConfig,
@@ -1380,7 +1381,9 @@ export function HlsWatchPlayer({
         }
         return;
       }
-      restarting = watch.lastReason === "sequence-stuck";
+      restarting =
+        watch.lastReason === "sequence-stuck" ||
+        watch.lastReason === "playlist-gone";
       setStallReason(watch.lastReason);
       if (!restarting) {
         setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
@@ -1390,6 +1393,18 @@ export function HlsWatchPlayer({
         // its jitter from an earlier tick would only fire into a dead player.
         clearPendingReconnect();
         setPhase("dead");
+        return;
+      }
+      if (decision === "hold") {
+        // Conventional restart dead window: stop the 1 Hz playlist /
+        // last-segment loop, keep the restarting overlay up, and let the
+        // next ticks' `"reconnect"` polls find a fresh master. No seek and
+        // no startLoad — those are what made the dead window look broken.
+        clearPendingReconnect();
+        console.warn(
+          `[hls] stream stalled (${watch.lastReason}), holding for restart`,
+        );
+        hlsRef.current?.stopLoad?.();
         return;
       }
       if (
@@ -1688,9 +1703,38 @@ export function HlsWatchPlayer({
       hls = player as unknown as HlsHandle;
       hlsRef.current = hls;
       player.on(Hls.Events.ERROR, (_event, data) => {
-        // Fatal network/media errors: hls.js has given up on this source;
-        // non-fatal ones it retries on its own and the watchdog only notes.
-        watch.onError({ fatal: Boolean(data.fatal) });
+        // Conventional restart dead window (2026-09-15): a 404/410 on our
+        // own playlist/master means the previous session is gone, not that
+        // this player should walk the fatal start-load ladder. Intercept
+        // before `onError({ fatal })` — hls.js marks these fatal after its
+        // retry budget, and that ladder is exactly the 1 Hz / last-segment
+        // loop the hold exists to stop. LL and VOD keep the ordinary path
+        // (#650: do not reintroduce the broader #646 live-edge recovery).
+        if (
+          !cancelled &&
+          !isVod &&
+          effectiveMode === "conventional" &&
+          isPlaylistGoneError({
+            details: typeof data.details === "string" ? data.details : null,
+            responseCode:
+              typeof data.response?.code === "number"
+                ? data.response.code
+                : null,
+          })
+        ) {
+          watch.onPlaylistGone();
+          // Stop the in-flight 404 storm immediately rather than waiting
+          // for the next stall tick to return `"hold"`.
+          player.stopLoad();
+          if (!cancelled) {
+            setStallReason("playlist-gone");
+            setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+          }
+        } else {
+          // Fatal network/media errors: hls.js has given up on this source;
+          // non-fatal ones it retries on its own and the watchdog only notes.
+          watch.onError({ fatal: Boolean(data.fatal) });
+        }
         // Pitfall 16 (CLAUDE.md): a 401 on our own playlist proxy is almost
         // always a Clerk JWT that went stale a few seconds before its
         // refresh, not a real access failure — the `?t=` capability in the

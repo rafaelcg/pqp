@@ -40,13 +40,26 @@ import {
  * - `"stall"` (buffering, no fatal error): `startLoad(-1)`, then reload the
  *   level playlist. No `recoverMediaError()` — there is no media error to
  *   recover from.
- * - `"sequence-stuck"` (the egress, not this player, is stuck): `startLoad`,
- *   then the harder `stopLoad()` + `startLoad(-1)` reset, then reload the
- *   level playlist — all against the SAME source. Claim 9's server-side
- *   watchdog is already restarting the egress, and a client rebuild cannot
- *   invent segments the server never wrote, so this reason never reaches
- *   `"rebuild"` on its own. Once its ladder is spent it instead asks to
- *   `"reconnect"`: check whether the session has actually moved on.
+ * - `"sequence-stuck"` / `"playlist-gone"` (the egress, not this player):
+ *   Claim 9's server-side watchdog is already restarting the egress, and a
+ *   client rebuild cannot invent segments the server never wrote, so these
+ *   reasons never reach `"rebuild"` on their own.
+ *
+ *   CONVENTIONAL (the 2026-09-15 restart dead-window polish): skip the
+ *   in-place `startLoad` / `restart-load` / `reload-level` ladder entirely.
+ *   Those steps hammer a dying or already-404ing playlist at ~1 Hz and
+ *   re-download the last known segment into an ugly 1–2 s loop while the
+ *   new master is still 10–15 s away. Instead: one `"hold"` (caller
+ *   `stopLoad()`s and shows the restarting UI), then bounded `"reconnect"`
+ *   polls for a fresh session. `"playlist-gone"` (own proxy answered
+ *   404/410) enters that path immediately, without waiting out
+ *   `sequenceStuckMs`.
+ *
+ *   LL keeps the older three-step in-place ladder, then the same
+ *   `"reconnect"` backoff. Do not fold the conventional hold into LL — #646
+ *   tried a broader live-edge recovery and #650 had to revert it after it
+ *   broke conventional playback.
+ *
  *   `"reconnect"` checks back off (doubling, capped at
  *   `reconnectBackoffMaxMs`) instead of firing on every tick, and after
  *   `maxReconnects` of them with no session change the stream is declared
@@ -85,6 +98,13 @@ export type HlsStallDecision =
   | "start-load"
   | "restart-load"
   | "reload-level"
+  /**
+   * Conventional egress-restart dead window (2026-09-15): stop loading, show
+   * the restarting holding screen, and wait for a reconnect poll to adopt a
+   * fresh master. Never startLoad / reload-level — those hammer a 404ing
+   * playlist and re-download the last segment into a 1–2 s loop.
+   */
+  | "hold"
   | "reconnect"
   | "rebuild"
   | "dead";
@@ -94,6 +114,8 @@ export type HlsStallReason =
   | "fatal"
   | "stall"
   | "sequence-stuck"
+  /** Own playlist/master answered 404/410 — the session is gone (restart). */
+  | "playlist-gone"
   | "part-stuck"
   | null;
 
@@ -157,6 +179,23 @@ export class HlsStallWatch {
   private reconnectAttempts = 0;
   /** Earliest time the next `"reconnect"` may fire; null means "now". */
   private nextReconnectAt: number | null = null;
+  /**
+   * `"conventional"` (default) holds through a restart dead window instead
+   * of walking the in-place sequence-stuck ladder; `"ll"` keeps that ladder.
+   * Set by `configureForMode`.
+   */
+  private mode: HlsMode = "conventional";
+  /**
+   * Own playlist/master answered 404/410. Conventional only — the player
+   * gates the call; once set, `tick` enters the hold/reconnect path without
+   * waiting out `sequenceStuckMs`.
+   */
+  private playlistGone = false;
+  /**
+   * This episode already emitted `"hold"`. Further ticks go straight to
+   * the reconnect backoff rather than repeating stopLoad every second.
+   */
+  private heldForRestart = false;
 
   private pendingFatal = false;
   private pendingDecodeError = false;
@@ -191,11 +230,12 @@ export class HlsStallWatch {
    *
    * Called once per attach (`HlsWatchPlayer`), never mid-episode, so this
    * never fights a ladder that is already walking: `conventional` restores
-   * exactly the constructor's values and disables the part rule, so a
-   * caller that never calls this at all -- every existing test, and every
-   * conventional session -- sees byte-identical behaviour.
+   * exactly the constructor's thresholds and disables the part rule. Mode
+   * also selects the sequence-stuck policy (hold+reconnect on conventional,
+   * in-place ladder on LL).
    */
   configureForMode(mode: HlsMode, partTargetMs?: number): void {
+    this.mode = mode;
     if (mode === "ll") {
       const parts = validPartTargetMs(partTargetMs);
       this.sequenceStuckMs = Math.max(
@@ -232,6 +272,8 @@ export class HlsStallWatch {
     this.waitingSince = null;
     this.pendingFatal = false;
     this.pendingDecodeError = false;
+    this.playlistGone = false;
+    this.heldForRestart = false;
     this.ladderStep = 0;
     this.reconnectAttempts = 0;
     this.nextReconnectAt = null;
@@ -259,6 +301,17 @@ export class HlsStallWatch {
   }
 
   /**
+   * Own playlist/master answered 404/410. The egress session this player is
+   * still pointed at is gone (restart dead window); the next `tick` holds
+   * and reconnects rather than walking the fatal or sequence-stuck ladders
+   * that would hammer the dead URL. Caller must only invoke this for
+   * conventional live — LL and VOD keep their own paths.
+   */
+  onPlaylistGone(): void {
+    this.playlistGone = true;
+  }
+
+  /**
    * The `<video>` element's own `error` event: the native engine, or an MSE
    * decode failure that bubbled past hls.js. `decode` is
    * `video.error?.code === MediaError.MEDIA_ERR_DECODE` — the one case the
@@ -282,6 +335,8 @@ export class HlsStallWatch {
     this.partStuckFired = false;
     this.pendingFatal = false;
     this.pendingDecodeError = false;
+    this.playlistGone = false;
+    this.heldForRestart = false;
     this.ladderStep = 0;
     // A genuine re-attach (a session that actually moved on) is the
     // recovery a stuck egress's reconnect budget exists to find -- reset it
@@ -306,6 +361,12 @@ export class HlsStallWatch {
   private currentReason(now: number): HlsStallReason {
     if (this.pendingFatal || this.pendingDecodeError) {
       return "fatal";
+    }
+    // Playlist-gone before the softer stall/sequence rules: a 404 on our
+    // own master is the restart signal itself, and waiting out
+    // sequenceStuckMs (or a waiting stall) would only prolong the 404 storm.
+    if (this.playlistGone) {
+      return "playlist-gone";
     }
     if (
       this.waitingSince !== null &&
@@ -350,6 +411,7 @@ export class HlsStallWatch {
       this.ladderStep = 0;
       this.reconnectAttempts = 0;
       this.nextReconnectAt = null;
+      this.heldForRestart = false;
     }
     this.lastReason = reason;
     this.ladderStep += 1;
@@ -360,7 +422,20 @@ export class HlsStallWatch {
       return this.gateRebuild(now);
     }
 
-    if (reason === "sequence-stuck") {
+    if (reason === "playlist-gone" || reason === "sequence-stuck") {
+      // Conventional restart dead window: hold once, then reconnect. Never
+      // the in-place start-load ladder — that is the 1 Hz / last-segment
+      // loop. LL sequence-stuck keeps the older ladder below.
+      if (reason === "playlist-gone" || this.mode === "conventional") {
+        if (!this.heldForRestart) {
+          this.heldForRestart = true;
+          return "hold";
+        }
+        // Pin the step so a long hold does not grow the cursor forever;
+        // gateReconnect only cares about reconnectAttempts / backoff.
+        this.ladderStep = 1;
+        return this.gateReconnect(now);
+      }
       const index = this.ladderStep - 1;
       if (index < SEQUENCE_STUCK_LADDER.length) {
         return SEQUENCE_STUCK_LADDER[index]!;

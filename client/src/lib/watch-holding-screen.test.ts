@@ -36,6 +36,16 @@ describe("resolveHoldingScreenReason", () => {
     ).toBe("restarting");
   });
 
+  it("maps a playlist-gone 404 to restarting — same dead-window copy", () => {
+    expect(
+      resolveHoldingScreenReason({
+        ...playing,
+        hasFrame: true,
+        stallReason: "playlist-gone",
+      }),
+    ).toBe("restarting");
+  });
+
   it("shows restarting even with a frame still on screen and phase still playing (B1.3: no rebuild for sequence-stuck)", () => {
     // The player no longer tears hls.js down for a stuck egress, so `phase`
     // never leaves "playing" and the last frame never leaves `hasFrame`.
@@ -123,6 +133,12 @@ describe("resolveHoldingScreenReason (mode: vod)", () => {
   it("never reads sequence-stuck as a dead egress: a VOD playlist's sequence never moves", () => {
     expect(
       resolveHoldingScreenReason({ ...buffering, stallReason: "sequence-stuck" }),
+    ).toBe("buffering");
+  });
+
+  it("never reads playlist-gone as a live restart either", () => {
+    expect(
+      resolveHoldingScreenReason({ ...buffering, stallReason: "playlist-gone" }),
     ).toBe("buffering");
   });
 
