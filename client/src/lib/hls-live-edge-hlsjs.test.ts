@@ -4,14 +4,8 @@ import {
   applyLlLatencyCeiling,
   hlsLivePlayerConfig,
   llHlsConfig,
-  llLatencyCeilingSeconds,
   llMaxLatencySeconds,
   LL_HLS_DEFAULT_PART_TARGET_MS,
-  LL_HLS_FRAG_MAX_RETRY_DELAY_MS,
-  LL_HLS_FRAG_RETRY_COUNT,
-  LL_HLS_FRAG_RETRY_DELAY_MS,
-  LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
-  LL_HLS_FRAG_TTFB_MS,
 } from "./hls-live-edge";
 
 /**
@@ -91,53 +85,5 @@ describe("our hls.js configs are configs hls.js accepts", () => {
           ),
         } as never),
     ).toThrow(/liveMaxLatencyDuration/);
-  });
-});
-
-/**
- * The LL fragment retry budget and the manifest-driven latency ceiling, both
- * handed to the real hls.js -- a config key hls.js does not recognise is
- * silently dropped in the merge, which looks exactly like a policy that is
- * working.
- */
-describe("the LL path's own load policies survive hls.js's merge", () => {
-  it("keeps the part-paced fragment retry budget", () => {
-    const player = new Hls(llHlsConfig() as never);
-    try {
-      const retry = player.config.fragLoadPolicy.default.errorRetry;
-      expect(retry?.maxNumRetry).toBe(LL_HLS_FRAG_RETRY_COUNT);
-      expect(retry?.retryDelayMs).toBe(LL_HLS_FRAG_RETRY_DELAY_MS);
-      expect(retry?.maxRetryDelayMs).toBe(LL_HLS_FRAG_MAX_RETRY_DELAY_MS);
-      // The timeout half of the same budget, which hls.js merges separately.
-      const policy = player.config.fragLoadPolicy.default;
-      expect(policy.maxTimeToFirstByteMs).toBe(LL_HLS_FRAG_TTFB_MS);
-      expect(policy.timeoutRetry?.maxNumRetry).toBe(
-        LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
-      );
-    } finally {
-      player.destroy();
-    }
-  });
-
-  it("raises the latency ceiling to clear the manifest's own PART-HOLD-BACK", () => {
-    // `LatencyController.maxLatency` reads `liveMaxLatencyDuration` off the
-    // merged config, and `StreamController.synchronizeToLiveEdge` force-seeks
-    // once the playhead is that far back. A 3 s hold-back under the 4 s
-    // part-derived ceiling leaves one second of slack, and one stumble then
-    // seeks, which empties a 6 s buffer, which is the next stumble.
-    const player = new Hls(llHlsConfig() as never);
-    try {
-      applyLlLatencyCeiling(
-        player as unknown as { config: { liveMaxLatencyDuration?: number } },
-        LL_HLS_DEFAULT_PART_TARGET_MS,
-        3,
-      );
-      expect(player.config.liveMaxLatencyDuration).toBe(
-        llLatencyCeilingSeconds(LL_HLS_DEFAULT_PART_TARGET_MS, 3),
-      );
-      expect(player.config.liveMaxLatencyDuration).toBeGreaterThan(3);
-    } finally {
-      player.destroy();
-    }
   });
 });
