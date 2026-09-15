@@ -44,7 +44,9 @@ import {
   jumpToLiveTime,
   liveSeekOffsetSeconds,
   liveSeekTarget,
+  applyLlLatencyCeiling,
   llHlsConfig,
+  llMaxLatencySeconds,
   mediaSeekableEnd,
   reloadHlsLevelPlaylist,
   resolveLiveEdge,
@@ -541,10 +543,9 @@ describe("effectiveHlsMode", () => {
 });
 
 describe("llHlsConfig", () => {
-  it("derives every number from partTargetMs, never a hardcoded 20s", () => {
-    const config = llHlsConfig(500);
+  it("sets the LL engine fields and nothing hls.js refuses at construction", () => {
+    const config = llHlsConfig();
     expect(config.lowLatencyMode).toBe(true);
-    expect(config.liveMaxLatencyDuration).toBe(LL_HLS_MAX_LATENCY_PARTS * 0.5);
     expect(config.maxLiveSyncPlaybackRate).toBe(
       LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
     );
@@ -556,34 +557,44 @@ describe("llHlsConfig", () => {
     // must not see a `liveSyncDuration`/`liveSyncDurationCount` key here.
     expect("liveSyncDuration" in config).toBe(false);
     expect("liveSyncDurationCount" in config).toBe(false);
+    // AND NOT THIS ONE EITHER. hls.js throws on a constructor config that
+    // carries `liveMaxLatencyDuration` without `liveSyncDuration`, which is
+    // the pair this config is built to avoid. `applyLlLatencyCeiling` puts
+    // the ceiling on after the merge instead.
+    expect("liveMaxLatencyDuration" in config).toBe(false);
+    expect("liveMaxLatencyDurationCount" in config).toBe(false);
   });
 
-  it("scales liveMaxLatencyDuration with a different part target", () => {
-    const fast = llHlsConfig(200);
-    const slow = llHlsConfig(1000);
-    expect(fast.liveMaxLatencyDuration).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 0.2);
-    expect(slow.liveMaxLatencyDuration).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 1.0);
-    expect(fast.liveMaxLatencyDuration).toBeLessThan(slow.liveMaxLatencyDuration);
+  it("scales the latency ceiling with the part target", () => {
+    expect(llMaxLatencySeconds(200)).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 0.2);
+    expect(llMaxLatencySeconds(1_000)).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 1.0);
+    expect(llMaxLatencySeconds(200)).toBeLessThan(llMaxLatencySeconds(1_000));
   });
 
   it("never returns the conventional path's ~20s cushion for a realistic part target", () => {
-    const config = llHlsConfig(500);
-    expect(config.liveMaxLatencyDuration).toBeLessThan(HLS_LIVE_WINDOW_SECONDS / 2);
+    expect(llMaxLatencySeconds(500)).toBeLessThan(HLS_LIVE_WINDOW_SECONDS / 2);
   });
 
   it("falls back to the default part target on a non-finite/zero input", () => {
-    expect(llHlsConfig(0).liveMaxLatencyDuration).toBe(
-      llHlsConfig(LL_HLS_DEFAULT_PART_TARGET_MS).liveMaxLatencyDuration,
+    expect(llMaxLatencySeconds(0)).toBe(
+      llMaxLatencySeconds(LL_HLS_DEFAULT_PART_TARGET_MS),
     );
-    expect(llHlsConfig(Number.NaN).liveMaxLatencyDuration).toBe(
-      llHlsConfig(LL_HLS_DEFAULT_PART_TARGET_MS).liveMaxLatencyDuration,
+    expect(llMaxLatencySeconds(Number.NaN)).toBe(
+      llMaxLatencySeconds(LL_HLS_DEFAULT_PART_TARGET_MS),
     );
   });
 
-  it("is a byte-identical snapshot at the documented 500ms part target", () => {
-    expect(llHlsConfig(500)).toEqual({
+  it("applyLlLatencyCeiling puts the part-derived ceiling on the merged config", () => {
+    const player = { config: {} as { liveMaxLatencyDuration?: number } };
+    applyLlLatencyCeiling(player, 500);
+    expect(player.config.liveMaxLatencyDuration).toBe(
+      LL_HLS_MAX_LATENCY_PARTS * 0.5,
+    );
+  });
+
+  it("is a byte-identical snapshot of the constructor config", () => {
+    expect(llHlsConfig()).toEqual({
       lowLatencyMode: true,
-      liveMaxLatencyDuration: 4,
       maxLiveSyncPlaybackRate: 1.1,
       maxBufferLength: 6,
       maxMaxBufferLength: 10,
@@ -611,7 +622,7 @@ describe("llHlsConfig", () => {
     // LL session) is what left four production parties with no picture on
     // 2026-09-15. hls.js's stock budget is ONE retry, which is two 503s and
     // a fatal error on a session that takes two seconds to subscribe.
-    const retry = llHlsConfig(500).manifestLoadPolicy.default.errorRetry;
+    const retry = llHlsConfig().manifestLoadPolicy.default.errorRetry;
     expect(retry.maxNumRetry).toBeGreaterThan(1);
     // Long enough to cover a real subscribe-and-first-part, short enough
     // that a dead origin still reaches the player's own recovery ladder.
