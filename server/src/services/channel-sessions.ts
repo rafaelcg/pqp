@@ -535,7 +535,11 @@ function rememberRelayed(sessionId: string, kind: string, now: number): void {
 export function resetRelayedChannelSessionReminders(): void {
   relayedReminders.clear();
   lastRelayedSweepAt = 0;
-  pendingReminderRetries = 0;
+  queuedReminderRetries.length = 0;
+  if (reminderRetryTimer) {
+    clearTimeout(reminderRetryTimer);
+    reminderRetryTimer = null;
+  }
 }
 
 subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
@@ -608,34 +612,51 @@ const REMINDER_REPUBLISH_MS = 3_000;
  * pretending to cover the one that does not.
  */
 /**
- * A worker catching up after an outage can claim hundreds of reminders in one
- * tick, and one timer each would be a burst of timers holding a frame each,
- * all firing in the same millisecond at a bus that is very likely still down.
- * Past this many outstanding, the retry is skipped: the frame was published
- * once, and a deployment this far behind has a bigger problem than the
+ * ONE QUEUE AND ONE TIMER, however many reminders come due at once.
+ *
+ * A worker catching up after an outage can claim hundreds in a single tick.
+ * A timer each would be hundreds of timers holding a frame apiece, all firing
+ * in the same millisecond at a bus that is very likely still down; a cap on
+ * how many of those may exist fixes the burst by throwing away the retry for
+ * everything past it, which is the wrong half to give up — those reminders
+ * were claimed in SQL and will not come round again. Collecting them instead
+ * costs one timer and one array, and every reminder in the window gets its
  * second attempt.
+ *
+ * The array is still bounded, because an unbounded retry buffer is a memory
+ * leak dressed as reliability (the same rule the transport itself follows).
+ * The oldest go first: they are the ones closest to being stale anyway.
  */
-const MAX_PENDING_REMINDER_RETRIES = 200;
-let pendingReminderRetries = 0;
+const MAX_QUEUED_REMINDER_RETRIES = 1_000;
+const queuedReminderRetries: ChannelSessionReminderEvent[] = [];
+let reminderRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushReminderRetries(): void {
+  reminderRetryTimer = null;
+  const batch = queuedReminderRetries.splice(0);
+  if (!isBusEnabled()) {
+    return;
+  }
+  for (const event of batch) {
+    publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, event);
+  }
+}
 
 function publishReminder(event: ChannelSessionReminderEvent): void {
   publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, event);
   if (isBusConnected()) {
     return;
   }
-  if (pendingReminderRetries >= MAX_PENDING_REMINDER_RETRIES) {
+  queuedReminderRetries.push(event);
+  if (queuedReminderRetries.length > MAX_QUEUED_REMINDER_RETRIES) {
+    queuedReminderRetries.shift();
+  }
+  if (reminderRetryTimer) {
     return;
   }
-  pendingReminderRetries += 1;
-  const retry = setTimeout(() => {
-    pendingReminderRetries -= 1;
-    if (!isBusEnabled()) {
-      return;
-    }
-    publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, event);
-  }, REMINDER_REPUBLISH_MS);
+  reminderRetryTimer = setTimeout(flushReminderRetries, REMINDER_REPUBLISH_MS);
   // A pending retry must never be why a worker refuses to exit.
-  retry.unref?.();
+  reminderRetryTimer.unref?.();
 }
 
 function notifyChannelSessionSubscribers(
