@@ -6308,6 +6308,11 @@ function MainAppContent({
   const voiceRoomSize = voiceState.voiceChannelId
     ? (voiceState.occupancy[voiceState.voiceChannelId] ?? []).length
     : 0;
+  const voiceServerId = voiceIsDmCall ? null : voiceServerIdRef.current;
+  const canCreateInviteForVoice =
+    voiceServerId !== null &&
+    voiceServerId === selectedServerId &&
+    perms.can(Permission.CREATE_INVITE);
   const attachedFeatureHint = winningFeatureHint({
     watchParty:
       wantsWatchPartyHint &&
@@ -6318,11 +6323,8 @@ function MainAppContent({
       seen: !wantsBringFriendsHint,
       automated: false,
       presenting: voiceState.status === "connected" && voiceState.isSharingScreen,
-      inServer: !voiceIsDmCall && voiceServerIdRef.current !== null,
-      canInvite:
-        voiceServerIdRef.current !== null &&
-        voiceServerIdRef.current === selectedServerId &&
-        perms.can(Permission.CREATE_INVITE),
+      inServer: voiceServerId !== null,
+      canInvite: canCreateInviteForVoice,
       roomSize: voiceRoomSize,
     }),
     music: wantsMusicHint && voiceState.status === "connected",
@@ -7539,7 +7541,8 @@ function MainAppContent({
     // provider because the card is one of its consumers.
     <FriendsContext.Provider value={friends}>
     <BringFriendsServerProvider
-      serverId={voiceIsDmCall ? null : voiceServerIdRef.current}
+      serverId={voiceServerId}
+      canCreateInvite={canCreateInviteForVoice}
     >
     <FeatureHintProvider winner={liveAttachedHint}>
     {/* One provider for the whole app: the profile card is opened from the

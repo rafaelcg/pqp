@@ -860,6 +860,8 @@
   "invite.hint.bringFriends.cta": "Copy invite",
   "invite.hint.bringFriends.failed": "Couldn't copy the invite.",
   "invite.done.body": "Send the link to whoever should be here.",
+  "invite.done.inviteFailed": "Couldn't make the link. Try again.",
+  "invite.done.retryInvite": "Try again",
   "voice.channelFallback": "Voice",
   "voice.live": "Live",
   "voice.meshWarning": "This room is nearly full. For a bigger call, whoever runs the server can change the room size in the channel settings.",

@@ -7,57 +7,60 @@ import {
   type ReactNode,
 } from "react";
 import { FeatureHint } from "@/components/layout/feature-hint";
-import { createInvite, listInvites } from "@/lib/api";
+import { createInvite } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { shareInviteText, shareInviteUrl } from "@/lib/share-invite";
 
-const BringFriendsServerContext = createContext<string | null>(null);
+type BringFriendsServerValue = {
+  serverId: string | null;
+  canCreateInvite: boolean;
+};
+
+const BringFriendsServerContext = createContext<BringFriendsServerValue>({
+  serverId: null,
+  canCreateInvite: false,
+});
 
 export function BringFriendsServerProvider({
   serverId,
+  canCreateInvite,
   children,
 }: {
   serverId: string | null;
+  canCreateInvite: boolean;
   children: ReactNode;
 }) {
   return (
-    <BringFriendsServerContext.Provider value={serverId}>
+    <BringFriendsServerContext.Provider value={{ serverId, canCreateInvite }}>
       {children}
     </BringFriendsServerContext.Provider>
   );
 }
 
-export function useBringFriendsServerId(): string | null {
+export function useBringFriendsServer(): BringFriendsServerValue {
   return useContext(BringFriendsServerContext);
 }
 
 const DEFAULT_EXPIRY_HOURS = 168;
 const COPY_MS = 1200;
 
-function inviteStillOpen(expiresAt: string | null, maxUses: number | null, uses: number) {
-  if (maxUses !== null && uses >= maxUses) {
-    return false;
-  }
-  if (!expiresAt) {
-    return true;
-  }
-  const remaining = new Date(expiresAt).getTime() - Date.now();
-  return !Number.isNaN(remaining) && remaining > 0;
-}
-
 /**
- * One-shot nudge for a lone presenter. CTA copies the short invite paste
- * (reuses a live link, or makes a 7-day one).
+ * One-shot nudge for a lone presenter. CTA makes a 7-day invite and
+ * copies the short paste. createInvite is permission-checked on the API.
  */
 export function BringFriendsHint({
   enabled,
   serverId: serverIdProp,
+  canCreateInvite: canCreateInviteProp,
 }: {
   enabled: boolean;
   serverId?: string | null;
+  canCreateInvite?: boolean;
 }) {
-  const serverIdFromContext = useBringFriendsServerId();
-  const serverId = serverIdProp === undefined ? serverIdFromContext : serverIdProp;
+  const ctx = useBringFriendsServer();
+  const serverId = serverIdProp === undefined ? ctx.serverId : serverIdProp;
+  const canCreateInvite =
+    canCreateInviteProp === undefined ? ctx.canCreateInvite : canCreateInviteProp;
   const { t, locale } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -74,19 +77,14 @@ export function BringFriendsHint({
   );
 
   async function copyInvitePaste() {
-    if (!serverId || busy) {
+    if (!serverId || !canCreateInvite || busy) {
       throw new Error("unavailable");
     }
     setBusy(true);
     try {
-      const { invites } = await listInvites(serverId);
-      const live = invites.find((invite) =>
-        inviteStillOpen(invite.expiresAt, invite.maxUses, invite.uses),
-      );
-      const invite =
-        live ??
-        (await createInvite(serverId, { expiresInHours: DEFAULT_EXPIRY_HOURS }))
-          .invite;
+      const { invite } = await createInvite(serverId, {
+        expiresInHours: DEFAULT_EXPIRY_HOURS,
+      });
       const url = shareInviteUrl(window.location.origin, invite.code);
       await navigator.clipboard.writeText(shareInviteText("short", locale, url));
       setFailed(false);
@@ -106,7 +104,7 @@ export function BringFriendsHint({
     }
   }
 
-  if (!serverId) {
+  if (!serverId || !canCreateInvite) {
     return null;
   }
 

@@ -860,6 +860,8 @@
   "invite.hint.bringFriends.cta": "Copiar convite",
   "invite.hint.bringFriends.failed": "Não deu pra copiar o convite.",
   "invite.done.body": "Manda o link pra quem deve entrar.",
+  "invite.done.inviteFailed": "Não deu pra gerar o link. Tenta de novo.",
+  "invite.done.retryInvite": "Tentar de novo",
   "voice.channelFallback": "Voz",
   "voice.live": "Live",
   "voice.meshWarning": "Essa sala tá quase cheia. Pra uma call maior, quem manda no servidor troca o tamanho da sala nas configurações do canal.",
