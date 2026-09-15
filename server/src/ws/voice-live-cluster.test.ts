@@ -1096,6 +1096,48 @@ describeDb("watch party stream and state across two instances", () => {
       expect(logLines("voice.hlsLlStreamCleared")[0]).toContain("reason=row-ended");
     });
 
+    it("the machine that notices the ended row tells the others over the bus", async () => {
+      // The other half of a lost stop: every machine is holding the same dead
+      // session, and each finding out for itself is a verification interval
+      // apiece. Reached here through the sweep path that drops an LL room
+      // without a fan-out (`hlsLlForgotStaleRoom`), which is exactly the state
+      // the owner is left in.
+      const channel = await plantChannel();
+      llControl.mode = "ll";
+      llControl.startedAt = Date.now();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnA = watcher(a);
+      const sidebarOnB = watcher(b);
+
+      const host = await join(a, randomUUID(), channel);
+      await setSharing(a, host, true);
+      await waitFor(
+        () => frames(sidebarOnB, "channel-live").length === 1,
+        "the LL stream on B",
+      );
+
+      // A forgets the room the way the demotion sweep does: no fan-out, so A
+      // keeps handing out the session it can no longer explain.
+      a.ll.delete(channel);
+      await plantLlRow(channel, llControl.startedAt, true);
+
+      // B asks the row, clears, and says so on the bus.
+      expect((await b.voice.getChannelLiveState(channel)).stream).toBeNull();
+      await waitFor(
+        () => frames(sidebarOnA, "channel-live").length === 2,
+        "the relayed clear on A",
+      );
+      expect(frames(sidebarOnA, "channel-live")[1]).toMatchObject({
+        stream: null,
+        ended: true,
+      });
+      expect(await a.voice.getChannelLiveState(channel)).toMatchObject({
+        stream: null,
+        known: true,
+      });
+    });
+
     it("a cached LL stream whose session row is still open is left alone", async () => {
       const channel = await plantChannel();
       llControl.mode = "ll";

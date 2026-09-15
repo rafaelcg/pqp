@@ -2416,7 +2416,7 @@ function pruneLiveChannelState(): void {
   // meaningless the moment it expires, and there are never more of them than
   // there are LL parties this machine is watching without owning.
   for (const [channelId, memo] of llVerifiedAt) {
-    if (now - memo.at > LL_SESSION_VERIFY_MS) {
+    if (now - memo.at > memo.ttl) {
       llVerifiedAt.delete(channelId);
     }
   }
@@ -2445,8 +2445,33 @@ function pruneLiveChannelState(): void {
  */
 const LL_SESSION_VERIFY_MS = 15_000;
 
-/** When this process last saw a row for a relayed LL session, per channel. */
-const llVerifiedAt = new Map<string, { startedAt: number; at: number }>();
+/**
+ * And how long a check that COULD NOT BE MADE is held for.
+ *
+ * `isHlsSessionOpen` fails open, which is right — a query timeout must not
+ * take a live party's playlist away — but "fails open" without a memo means
+ * the very next welcome, keyframe, re-mint and `GET /live` each start another
+ * query into a database that is already the reason the last one failed. So a
+ * failure is remembered too, just briefly: the stream keeps being served
+ * throughout, and the retry is paced instead of being driven by traffic (a
+ * Farol finding on this PR).
+ */
+const LL_SESSION_VERIFY_BACKOFF_MS = 5_000;
+
+/**
+ * When this process last ASKED about a relayed LL session, per channel: which
+ * session, when, and how long that answer is good for (the two constants
+ * above, by whether the row could be read).
+ */
+const llVerifiedAt = new Map<
+  string,
+  { startedAt: number; at: number; ttl: number }
+>();
+/**
+ * Keyed by channel AND session, never by channel alone: a query for session A
+ * that is still in flight when A is replaced by B must not be handed to B's
+ * caller as if it had answered about B (a Farol finding on this PR).
+ */
 const llVerifyInFlight = new Map<string, Promise<boolean>>();
 
 /**
@@ -2462,9 +2487,7 @@ function llVerifyDue(channelId: string, stream: LiveHlsStream): boolean {
   }
   const memo = llVerifiedAt.get(channelId);
   return !(
-    memo &&
-    memo.startedAt === stream.startedAt &&
-    Date.now() - memo.at < LL_SESSION_VERIFY_MS
+    memo && memo.startedAt === stream.startedAt && Date.now() - memo.at < memo.ttl
   );
 }
 
@@ -2483,44 +2506,81 @@ async function relayedLlStillOpen(
   if (!llVerifyDue(channelId, stream)) {
     return true;
   }
-  const inFlight = llVerifyInFlight.get(channelId);
+  const key = `${channelId}:${stream.startedAt}`;
+  const inFlight = llVerifyInFlight.get(key);
   if (inFlight) {
     return inFlight;
   }
   const query = isHlsSessionOpen(channelId, stream.startedAt)
     .then((answer) => {
       if (!answer.ok) {
+        llVerifiedAt.set(channelId, {
+          startedAt: stream.startedAt,
+          at: Date.now(),
+          ttl: LL_SESSION_VERIFY_BACKOFF_MS,
+        });
         return true;
       }
       if (answer.open) {
         llVerifiedAt.set(channelId, {
           startedAt: stream.startedAt,
           at: Date.now(),
+          ttl: LL_SESSION_VERIFY_MS,
         });
         return true;
       }
-      llVerifiedAt.delete(channelId);
+      // Only this session's own memo: a newer one installed while the row was
+      // being read is not ours to drop.
+      if (llVerifiedAt.get(channelId)?.startedAt === stream.startedAt) {
+        llVerifiedAt.delete(channelId);
+      }
       return false;
     })
     .finally(() => {
-      llVerifyInFlight.delete(channelId);
+      llVerifyInFlight.delete(key);
     });
-  llVerifyInFlight.set(channelId, query);
+  llVerifyInFlight.set(key, query);
   return query;
 }
 
 /**
  * The cached stream is over: forget it, fence the session so a straggling
- * `voice.live` cannot put it back, and tell everyone.
+ * `voice.live` cannot put it back, tell this machine's sockets, and tell the
+ * other machines.
  *
- * The fan-out RE-RESOLVES rather than carrying a `null` of its own, which is
+ * COMPARE AND CLEAR. The row read that sent us here is an `await` wide enough
+ * for the channel to have moved on — a `voice.live` carrying the conventional
+ * ladder a demotion started, a stop that arrived by the ordinary path, another
+ * waiter on the same query getting here first. Clearing unconditionally would
+ * then erase a stream that is genuinely live, or fan the same end out once per
+ * waiter (both Farol findings on this PR). The map is only emptied while it
+ * still holds the exact session that was verified, and because that test and
+ * the write happen in one synchronous stretch, the first caller through is the
+ * only one that acts.
+ *
+ * THE FAN-OUT RE-RESOLVES rather than carrying a `null` of its own, which is
  * what makes a REPLACEMENT the same code path as an end: with `hlsAudience`
- * emptied and the memo dropped, the resolve below falls through to the
- * session row and finds whatever actually is live now — the conventional
- * ladder a demotion started, most often. It terminates because this process
+ * emptied and the memo dropped, the resolve falls through to the session row
+ * and finds whatever actually is live now. It terminates because this process
  * no longer holds the stream that sent it here.
+ *
+ * AND IT CROSSES THE BUS. Every machine that missed the original stop is
+ * holding the same dead session, and each finding out for itself is a
+ * `LL_SESSION_VERIFY_MS` wait apiece; `publishChannelLive` makes the first one
+ * to notice tell the rest. The receiving handler's own lineage checks are what
+ * keep that safe — a machine holding a NEWER session, or running the egress
+ * for this one, drops the frame.
  */
-function clearEndedLlStream(channelId: string, held: LiveHlsStream): void {
+function clearEndedLlStream(channelId: string, held: LiveHlsStream): boolean {
+  const current = hlsAudience.stream(channelId);
+  if (
+    !current ||
+    current.mode !== "ll" ||
+    current.startedAt !== held.startedAt
+  ) {
+    return false;
+  }
+  const at = Date.now();
   hlsAudience.setStream(channelId, null);
   rememberChannelStream(channelId, null, held.startedAt);
   void broadcastChannelLive(channelId)
@@ -2530,12 +2590,14 @@ function clearEndedLlStream(channelId: string, held: LiveHlsStream): void {
         reason: "row-ended",
         startedAt: held.startedAt,
         sockets,
-        relayed: false,
+        relayed: isBusEnabled(),
       });
     })
     .catch((error: unknown) => {
       console.error("[voice] ll stream clear fan-out failed:", error);
     });
+  publishChannelLive(channelId, null, held, at);
+  return true;
 }
 
 async function resolveChannelStream(
@@ -2551,9 +2613,19 @@ async function resolveChannelStream(
   const relayed = hlsAudience.stream(channelId);
   if (relayed) {
     if (await relayedLlStillOpen(channelId, relayed)) {
-      return { stream: relayed, known: true };
+      // RE-READ, never `relayed`: the check above may have awaited a row, and
+      // a stop or a replacement can have landed in that gap. Whatever is held
+      // NOW is the answer; nothing at all falls through to the row below.
+      const current =
+        liveHlsStreamFor(channelId) ??
+        llStreamFor(channelId) ??
+        hlsAudience.stream(channelId);
+      if (current) {
+        return { stream: current, known: true };
+      }
+    } else {
+      clearEndedLlStream(channelId, relayed);
     }
-    clearEndedLlStream(channelId, relayed);
     // and fall through: the row below says what, if anything, replaced it.
   }
   const memo = dbStreamMemo.get(channelId);
@@ -3158,7 +3230,16 @@ const hlsAudience = createHlsAudience({
       if (llVerifyDue(channelId, held)) {
         void resolveChannelStream(channelId)
           .then((answer) => {
-            if (answer.stream === held) {
+            // RESTATE ONLY THE SESSION THIS TICK WAS ABOUT, and only while it
+            // is still what the channel holds. A clear does its own fan-out; a
+            // replacement arrived with the frame that carried it; either way
+            // repeating an answer from before the await is how a stale stream
+            // gets put back (a Farol finding on this PR).
+            if (
+              answer.stream &&
+              answer.stream.startedAt === held.startedAt &&
+              answer.stream === hlsAudience.stream(channelId)
+            ) {
               void broadcastChannelLive(channelId, answer);
             }
           })
@@ -9164,8 +9245,10 @@ subscribeToCluster(VOICE_LIVE_TOPIC, (data) => {
   // THIS PROCESS RUNS THE EGRESS: its own `pushLiveHls` is the authority for
   // what its sockets are told, and a frame from the other machine about the
   // same channel (a second instance with peers in the room reconciling too)
-  // must not overwrite it.
-  if (liveHlsStreamFor(frame.channelId)) {
+  // must not overwrite it. BOTH DRIVERS, for the same reason `pushLiveHls`
+  // now reads both: this guard used to ask the conventional ladder's map
+  // alone, so it did not protect a machine whose session is low-latency.
+  if (liveHlsStreamFor(frame.channelId) ?? llStreamFor(frame.channelId)) {
     return;
   }
   const lastAt = relayedLiveAt.get(frame.channelId) ?? 0;
