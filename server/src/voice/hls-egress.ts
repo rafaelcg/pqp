@@ -54,6 +54,7 @@ import {
   liveHlsLLAvailable,
   llDemotedRecently,
   llHasRoom,
+  llPlaylistFrontConfigured,
   llPlaylistUrl,
   llStreamFor,
   reconcileLlHlsNow,
@@ -1587,6 +1588,30 @@ export async function liveHlsStreamFromDb(
   // machine NOT running the transcode depends on. `llPlaylistUrl` is the one
   // place either driver builds an LL master URL, marker included.
   if (row.mode === "ll") {
+    if (!llPlaylistFrontConfigured()) {
+      // THIS INSTANCE CANNOT ADDRESS THIS SESSION, WHICH IS NOT THE SAME AS
+      // "NOTHING IS LIVE HERE" (a Farol finding on this PR). The LL master
+      // is rendered by the edge Worker and by nothing else; with no
+      // `LIVE_HLS_PLAYLIST_BASE_URL` on THIS process, `stampViewerStream`
+      // leaves the URL API-relative and the API's own proxy answers "not
+      // found" for a `mode = 'll'` row. `resolveHlsMode` already refuses to
+      // PICK the mode without a front; this is the same rule on the durable
+      // read, which runs on whichever machine a viewer's socket landed on
+      // and can therefore disagree with the machine that started the
+      // session during a rolling deploy or a configuration drift.
+      //
+      // Answered as "could not vouch", never as a positive absence: a bare
+      // `null` here reaches `channelLiveFrameWith` as `ended: true` and
+      // would hang up an audience watching a party that is, in fact, live
+      // (the 2026-09-14 shape, `ChannelLiveMessage.ended`'s doc comment).
+      // Throwing under `strict` is what `readChannelStreamFromDb` turns into
+      // `known: false`.
+      logEvent("voice.hlsLlUnservableFromDb", { channelId, startedAt });
+      if (options.strict) {
+        throw new Error("ll session with no LIVE_HLS_PLAYLIST_BASE_URL on this instance");
+      }
+      return null;
+    }
     return {
       hlsUrl: llPlaylistUrl(channelId, startedAt),
       startedAt,

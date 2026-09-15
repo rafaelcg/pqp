@@ -617,6 +617,12 @@ describe("llHlsConfig", () => {
     // that a dead origin still reaches the player's own recovery ladder.
     expect(retry.maxNumRetry * retry.retryDelayMs).toBeGreaterThanOrEqual(3_000);
     expect(retry.maxNumRetry * retry.maxRetryDelayMs).toBeLessThanOrEqual(20_000);
+    // AND NEVER FASTER THAN THE EDGE ASKED FOR (a Farol finding on this PR).
+    // `llNotReady` in the Worker sends `Retry-After: 1`; retrying inside
+    // that is the client half of a thundering herd, and the Worker's memo
+    // bounds what reaches the remux, not what reaches the Worker.
+    expect(retry.retryDelayMs).toBeGreaterThanOrEqual(1_000);
+    expect(retry.maxRetryDelayMs).toBeGreaterThanOrEqual(retry.retryDelayMs);
   });
 });
 

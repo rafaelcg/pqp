@@ -95,10 +95,15 @@ describeDb("live HLS state, a second instance's fallback to hls_sessions", () =>
   beforeEach(() => {
     resetLiveHlsForTests();
     resetHlsAudience();
+    // An LL row can only be addressed by an instance that has an edge
+    // playlist front (`llPlaylistFrontConfigured`), so the ordinary case in
+    // this suite is "configured". One test below deletes it on purpose.
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
   });
 
   afterEach(async () => {
     setLiveHlsTestHooks({ egress: null, findTracks: null, playlistProbe: null });
+    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
     await getPool().query(`TRUNCATE hls_sessions, channels CASCADE`);
   });
 
@@ -160,6 +165,37 @@ describeDb("live HLS state, a second instance's fallback to hls_sessions", () =>
     expect(stream!.hlsUrl).not.toBe(
       viewerPlaylistUrl(channelId, startedAt.getTime()),
     );
+  });
+
+  it("liveHlsStreamFromDb refuses to advertise an LL row this instance cannot address", async () => {
+    // A Farol finding on this PR. The LL master is rendered by the edge
+    // Worker and by nothing else, so an instance with no
+    // `LIVE_HLS_PLAYLIST_BASE_URL` would hand out an API-relative LL URL its
+    // own proxy answers "not found" for -- realistic during a rolling deploy
+    // or a configuration drift, since this read runs on whichever machine a
+    // viewer's socket landed on, not the one that started the session.
+    //
+    // And it must be "could not vouch", not "nothing is live": a bare null
+    // reaches a client as `ended: true` and hangs up an audience watching a
+    // party that is, in fact, live.
+    const channelId = randomUUID();
+    const startedAt = new Date("2026-09-15T11:57:02.742Z");
+    await insertChannel(channelId);
+    await insertSession(channelId, {
+      startedAt,
+      mode: "ll",
+      partTargetMs: 500,
+    });
+
+    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    expect(await liveHlsStreamFromDb(channelId)).toBeNull();
+    await expect(
+      liveHlsStreamFromDb(channelId, { strict: true }),
+    ).rejects.toThrow();
+
+    // With a front configured, the same row is served normally.
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    expect((await liveHlsStreamFromDb(channelId))?.mode).toBe("ll");
   });
 
   it("liveHlsStreamFromDb leaves a conventional row byte-for-byte as it was: no marker, no part target", async () => {

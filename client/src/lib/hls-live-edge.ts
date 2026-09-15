@@ -380,7 +380,9 @@ export interface HlsLLPlayerConfig {
    * session that needs two seconds to subscribe is most of them.
    *
    * Verified against `hls.mjs`: `retryForHttpStatus` retries any status
-   * outside 4xx, so a 503 IS retried; only the budget was too small.
+   * outside 4xx, so a 503 IS retried; only the budget was too small. The
+   * delays are paced to the edge's own `Retry-After` rather than as fast as
+   * hls.js will go -- see `LL_HLS_MANIFEST_RETRY_DELAY_MS`.
    * Everything but `errorRetry` here is hls.js's own default for this
    * policy, restated because the config is replaced wholesale, not merged.
    * LL only -- the conventional path never sees this branch and keeps the
@@ -398,14 +400,27 @@ export interface HlsLLPlayerConfig {
 
 /**
  * How many times an LL master load is retried before hls.js calls it fatal,
- * and how long between tries. Eight at 500 ms, capped at 2 s, covers roughly
- * ten seconds of a remux subscribing and writing its first part -- longer
- * than any healthy start observed, short enough that a genuinely dead origin
- * still reaches the player's own recovery ladder rather than retrying
- * forever.
+ * and how long between tries.
+ *
+ * PACED TO THE EDGE'S OWN `Retry-After`, NOT FASTER (a Farol finding on this
+ * PR: a first draft retried every 500 ms, which at party scale is the client
+ * half of a thundering herd -- the Worker's not-ready memo bounds what
+ * reaches the REMUX, and bounds nothing about what reaches the Worker). The
+ * Worker answers `Retry-After: 1`, so the first retry waits a second; hls.js
+ * then backs off toward `maxRetryDelayMs`, giving 1 + 2 + 2 + 2 + 2 + 2 ≈
+ * 11 s of patience for at most seven requests per viewer. Two hundred people
+ * joining a session that takes ten seconds to warm up is therefore ~1400
+ * Worker requests spread over eleven seconds, and still one `state.json`
+ * fetch a second against the box.
+ *
+ * Eleven seconds is chosen against what it is waiting FOR: `pqp-remux` has
+ * to subscribe to the LiveKit track and write one part. A start slower than
+ * that is not a warm-up, and letting the load go fatal hands the viewer to
+ * the player's own recovery ladder, which is where a genuinely broken
+ * session belongs.
  */
-export const LL_HLS_MANIFEST_RETRY_COUNT = 8;
-export const LL_HLS_MANIFEST_RETRY_DELAY_MS = 500;
+export const LL_HLS_MANIFEST_RETRY_COUNT = 6;
+export const LL_HLS_MANIFEST_RETRY_DELAY_MS = 1_000;
 export const LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS = 2_000;
 
 /**

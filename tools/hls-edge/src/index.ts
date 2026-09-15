@@ -257,8 +257,10 @@ const LL_NOT_READY_RETRY_AFTER_SECONDS = 1;
  * like a healthy request. A 503 is a fact the player can act on: hls.js
  * retries a manifest on any status outside 4xx (`retryForHttpStatus`), the
  * web client widens `manifestLoadPolicy` for LL so the warm-up window is
- * ridden out (`llHlsConfig`), and `useLiveHlsReady` keeps polling once a
- * second until the master parses as live.
+ * ridden out and paces its retries to THIS `Retry-After` rather than as fast
+ * as hls.js will go (`LL_HLS_MANIFEST_RETRY_DELAY_MS`), and
+ * `useLiveHlsReady` keeps polling once a second until the master parses as
+ * live.
  *
  * `no-store` because the answer is true for about a second by construction,
  * and caching it anywhere between here and the viewer would outlive the

@@ -111,8 +111,13 @@ export function liveHlsLLAllowlist(): Set<string> | null {
  * Read from `process.env` directly rather than through `playlistBaseUrl()`
  * in `hls-egress.ts`: that module imports THIS one, and the dependency
  * between the two drivers stays one-way (see `llObjectPrefix`).
+ *
+ * Exported because the DURABLE read path has to ask the same question:
+ * `liveHlsStreamFromDb` (`hls-egress.ts`) reconstructs a stream from an
+ * `hls_sessions` row on an instance that may not be the one that started it,
+ * and an instance with no edge front cannot address an `ll` row at all.
  */
-function llPlaylistFrontConfigured(): boolean {
+export function llPlaylistFrontConfigured(): boolean {
   return envTrimmed("LIVE_HLS_PLAYLIST_BASE_URL") !== null;
 }
 
