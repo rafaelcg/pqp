@@ -9,9 +9,9 @@ import type { VoiceState } from "@/hooks/use-voice";
  * WHAT IS PLAYING, ON THE CALL STRIP.
  *
  * One line: a note and the title, and "+N" for the queue. Every control
- * lives in the player at the bottom of the sidebar (`music-mini-player.tsx`),
- * which is where a browser keeps its media controls; this line only says
- * what is on, and a click on it unfolds the queue down there.
+ * lives in the player at the bottom of the sidebar, which is where a
+ * browser keeps its media controls; this line only says what is on, and a
+ * click on it unfolds the queue down there.
  */
 export function MusicDock({
   voiceState,
@@ -35,7 +35,7 @@ export function MusicDock({
     <div
       data-music-dock={compact ? "compact" : "stage"}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 text-[11px] text-paper-muted",
+        "flex shrink-0 items-center gap-1.5 text-[11px] text-text-secondary",
         className,
       )}
     >
@@ -44,7 +44,7 @@ export function MusicDock({
           type="button"
           aria-pressed={music.open}
           onClick={() => toggleMusicOpen()}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-signal hover:bg-ink-3/70"
+          className="flex items-center gap-1 rounded-[var(--radius-control)] px-1.5 py-0.5 text-accent hover:bg-surface-2"
         >
           <Music className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span className="max-w-[12rem] truncate">{current.title}</span>
