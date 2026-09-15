@@ -343,12 +343,22 @@ describe("the conventional recovery ladder is what it was before #646", () => {
       "startLoad(-1)",
       "seek(1496)",
     ]);
-    expect(warn.mock.calls.map((args: unknown[]) => String(args[0]))).toEqual([
+    const warned = warn.mock.calls.map((args: unknown[]) => String(args[0]));
+    // The in-place ladder, once through and in order.
+    expect(warned.slice(0, 3)).toEqual([
       "[hls] stream stalled (sequence-stuck), start-load",
       "[hls] stream stalled (sequence-stuck), restart-load",
       "[hls] stream stalled (sequence-stuck), reload-level",
-      "[hls] stream stalled (sequence-stuck), checking for a fresher session",
-      "[hls] stream stalled (sequence-stuck), checking for a fresher session",
     ]);
+    // And from there ONLY reconnect checks -- never a fourth in-place step,
+    // which is what "it does not loop" means. How MANY of them land in
+    // thirty seconds is not asserted: `gateReconnect` backs off against
+    // `Date.now()`, which under `shouldAdvanceTime` moves with real time
+    // too, so a loaded machine fits one more check into the same window.
+    // The count is the flaky part; the absence of a repeat is the claim.
+    expect(warned.length).toBeGreaterThan(3);
+    expect(new Set(warned.slice(3))).toEqual(
+      new Set(["[hls] stream stalled (sequence-stuck), checking for a fresher session"]),
+    );
   });
 });
