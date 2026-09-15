@@ -407,7 +407,12 @@ import {
   rememberServers,
   unreadByServer,
 } from "@/lib/notifications";
-import { setSoundOutput } from "@/lib/sounds";
+import {
+  applyPttHeldChange,
+  resetPttHeld,
+  setPttBeepEnabled,
+  setSoundOutput,
+} from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
@@ -2001,6 +2006,10 @@ function MainAppContent({
     });
   }, [localSettings.outputDeviceId, localSettings.outputVolume]);
 
+  useEffect(() => {
+    setPttBeepEnabled(localSettings.pttBeep);
+  }, [localSettings.pttBeep]);
+
   // Asked here as well as in the composer so the pane does not offer a drop
   // target on a deployment that has nowhere to put the bytes. The probe itself
   // is memoised, so this is the same answer rather than a second request.
@@ -2037,9 +2046,23 @@ function MainAppContent({
     voiceState.status === "connected";
 
   const handlePushToTalk = useCallback(
-    (held: boolean) => voice.setPushToTalkActive(held),
+    (held: boolean) => {
+      // The hold-to-talk button never goes through the key hook. Same
+      // transition helper, so a press from either side beeps once.
+      applyPttHeldChange(held, (next) => voice.setPushToTalkActive(next));
+    },
     [voice],
   );
+
+  useEffect(() => {
+    if (inPushToTalk) {
+      return;
+    }
+    // Close the hold-to-talk button path without playing: the hook's
+    // teardown already released a held key and reset the latch after that.
+    voice.setPushToTalkActive(false);
+    resetPttHeld();
+  }, [inPushToTalk, voice]);
 
   // The key binding lives here rather than in the panel because the panel is
   // unmounted the moment you navigate to a text channel, and push-to-talk has
