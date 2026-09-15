@@ -1624,6 +1624,7 @@ export function resetLiveHlsForTests(): void {
   }
   cameraProbeRetryTimers.clear();
   cameraProbeRetryAttempts.clear();
+  resumeRefusalLoggedAt.clear();
   changeListener = null;
   sfuLoadReader = null;
   stopLiveHlsMonitor();
@@ -3155,6 +3156,20 @@ export function adoptLiveHlsMicArchive(input: {
   return true;
 }
 
+/**
+ * When each channel last narrated a refused resume adoption, per reason.
+ *
+ * RATE LIMITED PER CHANNEL PER REASON, which is pitfall 16's own fix applied
+ * where it applies again: `reconcileLiveHlsNow` reaches the adoption on every
+ * roster event for a channel this process has a sharer in and no room for, so
+ * a channel whose fresh start is itself being refused (the restart budget's
+ * cooldown, the session cap) would repeat one line for every join and leave
+ * until it clears. A refusal that cannot be read is worse than no refusal at
+ * all, and a line repeated a hundred times is one nobody reads.
+ */
+const resumeRefusalLoggedAt = new Map<string, number>();
+const RESUME_REFUSAL_LOG_THROTTLE_MS = 60_000;
+
 /** One open `hls_sessions` row, as the resume adoption below reads it. */
 interface OpenHlsSessionRow {
   id: string;
@@ -3239,12 +3254,23 @@ export async function adoptRunningLiveHlsSession(
     return null;
   }
   const refuse = (reason: string, detail: Record<string, unknown> = {}) => {
-    logEvent("voice.hlsResumeNotAdopted", {
-      channelId,
-      presenterPeerId,
-      reason,
-      ...detail,
-    });
+    const key = `${channelId}:${reason}`;
+    const now = Date.now();
+    for (const [seen, at] of resumeRefusalLoggedAt) {
+      if (now - at > RESUME_REFUSAL_LOG_THROTTLE_MS) {
+        resumeRefusalLoggedAt.delete(seen);
+      }
+    }
+    const previous = resumeRefusalLoggedAt.get(key);
+    if (previous === undefined || now - previous >= RESUME_REFUSAL_LOG_THROTTLE_MS) {
+      resumeRefusalLoggedAt.set(key, now);
+      logEvent("voice.hlsResumeNotAdopted", {
+        channelId,
+        presenterPeerId,
+        reason,
+        ...detail,
+      });
+    }
     return null;
   };
 
