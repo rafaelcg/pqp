@@ -660,24 +660,29 @@ export function playPttBeep(kind: PttBeepKind): void {
   if (pttBusy[kind]) {
     return;
   }
-  const ctx = ensureContext();
-  if (!ctx || !master) {
-    return;
-  }
-  if (ctx.state === "suspended") {
-    void ctx.resume().catch(() => {});
-  }
-  pttBusy[kind] = true;
-  schedulePttTone(ctx, master, kind);
-  const holdMs = Math.ceil((PTT_BEEP[kind].duration + 0.02) * 1000);
-  if (pttBusyTimers[kind] !== null) {
-    clearTimeout(pttBusyTimers[kind]);
-  }
-  if (typeof setTimeout === "function") {
-    pttBusyTimers[kind] = setTimeout(() => {
-      pttBusyTimers[kind] = null;
-      pttBusy[kind] = false;
-    }, holdMs);
+  try {
+    const ctx = ensureContext();
+    if (!ctx || !master) {
+      return;
+    }
+    if (ctx.state === "suspended") {
+      void ctx.resume().catch(() => {});
+    }
+    pttBusy[kind] = true;
+    schedulePttTone(ctx, master, kind);
+    const holdMs = Math.ceil((PTT_BEEP[kind].duration + 0.02) * 1000);
+    if (pttBusyTimers[kind] !== null) {
+      clearTimeout(pttBusyTimers[kind]);
+    }
+    if (typeof setTimeout === "function") {
+      pttBusyTimers[kind] = setTimeout(() => {
+        pttBusyTimers[kind] = null;
+        pttBusy[kind] = false;
+      }, holdMs);
+    }
+  } catch {
+    // A failed cue must never stick the busy latch or escape to the mic path.
+    clearPttBusy(kind);
   }
 }
 
@@ -692,6 +697,22 @@ export function playPttHeldChange(held: boolean): void {
   }
   lastPttHeld = held;
   playPttBeep(cue);
+}
+
+/** Drop a leftover hold so the next session's first press can play `on`. */
+export function resetPttHeld(): void {
+  lastPttHeld = null;
+}
+
+/**
+ * Mic first, cue second. A thrown beep must not keep the microphone closed.
+ */
+export function applyPttHeldChange(
+  held: boolean,
+  apply: (held: boolean) => void,
+): void {
+  apply(held);
+  playPttHeldChange(held);
 }
 
 /** Settings preview: press, then release, without joining a call. */

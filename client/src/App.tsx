@@ -405,7 +405,12 @@ import {
   rememberServers,
   unreadByServer,
 } from "@/lib/notifications";
-import { playPttHeldChange, setPttBeepEnabled, setSoundOutput } from "@/lib/sounds";
+import {
+  applyPttHeldChange,
+  resetPttHeld,
+  setPttBeepEnabled,
+  setSoundOutput,
+} from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
@@ -2039,11 +2044,18 @@ function MainAppContent({
     (held: boolean) => {
       // The hold-to-talk button never goes through the key hook. Same
       // transition helper, so a press from either side beeps once.
-      playPttHeldChange(held);
-      voice.setPushToTalkActive(held);
+      applyPttHeldChange(held, (next) => voice.setPushToTalkActive(next));
     },
     [voice],
   );
+
+  useEffect(() => {
+    if (inPushToTalk) {
+      return;
+    }
+    handlePushToTalk(false);
+    resetPttHeld();
+  }, [inPushToTalk, handlePushToTalk]);
 
   // The key binding lives here rather than in the panel because the panel is
   // unmounted the moment you navigate to a text channel, and push-to-talk has

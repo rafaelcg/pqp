@@ -6,12 +6,14 @@ import {
   getSoundState,
   isCueEnabled,
   isPttBeepAllowed,
+  applyPttHeldChange,
   playActivitySound,
   playCue,
   playPttBeep,
   playPttHeldChange,
   PTT_BEEP,
   pttHeldCue,
+  resetPttHeld,
   resetSoundStateForTests,
   setIncomingRing,
   setPttBeepEnabled,
@@ -261,6 +263,82 @@ describe("playPttHeldChange", () => {
     expect(oscillators).toHaveLength(2);
     expect(oscillators[0]?.frequency.value).toBe(PTT_BEEP.on.freq);
     expect(oscillators[1]?.frequency.value).toBe(PTT_BEEP.off.freq);
+  });
+
+  it("plays on again after resetPttHeld clears a leftover hold", () => {
+    vi.useFakeTimers();
+    try {
+      const { oscillators } = stubPttAudio();
+      playPttHeldChange(true);
+      expect(oscillators).toHaveLength(1);
+      vi.advanceTimersByTime(200);
+      playPttHeldChange(true);
+      expect(oscillators).toHaveLength(1);
+      resetPttHeld();
+      playPttHeldChange(true);
+      expect(oscillators).toHaveLength(2);
+      expect(oscillators[1]?.frequency.value).toBe(PTT_BEEP.on.freq);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("applyPttHeldChange", () => {
+  it("still fires the held callback when createOscillator throws, then plays later", () => {
+    let failOscillator = true;
+    const oscillators: Array<{ frequency: { value: number } }> = [];
+    const gain = {
+      gain: {
+        value: 1,
+        setValueAtTime: vi.fn(),
+        linearRampToValueAtTime: vi.fn(),
+      },
+      connect: vi.fn(),
+    };
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        state = "running";
+        currentTime = 0;
+        destination = {};
+        createGain() {
+          return { ...gain, gain: { ...gain.gain } };
+        }
+        createOscillator() {
+          if (failOscillator) {
+            throw new Error("oscillator unavailable");
+          }
+          const osc = {
+            type: "sine",
+            frequency: { value: 0 },
+            connect: vi.fn(),
+            start: vi.fn(),
+            stop: vi.fn(),
+            onended: null as (() => void) | null,
+          };
+          oscillators.push(osc);
+          return osc;
+        }
+        close() {
+          return Promise.resolve();
+        }
+        resume() {
+          this.state = "running";
+          return Promise.resolve();
+        }
+      },
+    );
+
+    const apply = vi.fn();
+    expect(() => applyPttHeldChange(true, apply)).not.toThrow();
+    expect(apply).toHaveBeenCalledWith(true);
+    expect(oscillators).toHaveLength(0);
+
+    failOscillator = false;
+    playPttBeep("on");
+    expect(oscillators).toHaveLength(1);
+    expect(oscillators[0]?.frequency.value).toBe(PTT_BEEP.on.freq);
   });
 });
 

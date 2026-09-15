@@ -6,7 +6,7 @@ import {
 } from "@/components/voice/push-to-talk";
 import { bindingToAccelerator } from "@/components/voice/push-to-talk-accelerator";
 import { getDesktop } from "@/lib/desktop";
-import { playPttHeldChange, pttHeldCue } from "@/lib/sounds";
+import { playPttHeldChange, pttHeldCue, resetPttHeld } from "@/lib/sounds";
 
 interface PushToTalkOptions {
   /** Only true while push-to-talk is the chosen mode *and* a call is up. */
@@ -85,6 +85,12 @@ export function usePushToTalk({
   }, [onHeldChange]);
 
   useEffect(() => {
+    return () => {
+      resetPttHeld();
+    };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -113,12 +119,13 @@ export function usePushToTalk({
     }
     heldRef.current = next;
     setHeld(next);
-    playPttHeldChange(next);
     onHeldChangeRef.current(next);
+    playPttHeldChange(next);
   }, []);
 
   useEffect(() => {
     if (!enabled || typeof window === "undefined") {
+      resetPttHeld();
       return;
     }
 
@@ -168,6 +175,7 @@ export function usePushToTalk({
       // while the key is down all end the transmission. Never inherit a held
       // key across a change to what "held" means.
       releaseNow();
+      resetPttHeld();
     };
   }, [enabled, stableBinding, set]);
 
