@@ -122,16 +122,41 @@ function isBatchEnvelope(value: unknown): value is BatchEnvelope {
 }
 
 export interface PostgresBusTransport extends BusTransport {
-  /** Resolves once the first LISTEN is active. Boot logging and tests use it. */
+  /**
+   * Resolves once the first LISTEN is active — or, for a publish-only
+   * transport, once the connection that will carry the NOTIFYs is up. Boot
+   * logging and tests use it.
+   */
   whenConnected(): Promise<void>;
+}
+
+export interface PostgresBusOptions {
+  /**
+   * PUBLISH ONLY: connect, NOTIFY, never LISTEN.
+   *
+   * For `pqp-worker`, which has no `/ws` listener and no presence, voice or
+   * chat state of its own, and so has nothing to DO with an incoming frame —
+   * but plenty to SAY: the reminder tick, the watch-party host sweep and the
+   * cache invalidations in its jobs all run there, and every one of them was
+   * publishing into a bus that was not installed (`isBusEnabled()` false), so
+   * the frame was dropped on its first line and the API machines never heard
+   * about a party that ended or a reminder that came due.
+   *
+   * Subscribing there instead would be worse than useless: every handler in
+   * `ws/` would run against empty maps and zero sockets, doing the database
+   * reads a fan-out costs for an audience that is not there.
+   */
+  publishOnly?: boolean;
 }
 
 export function createPostgresBusTransport(
   connectionString = process.env.DATABASE_URL,
+  options: PostgresBusOptions = {},
 ): PostgresBusTransport {
   if (!connectionString) {
     throw new Error("DATABASE_URL is required for the Postgres cluster bus");
   }
+  const publishOnly = options.publishOnly === true;
 
   let client: pg.Client | null = null;
   let handler: ((frame: BusFrame) => void) | null = null;
@@ -200,8 +225,10 @@ export function createPostgresBusTransport(
 
     try {
       await next.connect();
-      // Identifiers cannot be parameters; NOTIFY_CHANNEL is a constant.
-      await next.query(`LISTEN ${NOTIFY_CHANNEL}`);
+      if (!publishOnly) {
+        // Identifiers cannot be parameters; NOTIFY_CHANNEL is a constant.
+        await next.query(`LISTEN ${NOTIFY_CHANNEL}`);
+      }
     } catch (error) {
       connecting = false;
       logEvent("bus.connectFailed", { message: (error as Error).message });
@@ -219,6 +246,7 @@ export function createPostgresBusTransport(
     reconnectDelay = RECONNECT_MIN_MS;
     logEvent("bus.connected", {
       instance: INSTANCE_ID,
+      publishOnly: publishOnly || undefined,
       droppedWhileDown: droppedWhileDown || undefined,
     });
     connectedOnce?.();
@@ -451,6 +479,10 @@ export function createPostgresBusTransport(
 
     onFrame(next) {
       handler = next;
+    },
+    connected() {
+      // Exactly what `sendEnvelope` checks before it decides to drop.
+      return client !== null;
     },
 
     whenConnected() {

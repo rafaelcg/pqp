@@ -4260,6 +4260,31 @@ ALTER TABLE automod_rules DROP COLUMN IF EXISTS report_hits;
 -- The pqp half of the invite rule came a day after the Discord half.
 ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS block_pqp_invites BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- WHEN #MOD-LOG WAS LAST TOLD ABOUT THIS AUTHOR, so two API machines do not
+-- both tell it.
+--
+-- `services/automod.ts` rate limits its alert post to one per author per
+-- server per ten seconds, and that window used to live in a `Map` in one
+-- process. With two `pqp-api` machines behind one hostname the same author's
+-- next blocked message lands on whichever machine the proxy picks, and a map
+-- the other machine cannot see says "nobody has alerted about them": the same
+-- embed is posted twice, and a flood gets one copy per machine per window.
+--
+-- One row per (server, author) that has ever tripped a rule with an alert
+-- channel, reused by every later hit, so the table is bounded by that pair
+-- count rather than by traffic and needs no sweep of its own; both FKs cascade,
+-- so deleting the server or the account takes the row with it.
+--
+-- The claim is a conditional UPSERT whose `rowCount` is the verdict (see
+-- `claimAlertWindow`): Postgres serialises two machines racing for the same
+-- pair, so exactly one of them can win the window.
+CREATE TABLE IF NOT EXISTS automod_alert_cooldowns (
+  server_id     UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  author_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_alert_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, author_id)
+);
+
 -- Watch party live streaming, per server, as DATA rather than configuration.
 --
 -- `LIVE_HLS_SERVER_ALLOWLIST` is a Fly environment variable, so widening it

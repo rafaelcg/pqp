@@ -115,6 +115,39 @@ describeDb("postgres cluster bus", () => {
     expect((onBeta[onBeta.length - 1]?.data as { n: number }).n).toBe(2);
   });
 
+  it("a publish-only transport is heard by the cluster and hears nothing itself", async () => {
+    // The worker's shape: `pqp-worker` runs the reminder tick and the
+    // watch-party host sweep, both of which finish on a socket it does not
+    // hold, and it has nothing to DO with an incoming frame. So it connects,
+    // NOTIFYs, and never LISTENs.
+    const worker = createPostgresBusTransport(DATABASE_URL, {
+      publishOnly: true,
+    });
+    const onWorker: BusFrame[] = [];
+    worker.onFrame((frame) => {
+      if (frame.topic === topic) {
+        onWorker.push(frame);
+      }
+    });
+    await worker.whenConnected();
+    const before = onBeta.length;
+
+    worker.publish({ origin: "instance-worker", topic, data: { n: 3 } });
+
+    await waitFor(() => onBeta.length > before);
+    expect((onBeta[onBeta.length - 1]?.data as { n: number }).n).toBe(3);
+
+    // Not even its own echo, which a LISTENing session always gets back.
+    alpha.publish({ origin: "instance-alpha", topic, data: { n: 4 } });
+    await waitFor(
+      () =>
+        (onBeta[onBeta.length - 1]?.data as { n?: number } | undefined)?.n === 4,
+    );
+    expect(onWorker).toHaveLength(0);
+
+    await worker.close();
+  });
+
   it("drops frames instead of throwing once closed", async () => {
     const closed = createPostgresBusTransport(DATABASE_URL);
     await closed.whenConnected();

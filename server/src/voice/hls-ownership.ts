@@ -612,3 +612,67 @@ export async function retryPendingHlsSessionClaims(
     })),
   );
 }
+
+/**
+ * DOES ANOTHER LIVE MACHINE OWN THIS SESSION? Asked by the playlist proxy's
+ * keep-warm loop, which is the one background job in the HLS path that is
+ * armed by a VIEWER's request rather than by owning a transcode: every API
+ * machine a viewer's poll lands on used to start its own loop for the same
+ * session, so two machines re-rendered (and re-listed, and re-signed) every
+ * rung of every live party on the same two-second cadence. The playlists are
+ * shared state in a bucket; warming them twice buys nothing and costs the
+ * origin, the storage bill and the pool exactly double.
+ *
+ * Whole-session rather than per-row on purpose: a ladder's rungs are started
+ * together by one process, and a session one machine is driving is not this
+ * machine's to warm even if one of its rows happens to be unstamped.
+ *
+ * Three answers, the same three every guard in this file has: `true` somebody
+ * else alive owns it (do not warm — they are), `false` nobody else does (warm,
+ * which covers the single-machine deployment, an unstamped row and this
+ * process's own session alike), `null` the question could not be asked, which
+ * the caller must not read as either.
+ *
+ * The prefixes are passed in rather than built here: `hls-egress.ts` owns
+ * their shape and imports this module, so reaching back for
+ * `sessionPrefixPattern` would be a cycle.
+ */
+export async function hlsSessionOwnedElsewhere(
+  input: {
+    channelId: string;
+    /** `hlsObjectPrefix(channelId, startedAt)` — the pre-ladder row's own key. */
+    objectPrefix: string;
+    /** `sessionPrefixPattern(channelId, startedAt)` — every rung of the ladder. */
+    prefixPattern: string;
+  },
+  options: HlsOwnershipOptions = {},
+): Promise<boolean | null> {
+  if (!isVoiceRegistryEnabled()) {
+    return false;
+  }
+  const me = options.instanceId ?? hlsOwnerInstanceId();
+  const ttlMs = options.ttlMs ?? INSTANCE_TTL_MS;
+  try {
+    const result = await getPool().query<{ owned: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM hls_sessions s
+           JOIN voice_instances i ON i.instance_id::text = s.instance_id
+          WHERE s.channel_id = $1
+            AND (s.object_prefix = $2 OR s.object_prefix LIKE $3)
+            AND s.ended_at IS NULL
+            AND s.cleaned_at IS NULL
+            AND s.instance_id <> $4
+            AND i.heartbeat_at > NOW() - ($5::bigint * INTERVAL '1 millisecond')
+       ) AS owned`,
+      [input.channelId, input.objectPrefix, input.prefixPattern, me, ttlMs],
+    );
+    return result.rows[0]?.owned ?? false;
+  } catch (error) {
+    logEvent("voice.hlsOwnerLookupFailed", {
+      scope: "keep-warm",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
