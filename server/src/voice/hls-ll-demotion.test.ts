@@ -1246,4 +1246,173 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     expect((await rowById(id)).ended_at).toBeNull();
     resetLiveHlsForTests();
   });
+
+  // -------------------------------------------------------------------------
+  // (3) Resume adoption on a machine that was already up
+  // -------------------------------------------------------------------------
+  //
+  // `#625` closed the conventional half: a presenter resuming onto a sibling
+  // that held no `rooms` entry used to `startRoom` a fresh ladder and kill
+  // the healthy egresses. LL had boot adopt (`adoptLlHlsSessions`) but the
+  // already-up survivor still went through `startLlSession`, which is a
+  // start path — no `fresh`/`stand-down` split, and a list failure looked
+  // like "gone". These cases pin the LL twin.
+
+  it("(3a) adopts a healthy LL session when the presenter resumes here, starting and stopping nothing", async () => {
+    const deadOwner = randomUUID();
+    await heartbeat(deadOwner, 300);
+    const startedAt = Date.now() - 30_000;
+    const { id, remuxSessionId } = await makeLlRow({
+      startedAt,
+      instanceId: deadOwner,
+      presenterPeerId: "peer-1",
+    });
+    boxSessions.set(remuxSessionId, {
+      sessionId: remuxSessionId,
+      room: channelA,
+      channelId: channelA,
+    });
+    logEvent.mockClear();
+
+    const stream = await reconcileLlHlsNow(channelA, "peer-1");
+
+    // THE SAME SESSION: every viewer's playlist URL is the one they are
+    // already polling and nobody rebuffers onto a new startedAt.
+    expect(stream?.startedAt).toBe(startedAt);
+    expect(stream?.mode).toBe("ll");
+    expect(stream?.presenterPeerId).toBe("peer-1");
+    expect(llHasRoom(channelA)).toBe(true);
+    expect(llStreamFor(channelA)?.startedAt).toBe(startedAt);
+    // NOT A SINGLE NEW REMUX SESSION, and nothing healthy stopped.
+    expect(started).toEqual([]);
+    expect(stopped).toEqual([]);
+    const row = await rowById(id);
+    expect(row.ended_at).toBeNull();
+    expect(row.instance_id).toBe(hlsOwnerInstanceId());
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlSessionResumeAdopted",
+      expect.objectContaining({
+        channelId: channelA,
+        presenterPeerId: "peer-1",
+        startedAt,
+        sessionId: remuxSessionId,
+        rowId: id,
+      }),
+    );
+  });
+
+  it("(3b) stands down while the owner is still answering, and starts nothing", async () => {
+    const machineB = randomUUID();
+    await heartbeat(machineB, 2);
+    const startedAt = Date.now() - 10_000;
+    const { id, remuxSessionId } = await makeLlRow({
+      startedAt,
+      instanceId: machineB,
+      presenterPeerId: "peer-1",
+    });
+    boxSessions.set(remuxSessionId, {
+      sessionId: remuxSessionId,
+      room: channelA,
+      channelId: channelA,
+    });
+    logEvent.mockClear();
+
+    const stream = await reconcileLlHlsNow(channelA, "peer-1");
+
+    expect(stream).toBeNull();
+    expect(started).toEqual([]);
+    expect(stopped).toEqual([]);
+    expect(llHasRoom(channelA)).toBe(false);
+    const row = await rowById(id);
+    expect(row.ended_at).toBeNull();
+    expect(row.instance_id).toBe(machineB);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsSkippedOwnedElsewhere",
+      expect.objectContaining({
+        site: "ll-resume-adopt",
+        ownerInstanceId: machineB,
+      }),
+    );
+  });
+
+  it("(3c) the loser of a concurrent claim starts nothing and stops nothing", async () => {
+    // TWO MACHINES RESUMING THE SAME PRESENTER AT ONCE. Both read the open
+    // LL row while the old owner's heartbeat has lapsed; one claims it and
+    // the other must NOT read its lost claim as "nothing to inherit" and
+    // mint (or stop) a second remux session beside the winner's.
+    //
+    // The race is real, not mocked: the other machine takes the row during
+    // the remux `GET /sessions` round trip, which is after this process has
+    // read the live instances and before it issues its claim.
+    const deadOwner = randomUUID();
+    await heartbeat(deadOwner, 300);
+    const startedAt = Date.now() - 30_000;
+    const { id, remuxSessionId } = await makeLlRow({
+      startedAt,
+      instanceId: deadOwner,
+      presenterPeerId: "peer-1",
+    });
+    const machineB = randomUUID();
+    const realFetch = fakeControlApi;
+    setHlsRemuxTestHooks({
+      fetch: async (url, init) => {
+        const path = url.slice(CONTROL_URL.length);
+        const method = (init.method ?? "GET").toUpperCase();
+        if (method === "GET" && path === "/sessions") {
+          await heartbeat(machineB, 0);
+          await getPool().query(
+            `UPDATE hls_sessions SET instance_id = $2 WHERE id = $1`,
+            [id, machineB],
+          );
+        }
+        return realFetch(url, init);
+      },
+    });
+    boxSessions.set(remuxSessionId, {
+      sessionId: remuxSessionId,
+      room: channelA,
+      channelId: channelA,
+    });
+    logEvent.mockClear();
+
+    const stream = await reconcileLlHlsNow(channelA, "peer-1");
+
+    expect(stream).toBeNull();
+    expect(started).toEqual([]);
+    expect(stopped).toEqual([]);
+    expect(llHasRoom(channelA)).toBe(false);
+    const row = await rowById(id);
+    expect(row.instance_id).toBe(machineB);
+    expect(row.ended_at).toBeNull();
+    expect(boxSessions.has(remuxSessionId)).toBe(true);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlResumeNotAdopted",
+      expect.objectContaining({
+        kind: "stand-down",
+        reason: "claim-refused",
+      }),
+    );
+  });
+
+  it("(3d) starts fresh when the remux session is gone, which is a genuine restart", async () => {
+    const deadOwner = randomUUID();
+    await heartbeat(deadOwner, 300);
+    const startedAt = Date.now() - 30_000;
+    await makeLlRow({
+      startedAt,
+      instanceId: deadOwner,
+      presenterPeerId: "peer-1",
+    });
+    // Box holds nothing: the remux really did die with the machine.
+    logEvent.mockClear();
+
+    const stream = await reconcileLlHlsNow(channelA, "peer-1");
+
+    expect(started.length).toBe(1);
+    expect(stream?.startedAt).toBe(startedAt);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlResumeNotAdopted",
+      expect.objectContaining({ reason: "no-live-session" }),
+    );
+  });
 });

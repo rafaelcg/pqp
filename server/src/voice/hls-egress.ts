@@ -3544,9 +3544,9 @@ export async function adoptRunningLiveHlsSession(
           AND ended_at IS NULL
           AND cleaned_at IS NULL
           -- An LL row names a pqp-remux session, not an egress id, and has
-          -- its own claim-before-you-act resume in reconcileLlHlsNow. This
-          -- pass decides a row fate by whether LiveKit still lists its
-          -- egress, which an LL row can never match.
+          -- its own resume-adopt twin in adoptRunningLlHlsSession
+          -- (hls-remux.ts). This pass decides a row fate by whether LiveKit
+          -- still lists its egress, which an LL row can never match.
           AND mode <> 'll'
           AND egress_id IS NOT NULL`,
       [channelId],
