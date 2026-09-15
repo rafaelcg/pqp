@@ -1532,6 +1532,37 @@ export function liveHlsOwnsChannel(channelId: string): boolean {
  * and doing it lazily from a read path would mean two instances racing to
  * monitor the same egress. This only answers a read.
  */
+/**
+ * `voice.hlsLlUnservableFromDb`, at most once per channel per minute.
+ *
+ * A misconfigured instance answers this question on every `channel-live`
+ * frame it builds for the channel, and a read path that fails is exactly
+ * where an unthrottled log line becomes the write amplifier pitfall 16 warns
+ * about. The condition is a deployment fact, not an event: one line a minute
+ * is enough to find it, and the second one adds nothing.
+ */
+const LL_UNSERVABLE_LOG_WINDOW_MS = 60_000;
+const llUnservableLoggedAt = new Map<string, number>();
+
+function noteLlUnservable(channelId: string, startedAt: number): void {
+  const now = Date.now();
+  const last = llUnservableLoggedAt.get(channelId);
+  if (last !== undefined && now - last < LL_UNSERVABLE_LOG_WINDOW_MS) {
+    return;
+  }
+  // Bounded the same way every other per-channel map here is: a sweep of
+  // closed windows before the map can grow on a channel it has never seen.
+  if (llUnservableLoggedAt.size > 256) {
+    for (const [key, at] of llUnservableLoggedAt) {
+      if (now - at >= LL_UNSERVABLE_LOG_WINDOW_MS) {
+        llUnservableLoggedAt.delete(key);
+      }
+    }
+  }
+  llUnservableLoggedAt.set(channelId, now);
+  logEvent("voice.hlsLlUnservableFromDb", { channelId, startedAt });
+}
+
 export async function liveHlsStreamFromDb(
   channelId: string,
   options: {
@@ -1606,7 +1637,7 @@ export async function liveHlsStreamFromDb(
       // (the 2026-09-14 shape, `ChannelLiveMessage.ended`'s doc comment).
       // Throwing under `strict` is what `readChannelStreamFromDb` turns into
       // `known: false`.
-      logEvent("voice.hlsLlUnservableFromDb", { channelId, startedAt });
+      noteLlUnservable(channelId, startedAt);
       if (options.strict) {
         throw new Error("ll session with no LIVE_HLS_PLAYLIST_BASE_URL on this instance");
       }
@@ -1663,6 +1694,7 @@ export function resetLiveHlsForTests(): void {
   deferredStops.clear();
   resetHlsOwnershipForTests();
   loggedGhostEgressIds.clear();
+  llUnservableLoggedAt.clear();
   cameraCooldownUntil.clear();
   voiceTrackSeparatedByChannel.clear();
   for (const timer of cameraProbeRetryTimers.values()) {
