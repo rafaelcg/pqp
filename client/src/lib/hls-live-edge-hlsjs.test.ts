@@ -10,6 +10,8 @@ import {
   LL_HLS_FRAG_MAX_RETRY_DELAY_MS,
   LL_HLS_FRAG_RETRY_COUNT,
   LL_HLS_FRAG_RETRY_DELAY_MS,
+  LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
+  LL_HLS_FRAG_TTFB_MS,
 } from "./hls-live-edge";
 
 /**
@@ -106,6 +108,12 @@ describe("the LL path's own load policies survive hls.js's merge", () => {
       expect(retry?.maxNumRetry).toBe(LL_HLS_FRAG_RETRY_COUNT);
       expect(retry?.retryDelayMs).toBe(LL_HLS_FRAG_RETRY_DELAY_MS);
       expect(retry?.maxRetryDelayMs).toBe(LL_HLS_FRAG_MAX_RETRY_DELAY_MS);
+      // The timeout half of the same budget, which hls.js merges separately.
+      const policy = player.config.fragLoadPolicy.default;
+      expect(policy.maxTimeToFirstByteMs).toBe(LL_HLS_FRAG_TTFB_MS);
+      expect(policy.timeoutRetry?.maxNumRetry).toBe(
+        LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
+      );
     } finally {
       player.destroy();
     }

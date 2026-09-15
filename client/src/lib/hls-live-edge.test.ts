@@ -27,9 +27,12 @@ import {
   LL_HLS_PART_ERROR_PIN_WINDOW_MS,
   LL_HLS_EDGE_JUMP_MAX,
   LL_HLS_EDGE_JUMP_WINDOW_MS,
+  LL_HLS_FRAG_MAX_LOAD_MS,
   LL_HLS_FRAG_MAX_RETRY_DELAY_MS,
   LL_HLS_FRAG_RETRY_COUNT,
   LL_HLS_FRAG_RETRY_DELAY_MS,
+  LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
+  LL_HLS_FRAG_TTFB_MS,
   LL_HLS_LATENCY_CEILING_HEADROOM_PARTS,
   applyHlsRecoveryStep,
   canJumpToLiveEdge,
@@ -768,9 +771,13 @@ describe("llHlsConfig", () => {
       },
       fragLoadPolicy: {
         default: {
-          maxTimeToFirstByteMs: 10_000,
-          maxLoadTimeMs: 30_000,
-          timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 },
+          maxTimeToFirstByteMs: LL_HLS_FRAG_TTFB_MS,
+          maxLoadTimeMs: LL_HLS_FRAG_MAX_LOAD_MS,
+          timeoutRetry: {
+            maxNumRetry: LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
+            retryDelayMs: 0,
+            maxRetryDelayMs: 0,
+          },
           errorRetry: {
             maxNumRetry: LL_HLS_FRAG_RETRY_COUNT,
             retryDelayMs: LL_HLS_FRAG_RETRY_DELAY_MS,
@@ -792,6 +799,17 @@ describe("llHlsConfig", () => {
     expect(retry.maxNumRetry * retry.maxRetryDelayMs).toBeLessThanOrEqual(4_000);
     // And each try is quick enough that the part after it is still there.
     expect(retry.retryDelayMs).toBeLessThanOrEqual(500);
+  });
+
+  it("cannot sit on one part for longer than the ring holds (Farol, this PR)", () => {
+    // hls.js's own timeout budget is four immediate retries against a 10 s
+    // first-byte deadline: fifty seconds on ONE part that never answered,
+    // four ring-widths, with the live-edge recovery waiting for a fatal that
+    // is not coming.
+    const policy = llHlsConfig().fragLoadPolicy.default;
+    const attempts = policy.timeoutRetry.maxNumRetry + 1;
+    expect(attempts * policy.maxLoadTimeMs).toBeLessThanOrEqual(12_000);
+    expect(policy.maxTimeToFirstByteMs).toBeLessThanOrEqual(policy.maxLoadTimeMs);
   });
 
   it("rides out a warming LL master: more than hls.js's stock one manifest retry", () => {

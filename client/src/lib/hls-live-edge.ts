@@ -510,8 +510,17 @@ export interface HlsLLPlayerConfig {
    * (`isMissingFragmentError`) picks it up and jumps to live rather than
    * grinding through a stale window. Fewer retries than the default and a
    * far better outcome, because failing fast on a live edge is how you stay
-   * on it. `timeoutRetry` is hls.js's own default, restated because this
-   * policy is replaced wholesale rather than merged.
+   * on it.
+   *
+   * AND THE TIMEOUT HALF IS PACED THE SAME WAY (a Farol finding on this PR).
+   * The first cut restated hls.js's own `timeoutRetry` -- four immediate
+   * retries against a 10 s `maxTimeToFirstByteMs` -- which is up to fifty
+   * seconds spent on ONE part that has not produced a byte, four ring-widths
+   * of an LL stream, while the live-edge recovery below waits for a fatal
+   * that is not coming. A request with no first byte after
+   * `LL_HLS_FRAG_TTFB_MS` is not going to be useful at this cadence, and a
+   * retry that has not finished inside `LL_HLS_FRAG_MAX_LOAD_MS` is loading
+   * a part the player no longer wants. One retry, then fatal, then the jump.
    */
   fragLoadPolicy: {
     default: {
@@ -559,6 +568,17 @@ export const LL_HLS_FRAG_RETRY_DELAY_MS = 200;
 export const LL_HLS_FRAG_MAX_RETRY_DELAY_MS = 1_000;
 
 /**
+ * The timeout half of the same budget. Two seconds to the first byte and
+ * five to finish, with ONE retry: worst case ten seconds on a part, under
+ * the ~12 s of parts the remux keeps, against the fifty hls.js's own
+ * defaults allow. A slow link that cannot make that is a viewer who should
+ * be on the conventional ladder, which is where §4's pin rule sends them.
+ */
+export const LL_HLS_FRAG_TTFB_MS = 2_000;
+export const LL_HLS_FRAG_MAX_LOAD_MS = 5_000;
+export const LL_HLS_FRAG_TIMEOUT_RETRY_COUNT = 1;
+
+/**
  * The LL hls.js CONSTRUCTOR config: everything hls.js will accept at
  * construction time, and nothing it will not.
  *
@@ -591,9 +611,13 @@ export function llHlsConfig(): HlsLLPlayerConfig {
     },
     fragLoadPolicy: {
       default: {
-        maxTimeToFirstByteMs: 10_000,
-        maxLoadTimeMs: 30_000,
-        timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 },
+        maxTimeToFirstByteMs: LL_HLS_FRAG_TTFB_MS,
+        maxLoadTimeMs: LL_HLS_FRAG_MAX_LOAD_MS,
+        timeoutRetry: {
+          maxNumRetry: LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
+          retryDelayMs: 0,
+          maxRetryDelayMs: 0,
+        },
         errorRetry: {
           maxNumRetry: LL_HLS_FRAG_RETRY_COUNT,
           retryDelayMs: LL_HLS_FRAG_RETRY_DELAY_MS,
