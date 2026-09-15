@@ -36,6 +36,8 @@ export const musicTrackSchema = z.object({
   durationMs: z.number().int().nonnegative().nullable(),
   addedByUserId: z.string().min(1).max(128),
   addedByName: z.string().min(1).max(100),
+  /** True when the room picked this track itself (autoplay). */
+  autoplayed: z.boolean().optional(),
 });
 
 export type MusicTrack = z.infer<typeof musicTrackSchema>;
@@ -66,6 +68,12 @@ export const musicStateSchema = z.object({
   skipVotes: z.array(z.string().min(1).max(128)).max(64).default([]),
   /** Most recent first. */
   history: z.array(musicTrackSchema).max(MUSIC_HISTORY_LIMIT).default([]),
+  /**
+   * When the queue runs out, the room keeps going with a related track.
+   * Only a manager writes this. Optional so a frame from an older client
+   * still parses; `completeMusicState` fills false from what the room holds.
+   */
+  autoplay: z.boolean().optional(),
 });
 
 export type MusicState = z.infer<typeof musicStateSchema>;
@@ -81,6 +89,7 @@ export const musicStateWriteSchema = musicStateSchema.extend({
   repeat: musicRepeatSchema.optional(),
   skipVotes: z.array(z.string().min(1).max(128)).max(64).optional(),
   history: z.array(musicTrackSchema).max(MUSIC_HISTORY_LIMIT).optional(),
+  autoplay: z.boolean().optional(),
 });
 
 export type MusicStateWrite = z.infer<typeof musicStateWriteSchema>;
@@ -90,12 +99,14 @@ export function completeMusicState(
   held: MusicState | null,
   incoming: MusicStateWrite,
 ): MusicState {
+  const autoplay = incoming.autoplay ?? held?.autoplay;
   return {
     ...incoming,
     openControls: incoming.openControls ?? held?.openControls ?? false,
     repeat: incoming.repeat ?? held?.repeat ?? "off",
     skipVotes: incoming.skipVotes ?? held?.skipVotes ?? [],
     history: incoming.history ?? held?.history ?? [],
+    ...(autoplay !== undefined ? { autoplay } : {}),
   };
 }
 
@@ -203,6 +214,9 @@ export function musicWriteIsStructural(
   if ((held.repeat ?? "off") !== (incoming.repeat ?? "off")) {
     return true;
   }
+  if ((held.autoplay ?? false) !== (incoming.autoplay ?? false)) {
+    return true;
+  }
   if (!sameIdList(held.skipVotes ?? [], incoming.skipVotes ?? [])) {
     return true;
   }
@@ -251,6 +265,7 @@ function withMusicDefaults(
     repeat: state.repeat ?? "off",
     skipVotes: state.skipVotes ?? [],
     history: state.history ?? [],
+    autoplay: state.autoplay ?? false,
   };
 }
 
@@ -272,6 +287,7 @@ export function musicAdvance(
   const skipVotes: string[] = [];
   const openControls = state.openControls;
   const repeat = state.repeat;
+  const autoplay = state.autoplay;
 
   if (repeat === "one" && finished) {
     return {
@@ -283,6 +299,7 @@ export function musicAdvance(
       repeat,
       skipVotes,
       history,
+      autoplay,
     };
   }
 
@@ -298,6 +315,7 @@ export function musicAdvance(
     repeat,
     skipVotes,
     history,
+    autoplay,
   };
 }
 
@@ -312,7 +330,8 @@ function sameHistory(a: MusicTrack[], b: MusicTrack[]): boolean {
 function controlsUnchanged(held: MusicState, incoming: MusicStateWrite): boolean {
   return (
     (held.openControls ?? false) === (incoming.openControls ?? false) &&
-    (held.repeat ?? "off") === (incoming.repeat ?? "off")
+    (held.repeat ?? "off") === (incoming.repeat ?? "off") &&
+    (held.autoplay ?? false) === (incoming.autoplay ?? false)
   );
 }
 
@@ -350,9 +369,39 @@ function matchesAdvance(held: MusicState, incoming: MusicStateWrite): boolean {
     sameTracks(expected.queue, incoming.queue) &&
     (incoming.openControls ?? false) === expected.openControls &&
     (incoming.repeat ?? "off") === expected.repeat &&
+    (incoming.autoplay ?? false) === expected.autoplay &&
     sameSkipVotes(incoming.skipVotes ?? [], expected.skipVotes) &&
     sameHistory(incoming.history ?? [], expected.history)
   );
+}
+
+function matchesAutoplayAdvance(
+  held: MusicState,
+  incoming: MusicStateWrite,
+  rights: MusicRights,
+): boolean {
+  if (held.autoplay !== true || held.queue.length > 0 || incoming.queue.length > 0) {
+    return false;
+  }
+  const next = incoming.current;
+  if (
+    next === null ||
+    next.autoplayed !== true ||
+    next.addedByUserId !== rights.userId
+  ) {
+    return false;
+  }
+  if (incoming.status !== "playing" || incoming.positionMs !== 0) {
+    return false;
+  }
+  if (!controlsUnchanged(held, incoming)) {
+    return false;
+  }
+  if ((incoming.skipVotes ?? []).length !== 0) {
+    return false;
+  }
+  const expected = musicAdvance(held);
+  return sameHistory(incoming.history ?? [], expected.history);
 }
 
 function ids(tracks: MusicTrack[]): string[] {
@@ -401,7 +450,10 @@ function sameOrNull(a: MusicTrack | null, b: MusicTrack | null): boolean {
  * once the current track has run out or enough skip votes are in; and, as
  * the room's last writer, sample position and fill in the duration.
  * Pausing, skipping, reordering, touching other people's songs, flipping
- * the room switches and ending it for the room are the manager's.
+ * the room switches (`openControls`, `repeat`, `autoplay`) and ending it
+ * for the room are the manager's. When `autoplay` is on, the queue is
+ * empty and the current track has run out, a member may also write the
+ * next related track under their own name with `autoplayed: true`.
  */
 export function musicWriteAllowed(
   held: MusicState | null,
@@ -426,6 +478,7 @@ export function musicWriteAllowed(
       incoming.queue.every(own) &&
       (incoming.openControls ?? false) === false &&
       (incoming.repeat ?? "off") === "off" &&
+      (incoming.autoplay ?? false) === false &&
       (incoming.skipVotes ?? []).length === 0 &&
       (incoming.history ?? []).length === 0
     );
@@ -463,9 +516,6 @@ export function musicWriteAllowed(
     const removed = held.queue.filter((track) => !incomingIds.has(track.id));
     return removed.length > 0 && removed.every(own) && sameTracks(kept, incoming.queue);
   }
-  if (!matchesAdvance(held, incoming)) {
-    return false;
-  }
   const ranOut =
     held.status === "playing" &&
     held.current !== null &&
@@ -473,7 +523,10 @@ export function musicWriteAllowed(
     held.positionMs >= held.current.durationMs - MUSIC_END_GRACE_MS;
   const votes = new Set([...votesHeld, rights.userId]);
   const votedOut = votes.size >= musicSkipVotesNeeded(rights.roomSize);
-  return ranOut || votedOut;
+  if (matchesAdvance(held, incoming)) {
+    return ranOut || votedOut;
+  }
+  return ranOut && matchesAutoplayAdvance(held, incoming, rights);
 }
 
 // ------------------------------------------------------------- link parsing
@@ -582,4 +635,43 @@ export function parseMusicInput(raw: string): MusicLink | null {
 /** Sort key for "you are third in the queue" style affordances. */
 export function musicQueuePosition(state: MusicState, trackId: string): number {
   return state.queue.findIndex((track) => track.id === trackId);
+}
+
+/** Shorter than a minute or longer than twelve is a clip or a film, not a song. */
+export const MUSIC_AUTOPLAY_MIN_MS = 60_000;
+export const MUSIC_AUTOPLAY_MAX_MS = 12 * 60 * 1000;
+
+/**
+ * First related video the room has not just finished, queued, or already
+ * played, and that is a song-length when duration is known. Duration
+ * unknown is kept: InnerTube sometimes omits the clock.
+ */
+export function musicAutoplayCandidate(
+  related: MusicResolved[],
+  state: MusicState,
+): MusicResolved | null {
+  const blocked = new Set<string>();
+  if (state.current?.videoId) {
+    blocked.add(state.current.videoId);
+  }
+  for (const track of state.history ?? []) {
+    blocked.add(track.videoId);
+  }
+  for (const track of state.queue) {
+    blocked.add(track.videoId);
+  }
+  for (const video of related) {
+    if (blocked.has(video.videoId)) {
+      continue;
+    }
+    if (
+      video.durationMs !== null &&
+      (video.durationMs < MUSIC_AUTOPLAY_MIN_MS ||
+        video.durationMs > MUSIC_AUTOPLAY_MAX_MS)
+    ) {
+      continue;
+    }
+    return video;
+  }
+  return null;
 }

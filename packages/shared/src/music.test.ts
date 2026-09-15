@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  MUSIC_AUTOPLAY_MAX_MS,
+  MUSIC_AUTOPLAY_MIN_MS,
   MUSIC_END_GRACE_MS,
   completeMusicState,
   musicAdvance,
+  musicAutoplayCandidate,
   musicSkipVotesNeeded,
   musicStateSchema,
   musicWriteAllowed,
@@ -10,6 +13,7 @@ import {
   musicWriteIsStructural,
   parseMusicInput,
   setMusicMessageSchema,
+  type MusicResolved,
   type MusicState,
   type MusicTrack,
 } from "./music.js";
@@ -38,6 +42,7 @@ const state = (overrides: Partial<MusicState> = {}): MusicState => ({
   repeat: "off",
   skipVotes: [],
   history: [],
+  autoplay: false,
   ...overrides,
 });
 
@@ -141,6 +146,7 @@ describe("ordering", () => {
     expect(musicWriteIsStructural(state(), state({ openControls: true }))).toBe(true);
     expect(musicWriteIsStructural(state(), state({ repeat: "all" }))).toBe(true);
     expect(musicWriteIsStructural(state(), state({ history: [track("z")] }))).toBe(true);
+    expect(musicWriteIsStructural(state(), state({ autoplay: true }))).toBe(true);
   });
 });
 
@@ -165,6 +171,10 @@ describe("schema", () => {
     expect(parsed.repeat).toBe("off");
     expect(parsed.skipVotes).toEqual([]);
     expect(parsed.history).toEqual([]);
+    // Omitted, not wiped: completeMusicState fills false so an old frame
+    // cannot turn the room's autoplay off.
+    expect(parsed.autoplay).toBeUndefined();
+    expect(completeMusicState(null, parsed).autoplay).toBeUndefined();
   });
 
   it("keeps omitted write fields undefined so they can be filled from held", () => {
@@ -184,17 +194,20 @@ describe("schema", () => {
     expect(parsed.state?.repeat).toBeUndefined();
     expect(parsed.state?.skipVotes).toBeUndefined();
     expect(parsed.state?.history).toBeUndefined();
+    expect(parsed.state?.autoplay).toBeUndefined();
     const held = state({
       openControls: true,
       repeat: "all",
       skipVotes: ["u3"],
       history: [track("z")],
+      autoplay: true,
     });
     expect(completeMusicState(held, parsed.state!)).toMatchObject({
       openControls: true,
       repeat: "all",
       skipVotes: ["u3"],
       history: [track("z")],
+      autoplay: true,
     });
   });
 });
@@ -341,10 +354,139 @@ describe("musicWriteAllowed", () => {
     expect(musicWriteAllowed(held, state({ status: "paused", openControls: true }), silent)).toBe(false);
   });
 
-  it("does not let a member flip openControls, repeat or history", () => {
+  it("does not let a member flip openControls, repeat, autoplay or history", () => {
     const held = state();
     expect(musicWriteAllowed(held, state({ openControls: true }), member)).toBe(false);
     expect(musicWriteAllowed(held, state({ repeat: "all" }), member)).toBe(false);
+    expect(musicWriteAllowed(held, state({ autoplay: true }), member)).toBe(false);
     expect(musicWriteAllowed(held, state({ history: [track("z")] }), member)).toBe(false);
+  });
+
+  it("lets a member autoplay-advance their own related track when the queue ran out", () => {
+    const current = { ...track("a"), durationMs: 200_000 };
+    const held = state({
+      current,
+      queue: [],
+      autoplay: true,
+      positionMs: 200_000 - MUSIC_END_GRACE_MS,
+      skipVotes: ["u3"],
+    });
+    const pick: MusicTrack = {
+      ...mine("auto"),
+      videoId: "nextSongxx1",
+      title: "Parecida",
+      autoplayed: true,
+    };
+    const incoming = {
+      ...state({
+        ...musicAdvance(held),
+        current: pick,
+        status: "playing" as const,
+        positionMs: 0,
+        autoplay: true,
+        rev: 2,
+      }),
+      actorId: "p2",
+    };
+    expect(musicWriteAllowed(held, incoming, member)).toBe(true);
+    expect(incoming.history[0]?.id).toBe("a");
+    expect(incoming.skipVotes).toEqual([]);
+  });
+
+  it("refuses a member autoplay-advance outside the ran-out empty-queue rule", () => {
+    const current = { ...track("a"), durationMs: 200_000 };
+    const pick: MusicTrack = {
+      ...mine("auto"),
+      videoId: "nextSongxx1",
+      autoplayed: true,
+    };
+    const incomingOf = (held: MusicState) =>
+      state({
+        ...musicAdvance(held),
+        current: pick,
+        status: "playing",
+        positionMs: 0,
+        autoplay: true,
+        rev: 2,
+        actorId: "p2",
+      });
+
+    const ready = state({
+      current,
+      queue: [],
+      autoplay: true,
+      positionMs: 200_000 - MUSIC_END_GRACE_MS,
+    });
+    expect(musicWriteAllowed(ready, incomingOf(ready), member)).toBe(true);
+    expect(
+      musicWriteAllowed(state({ ...ready, autoplay: false }), incomingOf(ready), member),
+    ).toBe(false);
+    expect(
+      musicWriteAllowed(state({ ...ready, queue: [track("b")] }), incomingOf(ready), member),
+    ).toBe(false);
+    expect(
+      musicWriteAllowed(state({ ...ready, positionMs: 0 }), incomingOf(ready), member),
+    ).toBe(false);
+    expect(
+      musicWriteAllowed(
+        ready,
+        state({ ...incomingOf(ready), current: { ...pick, addedByUserId: "u1" } }),
+        member,
+      ),
+    ).toBe(false);
+    expect(
+      musicWriteAllowed(
+        ready,
+        state({ ...incomingOf(ready), current: { ...pick, autoplayed: undefined } }),
+        member,
+      ),
+    ).toBe(false);
+    expect(
+      musicWriteAllowed(ready, state({ ...incomingOf(ready), history: [] }), member),
+    ).toBe(false);
+  });
+});
+
+describe("musicAutoplayCandidate", () => {
+  const resolved = (
+    videoId: string,
+    durationMs: number | null = 180_000,
+  ): MusicResolved => ({
+    provider: "youtube",
+    videoId,
+    title: videoId,
+    sourceUrl: null,
+    thumbnailUrl: null,
+    durationMs,
+  });
+
+  it("drops the finishing id, history, queue, and non-song lengths", () => {
+    const finishing = "finish00001";
+    const held = state({
+      current: { ...track("a"), videoId: finishing },
+      queue: [{ ...track("q"), videoId: "queued00001" }],
+      history: [{ ...track("h"), videoId: "history0001" }],
+    });
+    const related = [
+      resolved(finishing),
+      resolved("history0001"),
+      resolved("queued00001"),
+      resolved("short000001", MUSIC_AUTOPLAY_MIN_MS - 1),
+      resolved("long0000001", MUSIC_AUTOPLAY_MAX_MS + 1),
+      resolved("unknown0001", null),
+      resolved("pick0000001", 180_000),
+    ];
+    expect(musicAutoplayCandidate(related, held)?.videoId).toBe("unknown0001");
+  });
+
+  it("returns null when every related video is blocked or the wrong length", () => {
+    const held = state({ current: { ...track("a"), videoId: "finish00001" } });
+    expect(
+      musicAutoplayCandidate(
+        [resolved("finish00001"), resolved("clip0000001", 10_000)],
+        held,
+      ),
+    ).toBeNull();
+    expect(musicAutoplayCandidate([], held)).toBeNull();
   });
 });

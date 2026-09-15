@@ -8,9 +8,11 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import {
   readdFromHistory,
+  setAutoplay,
   setOpenControls,
   setRepeat,
   shuffle,
+  useMusic,
   voteSkip,
 } from "@/lib/music-store";
 
@@ -32,6 +34,7 @@ export function MusicRoomSwitches({
   repeat: MusicRepeat;
 }) {
   const { t } = useTranslation();
+  const autoplay = useMusic().state?.autoplay === true;
   const nextRepeat =
     REPEAT_ORDER[(REPEAT_ORDER.indexOf(repeat) + 1) % REPEAT_ORDER.length] ??
     "off";
@@ -43,46 +46,55 @@ export function MusicRoomSwitches({
         : t("music.repeat.off");
 
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-1">
+        <Switch
+          checked={openControls}
+          onCheckedChange={setOpenControls}
+          label={t("music.openControls")}
+          className="min-w-0 flex-1 px-1 py-1"
+        />
+        <Tooltip label={repeatLabel}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            aria-label={repeatLabel}
+            onClick={() => setRepeat(nextRepeat)}
+          >
+            {repeat === "one" ? (
+              <Repeat1 className="h-4 w-4 text-accent" aria-hidden="true" />
+            ) : (
+              <Repeat
+                className={
+                  repeat === "all" ? "h-4 w-4 text-accent" : "h-4 w-4 text-text-tertiary"
+                }
+                aria-hidden="true"
+              />
+            )}
+          </Button>
+        </Tooltip>
+        <Tooltip label={t("music.shuffle")}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            aria-label={t("music.shuffle")}
+            onClick={() => shuffle()}
+          >
+            <Shuffle className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </Tooltip>
+      </div>
       <Switch
-        checked={openControls}
-        onCheckedChange={setOpenControls}
-        label={t("music.openControls")}
-        className="min-w-0 flex-1 px-1 py-1"
+        checked={autoplay}
+        onCheckedChange={setAutoplay}
+        label={t("music.autoplay")}
+        description={t("music.autoplay.hint")}
+        className="min-w-0 px-1 py-1"
       />
-      <Tooltip label={repeatLabel}>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          aria-label={repeatLabel}
-          onClick={() => setRepeat(nextRepeat)}
-        >
-          {repeat === "one" ? (
-            <Repeat1 className="h-4 w-4 text-accent" aria-hidden="true" />
-          ) : (
-            <Repeat
-              className={
-                repeat === "all" ? "h-4 w-4 text-accent" : "h-4 w-4 text-text-tertiary"
-              }
-              aria-hidden="true"
-            />
-          )}
-        </Button>
-      </Tooltip>
-      <Tooltip label={t("music.shuffle")}>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          aria-label={t("music.shuffle")}
-          onClick={() => shuffle()}
-        >
-          <Shuffle className="h-4 w-4" aria-hidden="true" />
-        </Button>
-      </Tooltip>
     </div>
   );
 }

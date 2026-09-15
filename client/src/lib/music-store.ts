@@ -3,6 +3,7 @@ import {
   MUSIC_QUEUE_LIMIT,
   completeMusicState,
   musicAdvance,
+  musicAutoplayCandidate,
   musicSkipVotesNeeded,
   musicWriteIsStale,
   type MusicRepeat,
@@ -211,6 +212,7 @@ function base(): Omit<MusicState, "rev" | "actorId" | "atMs"> {
     repeat: held?.repeat ?? "off",
     skipVotes: held?.skipVotes ?? [],
     history: held?.history ?? [],
+    autoplay: held?.autoplay ?? false,
   };
 }
 
@@ -382,6 +384,97 @@ export function shuffle(): void {
 
 export function setOpenControls(on: boolean): void {
   write({ ...base(), openControls: on });
+}
+
+export function setAutoplay(on: boolean): void {
+  write({ ...base(), autoplay: on });
+}
+
+/**
+ * How long a machine that is not the actor waits before fetching a
+ * related track, so the actor (if still seated) wins. A room whose
+ * actor left still continues.
+ */
+export const AUTOPLAY_FALLBACK_MS = 1500;
+
+export function shouldAutoplayOnEnd(state: MusicState | null): boolean {
+  return (
+    state !== null &&
+    state.current !== null &&
+    state.autoplay === true &&
+    state.queue.length === 0 &&
+    (state.repeat ?? "off") === "off"
+  );
+}
+
+/**
+ * Mint the related pick under this machine's name and write the advance
+ * shape `musicWriteAllowed` accepts for a member: own track, autoplayed,
+ * playing at 0, history as `musicAdvance` would, votes cleared.
+ */
+export function autoplayAdvance(endedTrackId: string, pick: MusicResolved): void {
+  const held = snapshot.state;
+  if (!held?.current || held.current.id !== endedTrackId) {
+    return;
+  }
+  const track = mintTrack(pick);
+  if (!track) {
+    return;
+  }
+  const advanced = musicAdvance({ ...held, positionMs: livePositionMs(held) });
+  write({
+    ...advanced,
+    current: { ...track, autoplayed: true },
+    queue: [],
+    status: "playing",
+    positionMs: 0,
+  });
+}
+
+export async function onTrackEnded(
+  endedTrackId: string,
+  isActor: boolean,
+  fetchRelated: (videoId: string) => Promise<MusicResolved[]>,
+  wait: (ms: number) => Promise<void> = (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+): Promise<void> {
+  const held = snapshot.state;
+  if (!held || held.current?.id !== endedTrackId) {
+    return;
+  }
+  if (!shouldAutoplayOnEnd(held)) {
+    advance(endedTrackId);
+    return;
+  }
+  if (!isActor) {
+    await wait(AUTOPLAY_FALLBACK_MS);
+    if (snapshot.state?.current?.id !== endedTrackId) {
+      return;
+    }
+  }
+  const videoId = snapshot.state?.current?.videoId;
+  if (!videoId) {
+    advance(endedTrackId);
+    return;
+  }
+  try {
+    const related = await fetchRelated(videoId);
+    if (snapshot.state?.current?.id !== endedTrackId) {
+      return;
+    }
+    const pick = musicAutoplayCandidate(related, snapshot.state);
+    if (!pick) {
+      advance(endedTrackId);
+      return;
+    }
+    autoplayAdvance(endedTrackId, pick);
+  } catch {
+    if (snapshot.state?.current?.id === endedTrackId) {
+      advance(endedTrackId);
+    }
+  }
 }
 
 export function readdFromHistory(trackId: string): MusicAddOutcome {

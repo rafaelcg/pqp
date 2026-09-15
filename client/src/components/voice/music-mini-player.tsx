@@ -25,11 +25,13 @@ import {
   effectiveCanManageMusic,
 } from "@/components/voice/music-extras";
 import { useTranslation } from "@/lib/i18n";
+import { relatedMusic } from "@/lib/api";
 import {
   advance,
   expectedPositionMs,
   moveInQueue,
   moveTrackTo,
+  onTrackEnded,
   removeFromQueue,
   reportPosition,
   setListening,
@@ -251,7 +253,9 @@ export function MusicMiniPlayer({
         >
           <MarqueeText text={current.title} className="text-[13px] font-medium leading-tight text-paper" />
           <span className="block truncate text-[11px] leading-tight text-paper-muted">
-            {t("music.addedBy", { name: current.addedByName })}
+            {current.autoplayed
+              ? t("music.autoplayed")
+              : t("music.addedBy", { name: current.addedByName })}
           </span>
         </button>
         {needsTap ? (
@@ -687,7 +691,10 @@ function MusicPlayer({
                   playing = undefined;
                 }
                 if (current && (playing === undefined || playing === current.videoId)) {
-                  advance(current.id);
+                  void onTrackEnded(current.id, isActorRef.current, async (videoId) => {
+                    const { tracks } = await relatedMusic(videoId);
+                    return tracks;
+                  });
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);
