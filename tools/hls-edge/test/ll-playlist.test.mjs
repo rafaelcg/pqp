@@ -4,12 +4,14 @@ import test from "node:test";
 import { parseLiveEdge } from "../src/hls-blocking-reload.js";
 import {
   DEFAULT_LL_VIDEO_BANDWIDTH_BPS,
+  DEFAULT_PART_HOLD_BACK_PARTS,
   KEPT_PART_SEGMENTS,
   LL_TOKEN_PLACEHOLDER,
   applyLlRenditionCredential,
   applyLlRenditionToken,
   buildLlMultivariantPlaylist,
   buildLlRenditionPlaylist,
+  partHoldBackSeconds,
 } from "../src/ll-playlist.js";
 import { LL_AUDIO_RUNG, LL_VIDEO_RUNG } from "../src/ll-state.js";
 
@@ -73,7 +75,10 @@ test("golden LL media playlist: header tags", () => {
   assert.equal(lines[2], `#EXT-X-PQP-SESSION:${state.sessionId}`);
   assert.equal(lines[3], "#EXT-X-TARGETDURATION:5"); // ceil(4.02)
   assert.equal(lines[4], "#EXT-X-PART-INF:PART-TARGET=0.5");
-  assert.equal(lines[5], "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.5");
+  // 6 x the 500 ms part target (`DEFAULT_PART_HOLD_BACK_PARTS`), and the
+  // segment hold-back written out at 3 x TARGETDURATION -- which is the value
+  // RFC 8216bis already gives it when the attribute is absent.
+  assert.equal(lines[5], "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=3,HOLD-BACK=15");
   assert.equal(lines[6], "#EXT-X-MEDIA-SEQUENCE:41");
   assert.match(
     lines[7],
@@ -327,4 +332,87 @@ test("applyLlRenditionCredential swaps the WHOLE t=placeholder pair, so a party 
   assert.doesNotMatch(stamped, new RegExp(escapeRegExp(LL_TOKEN_PLACEHOLDER)), "no placeholder may survive");
   assert.ok(!stamped.includes("?t="), "the token PARAMETER is replaced too, not just its value");
   assert.match(stamped, /\?pp=pass%2Fvalue%2Bwith%3Fchars/);
+});
+
+// ---------------------------------------------------------------------------
+// PART-HOLD-BACK: the RFC's floor is not a recommendation.
+//
+// The rendered value was 3 x PART-TARGET -- 1.5 s at the remux's 500 ms part
+// target -- which is exactly RFC 8216bis 4.4.3.8's MINIMUM. Production viewers
+// are in the UK and the box is in Sao Paulo (~200 ms RTT, parts fetched by the
+// Worker in ~170 ms, blocking reloads answered in ~400 ms), so 1.5 s left no
+// budget for a single late part and the player spent the first seconds of every
+// stream fighting the live edge. The default is six parts now, tunable per
+// deployment with `LL_PART_HOLD_BACK_PARTS`, and clamped on both sides.
+// ---------------------------------------------------------------------------
+
+test("PART-HOLD-BACK defaults to six part targets, not the RFC's floor of three", () => {
+  const state = fixtureState();
+  const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
+  assert.match(text, /PART-HOLD-BACK=3,/);
+  assert.equal(DEFAULT_PART_HOLD_BACK_PARTS, 6);
+});
+
+test("a deployment can tune PART-HOLD-BACK without a code change", () => {
+  const state = fixtureState();
+  const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
+    basePath: BASE_PATH,
+    partHoldBackParts: 8,
+  });
+  // 8 x 0.5 = 4, still under this fixture's TARGETDURATION of 5.
+  assert.match(text, /PART-HOLD-BACK=4,/);
+});
+
+test("a configured value below the RFC's floor is clamped UP, never honored", () => {
+  const state = fixtureState();
+  for (const parts of [0.5, 1, 2, 2.99]) {
+    const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
+      basePath: BASE_PATH,
+      partHoldBackParts: parts,
+    });
+    assert.match(
+      text,
+      /PART-HOLD-BACK=1\.5,/,
+      `PART-HOLD-BACK must never go below 3 x PART-TARGET (RFC 8216bis 4.4.3.8), tried ${parts}`,
+    );
+  }
+});
+
+test("a configured value past TARGETDURATION is clamped DOWN to it", () => {
+  const state = fixtureState();
+  const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
+    basePath: BASE_PATH,
+    partHoldBackParts: 40,
+  });
+  // 40 x 0.5 = 20 s, which is a whole conventional ladder's hold-back: past
+  // one segment the player should be reading segments, so the ceiling is
+  // TARGETDURATION (5 here, ceil(4.02)).
+  assert.match(text, /PART-HOLD-BACK=5,/);
+});
+
+test("the two hold-backs stay on the right side of each other", () => {
+  const state = fixtureState();
+  const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
+    basePath: BASE_PATH,
+    partHoldBackParts: 40,
+  });
+  const line = text.split("\n").find((l) => l.startsWith("#EXT-X-SERVER-CONTROL"));
+  const partHoldBack = Number(/PART-HOLD-BACK=([0-9.]+)/.exec(line)[1]);
+  const holdBack = Number(/,HOLD-BACK=([0-9.]+)/.exec(line)[1]);
+  assert.ok(
+    partHoldBack < holdBack,
+    `PART-HOLD-BACK (${partHoldBack}) must stay inside HOLD-BACK (${holdBack}) even at the ceiling`,
+  );
+  const partTargetSecs = state.partTargetMs / 1000;
+  assert.ok(partHoldBack >= partTargetSecs * 3, "and never under the RFC's floor");
+});
+
+test("partHoldBackSeconds is the whole rule, in one place", () => {
+  // Floor, ordinary, ceiling -- the three cases the playlist renders.
+  assert.equal(partHoldBackSeconds(0.5, 5, 1), 1.5);
+  assert.equal(partHoldBackSeconds(0.5, 5, 6), 3);
+  assert.equal(partHoldBackSeconds(0.5, 5, 40), 5);
+  // A TARGETDURATION shorter than the RFC's own floor cannot win: an invalid
+  // playlist is worse than a hold-back longer than a segment.
+  assert.equal(partHoldBackSeconds(1, 2, 6), 3);
 });

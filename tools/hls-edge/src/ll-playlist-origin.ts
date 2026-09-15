@@ -172,6 +172,14 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    */
   private readonly originKey: string | undefined;
   private readonly timeoutMs: number;
+  /**
+   * How many part targets of `PART-HOLD-BACK` every rendition this origin
+   * renders advertises — `LL_PART_HOLD_BACK_PARTS`, threaded down from
+   * `index.ts` because the env is only readable there. `undefined` keeps
+   * `ll-playlist.js`'s own default (6); the clamping rules are that module's,
+   * not this one's (`partHoldBackSeconds`).
+   */
+  private readonly partHoldBackParts: number | undefined;
   private readonly videoCodecCache = new Map<string, CachedVideoCodec>();
 
   /**
@@ -209,10 +217,16 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
   // which erases type annotations but cannot inject the
   // `this.field = field` assignments parameter properties require --
   // `tsc --noEmit` doesn't care either way, but the test runner does.
-  constructor(originBase: string | undefined, timeoutMs: number, originKey?: string) {
+  constructor(
+    originBase: string | undefined,
+    timeoutMs: number,
+    originKey?: string,
+    partHoldBackParts?: number,
+  ) {
     this.originBase = originBase;
     this.timeoutMs = timeoutMs;
     this.originKey = originKey;
+    this.partHoldBackParts = partHoldBackParts;
   }
 
   get ready(): boolean {
@@ -371,7 +385,10 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       return new Response("Not found", { status: 404 });
     }
     const basePath = renditionBasePath(req.channelId, req.startedAt);
-    const text = buildLlRenditionPlaylist(found.state, track, req.rung, { basePath });
+    const text = buildLlRenditionPlaylist(found.state, track, req.rung, {
+      basePath,
+      partHoldBackParts: this.partHoldBackParts,
+    });
     return new Response(text, {
       status: 200,
       headers: { "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8" },

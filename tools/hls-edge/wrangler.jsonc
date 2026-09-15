@@ -37,7 +37,20 @@
     // (see ll-playlist-origin.ts's header). Empty: `LlPlaylistOrigin` is
     // never `ready`, every request behaves exactly as it did before L2.2 --
     // no LL rung is ever offered. Set once a real box exists (L1.6/L2.3).
-    "LL_ORIGIN_BASE": "https://remux.pqp.gg"
+    "LL_ORIGIN_BASE": "https://remux.pqp.gg",
+    // How many part targets of PART-HOLD-BACK an LL rendition advertises
+    // (src/ll-playlist.js, `DEFAULT_PART_HOLD_BACK_PARTS`). 6 x the remux's
+    // 500 ms part target = a 3.0 s hold-back. Raised from the RFC's floor of
+    // 3 (1.5 s) on 2026-09-15: viewers in the UK watching a box in Sao Paulo
+    // (~200 ms RTT, ~400 ms blocking reloads) had no budget left for a single
+    // late part and spent the first seconds of every stream fighting the live
+    // edge. Costs that difference in glass-to-glass, ~1.5 s.
+    //
+    // Tune it HERE rather than in code -- it is a property of where the
+    // viewers are. Clamped where it is used: never below RFC 8216bis
+    // 4.4.3.8's 3 x PART-TARGET, never above TARGETDURATION. Anything that is
+    // not a positive finite number is ignored and the code default stands.
+    "LL_PART_HOLD_BACK_PARTS": "6"
   },
 
   // Party-pass (and now shared-rendition-cache) revocation denylist --

@@ -379,7 +379,12 @@ this Worker's own `EXT-X-PQP-SESSION:<sessionId>` (an informational tag, new
 in this task, harmless to any parser that has never heard of it);
 `EXT-X-TARGETDURATION` (`ceil(state.targetDurationSecs)`); `EXT-X-PART-INF:
 PART-TARGET=<part target, seconds>`; `EXT-X-SERVER-CONTROL:
-CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=<3× part target>`; `EXT-X-MEDIA-SEQUENCE`
+CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=...,HOLD-BACK=...` — the part hold-back is
+`LL_PART_HOLD_BACK_PARTS` times the part target (6 by default, so 3.0 s at the
+remux's 500 ms part; clamped to at least 3 times the part target, per RFC
+8216bis 4.4.3.8, and at most `TARGETDURATION`), and the segment hold-back is
+3 times `TARGETDURATION`, which is also what the RFC gives it when the
+attribute is absent; `EXT-X-MEDIA-SEQUENCE`
 (the oldest listed segment's MSN); `EXT-X-MAP:URI=...` for the init segment;
 per segment, `EXT-X-PROGRAM-DATE-TIME` then (for the newest 3 complete
 segments, and always for the one still being assembled) `EXT-X-PART` lines
@@ -1017,6 +1022,15 @@ that answers nothing yet, before falling back to the conventional path.
 `MEDIA_ORIGIN_KEY` is non-empty (required once its `CONTROL_LISTEN` binds
 beyond loopback), matching values on both sides ("`LL_ORIGIN_KEY`: this
 Worker's credential against the remux origin" above).
+
+`LL_PART_HOLD_BACK_PARTS` (also in `wrangler.jsonc`, also not a secret) is the
+one LL knob an operator is expected to turn: how far from the live edge an LL
+player is told to sit, in part targets. 6 by default (3.0 s at a 500 ms part).
+Lower it toward 3 only for an audience close to the box, and expect the start
+of playback to fight the edge when the round trip is not small; nothing below 3
+is ever rendered, whatever it is set to. Changing it takes effect on the next
+`wrangler deploy`, affects every LL rendition playlist rendered after that, and
+costs (or saves) exactly the difference in glass-to-glass latency.
 
 **Rollback**: unset `LIVE_HLS_PLAYLIST_BASE_URL` on the API (see
 `docs/WATCH_PARTY.md` §"Playlists at the edge") — new sessions immediately go
