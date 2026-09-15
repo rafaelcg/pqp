@@ -226,12 +226,20 @@ function noop() {}
  * detachable. See this module's header for the production failure this
  * replaces.
  *
- * `isProducer` is true for a caller whose own `produce()` started the fetch
- * it is returning — the flag `index.ts` uses to pick exactly one cache
- * writer per shared fetch. A detach-and-reproduce can therefore hand out a
- * second producer for the same key; writing the same bytes to the same cache
- * key twice is wasteful, not wrong, and it is strictly better than the
- * alternative of a request that has no answer at all.
+ * `isProducer` is the flag `index.ts` uses to pick exactly one cache writer,
+ * and it means "my fetch was still this key's current one when it settled" —
+ * NOT "my call started a fetch". The difference is the whole point: a
+ * detach-and-reproduce replaces the map entry, so the fetch that was replaced
+ * reads `false` when it finally lands and does not write the cache. Electing
+ * the writer at settlement time rather than at start time is what stops an
+ * older playlist snapshot from overwriting the newer one its own replacement
+ * already stored, for the rest of the cache TTL (Farol, PR #645).
+ *
+ * At most one fetch per key is in flight in the ordinary case, including a
+ * synchronized detach: the map is re-read at the top of every attempt and a
+ * caller produces only when it sees an empty slot, so N joiners of one
+ * stalled fetch elect one replacement between them. `MAX_JOIN_ATTEMPTS` is
+ * the one deliberate exception, and it is bounded per caller.
  *
  * @template T
  * @param {Map<string, Promise<T>>} inFlight
