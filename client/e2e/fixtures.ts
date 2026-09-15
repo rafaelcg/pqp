@@ -218,16 +218,37 @@ export async function leaveVoiceIfConnected(page: Page): Promise<void> {
   // false on a slow runner while the bar re-laid itself out after a room
   // emptied, so the seat was never released and orphaned for 90s, and the
   // next spec joined a room that was not empty (see camera-stage.spec.ts).
-  const leave = page
-    .getByRole("button", { name: /^(Leave|Disconnect from voice)$/ })
+  //
+  // The bar's Leave first. The sidebar's Disconnect is only a fallback, and
+  // only when it is actually on screen: on a phone it sits in a closed
+  // drawer, "visible" to Playwright but off the viewport, and clicking it
+  // would spin until the test timed out.
+  const leave = page.getByRole("button", { name: "Leave", exact: true }).first();
+  const disconnect = page
+    .getByRole("button", { name: "Disconnect from voice" })
     .first();
+  let button = leave;
   try {
     await leave.waitFor({ state: "visible", timeout: 1_500 });
   } catch {
-    return;
+    const box = await disconnect
+      .boundingBox({ timeout: 500 })
+      .catch(() => null);
+    const viewport = page.viewportSize();
+    if (
+      !box ||
+      !viewport ||
+      box.x < 0 ||
+      box.y < 0 ||
+      box.x + box.width > viewport.width ||
+      box.y + box.height > viewport.height
+    ) {
+      return;
+    }
+    button = disconnect;
   }
-  await leave.click();
-  await expect(leave).toBeHidden({ timeout: 10_000 });
+  await button.click({ timeout: 10_000 });
+  await expect(button).toBeHidden({ timeout: 10_000 });
 }
 
 /** Read a resolved CSS custom property off :root. */
