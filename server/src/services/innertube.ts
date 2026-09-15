@@ -73,7 +73,7 @@ export class InnerTubeError extends Error {
 
 async function call(
   client: InnerTubeClient,
-  path: "search" | "browse",
+  path: "search" | "browse" | "next",
   body: Record<string, unknown>,
 ): Promise<unknown> {
   gate();
@@ -313,5 +313,50 @@ export async function innertubePlaylist(
     const response = await call(client, "browse", { browseId: `VL${listId}` });
     const videos = collectVideos(response, limit);
     return videos.length > 0 ? { name: playlistTitle(response), videos } : null;
+  });
+}
+
+const RELATED_CACHE_MAX = 500;
+const RELATED_CACHE_TTL_MS = 6 * 60 * 60_000;
+const relatedCache = new Map<string, { at: number; videos: InnerTubeVideo[] }>();
+
+function rememberRelated(videoId: string, videos: InnerTubeVideo[]) {
+  if (relatedCache.size >= RELATED_CACHE_MAX) {
+    const oldest = relatedCache.keys().next().value;
+    if (oldest !== undefined) {
+      relatedCache.delete(oldest);
+    }
+  }
+  relatedCache.set(videoId, { at: Date.now(), videos });
+}
+
+/** Test hook. */
+export function resetInnerTubeRelatedCache(): void {
+  relatedCache.clear();
+}
+
+/**
+ * "Watch next" videos for a video id. WEB answers `compactVideoRenderer`,
+ * TVHTML5 answers `lockupViewModel`; `collectVideos` already reads both.
+ * The seed video is dropped. Remembered for six hours, like search.
+ */
+export async function innertubeRelated(
+  videoId: string,
+  limit = 5,
+): Promise<InnerTubeVideo[] | null> {
+  const cached = relatedCache.get(videoId);
+  if (cached && Date.now() - cached.at < RELATED_CACHE_TTL_MS) {
+    return cached.videos.slice(0, limit);
+  }
+  return withClients(async (client) => {
+    const response = await call(client, "next", { videoId });
+    const videos = collectVideos(response)
+      .filter((video) => video.videoId !== videoId)
+      .slice(0, limit);
+    if (videos.length === 0) {
+      return null;
+    }
+    rememberRelated(videoId, videos);
+    return videos;
   });
 }

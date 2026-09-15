@@ -674,6 +674,13 @@ export const resolveMusic = (query: string, signal?: AbortSignal) =>
     signal ? { signal } : {},
   );
 
+/** Related videos for autoplay when the queue runs out. */
+export const relatedMusic = (videoId: string, signal?: AbortSignal) =>
+  apiFetch<{ tracks: MusicResolved[] }>(
+    `/api/music/related?videoId=${encodeURIComponent(videoId)}`,
+    signal ? { signal } : {},
+  );
+
 // -------------------------------------------------------------- attachments
 
 /**
