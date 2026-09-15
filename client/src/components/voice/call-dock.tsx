@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useRef,
   useState,
   type ReactElement,
   type ReactNode,
@@ -50,9 +51,11 @@ export interface CallDockContent {
 }
 
 type Publish = (content: CallDockContent | null) => void;
+type ReportOccupied = (occupied: boolean) => void;
 
 const PublishContext = createContext<Publish | null>(null);
 const ContentContext = createContext<CallDockContent | null>(null);
+const OccupiedContext = createContext<ReportOccupied | null>(null);
 
 export function CallDockProvider({
   children,
@@ -60,21 +63,34 @@ export function CallDockProvider({
 }: {
   children: ReactNode;
   /**
-   * Whether a bar is docked right now. `App` reads it to fold the sidebar's
-   * duplicate camera and share buttons while the same controls are on
-   * screen in the composer.
+   * Whether a bar is DRAWN right now: reported by the outlet that draws it,
+   * not by the stage that publishes it, so a bar published for a channel
+   * whose composer is not on screen counts as absent. `App` reads it to
+   * fold the sidebar's duplicate camera and share buttons while the same
+   * controls are on screen in the composer, and gets `false` again when
+   * the outlet or this provider goes away.
    */
   onOccupiedChange?: (occupied: boolean) => void;
 }) {
   const [content, setContent] = useState<CallDockContent | null>(null);
   const publish = useCallback<Publish>((next) => setContent(next), []);
-  const occupied = content !== null;
+  const [occupied, setOccupied] = useState(false);
   useEffect(() => {
     onOccupiedChange?.(occupied);
   }, [occupied, onOccupiedChange]);
+  useEffect(
+    () => () => {
+      onOccupiedChange?.(false);
+    },
+    [onOccupiedChange],
+  );
   return (
     <PublishContext.Provider value={publish}>
-      <ContentContext.Provider value={content}>{children}</ContentContext.Provider>
+      <OccupiedContext.Provider value={setOccupied}>
+        <ContentContext.Provider value={content}>
+          {children}
+        </ContentContext.Provider>
+      </OccupiedContext.Provider>
     </PublishContext.Provider>
   );
 }
@@ -130,6 +146,11 @@ const EXIT_BACKSTOP_MS = 600;
  * list above scroll-anchors to the bottom throughout (`MessageList` watches
  * its own height with a ResizeObserver).
  *
+ * While a bar is live it is drawn straight from context: the stage publishes
+ * a fresh element every render (a speaking ring, the clock), and copying it
+ * into state here would cost a second render pass each time. State only
+ * enters on the way out, to hold the last bar for its closing transition.
+ *
  * Under reduced motion the row snaps both ways.
  */
 export function CallDockOutlet({ channelId }: { channelId: string }) {
@@ -141,25 +162,46 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
   const active = content !== null;
   const reducedMotion = usePrefersReducedMotion();
 
-  // The bar that is drawn: the live one, or the last one while it folds away.
-  // Set during render rather than in an effect (the "information from
-  // previous renders" pattern), so no intermediate frame is ever committed.
+  // This outlet is the one drawing the bar, so it is the one that says so:
+  // a bar published for another channel's composer is not on screen. Cleared
+  // when the outlet unmounts (the composer of another channel takes over).
+  const reportOccupied = useContext(OccupiedContext);
+  useLayoutEffect(() => {
+    reportOccupied?.(active);
+  }, [active, reportOccupied]);
+  useLayoutEffect(
+    () => () => {
+      reportOccupied?.(false);
+    },
+    [reportOccupied],
+  );
+
+  // The last live bar, for the exit. The render that loses the content must
+  // still draw that bar in the SAME element, or the row remounts at 0fr and
+  // there is nothing to transition from; so that one render reads the ref
+  // (the value a layout effect wrote on the previous, live render, and which
+  // nothing else changes until the effect below moves it into `held`).
+  const lastContent = useRef<ReactElement | null>(null);
+  useLayoutEffect(() => {
+    if (content !== null) {
+      lastContent.current = content;
+    }
+  }, [content]);
+
+  // The bar kept on screen while the row closes; null while live or gone.
   const [held, setHeld] = useState<ReactElement | null>(null);
-  if (content !== null && content !== held) {
-    setHeld(content);
-  }
   const [open, setOpen] = useState(false);
 
   // Leaving: start closing now, and drop the bar at once when nothing will
-  // animate.
+  // animate. Arriving again mid-exit lets the held copy go.
   useLayoutEffect(() => {
     if (active) {
+      setHeld(null);
       return;
     }
     setOpen(false);
-    if (reducedMotion) {
-      setHeld(null);
-    }
+    setHeld(reducedMotion ? null : lastContent.current);
+    lastContent.current = null;
   }, [active, reducedMotion]);
 
   // Arriving: one painted frame closed, then open, so the row transitions.
@@ -194,7 +236,8 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
     setHeld(null);
   };
 
-  if (held === null) {
+  const shown = active ? content : (held ?? lastContent.current);
+  if (shown === null) {
     return null;
   }
 
@@ -216,7 +259,7 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
             and the field's text share a left edge. On a 360 phone that
             leaves 238px, and the six tiles a phone gets (mute, hand, music,
             camera, share, hang up) take 236 of it. */}
-        <div className="border-b border-border/60 px-3 pb-2 pt-2.5">{held}</div>
+        <div className="border-b border-border/60 px-3 pb-2 pt-2.5">{shown}</div>
       </div>
     </div>
   );

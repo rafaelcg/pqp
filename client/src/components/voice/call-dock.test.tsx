@@ -147,6 +147,63 @@ describe("CallDockOutlet", () => {
     render({ viewing: "lobby", call: null, onOccupiedChange: occupied });
     expect(occupied).toHaveBeenLastCalledWith(false);
   });
+
+  it("does not count a bar the composer on screen is not drawing", () => {
+    const occupied = vi.fn();
+    // In the Lobby call, looking at #general: the bar is published and the
+    // composer filters it out, so the sidebar must keep its own buttons.
+    render({ viewing: "general", call: LOBBY, onOccupiedChange: occupied });
+    expect(occupied).toHaveBeenLastCalledWith(false);
+    // Back to Lobby: the same publication is drawn, and now it counts.
+    render({ viewing: "lobby", call: LOBBY, onOccupiedChange: occupied });
+    expect(occupied).toHaveBeenLastCalledWith(true);
+    render({ viewing: "general", call: LOBBY, onOccupiedChange: occupied });
+    expect(occupied).toHaveBeenLastCalledWith(false);
+  });
+
+  it("reports the dock gone when the provider unmounts mid-call", () => {
+    const occupied = vi.fn();
+    render({ viewing: "lobby", call: LOBBY, onOccupiedChange: occupied });
+    expect(occupied).toHaveBeenLastCalledWith(true);
+    act(() => root.render(<div />));
+    expect(occupied).toHaveBeenLastCalledWith(false);
+  });
+
+  it("draws the live bar straight from the stage, without a copy in state", () => {
+    // One render of the stage is one render of the bar, so a speaking ring
+    // or the clock does not cost a second pass through the dock.
+    let renders = 0;
+    function Counting() {
+      renders += 1;
+      return <div data-bar>bar</div>;
+    }
+    function CountingStage() {
+      const publish = useCallDockPublisher()!;
+      return (
+        <CallDockPortal channelId="lobby" publish={publish}>
+          <Counting />
+        </CallDockPortal>
+      );
+    }
+    act(() =>
+      root.render(
+        <CallDockProvider>
+          <CountingStage />
+          <CallDockOutlet channelId="lobby" />
+        </CallDockProvider>,
+      ),
+    );
+    const afterMount = renders;
+    act(() =>
+      root.render(
+        <CallDockProvider>
+          <CountingStage />
+          <CallDockOutlet channelId="lobby" />
+        </CallDockProvider>,
+      ),
+    );
+    expect(renders - afterMount).toBe(1);
+  });
 });
 
 describe("CallDockPortal without a provider", () => {
