@@ -219,6 +219,44 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
     expect(hlsKeepWarmDeclined()).toBe(1);
   });
 
+  it("re-arms and re-asks seconds after being relieved, in case the owner died", async () => {
+    await liveSession(otherInstance);
+    await heartbeat(otherInstance, 1);
+
+    await buildSignedPlaylist(channelId, STARTED_AT, RUNG);
+    await waitFor(
+      () => frames.some((f) => f.topic === "voice.hlsKeepWarm"),
+      "the first hand-over",
+    );
+    ownerAnswers(STARTED_AT);
+    expect(hlsKeepWarmLoopsActive()).toBe(0);
+
+    // A viewer keeps polling. Nothing would tell this machine if the owner
+    // died a second after answering, so being stood down expires in seconds
+    // rather than lasting the whole ownership TTL.
+    const asks = () =>
+      frames.filter((f) => f.topic === "voice.hlsKeepWarm").length;
+    const before = asks();
+    // Stood down throughout: nothing is rendered while it waits.
+    const rendered = hlsKeepWarmRenders();
+    await new Promise((resolve) => setTimeout(resolve, 5_200));
+    expect(hlsKeepWarmRenders()).toBe(rendered);
+    await buildSignedPlaylist(channelId, STARTED_AT, RUNG);
+
+    expect(hlsKeepWarmLoopsActive()).toBe(1);
+    // And it asks again AT ONCE, in the viewer's own request rather than on
+    // the re-armed loop's first tick, so a live owner relieves it before that
+    // tick can render anything.
+    expect(asks()).toBeGreaterThan(before);
+    expect(hlsKeepWarmRenders()).toBe(rendered);
+
+    // The owner is gone: nobody answers, and this machine goes on warming.
+    await waitFor(
+      () => hlsKeepWarmRenders() > rendered,
+      "the survivor to warm the stream",
+    );
+  });
+
   it("keeps warming for as long as the owner never answers", async () => {
     await liveSession(otherInstance);
     await heartbeat(otherInstance, 1);

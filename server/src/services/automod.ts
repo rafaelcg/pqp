@@ -70,9 +70,27 @@ function cooldownKey(serverId: string, authorId: string): string {
   return `${serverId}:${authorId}`;
 }
 
+/**
+ * The gate map is swept at most once per cooldown window, however busy it
+ * gets. Sweeping on size alone was a trap at high cardinality: a thousand
+ * distinct offenders a second keeps the map ABOVE the bound even straight
+ * after a sweep, because everything in it is younger than the window and
+ * nothing is eligible to go — so every subsequent write rescanned the whole
+ * map and found nothing, on every API instance, turning a bounded cleanup
+ * into quadratic work exactly when the process is busiest. Time-gated, the
+ * scan happens once per window and the map stays bounded by what a window's
+ * worth of alerts can put in it, which is what it was ever bounded by.
+ */
+const ALERT_MAP_SWEEP_MIN = 10_000;
+let lastAlertSweepAt = 0;
+
 function rememberAlert(key: string, now: number): void {
   lastAlertAt.set(key, now);
-  if (lastAlertAt.size > 10_000) {
+  if (
+    lastAlertAt.size > ALERT_MAP_SWEEP_MIN &&
+    now - lastAlertSweepAt >= ALERT_COOLDOWN_MS
+  ) {
+    lastAlertSweepAt = now;
     for (const [k, at] of lastAlertAt) {
       if (now - at >= ALERT_COOLDOWN_MS) lastAlertAt.delete(k);
     }
@@ -258,6 +276,7 @@ subscribeToCluster(AUTOMOD_ALERT_TOPIC, (data) => {
 export function resetAutomodAlertCooldown(): void {
   lastAlertAt.clear();
   inflightClaims.clear();
+  lastAlertSweepAt = 0;
 }
 
 interface RuleRow {
@@ -712,6 +731,8 @@ export async function recordAutomodHit(
     ? await claimAlert(input.serverId, input.authorId, Date.now())
     : null;
   if (rule.alertChannelId && claim) {
+    /** The embed is in the channel: past this the window has been used. */
+    let posted = false;
     try {
       const authorId = actorId;
       const author = await getPool().query<{ display_name: string; username: string | null; discriminator: string | null; name: string | null }>(
@@ -747,14 +768,27 @@ export async function recordAutomodHit(
          RETURNING id`,
         [rule.alertChannelId, authorId, JSON.stringify([embed])],
       );
-      effects.alert = await getHydratedMessage(inserted.rows[0]!.id);
-      // The row is written. Only now is the window anybody else's business.
+      // THE INSERT IS THE POST, AND THE LINE BELOW IT IS NOT. Everything up to
+      // here can fail with nothing written, and the window goes back. From
+      // here the embed is IN #mod-log, so the window has been used and must
+      // stand whatever else goes wrong — releasing it after a successful
+      // insert is how the next hit posts the same embed twice, which is the
+      // duplicate this whole mechanism exists to prevent. So the claim is
+      // confirmed the instant the row exists, and the hydration below gets a
+      // catch of its own.
       confirmAlertClaim(input.serverId, input.authorId);
+      posted = true;
+      effects.alert = await getHydratedMessage(inserted.rows[0]!.id);
     } catch (error) {
       console.error("[automod] alert post failed:", error);
-      // Nothing was posted, so nothing should be silenced: give the window
-      // back rather than swallowing the next ten seconds of alerts too.
-      await releaseAlertClaim(input.serverId, input.authorId, claim);
+      if (!posted) {
+        // Nothing was posted, so nothing should be silenced: give the window
+        // back rather than swallowing the next ten seconds of alerts too.
+        await releaseAlertClaim(input.serverId, input.authorId, claim);
+      }
+      // Posted but not hydrated: the moderators have the embed, and the
+      // sockets watching #mod-log pick it up on their next read rather than
+      // live. Nothing to undo.
     }
   }
   return effects;

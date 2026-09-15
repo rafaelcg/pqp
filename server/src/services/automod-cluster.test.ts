@@ -47,6 +47,21 @@ interface Instance {
   db: DbModule;
 }
 
+/** Flipped by the one test that needs the post to land and the read to fail. */
+const hydrationFails = { now: false };
+vi.mock("./messages.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./messages.js")>();
+  return {
+    ...actual,
+    getHydratedMessage: async (id: string) => {
+      if (hydrationFails.now) {
+        throw new Error("hydration is down");
+      }
+      return actual.getHydratedMessage(id);
+    },
+  };
+});
+
 const hub = createMemoryHub();
 const booted: Instance[] = [];
 
@@ -254,6 +269,58 @@ describeDb("automod across two machines", () => {
         [serverId, authorId],
       );
     expect(rows.rows[0]!.count).toBe("0");
+  });
+
+  it("(2d) a post that landed keeps its window even when the read back fails", async () => {
+    const rule = await alpha.automod.createAutomodRule(serverId, {
+      kind: "keywords",
+      enabled: true,
+      keywords: ["bolacha"],
+      allowList: [],
+      mentionLimit: 5,
+      exemptRoleIds: [],
+      exemptChannelIds: [],
+      customMessage: "",
+      alertChannelId: modLogId,
+      timeoutMinutes: 0,
+      blockPqpInvites: false,
+    });
+    const hit = { kind: "keywords" as const, matched: "bolacha", ruleId: rule.id };
+    const input = {
+      serverId,
+      channelId: chatId,
+      authorId,
+      memberPerms: 0n,
+      body: "bolacha",
+    };
+
+    // The embed is inserted and the read back throws. The moderators HAVE the
+    // alert; only the live delivery of it is lost.
+    hydrationFails.now = true;
+    const first = await alpha.automod.recordAutomodHit(input, hit);
+    hydrationFails.now = false;
+    expect(first.alert).toBeNull();
+
+    const posts = await alpha.db
+      .getPool()
+      .query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM messages WHERE channel_id = $1`,
+        [modLogId],
+      );
+    expect(posts.rows[0]!.count).toBe("1");
+
+    // SO THE WINDOW STANDS. Releasing it here — the failure looks identical
+    // from inside the catch — is how #mod-log gets the same embed twice.
+    beta.automod.resetAutomodAlertCooldown();
+    const second = await beta.automod.recordAutomodHit(input, hit);
+    expect(second.alert).toBeNull();
+    const after = await alpha.db
+      .getPool()
+      .query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM messages WHERE channel_id = $1`,
+        [modLogId],
+      );
+    expect(after.rows[0]!.count).toBe("1");
   });
 
   it("(2b) the window is the row's: a machine that never heard the frame still refuses", async () => {

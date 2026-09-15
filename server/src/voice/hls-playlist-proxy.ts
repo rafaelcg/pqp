@@ -246,6 +246,7 @@ export function resetHlsPlaylistCacheForTests(): void {
   stopAllKeepWarmLoops();
   keepWarmOwnership.clear();
   keepWarmHandovers.clear();
+  keepWarmRelievedAt.clear();
   keepWarmRenders = 0;
   keepWarmDeclined = 0;
   keepWarmAdopted = 0;
@@ -520,6 +521,20 @@ const HLS_KEEP_WARM_HANDOVER_RETRY_MS = 6_000;
 /** Per session, when this process last asked the owner to take over. */
 const keepWarmHandovers = new Map<string, number>();
 
+/** Per session, when the owner last relieved this process of it. */
+const keepWarmRelievedAt = new Map<string, number>();
+
+/**
+ * How long a machine that has been relieved stays stood down before a viewer
+ * request re-arms it and re-asks. This is the window in which an owner that
+ * dies leaves its stream unwarmed, so it is deliberately much shorter than the
+ * ownership answer's own TTL: the re-ask is cheap and self-cancelling (the
+ * owner answers in a round trip, long before the re-armed loop's first tick),
+ * while the alternative is a party going cold for half a minute every time a
+ * machine goes away.
+ */
+const KEEP_WARM_REARM_MS = 5_000;
+
 /** Loops handed to the owner over the bus. For metrics. */
 export function hlsKeepWarmAdopted(): number {
   return keepWarmAdopted;
@@ -561,6 +576,11 @@ function pruneKeepWarmOwnership(now: number): void {
   for (const [key, at] of keepWarmHandovers) {
     if (now - at >= KEEP_WARM_OWNER_TTL_MS) {
       keepWarmHandovers.delete(key);
+    }
+  }
+  for (const [key, at] of keepWarmRelievedAt) {
+    if (now - at >= KEEP_WARM_OWNER_TTL_MS) {
+      keepWarmRelievedAt.delete(key);
     }
   }
 }
@@ -620,13 +640,31 @@ function touchKeepWarmSession(channelId: string, startedAt: number, now: number)
     loop.lastRequestedAt = now;
     return;
   }
-  // Already known to belong to the other machine: serve this viewer from the
-  // shared cache and storage, and do not re-arm a loop the first tick would
-  // only stop again. The entry expires, so a session this process later adopts
-  // is warmed by it within one TTL.
+  // Handed over and relieved: serve this viewer from the shared cache and
+  // storage, and do not re-arm a loop the owner would only relieve again — but
+  // only for KEEP_WARM_REARM_MS, NOT for the whole ownership TTL.
+  //
+  // THE OWNER CAN DIE BETWEEN TWO OF THESE. If it does, nothing tells this
+  // process: the rows still name a machine whose heartbeat has not expired
+  // yet, and the audience is here. So it re-arms, and asks again AT ONCE
+  // rather than on the loop's first tick — a live owner answers in a round
+  // trip and this loop is stopped before it has rendered anything, while a
+  // dead one answers never and this machine simply keeps warming, which is the
+  // whole fail-open rule. The cost of an owner dying is then seconds instead
+  // of half a minute, and the cost of one that has not is one frame each way
+  // per `KEEP_WARM_REARM_MS`, whatever the audience does in between.
   const known = keepWarmOwnership.get(key);
-  if (known?.ownedElsewhere && now - known.at < KEEP_WARM_OWNER_TTL_MS) {
-    return;
+  const elsewhere =
+    known?.ownedElsewhere === true && now - known.at < KEEP_WARM_OWNER_TTL_MS;
+  if (elsewhere) {
+    const relievedAt = keepWarmRelievedAt.get(key);
+    if (relievedAt !== undefined && now - relievedAt < KEEP_WARM_REARM_MS) {
+      return;
+    }
+    if (isBusEnabled()) {
+      keepWarmHandovers.set(key, now);
+      publishToCluster(HLS_KEEP_WARM_TOPIC, { channelId, startedAt });
+    }
   }
   const timer = setInterval(() => {
     void runKeepWarmTick(channelId, startedAt, key);
@@ -814,7 +852,10 @@ subscribeToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, (data) => {
     return;
   }
   keepWarmDeclined += 1;
+  // The ask is spent; the next re-arm asks again immediately. What holds that
+  // re-arm off for a few seconds is the relieved-at stamp, not this.
   keepWarmHandovers.delete(key);
+  keepWarmRelievedAt.set(key, Date.now());
   stopKeepWarmLoop(key);
 });
 

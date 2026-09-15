@@ -480,6 +480,10 @@ export function createPostgresBusTransport(
     onFrame(next) {
       handler = next;
     },
+    connected() {
+      // Exactly what `sendEnvelope` checks before it decides to drop.
+      return client !== null;
+    },
 
     whenConnected() {
       return ready;

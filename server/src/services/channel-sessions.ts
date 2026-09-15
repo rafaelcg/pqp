@@ -8,6 +8,7 @@ import { getPool } from "../db.js";
 import { pushChannelSessionReminder } from "./push.js";
 import { forEachAuthenticatedSocket } from "../ws/sockets.js";
 import {
+  isBusConnected,
   isBusEnabled,
   publishToCluster,
   subscribeToCluster,
@@ -472,6 +473,36 @@ export function deliverChannelSessionReminder(
   });
 }
 
+/**
+ * Reminders this instance has already put on its sockets, so the retry above
+ * cannot show anybody the same nudge twice. Keyed by the reminder's identity
+ * — a session and which of its two one-shot reminders this is — because that
+ * is exactly what `fireReminders` claims once and for all in SQL. Held for
+ * long enough to cover the retry and swept on write, never a timer.
+ */
+const RELAYED_REMINDER_MEMORY_MS = 60_000;
+const relayedReminders = new Map<string, number>();
+
+function alreadyRelayed(sessionId: string, kind: string, now: number): boolean {
+  const key = `${sessionId}:${kind}`;
+  const seen = relayedReminders.get(key);
+  if (seen !== undefined && now - seen < RELAYED_REMINDER_MEMORY_MS) {
+    return true;
+  }
+  for (const [old, at] of relayedReminders) {
+    if (now - at >= RELAYED_REMINDER_MEMORY_MS) {
+      relayedReminders.delete(old);
+    }
+  }
+  relayedReminders.set(key, now);
+  return false;
+}
+
+/** Test seam. */
+export function resetRelayedChannelSessionReminders(): void {
+  relayedReminders.clear();
+}
+
 subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
   const event = data as Partial<ChannelSessionReminderEvent> | null;
   if (
@@ -492,6 +523,11 @@ subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
   if (userIds.length === 0) {
     return;
   }
+  if (alreadyRelayed(event.sessionId, event.kind, Date.now())) {
+    // The publisher's one retry, or a duplicate frame: this instance has
+    // already shown these sockets this reminder.
+    return;
+  }
   // No push here: the instance that claimed the reminder already sent it, and
   // a second one would be a second notification on the same phone.
   deliverChannelSessionReminder({
@@ -504,16 +540,52 @@ subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
   });
 });
 
+/**
+ * How long to wait before the one retry below. Long enough for the Postgres
+ * transport's own reconnect (`RECONNECT_MIN_MS` is 500 ms and it backs off
+ * from there) to have got a connection back on the ordinary blip this covers,
+ * short enough that a reminder is still a reminder when it lands.
+ */
+const REMINDER_REPUBLISH_MS = 3_000;
+
+/**
+ * ONE RETRY, BECAUSE THIS FRAME NEVER COMES ROUND AGAIN.
+ *
+ * `publishToCluster` is fire-and-forget and the transport drops rather than
+ * buffers while it is reconnecting — the right trade for presence, the wrong
+ * one here: the reminder was CLAIMED in the same UPDATE that stamped
+ * `notified_before_at`, so nothing will ever try to send it again, and the
+ * person gets a push and an open tab that says nothing. If the bus was not
+ * connected at publish time, try once more after the transport has had a
+ * moment to come back.
+ *
+ * Deliberately not an outbox. A durable one would be the honest fix for a
+ * long outage and is a table, a sweep and a dedupe key of its own; this covers
+ * the case that actually happens (a reconnect measured in seconds) without
+ * pretending to cover the one that does not.
+ */
+function publishReminder(event: ChannelSessionReminderEvent): void {
+  publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, event);
+  if (isBusConnected()) {
+    return;
+  }
+  const retry = setTimeout(() => {
+    if (!isBusEnabled()) {
+      return;
+    }
+    publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, event);
+  }, REMINDER_REPUBLISH_MS);
+  // A pending retry must never be why a worker refuses to exit.
+  retry.unref?.();
+}
+
 function notifyChannelSessionSubscribers(
   event: ChannelSessionReminderEvent,
 ): void {
   const recipients = [...new Set(event.userIds)];
   deliverChannelSessionReminder({ ...event, userIds: recipients });
   if (isBusEnabled()) {
-    publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, {
-      ...event,
-      userIds: recipients,
-    });
+    publishReminder({ ...event, userIds: recipients });
   }
 
   pushChannelSessionReminder({

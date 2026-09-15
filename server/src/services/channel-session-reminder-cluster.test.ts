@@ -166,6 +166,7 @@ describeDb("a worker-side channel-session reminder reaches API sockets", () => {
 
   afterEach(async () => {
     for (const instance of booted.splice(0)) {
+      instance.sessions.resetRelayedChannelSessionReminders();
       await instance.bus.closeBus().catch(() => {});
       await instance.db.closePool().catch(() => {});
     }
@@ -206,6 +207,38 @@ describeDb("a worker-side channel-session reminder reaches API sockets", () => {
       channelId,
       kind: "before",
     });
+  });
+
+  it("shows one nudge even when the publisher retries the frame", async () => {
+    const rec = recorder();
+    api.sockets.setAuthenticatedSocket(rec.socket, {
+      id: userId,
+      display_name: "Sub",
+      avatar_url: null,
+    } as unknown as DbUser);
+
+    await worker.sessions.sendDueChannelSessionReminders();
+    await waitFor(
+      () => rec.frames.length > 0,
+      "the reminder to cross to the API instance",
+    );
+
+    // The publisher could not tell whether its frame went out (the transport
+    // drops while it reconnects) and sends it again. The reminder is claimed
+    // once in SQL, so the API instance must show it once however many frames
+    // carry it.
+    worker.bus.publishToCluster("channel-session.reminder", {
+      sessionId,
+      channelId,
+      title: "O filme",
+      startsAt: new Date().toISOString(),
+      kind: "before",
+      userIds: [userId],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(
+      rec.frames.filter((f) => f.type === "channel-session-reminder"),
+    ).toHaveLength(1);
   });
 
   it("does not deliver to somebody who never asked to be reminded", async () => {

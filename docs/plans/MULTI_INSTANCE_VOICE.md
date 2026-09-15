@@ -646,6 +646,15 @@ owner that has stopped reading its bus, a handler that answered on the strength
 of its own loop would have each fallback relieve the other, both stop, and
 every counter report a successful hand-over while nobody warmed anything.
 
+And being relieved lasts seconds, not the whole ownership TTL. Nothing tells a
+stood-down machine that the owner died a moment after answering — the rows
+still name a machine whose heartbeat has not expired — so a viewer request
+past `KEEP_WARM_REARM_MS` re-arms and re-asks, in the request itself rather
+than on the re-armed loop's first tick. A live owner answers in a round trip
+and the loop stops again having rendered nothing; a dead one never answers and
+the survivor keeps warming. The cost of a machine failing is then a few
+seconds of a cold rung instead of half a minute.
+
 Warming is the fail-open side throughout: an unstamped row, `VOICE_REGISTRY`
 off, a bus that is off (nobody to hand the job to) or a lookup that could not be
 made all leave the loop running, because a rung warmed twice costs money and a
@@ -678,7 +687,14 @@ per key, so a flood of hits for one author shares one query instead of queueing
 a hundred UPSERTs on the same primary-key row; the cluster frame is published
 only after the alert row commits; and a post that fails releases the window
 (conditional on the exact instant it wrote) rather than silencing ten seconds
-of alerts for something nobody ever saw. The map stays in front of it as a
+of alerts for something nobody ever saw. The release is careful about which
+failure it is undoing: the INSERT is the post, and anything that throws after
+it — the read back that turns the row into a live frame, say — leaves the
+embed sitting in #mod-log, so the window has been used and must stand.
+Releasing it there is how the next hit posts the same embed twice. The local
+gate map is swept at most once per window rather than on every write past a
+size bound, because at high cardinality nothing in it is old enough to remove
+and the scan would run on every alert, on every instance. The map stays in front of it as a
 cheap first gate and behind it as the fallback when the database cannot be
 asked — a duplicate alert during an outage is a nuisance, a swallowed one is a
 moderator not being told.
@@ -700,7 +716,15 @@ once that transport is connected (bounded to ten seconds, and they start
 anyway if it is not): the transport drops rather than buffers while
 disconnected, by design, and a reminder tick claims its rows in the same UPDATE
 that stamps them, so a frame dropped during a cold-start race is a nudge nobody
-ever gets. `/health` listens first and never waits on any of it. Beside it, the reminder
+ever gets. `/health` listens first and never waits on any of it. For the same
+reason the reminder publish asks `isBusConnected()` and, if the answer is no,
+tries once more three seconds later, by which time the transport's own
+reconnect has usually landed; the receiving side remembers which reminders it
+has already put on its sockets (a session and which of its two one-shot
+reminders), so neither that retry nor a duplicate frame can show anybody the
+same nudge twice. Deliberately not an outbox: a durable one is a table, a sweep
+and a dedupe key of its own, and this covers the outage that actually happens
+rather than pretending to cover the one that does not. Beside it, the reminder
 nudge itself is relayed (`channel-session.reminder`) so each API machine
 delivers it to its own sockets, while the Web Push stays with the process that
 claimed the row — sending it once per machine is how a phone gets three copies
