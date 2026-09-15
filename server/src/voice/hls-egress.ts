@@ -50,17 +50,14 @@ import {
   type StorageConfig,
 } from "../lib/s3.js";
 import {
-  isLiveHlsLLEnabled,
   liveHlsLLAvailable,
-  llDemotedRecently,
   llHasRoom,
   llPlaylistFrontConfigured,
   llPlaylistUrl,
   llStreamFor,
   reconcileLlHlsNow,
-  requestedHlsModeForChannel,
   resetHlsRemuxForTests,
-  resolveHlsMode,
+  resolveHlsModeForChannel,
   runBounded,
   stopLlSession,
   sweepLlDemotions,
@@ -5213,20 +5210,22 @@ async function reconcileLiveHlsNow(
   sourceHeight?: number | null,
 ): Promise<LiveHlsReconcileResult> {
   // THE MODE BRANCH, BEFORE ANYTHING ELSE HERE READS TRACKS OR RUNGS.
-  // `resolveHlsMode` answers `conventional` unconditionally while
-  // `LIVE_HLS_LL` is unset, so this branch is a map read that always misses
-  // and nothing below it changes: the flag off leaves this function
-  // byte-for-byte what it was before L1.5. `pqp-remux` finds its own screen
-  // track (its README), so the LL half skips every LiveKit-specific probe
-  // this function does for the ladder.
-  // With `LIVE_HLS_LL` unset there is nothing to ask the database: no LL
-  // session can exist, and a transient read failure must not be able to
-  // skip the conventional reconcile below (a Farol finding on the rebased
-  // PR #580: the lookup ran, and failed closed, even with the flag off).
-  const requestedMode = isLiveHlsLLEnabled()
-    ? await requestedHlsModeForChannel(channelId)
-    : false;
-  if (requestedMode === null) {
+  // `resolveHlsModeForChannel` answers `conventional` unconditionally while
+  // `LIVE_HLS_LL` is unset and asks the database nothing at all, so the flag
+  // off leaves this function byte-for-byte what it was before L1.5.
+  // `pqp-remux` finds its own screen track (its README), so the LL half
+  // skips every LiveKit-specific probe this function does for the ladder.
+  //
+  // The decision itself -- the party's request, the post-demotion veto that
+  // is scoped to THAT party, the allowlist, and the `voice.hlsModeResolved`
+  // line that says which of them chose the mode -- lives in one place in
+  // `hls-remux.ts`, because it was spread across here and there that a
+  // per-channel veto on one machine silently overruled a new party's request
+  // written on the other (2026-09-15, channel `d5559e70`).
+  const resolved = await resolveHlsModeForChannel(channelId, serverId, {
+    sharing: presenterPeerId !== null,
+  });
+  if (resolved === null) {
     // FAIL CLOSED (a Farol finding on PR #580, fourth round): a database
     // read failure here must be indistinguishable from "try again later",
     // never read as "this party did not ask" -- that would fall through to
@@ -5237,16 +5236,7 @@ async function reconcileLiveHlsNow(
     const existing = rooms.get(channelId);
     return { stream: existing ? existing.stream : llStreamFor(channelId) };
   }
-  // A DEMOTION STICKS FOR THE REST OF THE PARTY. `sweepLlDemotions` clears
-  // `low_latency_requested` too, so this is belt and braces on the machine
-  // that did the demoting: the clear is a write on a different tick, and
-  // between the two this read would still answer `true` and start a second LL
-  // session on top of the one the box has just given up on. Five minutes, the
-  // same window the box's own watchdog uses.
-  const mode = resolveHlsMode({
-    serverId,
-    requestedMode: requestedMode && !llDemotedRecently(channelId),
-  });
+  const { mode } = resolved;
   if (mode === "ll") {
     // A mode flip mid-party (the request field changed between two "Ir ao
     // vivo" presses for the same channel) must never leave two transcodes

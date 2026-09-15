@@ -22,7 +22,7 @@ const {
   liveHlsLLAllowlist,
   liveHlsLLAvailable,
   resolveHlsMode,
-  requestedHlsModeForChannel,
+  liveHlsRequestForChannel,
   setRequestedHlsMode,
   deriveLlSessionId,
   remuxControlUrl,
@@ -183,14 +183,16 @@ function createFakeDb() {
       return { rowCount: count, rows: [] };
     }
 
-    if (sql.includes("SELECT low_latency_requested")) {
+    if (sql.includes("SELECT id, low_latency_requested")) {
       const [channelId] = p as [string];
-      const found = [...channelSessions.values()].find(
-        (c) => c.channel_id === channelId && c.status === "live",
+      const found = [...channelSessions].find(
+        ([, c]) => c.channel_id === channelId && c.status === "live",
       );
       return {
         rowCount: found ? 1 : 0,
-        rows: found ? [{ low_latency_requested: found.low_latency_requested }] : [],
+        rows: found
+          ? [{ id: found[0], low_latency_requested: found[1].low_latency_requested }]
+          : [],
       };
     }
 
@@ -419,7 +421,10 @@ describe("liveHlsLLAvailable: the client's gate for showing the switch at all", 
 
 describe("the per-channel request field is durable, not process memory", () => {
   it("defaults to false for a channel with no live party row", async () => {
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
+    expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
+      requested: false,
+      partySessionId: null,
+    });
   });
 
   it("persists a request written on the party's own row and reads it back by channel", async () => {
@@ -433,7 +438,10 @@ describe("the per-channel request field is durable, not process memory", () => {
 
     await setRequestedHlsMode("party-1", true);
 
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(true);
+    expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
+      requested: true,
+      partySessionId: "party-1",
+    });
   });
 
   it("survives being read by a totally different call -- no in-memory state involved", async () => {
@@ -450,8 +458,14 @@ describe("the per-channel request field is durable, not process memory", () => {
     resetHlsRemuxForTests();
     query.mockImplementation(db.queryImpl);
 
-    expect(await requestedHlsModeForChannel(OTHER_CHANNEL)).toBe(true);
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBe(false);
+    expect(await liveHlsRequestForChannel(OTHER_CHANNEL)).toEqual({
+      requested: true,
+      partySessionId: "party-2",
+    });
+    expect(await liveHlsRequestForChannel(CHANNEL)).toEqual({
+      requested: false,
+      partySessionId: null,
+    });
   });
 
   it("fails CLOSED: answers null (never false) on a database read failure, logged once", async () => {
@@ -464,7 +478,7 @@ describe("the per-channel request field is durable, not process memory", () => {
       throw new Error("connection terminated");
     });
 
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBeNull();
+    expect(await liveHlsRequestForChannel(CHANNEL)).toBeNull();
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlLookupFailed",
       expect.objectContaining({ channelId: CHANNEL, source: "requested-mode" }),
@@ -473,7 +487,7 @@ describe("the per-channel request field is durable, not process memory", () => {
     // Rate limited: a second failure for the same channel inside the window
     // does not log again.
     logEvent.mockClear();
-    expect(await requestedHlsModeForChannel(CHANNEL)).toBeNull();
+    expect(await liveHlsRequestForChannel(CHANNEL)).toBeNull();
     expect(logEvent).not.toHaveBeenCalled();
   });
 
@@ -482,9 +496,9 @@ describe("the per-channel request field is durable, not process memory", () => {
       throw new Error("connection terminated");
     });
 
-    await requestedHlsModeForChannel(CHANNEL);
+    await liveHlsRequestForChannel(CHANNEL);
     logEvent.mockClear();
-    await requestedHlsModeForChannel(OTHER_CHANNEL);
+    await liveHlsRequestForChannel(OTHER_CHANNEL);
 
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlLookupFailed",

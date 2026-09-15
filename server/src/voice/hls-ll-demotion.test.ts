@@ -65,7 +65,8 @@ const {
   llHlsActivity,
   llStreamFor,
   reconcileLlHlsNow,
-  requestedHlsModeForChannel,
+  liveHlsRequestForChannel,
+  resolveHlsModeForChannel,
   resetHlsRemuxForTests,
   setHlsRemuxTestHooks,
   sweepLlDemotions,
@@ -100,6 +101,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
   /** Every `POST /sessions` the API sent. */
   let started: string[];
   let channelA: string;
+  let serverId: string;
   let partyId: string;
 
   beforeAll(async () => {
@@ -140,10 +142,11 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       `INSERT INTO servers (name, owner_id) VALUES ('test', $1) RETURNING id`,
       [user.id],
     );
+    serverId = server.rows[0]!.id;
     const channels = await getPool().query<{ id: string }>(
       `INSERT INTO channels (server_id, name, type, position)
        VALUES ($1, 'party', 'voice', 0) RETURNING id`,
-      [server.rows[0]!.id],
+      [serverId],
     );
     channelA = channels.rows[0]!.id;
     const party = await getPool().query<{ id: string }>(
@@ -163,6 +166,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     delete process.env.LIVE_HLS_REMUX_CONTROL_URL;
     delete process.env.LIVE_HLS_REMUX_CONTROL_SECRET;
     delete process.env.LIVE_HLS_REMUX_ORIGIN_URL;
+    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
   });
 
   /**
@@ -244,6 +248,33 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
        ON CONFLICT (instance_id) DO UPDATE SET heartbeat_at = EXCLUDED.heartbeat_at`,
       [instanceId, secondsAgo],
     );
+  }
+
+  /**
+   * The host ends the party and starts another one on the same channel --
+   * the real sequence, because only one party may be live per channel at a
+   * time. A NEW `channel_sessions` row is the whole point: its id is what
+   * the demotion memo is keyed against, and a new party has never been in
+   * it.
+   */
+  async function startNewerParty(
+    options: { lowLatency?: boolean } = {},
+  ): Promise<string> {
+    const owner = await getPool().query<{ id: string }>(
+      `SELECT created_by AS id FROM channel_sessions WHERE id = $1`,
+      [partyId],
+    );
+    await getPool().query(
+      `UPDATE channel_sessions SET status = 'ended' WHERE id = $1`,
+      [partyId],
+    );
+    const newer = await getPool().query<{ id: string }>(
+      `INSERT INTO channel_sessions
+         (channel_id, title, status, created_by, low_latency_requested)
+       VALUES ($1, 'Outra', 'live', $2, $3) RETURNING id`,
+      [channelA, owner.rows[0]!.id, options.lowLatency ?? true],
+    );
+    return newer.rows[0]!.id;
   }
 
   /** An open LL row for `channelA`, exactly as `startLlSession` writes one. */
@@ -407,34 +438,45 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       demoted: true,
       demotedReason: "part-stuck",
     });
-    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: true });
 
     await sweepLlDemotions();
 
     // The durable half: every reconcile on EVERY machine now resolves
     // `conventional` for the rest of this party.
-    expect(await requestedHlsModeForChannel(channelA)).toBe(false);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: false });
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlRequestCleared",
       expect.objectContaining({ channelId: channelA, reason: "demoted:part-stuck" }),
     );
     // And the memo, which holds on this machine even before that write is
-    // read back — the window the fallback used to loop through.
-    expect(llDemotedRecently(channelA)).toBe(true);
+    // read back — the window the fallback used to loop through. Keyed by the
+    // party, never the channel: it is a verdict about THIS party.
+    expect(llDemotedRecently(partyId)).toBe(true);
     // Five minutes on, the same window the box's own watchdog uses, a fresh
     // episode is allowed again.
-    expect(llDemotedRecently(channelA, Date.now() + 6 * 60_000)).toBe(false);
+    expect(llDemotedRecently(partyId, Date.now() + 6 * 60_000)).toBe(false);
 
-    // The next "Ir ao vivo" for this channel writes the column again, which
-    // is what makes a demotion last the party and not a minute longer.
+    // THE BELT, ON ITS OWN. Put the column back the way a write that lost a
+    // race (or never landed) would leave it: this party still resolves
+    // `conventional`, because the machine that demoted it remembers which
+    // party it was.
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
     await getPool().query(
       `UPDATE channel_sessions SET low_latency_requested = TRUE WHERE id = $1`,
       [partyId],
     );
-    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: true });
+    expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+      mode: "conventional",
+      requested: true,
+      partySessionId: partyId,
+      partyDemoted: true,
+    });
   });
 
   it("(1b-bis) does not suppress a NEW party that asks for LL on the same channel", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
     await reconcileLlHlsNow(channelA, "peer-1");
     const sessionId = started[0]!;
     boxSessions.set(sessionId, {
@@ -443,16 +485,121 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       demotedReason: "no-video",
     });
     await sweepLlDemotions();
-    expect(llDemotedRecently(channelA)).toBe(true);
+    expect(llDemotedRecently(partyId)).toBe(true);
 
     // The host ends the party and starts another one, asking for LL again.
     // The memo is a verdict about a session that no longer exists, and
     // holding the new party to it for the rest of five minutes would be a
     // silent downgrade nobody could explain.
-    await setRequestedHlsMode(partyId, true);
+    const newerId = await startNewerParty();
 
-    expect(llDemotedRecently(channelA)).toBe(false);
-    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+    expect(llDemotedRecently(newerId)).toBe(false);
+    expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+      mode: "ll",
+      requested: true,
+      partySessionId: newerId,
+      partyDemoted: false,
+    });
+  });
+
+  /**
+   * THE 2026-09-15 PRODUCTION FAILURE, on the two machines that produced it.
+   *
+   * Channel `d5559e70`: instance A demoted the LL session at 15:23:14 and
+   * remembered it. At 15:26:52 the host created a NEW party with the switch
+   * on; that HTTP request landed on instance B, which wrote
+   * `low_latency_requested = true`. The share at 15:27:01 reconciled on A,
+   * whose memo was keyed by CHANNEL and still set, so the API silently
+   * started the conventional ladder for a party whose row said `true` -- no
+   * `hlsLl*` line anywhere, and nothing saying why.
+   *
+   * "Instance B" here is the database write itself, because that is the
+   * entirety of what B does: `setRequestedHlsMode` on the new party's row,
+   * from a process that shares nothing in memory with A. The resolve then
+   * runs on A, the machine holding the demotion.
+   */
+  it("(1b-ter) lets a party created on ANOTHER machine have LL after a demotion here", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "part-stuck",
+    });
+    await sweepLlDemotions();
+    expect(llDemotedRecently(partyId)).toBe(true);
+
+    // Instance B: a new party row, then the goLive handler's own write.
+    const newerId = await startNewerParty({ lowLatency: false });
+    await setRequestedHlsMode(newerId, true);
+
+    // Instance A, where the demotion lives, reconciles the share.
+    const resolved = await resolveHlsModeForChannel(channelA, serverId, {
+      sharing: true,
+    });
+
+    expect(resolved).toMatchObject({
+      mode: "ll",
+      requested: true,
+      partySessionId: newerId,
+      partyDemoted: false,
+    });
+    // And the demoted party is still demoted on this machine: scoping the
+    // memo must not amount to dropping it.
+    expect(llDemotedRecently(partyId)).toBe(true);
+  });
+
+  it("(1b-quater) says why on every mode decision, once per decision", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "part-stuck",
+    });
+    await sweepLlDemotions();
+    // The durable clear has already landed, so put the column back the way a
+    // write that lost a race would leave it: the interesting line is the one
+    // about a party that IS still asking and is refused anyway.
+    await getPool().query(
+      `UPDATE channel_sessions SET low_latency_requested = TRUE WHERE id = $1`,
+      [partyId],
+    );
+    logEvent.mockClear();
+
+    await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
+
+    // A conventional ladder starting for a party that ASKED for LL was the
+    // silent part of the failure: one line, with each input that could have
+    // said no (pitfall 16).
+    expect(logEvent).toHaveBeenCalledWith("voice.hlsModeResolved", {
+      channelId: channelA,
+      partySessionId: partyId,
+      requested: true,
+      partyDemoted: true,
+      llAvailable: true,
+      mode: "conventional",
+      sharing: true,
+    });
+
+    // `reconcileLiveHlsNow` runs on every roster event; an unchanged
+    // decision must not be a line every time.
+    logEvent.mockClear();
+    await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsModeResolved",
+      expect.anything(),
+    );
+
+    // A decision that CHANGES is said out loud straight away.
+    const newerId = await startNewerParty();
+    await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsModeResolved",
+      expect.objectContaining({ partySessionId: newerId, mode: "ll" }),
+    );
   });
 
   it("(1c) never stops a demoted session whose row another live instance has taken", async () => {
@@ -489,7 +636,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     const row = await rowById(taken.rows[0]!.id);
     expect(row.ended_at).toBeNull();
     expect(row.instance_id).toBe(machineB);
-    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: true });
   });
 
   it("(1d) clears the party that asked for the session, not whatever is live now", async () => {
@@ -557,7 +704,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
 
     await sweepLlDemotions();
 
-    expect(await requestedHlsModeForChannel(channelA)).toBe(false);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: false });
     expect(pendingLlDemotionCount()).toBe(0);
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlDemotionAttributed",

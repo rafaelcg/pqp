@@ -1568,7 +1568,7 @@ mode: host-only, and present only when `GET /api/live-hls/config` says this
 server may ask at all (`lowLatency.available`), so a self-host with the flag
 off never sees a switch it cannot honour. The preference saves like any other
 option, but it only ever reaches the server at the next "Ir ao vivo" — the one
-moment `requestedHlsModeForChannel` is read (`server/src/voice/hls-remux.ts`)
+moment `setRequestedHlsMode` writes it (`server/src/voice/hls-remux.ts`)
 — so flipping it on a party that is already live shows its own note ("vale a
 partir da próxima transmissão") instead of silently doing nothing. The server
 still has the final word: off deployment-wide, this server not on the
