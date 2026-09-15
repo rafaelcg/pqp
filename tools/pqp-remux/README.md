@@ -346,6 +346,92 @@ last-registered-first, so registration order (`r2Writer`, `sess`, `cancel`,
 `Session.Close` had a chance to flush and enqueue the final video and audio
 segments) silently dropped a party's last few segments from R2 every time.
 
+## Keep-alive: a static source still publishes
+
+Everything in `internal/pipeline` is access-unit driven, and has to be:
+only the NEXT access unit can say how long the previous one lasted, so a
+part closes when a frame arrives past the part target, never on a timer.
+That is correct and stays correct — right up until the publisher stops
+sending frames.
+
+**A Chrome tab share of a page that is not repainting sends none.** Not a
+low frame rate: none, plus a low-rate refresh. So no part closes, the
+playlist stops advancing, and a viewer's video buffer ends at the last
+published part while the freeze is still going. On 2026-09-15 that also
+tripped the control plane's 3s `PART_STUCK_MS` twice on one production
+session and demoted the party off the LL rung.
+
+`Fragmenter.IdleFlush` (driven by `Session.RunMonitor`'s 100 ms tick, via
+`idleTick`) publishes the held access unit early, once the source has been
+quiet for a part target's worth of time. **Nothing is invented and nothing
+is duplicated**: the ordinary path would have given that same access unit
+a duration of `next.PTS - held.PTS` anyway — for a five-second freeze,
+a five-second sample — and this only emits it sooner, so the buffer covers
+the freeze instead of ending at the start of it. When frames resume, the
+next part begins exactly where the flushed one ended: `ptsOffset` is
+re-derived from the publisher's own clock on the first frame back, so the
+timeline neither rewinds (a `tfdt` going backwards is a corrupt stream)
+nor gains a hole. A segment still closes only on an IDR at or past the
+segment target — the keep-alive never closes one.
+
+**The limit, stated plainly.** One part per quiet episode. Past that the
+video timeline is HELD at the last frame while the **audio** track — paced
+off the wall clock by `runAudioPacer`, so it never goes idle — keeps
+producing parts at `PART_MS`. Publishing more video than that would mean
+emitting a coded frame the publisher never sent twice, which is safe only
+for an IDR (a P-frame applied to its own output is not the picture it
+codes) and is not something this pipeline does. Under
+`KEYFRAME_POLICY=pli` a quiet source is by definition past the gate
+window, so the requester is already asking for a keyframe throughout; if
+the browser answers, ordinary frames resume and the question does not
+arise.
+
+`keepAliveParts` on the watchdog's detail line counts them. A session
+whose parts are ALL keep-alives is a frozen picture, which is a real thing
+to want to see and is invisible from `partsWritten` alone.
+
+## Observability: one line every few seconds
+
+`Session.RunMonitor` writes one stats line per session per five seconds,
+always on, whichever binary is running (`session=<id>` under `pqp-remuxd`,
+`room=<name>` under the single-session `pqp-remux`). It exists because the
+2026-09-15 service log for a five-minute stalled session held fourteen
+depacketize warnings and nothing else, and four different explanations fit
+it equally well: no RTP arriving at all, RTP arriving with nothing coming
+out of the depacketizer, parts produced with the watchdog measuring the
+wrong thing, or the S3 path blocking. Each of those now has its own
+signature on one line:
+
+```
+pqp-remux: stats session=<id> window=5s subscribed=true
+  | video pkts=+1200 (240.0/s) frames=+150 (30.0/s) idr=+2 drops=+7
+    parts=+10 (2.0/s) segs=+1 keepalive=+0 idle=false
+    lastPkt=8ms lastFrame=12ms lastIdr=1.9s lastPart=210ms openSeg=2100ms
+  | audio pkts=+250 frames=+234 parts=+10 (2.0/s) segs=+1 dead=false restarts=0
+  | pli sent=+0 total=4 unanswered=0 lastPli=1m12s
+  | r2 ok=+11 fail=+0 drop=+0 queued=0 inflight=1 lastMs=87 maxMs=940
+```
+
+Read it as: **packets but no frames** is the depacketizer; **frames but no
+parts** is the muxer; **neither** is a quiet source (and `idle=true` says
+so outright); **parts flowing with `r2 queued` climbing and `lastMs` high**
+is the bucket. `maxMs` is a high-water mark and deliberately never reset —
+"did this bucket ever go slow" is a different question from "is it slow
+now", which `lastMs` already answers.
+
+Three state changes log immediately rather than waiting for the next
+window: the source going quiet and coming back (`video source idle` /
+`video source resumed`), every PLI written and the IDR that answers it
+(`keyframe: PLI sent (no IDR for 4s, gate 4s, 1 in this episode, ...)` /
+`keyframe: IDR after 3 PLI(s), 1.4s after the first request`, the second
+only ever logged when this process actually asked — a publisher supplying
+its own keyframes logs nothing), and each watchdog verdict with its full
+detail. Depacketize errors are rate limited to one line per second
+carrying the suppressed count: at the 27% large-packet loss the
+2026-09-15 presenter's uplink measured, unconditional logging is a flood,
+and a flood hides the one line that matters exactly as well as silence
+does.
+
 ## Control API (`L1.6`)
 
 `cmd/pqp-remuxd` (`internal/control`) is the supervisor
@@ -526,6 +612,33 @@ IO — driven by `managed_session.go`'s ticker), which:
    `TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown` (the
    same, but the old pipeline's own teardown seals one more segment on its
    way down).
+1-bis. **A quiet source is not a stall, and never restarts or demotes.**
+   Between step 0 and every rule below sits one question the watchdog used
+   to not ask: *is the publisher still sending?* A Chrome **tab** share
+   sends NO video frames at all while the page is not repainting — a
+   paused film, a slide, a scoreboard between goals — and only a low-rate
+   refresh in between. No frames means no access units, which means no
+   part boundary (every one of those is decided by the arrival of the
+   NEXT access unit, `internal/pipeline`), which means `lastPartAt` stops
+   moving and looks exactly like a wedged muxer. On 2026-09-15 a
+   production session resolved that ambiguity the wrong way twice —
+   `restarting (part-stuck)` at 42s, `demoting (part-stuck-second-stall)`
+   four minutes later — for a share that was working perfectly.
+   `sourceIdle` (`watchdog.go`) reads the RTP stream itself: **both** no
+   completed frame **and** no RTP packet for longer than `PART_STUCK_MS`
+   is a quiet source → one `video-source-idle` log line per quiet
+   episode and nothing else, at any length. Packets arriving with no
+   frames coming out (loss, a wedged access unit), or frames coming out
+   with no parts published (a real muxer bug), both fall through to the
+   ladder unchanged — which is exactly why the rule needs both clocks and
+   not one. It never demotes for quietness: reconnecting to the same room
+   to receive the same silence is not a fix, and demoting hands the
+   audience a conventional ladder showing the same frozen picture off the
+   same source. A session whose publisher has genuinely gone away is
+   ended by the track ending or by the API's own 60s heartbeat sweep,
+   neither of which this rule touches. Meanwhile the media side keeps the
+   playlist alive rather than freezing it — see **Keep-alive: a static
+   source still publishes** below.
 2. **The IDR-gap ladder takes precedence and skips the restart entirely.**
    No IDR for more than 2× the segment target → log once per gap (rate
    limited; resets the moment a real IDR arrives). Past 3× with still no
@@ -552,6 +665,26 @@ every demotion is logged with its `reason` (`pqp-remux: control: session
 <id>: restarting (part-stuck)` / `demoting (idr-gap-exceeded)` and so on),
 pitfall 15's rule in the root `CLAUDE.md`: a state change with no reason in
 the log is exactly what cost an afternoon there.
+
+**Every verdict now carries its numbers.** `restarting (part-stuck)` on
+its own cannot tell "the publisher stopped sending" from "the publisher is
+sending and nothing comes out" from "frames come out and nothing is
+published" — three different bugs with three different fixes, and the
+2026-09-15 log contained no other information at all. `stallDetail`
+(`watchdog.go`) appends every clock and counter to each restart, demote
+and warning line:
+
+```
+pqp-remux: control: session <id>: restarting (part-stuck): lastPart=3.2s
+  lastFrame=3.3s lastPkt=20ms lastIdr=4s parts=412 keepalive=2
+  audioParts=610 segIdx=9 pkts=98000 frames=1203 idrs=11 drops=4100
+  pli=8 unanswered=2 r2 ok=120 fail=0 drop=0 queued=0 inflight=0
+  lastMs=87 maxMs=940 openSeg=3200ms audioDead=false audioRestarts=0
+```
+
+`never` is a real answer and a load-bearing one: `lastFrame=never` (nothing
+was ever depacketized) and `lastFrame=12.4s` (it worked and then stopped)
+are different incidents.
 
 **A killed API never reaps a healthy session**: `pqp-remuxd` has no idea
 whether anything is polling `GET /sessions` at all, so a session simply

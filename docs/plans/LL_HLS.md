@@ -301,6 +301,28 @@ LL rung and demote**. Never close a segment on a non-IDR boundary: that is a
 player-dependent failure that looks like a corrupt stream, and a viewer would find
 it before we did.
 
+**A quiet source is not a stall (2026-09-15).** The rules above are all
+written in terms of parts, and a part boundary is decided by the arrival of
+the NEXT access unit — so a publisher that stops sending frames stops
+`lastPartAt` dead, and looks identical to a wedged muxer. A Chrome **tab**
+share does exactly that whenever the page is not repainting. A production
+session on 2026-09-15 was therefore restarted at 42 s (`part-stuck`) and
+demoted four minutes later (`part-stuck-second-stall`) for a share that was
+working, and the whole five-minute service log held fourteen depacketize
+warnings and nothing else to say otherwise. Three changes, all in
+`tools/pqp-remux` (see its README, "Keep-alive" and "Observability"):
+`sourceIdle` in `internal/control/watchdog.go` reads the RTP stream itself
+and treats "no frame AND no packet" as a quiet source — one log line per
+quiet episode, never a restart and never a demotion at any length, while
+"packets but no frames" and "frames but no parts" still run the ladder
+unchanged; `Fragmenter.IdleFlush` publishes the held access unit so the
+playlist and a viewer's buffer cover the freeze rather than ending at the
+start of it (one part per episode — past that the video timeline is held
+and the wall-clock-paced audio track keeps producing parts); and every
+session writes one stats line every five seconds carrying packets, frames,
+keyframes, PLIs, parts, segments, depacketizer drops and upload latency, so
+the next one of these is read off a line instead of guessed at.
+
 **Both sweeps get a case for their own rows**, pitfall 13's lesson, which this plan
 may not re-learn. The remux tears down any session in its map whose channel the API
 has not heartbeat about for 60 s; the API tears down any session `/healthz` reports

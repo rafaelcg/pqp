@@ -201,6 +201,13 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 		SegmentTargetMs: cfg.SegmentMs,
 	})
 
+	// The session's own always-on instrumentation and video keep-alive
+	// (internal/session.Session.RunMonitor): one stats line every few
+	// seconds, and the idle flush that stops a static screen share from
+	// looking like a stalled pipeline. ctx, so it stops with everything
+	// else this pipeline owns.
+	go sess.RunMonitor(ctx, "session="+cfg.SessionID)
+
 	return &remuxPipeline{
 		sess:         sess,
 		srv:          srv,
@@ -227,6 +234,12 @@ func msDuration(ms int64) time.Duration { return time.Duration(ms) * time.Millis
 
 func (p *remuxPipeline) Health() PipelineHealth {
 	h := p.sess.Health()
+	// Stats() is the SAME snapshot internal/session's own periodic log
+	// line is rendered from (see its monitor.go): the numbers in a
+	// `part-stuck` verdict and the numbers on the routine stats line an
+	// operator reads beside it are the same numbers, by construction,
+	// rather than two hand-maintained lists that drift.
+	st := p.sess.Stats()
 	ph := PipelineHealth{
 		Subscribed:        h.Subscribed,
 		PartsWritten:      h.PartsWritten,
@@ -237,6 +250,24 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		AudioSegmentIndex: p.sess.CurrentAudioSegmentIndex(),
 		VideoPartSeq:      p.sess.CurrentVideoPartSequence(),
 		AudioPartSeq:      p.sess.CurrentAudioPartSequence(),
+
+		LastVideoPacketAt:    st.LastVideoPacket,
+		LastVideoFrameAt:     st.LastVideoFrame,
+		VideoPacketsSeen:     st.VideoPacketsSeen,
+		VideoFramesSeen:      st.VideoFramesSeen,
+		VideoKeyframesSeen:   st.VideoKeyframesSeen,
+		VideoDepacketizeErrs: st.VideoDepacketizeErrs,
+		KeepAliveParts:       st.KeepAlivePartsWrites,
+		AudioPartsWritten:    st.AudioPartsWritten,
+		PLIsSent:             st.Keyframe.PLIsSent,
+		PLIsSinceIdr:         st.Keyframe.PLIsSinceIDR,
+		R2Uploaded:           st.R2Uploaded,
+		R2Failed:             st.R2Failed,
+		R2Dropped:            st.R2Dropped,
+		R2Queued:             st.R2Queued,
+		R2InFlight:           st.R2InFlight,
+		R2LastLatencyMs:      st.R2LastLatencyMs,
+		R2MaxLatencyMs:       st.R2MaxLatencyMs,
 	}
 	started := p.sess.Started()
 	if p.sess.HasPart() {

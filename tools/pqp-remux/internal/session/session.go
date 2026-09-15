@@ -35,15 +35,46 @@ import (
 )
 
 // Session owns the one video track's whole pipeline: depacketize, mux,
-// publish into the ring. HandleVideoPacket is meant to be called from a
-// single goroutine (the subscriber's own RTP reader for that track), so the
-// depacketizer/fragmenter/ring writes below need no lock of their own; the
-// atomics exist only because Health() is read concurrently from HTTP
-// handler goroutines.
+// publish into the ring. HandleVideoPacket is called from a single
+// goroutine (the subscriber's own RTP reader for that track) -- but it is
+// no longer the ONLY toucher of the depacketizer/fragmenter/ring: since
+// 2026-09-15 RunMonitor's keep-alive tick publishes the held access unit
+// when the publisher stops sending, which by definition cannot run on the
+// packet goroutine. videoMu is what makes those two safe together; see its
+// own doc comment. The atomics below are for Health()/Stats(), read
+// concurrently from HTTP handler and watchdog goroutines.
 type Session struct {
+	// videoMu serializes the video muxing path. Until 2026-09-15 this
+	// file's own doc comment could truthfully say "HandleVideoPacket is
+	// meant to be called from a single goroutine, so the
+	// depacketizer/fragmenter/ring writes need no lock" -- the
+	// subscriber's RTP reader was the only caller. RunMonitor's
+	// keep-alive tick (idleTick) is a SECOND caller of the fragmenter,
+	// by necessity: the whole point of it is to close a part when no
+	// packet is arriving to close it, so it cannot run on the packet
+	// goroutine. Every touch of dep/frag and every publish now takes
+	// this; Finish takes it too. Contention is one uncontended
+	// lock/unlock per video frame.
+	videoMu sync.Mutex
+
 	dep  *h264.Depacketizer
 	frag *pipeline.Fragmenter
 	ring *ring.Ring
+	// videoStopped is set by Close, under videoMu, and checked by
+	// idleTick under the same lock. It is what makes "Close has
+	// returned" imply "no keep-alive tick is inside the fragmenter, and
+	// none ever will be again" -- which internal/control's restart
+	// depends on: it reads the old pipeline's Health() (an
+	// unsynchronized read of the fragmenter's segment index and part
+	// sequence) immediately after closing it, and until the keep-alive
+	// existed the subscriber's RTP goroutine was the only other toucher,
+	// already joined by subscriber.Session.Close.
+	videoStopped bool
+
+	// partTicks is New's own partTicks argument, kept because idleTick
+	// needs to know the part target to decide how long "no new frame" has
+	// to last before the held access unit is published early.
+	partTicks uint32
 
 	// keyReq is an atomic pointer, nil under KEYFRAME_POLICY=natural and
 	// under --idr-log (L0.1 result item 4 requires idr-log to stay passive
@@ -73,6 +104,56 @@ type Session struct {
 	lastPartAtMs     atomic.Int64
 	lastIdrAtMs      atomic.Int64
 	audioPacketsSeen atomic.Uint64
+
+	// --- instrumentation (2026-09-15) ---
+	//
+	// WHY. On 2026-09-15 a production session stalled producing parts
+	// twice on a Chrome TAB share, restarted once and then demoted the
+	// party off the low-latency rung, and the service log for the whole
+	// five minutes held fourteen depacketize warnings and nothing else:
+	// it could not distinguish "no RTP arrived at all" (a static tab
+	// sends no frames) from "RTP arrived and no access unit came out"
+	// (a depacketizer wedged after loss) from "access units came out and
+	// no part was published" (a muxer bug). These counters exist so the
+	// next one of those is one log line, not an afternoon. They are
+	// deliberately cheap: atomics on paths that already do real work
+	// per packet.
+	videoPacketsSeen      atomic.Uint64
+	videoFramesSeen       atomic.Uint64
+	videoKeyframesSeen    atomic.Uint64
+	videoDepacketizeErrs  atomic.Uint64
+	videoSegmentsWritten  atomic.Uint64
+	audioFramesSeen       atomic.Uint64
+	audioSegmentsWritten  atomic.Uint64
+	keepAlivePartsWritten atomic.Uint64
+	// lastVideoPacketAtNs/lastVideoFrameAtNs are wall-clock UnixNano (0
+	// = never). Wall clock, not the elapsed-ms convention the rest of
+	// this type uses for its health fields, because the two questions
+	// they answer -- "is the publisher still sending?" and "has the
+	// depacketizer produced anything from what it sent?" -- are asked by
+	// a watchdog that has its own clock and no interest in this
+	// session's start time.
+	lastVideoPacketAtNs atomic.Int64
+	lastVideoFrameAtNs  atomic.Int64
+	// videoIdle is this session's own idea of whether the source has
+	// stopped sending frames, flipped (and logged) by idleTick and
+	// HandleVideoPacket. See idleTick.
+	videoIdle atomic.Bool
+	// depacketizeLogAtNs/depacketizeLogSuppressed rate-limit the
+	// per-error depacketize log line. Under the 27% large-packet loss
+	// the 2026-09-15 presenter's uplink was measured at, "log every
+	// malformed packet" is a log flood, and a flood is as unreadable as
+	// silence.
+	depacketizeLogAtNs       atomic.Int64
+	depacketizeLogSuppressed atomic.Uint64
+
+	// now is time.Now in production. It is a field only so a test can
+	// drive the video path and the keep-alive tick off ONE clock
+	// (idleTick already takes its instant as a parameter, and a test
+	// that stamped frames with the real clock while ticking a synthetic
+	// one would be comparing two unrelated timelines). Set it, if at
+	// all, immediately after New and before any packet or goroutine.
+	now func() time.Time
 
 	// segmentOpenedAtMs is elapsedMs() at the moment the currently-open
 	// segment began (the fragment whose IsSegmentStart was true most
@@ -170,9 +251,11 @@ func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requeste
 			PartDuration:    partTicks,
 			SegmentDuration: segmentTicks,
 		}),
-		ring:    r,
-		started: time.Now(),
-		epoch:   time.Now(),
+		ring:      r,
+		partTicks: partTicks,
+		now:       time.Now,
+		started:   time.Now(),
+		epoch:     time.Now(),
 	}
 	if keyReq != nil {
 		s.keyReq.Store(keyReq)
@@ -405,19 +488,36 @@ func (s *Session) CurrentAudioSegmentIndex() int {
 // packet must not take down the whole session (the depacketizer already
 // keeps accumulating past it; see internal/h264's doc comment).
 func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
+	s.videoMu.Lock()
+	defer s.videoMu.Unlock()
+
+	now := s.now()
+	s.videoPacketsSeen.Add(1)
+	s.lastVideoPacketAtNs.Store(now.UnixNano())
+
 	au, err := s.dep.Push(pkt.Payload, pkt.Timestamp, pkt.Marker)
 	if err != nil {
-		log.Printf("pqp-remux: h264 depacketize: %v", err)
+		s.videoDepacketizeErrs.Add(1)
+		s.logDepacketizeError(now, err)
 	}
 	if au == nil {
 		return
 	}
 
+	silence := s.idleFor(now)
+	s.videoFramesSeen.Add(1)
+	s.lastVideoFrameAtNs.Store(now.UnixNano())
+	if s.videoIdle.CompareAndSwap(true, false) {
+		log.Printf("pqp-remux: video source resumed: first frame after %s of silence (frames=%d idr=%d)",
+			silence.Round(time.Millisecond), s.videoFramesSeen.Load(), s.videoKeyframesSeen.Load())
+	}
+
 	if au.IsIDR {
+		s.videoKeyframesSeen.Add(1)
 		s.lastIdrAtMs.Store(s.elapsedMs())
 		s.idrSeen.Store(true)
 		if kr := s.keyReq.Load(); kr != nil {
-			kr.OnIDR(time.Now())
+			kr.OnIDR(now)
 		}
 	}
 
@@ -458,6 +558,9 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 // called): the stream ending is what closes that segment, in the same
 // sense a mid-stream rollover closes the one before it.
 func (s *Session) Finish() {
+	s.videoMu.Lock()
+	defer s.videoMu.Unlock()
+
 	frag, err := s.frag.Flush()
 	if err != nil {
 		log.Printf("pqp-remux: flushing the trailing fragment: %v", err)
@@ -487,6 +590,13 @@ func (s *Session) Finish() {
 // restart and closes its result, and no third interleaving exists
 // because recoverAudioEncoder never releases audioMu in between.
 func (s *Session) Close() {
+	// Fence the video side first: taking videoMu waits out a keep-alive
+	// tick that is already inside the fragmenter, and the flag stops any
+	// later one from entering. See the videoStopped field.
+	s.videoMu.Lock()
+	s.videoStopped = true
+	s.videoMu.Unlock()
+
 	s.audioMu.Lock()
 	s.audioClosed = true
 	enc := s.loadEncoder()
@@ -571,6 +681,7 @@ func (s *Session) publishAudioPart(frag *pipeline.Fragment) {
 	s.audioRing.Push(frag)
 	if sealedIndex >= 0 {
 		s.uploadAudioSegment(sealedIndex)
+		s.audioSegmentsWritten.Add(1)
 	}
 	s.audioPartsWritten.Add(1)
 	s.audioBytesWritten.Add(uint64(len(frag.Bytes)))
@@ -613,6 +724,7 @@ func (s *Session) publish(frag *pipeline.Fragment) {
 	s.ring.Push(frag)
 	if sealedIndex >= 0 {
 		s.uploadVideoSegment(sealedIndex)
+		s.videoSegmentsWritten.Add(1)
 	}
 	s.partsWritten.Add(1)
 	s.bytesWritten.Add(uint64(len(frag.Bytes)))
@@ -932,6 +1044,7 @@ func (s *Session) readEncoderFrames(enc remuxEncoder, done, failed chan struct{}
 				}
 				return
 			}
+			s.audioFramesSeen.Add(1)
 			pts := s.audioNextPTS.Add(aacenc.SamplesPerFrame) - aacenc.SamplesPerFrame
 			// nil means "this part is not full yet": since PART_MS
 			// batching, most frames land inside an open part rather

@@ -166,6 +166,13 @@ func runServer(cfg config.Config) error {
 		go keyReq.Run(ctx)
 	}
 
+	// The session's own always-on instrumentation and video keep-alive
+	// (internal/session.Session.RunMonitor): one stats line every few
+	// seconds, and the idle flush that keeps a static screen share's
+	// playlist advancing. Started after EnableAudio/EnableR2 so the
+	// first line already reports them.
+	go sess.RunMonitor(ctx, "room="+cfg.Room)
+
 	srv := serve.New(r, sess)
 	if audioEnabled {
 		srv.SetAudioRing(audioRing)

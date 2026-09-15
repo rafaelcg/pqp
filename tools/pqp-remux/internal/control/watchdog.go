@@ -1,6 +1,10 @@
 package control
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // WatchdogConfig controls the stall/demote ladder, docs/plans/LL_HLS.md §5.
 type WatchdogConfig struct {
@@ -41,6 +45,16 @@ const (
 type watchdogResult struct {
 	action watchdogAction
 	reason string
+	// detail is the WHY behind the verdict, in numbers: which clocks had
+	// stopped, how long ago, and what the source was doing at the time.
+	// It exists because on 2026-09-15 a production session logged
+	// `restarting (part-stuck)` and then `demoting
+	// (part-stuck-second-stall)` and neither line said anything else at
+	// all -- the reason string alone cannot tell "the publisher stopped
+	// sending" from "the publisher is sending and nothing comes out"
+	// from "frames come out and nothing is published", which are three
+	// different bugs with three different fixes. Empty for actionNone.
+	detail string
 }
 
 // watchdogState is one session's own mutable bookkeeping between ticks,
@@ -57,6 +71,12 @@ type watchdogState struct {
 	// "reset clean on real content" idea internal/keyframe.Requester.OnIDR
 	// already uses for its own pacer.
 	idrWarnLogged bool
+	// idleLogged rate-limits the "the source has gone quiet" line to
+	// once per quiet episode, reset the moment frames come back -- the
+	// same shape as idrWarnLogged above. Without it a presenter showing
+	// a static slide would log twice a second for as long as the slide
+	// is up.
+	idleLogged bool
 }
 
 // evaluateWatchdog is pure: no clock, no IO, no goroutine. Given a
@@ -99,10 +119,52 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 	if h.LastPartAt.IsZero() {
 		firstPartTimeout := time.Duration(cfg.FirstPartTimeoutMs) * time.Millisecond
 		if now.Sub(pipelineStartedAt) > firstPartTimeout {
-			return watchdogResult{actionDemote, "no-video"}
+			return watchdogResult{actionDemote, "no-video", stallDetail(h, now)}
 		}
-		return watchdogResult{actionNone, ""}
+		return watchdogResult{actionNone, "", ""}
 	}
+
+	stuckThreshold := time.Duration(cfg.PartStuckMs) * time.Millisecond
+
+	// PHASE 1.5, AND THE WHOLE POINT OF THIS BLOCK: a source that has
+	// gone quiet is not a stalled pipeline.
+	//
+	// A Chrome TAB share sends NO video frames at all while the page is
+	// not repainting -- a paused film, a slide, a scoreboard between
+	// goals -- and only a low-rate refresh in between. No frames means
+	// no access units, which means no part boundary (every one of those
+	// is decided by the arrival of the NEXT access unit, see
+	// internal/pipeline), which means LastPartAt stops moving. That is
+	// indistinguishable, from PartsWritten alone, from a genuinely
+	// wedged muxer, and on 2026-09-15 this watchdog resolved the
+	// ambiguity the wrong way twice on one production session: restart,
+	// then demote the party off the low-latency rung, for a presenter
+	// whose share was working perfectly.
+	//
+	// The signal that separates them is the RTP stream itself. Frames
+	// AND packets both stale means the publisher is not sending, so
+	// there is nothing this end could restart that would help --
+	// reconnecting to the same room to receive the same silence is not
+	// a fix, and demoting hands the audience a conventional ladder
+	// showing the SAME frozen picture off the SAME source. Packets
+	// arriving with no frames coming out (loss, a wedged access unit) or
+	// frames coming out with no parts published (a real muxer bug) both
+	// fall through to the ladder below, unchanged.
+	//
+	// It is deliberately unbounded: this never demotes for idleness, at
+	// any length. A session whose publisher has genuinely gone away is
+	// ended by the track ending (OnVideoTrackEnded) or by the API's own
+	// 60s heartbeat sweep, both of which are about the session existing
+	// rather than about it stalling, and neither of which this rule
+	// touches.
+	if sourceIdle(h, now, stuckThreshold) {
+		if !st.idleLogged {
+			st.idleLogged = true
+			return watchdogResult{actionLog, "video-source-idle", stallDetail(h, now)}
+		}
+		return watchdogResult{actionNone, "", ""}
+	}
+	st.idleLogged = false
 
 	idrRef := h.LastIdrAt
 	if idrRef.IsZero() {
@@ -113,20 +175,19 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 
 	switch {
 	case idrGap > 3*segDur:
-		return watchdogResult{actionDemote, "idr-gap-exceeded"}
+		return watchdogResult{actionDemote, "idr-gap-exceeded", stallDetail(h, now)}
 	case idrGap > 2*segDur:
 		if !st.idrWarnLogged {
 			st.idrWarnLogged = true
-			return watchdogResult{actionLog, "idr-gap-warning"}
+			return watchdogResult{actionLog, "idr-gap-warning", stallDetail(h, now)}
 		}
-		return watchdogResult{actionNone, ""}
+		return watchdogResult{actionNone, "", ""}
 	default:
 		st.idrWarnLogged = false
 	}
 
-	stuckThreshold := time.Duration(cfg.PartStuckMs) * time.Millisecond
 	if now.Sub(h.LastPartAt) <= stuckThreshold {
-		return watchdogResult{actionNone, ""}
+		return watchdogResult{actionNone, "", ""}
 	}
 
 	demoteWindow := time.Duration(cfg.DemoteWindowMs) * time.Millisecond
@@ -140,7 +201,72 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 		// already set and within the window, demotes rather than
 		// retrying the failing restart forever.
 		st.restartedAt = now
-		return watchdogResult{actionRestart, "part-stuck"}
+		return watchdogResult{actionRestart, "part-stuck", stallDetail(h, now)}
 	}
-	return watchdogResult{actionDemote, "part-stuck-second-stall"}
+	return watchdogResult{actionDemote, "part-stuck-second-stall", stallDetail(h, now)}
+}
+
+// sourceIdle reports whether the publisher has stopped sending on the
+// video track: no completed access unit AND no RTP packet at all for
+// longer than the part-stuck threshold.
+//
+// BOTH halves are required, and which half is which matters. Packets with
+// no frames is a depacketizer that cannot assemble what is arriving --
+// a real fault this watchdog should still act on. Frames with no packets
+// cannot happen. Neither stale is the ordinary case. Both stale is a quiet
+// source.
+//
+// A Pipeline that reports neither timestamp (LastVideoFrameAt zero: every
+// fake in this package's tests, and any future Pipeline implementation
+// that does not track the RTP stream) is never idle by this rule, so it is
+// evaluated exactly as it was before this function existed.
+func sourceIdle(h PipelineHealth, now time.Time, threshold time.Duration) bool {
+	if h.LastVideoFrameAt.IsZero() {
+		return false
+	}
+	if now.Sub(h.LastVideoFrameAt) <= threshold {
+		return false
+	}
+	if h.LastVideoPacketAt.IsZero() {
+		return true
+	}
+	return now.Sub(h.LastVideoPacketAt) > threshold
+}
+
+// stallDetail renders every clock and counter a human needs to tell this
+// watchdog's verdict apart from the two other things that look like it.
+// Read left to right it answers, in order: when did each stage of the
+// pipeline last do anything, how much has it done in total, is this
+// process asking for keyframes and being answered, and is the upload path
+// healthy.
+func stallDetail(h PipelineHealth, now time.Time) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "lastPart=%s lastFrame=%s lastPkt=%s lastIdr=%s",
+		since(now, h.LastPartAt), since(now, h.LastVideoFrameAt),
+		since(now, h.LastVideoPacketAt), since(now, h.LastIdrAt))
+	fmt.Fprintf(&b, " parts=%d keepalive=%d audioParts=%d segIdx=%d",
+		h.PartsWritten, h.KeepAliveParts, h.AudioPartsWritten, h.VideoSegmentIndex)
+	fmt.Fprintf(&b, " pkts=%d frames=%d idrs=%d drops=%d",
+		h.VideoPacketsSeen, h.VideoFramesSeen, h.VideoKeyframesSeen, h.VideoDepacketizeErrs)
+	fmt.Fprintf(&b, " pli=%d unanswered=%d", h.PLIsSent, h.PLIsSinceIdr)
+	fmt.Fprintf(&b, " r2 ok=%d fail=%d drop=%d queued=%d inflight=%d lastMs=%d maxMs=%d",
+		h.R2Uploaded, h.R2Failed, h.R2Dropped, h.R2Queued, h.R2InFlight, h.R2LastLatencyMs, h.R2MaxLatencyMs)
+	if h.OpenSegmentOK {
+		fmt.Fprintf(&b, " openSeg=%dms", h.OpenSegmentMs)
+	}
+	if h.AudioEnabled {
+		fmt.Fprintf(&b, " audioDead=%t audioRestarts=%d", h.AudioDead, h.AudioRestarts)
+	}
+	return b.String()
+}
+
+// since renders an age, or "never" for a zero time. "never" is a real and
+// load-bearing answer: "lastFrame=never" (nothing was ever depacketized)
+// and "lastFrame=12.4s" (it worked and then stopped) are different
+// incidents.
+func since(now, t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return now.Sub(t).Round(time.Millisecond).String()
 }

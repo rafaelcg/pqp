@@ -88,6 +88,23 @@ type Writer struct {
 	failed   atomic.Uint64
 	dropped  atomic.Uint64
 	uploaded atomic.Uint64
+
+	// inFlight/lastLatencyMs/maxLatencyMs answer the one question the
+	// counters above cannot: is the bucket SLOW. "Hypothesis (d), the
+	// writer or the S3 path is blocking" was one of four explanations
+	// that fit the 2026-09-15 production stall equally well, and nothing
+	// on this Writer could rule it in or out -- Uploaded going up says
+	// nothing about how long each one took, and a PUT that takes eight
+	// seconds looks identical to one that takes eighty milliseconds
+	// until the queue overflows. lastLatencyMs is the most recent
+	// successful PUT; maxLatencyMs is the worst since this Writer was
+	// created (a high-water mark, deliberately never reset: an operator
+	// reading it after the fact wants to know whether the bucket ever
+	// went slow, not whether it is slow right now, which lastLatencyMs
+	// already says).
+	inFlight      atomic.Int64
+	lastLatencyMs atomic.Int64
+	maxLatencyMs  atomic.Int64
 }
 
 type uploadJob struct {
@@ -182,10 +199,15 @@ func (w *Writer) uploadWithRetry(job uploadJob) {
 			}
 		}
 		ctx, cancel := context.WithTimeout(w.ctx, uploadTimeout)
+		w.inFlight.Add(1)
+		startedAt := time.Now()
 		err := w.uploader.PutObject(ctx, job.key, job.body, job.contentType)
+		elapsedMs := time.Since(startedAt).Milliseconds()
+		w.inFlight.Add(-1)
 		cancel()
 		if err == nil {
 			w.uploaded.Add(1)
+			w.recordLatency(elapsedMs)
 			return
 		}
 		if w.ctx.Err() != nil {
@@ -215,6 +237,33 @@ func retryBackoff(attempt int) time.Duration {
 	}
 	return d
 }
+
+// recordLatency stores the most recent successful PUT's duration and
+// raises the high-water mark if this one beat it. The compare-and-swap
+// loop is what makes "the worst PUT this Writer ever saw" true with more
+// than one upload worker running.
+func (w *Writer) recordLatency(ms int64) {
+	w.lastLatencyMs.Store(ms)
+	for {
+		cur := w.maxLatencyMs.Load()
+		if ms <= cur || w.maxLatencyMs.CompareAndSwap(cur, ms) {
+			return
+		}
+	}
+}
+
+// Queued is how many objects are waiting for a worker right now, and
+// InFlight how many PUTs are open. Together with LastLatencyMs they are
+// what tells a slow bucket ("queued rising, latency high") apart from a
+// pipeline producing nothing to upload ("queued zero, uploaded flat").
+func (w *Writer) Queued() int     { return len(w.queue) }
+func (w *Writer) InFlight() int64 { return w.inFlight.Load() }
+
+// LastLatencyMs is the most recent successful PUT's wall-clock duration,
+// MaxLatencyMs the worst since this Writer was created. Both are 0 before
+// the first successful upload.
+func (w *Writer) LastLatencyMs() int64 { return w.lastLatencyMs.Load() }
+func (w *Writer) MaxLatencyMs() int64  { return w.maxLatencyMs.Load() }
 
 // Enqueued/Failed/Dropped/Uploaded are running counters since this Writer
 // was created, safe to read from any goroutine at any time -- meant for
