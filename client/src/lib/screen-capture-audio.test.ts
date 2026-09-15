@@ -735,3 +735,40 @@ describe("liveScreenCaptureEnvironment", () => {
     expect(await ensureOsCanExcludeCallAudio()).toBe(true);
   });
 });
+
+describe("ensureOsCanExcludeCallAudio", () => {
+  afterEach(() => {
+    resetOsCanExcludeCallAudioForTests();
+  });
+
+  it("retries after a thrown UA-CH probe instead of caching false", async () => {
+    let calls = 0;
+    const previous = globalThis.navigator;
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        mediaDevices: previous?.mediaDevices,
+        userAgentData: {
+          platform: "Windows",
+          getHighEntropyValues: async () => {
+            calls += 1;
+            if (calls === 1) {
+              throw new Error("transient");
+            }
+            return { platformVersion: "13.0.0" };
+          },
+        },
+      },
+    });
+    try {
+      expect(await ensureOsCanExcludeCallAudio()).toBe(false);
+      expect(await ensureOsCanExcludeCallAudio()).toBe(true);
+      expect(calls).toBe(2);
+    } finally {
+      Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        value: previous,
+      });
+    }
+  });
+});

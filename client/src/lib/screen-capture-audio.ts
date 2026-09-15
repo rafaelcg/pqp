@@ -448,7 +448,7 @@ type NavigatorWithUaData = Navigator & {
   };
 };
 
-async function probeOsCanExcludeCallAudio(): Promise<boolean> {
+async function probeOsCanExcludeCallAudio(): Promise<boolean | "failed"> {
   try {
     const ua = (navigator as NavigatorWithUaData).userAgentData;
     if (!ua || typeof ua.getHighEntropyValues !== "function") {
@@ -457,7 +457,9 @@ async function probeOsCanExcludeCallAudio(): Promise<boolean> {
     const values = await ua.getHighEntropyValues(["platformVersion"]);
     return osCanExcludeCallFromUa(ua.platform, values.platformVersion);
   } catch {
-    return false;
+    // A thrown probe is not "this OS cannot exclude us". Caching that as
+    // false would hide computer sound for the rest of the tab.
+    return "failed";
   }
 }
 
@@ -476,8 +478,12 @@ export async function ensureOsCanExcludeCallAudio(): Promise<boolean> {
   if (osCanExcludeCallAudioCache !== undefined) {
     return osCanExcludeCallAudioCache;
   }
-  osCanExcludeCallAudioCache = await probeOsCanExcludeCallAudio();
-  return osCanExcludeCallAudioCache;
+  const probed = await probeOsCanExcludeCallAudio();
+  if (probed === "failed") {
+    return false;
+  }
+  osCanExcludeCallAudioCache = probed;
+  return probed;
 }
 
 /**

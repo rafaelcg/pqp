@@ -46,15 +46,15 @@ function serveTone() {
 }
 
 const { server, url } = await serveTone();
-const browser = await chromium.launch({
-  headless: false,
-  args: [
-    "--use-fake-ui-for-media-stream",
-    "--autoplay-policy=no-user-gesture-required",
-  ],
-});
-
+let browser;
 try {
+  browser = await chromium.launch({
+    headless: false,
+    args: [
+      "--use-fake-ui-for-media-stream",
+      "--autoplay-policy=no-user-gesture-required",
+    ],
+  });
   const game = await browser.newPage();
   await game.goto(url);
 
@@ -101,6 +101,6 @@ try {
   );
   void probeSource;
 } finally {
-  await browser.close();
+  await browser?.close();
   server.close();
 }
