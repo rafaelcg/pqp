@@ -320,8 +320,54 @@ export const LL_HLS_PART_STUCK_PARTS = 4;
  * for this the way `PART-HOLD-BACK` covers the sync target, so it stays a
  * config concern -- sized off the party's own part target, never a fixed
  * number, per §2's "do not hardcode 20 s anywhere on this path".
+ *
+ * APPLIED AFTER CONSTRUCTION, NEVER IN THE CONSTRUCTOR CONFIG -- see
+ * `applyLlLatencyCeiling` for why, and for the production outage that
+ * taught it.
  */
 export const LL_HLS_MAX_LATENCY_PARTS = 8;
+
+/** The ceiling itself, in seconds, from this party's own part target. */
+export function llMaxLatencySeconds(partTargetMs: number): number {
+  return (LL_HLS_MAX_LATENCY_PARTS * validPartTargetMs(partTargetMs)) / 1000;
+}
+
+/**
+ * Sets the LL latency ceiling on an ALREADY CONSTRUCTED hls.js instance.
+ *
+ * THIS IS NOT A STYLE CHOICE, IT IS THE ONLY PLACE hls.js ACCEPTS IT.
+ * `mergeConfig` (verified against `hls.mjs` 1.7.2) validates the
+ * constructor's own `userConfig` and THROWS on this exact pair:
+ *
+ *   if (userConfig.liveMaxLatencyDuration !== undefined &&
+ *       (userConfig.liveSyncDuration === undefined ||
+ *        userConfig.liveMaxLatencyDuration <= userConfig.liveSyncDuration))
+ *     throw new Error('Illegal hls.js config: "liveMaxLatencyDuration" must
+ *                      be greater than "liveSyncDuration"');
+ *
+ * and `llHlsConfig` omits `liveSyncDuration` ON PURPOSE, because setting it
+ * is precisely what stops hls.js deferring to the manifest's own
+ * `PART-HOLD-BACK` (`HlsLLPlayerConfig`'s own comment). The two requirements
+ * are only compatible if the ceiling goes on after the merge. It cost a live
+ * party: shipped in the constructor config, `new Hls(llHlsConfig(...))` threw
+ * for EVERY LL viewer, `attach()` was called as `void attach()` so the
+ * rejection was unhandled and silent, `loadSource` was never reached, and a
+ * viewer sat on "A transmissão travou, reconectando" having issued not one
+ * request for a playlist. Production, 2026-09-15: a two-minute HAR of a
+ * viewer holding a correct `mode: "ll"` frame and a correct edge URL contains
+ * zero requests to the edge host.
+ *
+ * `hls.config` is the MERGED config and hls.js reads the ceiling off it
+ * (`LatencyController.maxLatency`), not off `userConfig`; hls.js mutates the
+ * same object itself when a caller sets `hls.targetLatency`. Typed
+ * structurally so this file keeps needing no hls.js import.
+ */
+export function applyLlLatencyCeiling(
+  player: { config: { liveMaxLatencyDuration?: number } },
+  partTargetMs: number,
+): void {
+  player.config.liveMaxLatencyDuration = llMaxLatencySeconds(partTargetMs);
+}
 
 /**
  * hls.js's OWN low-latency catch-up (`config.maxLiveSyncPlaybackRate`,
@@ -344,22 +390,22 @@ export const LL_HLS_BACK_BUFFER_SECONDS = 4;
 export const LL_HLS_MAX_BUFFER_LENGTH_SECONDS = 6;
 export const LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS = 10;
 
+/**
+ * WHAT THIS CONFIG DELIBERATELY DOES NOT CONTAIN, AND WHY THAT IS THE WHOLE
+ * POINT. `liveSyncDuration`/`liveSyncDurationCount` are left OUT: verified
+ * against `hls.mjs`'s `LatencyController.updateTargetLatency`, hls.js only
+ * overrides the manifest's `PART-HOLD-BACK`/`HOLD-BACK` when the
+ * constructor's OWN `userConfig` set one of those two -- so omitting both is
+ * what "defer to the manifest when one is present" (`docs/plans/LL_HLS.md`
+ * §4) actually means in hls.js terms, not just a comment.
+ *
+ * `liveMaxLatencyDuration` is left out too, for a DIFFERENT reason: hls.js
+ * refuses a constructor config that carries it without `liveSyncDuration`,
+ * and refuses it by throwing. It is still applied, after construction, by
+ * `applyLlLatencyCeiling` -- see that function for the outage.
+ */
 export interface HlsLLPlayerConfig {
   lowLatencyMode: true;
-  /**
-   * Deliberately the only live-edge-targeting field this config sets.
-   * `liveSyncDuration`/`liveSyncDurationCount` are left OUT on purpose:
-   * verified against `hls.mjs`'s `LatencyController.updateTargetLatency`,
-   * hls.js only overrides the manifest's `PART-HOLD-BACK`/`HOLD-BACK` when
-   * the constructor's OWN `userConfig` set `liveSyncDuration` or
-   * `liveSyncDurationCount` -- so omitting both here is what "defer to the
-   * manifest when one is present" (`docs/plans/LL_HLS.md` §4) actually
-   * means in hls.js terms, not just a comment. `liveMaxLatencyDuration` has
-   * no manifest equivalent to defer to (HLS states a hold-back, never a
-   * "this is too far" ceiling), so it stays an explicit, part-derived
-   * config value.
-   */
-  liveMaxLatencyDuration: number;
   maxLiveSyncPlaybackRate: number;
   maxBufferLength: number;
   maxMaxBufferLength: number;
@@ -424,19 +470,19 @@ export const LL_HLS_MANIFEST_RETRY_DELAY_MS = 1_000;
 export const LL_HLS_MANIFEST_MAX_RETRY_DELAY_MS = 2_000;
 
 /**
- * The LL hls.js config, pure and derived entirely from `partTargetMs` --
- * never a hardcoded 20 s, and never `liveSyncDurationCount`/`liveSyncDuration`
- * (see `HlsLLPlayerConfig`'s own comment on why leaving those two out is the
- * whole point).
+ * The LL hls.js CONSTRUCTOR config: everything hls.js will accept at
+ * construction time, and nothing it will not.
+ *
+ * TAKES NO PART TARGET ANY MORE. The one field that was derived from it,
+ * `liveMaxLatencyDuration`, cannot live in a constructor config at all
+ * (`applyLlLatencyCeiling`), and everything left here is a fixed choice. A
+ * caller that still has a part target hands it to `applyLlLatencyCeiling`
+ * right after `new Hls(...)`; §2's "do not hardcode 20 s anywhere on this
+ * path" is unchanged, the number just lands one line later.
  */
-export function llHlsConfig(partTargetMs: number): HlsLLPlayerConfig {
-  const partSeconds =
-    Number.isFinite(partTargetMs) && partTargetMs > 0
-      ? partTargetMs / 1000
-      : LL_HLS_DEFAULT_PART_TARGET_MS / 1000;
+export function llHlsConfig(): HlsLLPlayerConfig {
   return {
     lowLatencyMode: true,
-    liveMaxLatencyDuration: LL_HLS_MAX_LATENCY_PARTS * partSeconds,
     maxLiveSyncPlaybackRate: LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
     maxBufferLength: LL_HLS_MAX_BUFFER_LENGTH_SECONDS,
     maxMaxBufferLength: LL_HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
