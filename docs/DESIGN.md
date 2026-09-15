@@ -472,6 +472,24 @@ itself on mount and flips above the pointer when it does not fit below.
 `scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native
 scrollbar would draw OS chrome over the design.
 
+### Slider
+
+`slider.tsx`. A one-dimensional value on `@radix-ui/react-slider`. Two variants.
+
+- **`scrub`.** A 2px track. The thumb appears on hover or focus, so a progress
+  bar does not grow a knob until someone means to move it. `readOnly` draws the
+  same fill with `role="progressbar"` and no thumb: that is the bar a person
+  without `MANAGE_MUSIC` sees.
+- **`volume`.** A slightly thicker track with the thumb always visible.
+- **States.** The fill is `accent` on `surface-3`. Focus uses the usual ring.
+  Disabled is 40% opacity.
+- **Use it** for playback position and volume. **Do not** use a native
+  `<input type="range">` for those; it draws OS chrome and cannot share the
+  read-only treatment.
+- **Accessibility.** The caller passes `aria-label`. A read-only slider is a
+  progress bar, not a slider, so a screen reader does not offer a value change
+  that cannot happen.
+
 ### SectionRail
 
 `section-rail.tsx`. The settings navigation: a real `role="tablist"` with arrow,
