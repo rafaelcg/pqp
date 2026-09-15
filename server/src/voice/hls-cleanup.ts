@@ -31,6 +31,10 @@ import {
   adoptLiveHlsMicArchive,
   adoptLiveHlsSession,
   listActiveEgresses,
+  // `hls-egress.ts` builds `object_prefix`, so it is also where it is read
+  // back: two copies of that parser would be a filter that drifts from the
+  // thing it filters for.
+  parseHlsObjectPrefix as sessionFromPrefix,
   stopEgressById,
   MIC_ARCHIVE_RUNG,
 } from "./hls-egress.js";
@@ -103,29 +107,6 @@ interface StaleSession {
   /** Which API process last started or adopted this session. NULL = nobody's. */
   instance_id: string | null;
   still_open: boolean;
-}
-
-/**
- * `live/<channelId>/<startedAt>-<rung>` -> startedAt, and the rung beside it.
- *
- * The rung suffix is why this cannot be a bare `Number(tail)` any more: with
- * a ladder every prefix ends `-1080p30` or similar, `Number` answers NaN, and
- * a row that cannot be parsed is treated as unadoptable and its egress
- * STOPPED. That would kill a live watch party on every deploy, which is the
- * exact failure this whole file was written to stop.
- */
-function sessionFromPrefix(
-  prefix: string,
-): { startedAt: number; rung: string | null } | null {
-  const tail = prefix.split("/").pop() ?? "";
-  const dash = tail.indexOf("-");
-  const startedAtPart = dash === -1 ? tail : tail.slice(0, dash);
-  const rung = dash === -1 ? null : tail.slice(dash + 1);
-  const parsed = Number(startedAtPart);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
-  }
-  return { startedAt: parsed, rung: rung || null };
 }
 
 interface DueSession {

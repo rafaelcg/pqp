@@ -410,6 +410,39 @@ beside it, are how you tell from outside that the guard runs at all: zero on one
 machine, non-zero within a deploy of a party running on two. See
 `server/src/voice/hls-ownership.ts`.
 
+**And the owner has to change hands on a RESUME, not only at boot.** Boot
+adoption covers the machine that comes up; it does not cover the machine that
+was already up when the presenter landed on it. On 2026-09-15 a rolling deploy
+drained both machines in turn with a party live on a 480p30 + 720p30 + mic
+ladder. Each drain closed the presenter's socket, they resumed on the sibling
+in about a second with the same peer id (`voice.resumeAdopted ownerAlive=false
+orphaned=true`), and the sibling, holding no `rooms` entry for the channel,
+took the only path it had: `startRoom`, a new `startedAt`, a new ladder, and
+`endSupersededSessions` stopping the healthy egresses on the LiveKit box it had
+just replaced. Three rungs became two, then one; every viewer rebuffered twice
+inside two minutes. `adoptRunningLiveHlsSession` in `hls-egress.ts` now asks
+the same question the seat adoption asks, at the same moment: an open row set
+for this channel, same presenter, egresses LiveKit still lists, owner not
+answering its heartbeat, is claimed (`claimHlsSessionRow` on the lowest rung is
+the verdict, the rest are repaired with `claimHlsSessionRows`) and adopted
+rung, camera and archive, with no new transcode and nothing stopped. A
+different presenter, an egress that is gone, an owner that is alive, or a
+question that could not be asked all fall through to the ordinary fresh start
+and say which in `voice.hlsResumeNotAdopted`. Leftover egresses are left to
+`reapForeignEgresses` on the monitor tick, which asks who owns an id before it
+stops one, and which now runs for the channel because this process holds the
+room. The LL path already had this shape (`reconcileLlHlsNow` claims an open
+row before it resumes); this is the conventional half. Beside it, a second
+defect from the same incident: `decideLadder` was priced against
+`activeLadderEgressCount()`, which counts every ACTIVE egress on the box
+including the ones `endSupersededSessions` was a line away from stopping, so
+the second restart read `ladderMbps=600` against a 450 budget and refused
+`720p30` outright. The count now takes a `supersededChannelId` and leaves that
+channel's condemned egresses out. A draining machine still stops no egress of
+its own: `shutdown()` in `server/src/index.ts` stops the monitor and nothing
+else, and a socket closed with 1001 ORPHANS its peer rather than removing it,
+so no `pushLiveHls` teardown runs on the way out.
+
 ### 5.8 Metrics and moderation targeting
 
 `getVoiceActivitySnapshot` rooms/participants from `voice_peers` (async; the
