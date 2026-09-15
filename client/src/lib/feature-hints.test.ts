@@ -3,6 +3,7 @@ import {
   FEATURE_HINT_STORAGE_KEYS,
   isFeatureHintSeen,
   rememberFeatureHint,
+  shouldOfferBringFriendsHint,
   shouldOfferChannelPinHint,
   shouldOfferComposerFormatHint,
   shouldOfferShortcutsHint,
@@ -36,6 +37,12 @@ describe("winningFeatureHint", () => {
       winningFeatureHint({ composerFormat: true, channelPin: true }),
     ).toBe("composerFormat");
     expect(winningFeatureHint({ channelPin: true })).toBe("channelPin");
+    expect(
+      winningFeatureHint({ watchParty: true, bringFriends: true }),
+    ).toBe("watchParty");
+    expect(
+      winningFeatureHint({ bringFriends: true, music: true }),
+    ).toBe("bringFriends");
   });
 });
 
@@ -84,6 +91,44 @@ describe("shouldOfferWatchPartyHint", () => {
     expect(shouldOfferWatchPartyHint({ ...ready, canShare: false })).toBe(
       false,
     );
+  });
+});
+
+describe("shouldOfferBringFriendsHint", () => {
+  const ready = {
+    seen: false,
+    automated: false,
+    presenting: true,
+    inServer: true,
+    roomSize: 1,
+  };
+
+  it("shows once when you are presenting to a small server call", () => {
+    expect(shouldOfferBringFriendsHint(ready)).toBe(true);
+    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 2 })).toBe(true);
+  });
+
+  it("hides for viewers, DMs, a full trio, or a second look", () => {
+    expect(shouldOfferBringFriendsHint({ ...ready, seen: true })).toBe(false);
+    expect(shouldOfferBringFriendsHint({ ...ready, automated: true })).toBe(
+      false,
+    );
+    expect(shouldOfferBringFriendsHint({ ...ready, presenting: false })).toBe(
+      false,
+    );
+    expect(shouldOfferBringFriendsHint({ ...ready, inServer: false })).toBe(
+      false,
+    );
+    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 3 })).toBe(false);
+    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 0 })).toBe(false);
+  });
+
+  it("records under the September 2026 key", () => {
+    const storage = memory();
+    rememberFeatureHint("bringFriends", storage, true);
+    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.bringFriends)).toBe("1");
+    expect(isFeatureHintSeen("bringFriends", storage, true)).toBe(true);
+    expect(isFeatureHintSeen("bringFriends", storage, false)).toBe(false);
   });
 });
 
