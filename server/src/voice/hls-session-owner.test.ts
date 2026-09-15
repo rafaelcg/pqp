@@ -806,13 +806,13 @@ describeDb("hls_sessions ownership across two API machines", () => {
       expect(stop).not.toHaveBeenCalled();
     });
 
-    it("leaves the session alone while its owner is still answering", async () => {
+    it("stands down while the owner is still answering, and starts nothing", async () => {
       await heartbeat(machineA, 2);
       const rows = await liveLadderRows(machineA);
-      boxRunning(["EG_low", "EG_high", "EG_mic"]);
+      const { start, stop } = boxRunning(["EG_low", "EG_high", "EG_mic"]);
       logEvent.mockClear();
 
-      await reconcileLiveHls(channelA, PRESENTER, serverA);
+      const stream = await reconcileLiveHls(channelA, PRESENTER, serverA);
 
       // Two monitors on one transcode is the failure `hls-ownership.ts`
       // exists to stop, so the row keeps its owner and the skip is counted.
@@ -821,6 +821,93 @@ describeDb("hls_sessions ownership across two API machines", () => {
         "voice.hlsSkippedOwnedElsewhere",
         expect.objectContaining({ site: "resume-adopt", ownerInstanceId: machineA }),
       );
+      // AND NO SECOND LADDER. Falling through to `startRoom` here would have
+      // `endSupersededSessions` stop a live machine's egresses, which is the
+      // incident this whole change is about reached from another direction.
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      expect(stream).toBeNull();
+      expect((await rowById(rows.high)).ended_at).toBeNull();
+    });
+
+    it("the loser of a concurrent claim starts nothing at all", async () => {
+      // TWO MACHINES RESUMING THE SAME PRESENTER AT ONCE. Both read the rows
+      // while the old owner's heartbeat has lapsed; one claims the primary
+      // rung and the other must NOT read its lost claim as "nothing to
+      // inherit" and mint a second ladder beside the winner's.
+      //
+      // The race is real, not mocked: the other machine takes the rows during
+      // the `ListEgress` round trip, which is after this process has read the
+      // live instances and before it issues its claim.
+      await heartbeat(machineA, 300);
+      const rows = await liveLadderRows(machineA);
+      const machineB = randomUUID();
+      const start = vi.fn(async () => ({ egressId: "EG_new" }));
+      const stop = vi.fn(async () => {});
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: start,
+          stopEgress: stop,
+          listEgress: async () => {
+            await heartbeat(machineB, 0);
+            await getPool().query(
+              `UPDATE hls_sessions SET instance_id = $2 WHERE channel_id = $1`,
+              [channelA, machineB],
+            );
+            return ["EG_low", "EG_high", "EG_mic"].map((egressId) => ({
+              egressId,
+              status: EgressStatus.EGRESS_ACTIVE,
+              roomName: channelA,
+              startedAt: Date.now(),
+            }));
+          },
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      logEvent.mockClear();
+
+      const stream = await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      expect(stream).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      // The winner keeps the session, whole and open.
+      for (const id of [rows.low, rows.high, rows.mic]) {
+        const row = await rowById(id);
+        expect(row.instance_id).toBe(machineB);
+        expect(row.ended_at).toBeNull();
+      }
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsResumeNotAdopted",
+        expect.objectContaining({ kind: "stand-down", reason: "claim-refused" }),
+      );
+    });
+
+    it("ends an earlier session's row even when a leftover egress is still listed", async () => {
+      // A row of a session this channel is no longer serving is superseded by
+      // definition. Left open because LiveKit still lists its egress, it stays
+      // open for the life of the deployment and retention never collects its
+      // objects; the egress itself is the ownership-aware reaper's business.
+      await heartbeat(machineA, 300);
+      const stale = await makeSession({
+        prefix: `live/${channelA}/${STARTED_AT - 90_000}-720p30`,
+        egressId: "EG_leftover",
+        instanceId: machineA,
+        rung: "720p30",
+        presenterPeerId: PRESENTER,
+      });
+      await liveLadderRows(machineA);
+      const { stop } = boxRunning([
+        "EG_low",
+        "EG_high",
+        "EG_mic",
+        "EG_leftover",
+      ]);
+
+      await reconcileLiveHls(channelA, PRESENTER, serverA);
+
+      expect((await rowById(stale)).ended_at).not.toBeNull();
+      expect(stop).not.toHaveBeenCalled();
     });
 
     it("starts fresh when the egresses are gone, which is a genuine restart", async () => {

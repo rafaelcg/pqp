@@ -1086,7 +1086,7 @@ describe("live HLS egress", () => {
         );
       });
 
-      it("activeBoxEgressCount subtracts them when asked, and only them", async () => {
+      it("activeBoxEgressCount subtracts exactly the ids it is given", async () => {
         resetLiveHlsForTests();
         enableHls();
         const heights: string[] = [];
@@ -1102,9 +1102,62 @@ describe("live HLS egress", () => {
         expect(await activeBoxEgressCount()).toBe(3);
         expect(
           await activeBoxEgressCount(Date.now(), {
-            supersededChannelId: CHANNEL,
+            supersededEgressIds: new Set(["EG_mine_a", "EG_mine_b"]),
           }),
         ).toBe(1);
+      });
+
+      it("an id whose stop keeps failing is still counted", async () => {
+        // `planSupersededEgresses` leaves it out of the set, because the box
+        // has already refused to let go of it once: pricing the new ladder as
+        // though it had stopped is how both end up running.
+        resetLiveHlsForTests();
+        enableHls();
+        process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+        delete process.env.LIVE_HLS_MAX_LADDER_MBPS;
+        const heights: string[] = [];
+        const start = fakeEgress(heights);
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: start,
+            // Every stop fails, which is what puts an id in the backoff.
+            stopEgress: vi.fn(async () => {
+              throw new Error("no response from servers");
+            }),
+            listEgress: async () => [
+              {
+                egressId: "EG_stuck_a",
+                status: EgressStatus.EGRESS_ACTIVE,
+                roomName: CHANNEL,
+                startedAt: Date.now(),
+              },
+              {
+                egressId: "EG_stuck_b",
+                status: EgressStatus.EGRESS_ACTIVE,
+                roomName: CHANNEL,
+                startedAt: Date.now(),
+              },
+            ],
+          },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+
+        // First start: the two are condemned, so both rungs fit, and the two
+        // stops fail and enter the backoff.
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        await reconcileLiveHls(CHANNEL, null, SERVER);
+        heights.length = 0;
+        logEvent.mockClear();
+
+        // Second start: the same two ids are still ACTIVE and now known not to
+        // stop, so they count and the top rung is refused.
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        expect(heights).toEqual(["720"]);
+        expect(logEvent).toHaveBeenCalledWith(
+          "voice.hlsRungRefused",
+          expect.objectContaining({ refusal: "ladder-budget" }),
+        );
       });
     });
   });
