@@ -85,6 +85,21 @@ export const LL_MODE_VALUE = "ll";
  * repeated or unparseable parameter (`URLSearchParams.get` returns the
  * FIRST value, so `?mode=ll&mode=x` still reads `ll` and `?mode=x&mode=ll`
  * does not — either way one deterministic answer, never a probe).
+ *
+ * NOT A CAPABILITY, AND DELIBERATELY UNSIGNED. `?t=` is what authorises this
+ * path; it names the user, the channel and the session, and the route
+ * verifies all three before this marker is read. All the marker does is pick
+ * which of two renderings of THAT session its holder is served. A viewer who
+ * adds it to a conventional session's URL gets a `503 Retry-After` loop and
+ * nothing else; one who strips it from an LL session's URL gets the
+ * conventional master they were already entitled to ask for. Neither reaches
+ * a session their token does not already name.
+ *
+ * The origin cost of a forged marker is bounded twice over: the memo in
+ * `LlPlaylistOrigin` collapses repeated not-ready answers for one second,
+ * and its key is `(channelId, startedAt)` — both of which the token pins, so
+ * the key cannot be varied to defeat the memo without a token for each
+ * variation.
  */
 export function requestsLlMode(url: URL): boolean {
   return url.searchParams.get(LL_MODE_PARAM) === LL_MODE_VALUE;
