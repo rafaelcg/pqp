@@ -33,6 +33,9 @@ lands on the same Worker, so the code is already split along that line:
 | `src/ll-init-codecs.js` | Reads `CODECS` (`avc1.PPCCLL`) off an init segment's `avcC` box | No — pure bytes-in, string-out |
 | `src/ll-session.js` | The remux `sessionId` for a channel's LL session — ported, pure | No |
 | `src/ll-playlist-origin.ts` | `PlaylistOrigin` for an LL session — talks to the remux box directly | No — this is the second-origin seam already, one level below `playlist-origin.ts` |
+| `src/ll-media.ts` | The LL MEDIA route (`L2.3`): part/segment/init bytes off the remux box, immutably cached per colo | No — a second origin would land in `ll-playlist-origin.ts`, not here |
+| `src/viewer-access.ts` | The one credential check (token, party pass, revocation) every route calls | No |
+| `src/edge-cache.ts` | The Cache API wrapped so losing it never costs a request, and the one definition of a cache key | No |
 | `src/index.ts` | Routing, the cache-or-forward decision, CORS, logging | No, or minimally — it is written against the `PlaylistOrigin` interface, not against "the API" |
 
 `playlist-origin.ts` today has exactly one implementation, `ApiPlaylistOrigin`
@@ -84,13 +87,21 @@ path shape the API's own playlist route uses:
    session's only playlist): always forwarded to the API with the caller's
    own token, never cached. See "The two routes are not the same kind of
    thing" below.
-4. **CORS**, matching the shape of `server/src/lib/http.ts`'s `corsHeaders`
+4. **For an LL rendition's MEDIA bytes**
+   (`.../:rung/<name>`, added by `L2.3` — see "LL media bytes" below):
+   fetches `{LL_ORIGIN_BASE}/s/{sessionId}/{name}` once per colo and serves
+   every other viewer of that part from the Cache API, `immutable` for a
+   year.
+5. **CORS**, matching the shape of `server/src/lib/http.ts`'s `corsHeaders`
    (an optional `CORS_ALLOWED_ORIGINS` allowlist; unset echoes every origin
    back, the same fail-open default the API has for a self-host with nothing
    configured).
 
-Segment bytes are untouched by any of this: they were already presigned R2
-URLs the browser fetches directly, and stay that way.
+A CONVENTIONAL rung's segment bytes are untouched by any of this: they were
+already presigned R2 URLs the browser fetches directly, and stay that way.
+An LL session's are the exception, and the reason step 4 exists — the remux
+box is a private origin behind a shared key, with nothing to presign, so for
+LL this Worker is the CDN in front of it.
 
 ## Blocking reload (L2.1)
 
@@ -294,7 +305,8 @@ and one `EXT-X-PRELOAD-HINT:TYPE=PART,URI=...` for the next unwritten part,
 when the origin names one. Every URI is relative to
 `/api/voice/hls-playlist/:channelId/:startedAt/:rung/<name>` — never the
 remux box's own host (see "Why this Worker talks to the remux box directly"
-above) — and, in the RENDERED body, carries `LL_TOKEN_PLACEHOLDER`
+above), and answered by this Worker's own media route ("LL media bytes
+(L2.3)" below) — and, in the RENDERED body, carries `LL_TOKEN_PLACEHOLDER`
 (`ll-playlist.js`) rather than a real `?t=` token. **This is deliberate, and
 the opposite of the conventional master's rule.** A first draft of this task
 embedded the real viewer's token directly, matching PR #572's party-lifetime
@@ -446,6 +458,84 @@ forwarded to a viewer: `fetchPlaylist`/`fetchMultivariantPlaylist` always
 construct a FRESH `Response` with only a `Content-Type` header, never the
 origin fetch's own request or response headers — pinned by
 `test/ll-playlist-origin.test.mjs`.
+
+## LL media bytes (L2.3)
+
+`docs/plans/LL_HLS.md` task `L2.3`, `src/ll-media.ts`. **Done** — an LL
+session's parts, segments and init segments now come through this Worker,
+which is the half `L2.2` was missing: the playlist it rendered was correct
+and unplayable, because every URI in it 404'd.
+
+**The exact viewer-facing shape**, and it is the same one `ll-playlist.js`
+has emitted since `L2.2` (this task added the route that answers it, not a
+new URL):
+
+```
+GET https://hls.pqp.gg/api/voice/hls-playlist/{channelId}/{startedAt}/{rung}/{name}?t={viewerToken}
+```
+
+- `{rung}` is `ll` (video) or `ll-audio` (the audio rendition).
+- `{name}` is exactly what `state.json` named: `init.mp4`, `seg-41.m4s`,
+  `part-164.m4s`, and the audio twins `audio-init.mp4`,
+  `audio-seg-42.m4s`, `audio-part-5.m4s`. Bounded by the same pattern
+  `ll-state.js`'s `isSafeUriSegment` applies to the document itself, in the
+  route regex AND again in `LlPlaylistOrigin.fetchMedia` — the door is no
+  wider than the thing on the other side of it.
+- `?t=` is the viewer's own token, put there by `index.ts`'s `stampLlToken`
+  when the rendition playlist left the Worker (the rendition BODY is
+  rendered with `LL_TOKEN_PLACEHOLDER` and cached token-free — see the L2.2
+  section above). So the credential arrives on a media request exactly the
+  way it arrives on the playlist request that named it. A `?pp=` party pass
+  authorizes media too, for the same reason it authorizes the rendition: a
+  pass-holding viewer must not get a playable playlist whose every URI 403s.
+
+**Each request maps to one origin path**:
+`{LL_ORIGIN_BASE}/s/{deriveLlSessionId(channelId, startedAt)}/{name}`, with
+`X-Pqp-Origin-Key`. The session id is recomputed, never looked up, exactly
+as the `state.json` probe does it.
+
+**What the route guarantees**, and where each one lives:
+
+1. **The credential is checked first, always** — `viewer-access.ts`'s
+   `authorizeViewer`, the same call the playlist routes make, revocation
+   gate included. A refused request reaches neither the Cache API nor the
+   box. `checkTokenRevocation` is `true` here (unlike the rendition route,
+   which runs it a few lines later, after the blocking-reload directive is
+   validated): nothing downstream of this route ever reaches the API, so
+   this Worker's own gate is the only one, the same reasoning the LL master
+   already applied.
+2. **The cache key is the path, never the token** (`edge-cache.ts`'s
+   `cacheKeyRequest`, shared with the rendition route) — two viewers in one
+   colo produce ONE origin fetch, which is this task's stated acceptance
+   test and what `test/ll-media.test.mjs` asserts first. Concurrent misses
+   on the same part are coalesced onto one in-flight promise
+   (`inFlightMediaFetches`, the same pattern `fetchRenditionCoalesced`
+   uses), and only the producer writes the cache entry.
+   `Cache-Control: public, max-age=31536000, immutable` because a part, a
+   segment and an init segment are written once and never rewritten: their
+   names carry a sequence number, so a changed byte is always a new name.
+3. **A 404 stays a 404 and is never cached.** `EXT-X-PRELOAD-HINT` names a
+   part the box has not finished writing, so a player asking a beat early is
+   NORMAL. Caching that for a year would make the part permanently missing
+   for every viewer in the colo; it goes out `no-store` instead.
+
+**Counters**: `hlsEdge.llPartOriginFetch` (one line per real fetch — the
+cache and the in-flight map already bound it to roughly one per part per
+colo, and it is the line that proves the acceptance test),
+`hlsEdge.llPartCacheHit` and `hlsEdge.llPartMissing` (the first occurrence
+logged immediately, the rest batched per 10 s window — a party's worth of
+cache hits must not become a party's worth of log lines, pitfall 16),
+`hlsEdge.llPartOriginRejected` and `hlsEdge.llPartOriginError` for the two
+failure shapes.
+
+**One bug found writing this**, worth naming because it had been shipped and
+silent: `playlist-route.ts`'s `PLAYLIST_PATH` was a character-for-character
+copy of the API's own regex, whose rungs are all alphanumeric
+(`720p30`, `1080p60`). `ll-audio` has a hyphen. So since `L2.2` the LL AUDIO
+rendition matched no route at all and 404'd from the edge before a line of
+LL code ran — the video rung worked, which is exactly the shape that makes
+this kind of thing hard to see. Pinned now by
+`test/playlist-route.test.mjs`.
 
 ## Why the cache key drops the token
 

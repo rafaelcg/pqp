@@ -35,12 +35,13 @@
  * plus `/{rung}/{name}`. These are DELIBERATELY NEVER the remux origin's own
  * host — `hls-remux.ts`'s doc comment on `llPlaylistUrl` explains why a raw
  * origin URL must never reach a client: it is a bearer link nothing can
- * revoke short of ending the session. `/{rung}/{name}` is the shape
- * `docs/plans/LL_HLS.md` task `L2.3` ("Proxy `/{session}/{rung}/{seq}.{n}.m4s`
- * from the box") will make resolvable; until then a client fetching one of
- * these gets a 404 from THIS Worker (no route matches it yet) rather than a
- * bypass URL, which is the same "wired, not yet reachable" shape the rest of
- * this plan uses throughout (flags, allowlists, `origin_base_url` unset).
+ * revoke short of ending the session. `/{rung}/{name}` is answered by THIS
+ * Worker, in `ll-media.ts` (`docs/plans/LL_HLS.md` task `L2.3`, shipped):
+ * the token on the URI is checked the same way it is on this playlist, and
+ * the bytes are fetched from `{LL_ORIGIN_BASE}/s/{sessionId}/{name}` and
+ * cached per colo, immutably. Until that route existed every URI this file
+ * emitted 404'd, which is why `L2.2` shipped a playlist that was correct
+ * and unplayable.
  *
  * THE TOKEN, AND WHY `buildLlRenditionPlaylist` NEVER TAKES ONE. PR #572's
  * party-lifetime pass established that the viewer's own `?t=` token stays on

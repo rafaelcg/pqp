@@ -68,6 +68,7 @@ import { deriveLlSessionId } from "./ll-session.js";
 import {
   LL_AUDIO_RUNG,
   LL_VIDEO_RUNG,
+  isSafeUriSegment,
   parseLlState,
   trackForRung,
   type LlSessionState,
@@ -267,6 +268,33 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       throw new Error("state.json failed validation");
     }
     return { sessionId, state: parsed };
+  }
+
+  /**
+   * ONE MEDIA OBJECT off the box — an init segment, a sealed segment, or a
+   * part — for the route that answers the URIs this class's own playlists
+   * emit (`ll-media.ts`, task `L2.3`). `sessionId` is recomputed, never
+   * looked up, exactly as `fetchState` does it.
+   *
+   * `name` is re-checked against `isSafeUriSegment` even though
+   * `playlist-route.ts` already bounded it to the same pattern: this method
+   * is what turns a name into a path against the remux origin, and the rule
+   * that a name can never escape `/s/:sessionId/` belongs next to the
+   * `new URL(path, base)` call that would otherwise be the place it escapes
+   * (see `isSafeUriSegment`'s own doc comment for what that looks like).
+   * A caller that gets here with something else has a bug; a viewer cannot
+   * reach it, because the route rejected the request first.
+   *
+   * Returns the buffered origin response as-is, 404 included: "this part is
+   * not written yet" is an ordinary answer on this route, not a failure —
+   * see `ll-media.ts`'s header, property 3.
+   */
+  async fetchMedia(channelId: string, startedAt: string, name: string): Promise<BufferedOriginResponse> {
+    if (!isSafeUriSegment(name)) {
+      throw new Error("LlPlaylistOrigin.fetchMedia called with an unsafe name");
+    }
+    const sessionId = await deriveLlSessionId(channelId, Number(startedAt));
+    return this.fetchFromOrigin(originAssetPath(sessionId, name));
   }
 
   /**

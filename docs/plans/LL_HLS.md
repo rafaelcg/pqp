@@ -533,10 +533,24 @@ FIRST and got a 404 (`hlsEdge.llStateFetchFailed` on every probe). **That endpoi
 now exists** (`tools/pqp-remux/internal/llstate`, served by `internal/serve` and
 mounted per session by `internal/control` behind the existing `X-Pqp-Origin-Key`
 gate), for both the video rendition and the audio twin, cross-checked against the
-Worker's own `parseLlState` by a committed golden file. What is left in `L2` before
-a viewer can actually play an LL session is `L2.3`: the Worker does not yet proxy
-the part and segment bytes its own playlists point at
-(`/{basePath}/{rung}/{name}`), so those URIs still 404 from the edge.
+Worker's own `parseLlState` by a committed golden file.
+
+**`L2.3` shipped too** (`tools/hls-edge/src/ll-media.ts`): the Worker now answers
+`GET /api/voice/hls-playlist/{channelId}/{startedAt}/{rung}/{name}?t=...` — the
+exact URIs its own playlists emit, for both the `ll` and `ll-audio` rungs — by
+fetching `{LL_ORIGIN_BASE}/s/{sessionId}/{name}` behind `X-Pqp-Origin-Key` and
+caching it on the path (never the token) as `public, max-age=31536000,
+immutable`, with concurrent misses for one part coalesced onto a single origin
+fetch and a 404 passed through `no-store` (the preload-hint part that does not
+exist yet). Two viewers in one colo produce one origin fetch, which is this
+task's acceptance test and the first case in `test/ll-media.test.mjs`.
+`hlsEdge.llPartOriginFetch` / `llPartCacheHit` / `llPartMissing` are the
+counters. It also fixed a shipped-and-silent bug beside it: the Worker's route
+regex was a character-for-character copy of the API's, whose rungs are all
+alphanumeric, so **`ll-audio` matched no route at all** and the LL audio
+rendition had been 404ing from the edge since `L2.2` while the video rung
+worked. What is left in `L2` before a viewer can actually play an LL session is
+`L2.4`, the three players.
 
 **L2.1 Blocking playlist reload in the Worker** (2 d). `_HLS_msn`/`_HLS_part`
 parsing, one in-flight origin request per (session, rung, part) per colo with every
@@ -550,10 +564,13 @@ and `PART-HOLD-BACK`, `EXT-X-PART-INF`, `EXT-X-PART` and `EXT-X-PRELOAD-HINT`; t
 check unchanged. *Accepted when* hls.js, AVPlayer and Media3 each play it and
 `mediastreamvalidator` passes with no LL error.
 
-**L2.3 Part bytes through the Worker** (1 d). Proxy
+**L2.3 Part bytes through the Worker** (1 d) — **done**, `ll-media.ts`. Proxy
 `/{session}/{rung}/{seq}.{n}.m4s` from the box, `Cache-Control: public,
 max-age=31536000, immutable`, Cache API keyed on the path and never the token.
-*Accepted when* two viewers in one colo produce one origin fetch per part.
+*Accepted when* two viewers in one colo produce one origin fetch per part —
+pinned by `test/ll-media.test.mjs`'s first case (two concurrent viewers with
+DIFFERENT tokens, one `fetchMedia` call), with the cache-hit, 404-passthrough,
+revoked-before-any-origin-fetch and audio-twin cases beside it.
 
 **L2.4 The three players stop overriding the manifest** (2 d). Web
 `hlsLivePlayerConfig`, iOS `WatchLiveEdge`, Android `HlsLiveEdge` / `HlsWatchdog`,
