@@ -1881,10 +1881,12 @@ function ActiveCall({
         </div>
       )}
       {!voiceState.error && voiceState.notice && (
+        // Status only. The strip notice sits over the share tile
+        // controls; capturing clicks there made fullscreen unreachable.
         <p
           role="status"
           data-voice-notice
-          className="absolute inset-x-0 top-0 z-20 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
         >
           {voiceState.notice}
         </p>
