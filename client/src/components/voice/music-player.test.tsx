@@ -15,6 +15,7 @@ import { resetMusicPrefsForTests } from "@/lib/music-prefs";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { MusicBarButton } from "@/components/voice/music-bar-button";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
+import { effectiveCanManageMusic } from "@/components/voice/music-extras";
 import { MusicPanel, musicActivityForViewer, musicActivityFromDiff } from "@/components/voice/music-panel";
 import {
   insertMusicStageTile,
@@ -51,6 +52,10 @@ const state = (partial: Partial<MusicState> = {}): MusicState => ({
   atMs: 1,
   rev: 1,
   actorId: "peer-ana",
+  openControls: false,
+  repeat: "off",
+  skipVotes: [],
+  history: [],
   ...partial,
 });
 
@@ -246,8 +251,23 @@ describe("shouldReportUnknownDuration", () => {
   });
 });
 
+describe("effectiveCanManageMusic", () => {
+  it("promotes a speaker when everyone controls is on", () => {
+    expect(
+      effectiveCanManageMusic({ canManageMusic: false, canSpeak: true }, { openControls: true }),
+    ).toBe(true);
+    expect(
+      effectiveCanManageMusic({ canManageMusic: false, canSpeak: true }, { openControls: false }),
+    ).toBe(false);
+    expect(
+      effectiveCanManageMusic({ canManageMusic: false, canSpeak: false }, { openControls: true }),
+    ).toBe(false);
+    expect(effectiveCanManageMusic({ canManageMusic: true, canSpeak: false }, null)).toBe(true);
+  });
+});
+
 describe("MusicNowPlaying", () => {
-  it("shows the adder and dims skip when the viewer cannot manage", () => {
+  it("shows the adder and a vote skip when the viewer cannot manage", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <MusicNowPlaying
@@ -272,9 +292,37 @@ describe("MusicNowPlaying", () => {
     );
     expect(html).toContain("Ana");
     expect(html).toContain("data-music-now-playing");
+    expect(html).toContain("data-music-vote-skip");
     expect(html).toContain("opacity-40");
     expect(html).toContain("role=\"progressbar\"");
     expect(html.match(/aria-expanded/g)?.length).toBe(2);
+  });
+
+  it("says the room picked a similar track", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicNowPlaying
+          current={track("now", { autoplayed: true })}
+          music={{
+            channelId: CHANNEL,
+            state: state({ current: track("now", { autoplayed: true }) }),
+            receivedAt: Date.now(),
+            open: false,
+            listening: true,
+          }}
+          voiceState={voiceState()}
+          canManage
+          playing
+          needsTap={false}
+          onExpand={() => {}}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-autoplayed");
+    expect(html).not.toContain("Ana");
   });
 });
 
@@ -328,6 +376,42 @@ describe("MusicPanel", () => {
     expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
   });
 
+  it("puts repeat, shuffle and collapsed queue options on a manager panel", () => {
+    const html = renderPanel(180_000);
+    expect(html).toContain("data-music-repeat");
+    expect(html).toContain("data-music-shuffle");
+    expect(html).toContain("data-music-options");
+    expect(html).not.toContain("data-music-options-body");
+    expect(html).toContain("data-music-listeners");
+  });
+
+  it("replaces skip with vote skip when the viewer cannot manage", () => {
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicPanel
+          current={track("now")}
+          music={snapshot(180_000)}
+          voiceState={voiceState({ canManageMusic: false })}
+          canManage={false}
+          playing
+          needsTap={false}
+          showVideo={false}
+          volume={40}
+          muted={false}
+          onPlayPause={() => {}}
+          onSkip={() => {}}
+          onTapToPlay={() => {}}
+          onMute={() => {}}
+          onVolume={() => {}}
+          onToggleVideo={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-vote-skip");
+    expect(html).not.toContain("data-music-options");
+    expect(html).not.toContain("data-music-repeat");
+  });
+
   it("names the stage and ducking controls", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
@@ -362,13 +446,14 @@ describe("ChannelMusicCard", () => {
       <TooltipProvider>
         <ChannelMusicCard
           channelId={CHANNEL}
-          track={{ videoId: "aaaaaaaaaaa", title: "Legião", thumbnailUrl: null }}
+          track={{ videoId: "aaaaaaaaaaa", title: "Legião", thumbnailUrl: null, listeners: 3 }}
           inCall={false}
         />
       </TooltipProvider>,
     );
     expect(html).toContain("data-channel-music");
     expect(html).toContain("Legião");
+    expect(html).toContain("3");
   });
 });
 

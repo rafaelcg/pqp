@@ -30,11 +30,20 @@ import {
 } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
 import {
+  MusicHistoryList,
+  MusicListeners,
+  MusicQueueOptions,
+  MusicRepeatButton,
+  MusicShuffleButton,
+  MusicVoteSkipButton,
+} from "@/components/voice/music-extras";
+import {
   formatMusicClock,
   formatMusicClockOrUnknown,
   ghostIconButton,
   lookupActorName,
   lookupAddedBy,
+  musicRoomPeople,
   usePlaybackProgress,
 } from "@/components/voice/music-now-playing";
 import { MusicQueueList } from "@/components/voice/music-queue-list";
@@ -188,6 +197,8 @@ export function MusicPanel({
   const duration = progress.durationMs ?? 0;
   const position = scrub ?? progress.position;
   const queue = music.state?.queue ?? [];
+  const history = music.state?.history ?? [];
+  const seated = musicRoomPeople(voiceState);
   const durationKnown = progress.known;
 
   return (
@@ -204,16 +215,30 @@ export function MusicPanel({
             </span>
             <div className="min-w-0 flex-1">
               <MarqueeText text={current.title} className="text-[13px] font-medium text-text" />
-              <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-text-secondary">
-                <UserAvatar
-                  name={addedBy.name}
-                  avatarUrl={addedBy.avatarUrl}
-                  className="h-3.5 w-3.5"
-                  fallbackClassName="bg-accent-soft text-[9px] text-on-accent-soft"
-                  rounded="full"
-                />
-                <span className="truncate">{t("music.addedBy", { name: addedBy.name })}</span>
-              </span>
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                {current.autoplayed ? (
+                  <span
+                    data-music-autoplayed=""
+                    className="min-w-0 truncate text-[11px] text-text-secondary"
+                  >
+                    {t("music.autoplayed")}
+                  </span>
+                ) : (
+                  <span className="flex min-w-0 items-center gap-1 text-[11px] text-text-secondary">
+                    <UserAvatar
+                      name={addedBy.name}
+                      avatarUrl={addedBy.avatarUrl}
+                      className="h-3.5 w-3.5"
+                      fallbackClassName="bg-accent-soft text-[9px] text-on-accent-soft"
+                      rounded="full"
+                    />
+                    <span className="truncate">{t("music.addedBy", { name: addedBy.name })}</span>
+                  </span>
+                )}
+                <span className="ml-auto min-w-0 shrink">
+                  <MusicListeners participants={seated} />
+                </span>
+              </div>
             </div>
             <Tooltip label={t("music.collapse")}>
               <button
@@ -258,7 +283,15 @@ export function MusicPanel({
             </span>
           </div>
 
-          <div className="flex items-center justify-center gap-2">
+          <div className="flex items-center gap-1">
+            <div className="flex min-w-0 flex-1 items-center justify-start gap-0.5">
+              {canManage ? (
+                <>
+                  <MusicRepeatButton repeat={music.state?.repeat ?? "off"} />
+                  <MusicShuffleButton />
+                </>
+              ) : null}
+            </div>
             {needsTap ? (
               <button
                 type="button"
@@ -269,49 +302,47 @@ export function MusicPanel({
                 {t("music.tapToPlay")}
               </button>
             ) : (
-              <>
-                <span className="inline-flex h-8 w-8 shrink-0" aria-hidden="true" />
-                <Tooltip
-                  label={playing ? t("music.pause") : t("music.play")}
-                  detail={canManage ? undefined : t("music.noManage")}
+              <Tooltip
+                label={playing ? t("music.pause") : t("music.play")}
+                detail={canManage ? undefined : t("music.noManage")}
+              >
+                <button
+                  type="button"
+                  className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent",
+                    canManage ? "hover:bg-accent-hover" : "opacity-40",
+                  )}
+                  aria-pressed={playing}
+                  aria-disabled={!canManage || undefined}
+                  onClick={() => {
+                    if (canManage) {
+                      onPlayPause();
+                    }
+                  }}
                 >
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent",
-                      canManage ? "hover:bg-accent-hover" : "opacity-40",
-                    )}
-                    aria-pressed={playing}
-                    aria-disabled={!canManage || undefined}
-                    onClick={() => {
-                      if (canManage) {
-                        onPlayPause();
-                      }
-                    }}
-                  >
-                    {playing ? (
-                      <Pause className="h-4 w-4" aria-hidden="true" />
-                    ) : (
-                      <Play className="ml-0.5 h-4 w-4" aria-hidden="true" />
-                    )}
-                  </button>
-                </Tooltip>
-                <Tooltip label={t("music.skip")} detail={canManage ? undefined : t("music.noManage")}>
-                  <button
-                    type="button"
-                    className={cn(ghostIconButton, !canManage && "opacity-40")}
-                    aria-disabled={!canManage || undefined}
-                    onClick={() => {
-                      if (canManage) {
-                        onSkip();
-                      }
-                    }}
-                  >
+                  {playing ? (
+                    <Pause className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Play className="ml-0.5 h-4 w-4" aria-hidden="true" />
+                  )}
+                </button>
+              </Tooltip>
+            )}
+            <div className="flex min-w-0 flex-1 items-center justify-end">
+              {canManage ? (
+                <Tooltip label={t("music.skip")}>
+                  <button type="button" className={ghostIconButton} onClick={onSkip}>
                     <SkipForward className="h-4 w-4" aria-hidden="true" />
                   </button>
                 </Tooltip>
-              </>
-            )}
+              ) : (
+                <MusicVoteSkipButton
+                  skipVotes={music.state?.skipVotes ?? []}
+                  userId={voiceState.self?.userId ?? null}
+                  roomSize={seated.length}
+                />
+              )}
+            </div>
           </div>
 
           <div className="flex min-w-0 items-center gap-2">
@@ -390,6 +421,10 @@ export function MusicPanel({
               <MusicQueueList queue={queue} voiceState={voiceState} canManage={canManage} />
             </div>
           )}
+
+          <MusicHistoryList history={history} defaultOpen={queue.length === 0} />
+
+          {canManage ? <MusicQueueOptions /> : null}
         </div>
       </ScrollArea>
 

@@ -6,9 +6,10 @@ import {
   musicShouldDuck,
   stepDuckGain,
 } from "@/lib/music-duck";
+import { relatedMusic } from "@/lib/api";
 import {
-  advance,
   expectedPositionMs,
+  onTrackEnded,
   reportPosition,
   setPositionProbe,
   type MusicSnapshot,
@@ -146,7 +147,10 @@ export function MusicPlayer({
                   playing = undefined;
                 }
                 if (current && (playing === undefined || playing === current.videoId)) {
-                  advance(current.id);
+                  void onTrackEnded(current.id, isActorRef.current, async (id) => {
+                    const { tracks } = await relatedMusic(id);
+                    return tracks;
+                  });
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);

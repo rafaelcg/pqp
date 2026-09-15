@@ -60,6 +60,11 @@ export function ChannelMusicCard({
         onClick={onTitleClick}
       >
         <MarqueeText text={track.title} />
+        {track.listeners != null && track.listeners > 0 ? (
+          <span className="block truncate text-[10px] text-text-tertiary tabular-nums">
+            {t("music.listening", { count: track.listeners })}
+          </span>
+        ) : null}
       </button>
       {inCall ? (
         <>

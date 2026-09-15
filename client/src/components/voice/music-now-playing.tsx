@@ -8,6 +8,7 @@ import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
 import { expectedPositionMs, type MusicSnapshot } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
+import { MusicVoteSkipButton } from "@/components/voice/music-extras";
 
 export const ghostIconButton =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text";
@@ -152,16 +153,25 @@ export function MusicNowPlaying({
         onClick={onExpand}
       >
         <MarqueeText text={current.title} className="text-[13px] font-medium leading-tight text-text" />
-        <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-tight text-text-secondary">
-          <UserAvatar
-            name={addedBy.name}
-            avatarUrl={addedBy.avatarUrl}
-            className="h-3.5 w-3.5"
-            fallbackClassName="bg-accent-soft text-[9px] text-on-accent-soft"
-            rounded="full"
-          />
-          <span className="truncate">{addedBy.name}</span>
-        </span>
+        {current.autoplayed ? (
+          <span
+            data-music-autoplayed=""
+            className="mt-0.5 block truncate text-[11px] leading-tight text-text-secondary"
+          >
+            {t("music.autoplayed")}
+          </span>
+        ) : (
+          <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-tight text-text-secondary">
+            <UserAvatar
+              name={addedBy.name}
+              avatarUrl={addedBy.avatarUrl}
+              className="h-3.5 w-3.5"
+              fallbackClassName="bg-accent-soft text-[9px] text-on-accent-soft"
+              rounded="full"
+            />
+            <span className="truncate">{addedBy.name}</span>
+          </span>
+        )}
       </button>
       {needsTap ? (
         <button
@@ -199,20 +209,19 @@ export function MusicNowPlaying({
           </button>
         </Tooltip>
       )}
-      <Tooltip label={t("music.skip")} detail={canManage ? undefined : t("music.noManage")}>
-        <button
-          type="button"
-          className={cn(ghostIconButton, !canManage && "opacity-40")}
-          aria-disabled={!canManage || undefined}
-          onClick={() => {
-            if (canManage) {
-              onSkip();
-            }
-          }}
-        >
-          <SkipForward className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </Tooltip>
+      {canManage ? (
+        <Tooltip label={t("music.skip")}>
+          <button type="button" className={ghostIconButton} onClick={onSkip}>
+            <SkipForward className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </Tooltip>
+      ) : (
+        <MusicVoteSkipButton
+          skipVotes={music.state?.skipVotes ?? []}
+          userId={voiceState.self?.userId ?? null}
+          roomSize={musicRoomPeople(voiceState).length}
+        />
+      )}
     </div>
   );
 }

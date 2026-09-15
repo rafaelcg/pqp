@@ -208,25 +208,33 @@ is playing). `components/voice/music-dock.tsx` is the title line on the
 call strip; a click unfolds the player in the sidebar. The player itself
 is `components/voice/music-mini-player.tsx`, pinned at the bottom of the
 sidebar above the call controls. At rest it is one card: artwork, title
-(scrolls on hover), who added it (avatar and name), a 2px progress bar,
-play/pause and skip. It opens in place into a panel: a 56px artwork
-row (title and who added it), an optional 16:9 video capped at about
-135px, a scrubber that stays up even before duration is known
-(managers seek; everyone else sees progress), volume with mute, an
-activity line ("Rafa pulou"), a search box that shows the top five
-results under the input, the queue with thumbnail, duration, who added
-it, drag reorder, play next, remove and "Abrir no YouTube" / "Abrir no
-Spotify", and two text actions: "Parar de ouvir", which unmounts this
-machine's embed and leaves a one-line pill with "Ouvir" as the way back
-while the room's queue carries on, and "Parar pra todos" behind a
-confirm, the room-wide stop. A pasted link still goes through `GET /api/music/resolve`.
+(scrolls on hover), who added it (avatar and name, or "Tocando
+parecidas" when the room picked the track), a 2px progress bar,
+play/pause and skip. A member without manage rights sees vote skip
+(`1/3`) instead of a dimmed skip. It opens in place into a panel: a
+56px artwork row (title, who added it, and "N ouvindo"), an optional
+16:9 video capped at about 135px, a scrubber that stays up even before
+duration is known (managers seek; everyone else sees progress), a
+transport row with repeat and shuffle on the left for effective
+managers, play/pause in the centre and skip (or vote skip) on the
+right, volume with mute, an activity line ("Rafa pulou"), a search box
+that shows the top five results under the input, the queue with
+thumbnail, duration, who added it, drag reorder, play next, remove and
+"Abrir no YouTube" / "Abrir no Spotify", a "Tocadas" list (collapsed to
+the count when the queue has rows), "Opções da fila" for effective
+managers ("Todo mundo controla" and "Continuar com parecidas"), and two
+text actions: "Parar de ouvir", which unmounts this machine's embed and
+leaves a one-line pill with "Ouvir" as the way back while the room's
+queue carries on, and "Parar pra todos" behind a confirm, the
+room-wide stop. A pasted link still goes through `GET /api/music/resolve`.
 Typed text goes through `GET /api/music/search` and the person picks a
 row. The embed is mounted for the whole call whatever the reader is
 looking at, because unmounting it is what stops the sound; the video is
 folded to zero height by default and the choice is remembered. Rooms you
 are not in show a card under their occupants instead
 (`channel-music-card.tsx`, off `voiceState.channelMusic`): artwork, the
-title, and an "Ouvir" that joins the call.
+title, "N ouvindo" when the count is present and above zero, and an
+"Ouvir" that joins the call.
 
 "Assistir na tela" moves that same embed onto the call stage as a 16:9
 tile, through the one-mount portal `watch-dock.tsx` already uses: a
@@ -270,7 +278,6 @@ told to.
 ## Not done yet
 
 - A "now playing" line in the channel, and on o recado.
-- A DJ permission bit, per-server history.
 - iOS and Android: the frame is shared, the players are not written.
 - Persisting the queue across an API restart (the row survives a restart
   only while somebody is still seated; an empty room takes it with it).
