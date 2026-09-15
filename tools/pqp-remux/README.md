@@ -399,9 +399,14 @@ time tracks the wall clock, whatever the frame rate**:
   and carries that frame's true duration, so **parts may run longer than
   `PART_MS`** — about a second on a static tab. `state.json` reports the
   real figure in `partTargetMs` (the configured `PART_MS` raised to cover
-  the longest listed part), because `PART-TARGET` is a promise about the
-  maximum and the edge Worker times its blocking playlist reloads at three
-  of them.
+  the longest listed part, and bounded by `SEGMENT_MS`), because
+  `PART-TARGET` is a promise about the maximum and the edge Worker times
+  its blocking playlist reloads at three of them. The ceiling is there
+  because every part duration descends from the **publisher's** own
+  access-unit timestamps: two frames stamped an hour apart would otherwise
+  become every viewer's blocking-reload deadline. A part is never usefully
+  longer than a segment, and understating a genuinely absurd one is the
+  safe direction to be wrong in.
 - **A keep-alive pays itself back.** The frame that ends the quiet spell is
   published where the flush ended, and its own duration runs to the
   *following* frame's true instant — so the wall time the flush could not
@@ -709,7 +714,10 @@ IO — driven by `managed_session.go`'s ticker), which:
    clock are measured from the later of that and their own last event. It
    is a restart of the clock, not an exemption: a source that is genuinely
    sending and genuinely publishing nothing still reaches the ladder
-   `PART_STUCK_MS` after the silence ended.
+   `PART_STUCK_MS` after the silence ended. **A decoded frame is what ends
+   the episode, never a packet** — RTP back with nothing coming out of the
+   depacketizer is exactly the "packets but no frames" case above, and it
+   keeps being judged on its own clocks.
 2. **The IDR-gap ladder takes precedence and skips the restart entirely.**
    No IDR for more than 2× the segment target → log once per gap (rate
    limited; resets the moment a real IDR arrives). Past 3× with still no
