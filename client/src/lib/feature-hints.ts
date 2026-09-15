@@ -167,6 +167,8 @@ export function shouldOfferBringFriendsHint(input: {
   automated: boolean;
   presenting: boolean;
   inServer: boolean;
+  /** CREATE_INVITE on the voice server, and that server is the one open. */
+  canInvite: boolean;
   roomSize: number;
 }): boolean {
   return (
@@ -174,6 +176,7 @@ export function shouldOfferBringFriendsHint(input: {
     !input.automated &&
     input.presenting &&
     input.inServer &&
+    input.canInvite &&
     input.roomSize > 0 &&
     input.roomSize < 3
   );

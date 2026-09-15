@@ -100,6 +100,7 @@ describe("shouldOfferBringFriendsHint", () => {
     automated: false,
     presenting: true,
     inServer: true,
+    canInvite: true,
     roomSize: 1,
   };
 
@@ -117,6 +118,9 @@ describe("shouldOfferBringFriendsHint", () => {
       false,
     );
     expect(shouldOfferBringFriendsHint({ ...ready, inServer: false })).toBe(
+      false,
+    );
+    expect(shouldOfferBringFriendsHint({ ...ready, canInvite: false })).toBe(
       false,
     );
     expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 3 })).toBe(false);

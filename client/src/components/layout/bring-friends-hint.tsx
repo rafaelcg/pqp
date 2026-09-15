@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useRef,
   useState,
   type ReactNode,
@@ -31,7 +32,7 @@ export function useBringFriendsServerId(): string | null {
 }
 
 const DEFAULT_EXPIRY_HOURS = 168;
-const COPY_MS = 1600;
+const COPY_MS = 1200;
 
 function inviteStillOpen(expiresAt: string | null, maxUses: number | null, uses: number) {
   if (maxUses !== null && uses >= maxUses) {
@@ -59,12 +60,22 @@ export function BringFriendsHint({
   const serverId = serverIdProp === undefined ? serverIdFromContext : serverIdProp;
   const { t, locale } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const copyTimer = useRef<number | null>(null);
 
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== null) {
+        window.clearTimeout(copyTimer.current);
+      }
+    },
+    [],
+  );
+
   async function copyInvitePaste() {
     if (!serverId || busy) {
-      return;
+      throw new Error("unavailable");
     }
     setBusy(true);
     try {
@@ -78,13 +89,18 @@ export function BringFriendsHint({
           .invite;
       const url = shareInviteUrl(window.location.origin, invite.code);
       await navigator.clipboard.writeText(shareInviteText("short", locale, url));
+      setFailed(false);
       setCopied(true);
       if (copyTimer.current !== null) {
         window.clearTimeout(copyTimer.current);
       }
-      copyTimer.current = window.setTimeout(() => setCopied(false), COPY_MS);
-    } catch {
+      await new Promise<void>((resolve) => {
+        copyTimer.current = window.setTimeout(resolve, COPY_MS);
+      });
+    } catch (error) {
       setCopied(false);
+      setFailed(true);
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -99,14 +115,18 @@ export function BringFriendsHint({
       id="bringFriends"
       enabled={enabled}
       title={t("invite.hint.bringFriends.title")}
-      body={t("invite.hint.bringFriends.body")}
+      body={
+        failed
+          ? t("invite.hint.bringFriends.failed")
+          : t("invite.hint.bringFriends.body")
+      }
       actionLabel={
         copied
           ? t("invite.paste.copied")
           : t("invite.hint.bringFriends.cta")
       }
       actionBusy={busy}
-      onAction={() => void copyInvitePaste()}
+      onAction={copyInvitePaste}
     />
   );
 }

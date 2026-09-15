@@ -6319,6 +6319,10 @@ function MainAppContent({
       automated: false,
       presenting: voiceState.status === "connected" && voiceState.isSharingScreen,
       inServer: !voiceIsDmCall && voiceServerIdRef.current !== null,
+      canInvite:
+        voiceServerIdRef.current !== null &&
+        voiceServerIdRef.current === selectedServerId &&
+        perms.can(Permission.CREATE_INVITE),
       roomSize: voiceRoomSize,
     }),
     music: wantsMusicHint && voiceState.status === "connected",

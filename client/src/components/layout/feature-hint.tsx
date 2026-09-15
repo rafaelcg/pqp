@@ -75,7 +75,11 @@ export function FeatureHint({
   body: string;
   /** Replaces the default "Got it" when this hint has a real next step. */
   actionLabel?: string;
-  onAction?: () => void;
+  /**
+   * A real next step. The card closes when this resolves. A thrown
+   * error (or a sync throw) leaves it open so the person can retry.
+   */
+  onAction?: () => void | Promise<void>;
   actionBusy?: boolean;
 }) {
   const { t } = useTranslation();
@@ -106,11 +110,14 @@ export function FeatureHint({
           className="cta-lift min-w-[7.5rem] rounded-full px-4"
           disabled={actionBusy}
           onClick={() => {
-            if (onAction) {
-              onAction();
+            if (!onAction) {
+              setOpen(false);
               return;
             }
-            setOpen(false);
+            void Promise.resolve(onAction()).then(
+              () => setOpen(false),
+              () => {},
+            );
           }}
         >
           {actionLabel ?? t("featureHint.gotIt")}
