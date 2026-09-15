@@ -74,6 +74,16 @@ export type ViewerAccess =
        */
       token: string | null;
       usedPartyPass: boolean;
+      /**
+       * The credential that actually authorized this request, as the query
+       * parameter and value a URL should carry to repeat it — `t` for a
+       * viewer token, `pp` for a party pass. `index.ts`'s `stampLlToken`
+       * writes exactly this into every URI of an LL rendition body, so the
+       * MEDIA requests those URIs produce (`ll-media.ts`) arrive holding the
+       * same credential the playlist request did. Stamping "the token"
+       * unconditionally wrote `null` for a party-pass viewer with no `?t=`.
+       */
+      credential: { param: string; value: string };
     }
   | { ok: false; reason: string; status: number };
 
@@ -259,9 +269,13 @@ export async function authorizeViewer(opts: {
     }
   }
 
+  const credential = usedPartyPass
+    ? { param: HLS_PARTY_PASS_PARAM, value: url.searchParams.get(HLS_PARTY_PASS_PARAM)! }
+    : { param: HLS_VIEWER_TOKEN_PARAM, value: token! };
   return {
     ok: true,
     verified,
+    credential,
     // A party-pass-only caller has no origin-verifiable token to pass on --
     // and a present-but-INVALID `?t=` is not one either, which is why this
     // reads the verification result rather than the raw parameter.

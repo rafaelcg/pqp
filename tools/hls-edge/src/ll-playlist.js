@@ -125,7 +125,37 @@ function withToken(uri, token) {
  * @returns {string}
  */
 export function applyLlRenditionToken(playlistText, token) {
-  return playlistText.split(LL_TOKEN_PLACEHOLDER).join(encodeURIComponent(token));
+  return applyLlRenditionCredential(playlistText, HLS_VIEWER_TOKEN_PARAM, token);
+}
+
+/**
+ * The same substitution, for a viewer whose credential is NOT a `?t=` token.
+ *
+ * WHY THIS EXISTS. A rendition is authorized by either a viewer token or a
+ * party pass (`index.ts`, `viewer-access.ts`) — and a party-pass viewer may
+ * have no `?t=` at all, or one that has since expired. Stamping "their
+ * token" into every URI then wrote the string `null`, or a token that no
+ * longer verifies, into the init/segment/part URIs of a playlist that had
+ * just been served to them successfully. Nothing noticed while those URIs
+ * 404'd from this Worker anyway; task `L2.3` made them real, and a media
+ * request is authorized by exactly the same two credentials the playlist
+ * request was. So the credential that got the viewer THIS body is the one
+ * stamped into it, whichever of the two it was.
+ *
+ * Replaces the whole `param=placeholder` pair, not just the placeholder, so
+ * a party pass comes back as `?pp=...` rather than a pass smuggled in under
+ * the token's own parameter name (which `verifyHlsViewerToken` would refuse,
+ * by construction).
+ *
+ * @param {string} playlistText
+ * @param {string} param
+ * @param {string} value
+ * @returns {string}
+ */
+export function applyLlRenditionCredential(playlistText, param, value) {
+  return playlistText
+    .split(`${HLS_VIEWER_TOKEN_PARAM}=${LL_TOKEN_PLACEHOLDER}`)
+    .join(`${param}=${encodeURIComponent(value)}`);
 }
 
 /**

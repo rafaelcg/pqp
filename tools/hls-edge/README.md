@@ -481,13 +481,19 @@ GET https://hls.pqp.gg/api/voice/hls-playlist/{channelId}/{startedAt}/{rung}/{na
   `ll-state.js`'s `isSafeUriSegment` applies to the document itself, in the
   route regex AND again in `LlPlaylistOrigin.fetchMedia` — the door is no
   wider than the thing on the other side of it.
-- `?t=` is the viewer's own token, put there by `index.ts`'s `stampLlToken`
+- `?t=` is the viewer's own credential, put there by `index.ts`'s `stampLlToken`
   when the rendition playlist left the Worker (the rendition BODY is
   rendered with `LL_TOKEN_PLACEHOLDER` and cached token-free — see the L2.2
   section above). So the credential arrives on a media request exactly the
   way it arrives on the playlist request that named it. A `?pp=` party pass
   authorizes media too, for the same reason it authorizes the rendition: a
   pass-holding viewer must not get a playable playlist whose every URI 403s.
+  A pass-authorized viewer's URIs carry `?pp=` instead, because
+  `stampLlToken` writes the credential that actually authorized THIS
+  response (`applyLlRenditionCredential`) rather than "the token" — which,
+  for a pass-holder with no `?t=` at all, used to be the literal string
+  `null`. Invisible while those URIs 404'd anyway; this task is what made
+  them real.
 
 **Each request maps to one origin path**:
 `{LL_ORIGIN_BASE}/s/{deriveLlSessionId(channelId, startedAt)}/{name}`, with

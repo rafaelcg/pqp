@@ -6,6 +6,7 @@ import {
   DEFAULT_LL_VIDEO_BANDWIDTH_BPS,
   KEPT_PART_SEGMENTS,
   LL_TOKEN_PLACEHOLDER,
+  applyLlRenditionCredential,
   applyLlRenditionToken,
   buildLlMultivariantPlaylist,
   buildLlRenditionPlaylist,
@@ -312,4 +313,18 @@ test("golden multivariant playlist: no width/height supplied omits RESOLUTION", 
     audioCodec: null,
   });
   assert.doesNotMatch(text, /RESOLUTION/);
+});
+
+test("applyLlRenditionCredential swaps the WHOLE t=placeholder pair, so a party pass lands under ?pp=", () => {
+  // The party-pass viewer's case (`index.ts`'s `stampLlToken`): they may have
+  // no `?t=` at all, so stamping "their token" wrote the string `null` into
+  // every URI of a playlist that had just been served to them successfully.
+  // Harmless while those URIs 404'd anyway; task L2.3 made them real.
+  const state = fixtureState();
+  const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
+  const stamped = applyLlRenditionCredential(text, "pp", "pass/value+with?chars");
+
+  assert.doesNotMatch(stamped, new RegExp(escapeRegExp(LL_TOKEN_PLACEHOLDER)), "no placeholder may survive");
+  assert.ok(!stamped.includes("?t="), "the token PARAMETER is replaced too, not just its value");
+  assert.match(stamped, /\?pp=pass%2Fvalue%2Bwith%3Fchars/);
 });

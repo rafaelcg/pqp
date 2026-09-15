@@ -22,9 +22,11 @@ import test from "node:test";
 import { handleLlMediaRequest } from "../dist/ll-media.js";
 import { PartyPassRevocationGate } from "../src/party-pass-revocation.js";
 import { HLS_VIEWER_TOKEN_PARAM } from "../src/hls-viewer-token.js";
+import { HLS_PARTY_PASS_PARAM } from "../src/hls-party-pass.js";
 import { LL_AUDIO_RUNG, LL_VIDEO_RUNG } from "../src/ll-state.js";
 
 const SECRET = "test-viewer-secret";
+const PARTY_SECRET = "test-party-secret";
 const NOW = Date.now();
 
 function sign(payload, secret) {
@@ -446,4 +448,48 @@ test("an origin 5xx is a 502 the player may retry, and is never cached", async (
   assert.equal(response.headers.get("Cache-Control"), "no-store");
   await ctx.drain();
   assert.equal(cache.size, 0);
+});
+
+test("a party-pass viewer with no token at all is served the bytes -- the pass authorizes media too", async () => {
+  // Otherwise a pass-holding viewer gets a playable rendition playlist whose
+  // every URI 403s, which is the half of the credential story `L2.3` made
+  // load-bearing: `stampLlToken` now writes the pass into those URIs
+  // (`applyLlRenditionCredential`), so this is the request they produce.
+  const channelId = "chan-part-partypass";
+  const startedAt = "1726000100010";
+  const name = "part-164.m4s";
+  const claims = {
+    v: 1,
+    u: "viewer-pass",
+    c: channelId,
+    s: Number(startedAt),
+    e: NOW + 600_000,
+    i: NOW - 1_000,
+  };
+  const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+  const pass = `${payload}.${sign(payload, PARTY_SECRET)}`;
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const url =
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}/${LL_VIDEO_RUNG}/${name}` +
+    `?${HLS_PARTY_PASS_PARAM}=${pass}`;
+
+  const response = await callMedia(
+    new Request(url, { method: "GET" }),
+    origin,
+    cache,
+    ctx,
+    baseEnv({ HLS_PARTY_PASS_SECRET: PARTY_SECRET }),
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(origin.calls, 1);
+  await ctx.drain();
+  assert.equal(
+    cache.keys()[0],
+    `https://hls.pqp.gg/api/voice/hls-playlist/${channelId}/${startedAt}/${LL_VIDEO_RUNG}/${name}`,
+    "a pass-authorized request writes the SAME token-free cache entry a token-authorized one does",
+  );
 });

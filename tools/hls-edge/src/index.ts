@@ -106,7 +106,7 @@ import { handleLlMediaRequest } from "./ll-media.js";
 import { parsePlaylistPath } from "./playlist-route.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { LlPlaylistOrigin } from "./ll-playlist-origin.js";
-import { applyLlRenditionToken } from "./ll-playlist.js";
+import { applyLlRenditionCredential } from "./ll-playlist.js";
 import { playlistOriginKindForRung } from "./ll-state.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
@@ -291,7 +291,7 @@ export async function handlePlaylistRequest(
   if (!access.ok) {
     return json(access.status, { error: "Unauthorized", reason: access.reason });
   }
-  const { verified, usedPartyPass, token } = access;
+  const { verified, usedPartyPass, token, credential } = access;
 
   if (!origins.api.ready) {
     logEvent("hlsEdge.originNotConfigured", { channelId, rung: rung ?? null });
@@ -479,7 +479,7 @@ export async function handlePlaylistRequest(
     // served the ordinary way below -- the non-blocking cache-or-forward
     // path -- rather than evicting or starving something already active.
     if (blockingResponse) {
-      return isLlRendition ? await stampLlToken(blockingResponse, token!) : blockingResponse;
+      return isLlRendition ? await stampLlToken(blockingResponse, credential) : blockingResponse;
     }
   }
 
@@ -491,7 +491,7 @@ export async function handlePlaylistRequest(
     const headers = new Headers(cached.headers);
     headers.set("X-HLS-Edge-Cache", "HIT");
     const response = new Response(cached.body, { status: cached.status, headers });
-    return isLlRendition ? await stampLlToken(response, token!) : response;
+    return isLlRendition ? await stampLlToken(response, credential) : response;
   }
 
   // A CACHE MISS NEEDS AN ORIGIN-VERIFIABLE TOKEN, AND A PARTY PASS IS NOT
@@ -578,7 +578,7 @@ export async function handlePlaylistRequest(
   // -- stamping only happens here, on the copy actually leaving the Worker
   // for THIS request, never on what other viewers will later read back out
   // of the cache.
-  return isLlRendition ? await stampLlToken(response, token!) : response;
+  return isLlRendition ? await stampLlToken(response, credential) : response;
 }
 
 /**
@@ -592,10 +592,16 @@ export async function handlePlaylistRequest(
  * conventional body never contains the placeholder, so calling this on one
  * would just be a wasted read-and-rebuild of every conventional response.
  */
-async function stampLlToken(response: Response, token: string): Promise<Response> {
+async function stampLlToken(
+  response: Response,
+  credential: { param: string; value: string },
+): Promise<Response> {
   const text = await response.text();
   const headers = new Headers(response.headers);
-  return new Response(applyLlRenditionToken(text, token), { status: response.status, headers });
+  return new Response(applyLlRenditionCredential(text, credential.param, credential.value), {
+    status: response.status,
+    headers,
+  });
 }
 
 interface FetchedPlaylist {
