@@ -142,9 +142,18 @@ type watchdogState struct {
 	// a static slide would log twice a second for as long as the slide
 	// is up.
 	idleLogged bool
+	// quiet is true from the first tick of a quiet episode until a real
+	// decoded FRAME ends it. Deliberately not idleLogged, which is only
+	// a log rate limiter: RTP packets resuming with nothing coming out
+	// of the depacketizer is the "packets but no frames" case, a real
+	// fault the ladder must still act on, and using the log flag as the
+	// episode marker would have let a wedged depacketizer end the
+	// episode and buy itself another PART_STUCK_MS of forgiveness
+	// (Farol review, PR #629).
+	quiet bool
 	// idleEndedAt is when the LAST quiet episode ended: the first tick
-	// on which the source was sending again after having been idle.
-	// Zero until a quiet episode has both begun and ended.
+	// on which a decoded frame arrived again after the source had been
+	// idle. Zero until a quiet episode has both begun and ended.
 	//
 	// WHY THE LADDER NEEDS IT. A part boundary is decided by the arrival
 	// of the NEXT access unit, so the first thing a quiet source owes
@@ -261,19 +270,24 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 			// them and costs the other a keyframe.
 			return stallLadder(h, cfg, st, now, "source-idle-too-long", "source-idle-too-long-second-stall")
 		}
+		st.quiet = true
 		if !st.idleLogged {
 			st.idleLogged = true
 			return watchdogResult{actionLog, "video-source-idle", stallDetail(h, now)}
 		}
 		return watchdogResult{actionNone, "", ""}
 	}
-	if st.idleLogged {
-		// This is the first tick on which the source is sending again.
-		// Everything below measures from here instead of from a clock
-		// that stopped during the silence -- see idleEndedAt.
+	st.idleLogged = false
+	// A quiet episode ends when a decoded FRAME arrives, not when
+	// packets do. Packets back with nothing coming out of the
+	// depacketizer is the case the ladder is for, and must keep being
+	// judged on its own clocks; only a real access unit means the
+	// pipeline owes us a part again, and only then does the part clock
+	// restart -- see idleEndedAt and quiet.
+	if st.quiet && !h.LastVideoFrameAt.IsZero() && now.Sub(h.LastVideoFrameAt) <= stuckThreshold {
+		st.quiet = false
 		st.idleEndedAt = now
 	}
-	st.idleLogged = false
 
 	idrRef := h.LastIdrAt
 	if idrRef.IsZero() {

@@ -183,7 +183,7 @@ type State struct {
 // parser would reject instead would cost an `hlsEdge.llStateFetchFailed`
 // on every probe and teach nobody anything.
 func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
-	videoTrack, ok := buildTrack(video, videoNames, false)
+	videoTrack, longestPartMs, ok := buildTrack(video, videoNames, false)
 	if !ok {
 		return State{}, false
 	}
@@ -200,56 +200,71 @@ func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
 		// reason to fail the whole document: video-only is a legal LL
 		// session, and an audio ring that has not produced a part yet is
 		// the ordinary state of every party before somebody speaks.
-		if audioTrack, audioOK := buildTrack(*audio, audioNames, true); audioOK {
+		if audioTrack, audioLongestMs, audioOK := buildTrack(*audio, audioNames, true); audioOK {
 			state.Audio = audioTrack
+			if audioLongestMs > longestPartMs {
+				longestPartMs = audioLongestMs
+			}
 		}
 	}
-	state.PartTargetMs = partTargetMs(meta.PartTargetMs, videoTrack, state.Audio)
+	state.PartTargetMs = partTargetMs(meta.PartTargetMs, meta.SegmentTargetMs, longestPartMs)
 	state.TargetDurationSecs = targetDuration(videoTrack, state.Audio, video.TargetSecs, audioTargetSecs(audio))
 	return state, true
 }
 
 // partTargetMs is what #EXT-X-PART-INF:PART-TARGET is rendered from: the
-// configured PART_MS, raised to cover the longest part actually listed.
-// Same shape and same reason as targetDuration below, one level down.
+// configured PART_MS, raised to cover the longest part actually listed
+// (longestMs, counted by buildTrack during the pass it already makes over
+// every part) and then bounded by the segment target.
 //
-// A PART-TARGET is a promise about the MAXIMUM part duration (RFC 8216bis
-// section 4.4.3.7), and a part may legitimately run past PART_MS in two
-// ways. The small one has always been there: a part is cut on the first
-// access unit at or past the target, so a 30fps source overshoots by up to
-// one frame. The large one arrived with the 2026-09-15 drift fix: a quiet
-// source's part now waits for the frame that really ends the gap and
-// carries that frame's TRUE duration rather than a guessed one, so a
-// Chrome tab share at 1.4 frames/s publishes parts of about a second
-// against a 500ms PART_MS. Understating the target there is not a
-// cosmetic lie: the edge Worker times its blocking playlist reloads at
-// three part targets, so a stale 500ms would hold a viewer's request for
-// 1.5s against a part that cannot arrive for a wall second, and time out
-// on a stream that is perfectly healthy. Reporting the real figure lets
-// that hold widen by itself, with no second configuration knob to keep in
-// sync.
-func partTargetMs(configured int, tracks ...*Track) int {
-	longest := configured
-	for _, track := range tracks {
-		if track == nil {
-			continue
-		}
-		for _, seg := range track.Segments {
-			for _, part := range seg.Parts {
-				if ms := int(math.Ceil(part.DurationSecs * 1000)); ms > longest {
-					longest = ms
-				}
-			}
-		}
+// WHY IT RISES. A PART-TARGET is a promise about the MAXIMUM part duration
+// (RFC 8216bis section 4.4.3.7), and a part may legitimately run past
+// PART_MS in two ways. The small one has always been there: a part is cut
+// on the first access unit at or past the target, so a 30fps source
+// overshoots by up to one frame. The large one arrived with the
+// 2026-09-15 drift fix: a quiet source's part now waits for the frame that
+// really ends the gap and carries that frame's TRUE duration rather than a
+// guessed one, so a Chrome tab share at 1.4 frames/s publishes parts of
+// about a second against a 500ms PART_MS. Understating the target there is
+// not a cosmetic lie: the edge Worker times its blocking playlist reloads
+// at three part targets, so a stale 500ms would hold a viewer's request
+// for 1.5s against a part that cannot arrive for a wall second, and time
+// out on a stream that is perfectly healthy.
+//
+// WHY IT IS BOUNDED. Every part duration here descends from the
+// PUBLISHER's own access-unit timestamps, and the browser on the other end
+// of the SFU is not a trusted input: two frames stamped hours apart
+// produce an hours-long part, and without a ceiling that number would
+// become the edge's blocking-reload deadline for every viewer of the
+// session (Farol review, PR #629). A part is never usefully longer than a
+// segment, so the segment target is the ceiling. Past it the advertised
+// target understates a real part, which is the SAFE direction to be wrong
+// in: a viewer's hold times out and falls back to the ordinary reload
+// cadence, rather than being held for as long as a hostile timestamp says.
+func partTargetMs(configured, segmentMs, longestMs int) int {
+	target := configured
+	if longestMs > target {
+		target = longestMs
 	}
-	if longest <= 0 {
+	ceiling := segmentMs
+	if ceiling < configured {
+		// A configured PART_MS larger than SEGMENT_MS is refused by
+		// config.Validate, so this is only reachable through a
+		// hand-built Meta. Never let the ceiling cut below what was
+		// asked for.
+		ceiling = configured
+	}
+	if target > ceiling {
+		target = ceiling
+	}
+	if target <= 0 {
 		// parseLlState refuses a document whose partTargetMs is not a
 		// positive integer, and refusing the whole document stalls every
 		// viewer. A caller that configured nothing sensible gets a
 		// millisecond rather than a blank stream.
-		longest = 1
+		target = 1
 	}
-	return longest
+	return target
 }
 
 // buildTrack renders one rendition. allIndependent is the audio override:
@@ -258,11 +273,17 @@ func partTargetMs(configured int, tracks ...*Track) int {
 // IsSegmentStart flag (which is what the ring records) is true only on a
 // segment boundary, so taking it literally would understate independence
 // for every other audio part.
-func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool) {
+func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, int, bool) {
 	if !snap.HasInit || len(snap.Segments) == 0 || snap.Timescale == 0 {
-		return nil, false
+		return nil, 0, false
 	}
 	track := &Track{InitURI: n.initURI}
+	// longestPartMs is counted HERE, inside the pass this function
+	// already makes over every part, rather than by a second traversal
+	// afterwards: state.json is served no-store and re-fetched by the
+	// edge's blocking-reload loop, so a second O(parts) scan per request
+	// is paid per viewer poll (Farol review, PR #629).
+	longestPartMs := 0
 	for _, seg := range snap.Segments {
 		if len(seg.Parts) == 0 {
 			// Unreachable through Ring.Push (a segment is opened BY its
@@ -270,7 +291,7 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool)
 			// with no parts breaks the "live edge has something to play"
 			// rule if it is last, and renders an EXTINF with no media if
 			// it is not.
-			return nil, false
+			return nil, 0, false
 		}
 		out := Segment{
 			MSN:             seg.Index,
@@ -280,9 +301,13 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool)
 		var totalTicks uint64
 		for i, p := range seg.Parts {
 			totalTicks += uint64(p.DurationTicks)
+			durationSecs := secs(uint64(p.DurationTicks), snap.Timescale)
+			if ms := int(math.Ceil(durationSecs * 1000)); ms > longestPartMs {
+				longestPartMs = ms
+			}
 			out.Parts = append(out.Parts, Part{
 				Index:        i,
-				DurationSecs: secs(uint64(p.DurationTicks), snap.Timescale),
+				DurationSecs: durationSecs,
 				Independent:  allIndependent || p.Independent,
 				URI:          n.part(p.Seq),
 			})
@@ -302,13 +327,13 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool)
 	// there (llStateFetchFailed on every poll).
 	for i := 1; i < len(track.Segments); i++ {
 		if track.Segments[i].MSN != track.Segments[i-1].MSN+1 {
-			return nil, false
+			return nil, 0, false
 		}
 	}
 	// Only the LAST segment may be incomplete.
 	for i := 0; i < len(track.Segments)-1; i++ {
 		if !track.Segments[i].Complete {
-			return nil, false
+			return nil, 0, false
 		}
 	}
 	if snap.HaveParts {
@@ -322,7 +347,7 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, bool)
 		}
 		track.PreloadHint = &hint
 	}
-	return track, true
+	return track, longestPartMs, true
 }
 
 func audioTargetSecs(audio *ring.Snapshot) int {

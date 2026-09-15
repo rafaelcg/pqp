@@ -142,3 +142,39 @@ func TestEvaluateWatchdog_StallWithNoQuietEpisodeStillRestarts(t *testing.T) {
 		t.Fatalf("a real stall produced %v (%s), want a part-stuck restart", got.action, got.reason)
 	}
 }
+
+// Packets coming back with NOTHING coming out of the depacketizer is not
+// the end of a quiet episode -- it is the case the ladder exists for.
+// Using the log rate limiter as the episode marker would have let a
+// wedged depacketizer end the episode and buy itself another
+// PART_STUCK_MS of forgiveness on every tick (Farol review, PR #629).
+func TestEvaluateWatchdog_PacketsWithoutFramesDoNotEndAQuietEpisode(t *testing.T) {
+	start := time.UnixMilli(0)
+	cfg := fixedWatchdogCfg()
+	var st watchdogState
+
+	quietFrom := start.Add(30 * time.Second)
+	h := PipelineHealth{
+		PartsWritten:      100,
+		LastPartAt:        quietFrom.Add(-500 * time.Millisecond),
+		LastIdrAt:         quietFrom,
+		LastVideoFrameAt:  quietFrom,
+		LastVideoPacketAt: quietFrom,
+	}
+	idleAt := quietFrom.Add(3500 * time.Millisecond)
+	if got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, idleAt); got.action != actionLog {
+		t.Fatalf("silence produced %v (%s), want the idle log line", got.action, got.reason)
+	}
+
+	// RTP is flowing again. No access unit has come out of it, and the
+	// last frame is still the one from before the silence.
+	at := idleAt.Add(time.Second)
+	h.LastVideoPacketAt = at.Add(-20 * time.Millisecond)
+	got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, at)
+	if got.action != actionRestart || got.reason != "part-stuck" {
+		t.Fatalf("packets with no frames did %v (%s), want the ladder to run on its own clocks", got.action, got.reason)
+	}
+	if !st.idleEndedAt.IsZero() {
+		t.Fatal("packets alone ended the quiet episode and restarted the part clock")
+	}
+}

@@ -430,3 +430,49 @@ func TestAudioTwinIsRenderedFromRealFragmenterOutput(t *testing.T) {
 		t.Fatalf("preload hint %q follows the last published part %q by %d, want 1", hint.URI, lastPart.URI, hintSeq-lastSeq)
 	}
 }
+
+// PART-TARGET is a promise about the MAXIMUM part duration, so a quiet
+// source publishing parts longer than PART_MS must be reported honestly:
+// the edge Worker times its blocking playlist reloads at three of these,
+// and a stale 500ms times a viewer out on a healthy stream.
+func TestBuild_PartTargetCoversTheLongestPart(t *testing.T) {
+	// A static Chrome tab at ~1.4 frames/s: parts close on real frames,
+	// about a second apart.
+	oneSecond := uint32(videoTimescale)
+	got, ok := Build(meta(), videoSnapshot(3, 1, 4, 2, videoTimescale, oneSecond), nil)
+	if !ok {
+		t.Fatal("Build refused a snapshot of second-long parts")
+	}
+	if got.PartTargetMs != 1000 {
+		t.Fatalf("partTargetMs = %d against second-long parts, want 1000", got.PartTargetMs)
+	}
+
+	// An ordinary source never moves it off the configured value.
+	got, ok = Build(meta(), videoSnapshot(3, 1, 4, 2, videoTimescale, partTicks), nil)
+	if !ok {
+		t.Fatal("Build refused an ordinary snapshot")
+	}
+	if got.PartTargetMs != 500 {
+		t.Fatalf("partTargetMs = %d on a 500ms source, want the configured 500", got.PartTargetMs)
+	}
+}
+
+// Every part duration here descends from the PUBLISHER's own access-unit
+// timestamps, and the browser on the far side of the SFU is not a trusted
+// input: two frames stamped an hour apart would otherwise become the
+// edge's blocking-reload deadline for every viewer of the session. A part
+// is never usefully longer than a segment, so the segment target is the
+// ceiling.
+func TestBuild_PartTargetIsBoundedByTheSegmentTarget(t *testing.T) {
+	hostile := uint32(videoTimescale) * 3600 // an hour in one part
+	got, ok := Build(meta(), videoSnapshot(3, 1, 1, 1, videoTimescale, hostile), nil)
+	if !ok {
+		t.Fatal("Build refused the snapshot")
+	}
+	if got.PartTargetMs != 4000 {
+		t.Fatalf("partTargetMs = %d from an hour-long part, want it capped at the 4000ms segment target", got.PartTargetMs)
+	}
+	if got.PartTargetMs <= 0 {
+		t.Fatal("parseLlState refuses a non-positive partTargetMs, which blanks the stream")
+	}
+}
