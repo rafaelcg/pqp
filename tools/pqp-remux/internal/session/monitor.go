@@ -67,8 +67,13 @@ func ticksToDuration(ticks int64) time.Duration {
 	return time.Duration(ticks) * time.Second / time.Duration(h264.ClockRate)
 }
 
+// durationToTicks converts wall-clock time into 90 kHz media ticks,
+// multiplying only AFTER reducing to milliseconds so a long duration
+// cannot overflow int64 on the way (d*90000 wraps somewhere past a day).
+// The millisecond truncation costs at most 90 ticks, a thousandth of a
+// second of a held frame's duration.
 func durationToTicks(d time.Duration) int64 {
-	return int64(d * h264.ClockRate / time.Second)
+	return d.Milliseconds() * h264.ClockRate / 1000
 }
 
 // RunMonitor is this session's own always-on observability and keep-alive

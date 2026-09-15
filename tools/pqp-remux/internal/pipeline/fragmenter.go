@@ -30,6 +30,10 @@ type Fragment struct {
 	Bytes          []byte
 }
 
+// maxFragmentTicks is the largest tick count a Fragment's own duration
+// fields (uint32, 90 kHz) can carry: about 13.25 hours.
+const maxFragmentTicks = int64(^uint32(0))
+
 var (
 	// ErrWaitingForIDR is returned (not fatal) by Push while the
 	// fragmenter has not yet seen the first IDR of the session: nothing
@@ -248,6 +252,17 @@ func (f *Fragmenter) IdleFlush(heldTicks int64) *Fragment {
 	nowPTS := f.pendingPTS + heldTicks
 	partElapsed := nowPTS - f.partStart
 	if partElapsed < int64(f.cfg.PartDuration) {
+		return nil
+	}
+	// A sample duration and a fragment duration are both uint32 ticks, so
+	// refuse rather than wrap. Only reachable if the process was
+	// suspended for hours between ticks (the caller ticks every 100ms and
+	// flushes at the first tick past the part target, so heldTicks is
+	// ordinarily a part target plus a tick). Refusing leaves the access
+	// unit held, which is exactly the pre-keep-alive behaviour: the
+	// ordinary Push path still gives it its true duration when a frame
+	// finally arrives.
+	if heldTicks > maxFragmentTicks || partElapsed > maxFragmentTicks {
 		return nil
 	}
 
