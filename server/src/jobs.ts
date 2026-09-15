@@ -37,6 +37,7 @@ import { pruneResolvedReports } from "./services/reports.js";
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
   deliverDueOutgoingWebhooks,
@@ -189,6 +190,11 @@ export function startColdJobs(): ColdJobs {
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
+    // Refilled cluster rate-limit buckets carry no information. Rows, not
+    // disk pages: the table is bounded by "subjects who rang somebody in the
+    // last hour" rather than by "subjects ever". Nothing depends on this
+    // running — a refilled row is spent exactly like an absent one.
+    every(DAILY_MS, "rate-limits", sweepRateLimitBuckets),
     every(PENDING_DELETION_SWEEP_INTERVAL_MS, "account", async () => {
       const finished = await sweepPendingAccountDeletions();
       if (finished > 0) {

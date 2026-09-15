@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import type { MusicState, VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
+import { noteLiveInstanceCount } from "../lib/cluster-rate-limit.js";
 import { countedQuery } from "../lib/db-tx-metrics.js";
+import {
+  currentInstanceSnapshot,
+  type InstanceSnapshot,
+} from "../lib/instance-snapshot.js";
 import { logEvent } from "../lib/log.js";
 import {
   VOICE_RESUME_TOKEN_TTL_MS,
@@ -58,6 +63,29 @@ export function voiceRegistryMode(): VoiceRegistryMode {
 /** Read per call, never cached: tests flip it, and a restart is the only other way it changes. */
 export function isVoiceRegistryEnabled(): boolean {
   return voiceRegistryMode() === "postgres";
+}
+
+/**
+ * WHETHER `voice_instances` IS A TOPOLOGY SOURCE AT ALL.
+ *
+ * The lease row is written by the registry heartbeat, but the thing that
+ * makes it worth writing — "this deployment expects siblings" — is true for
+ * either flag. `docs/plans/MULTI_INSTANCE_VOICE.md` allows turning on the bus
+ * before the registry, and in that staged configuration there would otherwise
+ * be no way at all to know how many machines are live: the divided rate
+ * limiters would divide by one forever and the dashboard would report a
+ * cluster of one while two machines served traffic. So the bus-only case gets
+ * the lease and the snapshot, without the reconcile it has no rows for.
+ *
+ * `CLUSTER_BUS` is read from the environment rather than through
+ * `isBusEnabled()` on purpose: that one reports whether a transport is
+ * installed, which is true of the in-memory transport a test sets up, and a
+ * limiter's behaviour must not change because a test wired a hub.
+ */
+export function clusterTopologyTracked(): boolean {
+  return (
+    isVoiceRegistryEnabled() || (process.env.CLUSTER_BUS ?? "off") === "postgres"
+  );
 }
 
 /** How often this instance proves it is alive, and how long silence means dead. */
@@ -1439,15 +1467,136 @@ export async function heartbeatVoiceInstance(
   // holds; `reconcileVoiceRegistry` below is what spends that lease, and it
   // too batches across every peer a dead instance owned in one statement
   // rather than looping.
-  await countedQuery(
+  //
+  // The snapshot rides along in the SAME statement. It is what the dashboard
+  // sums to answer "how big is the service", and putting it here rather than
+  // in a timer of its own is the point: no extra round trip, and a row can
+  // never claim to be alive while carrying numbers from a different minute.
+  const snapshot = currentInstanceSnapshot();
+  const live = await countedQuery<{ live: string }>(
     getPool(),
     "registry.instanceHeartbeat",
-    `INSERT INTO voice_instances (instance_id, config_hash, heartbeat_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (instance_id) DO UPDATE
-       SET config_hash = EXCLUDED.config_hash, heartbeat_at = NOW()`,
-    [instanceId, configHash],
+    `WITH beat AS (
+       INSERT INTO voice_instances (instance_id, config_hash, heartbeat_at, snapshot)
+       VALUES ($1, $2, NOW(), $3::jsonb)
+       ON CONFLICT (instance_id) DO UPDATE
+         SET config_hash = EXCLUDED.config_hash,
+             heartbeat_at = NOW(),
+             snapshot = EXCLUDED.snapshot
+       RETURNING 1
+     )
+     SELECT COUNT(*)::text AS live FROM voice_instances
+      WHERE heartbeat_at > NOW() - ($4::bigint * INTERVAL '1 millisecond')`,
+    [instanceId, configHash, snapshot ? JSON.stringify(snapshot) : null, INSTANCE_TTL_MS],
   );
+  // The count is one statement older than the beat it rode with (the CTE and
+  // the SELECT share a snapshot, so this instance's own first beat is not in
+  // it) — which is why the floor is 1 rather than the raw number. It feeds
+  // the divided-capacity limiters, where being one low for 15 seconds after a
+  // deploy costs a little extra fan-out and nothing else.
+  noteLiveInstanceCount(Number(live.rows[0]?.live ?? 0) || 1);
+}
+
+export interface ClusterSnapshot {
+  /** Instances whose lease is still live, this one included. */
+  instances: number;
+  /** Of those, how many wrote a snapshot the last time they beat. */
+  reporting: number;
+  /**
+   * Age of the OLDEST contributing heartbeat, in seconds. Measured from the
+   * rows, never assumed from the TTL: immediately after a beat every row is
+   * seconds old, and reporting the worst case there would make a fresh sum
+   * look stale enough to distrust.
+   */
+  maxStalenessSeconds: number;
+  sockets: number;
+  compressedSockets: number;
+  voiceParticipants: number;
+  hlsSessions: number;
+  poolBusy: number;
+  poolMax: number;
+  /** Distinct `APP_VERSION` values across live instances: >1 is a half-deploy. */
+  versions: string[];
+}
+
+/**
+ * The cluster's live counters, summed over the instances whose lease has not
+ * expired. A row with no snapshot (an instance that has not beaten since the
+ * column was added, or the worker, which holds no sockets) contributes
+ * nothing but is still counted in `instances`, so `reporting` is what says
+ * whether the sums can be trusted.
+ */
+export async function readClusterSnapshot(
+  ttlMs = INSTANCE_TTL_MS,
+): Promise<ClusterSnapshot> {
+  const result = await getPool().query<{
+    instance_id: string;
+    snapshot: InstanceSnapshot | null;
+    age_seconds: string;
+  }>(
+    `SELECT instance_id, snapshot,
+            EXTRACT(EPOCH FROM (NOW() - heartbeat_at))::text AS age_seconds
+       FROM voice_instances
+      WHERE heartbeat_at > NOW() - ($1::bigint * INTERVAL '1 millisecond')`,
+    [ttlMs],
+  );
+  const totals: ClusterSnapshot = {
+    instances: result.rows.length,
+    maxStalenessSeconds: 0,
+    reporting: 0,
+    sockets: 0,
+    compressedSockets: 0,
+    voiceParticipants: 0,
+    hlsSessions: 0,
+    poolBusy: 0,
+    poolMax: 0,
+    versions: [],
+  };
+  const versions = new Set<string>();
+  for (const row of result.rows) {
+    const snap = row.snapshot;
+    if (!snap) {
+      continue;
+    }
+    totals.reporting += 1;
+    const age = Math.max(0, Math.round(Number(row.age_seconds) || 0));
+    if (age > totals.maxStalenessSeconds) {
+      totals.maxStalenessSeconds = age;
+    }
+    totals.sockets += Number(snap.sockets) || 0;
+    totals.compressedSockets += Number(snap.compressedSockets) || 0;
+    totals.voiceParticipants += Number(snap.voiceParticipants) || 0;
+    totals.hlsSessions += Number(snap.hlsSessions) || 0;
+    totals.poolBusy += Number(snap.poolBusy) || 0;
+    totals.poolMax += Number(snap.poolMax) || 0;
+    if (snap.version) {
+      versions.add(snap.version);
+    }
+  }
+  totals.versions = [...versions].sort();
+  return totals;
+}
+
+/**
+ * Drop leases nobody is renewing.
+ *
+ * `reconcileVoiceRegistry` already does this as part of spending a dead
+ * instance's peers, and that is the only caller that matters when the
+ * registry is on. This one exists for the staged configuration where
+ * `CLUSTER_BUS` is on and `VOICE_REGISTRY` is off: there are instance rows
+ * (the topology the divided limiters and the dashboard read) and no reconcile
+ * to age them out, so the heartbeat sweeps its own table.
+ */
+export async function sweepDeadVoiceInstances(
+  ttlMs = INSTANCE_TTL_MS,
+): Promise<number> {
+  const result = await getPool().query(
+    `DELETE FROM voice_instances
+      WHERE instance_id <> $1
+        AND heartbeat_at < NOW() - ($2::bigint * INTERVAL '1 millisecond')`,
+    [INSTANCE_ID, ttlMs],
+  );
+  return result.rowCount ?? 0;
 }
 
 export async function withdrawVoiceInstance(
