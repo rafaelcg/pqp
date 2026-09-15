@@ -241,6 +241,33 @@ describeDb("a worker-side channel-session reminder reaches API sockets", () => {
     ).toHaveLength(1);
   });
 
+  it("a frame that reached no socket does not suppress the retry that would", async () => {
+    // The relayed frame lands while the one recipient is between sockets.
+    await worker.sessions.sendDueChannelSessionReminders();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // They come back, and the publisher's retry arrives.
+    const rec = recorder();
+    api.sockets.setAuthenticatedSocket(rec.socket, {
+      id: userId,
+      display_name: "Sub",
+      avatar_url: null,
+    } as unknown as DbUser);
+    worker.bus.publishToCluster("channel-session.reminder", {
+      sessionId,
+      channelId,
+      title: "O filme",
+      startsAt: new Date().toISOString(),
+      kind: "before",
+      userIds: [userId],
+    });
+
+    await waitFor(
+      () => rec.frames.some((f) => f.type === "channel-session-reminder"),
+      "the retry to reach the socket that was not there for the first frame",
+    );
+  });
+
   it("does not deliver to somebody who never asked to be reminded", async () => {
     const other = await worker.db.getPool().query<{ id: string }>(
       `INSERT INTO users (clerk_id, display_name) VALUES ('clerk_bystander', 'Bys')

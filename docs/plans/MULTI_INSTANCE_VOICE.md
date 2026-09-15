@@ -722,7 +722,10 @@ tries once more three seconds later, by which time the transport's own
 reconnect has usually landed; the receiving side remembers which reminders it
 has already put on its sockets (a session and which of its two one-shot
 reminders), so neither that retry nor a duplicate frame can show anybody the
-same nudge twice. Deliberately not an outbox: a durable one is a table, a sweep
+same nudge twice — and it remembers only once a socket has ACTUALLY been
+written to, because recording a frame that reached nobody (the recipient was
+between sockets, which is exactly when a reminder goes missing) would have the
+dedupe swallow the retry that exists to catch them. Deliberately not an outbox: a durable one is a table, a sweep
 and a dedupe key of its own, and this covers the outage that actually happens
 rather than pretending to cover the one that does not. Beside it, the reminder
 nudge itself is relayed (`channel-session.reminder`) so each API machine

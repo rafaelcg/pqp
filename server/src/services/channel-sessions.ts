@@ -456,7 +456,7 @@ interface ChannelSessionReminderEvent {
  */
 export function deliverChannelSessionReminder(
   event: ChannelSessionReminderEvent,
-): void {
+): number {
   const recipients = new Set(event.userIds);
   const frame = JSON.stringify({
     type: "channel-session-reminder",
@@ -466,11 +466,19 @@ export function deliverChannelSessionReminder(
     startsAt: event.startsAt,
     kind: event.kind,
   });
+  // HOW MANY SOCKETS ACTUALLY GOT IT, which is the only thing that makes this
+  // reminder "delivered" here. A relayed frame that lands while the one
+  // recipient is mid-reconnect reaches nobody, and the caller must be able to
+  // tell that apart from a delivery so it does not suppress the retry that
+  // would have caught them a moment later.
+  let sent = 0;
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && recipients.has(user.id)) {
       socket.send(frame);
+      sent += 1;
     }
   });
+  return sent;
 }
 
 /**
@@ -482,25 +490,52 @@ export function deliverChannelSessionReminder(
  */
 const RELAYED_REMINDER_MEMORY_MS = 60_000;
 const relayedReminders = new Map<string, number>();
+/**
+ * Swept on the same terms as automod's gate map, and for the same reason: a
+ * scan per write is a scan per reminder on every instance, and at a catch-up
+ * burst none of it is old enough to remove yet. Time-gated past a size bound,
+ * the scan runs once a memory window however many reminders arrive, and the
+ * map stays bounded by what one window can put in it.
+ */
+const RELAYED_REMINDER_SWEEP_MIN = 1_000;
+let lastRelayedSweepAt = 0;
 
-function alreadyRelayed(sessionId: string, kind: string, now: number): boolean {
-  const key = `${sessionId}:${kind}`;
-  const seen = relayedReminders.get(key);
-  if (seen !== undefined && now - seen < RELAYED_REMINDER_MEMORY_MS) {
-    return true;
-  }
-  for (const [old, at] of relayedReminders) {
-    if (now - at >= RELAYED_REMINDER_MEMORY_MS) {
-      relayedReminders.delete(old);
+function relayKey(sessionId: string, kind: string): string {
+  return `${sessionId}:${kind}`;
+}
+
+function wasRelayed(sessionId: string, kind: string, now: number): boolean {
+  const seen = relayedReminders.get(relayKey(sessionId, kind));
+  return seen !== undefined && now - seen < RELAYED_REMINDER_MEMORY_MS;
+}
+
+/**
+ * Remembered only once it has actually reached a socket. Recording it on
+ * ARRIVAL instead would make the dedupe defeat the retry it exists beside: a
+ * frame that lands while the one recipient is reconnecting reaches nobody,
+ * and the copy three seconds later — the copy that would have found them — is
+ * dropped as a duplicate of a delivery that never happened.
+ */
+function rememberRelayed(sessionId: string, kind: string, now: number): void {
+  relayedReminders.set(relayKey(sessionId, kind), now);
+  if (
+    relayedReminders.size > RELAYED_REMINDER_SWEEP_MIN &&
+    now - lastRelayedSweepAt >= RELAYED_REMINDER_MEMORY_MS
+  ) {
+    lastRelayedSweepAt = now;
+    for (const [old, at] of relayedReminders) {
+      if (now - at >= RELAYED_REMINDER_MEMORY_MS) {
+        relayedReminders.delete(old);
+      }
     }
   }
-  relayedReminders.set(key, now);
-  return false;
 }
 
 /** Test seam. */
 export function resetRelayedChannelSessionReminders(): void {
   relayedReminders.clear();
+  lastRelayedSweepAt = 0;
+  pendingReminderRetries = 0;
 }
 
 subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
@@ -523,14 +558,15 @@ subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
   if (userIds.length === 0) {
     return;
   }
-  if (alreadyRelayed(event.sessionId, event.kind, Date.now())) {
-    // The publisher's one retry, or a duplicate frame: this instance has
-    // already shown these sockets this reminder.
+  const now = Date.now();
+  if (wasRelayed(event.sessionId, event.kind, now)) {
+    // The publisher's one retry, or a duplicate frame: these sockets have
+    // already been shown this reminder.
     return;
   }
   // No push here: the instance that claimed the reminder already sent it, and
   // a second one would be a second notification on the same phone.
-  deliverChannelSessionReminder({
+  const sent = deliverChannelSessionReminder({
     sessionId: event.sessionId,
     channelId: event.channelId,
     title: event.title,
@@ -538,6 +574,13 @@ subscribeToCluster(CHANNEL_SESSION_REMINDER_TOPIC, (data) => {
     kind: event.kind,
     userIds,
   });
+  if (sent > 0) {
+    rememberRelayed(event.sessionId, event.kind, now);
+  }
+  // Nobody here to tell (the usual case — a recipient is on one machine, not
+  // both) or a socket that had just gone: nothing is remembered, so the
+  // publisher's retry gets a real second chance rather than being deduplicated
+  // against a delivery that did not happen.
 });
 
 /**
@@ -564,12 +607,28 @@ const REMINDER_REPUBLISH_MS = 3_000;
  * the case that actually happens (a reconnect measured in seconds) without
  * pretending to cover the one that does not.
  */
+/**
+ * A worker catching up after an outage can claim hundreds of reminders in one
+ * tick, and one timer each would be a burst of timers holding a frame each,
+ * all firing in the same millisecond at a bus that is very likely still down.
+ * Past this many outstanding, the retry is skipped: the frame was published
+ * once, and a deployment this far behind has a bigger problem than the
+ * second attempt.
+ */
+const MAX_PENDING_REMINDER_RETRIES = 200;
+let pendingReminderRetries = 0;
+
 function publishReminder(event: ChannelSessionReminderEvent): void {
   publishToCluster(CHANNEL_SESSION_REMINDER_TOPIC, event);
   if (isBusConnected()) {
     return;
   }
+  if (pendingReminderRetries >= MAX_PENDING_REMINDER_RETRIES) {
+    return;
+  }
+  pendingReminderRetries += 1;
   const retry = setTimeout(() => {
+    pendingReminderRetries -= 1;
     if (!isBusEnabled()) {
       return;
     }
