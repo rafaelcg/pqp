@@ -46,6 +46,16 @@ const (
 	// default, not a measured or specified value.
 	DefaultDemoteWindowMs = 5 * 60 * 1000
 
+	// DefaultVideoIdleMaxMs: how long a source that is sending NO RTP at
+	// all is forgiven before the ordinary restart-then-demote ladder is
+	// allowed to run on it (WatchdogConfig.VideoIdleMaxMs; 0 disables the
+	// bound entirely). Two minutes is far longer than any Chrome
+	// tab-capture refresh gap, and short enough to recover a quietly dead
+	// RECEIVE path -- an ICE/DTLS failure that never surfaces as a
+	// track-ended event -- while a party is still worth saving (Farol
+	// review, PR #626).
+	DefaultVideoIdleMaxMs = 2 * 60 * 1000
+
 	DefaultAACBitrateKbps  = 128
 	DefaultR2QueueDepth    = 64
 	DefaultR2MaxRetries    = 3
@@ -78,6 +88,7 @@ type GlobalConfig struct {
 	FirstPartTimeoutMs int64
 	PartStuckMs        int64
 	DemoteWindowMs     int64
+	VideoIdleMaxMs     int64
 
 	AACBitrateKbps int
 	FFmpegPath     string
@@ -108,6 +119,7 @@ func (c GlobalConfig) WatchdogConfig() WatchdogConfig {
 		FirstPartTimeoutMs: c.FirstPartTimeoutMs,
 		PartStuckMs:        c.PartStuckMs,
 		DemoteWindowMs:     c.DemoteWindowMs,
+		VideoIdleMaxMs:     c.VideoIdleMaxMs,
 	}
 }
 
@@ -151,6 +163,9 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	if c.DemoteWindowMs, err = envInt64Or("DEMOTE_WINDOW_MS", DefaultDemoteWindowMs); err != nil {
 		return GlobalConfig{}, err
 	}
+	if c.VideoIdleMaxMs, err = envInt64Or("VIDEO_IDLE_MAX_MS", DefaultVideoIdleMaxMs); err != nil {
+		return GlobalConfig{}, err
+	}
 	if v := os.Getenv("AAC_BITRATE_KBPS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
@@ -185,6 +200,12 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	}
 	if c.DemoteWindowMs <= 0 {
 		return GlobalConfig{}, fmt.Errorf("control: DEMOTE_WINDOW_MS must be positive, got %d", c.DemoteWindowMs)
+	}
+	// Zero is meaningful here and stays allowed ("forgive a silent source
+	// forever"), unlike the three timers above where zero has no coherent
+	// reading. Negative does not mean anything at all.
+	if c.VideoIdleMaxMs < 0 {
+		return GlobalConfig{}, fmt.Errorf("control: VIDEO_IDLE_MAX_MS must not be negative, got %d", c.VideoIdleMaxMs)
 	}
 	// R2_UPLOAD_QUEUE_DEPTH/R2_UPLOAD_MAX_RETRIES were read above with no
 	// bound check at all: envIntOr accepts any integer, including zero or

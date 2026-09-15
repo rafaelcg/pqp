@@ -311,11 +311,14 @@ demoted four minutes later (`part-stuck-second-stall`) for a share that was
 working, and the whole five-minute service log held fourteen depacketize
 warnings and nothing else to say otherwise. Three changes, all in
 `tools/pqp-remux` (see its README, "Keep-alive" and "Observability"):
-`sourceIdle` in `internal/control/watchdog.go` reads the RTP stream itself
+`sourceIdleFor` in `internal/control/watchdog.go` reads the RTP stream itself
 and treats "no frame AND no packet" as a quiet source — one log line per
-quiet episode, never a restart and never a demotion at any length, while
-"packets but no frames" and "frames but no parts" still run the ladder
-unchanged; `Fragmenter.IdleFlush` publishes the held access unit so the
+quiet episode and no action, while "packets but no frames" and "frames but
+no parts" still run the ladder unchanged. The forgiveness is bounded by
+`VIDEO_IDLE_MAX_MS` (default 2 minutes), because the same silence is also
+what a quietly dead RECEIVE path looks like — an ICE/DTLS failure with no
+track-ended event — and that one is fixed by exactly the restart the ladder
+would do; `Fragmenter.IdleFlush` publishes the held access unit so the
 playlist and a viewer's buffer cover the freeze rather than ending at the
 start of it (one part per episode — past that the video timeline is held
 and the wall-clock-paced audio track keeps producing parts); and every

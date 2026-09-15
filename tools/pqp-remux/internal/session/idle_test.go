@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -226,5 +228,52 @@ func TestFormatStatsLine_CarriesEveryDiagnosticField(t *testing.T) {
 	// Rates, not just totals: 150 frames in a 5s window is 30/s.
 	if !strings.Contains(line, "(30.0/s)") {
 		t.Fatalf("stats line carries no frame rate:\n%s", line)
+	}
+}
+
+// StartMonitor's stop must JOIN the goroutine, not merely signal it: a
+// caller tearing a pipeline down reads the fragmenter's final segment
+// index and part sequence immediately afterwards, and the keep-alive tick
+// is the only other thing that can advance them (Farol review, PR #626).
+func TestSession_StartMonitorStopJoinsTheGoroutine(t *testing.T) {
+	r := ring.New(6, 90000)
+	s := New(45000, 360000, r, nil)
+
+	before := runtime.NumGoroutine()
+	stop := s.StartMonitor(context.Background(), "test")
+	stop()
+	// The goroutine has returned, so the count is back where it started.
+	// Retried briefly only to absorb goroutines the test runtime itself
+	// happens to be shuffling, never the monitor's own exit.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > before {
+		t.Fatalf("goroutine count is %d after stop, was %d before StartMonitor", got, before)
+	}
+
+	stop() // idempotent
+}
+
+// Close fences the keep-alive for good: after it returns, no tick can
+// enter the fragmenter again.
+func TestSession_CloseStopsTheKeepAliveForGood(t *testing.T) {
+	r := ring.New(6, 90000)
+	s := New(45000, 360000, r, nil)
+	now := time.Now()
+	s.now = func() time.Time { return now }
+
+	s.HandleVideoPacket(videoPacket(singleNAL(7, realishSPS()[1:]), 0, false))
+	s.HandleVideoPacket(videoPacket(singleNAL(8, realishPPS()[1:]), 0, false))
+	s.HandleVideoPacket(videoPacket(singleNAL(5, []byte{0xAA, 0xBB}), 0, true))
+
+	s.Close()
+
+	if s.idleTick(now.Add(10 * time.Second)) {
+		t.Fatal("the keep-alive published a part after Close returned")
+	}
+	if s.Health().PartsWritten != 0 {
+		t.Fatalf("PartsWritten = %d after a post-Close tick", s.Health().PartsWritten)
 	}
 }

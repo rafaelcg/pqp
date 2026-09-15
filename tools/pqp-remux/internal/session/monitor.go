@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/h264"
@@ -76,15 +77,48 @@ func durationToTicks(d time.Duration) int64 {
 	return d.Milliseconds() * h264.ClockRate / 1000
 }
 
-// RunMonitor is this session's own always-on observability and keep-alive
-// goroutine: it publishes the held video access unit when the source goes
-// quiet (idleTick) and writes one stats line per statsInterval, labelled
-// with whatever the caller calls this session (a session id under
-// pqp-remuxd, a room name under the single-session binary).
+// StartMonitor starts RunMonitor on its own goroutine and returns a stop
+// function that cancels it AND WAITS for it to return.
 //
-// It returns when ctx is done. Start it once, after New (and after
-// EnableAudio/EnableR2 if those are wanted, so the first line reports
-// them), in its own goroutine.
+// The wait is the point. The monitor is the only thing besides the
+// subscriber's RTP goroutine that touches the fragmenter, and a caller
+// tearing a pipeline down reads that fragmenter's final segment index and
+// part sequence immediately afterwards (internal/control's restart, to
+// hand them to the replacement). videoMu already makes the two safe
+// against each other, and Close's own fence makes a post-Close tick inert
+// -- but a teardown that can simply say "the monitor is finished" before
+// it touches anything is a much smaller thing to have to reason about
+// than one that relies on both (Farol review, PR #626). Call stop BEFORE
+// disconnecting the subscriber.
+//
+// Idempotent: calling stop more than once is safe.
+//
+// Start it once, after New and after EnableAudio/EnableR2 if those are
+// wanted, so the first line already reports them.
+func (s *Session) StartMonitor(ctx context.Context, label string) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.RunMonitor(ctx, label)
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			cancel()
+			<-done
+		})
+	}
+}
+
+// RunMonitor is this session's own always-on observability and keep-alive
+// loop: it publishes the held video access unit when the source goes quiet
+// (idleTick) and writes one stats line per statsInterval, labelled with
+// whatever the caller calls this session (a session id under pqp-remuxd, a
+// room name under the single-session binary).
+//
+// It returns when ctx is done. Prefer StartMonitor, which gives you a stop
+// function that also waits for this to have returned.
 func (s *Session) RunMonitor(ctx context.Context, label string) {
 	ticker := time.NewTicker(monitorTick)
 	defer ticker.Stop()

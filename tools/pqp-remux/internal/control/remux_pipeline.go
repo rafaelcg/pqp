@@ -40,6 +40,9 @@ type remuxPipeline struct {
 	sub  *subscriber.Session
 
 	cancel context.CancelFunc
+	// stopMonitor cancels the session's monitor goroutine and waits for
+	// it to return; see Close for why it runs first of all.
+	stopMonitor func()
 
 	r2Writer     *r2.Writer
 	audioEnabled bool
@@ -202,17 +205,19 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 	})
 
 	// The session's own always-on instrumentation and video keep-alive
-	// (internal/session.Session.RunMonitor): one stats line every few
+	// (internal/session.Session.StartMonitor): one stats line every few
 	// seconds, and the idle flush that stops a static screen share from
-	// looking like a stalled pipeline. ctx, so it stops with everything
-	// else this pipeline owns.
-	go sess.RunMonitor(ctx, "session="+cfg.SessionID)
+	// looking like a stalled pipeline. Derived from ctx, so a process
+	// shutdown stops it too; stopMonitor is what Close uses to be sure it
+	// is finished before anything reads the fragmenter.
+	stopMonitor := sess.StartMonitor(ctx, "session="+cfg.SessionID)
 
 	return &remuxPipeline{
 		sess:         sess,
 		srv:          srv,
 		sub:          sub,
 		cancel:       cancel,
+		stopMonitor:  stopMonitor,
 		r2Writer:     r2Writer,
 		audioEnabled: audioEnabled,
 	}, nil
@@ -287,7 +292,8 @@ func (p *remuxPipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) { p.sr
 
 // Close tears this pipeline down in the exact order
 // cmd/pqp-remux/main.go's runServer already established (and Farol already
-// found the bug in getting backwards once): sub.Close() first (stop new
+// found the bug in getting backwards once), with the monitor stopped and
+// joined ahead of all of it (see the body): sub.Close() (stop new
 // packets), then cancel() (stop the audio pacer writing more PCM), then
 // sess.Close() (drain the encoder and flush the final segments, enqueuing
 // their uploads), then r2Writer.Close() LAST, so those final uploads get a
@@ -303,6 +309,14 @@ func (p *remuxPipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) { p.sr
 // index, and it used to be able to still be running, on a goroutine this
 // method never waited for, after Close had already returned.
 func (p *remuxPipeline) Close() {
+	// FIRST, before the subscriber: the monitor's keep-alive tick is the
+	// only toucher of the fragmenter that is not joined by sub.Close, and
+	// managed_session.go's restart reads that fragmenter's final segment
+	// index and part sequence the instant this method returns. Stopping
+	// and JOINING it here means the rest of this teardown, and that read,
+	// run with exactly one other goroutine in the picture -- the RTP
+	// reader sub.Close already waits for (Farol review, PR #626).
+	p.stopMonitor()
 	p.sub.Close()
 	p.cancel()
 	p.sess.Close()

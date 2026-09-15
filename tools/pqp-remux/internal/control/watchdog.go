@@ -25,6 +25,31 @@ type WatchdogConfig struct {
 	// than this is treated as a fresh problem, worth one more restart --
 	// see evaluateWatchdog's own doc comment.
 	DemoteWindowMs int64
+	// VideoIdleMaxMs bounds how long a QUIET source (sourceIdle) is
+	// forgiven before the ordinary restart-then-demote ladder is allowed
+	// to run on it anyway. 0 means unbounded.
+	//
+	// It exists because "no RTP at all" has two causes that look
+	// identical from this end, and only one of them is benign: the
+	// publisher genuinely sending nothing (a static tab share -- forgive
+	// it), and OUR OWN receive path having died quietly (an ICE or DTLS
+	// failure that never surfaces as a track-ended event, a wedged
+	// receiver). The second is precisely the case a restart fixes, since
+	// a restart builds a brand new subscriber connection to the same
+	// room -- so forgiving silence forever would turn a recoverable
+	// transport failure into a frozen rendition for the rest of the
+	// party (Farol review, PR #626).
+	//
+	// The default (DefaultVideoIdleMaxMs, 2 minutes) is far longer than
+	// any tab-capture refresh gap and short enough to recover a dead
+	// receiver while a party is still worth saving. The restart it
+	// eventually allows is also self-correcting for the benign case: a
+	// fresh subscription gets a keyframe from the SFU immediately, so a
+	// publisher that is merely quiet resumes producing parts on the new
+	// pipeline rather than being demoted, while a publisher that really
+	// is gone hits the new pipeline's own FirstPartTimeoutMs and demotes
+	// with "no-video".
+	VideoIdleMaxMs int64
 }
 
 // watchdogAction is what one evaluateWatchdog call decides to do.
@@ -89,7 +114,7 @@ type watchdogState struct {
 // directly with a fake clock, per this task's own "watchdog
 // restart-then-demote with a fake pipeline clock" acceptance bar.
 //
-// Three phases, evaluated in this order:
+// Four phases, evaluated in this order:
 //
 //  1. h.LastPartAt.IsZero() -- NO part has ever been produced. This is
 //     "waiting" (SessionState StateWaiting), not "stalled": a session
@@ -101,7 +126,15 @@ type watchdogState struct {
 //     and its ONLY action is demote-with-reason-"no-video" past that
 //     bound; there is nothing to restart (the pipeline is already doing
 //     the one thing it can -- waiting for a track).
-//  2. Once a part has arrived at least once, the IDR-gap check runs next
+//  2. The source's own liveness (sourceIdle, added 2026-09-15). A
+//     publisher that has stopped sending frames stops LastPartAt dead,
+//     because a part boundary is decided by the arrival of the NEXT
+//     access unit -- and a Chrome TAB share sends none while the page is
+//     not repainting. That is not a stall. It sits AHEAD of the IDR-gap
+//     rule deliberately: a quiet source has no IDRs either, so leaving it
+//     behind would demote a static slide at 3x the segment target. It is
+//     bounded, not unconditional -- see VideoIdleMaxMs.
+//  3. Once a part has arrived at least once, the IDR-gap check runs next
 //     and can demote outright with no restart attempt at all, because
 //     restarting the SAME subscription to the SAME room does nothing for
 //     a publisher that has simply stopped sending keyframes --
@@ -113,8 +146,9 @@ type watchdogState struct {
 //     below exists only so a violation of that invariant fails toward "a
 //     small, sane gap" instead of "no IDR since the Unix epoch, demote
 //     instantly."
-//  3. The part-stuck ladder: no NEW part for PartStuckMs, evaluated only
+//  4. The part-stuck ladder: no NEW part for PartStuckMs, evaluated only
 //     if the IDR-gap check found nothing worth acting on this tick.
+//     stallLadder below is that ladder, shared with phase 2's own bound.
 func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipelineStartedAt time.Time, st *watchdogState, now time.Time) watchdogResult {
 	if h.LastPartAt.IsZero() {
 		firstPartTimeout := time.Duration(cfg.FirstPartTimeoutMs) * time.Millisecond
@@ -157,7 +191,16 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 	// 60s heartbeat sweep, both of which are about the session existing
 	// rather than about it stalling, and neither of which this rule
 	// touches.
-	if sourceIdle(h, now, stuckThreshold) {
+	if idleFor, ok := sourceIdleFor(h, now, stuckThreshold); ok {
+		idleMax := time.Duration(cfg.VideoIdleMaxMs) * time.Millisecond
+		if cfg.VideoIdleMaxMs > 0 && idleFor > idleMax {
+			// Forgiven long enough. This is where a quietly dead
+			// RECEIVE path (see VideoIdleMaxMs) stops being
+			// indistinguishable from a quiet publisher: the ladder's
+			// restart rebuilds the subscription, which fixes one of
+			// them and costs the other a keyframe.
+			return stallLadder(h, cfg, st, now, "source-idle-too-long", "source-idle-too-long-second-stall")
+		}
 		if !st.idleLogged {
 			st.idleLogged = true
 			return watchdogResult{actionLog, "video-source-idle", stallDetail(h, now)}
@@ -190,6 +233,15 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 		return watchdogResult{actionNone, "", ""}
 	}
 
+	return stallLadder(h, cfg, st, now, "part-stuck", "part-stuck-second-stall")
+}
+
+// stallLadder is docs/plans/LL_HLS.md §5's "one restart, then demote",
+// shared by the two things that reach it: no new part while the source IS
+// sending (the classic stall), and a source that has been silent past
+// VideoIdleMaxMs. Each names its own reasons so the log still says which
+// of the two happened.
+func stallLadder(h PipelineHealth, cfg WatchdogConfig, st *watchdogState, now time.Time, restartReason, demoteReason string) watchdogResult {
 	demoteWindow := time.Duration(cfg.DemoteWindowMs) * time.Millisecond
 	if st.restartedAt.IsZero() || now.Sub(st.restartedAt) > demoteWindow {
 		// First stall (ever, or the last restart is old enough that this
@@ -201,14 +253,15 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 		// already set and within the window, demotes rather than
 		// retrying the failing restart forever.
 		st.restartedAt = now
-		return watchdogResult{actionRestart, "part-stuck", stallDetail(h, now)}
+		return watchdogResult{actionRestart, restartReason, stallDetail(h, now)}
 	}
-	return watchdogResult{actionDemote, "part-stuck-second-stall", stallDetail(h, now)}
+	return watchdogResult{actionDemote, demoteReason, stallDetail(h, now)}
 }
 
-// sourceIdle reports whether the publisher has stopped sending on the
-// video track: no completed access unit AND no RTP packet at all for
-// longer than the part-stuck threshold.
+// sourceIdleFor reports whether the video track has gone silent -- no
+// completed access unit AND no RTP packet at all for longer than the
+// part-stuck threshold -- and for how long, which is what the
+// VideoIdleMaxMs bound is judged against.
 //
 // BOTH halves are required, and which half is which matters. Packets with
 // no frames is a depacketizer that cannot assemble what is arriving --
@@ -220,17 +273,28 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 // fake in this package's tests, and any future Pipeline implementation
 // that does not track the RTP stream) is never idle by this rule, so it is
 // evaluated exactly as it was before this function existed.
-func sourceIdle(h PipelineHealth, now time.Time, threshold time.Duration) bool {
+func sourceIdleFor(h PipelineHealth, now time.Time, threshold time.Duration) (time.Duration, bool) {
 	if h.LastVideoFrameAt.IsZero() {
-		return false
+		return 0, false
 	}
-	if now.Sub(h.LastVideoFrameAt) <= threshold {
-		return false
+	frameGap := now.Sub(h.LastVideoFrameAt)
+	if frameGap <= threshold {
+		return 0, false
 	}
 	if h.LastVideoPacketAt.IsZero() {
-		return true
+		return frameGap, true
 	}
-	return now.Sub(h.LastVideoPacketAt) > threshold
+	packetGap := now.Sub(h.LastVideoPacketAt)
+	if packetGap <= threshold {
+		return 0, false
+	}
+	// How long the source has been silent is the SHORTER of the two: the
+	// stream is only quiet from the last thing that arrived on it, and
+	// that is a packet if any arrived after the last completed frame.
+	if packetGap < frameGap {
+		return packetGap, true
+	}
+	return frameGap, true
 }
 
 // stallDetail renders every clock and counter a human needs to tell this

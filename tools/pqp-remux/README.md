@@ -627,16 +627,28 @@ IO — driven by `managed_session.go`'s ticker), which:
    `sourceIdle` (`watchdog.go`) reads the RTP stream itself: **both** no
    completed frame **and** no RTP packet for longer than `PART_STUCK_MS`
    is a quiet source → one `video-source-idle` log line per quiet
-   episode and nothing else, at any length. Packets arriving with no
+   episode and nothing else. Packets arriving with no
    frames coming out (loss, a wedged access unit), or frames coming out
    with no parts published (a real muxer bug), both fall through to the
    ladder unchanged — which is exactly why the rule needs both clocks and
-   not one. It never demotes for quietness: reconnecting to the same room
-   to receive the same silence is not a fix, and demoting hands the
-   audience a conventional ladder showing the same frozen picture off the
-   same source. A session whose publisher has genuinely gone away is
-   ended by the track ending or by the API's own 60s heartbeat sweep,
-   neither of which this rule touches. Meanwhile the media side keeps the
+   not one. Restarting would not help a quiet publisher anyway
+   (reconnecting to the same room to receive the same silence is not a
+   fix) and demoting would hand the audience a conventional ladder showing
+   the same frozen picture off the same source.
+   **The forgiveness is bounded, by `VIDEO_IDLE_MAX_MS` (default 2
+   minutes, `0` for unbounded).** "No RTP at all" has a second cause that
+   looks identical from this end and is *not* benign: our own receive path
+   dying quietly — an ICE or DTLS failure that never surfaces as a
+   track-ended event — which is precisely the case a restart fixes, since
+   a restart builds a brand new subscriber connection. Past the bound the
+   ordinary ladder runs, with its own reasons (`source-idle-too-long`,
+   then `source-idle-too-long-second-stall`) so the log never claims a
+   part stalled when nothing was arriving. That restart is self-correcting
+   for the benign case too: a fresh subscription gets a keyframe from the
+   SFU immediately, so a merely-quiet publisher resumes producing parts on
+   the new pipeline instead of being demoted, while one that is really
+   gone hits the new pipeline's own `FIRST_PART_TIMEOUT_MS` and demotes
+   with `no-video`. Meanwhile the media side keeps the
    playlist alive rather than freezing it — see **Keep-alive: a static
    source still publishes** below.
 2. **The IDR-gap ladder takes precedence and skips the restart entirely.**
@@ -742,6 +754,7 @@ documented in Config above — `pqp-remuxd` shares those names with
 | `MEDIA_ORIGIN_KEY` | — (optional; required with a non-loopback `CONTROL_LISTEN`) | Gates `/s/:id/*` via the `X-Pqp-Origin-Key` header — see "Access control" above. Empty (the default, loopback-only posture) leaves those routes unauthenticated. |
 | `FIRST_PART_TIMEOUT_MS` | `60000` (60s) | No part has EVER arrived for this long → demote, reason `no-video`. Governs the "waiting for a presenter" phase, deliberately separate from and much longer than `PART_STUCK_MS` — see "Watchdog" above. |
 | `PART_STUCK_MS` | `3000` | Once at least one part has arrived: no NEW part for this long → restart the session's pipeline once. `docs/plans/LL_HLS.md` §5's own number ("six parts"). |
+| `VIDEO_IDLE_MAX_MS` | `120000` (2 min) | How long a source sending NO RTP at all is forgiven before the restart-then-demote ladder is allowed to run on it anyway; `0` forgives forever. Exists because "no RTP" has two causes that look identical from this end — a publisher genuinely sending nothing (a static tab share, benign) and our own receive path having died quietly with no track-ended event (recoverable, and only by a restart). Far longer than any tab-capture refresh gap, short enough to recover a dead receiver while a party is still worth saving. See "Watchdog and the demotion contract", step 1-bis. |
 | `DEMOTE_WINDOW_MS` | `300000` (5 min) | A second stall within this long of the last restart demotes instead of restarting again; further apart, it's a fresh episode. Sized after the conventional path's own "3 restarts per 5 min then a 5 min cooldown" family (`CLAUDE.md` pitfall 15) — there is no measured number for this specific ladder in the plan text, so this is `L1.6`'s own considered default, not a specified one. |
 
 `RUNG` is **not** read here: every session this binary ever runs is the

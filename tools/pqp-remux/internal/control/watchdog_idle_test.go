@@ -37,11 +37,11 @@ func TestEvaluateWatchdog_QuietSourceIsNotAStall(t *testing.T) {
 		t.Fatalf("the idle line does not say what stopped: %q", got.detail)
 	}
 
-	// Every tick after that, for as long as the source stays quiet, is a
-	// no-op. Not a restart at any length -- reconnecting to the same room
-	// to receive the same silence is not a fix, and demoting hands the
+	// Every tick after that, for as long as the source stays quiet and
+	// inside VideoIdleMaxMs, is a no-op: reconnecting to the same room to
+	// receive the same silence is not a fix, and demoting hands the
 	// audience the same frozen picture off the same source.
-	for _, elapsed := range []time.Duration{15 * time.Second, time.Minute, 10 * time.Minute} {
+	for _, elapsed := range []time.Duration{15 * time.Second, time.Minute, 110 * time.Second} {
 		at := quiet.Add(elapsed)
 		h.LastPartAt, h.LastIdrAt = quiet, quiet
 		got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, at)
@@ -50,7 +50,77 @@ func TestEvaluateWatchdog_QuietSourceIsNotAStall(t *testing.T) {
 		}
 	}
 	if !st.restartedAt.IsZero() {
-		t.Fatal("a quiet source consumed the session's one allowed restart")
+		t.Fatal("a quiet source consumed the session's one allowed restart inside the idle bound")
+	}
+}
+
+// ...but the forgiveness is BOUNDED. "No RTP at all" has two causes that
+// look identical from this end: a publisher genuinely sending nothing, and
+// our own receive path having died quietly (an ICE/DTLS failure that never
+// surfaces as a track-ended event). Only the second is fixed by a restart,
+// and forgiving silence forever would turn it into a frozen rendition for
+// the rest of the party (Farol review, PR #626).
+func TestEvaluateWatchdog_QuietPastTheIdleBoundRunsTheLadder(t *testing.T) {
+	start := time.UnixMilli(0)
+	cfg := fixedWatchdogCfg()
+	var st watchdogState
+
+	quiet := start.Add(30 * time.Second)
+	h := PipelineHealth{
+		PartsWritten:      400,
+		LastPartAt:        quiet,
+		LastIdrAt:         quiet,
+		LastVideoFrameAt:  quiet,
+		LastVideoPacketAt: quiet,
+	}
+
+	// Inside the bound: forgiven (one log line, then nothing).
+	if got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, quiet.Add(30*time.Second)); got.action != actionLog {
+		t.Fatalf("inside the idle bound the watchdog did %v (%s), want a log line", got.action, got.reason)
+	}
+
+	// Past it: one restart, which is the cheap action that rebuilds the
+	// subscriber connection and so fixes the dead-receive case.
+	past := quiet.Add(time.Duration(cfg.VideoIdleMaxMs)*time.Millisecond + time.Second)
+	got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, past)
+	if got.action != actionRestart || got.reason != "source-idle-too-long" {
+		t.Fatalf("past the idle bound the watchdog did %v (%s), want a source-idle-too-long restart", got.action, got.reason)
+	}
+	if !strings.Contains(got.detail, "lastFrame=") || !strings.Contains(got.detail, "lastPkt=") {
+		t.Fatalf("the restart carries no detail: %q", got.detail)
+	}
+
+	// Still silent, inside the demote window: demote, with its own reason
+	// so the log never claims a part stalled when nothing was arriving.
+	got = evaluateWatchdog(h, testSegmentMs, cfg, start, &st, past.Add(30*time.Second))
+	if got.action != actionDemote || got.reason != "source-idle-too-long-second-stall" {
+		t.Fatalf("a second idle episode inside the window did %v (%s), want a demote", got.action, got.reason)
+	}
+}
+
+// VIDEO_IDLE_MAX_MS=0 is a supported operator choice: forgive a silent
+// source forever.
+func TestEvaluateWatchdog_IdleBoundOfZeroForgivesForever(t *testing.T) {
+	start := time.UnixMilli(0)
+	cfg := fixedWatchdogCfg()
+	cfg.VideoIdleMaxMs = 0
+	var st watchdogState
+
+	quiet := start.Add(30 * time.Second)
+	h := PipelineHealth{
+		PartsWritten:      400,
+		LastPartAt:        quiet,
+		LastIdrAt:         quiet,
+		LastVideoFrameAt:  quiet,
+		LastVideoPacketAt: quiet,
+	}
+	if got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, quiet.Add(4*time.Second)); got.action != actionLog {
+		t.Fatalf("first quiet tick did %v, want a log line", got.action)
+	}
+	for _, elapsed := range []time.Duration{time.Minute, time.Hour, 24 * time.Hour} {
+		if got := evaluateWatchdog(h, testSegmentMs, cfg, start, &st, quiet.Add(elapsed)); got.action != actionNone {
+			t.Fatalf("with the bound disabled, %s of silence did %v (%s)", elapsed, got.action, got.reason)
+		}
 	}
 }
 
