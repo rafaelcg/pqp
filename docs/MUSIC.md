@@ -175,24 +175,53 @@ smaller cap.
 position sample does not re-render the call stage; `use-voice.ts` feeds it
 and registers a sender on every `welcome`. `components/voice/music-bar-button.tsx`
 is the control on the call bar beside camera and screen share ("Tocar
-música", lit while something plays); `components/voice/music-dock.tsx` is the
-line on the call strip and the popover both open: the add box and the queue
-with reorder and remove. The player itself is
-`components/voice/music-mini-player.tsx`, pinned at the bottom of the
-sidebar above the call controls, shaped like a music app's mini player. At
-rest it is one card: artwork, title (scrolls on hover), who added it,
-play/pause and skip. It opens (the chevron, or the button on the call bar)
-into the video toggle, volume with mute, the add box, the queue with
-reorder and remove, and two text actions: "Parar de ouvir", which unmounts
-this machine's embed and leaves a one-line pill with "Ouvir" as the way
-back while the room's queue carries on, and "Parar para todos", the
-room-wide stop. It is mounted for the whole call whatever the reader is
-looking at, because unmounting the embed is what stops the sound; the video
-is folded to zero height by default and the choice is remembered. Rooms you
+música", lit while something plays, with a small equaliser while the room
+is playing). `components/voice/music-dock.tsx` is the title line on the
+call strip; a click unfolds the player in the sidebar. The player itself
+is `components/voice/music-mini-player.tsx`, pinned at the bottom of the
+sidebar above the call controls. At rest it is one card: artwork, title
+(scrolls on hover), who added it (avatar and name), a 2px progress bar,
+play/pause and skip. It opens in place into a panel: a 56px artwork
+row (title and who added it), an optional 16:9 video capped at about
+135px, a scrubber that stays up even before duration is known
+(managers seek; everyone else sees progress), volume with mute, an
+activity line ("Rafa pulou"), a search box that shows the top five
+results under the input, the queue with thumbnail, duration, who added
+it, drag reorder, play next, remove and "Abrir no YouTube" / "Abrir no
+Spotify", and two text actions: "Parar de ouvir", which unmounts this
+machine's embed and leaves a one-line pill with "Ouvir" as the way back
+while the room's queue carries on, and "Parar pra todos" behind a
+confirm, the room-wide stop. A pasted link still goes through `GET /api/music/resolve`.
+Typed text goes through `GET /api/music/search` and the person picks a
+row. The embed is mounted for the whole call whatever the reader is
+looking at, because unmounting it is what stops the sound; the video is
+folded to zero height by default and the choice is remembered. Rooms you
 are not in show a card under their occupants instead
-(`channel-music-card.tsx`, off `voiceState.channelMusic`), whose title joins
-the call. `components/voice/music-dock.tsx` is only the title on the call
-strip.
+(`channel-music-card.tsx`, off `voiceState.channelMusic`): artwork, the
+title, and an "Ouvir" that joins the call.
+
+"Assistir na tela" moves that same embed onto the call stage as a 16:9
+tile, through the one-mount portal `watch-dock.tsx` already uses: a
+detached host is `appendChild`'d between the panel's video slot and
+`MusicStageTile`. The iframe never remounts, so the sound does not stop.
+The tile joins the stage grid (featured when nothing else is, in the
+grid otherwise), keeps a title overlay and "Voltar pra barra", and uses
+the existing fullscreen control. Navigating to a text channel rescues
+the host back to the sidebar dock; the placement is remembered per
+browser in `client/src/lib/music-prefs.ts`.
+
+Ducking is personal. `music-duck.ts` ramps the embed from full volume to
+35% over 200 ms when someone is speaking (`speakingPeerIds` or this
+machine's transmit gate) and back over 800 ms when they stop. The
+preference is "Abaixar quando alguém fala", on by default; a deafened
+listener is not ducked, because nobody is audible to them.
+
+Nothing playing means the footer is empty. The note on the call bar is
+the way in, and it focuses the add box. A room that starts music still
+opens the player by default. Settings > Voz has "Entrar na música da
+call automaticamente"; off means that transition shows the one-line
+pill instead, and "Ouvir" is how you join. "Parar de ouvir" keeps you
+out for the rest of that seat.
 
 Sync rules in the player: a new track loads at the room's expected position; a
 status change plays or pauses; every two seconds a non-actor compares the
@@ -208,7 +237,6 @@ told to.
 
 ## Not done yet
 
-- Ducking the music under speech, like the watch-party stream mixer.
 - A "now playing" line in the channel, and on o recado.
 - Vote skip, a DJ permission bit, per-server history.
 - iOS and Android: the frame is shared, the players are not written.

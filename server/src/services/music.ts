@@ -613,3 +613,34 @@ export async function resolveMusic(raw: string): Promise<MusicResolution> {
   }
   return { listName: null, tracks: [await searchYouTube(link.query)] };
 }
+
+/**
+ * Top search hits for the add box. InnerTube first (title, duration,
+ * thumbnail). When it answers nothing, fall through to `resolveMusic` so a
+ * pasted query still yields the same single track resolve already knew.
+ */
+export async function searchMusicCandidates(query: string): Promise<MusicResolved[]> {
+  try {
+    const videos = await innertubeSearch(query, 5);
+    if (videos && videos.length > 0) {
+      return videos.slice(0, 5).map((video) => ({
+        provider: "youtube" as const,
+        videoId: video.videoId,
+        title: video.title.trim().slice(0, 200) || video.videoId,
+        sourceUrl: null,
+        thumbnailUrl: video.thumbnailUrl,
+        durationMs: video.durationMs,
+      }));
+    }
+  } catch (error) {
+    if (error instanceof MusicResolveError) {
+      throw error;
+    }
+    console.warn(
+      "[music] innertube search failed, falling back to resolve:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  const { tracks } = await resolveMusic(query);
+  return tracks;
+}

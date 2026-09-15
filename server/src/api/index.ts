@@ -496,7 +496,7 @@ import {
   searchGifs,
   trendingGifs,
 } from "../services/gifs.js";
-import { MusicResolveError, resolveMusic } from "../services/music.js";
+import { MusicResolveError, resolveMusic, searchMusicCandidates } from "../services/music.js";
 import {
   completeConnection,
   connectionsConfig,
@@ -960,6 +960,7 @@ export function resetApiRateLimits(): void {
   // bucket above it is shared by every test in a file and would otherwise
   // drain across them.
   operatorLimiter.reset();
+  musicResolveLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -2817,6 +2818,41 @@ router.get("/api/music/resolve", async (ctx) => {
     const { tracks, listName } = await resolveMusic(query);
     // `track` stays for the first client build; `tracks` is the list.
     return { track: tracks[0], tracks, listName };
+  } catch (error) {
+    if (error instanceof MusicResolveError) {
+      if (error.code === "busy") {
+        ctx.res.setHeader("Retry-After", "5");
+        throw new HttpError(429, "Music search is busy, try again in a moment");
+      }
+      if (error.code === "upstream") {
+        console.error("[music] upstream failed:", error.message);
+        throw new HttpError(502, "Music provider unavailable");
+      }
+      throw new HttpError(error.code === "not_found" ? 404 : 400, error.message);
+    }
+    throw error;
+  }
+});
+
+router.get("/api/music/search", async (ctx) => {
+  const key = `user:${ctx.user.id}`;
+  if (!musicResolveLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(musicResolveLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const query = (ctx.url.searchParams.get("q") ?? "").trim();
+  if (!query) {
+    throw new HttpError(400, "Missing q");
+  }
+  if (query.length > 2048) {
+    throw new HttpError(400, "Query too long");
+  }
+  try {
+    const tracks = await searchMusicCandidates(query);
+    if (tracks.length === 0) {
+      throw new MusicResolveError("not_found", `Nothing on YouTube for "${query}"`);
+    }
+    return { tracks };
   } catch (error) {
     if (error instanceof MusicResolveError) {
       if (error.code === "busy") {
