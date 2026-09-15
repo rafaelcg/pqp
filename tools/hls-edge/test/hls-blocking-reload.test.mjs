@@ -6,6 +6,8 @@ import {
   MAX_ACTIVE_POLL_LOOPS,
   MAX_POLL_STATE_ENTRIES,
   MAX_WAITERS_PER_RENDITION,
+  VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS,
+  VIDEO_RUNG_FAST_POLL_WINDOW_MS,
   VIDEO_RUNG_HOLD_BUDGET_MS,
   awaitBlockingReload,
   handleBlockingReload,
@@ -399,6 +401,70 @@ test("awaitBlockingReload: the video rung (deps.rung === LL_VIDEO_RUNG) outlives
   controller.abort();
   const outcome = await pending;
   assert.equal(outcome.kind, "aborted");
+});
+
+test("awaitBlockingReload: the video rung's poll loop backs off from the plain cadence to VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS after VIDEO_RUNG_FAST_POLL_WINDOW_MS", async () => {
+  resetBlockingReloadStateForTests();
+  // Real timers on purpose, same reasoning as the test above -- this proves
+  // the actual origin-fetch schedule over the video rung's full real 6s
+  // hold, which a fake clock's synchronous-`sleep` semantics cannot race
+  // correctly against (see that test's comment).
+  const fetchTimestamps = [];
+  const deps = {
+    // PLAYLIST_A's PART-TARGET is 0.5s, so the fast-window cadence is 500ms.
+    fetchRendition: async () => {
+      fetchTimestamps.push(Date.now());
+      return toFetched(PLAYLIST_A);
+    },
+    rung: LL_VIDEO_RUNG,
+  };
+
+  const start = Date.now();
+  // msn 103 is never satisfied by PLAYLIST_A and is not too far ahead, so
+  // this holds all the way to the video rung's full 6s budget.
+  const outcome = await awaitBlockingReload("rendition-video-backoff-schedule", { msn: 103 }, deps);
+  assert.equal(outcome.kind, "timeout");
+  assert.ok(
+    fetchTimestamps.length >= 4,
+    `expected several origin polls over the 6s hold, got ${fetchTimestamps.length}`,
+  );
+
+  const gaps = [];
+  for (let i = 1; i < fetchTimestamps.length; i += 1) {
+    gaps.push({ atMs: fetchTimestamps[i] - start, gapMs: fetchTimestamps[i] - fetchTimestamps[i - 1] });
+  }
+
+  // A gap that STARTED comfortably inside the fast window should still be
+  // close to the plain 500ms cadence; a gap that started comfortably past it
+  // should be close to the 1000ms backoff cadence instead. Generous
+  // real-timer slack (this pins a SCHEDULE, not exact milliseconds), and
+  // gaps straddling the switchover are excluded rather than asserted either
+  // way.
+  const fastGaps = gaps.filter((g) => g.atMs < VIDEO_RUNG_FAST_POLL_WINDOW_MS - 150);
+  // The very last tick's own wait is deliberately clamped short by
+  // `runPollLoop`'s `Math.min(intervalMs, soonestDeadline - now())` so the
+  // loop lands close to the 6s deadline instead of overshooting it by a full
+  // backoff interval -- excluded here as a genuine, separate behavior, not
+  // part of the steady-state backoff cadence this test pins.
+  const backoffGaps = gaps.filter(
+    (g) => g.atMs > VIDEO_RUNG_FAST_POLL_WINDOW_MS + 250 && g.atMs < VIDEO_RUNG_HOLD_BUDGET_MS - 200,
+  );
+
+  assert.ok(fastGaps.length >= 1, "expected at least one poll gap inside the fast window");
+  for (const g of fastGaps) {
+    assert.ok(
+      g.gapMs < (VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS + 500) / 2,
+      `expected a fast-window gap near 500ms, got ${g.gapMs}ms at ${g.atMs}ms elapsed`,
+    );
+  }
+
+  assert.ok(backoffGaps.length >= 1, "expected at least one poll gap after the loop backed off");
+  for (const g of backoffGaps) {
+    assert.ok(
+      g.gapMs >= (VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS + 500) / 2,
+      `expected a post-backoff gap near ${VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS}ms, got ${g.gapMs}ms at ${g.atMs}ms elapsed`,
+    );
+  }
 });
 
 test("awaitBlockingReload: the audio rung (LL_AUDIO_RUNG) keeps the plain 3x-part-target formula, unlike the video rung", async () => {

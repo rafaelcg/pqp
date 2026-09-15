@@ -198,12 +198,17 @@
  * VIDEO rung (`ll`, `LL_VIDEO_RUNG`) with a flat 6s -- the ~5s worst case
  * plus margin, still well inside RFC 8216bis's own ceiling of
  * `3 x TARGETDURATION` (~18s here). See that constant's own doc comment for
- * the mechanics: it replaces the deadline calculation only, never the poll
- * cadence (`currentPollIntervalMs`, unchanged), and it is never
- * "provisional" the way the plain formula's deadline is -- there is nothing
- * to correct once a real `PART-TARGET` is known, because the video budget
- * never depended on it. `ll-audio` (`LL_AUDIO_RUNG`) never idles this way and
- * keeps the plain formula, and so does the conventional (non-LL) path, which
+ * the mechanics: it replaces the deadline calculation only -- the poll
+ * cadence stays the plain `currentPollIntervalMs` for the FIRST
+ * `VIDEO_RUNG_FAST_POLL_WINDOW_MS` of a video hold (1.5s, the old budget),
+ * then backs off to `VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS` for the remainder
+ * (see `pollIntervalForLoop`), so the extra ~4.5s this change adds does not
+ * poll the origin at the fast cadence the whole way through (Farol
+ * 2026-09-15, PR #634). It is never "provisional" the way the plain
+ * formula's deadline is -- there is nothing to correct once a real
+ * `PART-TARGET` is known, because the video budget never depended on it.
+ * `ll-audio` (`LL_AUDIO_RUNG`) never idles this way and keeps the plain
+ * formula and cadence, and so does the conventional (non-LL) path, which
  * never reaches this file at all regardless (see "THE PROBLEM THIS
  * REPLACES" above).
  */
@@ -241,6 +246,29 @@ const TIMEOUT_PART_MULTIPLIER = 3;
  * multiplier above.
  */
 export const VIDEO_RUNG_HOLD_BUDGET_MS = 6_000;
+
+/**
+ * How long a video-rung poll LOOP keeps the plain PART-TARGET cadence before
+ * backing off -- see `pollIntervalForLoop`'s doc comment for the full
+ * reasoning (Farol 2026-09-15, PR #634). Set to exactly the OLD budget
+ * (`TIMEOUT_PART_MULTIPLIER x` the 500ms default = 1.5s) on purpose: a video
+ * hold polls exactly like every other rendition until the moment the old,
+ * pre-this-PR formula would already have given up, and only backs off past
+ * that point, where the extra time is new.
+ */
+export const VIDEO_RUNG_FAST_POLL_WINDOW_MS = 1_500;
+
+/**
+ * The video rung's poll cadence once `VIDEO_RUNG_FAST_POLL_WINDOW_MS` has
+ * elapsed on its loop -- see `pollIntervalForLoop`'s doc comment. A flat 1s
+ * (not `PART-TARGET x 2`, which would vary the backoff cadence with the
+ * source's own part duration for no real benefit here): simple, well above
+ * the fast cadence, and still frequent enough that the loop's LAST tick
+ * lands close to the 6s deadline rather than overshooting it by a full
+ * backoff interval (the trailing `Math.min(intervalMs, soonestDeadline -
+ * now())` in `runPollLoop` shortens that final wait regardless).
+ */
+export const VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS = 1_000;
 
 /** Guards against a pathological (zero or tiny) PART-TARGET turning the poll loop into a busy-wait. */
 const MIN_POLL_INTERVAL_MS = 20;
@@ -555,6 +583,7 @@ export function isMsnTooFarAhead(edge, requested) {
  *   lastEdge: PlaylistLiveEdge | null,
  *   lastFetchedAt: number,
  *   polling: boolean,
+ *   pollLoopStartedAt: number,
  * }} RenditionPollState
  */
 
@@ -581,6 +610,41 @@ function decodeText(fetched) {
 function currentPollIntervalMs(edge) {
   const seconds = edge?.partTargetSeconds ?? DEFAULT_PART_TARGET_SECONDS;
   return Math.max(MIN_POLL_INTERVAL_MS, Math.round(seconds * 1000));
+}
+
+/**
+ * The video rung's poll LOOP cadence (distinct from `currentPollIntervalMs`,
+ * which this wraps and which stays the plain PART-TARGET-derived value for
+ * every other rendition, and for a video hold's own first
+ * `VIDEO_RUNG_FAST_POLL_WINDOW_MS`). Farol's 2026-09-15 review of PR #634
+ * named this directly: extending the deadline to 6s while polling stayed at
+ * the plain ~500ms cadence the whole time meant a quiet/frozen video
+ * rendition got polled roughly 12 times before timing out instead of the old
+ * ~3, multiplying origin traffic for exactly the case (a genuinely quiet or
+ * frozen source) this fix exists to tolerate rather than time out on. So a
+ * video hold keeps the plain cadence only for its first
+ * `VIDEO_RUNG_FAST_POLL_WINDOW_MS` (1.5s -- deliberately the OLD budget, so
+ * a video rendition's polling is indistinguishable from every other
+ * rendition's for exactly as long as the old formula would already have
+ * given up) and backs off to `VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS` (1s) for
+ * the rest of its 6s budget. This governs the tick-to-tick PACING sleep in
+ * `runPollLoop` only -- it never changes `fetchWithDeadlineRace`'s own
+ * per-waiter deadline race, and the trailing
+ * `Math.min(intervalMs, soonestDeadline - now())` in `runPollLoop` still
+ * shortens the final wait so the loop lands on time at the 6s deadline
+ * either way.
+ *
+ * @param {PlaylistLiveEdge | null} edge
+ * @param {boolean} isVideoRung
+ * @param {number} loopElapsedMs - `now() - state.pollLoopStartedAt`: how long THIS run of the poll loop has been going, not any one waiter's own hold time.
+ * @returns {number}
+ */
+function pollIntervalForLoop(edge, isVideoRung, loopElapsedMs) {
+  const baseMs = currentPollIntervalMs(edge);
+  if (isVideoRung && loopElapsedMs >= VIDEO_RUNG_FAST_POLL_WINDOW_MS) {
+    return Math.max(baseMs, VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS);
+  }
+  return baseMs;
 }
 
 /**
@@ -707,7 +771,14 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
   let state = pollStates.get(renditionKey);
   let insertedNewState = false;
   if (!state) {
-    const candidate = { waiters: new Set(), lastPlaylist: null, lastEdge: null, lastFetchedAt: 0, polling: false };
+    const candidate = {
+      waiters: new Set(),
+      lastPlaylist: null,
+      lastEdge: null,
+      lastFetchedAt: 0,
+      polling: false,
+      pollLoopStartedAt: 0,
+    };
     if (!insertPollState(renditionKey, candidate)) {
       // The map is full and every entry is active -- see `insertPollState`
       // and the module doc comment on `MAX_POLL_STATE_ENTRIES`. Rather than
@@ -778,6 +849,21 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
   const timeoutMs = isVideoRung
     ? VIDEO_RUNG_HOLD_BUDGET_MS
     : currentPollIntervalMs(state.lastEdge) * TIMEOUT_PART_MULTIPLIER;
+  // A LONGER budget does not mean an UNBOUNDED number of in-flight waiters
+  // on the video rung -- Farol 2026-09-15 (PR #634) asked this be cited
+  // explicitly: `MAX_WAITERS_PER_RENDITION` (2,000, above) already caps
+  // waiters on ANY single rendition, video included, and once hit a new
+  // waiter fails fast into `{ kind: "waiter-cap-fallback" }` (checked just
+  // above, before this point) rather than being added here -- it still gets
+  // served the current playlist through the plain non-blocking path, never
+  // an error. `MAX_ACTIVE_POLL_LOOPS` (64) and `MAX_POLL_STATE_ENTRIES`
+  // (500) are the other two ceilings in the same three-tier admission
+  // control, also unmodified and also rung-agnostic. Holding a video waiter
+  // 4x longer (6s vs. the old ~1.5s) does mean, at a fixed arrival rate,
+  // roughly 4x as many concurrent video waiters for a given rendition --
+  // which is exactly what makes MAX_WAITERS_PER_RENDITION's existing 2,000
+  // ceiling reachable sooner under sustained load on one rendition, by
+  // design: it still fails new waiters fast once reached.
 
   return new Promise((resolve, reject) => {
     /** @type {Waiter} */
@@ -826,6 +912,12 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
     state.waiters.add(waiter);
     if (!state.polling) {
       state.polling = true;
+      // Marks when THIS run of the loop started, not any one waiter's own
+      // `registeredAt` -- the video rung's poll backoff
+      // (`pollIntervalForLoop`) measures elapsed time against the loop, since
+      // it is the loop's own cadence that backs off, shared by every waiter
+      // currently joined to it.
+      state.pollLoopStartedAt = nowMs;
       void runPollLoop(renditionKey, state, deps, now, sleep);
     }
   });
@@ -985,6 +1077,10 @@ function fetchWithDeadlineRace(deps, state, now, sleep) {
  * @returns {Promise<void>}
  */
 async function runPollLoop(renditionKey, state, deps, now, sleep) {
+  // Same test as `awaitBlockingReload`'s own `isVideoRung`, recomputed here
+  // from `deps.rung` (this loop's own closure already has it) rather than
+  // threaded through as an extra parameter -- see `pollIntervalForLoop`.
+  const isVideoRung = deps.rung === LL_VIDEO_RUNG;
   try {
     while (state.waiters.size > 0) {
       const raced = await fetchWithDeadlineRace(deps, state, now, sleep);
@@ -1042,7 +1138,7 @@ async function runPollLoop(renditionKey, state, deps, now, sleep) {
         break;
       }
 
-      const intervalMs = currentPollIntervalMs(state.lastEdge);
+      const intervalMs = pollIntervalForLoop(state.lastEdge, isVideoRung, now() - state.pollLoopStartedAt);
       let soonestDeadline = Infinity;
       for (const waiter of state.waiters) {
         if (waiter.deadlineAt < soonestDeadline) {
