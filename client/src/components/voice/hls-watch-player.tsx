@@ -57,6 +57,7 @@ import {
   applyHlsRecoveryStep,
   applyLlLatencyCeiling,
   behindLiveThresholdSeconds,
+  canJumpToLiveEdge,
   buildMediaSessionMetadata,
   catchUpPlaybackRate,
   effectiveHlsMode,
@@ -67,6 +68,7 @@ import {
   isBehindLive,
   isInPlaceModeDemotion,
   isLlPartLoadErrorDetail,
+  isMissingFragmentError,
   isPipAvailable,
   liveSeekOffsetSeconds,
   liveSeekTarget,
@@ -1118,6 +1120,8 @@ export function HlsWatchPlayer({
     let currentFrag: { programDateTimeMs: number; startSeconds: number } | null =
       null;
     let currentRung: string | null = null;
+    /** The manifest's own `PART-HOLD-BACK`, last time it changed (LL only). */
+    let lastPartHoldBack: number | null = null;
     let stallsSinceLastSample = 0;
     let startupMsPending: number | null = null;
     // Distinct from `startupMsPending` being null, which also means "already
@@ -1303,6 +1307,51 @@ export function HlsWatchPlayer({
       pinnedToConventionalRef.current,
     );
     watch.configureForMode(effectiveMode, partTargetMs);
+    // FELL BEHIND THE WINDOW: JUMP TO LIVE, DO NOT ANNOUNCE A DEATH.
+    //
+    // The recovery this attach may perform at most `LL_HLS_EDGE_JUMP_MAX`
+    // times (`canJumpToLiveEdge`), for the one error that means the player
+    // is asking for the wrong place rather than that the stream is gone: a
+    // 404/410 on a part or segment (`isMissingFragmentError`). hls.js cannot
+    // recover from it on its own -- it never retries a 4xx, and an LL master
+    // has no second level to fail over to -- so it goes fatal, and before
+    // this the fatal reached the watchdog and the watchdog eventually
+    // reached "A transmissão caiu" over a broadcast that was still running.
+    //
+    // Bounded on purpose. Past the budget, or with no live edge to jump to,
+    // this returns false and the error goes to the ladder exactly as it did
+    // before, which is what still gets a person a holding screen and a retry
+    // button when the session really has ended.
+    const edgeJumps: number[] = [];
+    const jumpToLiveEdgeAfterError = (what: string): boolean => {
+      const now = Date.now();
+      if (!canJumpToLiveEdge(edgeJumps, now)) {
+        console.warn(`[hls] ${what}, out of live-edge jumps, escalating`);
+        return false;
+      }
+      const hls = hlsRef.current;
+      // Computed BEFORE the loader is touched, for the reason the stall
+      // tick's own seek is: after `stopLoad`/`startLoad`, `liveSyncPosition`
+      // can drop back to a first-window value while the element still holds
+      // the old back-buffer.
+      const target = liveSeekTarget({
+        currentTime: video.currentTime,
+        liveSyncPosition: hls?.liveSyncPosition ?? null,
+        seekableEnd: mediaSeekableEnd(video),
+        segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
+      });
+      if (target === null) {
+        console.warn(`[hls] ${what}, no live edge to jump to, escalating`);
+        return false;
+      }
+      edgeJumps.push(now);
+      console.warn(
+        `[hls] ${what} is behind the playlist window, jumping to the live edge @${target.toFixed(3)}`,
+      );
+      applyHlsRecoveryStep(hls, "restart-load", target);
+      video.currentTime = target;
+      return true;
+    };
     // This attach's own starting point for the token-swap ref (B1.3, item
     // 3): a real re-attach (this effect re-running at all) always deserves
     // the freshest URL it was actually given, never a stale ref left over
@@ -1435,7 +1484,28 @@ export function HlsWatchPlayer({
               seekableEnd: mediaSeekableEnd(video),
               segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
             });
-        applyHlsRecoveryStep(hls, decision);
+        // AND ON LL THE LOADER RESTARTS THERE TOO, not at the frozen
+        // playhead. `startLoad(-1)` means "resume where you were" in hls.js,
+        // not "go live" (`recoveryStartPosition`), so on LL every recovery
+        // fired one request for a part that had left the ring minutes
+        // earlier, got a 404, and went fatal before this seek ever landed.
+        //
+        // LL ONLY, and that gate is the whole difference between this PR and
+        // PR 646. A conventional stream's window is sixty seconds and its
+        // playhead is inside it: `-1` has been right there for the life of
+        // this player, every viewer we have is on that path, and PR 646's
+        // revert was a reviewer unable to rule out that this line had
+        // started seeking conventional recoveries to the edge. It has not:
+        // `null` is exactly what `applyHlsRecoveryStep` received before, on
+        // conventional and on VOD alike, and
+        // `hls-watch-player-conventional-recovery.test.tsx` pins the
+        // resulting `startLoad(-1)` against the ladder recorded off
+        // post-revert `main`.
+        applyHlsRecoveryStep(
+          hls,
+          decision,
+          effectiveMode === "ll" ? target : null,
+        );
         if (target !== null) {
           video.currentTime = target;
         }
@@ -1690,7 +1760,21 @@ export function HlsWatchPlayer({
       player.on(Hls.Events.ERROR, (_event, data) => {
         // Fatal network/media errors: hls.js has given up on this source;
         // non-fatal ones it retries on its own and the watchdog only notes.
-        watch.onError({ fatal: Boolean(data.fatal) });
+        const fatal = Boolean(data.fatal);
+        // WHETHER THIS ATTACH HAS A LIVE-EDGE JUMP AT ALL. LL only, and
+        // never a replay. On every other path -- which is every watch party
+        // anybody has actually run -- the watchdog is told FIRST and the
+        // rest of this handler is what it always was, so there is nothing a
+        // conventional viewer can reach that PR 646 could have changed.
+        //
+        // On LL the watchdog is told LAST instead, because the jump below
+        // is a claim that this fatal is recoverable in place: handing the
+        // ladder the same error would run a second, competing response to
+        // it.
+        const canJumpOnThisAttach = effectiveMode === "ll" && !isVod;
+        if (!canJumpOnThisAttach) {
+          watch.onError({ fatal });
+        }
         // Pitfall 16 (CLAUDE.md): a 401 on our own playlist proxy is almost
         // always a Clerk JWT that went stale a few seconds before its
         // refresh, not a real access failure — the `?t=` capability in the
@@ -1705,6 +1789,7 @@ export function HlsWatchPlayer({
         // "a viewer who cannot hold the edge should stop trying, not
         // oscillate". `effectiveMode` (not the raw `mode` prop) so a
         // session already pinned does not re-arm itself on its own errors.
+        let pinned = false;
         if (
           !cancelled &&
           effectiveMode === "ll" &&
@@ -1719,6 +1804,7 @@ export function HlsWatchPlayer({
             !pinnedToConventionalRef.current &&
             shouldPinToConventionalRung(timestamps)
           ) {
+            pinned = true;
             pinnedToConventionalRef.current = true;
             // The render-visible mirror (Farol review, this PR): without
             // this the live badge kept showing an LL latency reading after
@@ -1731,6 +1817,40 @@ export function HlsWatchPlayer({
             setAttempt((n) => n + 1);
           }
         }
+        if (!canJumpOnThisAttach) {
+          // Conventional and VOD are finished: the watchdog already has the
+          // error and its ladder is the only response there is, exactly as
+          // before PR 646.
+          return;
+        }
+        // A 404/410 on a part or segment: the player fell behind the ring,
+        // which a jump to live fixes and a holding screen does not. Skipped
+        // when the pin above already fired -- that rebuilds the instance
+        // from the live edge anyway, and two responses to one error is how
+        // a recovery ladder fights itself.
+        //
+        // Why this is LL-only rather than "live-only", which is what PR 646
+        // shipped: on a conventional stream a 404 on a segment is NOT a
+        // player that fell behind a twelve-second ring. The window is sixty
+        // seconds and hls.js's own retry budget is generous enough to sit
+        // inside it, so a 404 there means the object is genuinely not in the
+        // bucket -- an egress that stopped writing, a session that ended --
+        // and escalating to the ladder (and eventually to a holding screen
+        // that says so) is the correct answer, not jumping the audience
+        // forward over a hole.
+        if (
+          !cancelled &&
+          !pinned &&
+          isMissingFragmentError({
+            fatal,
+            details: data.details,
+            responseCode: data.response?.code ?? null,
+          }) &&
+          jumpToLiveEdgeAfterError(`${data.details} ${data.response?.code}`)
+        ) {
+          return;
+        }
+        watch.onError({ fatal });
       });
       player.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         // What Auto actually settled on, so the button can say
@@ -1772,6 +1892,29 @@ export function HlsWatchPlayer({
             `${data.details.lastPartSn}.${data.details.lastPartIndex}`,
             Date.now(),
           );
+          // THE CEILING FOLLOWS THE MANIFEST, once the manifest exists.
+          // `applyLlLatencyCeiling` at the attach only has the part target
+          // to go on -- 4 s at a 500 ms part -- and the server is free to
+          // advertise a `PART-HOLD-BACK` anywhere under that. Raise the
+          // hold-back to 3 s (which the edge is doing, for its own half of
+          // the same evening's rebuffering) and the player is asked to hold
+          // a 3 s target under a 4 s force-seek line: one stumble and
+          // `synchronizeToLiveEdge` seeks, which empties a 6 s buffer,
+          // which is the next stumble. `llLatencyCeilingSeconds` keeps six
+          // parts of room above whatever the manifest says. Re-applied only
+          // when the value actually changes -- this event fires once per
+          // PART under the blocking reload.
+          const holdBack = data.details.partHoldBack;
+          if (holdBack !== lastPartHoldBack) {
+            lastPartHoldBack = holdBack;
+            applyLlLatencyCeiling(
+              player as unknown as {
+                config: { liveMaxLatencyDuration?: number };
+              },
+              partTargetMs,
+              holdBack,
+            );
+          }
         }
         // Conventional only. This is exactly the override §4 warns against
         // on an LL manifest: it fights `PART-HOLD-BACK` by giving

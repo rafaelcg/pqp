@@ -3,6 +3,7 @@ import {
   LL_HLS_PART_STUCK_PARTS,
   LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
   LL_HLS_SEQUENCE_STUCK_SEGMENTS,
+  LL_HLS_STARTUP_GRACE_MS,
   validPartTargetMs,
   type HlsMode,
 } from "./hls-live-edge";
@@ -59,6 +60,17 @@ import {
  *   turned into roughly one `fetchChannelLive` per viewer per second for the
  *   whole outage, worse once the API itself was the slow part and requests
  *   started overlapping.
+ *
+ * THE STARTUP GRACE (LL only, `LL_HLS_STARTUP_GRACE_MS`). The soft rules --
+ * `"stall"` and the part-stuck nudge -- say nothing for the first seconds of
+ * an LL attach. A player waiting out the edge's `503 Retry-After: 1` while
+ * the remux warms up, and then filling a six-second buffer out of 500 ms
+ * parts, is indistinguishable from a stalled one by those two rules, and
+ * `LL_HLS_PART_STUCK_PARTS` is only two seconds: the nudge fired a
+ * `startLoad` into a load that was going fine, which is the client's half of
+ * the "struggles until it settles" the first sustained LL run showed. A
+ * fatal error is NOT graced -- a source that is gone at second two is gone.
+ * Conventional sessions set the grace to 0 and are byte-identical to before.
  *
  * `"fatal"`/`"stall"` repeat their ladder for up to three full cycles before
  * declaring `"rebuild"` ("no recovery after three attempts"); every
@@ -146,6 +158,18 @@ export class HlsStallWatch {
    * default, and every conventional session). Set by `configureForMode`.
    */
   private partStuckMs: number | null = null;
+  /**
+   * How long after an attach the soft rules stay quiet. 0 -- the constructed
+   * default and every conventional session -- is no grace at all, i.e.
+   * byte-identical to before this existed. Set by `configureForMode`.
+   */
+  private startupGraceMs = 0;
+  /**
+   * When this attach started, for the grace above. Set by `onSourceChanged`
+   * and, for a watch whose caller never calls it, lazily on the first
+   * `tick` -- so the clock is always the caller's, never `Date.now()`.
+   */
+  private attachedAt: number | null = null;
   /** The newest known (segment, part-index) key `onPartAdvance` has seen. */
   private lastPartKey: string | null = null;
   private partSeenAt: number | null = null;
@@ -203,10 +227,21 @@ export class HlsStallWatch {
         LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
       );
       this.partStuckMs = LL_HLS_PART_STUCK_PARTS * parts;
+      this.startupGraceMs = LL_HLS_STARTUP_GRACE_MS;
       return;
     }
     this.sequenceStuckMs = this.defaultSequenceStuckMs;
     this.partStuckMs = null;
+    this.startupGraceMs = 0;
+  }
+
+  /** Still inside this attach's startup grace (LL only; 0 elsewhere). */
+  private inStartupGrace(now: number): boolean {
+    return (
+      this.startupGraceMs > 0 &&
+      this.attachedAt !== null &&
+      now - this.attachedAt < this.startupGraceMs
+    );
   }
 
   /**
@@ -274,6 +309,7 @@ export class HlsStallWatch {
 
   /** A new source was attached: forget the old playlist's timeline. */
   onSourceChanged(now: number): void {
+    this.attachedAt = now;
     this.waitingSince = null;
     this.lastSequence = null;
     this.sequenceSeenAt = now;
@@ -309,7 +345,8 @@ export class HlsStallWatch {
     }
     if (
       this.waitingSince !== null &&
-      now - this.waitingSince >= this.stallMs
+      now - this.waitingSince >= this.stallMs &&
+      !this.inStartupGrace(now)
     ) {
       return "stall";
     }
@@ -324,6 +361,9 @@ export class HlsStallWatch {
   }
 
   tick(now: number): HlsStallDecision {
+    if (this.attachedAt === null) {
+      this.attachedAt = now;
+    }
     const reason = this.currentReason(now);
     if (reason === null) {
       this.ladderStep = 0;
@@ -334,8 +374,17 @@ export class HlsStallWatch {
       if (
         this.partStuckMs !== null &&
         !this.partStuckFired &&
+        // A PART THAT NEVER ARRIVED IS NOT A PART THAT STOPPED.
+        // `onSourceChanged` stamps `partSeenAt` at the attach so the clock
+        // has a start, but until `onPartAdvance` has actually reported one
+        // there is nothing to be stuck: firing here nudged (`startLoad`) a
+        // player that was merely still fetching its first manifest. The
+        // grace below covers the seconds after that first part too, while
+        // the buffer fills.
+        this.lastPartKey !== null &&
         this.partSeenAt !== null &&
-        now - this.partSeenAt >= this.partStuckMs
+        now - this.partSeenAt >= this.partStuckMs &&
+        !this.inStartupGrace(now)
       ) {
         this.partStuckFired = true;
         this.lastReason = "part-stuck";
