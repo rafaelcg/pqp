@@ -425,20 +425,40 @@ the same question the seat adoption asks, at the same moment: an open row set
 for this channel, same presenter, egresses LiveKit still lists, owner not
 answering its heartbeat, is claimed (`claimHlsSessionRow` on the lowest rung is
 the verdict, the rest are repaired with `claimHlsSessionRows`) and adopted
-rung, camera and archive, with no new transcode and nothing stopped. A
-different presenter, an egress that is gone, an owner that is alive, or a
-question that could not be asked all fall through to the ordinary fresh start
-and say which in `voice.hlsResumeNotAdopted`. Leftover egresses are left to
-`reapForeignEgresses` on the monitor tick, which asks who owns an id before it
-stops one, and which now runs for the channel because this process holds the
-room. The LL path already had this shape (`reconcileLlHlsNow` claims an open
-row before it resumes); this is the conventional half. Beside it, a second
-defect from the same incident: `decideLadder` was priced against
+rung, camera and archive, with no new transcode and nothing stopped.
+
+"No" is two different answers, and conflating them was the first thing a Farol
+review caught. `fresh` is a genuine restart (nothing to inherit, a different
+presenter, an egress LiveKit no longer lists) and the caller starts a ladder,
+exactly as it did before this existed. `stand-down` is "somebody alive holds
+this, or the question could not be answered": an owner still answering its
+heartbeat, an ownership or listing lookup that failed, and above all a CLAIM
+THIS PROCESS LOST. On a stand-down the caller does nothing at all this
+reconcile and asks again on the next roster event. Starting a ladder on any of
+them would be the same incident one step further along, with the loser of a
+two-machine race superseding the winner's healthy egresses. The reason is in
+`voice.hlsResumeNotAdopted` (`kind` plus `reason`, throttled per channel per
+reason) or in `voice.hlsSkippedOwnedElsewhere` for the owner case, and a
+non-adopted answer is cached for five seconds so a room filling up does not
+put a row read and a `ListEgress` behind every join. Leftover egresses are
+left to `reapForeignEgresses` on the monitor tick, which asks who owns an id
+before it stops one, and which now runs for the channel because this process
+holds the room. Rows are ended by two rules, not one: a row of an EARLIER
+session is superseded by definition and is closed whether or not a leftover
+egress is still writing to it (otherwise retention never collects its
+objects), while a row of THIS session is closed only when its egress is gone.
+The LL path already had this shape (`reconcileLlHlsNow` claims an open row
+before it resumes); this is the conventional half. Beside it, a second defect
+from the same incident: `decideLadder` was priced against
 `activeLadderEgressCount()`, which counts every ACTIVE egress on the box
 including the ones `endSupersededSessions` was a line away from stopping, so
 the second restart read `ladderMbps=600` against a 450 budget and refused
-`720p30` outright. The count now takes a `supersededChannelId` and leaves that
-channel's condemned egresses out. A draining machine still stops no egress of
+`720p30` outright. `planSupersededEgresses` now names the ids a start is
+actually entitled to end (this channel's active egresses, minus any a live
+other instance owns and any whose last `StopEgress` failed and is in backoff)
+and only those are left out of the count; its listing is passed through to
+`activeBoxEgressCount` so the box is not listed twice on one start. A draining
+machine still stops no egress of
 its own: `shutdown()` in `server/src/index.ts` stops the monitor and nothing
 else, and a socket closed with 1001 ORPHANS its peer rather than removing it,
 so no `pushLiveHls` teardown runs on the way out.
