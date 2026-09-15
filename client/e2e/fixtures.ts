@@ -234,14 +234,19 @@ export async function leaveVoiceIfConnected(page: Page): Promise<void> {
     const box = await disconnect
       .boundingBox({ timeout: 500 })
       .catch(() => null);
+    if (!box) {
+      return;
+    }
     const viewport = page.viewportSize();
+    // A headed run can have no fixed viewport. The button is still in the
+    // DOM and has a box, so hang up. The in-viewport test is only for a
+    // phone drawer: Playwright calls that "visible" while it is off screen.
     if (
-      !box ||
-      !viewport ||
-      box.x < 0 ||
-      box.y < 0 ||
-      box.x + box.width > viewport.width ||
-      box.y + box.height > viewport.height
+      viewport &&
+      (box.x < 0 ||
+        box.y < 0 ||
+        box.x + box.width > viewport.width ||
+        box.y + box.height > viewport.height)
     ) {
       return;
     }

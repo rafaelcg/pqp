@@ -7072,7 +7072,10 @@ function MainAppContent({
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
-      <CallDockProvider onOccupiedChange={setCallDockOnScreen}>
+      <CallDockProvider
+        viewingChannelId={selectedChannel.id}
+        onOccupiedChange={setCallDockOnScreen}
+      >
       <CallSplit
         shape={stageShape}
         kind={splitKind}

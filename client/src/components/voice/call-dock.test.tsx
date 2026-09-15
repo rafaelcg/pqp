@@ -37,7 +37,10 @@ function Screen({
   onOccupiedChange?: (occupied: boolean) => void;
 }) {
   return (
-    <CallDockProvider onOccupiedChange={onOccupiedChange}>
+    <CallDockProvider
+      viewingChannelId={viewing}
+      onOccupiedChange={onOccupiedChange}
+    >
       <div data-stage-slot>
         {call && <Stage channelId={call.channelId} label={call.label} />}
       </div>
@@ -188,6 +191,20 @@ describe("CallDockOutlet", () => {
     expect(occupied).toHaveBeenLastCalledWith(true);
     act(() => root.render(<div />));
     expect(occupied).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not retrigger occupancy when only the bar's contents change", () => {
+    const occupied = vi.fn();
+    render({ viewing: "lobby", call: LOBBY, onOccupiedChange: occupied });
+    expect(occupied).toHaveBeenLastCalledWith(true);
+    occupied.mockClear();
+    render({
+      viewing: "lobby",
+      call: { ...LOBBY, label: "Dev User, Bob" },
+      onOccupiedChange: occupied,
+    });
+    expect(composerText()).toBe("Dev User, Bob");
+    expect(occupied).not.toHaveBeenCalled();
   });
 
   it("draws the live bar straight from the stage, without a copy in state", () => {

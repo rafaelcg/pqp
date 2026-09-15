@@ -8,6 +8,7 @@ import {
   useState,
   type ReactElement,
   type ReactNode,
+  type RefObject,
   type TransitionEvent,
 } from "react";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
@@ -44,6 +45,11 @@ import { cn } from "@/lib/utils";
  * the channel it belongs to. The composer remounts per channel; without the
  * key its first render after a switch would briefly see the previous
  * channel's bar.
+ *
+ * Speaking ticks rebuild the bar. The channel key is what the provider
+ * holds in state; the live element lives on a ref the outlet reads, so a
+ * roster or timer update does not change the context value or walk the
+ * conversation tree a second time before paint.
  */
 export interface CallDockContent {
   channelId: string;
@@ -54,14 +60,25 @@ type Publish = (content: CallDockContent | null) => void;
 type ReportOccupied = (occupied: boolean) => void;
 
 const PublishContext = createContext<Publish | null>(null);
-const ContentContext = createContext<CallDockContent | null>(null);
+const ChannelContext = createContext<string | null>(null);
+const NodeRefContext = createContext<RefObject<ReactElement | null> | null>(
+  null,
+);
 const OccupiedContext = createContext<ReportOccupied | null>(null);
 
 export function CallDockProvider({
   children,
+  viewingChannelId,
   onOccupiedChange,
 }: {
   children: ReactNode;
+  /**
+   * The channel whose composer is on screen. Occupancy is this id matching
+   * the published bar AND an outlet actually drawing that bar. Staying in a
+   * call and opening a text channel leaves the sidebar's camera and share
+   * buttons in place, because that composer has no dock.
+   */
+  viewingChannelId?: string;
   /**
    * Whether a bar is DRAWN right now: reported by the outlet that draws it,
    * not by the stage that publishes it, so a bar published for a channel
@@ -72,24 +89,43 @@ export function CallDockProvider({
    */
   onOccupiedChange?: (occupied: boolean) => void;
 }) {
-  const [content, setContent] = useState<CallDockContent | null>(null);
-  const publish = useCallback<Publish>((next) => setContent(next), []);
-  const [occupied, setOccupied] = useState(false);
+  const [publishedChannelId, setPublishedChannelId] = useState<string | null>(
+    null,
+  );
+  const nodeRef = useRef<ReactElement | null>(null);
+  const publish = useCallback<Publish>((next) => {
+    nodeRef.current = next?.node ?? null;
+    setPublishedChannelId((previous) => {
+      const id = next?.channelId ?? null;
+      return previous === id ? previous : id;
+    });
+  }, []);
+  const [barVisible, setBarVisible] = useState(false);
+  const occupied =
+    barVisible &&
+    publishedChannelId !== null &&
+    publishedChannelId === viewingChannelId;
   useEffect(() => {
     onOccupiedChange?.(occupied);
   }, [occupied, onOccupiedChange]);
+  // Separate from the occupancy effect so a last-true report cannot stick
+  // when this provider unmounts (the conversation shell going away mid-call).
+  const onOccupiedChangeRef = useRef(onOccupiedChange);
+  onOccupiedChangeRef.current = onOccupiedChange;
   useEffect(
     () => () => {
-      onOccupiedChange?.(false);
+      onOccupiedChangeRef.current?.(false);
     },
-    [onOccupiedChange],
+    [],
   );
   return (
     <PublishContext.Provider value={publish}>
-      <OccupiedContext.Provider value={setOccupied}>
-        <ContentContext.Provider value={content}>
-          {children}
-        </ContentContext.Provider>
+      <OccupiedContext.Provider value={setBarVisible}>
+        <ChannelContext.Provider value={publishedChannelId}>
+          <NodeRefContext.Provider value={nodeRef}>
+            {children}
+          </NodeRefContext.Provider>
+        </ChannelContext.Provider>
       </OccupiedContext.Provider>
     </PublishContext.Provider>
   );
@@ -107,9 +143,12 @@ export function useCallDockPublisher(): Publish | null {
 /**
  * Renders nothing here and puts `children` in the dock instead.
  *
- * Publishes after every render, because the bar is rebuilt every render (a
- * speaking ring, a raised hand, the clock). The cleanup publishes null so the
- * dock closes when the stage goes away or stops being collapsed.
+ * The live bar is written into the provider's ref during render so the
+ * outlet (later in the tree) can read this pass's speaking ring or clock
+ * without a new context value. The layout effect only announces the
+ * channel, which is what occupancy and the first-paint handoff need.
+ * Cleanup publishes null so the dock closes when the stage goes away or
+ * stops being collapsed.
  */
 export function CallDockPortal({
   channelId,
@@ -120,9 +159,17 @@ export function CallDockPortal({
   publish: Publish;
   children: ReactElement;
 }) {
+  const nodeRef = useContext(NodeRefContext);
+  if (nodeRef) {
+    nodeRef.current = children;
+  }
   useLayoutEffect(() => {
-    publish({ channelId, node: children });
-  });
+    const node = nodeRef?.current;
+    if (!node) {
+      return;
+    }
+    publish({ channelId, node });
+  }, [channelId, nodeRef, publish]);
   useLayoutEffect(() => () => publish(null), [publish]);
   return null;
 }
@@ -146,18 +193,19 @@ const EXIT_BACKSTOP_MS = 600;
  * list above scroll-anchors to the bottom throughout (`MessageList` watches
  * its own height with a ResizeObserver).
  *
- * While a bar is live it is drawn straight from context: the stage publishes
- * a fresh element every render (a speaking ring, the clock), and copying it
+ * While a bar is live it is drawn from the node ref the portal writes during
+ * render: the stage rebuilds the element every speaking tick, and copying it
  * into state here would cost a second render pass each time. State only
  * enters on the way out, to hold the last bar for its closing transition.
  *
  * Under reduced motion the row snaps both ways.
  */
 export function CallDockOutlet({ channelId }: { channelId: string }) {
-  const published = useContext(ContentContext);
+  const publishedChannelId = useContext(ChannelContext);
+  const nodeRef = useContext(NodeRefContext);
   const content =
-    published !== null && published.channelId === channelId
-      ? published.node
+    publishedChannelId === channelId && nodeRef?.current != null
+      ? nodeRef.current
       : null;
   const active = content !== null;
   const reducedMotion = usePrefersReducedMotion();

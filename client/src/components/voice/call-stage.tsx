@@ -1150,21 +1150,13 @@ function ActiveCall({
     : null;
   const timerRunning =
     voiceState.status === "connected" && remotes.length > 0 && timerKey !== null;
-  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!timerRunning || !timerKey) {
       return;
     }
     markCallStarted(timerKey, Date.now());
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
   }, [timerRunning, timerKey]);
   const startedAt = timerKey ? callStartedAt(timerKey) : null;
-  const elapsedLabel =
-    timerRunning && startedAt !== null
-      ? formatCallDuration(now - startedAt)
-      : null;
 
   // --- fullscreen ---------------------------------------------------------
   const stageRef = useRef<HTMLDivElement>(null);
@@ -1446,14 +1438,11 @@ function ActiveCall({
                 {t("call.panel.declined", { name })}
               </span>
             ))}
-            {elapsedLabel && (
-              <span
-                className="ml-2 tabular-nums text-text-tertiary"
-                aria-label={t("call.stage.duration")}
-              >
-                {elapsedLabel}
-              </span>
-            )}
+            <CallDuration
+              running={timerRunning}
+              startedAt={startedAt}
+              className="ml-2 tabular-nums text-text-tertiary"
+            />
           </p>
           <RaisedHandQueue
             compact
@@ -2044,14 +2033,11 @@ function ActiveCall({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {elapsedLabel && (
-            <span
-              className="rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
-              aria-label={t("call.stage.duration")}
-            >
-              {elapsedLabel}
-            </span>
-          )}
+          <CallDuration
+            running={timerRunning}
+            startedAt={startedAt}
+            className="rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
+          />
           {/* The way back from the landscape takeover, and the way into it
               again. Only on a phone held sideways with a share on. */}
           {(immersive.canDismiss || immersive.dismissed) && (
@@ -2173,6 +2159,39 @@ function useReceivedShareAudio(stream: MediaStream | null): boolean {
 function receivingVideo(voiceState: VoiceState): boolean {
   return voiceState.remotePeers.some(
     (peer) => peer.cameraStream !== null || peer.screenStream !== null,
+  );
+}
+
+/**
+ * The call clock. It ticks in this component so a speaking or roster update
+ * does not have to republish the whole dock just to advance "0:07".
+ */
+function CallDuration({
+  running,
+  startedAt,
+  className,
+}: {
+  running: boolean;
+  startedAt: number | null;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running || startedAt === null) {
+      return;
+    }
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [running, startedAt]);
+  if (!running || startedAt === null) {
+    return null;
+  }
+  return (
+    <span className={className} aria-label={t("call.stage.duration")}>
+      {formatCallDuration(now - startedAt)}
+    </span>
   );
 }
 
