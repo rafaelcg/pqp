@@ -16,7 +16,7 @@ import { HlsWatchPlayer } from "./hls-watch-player";
  * so a wiring miss (classifier never called, stopLoad never reached, LL
  * accidentally taking the path) fails here.
  *
- * #650: LL must NOT use this hold — that broader recovery was reverted.
+ * PR 650: LL must NOT use this hold — that broader recovery was reverted.
  */
 
 type ErrorHandler = (event: string, data: Record<string, unknown>) => void;
@@ -146,7 +146,7 @@ describe("HlsWatchPlayer conventional restart hold", () => {
     try {
       await mount({ src: LL_SRC, mode: "ll", partTargetMs: 500 });
       emitPlaylist404();
-      // LL keeps the ordinary fatal path (#650). The ERROR handler must not
+      // LL keeps the ordinary fatal path (PR 650). The ERROR handler must not
       // call stopLoad for playlist-gone on LL.
       expect(stopLoad).not.toHaveBeenCalled();
       expect(container.querySelector('[data-testid="hls-restarting"]')).toBeNull();

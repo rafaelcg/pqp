@@ -1709,7 +1709,7 @@ export function HlsWatchPlayer({
         // before `onError({ fatal })` — hls.js marks these fatal after its
         // retry budget, and that ladder is exactly the 1 Hz / last-segment
         // loop the hold exists to stop. LL and VOD keep the ordinary path
-        // (#650: do not reintroduce the broader #646 live-edge recovery).
+        // (PR 650: do not reintroduce the broader PR 646 live-edge recovery).
         if (
           !cancelled &&
           !isVod &&
