@@ -47,23 +47,63 @@
  *     the colo. `no-store` on the way out, `hlsEdge.llPartMissing` on the
  *     way past.
  *
- * WHY THE BODY IS BUFFERED RATHER THAN STREAMED THROUGH. Coalescing is the
- * point of this route (property 2), and N coalesced callers need N
- * independent bodies — a `Response` body can be read once. The same
- * reasoning `index.ts`'s `fetchRenditionCoalesced` gives for returning a
- * buffered record. The sizes this is bounded to make that cheap: a part is
- * one part target of video (~200 KB at 3.2 Mbit/s and a 500 ms target) and
- * a sealed segment a few of them, nowhere near a Worker's memory bound.
- * Buffering inside `LlPlaylistOrigin.fetchMedia` also means one abort
- * window covers the whole exchange, which is what a box that sends headers
- * and then stalls needs (see `fetchFromOrigin`'s own doc comment).
+ * WHY THE BODY IS BUFFERED, AND WHY ONLY ONE REQUEST KEEPS THE BUFFER.
+ * `LlPlaylistOrigin.fetchMedia` reads the whole object inside one abort
+ * window, which is what a box that sends headers and then stalls needs (see
+ * `fetchFromOrigin`'s own doc comment) — so the producer holds it in isolate
+ * memory either way. What must NOT happen is every coalesced waiter building
+ * its own `Response` from that same buffer and holding a copy until its own
+ * client drains: hundreds of viewers times a several-hundred-KB segment is
+ * real pressure on one isolate. So a waiter awaits the producer's cache
+ * write (already in flight, a few ms, against an origin fetch it has already
+ * paid for) and reads the entry back out of the cache, streaming from the
+ * colo rather than from the isolate. The shared buffer is its fallback only
+ * if that read comes back empty.
  */
 
 import { cacheKeyRequest, safeCacheMatch, safeCachePut } from "./edge-cache.js";
 import { logEvent } from "./log.js";
-import { playlistOriginKindForRung } from "./ll-state.js";
+import { LL_AUDIO_RUNG, playlistOriginKindForRung } from "./ll-state.js";
 import { authorizeViewer, type ViewerAccessEnv } from "./viewer-access.js";
 import type { PartyPassRevocationGate } from "./party-pass-revocation.js";
+
+/**
+ * THE NAMES THIS ROUTE WILL ASK THE BOX FOR — narrower than
+ * `isSafeUriSegment`, deliberately.
+ *
+ * `isSafeUriSegment` (`ll-state.js`) answers "can this string be a path
+ * segment without escaping", which is the right question for a document the
+ * remux wrote. It is the WRONG question for a name a VIEWER supplies: a
+ * party viewer holding a perfectly valid token could ask for `probe-1`,
+ * `probe-2`, ... forever, and since a name the box does not have 404s and a
+ * 404 is deliberately never cached (property 3), every one of those would be
+ * another real fetch against the origin — a viewer-driven amplifier against
+ * the one box serving the party. Farol caught it on this PR's first commit.
+ *
+ * So the route accepts only the filename grammar `pqp-remuxd` actually
+ * writes (`internal/serve`, and `ll-state.js`'s own contract): an init
+ * segment, a sealed segment, or a part, each with an optional `audio-`
+ * prefix that must AGREE with the rung being asked for — the video rung can
+ * never fetch the audio ring's files and vice versa. Anything else is
+ * refused here, with no origin fetch at all.
+ *
+ * IF A PRODUCER EVER CHANGES ITS NAMING, THIS IS THE ONE PLACE TO WIDEN.
+ * `state.json`'s contract permits any safe name, so a future remux could
+ * legitimately name things differently; `test/ll-state-remux-golden.test.mjs`
+ * pins the names the real one emits today, and `hlsEdge.llPartNameRefused`
+ * is what a divergence would look like from the outside.
+ */
+const MEDIA_NAME_PATTERN = /^(init\.mp4|seg-\d{1,12}\.m4s|part-\d{1,12}\.m4s)$/;
+const AUDIO_NAME_PREFIX = "audio-";
+
+function nameBelongsToRung(name: string, rung: string): boolean {
+  const isAudioRung = rung === LL_AUDIO_RUNG;
+  const isAudioName = name.startsWith(AUDIO_NAME_PREFIX);
+  if (isAudioRung !== isAudioName) {
+    return false;
+  }
+  return MEDIA_NAME_PATTERN.test(isAudioName ? name.slice(AUDIO_NAME_PREFIX.length) : name);
+}
 
 /** A year, in seconds — RFC 9111's practical ceiling and what `immutable` is paired with everywhere. */
 const MEDIA_MAX_AGE_SECONDS = 31_536_000;
@@ -175,7 +215,14 @@ interface FetchedMedia {
 
 interface CoalescedMedia {
   result: FetchedMedia;
-  /** True for exactly the caller whose call started the origin fetch — only it writes the cache. */
+  /**
+   * Resolves once the producer has finished populating the cache (or
+   * decided not to: a 404, a 5xx, a failed write). A NON-producer awaits it
+   * and then reads the entry back out of the cache instead of building its
+   * own `Response` from the shared buffer — see `handleLlMediaRequest`.
+   */
+  settled: Promise<void>;
+  /** True only for the caller whose call started the origin fetch. */
   isProducer: boolean;
 }
 
@@ -188,22 +235,40 @@ interface CoalescedMedia {
  * observes `cache.match` as empty. Keyed on the cache key (the path, never
  * the token), so viewers with different tokens share one fetch.
  *
+ * THE ENTRY LIVES UNTIL THE CACHE IS POPULATED, NOT UNTIL THE ORIGIN
+ * ANSWERS. A first version deleted the in-flight entry in a `finally` the
+ * moment the fetch settled and only THEN scheduled `cache.put` under
+ * `waitUntil` — leaving a window in which a newly arriving viewer saw an
+ * empty cache AND an empty in-flight map, and started a second real fetch
+ * for the same part. At party scale that window is exactly when the burst
+ * arrives, so it defeated the one-fetch collapse this route exists for
+ * (Farol, on this PR's first commit). The cache write now happens INSIDE
+ * the shared chain, and the entry is removed only after it has, so the
+ * window has nothing in it.
+ *
+ * Callers still get their bytes as soon as the ORIGIN answers — they await
+ * the fetch promise, not the write — so nobody pays the cache write's
+ * latency to be served.
+ *
  * This composes with, rather than replaces, `LlPlaylistOrigin`'s own
  * per-path in-flight map: that one de-duplicates across every caller inside
  * the origin class (a `state.json` probe and a part fetch alike), this one
- * additionally decides WHO writes the cache, which the origin has no way to
- * know.
+ * additionally owns the cache write, which the origin has no way to do.
  */
 const inFlightMediaFetches = new Map<string, Promise<FetchedMedia>>();
+const settledMediaWrites = new Map<string, Promise<void>>();
 
-async function fetchMediaCoalesced(
-  cacheKeyUrl: string,
+function fetchMediaCoalesced(
+  cacheKey: Request,
   origin: LlMediaOrigin,
   route: LlMediaRoute,
-): Promise<CoalescedMedia> {
-  const existing = inFlightMediaFetches.get(cacheKeyUrl);
+  cache: Cache,
+  ctx: ExecutionContext,
+): CoalescedMedia | Promise<CoalescedMedia> {
+  const existing = inFlightMediaFetches.get(cacheKey.url);
   if (existing) {
-    return { result: await existing, isProducer: false };
+    const settled = settledMediaWrites.get(cacheKey.url) ?? Promise.resolve();
+    return existing.then((result) => ({ result, settled, isProducer: false }));
   }
   const startTime = Date.now();
   const promise = (async (): Promise<FetchedMedia> => {
@@ -232,12 +297,46 @@ async function fetchMediaCoalesced(
     }
     return fetched;
   })();
-  inFlightMediaFetches.set(cacheKeyUrl, promise);
-  try {
-    return { result: await promise, isProducer: true };
-  } finally {
-    inFlightMediaFetches.delete(cacheKeyUrl);
-  }
+  inFlightMediaFetches.set(cacheKey.url, promise);
+
+  // ONLY THE PRODUCER WRITES THE CACHE, and it writes it from HERE rather
+  // than from its own request handler -- every other caller sharing this
+  // fetch would otherwise run the identical `cache.put` on the identical
+  // key for no benefit (the same finding Farol raised against the rendition
+  // route), and doing it inside the chain is what keeps the in-flight entry
+  // alive across the write (see the doc comment above).
+  const settled = promise
+    .then(
+      async (fetched) => {
+        if (!fetched.ok) {
+          return;
+        }
+        const toCache = new Response(fetched.body, {
+          status: 200,
+          headers: mediaHeaders(route, fetched.body.byteLength),
+        });
+        await safeCachePut(cache, cacheKey, toCache);
+      },
+      () => {
+        // The failure is already logged inside the shared fetch, and the
+        // caller sees it as a rejection of `promise` itself.
+      },
+    )
+    .finally(() => {
+      inFlightMediaFetches.delete(cacheKey.url);
+      settledMediaWrites.delete(cacheKey.url);
+    });
+  settledMediaWrites.set(cacheKey.url, settled);
+  ctx.waitUntil(settled);
+  return promise.then((result) => ({ result, settled, isProducer: true }));
+}
+
+function mediaHeaders(route: LlMediaRoute, byteLength: number): Headers {
+  return new Headers({
+    "Content-Type": contentTypeFor(route.name),
+    "Cache-Control": MEDIA_CACHE_CONTROL,
+    "Content-Length": String(byteLength),
+  });
 }
 
 function text(status: number, body: string, extraHeaders: Record<string, string> = {}): Response {
@@ -277,6 +376,16 @@ export async function handleLlMediaRequest(
   // never existed on this host -- 404, before any credential work, the same
   // answer an unmatched path gets.
   if (playlistOriginKindForRung(route.rung) !== "ll") {
+    return json(404, { error: "Not found" });
+  }
+
+  // The name must be one the remux actually writes -- see
+  // `MEDIA_NAME_PATTERN` for why a viewer-supplied name gets a narrower
+  // check than a state.json-supplied one. Before the credential work, like
+  // the rung check above: this is "that file does not exist here", not
+  // "you may not have it".
+  if (!nameBelongsToRung(route.name, route.rung)) {
+    countEvent("hlsEdge.llPartNameRefused", route);
     return json(404, { error: "Not found" });
   }
 
@@ -322,10 +431,12 @@ export async function handleLlMediaRequest(
 
   let fetched: FetchedMedia;
   let isProducer: boolean;
+  let settled: Promise<void>;
   try {
-    const coalesced = await fetchMediaCoalesced(cacheKey.url, origin, route);
+    const coalesced = await fetchMediaCoalesced(cacheKey, origin, route, cache, ctx);
     fetched = coalesced.result;
     isProducer = coalesced.isProducer;
+    settled = coalesced.settled;
   } catch {
     // Already logged once, inside the shared fetch.
     return text(502, "Origin fetch failed", { "Cache-Control": "no-store" });
@@ -349,22 +460,29 @@ export async function handleLlMediaRequest(
     return text(502, "Origin fetch failed", { "Cache-Control": "no-store" });
   }
 
-  const headers = new Headers({
-    "Content-Type": contentTypeFor(route.name),
-    "Cache-Control": MEDIA_CACHE_CONTROL,
-    "Content-Length": String(fetched.body.byteLength),
-  });
-
-  // ONLY THE PRODUCER WRITES THE CACHE -- every other caller sharing this
-  // fetch already holds the same bytes, and a duplicate `cache.put` per
-  // waiter is pure waste (the same finding Farol raised against the
-  // rendition route).
-  if (isProducer) {
-    const toCache = new Response(fetched.body, { status: 200, headers: new Headers(headers) });
-    ctx.waitUntil(safeCachePut(cache, cacheKey, toCache));
+  // A WAITER IS SERVED FROM THE CACHE, NOT FROM THE SHARED BUFFER. The
+  // producer holds the whole object in isolate memory (it has to: it just
+  // read it), and every waiter that built its OWN `Response` from that same
+  // buffer added another copy for as long as its client took to drain it --
+  // hundreds of viewers times a several-hundred-KB segment is real memory
+  // pressure on one isolate, which Farol flagged on this PR's first commit.
+  // Waiting for the write the producer is already doing (a few ms, against
+  // an origin fetch they have ALREADY paid) and reading the entry back
+  // means the bytes stream out of the colo's cache instead. The buffered
+  // copy below is the fallback for when that read comes back empty -- a
+  // failed or evicted write -- because a viewer must never be worse off
+  // than before this optimization existed.
+  if (!isProducer) {
+    await settled;
+    const warmed = await safeCacheMatch(cache, cacheKey);
+    if (warmed) {
+      const headers = new Headers(warmed.headers);
+      headers.set("X-HLS-Edge-Cache", "COALESCED");
+      return new Response(warmed.body, { status: warmed.status, headers });
+    }
   }
 
-  const response = new Response(fetched.body, { status: 200, headers });
-  response.headers.set("X-HLS-Edge-Cache", "MISS");
-  return response;
+  const headers = mediaHeaders(route, fetched.body.byteLength);
+  headers.set("X-HLS-Edge-Cache", isProducer ? "MISS" : "COALESCED");
+  return new Response(fetched.body, { status: 200, headers });
 }

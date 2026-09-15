@@ -493,3 +493,95 @@ test("a party-pass viewer with no token at all is served the bytes -- the pass a
     "a pass-authorized request writes the SAME token-free cache entry a token-authorized one does",
   );
 });
+
+test("a name outside the remux's own filename grammar never reaches the box", async () => {
+  // The amplifier Farol caught: a valid token plus an endless supply of
+  // path-safe names (`probe-1`, `probe-2`, ...) would be one uncached
+  // origin fetch each, since a name the box does not have 404s and a 404 is
+  // deliberately never cached.
+  const channelId = "chan-part-badname";
+  const startedAt = "1726000100011";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const token = tokenFor("viewer-a", channelId, startedAt);
+
+  for (const [rung, name] of [
+    [LL_VIDEO_RUNG, "probe-1"],
+    [LL_VIDEO_RUNG, "state.json"],
+    [LL_VIDEO_RUNG, "playlist.m3u8"],
+    [LL_VIDEO_RUNG, "part-164.mp4"],
+    // The rung and the name must agree: the video rung may not reach into
+    // the audio ring, nor the other way round.
+    [LL_VIDEO_RUNG, "audio-part-5.m4s"],
+    [LL_AUDIO_RUNG, "part-5.m4s"],
+  ]) {
+    const response = await callMedia(
+      mediaRequest(channelId, startedAt, rung, name, token),
+      origin,
+      cache,
+      ctx,
+      baseEnv(),
+      { channelId, startedAt, rung, name },
+    );
+    assert.equal(response.status, 404, `${rung}/${name}`);
+  }
+
+  assert.equal(origin.calls, 0, "not one of those may become an origin fetch");
+});
+
+test("a coalesced waiter is served the cached copy, and the entry is warm the moment the fetch settles", async () => {
+  // The window Farol caught: the in-flight entry used to be dropped as soon
+  // as the origin answered, with the cache write only scheduled afterwards,
+  // so a viewer arriving in between saw an empty cache AND an empty
+  // in-flight map and started a second real fetch.
+  const channelId = "chan-part-window";
+  const startedAt = "1726000100012";
+  const name = "part-999.m4s";
+  const origin = fakeMediaOrigin({ delayMs: 10 });
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const env = baseEnv();
+  const route = { channelId, startedAt, rung: LL_VIDEO_RUNG, name };
+
+  const [producer, waiter] = await Promise.all([
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-a", channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      route,
+    ),
+    callMedia(
+      mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-b", channelId, startedAt)),
+      origin,
+      cache,
+      ctx,
+      env,
+      route,
+    ),
+  ]);
+
+  assert.equal(origin.calls, 1);
+  assert.equal(producer.headers.get("X-HLS-Edge-Cache"), "MISS");
+  assert.equal(
+    waiter.headers.get("X-HLS-Edge-Cache"),
+    "COALESCED",
+    "the waiter is served the cached copy, not its own copy of the shared buffer",
+  );
+  assert.deepEqual([...new Uint8Array(await waiter.arrayBuffer())], [1, 2, 3, 4]);
+  // Warm already, with no `drain()` -- the write happens inside the shared
+  // chain, not after it.
+  assert.equal(cache.size, 1);
+  const third = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, tokenFor("viewer-c", channelId, startedAt)),
+    origin,
+    cache,
+    ctx,
+    env,
+    route,
+  );
+  assert.equal(third.headers.get("X-HLS-Edge-Cache"), "HIT");
+  assert.equal(origin.calls, 1);
+});

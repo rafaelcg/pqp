@@ -523,7 +523,34 @@ as the `state.json` probe does it.
 3. **A 404 stays a 404 and is never cached.** `EXT-X-PRELOAD-HINT` names a
    part the box has not finished writing, so a player asking a beat early is
    NORMAL. Caching that for a year would make the part permanently missing
-   for every viewer in the colo; it goes out `no-store` instead.
+   for every viewer in the colo; it goes out `no-store` instead. Deliberately
+   NOT negatively cached even briefly: the gap between "not yet" and "there"
+   is one part target, and any hold on re-asking is latency added to the one
+   feature whose entire point is not having it. The concurrent case is
+   already collapsed by the in-flight map.
+4. **The name must be one the remux actually writes.** `isSafeUriSegment`
+   answers "can this be a path segment", which is the right question for a
+   name `state.json` supplied and the wrong one for a name a VIEWER
+   supplied: a valid token plus an endless supply of path-safe names
+   (`probe-1`, `probe-2`, …) would be one uncached origin fetch each,
+   against the single box serving the party. So the route accepts only
+   `init.mp4` / `seg-<n>.m4s` / `part-<n>.m4s` and their `audio-` twins,
+   with the prefix required to AGREE with the rung — refused with no origin
+   fetch at all, counted by `hlsEdge.llPartNameRefused`. If a producer ever
+   changes its naming, `MEDIA_NAME_PATTERN` in `ll-media.ts` is the one
+   place to widen.
+
+**The in-flight entry lives until the cache is populated, not until the
+origin answers**, and a coalesced waiter is served the cached copy rather
+than its own `Response` over the shared buffer. Both came out of a Farol
+review of this PR's first commit, and both are about the same burst: a
+window in which the cache is still empty and the in-flight entry is already
+gone starts a second real fetch exactly when the crowd arrives, and a
+buffer fanned out to hundreds of waiters is hundreds of copies of a
+several-hundred-KB segment on one isolate. The write happens inside the
+shared chain; waiters await it and read the entry back (`X-HLS-Edge-Cache:
+COALESCED`), falling back to the shared buffer only if that read comes back
+empty.
 
 **Counters**: `hlsEdge.llPartOriginFetch` (one line per real fetch — the
 cache and the in-flight map already bound it to roughly one per part per

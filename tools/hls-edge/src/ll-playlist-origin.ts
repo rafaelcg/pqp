@@ -277,7 +277,9 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    * looked up, exactly as `fetchState` does it.
    *
    * `name` is re-checked against `isSafeUriSegment` even though
-   * `playlist-route.ts` already bounded it to the same pattern: this method
+   * `playlist-route.ts` bounded it to the same pattern and `ll-media.ts`
+   * bounded it to a NARROWER one (the filenames the remux actually writes):
+   * this method
    * is what turns a name into a path against the remux origin, and the rule
    * that a name can never escape `/s/:sessionId/` belongs next to the
    * `new URL(path, base)` call that would otherwise be the place it escapes
