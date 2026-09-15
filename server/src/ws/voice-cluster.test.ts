@@ -414,6 +414,10 @@ function queue(
     atMs: Date.now(),
     rev,
     actorId,
+    openControls: false,
+    repeat: "off",
+    skipVotes: [],
+    history: [],
     ...extra,
   };
 }
@@ -1049,6 +1053,84 @@ describeDb("voice across two instances", () => {
           (f) => (f.state as { rev: number } | null)?.rev === 3,
         ),
       ).toBe(false);
+    });
+  });
+
+  describe("music listening across instances", () => {
+    /**
+     * The listener flag is a row, not a gossip, so B must build its roster
+     * and its channel-music count from `voice_peers` with the registry on
+     * (pitfall 12). The write counter is the line that proves the path ran.
+     */
+    it("a listening toggle on A is on B's roster and in B's listener count", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userA = randomUUID();
+      const userB = randomUUID();
+      const dj = await join(a, userA, channel);
+      const listenerOnB = await join(b, userB, channel);
+      const sidebarOnB = watcher(b);
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(1, userA, musicTrack("kkkkkkkkkkk", userA)),
+        },
+      );
+      await waitFor(
+        () => frames(listenerOnB, "music").length === 1,
+        "music on B",
+      );
+      await waitFor(
+        () =>
+          (lastRoster(sidebarOnB, channel)?.participants.length ?? 0) === 2,
+        "both on B's sidebar",
+      );
+      await settle();
+
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        { type: "set-music-listening", listening: false },
+      );
+      await settle();
+
+      await waitFor(() => {
+        const roster = lastRoster(sidebarOnB, channel) as
+          | {
+              participants: {
+                peerId: string;
+                listeningMusic?: boolean;
+              }[];
+            }
+          | undefined;
+        const onA = roster?.participants.find((p) => p.peerId === dj.peerId);
+        return onA?.listeningMusic === false;
+      }, "A not listening on B's roster");
+
+      await waitFor(() => {
+        const pills = frames(sidebarOnB, "channel-music");
+        const last = pills[pills.length - 1] as
+          | { track?: { listeners?: number } | null }
+          | undefined;
+        return last?.track?.listeners === 1;
+      }, "B's channel-music count is 1");
+
+      const row = await pools[0]!.getPool().query<{
+        listening_music: boolean;
+      }>(`SELECT listening_music FROM voice_peers WHERE peer_id = $1`, [
+        dj.peerId,
+      ]);
+      expect(row.rows[0]?.listening_music).toBe(false);
+
+      const snapshotA = await a.voice.getVoiceActivitySnapshot();
+      const snapshotB = await b.voice.getVoiceActivitySnapshot();
+      expect(snapshotA.cluster.musicListeningWrites).toBeGreaterThanOrEqual(1);
+      expect(snapshotA.registry.writesPerMinute).toBeGreaterThan(0);
+      expect(snapshotB.roster.snapshots + snapshotB.roster.deltas).toBeGreaterThan(
+        0,
+      );
     });
   });
 

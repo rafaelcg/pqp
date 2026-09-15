@@ -1486,6 +1486,7 @@ CREATE TABLE IF NOT EXISTS voice_peers (
   muted                  BOOLEAN NOT NULL DEFAULT FALSE,
   deafened               BOOLEAN NOT NULL DEFAULT FALSE,
   sharing_screen         BOOLEAN NOT NULL DEFAULT FALSE,
+  listening_music        BOOLEAN NOT NULL DEFAULT TRUE,
   camera_stream_id       TEXT,
   screen_audio_stream_id TEXT,
   can_speak              BOOLEAN NOT NULL DEFAULT TRUE,
@@ -1501,6 +1502,9 @@ CREATE INDEX IF NOT EXISTS idx_voice_peers_instance ON voice_peers (instance_id)
 -- STREAM split landed after M1 created this table. Existing rows keep
 -- presenting (the old Speak bit covered camera and share).
 ALTER TABLE voice_peers ADD COLUMN IF NOT EXISTS can_stream BOOLEAN NOT NULL DEFAULT TRUE;
+-- Who is playing the room's music. Default TRUE: a fresh player is on, and
+-- a client that predates `set-music-listening` never turns it off.
+ALTER TABLE voice_peers ADD COLUMN IF NOT EXISTS listening_music BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- A moderator's mute on one person in one room, the cluster's copy of
 -- `roomServerMutes` in server/src/ws/voice.ts. Keyed on the (room, user)
