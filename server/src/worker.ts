@@ -19,7 +19,10 @@ import { closeApnsSessions } from "./services/apns.js";
 import { startColdJobs, type ColdJobs } from "./jobs.js";
 import { createWorkerHealthServer } from "./worker-health.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
-import { createPostgresBusTransport } from "./lib/bus-postgres.js";
+import {
+  createPostgresBusTransport,
+  type PostgresBusTransport,
+} from "./lib/bus-postgres.js";
 import { logEvent } from "./lib/log.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -43,29 +46,58 @@ const PORT = Number(process.env.PORT ?? 3001);
  * "there is more than one process here". Unset, or any other value, and this
  * process behaves exactly as it did before.
  */
-function startWorkerBus(): boolean {
+function startWorkerBus(): PostgresBusTransport | null {
   const mode = process.env.CLUSTER_BUS ?? "off";
   if (mode === "off") {
-    return false;
+    return null;
   }
   if (mode !== "postgres") {
     console.warn(
       `[bus] unknown CLUSTER_BUS=${mode} — the worker will not publish. ` +
         `Supported: "postgres", "off".`,
     );
-    return false;
+    return null;
   }
-  setBusTransport(createPostgresBusTransport(undefined, { publishOnly: true }));
+  const transport = createPostgresBusTransport(undefined, {
+    publishOnly: true,
+  });
+  setBusTransport(transport);
   logEvent("bus.enabled", {
     transport: "postgres",
     instance: INSTANCE_ID,
     publishOnly: true,
     role: "worker",
   });
-  return true;
+  return transport;
 }
 
+/**
+ * How long boot waits for the bus to be up before starting the jobs.
+ *
+ * A PUBLISH THAT LANDS ON A DISCONNECTED TRANSPORT IS GONE, by design: the
+ * transport drops rather than buffers (see `droppedWhileDown`), because a
+ * queue that grows while Postgres is unreachable is a memory leak dressed as
+ * reliability. That rule is right for presence and typing, and it costs
+ * something here: a reminder tick claims its rows in the same UPDATE that
+ * stamps them, so a frame dropped at boot is a nudge nobody ever gets. Waiting
+ * a few seconds for the LISTEN/NOTIFY connection before the first tick can
+ * fire is the cheap half of the answer, and the one that covers the case that
+ * actually happens — a cold start, where the jobs and the connection race.
+ *
+ * BOUNDED, and the jobs start either way. A worker that cannot reach Postgres
+ * has bigger problems than fan-out and must still answer `/health` and run its
+ * sweeps the moment it can; blocking boot on the bus would turn a slow
+ * database into a worker that never starts.
+ */
+const BUS_READY_TIMEOUT_MS = 10_000;
+
 let jobs: ColdJobs | null = null;
+/**
+ * Set by the first signal. The jobs now start on a promise (they wait for the
+ * bus), so a SIGTERM during that wait must not be followed by a boot that
+ * schedules everything on a process already draining.
+ */
+let shuttingDown = false;
 const healthServer = createWorkerHealthServer();
 
 process.on("unhandledRejection", (reason) => {
@@ -77,6 +109,7 @@ process.on("uncaughtException", (error) => {
 
 async function shutdown(signal: string) {
   console.log(`[shutdown] ${signal}, draining worker`);
+  shuttingDown = true;
   jobs?.stop();
   await new Promise<void>((done) => healthServer.close(() => done()));
   closeApnsSessions();
@@ -93,14 +126,40 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 }
 
 // Before the jobs: the first tick of a job that publishes must find the
-// transport installed, not race it.
-const busPublishing = startWorkerBus();
+// transport installed AND connected, not race it. See BUS_READY_TIMEOUT_MS.
+const bus = startWorkerBus();
 
-jobs = startColdJobs();
+// `/health` first and unconditionally: liveness must never wait on the bus,
+// for the same reason it no longer waits on Postgres (pitfall 17).
 healthServer.listen(PORT, () => {
   console.log(
-    `pqp worker: ${jobs?.count ?? 0} job(s) scheduled, ` +
-      `bus ${busPublishing ? "publishing" : "off"}, ` +
-      `/health on http://localhost:${PORT}`,
+    `pqp worker: /health on http://localhost:${PORT}, ` +
+      `bus ${bus ? "connecting" : "off"}`,
   );
 });
+
+async function startJobsWhenBusIsReady(): Promise<void> {
+  if (bus) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      bus.whenConnected(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, BUS_READY_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+  if (shuttingDown) {
+    return;
+  }
+  jobs = startColdJobs();
+  console.log(
+    `pqp worker: ${jobs.count} job(s) scheduled, ` +
+      `bus ${bus ? "publishing" : "off"}`,
+  );
+}
+
+void startJobsWhenBusIsReady();

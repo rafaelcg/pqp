@@ -19,6 +19,11 @@ import {
 import { HLS_PARTY_PASS_PARAM, HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 import { LiveWindowHistory, widenLivePlaylist } from "./hls-live-window.js";
 import { hlsSessionOwnedElsewhere } from "./hls-ownership.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -242,6 +247,7 @@ export function resetHlsPlaylistCacheForTests(): void {
   keepWarmOwnership.clear();
   keepWarmRenders = 0;
   keepWarmDeclined = 0;
+  keepWarmAdopted = 0;
 }
 
 /**
@@ -434,10 +440,22 @@ async function renderCachedPlaylist(
  * other one serves every viewer exactly as before, from the shared cache and
  * from storage, and simply does not poll on its own clock.
  *
- * WARMING IS THE FAIL-OPEN SIDE. An unstamped row, the registry off, or a
- * lookup this process could not make all leave the loop running: a rung warmed
- * twice costs money, a rung warmed by nobody costs the viewer who switches to
- * it a third of a window (which is the bug this loop exists to fix).
+ * STANDING DOWN IS NOT ENOUGH ON ITS OWN, and getting that wrong would be a
+ * worse bug than the one this fixes. The owner only arms a loop when a VIEWER
+ * polls IT, so an audience that all landed on the other machine (two viewers,
+ * or an owner whose own loop idled out hours into a party) would leave NOBODY
+ * warming. So the machine that stands down first says so on the bus
+ * (`voice.hlsKeepWarm`), and the owner arms its own loop on hearing it — the
+ * same shape as `voice.hlsReconcile`: the instance that cannot do the work
+ * asks the one that can. The non-owner re-publishes every time its ownership
+ * answer expires (`KEEP_WARM_OWNER_TTL_MS`, 30s) for as long as viewers keep
+ * polling it, which is well inside the owner's own `HLS_KEEP_WARM_IDLE_MS`.
+ *
+ * WARMING IS THE FAIL-OPEN SIDE. An unstamped row, the registry off, a bus
+ * that is off (nobody to hand the job to), or a lookup this process could not
+ * make all leave the loop running: a rung warmed twice costs money, a rung
+ * warmed by nobody costs the viewer who switches to it a third of a window
+ * (which is the bug this loop exists to fix).
  */
 export const HLS_KEEP_WARM_INTERVAL_MS = 2_000;
 
@@ -465,6 +483,24 @@ let keepWarmRenders = 0;
  */
 let keepWarmDeclined = 0;
 
+/** Loops this process armed because the OTHER machine handed the job over. */
+let keepWarmAdopted = 0;
+
+/**
+ * "I have a viewer for this session and it is not mine to warm." Published by
+ * the machine standing down, acted on by the owner and by nobody else: every
+ * instance that hears it asks the same ownership question, and only the one
+ * whose answer is "not somebody else's" arms anything. A third machine
+ * therefore stays quiet instead of arming a loop that would only stand down
+ * again and re-publish.
+ */
+const HLS_KEEP_WARM_TOPIC = "voice.hlsKeepWarm";
+
+/** Loops handed to the owner over the bus. For metrics. */
+export function hlsKeepWarmAdopted(): number {
+  return keepWarmAdopted;
+}
+
 /**
  * The ownership answer per session, so the decision costs one query per
  * session per TTL rather than one per two-second tick. Short on purpose: the
@@ -473,6 +509,21 @@ let keepWarmDeclined = 0;
  */
 const KEEP_WARM_OWNER_TTL_MS = 30_000;
 const keepWarmOwnership = new Map<string, { ownedElsewhere: boolean; at: number }>();
+
+/**
+ * An entry is only useful while it is inside its TTL, and a process that runs
+ * for weeks sees every session the deployment ever streamed. Pruned on every
+ * write rather than on a timer of its own: the map is read on a two-second
+ * tick and written once per session per TTL, so the sweep is cheap and there
+ * is no case where an entry outlives its own expiry by more than one write.
+ */
+function pruneKeepWarmOwnership(now: number): void {
+  for (const [key, entry] of keepWarmOwnership) {
+    if (now - entry.at >= KEEP_WARM_OWNER_TTL_MS) {
+      keepWarmOwnership.delete(key);
+    }
+  }
+}
 
 /** Sessions this process left to the machine that owns them. For metrics. */
 export function hlsKeepWarmDeclined(): number {
@@ -503,6 +554,7 @@ async function keepWarmOwnedElsewhere(
   if (answer === null) {
     return known?.ownedElsewhere ?? null;
   }
+  pruneKeepWarmOwnership(now);
   keepWarmOwnership.set(key, { ownedElsewhere: answer, at: now });
   return answer;
 }
@@ -574,7 +626,13 @@ async function runKeepWarmTick(
       key,
       now,
     );
-    if (ownedElsewhere === true) {
+    if (ownedElsewhere === true && isBusEnabled()) {
+      // HAND IT OVER BEFORE STANDING DOWN. Published first and unconditionally:
+      // if this is dropped the owner may never learn there is an audience at
+      // all, and the cost of one extra frame every 30s is nothing next to a
+      // party nobody is warming. With the bus off there is nobody to tell, so
+      // this machine keeps warming instead (the fail-open rule above).
+      publishToCluster(HLS_KEEP_WARM_TOPIC, { channelId, startedAt });
       keepWarmDeclined += 1;
       stopKeepWarmLoop(key);
       return;
@@ -623,6 +681,51 @@ function stopAllKeepWarmLoops(): void {
     stopKeepWarmLoop(key);
   }
 }
+
+/**
+ * The other machine has a viewer for a session it does not own. Every instance
+ * hears this; only the owner acts on it. `false` from the probe means "no LIVE
+ * instance other than me owns this", which on the machine holding the rows is
+ * exactly "mine", and on a third machine (A owns, C is neither) is `true`, so
+ * C stays quiet. A frame for a session whose rows are gone arms a loop that
+ * stops itself on its first render, which is the same self-limiting path an
+ * ended session already takes.
+ */
+subscribeToCluster(HLS_KEEP_WARM_TOPIC, (data) => {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof (data as { channelId?: unknown }).channelId !== "string" ||
+    typeof (data as { startedAt?: unknown }).startedAt !== "number"
+  ) {
+    return;
+  }
+  const { channelId, startedAt } = data as {
+    channelId: string;
+    startedAt: number;
+  };
+  const key = keepWarmSessionKey(channelId, startedAt);
+  if (keepWarmLoops.has(key)) {
+    // Already warming it. Count the hand-over as a touch so the owner's idle
+    // timer follows the audience on the OTHER machine, not just its own.
+    keepWarmLoops.get(key)!.lastRequestedAt = Date.now();
+    return;
+  }
+  void keepWarmOwnedElsewhere(channelId, startedAt, key, Date.now())
+    .then((elsewhere) => {
+      // `null` (could not ask) is not "mine": guessing would put a second
+      // warmer back on the same session, which is the bug this file fixes.
+      if (elsewhere !== false) {
+        return;
+      }
+      keepWarmAdopted += 1;
+      touchKeepWarmSession(channelId, startedAt, Date.now());
+    })
+    .catch(() => {
+      // The probe swallows its own failures; this is belt and braces so a
+      // rejection can never reach the bus dispatcher.
+    });
+});
 
 async function renderSignedPlaylist(
   channelId: string,

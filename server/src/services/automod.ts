@@ -90,60 +90,143 @@ function rememberAlert(key: string, now: number): void {
  * `rowCount` IS the verdict — Postgres serialises two machines racing for the
  * same `(server, author)` pair, so exactly one of them can win.
  *
+ * ON THE DATABASE'S CLOCK, both sides of the comparison. Two machines' clocks
+ * agree to within a second in practice and are not required to: a peer running
+ * eleven seconds fast would otherwise satisfy its own `WHERE` and claim a
+ * window that has not elapsed at all. `NOW()` is one clock for every claimant,
+ * and the timestamp it wrote comes back so the caller can undo exactly the row
+ * it wrote and nothing else.
+ *
  * The local map stays in front of it as a cheap first gate (an alert this
  * process just posted needs no round trip to be refused) and as the fallback
  * when the database cannot be asked: a duplicate alert during an outage is a
  * nuisance, a swallowed one is a moderator not being told.
  */
+interface AlertClaim {
+  key: string;
+  /**
+   * The instant the row now carries, so a release can be conditional on it.
+   * `null` when the database could not be asked at all and this process
+   * decided on its own — there is then no row to undo.
+   */
+  at: Date | null;
+}
+
+/**
+ * ONE CLAIM IN FLIGHT PER KEY. A flood is many hits for the same
+ * `(server, author)` arriving together, and every one of them passes the local
+ * gate before the first has written anything: without this they would each
+ * issue an UPSERT and then serialise on the same primary-key row, turning a
+ * burst into a queue on the pool. They share one query instead, and exactly
+ * one of them gets the claim — the same coalescing the playlist proxy does for
+ * a stampede of identical reads.
+ */
+const inflightClaims = new Map<string, Promise<Date | false | null>>();
+
 async function claimAlertWindow(
   serverId: string,
   authorId: string,
-  now: number,
-): Promise<boolean | null> {
+  key: string,
+): Promise<Date | false | null> {
+  const existing = inflightClaims.get(key);
+  if (existing) {
+    // Somebody else is already asking. Whatever the answer, it is not this
+    // caller's claim: one winner per query, and the row is the arbiter.
+    await existing.catch(() => null);
+    return false;
+  }
+  const inflight = (async (): Promise<Date | false | null> => {
+    try {
+      const result = await getPool().query<{ last_alert_at: Date }>(
+        `INSERT INTO automod_alert_cooldowns (server_id, author_id, last_alert_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (server_id, author_id) DO UPDATE
+           SET last_alert_at = NOW()
+           WHERE automod_alert_cooldowns.last_alert_at
+                 <= NOW() - ($3::bigint * INTERVAL '1 millisecond')
+         RETURNING last_alert_at`,
+        [serverId, authorId, ALERT_COOLDOWN_MS],
+      );
+      return result.rows[0]?.last_alert_at ?? false;
+    } catch (error) {
+      console.error("[automod] alert cooldown claim failed:", error);
+      return null;
+    }
+  })();
+  inflightClaims.set(key, inflight);
   try {
-    const result = await getPool().query(
-      `INSERT INTO automod_alert_cooldowns (server_id, author_id, last_alert_at)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0))
-       ON CONFLICT (server_id, author_id) DO UPDATE
-         SET last_alert_at = EXCLUDED.last_alert_at
-         WHERE automod_alert_cooldowns.last_alert_at
-               <= EXCLUDED.last_alert_at - ($4::bigint * INTERVAL '1 millisecond')`,
-      [serverId, authorId, now, ALERT_COOLDOWN_MS],
-    );
-    return (result.rowCount ?? 0) > 0;
-  } catch (error) {
-    console.error("[automod] alert cooldown claim failed:", error);
-    return null;
+    return await inflight;
+  } finally {
+    inflightClaims.delete(key);
   }
 }
 
-async function alertAllowed(
+/**
+ * May this instance post the alert? A claim back means yes and must be
+ * finished with exactly once: `confirmAlertClaim` after the post lands,
+ * `releaseAlertClaim` if it does not.
+ */
+async function claimAlert(
   serverId: string,
   authorId: string,
   now: number,
-): Promise<boolean> {
+): Promise<AlertClaim | null> {
   const key = cooldownKey(serverId, authorId);
   const last = lastAlertAt.get(key);
   if (last !== undefined && now - last < ALERT_COOLDOWN_MS) {
-    return false;
+    return null;
   }
-  const claimed = await claimAlertWindow(serverId, authorId, now);
+  const claimed = await claimAlertWindow(serverId, authorId, key);
   if (claimed === false) {
-    // The other machine posted this one. Not remembered locally: the row is
-    // the authority on when the window ends, and stamping our own map with
-    // `now` would extend it past what the row says.
-    return false;
+    // Somebody else holds this window. Not remembered locally: the row is the
+    // authority on when it ends, and stamping our own map with `now` would
+    // extend it past what the row says.
+    return null;
   }
   // Claimed, or the database could not be asked and this process is deciding
   // on its own. Either way this instance is about to post.
   rememberAlert(key, now);
+  return { key, at: claimed instanceof Date ? claimed : null };
+}
+
+/**
+ * The post landed. Only now are the other machines told, so a frame can never
+ * suppress an alert that was never written — the row already refuses them, and
+ * this is the belt to its braces that keeps working during a database blip.
+ */
+function confirmAlertClaim(serverId: string, authorId: string): void {
   if (isBusEnabled()) {
-    // Belt to the row's braces, and the half that works during a blip: tell
-    // the other machines directly, so their local gate refuses before their
-    // own claim is even attempted.
-    publishToCluster(AUTOMOD_ALERT_TOPIC, { serverId, authorId, at: now });
+    publishToCluster(AUTOMOD_ALERT_TOPIC, { serverId, authorId });
   }
-  return true;
+}
+
+/**
+ * THE POST DID NOT HAPPEN, SO THE WINDOW WAS NOT USED. Without this, an author
+ * lookup that threw or a message insert that failed would leave the row (and
+ * this machine's map) silencing the next ten seconds of alerts for a post
+ * nobody ever saw. Conditional on the exact instant this claim wrote, so a
+ * claim somebody else has legitimately taken in the meantime is left alone.
+ */
+async function releaseAlertClaim(
+  serverId: string,
+  authorId: string,
+  claim: AlertClaim,
+): Promise<void> {
+  lastAlertAt.delete(claim.key);
+  if (!claim.at) {
+    return;
+  }
+  try {
+    await getPool().query(
+      `DELETE FROM automod_alert_cooldowns
+        WHERE server_id = $1 AND author_id = $2 AND last_alert_at = $3`,
+      [serverId, authorId, claim.at],
+    );
+  } catch (error) {
+    // The window stands for its ten seconds. Worth a line, not a throw: the
+    // caller is already in a catch block for a failed alert.
+    console.error("[automod] alert cooldown release failed:", error);
+  }
 }
 
 subscribeToCluster(AUTOMOD_ALERT_TOPIC, (data) => {
@@ -156,15 +239,16 @@ subscribeToCluster(AUTOMOD_ALERT_TOPIC, (data) => {
     return;
   }
   const { serverId, authorId } = data as { serverId: string; authorId: string };
-  // Stamped with THIS clock, not the publisher's: the two machines' clocks are
-  // close but not identical, and a frame from a slightly fast peer must not
-  // shorten this instance's window.
+  // Stamped with THIS clock: the frame says "somebody posted one just now",
+  // and this map is only the fast gate in front of the row, which is the one
+  // thing that decides the window.
   rememberAlert(cooldownKey(serverId, authorId), Date.now());
 });
 
 /** Test seam. */
 export function resetAutomodAlertCooldown(): void {
   lastAlertAt.clear();
+  inflightClaims.clear();
 }
 
 interface RuleRow {
@@ -615,10 +699,10 @@ export async function recordAutomodHit(
     }
   }
 
-  if (
-    rule.alertChannelId &&
-    (await alertAllowed(input.serverId, input.authorId, Date.now()))
-  ) {
+  const claim = rule.alertChannelId
+    ? await claimAlert(input.serverId, input.authorId, Date.now())
+    : null;
+  if (rule.alertChannelId && claim) {
     try {
       const authorId = actorId;
       const author = await getPool().query<{ display_name: string; username: string | null; discriminator: string | null; name: string | null }>(
@@ -655,8 +739,13 @@ export async function recordAutomodHit(
         [rule.alertChannelId, authorId, JSON.stringify([embed])],
       );
       effects.alert = await getHydratedMessage(inserted.rows[0]!.id);
+      // The row is written. Only now is the window anybody else's business.
+      confirmAlertClaim(input.serverId, input.authorId);
     } catch (error) {
       console.error("[automod] alert post failed:", error);
+      // Nothing was posted, so nothing should be silenced: give the window
+      // back rather than swallowing the next ten seconds of alerts too.
+      await releaseAlertClaim(input.serverId, input.authorId, claim);
     }
   }
   return effects;

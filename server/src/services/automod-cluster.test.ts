@@ -213,6 +213,49 @@ describeDb("automod across two machines", () => {
     expect(audits.rows[0]!.count).toBe("2");
   });
 
+  it("(2c) a failed alert post gives the window back instead of silencing the next one", async () => {
+    const rule = await alpha.automod.createAutomodRule(serverId, {
+      kind: "keywords",
+      enabled: true,
+      keywords: ["bolacha"],
+      allowList: [],
+      mentionLimit: 5,
+      exemptRoleIds: [],
+      exemptChannelIds: [],
+      customMessage: "",
+      alertChannelId: modLogId,
+      timeoutMinutes: 0,
+      blockPqpInvites: false,
+    });
+    const hit = { kind: "keywords" as const, matched: "bolacha", ruleId: rule.id };
+    const input = {
+      serverId,
+      channelId: chatId,
+      authorId,
+      memberPerms: 0n,
+      body: "bolacha",
+    };
+
+    // The alert channel is deleted between the claim and the insert, which is
+    // one of the ways the post can fail for real (the FK refuses it).
+    await alpha.db
+      .getPool()
+      .query(`DELETE FROM channels WHERE id = $1`, [modLogId]);
+    const failed = await alpha.automod.recordAutomodHit(input, hit);
+    expect(failed.alert).toBeNull();
+
+    // Nothing was posted, so nothing is owed a cooldown: the row is gone and
+    // the next hit is free to try again immediately.
+    const rows = await alpha.db
+      .getPool()
+      .query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM automod_alert_cooldowns
+          WHERE server_id = $1 AND author_id = $2`,
+        [serverId, authorId],
+      );
+    expect(rows.rows[0]!.count).toBe("0");
+  });
+
   it("(2b) the window is the row's: a machine that never heard the frame still refuses", async () => {
     const rule = await alpha.automod.createAutomodRule(serverId, {
       kind: "keywords",

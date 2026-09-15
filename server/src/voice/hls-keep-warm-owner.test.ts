@@ -44,6 +44,8 @@ const {
   resetHlsPlaylistCacheForTests,
 } = await import("./hls-playlist-proxy.js");
 const { resetHlsOwnershipForTests } = await import("./hls-ownership.js");
+const { createMemoryHub, createMemoryTransport, setBusTransport, closeBus } =
+  await import("../lib/bus.js");
 
 const RUNG = "720p30";
 const STARTED_AT = 1_700_000_000_000;
@@ -124,6 +126,10 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
     );
     channelId = channel.rows[0]!.id;
     process.env.VOICE_REGISTRY = "postgres";
+    // A bus with nobody else on it: enough for the decline path to have
+    // somewhere to hand the session over to, which is what it requires before
+    // it will stand down at all.
+    setBusTransport(createMemoryTransport(createMemoryHub()));
     enableHls();
     resetHlsPlaylistCacheForTests();
     resetHlsOwnershipForTests();
@@ -133,9 +139,10 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetHlsPlaylistCacheForTests();
     resetHlsOwnershipForTests();
+    await closeBus();
     vi.unstubAllGlobals();
     disableHls();
     delete process.env.VOICE_REGISTRY;
@@ -215,6 +222,44 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
       () => hlsKeepWarmRenders() > 0,
       "a warm render for a row nobody claims",
     );
+    expect(hlsKeepWarmDeclined()).toBe(0);
+  });
+
+  it("hands the session to the owner over the bus before standing down", async () => {
+    await liveSession(otherInstance);
+    await heartbeat(otherInstance, 1);
+
+    const frames: { topic: string; data: unknown }[] = [];
+    const hub = createMemoryHub();
+    hub.listeners.add((frame) => frames.push(frame));
+    setBusTransport(createMemoryTransport(hub));
+
+    await buildSignedPlaylist(channelId, STARTED_AT, RUNG);
+    await waitFor(
+      () => hlsKeepWarmLoopsActive() === 0,
+      "the loop to stand down for the owner",
+    );
+
+    // THE HAND-OVER IS THE POINT. Standing down alone would leave nobody
+    // warming a party whose whole audience landed on this machine.
+    const handover = frames.find((f) => f.topic === "voice.hlsKeepWarm");
+    expect(handover).toBeDefined();
+    expect(handover!.data).toMatchObject({ channelId, startedAt: STARTED_AT });
+  });
+
+  it("keeps warming when there is no bus to hand the session over on", async () => {
+    await liveSession(otherInstance);
+    await heartbeat(otherInstance, 1);
+    // No transport: the owner cannot be told, so standing down would be
+    // handing the job to nobody. Warming twice is the cheap mistake.
+    await closeBus();
+
+    await buildSignedPlaylist(channelId, STARTED_AT, RUNG);
+    await waitFor(
+      () => hlsKeepWarmRenders() > 0,
+      "a warm render with nobody to hand over to",
+    );
+    expect(hlsKeepWarmLoopsActive()).toBe(1);
     expect(hlsKeepWarmDeclined()).toBe(0);
   });
 

@@ -618,13 +618,28 @@ signatures, for one set of playlists in one bucket that neither copy improves.
 Now only the machine that owns the session's `hls_sessions` rows warms it, via
 `hlsSessionOwnedElsewhere` (the `instance_id` stamp and `voice_instances`
 heartbeat from the ownership work above); the other machine serves every viewer
-exactly as before, from the shared cache and from storage. Warming is the
-fail-open side on purpose: an unstamped row, `VOICE_REGISTRY` off, or a lookup
-that could not be made all leave the loop running, because a rung warmed twice
-costs money and a rung warmed by nobody costs the viewer who switches to it a
-third of a window. Counted by `hlsKeepWarmDeclined()`, which belongs at zero on
-one machine and non-zero within a minute of a party running on two. (The
-dashboard line for it goes in beside `keepWarmLoops` / `keepWarmRenders` in
+exactly as before, from the shared cache and from storage.
+
+**Standing down is only half of it**, and shipping just that half would have
+been a worse bug than the one it fixes: the owner arms a loop only when a
+viewer polls IT, so an audience of two that both landed on the other machine —
+or an owner whose own loop idled out hours into a party — would leave nobody
+warming at all. So the machine standing down publishes `voice.hlsKeepWarm` and
+the owner arms its own loop on hearing it, the same shape as
+`voice.hlsReconcile`: the instance that cannot do the work asks the one that
+can. Every instance hears the frame and only the one whose ownership answer is
+"not somebody else's" acts, so a third machine stays quiet instead of arming a
+loop that would stand down and re-publish. The non-owner re-publishes each time
+its 30s ownership answer expires, for as long as viewers keep polling it, which
+is well inside the owner's ten-minute idle window.
+
+Warming is the fail-open side throughout: an unstamped row, `VOICE_REGISTRY`
+off, a bus that is off (nobody to hand the job to) or a lookup that could not be
+made all leave the loop running, because a rung warmed twice costs money and a
+rung warmed by nobody costs the viewer who switches to it a third of a window.
+Counted by `hlsKeepWarmDeclined()` and `hlsKeepWarmAdopted()`, which belong at
+zero on one machine and non-zero within a minute of a party running on two.
+(The dashboard lines go in beside `keepWarmLoops` / `keepWarmRenders` in
 `services/metrics.ts`, which another change owned while this one was written.)
 
 **AutoMod's rule cache and alert cooldown were both per process.** The rule
@@ -639,9 +654,17 @@ author per server per ten seconds — lived in a `Map`, so two machines meant tw
 maps and two copies of the same embed, one per machine per window. The window
 is now a row: `automod_alert_cooldowns`, claimed by a conditional UPSERT whose
 `rowCount` is the verdict, so Postgres serialises the two machines and exactly
-one can win. The map stays in front of it as a cheap first gate and behind it
-as the fallback when the database cannot be asked — a duplicate alert during an
-outage is a nuisance, a swallowed one is a moderator not being told.
+one can win. Both sides of that comparison are `NOW()`, the database's own
+clock: a peer running eleven seconds fast would otherwise satisfy its own
+`WHERE` and claim a window that had not elapsed. The claim is single-flighted
+per key, so a flood of hits for one author shares one query instead of queueing
+a hundred UPSERTs on the same primary-key row; the cluster frame is published
+only after the alert row commits; and a post that fails releases the window
+(conditional on the exact instant it wrote) rather than silencing ten seconds
+of alerts for something nobody ever saw. The map stays in front of it as a
+cheap first gate and behind it as the fallback when the database cannot be
+asked — a duplicate alert during an outage is a nuisance, a swallowed one is a
+moderator not being told.
 
 **The worker had no bus at all, so two of its jobs finished nowhere.** `jobs.ts`
 runs on `pqp-worker` (`WORKER_MODE=worker`), a process with no `/ws` listener,
@@ -655,7 +678,12 @@ as nothing at all in the open tab. `worker.ts` now installs a **publish-only**
 Postgres transport (connect, NOTIFY, never LISTEN — `PostgresBusOptions.publishOnly`),
 gated on the same `CLUSTER_BUS=postgres` the API reads and set in
 `fly.worker.toml`. Subscribing there would be worse than useless: every handler
-in `ws/` would run against empty maps and zero sockets. Beside it, the reminder
+in `ws/` would run against empty maps and zero sockets. The jobs start only
+once that transport is connected (bounded to ten seconds, and they start
+anyway if it is not): the transport drops rather than buffers while
+disconnected, by design, and a reminder tick claims its rows in the same UPDATE
+that stamps them, so a frame dropped during a cold-start race is a nudge nobody
+ever gets. `/health` listens first and never waits on any of it. Beside it, the reminder
 nudge itself is relayed (`channel-session.reminder`) so each API machine
 delivers it to its own sockets, while the Web Push stays with the process that
 claimed the row — sending it once per machine is how a phone gets three copies
