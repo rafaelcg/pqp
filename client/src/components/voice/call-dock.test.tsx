@@ -61,6 +61,8 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 const dock = () => container.querySelector<HTMLElement>("[data-call-dock]");
@@ -136,6 +138,25 @@ describe("CallDockOutlet", () => {
       vi.advanceTimersByTime(700);
     });
     expect(dock()).toBeNull();
+  });
+
+  it("snaps both ways under reduced motion: no frame to open, no transition to wait on", () => {
+    const list = {
+      matches: true,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as MediaQueryList;
+    // jsdom has no matchMedia; the hook treats its absence as "no preference".
+    vi.stubGlobal("matchMedia", () => list);
+    vi.useFakeTimers();
+    const raf = vi.spyOn(window, "requestAnimationFrame");
+    render({ viewing: "lobby", call: LOBBY });
+    expect(dock()?.dataset.state).toBe("open");
+    expect(raf).not.toHaveBeenCalled();
+    render({ viewing: "lobby", call: null });
+    // Gone in the leaving render itself: no transitionend, no backstop timer.
+    expect(dock()).toBeNull();
+    expect(composerText()).toBe("");
   });
 
   it("tells the provider when a bar is docked, for the sidebar's sake", () => {

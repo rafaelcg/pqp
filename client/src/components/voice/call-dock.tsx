@@ -236,7 +236,12 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
     setHeld(null);
   };
 
-  const shown = active ? content : (held ?? lastContent.current);
+  // Under reduced motion there is no exit to draw, so the leaving render
+  // drops the bar itself rather than waiting on the effect above to commit
+  // a state change (which it would not, if the row never got to open).
+  const shown = active
+    ? content
+    : (held ?? (reducedMotion ? null : lastContent.current));
   if (shown === null) {
     return null;
   }
