@@ -401,13 +401,62 @@ process memory and a stale entry acted on after another machine took the
 party over would kill the new owner's stream through the one path with no
 claim in front of it. **And the fallback sticks**: the demotion clears the party's
 `low_latency_requested` (logged as `voice.hlsLlRequestCleared`) and memoes the
-channel for the same five minutes the box's own `DEMOTE_WINDOW_MS` uses, so
+PARTY for the same five minutes the box's own `DEMOTE_WINDOW_MS` uses, so
 the next reconcile cannot start a second LL session on top of the one just
 given up on. That write is scoped to the party the session
 RECORDED (`hls_sessions.watch_party_session_id`, written at start, which is
 the one moment "the party that asked" and "the party that is live" are
 certainly the same), never to the channel, so a cleanup that runs late cannot
 clear a newer party's request.
+
+**The memo is keyed by party too, and that took two machines to learn.**
+Channel `d5559e70`, 2026-09-15: instance A demoted a session at 15:23:14 and
+memoed the CHANNEL. At 15:26:52 the host created a new party with the switch
+on; that request landed on instance B, which wrote `low_latency_requested =
+true` and cleared its own (empty) memo. The share seconds later reconciled on
+A, whose channel memo was still set, so the API started the conventional
+ladder for a party whose row said `true` — and logged nothing about it, the
+same per-process-state shape as #603/#605/#606/#618/#625. Keyed by the demoted
+party's own `channel_sessions.id` there is nothing to invalidate across
+machines: a new party is a new row with a new id and was never in the map, so
+the memo can only ever veto the one party it is a verdict about, on the one
+machine that reached that verdict. `forgetLlDemotion` is gone with the hole it
+patched.
+
+**A demotion whose party is not yet known still vetoes the channel.** Keying
+the memo by party opens a window the channel-keyed one covered by covering
+everything: a row with `watch_party_session_id = NULL` has no party to key by
+until `attributeDemotion` resolves one, and a reconcile in between would start
+LL straight back into the session the box just gave up on. So while attribution
+is outstanding, `llDemotionPendingAttribution` refuses LL for the channel — but
+only for a party that could BE the demoted one, bounded by the demoted
+session's own start, so a party created afterwards is never caught by it. It is
+self-limiting: attribution runs at the bottom of the same sweep and fails
+closed onto the live party after three attempts, which is what ends the veto.
+It lasts as long as the queued demotion does rather than five minutes, because
+a prolonged attribution failure is exactly the condition that produces an
+unattributed demotion in the first place, and an expiry shorter than the
+repair reopens the window mid-failure.
+
+Both memos are bounded in constant time rather than by sweeping on the write,
+and the full sweep runs only on the health tick and a lazy unref'd timer. The
+log memo evicts the least recently written key at its cap, because losing one
+costs an extra line. The demotion memo may only evict an EXPIRED entry (one
+constant-time look: insertion order is write order, so if the least recently
+written entry is live, none is) -- dropping a live veto would hand the party it
+is about straight back onto LL inside the window the memo covers. A memo full
+of live vetoes fails closed instead: `voice.hlsLlDemotionMemoFull`, and every
+party is refused LL until a sweep makes room. A threshold-triggered sweep on the
+write path is the same quadratic shape one threshold further out, which is
+what two rounds of Farol on this change were about.
+
+**And the decision says why.** `resolveHlsModeForChannel` (`hls-remux.ts`) is
+the whole mode branch in one place — the party's request, the party-scoped
+demotion veto, the allowlist — and logs `voice.hlsModeResolved` with
+`requested`, `partyDemoted`, `llAvailable`, `mode` and the party id.
+`reconcileLiveHlsNow` runs on every roster event, so the line is emitted when
+the decision CHANGES for a channel (a share starting, a mode flipping, a
+demotion landing) and restated at most once per five minutes otherwise.
 
 **A NULL attribution is unknown, not "no party".** The column is NULL for two
 different reasons a row cannot tell apart: the session genuinely started with
