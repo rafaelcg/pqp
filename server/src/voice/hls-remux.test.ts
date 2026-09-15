@@ -512,7 +512,12 @@ describe("config helpers", () => {
       ringSegments: 6,
       keyframePolicy: "natural",
       pliPaceMs: 500,
-      pliGateFactor: 1.5,
+      // 1x the segment target, matching the Go binary's
+      // keyframe.defaultGateFactor. A gate above 1 cannot produce a
+      // segment shorter than that multiple of segmentMs, which is how
+      // production ended up with 11 second segments against a 4 second
+      // target on 2026-09-15.
+      pliGateFactor: 1,
     });
   });
 

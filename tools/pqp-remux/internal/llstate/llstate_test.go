@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/pipeline"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
 )
 
@@ -328,5 +330,103 @@ func TestGolden(t *testing.T) {
 	}
 	if !bytes.Equal(pretty.Bytes(), want) {
 		t.Fatalf("state.json drifted from the golden.\n--- got ---\n%s\n--- want ---\n%s", pretty.String(), want)
+	}
+}
+
+// TestAudioTwinIsRenderedFromRealFragmenterOutput closes the gap the
+// 2026-09-15 incident fell through. Every other test in this file (the
+// golden included) hands Build a SYNTHETIC snapshot with 500ms audio
+// parts, which is what the contract says and what the Worker's own
+// cross-check then reads back -- so both sides agreed with each other
+// while the actual producer, pipeline.AudioFragmenter, was emitting one
+// part per 21ms AAC frame. Nothing in either repository compared the
+// document to what the fragmenter really makes. This does: a real
+// AudioFragmenter through a real ring into Build.
+func TestAudioTwinIsRenderedFromRealFragmenterOutput(t *testing.T) {
+	const partMs = 500
+	const segmentMs = 4000
+	const frameTicks = 1024 // aacenc.SamplesPerFrame
+
+	audioRing := ring.New(6, audioTimescale)
+	audioRing.SetInit([]byte("audio-init"))
+	audioRing.SetClock(func() time.Time { return epoch })
+
+	f := pipeline.NewAudioFragmenter(pipeline.AudioConfig{
+		Timescale:       audioTimescale,
+		PartDuration:    partMs * audioTimescale / 1000,
+		SegmentDuration: segmentMs * audioTimescale / 1000,
+	})
+
+	// Twelve seconds of audio: three whole segments and a bit.
+	var pts int64
+	for i := 0; i < 12*audioTimescale/frameTicks; i++ {
+		if frag := f.Push(pts, frameTicks, []byte{byte(i)}); frag != nil {
+			audioRing.Push(frag)
+		}
+		pts += frameTicks
+	}
+
+	video := videoSnapshot(0, 2, 8, 2, videoTimescale, partTicks)
+	audioSnap := audioRing.Snapshot()
+	state, ok := Build(meta(), video, &audioSnap)
+	if !ok {
+		t.Fatal("Build refused a real audio ring")
+	}
+	if state.Audio == nil {
+		t.Fatal("no audio twin")
+	}
+
+	// Parts are PART_MS, within one AAC frame. 0.021 -- one part per
+	// frame -- is the bug.
+	const frameSecs = float64(frameTicks) / audioTimescale
+	target := float64(partMs) / 1000
+	var parts int
+	for _, seg := range state.Audio.Segments {
+		for i, p := range seg.Parts {
+			parts++
+			last := i == len(seg.Parts)-1
+			if p.DurationSecs > target+frameSecs {
+				t.Fatalf("audio part %s is %.3fs, past the %.3fs target", p.URI, p.DurationSecs, target)
+			}
+			// Only the part a segment boundary cut short may be under
+			// the target.
+			if !last && p.DurationSecs < target {
+				t.Fatalf("audio part %s is %.3fs, under the %.3fs target mid-segment", p.URI, p.DurationSecs, target)
+			}
+		}
+	}
+	if parts == 0 {
+		t.Fatal("no audio parts at all")
+	}
+
+	// Segments hold the same order of magnitude of parts as the video
+	// rendition's: 8 against 8, not 69 against 6.
+	for _, seg := range state.Audio.Segments {
+		if !seg.Complete {
+			continue
+		}
+		if n := len(seg.Parts); n < 7 || n > 9 {
+			t.Fatalf("audio segment %d holds %d parts at a %dms part target and a %dms segment target, want about %d",
+				seg.MSN, n, partMs, segmentMs, segmentMs/partMs)
+		}
+	}
+
+	// The preload hint names the part the fragmenter has not emitted
+	// yet -- the very next sequence number, not one 20,000 ahead.
+	hint := state.Audio.PreloadHint
+	if hint == nil {
+		t.Fatal("no audio preload hint")
+	}
+	lastSeg := state.Audio.Segments[len(state.Audio.Segments)-1]
+	lastPart := lastSeg.Parts[len(lastSeg.Parts)-1]
+	var lastSeq, hintSeq int
+	if _, err := fmt.Sscanf(lastPart.URI, "audio-part-%d.m4s", &lastSeq); err != nil {
+		t.Fatalf("parsing %q: %v", lastPart.URI, err)
+	}
+	if _, err := fmt.Sscanf(hint.URI, "audio-part-%d.m4s", &hintSeq); err != nil {
+		t.Fatalf("parsing %q: %v", hint.URI, err)
+	}
+	if hintSeq != lastSeq+1 {
+		t.Fatalf("preload hint %q follows the last published part %q by %d, want 1", hint.URI, lastPart.URI, hintSeq-lastSeq)
 	}
 }

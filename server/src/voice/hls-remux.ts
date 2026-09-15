@@ -678,7 +678,17 @@ export function remuxSessionConfig(): {
     ringSegments: positiveIntFromEnv("LIVE_HLS_REMUX_RING_SEGMENTS", 6),
     keyframePolicy: policy === "pli" ? "pli" : "natural",
     pliPaceMs: positiveIntFromEnv("LIVE_HLS_REMUX_PLI_PACE_MS", 500),
-    pliGateFactor: positiveFloatFromEnv("LIVE_HLS_REMUX_PLI_GATE_FACTOR", 1.5),
+    // 1, not 1.5. The remux closes a segment on the first IDR at or
+    // AFTER `segmentMs`, and a Chromium screen share only sends an IDR
+    // when asked, so a gate of 1.5x makes the earliest boundary the
+    // fragmenter can possibly see land at 1.5x the target. Production on
+    // 2026-09-15 ran 1.5 against a 4s target and closed segments at 7 to
+    // 11 seconds (`targetDurationSecs` 11). See
+    // `tools/pqp-remux/internal/keyframe/gater.go`'s `defaultGateFactor`,
+    // which this has to stay equal to -- the comment there is the long
+    // version, and "defaults match the Go binary's own defaults" above is
+    // the rule.
+    pliGateFactor: positiveFloatFromEnv("LIVE_HLS_REMUX_PLI_GATE_FACTOR", 1),
   };
 }
 

@@ -119,10 +119,11 @@ func runServer(cfg config.Config) error {
 	// ffmpeg missing) — video passthrough must never depend on this
 	// succeeding, per the plan's own instruction to keep the video path
 	// untouched.
-	audioRing := ring.New(cfg.RingSegments, aacenc.SampleRate)
+	audioRing := ring.New(ring.AudioSegments(cfg.RingSegments), aacenc.SampleRate)
 	audioEnabled := true
 	if err := sess.EnableAudio(ctx, session.AudioConfig{
 		Ring:         audioRing,
+		PartTicks:    uint32(cfg.PartMS) * aacenc.SampleRate / 1000,
 		SegmentTicks: uint32(cfg.SegmentMS) * aacenc.SampleRate / 1000,
 		Encoder: aacenc.Config{
 			FFmpegPath:  cfg.FFmpegPath,

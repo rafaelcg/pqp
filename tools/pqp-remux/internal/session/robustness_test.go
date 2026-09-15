@@ -84,7 +84,7 @@ func TestSession_AudioEncoderWriteFailureRestartsOnceThenMarksDead(t *testing.T)
 	defer cancel()
 	defer s.Close()
 
-	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), SegmentTicks: 4 * 48000}); err != nil {
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
 		t.Fatalf("EnableAudio: %v", err)
 	}
 
@@ -162,7 +162,7 @@ func TestSession_CloseDuringInFlightRestartNeverLeaksTheReplacementEncoder(t *te
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), SegmentTicks: 4 * 48000}); err != nil {
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
 		t.Fatalf("EnableAudio: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestSession_AudioEncoderRecoversFromATransientFailure(t *testing.T) {
 	defer cancel()
 	defer s.Close()
 
-	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), SegmentTicks: 4 * 48000}); err != nil {
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
 		t.Fatalf("EnableAudio: %v", err)
 	}
 
@@ -314,7 +314,7 @@ func TestSession_UnexpectedEncoderErrorTripsRecovery(t *testing.T) {
 	defer cancel()
 	defer s.Close()
 
-	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), SegmentTicks: 4 * 48000}); err != nil {
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: ring.New(6, 48000), PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
 		t.Fatalf("EnableAudio: %v", err)
 	}
 
@@ -337,7 +337,7 @@ func TestSession_UnexpectedEncoderErrorTripsRecovery(t *testing.T) {
 
 func TestReadEncoderFrames_ExitsCleanlyWhenFramesClosesWithErrsOpenAndEmpty(t *testing.T) {
 	s := New(45000, 360000, ring.New(6, 90000), nil)
-	s.audioFrag = pipeline.NewAudioFragmenter(pipeline.AudioConfig{Timescale: 48000, SegmentDuration: 4 * 48000})
+	s.audioFrag = pipeline.NewAudioFragmenter(pipeline.AudioConfig{Timescale: 48000, PartDuration: 1024, SegmentDuration: 4 * 48000}) // one frame per part: this test is about frame DELIVERY, not part sizing
 	s.audioRing = ring.New(6, 48000)
 	s.audioRing.SetInit([]byte("init"))
 
@@ -366,7 +366,7 @@ func TestReadEncoderFrames_ExitsCleanlyWhenFramesClosesWithErrsOpenAndEmpty(t *t
 
 func TestReadEncoderFrames_KeepsDeliveringFramesAfterErrsCloses(t *testing.T) {
 	s := New(45000, 360000, ring.New(6, 90000), nil)
-	s.audioFrag = pipeline.NewAudioFragmenter(pipeline.AudioConfig{Timescale: 48000, SegmentDuration: 4 * 48000})
+	s.audioFrag = pipeline.NewAudioFragmenter(pipeline.AudioConfig{Timescale: 48000, PartDuration: 1024, SegmentDuration: 4 * 48000}) // one frame per part: this test is about frame DELIVERY, not part sizing
 	s.audioRing = ring.New(6, 48000)
 	s.audioRing.SetInit([]byte("init"))
 
@@ -483,4 +483,117 @@ func TestSession_R2UploadHappensOnlyAfterSegmentSeals(t *testing.T) {
 	if segUploads < 2 {
 		t.Fatalf("expected at least 2 distinct sealed segments uploaded, got %d (%v)", segUploads, uploader.puts)
 	}
+}
+
+// --- PART_MS batching (the 2026-09-15 audio-parts incident) ---
+
+// TestSession_CloseFlushesThePartStillAccumulating is the session-level
+// half of the PART_MS fix. Once audio parts batch frames to a target,
+// up to PART_MS of already-encoded audio lives inside the fragmenter at
+// any instant; a session that ends without draining it silently drops
+// that tail, and for a party shorter than one part target it would drop
+// the audio track entirely.
+func TestSession_CloseFlushesThePartStillAccumulating(t *testing.T) {
+	var mu sync.Mutex
+	var built []*fakeEncoder
+	withFakeEncoderFactory(t, func(ctx context.Context, cfg aacenc.Config) (remuxEncoder, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		fe := newFakeEncoder()
+		built = append(built, fe)
+		return fe, nil
+	})
+
+	s := New(45000, 360000, ring.New(6, 90000), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	audioRing := ring.New(6, 48000)
+	// 500ms parts at 48kHz: three 1024-sample frames is ~64ms, nowhere
+	// near closing one.
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: audioRing, PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
+		t.Fatalf("EnableAudio: %v", err)
+	}
+
+	mu.Lock()
+	fe := built[0]
+	mu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		fe.frames <- aacenc.Frame{Data: []byte{byte(i), 0x21}}
+	}
+	waitFor(t, 2*time.Second, func() bool { return s.audioNextPTS.Load() == 3*aacenc.SamplesPerFrame })
+
+	if got := s.audioPartsWritten.Load(); got != 0 {
+		t.Fatalf("audioPartsWritten = %d after 64ms of audio at a 500ms part target, want 0 (a part per frame is the bug)", got)
+	}
+
+	cancel()
+	s.Close()
+
+	if got := s.audioPartsWritten.Load(); got != 1 {
+		t.Fatalf("audioPartsWritten = %d after Close, want 1: the pending part was never flushed", got)
+	}
+	if _, ok := audioRing.Segment(0); !ok {
+		t.Fatal("the flushed part never reached the audio ring")
+	}
+}
+
+// TestSession_CloseDoesNotTouchTheFragmenterAfterADrainTimeout is Farol's
+// finding on PR #623. Close waits a BOUNDED time for the audio reader to
+// drain, then carries on -- and the flush the PART_MS batching added is
+// only safe once that reader has actually returned, because
+// AudioFragmenter is explicitly not safe for concurrent use. On the
+// timeout branch the reader may still be inside Push, so Close must
+// leave the fragmenter alone entirely. Run under -race, this is the test
+// that would report the race the finding describes.
+func TestSession_CloseDoesNotTouchTheFragmenterAfterADrainTimeout(t *testing.T) {
+	origDeadline := audioCloseFlushDeadline
+	audioCloseFlushDeadline = 50 * time.Millisecond
+	t.Cleanup(func() { audioCloseFlushDeadline = origDeadline })
+
+	var mu sync.Mutex
+	var built []*fakeEncoder
+	withFakeEncoderFactory(t, func(ctx context.Context, cfg aacenc.Config) (remuxEncoder, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		// Close() that does NOT close Frames(): the reader goroutine
+		// stays blocked, which is exactly the stuck-downstream case the
+		// deadline exists for.
+		fe := newFakeEncoder()
+		fe.closed = true
+		built = append(built, fe)
+		return fe, nil
+	})
+
+	s := New(45000, 360000, ring.New(6, 90000), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	audioRing := ring.New(6, 48000)
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: audioRing, PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
+		t.Fatalf("EnableAudio: %v", err)
+	}
+
+	mu.Lock()
+	fe := built[0]
+	mu.Unlock()
+
+	// Two frames in, sitting inside the fragmenter's open part.
+	for i := 0; i < 2; i++ {
+		fe.frames <- aacenc.Frame{Data: []byte{byte(i), 0x21}}
+	}
+	waitFor(t, 2*time.Second, func() bool { return s.audioNextPTS.Load() == 2*aacenc.SamplesPerFrame })
+
+	cancel()
+	s.Close() // times out waiting for the reader, which is still parked on Frames()
+
+	if got := s.audioPartsWritten.Load(); got != 0 {
+		t.Fatalf("audioPartsWritten = %d: Close flushed the fragmenter while the reader could still be pushing into it", got)
+	}
+
+	// Let the reader out so the goroutine does not outlive the test.
+	fe.mu.Lock()
+	close(fe.frames)
+	fe.mu.Unlock()
 }

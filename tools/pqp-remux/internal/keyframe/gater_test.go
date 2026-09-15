@@ -75,8 +75,12 @@ func TestGater_ResetsCleanOnFreshIDR(t *testing.T) {
 
 func TestConfig_GateWindowAndPaceDefaults(t *testing.T) {
 	c := Config{SegmentTargetMs: 4000} // GateFactor and PaceMs both zero
-	if got := c.GateWindow(); got != 6000*time.Millisecond {
-		t.Fatalf("GateWindow() = %v, want 6000ms (default 1.5x)", got)
+	// 1x, not 1.5x: the gate must not itself push the earliest possible
+	// segment boundary past the segment target. See
+	// defaultGateFactor's doc comment for the production evidence
+	// (4s target, 7-11s segments, TARGETDURATION 11).
+	if got := c.GateWindow(); got != 4000*time.Millisecond {
+		t.Fatalf("GateWindow() = %v, want 4000ms (default 1x of the segment target)", got)
 	}
 	if got := c.Pace(); got != 500*time.Millisecond {
 		t.Fatalf("Pace() = %v, want the 500ms floor", got)

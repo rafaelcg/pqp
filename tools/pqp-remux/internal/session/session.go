@@ -219,6 +219,13 @@ type AudioConfig struct {
 	// ring.Ring instance (audio is a separate CMAF stream; see
 	// internal/cmaf/audio_init.go's doc comment).
 	Ring *ring.Ring
+	// PartTicks is the audio track's own PART_MS target, in the audio
+	// track's 48kHz timescale (aacenc.SampleRate). Leaving it zero is
+	// what shipped the 2026-09-15 incident this field exists to close:
+	// see pipeline.AudioConfig's own doc comment, which carries the
+	// production evidence. Ordinarily the same PART_MS the video
+	// Fragmenter gets, converted into this track's clock.
+	PartTicks uint32
 	// SegmentTicks is the audio track's own segment target, in the audio
 	// track's 48kHz timescale (aacenc.SampleRate) — NOT the same tick
 	// count New's segmentTicks used, which is in the video track's 90kHz
@@ -267,6 +274,7 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 	s.storeEncoder(enc)
 	s.audioFrag = pipeline.NewAudioFragmenter(pipeline.AudioConfig{
 		Timescale:       aacenc.SampleRate,
+		PartDuration:    cfg.PartTicks,
 		SegmentDuration: cfg.SegmentTicks,
 	})
 	if cfg.StartSegmentIndex > 0 {
@@ -497,10 +505,22 @@ func (s *Session) Close() {
 	// tail of the audio track. Bounded (not "wait forever") for the same
 	// reason r2.Writer.Close is: shutdown must complete even if something
 	// downstream is unexpectedly stuck.
+	//
+	// drained records whether that wait actually SUCCEEDED, which is a
+	// different question from whether it finished, and the difference is
+	// load bearing: the only thing that makes audioFrag safe to touch
+	// from this goroutine is the reader having returned (AudioFragmenter
+	// is explicitly not safe for concurrent use, and audioClosed --
+	// already set above, under audioMu -- is what stops a replacement
+	// reader from ever starting). On the timeout branch the reader may
+	// still be inside Push, so nothing below may look at the fragmenter
+	// at all. Farol review, PR #623.
+	drained := true
 	if readerDone != nil {
 		select {
 		case <-readerDone:
 		case <-time.After(audioCloseFlushDeadline):
+			drained = false
 			log.Printf("pqp-remux: timed out after %s waiting for the audio reader to drain during shutdown; the final segment may be incomplete", audioCloseFlushDeadline)
 		}
 	}
@@ -509,16 +529,62 @@ func (s *Session) Close() {
 	// open) segment, in the same sense Finish does for video: nothing
 	// else will ever start a *next* segment to trigger the ordinary
 	// roll-over upload.
-	if s.audioFrag != nil {
-		s.uploadAudioSegment(s.audioFrag.CurrentSegmentIndex())
+	if s.audioFrag == nil {
+		return
 	}
+	if drained {
+		// Drain the part still accumulating inside the fragmenter
+		// BEFORE uploading the final segment: since parts batch to
+		// PART_MS, up to half a second of already-encoded audio is held
+		// there at any instant, and it belongs in the segment this
+		// upload is about to seal. Only reachable with drained true --
+		// see its declaration.
+		if frag := s.audioFrag.Flush(); frag != nil {
+			s.publishAudioPart(frag)
+		}
+	}
+	// Which segment to upload is asked of the RING, not of the
+	// fragmenter. The ring answers under its own lock, so this is
+	// correct on the timeout branch too -- where the racing reader is
+	// also the thing still pushing into it, and the ring's own last
+	// segment is exactly as up to date as that reader has managed to
+	// make it. (It used to be audioFrag.CurrentSegmentIndex(), an
+	// unsynchronized read of the same not-concurrency-safe type.)
+	if s.audioRing == nil {
+		return
+	}
+	if index, ok := s.audioRing.LastSegmentIndex(); ok {
+		s.uploadAudioSegment(index)
+	}
+}
+
+// publishAudioPart is readEncoderFrames' and Close's shared tail: push one
+// closed audio part into the ring, upload whichever segment that sealed,
+// and count it. Push FIRST, upload second -- Ring.Push is what marks the
+// previous segment sealed, exactly as publish's own comment explains for
+// video.
+func (s *Session) publishAudioPart(frag *pipeline.Fragment) {
+	sealedIndex := -1
+	if frag.IsSegmentStart && frag.SegmentIndex > 0 {
+		sealedIndex = frag.SegmentIndex - 1
+	}
+	s.audioRing.Push(frag)
+	if sealedIndex >= 0 {
+		s.uploadAudioSegment(sealedIndex)
+	}
+	s.audioPartsWritten.Add(1)
+	s.audioBytesWritten.Add(uint64(len(frag.Bytes)))
 }
 
 // audioCloseFlushDeadline bounds Close's wait for the audio reader to
 // finish draining the encoder's final output. Generous next to a single
 // AAC frame's own cadence (~21ms) but still short enough not to
 // meaningfully delay process shutdown if the reader is ever stuck.
-const audioCloseFlushDeadline = 5 * time.Second
+//
+// A var, not a const, only so a test can exercise the TIMEOUT branch --
+// the one where Close must not touch the fragmenter at all -- without
+// spending five real seconds on it. Production never assigns it.
+var audioCloseFlushDeadline = 5 * time.Second
 
 // publish is HandleVideoPacket and Finish's shared tail: a fragment is
 // only written into the ring once a valid init segment exists. Publishing
@@ -867,18 +933,13 @@ func (s *Session) readEncoderFrames(enc remuxEncoder, done, failed chan struct{}
 				return
 			}
 			pts := s.audioNextPTS.Add(aacenc.SamplesPerFrame) - aacenc.SamplesPerFrame
-			frag := s.audioFrag.Push(pts, aacenc.SamplesPerFrame, frame.Data)
-
-			sealedIndex := -1
-			if frag.IsSegmentStart && frag.SegmentIndex > 0 {
-				sealedIndex = frag.SegmentIndex - 1
+			// nil means "this part is not full yet": since PART_MS
+			// batching, most frames land inside an open part rather
+			// than becoming one. (Before that, every frame was a part,
+			// which is the bug pipeline.AudioConfig documents.)
+			if frag := s.audioFrag.Push(pts, aacenc.SamplesPerFrame, frame.Data); frag != nil {
+				s.publishAudioPart(frag)
 			}
-			s.audioRing.Push(frag) // seals sealedIndex, if any; see publish's matching comment
-			if sealedIndex >= 0 {
-				s.uploadAudioSegment(sealedIndex)
-			}
-			s.audioPartsWritten.Add(1)
-			s.audioBytesWritten.Add(uint64(len(frag.Bytes)))
 		case err, ok := <-errsCh:
 			if !ok {
 				// Errs() will never send again, but Frames() may still

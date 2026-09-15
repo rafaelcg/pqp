@@ -109,10 +109,11 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, rung)
 	}
 
-	audioRing := ring.New(cfg.RingSegments, aacenc.SampleRate)
+	audioRing := ring.New(ring.AudioSegments(cfg.RingSegments), aacenc.SampleRate)
 	audioEnabled := true
 	if err := sess.EnableAudio(ctx, session.AudioConfig{
 		Ring:         audioRing,
+		PartTicks:    uint32(cfg.PartMs) * aacenc.SampleRate / 1000,
 		SegmentTicks: uint32(cfg.SegmentMs) * aacenc.SampleRate / 1000,
 		Encoder: aacenc.Config{
 			FFmpegPath:  global.FFmpegPath,

@@ -337,3 +337,54 @@ func (r *Ring) Snapshot() Snapshot {
 	}
 	return snap
 }
+
+// audioRingHeadroom is the factor by which an AUDIO ring is made deeper
+// than its session's video ring. See AudioSegments.
+const audioRingHeadroom = 2
+
+// AudioSegments returns how many segments the audio ring of a session
+// whose video ring retains videoSegments should retain.
+//
+// The two rings are counted in SEGMENTS but a player evicts in SECONDS,
+// and the two tracks' segments are not the same length. The audio
+// fragmenter closes a segment on the first frame boundary at or after
+// SEGMENT_MS, which is within 21 ms of the target; the video fragmenter
+// closes on the first IDR at or after it, and an IDR arrives when the
+// publisher feels like it. Production on 2026-09-15 ran KEYFRAME_POLICY=pli
+// with a 1.5x gate and closed video segments at 7 to 11 seconds against a
+// 4 second target. Six segments each is then ~24 s of audio against ~50 s
+// of video: a viewer who drifts past the audio window loses the audio
+// rendition while the video playlist still lists the same live edge, and
+// what the edge Worker logs is `hlsEdge.llPartMissing` on
+// `audio-part-<n>.m4s` with nothing wrong on the video side to explain it.
+//
+// Doubling the audio ring is the cheap side of that trade: the AAC
+// rendition is 128 kbps against a screen share's several Mbps, so the
+// extra depth costs well under a megabyte per session, and it covers any
+// video overrun up to 2x the segment target -- which is the gate factor's
+// own bound. It is headroom, not a guarantee: a publisher that goes
+// minutes without a keyframe stretches the video window past any fixed
+// multiple, and the answer to that is the keyframe gate, not a bigger
+// buffer.
+func AudioSegments(videoSegments int) int {
+	if videoSegments < 1 {
+		videoSegments = 1
+	}
+	return videoSegments * audioRingHeadroom
+}
+
+// LastSegmentIndex returns the index of the newest segment this ring
+// holds -- the one still open, in a live session -- and false when
+// nothing has been pushed yet. It exists so a caller can name that
+// segment without asking the FRAGMENTER for it: a fragmenter is not safe
+// for concurrent use and a shutdown path may be racing the goroutine that
+// owns it, while this answer is taken under the ring's own lock (Farol
+// review, PR #623; internal/session.Close).
+func (r *Ring) LastSegmentIndex() (int, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.segments) == 0 {
+		return 0, false
+	}
+	return r.segments[len(r.segments)-1].index, true
+}
