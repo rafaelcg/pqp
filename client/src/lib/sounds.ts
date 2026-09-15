@@ -1,5 +1,6 @@
 /**
- * In-app sound cues: message ping, mention, voice join/leave, incoming/outgoing call.
+ * In-app sound cues: message ping, mention, voice join/leave, incoming/outgoing
+ * call, and the local push-to-talk press/release beeps.
  *
  * Own long-lived AudioContext. Do not reuse `voice-audio.ts`: that context
  * closes when the last speaking-meter ref drops, which would kill a ringtone
@@ -8,6 +9,11 @@
  * Desktop banners stay silent (`Notification.silent`). These cues are the
  * audible half, and they run even when the user has not opted into OS
  * notifications. DND and per-channel levels still gate whether we play.
+ *
+ * Push-to-talk beeps are synthesised (same oscillator path as the rings),
+ * play only on this device, and never go into the call. Master mute, master
+ * volume and setSinkId still apply. The on/off toggle itself is device-local
+ * (`pqp-local-settings.pttBeep`) and is handed in via `setPttBeepEnabled`.
  */
 
 import type { SoundPreferences } from "@pqp/shared";
@@ -70,8 +76,22 @@ type OutputContext = AudioContext & {
   setSinkId?: (id: string) => Promise<void>;
 };
 
+export type PttBeepKind = "on" | "off";
+
+/** Press is A5, release is E5. Short, quiet, and easy to tell apart. */
+export const PTT_BEEP = {
+  on: { freq: 880, duration: 0.058, peak: 0.12, type: "sine" as const },
+  off: { freq: 660, duration: 0.062, peak: 0.1, type: "sine" as const },
+} as const;
+
 let incomingRing: IncomingRingId = DEFAULT_INCOMING_RING;
 let state: SoundState = load();
+/** Device-local PTT cue switch. Not part of the synced sound prefs. */
+let pttBeepEnabled = true;
+let lastPttHeld: boolean | null = null;
+const pttBusy: Record<PttBeepKind, boolean> = { on: false, off: false };
+const pttBusyTimers: Record<PttBeepKind, ReturnType<typeof setTimeout> | null> =
+  { on: null, off: null };
 const listeners = new Set<() => void>();
 
 let context: OutputContext | null = null;
@@ -239,6 +259,32 @@ export function isCueEnabled(current: SoundState, cue: SoundCue): boolean {
     return false;
   }
   return current[cue];
+}
+
+export function isPttBeepEnabled(): boolean {
+  return pttBeepEnabled;
+}
+
+export function setPttBeepEnabled(enabled: boolean): void {
+  pttBeepEnabled = enabled;
+}
+
+/** Press, repeat, release: on, nothing, off. */
+export function pttHeldCue(
+  previousHeld: boolean,
+  nextHeld: boolean,
+): PttBeepKind | null {
+  if (previousHeld === nextHeld) {
+    return null;
+  }
+  return nextHeld ? "on" : "off";
+}
+
+export function isPttBeepAllowed(
+  current: SoundState,
+  beepEnabled: boolean,
+): boolean {
+  return current.enabled && beepEnabled;
 }
 
 function ensureContext(): OutputContext | null {
@@ -569,6 +615,101 @@ function trackOscillator(active: OscillatorNode[], osc: OscillatorNode): void {
   };
 }
 
+function clearPttBusy(kind: PttBeepKind): void {
+  const timer = pttBusyTimers[kind];
+  if (timer !== null) {
+    clearTimeout(timer);
+    pttBusyTimers[kind] = null;
+  }
+  pttBusy[kind] = false;
+}
+
+function schedulePttTone(ctx: AudioContext, dest: GainNode, kind: PttBeepKind): void {
+  const tone = PTT_BEEP[kind];
+  const start = ctx.currentTime;
+  const attack = 0.006;
+  const release = 0.014;
+  const peakAt = start + attack;
+  const holdEnd = start + tone.duration - release;
+  const end = start + tone.duration;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0, start);
+  env.gain.linearRampToValueAtTime(tone.peak, peakAt);
+  if (holdEnd > peakAt) {
+    env.gain.setValueAtTime(tone.peak, holdEnd);
+  }
+  env.gain.linearRampToValueAtTime(0, end);
+  env.connect(dest);
+  const osc = ctx.createOscillator();
+  osc.type = tone.type;
+  osc.frequency.value = tone.freq;
+  osc.connect(env);
+  osc.start(start);
+  osc.stop(end + 0.01);
+}
+
+/**
+ * Local press/release cue. Master mute and the device-local PTT toggle both
+ * gate it. A second press (or release) while that same tone is still playing
+ * is dropped so a mash cannot stack oscillators.
+ */
+export function playPttBeep(kind: PttBeepKind): void {
+  if (!isPttBeepAllowed(state, pttBeepEnabled)) {
+    return;
+  }
+  if (pttBusy[kind]) {
+    return;
+  }
+  const ctx = ensureContext();
+  if (!ctx || !master) {
+    return;
+  }
+  if (ctx.state === "suspended") {
+    void ctx.resume().catch(() => {});
+  }
+  pttBusy[kind] = true;
+  schedulePttTone(ctx, master, kind);
+  const holdMs = Math.ceil((PTT_BEEP[kind].duration + 0.02) * 1000);
+  if (pttBusyTimers[kind] !== null) {
+    clearTimeout(pttBusyTimers[kind]);
+  }
+  if (typeof setTimeout === "function") {
+    pttBusyTimers[kind] = setTimeout(() => {
+      pttBusyTimers[kind] = null;
+      pttBusy[kind] = false;
+    }, holdMs);
+  }
+}
+
+/**
+ * Same as `playPttBeep` but keyed on the held flag so the hook and the hold
+ * button can both announce a transition without playing twice.
+ */
+export function playPttHeldChange(held: boolean): void {
+  const cue = pttHeldCue(lastPttHeld === true, held);
+  if (cue === null) {
+    return;
+  }
+  lastPttHeld = held;
+  playPttBeep(cue);
+}
+
+/** Settings preview: press, then release, without joining a call. */
+export function previewPttBeeps(): void {
+  if (!isPttBeepAllowed(state, pttBeepEnabled)) {
+    return;
+  }
+  playPttBeep("on");
+  const gapMs = Math.ceil((PTT_BEEP.on.duration + 0.04) * 1000);
+  if (typeof window !== "undefined") {
+    window.setTimeout(() => {
+      playPttBeep("off");
+    }, gapMs);
+  } else {
+    playPttBeep("off");
+  }
+}
+
 function scheduleTone(
   ctx: AudioContext,
   dest: GainNode,
@@ -772,6 +913,10 @@ export function resetSoundStateForTests(): void {
   resetSoundEngineForTests();
   incomingRing = DEFAULT_INCOMING_RING;
   state = { ...DEFAULT_STATE };
+  pttBeepEnabled = true;
+  lastPttHeld = null;
+  clearPttBusy("on");
+  clearPttBusy("off");
   listeners.clear();
 }
 

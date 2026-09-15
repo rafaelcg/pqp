@@ -5,10 +5,16 @@ import {
   getIncomingRing,
   getSoundState,
   isCueEnabled,
+  isPttBeepAllowed,
   playActivitySound,
   playCue,
+  playPttBeep,
+  playPttHeldChange,
+  PTT_BEEP,
+  pttHeldCue,
   resetSoundStateForTests,
   setIncomingRing,
+  setPttBeepEnabled,
   setSoundCueEnabled,
   setSoundEnabled,
   startSoundLoop,
@@ -37,6 +43,25 @@ describe("cueForActivity", () => {
   it("uses the mention cue when the burst named the reader", () => {
     expect(cueForActivity(0)).toBe("message");
     expect(cueForActivity(1)).toBe("mention");
+  });
+});
+
+describe("pttHeldCue", () => {
+  it("plays on press, ignores a repeat, and plays off on release", () => {
+    expect(pttHeldCue(false, true)).toBe("on");
+    expect(pttHeldCue(true, true)).toBe(null);
+    expect(pttHeldCue(true, false)).toBe("off");
+  });
+});
+
+describe("isPttBeepAllowed", () => {
+  it("silences the PTT tones when the master switch is off", () => {
+    expect(isPttBeepAllowed({ ...enabled, enabled: false }, true)).toBe(false);
+  });
+
+  it("silences the PTT tones when the device toggle is off", () => {
+    expect(isPttBeepAllowed(enabled, false)).toBe(false);
+    expect(isPttBeepAllowed(enabled, true)).toBe(true);
   });
 });
 
@@ -139,6 +164,103 @@ describe("startSoundLoop", () => {
     expect(soundLoopIsRunningForTests("incomingCall")).toBe(true);
     stopSoundLoop("incomingCall");
     expect(soundLoopIsRunningForTests("incomingCall")).toBe(false);
+  });
+});
+
+function stubPttAudio() {
+  const oscillators: Array<{
+    type: string;
+    frequency: { value: number };
+    start: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
+    connect: ReturnType<typeof vi.fn>;
+  }> = [];
+  const gain = {
+    gain: {
+      value: 1,
+      setValueAtTime: vi.fn(),
+      linearRampToValueAtTime: vi.fn(),
+    },
+    connect: vi.fn(),
+  };
+  vi.stubGlobal(
+    "AudioContext",
+    class {
+      state = "running";
+      currentTime = 0;
+      destination = {};
+      createGain() {
+        return { ...gain, gain: { ...gain.gain } };
+      }
+      createOscillator() {
+        const osc = {
+          type: "sine",
+          frequency: { value: 0 },
+          connect: vi.fn(),
+          start: vi.fn(),
+          stop: vi.fn(),
+          onended: null as (() => void) | null,
+        };
+        oscillators.push(osc);
+        return osc;
+      }
+      close() {
+        return Promise.resolve();
+      }
+      resume() {
+        this.state = "running";
+        return Promise.resolve();
+      }
+    },
+  );
+  return { oscillators };
+}
+
+describe("playPttBeep", () => {
+  it("is a no-op when the master switch is off, even without an AudioContext", () => {
+    setSoundEnabled(false);
+    expect(() => playPttBeep("on")).not.toThrow();
+    expect(() => playPttBeep("off")).not.toThrow();
+  });
+
+  it("is a no-op when the PTT toggle is off", () => {
+    const { oscillators } = stubPttAudio();
+    setPttBeepEnabled(false);
+    playPttBeep("on");
+    playPttBeep("off");
+    expect(oscillators).toHaveLength(0);
+  });
+
+  it("plays a higher tone on press and a lower tone on release", () => {
+    const { oscillators } = stubPttAudio();
+    playPttBeep("on");
+    playPttBeep("off");
+    expect(oscillators).toHaveLength(2);
+    expect(oscillators[0]?.frequency.value).toBe(PTT_BEEP.on.freq);
+    expect(oscillators[1]?.frequency.value).toBe(PTT_BEEP.off.freq);
+    expect(oscillators[0]?.start).toHaveBeenCalled();
+    expect(oscillators[1]?.start).toHaveBeenCalled();
+  });
+
+  it("does not stack a second press or a second release while that tone is still going", () => {
+    const { oscillators } = stubPttAudio();
+    playPttBeep("on");
+    playPttBeep("on");
+    playPttBeep("off");
+    playPttBeep("off");
+    expect(oscillators).toHaveLength(2);
+  });
+});
+
+describe("playPttHeldChange", () => {
+  it("fires on, nothing, off across press, repeat, and release", () => {
+    const { oscillators } = stubPttAudio();
+    playPttHeldChange(true);
+    playPttHeldChange(true);
+    playPttHeldChange(false);
+    expect(oscillators).toHaveLength(2);
+    expect(oscillators[0]?.frequency.value).toBe(PTT_BEEP.on.freq);
+    expect(oscillators[1]?.frequency.value).toBe(PTT_BEEP.off.freq);
   });
 });
 

@@ -6,6 +6,7 @@ import {
 } from "@/components/voice/push-to-talk";
 import { bindingToAccelerator } from "@/components/voice/push-to-talk-accelerator";
 import { getDesktop } from "@/lib/desktop";
+import { playPttHeldChange, pttHeldCue } from "@/lib/sounds";
 
 interface PushToTalkOptions {
   /** Only true while push-to-talk is the chosen mode *and* a call is up. */
@@ -105,11 +106,14 @@ export function usePushToTalk({
   // Shared by the window listeners and the desktop bridge: a release from
   // either side ends the transmission, whichever side started it.
   const set = useCallback((next: boolean) => {
-    if (heldRef.current === next) {
+    // Key repeat keeps firing keydown while the key is down. Same held flag
+    // means no second open, and no second beep.
+    if (pttHeldCue(heldRef.current, next) === null) {
       return;
     }
     heldRef.current = next;
     setHeld(next);
+    playPttHeldChange(next);
     onHeldChangeRef.current(next);
   }, []);
 
