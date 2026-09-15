@@ -136,6 +136,12 @@ import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
 import { bindRemoteVideo } from "@/lib/remote-video-binding";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import {
+  CallControlDivider,
+  CallControlGroup,
+} from "@/components/voice/call-control-groups";
+import { collapsedPeopleLabel } from "@/components/voice/collapsed-people-label";
+import { PttFocusHint, PttHoldControl } from "@/components/voice/ptt-hold-control";
+import {
   idleChromeClassName,
   tapIsOnStage,
   useIdleChrome,
@@ -1463,64 +1469,87 @@ function ActiveCall({
     return null;
   }
   if (collapsed) {
+    const people =
+      roster.length > 0
+        ? roster.map((person) => {
+            const remote = remotes.find((r) => r.key === person.peerId);
+            const isSelf = person.peerId === voiceState.peerId;
+            return {
+              key: person.peerId,
+              displayName: person.displayName,
+              avatarUrl: person.avatarUrl,
+              speaking: isSelf
+                ? Boolean(self?.speaking)
+                : speaking.has(person.peerId),
+              volume: remote?.volume,
+              onSetVolume: remote?.onSetVolume,
+              shareVolume: remote?.shareVolume,
+              onSetShareVolume: remote?.onSetShareVolume,
+              failed: remote?.failed,
+              onRetry: remote?.onRetry,
+            };
+          })
+        : allPeople.map((person) => ({
+            key: person.key,
+            displayName: person.name,
+            avatarUrl: person.avatarUrl,
+            speaking: person.speaking,
+            volume: person.volume,
+            onSetVolume: person.onSetVolume,
+            shareVolume: person.shareVolume,
+            onSetShareVolume: person.onSetShareVolume,
+            failed: person.failed,
+            onRetry: person.onRetry,
+          }));
+    const peopleLine =
+      statusLine ??
+      collapsedPeopleLabel(people.map((person) => person.displayName), (count) =>
+        t("call.panel.inCall", { count }),
+      );
     return (
-      <div
-        data-testid="call-stage-collapsed"
-        className="flex items-center gap-3 border-b border-ink-4/60 bg-ink-2/70 px-3 py-1.5"
-      >
-        <OccupantFaces
-          faces={
-            roster.length > 0
-              ? roster.map((person) => {
-                  const remote = remotes.find((r) => r.key === person.peerId);
-                  return {
-                    key: person.peerId,
-                    displayName: person.displayName,
-                    avatarUrl: person.avatarUrl,
-                    volume: remote?.volume,
-                    onSetVolume: remote?.onSetVolume,
-                    shareVolume: remote?.shareVolume,
-                    onSetShareVolume: remote?.onSetShareVolume,
-                    failed: remote?.failed,
-                    onRetry: remote?.onRetry,
-                  };
-                })
-              : remotes.map((person) => ({
-                  key: person.key,
-                  displayName: person.name,
-                  avatarUrl: person.avatarUrl,
-                  volume: person.volume,
-                  onSetVolume: person.onSetVolume,
-                  shareVolume: person.shareVolume,
-                  onSetShareVolume: person.onSetShareVolume,
-                  failed: person.failed,
-                  onRetry: person.onRetry,
-                }))
-          }
-        />
-        <p className="min-w-0 flex-1 truncate text-xs text-paper-muted" role="status">
-          {statusLine ?? title}
-          {declinedNames.map((name) => (
-            <span key={name} className="ml-2 text-warning">
-              {t("call.panel.declined", { name })}
-            </span>
-          ))}
-          {elapsedLabel && (
-            <span className="ml-2 tabular-nums" aria-label={t("call.stage.duration")}>
-              {elapsedLabel}
-            </span>
+      <div className="border-b border-border bg-surface-0 px-3 py-2">
+        <div
+          data-testid="call-stage-collapsed"
+          className="flex flex-col gap-2 rounded-xl border border-border-strong bg-surface-2 px-3 py-2.5 lg:flex-row lg:items-center lg:gap-3"
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <OccupantFaces faces={people} />
+            <p
+              className="min-w-0 flex-1 truncate text-sm text-text"
+              role="status"
+            >
+              {peopleLine}
+              {declinedNames.map((name) => (
+                <span key={name} className="ml-2 text-warning">
+                  {t("call.panel.declined", { name })}
+                </span>
+              ))}
+              {elapsedLabel && (
+                <span
+                  className="ml-2 tabular-nums text-text-tertiary"
+                  aria-label={t("call.stage.duration")}
+                >
+                  {elapsedLabel}
+                </span>
+              )}
+            </p>
+            <RaisedHandQueue
+              compact
+              participants={roomParticipants}
+              selfUserId={voiceState.self?.userId ?? null}
+            />
+            <MusicDock compact voiceState={voiceState} />
+          </div>
+          {watchPartyChrome ? null : (
+            <div className="flex min-w-0 w-full justify-end lg:w-auto">
+              {controls}
+            </div>
           )}
-        </p>
-        {/* The queue on the shape most calls actually have. An audio-only
-            call never opens an expanded stage, so the panel above the
-            controls would never be seen in the ordinary case. */}
-        <RaisedHandQueue
-          compact
-          participants={roomParticipants}
-          selfUserId={voiceState.self?.userId ?? null}
+        </div>
+        <PttFocusHint
+          show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
+          className="mt-1.5 px-1"
         />
-        <MusicDock compact voiceState={voiceState} />
-        {watchPartyChrome ? null : controls}
       </div>
     );
   }
@@ -2223,8 +2252,8 @@ export function CallControls({
   );
   const cameraLimit = videoLimitOf(voiceState, "cameras");
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
-  const size = collapsed ? "h-8 w-8" : "h-10 w-10";
-  const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
+  const size = collapsed ? "h-9 w-9" : "h-10 w-10";
+  const iconSize = collapsed ? "h-4 w-4" : "h-4 w-4";
   // SPEAK denied locks mute. STREAM denied hides camera and share. The two
   // bits are independent: a stage can let someone present without talking.
   // In a watch_party channel the server answers `canStream` from
@@ -2244,17 +2273,28 @@ export function CallControls({
     ? t("voice.hand.lower")
     : t("voice.hand.raise");
 
+  const showMute = !collapsed || !pushToTalk;
+
   return (
-    <div className={cn("flex flex-col items-center", collapsed ? "gap-0" : "gap-1.5")}>
-      {watchPartyHintEnabled && canWatchParty && !listenOnly && !noVideo && (
-        <div className="pointer-events-auto mb-1">
-          <FeatureHint
-            id="watchParty"
-            enabled
-            body={t("featureHint.watchParty.body")}
-          />
-        </div>
+    <div
+      className={cn(
+        "flex flex-col",
+        collapsed ? "w-full gap-0" : "items-center gap-1.5",
       )}
+    >
+      <div data-call-hints>
+        {watchPartyHintEnabled && canWatchParty && !listenOnly && !noVideo && (
+          <div className="pointer-events-auto mb-1">
+            <FeatureHint
+              id="watchParty"
+              enabled
+              body={t("featureHint.watchParty.body")}
+            />
+          </div>
+        )}
+        {/* Hint slot above the bar. feat/vem-pra-pqp adds BringFriendsHint
+            here when the person is sharing and the stage is expanded. */}
+      </div>
       {/* The queue sits above the bar, where the room is, rather than in a
           panel somebody has to go and open. Hidden on the slim bar, which has
           no room for a list: the hands are still on every person's row in the
@@ -2270,77 +2310,40 @@ export function CallControls({
         />
       )}
       {!collapsed && <MusicDock voiceState={voiceState} className="mb-1.5" />}
-      {pushToTalk && (
-        <div className={cn("w-full", collapsed ? "mb-1" : "mb-0.5")}>
-          <Button
-            variant={isTransmitting ? "default" : "secondary"}
-            size={collapsed ? "sm" : "default"}
-            className={cn(
-              "w-full select-none touch-none",
-              isTransmitting && "ring-2 ring-accent",
-            )}
-            disabled={pushToTalkBlocked || listenOnly}
-            aria-pressed={isTransmitting}
-            onPointerDown={(event) => {
-              event.currentTarget.setPointerCapture?.(event.pointerId);
-              onPushToTalk?.(true);
-            }}
-            onPointerUp={() => onPushToTalk?.(false)}
-            onPointerCancel={() => onPushToTalk?.(false)}
-            onLostPointerCapture={() => onPushToTalk?.(false)}
-            onKeyDown={(event) => {
-              if (event.key === " " && !event.repeat) {
-                event.preventDefault();
-                onPushToTalk?.(true);
-              }
-            }}
-            onKeyUp={(event) => {
-              if (event.key === " ") {
-                event.preventDefault();
-                onPushToTalk?.(false);
-              }
-            }}
-            onBlur={() => onPushToTalk?.(false)}
-          >
-            {isTransmitting ? (
-              <Mic className="h-4 w-4" aria-hidden="true" />
-            ) : (
-              <MicOff className="h-4 w-4" aria-hidden="true" />
-            )}
-            {pushToTalkBlocked || listenOnly
-              ? t("voice.ptt.blocked")
-              : isTransmitting
-                ? t("voice.ptt.transmitting")
-                : t("voice.ptt.hold")}
-          </Button>
-          {!collapsed && (
-            <p className="mt-1 text-center text-[11px] text-paper-muted">
-              {pushToTalkKeyLabel
-                ? t("voice.ptt.hintKey", { key: pushToTalkKeyLabel })
-                : t("voice.ptt.hintButton")}
-            </p>
-          )}
-          {pushToTalkKeyLabel && !windowFocused && (
-            <p role="status" className="mt-1 text-center text-[11px] text-warning">
-              {t("voice.ptt.unfocused")}
-            </p>
-          )}
-        </div>
-      )}
+      <div
+        className={cn(
+          "flex items-center gap-2",
+          collapsed
+            ? "w-full flex-col lg:flex-row lg:flex-wrap lg:justify-end"
+            : "flex-wrap justify-center",
+        )}
+      >
+        {pushToTalk && (
+          <PttHoldControl
+            blocked={pushToTalkBlocked}
+            listenOnly={listenOnly}
+            isTransmitting={isTransmitting}
+            keyLabel={pushToTalkKeyLabel}
+            windowFocused={windowFocused}
+            fullWidth={collapsed}
+            onPushToTalk={onPushToTalk}
+          />
+        )}
     <div
       className={cn(
-        "flex items-center",
-        collapsed ? "gap-1" : "gap-2 rounded-full bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur",
+        "flex items-center gap-1",
+        collapsed
+          ? "w-full justify-end lg:w-auto"
+          : "gap-2 rounded-full bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur",
       )}
     >
       {/* Every control in this bar used to carry a `title` beside its
           `aria-label`: two copies of one string, a one-second wait, and
           nothing at all for a keyboard. The `Tooltip` is one copy, quicker,
           and it opens on focus. */}
-      {/* Mute lives on the expanded stage (you are looking at the picture).
-          On the slim bar it is the user panel, one pair, Discord's corner.
-          Deafen is only ever the user panel. */}
-      {!collapsed && (
+      {/* Mute stays on the expanded stage, and on the slim bar when the
+          input mode is voice activity. Push-to-talk owns the mic there. */}
+      {showMute && (
         <Tooltip
           label={
             listenOnly
@@ -2407,6 +2410,7 @@ export function CallControls({
           {t("voice.bar.listenOnly")}
         </span>
       )}
+      <CallControlGroup>
       {/* Raising a hand is the one control here that a listen-only seat needs
           MORE than anyone else, so it is never hidden by `listenOnly` and
           never disabled: lowering your own hand has to work whatever else the
@@ -2433,6 +2437,9 @@ export function CallControls({
         </Tooltip>
       )}
       <MusicBarButton size={size} iconSize={iconSize} />
+      </CallControlGroup>
+      <CallControlDivider className={collapsed ? "my-1" : "my-1.5"} />
+      <CallControlGroup>
       {!noVideo && (
       <Tooltip
         label={
@@ -2752,23 +2759,15 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
+      </CallControlGroup>
+      <CallControlDivider className={collapsed ? "my-1" : "my-1.5"} />
+      <CallControlGroup>
       {/* C2, docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md: a room past
           `LARGE_ROOM_SOUND_THRESHOLD` auto-mutes join/leave cues on its own
           (`lib/large-room-sounds.ts`); this is the visible way back to the
           cues for whoever wants them anyway. Always shown, not only in a
-          large room, so the setting is findable before the room gets loud —
-          except below `sm`. The slim bar's own row (`OccupantFaces`, the
-          status line, the raised-hand queue, the music dock and this whole
-          control cluster) does not wrap, and at the mesh ceiling (8 faces
-          capped to 3, a longer "N people" status) it was already close to a
-          phone's width; this control was the one that tipped it past 390px
-          and pushed the hang-up button itself off the visible page
-          (`voice-lobby.spec.ts` "at the mesh ceiling"). A phone screen that
-          size is exactly where "findable before it gets loud" matters least
-          in practice: the setting is still one tap from the expanded stage
-          (this same block, unconditional there) or a wider window, and a
-          person cannot use "the way back to the cues" from a bar they cannot
-          reach the hang-up button on either. */}
+          large room, so the setting is findable before the room gets loud.
+          Hidden below `sm` so a phone still reaches hang-up. */}
       <Tooltip
         label={
           joinLeaveAutoMute
@@ -2794,13 +2793,8 @@ export function CallControls({
           )}
         </button>
       </Tooltip>
-      <span
-        aria-hidden="true"
-        className={cn(
-          "hidden mx-0.5 w-px self-stretch bg-ink-4/70 sm:block",
-          collapsed ? "my-1" : "my-1.5",
-        )}
-      />
+      </CallControlGroup>
+      <CallControlDivider className={cn("mx-0.5", collapsed ? "my-1" : "my-1.5")} />
       <Tooltip label={t("call.panel.leave")}>
         <button
           type="button"
@@ -2815,6 +2809,13 @@ export function CallControls({
         </button>
       </Tooltip>
     </div>
+      </div>
+      {!collapsed && (
+        <PttFocusHint
+          show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
+          className="text-center"
+        />
+      )}
     {shareHint && (
       <p role="status" className="text-center text-[11px] text-paper-muted">
         {shareHint}
@@ -3466,6 +3467,7 @@ export interface OccupantFace {
   key: string;
   displayName: string;
   avatarUrl: string | null;
+  speaking?: boolean;
   volume?: number;
   onSetVolume?: (volume: number) => void;
   shareVolume?: number;
@@ -3507,12 +3509,11 @@ function BannerFace({ person }: { person: OccupantFace }) {
     : undefined;
   const actionable = Boolean(voice || share || (person.failed && person.onRetry));
   const avatar = (
-    <UserAvatar
+    <VoiceAvatar
       name={person.displayName}
       avatarUrl={person.avatarUrl}
-      rounded="full"
-      className="h-6 w-6 ring-2 ring-ink-2"
-      fallbackClassName="bg-ink-4 text-[10px] text-paper"
+      size="sm"
+      isSpeaking={person.speaking}
     />
   );
   return (

@@ -1041,7 +1041,7 @@
   "voice.ptt.blocked": "Muted: push-to-talk is off",
   "voice.ptt.hintKey": "Hold {key} or the button above.",
   "voice.ptt.hintButton": "Hold the button above to talk.",
-  "voice.ptt.unfocused": "This window isn't focused, the key won't reach it. Click here first, or use the button.",
+  "voice.ptt.unfocused": "The key only works while this window is focused. The button always works.",
   "voice.bar.pttLive": "Live",
   "voice.bar.pttIdle": "PTT",
   "voice.bar.vadLive": "Live",
