@@ -1310,6 +1310,8 @@
   "cargosHint.body": "Clica na pessoa e marca um: Adm, Gerente, Mod ou VIP. Os que você criar ficam junto.",
   "cargosHint.cta": "Ver cargos",
   "cargosHint.dismiss": "Dispensar",
+  "featureHint.callDock.title": "Os controles da call mudaram de lugar",
+  "featureHint.callDock.body": "Agora ficam aqui embaixo, junto da mensagem. Mute, tela, mão levantada, sair.",
   "featureHint.gotIt": "Entendi",
   "featureHint.dismiss": "Fechar dica",
   "featureHint.composerFormat.body": "Clica no {control}. Abre Formatação e Prévia.",

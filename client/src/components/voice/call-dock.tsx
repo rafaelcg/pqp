@@ -1,0 +1,223 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  type ReactElement,
+  type ReactNode,
+  type TransitionEvent,
+} from "react";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import { cn } from "@/lib/utils";
+
+/**
+ * THE CALL LIVES WITH THE COMPOSER.
+ *
+ * A voice-only call used to draw a strip across the top of the channel: faces,
+ * a name, the control bar. The top of a channel is where the picture goes when
+ * there is one, and every call product people already know (Discord, Meet,
+ * FaceTime) keeps its controls at the bottom, beside the thing you type into.
+ * So the collapsed bar now docks INSIDE the composer, above the text field,
+ * and the composer grows to hold it.
+ *
+ * WHY A SLOT AND NOT A SECOND MOUNT. `CallStage` is the one component that
+ * knows a room well enough to build its control bar: it holds the peers, the
+ * caps, the fullscreen state, the quality menu and a few dozen callbacks, and
+ * it decides for itself whether the stage is expanded or collapsed. Moving the
+ * collapsed branch into the composer by mounting a second `CallStage` there
+ * would remount the call surface every time a camera went on or off. Instead
+ * the stage keeps deciding and, when it lands on "collapsed", hands the bar it
+ * built to this slot. The stage renders nothing in its own place; the composer
+ * renders the bar in its. One decision, one bar, two possible homes.
+ *
+ * The handoff is a React element published through context (a layout effect,
+ * so the composer has it before the first paint). A DOM portal would have been
+ * the other shape, and it cannot animate the exit: the moment the person
+ * hangs up, `CallStage` unmounts and a portal's children go with it, leaving
+ * nothing to fade. The outlet below keeps the last bar it was given for one
+ * closing transition, which is what lets it fold away instead of vanishing.
+ *
+ * The content is keyed by channel so a composer only ever draws the call of
+ * the channel it belongs to. The composer remounts per channel; without the
+ * key its first render after a switch would briefly see the previous
+ * channel's bar.
+ */
+export interface CallDockContent {
+  channelId: string;
+  node: ReactElement;
+}
+
+type Publish = (content: CallDockContent | null) => void;
+
+const PublishContext = createContext<Publish | null>(null);
+const ContentContext = createContext<CallDockContent | null>(null);
+
+export function CallDockProvider({
+  children,
+  onOccupiedChange,
+}: {
+  children: ReactNode;
+  /**
+   * Whether a bar is docked right now. `App` reads it to fold the sidebar's
+   * duplicate camera and share buttons while the same controls are on
+   * screen in the composer.
+   */
+  onOccupiedChange?: (occupied: boolean) => void;
+}) {
+  const [content, setContent] = useState<CallDockContent | null>(null);
+  const publish = useCallback<Publish>((next) => setContent(next), []);
+  const occupied = content !== null;
+  useEffect(() => {
+    onOccupiedChange?.(occupied);
+  }, [occupied, onOccupiedChange]);
+  return (
+    <PublishContext.Provider value={publish}>
+      <ContentContext.Provider value={content}>{children}</ContentContext.Provider>
+    </PublishContext.Provider>
+  );
+}
+
+/**
+ * The stage's end of the handoff. Null outside a provider, which is how a
+ * `CallStage` mounted on its own (a test, a surface with no composer) knows to
+ * keep drawing the bar where it stands.
+ */
+export function useCallDockPublisher(): Publish | null {
+  return useContext(PublishContext);
+}
+
+/**
+ * Renders nothing here and puts `children` in the dock instead.
+ *
+ * Publishes after every render, because the bar is rebuilt every render (a
+ * speaking ring, a raised hand, the clock). The cleanup publishes null so the
+ * dock closes when the stage goes away or stops being collapsed.
+ */
+export function CallDockPortal({
+  channelId,
+  publish,
+  children,
+}: {
+  channelId: string;
+  publish: Publish;
+  children: ReactElement;
+}) {
+  useLayoutEffect(() => {
+    publish({ channelId, node: children });
+  });
+  useLayoutEffect(() => () => publish(null), [publish]);
+  return null;
+}
+
+/**
+ * Only reached when no `transitionend` arrives: a pane hidden with the
+ * `hidden` attribute runs no transitions, and the last bar would otherwise
+ * stay mounted at zero height. Three times `--duration-base`.
+ */
+const EXIT_BACKSTOP_MS = 600;
+
+/**
+ * The composer's end: the slot the bar is drawn in, and the animation that
+ * opens and closes it.
+ *
+ * Height is a grid row going from `0fr` to `1fr`, which needs no measuring
+ * and follows the bar if it wraps to two rows on a narrow pane. A fresh bar
+ * mounts closed and opens on the next frame, so the first appearance is a
+ * transition rather than a jump. On the way out the last bar is kept until
+ * the row has finished closing, so it fades and folds together; the message
+ * list above scroll-anchors to the bottom throughout (`MessageList` watches
+ * its own height with a ResizeObserver).
+ *
+ * Under reduced motion the row snaps both ways.
+ */
+export function CallDockOutlet({ channelId }: { channelId: string }) {
+  const published = useContext(ContentContext);
+  const content =
+    published !== null && published.channelId === channelId
+      ? published.node
+      : null;
+  const active = content !== null;
+  const reducedMotion = usePrefersReducedMotion();
+
+  // The bar that is drawn: the live one, or the last one while it folds away.
+  // Set during render rather than in an effect (the "information from
+  // previous renders" pattern), so no intermediate frame is ever committed.
+  const [held, setHeld] = useState<ReactElement | null>(null);
+  if (content !== null && content !== held) {
+    setHeld(content);
+  }
+  const [open, setOpen] = useState(false);
+
+  // Leaving: start closing now, and drop the bar at once when nothing will
+  // animate.
+  useLayoutEffect(() => {
+    if (active) {
+      return;
+    }
+    setOpen(false);
+    if (reducedMotion) {
+      setHeld(null);
+    }
+  }, [active, reducedMotion]);
+
+  // Arriving: one painted frame closed, then open, so the row transitions.
+  useEffect(() => {
+    if (!active || open) {
+      return;
+    }
+    if (reducedMotion) {
+      setOpen(true);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setOpen(true));
+    return () => cancelAnimationFrame(frame);
+  }, [active, open, reducedMotion]);
+
+  useEffect(() => {
+    if (active || held === null) {
+      return;
+    }
+    const timer = setTimeout(() => setHeld(null), EXIT_BACKSTOP_MS);
+    return () => clearTimeout(timer);
+  }, [active, held]);
+
+  const onTransitionEnd = (event: TransitionEvent<HTMLDivElement>) => {
+    if (
+      event.target !== event.currentTarget ||
+      event.propertyName !== "grid-template-rows" ||
+      active
+    ) {
+      return;
+    }
+    setHeld(null);
+  };
+
+  if (held === null) {
+    return null;
+  }
+
+  return (
+    <div
+      data-call-dock=""
+      data-state={open ? "open" : "closed"}
+      aria-hidden={active ? undefined : true}
+      className={cn(
+        "grid transition-[grid-template-rows,opacity] duration-[var(--duration-base)] motion-reduce:transition-none",
+        open
+          ? "grid-rows-[1fr] opacity-100 ease-[var(--ease-emphasized)]"
+          : "pointer-events-none grid-rows-[0fr] opacity-0 ease-in",
+      )}
+      onTransitionEnd={onTransitionEnd}
+    >
+      <div className="min-h-0 overflow-hidden">
+        {/* Same 12px sides as the text field, so the first face, the pill
+            and the field's text share a left edge. On a 360 phone that
+            leaves 238px, and the six tiles a phone gets (mute, hand, music,
+            camera, share, hang up) take 236 of it. */}
+        <div className="border-b border-border/60 px-3 pb-2 pt-2.5">{held}</div>
+      </div>
+    </div>
+  );
+}

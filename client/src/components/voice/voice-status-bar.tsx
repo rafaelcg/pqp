@@ -86,6 +86,12 @@ interface VoiceStatusBarProps {
    * are on the stage, which is what the collapsed sidebar made room for.
    */
   compact?: boolean;
+  /**
+   * The call's own bar is on screen (docked in the composer, see
+   * `call-dock.tsx`), with these same camera and share buttons on it. This
+   * strip then keeps the sentence and the way out and drops the second copy.
+   */
+  hideActions?: boolean;
 }
 
 const ACTION = "h-9 w-full shrink-0 rounded-lg";
@@ -118,6 +124,7 @@ export function VoiceStatusBar({
   onLeave,
   shareHintEnabled = false,
   compact = false,
+  hideActions = false,
 }: VoiceStatusBarProps) {
   const { t } = useTranslation();
   const connected = status === "connected";
@@ -134,7 +141,7 @@ export function VoiceStatusBar({
   const showCamera = showVideoActions && onToggleCamera != null;
   const showShare =
     showVideoActions && onToggleScreenShare != null && platformCanShare;
-  const showActionRow = showCamera || showShare;
+  const showActionRow = (showCamera || showShare) && !hideActions;
   const cameraLabel = isCameraOn
     ? t("voice.bar.cameraOff")
     : t("voice.bar.cameraOn");

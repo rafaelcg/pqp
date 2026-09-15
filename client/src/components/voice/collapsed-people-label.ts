@@ -17,3 +17,27 @@ export function collapsedPeopleLabel(
   }
   return inCall(present.length);
 }
+
+/**
+ * What the line actually prints. Once the room is connected and there is
+ * somebody to name, the names win over any status line still hanging about
+ * ("Connecting…" outliving the join). The one exception is an outgoing ring:
+ * "Calling…" is a connected-room status, and the only name it would replace
+ * is our own. Before that, the status speaks, and the names are the fallback.
+ */
+export function collapsedPeopleLine({
+  connected,
+  callingOut,
+  statusLine,
+  peopleLabel,
+}: {
+  connected: boolean;
+  callingOut: boolean;
+  statusLine: string | null;
+  peopleLabel: string;
+}): string {
+  if (connected && !callingOut && peopleLabel.length > 0) {
+    return peopleLabel;
+  }
+  return statusLine ?? peopleLabel;
+}

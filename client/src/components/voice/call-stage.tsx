@@ -139,7 +139,14 @@ import {
   CallControlDivider,
   CallControlGroup,
 } from "@/components/voice/call-control-groups";
-import { collapsedPeopleLabel } from "@/components/voice/collapsed-people-label";
+import {
+  CallDockPortal,
+  useCallDockPublisher,
+} from "@/components/voice/call-dock";
+import {
+  collapsedPeopleLabel,
+  collapsedPeopleLine,
+} from "@/components/voice/collapsed-people-label";
 import { PttFocusHint, PttHoldControl } from "@/components/voice/ptt-hold-control";
 import {
   idleChromeClassName,
@@ -856,6 +863,9 @@ function ActiveCall({
 }) {
   const { t } = useTranslation();
   const wide = useLgUp();
+  // Where the collapsed bar goes: the composer's dock when one is mounted
+  // around us, our own place otherwise. See `call-dock.tsx`.
+  const dockPublish = useCallDockPublisher();
   // For the floating self-preview, which is a camera like any other and so
   // follows the camera answer. It carries no button of its own: at 112px
   // there is no room for one, and the tiles that do carry it set the same
@@ -1377,10 +1387,90 @@ function ActiveCall({
     fullscreen.toggleScreen(cameraSoloId(key));
   };
 
+  // The people on the slim bar: faces, names, hands and the music dock. Built
+  // here rather than in the collapsed branch because the control bar lays it
+  // out as the leading cell of its own row (see `CallControls`, collapsed).
+  const collapsedLeading = collapsed ? (
+    (() => {
+      const people =
+        roster.length > 0
+          ? roster.map((person) => {
+              const remote = remotes.find((r) => r.key === person.peerId);
+              const isSelf = person.peerId === voiceState.peerId;
+              return {
+                key: person.peerId,
+                displayName: person.displayName,
+                avatarUrl: person.avatarUrl,
+                speaking: isSelf
+                  ? Boolean(self?.speaking)
+                  : speaking.has(person.peerId),
+                volume: remote?.volume,
+                onSetVolume: remote?.onSetVolume,
+                shareVolume: remote?.shareVolume,
+                onSetShareVolume: remote?.onSetShareVolume,
+                failed: remote?.failed,
+                onRetry: remote?.onRetry,
+              };
+            })
+          : allPeople.map((person) => ({
+              key: person.key,
+              displayName: person.name,
+              avatarUrl: person.avatarUrl,
+              speaking: person.speaking,
+              volume: person.volume,
+              onSetVolume: person.onSetVolume,
+              shareVolume: person.shareVolume,
+              onSetShareVolume: person.onSetShareVolume,
+              failed: person.failed,
+              onRetry: person.onRetry,
+            }));
+      const peopleLine = collapsedPeopleLine({
+        connected: voiceState.status === "connected",
+        callingOut,
+        statusLine,
+        peopleLabel: collapsedPeopleLabel(
+          people.map((person) => person.displayName),
+          (count) => t("call.panel.inCall", { count }),
+        ),
+      });
+      return (
+        <div className="flex min-w-0 items-center gap-2">
+          <OccupantFaces faces={people} />
+          <p
+            className="min-w-0 flex-1 truncate text-sm text-text"
+            role="status"
+          >
+            {peopleLine}
+            {declinedNames.map((name) => (
+              <span key={name} className="ml-2 text-warning">
+                {t("call.panel.declined", { name })}
+              </span>
+            ))}
+            {elapsedLabel && (
+              <span
+                className="ml-2 tabular-nums text-text-tertiary"
+                aria-label={t("call.stage.duration")}
+              >
+                {elapsedLabel}
+              </span>
+            )}
+          </p>
+          <RaisedHandQueue
+            compact
+            participants={roomParticipants}
+            selfUserId={voiceState.self?.userId ?? null}
+          />
+          <MusicDock compact voiceState={voiceState} />
+        </div>
+      );
+    })()
+  ) : null;
+
   const controls = (
     <CallControls
       voiceState={voiceState}
       collapsed={collapsed}
+      leading={collapsedLeading}
       canExpand={hasVideo}
       userCollapsed={userCollapsed}
       fullscreenAvailable={fullscreen.available && !collapsed}
@@ -1469,87 +1559,35 @@ function ActiveCall({
     return null;
   }
   if (collapsed) {
-    const people =
-      roster.length > 0
-        ? roster.map((person) => {
-            const remote = remotes.find((r) => r.key === person.peerId);
-            const isSelf = person.peerId === voiceState.peerId;
-            return {
-              key: person.peerId,
-              displayName: person.displayName,
-              avatarUrl: person.avatarUrl,
-              speaking: isSelf
-                ? Boolean(self?.speaking)
-                : speaking.has(person.peerId),
-              volume: remote?.volume,
-              onSetVolume: remote?.onSetVolume,
-              shareVolume: remote?.shareVolume,
-              onSetShareVolume: remote?.onSetShareVolume,
-              failed: remote?.failed,
-              onRetry: remote?.onRetry,
-            };
-          })
-        : allPeople.map((person) => ({
-            key: person.key,
-            displayName: person.name,
-            avatarUrl: person.avatarUrl,
-            speaking: person.speaking,
-            volume: person.volume,
-            onSetVolume: person.onSetVolume,
-            shareVolume: person.shareVolume,
-            onSetShareVolume: person.onSetShareVolume,
-            failed: person.failed,
-            onRetry: person.onRetry,
-          }));
-    const peopleLine =
-      statusLine ??
-      collapsedPeopleLabel(people.map((person) => person.displayName), (count) =>
-        t("call.panel.inCall", { count }),
-      );
-    return (
-      <div className="border-b border-border bg-surface-0 px-3 py-2">
-        <div
-          data-testid="call-stage-collapsed"
-          className="flex flex-col gap-2 rounded-xl border border-border-strong bg-surface-2 px-3 py-2.5 lg:flex-row lg:items-center lg:gap-3"
-        >
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <OccupantFaces faces={people} />
-            <p
-              className="min-w-0 flex-1 truncate text-sm text-text"
-              role="status"
-            >
-              {peopleLine}
-              {declinedNames.map((name) => (
-                <span key={name} className="ml-2 text-warning">
-                  {t("call.panel.declined", { name })}
-                </span>
-              ))}
-              {elapsedLabel && (
-                <span
-                  className="ml-2 tabular-nums text-text-tertiary"
-                  aria-label={t("call.stage.duration")}
-                >
-                  {elapsedLabel}
-                </span>
-              )}
-            </p>
-            <RaisedHandQueue
-              compact
-              participants={roomParticipants}
-              selfUserId={voiceState.self?.userId ?? null}
-            />
-            <MusicDock compact voiceState={voiceState} />
-          </div>
-          {watchPartyChrome ? null : (
-            <div className="flex min-w-0 w-full justify-end lg:w-auto">
-              {controls}
-            </div>
-          )}
-        </div>
+    // `@container`: the bar breaks on its OWN width, not the window's. Inside
+    // the composer it is as wide as the chat column, which at 1024px with the
+    // member list open is about 450px, far too narrow for one row even though
+    // the viewport is `lg`. The tiers are in `CallControls`.
+    const bar = (
+      <div
+        data-testid="call-stage-collapsed"
+        className="@container flex flex-col gap-1.5"
+      >
+        {controls}
         <PttFocusHint
           show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
-          className="mt-1.5 px-1"
+          className="px-1"
         />
+      </div>
+    );
+    if (dockPublish) {
+      return (
+        <CallDockPortal channelId={channelId} publish={dockPublish}>
+          {bar}
+        </CallDockPortal>
+      );
+    }
+    // No composer around us to dock into: the bar stays where the stage is.
+    return (
+      <div className="border-b border-border bg-surface-0 px-3 py-2">
+        <div className="rounded-[var(--radius-card)] border border-border-strong bg-surface-2 px-3 py-2.5">
+          {bar}
+        </div>
       </div>
     );
   }
@@ -2173,9 +2211,16 @@ export function CallControls({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  leading = null,
 }: {
   voiceState: VoiceState;
   collapsed: boolean;
+  /**
+   * Collapsed only: the people cell (faces, names, hands, music) that the
+   * bar lays out ahead of its controls. Owned by the row so the hold-to-talk
+   * pill can take the space between the people and the tiles.
+   */
+  leading?: ReactNode;
   canExpand: boolean;
   userCollapsed: boolean;
   fullscreenAvailable: boolean;
@@ -2226,6 +2271,13 @@ export function CallControls({
   const joinLeaveAutoMute = useJoinLeaveAutoMuteEnabled();
   const cursorLiveControl = useMemo(() => canControlShareCursor(), []);
   const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
+  // "The controls moved down here." Once, the first time the dock opens.
+  // Pressing any control in the dock is proof enough that they were found,
+  // so one capture handler on the row closes the card; the impression is
+  // already recorded by then (`FeatureHint` remembers on first paint), so it
+  // does not come back either way.
+  const callDockHintEnabled = useFeatureHintEnabled("callDock");
+  const [dockControlUsed, setDockControlUsed] = useState(false);
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
     if (voiceState.isSharingScreen || voiceState.error) {
@@ -2283,6 +2335,16 @@ export function CallControls({
       )}
     >
       <div data-call-hints>
+        {collapsed && callDockHintEnabled && (
+          <div className="pointer-events-auto mb-2">
+            <FeatureHint
+              id="callDock"
+              enabled={!dockControlUsed}
+              title={t("featureHint.callDock.title")}
+              body={t("featureHint.callDock.body")}
+            />
+          </div>
+        )}
         {watchPartyHintEnabled && canWatchParty && !listenOnly && !noVideo && (
           <div className="pointer-events-auto mb-1">
             <FeatureHint
@@ -2310,14 +2372,59 @@ export function CallControls({
         />
       )}
       {!collapsed && <MusicDock voiceState={voiceState} className="mb-1.5" />}
+      {/* THE SLIM BAR IS ONE ROW WHEN IT FITS, AND FOLDS FROM THE LEFT.
+          Its cells are the people, the hold-to-talk pill (push-to-talk only)
+          and the tiles. Breakpoints are container queries against the bar's
+          OWN width (`@container` on the collapsed root in `ActiveCall`),
+          because inside the composer the bar is as wide as the chat column,
+          not the window.
+
+          - under 35rem: people / pill / tiles, one per line, tiles right.
+          - 35rem and up: the pill sits beside the tiles and takes the space
+            between; the people keep a line of their own. Without a pill the
+            people and the tiles share one line already.
+          - 48rem and up (`@3xl`): people, pill, tiles on one line.
+
+          35rem is where the pt-BR pill ("Segura pra falar" plus its key
+          chip, ~12rem) still fits beside the full set of tiles (~21.5rem).
+          The pill is capped at 22rem so a 1440px window does not turn it
+          into a slab; what it leaves goes to the people. */}
       <div
         className={cn(
           "flex items-center gap-2",
           collapsed
-            ? "w-full flex-col lg:flex-row lg:flex-wrap lg:justify-end"
+            ? "w-full flex-col @min-[35rem]:flex-row @min-[35rem]:flex-wrap @min-[35rem]:gap-x-3 @min-[35rem]:gap-y-2"
             : "flex-wrap justify-center",
         )}
+        // Capture, so the pill's pointerdown and every tile's click count,
+        // including the ones that open a menu and stop propagation.
+        onPointerDownCapture={
+          collapsed && callDockHintEnabled && !dockControlUsed
+            ? (event) => {
+                if (
+                  event.target instanceof Element &&
+                  event.target.closest("button")
+                ) {
+                  setDockControlUsed(true);
+                }
+              }
+            : undefined
+        }
       >
+        {collapsed && leading && (
+          <div
+            className={cn(
+              "min-w-0 self-stretch",
+              // Sized to its content: what the row has spare goes to the
+              // pill, and past the pill's cap to the gap before the tiles.
+              pushToTalk
+                ? "@min-[35rem]:basis-full @3xl:basis-auto"
+                : "@min-[35rem]:basis-auto",
+            )}
+          >
+            {leading}
+          </div>
+        )}
         {pushToTalk && (
           <PttHoldControl
             blocked={pushToTalkBlocked}
@@ -2325,15 +2432,19 @@ export function CallControls({
             isTransmitting={isTransmitting}
             keyLabel={pushToTalkKeyLabel}
             windowFocused={windowFocused}
-            fullWidth={collapsed}
+            inBar={collapsed}
             onPushToTalk={onPushToTalk}
           />
         )}
+    {/* The tile row wraps rather than clips. On a 360 phone the bar is
+        ~238px wide and six 36px tiles fill it to the pixel, so anything the
+        width budget did not foresee goes to a second line, where it can
+        still be pressed, instead of off the edge. */}
     <div
       className={cn(
         "flex items-center gap-1",
         collapsed
-          ? "w-full justify-end lg:w-auto"
+          ? "w-full flex-wrap justify-end @min-[35rem]:ml-auto @min-[35rem]:w-auto @min-[35rem]:shrink-0"
           : "gap-2 rounded-full bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur",
       )}
     >
@@ -2438,7 +2549,10 @@ export function CallControls({
       )}
       <MusicBarButton size={size} iconSize={iconSize} />
       </CallControlGroup>
-      <CallControlDivider className={collapsed ? "my-1" : "my-1.5"} />
+      <CallControlDivider
+        container={collapsed}
+        className={collapsed ? "my-1" : "my-1.5"}
+      />
       <CallControlGroup>
       {!noVideo && (
       <Tooltip
@@ -2552,7 +2666,12 @@ export function CallControls({
               data-testid="share-cursor-toggle"
               aria-pressed={shareCursor === "hide"}
               className={cn(
-                "flex items-center justify-center rounded-full",
+                "items-center justify-center rounded-full",
+                // Under 22rem the slim bar keeps the tiles a phone can use
+                // (22rem is what the full set of tiles needs). A phone has no
+                // getDisplayMedia, so this one is already gone there; the
+                // rule only bites a squeezed desktop pane.
+                collapsed ? "hidden @min-[22rem]:flex" : "flex",
                 size,
                 shareCursor === "hide"
                   ? "bg-signal/20 text-signal"
@@ -2682,7 +2801,10 @@ export function CallControls({
               aria-label={t("voice.control.watchParty")}
               aria-disabled={shareCappedOut || undefined}
               className={cn(
-                "flex items-center justify-center rounded-full",
+                "items-center justify-center rounded-full",
+                // Same rule as the cursor toggle: a watch party starts from
+                // a Chrome tab, which no phone can share.
+                collapsed ? "hidden @min-[22rem]:flex" : "flex",
                 size,
                 shareCappedOut && "opacity-40",
                 "bg-ink-3 text-paper hover:bg-ink-4",
@@ -2760,14 +2882,21 @@ export function CallControls({
         </Tooltip>
       )}
       </CallControlGroup>
-      <CallControlDivider className={collapsed ? "my-1" : "my-1.5"} />
-      <CallControlGroup>
+      <CallControlDivider
+        container={collapsed}
+        className={collapsed ? "my-1" : "my-1.5"}
+      />
+      {/* The group hides with its only tile, or its gap would still be
+          spent on a row where six tiles fill the width to the pixel. */}
+      <CallControlGroup className={collapsed ? "hidden @min-[22rem]:flex" : "hidden sm:flex"}>
       {/* C2, docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md: a room past
           `LARGE_ROOM_SOUND_THRESHOLD` auto-mutes join/leave cues on its own
           (`lib/large-room-sounds.ts`); this is the visible way back to the
           cues for whoever wants them anyway. Always shown, not only in a
           large room, so the setting is findable before the room gets loud.
-          Hidden below `sm` so a phone still reaches hang-up. */}
+          Hidden below `sm` so a phone still reaches hang-up; on the slim bar
+          the rule is the bar's own width, under 22rem, like the cursor and
+          watch party tiles. */}
       <Tooltip
         label={
           joinLeaveAutoMute
@@ -2781,7 +2910,7 @@ export function CallControls({
           data-testid="join-leave-auto-mute-toggle"
           aria-pressed={joinLeaveAutoMute}
           className={cn(
-            "hidden items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 sm:flex",
+            "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
             size,
           )}
           onClick={() => setJoinLeaveAutoMuteEnabled(!joinLeaveAutoMute)}
@@ -2794,13 +2923,16 @@ export function CallControls({
         </button>
       </Tooltip>
       </CallControlGroup>
-      <CallControlDivider className={cn("mx-0.5", collapsed ? "my-1" : "my-1.5")} />
+      <CallControlDivider
+        container={collapsed}
+        className={cn("mx-0.5", collapsed ? "my-1" : "my-1.5")}
+      />
       <Tooltip label={t("call.panel.leave")}>
         <button
           type="button"
           aria-label={t("call.panel.leave")}
           className={cn(
-            "flex items-center justify-center rounded-full bg-danger/90 text-paper hover:bg-danger",
+            "flex shrink-0 items-center justify-center rounded-full bg-danger/90 text-paper hover:bg-danger",
             collapsed ? size : "h-10 w-14",
           )}
           onClick={onLeave}

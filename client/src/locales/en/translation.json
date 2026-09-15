@@ -1310,6 +1310,8 @@
   "cargosHint.body": "Open someone and tick one: Admin, Manager, Mod, or VIP. Homemade cargos sit next to those.",
   "cargosHint.cta": "Open roles",
   "cargosHint.dismiss": "Dismiss",
+  "featureHint.callDock.title": "The call controls moved",
+  "featureHint.callDock.body": "They now live down here, next to the message box. Mute, screen, raised hand, leave.",
   "featureHint.gotIt": "Got it",
   "featureHint.dismiss": "Dismiss hint",
   "featureHint.composerFormat.body": "Click {control}. Opens Formatting and Preview.",

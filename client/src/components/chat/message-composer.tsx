@@ -50,7 +50,15 @@ import { ComposerFormatPreview } from "@/components/chat/composer-format-preview
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { rememberFeatureHint } from "@/lib/feature-hints";
 import { PollComposer } from "@/components/chat/poll-composer";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AUTOCOMPLETE_GRID_COLUMNS,
   AutocompleteMenu,
@@ -172,6 +180,13 @@ interface MessageComposerProps {
    * are furniture. Twitch's composer is exactly this shape.
    */
   variant?: "default" | "stream";
+  /**
+   * A slot at the top of the field, inside the same rounded well as the
+   * text. The voice-only call bar docks here (`CallDockOutlet`), so the
+   * composer grows to hold the call rather than the call sitting on top of
+   * the channel. The composer knows nothing about what is in it.
+   */
+  dock?: ReactNode;
 }
 
 /**
@@ -339,6 +354,7 @@ export function MessageComposer({
   placeholder,
   onEditLastOwn,
   variant = "default",
+  dock,
 }: MessageComposerProps) {
   const { t } = useTranslation();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
@@ -1485,6 +1501,7 @@ export function MessageComposer({
           "rounded-[var(--radius-card)] border border-border bg-surface-2 transition-colors focus-within:border-border-strong",
         )}
       >
+        {dock}
         {(replyTarget ||
           isPollComposerOpen ||
           pending.length > 0 ||

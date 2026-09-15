@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATTACHED_FEATURE_HINT_ORDER,
   FEATURE_HINT_STORAGE_KEYS,
   isFeatureHintSeen,
   rememberFeatureHint,
+  shouldOfferCallDockHint,
   shouldOfferChannelPinHint,
   shouldOfferComposerFormatHint,
   shouldOfferShortcutsHint,
@@ -26,6 +28,22 @@ describe("winningFeatureHint", () => {
     expect(
       winningFeatureHint({ watchParty: false, composerFormat: false }),
     ).toBeNull();
+  });
+
+  it("lets the moved controls beat every hint that points at one of them", () => {
+    expect(
+      winningFeatureHint({
+        callDock: true,
+        watchPartyHost: true,
+        watchPartyViewer: true,
+        watchParty: true,
+        music: true,
+        composerFormat: true,
+      }),
+    ).toBe("callDock");
+    expect(ATTACHED_FEATURE_HINT_ORDER[0]).toBe("callDock");
+    // And steps aside once it has had its turn.
+    expect(winningFeatureHint({ callDock: false, music: true })).toBe("music");
   });
 
   it("lets Watch party beat the format bar, and format beat pin", () => {
@@ -56,6 +74,36 @@ describe("remember / seen", () => {
     rememberFeatureHint("shortcuts", storage, false);
     expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.shortcuts)).toBeNull();
     expect(isFeatureHintSeen("shortcuts", storage, false)).toBe(false);
+  });
+});
+
+describe("shouldOfferCallDockHint", () => {
+  const ready = {
+    seen: false,
+    automated: false,
+    dockVisible: true,
+    connected: true,
+  };
+
+  it("shows the first time the dock opens in a room you are in", () => {
+    expect(shouldOfferCallDockHint(ready)).toBe(true);
+  });
+
+  it("stays away once seen, under automation, off the dock, or before the join lands", () => {
+    expect(shouldOfferCallDockHint({ ...ready, seen: true })).toBe(false);
+    expect(shouldOfferCallDockHint({ ...ready, automated: true })).toBe(false);
+    expect(shouldOfferCallDockHint({ ...ready, dockVisible: false })).toBe(
+      false,
+    );
+    expect(shouldOfferCallDockHint({ ...ready, connected: false })).toBe(
+      false,
+    );
+  });
+
+  it("has a key of its own", () => {
+    expect(FEATURE_HINT_STORAGE_KEYS.callDock).toBe(
+      "pqp:feature-hint-call-dock-2026-09",
+    );
   });
 });
 

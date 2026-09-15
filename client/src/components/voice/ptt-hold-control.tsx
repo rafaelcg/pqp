@@ -8,6 +8,11 @@ import { cn } from "@/lib/utils";
  * Lives in the same row as the icon buttons. The bound key is a chip on the
  * pill; when the window is not focused the chip dims, because the key cannot
  * reach this page and the button still can.
+ *
+ * `inBar`: on the slim bar the pill is the cell between the people and the
+ * tiles. It is full width while the bar folds into lines, and from 35rem it
+ * grows into whatever the row has spare, up to 22rem. The tiers are the
+ * bar's, in `call-stage.tsx`.
  */
 export function PttHoldControl({
   blocked,
@@ -15,7 +20,7 @@ export function PttHoldControl({
   isTransmitting,
   keyLabel,
   windowFocused,
-  fullWidth = false,
+  inBar = false,
   onPushToTalk,
 }: {
   blocked: boolean;
@@ -23,7 +28,7 @@ export function PttHoldControl({
   isTransmitting: boolean;
   keyLabel: string | null;
   windowFocused: boolean;
-  fullWidth?: boolean;
+  inBar?: boolean;
   onPushToTalk?: (held: boolean) => void;
 }) {
   const { t } = useTranslation();
@@ -44,7 +49,8 @@ export function PttHoldControl({
         "transition-[background,color,opacity] duration-[var(--duration-fast)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
         "disabled:pointer-events-none disabled:opacity-40",
-        fullWidth && "w-full lg:w-auto lg:min-w-[11rem]",
+        inBar &&
+          "w-full @min-[35rem]:w-auto @min-[35rem]:max-w-[22rem] @min-[35rem]:shrink-0 @min-[35rem]:grow",
         isTransmitting
           ? "bg-accent text-on-accent"
           : "border border-border bg-surface-3 text-text hover:bg-surface-2",
