@@ -35,11 +35,24 @@ const (
 // this doesn't get more keyframes, it just wastes RTCP.
 const minPaceMs = 500
 
-// defaultGateFactor is PLI_GATE_FACTOR's default: don't ask for a keyframe
-// until 1.5x the segment target has passed with no IDR, matching section
-// 3's "Branch B" rule in the plan (one PLI only when no IDR arrived within
-// 1.5xS, at most one every ~1.5xS after that).
-const defaultGateFactor = 1.5
+// defaultGateFactor is PLI_GATE_FACTOR's default: ask for a keyframe once
+// the segment target itself has passed with no IDR.
+//
+// It was 1.5 -- section 3's "Branch B" as first written, one PLI only
+// after 1.5xS with no IDR. Production on 2026-09-15 showed what that costs
+// when the browser genuinely never sends an unrequested IDR: the
+// fragmenter closes a segment on the first IDR at or AFTER SEGMENT_MS, and
+// the gate meant the earliest IDR it could possibly see was already at
+// 1.5xS, so 4 second segments came out 7 to 11 seconds long and
+// #EXT-X-TARGETDURATION read 11. A factor of 1 asks at the moment the
+// segment would like to close, so the IDR lands one round trip later and
+// segments land just past the target instead of half again past it.
+//
+// This does not ask for more keyframes than a stream needs: the gate only
+// ever fires when no IDR has arrived within the whole window, which is
+// exactly the case where a segment cannot close without one. A publisher
+// whose own cadence is shorter than SEGMENT_MS never triggers it at all.
+const defaultGateFactor = 1.0
 
 // Config controls Gater. SegmentTargetMs is SEGMENT_MS; GateFactor is
 // PLI_GATE_FACTOR (<=0 uses defaultGateFactor); PaceMs is PLI_PACE_MS

@@ -144,7 +144,7 @@ func TestSessionAudioPipelineEndToEnd(t *testing.T) {
 	// this runs cancel() before s.Close() at the end of the test.
 	defer s.Close()
 	defer cancel()
-	if err := s.EnableAudio(ctx, AudioConfig{Ring: audioRing, SegmentTicks: 4 * 48000}); err != nil {
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: audioRing, PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
 		t.Fatalf("EnableAudio: %v", err)
 	}
 
@@ -203,7 +203,7 @@ func TestSessionCloseUploadsTheFinalOpenAudioSegment(t *testing.T) {
 
 	audioRing := ring.New(6, 48000)
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := s.EnableAudio(ctx, AudioConfig{Ring: audioRing, SegmentTicks: 4 * 48000}); err != nil {
+	if err := s.EnableAudio(ctx, AudioConfig{Ring: audioRing, PartTicks: 24000, SegmentTicks: 4 * 48000}); err != nil {
 		t.Fatalf("EnableAudio: %v", err)
 	}
 

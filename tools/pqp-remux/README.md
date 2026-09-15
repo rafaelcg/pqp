@@ -92,11 +92,11 @@ Read by `internal/config`.
 | `LIVEKIT_API_SECRET` | — (required) | |
 | `ROOM` | — (required) | LiveKit room name to subscribe to |
 | `LISTEN` | `127.0.0.1:8089` | HTTP address for the local test surface. **Loopback by default on purpose**: none of `internal/serve`'s routes authenticate a caller (see its package doc comment), so binding every interface by default would turn a forgotten override into an unauthenticated media-disclosure endpoint. Set it to a non-loopback address only deliberately, and only with a real access-control layer in front of it |
-| `PART_MS` | `500` | CMAF part target (plan §2/§6) |
+| `PART_MS` | `500` | CMAF part target (plan §2/§6) — **both renditions**. Audio batches whole AAC frames until it is reached, so an audio part is `PART_MS` rounded up to the next 21.3ms frame (512ms at the default). It used to be one part per AAC frame, ~48/s; see `internal/pipeline.AudioConfig` |
 | `SEGMENT_MS` | `4000` | CMAF segment target (plan §2/§6); segments close elastically on the first IDR at or after this, never before |
-| `RING_SEGMENTS` | `6` | How many sealed segments (plus the live one) stay in memory |
+| `RING_SEGMENTS` | `6` | How many sealed segments (plus the live one) of the **video** track stay in memory. The audio ring gets `ring.AudioSegments(RING_SEGMENTS)` — deeper, because audio segments close on schedule while video's close elastically, so the same segment count is a shorter window in seconds |
 | `KEYFRAME_POLICY` | `natural` | `natural` (never send a PLI) or `pli` (paced, gated requests). **`L0.2` has not chosen a branch yet** — this defaults to `natural` on purpose |
-| `PLI_GATE_FACTOR` | `1.5` | In `pli` mode, wait this many × `SEGMENT_MS` with no IDR before asking for one |
+| `PLI_GATE_FACTOR` | `1.0` | In `pli` mode, wait this many × `SEGMENT_MS` with no IDR before asking for one. A factor above 1 pushes the earliest possible segment boundary past `SEGMENT_MS`, because a segment closes on the first IDR at or after the target |
 | `PLI_PACE_MS` | `500` | Minimum spacing between repeated PLI requests while still waiting for an IDR. **Floored at 500ms** regardless of a lower value: `L0.1` found the SFU's own `rtc.pli_throttle` (Low tier) defaults to 500ms for a single-layer publish (our screen share always is), so asking faster only wastes RTCP, it does not get more keyframes |
 | `AAC_BITRATE_KBPS` | `128` | Target AAC-LC bitrate `internal/aacenc` asks ffmpeg's native encoder for |
 | `FFMPEG_PATH` | `ffmpeg` (via `PATH`) | Override the ffmpeg binary `internal/aacenc` shells out to |
@@ -260,9 +260,17 @@ parts/segments... or as a separate audio rendition with its own init/parts
   wanders relative to its own frame grain.
 - **Every AAC-LC frame is independently decodable** (no B-frames, no GOP),
   so the audio segment boundary needs no IDR-wait at all — `AudioFragmenter`
-  closes exactly on schedule. Sharing one `moof`/segment-boundary decision
+  closes exactly on schedule (the first frame boundary at or after the
+  target, within 21.3ms of it). Sharing one `moof`/segment-boundary decision
   with video would import video's "wait for an IDR" rule into a track that
   has no such constraint, for no benefit.
+- **Independent cadences are not "no cadence".** The audio track still cuts
+  parts at `PART_MS`, batching whole AAC frames until the target is reached.
+  Reading "independent" as "whatever the caller pushes at" is what shipped
+  one CMAF part per 21.3ms frame — roughly 48 parts per second of ~114
+  bytes each — and stalled every viewer of the first end-to-end LL session
+  on 2026-09-15. `internal/pipeline.AudioConfig`'s doc comment carries the
+  measurements.
 - **Independent failure domains.** If `ffmpeg` isn't available, is slow to
   start, or the mix has no active source yet, video passthrough must not
   care — see `Session.EnableAudio`'s doc comment: a failure there is logged

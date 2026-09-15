@@ -219,6 +219,13 @@ type AudioConfig struct {
 	// ring.Ring instance (audio is a separate CMAF stream; see
 	// internal/cmaf/audio_init.go's doc comment).
 	Ring *ring.Ring
+	// PartTicks is the audio track's own PART_MS target, in the audio
+	// track's 48kHz timescale (aacenc.SampleRate). Leaving it zero is
+	// what shipped the 2026-09-15 incident this field exists to close:
+	// see pipeline.AudioConfig's own doc comment, which carries the
+	// production evidence. Ordinarily the same PART_MS the video
+	// Fragmenter gets, converted into this track's clock.
+	PartTicks uint32
 	// SegmentTicks is the audio track's own segment target, in the audio
 	// track's 48kHz timescale (aacenc.SampleRate) — NOT the same tick
 	// count New's segmentTicks used, which is in the video track's 90kHz
@@ -267,6 +274,7 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 	s.storeEncoder(enc)
 	s.audioFrag = pipeline.NewAudioFragmenter(pipeline.AudioConfig{
 		Timescale:       aacenc.SampleRate,
+		PartDuration:    cfg.PartTicks,
 		SegmentDuration: cfg.SegmentTicks,
 	})
 	if cfg.StartSegmentIndex > 0 {
@@ -510,8 +518,38 @@ func (s *Session) Close() {
 	// else will ever start a *next* segment to trigger the ordinary
 	// roll-over upload.
 	if s.audioFrag != nil {
+		// Drain the part still accumulating inside the fragmenter
+		// BEFORE uploading the final segment: since parts batch to
+		// PART_MS, up to half a second of already-encoded audio is held
+		// there at any instant, and it belongs in the segment this
+		// upload is about to seal. Safe to touch audioFrag from this
+		// goroutine only because the wait above proves the one goroutine
+		// that ever calls Push has returned, and audioClosed (set under
+		// audioMu, checked under it by recoverAudioEncoder) proves no
+		// replacement reader can start.
+		if frag := s.audioFrag.Flush(); frag != nil {
+			s.publishAudioPart(frag)
+		}
 		s.uploadAudioSegment(s.audioFrag.CurrentSegmentIndex())
 	}
+}
+
+// publishAudioPart is readEncoderFrames' and Close's shared tail: push one
+// closed audio part into the ring, upload whichever segment that sealed,
+// and count it. Push FIRST, upload second -- Ring.Push is what marks the
+// previous segment sealed, exactly as publish's own comment explains for
+// video.
+func (s *Session) publishAudioPart(frag *pipeline.Fragment) {
+	sealedIndex := -1
+	if frag.IsSegmentStart && frag.SegmentIndex > 0 {
+		sealedIndex = frag.SegmentIndex - 1
+	}
+	s.audioRing.Push(frag)
+	if sealedIndex >= 0 {
+		s.uploadAudioSegment(sealedIndex)
+	}
+	s.audioPartsWritten.Add(1)
+	s.audioBytesWritten.Add(uint64(len(frag.Bytes)))
 }
 
 // audioCloseFlushDeadline bounds Close's wait for the audio reader to
@@ -867,18 +905,13 @@ func (s *Session) readEncoderFrames(enc remuxEncoder, done, failed chan struct{}
 				return
 			}
 			pts := s.audioNextPTS.Add(aacenc.SamplesPerFrame) - aacenc.SamplesPerFrame
-			frag := s.audioFrag.Push(pts, aacenc.SamplesPerFrame, frame.Data)
-
-			sealedIndex := -1
-			if frag.IsSegmentStart && frag.SegmentIndex > 0 {
-				sealedIndex = frag.SegmentIndex - 1
+			// nil means "this part is not full yet": since PART_MS
+			// batching, most frames land inside an open part rather
+			// than becoming one. (Before that, every frame was a part,
+			// which is the bug pipeline.AudioConfig documents.)
+			if frag := s.audioFrag.Push(pts, aacenc.SamplesPerFrame, frame.Data); frag != nil {
+				s.publishAudioPart(frag)
 			}
-			s.audioRing.Push(frag) // seals sealedIndex, if any; see publish's matching comment
-			if sealedIndex >= 0 {
-				s.uploadAudioSegment(sealedIndex)
-			}
-			s.audioPartsWritten.Add(1)
-			s.audioBytesWritten.Add(uint64(len(frag.Bytes)))
 		case err, ok := <-errsCh:
 			if !ok {
 				// Errs() will never send again, but Frames() may still

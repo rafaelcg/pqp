@@ -15,15 +15,17 @@ import (
 )
 
 // Defaults match docs/plans/LL_HLS.md §2/§3/§6: 500ms parts, 4s segments,
-// natural keyframe policy (L0.2 has not chosen a branch yet), a 1.5x gate
-// factor for whenever PLI mode is turned on, and a 6-segment ring (~24s of
-// DVR at the default segment target, section 5's memory budget).
+// natural keyframe policy (L0.2 has not chosen a branch yet), a 1x gate
+// factor for whenever PLI mode is turned on (see
+// keyframe.defaultGateFactor for why it is no longer 1.5), and a
+// 6-segment ring (~24s of DVR at the default segment target, section 5's
+// memory budget).
 const (
 	DefaultPartMS         = 500
 	DefaultSegmentMS      = 4000
 	DefaultRingSegments   = 6
 	DefaultKeyframePolicy = keyframe.PolicyNatural
-	DefaultPLIGateFactor  = 1.5
+	DefaultPLIGateFactor  = 1.0
 	// DefaultListen binds loopback only: internal/serve is an
 	// unauthenticated local testing surface (see its package doc comment),
 	// and defaulting to every interface would turn a forgotten `LISTEN`

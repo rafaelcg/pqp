@@ -226,3 +226,82 @@ func TestSnapshotNextPartSeqSurvivesEviction(t *testing.T) {
 		t.Fatalf("NextPartSeq = %d, want 6", snap.NextPartSeq)
 	}
 }
+
+// TestAudioSegmentsGivesTheAudioRingHeadroom pins the rule, not the
+// number: an audio ring counted in the same number of segments as the
+// video ring covers strictly LESS wall clock, because the video
+// fragmenter's segments are elastic (first IDR at or after the target)
+// and the audio fragmenter's are not (first frame boundary at or after
+// it). Production on 2026-09-15 closed 4s-target video segments at 7 to
+// 11 seconds, so six of each was ~24s of audio against ~50s of video and
+// an `hlsEdge.llPartMissing` on audio parts the video side could not
+// explain.
+func TestAudioSegmentsGivesTheAudioRingHeadroom(t *testing.T) {
+	for _, videoSegments := range []int{1, 6, 12} {
+		if got := AudioSegments(videoSegments); got <= videoSegments {
+			t.Fatalf("AudioSegments(%d) = %d, want more than the video ring's own depth", videoSegments, got)
+		}
+	}
+	// A nonsense video depth must still produce a usable audio ring,
+	// matching New's own floor of 1.
+	if got := AudioSegments(0); got < 1 {
+		t.Fatalf("AudioSegments(0) = %d, want at least 1", got)
+	}
+}
+
+// TestAudioRingHoldsAtLeastAsManyPartsAsVideo is the property the
+// incident actually violated, expressed end to end: at the default
+// config (6 segments, 500ms parts, 4s segments) the audio ring must
+// retain at least as many parts as the video ring does, even when the
+// video track's segments run long.
+func TestAudioRingHoldsAtLeastAsManyPartsAsVideo(t *testing.T) {
+	const ringSegments = 6
+
+	// Video: 6 segments that ran to 8s each (twice the target, what a
+	// PLI-gated Chromium share produced in production), 500ms parts.
+	video := New(ringSegments, 90000)
+	video.SetInit([]byte("v"))
+	var vseq uint32
+	for seg := 0; seg < ringSegments+2; seg++ {
+		for part := 0; part < 16; part++ { // 16 x 500ms = 8s
+			vseq++
+			video.Push(&pipeline.Fragment{
+				SequenceNumber: vseq,
+				SegmentIndex:   seg,
+				IsSegmentStart: part == 0,
+				DurationTicks:  45000,
+				Bytes:          []byte{1},
+			})
+		}
+	}
+
+	// Audio: the same 500ms parts, but segments that close on schedule
+	// at 4s, in a ring sized by AudioSegments.
+	audio := New(AudioSegments(ringSegments), 48000)
+	audio.SetInit([]byte("a"))
+	var aseq uint32
+	for seg := 0; seg < AudioSegments(ringSegments)+2; seg++ {
+		for part := 0; part < 8; part++ { // 8 x 500ms = 4s
+			aseq++
+			audio.Push(&pipeline.Fragment{
+				SequenceNumber: aseq,
+				SegmentIndex:   seg,
+				IsSegmentStart: part == 0,
+				DurationTicks:  24000,
+				Bytes:          []byte{1},
+			})
+		}
+	}
+
+	countParts := func(r *Ring) int {
+		n := 0
+		for _, s := range r.Snapshot().Segments {
+			n += len(s.Parts)
+		}
+		return n
+	}
+	gotVideo, gotAudio := countParts(video), countParts(audio)
+	if gotAudio < gotVideo {
+		t.Fatalf("audio ring holds %d parts, video holds %d: audio parts are evicted while the video playlist still lists the same window", gotAudio, gotVideo)
+	}
+}
