@@ -130,6 +130,9 @@ func newRealSessionPipelineFactory(writer *r2.Writer) PipelineFactory {
 		if cfg.StartVideoSegmentIndex > 0 {
 			sess.SetStartSegmentIndex(cfg.StartVideoSegmentIndex)
 		}
+		if cfg.StartVideoPartSeq > 0 {
+			sess.SetStartPartSequence(cfg.StartVideoPartSeq)
+		}
 		if writer != nil {
 			sess.EnableR2(writer, cfg.ChannelID, cfg.StartedAtMs, "ll")
 		}
@@ -145,6 +148,8 @@ func (p *realSessionPipeline) Health() PipelineHealth {
 		PartsWritten:      h.PartsWritten,
 		VideoSegmentIndex: p.sess.CurrentVideoSegmentIndex(),
 		AudioSegmentIndex: p.sess.CurrentAudioSegmentIndex(),
+		VideoPartSeq:      p.sess.CurrentVideoPartSequence(),
+		AudioPartSeq:      p.sess.CurrentAudioPartSequence(),
 	}
 	if p.sess.HasPart() {
 		ph.LastPartAt = p.sess.Started().Add(msDuration(h.LastPartAtMs))
@@ -560,3 +565,65 @@ func TestManagedSession_RestartNeverReusesR2Key_SealsDuringTeardown(t *testing.T
 // own framesPerGeneration (50): enough frames to seal at least two 15-frame
 // segments (0 and 1) with a third left open.
 const framesPerGenerationForTest = 50
+
+// TestManagedSession_RestartNeverReusesPartName is PR #621's counterpart
+// to the R2-key test above, one level down and for a different consumer.
+// Segment indices have been carried across a restart since PR #584,
+// because re-using one overwrote an uploaded object. Part sequence numbers
+// were not, and until state.json (internal/llstate) that was invisible:
+// nothing outside this process ever saw a part's file name. Now the edge
+// Worker advertises "part-<seq>.m4s" to players and caches those bytes by
+// PATH, with the viewer token deliberately dropped from the key -- so a
+// replacement pipeline numbering from 1 again would publish names whose
+// bytes are already cached from the pipeline before it, and viewers would
+// be served the dead pipeline's media for the life of the entry (Farol
+// review, PR #621).
+func TestManagedSession_RestartNeverReusesPartName(t *testing.T) {
+	factory := newRealSessionPipelineFactory(nil)
+	req := testStartReq(sessA, chanA, chanA)
+	req.PartMs = 500
+	req.SegmentMs = 500
+
+	ms, err := newManagedSession(context.Background(), req, time.Now().UnixMilli(), GlobalConfig{}, fixedWatchdogCfg(), factory)
+	if err != nil {
+		t.Fatalf("unexpected error starting session: %v", err)
+	}
+	// No ms.Stop(): this ManagedSession's watchdog goroutine was never
+	// started (see TestManagedSession_RestartNeverReusesR2Key's own
+	// comment on why these tests drive restart() directly), and Stop
+	// waits on it. Close the live pipeline instead.
+	defer func() {
+		if p := ms.currentPipelineForTest(); p != nil {
+			p.Close()
+		}
+	}()
+
+	const frames = 50
+	p1 := ms.currentPipelineForTest().(*realSessionPipeline)
+	p1.pushSPSPPS(0)
+	p1.pushIDRFrames(0, frames, restartTestFrameStep)
+
+	lastSeq := p1.sess.CurrentVideoPartSequence()
+	if lastSeq == 0 {
+		t.Fatal("the first pipeline emitted no part at all; nothing below would prove anything")
+	}
+
+	ms.restart()
+
+	p2 := ms.currentPipelineForTest().(*realSessionPipeline)
+	if p2 == p1 {
+		t.Fatal("expected restart to build a new pipeline instance")
+	}
+	// Resumed, not reset: the replacement's counter sits exactly where
+	// the predecessor left it, so its FIRST part is lastSeq+1. Without
+	// the fix this reads 0 and the next part published is part-1.m4s.
+	if got := p2.sess.CurrentVideoPartSequence(); got != lastSeq {
+		t.Fatalf("replacement resumed at %d, want the predecessor's final %d (so its first part is %d)", got, lastSeq, lastSeq+1)
+	}
+
+	p2.pushSPSPPS(frames * restartTestFrameStep)
+	p2.pushIDRFrames(frames, frames, restartTestFrameStep)
+	if got := p2.sess.CurrentVideoPartSequence(); got <= lastSeq {
+		t.Fatalf("replacement emitted %d parts past the predecessor's final %d", got-lastSeq, lastSeq)
+	}
+}

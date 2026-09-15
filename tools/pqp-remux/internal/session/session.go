@@ -234,6 +234,11 @@ type AudioConfig struct {
 	// segment 0" behaviour; L1.6's watchdog restart is the only caller
 	// that ever sets this to anything else.
 	StartSegmentIndex int
+	// StartSequence is the audio counterpart of
+	// Session.SetStartPartSequence's parameter -- see that method's doc
+	// comment. 0 is ordinary "number parts from 1"; only a watchdog
+	// restart sets it.
+	StartSequence uint32
 }
 
 // EnableAudio starts the AAC encoder subprocess and this session's audio
@@ -266,6 +271,9 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 	})
 	if cfg.StartSegmentIndex > 0 {
 		s.audioFrag.SetStartSegmentIndex(cfg.StartSegmentIndex)
+	}
+	if cfg.StartSequence > 0 {
+		s.audioFrag.SetStartSequence(cfg.StartSequence)
 	}
 	s.audioRing = cfg.Ring
 
@@ -341,6 +349,30 @@ func (s *Session) SetKeyframeRequester(r *keyframe.Requester) { s.keyReq.Store(r
 // silently overwriting objects the predecessor already uploaded (Farol
 // review, PR #584).
 func (s *Session) SetStartSegmentIndex(index int) { s.frag.SetStartSegmentIndex(index) }
+
+// SetStartPartSequence makes the video track's NEXT part carry sequence
+// number next -- the part-level twin of SetStartSegmentIndex, added
+// because state.json (internal/llstate) now publishes part FILE NAMES to
+// the edge Worker, which caches them by path alone. See
+// pipeline.Fragmenter.SetStartSequence for the full reasoning. Call it,
+// if at all, immediately after New and before the first
+// HandleVideoPacket.
+func (s *Session) SetStartPartSequence(next uint32) { s.frag.SetStartSequence(next) }
+
+// CurrentVideoPartSequence returns the sequence number of the last part
+// the video fragmenter emitted (0 before the first). internal/control
+// reads it (via Health) after closing a stalled pipeline, so the
+// replacement can resume past it.
+func (s *Session) CurrentVideoPartSequence() uint32 { return s.frag.CurrentSequence() }
+
+// CurrentAudioPartSequence is CurrentVideoPartSequence's audio
+// counterpart; 0 before EnableAudio has ever run.
+func (s *Session) CurrentAudioPartSequence() uint32 {
+	if s.audioFrag == nil {
+		return 0
+	}
+	return s.audioFrag.CurrentSequence()
+}
 
 // CurrentVideoSegmentIndex returns the video fragmenter's current (open,
 // not-yet-sealed) segment index. internal/control reads this (via Health,

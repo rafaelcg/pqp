@@ -44,6 +44,18 @@ type PipelineHealth struct {
 	// values a value a restart can safely resume at.
 	VideoSegmentIndex int
 	AudioSegmentIndex int
+
+	// VideoPartSeq/AudioPartSeq are the sequence number of the LAST part
+	// each track's fragmenter emitted -- the part-level twin of the two
+	// segment indices above, and read at the same moment for the same
+	// reason. It matters now because state.json (internal/llstate)
+	// publishes part FILE NAMES ("part-<seq>.m4s") to the edge Worker,
+	// whose media cache keys that path and deliberately drops the token:
+	// a replacement pipeline that started numbering at 1 again would
+	// advertise names whose bytes are already cached from its
+	// predecessor (Farol review, PR #621).
+	VideoPartSeq uint32
+	AudioPartSeq uint32
 }
 
 // Pipeline is the minimal surface a managed session's media pipeline
@@ -96,6 +108,14 @@ type PipelineConfig struct {
 	// internal/session.Session.SetStartSegmentIndex's doc comment.
 	StartVideoSegmentIndex int
 	StartAudioSegmentIndex int
+
+	// StartVideoPartSeq/StartAudioPartSeq are the sequence number the
+	// replacement pipeline's FIRST part should carry, one past whatever
+	// its predecessor last emitted (0 for a session's first pipeline) --
+	// see PipelineHealth.VideoPartSeq and
+	// internal/session.Session.SetStartPartSequence.
+	StartVideoPartSeq uint32
+	StartAudioPartSeq uint32
 
 	Global GlobalConfig
 }

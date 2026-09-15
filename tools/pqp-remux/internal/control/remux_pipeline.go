@@ -10,6 +10,7 @@ import (
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/aacenc"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/h264"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/keyframe"
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/llstate"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/serve"
@@ -100,6 +101,9 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 	if cfg.StartVideoSegmentIndex > 0 {
 		sess.SetStartSegmentIndex(cfg.StartVideoSegmentIndex)
 	}
+	if cfg.StartVideoPartSeq > 0 {
+		sess.SetStartPartSequence(cfg.StartVideoPartSeq)
+	}
 
 	if r2Writer != nil {
 		sess.EnableR2(r2Writer, cfg.ChannelID, cfg.StartedAtMs, rung)
@@ -115,6 +119,7 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 			BitrateKbps: global.AACBitrateKbps,
 		},
 		StartSegmentIndex: cfg.StartAudioSegmentIndex,
+		StartSequence:     cfg.StartAudioPartSeq,
 	}); err != nil {
 		audioEnabled = false
 		log.Printf("pqp-remux: control: session %s: audio mixing disabled: %v", cfg.SessionID, err)
@@ -182,6 +187,18 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 	if audioEnabled {
 		srv.SetAudioRing(audioRing)
 	}
+	// GET /s/<sessionId>/state.json -- the FIRST thing L2.3's edge Worker
+	// asks this box for, and (until 2026-09-15) the one thing it did not
+	// answer: a live party had parts, segments and a 200 on every other
+	// media route while every viewer stalled, because the Worker builds
+	// the LL playlist itself and had no numbers to build it from. See
+	// internal/llstate's package comment.
+	srv.SetLlState(llstate.Meta{
+		SessionID:       cfg.SessionID,
+		ChannelID:       cfg.ChannelID,
+		PartTargetMs:    cfg.PartMs,
+		SegmentTargetMs: cfg.SegmentMs,
+	})
 
 	return &remuxPipeline{
 		sess:         sess,
@@ -217,6 +234,8 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		AudioRestarts:     h.AudioRestarts,
 		VideoSegmentIndex: p.sess.CurrentVideoSegmentIndex(),
 		AudioSegmentIndex: p.sess.CurrentAudioSegmentIndex(),
+		VideoPartSeq:      p.sess.CurrentVideoPartSequence(),
+		AudioPartSeq:      p.sess.CurrentAudioPartSequence(),
 	}
 	started := p.sess.Started()
 	if p.sess.HasPart() {

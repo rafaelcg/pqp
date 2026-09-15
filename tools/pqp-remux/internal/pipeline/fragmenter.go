@@ -80,6 +80,37 @@ func NewFragmenter(cfg Config) *Fragmenter {
 // already uploaded (Farol review, PR #584).
 func (f *Fragmenter) SetStartSegmentIndex(index int) { f.segmentIndex = index }
 
+// SetStartSequence makes the NEXT part this Fragmenter emits carry
+// sequence number next, instead of 1. It is the part-level counterpart of
+// SetStartSegmentIndex and exists for the same reason, one layer down: a
+// watchdog restart (internal/control's ManagedSession.restart) replaces
+// the pipeline while the SESSION, and therefore its URL space, survives.
+// Segment indices were already carried across so a replacement never
+// re-PUTs an R2 key its predecessor wrote; part sequence numbers were not,
+// because until state.json (internal/llstate) nothing outside this process
+// ever saw a part's name. Now the edge Worker advertises
+// "part-<seq>.m4s" to players and its own cache keys that path WITHOUT the
+// token, deliberately and immutably -- so a replacement pipeline starting
+// back at 1 would hand out names whose bytes are already cached from the
+// pipeline before it, and a player would be served the predecessor's media
+// for the life of that cache entry (Farol review, PR #621).
+//
+// Call it, if at all, immediately after NewFragmenter and before the first
+// Push. next == 0 is a no-op: there is no part zero (closePart increments
+// BEFORE using the counter, so the first part of a fresh session is 1), so
+// zero means "no predecessor", which is exactly the default.
+func (f *Fragmenter) SetStartSequence(next uint32) {
+	if next > 0 {
+		f.seq = next - 1
+	}
+}
+
+// CurrentSequence returns the sequence number of the LAST part this
+// Fragmenter emitted (0 before the first one). Read after Close, it is
+// what a replacement pipeline's SetStartSequence resumes past -- the same
+// role CurrentSegmentIndex plays for segments.
+func (f *Fragmenter) CurrentSequence() uint32 { return f.seq }
+
 // Push feeds the next access unit in PTS order. It returns a Fragment
 // whenever this AU's arrival closes a part (which may also close a
 // segment), or nil while a part is still open. ErrWaitingForIDR is
