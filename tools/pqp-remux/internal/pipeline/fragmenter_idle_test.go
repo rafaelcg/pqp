@@ -186,3 +186,69 @@ func TestFragmenter_IdleFlushNeverClosesASegment(t *testing.T) {
 		t.Fatalf("segment index is %d after the IDR, want 1", f.CurrentSegmentIndex())
 	}
 }
+
+// A freeze can outlast the segment target. When the frame that ends it is
+// an IDR, that IDR starts the next segment -- the ordinary Push branch
+// cannot do it, because it judges the access unit AFTER the pending one,
+// and waiting for the IDR after the next one is how EXT-X-TARGETDURATION
+// creeps upward across a party.
+func TestFragmenter_IdrEndingALongFreezeStartsTheNextSegment(t *testing.T) {
+	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
+
+	if _, err := f.Push(au(0, true)); err != nil {
+		t.Fatalf("first IDR: %v", err)
+	}
+	// Frozen for longer than a whole segment.
+	if frag := f.IdleFlush(segmentDuration + partDuration); frag == nil {
+		t.Fatal("IdleFlush produced no part")
+	}
+	if f.CurrentSegmentIndex() != 0 {
+		t.Fatalf("the flush itself advanced the segment index to %d", f.CurrentSegmentIndex())
+	}
+
+	// The source comes back with a keyframe.
+	resume := int64(segmentDuration + partDuration)
+	if _, err := f.Push(au(resume, true)); err != nil {
+		t.Fatalf("resume IDR: %v", err)
+	}
+	if f.CurrentSegmentIndex() != 1 {
+		t.Fatalf("segment index is %d after an IDR ended a freeze past the segment target, want 1", f.CurrentSegmentIndex())
+	}
+
+	var next *Fragment
+	for i := int64(1); next == nil && i < 100; i++ {
+		frag, err := f.Push(au(resume+i*frameStep, false))
+		if err != nil {
+			t.Fatalf("frame %d after resume: %v", i, err)
+		}
+		next = frag
+	}
+	if next == nil {
+		t.Fatal("no part closed after the source resumed")
+	}
+	if !next.IsSegmentStart {
+		t.Fatal("the first part after the resuming IDR does not start its segment")
+	}
+	if next.SegmentIndex != 1 {
+		t.Fatalf("the first part after the resume is in segment %d, want 1", next.SegmentIndex)
+	}
+	if !firstSampleIsSync(t, next.Bytes) {
+		t.Fatal("the segment-starting part's first sample is not a sync sample")
+	}
+
+	// A freeze that does NOT reach the segment target leaves the segment
+	// where it is, even when an IDR ends it.
+	short := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
+	if _, err := short.Push(au(0, true)); err != nil {
+		t.Fatalf("first IDR: %v", err)
+	}
+	if frag := short.IdleFlush(partDuration); frag == nil {
+		t.Fatal("IdleFlush produced no part")
+	}
+	if _, err := short.Push(au(partDuration, true)); err != nil {
+		t.Fatalf("resume IDR: %v", err)
+	}
+	if short.CurrentSegmentIndex() != 0 {
+		t.Fatalf("a short freeze advanced the segment index to %d", short.CurrentSegmentIndex())
+	}
+}

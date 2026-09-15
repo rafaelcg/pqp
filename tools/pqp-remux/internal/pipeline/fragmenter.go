@@ -163,6 +163,19 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 		// synthesized -- see the ptsOffset field's doc comment.
 		f.ptsOffset = f.resumePTS - au.PTS
 		f.partStart = f.resumePTS
+		// A quiet source also spends real time inside the open segment,
+		// so the segment target can pass while nothing is arriving. If
+		// the frame that ends the silence is itself an IDR, it starts
+		// the next segment here -- the ordinary branch below can never
+		// do it for this AU, since that branch judges the AU AFTER the
+		// pending one. Without this, a freeze longer than the segment
+		// target pushed the boundary out to the IDR after the next one,
+		// which is how EXT-X-TARGETDURATION creeps.
+		if au.IsIDR && f.resumePTS-f.segmentStart >= int64(f.cfg.SegmentDuration) {
+			f.segmentIndex++
+			f.segmentStart = f.resumePTS
+			f.nextIsSegmentStart = true
+		}
 		f.pending = au
 		f.pendingPTS = f.resumePTS
 		return nil, nil
@@ -266,9 +279,11 @@ func (f *Fragmenter) IdleFlush(heldTicks int64) *Fragment {
 		return nil
 	}
 
-	duration := uint32(heldTicks)
-	f.lastDuration = duration
-	f.partSamples = append(f.partSamples, toSample(f.pending, duration))
+	// lastDuration is deliberately NOT updated: it is Flush's estimate
+	// for a trailing sample with no successor, and the real inter-frame
+	// gap is a far better estimate of that than however long this
+	// particular freeze happened to last.
+	f.partSamples = append(f.partSamples, toSample(f.pending, uint32(heldTicks)))
 
 	frag := f.closePart(uint32(partElapsed))
 	f.partStart = nowPTS
