@@ -1491,9 +1491,9 @@ export function HlsWatchPlayer({
         // earlier, got a 404, and went fatal before this seek ever landed.
         //
         // LL ONLY, and that gate is the whole difference between this PR and
-        // #646. A conventional stream's window is sixty seconds and its
+        // PR 646. A conventional stream's window is sixty seconds and its
         // playhead is inside it: `-1` has been right there for the life of
-        // this player, every viewer we have is on that path, and #646's
+        // this player, every viewer we have is on that path, and PR 646's
         // revert was a reviewer unable to rule out that this line had
         // started seeking conventional recoveries to the edge. It has not:
         // `null` is exactly what `applyHlsRecoveryStep` received before, on
@@ -1765,7 +1765,7 @@ export function HlsWatchPlayer({
         // never a replay. On every other path -- which is every watch party
         // anybody has actually run -- the watchdog is told FIRST and the
         // rest of this handler is what it always was, so there is nothing a
-        // conventional viewer can reach that #646 could have changed.
+        // conventional viewer can reach that PR 646 could have changed.
         //
         // On LL the watchdog is told LAST instead, because the jump below
         // is a claim that this fatal is recoverable in place: handing the
@@ -1820,7 +1820,7 @@ export function HlsWatchPlayer({
         if (!canJumpOnThisAttach) {
           // Conventional and VOD are finished: the watchdog already has the
           // error and its ladder is the only response there is, exactly as
-          // before #646.
+          // before PR 646.
           return;
         }
         // A 404/410 on a part or segment: the player fell behind the ring,
@@ -1829,7 +1829,7 @@ export function HlsWatchPlayer({
         // from the live edge anyway, and two responses to one error is how
         // a recovery ladder fights itself.
         //
-        // Why this is LL-only rather than "live-only", which is what #646
+        // Why this is LL-only rather than "live-only", which is what PR 646
         // shipped: on a conventional stream a 404 on a segment is NOT a
         // player that fell behind a twelve-second ring. The window is sixty
         // seconds and hls.js's own retry budget is generous enough to sit
