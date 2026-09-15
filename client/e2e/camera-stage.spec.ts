@@ -1,10 +1,34 @@
 import { expect, test } from "@playwright/test";
-import { ensureServer, openApp } from "./fixtures";
+import { ensureServer, leaveVoiceIfConnected, openApp } from "./fixtures";
 
 /**
  * Turning a camera on in a server voice channel must grow the shared stage,
  * not a sidebar tile. Voice-only stays a slim bar.
  */
+
+// This spec never used to hang up, unlike its siblings (call-stage-strip,
+// mobile-immersive-stage, and others): it turns the camera off but never
+// clicks Leave, so the lobby seat stayed held. Invisible while a run
+// finished clean, but a run that fails partway (anywhere between "camera
+// on" and the end) leaves the page abandoned mid-call. Playwright's own
+// teardown skips `pagehide`, so the seat orphans for up to 90s with the
+// camera still attached (`voice.orphan` in the server log). CI retries
+// once, and the retry's fresh page joins that SAME still-live room:
+// `planStage` then correctly sees a SECOND camera already on the stage
+// and floats ours in the self-preview pip instead. Not a rendering race,
+// a real second publisher. `getByLabel("Your camera")` inside
+// `stage-grid` then never resolves, which is the exact "element(s) not
+// found" failure this was chasing. Confirmed locally: a page abandoned
+// right after "camera on" (simulating a failed, unhung-up attempt)
+// leaves a peer whose camera a fresh join can actually see, while 35
+// straight repeats of this spec on its own (15 at normal speed, 20 more
+// under 6x CPU throttling) never failed. It takes a prior attempt's
+// leftover seat to do it. Hanging up here, like every sibling voice spec
+// already does, is what keeps a single bad run from poisoning its own
+// retry.
+test.afterEach(async ({ page }) => {
+  await leaveVoiceIfConnected(page).catch(() => {});
+});
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
@@ -71,13 +95,14 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
   await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("call-stage-collapsed")).toHaveCount(0);
 
-  // Scoped to the stage grid, not `page.getByLabel` at large: alone in the
-  // room our camera is also briefly a match inside the floating self-preview
-  // pip (`stage-layout.ts`'s `selfPreview`, a few dozen px² at this
-  // viewport) the instant the stream attaches and before `planStage`
-  // settles on the solo tile taking the whole grid. `stage-grid` only
-  // exists once `planStage` has put a tile on the big stage, so scoping here
-  // rules that element out rather than racing it.
+  // Scoped to the stage grid, not `page.getByLabel` at large: our own
+  // camera also matches inside the floating self-preview pip
+  // (`stage-layout.ts`'s `selfPreview`, a few dozen px² at this viewport),
+  // which is where it lands whenever somebody else is already publishing
+  // exactly one picture. Alone in the room that never happens (see the
+  // top-of-file note on why a stale room sometimes is not alone), so
+  // `stage-grid` is where our camera belongs and this scoping rules the
+  // pip out rather than racing it.
   const stageGrid = page.getByTestId("stage-grid");
   await expect(stageGrid).toBeVisible({ timeout: 20_000 });
   const video = stageGrid.getByLabel("Your camera");
