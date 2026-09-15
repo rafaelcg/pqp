@@ -97,6 +97,7 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
@@ -111,6 +112,7 @@ import { uniformJitterMs } from "@/lib/reconnect-jitter";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
+    shouldOfferBringFriendsHint,
     shouldOfferWatchPartyViewerHint,
   winningFeatureHint,
 } from "@/lib/feature-hints";
@@ -1162,6 +1164,9 @@ function MainAppContent({
   );
   const [wantsWatchPartyHint] = useState(() =>
     featureHintEligible("watchParty"),
+  );
+  const [wantsBringFriendsHint] = useState(() =>
+    featureHintEligible("bringFriends"),
   );
   const [wantsMusicHint] = useState(() => featureHintEligible("music"));
   // The cargos card decides for itself whether it was seen; the corner queue
@@ -6296,12 +6301,32 @@ function MainAppContent({
       (voiceState.voiceChannelId === selectedChannelId ||
         voiceState.voiceChannelId === activeConversation?.channelId),
   );
+  const voiceIsDmCall = Boolean(
+    voiceState.voiceChannelId &&
+      conversations.some((one) => one.channelId === voiceState.voiceChannelId),
+  );
+  const voiceRoomSize = voiceState.voiceChannelId
+    ? (voiceState.occupancy[voiceState.voiceChannelId] ?? []).length
+    : 0;
+  const voiceServerId = voiceIsDmCall ? null : voiceServerIdRef.current;
+  const canCreateInviteForVoice =
+    voiceServerId !== null &&
+    voiceServerId === selectedServerId &&
+    perms.can(Permission.CREATE_INVITE);
   const attachedFeatureHint = winningFeatureHint({
     watchParty:
       wantsWatchPartyHint &&
       voiceState.status === "connected" &&
       voiceState.canStream &&
       supportsScreenShare(),
+    bringFriends: shouldOfferBringFriendsHint({
+      seen: !wantsBringFriendsHint,
+      automated: false,
+      presenting: voiceState.status === "connected" && voiceState.isSharingScreen,
+      inServer: voiceServerId !== null,
+      canInvite: canCreateInviteForVoice,
+      roomSize: voiceRoomSize,
+    }),
     music: wantsMusicHint && voiceState.status === "connected",
     composerFormat:
       wantsComposerFormatHint &&
@@ -6528,6 +6553,9 @@ function MainAppContent({
               !isDesktopApp() &&
               supportsScreenShare()
             )
+          }
+          bringFriendsHintEnabled={
+            liveAttachedHint === "bringFriends" && !viewingThisCall
           }
           onLeave={() => voice.leave()}
           compact={compact}
@@ -7512,6 +7540,10 @@ function MainAppContent({
     // the view, every profile card, and the two badges. Outside the popover
     // provider because the card is one of its consumers.
     <FriendsContext.Provider value={friends}>
+    <BringFriendsServerProvider
+      serverId={voiceServerId}
+      canCreateInvite={canCreateInviteForVoice}
+    >
     <FeatureHintProvider winner={liveAttachedHint}>
     {/* One provider for the whole app: the profile card is opened from the
         transcript, the members panel and the conversation list, and every one of
@@ -8792,6 +8824,7 @@ function MainAppContent({
     </div>
     </ProfilePopoverProvider>
     </FeatureHintProvider>
+    </BringFriendsServerProvider>
     </FriendsContext.Provider>
   );
 }
