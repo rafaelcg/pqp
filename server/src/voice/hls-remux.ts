@@ -479,13 +479,26 @@ function rememberBounded<V>(
 
 function pruneLlMemos(now: number): void {
   memoEntriesScanned += llDemotedAt.size + lastModeResolved.size;
-  // Whatever it was, it is not saturated once the sweep below has run and
-  // left room: the fail-closed answer lasts exactly as long as the condition.
-  memoSaturatedAt = null;
   for (const [id, at] of llDemotedAt) {
     if (now - at > LL_DEMOTION_MEMO_MS) {
       llDemotedAt.delete(id);
     }
+  }
+  // SATURATION IS A STATEMENT ABOUT CAPACITY, SO IT IS RE-READ FROM CAPACITY.
+  // A first version cleared it on every sweep, whether or not the sweep had
+  // freed anything: a memo of 1,024 vetoes that are ALL still live prunes to
+  // 1,024 vetoes, and clearing the flag there lifts the fail-closed answer
+  // while the condition that demanded it is exactly as true as it was (a
+  // Farol finding on PR #630, recorded as a known edge case at merge). The
+  // party that could not be recorded would then be handed LL again, which is
+  // the one outcome this whole memo exists to prevent.
+  if (llDemotedAt.size < MAX_LL_DEMOTION_MEMOS) {
+    memoSaturatedAt = null;
+  } else if (memoSaturatedAt !== null) {
+    // Still full, still saturated -- and re-stamped, so the flag's own
+    // five-minute expiry cannot lapse underneath a condition that has not
+    // ended. It ends when a sweep finds room, and not before.
+    memoSaturatedAt = now;
   }
   for (const [id, entry] of lastModeResolved) {
     if (now - entry.at > MODE_RESOLVED_LOG_WINDOW_MS) {

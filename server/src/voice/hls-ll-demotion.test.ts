@@ -772,6 +772,43 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     expect(llDemotedRecently("overflow")).toBe(false);
   });
 
+  /**
+   * A SWEEP THAT FREED NOTHING HAS NOT ENDED THE CONDITION.
+   *
+   * The fail-closed answer used to be cleared on every sweep, whether or not
+   * the sweep had made room. A memo of live vetoes prunes to the same live
+   * vetoes, so the flag lifted while the map was exactly as full as before,
+   * and the party that could not be recorded was handed LL again -- the one
+   * outcome the memo exists to prevent (a Farol finding on PR #630, merged
+   * as a known edge case and fixed here).
+   */
+  it("(1b-decies) stays saturated while a sweep cannot free a single slot", async () => {
+    for (let i = 0; i < 1024; i += 1) {
+      noteLlDemotion(`live-${i}`);
+    }
+    noteLlDemotion("overflow");
+    expect(llDemotedRecently("overflow")).toBe(true);
+
+    // Every entry is still inside the window, so this sweep deletes nothing.
+    await sweepLlDemotions();
+
+    expect(llMemoSizesForTests().demotedParties).toBe(1024);
+    expect(llDemotedRecently("overflow")).toBe(true);
+    expect(llDemotedRecently("live-0")).toBe(true);
+
+    // Nor does the flag's own five-minute expiry let it lapse underneath a
+    // condition that is still true: a sweep inside the window re-states it.
+    const almostLapsed = Date.now() + 4 * 60_000;
+    await sweepLlDemotions(almostLapsed);
+    expect(llDemotedRecently("overflow", almostLapsed + 2 * 60_000)).toBe(true);
+
+    // It ends when a sweep finds room, and not before.
+    const afterWindow = Date.now() + 6 * 60_000 + 4 * 60_000;
+    await sweepLlDemotions(afterWindow);
+    expect(llMemoSizesForTests().demotedParties).toBe(0);
+    expect(llDemotedRecently("overflow", afterWindow)).toBe(false);
+  });
+
   it("(1b-nonies) evicts an EXPIRED entry to make room, rather than saturating", async () => {
     const old = Date.now() - 6 * 60_000;
     noteLlDemotion("stale", old);
