@@ -234,7 +234,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
 
   it("every /tela FAQ pair matches its tela.faq.* twin, both locales", () => {
     // Same rule as above: page order, and the JSON-LD must be the same list.
-    const ids = ["why", "download", "vpn", "people", "free", "mobile", "data"] as const;
+    const ids = ["download", "vpn", "people", "free", "mobile", "data", "why"] as const;
     expect(TELA_FAQ.en).toHaveLength(ids.length);
     expect(TELA_FAQ["pt-BR"]).toHaveLength(ids.length);
     ids.forEach((id, index) => {
