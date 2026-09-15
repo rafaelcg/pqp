@@ -748,14 +748,14 @@ subscribeToCluster(HLS_KEEP_WARM_TOPIC, (data) => {
     startedAt: number;
   };
   const key = keepWarmSessionKey(channelId, startedAt);
-  if (keepWarmLoops.has(key)) {
-    // Already warming it. Count the hand-over as a touch so the owner's idle
-    // timer follows the audience on the OTHER machine, not just its own, and
-    // answer: the asker is still warming it too until it hears this.
-    keepWarmLoops.get(key)!.lastRequestedAt = Date.now();
-    publishToCluster(HLS_KEEP_WARM_TAKEN_TOPIC, { channelId, startedAt });
-    return;
-  }
+  // OWNERSHIP IS ASKED FIRST, EVEN WHEN THIS PROCESS IS ALREADY WARMING — and
+  // "I have a loop" is emphatically not a reason to answer. Three machines and
+  // an owner that has stopped reading its bus: B and C both ask, and a handler
+  // that answered on the strength of its own running loop would have B relieve
+  // C and C relieve B, both of them believing the session is A's, both
+  // stopping. Nobody would be warming and every counter would say the
+  // hand-over worked. Only an instance whose own answer is "not somebody
+  // else's" — the owner, and nobody else — may reply.
   void keepWarmOwnedElsewhere(channelId, startedAt, key, Date.now())
     .then((elsewhere) => {
       // `null` (could not ask) is not "mine": guessing would put a second
@@ -763,8 +763,15 @@ subscribeToCluster(HLS_KEEP_WARM_TOPIC, (data) => {
       if (elsewhere !== false) {
         return;
       }
-      keepWarmAdopted += 1;
-      touchKeepWarmSession(channelId, startedAt, Date.now());
+      if (keepWarmLoops.has(key)) {
+        // Already warming it. The hand-over counts as a touch, so the owner's
+        // idle timer follows the audience on the OTHER machine as well as its
+        // own.
+        keepWarmLoops.get(key)!.lastRequestedAt = Date.now();
+      } else {
+        keepWarmAdopted += 1;
+        touchKeepWarmSession(channelId, startedAt, Date.now());
+      }
       // Answered only once the loop is actually running, never on intent: the
       // asker stops warming on this frame, so it has to mean what it says.
       if (keepWarmLoops.has(key)) {

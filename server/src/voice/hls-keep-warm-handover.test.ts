@@ -183,6 +183,31 @@ describeDb("the owner picks up the keep-warm job it was handed", () => {
     delete process.env.VOICE_REGISTRY;
   });
 
+  it("two non-owners never relieve each other while the owner is silent", async () => {
+    // The owner holds the rows and is answering its heartbeat, but is not
+    // reading its bus (wedged, or its own transport is reconnecting). Both
+    // edges ask; an ack from a fellow asker would stop them BOTH and leave
+    // the stream with no warmer at all, with every counter saying otherwise.
+    await owner.bus.closeBus();
+    const secondEdge = await bootInstance();
+
+    await edge.proxy.buildSignedPlaylist(channelId, STARTED_AT, RUNG);
+    await secondEdge.proxy.buildSignedPlaylist(channelId, STARTED_AT, RUNG);
+
+    await waitFor(
+      () =>
+        edge.proxy.hlsKeepWarmRenders() > 0 &&
+        secondEdge.proxy.hlsKeepWarmRenders() > 0,
+      "both edges to warm while nobody relieves them",
+    );
+    // Long enough for several asks to have crossed between them.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(edge.proxy.hlsKeepWarmLoopsActive()).toBe(1);
+    expect(secondEdge.proxy.hlsKeepWarmLoopsActive()).toBe(1);
+    expect(edge.proxy.hlsKeepWarmDeclined()).toBe(0);
+    expect(secondEdge.proxy.hlsKeepWarmDeclined()).toBe(0);
+  });
+
   it("the edge stands down and the owner, with no viewer of its own, starts warming", async () => {
     // The whole audience is on the machine that owns nothing.
     await edge.proxy.buildSignedPlaylist(channelId, STARTED_AT, RUNG);

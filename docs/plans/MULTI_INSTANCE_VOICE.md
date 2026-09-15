@@ -640,6 +640,12 @@ an owner that went away between the row and the frame — means the asker goes o
 warming, which is the fail-open rule applied to the one case that cannot be
 detected locally. The ask repeats on a slow cadence while it goes unanswered.
 
+Only an instance whose own ownership answer is "not somebody else's" may
+reply, and having a running loop is not a reason to: with three machines and an
+owner that has stopped reading its bus, a handler that answered on the strength
+of its own loop would have each fallback relieve the other, both stop, and
+every counter report a successful hand-over while nobody warmed anything.
+
 Warming is the fail-open side throughout: an unstamped row, `VOICE_REGISTRY`
 off, a bus that is off (nobody to hand the job to) or a lookup that could not be
 made all leave the loop running, because a rung warmed twice costs money and a
