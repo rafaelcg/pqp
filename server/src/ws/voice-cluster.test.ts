@@ -1068,9 +1068,19 @@ describeDb("voice across two instances", () => {
       const b = await bootInstance();
       const userA = randomUUID();
       const userB = randomUUID();
-      const dj = await join(a, userA, channel);
-      const listenerOnB = await join(b, userB, channel);
+      // Watcher first, same as the other roster groups: a socket that
+      // connects after both seats are already up never sees those joins.
       const sidebarOnB = watcher(b);
+      const listenerOnB = await join(b, userB, channel);
+      await waitFor(
+        () => lastRoster(sidebarOnB, channel)?.participants.length === 1,
+        "B's own roster on B",
+      );
+      const dj = await join(a, userA, channel);
+      await waitFor(
+        () => lastRoster(sidebarOnB, channel)?.participants.length === 2,
+        "both on B's sidebar",
+      );
 
       await a.voice.handleVoiceMessage(
         { socket: dj.socket, user: asUser(userA) },
@@ -1082,11 +1092,6 @@ describeDb("voice across two instances", () => {
       await waitFor(
         () => frames(listenerOnB, "music").length === 1,
         "music on B",
-      );
-      await waitFor(
-        () =>
-          (lastRoster(sidebarOnB, channel)?.participants.length ?? 0) === 2,
-        "both on B's sidebar",
       );
       await settle();
 
