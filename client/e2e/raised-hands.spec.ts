@@ -155,8 +155,12 @@ async function joinVoice(page: Page, channelName: string): Promise<void> {
   // it must: "speaking lowers your own hand", the instant `isTransmitting`
   // goes true. That rule is correct and this spec is not testing it, so mute
   // before ever raising a hand here — a real listen-only or muted person is
-  // the ordinary case this feature is for anyway.
-  const mute = page.getByRole("button", { name: "Mute microphone" });
+  // the ordinary case this feature is for anyway. Two buttons carry this name
+  // now, the user panel's and the call dock's; the dock's is the one that
+  // sits beside the hand.
+  const mute = page
+    .getByTestId("call-stage-collapsed")
+    .getByRole("button", { name: "Mute microphone" });
   await expect(mute).toBeVisible({ timeout: 10_000 });
   if ((await mute.getAttribute("aria-pressed")) !== "true") {
     await mute.click();
@@ -348,19 +352,18 @@ test("phone: the hand button is reachable and the queue is readable at 390px", a
     .dblclick();
   await waitUntilVoiceConnected(page);
   // Picking a channel closes the drawer on its own, same as a text channel
-  // would, and the content pane's own call bar is `collapsed` (audio-only,
-  // no camera): mute/unmute is `!collapsed`-gated in call-stage.tsx and has
-  // no other home in that bar, so on a phone the ONLY reachable mute toggle
-  // is back inside the channel list sidebar (`voice-status-bar.tsx`). Reopen
-  // it to mute — this is a real, if narrow, phone gap worth flagging on its
-  // own (see the QA report), not something to route around silently — then
-  // close it again for the assertions this test actually cares about.
-  await page.getByRole("button", { name: "Open navigation" }).click();
-  const mute = page.getByRole("button", { name: "Mute microphone" });
+  // would, and the audio-only call bar is docked in the composer with its
+  // own mute tile. That closes the phone gap this test used to route around
+  // (the only reachable mute was back inside the channel list drawer); mute
+  // here, on the bar, before raising a hand, for the same reason as the
+  // desktop helper above.
+  const mute = page
+    .getByTestId("call-stage-collapsed")
+    .getByRole("button", { name: "Mute microphone" });
   await expect(mute).toBeVisible({ timeout: 10_000 });
+  await expect(mute).toBeInViewport();
   await mute.click();
   await expect(mute).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Close channel list" }).click();
 
   const raise = page.locator("[data-raise-hand]");
   await expect(raise).toBeVisible({ timeout: 20_000 });

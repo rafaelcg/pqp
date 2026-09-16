@@ -16,6 +16,7 @@ import {
  */
 
 export const FEATURE_HINT_IDS = [
+  "callDock",
   "watchPartyHost",
   "watchPartyViewer",
   "watchParty",
@@ -29,6 +30,7 @@ export const FEATURE_HINT_IDS = [
 export type FeatureHintId = (typeof FEATURE_HINT_IDS)[number];
 
 export const FEATURE_HINT_STORAGE_KEYS = {
+  callDock: "pqp:feature-hint-call-dock-2026-09",
   watchPartyHost: "pqp:feature-hint-watch-party-host-2026-09",
   watchPartyViewer: "pqp:feature-hint-watch-party-viewer-2026-09",
   watchParty: "pqp:feature-hint-watch-party-2026-09",
@@ -41,7 +43,12 @@ export const FEATURE_HINT_STORAGE_KEYS = {
 
 /** Attached to a control, not the corner. First match mounts. */
 export const ATTACHED_FEATURE_HINT_ORDER = [
-  // The two watch party hints come first and are the most specific: a person
+  // The call controls moved from the top of the channel into the composer
+  // (September 2026). Every in-call hint below points at a control that now
+  // lives in that dock, so "the controls are here" has to win the slot
+  // before any of them can make sense. Once, for everyone.
+  "callDock",
+  // The two watch party hints come next and are the most specific: a person
   // setting a show up, and a person who has just landed in one. Both are
   // moments, not states, so they must not queue behind the standing "share is
   // on the call bar" tip that fires for anyone in any call.
@@ -88,6 +95,23 @@ export function winningFeatureHint(
     }
   }
   return null;
+}
+
+/**
+ * The first time the call dock opens for this person, in a room they are
+ * connected to. Not gated on having used the old layout: a newcomer is told
+ * where the controls are just the same.
+ */
+export function shouldOfferCallDockHint(input: {
+  seen: boolean;
+  automated: boolean;
+  /** The collapsed call bar is docked in the composer on screen. */
+  dockVisible: boolean;
+  connected: boolean;
+}): boolean {
+  return (
+    !input.seen && !input.automated && input.dockVisible && input.connected
+  );
 }
 
 export function shouldOfferWatchPartyHint(input: {

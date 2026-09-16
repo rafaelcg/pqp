@@ -65,16 +65,48 @@ test.describe("voice lobby", () => {
     await expect(
       page.getByRole("button", { name: "Disconnect from voice" }),
     ).toBeVisible();
+    // Mute is in two places on purpose: the user panel, and the bar, where a
+    // phone (whose panel is behind the drawer) can reach it. Deafen stays in
+    // the panel alone.
+    const bar = page.getByTestId("call-stage-collapsed");
     await expect(
       page.getByRole("button", { name: "Mute microphone" }),
+    ).toHaveCount(2);
+    await expect(
+      bar.getByRole("button", { name: "Mute microphone" }),
     ).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Deafen" })).toHaveCount(1);
-    const bar = page.getByTestId("call-stage-collapsed");
+
+    // The bar is docked in the composer: inside the message form, under the
+    // transcript, and the dock has finished opening. Still a bar's worth of
+    // height, one row of 36px tiles.
+    const dock = page.locator("[data-call-dock]");
+    await expect(dock).toHaveAttribute("data-state", "open");
     const barBox = (await bar.boundingBox())!;
     expect(barBox.height).toBeLessThanOrEqual(80);
+    const form = page.getByRole("main").locator("form").filter({ has: bar });
+    await expect(form.locator("textarea")).toBeVisible();
+    const formBox = (await form.boundingBox())!;
+    expect(barBox.y).toBeGreaterThanOrEqual(formBox.y);
+    const pane = (await page.locator("[data-call-split-chat]").boundingBox())!;
+    expect(barBox.y).toBeGreaterThan(pane.y + pane.height / 2);
+    // Nothing is left where the strip used to be, above the transcript.
+    const stagePane = page.locator("[data-call-split-stage]");
+    if ((await stagePane.count()) > 0) {
+      expect((await stagePane.boundingBox())?.height ?? 0).toBeLessThan(2);
+    }
+
+    // With the same actions in the composer, the sidebar keeps its one-line
+    // status and hang-up and drops the camera/share pair.
+    await expect(
+      page.getByRole("button", { name: "Turn camera on", exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Share screen", exact: true }),
+    ).toHaveCount(0);
 
     await expect(
-      page.getByRole("button", { name: "Mute microphone" }),
+      bar.getByRole("button", { name: "Mute microphone" }),
     ).toBeEnabled();
   });
 

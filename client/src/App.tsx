@@ -112,8 +112,9 @@ import { uniformJitterMs } from "@/lib/reconnect-jitter";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
-    shouldOfferBringFriendsHint,
-    shouldOfferWatchPartyViewerHint,
+  shouldOfferBringFriendsHint,
+  shouldOfferCallDockHint,
+  shouldOfferWatchPartyViewerHint,
   winningFeatureHint,
 } from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
@@ -165,6 +166,7 @@ import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
+import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
 import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
 import {
   canOfferWatchPartyCreate,
@@ -1174,6 +1176,7 @@ function MainAppContent({
     featureHintEligible("bringFriends"),
   );
   const [wantsMusicHint] = useState(() => featureHintEligible("music"));
+  const [wantsCallDockHint] = useState(() => featureHintEligible("callDock"));
   // The cargos card decides for itself whether it was seen; the corner queue
   // has to know too, or the corner stays "taken" by a card that never draws
   // and every attached tip behind it (share, music) waits for good.
@@ -1250,6 +1253,13 @@ function MainAppContent({
     (shape: CallStageShape) => reportStageShape("watch-party", shape),
     [reportStageShape],
   );
+  /**
+   * A voice-only call's bar is docked in the composer (`call-dock.tsx`). While
+   * it is, the sidebar's call strip drops its camera and share row (the same
+   * two buttons are on the dock) and the chat pane draws no header, since
+   * there is nothing above the transcript for a header to sit under.
+   */
+  const [callDockOnScreen, setCallDockOnScreen] = useState(false);
   const [splitState, setSplitState] = useState<CallSplitState>({
     active: false,
     canSideBySide: false,
@@ -6337,6 +6347,14 @@ function MainAppContent({
     voiceServerId === selectedServerId &&
     perms.can(Permission.CREATE_INVITE);
   const attachedFeatureHint = winningFeatureHint({
+    // Rendered by `CallControls` in the dock's hint slot; dismissed by
+    // Entendi or by pressing any control in the dock.
+    callDock: shouldOfferCallDockHint({
+      seen: !wantsCallDockHint,
+      automated: false,
+      dockVisible: callDockOnScreen,
+      connected: voiceState.status === "connected",
+    }),
     watchParty:
       wantsWatchPartyHint &&
       voiceState.status === "connected" &&
@@ -6582,6 +6600,7 @@ function MainAppContent({
           }
           onLeave={() => voice.leave()}
           compact={compact}
+          hideActions={callDockOnScreen}
         />
       )}
       {/* Anchored above the user bar, never inside the icons-only rail:
@@ -7104,13 +7123,20 @@ function MainAppContent({
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
+      <CallDockProvider
+        viewingChannelId={selectedChannel.id}
+        onOccupiedChange={setCallDockOnScreen}
+      >
       <CallSplit
         shape={stageShape}
         kind={splitKind}
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
-        chatHeader={{
+        // No header while the call is docked in the composer: the header
+        // exists to sit between a stage and the transcript, and there is
+        // no stage above the transcript then.
+        chatHeader={callDockOnScreen ? undefined : {
           title: t("chat.paneTitle"),
           meta:
             splitKind === "watch"
@@ -7553,8 +7579,12 @@ function MainAppContent({
         disabled={!selectedChannelId || messagesLoading}
         slowModeUntil={chat.getSlowModeHeldUntil() || null}
         placeholder={t("composer.placeholder", { name: selectedChannel.name })}
+        // The voice-only call bar, when this channel is the one we are in.
+        // Keyed by channel so the composer of any other channel stays plain.
+        dock={<CallDockOutlet channelId={selectedChannel.id} />}
       />
       </CallSplit>
+      </CallDockProvider>
     </div>
   ) : null;
 
