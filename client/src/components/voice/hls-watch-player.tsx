@@ -92,6 +92,7 @@ import {
   HLS_WATCH_PLAYER_STALL_MS,
   HlsStallWatch,
   channelIdFromHlsUrl,
+  livePlaylistProgress,
   type HlsStallReason,
 } from "@/lib/hls-stall";
 import {
@@ -1981,10 +1982,13 @@ export function HlsWatchPlayer({
         if (isVod) {
           return;
         }
-        // The live playlist's EXT-X-MEDIA-SEQUENCE. A dead egress leaves
-        // the playlist answering but never advancing; this is how the
-        // watchdog tells that apart from a slow network.
-        watch.onMediaSequence(data.details.startSN, Date.now());
+        // The live playlist's newest segment number, NOT its
+        // EXT-X-MEDIA-SEQUENCE: the proxy's widened window keeps the first
+        // listed segment (`startSN`) still for the first 60 s a process
+        // sees a session and after every API restart, while a dead egress
+        // is one that stops APPENDING (`livePlaylistProgress`). This is how
+        // the watchdog tells a dead egress apart from a slow network.
+        watch.onMediaSequence(livePlaylistProgress(data.details), Date.now());
         // LL only, and a SEPARATE signal from the media-sequence one above
         // (Farol review, this PR): under LL's blocking reload, hls.js fires
         // this same event once per PART, not only once per segment --

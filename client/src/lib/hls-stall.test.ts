@@ -3,6 +3,7 @@ import {
   HLS_WATCH_PLAYER_STALL_MS,
   HlsStallWatch,
   channelIdFromHlsUrl,
+  livePlaylistProgress,
   type HlsStallDecision,
 } from "./hls-stall";
 import { resolveHoldingScreenReason } from "./watch-holding-screen";
@@ -229,6 +230,43 @@ describe("HlsStallWatch", () => {
       expect(watch.tick(T0 + 23_100)).toBe("dead"); // budget spent, still stuck
       // A person's own "try again" is the only way out from here.
       expect(watch.tick(T0 + 90_000)).toBe("dead");
+    });
+
+    it("a window that is still growing is progress, not a dead egress", () => {
+      // The proxy widens the egress's five-segment window from what each
+      // process has seen, so for the first 15 segments (60 s at 4 s) of a
+      // session, and again after an API restart, EXT-X-MEDIA-SEQUENCE
+      // (`startSN`) sits still while segments keep being appended. Fed
+      // `startSN`, the watchdog held every viewer "for restart" at the
+      // start of every party (2026-09-16). `livePlaylistProgress` is what
+      // the player feeds instead: the newest segment number.
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      for (let i = 0; i <= 8; i++) {
+        watch.onMediaSequence(
+          livePlaylistProgress({ startSN: 0, endSN: 4 + i }),
+          T0 + i * 4_000,
+        );
+        expect(watch.tick(T0 + i * 4_000 + 500)).toBe("none");
+      }
+      // 32 s in, startSN has been 0 the whole time and nothing fired.
+      expect(watch.lastReason).toBeNull();
+    });
+
+    it("a playlist whose newest segment stops is still a dead egress", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onMediaSequence(livePlaylistProgress({ startSN: 0, endSN: 9 }), T0);
+      // startSN even moves here (an old window entry aged out) and it must
+      // not count: only the newest segment is progress.
+      watch.onMediaSequence(
+        livePlaylistProgress({ startSN: 1, endSN: 9 }),
+        T0 + 4_000,
+      );
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
+      expect(watch.lastReason).toBe("sequence-stuck");
     });
 
     it("resolves cleanly once the sequence actually moves again", () => {
