@@ -1,10 +1,13 @@
 import {
-  HLS_LIVE_SEGMENT_SECONDS,
-  LL_HLS_PART_STUCK_PARTS,
-  LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
-  LL_HLS_SEQUENCE_STUCK_SEGMENTS,
+  classifyLlHlsError,
+  describeHlsError,
+  llPartStuckMs,
+  llSequenceStuckMs,
+  LL_HLS_MAX_MEDIA_REBUILDS,
   LL_HLS_STARTUP_GRACE_MS,
   validPartTargetMs,
+  validTargetDurationSeconds,
+  type HlsErrorSummary,
   type HlsMode,
 } from "./hls-live-edge";
 
@@ -85,6 +88,36 @@ import {
  * fatal error is NOT graced -- a source that is gone at second two is gone.
  * Conventional sessions set the grace to 0 and are byte-identical to before.
  *
+ * WHAT LL JUDGES "STUCK" ON, SINCE 2026-09-16. Three rules changed, all of
+ * them gated on `mode === "ll"` so the conventional path is byte-identical:
+ *
+ * 1. PARTS, NOT `EXT-X-MEDIA-SEQUENCE`. The media sequence only moves when a
+ *    closed segment leaves the window, and `pqp-remux` closes a video
+ *    segment on an IDR: real segments run 5 to 9 s and the live party
+ *    advertised `EXT-X-TARGETDURATION 7`. A part arriving is proof the
+ *    stream is alive, so `"sequence-stuck"` is now a BACKSTOP that only
+ *    speaks when parts have stopped too (`partsAdvancing`), and its
+ *    threshold comes from the manifest (`llSequenceStuckMs`, three
+ *    TARGETDURATIONs) rather than from a constant that guessed 4 s.
+ * 2. THE PART RULE READS THE MANIFEST TOO (`onManifestTiming`): four of the
+ *    playlist's own `PART-TARGET`, and only for parts the playlist actually
+ *    lists.
+ * 3. hls.js's BUFFER EVENTS ARE NOT SOURCE DEATHS (`classifyLlHlsError`).
+ *    `GapController._tryNudgeBuffer` raises `bufferStalledError` to
+ *    `fatal: true` after its nudge budget; on a starved presenter upload
+ *    that is a statement about the buffer, and answering it with the fatal
+ *    ladder rebuilt the player and cancelled the very part downloads that
+ *    were filling it. It opens an ordinary buffering episode instead. A
+ *    media-pipeline error (`bufferAppendError`, `fragParsingError`, ...)
+ *    gets one `recoverMediaError()` and a BOUNDED rebuild
+ *    (`LL_HLS_MAX_MEDIA_REBUILDS`), then the holding screen.
+ *
+ * And every ladder line the player logs now carries `describeContext()`:
+ * hls.js's own `type`/`details`/`fatal`/`reason`/message plus the cadence
+ * the thresholds were derived from. The capture that found all of this said
+ * only `[hls] stream stalled (fatal), start-load`, which named our verdict
+ * and nothing about its cause.
+ *
  * `"fatal"`/`"stall"` repeat their ladder for up to three full cycles before
  * declaring `"rebuild"` ("no recovery after three attempts"); every
  * `"rebuild"` is counted, and after `maxRebuilds` of them inside `windowMs`
@@ -162,7 +195,7 @@ const MAX_LADDER_CYCLES = 3;
 
 export class HlsStallWatch {
   private readonly stallMs: number;
-  /** Mutable: `configureForMode` scales this for LL, segment-paced -- see `LL_HLS_SEQUENCE_STUCK_SEGMENTS`. */
+  /** Mutable: LL paces this off the manifest -- see `llSequenceStuckMs`. */
   private sequenceStuckMs: number;
   /** The constructed value, restored by `configureForMode("conventional")`. */
   private readonly defaultSequenceStuckMs: number;
@@ -180,6 +213,18 @@ export class HlsStallWatch {
    * default, and every conventional session). Set by `configureForMode`.
    */
   private partStuckMs: number | null = null;
+  /** The server-advertised part target, validated, for the LL thresholds. */
+  private partTargetMs: number = 0;
+  /** `EXT-X-TARGETDURATION` as last seen on the playlist, LL only. */
+  private targetDurationSeconds: number | null = null;
+  /** `PART-TARGET` as last seen on the playlist, LL only. */
+  private manifestPartTargetSeconds: number | null = null;
+  /** The last hls.js (or native) error seen, for `describeContext`. */
+  private lastError: HlsErrorSummary | null = null;
+  /** LL only: the pending fatal is a media-pipeline failure, not a network one. */
+  private pendingMediaFatal = false;
+  /** Rebuilds spent on media-class errors; cleared by a real recovery. */
+  private mediaRebuilds = 0;
   /**
    * How long after an attach the soft rules stay quiet. 0 -- the constructed
    * default and every conventional session -- is no grace at all, i.e.
@@ -243,9 +288,10 @@ export class HlsStallWatch {
    * advances once per closed SEGMENT even in LL mode, so scaling that
    * threshold to a handful of PARTS (the first cut of this method) fired the
    * full escalating ladder on a perfectly healthy stream. `sequenceStuckMs`
-   * on LL is therefore segment-paced (`LL_HLS_SEQUENCE_STUCK_SEGMENTS`
-   * segments, floored at `LL_HLS_SEQUENCE_STUCK_FLOOR_MS`) and independent
-   * of `partTargetMs` entirely. The genuinely part-paced signal is the
+   * on LL is therefore segment-paced (`llSequenceStuckMs`: three
+   * `EXT-X-TARGETDURATION`s once a manifest has been seen) and independent
+   * of `partTargetMs` entirely -- and, since 2026-09-16, a BACKSTOP that
+   * only speaks when parts have stopped too (`partsAdvancing`). The genuinely part-paced signal is the
    * SEPARATE `partStuckMs` rule below, fed by `onPartAdvance` and read only
    * in `tick()`'s "nothing else is already flagged" branch -- it fires the
    * ladder's first in-place step once, then gets out of the way; the
@@ -260,19 +306,96 @@ export class HlsStallWatch {
    */
   configureForMode(mode: HlsMode, partTargetMs?: number): void {
     this.mode = mode;
+    this.targetDurationSeconds = null;
+    this.manifestPartTargetSeconds = null;
     if (mode === "ll") {
-      const parts = validPartTargetMs(partTargetMs);
-      this.sequenceStuckMs = Math.max(
-        LL_HLS_SEQUENCE_STUCK_SEGMENTS * HLS_LIVE_SEGMENT_SECONDS * 1_000,
-        LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
-      );
-      this.partStuckMs = LL_HLS_PART_STUCK_PARTS * parts;
+      this.partTargetMs = validPartTargetMs(partTargetMs);
+      // The manifest has not been seen yet: `HLS_LIVE_SEGMENT_SECONDS` is
+      // the starting guess and `onManifestTiming` replaces it with what the
+      // playlist actually promises, which on a real party is nearly twice
+      // as long.
+      this.sequenceStuckMs = llSequenceStuckMs(null);
+      this.partStuckMs = llPartStuckMs(this.partTargetMs, null);
       this.startupGraceMs = LL_HLS_STARTUP_GRACE_MS;
       return;
     }
     this.sequenceStuckMs = this.defaultSequenceStuckMs;
     this.partStuckMs = null;
     this.startupGraceMs = 0;
+  }
+
+  /**
+   * LL only: what the playlist says about its OWN cadence, from hls.js's
+   * `LEVEL_UPDATED` (`details.targetduration`, `details.partTarget`). Both
+   * thresholds are re-derived from it, because a rule about "the stream
+   * stopped" has to be paced by the stream, not by a constant that happened
+   * to match an earlier deployment (production, 2026-09-16: a flat 12 s
+   * against segments that legitimately run up to 9 s).
+   *
+   * Conventional sessions never call this and are untouched by it.
+   */
+  onManifestTiming(input: {
+    targetDurationSeconds?: number | null;
+    partTargetSeconds?: number | null;
+  }): void {
+    if (this.mode !== "ll") {
+      return;
+    }
+    const target = validTargetDurationSeconds(input.targetDurationSeconds);
+    if (target !== null) {
+      this.targetDurationSeconds = target;
+      this.sequenceStuckMs = llSequenceStuckMs(target);
+    }
+    const partTarget = input.partTargetSeconds;
+    if (
+      typeof partTarget === "number" &&
+      Number.isFinite(partTarget) &&
+      partTarget > 0
+    ) {
+      this.manifestPartTargetSeconds = partTarget;
+    }
+    this.partStuckMs = llPartStuckMs(
+      this.partTargetMs,
+      this.manifestPartTargetSeconds,
+    );
+  }
+
+  /**
+   * Everything the next production capture needs in one string: which
+   * hls.js error was last seen (type, details, fatal, reason, message) and
+   * the cadence the thresholds were derived from. Empty on conventional, so
+   * that path's log lines stay exactly what they were.
+   */
+  describeContext(): string {
+    if (this.mode !== "ll") {
+      return "";
+    }
+    const parts: string[] = [];
+    const error = describeHlsError(this.lastError);
+    if (error) {
+      parts.push(error);
+    }
+    parts.push(
+      `targetDuration=${this.targetDurationSeconds ?? "?"}s`,
+      `partTarget=${(this.manifestPartTargetSeconds ?? this.partTargetMs / 1_000).toFixed(3)}s`,
+      `seqStuckMs=${this.sequenceStuckMs}`,
+      `partStuckMs=${this.partStuckMs ?? "off"}`,
+    );
+    return parts.join(" ");
+  }
+
+  /**
+   * LL only: parts are still arriving, so whatever else is wrong the stream
+   * itself is not stuck. This is what demotes the `EXT-X-MEDIA-SEQUENCE`
+   * rule to a backstop -- see `currentReason`.
+   */
+  private partsAdvancing(now: number): boolean {
+    return (
+      this.partStuckMs !== null &&
+      this.lastPartKey !== null &&
+      this.partSeenAt !== null &&
+      now - this.partSeenAt < this.partStuckMs
+    );
   }
 
   /** Still inside this attach's startup grace (LL only; 0 elsewhere). */
@@ -316,6 +439,10 @@ export class HlsStallWatch {
     }
     this.pendingFatal = false;
     this.pendingDecodeError = false;
+    this.pendingMediaFatal = false;
+    // A picture that is moving again is the recovery the media-rebuild
+    // budget exists to find: give the next, unrelated episode its own.
+    this.mediaRebuilds = 0;
     this.ladderStep = 0;
     this.reconnectAttempts = 0;
     this.nextReconnectAt = null;
@@ -357,8 +484,57 @@ export class HlsStallWatch {
     }
   }
 
-  /** hls.js `ERROR`. A fatal one joins the ladder on the next tick. */
-  onError(input: { fatal: boolean }): void {
+  /**
+   * hls.js `ERROR`. A fatal one joins the ladder on the next tick --
+   * EXCEPT, on LL, for the buffer family.
+   *
+   * `bufferStalledError` goes `fatal: true` once hls.js has spent
+   * `nudgeMaxRetry` nudges on a playhead that will not move
+   * (`GapController._tryNudgeBuffer`). That is a statement about the buffer,
+   * and on 2026-09-16 it was the whole of what a starved presenter upload
+   * produced: the fatal ladder ran `recover-media-error`, `start-load`,
+   * `reload-level` and then rebuilt the player, which cancelled the part
+   * downloads that were slowly filling the buffer, and the new player
+   * arrived at the same place. It opens an ordinary buffering episode now
+   * -- the soft ladder, and a person sees buffering rather than a teardown.
+   *
+   * `details` and `now` are optional so every existing caller and test that
+   * passes only `{ fatal }` keeps exactly the behaviour it had.
+   */
+  onError(input: {
+    fatal: boolean;
+    type?: string | null;
+    details?: string | null;
+    reason?: string | null;
+    message?: string | null;
+    now?: number;
+  }): void {
+    this.lastError = {
+      type: input.type ?? null,
+      details: input.details ?? null,
+      fatal: input.fatal,
+      reason: input.reason ?? null,
+      message: input.message ?? null,
+    };
+    if (this.mode === "ll") {
+      const kind = classifyLlHlsError(input.details);
+      if (kind === "buffer") {
+        // Never the fatal ladder, fatal flag or not. hls.js only says this
+        // when playback is genuinely not progressing, so it is honest to
+        // open the buffering episode here even if the element's own
+        // `waiting` has not fired (or fired and was cleared by a `playing`
+        // that did not last).
+        if (typeof input.now === "number") {
+          this.onWaiting(input.now);
+        }
+        return;
+      }
+      if (input.fatal && kind === "media") {
+        this.pendingFatal = true;
+        this.pendingMediaFatal = true;
+        return;
+      }
+    }
     if (input.fatal) {
       this.pendingFatal = true;
     }
@@ -389,6 +565,13 @@ export class HlsStallWatch {
    * built for it and there is nothing to gain from trying the rest.
    */
   onNativeMediaError(input: { decode: boolean }): void {
+    this.lastError = {
+      type: "mediaElementError",
+      details: input.decode ? "MEDIA_ERR_DECODE" : null,
+      fatal: true,
+      reason: null,
+      message: null,
+    };
     this.pendingFatal = true;
     if (input.decode) {
       this.pendingDecodeError = true;
@@ -408,7 +591,11 @@ export class HlsStallWatch {
     this.pendingDecodeError = false;
     this.playlistGone = false;
     this.heldForRestart = false;
+    this.pendingMediaFatal = false;
     this.ladderStep = 0;
+    // `mediaRebuilds` deliberately survives, for the same reason `rebuilds`
+    // below does: a rebuild is what calls this, so resetting it here would
+    // make the bound unreachable.
     // A genuine re-attach (a session that actually moved on) is the
     // recovery a stuck egress's reconnect budget exists to find -- reset it
     // along with the rest of the episode's state.
@@ -423,6 +610,8 @@ export class HlsStallWatch {
   /** The person pressed "try again": a clean slate, including the dead-window. */
   reset(now: number): void {
     this.rebuilds = [];
+    this.mediaRebuilds = 0;
+    this.lastError = null;
     this.onSourceChanged(now);
   }
 
@@ -451,7 +640,16 @@ export class HlsStallWatch {
     if (
       this.sequenceSeenAt !== null &&
       this.lastSequence !== null &&
-      now - this.sequenceSeenAt >= this.sequenceStuckMs
+      now - this.sequenceSeenAt >= this.sequenceStuckMs &&
+      // THE BACKSTOP, NOT THE RULE (production, 2026-09-16). On LL a part
+      // arriving is proof the stream is alive; `EXT-X-MEDIA-SEQUENCE` only
+      // moves when a closed segment leaves the window, which a remux that
+      // closes on an IDR does every 5 to 9 s. While parts advance there is
+      // nothing stuck to recover from, and the ladder's seeks and reloads
+      // were cancelling the very part downloads that proved it. With no
+      // part signal at all -- a conventional session, or an LL one whose
+      // `LEVEL_UPDATED` has never carried a part -- this is unchanged.
+      !this.partsAdvancing(now)
     ) {
       return "sequence-stuck";
     }
@@ -508,9 +706,27 @@ export class HlsStallWatch {
       return this.gateRebuild(now);
     }
 
+    if (this.pendingMediaFatal) {
+      // LL only (`classifyLlHlsError`): the pipeline cannot use the bytes it
+      // was handed. One `recoverMediaError()`, then a BOUNDED rebuild --
+      // `LL_HLS_MAX_MEDIA_REBUILDS` of them and the person gets the holding
+      // screen with a retry button instead of a player that tears itself
+      // down for the rest of the party. Never reachable on conventional:
+      // `onError` only ever sets this flag under `mode === "ll"`, so the
+      // restart hold above and the ladder below are untouched there.
+      if (this.ladderStep === 1) {
+        return "recover-media-error";
+      }
+      if (this.mediaRebuilds >= LL_HLS_MAX_MEDIA_REBUILDS) {
+        return "dead";
+      }
+      this.mediaRebuilds += 1;
+      return this.gateRebuild(now);
+    }
+
     if (reason === "playlist-gone" || reason === "sequence-stuck") {
       // Conventional restart dead window: hold once, then reconnect. Never
-      // the in-place start-load ladder — that is the 1 Hz / last-segment
+      // the in-place start-load ladder -- that is the 1 Hz / last-segment
       // loop. LL sequence-stuck keeps the older ladder below.
       if (reason === "playlist-gone" || this.mode === "conventional") {
         if (!this.heldForRestart) {

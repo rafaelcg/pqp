@@ -298,7 +298,65 @@ export function hlsPartTargetMs(
  * below for the actual part-level signal.
  */
 export const LL_HLS_SEQUENCE_STUCK_SEGMENTS = 3;
+/**
+ * The FLOOR under `llSequenceStuckMs`, not the value. It only ever binds
+ * when a manifest advertises an absurdly short `EXT-X-TARGETDURATION`.
+ */
 export const LL_HLS_SEQUENCE_STUCK_FLOOR_MS = 6_000;
+
+/**
+ * The sane band for a manifest's own `EXT-X-TARGETDURATION`, in seconds.
+ * Nothing this pipeline produces sits outside it: `pqp-remux` closes a video
+ * segment on an IDR and the keyframe gate is a PLI every four seconds, so a
+ * real party advertises between four and nine.
+ */
+export const LL_HLS_MIN_TARGET_DURATION_SECONDS = 1;
+export const LL_HLS_MAX_TARGET_DURATION_SECONDS = 30;
+
+/** The one validity check for a raw `LevelDetails.targetduration`. */
+export function validTargetDurationSeconds(
+  value: number | null | undefined,
+): number | null {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < LL_HLS_MIN_TARGET_DURATION_SECONDS ||
+    value > LL_HLS_MAX_TARGET_DURATION_SECONDS
+  ) {
+    return null;
+  }
+  return value;
+}
+
+/**
+ * THE BACKSTOP'S THRESHOLD COMES FROM THE MANIFEST, NOT FROM A GUESS ABOUT
+ * SEGMENT LENGTH (production, 2026-09-16 00:50-00:56 UK).
+ *
+ * `HLS_LIVE_SEGMENT_SECONDS` is 4, so this used to resolve to a flat 12 s on
+ * every LL session. But `pqp-remux` closes a video segment only on an IDR,
+ * and the keyframe gate is a PLI every 4 s answered in about a second: real
+ * segments run 5 to 9 s, and the session live at the time advertised
+ * `EXT-X-TARGETDURATION 7`. `EXT-X-MEDIA-SEQUENCE` therefore legitimately
+ * sat still for longer than 12 s on a completely healthy stream, the
+ * watchdog called `sequence-stuck`, the ladder seeked and reloaded and
+ * cancelled its own in-flight part downloads, and the rebuilt player hit the
+ * same clock a few seconds later. Six `audio-init.mp4` fetches in a minute,
+ * all of them self-inflicted.
+ *
+ * Three TARGETDURATIONs, which is what a manifest actually promises about
+ * its own cadence: 21 s for that party rather than 12. The old segment
+ * constant survives only as the value before the first manifest arrives.
+ */
+export function llSequenceStuckMs(
+  targetDurationSeconds?: number | null,
+): number {
+  const seconds =
+    validTargetDurationSeconds(targetDurationSeconds) ?? HLS_LIVE_SEGMENT_SECONDS;
+  return Math.max(
+    LL_HLS_SEQUENCE_STUCK_SEGMENTS * seconds * 1_000,
+    LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
+  );
+}
 
 /**
  * §5's PART-level stall check, SEPARATE from the segment-based ceiling
@@ -313,6 +371,128 @@ export const LL_HLS_SEQUENCE_STUCK_FLOOR_MS = 6_000;
  * comfortably inside the segment ceiling's 6 s floor.
  */
 export const LL_HLS_PART_STUCK_PARTS = 4;
+
+/**
+ * The part-stuck threshold, from the manifest's own `EXT-X-PART-INF`
+ * `PART-TARGET` when there is one and from the server-advertised
+ * `partTargetMs` until then. Same reasoning as `llSequenceStuckMs` above:
+ * what the playlist says about its own cadence beats what the wire frame
+ * said about the deployment's default.
+ */
+export function llPartStuckMs(
+  partTargetMs: number | null | undefined,
+  manifestPartTargetSeconds?: number | null,
+): number {
+  const fromManifest =
+    typeof manifestPartTargetSeconds === "number" &&
+    Number.isFinite(manifestPartTargetSeconds) &&
+    manifestPartTargetSeconds > 0
+      ? manifestPartTargetSeconds * 1_000
+      : null;
+  return LL_HLS_PART_STUCK_PARTS * validPartTargetMs(fromManifest ?? partTargetMs);
+}
+
+/**
+ * WHICH hls.js ERRORS THE LL RECOVERY LADDER IS ALLOWED TO TREAT AS FATAL.
+ *
+ * The 2026-09-16 capture showed the fatal ladder running in a loop --
+ * `start-load`, `reload-level`, `recover-media-error`, `rebuilding the
+ * player`, again -- on a session the server was serving perfectly (remux at
+ * 2 parts/s, `timelineRatio` 1.00, 520 Worker requests all 200). hls.js's
+ * gap controller escalates `bufferStalledError` to `fatal: true` once it has
+ * spent `nudgeMaxRetry` nudges (`hls.js` `GapController._tryNudgeBuffer`),
+ * which on a presenter whose upload is starved is a statement about the
+ * BUFFER, not about the source. Handing that to a ladder whose last rung is
+ * "build a new player" throws away the buffer that was the problem.
+ *
+ * Three families, LL only:
+ *
+ * - `"buffer"`: hls.js is telling us the playhead is not moving. Never the
+ *   fatal ladder, fatal flag or not -- it opens the ordinary buffering
+ *   episode instead, so a starved source shows buffering and recovers on
+ *   its own when parts resume.
+ * - `"media"`: the pipeline genuinely cannot use the bytes it was given.
+ *   Worth one `recoverMediaError()` and, failing that, a BOUNDED rebuild.
+ * - `"other"`: everything else (network, manifest loads, the 404/410 the
+ *   live-edge jump owns) keeps exactly the ladder it has always had.
+ */
+export const LL_HLS_BUFFER_ERROR_DETAILS: readonly string[] = [
+  "bufferStalledError",
+  "bufferSeekOverHole",
+  "bufferNudgeOnStall",
+];
+
+export const LL_HLS_MEDIA_ERROR_DETAILS: readonly string[] = [
+  "bufferAppendError",
+  "bufferAppendingError",
+  "bufferAddCodecError",
+  "bufferIncompatibleCodecsError",
+  "fragParsingError",
+  "manifestParsingError",
+];
+
+export type LlHlsErrorClass = "buffer" | "media" | "other";
+
+export function classifyLlHlsError(
+  details: string | null | undefined,
+): LlHlsErrorClass {
+  if (typeof details !== "string") {
+    return "other";
+  }
+  if (LL_HLS_BUFFER_ERROR_DETAILS.includes(details)) {
+    return "buffer";
+  }
+  if (LL_HLS_MEDIA_ERROR_DETAILS.includes(details)) {
+    return "media";
+  }
+  return "other";
+}
+
+/**
+ * How many rebuilds one media-class error is worth before the holding
+ * screen. Two, and then the person gets "try again" rather than a player
+ * that tears itself down every few seconds for the rest of the party.
+ */
+export const LL_HLS_MAX_MEDIA_REBUILDS = 2;
+
+/** What the watchdog remembers about the last hls.js error, for the log. */
+export interface HlsErrorSummary {
+  type?: string | null;
+  details?: string | null;
+  fatal?: boolean | null;
+  reason?: string | null;
+  message?: string | null;
+}
+
+/**
+ * THE LOG LINE HAS TO NAME THE CAUSE (pitfall 16's rule, applied to our own
+ * console). `[hls] stream stalled (fatal), start-load` says which of OUR
+ * reasons fired and nothing at all about hls.js's, so the 2026-09-16 capture
+ * could not tell a starved buffer from a broken decoder from a 404. Every
+ * field hls.js puts on an `ERROR` that matters here, in one string.
+ */
+export function describeHlsError(error: HlsErrorSummary | null): string {
+  if (!error) {
+    return "";
+  }
+  const parts: string[] = [];
+  if (error.type) {
+    parts.push(`type=${error.type}`);
+  }
+  if (error.details) {
+    parts.push(`details=${error.details}`);
+  }
+  if (typeof error.fatal === "boolean") {
+    parts.push(`fatal=${error.fatal}`);
+  }
+  if (error.reason) {
+    parts.push(`reason=${error.reason}`);
+  }
+  if (error.message) {
+    parts.push(`err=${error.message}`);
+  }
+  return parts.join(" ");
+}
 
 /**
  * How far behind the edge hls.js is allowed to drift before it forces a
@@ -569,14 +749,30 @@ export const LL_HLS_FRAG_MAX_RETRY_DELAY_MS = 1_000;
 
 /**
  * The timeout half of the same budget. Two seconds to the first byte and
- * five to finish, with ONE retry: worst case ten seconds on a part, under
- * the ~12 s of parts the remux keeps, against the fifty hls.js's own
- * defaults allow. A slow link that cannot make that is a viewer who should
- * be on the conventional ladder, which is where §4's pin rule sends them.
+ * five to finish, against the fifty hls.js's own defaults allow. A slow link
+ * that cannot make that is a viewer who should be on the conventional
+ * ladder, which is where §4's pin rule sends them.
+ *
+ * THREE RETRIES INSIDE THE SAME CEILING, NOT ONE (production, 2026-09-16).
+ * One retry meant a presenter whose upload went quiet -- which the same
+ * capture showed, tiny parts and a shrinking buffer -- produced a fatal
+ * `fragLoadTimeOut` after two tries, and a fatal network error is what the
+ * recovery ladder reads as "this source is gone". Four attempts paced
+ * 200/400/800 ms ride out a starved second instead of tearing the player
+ * down over it.
+ *
+ * AND THE WHOLE BUDGET STILL FITS THE RING, which is the invariant this
+ * cannot break (`hls-live-edge.test.ts`, "cannot sit on one part for longer
+ * than the ring holds"): four attempts at 2.5 s plus 1.4 s of backoff is
+ * under the ~12 s of parts the remux keeps, where the old two attempts at
+ * 5 s were 10 s. More chances, same ceiling -- what changed is the shape of
+ * the patience, not its size.
  */
 export const LL_HLS_FRAG_TTFB_MS = 2_000;
-export const LL_HLS_FRAG_MAX_LOAD_MS = 5_000;
-export const LL_HLS_FRAG_TIMEOUT_RETRY_COUNT = 1;
+export const LL_HLS_FRAG_MAX_LOAD_MS = 2_500;
+export const LL_HLS_FRAG_TIMEOUT_RETRY_COUNT = 3;
+export const LL_HLS_FRAG_TIMEOUT_RETRY_DELAY_MS = 200;
+export const LL_HLS_FRAG_TIMEOUT_MAX_RETRY_DELAY_MS = 1_000;
 
 /**
  * The LL hls.js CONSTRUCTOR config: everything hls.js will accept at
@@ -615,8 +811,8 @@ export function llHlsConfig(): HlsLLPlayerConfig {
         maxLoadTimeMs: LL_HLS_FRAG_MAX_LOAD_MS,
         timeoutRetry: {
           maxNumRetry: LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
-          retryDelayMs: 0,
-          maxRetryDelayMs: 0,
+          retryDelayMs: LL_HLS_FRAG_TIMEOUT_RETRY_DELAY_MS,
+          maxRetryDelayMs: LL_HLS_FRAG_TIMEOUT_MAX_RETRY_DELAY_MS,
         },
         errorRetry: {
           maxNumRetry: LL_HLS_FRAG_RETRY_COUNT,
