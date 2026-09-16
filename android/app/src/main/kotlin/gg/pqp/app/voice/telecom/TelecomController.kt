@@ -60,14 +60,26 @@ class TelecomController(
 
         scope.launch {
             var wasActive = false
+            // Which room `markActive` has already been called for, so a busy
+            // room's ordinary roster/mute/stage-unrelated VoiceState emissions
+            // do not re-invoke it (a TelecomBridge lookup plus a
+            // Connection.setActive() Binder call) on every single one — only
+            // the actual transition into Connected does (Farol review, PR
+            // 678). Reset on leaving, so the same room reconnecting later
+            // marks active again.
+            var markedActiveFor: String? = null
             voice.state.collect { vs ->
                 val channelId = vs.channelId
                 if (vs.isActive && channelId != null) {
                     wasActive = true
                     dispatch(TelecomEvent.RoomJoined(channelId, address = channelId, displayName = roomDisplayName(vs)))
-                    if (vs.stage == VoiceStage.Connected) gateway.markActive(channelId)
+                    if (vs.stage == VoiceStage.Connected && markedActiveFor != channelId) {
+                        gateway.markActive(channelId)
+                        markedActiveFor = channelId
+                    }
                 } else if (wasActive) {
                     wasActive = false
+                    markedActiveFor = null
                     dispatch(TelecomEvent.RoomLeft)
                 }
             }
@@ -95,8 +107,8 @@ class TelecomController(
         dispatch(TelecomEvent.RingStarted(call.conversationId, call.caller.userId, call.caller.displayName))
     }
 
-    override fun onIncomingCallEnded(conversationId: String) {
-        dispatch(TelecomEvent.RingEnded(conversationId))
+    override fun onIncomingCallEnded(conversationId: String, declined: Boolean) {
+        dispatch(TelecomEvent.RingEnded(conversationId, declined))
     }
 
     // --- TelecomConnectionCallbacks: from the system, through PqpConnection ---
@@ -127,11 +139,21 @@ class TelecomController(
     }
 
     override fun onAudioStateChanged(roomId: String, muted: Boolean) {
+        // A callback from a connection that is not the current active room —
+        // delayed delivery for a room this device already left, or for a
+        // ringing room's connection before it is answered — must not mutate
+        // whatever room actually IS active now (Farol review, PR 678).
+        if (voice.state.value.channelId != roomId) return
         muteChangeFrom(voice.state.value.muted, muted)?.let(voice::setMuted)
     }
 
     override fun onShowIncomingCallUi(roomId: String, displayName: String) {
         IncomingCallNotifier.show(context, roomId, displayName)
+    }
+
+    override fun onConnectionFailed(roomId: String) {
+        TelecomBridge.clearPending(roomId)
+        dispatch(TelecomEvent.ConnectionFailed(roomId))
     }
 
     // --- the coordinator ---

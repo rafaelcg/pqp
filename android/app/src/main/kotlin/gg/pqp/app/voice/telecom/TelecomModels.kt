@@ -48,8 +48,11 @@ sealed interface TelecomEvent {
     data class RingStarted(val roomId: String, val address: String, val displayName: String) : TelecomEvent
 
     /** The ring ended on this device without being answered here: declined,
-     * dismissed, cancelled by the caller, or timed out. */
-    data class RingEnded(val roomId: String) : TelecomEvent
+     * dismissed, cancelled by the caller, or timed out. `declined` is true
+     * only for a LOCAL decline (see [gg.pqp.app.voice.CallTelecomHooks.onIncomingCallEnded]);
+     * everything else maps to [TelecomEndCause.Missed], which a decline used
+     * to as well (Farol review, PR 678). */
+    data class RingEnded(val roomId: String, val declined: Boolean = false) : TelecomEvent
 
     /** [gg.pqp.app.voice.VoiceController] reports live media in a room —
      * a plain voice channel joined directly, a DM call placed by this device,
@@ -58,6 +61,16 @@ sealed interface TelecomEvent {
 
     /** [gg.pqp.app.voice.VoiceController] reports this device is in no room. */
     data object RoomLeft : TelecomEvent
+
+    /** Telecom refused to build a connection for this room at all
+     * (`onCreateOutgoingConnectionFailed` / `onCreateIncomingConnectionFailed`).
+     * No [TelecomEffect] answers this: there is nothing left to tell Telecom
+     * (it already refused) and nothing to tell pqp's own voice call (it was
+     * never gated on Telecom succeeding) — this only clears local bookkeeping
+     * so a later `markActive`/`endConnection` for this room, and a later ring
+     * for the same conversation, are not confused by a connection that never
+     * existed (Farol review, PR 678). */
+    data class ConnectionFailed(val roomId: String) : TelecomEvent
 }
 
 sealed interface TelecomEffect {
@@ -77,6 +90,7 @@ object TelecomCoordinator {
         is TelecomEvent.RingEnded -> onRingEnded(state, event)
         is TelecomEvent.RoomJoined -> onRoomJoined(state, event)
         TelecomEvent.RoomLeft -> onRoomLeft(state)
+        is TelecomEvent.ConnectionFailed -> onConnectionFailed(state, event)
     }
 
     private fun onRingStarted(state: TelecomState, event: TelecomEvent.RingStarted): Pair<TelecomState, List<TelecomEffect>> {
@@ -92,8 +106,9 @@ object TelecomCoordinator {
 
     private fun onRingEnded(state: TelecomState, event: TelecomEvent.RingEnded): Pair<TelecomState, List<TelecomEffect>> {
         val info = state.ringing[event.roomId] ?: return state to emptyList()
+        val cause = if (event.declined) TelecomEndCause.Rejected else TelecomEndCause.Missed
         return state.copy(ringing = state.ringing - event.roomId) to
-            listOf(TelecomEffect.EndConnection(info.roomId, TelecomEndCause.Missed))
+            listOf(TelecomEffect.EndConnection(info.roomId, cause))
     }
 
     private fun onRoomJoined(state: TelecomState, event: TelecomEvent.RoomJoined): Pair<TelecomState, List<TelecomEffect>> = when {
@@ -105,10 +120,23 @@ object TelecomCoordinator {
         // address/name (already on file from the ring) is kept rather than
         // whatever VoiceController's own join happened to carry, which for an
         // accepted DM call is nothing more specific than the room id.
+        //
+        // A DIFFERENT room can still be `active` here — this device joined a
+        // call, then answered a ring for another conversation without a
+        // RoomLeft for the first ever reaching this reducer — and answering
+        // must not leave that connection behind: it is a leftover as real as
+        // the one the `else` branch below already guards against (Farol
+        // review, PR 678).
         state.ringing.containsKey(event.roomId) -> {
             val info = state.ringing.getValue(event.roomId)
-            state.copy(ringing = state.ringing - event.roomId, active = info) to
-                listOf(TelecomEffect.MarkAnswered(event.roomId))
+            val previous = state.active
+            val effects = buildList {
+                if (previous != null && previous.roomId != event.roomId) {
+                    add(TelecomEffect.EndConnection(previous.roomId, TelecomEndCause.Local))
+                }
+                add(TelecomEffect.MarkAnswered(event.roomId))
+            }
+            state.copy(ringing = state.ringing - event.roomId, active = info) to effects
         }
 
         // A genuinely new call this device is placing: a plain voice channel,
@@ -132,6 +160,17 @@ object TelecomCoordinator {
     private fun onRoomLeft(state: TelecomState): Pair<TelecomState, List<TelecomEffect>> {
         val previous = state.active ?: return state to emptyList()
         return state.copy(active = null) to listOf(TelecomEffect.EndConnection(previous.roomId, TelecomEndCause.Local))
+    }
+
+    private fun onConnectionFailed(state: TelecomState, event: TelecomEvent.ConnectionFailed): Pair<TelecomState, List<TelecomEffect>> {
+        if (state.ringing[event.roomId] == null && state.active?.roomId != event.roomId) {
+            return state to emptyList()
+        }
+        val next = state.copy(
+            ringing = state.ringing - event.roomId,
+            active = state.active?.takeUnless { it.roomId == event.roomId },
+        )
+        return next to emptyList()
     }
 }
 

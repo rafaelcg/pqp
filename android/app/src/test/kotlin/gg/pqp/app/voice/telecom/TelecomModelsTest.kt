@@ -79,6 +79,17 @@ class TelecomModelsTest {
         assertEquals(TelecomState(), state)
     }
 
+    @Test
+    fun `a locally declined ring ends its connection as Rejected, not Missed`() {
+        val (state, effects) = run(
+            TelecomState(),
+            TelecomEvent.RingStarted(room, "u1", "Rafa"),
+            TelecomEvent.RingEnded(room, declined = true),
+        )
+        assertEquals(TelecomEffect.EndConnection(room, TelecomEndCause.Rejected), effects.last())
+        assertTrue(state.ringing.isEmpty())
+    }
+
     // --- answering ---
 
     @Test
@@ -93,6 +104,27 @@ class TelecomModelsTest {
         // The caller's own name from the ring is kept, not the bare room id
         // VoiceController's join carried.
         assertEquals(TelecomRoomInfo(room, "u1", "Rafa"), state.active)
+    }
+
+    @Test
+    fun `answering a ring while a different room is still active ends the old connection first`() {
+        // A move without a RoomLeft ever reaching this reducer in between --
+        // the same shape the `else` (placing) branch already guards against,
+        // now covered for the answer path too (Farol review, PR 678).
+        val (state, effects) = run(
+            TelecomState(),
+            TelecomEvent.RoomJoined(room, room, "#general"),
+            TelecomEvent.RingStarted(other, "u2", "Bob"),
+            TelecomEvent.RoomJoined(other, address = other, displayName = "#watch-party"),
+        )
+        assertEquals(
+            listOf(
+                TelecomEffect.EndConnection(room, TelecomEndCause.Local),
+                TelecomEffect.MarkAnswered(other),
+            ),
+            effects.takeLast(2),
+        )
+        assertEquals(TelecomRoomInfo(other, "u2", "Bob"), state.active)
     }
 
     @Test
@@ -164,6 +196,31 @@ class TelecomModelsTest {
         )
         assertEquals(TelecomEffect.EndConnection(room, TelecomEndCause.Local), effects.last())
         assertEquals(TelecomRoomInfo(other, "u2", "Bob"), state.ringing[other])
+    }
+
+    // --- connection creation refused by Telecom ---
+
+    @Test
+    fun `a failed connection for a ringing room clears the ring, with no effects`() {
+        val (ringing, _) = run(TelecomState(), TelecomEvent.RingStarted(room, "u1", "Rafa"))
+        val (state, effects) = run(ringing, TelecomEvent.ConnectionFailed(room))
+        assertTrue(effects.isEmpty())
+        assertTrue(state.ringing.isEmpty())
+    }
+
+    @Test
+    fun `a failed connection for the active room clears it, with no effects`() {
+        val (active, _) = run(TelecomState(), TelecomEvent.RoomJoined(room, room, "#general"))
+        val (state, effects) = run(active, TelecomEvent.ConnectionFailed(room))
+        assertTrue(effects.isEmpty())
+        assertNull(state.active)
+    }
+
+    @Test
+    fun `a failed connection for a room nothing knows about is a no-op`() {
+        val (state, effects) = run(TelecomState(), TelecomEvent.ConnectionFailed(room))
+        assertTrue(effects.isEmpty())
+        assertEquals(TelecomState(), state)
     }
 
     // --- mute mapping ---

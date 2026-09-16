@@ -30,7 +30,13 @@ class PqpConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle,
         request: ConnectionRequest,
     ) {
-        Log.w(TAG, "outgoing connection refused for ${request.extras?.getString(AndroidTelecomGateway.EXTRA_ROOM_ID)}")
+        val roomId = request.extras?.getString(AndroidTelecomGateway.EXTRA_ROOM_ID)
+        Log.w(TAG, "outgoing connection refused for $roomId")
+        // The underlying pqp call is unaffected -- only Telecom's own
+        // bookkeeping needs to hear about this, so it stops believing a
+        // connection exists for a room Telecom itself just refused (Farol
+        // review, PR 678).
+        roomId?.let { TelecomBridge.callbacks?.onConnectionFailed(it) }
     }
 
     override fun onCreateIncomingConnection(
@@ -42,7 +48,9 @@ class PqpConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle,
         request: ConnectionRequest,
     ) {
-        Log.w(TAG, "incoming connection refused for ${request.extras?.getString(AndroidTelecomGateway.EXTRA_ROOM_ID)}")
+        val roomId = request.extras?.getString(AndroidTelecomGateway.EXTRA_ROOM_ID)
+        Log.w(TAG, "incoming connection refused for $roomId")
+        roomId?.let { TelecomBridge.callbacks?.onConnectionFailed(it) }
     }
 
     private fun build(request: ConnectionRequest, incoming: Boolean): Connection {

@@ -120,7 +120,7 @@ class CallController(
         telecomHookEvents(before, transition).forEach { event ->
             when (event) {
                 is TelecomHookEvent.Arrived -> hooks.onIncomingCallArrived(event.call)
-                is TelecomHookEvent.Ended -> hooks.onIncomingCallEnded(event.conversationId)
+                is TelecomHookEvent.Ended -> hooks.onIncomingCallEnded(event.conversationId, event.declined)
             }
         }
     }

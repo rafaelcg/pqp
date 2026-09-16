@@ -133,13 +133,34 @@ class AndroidTelecomGateway(private val context: Context) : TelecomGateway {
     }
 
     override fun markActive(roomId: String) {
-        val connection = TelecomBridge.find(roomId) ?: return
+        val connection = TelecomBridge.find(roomId)
+        if (connection == null) {
+            // The system has not finished creating this room's connection
+            // yet (placeCall/addNewIncomingCall already returned, but
+            // PqpConnectionService has not been called back into). Queue
+            // it: TelecomBridge.register replays this the moment the
+            // connection actually exists, instead of the call silently
+            // staying "Dialing" forever (Farol review, PR 678).
+            TelecomBridge.queueActive(roomId)
+            return
+        }
         runCatching { connection.setActive() }
     }
 
     override fun endConnection(roomId: String, cause: TelecomEndCause) {
         IncomingCallNotifier.cancel(context, roomId)
-        runCatching { TelecomBridge.find(roomId)?.end(disconnectCauseCode(cause)) }
+        val causeCode = disconnectCauseCode(cause)
+        val connection = TelecomBridge.find(roomId)
+        if (connection == null) {
+            // Same race as markActive, the other direction: the room ended
+            // (or the ring did) before its connection was registered. Queue
+            // the end so a connection that gets created moments later is
+            // torn down immediately instead of lingering as a ghost call
+            // (Farol review, PR 678).
+            TelecomBridge.queueEnd(roomId, causeCode)
+            return
+        }
+        runCatching { connection.end(causeCode) }
     }
 
     private fun roomUri(address: String): Uri = Uri.fromParts(ADDRESS_SCHEME, address, null)

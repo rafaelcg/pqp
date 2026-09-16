@@ -15,14 +15,23 @@ interface CallTelecomHooks {
 
     /** The ring ended on this device without being answered here: declined,
      * dismissed, cancelled by the caller, or timed out. Not called for a ring
-     * that turned into a join — see [CallEffect.JoinCall] at the call site. */
-    fun onIncomingCallEnded(conversationId: String)
+     * that turned into a join — see [CallEffect.JoinCall] at the call site.
+     *
+     * `declined` is true only for a LOCAL decline — this device's user,
+     * whether through the in-app card or the system Telecom UI (both go
+     * through [CallEvent.Decline]) — and false for every other way a ring
+     * ends unanswered: a timeout, a dismiss, or the caller cancelling. The
+     * system call log said "Missed" for a call this device's own user
+     * declined, which reads as a bug to a user checking their call history
+     * (Farol review, PR 678); this is what lets [TelecomController] tell
+     * the two apart. */
+    fun onIncomingCallEnded(conversationId: String, declined: Boolean)
 }
 
 /** One thing [CallTelecomHooks] needs to hear about. */
 internal sealed interface TelecomHookEvent {
     data class Arrived(val call: IncomingCall) : TelecomHookEvent
-    data class Ended(val conversationId: String) : TelecomHookEvent
+    data class Ended(val conversationId: String, val declined: Boolean) : TelecomHookEvent
 }
 
 /**
@@ -50,9 +59,16 @@ internal fun telecomHookEvents(before: CallState, transition: Transition): List<
         .filterIsInstance<CallEffect.JoinCall>()
         .map { it.call.conversationId }
         .toSet()
+    // Correlated the same way `answered` is, off the effect the LOCAL decline
+    // path — and only that path — produces (see `CallMachine`'s
+    // `CallEvent.Decline` handler).
+    val declined = transition.effects
+        .filterIsInstance<CallEffect.SendDecline>()
+        .map { it.conversationId }
+        .toSet()
     val ended = (beforeIds - afterIds)
         .filterNot { it in answered }
-        .map { TelecomHookEvent.Ended(it) }
+        .map { TelecomHookEvent.Ended(it, declined = it in declined) }
 
     return arrived + ended
 }

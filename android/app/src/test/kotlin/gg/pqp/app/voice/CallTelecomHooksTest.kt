@@ -26,35 +26,47 @@ class CallTelecomHooksTest {
     }
 
     @Test
-    fun `declining is reported as ended, with a decline effect alongside it`() {
+    fun `declining is reported as ended and declined, with a decline effect alongside it`() {
         val before = CallState(incoming = listOf(ring))
         val transition = CallMachine.reduce(before, CallEvent.Decline(ring.conversationId))
         assertTrue(transition.effects.any { it is CallEffect.SendDecline })
-        assertEquals(listOf(TelecomHookEvent.Ended(ring.conversationId)), telecomHookEvents(before, transition))
+        assertEquals(
+            listOf(TelecomHookEvent.Ended(ring.conversationId, declined = true)),
+            telecomHookEvents(before, transition),
+        )
     }
 
     @Test
-    fun `dismissing is reported as ended too, even though it sends nothing`() {
+    fun `dismissing is reported as ended too, even though it sends nothing, and is not a decline`() {
         val before = CallState(incoming = listOf(ring))
         val transition = CallMachine.reduce(before, CallEvent.Dismiss(ring.conversationId))
-        assertEquals(listOf(TelecomHookEvent.Ended(ring.conversationId)), telecomHookEvents(before, transition))
+        assertEquals(
+            listOf(TelecomHookEvent.Ended(ring.conversationId, declined = false)),
+            telecomHookEvents(before, transition),
+        )
     }
 
     @Test
-    fun `an uncancelled ring expiring is reported as ended`() {
+    fun `an uncancelled ring expiring is reported as ended, not declined`() {
         val before = CallState(incoming = listOf(ring))
         val transition = CallMachine.reduce(before, CallEvent.RingExpired(ring.conversationId))
-        assertEquals(listOf(TelecomHookEvent.Ended(ring.conversationId)), telecomHookEvents(before, transition))
+        assertEquals(
+            listOf(TelecomHookEvent.Ended(ring.conversationId, declined = false)),
+            telecomHookEvents(before, transition),
+        )
     }
 
     @Test
-    fun `the caller cancelling the ring is reported as ended`() {
+    fun `the caller cancelling the ring is reported as ended, not declined`() {
         val before = CallState(incoming = listOf(ring))
         val transition = CallMachine.reduce(
             before,
             CallEvent.Frame(CallFrame.RingCancelled(ring.conversationId, RingEnd.Cancelled)),
         )
-        assertEquals(listOf(TelecomHookEvent.Ended(ring.conversationId)), telecomHookEvents(before, transition))
+        assertEquals(
+            listOf(TelecomHookEvent.Ended(ring.conversationId, declined = false)),
+            telecomHookEvents(before, transition),
+        )
     }
 
     @Test
@@ -83,7 +95,10 @@ class CallTelecomHooksTest {
         val before = CallState(incoming = listOf(ring))
         val transition = CallMachine.reduce(before, CallEvent.Place(ring.conversationId))
         assertTrue(transition.state.incoming.isEmpty())
-        assertEquals(listOf(TelecomHookEvent.Ended(ring.conversationId)), telecomHookEvents(before, transition))
+        assertEquals(
+            listOf(TelecomHookEvent.Ended(ring.conversationId, declined = false)),
+            telecomHookEvents(before, transition),
+        )
     }
 
     @Test
