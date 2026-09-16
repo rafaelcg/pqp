@@ -175,7 +175,8 @@ struct ChatView: View {
                             voice.isCollapsed = false
                             Task {
                                 await voice.join(
-                                    channel: voiceChannel, session: session, ratings: ratings
+                                    channel: voiceChannel, session: session, ratings: ratings,
+                                    serverName: server?.name
                                 )
                             }
                         } label: {

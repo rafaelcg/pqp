@@ -17,6 +17,11 @@ struct PqpApp: App {
     /// a question owned by that screen would be destroyed before it could be
     /// asked.
     @State private var ratings = CallRatingModel()
+    /// The one CXProvider/CXCallController pair for the process. Registering
+    /// it here, at launch, and not lazily on the first call is what lets a
+    /// cold-launched app still answer a call CallKit is already presenting.
+    /// See `docs/IOS_CALLKIT.md`.
+    @State private var callKit = CallKitCoordinator()
     /// The only object iOS will hand an APNs device token to. SwiftUI owns its
     /// lifetime; `RootView` attaches the session to it.
     @UIApplicationDelegateAdaptor(PushDelegate.self) private var push
@@ -38,7 +43,7 @@ struct PqpApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(push: push)
+            RootView(push: push, callKit: callKit)
                 .environment(session)
                 .environment(call)
                 .environment(voice)
@@ -84,6 +89,9 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     let push: PushDelegate
+    /// Not `@Observable`, so it travels as a plain stored value rather than
+    /// through `.environment`, the same reason `push` does.
+    let callKit: CallKitCoordinator
 
     /// Whether the server can send native pushes at all. Nil until asked — the
     /// explainer must not flash on screen and then vanish because the answer
@@ -212,7 +220,8 @@ struct RootView: View {
         // somewhere to deliver its target as soon as the session exists.
         .task { push.attach(session: session) }
         .task { await session.restore() }
-        .task { call.attach(session: session, ratings: ratings) }
+        .task { call.attach(session: session, ratings: ratings, callKit: callKit) }
+        .task { voice.attachCallKit(callKit) }
         #if DEBUG
         // Only ever fires under a launch argument. See
         // `CallRatingModel.offerSyntheticCallIfRequested`.

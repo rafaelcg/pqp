@@ -155,6 +155,10 @@ final class CallModel {
     }
     private var resumeClaim: VoiceResumeClaim?
     private var session: SessionStore?
+    /// Reports this call to CallKit and carries out what CallKit asks back.
+    /// See `CallKitCoordinator` and `docs/IOS_CALLKIT.md`. Weak and optional:
+    /// a call this device places is a real call with or without it.
+    private weak var callKit: CallKitCoordinator?
     private static let handlerKey = "dm-call"
     /// Send `call-ring` when `welcome` lands — set only for a call we placed.
     private var ringOnWelcome = false
@@ -175,9 +179,13 @@ final class CallModel {
 
     /// Register the one long-lived handler. Idempotent: called from the root
     /// view's `task`, which re-runs on every re-entry into the signed-in shell.
-    func attach(session: SessionStore, ratings: CallRatingModel? = nil) {
+    func attach(session: SessionStore, ratings: CallRatingModel? = nil, callKit: CallKitCoordinator? = nil) {
         self.session = session
         if let ratings { self.ratings = ratings }
+        if let callKit {
+            self.callKit = callKit
+            callKit.callDelegate = self
+        }
         configureScreenShare()
         session.eventHandlers[Self.handlerKey] = { [weak self] event in
             self?.apply(event)
@@ -193,6 +201,11 @@ final class CallModel {
         ringOnWelcome = true
         wantsCamera = withVideo
         phase = .connecting
+        callKit?.reportOutgoingCall(
+            room: .conversation(conversation.channelId),
+            displayName: conversation.title,
+            hasVideo: withVideo
+        )
         await connect()
     }
 
@@ -227,6 +240,7 @@ final class CallModel {
     /// Refuse a ring. The caller stops waiting for us and our other devices stop
     /// ringing; the call itself continues for anyone else in it.
     func decline(_ call: IncomingCall) async {
+        callKit?.reportCallEnded(room: .conversation(call.conversationId), reason: .unanswered)
         await session?.realtime.declineCall(conversationId: call.conversationId)
         dismiss(call.conversationId)
     }
@@ -238,7 +252,11 @@ final class CallModel {
     }
 
     func hangUp(reason: String? = nil) async {
-        guard conversationId != nil else { return }
+        guard let conversationId else { return }
+        // Read before `clearCallState()` below wipes it. Not called for a
+        // CallKit-initiated end: the CXEndCallAction handler already forgot
+        // this room, so this finds nothing left to report.
+        callKit?.reportCallEnded(room: .conversation(conversationId), reason: .remoteEnded)
         ringTimeout?.cancel()
         ringTimeout = nil
         sfuJoin?.cancel()
@@ -602,6 +620,9 @@ final class CallModel {
             guard !incoming.contains(where: { $0.conversationId == call.conversationId })
             else { return }
             incoming.append(call)
+            callKit?.reportIncomingCall(
+                room: .conversation(call.conversationId), callerName: call.callerName
+            )
             // Belt to the server's own 45s timer: if the cancellation frame is
             // lost to a reconnect, the banner must still go away.
             Task { [weak self] in
@@ -610,6 +631,11 @@ final class CallModel {
             }
 
         case .callRingCancelled(let conversationId, _):
+            // Only for a ring we never answered: our own live call, if this
+            // happens to name it, is not this device's business to end here.
+            if self.conversationId != conversationId {
+                callKit?.reportCallEnded(room: .conversation(conversationId), reason: .unanswered)
+            }
             dismiss(conversationId)
 
         case .callDeclined(let conversationId, let userId):
@@ -705,6 +731,7 @@ final class CallModel {
             } else {
                 phase = .active
                 startedAt = startedAt ?? Date()
+                callKit?.reportConnected(room: .conversation(voiceChannelId))
             }
             let shouldRing = ringOnWelcome
             ringOnWelcome = false
@@ -748,6 +775,7 @@ final class CallModel {
             ringTimeout = nil
             phase = .active
             startedAt = startedAt ?? Date()
+            if let conversationId { callKit?.reportConnected(room: .conversation(conversationId)) }
             if transport == .livekit {
                 Task { await sfu.setRoster([participant]) }
                 return
@@ -1097,5 +1125,32 @@ final class CallModel {
         case .denied, .restricted: return false
         default: return await AVCaptureDevice.requestAccess(for: .video)
         }
+    }
+}
+
+// MARK: - CallKitRoomHandling
+
+/// What CallKit asks this device to do to a DM call, from the lock screen,
+/// CarPlay, Apple Watch or Siri. See `CallKitCoordinator`.
+extension CallModel: CallKitRoomHandling {
+    func callKitAnswer(_ room: CallKitRoom) {
+        guard case .conversation(let id) = room,
+              let ring = incoming.first(where: { $0.conversationId == id })
+        else { return }
+        Task { await accept(ring, withVideo: false) }
+    }
+
+    func callKitEnd(_ room: CallKitRoom) {
+        guard case .conversation(let id) = room else { return }
+        if conversationId == id, phase.isLive {
+            Task { await hangUp() }
+        } else if let ring = incoming.first(where: { $0.conversationId == id }) {
+            Task { await decline(ring) }
+        }
+    }
+
+    func callKitSetMuted(_ room: CallKitRoom, muted: Bool) {
+        guard case .conversation(let id) = room, conversationId == id else { return }
+        isMuted = muted
     }
 }
