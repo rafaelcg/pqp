@@ -264,3 +264,72 @@ func TestSession_ParameterSetChangeWithoutIDRDemotes(t *testing.T) {
 		t.Fatal("must not publish init-2.mp4 when demoting")
 	}
 }
+
+// A damaged SPS (here 16x16, well under anything a publisher sends) must not
+// rebuild the init or demote: the stream keeps playing on the init it has.
+func TestSession_ImplausibleParameterSetIsIgnored(t *testing.T) {
+	r := ring.New(6, 90000)
+	s := New(45000, 360000, r, nil)
+
+	sps720 := buildSPS(t, 1280, 720, 0x1F)
+	spsTiny := buildSPS(t, 16, 16, 0x1F)
+	pps := buildPPS()
+
+	frame := uint32(0)
+	feedAU(s, sps720, pps, true, frame)
+	frame += frameStep
+	for i := 0; i < 20; i++ {
+		feedAU(s, nil, nil, false, frame)
+		frame += frameStep
+	}
+	if r.CurrentInitURI() != ring.DefaultInitURI {
+		t.Fatalf("current init = %q, want %s", r.CurrentInitURI(), ring.DefaultInitURI)
+	}
+
+	partsBeforeDamage := s.Health().PartsWritten
+	feedAU(s, spsTiny, pps, true, frame)
+	frame += frameStep
+	for i := 0; i < 5; i++ {
+		feedAU(s, nil, nil, false, frame)
+		frame += frameStep
+	}
+	if got := s.Health().PartsWritten; got != partsBeforeDamage {
+		t.Fatalf("parts grew from %d to %d during the damaged GOP; those frames must be dropped", partsBeforeDamage, got)
+	}
+	if r.CurrentInitURI() != ring.DefaultInitURI {
+		t.Fatalf("a 16x16 SPS rebuilt the init to %q; it must be ignored", r.CurrentInitURI())
+	}
+	if _, ok := r.InitByURI("init-2.mp4"); ok {
+		t.Fatal("init-2.mp4 must not exist after an implausible parameter set")
+	}
+	if s.DemoteReason() != "" {
+		t.Fatalf("demoted for %q; an implausible SPS must be ignored, not demoted", s.DemoteReason())
+	}
+	// Counted per access unit that still carries the damaged set, so the
+	// stats line shows how long the publisher kept sending it.
+	if got := s.implausibleParamSets.Load(); got < 1 {
+		t.Fatalf("implausibleParamSets = %d, want >= 1", got)
+	}
+	// The depacketizer carries the active parameter set on every access unit,
+	// so each damaged frame is refused by the plausibility check itself; the
+	// droppingDamaged flag covers a depacketizer that does not. Either way all
+	// six frames of the damaged GOP are accounted for and none was fragmented.
+	if got := s.implausibleParamSets.Load() + s.damagedAUsDropped.Load(); got != 6 {
+		t.Fatalf("dropped %d frames of the damaged GOP, want 6 (1 IDR + 5 P)", got)
+	}
+
+	// The next sane keyframe resumes the stream on the init it kept.
+	partsBefore := s.Health().PartsWritten
+	feedAU(s, sps720, pps, true, frame)
+	frame += frameStep
+	for i := 0; i < 20; i++ {
+		feedAU(s, nil, nil, false, frame)
+		frame += frameStep
+	}
+	if s.Health().PartsWritten <= partsBefore {
+		t.Fatal("expected parts to resume after the next sane IDR")
+	}
+	if r.CurrentInitURI() != ring.DefaultInitURI {
+		t.Fatalf("current init = %q after resuming, want %s", r.CurrentInitURI(), ring.DefaultInitURI)
+	}
+}
