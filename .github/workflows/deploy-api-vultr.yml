@@ -213,28 +213,52 @@ jobs:
       # runner, over the files from THIS verified checkout, before either
       # file goes anywhere near the SSH connection an attacker might also
       # hold.
-      - name: Sign compose/Caddy config
+      # Signs pqp-deploy.sh itself alongside compose.yaml/Caddyfile (three
+      # files, same manifest) since docs/plans/ALWAYS_ON.md A0.2: the
+      # rolling-update logic that makes two replicas work at all -- pull,
+      # bring up api-a, wait, only then api-b -- lives in that script, not
+      # in compose.yaml, and an installed copy that predates this PR still
+      # says `docker compose pull api worker`. Against a compose.yaml that
+      # no longer defines an `api` service at all, that is not a
+      # degraded-but-working deploy, it is a hard failure on the very next
+      # line. Before this, this workflow only ever kept compose.yaml/
+      # Caddyfile in sync automatically and left /usr/local/bin/pqp-deploy
+      # to provision.sh, run by hand -- fine while the script's own logic
+      # never depended on which services existed, not fine now. See
+      # pqp-deploy.sh's own staged-install block for how it installs a
+      # newer copy of ITSELF safely mid-run, and docs/deploy-vultr.md
+      # "Migrating an existing box" for the one manual step this still
+      # needs on a box whose installed script predates this PR entirely
+      # (it has no logic to notice a staged pqp-deploy.sh until the copy
+      # that adds this).
+      - name: Sign compose/Caddy/deploy-script config
         if: steps.relevant.outputs.needed == 'true'
         env:
           HMAC_KEY: ${{ secrets.VULTR_CONFIG_HMAC_KEY }}
         run: |
-          (cd tools/api-host && sha256sum compose.yaml Caddyfile) > "$RUNNER_TEMP/manifest.sha256"
+          (cd tools/api-host && sha256sum compose.yaml Caddyfile pqp-deploy.sh) > "$RUNNER_TEMP/manifest.sha256"
           openssl dgst -sha256 -hmac "$HMAC_KEY" -r "$RUNNER_TEMP/manifest.sha256" \
             | awk '{print $1}' > "$RUNNER_TEMP/manifest.sig"
 
-      # Copies the two files whose content actually matters at deploy time
-      # (compose.yaml, Caddyfile), plus the manifest and signature above,
-      # into pqp-deploy's own staging directory, then runs the one script
-      # that account may sudo. That script (root) verifies the signature,
-      # installs the files into /opt/pqp only if it checks out, pulls BOTH
-      # images before touching either running container (so a bad tag
-      # never leaves api and worker on different releases), brings up api
-      # + worker, and reloads Caddy from whatever Caddyfile is now in
-      # place — a Caddy-only change no longer sits copied-but-inert. It
-      # waits for both containers' own Docker healthchecks and confirms
-      # the API is actually serving this commit before exiting 0; any of
-      # that failing is a non-zero exit, which this step surfaces via
-      # `continue-on-error` so the rollback step below still gets to run.
+      # Copies the three files whose content actually matters at deploy
+      # time (compose.yaml, Caddyfile, pqp-deploy.sh itself — see the
+      # "Sign compose/Caddy/deploy-script config" step above for why the
+      # script is now part of this set), plus the manifest and signature,
+      # into pqp-deploy's own staging directory, then runs the ALREADY
+      # INSTALLED copy of that script, which that account may sudo. That
+      # script (root) verifies the signature, installs the three staged
+      # files (`/opt/pqp/compose.yaml`, `/opt/pqp/Caddyfile`,
+      # `/usr/local/bin/pqp-deploy` — see its own staged-install block for
+      # how replacing itself mid-run is safe) only if it checks out, pulls
+      # every image before touching any running container (so a bad tag
+      # never leaves api and worker on different releases), rolls the
+      # update through api-a, then api-b, then worker, and reloads Caddy
+      # from whatever Caddyfile is now in place — a Caddy-only change no
+      # longer sits copied-but-inert. It waits for every container's own
+      # Docker healthcheck and confirms each api replica is actually
+      # serving this commit before exiting 0; any of that failing is a
+      # non-zero exit, which this step surfaces via `continue-on-error` so
+      # the rollback step below still gets to run.
       #
       # stop_grace_period: 60s in compose.yaml is what gives
       # server/src/lib/drain.ts's SIGTERM handling room to finish (25s
@@ -253,10 +277,39 @@ jobs:
             ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
           scp -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
-            tools/api-host/compose.yaml tools/api-host/Caddyfile \
+            tools/api-host/compose.yaml tools/api-host/Caddyfile tools/api-host/pqp-deploy.sh \
             "$RUNNER_TEMP/manifest.sha256" "$RUNNER_TEMP/manifest.sig" \
             "pqp-deploy@$HOST:/home/pqp-deploy/incoming/"
-          ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA"
+          # pqp-deploy.sh prints an "api-replicas=N" line stating this
+          # run's TARGET replica count, and the "Verify the deployed
+          # commit" step below needs that number -- it has no access to
+          # this box's .env (a different, more restricted SSH identity)
+          # and otherwise has no way to tell "api-b is intentionally not
+          # running (API_REPLICAS=1)" apart from "api-b crashed and should
+          # be failing this deploy". Captured to a file rather than via
+          # `$(...)` command substitution on purpose: piping straight into
+          # a plain pipeline (`cmd | tee file`, no command substitution
+          # wrapping it) is what makes `${PIPESTATUS[0]}` an unambiguous,
+          # well-defined read of ssh_cmd's own exit status regardless of
+          # whether `pipefail` happens to be on -- wrapping the same
+          # pipeline in `$(...)` runs it in a subshell, and relying on that
+          # subshell's exit code to correctly reflect PIPESTATUS[0] back in
+          # THIS shell depends on `pipefail` propagating through the
+          # substitution, which is exactly the kind of implicit,
+          # environment-dependent assumption worth not needing at all here.
+          # `set +e`/`set -e` bracket only this one command: under GitHub
+          # Actions' default `bash -eo pipefail`, letting a failing
+          # pipeline hit `set -e` would exit the step before the exit code
+          # is ever captured into $ssh_status below, which is exactly the
+          # (also failure) case this needs to still report accurately.
+          DEPLOY_LOG="$RUNNER_TEMP/deploy-output.log"
+          set +e
+          ssh_cmd "sudo /usr/local/bin/pqp-deploy $SHA" | tee "$DEPLOY_LOG"
+          ssh_status=${PIPESTATUS[0]}
+          set -e
+          replicas=$(grep -o '^api-replicas=[0-9]\+' "$DEPLOY_LOG" | tail -1 | cut -d= -f2)
+          echo "replicas=${replicas:-2}" >> "$GITHUB_OUTPUT"
+          exit "$ssh_status"
 
       # Mirrors deploy-api-fly.yml's "Verify the deployed commit" step in
       # intent, but NOT in mechanism: that step curls the box straight from
@@ -298,6 +351,36 @@ jobs:
       # half is exactly what `.github/workflows/monitor-uptime.yml` and the
       # UptimeRobot checks in docs/MONITORING.md already watch, continuously,
       # independent of any one deploy.
+      #
+      # TWO REPLICAS (docs/plans/ALWAYS_ON.md A0.2): checking only the
+      # public path via Caddy is not enough on its own any more — Caddy
+      # round-robins api-a/api-b, so one lucky hit proves at most one of
+      # them is on the new tag, and pqp-deploy.sh's own per-container
+      # verify already runs as root inside the box (it has docker access;
+      # this SSH identity deliberately does not — see pqp-deploy.sh's
+      # header). So this step also curls api-a and api-b DIRECTLY, each on
+      # its own loopback-only port (compose.yaml's `127.0.0.1:3011`/`:3012`
+      # publishes, added for exactly this), which needs no docker socket
+      # access at all. api-b's port intentionally refuses connections when
+      # this box is running with `API_REPLICAS=1` (compose.yaml's
+      # `replicas` profile is inactive, so the container never starts) —
+      # that is a valid, expected state, not a failure, but ONLY when this
+      # deploy's own target topology says so: `EXPECTED_REPLICAS` (below)
+      # carries pqp-deploy.sh's own "api-replicas=N" line through from the
+      # "Deploy over SSH" step, so a connection refused on :3012 during a
+      # deploy that targeted TWO replicas still fails this check instead of
+      # being waved through as "must be single-replica mode" — this SSH
+      # identity has no access to the box's .env and cannot otherwise tell
+      # the two apart. Beyond that, the distinction that matters is curl's
+      # OWN exit code, not just "did we get a body": exit 7 is "couldn't
+      # connect at all" (nothing listening on :3012), the only code this
+      # step will even consider treating as absent. Any other failure — a
+      # timeout, a non-2xx from `-f`, a reset mid-response — means
+      # something IS listening on :3012 but unhealthy, and that must
+      # always fail the check regardless of replica count; api-b existing
+      # in a broken state is not the same thing as api-b not existing, and
+      # conflating the two would let a genuinely degraded two-replica
+      # deploy pass as clean.
       - name: Verify the deployed commit
         id: verify
         if: steps.relevant.outputs.needed == 'true' && steps.deploy.outcome == 'success'
@@ -306,33 +389,99 @@ jobs:
           SSH_KEY: ${{ runner.temp }}/vultr_deploy_key
           EXPECTED: ${{ steps.commit.outputs.sha }}
           HOST: ${{ secrets.VULTR_API_HOST }}
+          # Threaded through from pqp-deploy.sh's own "api-replicas=N" line
+          # (captured by the "Deploy over SSH" step above) so this step
+          # knows whether api-b being unreachable right now is the
+          # expected API_REPLICAS=1 shape or api-b having gone down in a
+          # deploy that was supposed to leave two replicas running. This
+          # SSH identity has no access to the box's .env, so it cannot
+          # just look that up itself.
+          EXPECTED_REPLICAS: ${{ steps.deploy.outputs.replicas }}
         run: |
           ssh_cmd() {
             ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
-          # One SSH session per attempt (not two): both curls run on the box
-          # in a single remote script, printing "<body>\t<ready-code>" for
-          # the runner to split, instead of paying a fresh handshake twice
-          # per attempt for up to 80 handshakes across the full loop.
+          # One SSH session per attempt (not four), and all four curls
+          # launched CONCURRENTLY inside it (not chained) — with four
+          # sequential 10s-max-time curls, a single hung endpoint could
+          # cost ~40s per attempt before the 15s sleep, and 40 attempts of
+          # that risks running past this job's own 30-minute timeout
+          # before ever reaching the rollback step. Running them in
+          # parallel bounds one attempt to roughly the slowest single
+          # curl (≤10s) plus the sleep, not the sum of all four.
+          # api-b's curl has no `-f`, so a connection-refused comes back
+          # as an empty body with a distinguishable exit code (captured
+          # separately below) rather than aborting the remote script.
           remote_check=$(cat <<REMOTE
-          body=\$(curl -fsS -k --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$HEALTH_URL' 2>/dev/null) || body='{}'
-          ready=\$(curl -fsS -k -o /dev/null -w '%{http_code}' --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$READY_URL' 2>/dev/null) || ready='000'
-          printf '%s\t%s\n' "\$body" "\$ready"
+          ta=\$(mktemp); tb=\$(mktemp); tc=\$(mktemp); tr=\$(mktemp)
+          curl -fsS --max-time 10 'http://127.0.0.1:3011/health' >"\$ta" 2>/dev/null & pa=\$!
+          curl -sS --max-time 10 'http://127.0.0.1:3012/health' >"\$tb" 2>/dev/null & pb=\$!
+          curl -fsS -k --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$HEALTH_URL' >"\$tc" 2>/dev/null & pc=\$!
+          curl -fsS -k -o /dev/null -w '%{http_code}' --max-time 10 --connect-to 'api.pqp.gg:443:127.0.0.1:443' '$READY_URL' >"\$tr" 2>/dev/null & pr=\$!
+          wait \$pa; ra=\$?
+          wait \$pb; rb=\$?
+          wait \$pc; rc=\$?
+          wait \$pr || true
+          ready=\$(cat "\$tr" 2>/dev/null)
+          [ -n "\$ready" ] || ready='000'
+          body_a=\$(cat "\$ta" 2>/dev/null); [ \$ra -eq 0 ] || body_a='{}'
+          body_b=\$(cat "\$tb" 2>/dev/null)
+          body_caddy=\$(cat "\$tc" 2>/dev/null); [ \$rc -eq 0 ] || body_caddy='{}'
+          rm -f "\$ta" "\$tb" "\$tc" "\$tr"
+          printf '%s\t%s\t%s\t%s\t%s\n' "\$body_a" "\$rb" "\$body_b" "\$body_caddy" "\$ready"
           REMOTE
           )
           for attempt in $(seq 1 40); do
-            line=$(ssh_cmd "$remote_check" || printf '{}\t000')
-            body=$(printf '%s' "$line" | cut -f1)
-            ready=$(printf '%s' "$line" | cut -f2)
-            got=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null || echo "")
-            if [ "$got" = "$EXPECTED" ] && [ "$ready" = "200" ]; then
-              echo "$HOST is serving $got, /ready is 200"
+            line=$(ssh_cmd "$remote_check" || printf '{}\t1\t\t{}\t000')
+            body_a=$(printf '%s' "$line" | cut -f1)
+            rc_b=$(printf '%s' "$line" | cut -f2)
+            body_b=$(printf '%s' "$line" | cut -f3)
+            body_caddy=$(printf '%s' "$line" | cut -f4)
+            ready=$(printf '%s' "$line" | cut -f5)
+
+            got_a=$(printf '%s' "$body_a" | jq -r '.version // empty' 2>/dev/null || echo "")
+            got_caddy=$(printf '%s' "$body_caddy" | jq -r '.version // empty' 2>/dev/null || echo "")
+
+            case "$rc_b" in
+              0)
+                got_b=$(printf '%s' "$body_b" | jq -r '.version // empty' 2>/dev/null || echo "")
+                b_status="${got_b:-unknown}"
+                [ "$got_b" = "$EXPECTED" ] && b_ok=true || b_ok=false
+                ;;
+              7)
+                # Connection refused: nothing listening on :3012 at all.
+                # Only acceptable when THIS deploy's own target topology
+                # (EXPECTED_REPLICAS, from pqp-deploy.sh's "api-replicas="
+                # line) says api-b was never supposed to be running. If the
+                # box was deployed for two replicas and api-b is refusing
+                # connections, that is api-b having gone down, not api-b
+                # being intentionally absent — must fail, not pass as
+                # "expected API_REPLICAS=1" when it isn't.
+                if [ "$EXPECTED_REPLICAS" = "1" ]; then
+                  b_status="not running (API_REPLICAS=1)"
+                  b_ok=true
+                else
+                  b_status="not running (unexpected: this deploy targeted $EXPECTED_REPLICAS replicas)"
+                  b_ok=false
+                fi
+                ;;
+              *)
+                # Reachable-but-broken (timeout, reset, non-2xx, ...): a
+                # real api-b exists and is unhealthy. Must fail, not be
+                # waved through as "absent".
+                b_status="unhealthy (curl exit $rc_b)"
+                b_ok=false
+                ;;
+            esac
+
+            if [ "$got_a" = "$EXPECTED" ] && [ "$b_ok" = "true" ] && [ "$got_caddy" = "$EXPECTED" ] && [ "$ready" = "200" ]; then
+              echo "$HOST: api-a=$got_a api-b=$b_status caddy=$got_caddy ready=$ready"
               exit 0
             fi
-            echo "attempt $attempt: /health version='${got:-unknown}' (want '$EXPECTED'), /ready=$ready"
+            echo "attempt $attempt: api-a='${got_a:-unknown}' api-b='$b_status' caddy='${got_caddy:-unknown}' (want '$EXPECTED'), ready=$ready"
             sleep 15
           done
-          echo "::error::$HOST never reported the deployed commit as healthy and ready from its own loopback."
+          echo "::error::$HOST never reported the deployed commit as healthy and ready on every replica actually running."
           exit 1
 
       # Both the deploy script's own internal health wait and the
@@ -350,12 +499,12 @@ jobs:
           echo "::warning::Deploy of ${{ steps.commit.outputs.sha }} failed; rolling back to $PREV"
           ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
             "pqp-deploy@$HOST" "sudo /usr/local/bin/pqp-deploy $PREV" \
-            || echo "::error::Rollback to $PREV itself failed. SSH in as pqp (docs/deploy-vultr.md) and check 'docker compose logs api worker caddy' immediately."
+            || echo "::error::Rollback to $PREV itself failed. SSH in as pqp (docs/deploy-vultr.md) and check 'docker compose logs api-a api-b worker caddy' immediately."
 
       - name: Fail the job if the new tag never became healthy
         if: steps.relevant.outputs.needed == 'true' && (steps.deploy.outcome == 'failure' || steps.verify.outcome == 'failure')
         env:
           HOST: ${{ secrets.VULTR_API_HOST }}
         run: |
-          echo "::error::Vultr deploy of ${{ steps.commit.outputs.sha }} did not become healthy. Check 'ssh pqp@$HOST docker compose logs api worker caddy' (see docs/deploy-vultr.md)."
+          echo "::error::Vultr deploy of ${{ steps.commit.outputs.sha }} did not become healthy. Check 'ssh pqp@$HOST docker compose logs api-a api-b worker caddy' (see docs/deploy-vultr.md)."
           exit 1
