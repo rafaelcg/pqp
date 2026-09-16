@@ -243,7 +243,12 @@ export function collectVideos(response: unknown, limit = Infinity): InnerTubeVid
       return;
     }
     let video: InnerTubeVideo | null = null;
-    if (key === "videoRenderer" || key === "compactVideoRenderer" || key === "playlistVideoRenderer") {
+    if (
+      key === "videoRenderer" ||
+      key === "compactVideoRenderer" ||
+      key === "playlistVideoRenderer" ||
+      key === "endScreenVideoRenderer"
+    ) {
       video = fromRenderer(value);
     } else if (key === "lockupViewModel") {
       video = fromLockup(value);
@@ -330,33 +335,51 @@ function rememberRelated(videoId: string, videos: InnerTubeVideo[]) {
   relatedCache.set(videoId, { at: Date.now(), videos });
 }
 
+const relatedInflight = new Map<string, Promise<InnerTubeVideo[] | null>>();
+
 /** Test hook. */
 export function resetInnerTubeRelatedCache(): void {
   relatedCache.clear();
+  relatedInflight.clear();
 }
 
+/** How many watch-next hits to keep after dropping the seed. */
+export const INNERTUBE_RELATED_LIMIT = 20;
+
 /**
- * "Watch next" videos for a video id. WEB answers `compactVideoRenderer`,
- * TVHTML5 answers `lockupViewModel`; `collectVideos` already reads both.
- * The seed video is dropped. Remembered for six hours, like search.
+ * "Watch next" videos for a video id. WEB answers `compactVideoRenderer`
+ * and sometimes `endScreenVideoRenderer`, TVHTML5 answers `lockupViewModel`;
+ * `collectVideos` already reads those. The seed video is dropped.
+ * Remembered for six hours, like search. In-flight reads for the same
+ * id share one upstream call, so a room of listeners cannot stampede YouTube.
  */
 export async function innertubeRelated(
   videoId: string,
-  limit = 5,
+  limit = INNERTUBE_RELATED_LIMIT,
 ): Promise<InnerTubeVideo[] | null> {
   const cached = relatedCache.get(videoId);
   if (cached && Date.now() - cached.at < RELATED_CACHE_TTL_MS) {
     return cached.videos.slice(0, limit);
   }
-  return withClients(async (client) => {
+  const pending = relatedInflight.get(videoId);
+  if (pending) {
+    const videos = await pending;
+    return videos?.slice(0, limit) ?? null;
+  }
+  const request = withClients(async (client) => {
     const response = await call(client, "next", { videoId });
     const videos = collectVideos(response)
       .filter((video) => video.videoId !== videoId)
-      .slice(0, limit);
+      .slice(0, INNERTUBE_RELATED_LIMIT);
     if (videos.length === 0) {
       return null;
     }
     rememberRelated(videoId, videos);
     return videos;
+  }).finally(() => {
+    relatedInflight.delete(videoId);
   });
+  relatedInflight.set(videoId, request);
+  const videos = await request;
+  return videos?.slice(0, limit) ?? null;
 }

@@ -4,7 +4,9 @@ import {
   addTrack,
   addTracks,
   autoplayAdvance,
+  fillAutoplayBuffer,
   getMusicSnapshot,
+  markCurrentEnded,
   moveTrackTo,
   onTrackEnded,
   receiveMusic,
@@ -312,5 +314,150 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().state?.current).toBeNull();
     expect(getMusicSnapshot().state?.status).toBe("paused");
     expect(getMusicSnapshot().state?.history[0]?.id).toBe(ended.id);
+  });
+
+  it("fills three related tracks onto the queue before the current one ends", async () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), durationMs: 90_000 });
+    setAutoplay(true);
+    const fetchRelated = vi.fn(async () => [
+      { ...resolved("bbbbbbbbbbb"), durationMs: 180_000 },
+      { ...resolved("ccccccccccc"), durationMs: 180_000 },
+      { ...resolved("ddddddddddd"), durationMs: 180_000 },
+      { ...resolved("eeeeeeeeeee"), durationMs: 180_000 },
+    ]);
+    await fillAutoplayBuffer(true, fetchRelated, async () => {
+      throw new Error("actor must not wait");
+    });
+    expect(fetchRelated).toHaveBeenCalledWith("aaaaaaaaaaa");
+    expect(getMusicSnapshot().state?.queue.map((track) => track.videoId)).toEqual([
+      "bbbbbbbbbbb",
+      "ccccccccccc",
+      "ddddddddddd",
+    ]);
+    expect(getMusicSnapshot().state?.queue.every((track) => track.autoplayed)).toBe(true);
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("aaaaaaaaaaa");
+  });
+
+  it("onTrackEnded with a related buffer only advances", async () => {
+    addTrack(resolved("aaaaaaaaaaa"));
+    setAutoplay(true);
+    await fillAutoplayBuffer(true, async () => [
+      { ...resolved("bbbbbbbbbbb"), durationMs: 180_000 },
+      { ...resolved("ccccccccccc"), durationMs: 180_000 },
+      { ...resolved("ddddddddddd"), durationMs: 180_000 },
+    ]);
+    const ended = getMusicSnapshot().state!.current!;
+    const fetchRelated = vi.fn(async () => []);
+    await onTrackEnded(ended.id, true, fetchRelated);
+    expect(fetchRelated).not.toHaveBeenCalled();
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("bbbbbbbbbbb");
+    expect(getMusicSnapshot().state?.queue.map((track) => track.videoId)).toEqual([
+      "ccccccccccc",
+      "ddddddddddd",
+    ]);
+  });
+
+  it("starts a new pick when the current track has ended", () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), title: "Old" });
+    setAutoplay(true);
+    const ended = getMusicSnapshot().state!.current!;
+    markCurrentEnded(ended.id);
+    expect(addTrack({ ...resolved("bbbbbbbbbbb"), title: "New" })).toBe("playing");
+    const next = getMusicSnapshot().state!;
+    expect(next.current?.videoId).toBe("bbbbbbbbbbb");
+    expect(next.current?.title).toBe("New");
+    expect(next.status).toBe("playing");
+    expect(next.positionMs).toBe(0);
+    expect(next.history[0]?.id).toBe(ended.id);
+  });
+
+  it("queues a pick while the current track is still playing", () => {
+    addTrack(resolved("aaaaaaaaaaa"));
+    expect(addTrack(resolved("bbbbbbbbbbb"))).toBe("queued");
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("aaaaaaaaaaa");
+    expect(getMusicSnapshot().state?.queue.map((track) => track.videoId)).toEqual(["bbbbbbbbbbb"]);
+  });
+
+  it("drops pending autoplayed rows when autoplay is turned off, and when a new pick starts after end", async () => {
+    addTrack(resolved("aaaaaaaaaaa"));
+    addTrack(resolved("zzzzzzzzzzz"));
+    setAutoplay(true);
+    await fillAutoplayBuffer(true, async () => [
+      { ...resolved("bbbbbbbbbbb"), durationMs: 180_000 },
+      { ...resolved("ccccccccccc"), durationMs: 180_000 },
+      { ...resolved("ddddddddddd"), durationMs: 180_000 },
+    ]);
+    expect(getMusicSnapshot().state?.queue.some((track) => track.autoplayed)).toBe(true);
+    const ended = getMusicSnapshot().state!.current!;
+    markCurrentEnded(ended.id);
+    expect(addTrack(resolved("nnnnnnnnnnn"))).toBe("playing");
+    const after = getMusicSnapshot().state!;
+    expect(after.current?.videoId).toBe("nnnnnnnnnnn");
+    expect(after.queue.every((track) => !track.autoplayed)).toBe(true);
+    expect(after.queue.map((track) => track.videoId)).toEqual(["zzzzzzzzzzz"]);
+
+    addTrack(resolved("aaaaaaaaaaa"));
+    setAutoplay(true);
+    await fillAutoplayBuffer(true, async () => [
+      { ...resolved("bbbbbbbbbbb"), durationMs: 180_000 },
+    ]);
+    setAutoplay(false);
+    expect(getMusicSnapshot().state?.autoplay).toBe(false);
+    expect(getMusicSnapshot().state?.queue.every((track) => !track.autoplayed)).toBe(true);
+  });
+
+  it("drops an in-flight fill when the seat moves to another room", async () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), durationMs: 90_000 });
+    setAutoplay(true);
+    let finish!: (tracks: MusicResolved[]) => void;
+    const fetchRelated = vi.fn(
+      () =>
+        new Promise<MusicResolved[]>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const filling = fillAutoplayBuffer(true, fetchRelated);
+    await vi.waitFor(() => expect(fetchRelated).toHaveBeenCalledTimes(1));
+    setMusicSession({
+      channelId: "22222222-2222-4222-8222-222222222222",
+      peerId: "peer-b",
+      userId: "u1",
+      displayName: "Ana",
+      send: (state) => {
+        sent.push(state);
+      },
+    });
+    addTrack({ ...resolved("zzzzzzzzzzz"), durationMs: 90_000 });
+    setAutoplay(true);
+    finish([
+      { ...resolved("bbbbbbbbbbb"), durationMs: 180_000 },
+      { ...resolved("ccccccccccc"), durationMs: 180_000 },
+      { ...resolved("ddddddddddd"), durationMs: 180_000 },
+    ]);
+    await filling;
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("zzzzzzzzzzz");
+    expect(getMusicSnapshot().state?.queue).toEqual([]);
+  });
+
+  it("does not append related for a seed that is no longer last in the queue", async () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), durationMs: 90_000 });
+    setAutoplay(true);
+    let finish!: (tracks: MusicResolved[]) => void;
+    const fetchRelated = vi.fn(
+      () =>
+        new Promise<MusicResolved[]>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const filling = fillAutoplayBuffer(true, fetchRelated);
+    await vi.waitFor(() => expect(fetchRelated).toHaveBeenCalledWith("aaaaaaaaaaa"));
+    expect(addTrack(resolved("zzzzzzzzzzz"))).toBe("queued");
+    finish([
+      { ...resolved("bbbbbbbbbbb"), durationMs: 180_000 },
+      { ...resolved("ccccccccccc"), durationMs: 180_000 },
+      { ...resolved("ddddddddddd"), durationMs: 180_000 },
+    ]);
+    await filling;
+    expect(getMusicSnapshot().state?.queue.map((track) => track.videoId)).toEqual(["zzzzzzzzzzz"]);
   });
 });

@@ -28,9 +28,13 @@ import { MusicDock } from "@/components/voice/music-dock";
 import {
   musicEmbedCommand,
   playerNeedsRoomSeek,
+  shouldAdvanceOnEnded,
+  shouldCallPlayVideo,
   shouldKeepMusicEmbed,
+  shouldReportPositionSample,
   shouldReportUnknownDuration,
 } from "@/components/voice/music-player-embed";
+import { YT_STATE } from "@/lib/youtube-iframe";
 import { resetMusicEmbedHostForTests } from "@/components/voice/music-embed-host";
 import {
   queueResolvedNext,
@@ -240,6 +244,50 @@ describe("musicEmbedCommand", () => {
   it("loads a playing track and cues a paused one", () => {
     expect(musicEmbedCommand("dQw4w9WgXcQ", "playing")).toBe("load");
     expect(musicEmbedCommand("dQw4w9WgXcQ", "paused")).toBe("cue");
+  });
+});
+
+describe("shouldCallPlayVideo", () => {
+  const base = {
+    status: "playing" as const,
+    roomVideoId: "aaaaaaaaaaa",
+    loadedVideoId: "aaaaaaaaaaa",
+    playerState: YT_STATE.PAUSED,
+    repeat: "off" as const,
+  };
+
+  it("does not restart an ended video unless repeat is one", () => {
+    expect(shouldCallPlayVideo({ ...base, playerState: YT_STATE.ENDED })).toBe(false);
+    expect(shouldCallPlayVideo({ ...base, playerState: YT_STATE.ENDED, repeat: "one" })).toBe(true);
+  });
+
+  it("leaves a mismatched loaded video to the load effect", () => {
+    expect(shouldCallPlayVideo({ ...base, loadedVideoId: "bbbbbbbbbbb" })).toBe(false);
+  });
+
+  it("does not poke a player that is already playing", () => {
+    expect(shouldCallPlayVideo({ ...base, playerState: YT_STATE.PLAYING })).toBe(false);
+    expect(shouldCallPlayVideo({ ...base, playerState: YT_STATE.BUFFERING })).toBe(false);
+  });
+
+  it("plays a paused or cued matching video", () => {
+    expect(shouldCallPlayVideo(base)).toBe(true);
+    expect(shouldCallPlayVideo({ ...base, playerState: YT_STATE.CUED })).toBe(true);
+  });
+});
+
+describe("shouldAdvanceOnEnded", () => {
+  it("ignores a missing or mismatched video id", () => {
+    expect(shouldAdvanceOnEnded(undefined, "aaaaaaaaaaa")).toBe(false);
+    expect(shouldAdvanceOnEnded("bbbbbbbbbbb", "aaaaaaaaaaa")).toBe(false);
+    expect(shouldAdvanceOnEnded("aaaaaaaaaaa", "aaaaaaaaaaa")).toBe(true);
+  });
+});
+
+describe("shouldReportPositionSample", () => {
+  it("skips samples while the player is ended", () => {
+    expect(shouldReportPositionSample(YT_STATE.ENDED)).toBe(false);
+    expect(shouldReportPositionSample(YT_STATE.PLAYING)).toBe(true);
   });
 });
 

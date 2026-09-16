@@ -4,6 +4,7 @@ import {
   completeMusicState,
   musicAdvance,
   musicAutoplayCandidate,
+  musicAutoplayCandidates,
   musicSkipVotesNeeded,
   musicWriteIsStale,
   type MusicRepeat,
@@ -56,6 +57,10 @@ export interface MusicSnapshot {
 
 let session: MusicSession | null = null;
 let snapshot: MusicSnapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
+/** This machine saw YouTube ENDED for this current track id. */
+let localEndedTrackId: string | null = null;
+/** Bumped to abandon an in-flight related fill. */
+let fillGeneration = 0;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -64,7 +69,20 @@ function emit() {
   }
 }
 
+function abandonAutoplayFill(): void {
+  fillGeneration += 1;
+}
+
 function set(state: MusicState | null, channelId: string | null) {
+  if (localEndedTrackId && state?.current?.id !== localEndedTrackId) {
+    localEndedTrackId = null;
+  }
+  // A fill started for another room or another current track must not
+  // land after this write. Queue-only edits keep the generation so one
+  // fill can append more than once.
+  if (snapshot.channelId !== channelId || snapshot.state?.current?.id !== state?.current?.id) {
+    abandonAutoplayFill();
+  }
   snapshot = { ...snapshot, channelId, state, receivedAt: Date.now() };
   emit();
 }
@@ -153,6 +171,8 @@ export function resetMusicStoreForTests(): void {
   session = null;
   positionProbe = null;
   seekApply = null;
+  localEndedTrackId = null;
+  fillGeneration += 1;
   snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
   listeners.clear();
 }
@@ -248,6 +268,44 @@ function mintTrack(resolved: MusicResolved): MusicTrack | null {
   };
 }
 
+function dropAutoplayed(queue: MusicTrack[]): MusicTrack[] {
+  return queue.filter((track) => !track.autoplayed);
+}
+
+/** This machine's player reported the current track ended. */
+export function markCurrentEnded(trackId: string): void {
+  if (snapshot.state?.current?.id === trackId) {
+    localEndedTrackId = trackId;
+  }
+}
+
+export function currentTrackHasEnded(): boolean {
+  const currentId = snapshot.state?.current?.id;
+  return Boolean(currentId && localEndedTrackId === currentId);
+}
+
+function startNow(track: MusicTrack, extra: MusicTrack[] = []): void {
+  const held = snapshot.state;
+  if (!held?.current) {
+    return;
+  }
+  const advanced = musicAdvance({
+    ...held,
+    queue: dropAutoplayed(held.queue),
+    positionMs: livePositionMs(held),
+  });
+  const displaced = advanced.current ? [advanced.current, ...advanced.queue] : advanced.queue;
+  const restFits = extra.slice(0, MUSIC_QUEUE_LIMIT);
+  const displacedFits = displaced.slice(0, MUSIC_QUEUE_LIMIT - restFits.length);
+  write({
+    ...advanced,
+    current: track,
+    queue: [...restFits, ...displacedFits],
+    status: "playing",
+    positionMs: 0,
+  });
+}
+
 export type MusicAddOutcome = "playing" | "queued" | "full" | "no-session";
 
 export interface MusicAddManyOutcome {
@@ -267,6 +325,20 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
   const minted = resolved
     .map(mintTrack)
     .filter((track): track is MusicTrack => track !== null);
+  if (minted.length === 0) {
+    return { added: 0, dropped: resolved.length, startedPlaying: false };
+  }
+  if (currentTrackHasEnded() && held.current) {
+    const extra = minted.slice(1);
+    startNow(minted[0] as MusicTrack, extra);
+    setMusicOpen(true);
+    const extraFits = Math.min(extra.length, MUSIC_QUEUE_LIMIT);
+    return {
+      added: 1 + extraFits,
+      dropped: extra.length - extraFits,
+      startedPlaying: true,
+    };
+  }
   let current = held.current;
   let rest = minted;
   let startedPlaying = false;
@@ -301,6 +373,11 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
   const held = base();
   if (held.current === null) {
     write({ ...held, current: track, queue: held.queue, status: "playing", positionMs: 0 });
+    setMusicOpen(true);
+    return "playing";
+  }
+  if (currentTrackHasEnded()) {
+    startNow(track);
     setMusicOpen(true);
     return "playing";
   }
@@ -411,7 +488,17 @@ export function setOpenControls(on: boolean): void {
 }
 
 export function setAutoplay(on: boolean): void {
-  write({ ...base(), autoplay: on });
+  const held = base();
+  if (on) {
+    write({ ...held, autoplay: true });
+    return;
+  }
+  abandonAutoplayFill();
+  write({
+    ...held,
+    autoplay: false,
+    queue: dropAutoplayed(held.queue),
+  });
 }
 
 /**
@@ -429,6 +516,114 @@ export function shouldAutoplayOnEnd(state: MusicState | null): boolean {
     state.queue.length === 0 &&
     (state.repeat ?? "off") === "off"
   );
+}
+
+/** Upcoming related rows to keep queued while autoplay is on. */
+export const AUTOPLAY_BUFFER = 3;
+const AUTOPLAY_FILL_FETCH_CAP = 3;
+
+export function shouldFillAutoplayBuffer(state: MusicState | null): boolean {
+  if (
+    state === null ||
+    state.current === null ||
+    state.autoplay !== true ||
+    (state.repeat ?? "off") !== "off"
+  ) {
+    return false;
+  }
+  const autoplayed = state.queue.filter((track) => track.autoplayed).length;
+  return autoplayed < AUTOPLAY_BUFFER && state.queue.length < MUSIC_QUEUE_LIMIT;
+}
+
+export function autoplayBufferSeed(state: MusicState): string | null {
+  return state.queue.at(-1)?.videoId ?? state.current?.videoId ?? null;
+}
+
+function appendAutoplayed(picks: MusicResolved[], gen: number): void {
+  if (gen !== fillGeneration || picks.length === 0) {
+    return;
+  }
+  if (!shouldFillAutoplayBuffer(snapshot.state)) {
+    return;
+  }
+  const held = base();
+  const minted: MusicTrack[] = [];
+  for (const pick of picks) {
+    const track = mintTrack(pick);
+    if (track) {
+      minted.push({ ...track, autoplayed: true });
+    }
+  }
+  const room = MUSIC_QUEUE_LIMIT - held.queue.length;
+  const fits = minted.slice(0, Math.max(0, room));
+  if (fits.length === 0) {
+    return;
+  }
+  write({ ...held, queue: [...held.queue, ...fits] });
+}
+
+/**
+ * Keep a short buffer of related tracks on the queue so ENDED can
+ * `advance()` instead of waiting on InnerTube. The embed only starts
+ * this as the actor. The non-actor wait is for callers that still
+ * need a fallback, including tests.
+ */
+export async function fillAutoplayBuffer(
+  isActor: boolean,
+  fetchRelated: (videoId: string) => Promise<MusicResolved[]>,
+  wait: (ms: number) => Promise<void> = (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+): Promise<void> {
+  const gen = ++fillGeneration;
+  if (!isActor) {
+    await wait(AUTOPLAY_FALLBACK_MS);
+    if (gen !== fillGeneration) {
+      return;
+    }
+  }
+  let fetches = 0;
+  while (shouldFillAutoplayBuffer(snapshot.state) && fetches < AUTOPLAY_FILL_FETCH_CAP) {
+    if (gen !== fillGeneration) {
+      return;
+    }
+    const held = snapshot.state;
+    if (!held) {
+      return;
+    }
+    const channelId = session?.channelId ?? null;
+    const seed = autoplayBufferSeed(held);
+    if (!seed || !channelId) {
+      return;
+    }
+    fetches += 1;
+    let related: MusicResolved[];
+    try {
+      related = await fetchRelated(seed);
+    } catch {
+      return;
+    }
+    const next = snapshot.state;
+    if (
+      gen !== fillGeneration ||
+      session?.channelId !== channelId ||
+      !next ||
+      autoplayBufferSeed(next) !== seed ||
+      !shouldFillAutoplayBuffer(next)
+    ) {
+      return;
+    }
+    const needed = Math.min(
+      AUTOPLAY_BUFFER - next.queue.filter((track) => track.autoplayed).length,
+      MUSIC_QUEUE_LIMIT - next.queue.length,
+    );
+    const picks = musicAutoplayCandidates(related, next, needed);
+    if (picks.length === 0) {
+      return;
+    }
+    appendAutoplayed(picks, gen);
+  }
 }
 
 /**
@@ -468,6 +663,7 @@ export async function onTrackEnded(
   if (!held || held.current?.id !== endedTrackId) {
     return;
   }
+  markCurrentEnded(endedTrackId);
   if (!shouldAutoplayOnEnd(held)) {
     advance(endedTrackId);
     return;
@@ -556,6 +752,8 @@ export function stopMusic(): void {
   if (!session) {
     return;
   }
+  abandonAutoplayFill();
+  localEndedTrackId = null;
   set(null, session.channelId);
   session.send(null);
 }

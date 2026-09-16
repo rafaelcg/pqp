@@ -641,15 +641,23 @@ export function musicQueuePosition(state: MusicState, trackId: string): number {
 export const MUSIC_AUTOPLAY_MIN_MS = 60_000;
 export const MUSIC_AUTOPLAY_MAX_MS = 12 * 60 * 1000;
 
+function isSongLength(durationMs: number | null): boolean {
+  if (durationMs === null) {
+    return true;
+  }
+  return durationMs >= MUSIC_AUTOPLAY_MIN_MS && durationMs <= MUSIC_AUTOPLAY_MAX_MS;
+}
+
 /**
- * First related video the room has not just finished, queued, or already
- * played, and that is a song-length when duration is known. Duration
+ * Related videos the room has not just finished, queued, or already
+ * played, and that are song-length when duration is known. Duration
  * unknown is kept: InnerTube sometimes omits the clock.
  */
-export function musicAutoplayCandidate(
+export function musicAutoplayCandidates(
   related: MusicResolved[],
   state: MusicState,
-): MusicResolved | null {
+  limit = Infinity,
+): MusicResolved[] {
   const blocked = new Set<string>();
   if (state.current?.videoId) {
     blocked.add(state.current.videoId);
@@ -660,18 +668,24 @@ export function musicAutoplayCandidate(
   for (const track of state.queue) {
     blocked.add(track.videoId);
   }
+  const out: MusicResolved[] = [];
   for (const video of related) {
-    if (blocked.has(video.videoId)) {
+    if (out.length >= limit) {
+      break;
+    }
+    if (blocked.has(video.videoId) || !isSongLength(video.durationMs)) {
       continue;
     }
-    if (
-      video.durationMs !== null &&
-      (video.durationMs < MUSIC_AUTOPLAY_MIN_MS ||
-        video.durationMs > MUSIC_AUTOPLAY_MAX_MS)
-    ) {
-      continue;
-    }
-    return video;
+    out.push(video);
+    blocked.add(video.videoId);
   }
-  return null;
+  return out;
+}
+
+/** First pick from `musicAutoplayCandidates`. */
+export function musicAutoplayCandidate(
+  related: MusicResolved[],
+  state: MusicState,
+): MusicResolved | null {
+  return musicAutoplayCandidates(related, state, 1)[0] ?? null;
 }

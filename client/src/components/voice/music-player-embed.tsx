@@ -9,10 +9,13 @@ import {
 import { relatedMusic } from "@/lib/api";
 import {
   expectedPositionMs,
+  fillAutoplayBuffer,
+  markCurrentEnded,
   onTrackEnded,
   reportPosition,
   setPositionProbe,
   setSeekApply,
+  shouldFillAutoplayBuffer,
   type MusicSnapshot,
 } from "@/lib/music-store";
 import {
@@ -77,6 +80,45 @@ export function musicEmbedCommand(
     return "stop";
   }
   return status === "playing" ? "load" : "cue";
+}
+
+/**
+ * Whether the drift/play effect should call `playVideo()`. YouTube replays
+ * from the start when the player is ENDED; that is only correct for
+ * repeat-one. A loaded id that is not the room's is the load effect's job.
+ */
+export function shouldCallPlayVideo(args: {
+  status: "playing" | "paused";
+  roomVideoId: string | null;
+  loadedVideoId: string | null | undefined;
+  playerState: number;
+  repeat: "off" | "one" | "all";
+}): boolean {
+  if (args.status !== "playing" || !args.roomVideoId) {
+    return false;
+  }
+  if (args.loadedVideoId && args.loadedVideoId !== args.roomVideoId) {
+    return false;
+  }
+  if (args.playerState === YT_STATE.PLAYING || args.playerState === YT_STATE.BUFFERING) {
+    return false;
+  }
+  if (args.playerState === YT_STATE.ENDED) {
+    return args.repeat === "one";
+  }
+  return true;
+}
+
+/** ENDED for a video the room is not on, or with no id yet, must not advance. */
+export function shouldAdvanceOnEnded(
+  playingVideoId: string | undefined,
+  roomVideoId: string | null | undefined,
+): boolean {
+  return Boolean(playingVideoId && roomVideoId && playingVideoId === roomVideoId);
+}
+
+export function shouldReportPositionSample(playerState: number): boolean {
+  return playerState !== YT_STATE.ENDED;
 }
 
 /**
@@ -192,7 +234,8 @@ export function MusicPlayer({
               const snap = musicRef.current;
               if (event.data === YT_STATE.ENDED) {
                 // Only the video the room is on. A late "ended" from the
-                // video this player just left must not skip the new one.
+                // video this player just left, or a transition with no id
+                // yet, must not skip the new one.
                 const current = snap.state?.current;
                 let playing: string | undefined;
                 try {
@@ -200,7 +243,8 @@ export function MusicPlayer({
                 } catch {
                   playing = undefined;
                 }
-                if (current && (playing === undefined || playing === current.videoId)) {
+                if (current && shouldAdvanceOnEnded(playing, current.videoId)) {
+                  markCurrentEnded(current.id);
                   void onTrackEnded(current.id, isActorRef.current, async (id) => {
                     const { tracks } = await relatedMusic(id);
                     return tracks;
@@ -287,13 +331,46 @@ export function MusicPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, videoId, trackId]);
 
+  const autoplayedQueued = music.state?.queue.filter((track) => track.autoplayed).length ?? 0;
+  const autoplayOn = music.state?.autoplay === true;
+  const repeatMode = music.state?.repeat ?? "off";
+  const queueLength = music.state?.queue.length ?? 0;
+  useEffect(() => {
+    // Only the actor prefetches. Non-actors waiting 1.5s would stampede
+    // InnerTube if the actor is slow or gone; ENDED still has that fallback.
+    if (!isActor || !shouldFillAutoplayBuffer(musicRef.current.state)) {
+      return;
+    }
+    void fillAutoplayBuffer(true, async (id) => {
+      const { tracks } = await relatedMusic(id);
+      return tracks;
+    });
+  }, [isActor, autoplayOn, repeatMode, trackId, autoplayedQueued, queueLength]);
+
   // Play or pause, and the drift loop.
   useEffect(() => {
     const player = playerRef.current;
     if (!ready || !player) {
       return;
     }
-    if (status === "playing" && videoId) {
+    let loaded: string | undefined;
+    let ytState: number = YT_STATE.UNSTARTED;
+    try {
+      loaded = player.getVideoData().video_id;
+      ytState = player.getPlayerState();
+    } catch {
+      // player not ready to read
+    }
+    const repeat = musicRef.current.state?.repeat ?? "off";
+    if (
+      shouldCallPlayVideo({
+        status,
+        roomVideoId: videoId,
+        loadedVideoId: loaded,
+        playerState: ytState,
+        repeat,
+      })
+    ) {
       try {
         if (player.getVolume() > 0 && player.isMuted()) {
           player.unMute();
@@ -302,7 +379,7 @@ export function MusicPlayer({
         // volume read is best-effort
       }
       player.playVideo();
-    } else {
+    } else if (status !== "playing" || !videoId) {
       try {
         player.pauseVideo();
       } catch {
@@ -324,6 +401,9 @@ export function MusicPlayer({
     // the panel is that gesture.
     const tapCheck = setTimeout(() => {
       const current = player.getPlayerState();
+      if (current === YT_STATE.ENDED) {
+        return;
+      }
       if (current !== YT_STATE.PLAYING && current !== YT_STATE.BUFFERING) {
         onNeedsTap(true);
       }
@@ -332,6 +412,15 @@ export function MusicPlayer({
     const timer = setInterval(() => {
       const snap = musicRef.current;
       if (!snap.state || snap.state.status !== "playing") {
+        return;
+      }
+      let ytState: number = YT_STATE.UNSTARTED;
+      try {
+        ytState = player.getPlayerState();
+      } catch {
+        return;
+      }
+      if (!shouldReportPositionSample(ytState)) {
         return;
       }
       let at = 0;

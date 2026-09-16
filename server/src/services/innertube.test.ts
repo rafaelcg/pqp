@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectVideos,
   innertubeRelated,
+  INNERTUBE_RELATED_LIMIT,
   parseDurationLabel,
   resetInnerTubeRelatedCache,
 } from "./innertube.js";
@@ -81,6 +82,26 @@ describe("collectVideos", () => {
       },
     ]);
     expect(collectVideos(response, 0)).toEqual([]);
+  });
+
+  it("reads endScreenVideoRenderer the same way as compactVideoRenderer", () => {
+    const response = {
+      overlay: {
+        endScreenVideoRenderer: {
+          videoId: "endScreen01",
+          title: { simpleText: "Related end screen" },
+          lengthText: { simpleText: "3:21" },
+        },
+      },
+    };
+    expect(collectVideos(response)).toEqual([
+      {
+        videoId: "endScreen01",
+        title: "Related end screen",
+        durationMs: 201_000,
+        thumbnailUrl: "https://i.ytimg.com/vi/endScreen01/hqdefault.jpg",
+      },
+    ]);
   });
 });
 
@@ -173,10 +194,91 @@ describe("innertubeRelated", () => {
     ]);
   });
 
+  it("keeps twenty watch-next hits by default", async () => {
+    const extra = Object.fromEntries(
+      Array.from({ length: 25 }, (_, i) => [
+        `r${i}`,
+        {
+          compactVideoRenderer: {
+            videoId: `relWeb${String(i).padStart(5, "0")}`,
+            title: { simpleText: `Related ${i}` },
+            lengthText: { simpleText: "3:00" },
+          },
+        },
+      ]),
+    );
+    mockNext({
+      contents: {
+        seed: {
+          compactVideoRenderer: {
+            videoId: "dQw4w9WgXcQ",
+            title: { simpleText: "Seed" },
+          },
+        },
+        ...extra,
+      },
+    });
+    const videos = await innertubeRelated("dQw4w9WgXcQ");
+    expect(videos).toHaveLength(INNERTUBE_RELATED_LIMIT);
+    expect(videos?.[0]?.videoId).toBe("relWeb00000");
+    expect(videos?.[19]?.videoId).toBe("relWeb00019");
+  });
+
   it("serves a later call from the six-hour cache", async () => {
     const fetchMock = mockNext(compactNext);
     await innertubeRelated("dQw4w9WgXcQ", 5);
     await innertubeRelated("dQw4w9WgXcQ", 5);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces concurrent related fetches and keeps the full cap for a later caller", async () => {
+    const extra = Object.fromEntries(
+      Array.from({ length: 25 }, (_, i) => [
+        `r${i}`,
+        {
+          compactVideoRenderer: {
+            videoId: `relWeb${String(i).padStart(5, "0")}`,
+            title: { simpleText: `Related ${i}` },
+            lengthText: { simpleText: "3:00" },
+          },
+        },
+      ]),
+    );
+    const body = {
+      contents: {
+        seed: {
+          compactVideoRenderer: {
+            videoId: "dQw4w9WgXcQ",
+            title: { simpleText: "Seed" },
+          },
+        },
+        ...extra,
+      },
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (!url.includes("youtubei/v1/next")) {
+        throw new Error(`unexpected fetch ${url}`);
+      }
+      await gate;
+      return { ok: true, status: 200, json: async () => body };
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      fetchMock as unknown as typeof fetch,
+    );
+    const first = innertubeRelated("dQw4w9WgXcQ", 5);
+    const second = innertubeRelated("dQw4w9WgXcQ", INNERTUBE_RELATED_LIMIT);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toHaveLength(5);
+    expect(b).toHaveLength(INNERTUBE_RELATED_LIMIT);
+    expect(a?.[0]?.videoId).toBe("relWeb00000");
+    expect(b?.[19]?.videoId).toBe("relWeb00019");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
