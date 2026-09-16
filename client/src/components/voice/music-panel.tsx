@@ -27,7 +27,6 @@ import {
 import { cn } from "@/lib/utils";
 import {
   MusicHistoryList,
-  MusicListeners,
   musicOverflowItems,
   MusicRepeatButton,
   MusicShuffleButton,
@@ -244,24 +243,30 @@ export function MusicPanel({
                 <ListMusic className="m-auto h-5 w-5 text-accent" aria-hidden="true" />
               )}
             </button>
-            <button
-              type="button"
-              className="min-w-0 flex-1 text-left"
-              aria-expanded
-              aria-label={collapseLabel}
-              onClick={() => toggleMusicOpen()}
-            >
-              <MarqueeText always text={current.title} className="text-[13px] font-medium text-text" />
-              <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+            <div className="min-w-0 flex-1">
+              <button
+                type="button"
+                className="w-full min-w-0 text-left"
+                aria-expanded
+                aria-label={collapseLabel}
+                onClick={() => toggleMusicOpen()}
+              >
+                <MarqueeText always text={current.title} className="text-[13px] font-medium text-text" />
                 {current.autoplayed ? (
                   <span
                     data-music-autoplayed=""
-                    className="min-w-0 truncate text-[11px] text-text-secondary"
+                    className="mt-0.5 block truncate text-[11px] text-text-secondary"
                   >
                     {t("music.autoplayed")}
                   </span>
-                ) : (
-                  <span className="flex min-w-0 items-center gap-1 text-[11px] text-text-secondary">
+                ) : null}
+              </button>
+              {current.autoplayed ? null : (
+                <Tooltip label={t("music.addedBy", { name: addedBy.name })}>
+                  <span
+                    data-music-added-by=""
+                    className="mt-0.5 inline-flex"
+                  >
                     <UserAvatar
                       name={addedBy.name}
                       avatarUrl={addedBy.avatarUrl}
@@ -269,14 +274,10 @@ export function MusicPanel({
                       fallbackClassName="bg-accent-soft text-[9px] text-on-accent-soft"
                       rounded="full"
                     />
-                    <span className="truncate">{t("music.addedBy", { name: addedBy.name })}</span>
                   </span>
-                )}
-                <span className="ml-auto min-w-0 shrink">
-                  <MusicListeners participants={seated} />
-                </span>
-              </div>
-            </button>
+                </Tooltip>
+              )}
+            </div>
             <MusicStopListeningButton className="h-7 w-7" />
             <Menu items={overflowItems} align="end" side="top">
               <button

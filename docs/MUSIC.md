@@ -212,8 +212,9 @@ controls. Two heights of one player, not two modes. At rest it is a bar:
 Progress is the top edge of that bar, a 2px fill on the divider, not a
 second row. A member without manage rights sees vote skip
 (`1/3`) instead of a dimmed skip. A click on the art, the title, or the
-chevron opens the sheet in place: a 56px artwork row (title, who added
-it, and "N ouvindo"), an optional 16:9 video capped at about 135px, a
+chevron opens the sheet in place: a 56px artwork row (title, and who
+added it as an avatar with a tooltip), an optional 16:9 video capped
+at about 135px, a
 scrubber that stays up even before duration is known (managers seek;
 everyone else sees progress), a transport row with repeat and shuffle
 on the left for effective managers, play/pause in the centre and skip

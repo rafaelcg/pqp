@@ -544,7 +544,9 @@ describe("MusicPanel", () => {
     expect(html).toContain("data-music-shuffle");
     expect(html).toContain("data-music-overflow");
     expect(html).not.toContain("data-music-options");
-    expect(html).toContain("data-music-listeners");
+    expect(html).not.toContain("data-music-listeners");
+    expect(html).toContain("data-music-added-by");
+    expect(html).toContain("added by Ana");
     expect(html).toContain("data-slider=\"volume\"");
   });
 
