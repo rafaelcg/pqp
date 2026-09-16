@@ -2875,6 +2875,29 @@ then tag `android-v<versionName>`.
    it skips only the Play upload, loudly, with a job-summary note saying which
    secret is missing.
 
+5. **Create the `play-production` GitHub Environment** (repo Settings →
+   Environments → New environment, name it exactly `play-production`) and add
+   at least one **Required reviewer** (Rafael). The workflow already
+   references this environment — `environment:` on the `release` job resolves
+   to `play-production` only when `track: production` is chosen from
+   `workflow_dispatch`, and to a separate, unrestricted `play-internal`
+   environment otherwise — but a referenced environment with no protection
+   rule configured on it is a no-op: creating it here, with the reviewer, is
+   what actually makes choosing `production` from the dropdown pause for
+   approval instead of publishing immediately (Farol review on PR 679, before
+   which there was no such gate at all). `play-internal` needs no setup;
+   letting it not exist yet is fine too — an unconfigured environment simply
+   has no protection rules, which is the correct behaviour for it.
+6. **Restrict who can create `android-v*` tags**, with a repository ruleset
+   (Settings → Rules → Rulesets → New tag ruleset, target pattern
+   `android-v*`, restrict tag creation to specific people/teams or require it
+   to come from a signed/verified commit). A tag is not a reviewed change the
+   way a merged PR is, and this job runs with the Play upload keystore and
+   service account the moment a matching tag exists — the workflow's own
+   "Verify the tag is reachable from main" step is a code-level backstop
+   (refuses a tag pointing at a commit not on `main`), not a substitute for
+   controlling who can push the tag in the first place.
+
 ### Per-release flow
 
 1. Bump `versionCode` and `versionName` in `android/app/build.gradle.kts`

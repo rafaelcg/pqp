@@ -54,10 +54,45 @@ jobs:
     name: Build and publish to Play
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # `production` reaches real users immediately (status: completed on the
+    # Upload to Google Play step below); `internal` is Play's own low-stakes
+    # track. Two separate GitHub Environments so a required-reviewer rule on
+    # `play-production` (configured once in repo Settings → Environments, see
+    # docs/ANDROID_RELEASE.md) actually gates a production publish, rather
+    # than any account with workflow_dispatch access being able to pick
+    # `production` from the dropdown and publish unattended (Farol review,
+    # PR 679).
+    environment: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.track == 'production') && 'play-production' || 'play-internal' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history: "Verify the tag is reachable from main" below needs
+          # to walk it.
+          fetch-depth: 0
+
+      # An `android-v*` TAG is enough to trigger this credentialed job by
+      # itself. Creating a tag is not creating a commit, and nothing about it
+      # implies the review a merged PR gets — unlike main, tag creation is
+      # not (by default) branch-protected, so any account able to push a tag
+      # could point `android-v*` at an unreviewed or modified commit and have
+      # this job build and sign it with the Play upload keystore (Farol
+      # review, PR 679). Refuse unless the tagged commit is actually
+      # reachable from `main`. This is a code-level backstop, not a
+      # replacement for a repository ruleset restricting who may create
+      # `android-v*` tags — see docs/ANDROID_RELEASE.md.
+      - name: Verify the tag is reachable from main
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::${{ github.ref }} (${{ github.sha }}) is not reachable from main. Refusing to build and sign a release from a ref that did not go through the ordinary PR/review path. Push android-v* tags only at a commit already on main."
+            exit 1
+          fi
+          echo "Tag commit is reachable from main."
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -102,10 +137,24 @@ jobs:
       - name: Resolve track and version
         id: params
         shell: bash
+        env:
+          # Passed through env, not interpolated into the script text: a
+          # crafted workflow_dispatch API call controls this string, and
+          # `${{ }}` inside `run:` is substituted before bash ever parses the
+          # line, so a value that closes the quote runs as shell code with
+          # the Play/keystore credentials this job later loads into its
+          # environment (Farol review, PR 679).
+          TRACK_INPUT: ${{ github.event.inputs.track }}
         run: |
           set -euo pipefail
-          track="${{ github.event.inputs.track }}"
-          if [ -z "$track" ]; then track="internal"; fi
+          track="${TRACK_INPUT:-internal}"
+          case "$track" in
+            internal|production) ;;
+            *)
+              echo "::error::Unrecognized track \"$track\" (expected internal or production)."
+              exit 1
+              ;;
+          esac
           echo "track=${track}" >> "$GITHUB_OUTPUT"
 
           version_name=$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts)
@@ -188,7 +237,16 @@ jobs:
         run: |
           set -euo pipefail
           aab="app/build/outputs/bundle/release/app-release.aab"
-          if ! unzip -l "$aab" | grep -qE 'META-INF/[^/]+\.(RSA|DSA|EC)$'; then
+          # Captured, not piped straight into grep -q: with `set -o
+          # pipefail`, grep -q exits the instant it finds a match, unzip -l
+          # can then receive SIGPIPE while still writing the rest of the
+          # listing, and the pipeline's exit status becomes unzip's nonzero
+          # SIGPIPE code even though grep found exactly what it was looking
+          # for -- reporting a signed bundle as unsigned (Farol review, PR
+          # 679). unzip runs to completion here; the `<<<` here-string below
+          # is not a pipe, so grep exiting early has nothing to SIGPIPE.
+          listing=$(unzip -l "$aab")
+          if ! grep -qE 'META-INF/[^/]+\.(RSA|DSA|EC)$' <<< "$listing"; then
             echo "::error::${aab} has no JAR signature block even though ANDROID_UPLOAD_KEYSTORE_B64 was set. The signing config likely did not apply; check ANDROID_UPLOAD_KEY_ALIAS and the two passwords."
             exit 1
           fi
@@ -205,8 +263,17 @@ jobs:
       - name: Check for the Play service account
         id: play
         shell: bash
+        env:
+          # Through env, not `${{ }}` interpolated straight into the script:
+          # the real secret is the normal Google service-account JSON, whose
+          # embedded quotes and newlines would land inside `if [ -z "..." ]`
+          # before bash ever parses the line, breaking the test (and, unlike
+          # the read-only check here, the credential this same shape would
+          # have handed to `run:` blocks that actually use it — Farol review,
+          # PR 679).
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: |
-          if [ -z "${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}" ]; then
+          if [ -z "${PLAY_SERVICE_ACCOUNT_JSON}" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "::warning::PLAY_SERVICE_ACCOUNT_JSON is not set. Nothing will be uploaded to Play. See docs/ANDROID.md 'Shipping to Google Play'."
           else
@@ -234,9 +301,16 @@ jobs:
           printf '%s' "$text" | head -c 500 > "$dir/whatsnew-pt-BR"
           echo "dir=${dir}" >> "$GITHUB_OUTPUT"
 
+      # Pinned to a commit SHA, not the mutable `v1` tag: this action receives
+      # the Play service-account JSON in full and can publish under it; a
+      # compromised or retargeted tag would be able to exfiltrate the
+      # credential or ship an attacker-controlled release (Farol review, PR
+      # 679). `# v1` names what is pinned; bump only through a deliberate
+      # review of the new commit.
       - name: Upload to Google Play
+        id: play_upload
         if: steps.signing.outputs.ready == 'true' && steps.play.outputs.ready == 'true'
-        uses: r0adkll/upload-google-play@v1
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: gg.pqp.app
@@ -274,5 +348,5 @@ jobs:
             echo "| versionName | ${{ steps.params.outputs.version_name }} |"
             echo "| versionCode | ${{ steps.params.outputs.version_code }} |"
             echo "| track requested | ${{ steps.params.outputs.track }} |"
-            echo "| uploaded to Play | ${{ steps.signing.outputs.ready == 'true' && steps.play.outputs.ready == 'true' }} |"
+            echo "| uploaded to Play | ${{ steps.play_upload.outcome == 'success' }} |"
           } >> "$GITHUB_STEP_SUMMARY"
