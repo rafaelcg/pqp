@@ -297,6 +297,29 @@ func Connect(cfg Config, h Handlers) (*Session, error) {
 			sess.videoWG.Add(1)
 			sess.closeMu.Unlock()
 			defer sess.videoWG.Done()
+			// PIN THE TOP SIMULCAST LAYER. A watch-party screen share is
+			// published as simulcast with dynacast on (client
+			// livekit-session.ts), and this is a passive "hidden" subscriber
+			// that otherwise expresses no quality preference. With dynacast,
+			// the SFU pauses or downgrades any layer no subscriber has asked
+			// for at HIGH, so whichever layer it settles on is what this
+			// subscriber is fed -- and it flips between layers, changing the
+			// resolution (and therefore the H.264 parameter set) under us.
+			// Every flip is a new init segment, and an HLS viewer's decoder
+			// dies on that churn (production channel d5559e70, 2026-09-16: 11
+			// resolution changes -- 720p/360p/270p -- in 46 minutes, viewers
+			// getting MEDIA_ERR_DECODE while the box itself was healthy).
+			// Asking for HIGH keeps the top, size-pinned layer (client PR
+			// #475's maintain-resolution + scaleResolutionDownBy 1) always
+			// live and forwarded, so the remux is fed ONE stable resolution
+			// and never a layer switch. Best-effort: a non-simulcast track
+			// (a single layer, nothing to choose) makes this a harmless no-op
+			// on the SFU side, so a failure here is logged, not fatal.
+			if err := pub.SetVideoQuality(livekit.VideoQuality_HIGH); err != nil {
+				log.Printf("subscriber: could not pin screen-share to HIGH quality in room %q: %v", cfg.Room, err)
+			} else {
+				log.Printf("subscriber: pinned screen-share subscription to HIGH (top simulcast layer) in room %q", cfg.Room)
+			}
 			if h.OnVideoTrackFound != nil {
 				h.OnVideoTrackFound(sess)
 			}
