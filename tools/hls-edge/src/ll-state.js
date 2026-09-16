@@ -49,7 +49,7 @@
  *   "mediaSequence": 41,              // MSN of the OLDEST segment in "video.segments" (both tracks share one MSN space per rendition)
  *   "video": {
  *     "initUri": "init-2.mp4",        // NEWEST init; `init.mp4`, then `init-2.mp4`, ... (all safe file names)
- *     "discontinuitySequence": 1,     // optional non-negative #EXT-X-DISCONTINUITY-SEQUENCE; defaults to 0
+ *     "discontinuitySequence": 1,     // optional non-negative count of init changes so far; accepted, no longer rendered (see ll-playlist.js)
  *     "segments": [
  *       {
  *         "msn": 41,
@@ -57,7 +57,7 @@
  *         "durationSecs": 4.016,      // required when complete; null/absent otherwise
  *         "programDateTime": "2026-09-14T18:03:21.114Z",
  *         "initUri": "init.mp4",      // optional safe URI; omitted inherits the track's newest initUri
- *         "discontinuity": false,     // optional; defaults to false
+ *         "discontinuity": false,     // optional; true on the first segment after an init change; rendered as a new #EXT-X-MAP, never as #EXT-X-DISCONTINUITY
  *         "uri": "seg-41.m4s",        // required when complete; omit/null otherwise
  *         "parts": [
  *           // `index` is the part's position within THIS segment; the URI is

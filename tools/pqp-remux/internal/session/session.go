@@ -103,7 +103,10 @@ type Session struct {
 	// initGeneration is how many video init segments this session has
 	// published (1 after the first SPS/PPS, 2 after the first real
 	// parameter-set change, …). Used only to name init-N.mp4.
-	initGeneration atomic.Uint64
+	initGeneration       atomic.Uint64
+	implausibleParamSets atomic.Uint64
+	droppingDamaged      atomic.Bool
+	damagedAUsDropped    atomic.Uint64
 	// initSPS/initPPS are the parameter sets the CURRENT init segment was
 	// built from. Compared byte-for-byte against every later in-band
 	// pair; a real change rebuilds the init. Protected by videoMu.
@@ -565,11 +568,23 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 				// Build failed; keep waiting for a later pair.
 			}
 		} else if !bytes.Equal(au.SPS, s.initSPS) || !bytes.Equal(au.PPS, s.initPPS) {
-			s.handleParameterSetChange(au)
+			if !s.handleParameterSetChange(au) {
+				return
+			}
 			if s.DemoteReason() != "" {
 				return
 			}
 		}
+	}
+	if s.droppingDamaged.Load() {
+		// A damaged parameter set poisoned this GOP: every frame until the
+		// next keyframe references pictures that never decoded. Drop them
+		// rather than hand the decoder slices it will reject (-12911 measured).
+		if !au.IsIDR {
+			s.damagedAUsDropped.Add(1)
+			return
+		}
+		s.droppingDamaged.Store(false)
 	}
 
 	frag, err := s.frag.Push(au)
@@ -618,17 +633,33 @@ func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) b
 // new init-N.mp4, and mark the next segment discontinuous. Without an
 // IDR, or if the new init cannot be built, demote — shipping undecodable
 // media is worse than falling back to the conventional ladder.
-func (s *Session) handleParameterSetChange(au *h264.AccessUnit) {
+// handleParameterSetChange reports whether the access unit may continue into
+// the fragmenter. False means it carried a damaged parameter set and must be
+// dropped, along with the rest of its GOP.
+func (s *Session) handleParameterSetChange(au *h264.AccessUnit) bool {
 	oldW, oldH, oldProfile, oldLevel := spsSummary(s.initSPS)
 	newW, newH, newProfile, newLevel := spsSummary(au.SPS)
 	segIdx := s.frag.CurrentSegmentIndex()
 	partSeq := s.frag.CurrentSequence()
 
+	if !plausibleVideoDimensions(newW, newH) {
+		// A parameter set that parses to an absurd picture size is corruption
+		// (a truncated SPS at the tail of a stream, a packet-loss-damaged NAL),
+		// not a publisher decision. Measured 2026-09-16: the end of a test
+		// stream produced a 2x2 SPS plus a 160-byte "IDR"; rebuilding the init
+		// on it killed every viewer's decoder. Keep the init we have and skip
+		// this access unit's parameter sets; the next sane pair is honoured.
+		s.implausibleParamSets.Add(1)
+		s.droppingDamaged.Store(true)
+		log.Printf("pqp-remux: parameter-set change ignored, implausible dimensions: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); dropping this GOP",
+			oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq)
+		return false
+	}
 	if !au.IsIDR {
 		log.Printf("pqp-remux: parameter-set change without IDR: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); demoting",
 			oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq)
 		s.requestDemote("parameter-set-change-without-idr")
-		return
+		return true
 	}
 
 	nextGen := s.initGeneration.Load() + 1
@@ -638,10 +669,11 @@ func (s *Session) handleParameterSetChange(au *h264.AccessUnit) {
 		log.Printf("pqp-remux: parameter-set change could not build init %s: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); demoting",
 			uri, oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq)
 		s.requestDemote("parameter-set-change-init-failed")
-		return
+		return true
 	}
-	log.Printf("pqp-remux: parameter-set change: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); published %s with discontinuity",
+	log.Printf("pqp-remux: parameter-set change: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); published %s as a new init map",
 		oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq, uri)
+	return true
 }
 
 func (s *Session) requestDemote(reason string) {
@@ -667,6 +699,13 @@ func (s *Session) DemoteReason() string {
 // spsSummary pulls the fields the parameter-set-change log line wants.
 // A malformed SPS still yields profile/level from the header bytes when
 // present; width/height stay zero.
+// plausibleVideoDimensions bounds what a real publisher can send. Below 64
+// lines is smaller than any screen share or camera this codebase publishes;
+// above 8192 is beyond every H.264 level. Either means the SPS is damaged.
+func plausibleVideoDimensions(width, height uint32) bool {
+	return width >= 64 && height >= 64 && width <= 8192 && height <= 8192
+}
+
 func spsSummary(sps []byte) (width, height, profile, level uint32) {
 	if len(sps) >= 4 {
 		profile = uint32(sps[1])

@@ -88,7 +88,11 @@ test("golden LL media playlist: header tags", () => {
   );
 });
 
-test("a rendition changes maps at a discontinuity and starts from the first retained init", () => {
+test("an init change is rendered as a new #EXT-X-MAP with no discontinuity, and the window starts from the first retained init", () => {
+  // Why no discontinuity: measured 2026-09-16 with stock hls.js 1.7.2 against the
+  // live remux. A discontinuity in the video rendition alone left a late joiner
+  // waiting forever for the audio rendition's discontinuity count to catch up;
+  // the plain map change played cleanly for early and late joiners alike.
   const state = fixtureState();
   state.video.discontinuitySequence = 1;
   state.video.segments = [
@@ -100,13 +104,23 @@ test("a rendition changes maps at a discontinuity and starts from the first reta
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
 
   const initialMap = text.indexOf("/ll/init.mp4?");
-  const discontinuity = text.indexOf("#EXT-X-DISCONTINUITY\n");
   const replacementMap = text.indexOf("/ll/init-2.mp4?");
   const secondSegment = text.indexOf("seg-42.m4s?");
   assert.ok(initialMap >= 0, "the first retained segment's init must be the initial map");
-  assert.ok(discontinuity > initialMap, "the discontinuity follows the first init");
-  assert.ok(replacementMap > discontinuity && replacementMap < secondSegment, "the replacement map precedes its segment");
-  assert.match(text, /#EXT-X-DISCONTINUITY-SEQUENCE:1/);
+  assert.ok(replacementMap > initialMap && replacementMap < secondSegment, "the replacement map precedes its segment");
+  assert.doesNotMatch(text, /#EXT-X-DISCONTINUITY/, "an init change must never be rendered as a discontinuity");
+  assert.equal((text.match(/#EXT-X-MAP:/g) ?? []).length, 2, "exactly one map per distinct init in the window");
+
+  // A producer that changes the init without flagging the segment still gets a map.
+  const unflagged = fixtureState();
+  unflagged.video.segments = [
+    { ...segment(41, { offsetSecs: 0 }), initUri: "init.mp4", discontinuity: false },
+    { ...segment(42, { offsetSecs: 4 }), initUri: "init-2.mp4", discontinuity: false },
+  ];
+  unflagged.video.preloadHint = null;
+  const unflaggedText = buildLlRenditionPlaylist(unflagged, unflagged.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
+  assert.equal((unflaggedText.match(/#EXT-X-MAP:/g) ?? []).length, 2);
+  assert.doesNotMatch(unflaggedText, /#EXT-X-DISCONTINUITY/);
 
   const agedOut = fixtureState();
   agedOut.video.initUri = "init-2.mp4";
@@ -114,7 +128,7 @@ test("a rendition changes maps at a discontinuity and starts from the first reta
   agedOut.video.segments = [{ ...segment(42, { offsetSecs: 4 }), initUri: "init-2.mp4", discontinuity: false }];
   agedOut.video.preloadHint = null;
   const agedOutText = buildLlRenditionPlaylist(agedOut, agedOut.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
-  assert.match(agedOutText, /#EXT-X-DISCONTINUITY-SEQUENCE:1/);
+  assert.doesNotMatch(agedOutText, /#EXT-X-DISCONTINUITY/);
   assert.match(agedOutText, /#EXT-X-MAP:URI="[^"]*\/ll\/init-2\.mp4\?/);
   assert.doesNotMatch(agedOutText, /\/ll\/init\.mp4\?/);
 });

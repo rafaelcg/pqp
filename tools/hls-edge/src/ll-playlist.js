@@ -291,22 +291,28 @@ export function buildLlRenditionPlaylist(state, track, rung, opts) {
     `#EXT-X-MEDIA-SEQUENCE:${firstMsn}`,
     `#EXT-X-MAP:URI="${renditionUri(basePath, rung, firstInitUri, token)}"`,
   ];
-  if (track.discontinuitySequence > 0) {
-    lines.splice(7, 0, `#EXT-X-DISCONTINUITY-SEQUENCE:${track.discontinuitySequence}`);
-  }
+  // No #EXT-X-DISCONTINUITY-SEQUENCE: see the loop below for why an init
+  // change is not a discontinuity in this playlist.
 
   let activeInitUri = firstInitUri;
   let completeSeen = 0;
   for (const segment of track.segments) {
     const initUri = segment.initUri ?? track.initUri;
-    if (segment.discontinuity) {
-      lines.push("#EXT-X-DISCONTINUITY");
-      lines.push(`#EXT-X-MAP:URI="${renditionUri(basePath, rung, initUri, token)}"`);
-      activeInitUri = initUri;
-    } else if (initUri !== activeInitUri) {
-      // A producer should pair an init change with a discontinuity. Keep the
-      // playlist playable if it does not, rather than serving old media with
-      // the wrong initialization segment.
+    if (segment.discontinuity || initUri !== activeInitUri) {
+      // A NEW MAP, NOT A DISCONTINUITY. The remux rebuilds the init segment
+      // when the publisher's SPS/PPS change (a Chrome screen share ramping
+      // 360p -> 720p), but its timeline is continuous: tfdt keeps counting and
+      // nothing rewinds. That is the same shape as an ABR level switch, which
+      // every player handles by appending the new init before the next
+      // fragment. An #EXT-X-DISCONTINUITY here was measured to be worse, not
+      // safer (2026-09-16, stock hls.js 1.7.2 against the live remux): the
+      // audio rendition has no matching cut, so its discontinuity sequence
+      // fell behind the video's and a viewer joining after the change waited
+      // forever for the two to align. Aligning the audio at a segment
+      // boundary instead produced A/V holes and stalls every few seconds.
+      // The plain map change played cleanly for both an early and a late
+      // joiner. `segment.discontinuity` therefore only marks where the init
+      // changed; the playlist says so with #EXT-X-MAP alone.
       lines.push(`#EXT-X-MAP:URI="${renditionUri(basePath, rung, initUri, token)}"`);
       activeInitUri = initUri;
     }
