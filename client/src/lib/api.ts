@@ -92,6 +92,7 @@ import type {
   UpdateAutomodRuleInput,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
+import { parseRetryAfterMs } from "./reconnect-jitter";
 
 const API_TIMEOUT_MS = 12_000;
 
@@ -127,6 +128,14 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * The server's `Retry-After`, in ms, when it sent one — the DB circuit
+     * breaker answers a saturated pool with `503 database_unavailable` and
+     * `Retry-After: 5`. Callers that auto-retry (the cold bootstrap) honor it
+     * as a floor so a recovery wave does not re-saturate the pool. null when
+     * absent or unparseable.
+     */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -208,7 +217,11 @@ export async function apiFetch<T>(
       const body = (await response.json().catch(() => ({}))) as {
         error?: string;
       };
-      throw new ApiError(response.status, body.error ?? "Request failed");
+      throw new ApiError(
+        response.status,
+        body.error ?? "Request failed",
+        parseRetryAfterMs(response.headers.get("Retry-After")),
+      );
     }
 
     return (await response.json()) as T;
