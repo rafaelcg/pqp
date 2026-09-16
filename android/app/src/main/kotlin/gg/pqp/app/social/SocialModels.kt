@@ -135,6 +135,27 @@ data class UserLookupResponse(val user: PublicUser)
 data class BlockRequest(val userId: String)
 
 /**
+ * A person this account has blocked, as `GET /api/blocks` lists them: the
+ * public shape plus when the block was made, and nothing else. Blocking
+ * somebody must not become a way to learn more about them than you could
+ * before.
+ */
+@Serializable
+data class BlockedUser(
+    val id: String,
+    val displayName: String,
+    val username: String? = null,
+    val tag: String? = null,
+    val avatarUrl: String? = null,
+    val blockedAt: String? = null,
+) {
+    fun asPublicUser(): PublicUser = PublicUser(id, displayName, username, tag, avatarUrl)
+}
+
+@Serializable
+data class BlockListResponse(val blocked: List<BlockedUser> = emptyList())
+
+/**
  * Body of `POST /api/channels/:id/read`. Sent empty, which the server reads as
  * "now": naming a timestamp is for a client that knows it has fallen behind,
  * and this one only ever marks a conversation read while looking at it.

@@ -123,30 +123,37 @@ private fun annotate(
         style = SpanStyle(color = scheme.primary, textDecoration = TextDecoration.Underline),
     )
 
+    // Web's `.pqp-mention` gives every `@name` a tinted, accent-coloured pill
+    // (`client/src/index.css`); this used to colour only a mention of the
+    // reader and leave everybody else's name as a plain grey run, which is
+    // why a busy channel read as flat here and not there. Every mention now
+    // gets the pill; the two web reserves for louder cases are kept, just
+    // applied to the right thing: a mention naming the reader (or
+    // `@everyone` / `@here`, which always does) gets the stronger tint web
+    // calls `.pqp-mention-self`, and a mass mention alone gets the bold
+    // weight web calls `.pqp-mention-mass`.
+    val mentionTint = scheme.primary
+
     return buildAnnotatedString {
         spans.forEach { span ->
-            val mentionsMe = span.mention != null &&
-                (span.mention.lowercase() == me ||
-                    span.mention.equals("everyone", true) ||
-                    span.mention.equals("here", true))
+            val isMassMention = span.mention?.let {
+                it.equals("everyone", true) || it.equals("here", true)
+            } == true
+            val mentionsMe = span.mention != null && (span.mention.lowercase() == me || isMassMention)
             val style = SpanStyle(
-                fontWeight = if (span.bold) FontWeight.SemiBold else null,
+                fontWeight = if (span.bold || isMassMention) FontWeight.SemiBold else null,
                 fontStyle = if (span.italic) FontStyle.Italic else null,
                 textDecoration = if (span.strike) TextDecoration.LineThrough else null,
                 fontFamily = if (span.code) FontFamily.Monospace else null,
-                // A mention naming the reader is the loudest thing in a
-                // transcript, so it is the only one that gets the accent; a
-                // mention of somebody else is marked but stays quiet.
                 color = when {
-                    mentionsMe -> scheme.primary
-                    span.mention != null -> scheme.onSurfaceVariant
+                    span.mention != null -> mentionTint
                     span.code -> scheme.onSurfaceVariant
                     else -> androidx.compose.ui.graphics.Color.Unspecified
                 },
-                background = if (span.code || mentionsMe) {
-                    scheme.surfaceContainerHigh
-                } else {
-                    androidx.compose.ui.graphics.Color.Unspecified
+                background = when {
+                    span.code -> scheme.surfaceContainerHigh
+                    span.mention != null -> mentionTint.copy(alpha = if (mentionsMe) 0.26f else 0.12f)
+                    else -> androidx.compose.ui.graphics.Color.Unspecified
                 },
             )
 

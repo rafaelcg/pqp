@@ -228,6 +228,12 @@
     <string name="you_backend">Server</string>
     <string name="you_version">Version</string>
     <string name="you_voice_title">Voice</string>
+    <string name="you_blocked_users">Blocked users</string>
+
+    <!-- Blocked users dialog -->
+    <string name="blocked_users_title">Blocked users</string>
+    <string name="blocked_users_empty">You have not blocked anybody.</string>
+    <string name="blocked_users_unblock">Unblock</string>
 
     <!-- Generic -->
     <string name="chat_untitled">Conversation</string>

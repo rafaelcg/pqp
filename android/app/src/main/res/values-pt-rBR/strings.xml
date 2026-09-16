@@ -218,6 +218,12 @@
     <string name="you_backend">Servidor</string>
     <string name="you_version">Versão</string>
     <string name="you_voice_title">Voz</string>
+    <string name="you_blocked_users">Pessoas bloqueadas</string>
+
+    <!-- Blocked users dialog -->
+    <string name="blocked_users_title">Pessoas bloqueadas</string>
+    <string name="blocked_users_empty">Você não bloqueou ninguém.</string>
+    <string name="blocked_users_unblock">Desbloquear</string>
 
     <!-- Genéricos -->
     <string name="chat_untitled">Conversa</string>
