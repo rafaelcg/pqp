@@ -13,12 +13,11 @@ import {
   Video,
   VideoOff,
 } from "lucide-react";
-import type { MusicRepeat, MusicState, MusicTrack, VoiceParticipant } from "@pqp/shared";
+import type { MusicRepeat, MusicState, MusicTrack } from "@pqp/shared";
 import { musicSkipVotesNeeded } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
-import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   readdFromHistory,
@@ -272,45 +271,6 @@ export function MusicHistoryList({
           ))}
         </ol>
       ) : null}
-    </div>
-  );
-}
-
-export function MusicListeners({
-  participants,
-}: {
-  participants: VoiceParticipant[];
-}) {
-  const { t } = useTranslation();
-  const listening = participants.filter((peer) => peer.listeningMusic !== false);
-  if (listening.length === 0) {
-    return null;
-  }
-  const shown = listening.slice(0, 5);
-  const extra = listening.length - shown.length;
-  return (
-    <div
-      data-music-listeners=""
-      className="flex min-w-0 items-center gap-1 text-[11px] text-text-secondary"
-    >
-      <div className="flex -space-x-1.5">
-        {shown.map((peer) => (
-          <UserAvatar
-            key={peer.peerId}
-            name={peer.displayName}
-            avatarUrl={peer.avatarUrl}
-            className="h-5 w-5 ring-1 ring-surface-1"
-            fallbackClassName="bg-accent-soft text-[9px] text-on-accent-soft"
-            rounded="full"
-          />
-        ))}
-      </div>
-      {extra > 0 ? (
-        <span className="tabular-nums text-text-tertiary">+{extra}</span>
-      ) : null}
-      <span className="min-w-0 truncate tabular-nums">
-        {t("music.listening", { count: listening.length })}
-      </span>
     </div>
   );
 }
