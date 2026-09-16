@@ -26,8 +26,14 @@ type Fragment struct {
 	SequenceNumber uint32
 	SegmentIndex   int
 	IsSegmentStart bool // this fragment is the first part of SegmentIndex, and starts on an IDR
-	DurationTicks  uint32
-	Bytes          []byte
+	// Independent is true when the fragment's first sample is an IDR (or
+	// otherwise sync), so a player may begin decoding on this part. It is
+	// a superset of IsSegmentStart: a mid-segment part that happens to
+	// open on an IDR is still independent even though it does not open a
+	// new seg-<n>.m4s.
+	Independent   bool
+	DurationTicks uint32
+	Bytes         []byte
 }
 
 // maxFragmentTicks is the largest tick count a Fragment's own duration
@@ -117,6 +123,11 @@ type Fragmenter struct {
 	// published up to, and therefore where the next part must begin.
 	// Meaningful only while pending == nil and haveFirstIDR is true.
 	resumePTS int64
+	// forceSegmentBoundary, when set, makes the next IDR close the open
+	// segment even if Config.SegmentDuration has not been reached. Set
+	// by ForceSegmentBoundary after a parameter-set change; cleared the
+	// moment that IDR is consumed.
+	forceSegmentBoundary bool
 }
 
 // minSampleTicks is the shortest duration a sample may carry. A sample of
@@ -220,7 +231,8 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 		// pending one. Without this, a freeze longer than the segment
 		// target pushed the boundary out to the IDR after the next one,
 		// which is how EXT-X-TARGETDURATION creeps.
-		if au.IsIDR && f.resumePTS-f.segmentStart >= int64(f.cfg.SegmentDuration) {
+		if au.IsIDR && (f.forceSegmentBoundary || f.resumePTS-f.segmentStart >= int64(f.cfg.SegmentDuration)) {
+			f.forceSegmentBoundary = false
 			f.segmentIndex++
 			f.segmentStart = f.resumePTS
 			f.nextIsSegmentStart = true
@@ -253,11 +265,15 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) (*Fragment, error) {
 	partElapsed := uint64(pts - f.partStart)
 
 	switch {
-	case au.IsIDR && segmentElapsed >= uint64(f.cfg.SegmentDuration):
+	case au.IsIDR && (f.forceSegmentBoundary || segmentElapsed >= uint64(f.cfg.SegmentDuration)):
 		// This fragment's own duration is what elapsed since the *part*
 		// (not the segment) opened: segmentElapsed only decided whether
 		// the segment target was reached, and can span several prior
-		// parts.
+		// parts. forceSegmentBoundary is set by ForceSegmentBoundary
+		// when the publisher's SPS/PPS changed: the segment must close
+		// on this IDR even if the target has not been reached, so no
+		// sample after the new init is ever listed against the old one.
+		f.forceSegmentBoundary = false
 		frag := f.closePart(uint32(partElapsed))
 		f.segmentIndex++
 		f.segmentStart = pts
@@ -412,6 +428,20 @@ func (f *Fragmenter) Flush() (*Fragment, error) {
 // ending has just closed, for the R2 writer (L1.4).
 func (f *Fragmenter) CurrentSegmentIndex() int { return f.segmentIndex }
 
+// ForceSegmentBoundary arms the next IDR to close the currently open
+// segment regardless of Config.SegmentDuration. Call it when the
+// publisher's SPS/PPS have changed and the AU about to be Push'd is the
+// IDR that carries the new sets: Push then seals the old segment cleanly
+// (timeline continues — no rewind) and opens the next one on that IDR.
+//
+// It is a no-op before the session's first IDR (there is no open segment
+// to close). It does not itself emit a Fragment.
+func (f *Fragmenter) ForceSegmentBoundary() {
+	if f.haveFirstIDR {
+		f.forceSegmentBoundary = true
+	}
+}
+
 func (f *Fragmenter) closePart(durationTicks uint32) *Fragment {
 	samples := f.partSamples
 	f.partSamples = nil
@@ -419,6 +449,11 @@ func (f *Fragmenter) closePart(durationTicks uint32) *Fragment {
 
 	isStart := f.nextIsSegmentStart
 	f.nextIsSegmentStart = false
+
+	independent := isStart
+	if len(samples) > 0 && samples[0].IsSync {
+		independent = true
+	}
 
 	fragBytes := cmaf.BuildFragment(cmaf.FragmentParams{
 		SequenceNumber:      f.seq,
@@ -430,6 +465,7 @@ func (f *Fragmenter) closePart(durationTicks uint32) *Fragment {
 		SequenceNumber: f.seq,
 		SegmentIndex:   f.segmentIndex,
 		IsSegmentStart: isStart,
+		Independent:    independent,
 		DurationTicks:  durationTicks,
 		Bytes:          fragBytes,
 	}

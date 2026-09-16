@@ -129,10 +129,19 @@ type Segment struct {
 	// DurationSecs and URI are present only when Complete -- the Worker's
 	// parser refuses an in-progress segment that carries a URI, since
 	// there is no sealed object to point at yet.
-	DurationSecs    *float64 `json:"durationSecs,omitempty"`
-	URI             *string  `json:"uri,omitempty"`
-	ProgramDateTime string   `json:"programDateTime"`
-	Parts           []Part   `json:"parts"`
+	DurationSecs *float64 `json:"durationSecs,omitempty"`
+	URI          *string  `json:"uri,omitempty"`
+	// InitURI is the CMAF init segment this segment's samples were built
+	// against. May differ from Track.InitURI (the newest) after a
+	// mid-session parameter-set change; the edge Worker re-emits
+	// #EXT-X-MAP when it changes.
+	InitURI string `json:"initUri"`
+	// Discontinuity is true on the first segment that uses a new InitURI
+	// after a parameter-set change. The Worker emits #EXT-X-DISCONTINUITY
+	// before that segment's lines.
+	Discontinuity   bool   `json:"discontinuity"`
+	ProgramDateTime string `json:"programDateTime"`
+	Parts           []Part `json:"parts"`
 }
 
 // PreloadHint names the part the fragmenter has NOT emitted yet.
@@ -144,9 +153,14 @@ type PreloadHint struct {
 
 // Track is one rendition's half of the document.
 type Track struct {
-	InitURI     string       `json:"initUri"`
-	Segments    []Segment    `json:"segments"`
-	PreloadHint *PreloadHint `json:"preloadHint"`
+	// InitURI is the NEWEST init segment file name. Per-segment InitURI
+	// may still name an older generation retained in the window.
+	InitURI string `json:"initUri"`
+	// DiscontinuitySequence is how many discontinuous segments have aged
+	// out of the listed window — #EXT-X-DISCONTINUITY-SEQUENCE.
+	DiscontinuitySequence int          `json:"discontinuitySequence"`
+	Segments              []Segment    `json:"segments"`
+	PreloadHint           *PreloadHint `json:"preloadHint"`
 }
 
 // State is the whole document.
@@ -207,15 +221,24 @@ func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
 			}
 		}
 	}
-	state.PartTargetMs = partTargetMs(meta.PartTargetMs, meta.SegmentTargetMs, longestPartMs)
+	state.PartTargetMs = partTargetMs(meta.PartTargetMs, meta.SegmentTargetMs, longestPartMs, video.PeakPartMs, audioPeakPartMs(audio))
 	state.TargetDurationSecs = targetDuration(videoTrack, state.Audio, video.TargetSecs, audioTargetSecs(audio))
 	return state, true
 }
 
+func audioPeakPartMs(audio *ring.Snapshot) int {
+	if audio == nil {
+		return 0
+	}
+	return audio.PeakPartMs
+}
+
 // partTargetMs is what #EXT-X-PART-INF:PART-TARGET is rendered from: the
-// configured PART_MS, raised to cover the longest part actually listed
-// (longestMs, counted by buildTrack during the pass it already makes over
-// every part) and then bounded by the segment target.
+// configured PART_MS, raised to cover the longest part this session has
+// ever observed (and never lowered mid-playlist — RFC 8216bis requires
+// PART-TARGET to be fixed for the playlist; a target that shrinks when a
+// long part ages out of the window made hls.js recompute its latency and
+// seek), then bounded by the segment target.
 //
 // WHY IT RISES. A PART-TARGET is a promise about the MAXIMUM part duration
 // (RFC 8216bis section 4.4.3.7), and a part may legitimately run past
@@ -231,6 +254,13 @@ func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
 // for 1.5s against a part that cannot arrive for a wall second, and time
 // out on a stream that is perfectly healthy.
 //
+// WHY IT NEVER FALLS. Production 2026-09-16 measured PART-TARGET mutate
+// mid-stream (2.534 -> 0.55) when the longest listed part aged out of the
+// window. hls.js recomputed target latency from it and forced seeks. The
+// ring's PeakPartMs is the session high-water mark; peaks listed here are
+// max'd with the currently-listed longest so a brand-new snapshot that
+// has not yet updated the ring's peak still covers what it shows.
+//
 // WHY IT IS BOUNDED. Every part duration here descends from the
 // PUBLISHER's own access-unit timestamps, and the browser on the other end
 // of the SFU is not a trusted input: two frames stamped hours apart
@@ -241,10 +271,15 @@ func Build(meta Meta, video ring.Snapshot, audio *ring.Snapshot) (State, bool) {
 // target understates a real part, which is the SAFE direction to be wrong
 // in: a viewer's hold times out and falls back to the ordinary reload
 // cadence, rather than being held for as long as a hostile timestamp says.
-func partTargetMs(configured, segmentMs, longestMs int) int {
+func partTargetMs(configured, segmentMs, longestListedMs int, peaks ...int) int {
 	target := configured
-	if longestMs > target {
-		target = longestMs
+	if longestListedMs > target {
+		target = longestListedMs
+	}
+	for _, peak := range peaks {
+		if peak > target {
+			target = peak
+		}
 	}
 	ceiling := segmentMs
 	if ceiling < configured {
@@ -277,7 +312,18 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, int, 
 	if !snap.HasInit || len(snap.Segments) == 0 || snap.Timescale == 0 {
 		return nil, 0, false
 	}
-	track := &Track{InitURI: n.initURI}
+	initURI := n.initURI
+	// Video may publish init-2.mp4 mid-session; the ring's CurrentInitURI
+	// is the newest. Audio keeps the fixed audio-init.mp4 name from
+	// names (SetInit on an audio ring still stores DefaultInitURI
+	// internally for the conventional playlist's "init.mp4" suffix).
+	if n.prefix == "" && snap.InitURI != "" {
+		initURI = snap.InitURI
+	}
+	track := &Track{
+		InitURI:               initURI,
+		DiscontinuitySequence: snap.DiscontinuitySequence,
+	}
 	// longestPartMs is counted HERE, inside the pass this function
 	// already makes over every part, rather than by a second traversal
 	// afterwards: state.json is served no-store and re-fetched by the
@@ -293,9 +339,15 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, int, 
 			// it is not.
 			return nil, 0, false
 		}
+		segInit := seg.InitURI
+		if segInit == "" {
+			segInit = initURI
+		}
 		out := Segment{
 			MSN:             seg.Index,
 			Complete:        seg.Sealed,
+			InitURI:         segInit,
+			Discontinuity:   seg.Discontinuity,
 			ProgramDateTime: seg.OpenedAt.UTC().Format(pdtLayout),
 		}
 		var totalTicks uint64
