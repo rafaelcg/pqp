@@ -22,8 +22,8 @@ type part struct {
 	durationTicks uint32
 	// independent is the pipeline's own claim that this part's first
 	// frame can be decoded without any earlier part of the same segment
-	// -- pipeline.Fragment.IsSegmentStart, i.e. "this part starts on an
-	// IDR". It is recorded here rather than inferred later because the
+	// -- typically "this part starts on an IDR" (pipeline.Fragment.Independent).
+	// It is recorded here rather than inferred later because the
 	// ring is the only place that still knows which fragment carried it:
 	// Snapshot hands it straight to internal/llstate, which renders it
 	// as EXT-X-PART's INDEPENDENT=YES through the edge Worker. Never
@@ -51,6 +51,16 @@ type segment struct {
 	// one segment shares the segment's anchor exactly the way HLS
 	// expects.
 	openedAt time.Time
+	// initURI is the CMAF init segment this segment's samples were built
+	// against (init.mp4, init-2.mp4, ...). Stamped at open from the
+	// ring's then-current init so a mid-session parameter-set change can
+	// leave older retained segments pointing at the init that still
+	// describes them.
+	initURI string
+	// discontinuity is true when this segment is the first to use a new
+	// initURI after a parameter-set change. The edge Worker renders
+	// #EXT-X-DISCONTINUITY + a fresh #EXT-X-MAP before it.
+	discontinuity bool
 }
 
 func (s *segment) bytes() []byte {
@@ -70,20 +80,42 @@ func (s *segment) durationTicks() uint64 {
 }
 
 // Ring is a fixed-capacity, oldest-evicted-first buffer of a session's CMAF
-// output: the init segment (built once), every part by its global CMAF
-// sequence number, and segments grouped for the media playlist.
+// output: one or more init segments (init.mp4, then init-2.mp4 on a
+// parameter-set change), every part by its global CMAF sequence number,
+// and segments grouped for the media playlist.
 type Ring struct {
 	mu sync.RWMutex
 
 	timescale   uint32
 	maxSegments int
 
-	init []byte
+	// initByURI holds every init segment this session has ever published,
+	// keyed by the file name the HTTP surface serves (init.mp4,
+	// init-2.mp4, ...). currentInitURI is the newest; older ones stay
+	// fetchable for as long as a retained segment still references them.
+	initByURI      map[string][]byte
+	currentInitURI string
+	// nextDiscontinuity is consumed by the next IsSegmentStart Push: the
+	// segment that opens then is the first to use currentInitURI after a
+	// parameter-set change.
+	nextDiscontinuity bool
+	// discontinuitySequence is how many discontinuous segments have been
+	// evicted off the front of the window -- the value
+	// #EXT-X-DISCONTINUITY-SEQUENCE must carry so a player that joined
+	// after the change still sees a contiguous sequence number space as
+	// older discontinuities age out (RFC 8216bis §4.4.3.3).
+	discontinuitySequence int
 
 	segments   []*segment // index 0 is the oldest retained segment
 	seqToPart  map[uint32]part
 	baseIndex  int // segment index of segments[0], for #EXT-X-MEDIA-SEQUENCE
 	targetSecs int
+	// peakPartMs is the longest part duration (milliseconds, ceil) this
+	// ring has ever observed. #EXT-X-PART-INF:PART-TARGET must never
+	// shrink mid-playlist (RFC 8216bis); state.json reads this rather
+	// than re-deriving from the currently-listed window, which would
+	// drop when a long part ages out.
+	peakPartMs int
 
 	// lastSeq/haveSeq remember the newest part sequence number ever
 	// pushed (NOT merely the newest retained one -- eviction drops parts
@@ -106,27 +138,73 @@ func New(maxSegments int, timescale uint32) *Ring {
 	return &Ring{
 		maxSegments: maxSegments,
 		timescale:   timescale,
+		initByURI:   make(map[string][]byte),
 		seqToPart:   make(map[uint32]part),
 		now:         time.Now,
 	}
 }
 
-// SetInit stores the session's init segment (ftyp+moov). Called once, as
-// soon as the first SPS/PPS pair is known.
+// DefaultInitURI is the file name of the session's first video init
+// segment. Later parameter-set changes publish init-2.mp4, init-3.mp4, …
+// beside it; this name is never reused for a different avcC.
+const DefaultInitURI = "init.mp4"
+
+// SetInit stores the session's first init segment as init.mp4. Prefer
+// SetNamedInit when publishing a later generation after a parameter-set
+// change.
 func (r *Ring) SetInit(b []byte) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.init = b
+	r.SetNamedInit(DefaultInitURI, b, false)
 }
 
-// Init returns the init segment, or (nil, false) before SetInit.
+// SetNamedInit stores an init segment under uri and makes it current.
+// discontinuity=true marks the NEXT segment that opens as the first to
+// use this init (EXT-X-DISCONTINUITY + a fresh EXT-X-MAP). Call it only
+// after the previous segment has been sealed (or before any media), so
+// no sample is ever listed against the wrong avcC.
+func (r *Ring) SetNamedInit(uri string, b []byte, discontinuity bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.initByURI == nil {
+		r.initByURI = make(map[string][]byte)
+	}
+	// Copy so a caller that reuses its buffer cannot mutate what players
+	// are still fetching.
+	stored := append([]byte(nil), b...)
+	r.initByURI[uri] = stored
+	r.currentInitURI = uri
+	if discontinuity {
+		r.nextDiscontinuity = true
+	}
+}
+
+// Init returns the NEWEST init segment, or (nil, false) before any
+// SetInit/SetNamedInit. /init.mp4's own route uses InitByURI with
+// DefaultInitURI so the original file name keeps serving the original
+// bytes after a later generation is published.
 func (r *Ring) Init() ([]byte, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if r.init == nil {
+	if r.currentInitURI == "" {
 		return nil, false
 	}
-	return r.init, true
+	b, ok := r.initByURI[r.currentInitURI]
+	return b, ok
+}
+
+// InitByURI returns one published init segment by the file name state.json
+// advertised for it.
+func (r *Ring) InitByURI(uri string) ([]byte, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	b, ok := r.initByURI[uri]
+	return b, ok
+}
+
+// CurrentInitURI is the newest init file name, or "" before any init.
+func (r *Ring) CurrentInitURI() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.currentInitURI
 }
 
 // Push records one fragment from the pipeline. A fragment whose
@@ -137,11 +215,17 @@ func (r *Ring) Push(f *pipeline.Fragment) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	p := part{seq: f.SequenceNumber, bytes: f.Bytes, durationTicks: f.DurationTicks, independent: f.IsSegmentStart}
+	p := part{seq: f.SequenceNumber, bytes: f.Bytes, durationTicks: f.DurationTicks, independent: f.Independent}
 	r.seqToPart[f.SequenceNumber] = p
 	if !r.haveSeq || f.SequenceNumber > r.lastSeq {
 		r.lastSeq = f.SequenceNumber
 		r.haveSeq = true
+	}
+	if r.timescale > 0 {
+		partMs := int(math.Ceil(float64(f.DurationTicks) / float64(r.timescale) * 1000))
+		if partMs > r.peakPartMs {
+			r.peakPartMs = partMs
+		}
 	}
 
 	if f.IsSegmentStart || len(r.segments) == 0 {
@@ -150,12 +234,30 @@ func (r *Ring) Push(f *pipeline.Fragment) {
 			last.sealed = true
 			r.updateTargetDuration(last)
 		}
-		r.segments = append(r.segments, &segment{index: f.SegmentIndex, openedAt: r.now()})
+		initURI := r.currentInitURI
+		if initURI == "" {
+			initURI = DefaultInitURI
+		}
+		disc := r.nextDiscontinuity
+		r.nextDiscontinuity = false
+		r.segments = append(r.segments, &segment{
+			index:         f.SegmentIndex,
+			openedAt:      r.now(),
+			initURI:       initURI,
+			discontinuity: disc,
+		})
 		for len(r.segments) > r.maxSegments {
 			evicted := r.segments[0]
+			if evicted.discontinuity {
+				r.discontinuitySequence++
+			}
 			for _, ep := range evicted.parts {
 				delete(r.seqToPart, ep.seq)
 			}
+			// Drop an init no retained segment still needs, but never the
+			// current (newest) one — a just-published init-N may not yet
+			// have a segment stamped with it if media has not arrived.
+			r.maybeForgetInit(evicted.initURI)
 			r.segments = r.segments[1:]
 			r.baseIndex++
 		}
@@ -163,6 +265,20 @@ func (r *Ring) Push(f *pipeline.Fragment) {
 
 	cur := r.segments[len(r.segments)-1]
 	cur.parts = append(cur.parts, p)
+}
+
+// maybeForgetInit drops uri from initByURI when no retained segment
+// references it and it is not the current generation. Caller holds r.mu.
+func (r *Ring) maybeForgetInit(uri string) {
+	if uri == "" || uri == r.currentInitURI {
+		return
+	}
+	for _, s := range r.segments[1:] { // segments[0] is the one being evicted
+		if s.initURI == uri {
+			return
+		}
+	}
+	delete(r.initByURI, uri)
 }
 
 func (r *Ring) updateTargetDuration(s *segment) {
@@ -281,10 +397,12 @@ type PartSnapshot struct {
 // PlaylistWithURIPrefix, which applies the same rule to the conventional
 // playlist.
 type SegmentSnapshot struct {
-	Index    int
-	Sealed   bool
-	OpenedAt time.Time
-	Parts    []PartSnapshot
+	Index         int
+	Sealed        bool
+	OpenedAt      time.Time
+	InitURI       string
+	Discontinuity bool
+	Parts         []PartSnapshot
 }
 
 // Snapshot is a consistent, allocation-copied view of everything
@@ -301,6 +419,15 @@ type Snapshot struct {
 	// llstate applies the floor of 1 the tag's grammar requires.
 	TargetSecs int
 	HasInit    bool
+	// InitURI is the newest init file name (track.initUri). Per-segment
+	// InitURI on SegmentSnapshot may still name an older generation.
+	InitURI string
+	// DiscontinuitySequence is how many discontinuous segments have aged
+	// out of the window -- #EXT-X-DISCONTINUITY-SEQUENCE.
+	DiscontinuitySequence int
+	// PeakPartMs is the longest part duration (ceil ms) ever observed on
+	// this ring; llstate's PART-TARGET never falls below it.
+	PeakPartMs int
 	// NextPartSeq is the sequence number the fragmenter will give the
 	// NEXT part it emits -- the file an EXT-X-PRELOAD-HINT points at.
 	// Valid only when HaveParts is true.
@@ -318,14 +445,23 @@ func (r *Ring) Snapshot() Snapshot {
 	defer r.mu.RUnlock()
 
 	snap := Snapshot{
-		Timescale:   r.timescale,
-		TargetSecs:  r.targetSecs,
-		HasInit:     r.init != nil,
-		NextPartSeq: r.lastSeq + 1,
-		HaveParts:   r.haveSeq,
+		Timescale:             r.timescale,
+		TargetSecs:            r.targetSecs,
+		HasInit:               r.currentInitURI != "" && r.initByURI[r.currentInitURI] != nil,
+		InitURI:               r.currentInitURI,
+		DiscontinuitySequence: r.discontinuitySequence,
+		PeakPartMs:            r.peakPartMs,
+		NextPartSeq:           r.lastSeq + 1,
+		HaveParts:             r.haveSeq,
 	}
 	for _, s := range r.segments {
-		seg := SegmentSnapshot{Index: s.index, Sealed: s.sealed, OpenedAt: s.openedAt}
+		seg := SegmentSnapshot{
+			Index:         s.index,
+			Sealed:        s.sealed,
+			OpenedAt:      s.openedAt,
+			InitURI:       s.initURI,
+			Discontinuity: s.discontinuity,
+		}
 		for _, p := range s.parts {
 			seg.Parts = append(seg.Parts, PartSnapshot{
 				Seq:           p.seq,

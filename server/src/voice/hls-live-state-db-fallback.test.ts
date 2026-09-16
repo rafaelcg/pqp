@@ -39,6 +39,7 @@ if (DATABASE_URL) {
 const { getPool, initDb, closePool } = await import("../db.js");
 const {
   liveHlsStreamFromDb,
+  llUnservableLogEntryCount,
   viewerPlaylistUrl,
   resetLiveHlsForTests,
   setLiveHlsTestHooks,
@@ -196,6 +197,27 @@ describeDb("live HLS state, a second instance's fallback to hls_sessions", () =>
     // With a front configured, the same row is served normally.
     process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
     expect((await liveHlsStreamFromDb(channelId))?.mode).toBe("ll");
+  });
+
+  it("the unservable-LL log throttle is bounded, even inside one window", async () => {
+    // Three Farol findings on one eight-line function, all the same shape:
+    // expiring closed windows is not a bound. A burst of distinct channels
+    // inside ONE window expires nothing, so without a hard ceiling the map
+    // grows to the size of the burst and stays there, and a per-key sweep
+    // makes that burst quadratic on the event loop while it happens.
+    //
+    // `channelId` here is a path segment on a read a caller can drive, so
+    // this is the bound that matters, not the sweep.
+    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
+    const startedAt = new Date("2026-09-15T11:57:02.742Z");
+    for (let i = 0; i < 400; i += 1) {
+      const channelId = randomUUID();
+      await insertChannel(channelId);
+      await insertSession(channelId, { startedAt, mode: "ll" });
+      expect(await liveHlsStreamFromDb(channelId)).toBeNull();
+      await getPool().query(`DELETE FROM hls_sessions WHERE channel_id = $1`, [channelId]);
+    }
+    expect(llUnservableLogEntryCount()).toBeLessThanOrEqual(256);
   });
 
   it("liveHlsStreamFromDb leaves a conventional row byte-for-byte as it was: no marker, no part target", async () => {

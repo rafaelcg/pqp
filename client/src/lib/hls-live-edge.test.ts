@@ -25,7 +25,26 @@ import {
   LL_HLS_MAX_PART_TARGET_MS,
   LL_HLS_MIN_PART_TARGET_MS,
   LL_HLS_PART_ERROR_PIN_WINDOW_MS,
+  LL_HLS_EDGE_JUMP_MAX,
+  LL_HLS_EDGE_JUMP_WINDOW_MS,
+  LL_HLS_FRAG_MAX_LOAD_MS,
+  LL_HLS_FRAG_MAX_RETRY_DELAY_MS,
+  LL_HLS_FRAG_RETRY_COUNT,
+  LL_HLS_FRAG_RETRY_DELAY_MS,
+  LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
+  LL_HLS_PART_STUCK_PARTS,
+  LL_HLS_SEQUENCE_STUCK_FLOOR_MS,
+  llSequenceStuckMs,
+  llPartStuckMs,
+  validTargetDurationSeconds,
+  classifyLlHlsError,
+  describeHlsError,
+  LL_HLS_FRAG_TIMEOUT_RETRY_DELAY_MS,
+  LL_HLS_FRAG_TIMEOUT_MAX_RETRY_DELAY_MS,
+  LL_HLS_FRAG_TTFB_MS,
+  LL_HLS_LATENCY_CEILING_HEADROOM_PARTS,
   applyHlsRecoveryStep,
+  canJumpToLiveEdge,
   behindLiveThresholdSeconds,
   buildMediaSessionMetadata,
   catchUpPlaybackRate,
@@ -40,11 +59,16 @@ import {
   isBehindLive,
   isInPlaceModeDemotion,
   isLlPartLoadErrorDetail,
+  isMissingFragmentError,
+  isPlaylistGoneError,
   isPipAvailable,
   jumpToLiveTime,
   liveSeekOffsetSeconds,
   liveSeekTarget,
+  applyLlLatencyCeiling,
   llHlsConfig,
+  llLatencyCeilingSeconds,
+  llMaxLatencySeconds,
   mediaSeekableEnd,
   reloadHlsLevelPlaylist,
   resolveLiveEdge,
@@ -460,6 +484,151 @@ describe("applyHlsRecoveryStep", () => {
     expect(() => applyHlsRecoveryStep(null, "start-load")).not.toThrow();
     expect(() => applyHlsRecoveryStep(undefined, "reload-level")).not.toThrow();
   });
+
+  /**
+   * `startLoad(-1)` IS "RESUME WHERE YOU WERE", NOT "GO LIVE".
+   *
+   * `StreamController.startLoad` overrides a `-1` with `lastCurrentTime`
+   * whenever the player has played at all, so every recovery step resumed
+   * at the frozen playhead. On LL that names a part that left the ring
+   * minutes ago: production, 2026-09-15, `ll/part-699.m4s` requested with
+   * the edge at part ~1,400, answered 404, fatal, "A transmissão caiu".
+   */
+  it("restarts the loader at the live edge it was given", () => {
+    const a = fakeHls();
+    applyHlsRecoveryStep(a, "start-load", 1_234.5);
+    expect(a.calls).toEqual(["startLoad(1234.5)"]);
+
+    const b = fakeHls();
+    applyHlsRecoveryStep(b, "restart-load", 1_234.5);
+    expect(b.calls).toEqual(["stopLoad", "startLoad(1234.5)"]);
+
+    const c = fakeHls();
+    applyHlsRecoveryStep(c, "reload-level", 1_234.5);
+    expect(c.calls).toEqual(["stopLoad", "startLoad(1234.5)"]);
+    expect(c.currentLevel).toBe(3);
+  });
+
+  it("keeps hls.js's own -1 when there is no live edge to restart at", () => {
+    // VOD, and any live stream whose edge could not be resolved: resuming
+    // where you were is exactly right for a replay.
+    for (const position of [null, undefined, Number.NaN, -3]) {
+      const hls = fakeHls();
+      applyHlsRecoveryStep(hls, "start-load", position as number | null);
+      expect(hls.calls).toEqual(["startLoad(-1)"]);
+    }
+  });
+
+  it("never passes a position to recoverMediaError -- it takes none", () => {
+    const hls = fakeHls();
+    applyHlsRecoveryStep(hls, "recover-media-error", 1_234.5);
+    expect(hls.calls).toEqual(["recoverMediaError"]);
+  });
+});
+
+/**
+ * §5, the 2026-09-15 run: a 404 on a part that has left the ring means the
+ * PLAYER fell behind, and the remedy is a jump to live. Before this the
+ * fatal went to the watchdog and the watchdog eventually told a room full of
+ * people the broadcast had died, over a stream that was still running.
+ */
+describe("isMissingFragmentError", () => {
+  it("is a fatal fragment load that came back gone", () => {
+    expect(
+      isMissingFragmentError({
+        fatal: true,
+        details: "fragLoadError",
+        responseCode: 404,
+      }),
+    ).toBe(true);
+    expect(
+      isMissingFragmentError({
+        fatal: true,
+        details: "fragLoadError",
+        responseCode: 410,
+      }),
+    ).toBe(true);
+  });
+
+  it("is not a 500: that part still exists, and the retry budget owns it", () => {
+    expect(
+      isMissingFragmentError({
+        fatal: true,
+        details: "fragLoadError",
+        responseCode: 500,
+      }),
+    ).toBe(false);
+  });
+
+  it("is not a playlist or master 404: that session really is gone", () => {
+    for (const details of [
+      "levelLoadError",
+      "manifestLoadError",
+      "manifestParsingError",
+    ]) {
+      expect(
+        isMissingFragmentError({ fatal: true, details, responseCode: 404 }),
+      ).toBe(false);
+    }
+  });
+
+  it("is not a non-fatal error, and not one with no response at all", () => {
+    expect(
+      isMissingFragmentError({
+        fatal: false,
+        details: "fragLoadError",
+        responseCode: 404,
+      }),
+    ).toBe(false);
+    expect(
+      isMissingFragmentError({
+        fatal: true,
+        details: "fragLoadError",
+        responseCode: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("canJumpToLiveEdge", () => {
+  it("allows the budget and then stops", () => {
+    const now = 1_000_000;
+    expect(canJumpToLiveEdge([], now)).toBe(true);
+    const spent = Array.from({ length: LL_HLS_EDGE_JUMP_MAX }, (_, i) => now - i);
+    expect(canJumpToLiveEdge(spent, now)).toBe(false);
+  });
+
+  it("forgets jumps older than the window", () => {
+    const now = 1_000_000;
+    const old = Array.from(
+      { length: LL_HLS_EDGE_JUMP_MAX },
+      () => now - LL_HLS_EDGE_JUMP_WINDOW_MS - 1,
+    );
+    expect(canJumpToLiveEdge(old, now)).toBe(true);
+  });
+});
+
+describe("llLatencyCeilingSeconds", () => {
+  it("is the part-derived ceiling until a manifest says otherwise", () => {
+    expect(llLatencyCeilingSeconds(500, null)).toBe(llMaxLatencySeconds(500));
+    expect(llLatencyCeilingSeconds(500)).toBe(llMaxLatencySeconds(500));
+    expect(llLatencyCeilingSeconds(500, Number.NaN)).toBe(
+      llMaxLatencySeconds(500),
+    );
+  });
+
+  it("keeps room above a hold-back the part target alone would sit under", () => {
+    // The edge raising PART-HOLD-BACK to ~3s under a 4s ceiling leaves one
+    // second of slack, after which hls.js force-seeks -- which empties a 6s
+    // buffer, which is the next stall. This is that pair, fixed.
+    const ceiling = llLatencyCeilingSeconds(500, 3);
+    expect(ceiling).toBeGreaterThan(3);
+    expect(ceiling).toBe(3 + (LL_HLS_LATENCY_CEILING_HEADROOM_PARTS * 500) / 1000);
+  });
+
+  it("never drops below the part-derived floor for a small hold-back", () => {
+    expect(llLatencyCeilingSeconds(500, 0.5)).toBe(llMaxLatencySeconds(500));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -541,10 +710,9 @@ describe("effectiveHlsMode", () => {
 });
 
 describe("llHlsConfig", () => {
-  it("derives every number from partTargetMs, never a hardcoded 20s", () => {
-    const config = llHlsConfig(500);
+  it("sets the LL engine fields and nothing hls.js refuses at construction", () => {
+    const config = llHlsConfig();
     expect(config.lowLatencyMode).toBe(true);
-    expect(config.liveMaxLatencyDuration).toBe(LL_HLS_MAX_LATENCY_PARTS * 0.5);
     expect(config.maxLiveSyncPlaybackRate).toBe(
       LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE,
     );
@@ -556,34 +724,44 @@ describe("llHlsConfig", () => {
     // must not see a `liveSyncDuration`/`liveSyncDurationCount` key here.
     expect("liveSyncDuration" in config).toBe(false);
     expect("liveSyncDurationCount" in config).toBe(false);
+    // AND NOT THIS ONE EITHER. hls.js throws on a constructor config that
+    // carries `liveMaxLatencyDuration` without `liveSyncDuration`, which is
+    // the pair this config is built to avoid. `applyLlLatencyCeiling` puts
+    // the ceiling on after the merge instead.
+    expect("liveMaxLatencyDuration" in config).toBe(false);
+    expect("liveMaxLatencyDurationCount" in config).toBe(false);
   });
 
-  it("scales liveMaxLatencyDuration with a different part target", () => {
-    const fast = llHlsConfig(200);
-    const slow = llHlsConfig(1000);
-    expect(fast.liveMaxLatencyDuration).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 0.2);
-    expect(slow.liveMaxLatencyDuration).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 1.0);
-    expect(fast.liveMaxLatencyDuration).toBeLessThan(slow.liveMaxLatencyDuration);
+  it("scales the latency ceiling with the part target", () => {
+    expect(llMaxLatencySeconds(200)).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 0.2);
+    expect(llMaxLatencySeconds(1_000)).toBeCloseTo(LL_HLS_MAX_LATENCY_PARTS * 1.0);
+    expect(llMaxLatencySeconds(200)).toBeLessThan(llMaxLatencySeconds(1_000));
   });
 
   it("never returns the conventional path's ~20s cushion for a realistic part target", () => {
-    const config = llHlsConfig(500);
-    expect(config.liveMaxLatencyDuration).toBeLessThan(HLS_LIVE_WINDOW_SECONDS / 2);
+    expect(llMaxLatencySeconds(500)).toBeLessThan(HLS_LIVE_WINDOW_SECONDS / 2);
   });
 
   it("falls back to the default part target on a non-finite/zero input", () => {
-    expect(llHlsConfig(0).liveMaxLatencyDuration).toBe(
-      llHlsConfig(LL_HLS_DEFAULT_PART_TARGET_MS).liveMaxLatencyDuration,
+    expect(llMaxLatencySeconds(0)).toBe(
+      llMaxLatencySeconds(LL_HLS_DEFAULT_PART_TARGET_MS),
     );
-    expect(llHlsConfig(Number.NaN).liveMaxLatencyDuration).toBe(
-      llHlsConfig(LL_HLS_DEFAULT_PART_TARGET_MS).liveMaxLatencyDuration,
+    expect(llMaxLatencySeconds(Number.NaN)).toBe(
+      llMaxLatencySeconds(LL_HLS_DEFAULT_PART_TARGET_MS),
     );
   });
 
-  it("is a byte-identical snapshot at the documented 500ms part target", () => {
-    expect(llHlsConfig(500)).toEqual({
+  it("applyLlLatencyCeiling puts the part-derived ceiling on the merged config", () => {
+    const player = { config: {} as { liveMaxLatencyDuration?: number } };
+    applyLlLatencyCeiling(player, 500);
+    expect(player.config.liveMaxLatencyDuration).toBe(
+      LL_HLS_MAX_LATENCY_PARTS * 0.5,
+    );
+  });
+
+  it("is a byte-identical snapshot of the constructor config", () => {
+    expect(llHlsConfig()).toEqual({
       lowLatencyMode: true,
-      liveMaxLatencyDuration: 4,
       maxLiveSyncPlaybackRate: 1.1,
       maxBufferLength: 6,
       maxMaxBufferLength: 10,
@@ -601,7 +779,56 @@ describe("llHlsConfig", () => {
           },
         },
       },
+      fragLoadPolicy: {
+        default: {
+          maxTimeToFirstByteMs: LL_HLS_FRAG_TTFB_MS,
+          maxLoadTimeMs: LL_HLS_FRAG_MAX_LOAD_MS,
+          timeoutRetry: {
+            maxNumRetry: LL_HLS_FRAG_TIMEOUT_RETRY_COUNT,
+            retryDelayMs: LL_HLS_FRAG_TIMEOUT_RETRY_DELAY_MS,
+            maxRetryDelayMs: LL_HLS_FRAG_TIMEOUT_MAX_RETRY_DELAY_MS,
+          },
+          errorRetry: {
+            maxNumRetry: LL_HLS_FRAG_RETRY_COUNT,
+            retryDelayMs: LL_HLS_FRAG_RETRY_DELAY_MS,
+            maxRetryDelayMs: LL_HLS_FRAG_MAX_RETRY_DELAY_MS,
+          },
+        },
+      },
     });
+  });
+
+  it("retries a part at the pace of a part, not of a 4s segment", () => {
+    // hls.js's stock fragment budget is six retries paced 1s, 2s, 4s, 8s,
+    // 8s: written for segments, and a guarantee of falling out of a ring
+    // that holds ~12s of parts. Five sporadic 500s from the edge Worker on
+    // 2026-09-15 are what found it.
+    const retry = llHlsConfig().fragLoadPolicy.default.errorRetry;
+    expect(retry.maxNumRetry).toBeGreaterThan(1);
+    // The whole budget, worst case, stays inside the part ring.
+    expect(retry.maxNumRetry * retry.maxRetryDelayMs).toBeLessThanOrEqual(4_000);
+    // And each try is quick enough that the part after it is still there.
+    expect(retry.retryDelayMs).toBeLessThanOrEqual(500);
+  });
+
+  it("cannot sit on one part for longer than the ring holds (Farol, this PR)", () => {
+    // hls.js's own timeout budget is four immediate retries against a 10 s
+    // first-byte deadline: fifty seconds on ONE part that never answered,
+    // four ring-widths, with the live-edge recovery waiting for a fatal that
+    // is not coming.
+    const policy = llHlsConfig().fragLoadPolicy.default;
+    const attempts = policy.timeoutRetry.maxNumRetry + 1;
+    expect(attempts * policy.maxLoadTimeMs).toBeLessThanOrEqual(12_000);
+    expect(policy.maxTimeToFirstByteMs).toBeLessThanOrEqual(policy.maxLoadTimeMs);
+    // THE BACKOFF COUNTS TOO (2026-09-16). The retries were paced 200/400/
+    // 800 ms so a starved second does not go fatal; that patience is part of
+    // the same ceiling, not free on top of it.
+    const backoff =
+      policy.timeoutRetry.retryDelayMs *
+      (2 ** policy.timeoutRetry.maxNumRetry - 1);
+    expect(attempts * policy.maxLoadTimeMs + backoff).toBeLessThanOrEqual(12_000);
+    // And there are enough of them to ride one out at all.
+    expect(policy.timeoutRetry.maxNumRetry).toBeGreaterThanOrEqual(3);
   });
 
   it("rides out a warming LL master: more than hls.js's stock one manifest retry", () => {
@@ -611,7 +838,7 @@ describe("llHlsConfig", () => {
     // LL session) is what left four production parties with no picture on
     // 2026-09-15. hls.js's stock budget is ONE retry, which is two 503s and
     // a fatal error on a session that takes two seconds to subscribe.
-    const retry = llHlsConfig(500).manifestLoadPolicy.default.errorRetry;
+    const retry = llHlsConfig().manifestLoadPolicy.default.errorRetry;
     expect(retry.maxNumRetry).toBeGreaterThan(1);
     // Long enough to cover a real subscribe-and-first-part, short enough
     // that a dead origin still reaches the player's own recovery ladder.
@@ -755,5 +982,136 @@ describe("shouldPinToConventionalRung / isLlPartLoadErrorDetail", () => {
     expect(isLlPartLoadErrorDetail("fragParsingError")).toBe(true);
     expect(isLlPartLoadErrorDetail("manifestLoadError")).toBe(false);
     expect(isLlPartLoadErrorDetail("bufferStalledError")).toBe(false);
+  });
+});
+
+describe("isPlaylistGoneError (conventional restart dead window)", () => {
+  it("is true for a 404/410 on the master or media playlist", () => {
+    expect(
+      isPlaylistGoneError({ details: "manifestLoadError", responseCode: 404 }),
+    ).toBe(true);
+    expect(
+      isPlaylistGoneError({ details: "levelLoadError", responseCode: 410 }),
+    ).toBe(true);
+  });
+
+  it("is false for a missing fragment — that is not a gone session", () => {
+    expect(
+      isPlaylistGoneError({ details: "fragLoadError", responseCode: 404 }),
+    ).toBe(false);
+  });
+
+  it("is false for timeouts and 5xx — those are not 'gone'", () => {
+    expect(
+      isPlaylistGoneError({
+        details: "manifestLoadError",
+        responseCode: 500,
+      }),
+    ).toBe(false);
+    expect(
+      isPlaylistGoneError({
+        details: "manifestLoadTimeOut",
+        responseCode: 404,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false without a response code or details", () => {
+    expect(isPlaylistGoneError({ details: "manifestLoadError" })).toBe(false);
+    expect(isPlaylistGoneError({ responseCode: 404 })).toBe(false);
+    expect(isPlaylistGoneError({})).toBe(false);
+  });
+});
+
+/**
+ * PRODUCTION, 2026-09-16 00:50-00:56 UK. `pqp-remux` closes a video segment
+ * only on an IDR, and the keyframe gate is a PLI every 4 s answered in about
+ * a second, so the live session advertised `EXT-X-TARGETDURATION 7` with
+ * segments running 5 to 9 s while parts advanced every 0.5 s.
+ * `EXT-X-MEDIA-SEQUENCE` therefore legitimately sat still for longer than
+ * the flat 12 s the old rule derived from `HLS_LIVE_SEGMENT_SECONDS`, and
+ * the watchdog spent the party declaring a healthy stream stuck.
+ */
+describe("llSequenceStuckMs", () => {
+  it("is three of the manifest's own TARGETDURATIONs", () => {
+    expect(llSequenceStuckMs(7)).toBe(21_000);
+    expect(llSequenceStuckMs(9)).toBe(27_000);
+  });
+
+  it("falls back to the segment constant before a manifest has been seen", () => {
+    expect(llSequenceStuckMs(null)).toBe(12_000);
+    expect(llSequenceStuckMs(undefined)).toBe(12_000);
+  });
+
+  it("never drops under the floor, whatever a manifest claims", () => {
+    expect(llSequenceStuckMs(1)).toBe(LL_HLS_SEQUENCE_STUCK_FLOOR_MS);
+  });
+
+  it("refuses a TARGETDURATION outside the sane band rather than trusting it", () => {
+    expect(validTargetDurationSeconds(0)).toBeNull();
+    expect(validTargetDurationSeconds(999)).toBeNull();
+    expect(validTargetDurationSeconds(Number.NaN)).toBeNull();
+    expect(validTargetDurationSeconds(7)).toBe(7);
+    // An absurd manifest value leaves the pre-manifest threshold in place.
+    expect(llSequenceStuckMs(999)).toBe(12_000);
+  });
+});
+
+describe("llPartStuckMs", () => {
+  it("prefers the manifest's PART-TARGET over the wire frame's", () => {
+    expect(llPartStuckMs(500, 1)).toBe(LL_HLS_PART_STUCK_PARTS * 1_000);
+  });
+
+  it("falls back to the advertised part target when the manifest has none", () => {
+    expect(llPartStuckMs(500, null)).toBe(LL_HLS_PART_STUCK_PARTS * 500);
+  });
+
+  it("validates both, so a malformed frame cannot set the threshold", () => {
+    expect(llPartStuckMs(999_999, null)).toBe(LL_HLS_PART_STUCK_PARTS * 500);
+    expect(llPartStuckMs(500, -3)).toBe(LL_HLS_PART_STUCK_PARTS * 500);
+  });
+});
+
+describe("classifyLlHlsError", () => {
+  it("calls hls.js's buffer events what they are, fatal flag or not", () => {
+    // `GapController._tryNudgeBuffer` raises `bufferStalledError` to
+    // `fatal: true` after `nudgeMaxRetry` nudges. That is a statement about
+    // the buffer on a starved source, not about the source.
+    expect(classifyLlHlsError("bufferStalledError")).toBe("buffer");
+    expect(classifyLlHlsError("bufferSeekOverHole")).toBe("buffer");
+    expect(classifyLlHlsError("bufferNudgeOnStall")).toBe("buffer");
+  });
+
+  it("calls a pipeline that cannot use its bytes a media error", () => {
+    expect(classifyLlHlsError("bufferAppendError")).toBe("media");
+    expect(classifyLlHlsError("bufferAddCodecError")).toBe("media");
+    expect(classifyLlHlsError("fragParsingError")).toBe("media");
+    expect(classifyLlHlsError("manifestParsingError")).toBe("media");
+  });
+
+  it("leaves everything else to the ladder it always had", () => {
+    expect(classifyLlHlsError("fragLoadError")).toBe("other");
+    expect(classifyLlHlsError("fragLoadTimeOut")).toBe("other");
+    expect(classifyLlHlsError(undefined)).toBe("other");
+  });
+});
+
+describe("describeHlsError", () => {
+  it("names every field the next capture needs", () => {
+    expect(
+      describeHlsError({
+        type: "mediaError",
+        details: "bufferStalledError",
+        fatal: true,
+        reason: null,
+        message: "Playback stalling at @12.3 due to low buffer",
+      }),
+    ).toBe(
+      "type=mediaError details=bufferStalledError fatal=true err=Playback stalling at @12.3 due to low buffer",
+    );
+  });
+
+  it("says nothing when there is nothing to say", () => {
+    expect(describeHlsError(null)).toBe("");
   });
 });

@@ -92,6 +92,7 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
+  isHlsSessionOpen,
   isLiveHlsEnabledForServer,
   liveHlsOwnsChannel,
   liveHlsStreamFor,
@@ -182,7 +183,7 @@ import {
   getWatchPartyState,
   resetWatchPartyLimits,
 } from "./watch-party.js";
-import { musicWriteAllowed } from "@pqp/shared";
+import { completeMusicState, musicWriteAllowed } from "@pqp/shared";
 import {
   adoptMusicState,
   applyMusicWrite,
@@ -216,6 +217,12 @@ interface VoicePeer {
   avatarUrl: string | null;
   voiceChannelId: string;
   sharingScreen: boolean;
+  /**
+   * This seat's music player is on. Default true: a fresh player starts
+   * that way, and a client that predates `set-music-listening` never
+   * turns it off. Carried on the roster like `sharingScreen`.
+   */
+  listeningMusic: boolean;
   /** Sender-side camera MediaStream id, or null while the camera is off.
    *  See `voiceParticipantSchema.cameraStreamId` for why the id travels. */
   cameraStreamId: string | null;
@@ -576,6 +583,7 @@ function writePeerRow(peer: VoicePeer): void {
       muted: peer.muted,
       deafened: peer.deafened,
       sharingScreen: peer.sharingScreen,
+      listeningMusic: peer.listeningMusic,
       cameraStreamId: peer.cameraStreamId,
       screenAudioStreamId: peer.screenAudioStreamId,
       canSpeak: peer.canSpeak,
@@ -596,6 +604,7 @@ function rowToParticipant(row: VoiceRosterPeerRow): VoiceParticipant {
     displayName: row.displayName,
     avatarUrl: row.avatarUrl,
     sharingScreen: row.sharingScreen,
+    listeningMusic: row.listeningMusic,
     cameraStreamId: row.cameraStreamId,
     screenAudioStreamId: row.screenAudioStreamId,
     muted: row.muted,
@@ -1544,6 +1553,11 @@ export interface VoiceActivitySnapshot {
     musicRelayed: number;
     musicAdopted: number;
     /**
+     * `set-music-listening` writes this process accepted. With the registry
+     * on, each one is a row write the other machine can read (pitfall 12).
+     */
+    musicListeningWrites: number;
+    /**
      * `voice.hlsReconcile`: reconcile intents this instance published for a
      * channel whose transcode lives on the other machine, and intents it
      * acted on for a channel it owns. See `relayHlsReconcile`.
@@ -1834,6 +1848,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       framesReceived: clusterFrames.received,
       musicRelayed: musicCluster.relayed,
       musicAdopted: musicCluster.adopted,
+      musicListeningWrites: musicCluster.listeningWrites,
       hlsReconcileRelayed: hlsReconcileRelay.published,
       hlsReconcileApplied: hlsReconcileRelay.applied,
     },
@@ -1870,6 +1885,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     displayName: peer.displayName,
     avatarUrl: peer.avatarUrl,
     sharingScreen: peer.sharingScreen,
+    listeningMusic: peer.listeningMusic,
     cameraStreamId: peer.cameraStreamId,
     screenAudioStreamId: peer.screenAudioStreamId,
     muted: peer.muted,
@@ -2082,7 +2098,33 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
   // stopping a share. Only the broadcast to people without a seat stops.
   const over = watchPartyKnownOver(voiceChannelId);
   const sharing = pickHlsSharer(getRoomPeers(voiceChannelId));
-  const prev = liveHlsStreamFor(voiceChannelId);
+  // BOTH DRIVERS, BECAUSE BOTH DRIVERS PRODUCE A STREAM.
+  //
+  // `liveHlsStreamFor` is the conventional ladder's `rooms` map and nothing
+  // else; an LL session lives in `llRooms` (`hls-remux.ts`) and is reached
+  // through `llStreamFor`. Reading only the first made every comparison
+  // below lie about an LL party in the one direction that matters: on the
+  // push that ENDS one, `prev` was already null, `next` was null too, and
+  // `liveHlsFrameChanged(null, null)` is false — so the whole fan-out under
+  // it was skipped. No `voice-stream`, no `channel-live` with `ended`, no
+  // `hlsAudience.setStream(null)` to stop the 30-second keyframe and the
+  // token re-mint, and no `voice.live` on the bus for the other machine's
+  // audience cache.
+  //
+  // Seen in production on 2026-09-15: channel `d5559e70`'s LL session ran
+  // 18:14:47 to 18:33:11 UTC and ended cleanly, and at 19:36 the host's own
+  // freshly loaded page was still being handed that dead session every
+  // thirty seconds, on both machines. The edge Worker answered 503 "no-state"
+  // for it (correctly), the player sat on "A transmissão travou,
+  // reconectando", and the host could not get past the watch surface to set
+  // up a new party.
+  //
+  // Reading both maps also stops the mirror-image waste on the way in: with
+  // `prev` pinned at null, EVERY push for a live LL party compared null
+  // against the running stream, called that a change, and re-minted a token
+  // for every peer and every member of the channel's audience on every
+  // roster event.
+  const prev = liveHlsStreamFor(voiceChannelId) ?? llStreamFor(voiceChannelId);
   // Once, on the push that tears it down: `prev` is null on every push after.
   if (over && prev && sharing) {
     logWatchPartyOverStop(voiceChannelId, sharing.id);
@@ -2161,20 +2203,42 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     const at = Date.now();
     // Per peer rather than `broadcastToRoom`: the playlist URL carries a
     // token bound to the recipient, so there is no one frame for the room.
+    let peersTold = 0;
     for (const peer of getRoomPeers(voiceChannelId)) {
       send(peer.socket, {
         type: "voice-stream",
         channelId: voiceChannelId,
         stream: next ? stampViewerStream(next, peer.userId) : null,
       });
+      peersTold += 1;
     }
     hlsAudience.setStream(voiceChannelId, next);
     rememberChannelStream(voiceChannelId, next, prev?.startedAt ?? null);
+    // An LL stream this process just stopped or replaced cannot be verified
+    // against a row any more either: forget the memo so the next resolve for
+    // this channel asks again rather than trusting a "still open" from before
+    // the stop.
+    llVerifiedAt.delete(voiceChannelId);
     // `next` is the reconcile's own answer, so the frame carries it rather
     // than resolving again: a `null` here is the session this process just
     // ended, which is as certain as it gets.
-    await broadcastChannelLive(voiceChannelId, { stream: next, known: true });
+    const audienceTold = await broadcastChannelLive(voiceChannelId, {
+      stream: next,
+      known: true,
+    });
     publishChannelLive(voiceChannelId, next, prev, at);
+    // ONE LINE PER LL TEARDOWN, because the fifteen hours this bug ran
+    // produced not a single one. `voice.hlsLlStopped` says the box was told;
+    // this says the PEOPLE were, and how many of them.
+    if (prev?.mode === "ll" && next?.mode !== "ll") {
+      logEvent("voice.hlsLlStreamCleared", {
+        channelId: voiceChannelId,
+        reason: next ? "replaced" : over ? "party-over" : "no-share",
+        startedAt: prev.startedAt,
+        sockets: peersTold + audienceTold,
+        relayed: isBusEnabled(),
+      });
+    }
   } catch (error) {
     logEvent("voice.hlsReconcileFailed", {
       channelId: voiceChannelId,
@@ -2363,14 +2427,240 @@ function pruneLiveChannelState(): void {
       }
     }
   }
+  // Bounded by its own TTL rather than by the sweep threshold: an entry is
+  // meaningless the moment it expires, and there are never more of them than
+  // there are LL parties this machine is watching without owning.
+  for (const [channelId, memo] of llVerifiedAt) {
+    if (now - memo.at > memo.ttl) {
+      llVerifiedAt.delete(channelId);
+    }
+  }
+}
+
+/**
+ * How long a `mode: "ll"` stream this process did not produce is trusted
+ * before its session row is asked about again.
+ *
+ * A SECOND STRAP, and it exists because the first one can be lost. The stop
+ * reaches this machine as a `voice.live` frame (`pushLiveHls` ->
+ * `publishChannelLive`), the bus is best-effort by design, and a stream this
+ * process holds in `hlsAudience` and nowhere else is restated to the whole
+ * channel every `ROSTER_AUDIENCE_KEYFRAME_MS` for as long as it sits there.
+ * That is the 2026-09-15 shape exactly: a dead LL session handed to the host
+ * every thirty seconds for an hour, with the machine holding it perfectly
+ * convinced it was being helpful.
+ *
+ * ONLY LL, and only when the local drivers cannot answer. A conventional
+ * stream is not covered here on purpose: it has no equivalent of the edge
+ * Worker's "no-state" wall (a stale conventional playlist reads as a frozen
+ * DVR, not a hard stall), and adding a query behind every join for every
+ * mode is a cost this path has spent five revisions avoiding. Half a
+ * keyframe interval, so a missed stop costs the audience at most one more
+ * restatement before the row settles it.
+ */
+const LL_SESSION_VERIFY_MS = 15_000;
+
+/**
+ * And how long a check that COULD NOT BE MADE is held for.
+ *
+ * `isHlsSessionOpen` fails open, which is right — a query timeout must not
+ * take a live party's playlist away — but "fails open" without a memo means
+ * the very next welcome, keyframe, re-mint and `GET /live` each start another
+ * query into a database that is already the reason the last one failed. So a
+ * failure is remembered too, just briefly: the stream keeps being served
+ * throughout, and the retry is paced instead of being driven by traffic (a
+ * Farol finding on this PR).
+ */
+const LL_SESSION_VERIFY_BACKOFF_MS = 5_000;
+
+/**
+ * When this process last ASKED about a relayed LL session, per channel: which
+ * session, when, and how long that answer is good for (the two constants
+ * above, by whether the row could be read).
+ */
+const llVerifiedAt = new Map<
+  string,
+  { startedAt: number; at: number; ttl: number }
+>();
+/**
+ * Keyed by channel AND session, never by channel alone: a query for session A
+ * that is still in flight when A is replaced by B must not be handed to B's
+ * caller as if it had answered about B (a Farol finding on this PR).
+ */
+const llVerifyInFlight = new Map<string, Promise<boolean>>();
+
+/**
+ * Whether this stream is one the row check above has to be run for: an LL
+ * stream, not verified recently enough, for this exact session.
+ *
+ * Pure and synchronous so the audience keyframe can ask before deciding
+ * whether to restate from memory or resolve properly.
+ */
+function llVerifyDue(channelId: string, stream: LiveHlsStream): boolean {
+  if (stream.mode !== "ll") {
+    return false;
+  }
+  const memo = llVerifiedAt.get(channelId);
+  return !(
+    memo && memo.startedAt === stream.startedAt && Date.now() - memo.at < memo.ttl
+  );
+}
+
+/**
+ * Ask the row. Deduped per channel so a wave of joins, a keyframe and a
+ * re-mint landing together is one query; a positive answer is memoised for
+ * `LL_SESSION_VERIFY_MS` and a NEGATIVE one is not, because a negative is
+ * acted on at once and there is nothing left to re-ask about.
+ *
+ * "Could not ask" answers true: see `isHlsSessionOpen`.
+ */
+async function relayedLlStillOpen(
+  channelId: string,
+  stream: LiveHlsStream,
+): Promise<boolean> {
+  if (!llVerifyDue(channelId, stream)) {
+    return true;
+  }
+  const key = `${channelId}:${stream.startedAt}`;
+  const inFlight = llVerifyInFlight.get(key);
+  if (inFlight) {
+    return inFlight;
+  }
+  /**
+   * NEVER BACKWARDS. Two sessions of one channel can be in flight at once
+   * during a turnover, and the older query can land last; letting it stamp
+   * the memo would leave the entry naming a session nobody holds, so the new
+   * one re-queries on every caller until the stale entry expires (a Farol
+   * finding on this PR). The memo is not load-bearing for correctness —
+   * `llVerifyDue` compares the session before trusting it — so the whole cost
+   * of getting this wrong is queries, which is exactly what the memo is for.
+   */
+  const remember = (ttl: number) => {
+    const existing = llVerifiedAt.get(channelId);
+    if (existing && existing.startedAt > stream.startedAt) {
+      return;
+    }
+    // Nor for a session the channel has already moved past: the entry would
+    // be about nothing, and the one slot is the session that IS held.
+    const current = hlsAudience.stream(channelId);
+    if (current && current.startedAt > stream.startedAt) {
+      return;
+    }
+    llVerifiedAt.set(channelId, {
+      startedAt: stream.startedAt,
+      at: Date.now(),
+      ttl,
+    });
+  };
+  const query = isHlsSessionOpen(channelId, stream.startedAt)
+    .then((answer) => {
+      if (!answer.ok) {
+        remember(LL_SESSION_VERIFY_BACKOFF_MS);
+        return true;
+      }
+      if (answer.open) {
+        remember(LL_SESSION_VERIFY_MS);
+        return true;
+      }
+      // Only this session's own memo: a newer one installed while the row was
+      // being read is not ours to drop.
+      if (llVerifiedAt.get(channelId)?.startedAt === stream.startedAt) {
+        llVerifiedAt.delete(channelId);
+      }
+      return false;
+    })
+    .finally(() => {
+      llVerifyInFlight.delete(key);
+    });
+  llVerifyInFlight.set(key, query);
+  return query;
+}
+
+/**
+ * The cached stream is over: forget it, fence the session so a straggling
+ * `voice.live` cannot put it back, tell this machine's sockets, and tell the
+ * other machines.
+ *
+ * COMPARE AND CLEAR. The row read that sent us here is an `await` wide enough
+ * for the channel to have moved on — a `voice.live` carrying the conventional
+ * ladder a demotion started, a stop that arrived by the ordinary path, another
+ * waiter on the same query getting here first. Clearing unconditionally would
+ * then erase a stream that is genuinely live, or fan the same end out once per
+ * waiter (both Farol findings on this PR). The map is only emptied while it
+ * still holds the exact session that was verified, and because that test and
+ * the write happen in one synchronous stretch, the first caller through is the
+ * only one that acts.
+ *
+ * THE FAN-OUT RE-RESOLVES rather than carrying a `null` of its own, which is
+ * what makes a REPLACEMENT the same code path as an end: with `hlsAudience`
+ * emptied and the memo dropped, the resolve falls through to the session row
+ * and finds whatever actually is live now. It terminates because this process
+ * no longer holds the stream that sent it here.
+ *
+ * AND IT CROSSES THE BUS. Every machine that missed the original stop is
+ * holding the same dead session, and each finding out for itself is a
+ * `LL_SESSION_VERIFY_MS` wait apiece; `publishChannelLive` makes the first one
+ * to notice tell the rest. The receiving handler's own lineage checks are what
+ * keep that safe — a machine holding a NEWER session, or running the egress
+ * for this one, drops the frame.
+ */
+function clearEndedLlStream(channelId: string, held: LiveHlsStream): boolean {
+  const current = hlsAudience.stream(channelId);
+  if (
+    !current ||
+    current.mode !== "ll" ||
+    current.startedAt !== held.startedAt
+  ) {
+    return false;
+  }
+  const at = Date.now();
+  hlsAudience.setStream(channelId, null);
+  rememberChannelStream(channelId, null, held.startedAt);
+  void broadcastChannelLive(channelId)
+    .then((sockets) => {
+      logEvent("voice.hlsLlStreamCleared", {
+        channelId,
+        reason: "row-ended",
+        startedAt: held.startedAt,
+        sockets,
+        relayed: isBusEnabled(),
+      });
+    })
+    .catch((error: unknown) => {
+      console.error("[voice] ll stream clear fan-out failed:", error);
+    });
+  publishChannelLive(channelId, null, held, at);
+  return true;
 }
 
 async function resolveChannelStream(
   channelId: string,
 ): Promise<{ stream: LiveHlsStream | null; known: boolean }> {
-  const local = channelStreamFor(channelId);
-  if (local) {
-    return { stream: local, known: true };
+  // THE DRIVERS FIRST, and they are never second-guessed: this process is
+  // running the session, so its own map is the authority `channelStreamFor`
+  // describes.
+  const owned = liveHlsStreamFor(channelId) ?? llStreamFor(channelId);
+  if (owned) {
+    return { stream: owned, known: true };
+  }
+  const relayed = hlsAudience.stream(channelId);
+  if (relayed) {
+    if (!(await relayedLlStillOpen(channelId, relayed))) {
+      // A no-op when the channel moved on while the row was being read; the
+      // re-read below is then the whole of this branch.
+      clearEndedLlStream(channelId, relayed);
+    }
+    // RE-READ, NEVER `relayed`, EITHER WAY. The check above awaited a row, and
+    // a stop or a replacement can have landed in that gap. Whatever is held
+    // NOW is the answer; only when nothing is held at all does the row below
+    // get asked what, if anything, replaced it.
+    const current =
+      liveHlsStreamFor(channelId) ??
+      llStreamFor(channelId) ??
+      hlsAudience.stream(channelId);
+    if (current) {
+      return { stream: current, known: true };
+    }
   }
   const memo = dbStreamMemo.get(channelId);
   if (
@@ -2437,8 +2727,54 @@ async function channelLiveFrame(
   return channelLiveFrameWith(channelId, userId, stream, known);
 }
 
-function channelMusicFrame(channelId: string): VoiceSignalingMessage {
-  return { type: "channel-music", channelId, track: channelMusicTrack(channelId) };
+function countMusicListenersFromPeers(channelId: string): number {
+  return getRoomPeers(channelId).filter((peer) => peer.listeningMusic !== false)
+    .length;
+}
+
+async function countMusicListeners(channelId: string): Promise<number> {
+  if (registryOn()) {
+    await settledRowWrites(channelId);
+    try {
+      const rows = await listVoicePeersInRoom(channelId);
+      return rows.filter((row) => row.listeningMusic !== false).length;
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "musicListeners",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return countMusicListenersFromPeers(channelId);
+}
+
+async function musicRoomSize(channelId: string): Promise<number> {
+  if (registryOn()) {
+    await settledRowWrites(channelId);
+    try {
+      const room = await readClusterRoom(channelId);
+      if (room) {
+        return room.participants.length;
+      }
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "musicRoomSize",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return getRoomPeers(channelId).length;
+}
+
+async function channelMusicFrame(
+  channelId: string,
+): Promise<VoiceSignalingMessage> {
+  const listeners = await countMusicListeners(channelId);
+  return {
+    type: "channel-music",
+    channelId,
+    track: channelMusicTrack(channelId, listeners),
+  };
 }
 
 /**
@@ -2456,12 +2792,47 @@ async function broadcastChannelMusic(channelId: string): Promise<void> {
   if (!audience) {
     return;
   }
-  const frame = channelMusicFrame(channelId);
+  const frame = await channelMusicFrame(channelId);
   forEachAuthenticatedSocket((socket, user) => {
     if (audience.has(user.id)) {
       send(socket, frame);
     }
   });
+}
+
+const lastMusicListeners = new Map<string, number>();
+const musicListenerBroadcasts = new Map<string, ReturnType<typeof setTimeout>>();
+
+function noteMusicListenerCount(
+  channelId: string,
+  participants: readonly { listeningMusic?: boolean }[],
+): void {
+  if (!getMusicState(channelId)?.current) {
+    lastMusicListeners.delete(channelId);
+    return;
+  }
+  const listeners = participants.filter((peer) => peer.listeningMusic !== false)
+    .length;
+  if (lastMusicListeners.get(channelId) === listeners) {
+    return;
+  }
+  lastMusicListeners.set(channelId, listeners);
+  scheduleChannelMusicBroadcast(channelId);
+}
+
+/** Re-send channel-music when the listener count changes. Debounced. */
+function scheduleChannelMusicBroadcast(channelId: string): void {
+  const held = musicListenerBroadcasts.get(channelId);
+  if (held) {
+    clearTimeout(held);
+  }
+  musicListenerBroadcasts.set(
+    channelId,
+    setTimeout(() => {
+      musicListenerBroadcasts.delete(channelId);
+      void broadcastChannelMusic(channelId);
+    }, 80),
+  );
 }
 
 /**
@@ -2646,6 +3017,8 @@ export function resetHlsAudience(): void {
   dbStreamInFlight.clear();
   streamGeneration.clear();
   locallyEndedAt.clear();
+  llVerifiedAt.clear();
+  llVerifyInFlight.clear();
   resetConvergenceTurns();
 }
 
@@ -2963,6 +3336,33 @@ const hlsAudience = createHlsAudience({
     // is that a lost frame takes a few more ticks to be noticed.
     const held = hlsAudience.stream(channelId);
     if (held) {
+      // A RELAYED LL STREAM IS RESTATED ONLY WHILE ITS ROW AGREES. This is
+      // the tick that ran every thirty seconds for an hour on 2026-09-15
+      // handing out a session that had ended at 18:33, so it is the tick that
+      // has to be able to notice. `resolveChannelStream` does the asking (and
+      // the clearing, and its own fan-out, if the answer is "over"); this
+      // only restates when the stream came back unchanged.
+      if (llVerifyDue(channelId, held)) {
+        void resolveChannelStream(channelId)
+          .then((answer) => {
+            // RESTATE ONLY THE SESSION THIS TICK WAS ABOUT, and only while it
+            // is still what the channel holds. A clear does its own fan-out; a
+            // replacement arrived with the frame that carried it; either way
+            // repeating an answer from before the await is how a stale stream
+            // gets put back (a Farol finding on this PR).
+            if (
+              answer.stream &&
+              answer.stream.startedAt === held.startedAt &&
+              answer.stream === hlsAudience.stream(channelId)
+            ) {
+              void broadcastChannelLive(channelId, answer);
+            }
+          })
+          .catch((error: unknown) => {
+            console.error("[voice] ll keyframe verification failed:", error);
+          });
+        return;
+      }
       void broadcastChannelLive(channelId, { stream: held, known: true });
       return;
     }
@@ -3093,7 +3493,7 @@ const clusterFrames = { relayed: 0, received: 0 };
  * while `adopted` stays at zero on every instance is the shape of pitfall 12
  * in CLAUDE.md: a path that ships, publishes, and is never once applied.
  */
-const musicCluster = { relayed: 0, adopted: 0 };
+const musicCluster = { relayed: 0, adopted: 0, listeningWrites: 0 };
 
 function publishVoice(topic: string, frame: unknown): void {
   clusterFrames.relayed += 1;
@@ -3149,6 +3549,7 @@ export function resetRosterSequences(): void {
   clusterFrames.received = 0;
   musicCluster.relayed = 0;
   musicCluster.adopted = 0;
+  musicCluster.listeningWrites = 0;
 }
 
 /** The sequence a socket should adopt from a full roster of this channel. */
@@ -3366,6 +3767,7 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
     // --- one synchronous stretch: snapshot, queue, sequence ---------------
     const participants =
       room?.participants ?? getRoomPeers(voiceChannelId).map(toParticipant);
+    noteMusicListenerCount(voiceChannelId, participants);
     events = pendingRoomEvents.get(voiceChannelId) ?? [];
     pendingRoomEvents.delete(voiceChannelId);
     const transport = room?.transport ?? getRoomTransport(voiceChannelId);
@@ -4134,6 +4536,8 @@ const SELF_INITIATED_VOICE_FRAMES: ReadonlySet<string> = new Set([
   "set-camera",
   "set-raised-hand",
   "set-watch-party",
+  "set-music",
+  "set-music-listening",
   "live-reaction",
   "voice-still-here",
 ]);
@@ -4961,7 +5365,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   for (const channelId of musicChannels()) {
     const audience = await getChannelAudience(channelId).catch(() => null);
     if (audience?.has(user.id)) {
-      send(socket, channelMusicFrame(channelId));
+      send(socket, await channelMusicFrame(channelId));
     }
   }
 }
@@ -6063,6 +6467,7 @@ export async function handleVoiceMessage(
       avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
       sharingScreen: adopted?.sharingScreen ?? false,
+      listeningMusic: adopted?.listeningMusic ?? true,
       cameraStreamId: adopted?.cameraStreamId ?? null,
       screenAudioStreamId: adopted?.screenAudioStreamId ?? null,
       // Not muted until the client says so: the client re-declares its state
@@ -6491,17 +6896,23 @@ export async function handleVoiceMessage(
       return;
     }
     const before = channelMusicTrack(peer.voiceChannelId)?.videoId ?? null;
+    const roomSize = await musicRoomSize(peer.voiceChannelId);
+    const held = getMusicState(peer.voiceChannelId);
+    const incoming =
+      payload.state === null ? null : completeMusicState(held, payload.state);
     // A privileged write (one a plain member could not make) re-resolves
     // MANAGE_MUSIC before it is trusted: the cached bit is refreshed when
     // cargos change (`reevaluateVoiceSpeak`), and this is the belt to that
     // brace, so a member stripped of the bit a moment ago cannot skip on a
-    // stale seat. Ordinary adds never pay for it.
+    // stale seat. Ordinary adds never pay for it. `openControls` is read
+    // from the held state inside `musicWriteAllowed`, not computed here.
     if (
       peer.canManageMusic &&
-      !musicWriteAllowed(getMusicState(peer.voiceChannelId), payload.state, {
+      !musicWriteAllowed(held, incoming, {
         userId: user.id,
         canManage: false,
         canAdd: peer.canSpeak,
+        roomSize,
       })
     ) {
       try {
@@ -6512,10 +6923,11 @@ export async function handleVoiceMessage(
         console.error("[voice] music permission re-check failed:", error);
       }
     }
-    const write = applyMusicWrite(peer.voiceChannelId, payload.state, {
+    const write = applyMusicWrite(peer.voiceChannelId, incoming, {
       userId: user.id,
       canManage: peer.canManageMusic,
       canAdd: peer.canSpeak,
+      roomSize,
     });
     if (write.kind === "coalesced") {
       return;
@@ -6591,6 +7003,36 @@ export async function handleVoiceMessage(
         state: write.state,
       } satisfies VoiceMusicFrame);
     }
+    return;
+  }
+
+  if (payload.type === "set-music-listening") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    const listening = payload.listening;
+    if (peer.listeningMusic === listening) {
+      return;
+    }
+    peer.listeningMusic = listening;
+    writePeerRow(peer);
+    musicCluster.listeningWrites += 1;
+    logEvent("voice.musicListening", {
+      peerId: peer.id,
+      userId: peer.userId,
+      voiceChannelId: peer.voiceChannelId,
+      listening,
+      registry: registryOn(),
+    });
+    await broadcastRoster(peer.voiceChannelId, {
+      kind: "updated",
+      peer: toParticipant(peer),
+    });
+    scheduleChannelMusicBroadcast(peer.voiceChannelId);
     return;
   }
 
@@ -8960,8 +9402,10 @@ subscribeToCluster(VOICE_LIVE_TOPIC, (data) => {
   // THIS PROCESS RUNS THE EGRESS: its own `pushLiveHls` is the authority for
   // what its sockets are told, and a frame from the other machine about the
   // same channel (a second instance with peers in the room reconciling too)
-  // must not overwrite it.
-  if (liveHlsStreamFor(frame.channelId)) {
+  // must not overwrite it. BOTH DRIVERS, for the same reason `pushLiveHls`
+  // now reads both: this guard used to ask the conventional ladder's map
+  // alone, so it did not protect a machine whose session is low-latency.
+  if (liveHlsStreamFor(frame.channelId) ?? llStreamFor(frame.channelId)) {
     return;
   }
   const lastAt = relayedLiveAt.get(frame.channelId) ?? 0;

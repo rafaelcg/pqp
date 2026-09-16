@@ -13,6 +13,8 @@
 /**
  * Whether the stage has a picture worth owning the room: a camera (ours or
  * someone else's) or a screen share. Voice-only occupancy is not a picture.
+ * Music on the stage is also not this: it is a clip, and counting it here
+ * swaps the composer dock for the overlay bar and listener strip.
  */
 export function hasWatchableVideo(input: {
   localCameraOn: boolean;
@@ -30,6 +32,9 @@ export function hasWatchableVideo(input: {
  * The expanded stage is for watching something, or for an outgoing ring.
  * Voice-only occupancy stays a slim bar. Collapsing is a user choice
  * remembered for the session.
+ *
+ * `hasVideo` is live cameras and shares only (`hasWatchableVideo`). Do not
+ * pass music: "Assistir na tela" keeps the composer dock.
  */
 export function shouldShowExpandedStage(
   hasVideo: boolean,
@@ -37,6 +42,25 @@ export function shouldShowExpandedStage(
   ringing = false,
 ): boolean {
   return (hasVideo || ringing) && !userCollapsed;
+}
+
+/**
+ * Music on the stage with nobody publishing. The clip owns the picture
+ * pane; mute, hang up and the faces stay in the composer dock. Cameras,
+ * a share, an outgoing ring or a watch party still take the overlay chrome.
+ */
+export function isMusicPictureOnlyStage(input: {
+  musicOnStage: boolean;
+  hasLiveVideo: boolean;
+  ringing?: boolean;
+  watchPartyChrome?: boolean;
+}): boolean {
+  return (
+    input.musicOnStage &&
+    !input.hasLiveVideo &&
+    !input.ringing &&
+    !input.watchPartyChrome
+  );
 }
 
 /** Prefix so a camera solo does not collide with that peer's screen share. */

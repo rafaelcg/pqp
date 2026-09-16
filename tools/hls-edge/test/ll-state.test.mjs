@@ -61,7 +61,32 @@ test("parses a well-formed fixture", () => {
   assert.equal(state.video.segments.length, 3);
   assert.equal(state.video.segments[2].complete, false);
   assert.equal(state.video.preloadHint.uri, "part-43.1.m4s");
+  assert.equal(state.video.discontinuitySequence, 0);
+  assert.equal(state.video.segments[0].initUri, "init.mp4");
+  assert.equal(state.video.segments[0].discontinuity, false);
   assert.equal(state.audio, null);
+});
+
+test("parses a per-segment init after a discontinuity and rejects malformed discontinuity data", () => {
+  const raw = fixtureState();
+  raw.video.initUri = "init-2.mp4";
+  raw.video.discontinuitySequence = 1;
+  raw.video.segments[0].initUri = "init.mp4";
+  raw.video.segments[1].initUri = "init-2.mp4";
+  raw.video.segments[1].discontinuity = true;
+  const state = parseLlState(raw);
+  assert.ok(state);
+  assert.equal(state.video.discontinuitySequence, 1);
+  assert.equal(state.video.segments[0].initUri, "init.mp4");
+  assert.equal(state.video.segments[1].initUri, "init-2.mp4");
+  assert.equal(state.video.segments[1].discontinuity, true);
+
+  const badSequence = fixtureState();
+  badSequence.video.discontinuitySequence = -1;
+  assert.equal(parseLlState(badSequence), null);
+  const badInit = fixtureState();
+  badInit.video.segments[0].initUri = "../init-2.mp4";
+  assert.equal(parseLlState(badInit), null);
 });
 
 test("rejects a non-object", () => {

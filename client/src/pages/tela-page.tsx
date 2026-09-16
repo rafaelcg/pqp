@@ -73,7 +73,6 @@ const STEPS: MessageKey[] = ["tela.how.1", "tela.how.2", "tela.how.3"];
  * tests rather than silently drifting.
  */
 const FAQ_ITEMS: { id: string; question: MessageKey; answer: MessageKey }[] = [
-  { id: "why", question: "tela.faq.why.q", answer: "tela.faq.why.a" },
   {
     id: "download",
     question: "tela.faq.download.q",
@@ -84,6 +83,7 @@ const FAQ_ITEMS: { id: string; question: MessageKey; answer: MessageKey }[] = [
   { id: "free", question: "tela.faq.free.q", answer: "tela.faq.free.a" },
   { id: "mobile", question: "tela.faq.mobile.q", answer: "tela.faq.mobile.a" },
   { id: "data", question: "tela.faq.data.q", answer: "tela.faq.data.a" },
+  { id: "why", question: "tela.faq.why.q", answer: "tela.faq.why.a" },
 ];
 
 function stagger(i: number): CSSProperties {

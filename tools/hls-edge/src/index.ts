@@ -112,6 +112,7 @@ import { playlistOriginKindForRung } from "./ll-state.js";
 import { handleCorsPreflight, withCors } from "./cors.js";
 import { logEvent } from "./log.js";
 import { handleBlockingReload, parseBlockingReloadParams } from "./hls-blocking-reload.js";
+import { coalesceFetch } from "./coalesced-fetch.js";
 
 export interface Env {
   /** The API origin this Worker fetches playlists from, e.g. https://api.pqp.gg (a var). */
@@ -178,6 +179,25 @@ export interface Env {
    * viewer, the same rule `LL_ORIGIN_BASE` documents above.
    */
   LL_ORIGIN_KEY?: string;
+  /**
+   * How many part targets of `PART-HOLD-BACK` an LL rendition playlist
+   * advertises — `ll-playlist.js`'s `DEFAULT_PART_HOLD_BACK_PARTS` (6) when
+   * unset, which at the remux's 500 ms part target is a 3.0 s hold-back.
+   *
+   * A STRING, LIKE EVERY `vars` ENTRY, and deliberately forgiving: anything
+   * that is not a finite number is ignored and the default stands, because a
+   * typo in a tuning knob must never be able to render an invalid playlist to
+   * a live audience. The floor and the ceiling are enforced where the value
+   * is used (`partHoldBackSeconds`): never below RFC 8216bis 4.4.3.8's
+   * `3 x PART-TARGET`, never above `TARGETDURATION`.
+   *
+   * It exists because the right number is a property of where the viewers
+   * are, not of this repo: the default was three parts (1.5 s) until viewers
+   * in the UK watching a box in São Paulo — ~200 ms of round trip, ~400 ms
+   * blocking reloads — spent the first seconds of every stream fighting the
+   * live edge.
+   */
+  LL_PART_HOLD_BACK_PARTS?: string;
   // ALWAYS-ON (not yet built, see playlist-origin.ts and
   // docs/plans/ALWAYS_ON.md task A1.x): a future R2-backed PlaylistOrigin
   // would add its own bindings here (an R2Bucket, a DurableObjectNamespace).
@@ -573,7 +593,7 @@ export async function handlePlaylistRequest(
       // than changing `fetchRenditionCoalesced`'s return shape, which the
       // non-blocking cache-or-forward path below still needs whole.
       () =>
-        fetchRenditionCoalesced(cacheKeyRequest(request).url, origin, {
+        fetchRenditionCoalesced(cacheKeyRequest(request).url, origin, ctx, {
           channelId,
           startedAt,
           rung,
@@ -582,6 +602,15 @@ export async function handlePlaylistRequest(
       logEvent,
       { channelId, rung },
       request.signal,
+      // `ctx.waitUntil`, so the poll loop this request may START outlives
+      // this request's own response. Without it the loop's timers and its
+      // origin fetch die with this request's context the moment the hold is
+      // answered, leaving `state.polling` stuck true and every later request
+      // for the rendition parked on a loop that no longer exists -- the
+      // thirteen "your Worker's code had hung" 500s of 2026-09-15. See
+      // `hls-blocking-reload.js`, the block comment above
+      // `LOOP_RESUME_SLACK_MS`.
+      { keepAlive: (promise) => ctx.waitUntil(promise) },
     );
     // `null` is the fallback signal (`hls-blocking-reload.js`): this
     // isolate declined to hold THIS request open, for one of three reasons
@@ -637,7 +666,7 @@ export async function handlePlaylistRequest(
   let fetched: FetchedPlaylist;
   let isProducer: boolean;
   try {
-    const coalesced = await fetchRenditionCoalesced(cacheKey.url, origin, {
+    const coalesced = await fetchRenditionCoalesced(cacheKey.url, origin, ctx, {
       channelId,
       startedAt,
       rung,
@@ -785,27 +814,50 @@ const inFlightRenditionFetches = new Map<string, Promise<FetchedPlaylist>>();
 let llOriginSingleton: LlPlaylistOrigin | null = null;
 let llOriginSingletonBase: string | undefined;
 let llOriginSingletonKey: string | undefined;
+let llOriginSingletonHoldBackParts: number | undefined;
 
-function getLlOrigin(originBase: string | undefined, timeoutMs: number, originKey: string | undefined): LlPlaylistOrigin {
-  if (!llOriginSingleton || llOriginSingletonBase !== originBase || llOriginSingletonKey !== originKey) {
-    llOriginSingleton = new LlPlaylistOrigin(originBase, timeoutMs, originKey);
+function getLlOrigin(
+  originBase: string | undefined,
+  timeoutMs: number,
+  originKey: string | undefined,
+  partHoldBackParts: number | undefined,
+): LlPlaylistOrigin {
+  if (
+    !llOriginSingleton ||
+    llOriginSingletonBase !== originBase ||
+    llOriginSingletonKey !== originKey ||
+    llOriginSingletonHoldBackParts !== partHoldBackParts
+  ) {
+    llOriginSingleton = new LlPlaylistOrigin(originBase, timeoutMs, originKey, partHoldBackParts);
     llOriginSingletonBase = originBase;
     llOriginSingletonKey = originKey;
+    llOriginSingletonHoldBackParts = partHoldBackParts;
   }
   return llOriginSingleton;
+}
+
+/**
+ * `LL_PART_HOLD_BACK_PARTS`, or `undefined` for anything that is not a finite
+ * number — an empty string, a typo, a negative. `undefined` means
+ * "`ll-playlist.js`'s default", never "zero", which is the one reading that
+ * would put an invalid `PART-HOLD-BACK` in front of a live audience.
+ */
+function parsePartHoldBackParts(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 async function fetchRenditionCoalesced(
   cacheKeyUrl: string,
   origin: PlaylistOrigin,
+  ctx: ExecutionContext,
   req: { channelId: string; startedAt: string; rung: string; token: string },
 ): Promise<CoalescedFetch> {
-  const existing = inFlightRenditionFetches.get(cacheKeyUrl);
-  if (existing) {
-    return { result: await existing, isProducer: false };
-  }
   const startTime = Date.now();
-  const promise = (async (): Promise<FetchedPlaylist> => {
+  const produce = async (): Promise<FetchedPlaylist> => {
     let response: Response;
     let body: ArrayBuffer;
     try {
@@ -832,13 +884,27 @@ async function fetchRenditionCoalesced(
       });
     }
     return { status: response.status, headers: response.headers, body };
-  })();
-  inFlightRenditionFetches.set(cacheKeyUrl, promise);
-  try {
-    return { result: await promise, isProducer: true };
-  } finally {
-    inFlightRenditionFetches.delete(cacheKeyUrl);
-  }
+  };
+
+  // BOTH HALVES OF THE 2026-09-15 FIX (see `coalesced-fetch.js`'s header).
+  // `keepAlive` extends the PRODUCING request's context past its own
+  // response, so the fetch every joiner is sharing actually survives long
+  // enough to answer them -- without it, the producer returning is what
+  // cancelled the fetch and turned a healthy origin into five 502s. The
+  // bounded, detachable join inside `coalesceFetch` is the other half, for
+  // the joiners of a producer that dies anyway (a viewer navigating away
+  // takes its context with it whatever this Worker does).
+  return coalesceFetch(inFlightRenditionFetches, cacheKeyUrl, produce, {
+    keepAlive: (promise) => ctx.waitUntil(promise),
+    onDetach: ({ reason, attempt }) => {
+      logEvent("hlsEdge.originJoinDetached", {
+        channelId: req.channelId,
+        rung: req.rung,
+        reason,
+        attempt,
+      });
+    },
+  });
 }
 
 export default {
@@ -862,7 +928,12 @@ export default {
     // task L2.2's LL origin -- ready only when `LL_ORIGIN_BASE` is set; see
     // `ll-playlist-origin.ts` and the `Env.LL_ORIGIN_BASE` doc comment above.
     const apiOrigin = new ApiPlaylistOrigin(env.ORIGIN_BASE, UPSTREAM_TIMEOUT_MS);
-    const llOrigin = getLlOrigin(env.LL_ORIGIN_BASE, UPSTREAM_TIMEOUT_MS, env.LL_ORIGIN_KEY);
+    const llOrigin = getLlOrigin(
+      env.LL_ORIGIN_BASE,
+      UPSTREAM_TIMEOUT_MS,
+      env.LL_ORIGIN_KEY,
+      parsePartHoldBackParts(env.LL_PART_HOLD_BACK_PARTS),
+    );
 
     // THE LL MEDIA ROUTE (task L2.3, `ll-media.ts`): a fourth path segment
     // means the caller is asking for the BYTES an LL playlist's own URI

@@ -476,3 +476,35 @@ func TestBuild_PartTargetIsBoundedByTheSegmentTarget(t *testing.T) {
 		t.Fatal("parseLlState refuses a non-positive partTargetMs, which blanks the stream")
 	}
 }
+
+// TestBuild_AudioSegmentInitURINeverAdvertisesBareInit is the Farol finding
+// on PR #656: an audio ring whose segments still carry the ring-internal
+// DefaultInitURI ("init.mp4" — what SetInit stores, and what a live audio
+// ring stamped before SetNamedInit("audio-init.mp4")) must NEVER emit that
+// bare name on state.json segments. The Worker prefers
+// track.segments[0].initUri for the audio MAP, and ll-audio/init.mp4 is
+// refused by nameBelongsToRung (audio rung requires the audio- prefix).
+func TestBuild_AudioSegmentInitURINeverAdvertisesBareInit(t *testing.T) {
+	video := videoSnapshot(41, 1, 2, 1, videoTimescale, partTicks)
+	audio := videoSnapshot(41, 2, 2, 1, audioTimescale, audioTimescale/2)
+	audio.InitURI = ring.DefaultInitURI // "init.mp4" — what a live audio ring stores
+	for i := range audio.Segments {
+		audio.Segments[i].InitURI = ring.DefaultInitURI
+	}
+
+	got, ok := Build(meta(), video, &audio)
+	if !ok {
+		t.Fatal("Build refused a snapshot whose audio segments carry init.mp4")
+	}
+	if got.Audio == nil {
+		t.Fatal("audio track missing")
+	}
+	if got.Audio.InitURI != "audio-init.mp4" {
+		t.Fatalf("audio track initUri = %q, want audio-init.mp4", got.Audio.InitURI)
+	}
+	for _, seg := range got.Audio.Segments {
+		if seg.InitURI != "audio-init.mp4" {
+			t.Fatalf("audio segment msn=%d initUri = %q, want audio-init.mp4 (never the ring's bare init.mp4)", seg.MSN, seg.InitURI)
+		}
+	}
+}

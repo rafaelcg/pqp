@@ -219,6 +219,9 @@ type watchdogState struct {
 //     if the IDR-gap check found nothing worth acting on this tick.
 //     stallLadder below is that ladder, shared with phase 2's own bound.
 func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipelineStartedAt time.Time, st *watchdogState, now time.Time) watchdogResult {
+	if reason := h.DemoteReason; reason != "" {
+		return watchdogResult{actionDemote, reason, stallDetail(h, now)}
+	}
 	if h.LastPartAt.IsZero() {
 		firstPartTimeout := msDuration(cfg.FirstPartTimeoutMs)
 		if now.Sub(pipelineStartedAt) > firstPartTimeout {

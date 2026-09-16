@@ -97,6 +97,7 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
@@ -111,6 +112,7 @@ import { uniformJitterMs } from "@/lib/reconnect-jitter";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
+  shouldOfferBringFriendsHint,
   shouldOfferCallDockHint,
   shouldOfferWatchPartyViewerHint,
   winningFeatureHint,
@@ -407,7 +409,12 @@ import {
   rememberServers,
   unreadByServer,
 } from "@/lib/notifications";
-import { setSoundOutput } from "@/lib/sounds";
+import {
+  applyPttHeldChange,
+  resetPttHeld,
+  setPttBeepEnabled,
+  setSoundOutput,
+} from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
@@ -1164,6 +1171,9 @@ function MainAppContent({
   );
   const [wantsWatchPartyHint] = useState(() =>
     featureHintEligible("watchParty"),
+  );
+  const [wantsBringFriendsHint] = useState(() =>
+    featureHintEligible("bringFriends"),
   );
   const [wantsMusicHint] = useState(() => featureHintEligible("music"));
   const [wantsCallDockHint] = useState(() => featureHintEligible("callDock"));
@@ -2006,6 +2016,10 @@ function MainAppContent({
     });
   }, [localSettings.outputDeviceId, localSettings.outputVolume]);
 
+  useEffect(() => {
+    setPttBeepEnabled(localSettings.pttBeep);
+  }, [localSettings.pttBeep]);
+
   // Asked here as well as in the composer so the pane does not offer a drop
   // target on a deployment that has nowhere to put the bytes. The probe itself
   // is memoised, so this is the same answer rather than a second request.
@@ -2042,9 +2056,23 @@ function MainAppContent({
     voiceState.status === "connected";
 
   const handlePushToTalk = useCallback(
-    (held: boolean) => voice.setPushToTalkActive(held),
+    (held: boolean) => {
+      // The hold-to-talk button never goes through the key hook. Same
+      // transition helper, so a press from either side beeps once.
+      applyPttHeldChange(held, (next) => voice.setPushToTalkActive(next));
+    },
     [voice],
   );
+
+  useEffect(() => {
+    if (inPushToTalk) {
+      return;
+    }
+    // Close the hold-to-talk button path without playing: the hook's
+    // teardown already released a held key and reset the latch after that.
+    voice.setPushToTalkActive(false);
+    resetPttHeld();
+  }, [inPushToTalk, voice]);
 
   // The key binding lives here rather than in the panel because the panel is
   // unmounted the moment you navigate to a text channel, and push-to-talk has
@@ -6306,6 +6334,18 @@ function MainAppContent({
       (voiceState.voiceChannelId === selectedChannelId ||
         voiceState.voiceChannelId === activeConversation?.channelId),
   );
+  const voiceIsDmCall = Boolean(
+    voiceState.voiceChannelId &&
+      conversations.some((one) => one.channelId === voiceState.voiceChannelId),
+  );
+  const voiceRoomSize = voiceState.voiceChannelId
+    ? (voiceState.occupancy[voiceState.voiceChannelId] ?? []).length
+    : 0;
+  const voiceServerId = voiceIsDmCall ? null : voiceServerIdRef.current;
+  const canCreateInviteForVoice =
+    voiceServerId !== null &&
+    voiceServerId === selectedServerId &&
+    perms.can(Permission.CREATE_INVITE);
   const attachedFeatureHint = winningFeatureHint({
     // Rendered by `CallControls` in the dock's hint slot; dismissed by
     // Entendi or by pressing any control in the dock.
@@ -6320,6 +6360,14 @@ function MainAppContent({
       voiceState.status === "connected" &&
       voiceState.canStream &&
       supportsScreenShare(),
+    bringFriends: shouldOfferBringFriendsHint({
+      seen: !wantsBringFriendsHint,
+      automated: false,
+      presenting: voiceState.status === "connected" && voiceState.isSharingScreen,
+      inServer: voiceServerId !== null,
+      canInvite: canCreateInviteForVoice,
+      roomSize: voiceRoomSize,
+    }),
     music: wantsMusicHint && voiceState.status === "connected",
     composerFormat:
       wantsComposerFormatHint &&
@@ -6546,6 +6594,9 @@ function MainAppContent({
               !isDesktopApp() &&
               supportsScreenShare()
             )
+          }
+          bringFriendsHintEnabled={
+            liveAttachedHint === "bringFriends" && !viewingThisCall
           }
           onLeave={() => voice.leave()}
           compact={compact}
@@ -7542,6 +7593,10 @@ function MainAppContent({
     // the view, every profile card, and the two badges. Outside the popover
     // provider because the card is one of its consumers.
     <FriendsContext.Provider value={friends}>
+    <BringFriendsServerProvider
+      serverId={voiceServerId}
+      canCreateInvite={canCreateInviteForVoice}
+    >
     <FeatureHintProvider winner={liveAttachedHint}>
     {/* One provider for the whole app: the profile card is opened from the
         transcript, the members panel and the conversation list, and every one of
@@ -8822,6 +8877,7 @@ function MainAppContent({
     </div>
     </ProfilePopoverProvider>
     </FeatureHintProvider>
+    </BringFriendsServerProvider>
     </FriendsContext.Provider>
   );
 }

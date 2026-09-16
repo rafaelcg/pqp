@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { MusicState, VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
+import {
+  musicStateSchema,
+  type MusicState,
+  type VoiceRoomTransport,
+  type WatchPartyState,
+} from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import { noteLiveInstanceCount } from "../lib/cluster-rate-limit.js";
@@ -345,6 +350,7 @@ export interface VoicePeerRow {
   muted: boolean;
   deafened: boolean;
   sharingScreen: boolean;
+  listeningMusic: boolean;
   cameraStreamId: string | null;
   screenAudioStreamId: string | null;
   canSpeak: boolean;
@@ -368,6 +374,7 @@ interface VoicePeerDbRow {
   muted: boolean;
   deafened: boolean;
   sharing_screen: boolean;
+  listening_music: boolean;
   camera_stream_id: string | null;
   screen_audio_stream_id: string | null;
   can_speak: boolean;
@@ -387,6 +394,7 @@ function mapRow(row: VoicePeerDbRow): VoicePeerRow {
     muted: row.muted,
     deafened: row.deafened,
     sharingScreen: row.sharing_screen,
+    listeningMusic: row.listening_music ?? true,
     cameraStreamId: row.camera_stream_id,
     screenAudioStreamId: row.screen_audio_stream_id,
     canSpeak: row.can_speak,
@@ -397,7 +405,7 @@ function mapRow(row: VoicePeerDbRow): VoicePeerRow {
 }
 
 const PEER_COLUMNS = `peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
-       muted, deafened, sharing_screen, camera_stream_id, screen_audio_stream_id,
+       muted, deafened, sharing_screen, listening_music, camera_stream_id, screen_audio_stream_id,
        can_speak, can_stream, can_resume, orphaned_at`;
 /** The same list qualified as `p.<column>`, for statements that join `voice_peers p`. */
 const PEER_COLUMNS_OF_P = PEER_COLUMNS.split(",")
@@ -435,9 +443,9 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
         "registry.upsertPeer",
         `INSERT INTO voice_peers (
            peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
-           muted, deafened, sharing_screen, camera_stream_id,
+           muted, deafened, sharing_screen, listening_music, camera_stream_id,
            screen_audio_stream_id, can_speak, can_stream, can_resume, orphaned_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          ON CONFLICT (peer_id) DO UPDATE SET
            channel_id = EXCLUDED.channel_id,
            user_id = EXCLUDED.user_id,
@@ -447,6 +455,7 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
            muted = EXCLUDED.muted,
            deafened = EXCLUDED.deafened,
            sharing_screen = EXCLUDED.sharing_screen,
+           listening_music = EXCLUDED.listening_music,
            camera_stream_id = EXCLUDED.camera_stream_id,
            screen_audio_stream_id = EXCLUDED.screen_audio_stream_id,
            can_speak = EXCLUDED.can_speak,
@@ -464,6 +473,7 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
           peer.muted,
           peer.deafened,
           peer.sharingScreen,
+          peer.listeningMusic,
           peer.cameraStreamId,
           peer.screenAudioStreamId,
           peer.canSpeak,
@@ -850,7 +860,7 @@ interface RosterDbRow extends VoicePeerDbRow {
 
 const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
        p.peer_id, p.channel_id, p.user_id, p.instance_id, p.display_name,
-       p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.camera_stream_id,
+       p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.listening_music, p.camera_stream_id,
        p.screen_audio_stream_id, p.can_speak, p.can_stream, p.can_resume, p.orphaned_at,
        EXISTS (
          SELECT 1 FROM voice_server_mutes m
@@ -1188,14 +1198,19 @@ export async function persistMusic(
 export async function readMusic(
   channelId: string,
 ): Promise<MusicState | null | undefined> {
-  const result = await getPool().query<{ music: MusicState | null }>(
+  const result = await getPool().query<{ music: unknown }>(
     `SELECT music FROM voice_rooms WHERE channel_id = $1`,
     [channelId],
   );
   if (result.rows.length === 0) {
     return undefined;
   }
-  return result.rows[0]?.music ?? null;
+  const raw = result.rows[0]?.music ?? null;
+  if (raw === null) {
+    return null;
+  }
+  const parsed = musicStateSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 /**

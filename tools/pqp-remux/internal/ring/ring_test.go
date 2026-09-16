@@ -14,6 +14,7 @@ func frag(seq uint32, segIdx int, start bool, duration uint32, data []byte) *pip
 		SequenceNumber: seq,
 		SegmentIndex:   segIdx,
 		IsSegmentStart: start,
+		Independent:    start,
 		DurationTicks:  duration,
 		Bytes:          data,
 	}
@@ -166,15 +167,18 @@ func TestSnapshot(t *testing.T) {
 	}
 
 	r.SetInit([]byte("init"))
-	r.Push(&pipeline.Fragment{SequenceNumber: 1, SegmentIndex: 0, IsSegmentStart: true, DurationTicks: 45000, Bytes: []byte("a")})
+	r.Push(&pipeline.Fragment{SequenceNumber: 1, SegmentIndex: 0, IsSegmentStart: true, Independent: true, DurationTicks: 45000, Bytes: []byte("a")})
 	stamp = stamp.Add(500 * time.Millisecond)
 	r.Push(&pipeline.Fragment{SequenceNumber: 2, SegmentIndex: 0, DurationTicks: 45000, Bytes: []byte("b")})
 	stamp = stamp.Add(500 * time.Millisecond)
-	r.Push(&pipeline.Fragment{SequenceNumber: 3, SegmentIndex: 1, IsSegmentStart: true, DurationTicks: 45000, Bytes: []byte("c")})
+	r.Push(&pipeline.Fragment{SequenceNumber: 3, SegmentIndex: 1, IsSegmentStart: true, Independent: true, DurationTicks: 45000, Bytes: []byte("c")})
 
 	snap := r.Snapshot()
 	if !snap.HasInit || snap.Timescale != 90000 {
 		t.Fatalf("snapshot = %+v", snap)
+	}
+	if snap.InitURI != DefaultInitURI {
+		t.Fatalf("InitURI = %q, want %s", snap.InitURI, DefaultInitURI)
 	}
 	if len(snap.Segments) != 2 {
 		t.Fatalf("segments = %d, want 2", len(snap.Segments))
@@ -190,10 +194,13 @@ func TestSnapshot(t *testing.T) {
 	if got := snap.Segments[1].OpenedAt; !got.Equal(time.Date(2026, 9, 15, 8, 1, 1, 0, time.UTC)) {
 		t.Fatalf("segment 1 openedAt = %v", got)
 	}
-	// Independence is the fragmenter's own IsSegmentStart, carried
+	// Independence is the fragmenter's own Independent flag, carried
 	// through -- not inferred from a part's position.
 	if !snap.Segments[0].Parts[0].Independent || snap.Segments[0].Parts[1].Independent {
 		t.Fatalf("independence not carried through: %+v", snap.Segments[0].Parts)
+	}
+	if snap.Segments[0].InitURI != DefaultInitURI {
+		t.Fatalf("segment 0 initURI = %q", snap.Segments[0].InitURI)
 	}
 	if !snap.HaveParts || snap.NextPartSeq != 4 {
 		t.Fatalf("NextPartSeq = %d (haveParts=%v), want 4", snap.NextPartSeq, snap.HaveParts)

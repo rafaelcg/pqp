@@ -10,9 +10,11 @@ import type { HlsStallReason } from "@/lib/hls-stall";
  * presenter had not started, the egress restarted, the network dropped, or
  * nothing at all was wrong. Four different situations, one silent spinner.
  *
- * - `restarting`: the stall watchdog's `sequence-stuck` reason — the playlist
- *   answers but its media sequence has not moved for 20s, which is what a
- *   dead egress that is about to be replaced looks like (see `hls-stall.ts`).
+ * - `restarting`: the stall watchdog's `sequence-stuck` or `playlist-gone`
+ *   reason — either the playlist answers but its media sequence has not
+ *   moved for 20s (a dead egress about to be replaced; see `hls-stall.ts`),
+ *   or our own playlist proxy answered 404/410 (the previous session is
+ *   already gone and a fresh master is what reconnect is polling for).
  *   The reconnect that follows fetches a fresh session, typically inside the
  *   restart window the copy names.
  * - `reconnecting`: any other stall (a network drop) or a fatal media error.
@@ -92,7 +94,7 @@ export function resolveHoldingScreenReason(input: {
     }
     return "buffering";
   }
-  if (input.stallReason === "sequence-stuck") {
+  if (input.stallReason === "sequence-stuck" || input.stallReason === "playlist-gone") {
     return "restarting";
   }
   if (input.phase === "playing" && input.hasFrame) {

@@ -61,11 +61,15 @@ const {
   pendingLlDemotionCount,
   setRequestedHlsMode,
   llDemotedRecently,
+  llDemotionPendingAttribution,
+  llMemoSizesForTests,
+  noteLlDemotion,
   llHasRoom,
   llHlsActivity,
   llStreamFor,
   reconcileLlHlsNow,
-  requestedHlsModeForChannel,
+  liveHlsRequestForChannel,
+  resolveHlsModeForChannel,
   resetHlsRemuxForTests,
   setHlsRemuxTestHooks,
   sweepLlDemotions,
@@ -86,6 +90,8 @@ interface FakeSession {
   demoted?: boolean;
   demotedReason?: string | null;
   state?: string;
+  /** What the box reports for this session's `partsWritten` (default 0). */
+  partsWritten?: number;
 }
 
 describeDb("LL-HLS demotion and row ownership across two machines", () => {
@@ -100,6 +106,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
   /** Every `POST /sessions` the API sent. */
   let started: string[];
   let channelA: string;
+  let serverId: string;
   let partyId: string;
 
   beforeAll(async () => {
@@ -140,10 +147,11 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       `INSERT INTO servers (name, owner_id) VALUES ('test', $1) RETURNING id`,
       [user.id],
     );
+    serverId = server.rows[0]!.id;
     const channels = await getPool().query<{ id: string }>(
       `INSERT INTO channels (server_id, name, type, position)
        VALUES ($1, 'party', 'voice', 0) RETURNING id`,
-      [server.rows[0]!.id],
+      [serverId],
     );
     channelA = channels.rows[0]!.id;
     const party = await getPool().query<{ id: string }>(
@@ -163,6 +171,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     delete process.env.LIVE_HLS_REMUX_CONTROL_URL;
     delete process.env.LIVE_HLS_REMUX_CONTROL_SECRET;
     delete process.env.LIVE_HLS_REMUX_ORIGIN_URL;
+    delete process.env.LIVE_HLS_PLAYLIST_BASE_URL;
   });
 
   /**
@@ -185,7 +194,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
             lastPartAtMs: null,
             lastIdrAtMs: null,
             openSegmentMs: null,
-            partsWritten: 0,
+            partsWritten: session.partsWritten ?? 0,
             bytesServed: 0,
             state: session.state ?? (session.demoted ? "demoted" : "running"),
             demoted: session.demoted ?? false,
@@ -244,6 +253,33 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
        ON CONFLICT (instance_id) DO UPDATE SET heartbeat_at = EXCLUDED.heartbeat_at`,
       [instanceId, secondsAgo],
     );
+  }
+
+  /**
+   * The host ends the party and starts another one on the same channel --
+   * the real sequence, because only one party may be live per channel at a
+   * time. A NEW `channel_sessions` row is the whole point: its id is what
+   * the demotion memo is keyed against, and a new party has never been in
+   * it.
+   */
+  async function startNewerParty(
+    options: { lowLatency?: boolean } = {},
+  ): Promise<string> {
+    const owner = await getPool().query<{ id: string }>(
+      `SELECT created_by AS id FROM channel_sessions WHERE id = $1`,
+      [partyId],
+    );
+    await getPool().query(
+      `UPDATE channel_sessions SET status = 'ended' WHERE id = $1`,
+      [partyId],
+    );
+    const newer = await getPool().query<{ id: string }>(
+      `INSERT INTO channel_sessions
+         (channel_id, title, status, created_by, low_latency_requested)
+       VALUES ($1, 'Outra', 'live', $2, $3) RETURNING id`,
+      [channelA, owner.rows[0]!.id, options.lowLatency ?? true],
+    );
+    return newer.rows[0]!.id;
   }
 
   /** An open LL row for `channelA`, exactly as `startLlSession` writes one. */
@@ -380,6 +416,50 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     });
   });
 
+  it("(1a-readiness) demotes a session that never produces a part once the readiness window passes -- the backstop for the box's own no-video watchdog failing to fire (production d5559e70, 2026-09-16)", async () => {
+    // The box reports the session present, subscribed, NOT demoted -- but
+    // partsWritten stays 0 forever (the fake box's default), which is exactly
+    // the production failure: an LL session that hangs before it ever attaches
+    // to the presenter's track sits at zero parts for the whole party while
+    // the box never flags it and the sweep leaves it alone every tick.
+    await reconcileLlHlsNow(channelA, "peer-1");
+    expect(llHasRoom(channelA)).toBe(true);
+
+    const t0 = Date.now();
+    // First observation: nothing demoted, the window has not passed.
+    expect(await sweepLlDemotions(t0)).toEqual([]);
+    expect(llHasRoom(channelA)).toBe(true);
+    // Still zero parts a little past the readiness window (default 75s): the
+    // backstop fires where the box's FirstPartTimeoutMs did not.
+    const fellBack = await sweepLlDemotions(t0 + 76_000);
+    expect(fellBack).toEqual([channelA]);
+    expect(llHasRoom(channelA)).toBe(false);
+    expect(logEvent).toHaveBeenCalledWith("voice.hlsLlDemoted", {
+      channelId: channelA,
+      reason: "no-video-timeout",
+    });
+  });
+
+  it("(1a-readiness-safe) never demotes a session that HAS produced video, however long it then runs -- a source that went quiet is the box's sourceIdle case, not this backstop's", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    // This session produced parts, then (say) went quiet: partsWritten > 0,
+    // lastPart old. The readiness backstop must never touch it.
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      partsWritten: 3,
+    });
+
+    const t0 = Date.now();
+    expect(await sweepLlDemotions(t0)).toEqual([]);
+    expect(await sweepLlDemotions(t0 + 10 * 60_000)).toEqual([]);
+    expect(llHasRoom(channelA)).toBe(true);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsLlDemoted",
+      expect.objectContaining({ reason: "no-video-timeout" }),
+    );
+  });
+
   it("(1a-fail-closed) changes nothing when the control API cannot be asked", async () => {
     await reconcileLlHlsNow(channelA, "peer-1");
     setHlsRemuxTestHooks({
@@ -407,34 +487,45 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       demoted: true,
       demotedReason: "part-stuck",
     });
-    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: true });
 
     await sweepLlDemotions();
 
     // The durable half: every reconcile on EVERY machine now resolves
     // `conventional` for the rest of this party.
-    expect(await requestedHlsModeForChannel(channelA)).toBe(false);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: false });
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlRequestCleared",
       expect.objectContaining({ channelId: channelA, reason: "demoted:part-stuck" }),
     );
     // And the memo, which holds on this machine even before that write is
-    // read back — the window the fallback used to loop through.
-    expect(llDemotedRecently(channelA)).toBe(true);
+    // read back — the window the fallback used to loop through. Keyed by the
+    // party, never the channel: it is a verdict about THIS party.
+    expect(llDemotedRecently(partyId)).toBe(true);
     // Five minutes on, the same window the box's own watchdog uses, a fresh
     // episode is allowed again.
-    expect(llDemotedRecently(channelA, Date.now() + 6 * 60_000)).toBe(false);
+    expect(llDemotedRecently(partyId, Date.now() + 6 * 60_000)).toBe(false);
 
-    // The next "Ir ao vivo" for this channel writes the column again, which
-    // is what makes a demotion last the party and not a minute longer.
+    // THE BELT, ON ITS OWN. Put the column back the way a write that lost a
+    // race (or never landed) would leave it: this party still resolves
+    // `conventional`, because the machine that demoted it remembers which
+    // party it was.
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
     await getPool().query(
       `UPDATE channel_sessions SET low_latency_requested = TRUE WHERE id = $1`,
       [partyId],
     );
-    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: true });
+    expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+      mode: "conventional",
+      requested: true,
+      partySessionId: partyId,
+      partyDemoted: true,
+    });
   });
 
   it("(1b-bis) does not suppress a NEW party that asks for LL on the same channel", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
     await reconcileLlHlsNow(channelA, "peer-1");
     const sessionId = started[0]!;
     boxSessions.set(sessionId, {
@@ -443,16 +534,350 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       demotedReason: "no-video",
     });
     await sweepLlDemotions();
-    expect(llDemotedRecently(channelA)).toBe(true);
+    expect(llDemotedRecently(partyId)).toBe(true);
 
     // The host ends the party and starts another one, asking for LL again.
     // The memo is a verdict about a session that no longer exists, and
     // holding the new party to it for the rest of five minutes would be a
     // silent downgrade nobody could explain.
-    await setRequestedHlsMode(partyId, true);
+    const newerId = await startNewerParty();
 
-    expect(llDemotedRecently(channelA)).toBe(false);
-    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+    expect(llDemotedRecently(newerId)).toBe(false);
+    expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+      mode: "ll",
+      requested: true,
+      partySessionId: newerId,
+      partyDemoted: false,
+    });
+  });
+
+  /**
+   * THE 2026-09-15 PRODUCTION FAILURE, on the two machines that produced it.
+   *
+   * Channel `d5559e70`: instance A demoted the LL session at 15:23:14 and
+   * remembered it. At 15:26:52 the host created a NEW party with the switch
+   * on; that HTTP request landed on instance B, which wrote
+   * `low_latency_requested = true`. The share at 15:27:01 reconciled on A,
+   * whose memo was keyed by CHANNEL and still set, so the API silently
+   * started the conventional ladder for a party whose row said `true` -- no
+   * `hlsLl*` line anywhere, and nothing saying why.
+   *
+   * "Instance B" here is the database write itself, because that is the
+   * entirety of what B does: `setRequestedHlsMode` on the new party's row,
+   * from a process that shares nothing in memory with A. The resolve then
+   * runs on A, the machine holding the demotion.
+   */
+  it("(1b-ter) lets a party created on ANOTHER machine have LL after a demotion here", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "part-stuck",
+    });
+    await sweepLlDemotions();
+    expect(llDemotedRecently(partyId)).toBe(true);
+
+    // Instance B: a new party row, then the goLive handler's own write.
+    const newerId = await startNewerParty({ lowLatency: false });
+    await setRequestedHlsMode(newerId, true);
+
+    // Instance A, where the demotion lives, reconciles the share.
+    const resolved = await resolveHlsModeForChannel(channelA, serverId, {
+      sharing: true,
+    });
+
+    expect(resolved).toMatchObject({
+      mode: "ll",
+      requested: true,
+      partySessionId: newerId,
+      partyDemoted: false,
+    });
+    // And the demoted party is still demoted on this machine: scoping the
+    // memo must not amount to dropping it.
+    expect(llDemotedRecently(partyId)).toBe(true);
+  });
+
+  it("(1b-quater) says why on every mode decision, once per decision", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "part-stuck",
+    });
+    await sweepLlDemotions();
+    // The durable clear has already landed, so put the column back the way a
+    // write that lost a race would leave it: the interesting line is the one
+    // about a party that IS still asking and is refused anyway.
+    await getPool().query(
+      `UPDATE channel_sessions SET low_latency_requested = TRUE WHERE id = $1`,
+      [partyId],
+    );
+    logEvent.mockClear();
+
+    await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
+
+    // A conventional ladder starting for a party that ASKED for LL was the
+    // silent part of the failure: one line, with each input that could have
+    // said no (pitfall 16).
+    expect(logEvent).toHaveBeenCalledWith("voice.hlsModeResolved", {
+      channelId: channelA,
+      partySessionId: partyId,
+      requested: true,
+      partyDemoted: true,
+      demotionUnattributed: false,
+      llAvailable: true,
+      mode: "conventional",
+      sharing: true,
+    });
+
+    // `reconcileLiveHlsNow` runs on every roster event; an unchanged
+    // decision must not be a line every time.
+    logEvent.mockClear();
+    await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsModeResolved",
+      expect.anything(),
+    );
+
+    // A decision that CHANGES is said out loud straight away.
+    const newerId = await startNewerParty();
+    await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsModeResolved",
+      expect.objectContaining({ partySessionId: newerId, mode: "ll" }),
+    );
+  });
+
+  /**
+   * THE GAP A PARTY-KEYED MEMO OPENS, AND WHAT CLOSES IT.
+   *
+   * `hls_sessions.watch_party_session_id` is NULL for two reasons a row
+   * cannot tell apart, so a demotion can be queued with no party to key the
+   * memo by. Keyed by channel that never mattered; keyed by party it leaves
+   * the window between the demotion and the attribution completely open, and
+   * a reconcile in there starts LL straight back into the session the box
+   * has just given up on (a Farol finding on this PR).
+   */
+  it("(1b-quinquies) holds LL off while a demotion has not yet learned whose party it was", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    await getPool().query(
+      `UPDATE hls_sessions SET watch_party_session_id = NULL
+        WHERE channel_id = $1 AND mode = 'll'`,
+      [channelA],
+    );
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      demoted: true,
+      demotedReason: "no-video",
+    });
+    // ONLY the attribution lookup fails -- the demotion itself is queued
+    // exactly as it would be, and the queue backs off and tries again on the
+    // next tick. Everything else still talks to the real database.
+    const pool = getPool();
+    const realQuery = pool.query.bind(pool) as typeof pool.query;
+    const failing = vi
+      .spyOn(pool, "query")
+      .mockImplementation(((sql: string, params?: unknown[]) =>
+        typeof sql === "string" && sql.includes("created_at <= to_timestamp")
+          ? Promise.reject(new Error("connection terminated"))
+          : realQuery(sql, params as never)) as typeof pool.query);
+    await sweepLlDemotions();
+    failing.mockRestore();
+
+    expect(pendingLlDemotionCount()).toBe(1);
+    // The party still says it wants LL, and nobody has memoed it, because
+    // nobody knows yet that it is the one.
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({
+      requested: true,
+      partySessionId: partyId,
+    });
+    expect(llDemotedRecently(partyId)).toBe(false);
+    // And it is still refused, because a demotion on this channel could be
+    // about this party and nothing has ruled that out.
+    expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+      mode: "conventional",
+      requested: true,
+      partyDemoted: false,
+      demotionUnattributed: true,
+    });
+
+    // AND IT DOES NOT LAPSE WHILE THE DEMOTION IS STILL BEING RETRIED. The
+    // first version expired this with the five-minute memo window while the
+    // queue entry lives for half an hour, so a prolonged attribution failure
+    // -- the very thing that produces an unattributed demotion -- reopened
+    // the window at the five minute mark (a Farol finding on this PR).
+    expect(pendingLlDemotionCount()).toBe(1);
+    expect(
+      llDemotionPendingAttribution(channelA, Date.now() - 60 * 60_000),
+    ).toBe(true);
+
+    // A party created AFTER the demoted session started could not be the one
+    // it belonged to, so the same outstanding demotion does not touch it.
+    const newerId = await startNewerParty();
+    expect(await resolveHlsModeForChannel(channelA, serverId)).toMatchObject({
+      mode: "ll",
+      partySessionId: newerId,
+      demotionUnattributed: false,
+    });
+  });
+
+  /**
+   * Both memos expire on a clock, so something that is not a write to them
+   * has to sweep them -- including on a deployment with `LIVE_HLS_LL` on and
+   * no remux control URL, which resolves modes (filling `lastModeResolved`)
+   * and never demotes anything (a Farol finding on this PR).
+   */
+  it("(1b-sexies) sweeps both expiring memos on the tick, control URL or not", async () => {
+    process.env.LIVE_HLS_PLAYLIST_BASE_URL = "https://hls.example.test";
+    noteLlDemotion(partyId);
+    await resolveHlsModeForChannel(channelA, serverId, { sharing: true });
+    expect(llMemoSizesForTests()).toMatchObject({
+      demotedParties: 1,
+      modeDecisions: 1,
+    });
+
+    // A deployment with the flag on and no remux control URL resolves modes
+    // -- filling the log memo -- and demotes nothing, so it returns below
+    // without ever reaching a sweep placed after that check.
+    delete process.env.LIVE_HLS_REMUX_CONTROL_URL;
+    expect(await sweepLlDemotions(Date.now() + 6 * 60_000)).toEqual([]);
+
+    // GONE, not merely ignored. Every other seam reads an expired entry and
+    // an absent one the same way; the difference is a map that grows with
+    // every party this process has ever demoted.
+    expect(llMemoSizesForTests()).toMatchObject({
+      demotedParties: 0,
+      modeDecisions: 0,
+    });
+  });
+
+  /**
+   * THE WRITE PATH NEVER WALKS THE MAP, AT ANY SIZE.
+   *
+   * A threshold-triggered sweep on the write is the same quadratic shape one
+   * threshold further out: once the map is large, every demotion pays for
+   * every entry, and demotions arrive in bursts (a Farol finding on this
+   * PR). `entriesScanned` counts what any full sweep has walked, so "the
+   * write path does not scan" is an assertion rather than a claim.
+   */
+  it("(1b-septies) remembers a thousand demotions without ever scanning the map", async () => {
+    for (let i = 0; i < 1000; i += 1) {
+      noteLlDemotion(`party-${i}`);
+    }
+
+    const sizes = llMemoSizesForTests();
+    expect(sizes.entriesScanned).toBe(0);
+    expect(sizes.demotedParties).toBe(1000);
+    expect(llDemotedRecently("party-0")).toBe(true);
+    expect(llDemotedRecently("party-999")).toBe(true);
+  });
+
+  /**
+   * A CAP MAY NEVER COST A LIVE VETO.
+   *
+   * Evicting the least recently written entry is only safe when it has
+   * expired. Dropping a live one hands the party it is about straight back
+   * onto LL inside the window the memo exists to cover -- and the condition
+   * that fills this map is a burst of demotions, which is the database
+   * failure the memo is the belt for (a Farol finding on this PR).
+   */
+  it("(1b-octies) refuses LL for everyone rather than drop a live veto", async () => {
+    for (let i = 0; i < 1024; i += 1) {
+      noteLlDemotion(`live-${i}`);
+    }
+    expect(llMemoSizesForTests().demotedParties).toBe(1024);
+
+    noteLlDemotion("overflow");
+
+    // Nothing was lost, and nothing grew.
+    expect(llMemoSizesForTests()).toMatchObject({
+      demotedParties: 1024,
+      entriesScanned: 0,
+    });
+    expect(llDemotedRecently("live-0")).toBe(true);
+    expect(llDemotedRecently("live-1023")).toBe(true);
+    // And the party that could not be recorded is refused anyway: with the
+    // memo saturated the answer for every party is no, until a sweep makes
+    // room. Fail closed beats guessing which veto was safe to lose.
+    expect(llDemotedRecently("overflow")).toBe(true);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsLlDemotionMemoFull",
+      expect.objectContaining({ partySessionId: "overflow", cap: 1024 }),
+    );
+
+    // Once the entries expire, the sweep prunes them and the saturation goes
+    // with the condition: a fresh party is eligible again.
+    await sweepLlDemotions(Date.now() + 6 * 60_000);
+    expect(llMemoSizesForTests().demotedParties).toBe(0);
+    expect(llDemotedRecently("overflow")).toBe(false);
+  });
+
+  /**
+   * A SWEEP THAT FREED NOTHING HAS NOT ENDED THE CONDITION.
+   *
+   * The fail-closed answer used to be cleared on every sweep, whether or not
+   * the sweep had made room. A memo of live vetoes prunes to the same live
+   * vetoes, so the flag lifted while the map was exactly as full as before,
+   * and the party that could not be recorded was handed LL again -- the one
+   * outcome the memo exists to prevent (a Farol finding on PR #630, merged
+   * as a known edge case and fixed here).
+   */
+  it("(1b-decies) stays saturated while a sweep cannot free a single slot", async () => {
+    for (let i = 0; i < 1024; i += 1) {
+      noteLlDemotion(`live-${i}`);
+    }
+    noteLlDemotion("overflow");
+    expect(llDemotedRecently("overflow")).toBe(true);
+
+    // Every entry is still inside the window, so this sweep deletes nothing.
+    await sweepLlDemotions();
+
+    expect(llMemoSizesForTests().demotedParties).toBe(1024);
+    expect(llDemotedRecently("overflow")).toBe(true);
+    expect(llDemotedRecently("live-0")).toBe(true);
+
+    // Nor does the flag's own five-minute expiry let it lapse underneath a
+    // condition that is still true: a sweep inside the window re-states it.
+    const almostLapsed = Date.now() + 4 * 60_000;
+    await sweepLlDemotions(almostLapsed);
+    expect(llDemotedRecently("overflow", almostLapsed + 2 * 60_000)).toBe(true);
+
+    // It ends when a sweep finds room, and not before.
+    const afterWindow = Date.now() + 6 * 60_000 + 4 * 60_000;
+    await sweepLlDemotions(afterWindow);
+    expect(llMemoSizesForTests().demotedParties).toBe(0);
+    expect(llDemotedRecently("overflow", afterWindow)).toBe(false);
+  });
+
+  it("(1b-nonies) evicts an EXPIRED entry to make room, rather than saturating", async () => {
+    const old = Date.now() - 6 * 60_000;
+    noteLlDemotion("stale", old);
+    for (let i = 0; i < 1023; i += 1) {
+      noteLlDemotion(`live-${i}`);
+    }
+    expect(llMemoSizesForTests().demotedParties).toBe(1024);
+
+    noteLlDemotion("fresh");
+
+    // The expired one made way, in one constant-time look: insertion order
+    // is write order, so the least recently written entry is the only
+    // candidate that needs testing.
+    expect(llMemoSizesForTests()).toMatchObject({
+      demotedParties: 1024,
+      entriesScanned: 0,
+    });
+    expect(llDemotedRecently("fresh")).toBe(true);
+    expect(llDemotedRecently("live-0")).toBe(true);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsLlDemotionMemoFull",
+      expect.anything(),
+    );
   });
 
   it("(1c) never stops a demoted session whose row another live instance has taken", async () => {
@@ -489,7 +914,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
     const row = await rowById(taken.rows[0]!.id);
     expect(row.ended_at).toBeNull();
     expect(row.instance_id).toBe(machineB);
-    expect(await requestedHlsModeForChannel(channelA)).toBe(true);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: true });
   });
 
   it("(1d) clears the party that asked for the session, not whatever is live now", async () => {
@@ -557,7 +982,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
 
     await sweepLlDemotions();
 
-    expect(await requestedHlsModeForChannel(channelA)).toBe(false);
+    expect(await liveHlsRequestForChannel(channelA)).toMatchObject({ requested: false });
     expect(pendingLlDemotionCount()).toBe(0);
     expect(logEvent).toHaveBeenCalledWith(
       "voice.hlsLlDemotionAttributed",

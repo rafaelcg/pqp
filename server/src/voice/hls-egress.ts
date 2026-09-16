@@ -50,17 +50,14 @@ import {
   type StorageConfig,
 } from "../lib/s3.js";
 import {
-  isLiveHlsLLEnabled,
   liveHlsLLAvailable,
-  llDemotedRecently,
   llHasRoom,
   llPlaylistFrontConfigured,
   llPlaylistUrl,
   llStreamFor,
   reconcileLlHlsNow,
-  requestedHlsModeForChannel,
   resetHlsRemuxForTests,
-  resolveHlsMode,
+  resolveHlsModeForChannel,
   runBounded,
   stopLlSession,
   sweepLlDemotions,
@@ -1532,6 +1529,72 @@ export function liveHlsOwnsChannel(channelId: string): boolean {
  * and doing it lazily from a read path would mean two instances racing to
  * monitor the same egress. This only answers a read.
  */
+/**
+ * `voice.hlsLlUnservableFromDb`, at most once per channel per minute.
+ *
+ * A misconfigured instance answers this question on every `channel-live`
+ * frame it builds for the channel, and a read path that fails is exactly
+ * where an unthrottled log line becomes the write amplifier pitfall 16 warns
+ * about. The condition is a deployment fact, not an event: one line a minute
+ * is enough to find it, and the second one adds nothing.
+ *
+ * TWO BOUNDS, NOT ONE, AND THE FIRST DRAFT HAD NEITHER RIGHT (three Farol
+ * findings, one per dimension, on the same eight lines). Expiring entries
+ * whose window has closed is not a bound: a burst of N distinct channels
+ * inside ONE window expires nothing, so the map grows to N and stays there
+ * if traffic then stops. And sweeping on every previously-unseen key is
+ * O(map) per key, which makes that same burst quadratic on the event loop —
+ * the sweep being the expensive half of a defence against cheap writes.
+ *
+ * So, exactly the shape `logRejection` (`tools/hls-edge/src/viewer-access.ts`)
+ * already uses for the same problem: the sweep is THROTTLED to at most one
+ * full scan per `LL_UNSERVABLE_LOG_SWEEP_INTERVAL_MS`, and
+ * `LL_UNSERVABLE_LOG_MAX_ENTRIES` is a hard ceiling checked in O(1) on every
+ * new key regardless of that throttle, evicting the oldest by insertion
+ * order. That is an approximation of LRU rather than a precise one (a
+ * refreshed key keeps its original position), which is enough for a log
+ * dedupe table and not something anything depends on for eviction precision.
+ */
+const LL_UNSERVABLE_LOG_WINDOW_MS = 60_000;
+const LL_UNSERVABLE_LOG_MAX_ENTRIES = 256;
+const LL_UNSERVABLE_LOG_SWEEP_INTERVAL_MS = 60_000;
+const llUnservableLoggedAt = new Map<string, number>();
+let llUnservableLastSweptAt = 0;
+
+function noteLlUnservable(channelId: string, startedAt: number): void {
+  const now = Date.now();
+  const last = llUnservableLoggedAt.get(channelId);
+  if (last !== undefined && now - last < LL_UNSERVABLE_LOG_WINDOW_MS) {
+    return;
+  }
+  logEvent("voice.hlsLlUnservableFromDb", { channelId, startedAt });
+  if (last === undefined) {
+    // Active expiry, throttled: one full scan per interval at most, however
+    // many new channels arrive in between.
+    if (now - llUnservableLastSweptAt >= LL_UNSERVABLE_LOG_SWEEP_INTERVAL_MS) {
+      for (const [key, at] of llUnservableLoggedAt) {
+        if (now - at >= LL_UNSERVABLE_LOG_WINDOW_MS) {
+          llUnservableLoggedAt.delete(key);
+        }
+      }
+      llUnservableLastSweptAt = now;
+    }
+    // The hard ceiling, O(1), whatever the sweep did or did not do.
+    if (llUnservableLoggedAt.size >= LL_UNSERVABLE_LOG_MAX_ENTRIES) {
+      const oldestKey = llUnservableLoggedAt.keys().next().value;
+      if (oldestKey !== undefined) {
+        llUnservableLoggedAt.delete(oldestKey);
+      }
+    }
+  }
+  llUnservableLoggedAt.set(channelId, now);
+}
+
+/** Exported for `hls-live-state-db-fallback.test.ts`, which pins the ceiling. */
+export function llUnservableLogEntryCount(): number {
+  return llUnservableLoggedAt.size;
+}
+
 export async function liveHlsStreamFromDb(
   channelId: string,
   options: {
@@ -1606,7 +1669,7 @@ export async function liveHlsStreamFromDb(
       // (the 2026-09-14 shape, `ChannelLiveMessage.ended`'s doc comment).
       // Throwing under `strict` is what `readChannelStreamFromDb` turns into
       // `known: false`.
-      logEvent("voice.hlsLlUnservableFromDb", { channelId, startedAt });
+      noteLlUnservable(channelId, startedAt);
       if (options.strict) {
         throw new Error("ll session with no LIVE_HLS_PLAYLIST_BASE_URL on this instance");
       }
@@ -1625,6 +1688,51 @@ export async function liveHlsStreamFromDb(
     startedAt,
     presenterPeerId: row.presenter_peer_id,
   };
+}
+
+/**
+ * IS THIS EXACT SESSION STILL OPEN? One row, addressed by the pair that
+ * identifies a session everywhere else in this codebase (channel and
+ * `startedAt`), answering nothing but "has it ended".
+ *
+ * Deliberately NOT `liveHlsStreamFromDb`, which is the other shape of the
+ * same question and the wrong one here. That one answers "what is the newest
+ * live session on this channel", which conflates a session that ended with a
+ * session that was replaced; and for a `mode = 'll'` row it refuses outright
+ * on an instance with no `LIVE_HLS_PLAYLIST_BASE_URL`, because it has to
+ * build a URL. This has no URL to build, so it gives the same answer on every
+ * machine whatever that machine is configured to serve.
+ *
+ * THREE-VALUED ON PURPOSE. `{ ok: false }` is "could not ask", and its one
+ * caller (`resolveChannelStream` in `ws/voice.ts`) treats it as "assume the
+ * session is fine": tearing a live party's playlist away from its audience
+ * because one query timed out is the failure this read exists to prevent,
+ * pointed the other way.
+ */
+export async function isHlsSessionOpen(
+  channelId: string,
+  startedAt: number,
+): Promise<{ ok: true; open: boolean } | { ok: false }> {
+  try {
+    const result = await getPool().query(
+      `SELECT 1
+         FROM hls_sessions
+        WHERE channel_id = $1
+          AND started_at = to_timestamp($2 / 1000.0)
+          AND ended_at IS NULL
+          AND cleaned_at IS NULL
+        LIMIT 1`,
+      [channelId, startedAt],
+    );
+    return { ok: true, open: result.rows.length > 0 };
+  } catch (error) {
+    logEvent("voice.hlsSessionOpenCheckFailed", {
+      channelId,
+      startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false };
+  }
 }
 
 /** Tests inject fakes; production leaves both null. */
@@ -1663,6 +1771,8 @@ export function resetLiveHlsForTests(): void {
   deferredStops.clear();
   resetHlsOwnershipForTests();
   loggedGhostEgressIds.clear();
+  llUnservableLoggedAt.clear();
+  llUnservableLastSweptAt = 0;
   cameraCooldownUntil.clear();
   voiceTrackSeparatedByChannel.clear();
   for (const timer of cameraProbeRetryTimers.values()) {
@@ -2687,7 +2797,7 @@ export async function checkLiveHlsHealth(
   // ladder. `notifyChanged` is the same seam a dead egress uses
   // (`ws/voice.ts` turns it into a `pushLiveHls`, which re-resolves the mode
   // -- now `conventional`, because `sweepLlDemotions` has both cleared
-  // `low_latency_requested` and memoed the channel -- and starts the rungs).
+  // `low_latency_requested` and memoed the party -- and starts the rungs).
   for (const channelId of await sweepLlDemotions()) {
     notifyChanged(channelId, "ll-demoted");
   }
@@ -5213,20 +5323,22 @@ async function reconcileLiveHlsNow(
   sourceHeight?: number | null,
 ): Promise<LiveHlsReconcileResult> {
   // THE MODE BRANCH, BEFORE ANYTHING ELSE HERE READS TRACKS OR RUNGS.
-  // `resolveHlsMode` answers `conventional` unconditionally while
-  // `LIVE_HLS_LL` is unset, so this branch is a map read that always misses
-  // and nothing below it changes: the flag off leaves this function
-  // byte-for-byte what it was before L1.5. `pqp-remux` finds its own screen
-  // track (its README), so the LL half skips every LiveKit-specific probe
-  // this function does for the ladder.
-  // With `LIVE_HLS_LL` unset there is nothing to ask the database: no LL
-  // session can exist, and a transient read failure must not be able to
-  // skip the conventional reconcile below (a Farol finding on the rebased
-  // PR #580: the lookup ran, and failed closed, even with the flag off).
-  const requestedMode = isLiveHlsLLEnabled()
-    ? await requestedHlsModeForChannel(channelId)
-    : false;
-  if (requestedMode === null) {
+  // `resolveHlsModeForChannel` answers `conventional` unconditionally while
+  // `LIVE_HLS_LL` is unset and asks the database nothing at all, so the flag
+  // off leaves this function byte-for-byte what it was before L1.5.
+  // `pqp-remux` finds its own screen track (its README), so the LL half
+  // skips every LiveKit-specific probe this function does for the ladder.
+  //
+  // The decision itself -- the party's request, the post-demotion veto that
+  // is scoped to THAT party, the allowlist, and the `voice.hlsModeResolved`
+  // line that says which of them chose the mode -- lives in one place in
+  // `hls-remux.ts`, because it was spread across here and there that a
+  // per-channel veto on one machine silently overruled a new party's request
+  // written on the other (2026-09-15, channel `d5559e70`).
+  const resolved = await resolveHlsModeForChannel(channelId, serverId, {
+    sharing: presenterPeerId !== null,
+  });
+  if (resolved === null) {
     // FAIL CLOSED (a Farol finding on PR #580, fourth round): a database
     // read failure here must be indistinguishable from "try again later",
     // never read as "this party did not ask" -- that would fall through to
@@ -5237,16 +5349,7 @@ async function reconcileLiveHlsNow(
     const existing = rooms.get(channelId);
     return { stream: existing ? existing.stream : llStreamFor(channelId) };
   }
-  // A DEMOTION STICKS FOR THE REST OF THE PARTY. `sweepLlDemotions` clears
-  // `low_latency_requested` too, so this is belt and braces on the machine
-  // that did the demoting: the clear is a write on a different tick, and
-  // between the two this read would still answer `true` and start a second LL
-  // session on top of the one the box has just given up on. Five minutes, the
-  // same window the box's own watchdog uses.
-  const mode = resolveHlsMode({
-    serverId,
-    requestedMode: requestedMode && !llDemotedRecently(channelId),
-  });
+  const { mode } = resolved;
   if (mode === "ll") {
     // A mode flip mid-party (the request field changed between two "Ir ao
     // vivo" presses for the same channel) must never leave two transcodes

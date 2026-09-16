@@ -36,6 +36,7 @@ lands on the same Worker, so the code is already split along that line:
 | `src/ll-media.ts` | The LL MEDIA route (`L2.3`): part/segment/init bytes off the remux box, immutably cached per colo | No — a second origin would land in `ll-playlist-origin.ts`, not here |
 | `src/viewer-access.ts` | The one credential check (token, party pass, revocation) every route calls | No |
 | `src/edge-cache.ts` | The Cache API wrapped so losing it never costs a request, and the one definition of a cache key | No |
+| `src/coalesced-fetch.js` | One in-flight fetch per key, shared — with every join bounded and detachable, so a joiner never depends on a request context it does not own | No — it is about promises, not about where the bytes come from |
 | `src/index.ts` | Routing, the cache-or-forward decision, CORS, logging | No, or minimally — it is written against the `PlaylistOrigin` interface, not against "the API" |
 
 `playlist-origin.ts` today has exactly one implementation, `ApiPlaylistOrigin`
@@ -199,6 +200,64 @@ from `index.ts`) removes their waiter immediately instead of polling on
 their behalf until the timeout. See `src/hls-blocking-reload.js`'s module
 doc comment for the full detail on each.
 
+**Nothing is ever parked without a live loop or a live timer of its own
+(2026-09-15).** A production session of three and a half minutes had thirteen
+requests killed by the Workers runtime with *"your Worker's code had hung and
+would never generate a response"* — each after a wall time of one to thirteen
+milliseconds, which is the tell: the runtime says that when a request's
+promise is unsettled and the request's OWN context has no pending I/O at all.
+The cause is a Workers rule this module was written as if it did not exist: a
+`fetch()` and a `setTimeout()` belong to the request context that created
+them, and when that request's handler returns, its pending I/O is cancelled
+and its timers stop firing. So the poll loop — whose timers and origin fetch
+belong to whichever request happened to start it — died the moment that
+request was answered or its viewer navigated away, its `finally` never ran,
+`state.polling` stayed `true` forever, and every later request for that
+rendition joined a loop that no longer existed. Four changes, layered so that
+no one of them has to be right on its own:
+
+1. **`ctx.waitUntil` on the producer.** `index.ts` hands both the poll loop
+   and the shared origin fetch to `ctx.waitUntil`, so the context that owns
+   the work outlives the response that started it. This is the fix; the three
+   below are what happens when it is not enough (a viewer who navigates away
+   takes their context with them regardless).
+2. **`loopResumeBy`, not a boolean.** The loop republishes, before every
+   `await`, the instant it is due back by. A request that finds a claimed but
+   overdue loop starts a replacement, bumping `loopGeneration` so the zombie —
+   if it ever does resume — exits without settling the new loop's waiters or
+   clearing its `polling` flag. Counted as
+   `hlsEdge.blockingReloadLoopRevived`.
+3. **A per-waiter timer**, armed in the waiter's own request context. Even
+   with both mechanisms above wrong, the request holds a live timer (so the
+   runtime never declares it hung) and answers itself with the retained
+   playlist within 250 ms of its own deadline. Counted as
+   `hlsEdge.blockingReloadWaiterSelfTimeout`, which belongs at zero.
+4. **A last-resort `Promise.race`** in `handleBlockingReload`, at the hold's
+   budget plus a second, answering with the current playlist. Counted as
+   `hlsEdge.blockingReloadHardTimeout`, also at zero: it exists so the next
+   race nobody has thought of degrades into a slightly stale playlist instead
+   of a 500.
+
+The same afternoon produced five `hlsEdge.blockingReloadOriginError` 502s
+while every origin request in the window was a 200 in about a millisecond —
+the other half of the same rule, on the shared-fetch side: a joiner was
+awaiting a fetch whose owner's context died, and inherited its abort.
+`src/coalesced-fetch.js` is the shared answer for every in-flight map in this
+Worker (`index.ts`'s rendition fetches and `LlPlaylistOrigin`'s `state.json`
+probes alike): a joiner arms its OWN bound, and on expiry — or on a rejection
+it did not cause — **detaches and fetches for itself** rather than the shared
+fetch being aborted out from under whoever is still attached. Detaching
+joiners collapse onto one retry, not one each — the map is re-read at the top
+of every attempt and a caller only produces when it sees an empty slot — so a
+genuinely sick origin still sees at most one extra request per key. And
+`isProducer` (which is what elects the single cache writer in `index.ts`) is
+decided when a fetch *settles*, not when it starts, so a slow fetch that
+finishes after its replacement cannot overwrite the newer playlist its own
+retry already stored. Counted as
+`hlsEdge.originJoinDetached` / `hlsEdge.llOriginJoinDetached`, both of which
+belong at zero and, when they are not, say that a context died rather than
+that the origin refused anything.
+
 **Three ceilings, not one, and a second review round (2026-09-14) that
 closed the gaps between them.** `MAX_POLL_STATE_ENTRIES` (500) bounds how
 many DISTINCT renditions this isolate retains; it says nothing about how
@@ -320,7 +379,12 @@ this Worker's own `EXT-X-PQP-SESSION:<sessionId>` (an informational tag, new
 in this task, harmless to any parser that has never heard of it);
 `EXT-X-TARGETDURATION` (`ceil(state.targetDurationSecs)`); `EXT-X-PART-INF:
 PART-TARGET=<part target, seconds>`; `EXT-X-SERVER-CONTROL:
-CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=<3× part target>`; `EXT-X-MEDIA-SEQUENCE`
+CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=...,HOLD-BACK=...` — the part hold-back is
+`LL_PART_HOLD_BACK_PARTS` times the part target (6 by default, so 3.0 s at the
+remux's 500 ms part; clamped to at least 3 times the part target, per RFC
+8216bis 4.4.3.8, and at most `TARGETDURATION`), and the segment hold-back is
+3 times `TARGETDURATION`, which is also what the RFC gives it when the
+attribute is absent; `EXT-X-MEDIA-SEQUENCE`
 (the oldest listed segment's MSN); `EXT-X-MAP:URI=...` for the init segment;
 per segment, `EXT-X-PROGRAM-DATE-TIME` then (for the newest 3 complete
 segments, and always for the one still being assembled) `EXT-X-PART` lines
@@ -540,8 +604,10 @@ as the `state.json` probe does it.
    colo produce ONE origin fetch, which is this task's stated acceptance
    test and what `test/ll-media.test.mjs` asserts first. Concurrent misses
    on the same part are coalesced onto one in-flight promise
-   (`inFlightMediaFetches`, the same pattern `fetchRenditionCoalesced`
-   uses), and only the producer writes the cache entry.
+   (`inFlightMediaFetches`, through the same `coalesceFetch` helper
+   `fetchRenditionCoalesced` uses), and only the producer writes the cache
+   entry — see "The joiner and the context it does not own" below for why
+   that join is bounded and detachable rather than a bare `await`.
    `Cache-Control: public, max-age=31536000, immutable` because a part, a
    segment and an init segment are written once and never rewritten: their
    names carry a sequence number, so a changed byte is always a new name.
@@ -594,6 +660,50 @@ rendition matched no route at all and 404'd from the edge before a line of
 LL code ran — the video rung worked, which is exactly the shape that makes
 this kind of thing hard to see. Pinned now by
 `test/playlist-route.test.mjs`.
+
+### The joiner and the context it does not own (2026-09-15)
+
+The evening after PR #645 fixed this on the playlist path, five **media**
+requests were killed by the Workers runtime with *"your Worker's code had hung
+and would never generate a response"*, each after a wall time of **5-6 ms**:
+`ll/part-941.m4s`, `ll/part-1004.m4s`, `ll-audio/audio-part-1020.m4s`,
+`ll-audio/audio-part-1030.m4s`, `ll-audio/audio-part-1475.m4s`. The origin
+behind them answered 3,093 requests over the same window with two legitimate
+404s and a max of 691 ms.
+
+Same rule, one layer over (see "Blocking reload" above for the derivation): a
+`fetch()` and a `setTimeout()` belong to the request context that created
+them. `ll-media.ts` had `ctx.waitUntil` on the producer and read as covered,
+but `waitUntil` anchors the producer and does nothing for the **joiner** —
+and this route's joiners are not an edge case. Two players on one LL session
+(a viewer and the host's own "Público" preview) ask for the same part within
+about 15 ms all evening, so one produces and one joins; hls.js cancels a part
+request the moment it decides it has stalled, which takes the producing
+request's context with it, and the joiner was parked on two promises that
+context owned: the origin fetch, and the cache write it waits for before
+reading the entry back.
+
+Four layers, same shape as #645's:
+
+1. **`coalesceFetch`** replaces the hand-rolled in-flight map: a bounded,
+   detachable join with the producer anchored by `ctx.waitUntil` and a single
+   producer per key elected at settlement. `hlsEdge.llMediaJoinDetached`.
+2. **The wait on the producer's cache write is bounded too**
+   (`DEFAULT_MEDIA_WRITE_JOIN_BOUND_MS`, 1 s), by a timer in the joiner's own
+   context, and a write that misses its bound is dropped from the map so the
+   next arrival does not queue behind the same dead context.
+   `hlsEdge.llMediaWriteJoinTimeout`.
+3. **The write is published from inside the shared chain**, the instant the
+   origin answers, so an arrival always has either the in-flight fetch or the
+   in-flight write to join — the window Farol caught on this route's first
+   commit, which `coalesceFetch` deleting its map entry at settlement would
+   otherwise have reopened.
+4. **A last-resort `Promise.race`** over the whole served path
+   (`DEFAULT_MEDIA_HARD_TIMEOUT_MS`, 5 s), armed in this request's own
+   context. It is what makes the hang detector structurally unreachable here:
+   the request always holds live pending I/O of its own. When it fires, the
+   request answers itself by fetching the part directly.
+   `hlsEdge.llMediaHardTimeout`, which belongs at zero.
 
 ## Why the cache key drops the token
 
@@ -912,6 +1022,15 @@ that answers nothing yet, before falling back to the conventional path.
 `MEDIA_ORIGIN_KEY` is non-empty (required once its `CONTROL_LISTEN` binds
 beyond loopback), matching values on both sides ("`LL_ORIGIN_KEY`: this
 Worker's credential against the remux origin" above).
+
+`LL_PART_HOLD_BACK_PARTS` (also in `wrangler.jsonc`, also not a secret) is the
+one LL knob an operator is expected to turn: how far from the live edge an LL
+player is told to sit, in part targets. 6 by default (3.0 s at a 500 ms part).
+Lower it toward 3 only for an audience close to the box, and expect the start
+of playback to fight the edge when the round trip is not small; nothing below 3
+is ever rendered, whatever it is set to. Changing it takes effect on the next
+`wrangler deploy`, affects every LL rendition playlist rendered after that, and
+costs (or saves) exactly the difference in glass-to-glass latency.
 
 **Rollback**: unset `LIVE_HLS_PLAYLIST_BASE_URL` on the API (see
 `docs/WATCH_PARTY.md` §"Playlists at the edge") — new sessions immediately go

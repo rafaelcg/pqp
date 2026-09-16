@@ -74,6 +74,7 @@ import {
 } from "./ll-state.js";
 import type { PlaylistFetch, PlaylistOrigin } from "./playlist-origin.js";
 import { logEvent } from "./log.js";
+import { coalesceFetch } from "./coalesced-fetch.js";
 
 /** Bound on the per-session video-codec cache — same shape as `index.ts`'s `rejectionLog`: a churn of many short LL sessions must not grow this forever. */
 const VIDEO_CODEC_CACHE_MAX_ENTRIES = 200;
@@ -124,11 +125,11 @@ export type LlMultivariantResult =
 
 /**
  * Only the VIDEO half of a session's codec info is cached — it is read off
- * `avcC` in `init.mp4`, which cannot change for the session's lifetime once
- * written. The AUDIO codec is deliberately NOT part of this shape: see
+ * the state snapshot's newest init segment. The AUDIO codec is deliberately NOT part of this shape: see
  * `videoCodecFor`'s doc comment for why caching it too was a real bug.
  */
 interface CachedVideoCodec {
+  initUri: string;
   videoCodec: string;
   videoWidth: number;
   videoHeight: number;
@@ -171,6 +172,14 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    */
   private readonly originKey: string | undefined;
   private readonly timeoutMs: number;
+  /**
+   * How many part targets of `PART-HOLD-BACK` every rendition this origin
+   * renders advertises — `LL_PART_HOLD_BACK_PARTS`, threaded down from
+   * `index.ts` because the env is only readable there. `undefined` keeps
+   * `ll-playlist.js`'s own default (6); the clamping rules are that module's,
+   * not this one's (`partHoldBackSeconds`).
+   */
+  private readonly partHoldBackParts: number | undefined;
   private readonly videoCodecCache = new Map<string, CachedVideoCodec>();
 
   /**
@@ -208,10 +217,16 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
   // which erases type annotations but cannot inject the
   // `this.field = field` assignments parameter properties require --
   // `tsc --noEmit` doesn't care either way, but the test runner does.
-  constructor(originBase: string | undefined, timeoutMs: number, originKey?: string) {
+  constructor(
+    originBase: string | undefined,
+    timeoutMs: number,
+    originKey?: string,
+    partHoldBackParts?: number,
+  ) {
     this.originBase = originBase;
     this.timeoutMs = timeoutMs;
     this.originKey = originKey;
+    this.partHoldBackParts = partHoldBackParts;
   }
 
   get ready(): boolean {
@@ -233,17 +248,26 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    * `finally` runs, means one timeout covers the ENTIRE exchange — the same
    * fix `ApiPlaylistOrigin.fetchPlaylist` already applies, for the same
    * reason (see that method's own doc comment).
+   *
+   * NEVER AWAITED UNBOUNDEDLY BY A JOINER (2026-09-15). The in-flight map
+   * shares one fetch between concurrent callers, and in Workers those callers
+   * are usually different REQUESTS — so a joiner used to be betting its own
+   * response on a fetch owned by a context it does not control, and on the
+   * single `AbortController` that context armed. When the owner returned, its
+   * fetch was cancelled and the joiner saw an abort-shaped rejection from a
+   * perfectly healthy origin (five 502s that afternoon), or nothing at all.
+   * `coalesceFetch` bounds the join and lets a joiner DETACH and fetch for
+   * itself — with its own controller and its own timer — rather than
+   * aborting the shared fetch out from under whoever is still attached. See
+   * `coalesced-fetch.js`'s header.
    */
-  private fetchFromOrigin(path: string): Promise<BufferedOriginResponse> {
-    const existing = this.inFlight.get(path);
-    if (existing) {
-      return existing;
-    }
-    const promise = this.fetchFromOriginUncoalesced(path);
-    this.inFlight.set(path, promise);
-    return promise.finally(() => {
-      this.inFlight.delete(path);
+  private async fetchFromOrigin(path: string): Promise<BufferedOriginResponse> {
+    const coalesced = await coalesceFetch(this.inFlight, path, () => this.fetchFromOriginUncoalesced(path), {
+      onDetach: ({ reason, attempt }) => {
+        logEvent("hlsEdge.llOriginJoinDetached", { path, reason, attempt });
+      },
     });
+    return coalesced.result;
   }
 
   private async fetchFromOriginUncoalesced(path: string): Promise<BufferedOriginResponse> {
@@ -361,7 +385,10 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       return new Response("Not found", { status: 404 });
     }
     const basePath = renditionBasePath(req.channelId, req.startedAt);
-    const text = buildLlRenditionPlaylist(found.state, track, req.rung, { basePath });
+    const text = buildLlRenditionPlaylist(found.state, track, req.rung, {
+      basePath,
+      partHoldBackParts: this.partHoldBackParts,
+    });
     return new Response(text, {
       status: 200,
       headers: { "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8" },
@@ -460,10 +487,10 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
   }
 
   /**
-   * Only the VIDEO codec/geometry is memoized here, and only once
-   * successfully read — `avcC` in `init.mp4` cannot change for a session's
-   * lifetime, so every later master request for the same session reuses it
-   * with no origin fetch at all.
+   * Only the VIDEO codec/geometry is memoized here, and only for the init
+   * URI that supplied it. A remux can replace `init.mp4` with `init-2.mp4`
+   * mid-session after a codec or geometry change, so a later state snapshot
+   * naming a new newest init must refetch before building its master.
    *
    * A first version of this method cached the AUDIO codec alongside the
    * video one, computed from whatever `state.audio` happened to be on the
@@ -482,7 +509,7 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    */
   private async videoCodecFor(sessionId: string, state: LlSessionState): Promise<CachedVideoCodec> {
     const cached = this.videoCodecCache.get(sessionId);
-    if (cached) {
+    if (cached?.initUri === state.video.initUri) {
       return cached;
     }
     const fetched = await this.fetchFromOrigin(originAssetPath(sessionId, state.video.initUri));
@@ -494,6 +521,7 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       throw new Error("video init segment did not yield an avcC box");
     }
     const result: CachedVideoCodec = {
+      initUri: state.video.initUri,
       videoCodec: videoInfo.codec,
       videoWidth: videoInfo.width,
       videoHeight: videoInfo.height,

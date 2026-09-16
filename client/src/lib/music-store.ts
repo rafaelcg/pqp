@@ -1,11 +1,18 @@
 import { useSyncExternalStore } from "react";
 import {
   MUSIC_QUEUE_LIMIT,
+  completeMusicState,
+  musicAdvance,
+  musicAutoplayCandidate,
+  musicSkipVotesNeeded,
   musicWriteIsStale,
+  type MusicRepeat,
   type MusicResolved,
   type MusicState,
   type MusicTrack,
 } from "@pqp/shared";
+
+export { musicSkipVotesNeeded };
 
 /**
  * THE ROOM'S MUSIC QUEUE, ON THIS MACHINE.
@@ -29,6 +36,7 @@ export interface MusicSession {
   userId: string;
   displayName: string;
   send: (state: MusicState | null) => void;
+  sendListening?: (listening: boolean) => void;
 }
 
 export interface MusicSnapshot {
@@ -87,6 +95,9 @@ export function setMusicSession(next: MusicSession | null): void {
     snapshot = { ...snapshot, listening: true, open: false };
   }
   set(null, next?.channelId ?? null);
+  if (next && !snapshot.listening) {
+    next.sendListening?.(false);
+  }
 }
 
 /** The room this machine may write to right now, or null. */
@@ -100,6 +111,7 @@ export function setListening(listening: boolean): void {
   }
   snapshot = { ...snapshot, listening };
   emit();
+  session?.sendListening?.(listening);
 }
 
 /** A `music` frame from the server (join, echo, another person's write). */
@@ -115,10 +127,11 @@ export function receiveMusic(
   }
   // A refusal hands back what the server holds; our optimistic copy is
   // ahead of it by one `rev` and would otherwise call the correction stale.
-  if (!forced && state !== null && musicWriteIsStale(snapshot.state, state)) {
+  const next = state === null ? null : completeMusicState(snapshot.state, state);
+  if (!forced && next !== null && musicWriteIsStale(snapshot.state, next)) {
     return;
   }
-  set(state, channelId);
+  set(next, channelId);
 }
 
 export function subscribeMusic(listener: () => void): () => void {
@@ -139,6 +152,7 @@ export function useMusic(): MusicSnapshot {
 export function resetMusicStoreForTests(): void {
   session = null;
   positionProbe = null;
+  seekApply = null;
   snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
   listeners.clear();
 }
@@ -171,6 +185,17 @@ export function setPositionProbe(probe: (() => number) | null): void {
   positionProbe = probe;
 }
 
+/**
+ * The mounted embed. A scrub must move THIS machine's player in the same
+ * click as the write: a later effect `seekTo` is not a gesture, and YouTube
+ * answers that by playing muted or not at all.
+ */
+let seekApply: ((positionMs: number) => void) | null = null;
+
+export function setSeekApply(apply: ((positionMs: number) => void) | null): void {
+  seekApply = apply;
+}
+
 function livePositionMs(held: MusicState | null): number {
   if (!held || !held.current) {
     return 0;
@@ -195,6 +220,11 @@ function base(): Omit<MusicState, "rev" | "actorId" | "atMs"> {
     queue: held?.queue ?? [],
     status: held?.status ?? "paused",
     positionMs: livePositionMs(held),
+    openControls: held?.openControls ?? false,
+    repeat: held?.repeat ?? "off",
+    skipVotes: held?.skipVotes ?? [],
+    history: held?.history ?? [],
+    autoplay: held?.autoplay ?? false,
   };
 }
 
@@ -248,13 +278,18 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
   const room = MUSIC_QUEUE_LIMIT - held.queue.length;
   const fits = rest.slice(0, Math.max(0, room));
   const dropped = rest.length - fits.length;
+  const added = fits.length + (startedPlaying ? 1 : 0);
   write({
+    ...held,
     current,
     queue: [...held.queue, ...fits],
     status: startedPlaying ? "playing" : held.status,
     positionMs: startedPlaying ? 0 : held.positionMs,
   });
-  return { added: fits.length + (startedPlaying ? 1 : 0), dropped, startedPlaying };
+  if (added > 0) {
+    setMusicOpen(true);
+  }
+  return { added, dropped, startedPlaying };
 }
 
 /** Add a resolved track: starts it when nothing is playing, queues otherwise. */
@@ -265,13 +300,15 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
   }
   const held = base();
   if (held.current === null) {
-    write({ current: track, queue: held.queue, status: "playing", positionMs: 0 });
+    write({ ...held, current: track, queue: held.queue, status: "playing", positionMs: 0 });
+    setMusicOpen(true);
     return "playing";
   }
   if (held.queue.length >= MUSIC_QUEUE_LIMIT) {
     return "full";
   }
   write({ ...held, queue: [...held.queue, track] });
+  setMusicOpen(true);
   return "queued";
 }
 
@@ -293,7 +330,13 @@ export function seekTo(positionMs: number): void {
   if (held.current === null) {
     return;
   }
-  write({ ...held, positionMs: Math.max(0, Math.round(positionMs)) });
+  const at = Math.max(0, Math.round(positionMs));
+  try {
+    seekApply?.(at);
+  } catch {
+    // the write still has to land so the room can catch up
+  }
+  write({ ...held, positionMs: at });
 }
 
 /** Position-only sample while playing, so a late joiner lands close. */
@@ -317,16 +360,159 @@ export function reportPosition(positionMs: number, durationMs?: number): void {
  * must not skip the one now playing.
  */
 export function advance(endedTrackId?: string): void {
-  const held = base();
+  const held = snapshot.state;
+  if (!held) {
+    return;
+  }
   if (endedTrackId && held.current?.id !== endedTrackId) {
     return;
   }
-  const [next, ...rest] = held.queue;
+  write(musicAdvance({ ...held, positionMs: livePositionMs(held) }));
+}
+
+export function voteSkip(roomSize: number): void {
+  if (!session) {
+    return;
+  }
+  const held = snapshot.state;
+  if (!held?.current) {
+    return;
+  }
+  const votes = held.skipVotes ?? [];
+  if (votes.includes(session.userId)) {
+    return;
+  }
+  const nextVotes = [...votes, session.userId];
+  if (new Set(nextVotes).size >= musicSkipVotesNeeded(roomSize)) {
+    write(musicAdvance({ ...held, positionMs: livePositionMs(held) }));
+    return;
+  }
+  write({ ...base(), skipVotes: nextVotes });
+}
+
+export function setRepeat(mode: MusicRepeat): void {
+  write({ ...base(), repeat: mode });
+}
+
+export function shuffle(): void {
+  const held = base();
+  const queue = [...held.queue];
+  for (let i = queue.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const current = queue[i]!;
+    queue[i] = queue[j]!;
+    queue[j] = current;
+  }
+  write({ ...held, queue });
+}
+
+export function setOpenControls(on: boolean): void {
+  write({ ...base(), openControls: on });
+}
+
+export function setAutoplay(on: boolean): void {
+  write({ ...base(), autoplay: on });
+}
+
+/**
+ * How long a machine that is not the actor waits before fetching a
+ * related track, so the actor (if still seated) wins. A room whose
+ * actor left still continues.
+ */
+export const AUTOPLAY_FALLBACK_MS = 1500;
+
+export function shouldAutoplayOnEnd(state: MusicState | null): boolean {
+  return (
+    state !== null &&
+    state.current !== null &&
+    state.autoplay === true &&
+    state.queue.length === 0 &&
+    (state.repeat ?? "off") === "off"
+  );
+}
+
+/**
+ * Mint the related pick under this machine's name and write the advance
+ * shape `musicWriteAllowed` accepts for a member: own track, autoplayed,
+ * playing at 0, history as `musicAdvance` would, votes cleared.
+ */
+export function autoplayAdvance(endedTrackId: string, pick: MusicResolved): void {
+  const held = snapshot.state;
+  if (!held?.current || held.current.id !== endedTrackId) {
+    return;
+  }
+  const track = mintTrack(pick);
+  if (!track) {
+    return;
+  }
+  const advanced = musicAdvance({ ...held, positionMs: livePositionMs(held) });
   write({
-    current: next ?? null,
-    queue: rest,
-    status: next ? "playing" : "paused",
+    ...advanced,
+    current: { ...track, autoplayed: true },
+    queue: [],
+    status: "playing",
     positionMs: 0,
+  });
+}
+
+export async function onTrackEnded(
+  endedTrackId: string,
+  isActor: boolean,
+  fetchRelated: (videoId: string) => Promise<MusicResolved[]>,
+  wait: (ms: number) => Promise<void> = (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+): Promise<void> {
+  const held = snapshot.state;
+  if (!held || held.current?.id !== endedTrackId) {
+    return;
+  }
+  if (!shouldAutoplayOnEnd(held)) {
+    advance(endedTrackId);
+    return;
+  }
+  if (!isActor) {
+    await wait(AUTOPLAY_FALLBACK_MS);
+    if (snapshot.state?.current?.id !== endedTrackId) {
+      return;
+    }
+  }
+  const videoId = snapshot.state?.current?.videoId;
+  if (!videoId) {
+    advance(endedTrackId);
+    return;
+  }
+  try {
+    const related = await fetchRelated(videoId);
+    if (snapshot.state?.current?.id !== endedTrackId) {
+      return;
+    }
+    const pick = musicAutoplayCandidate(related, snapshot.state);
+    if (!pick) {
+      advance(endedTrackId);
+      return;
+    }
+    autoplayAdvance(endedTrackId, pick);
+  } catch {
+    if (snapshot.state?.current?.id === endedTrackId) {
+      advance(endedTrackId);
+    }
+  }
+}
+
+export function readdFromHistory(trackId: string): MusicAddOutcome {
+  const entry = snapshot.state?.history?.find((track) => track.id === trackId);
+  if (!entry) {
+    return "no-session";
+  }
+  return addTrack({
+    provider: entry.provider,
+    videoId: entry.videoId,
+    title: entry.title,
+    sourceUrl: entry.sourceUrl,
+    thumbnailUrl: entry.thumbnailUrl,
+    durationMs: entry.durationMs,
   });
 }
 

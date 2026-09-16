@@ -180,7 +180,40 @@
  *    capability itself, so nothing changes for a client that never asks.
  *  - `EXT-X-PART` / `EXT-X-PRELOAD-HINT` playlist generation — also L2.2.
  *  - Serving PART byte ranges themselves through this Worker — L2.3.
+ *
+ * IMPORTS `LL_VIDEO_RUNG` FROM `ll-state.js`, NOTHING ELSE. That module has
+ * no imports of its own, so this stays a one-way, non-circular edge purely
+ * to reuse the ONE constant that names the video rung, rather than
+ * hardcoding the string `"ll"` a second time here.
+ *
+ * THE VIDEO RUNG'S HOLD BUDGET IS NOT THE PLAIN 3x-PART-TARGET FORMULA. PR
+ * #629 (merged b06cf621, `tools/pqp-remux`) made the remux honest about a
+ * quiet video source: on a static tab share a video part may take up to ~1s
+ * to appear, and after a genuine freeze the next video part waits on the
+ * keyframe gate -- a PLI every 4s, answered in ~1s -- so the next part can be
+ * ~5s away. The plain formula (3 x the 500ms default PART-TARGET = 1.5s) is
+ * nowhere near that, and it timed out in production
+ * (`hlsEdge.blockingReloadTimeout`, 2026-09-15 15:10:40 UTC), stalling the
+ * player. `VIDEO_RUNG_HOLD_BUDGET_MS` replaces the formula for exactly the
+ * VIDEO rung (`ll`, `LL_VIDEO_RUNG`) with a flat 6s -- the ~5s worst case
+ * plus margin, still well inside RFC 8216bis's own ceiling of
+ * `3 x TARGETDURATION` (~18s here). See that constant's own doc comment for
+ * the mechanics: it replaces the deadline calculation only -- the poll
+ * cadence stays the plain `currentPollIntervalMs` for the FIRST
+ * `VIDEO_RUNG_FAST_POLL_WINDOW_MS` of a video hold (1.5s, the old budget),
+ * then backs off to `VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS` for the remainder
+ * (see `pollIntervalForLoop`), so the extra ~4.5s this change adds does not
+ * poll the origin at the fast cadence the whole way through (Farol
+ * 2026-09-15, PR #634). It is never "provisional" the way the plain
+ * formula's deadline is -- there is nothing to correct once a real
+ * `PART-TARGET` is known, because the video budget never depended on it.
+ * `ll-audio` (`LL_AUDIO_RUNG`) never idles this way and keeps the plain
+ * formula and cadence, and so does the conventional (non-LL) path, which
+ * never reaches this file at all regardless (see "THE PROBLEM THIS
+ * REPLACES" above).
  */
+
+import { LL_VIDEO_RUNG } from "./ll-state.js";
 
 /** Query parameter names, verbatim from RFC 8216bis §6.2.5.2. */
 export const HLS_MSN_PARAM = "_HLS_msn";
@@ -196,8 +229,46 @@ export const HLS_PART_PARAM = "_HLS_part";
  */
 export const DEFAULT_PART_TARGET_SECONDS = 0.5;
 
-/** The hold's hard timeout, in units of the target part duration, per L2.1's spec. */
+/** The hold's hard timeout, in units of the target part duration, per L2.1's spec. Used for every rendition except the video rung -- see `VIDEO_RUNG_HOLD_BUDGET_MS`. */
 const TIMEOUT_PART_MULTIPLIER = 3;
+
+/**
+ * The VIDEO rung's (`ll`, `LL_VIDEO_RUNG`) own hold budget, replacing
+ * `TIMEOUT_PART_MULTIPLIER x PART-TARGET` for that one rendition. See the
+ * module doc comment, "THE VIDEO RUNG'S HOLD BUDGET IS NOT THE PLAIN
+ * 3x-PART-TARGET FORMULA", for the full derivation -- in short: a quiet tab
+ * share's next video part can lag up to ~1s, and a part that follows a
+ * genuine freeze waits on a PLI/keyframe round trip (a PLI every 4s,
+ * answered in ~1s), putting the next part as much as ~5s away. 6s is that
+ * ~5s worst case plus margin, and still comfortably inside RFC 8216bis's own
+ * ceiling of `3 x TARGETDURATION` (~18s at this deployment's 4s
+ * TARGETDURATION). `ll-audio` never idles this way and keeps the plain
+ * multiplier above.
+ */
+export const VIDEO_RUNG_HOLD_BUDGET_MS = 6_000;
+
+/**
+ * How long a video-rung poll LOOP keeps the plain PART-TARGET cadence before
+ * backing off -- see `pollIntervalForLoop`'s doc comment for the full
+ * reasoning (Farol 2026-09-15, PR #634). Set to exactly the OLD budget
+ * (`TIMEOUT_PART_MULTIPLIER x` the 500ms default = 1.5s) on purpose: a video
+ * hold polls exactly like every other rendition until the moment the old,
+ * pre-this-PR formula would already have given up, and only backs off past
+ * that point, where the extra time is new.
+ */
+export const VIDEO_RUNG_FAST_POLL_WINDOW_MS = 1_500;
+
+/**
+ * The video rung's poll cadence once `VIDEO_RUNG_FAST_POLL_WINDOW_MS` has
+ * elapsed on its loop -- see `pollIntervalForLoop`'s doc comment. A flat 1s
+ * (not `PART-TARGET x 2`, which would vary the backoff cadence with the
+ * source's own part duration for no real benefit here): simple, well above
+ * the fast cadence, and still frequent enough that the loop's LAST tick
+ * lands close to the 6s deadline rather than overshooting it by a full
+ * backoff interval (the trailing `Math.min(intervalMs, soonestDeadline -
+ * now())` in `runPollLoop` shortens that final wait regardless).
+ */
+export const VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS = 1_000;
 
 /** Guards against a pathological (zero or tiny) PART-TARGET turning the poll loop into a busy-wait. */
 const MIN_POLL_INTERVAL_MS = 20;
@@ -275,6 +346,104 @@ export const MAX_WAITERS_PER_RENDITION = 2_000;
  * map's own `polling` flags cannot.
  */
 export const MAX_ACTIVE_POLL_LOOPS = 64;
+
+/**
+ * NOTHING IS PARKED WITHOUT A LIVE TIMER OF ITS OWN (production, 2026-09-15).
+ *
+ * Thirteen requests in three and a half minutes were killed by the Workers
+ * runtime with "your Worker's code had hung and would never generate a
+ * response", eleven of them blocking reloads on the audio rung, each after a
+ * WALL TIME OF ONE TO THIRTEEN MILLISECONDS. That wall time is the whole
+ * diagnosis: the runtime declares a hang when a request's promise is
+ * unsettled and the request's OWN context has no pending I/O at all. A
+ * request that is genuinely holding for a part has a timer; a request that
+ * hung instantly had none.
+ *
+ * WHERE IT HAD NONE. `state.polling` was a plain boolean meaning "a loop is
+ * running", and in pure JS it could not lie: every exit from `runPollLoop`'s
+ * `while` runs the `finally` synchronously. In Workers it can, because the
+ * loop's `sleep` timers and its origin fetch belong to the REQUEST CONTEXT
+ * OF WHICHEVER REQUEST STARTED THE LOOP. That request settles (its waiter is
+ * served, or its viewer aborts — hls.js cancels a pending playlist request
+ * on every re-request), its handler returns, the runtime tears the context
+ * down, and the loop's next `await` never resumes. The `finally` never runs,
+ * so `state.polling` stays `true` forever, so every later request for that
+ * rendition registers a waiter, starts no loop, arms no timer, and is parked
+ * on a signal nothing will ever raise — 1 ms, 500, "hung". That is also why
+ * they arrived in pairs 50 ms to 2.5 s apart: once a rendition's loop is a
+ * zombie, EVERY request for it hangs until the poll state is swept.
+ *
+ * THE THREE THINGS THAT FIX IT, none of which trusts the other two:
+ *
+ *  1. **`loopResumeBy`** — the loop republishes, before every single
+ *     `await`, the wall-clock instant by which it is due back
+ *     (`the await's own bound + LOOP_RESUME_SLACK_MS`). A joiner that finds
+ *     `state.polling === true` but `now() > state.loopResumeBy` treats the
+ *     loop as dead and starts a replacement. `state.polling` alone is no
+ *     longer taken as proof of anything.
+ *  2. **`loopGeneration`** — bumped by whoever starts a loop, captured by
+ *     that loop, checked after every `await` and in its `finally`. A zombie
+ *     that turns out to be alive after all (a context that was merely slow)
+ *     exits without settling anybody else's waiters and without clearing
+ *     `polling` out from under the loop that replaced it. There is never
+ *     more than one loop with authority over a rendition.
+ *  3. **A per-waiter timer**, armed in the waiter's OWN request context by
+ *     `deps.setTimer`. This is the belt: even if both mechanisms above were
+ *     wrong, the request holds a live timer, so the runtime sees pending I/O
+ *     and never declares a hang, and the waiter settles itself with the
+ *     retained playlist within `WAITER_SELF_TIMEOUT_SLACK_MS` of its own
+ *     deadline. `hlsEdge.blockingReloadWaiterSelfTimeout` counts every time
+ *     the belt is what actually answered — it belongs at zero.
+ *
+ * Above all three, `handleBlockingReload` races the whole thing against
+ * `hardTimeoutBudgetMs` and answers with the current playlist
+ * (`hlsEdge.blockingReloadHardTimeout`), so a race nobody has thought of yet
+ * degrades into a slightly stale playlist instead of a 500.
+ */
+export const LOOP_RESUME_SLACK_MS = 250;
+
+/**
+ * The bound on a poll tick whose waiter set emptied out from under it (every
+ * waiter aborted mid-fetch). `fetchWithDeadlineRace` used to treat that as
+ * "no deadline — await the fetch directly", which is the one remaining
+ * unbounded `await` in this module and therefore the one remaining way to
+ * park with nothing pending. A loop with nobody left waiting is about to
+ * exit anyway; a second is plenty of time for the in-flight fetch it may as
+ * well collect on its way out.
+ */
+export const NO_WAITER_TICK_BUDGET_MS = 1_000;
+
+/**
+ * How long after its own deadline a waiter waits for the poll loop to serve
+ * it before serving itself. Long enough that the loop, when healthy, always
+ * wins (it settles due waiters the instant its deadline race fires), short
+ * enough that a dead loop costs a viewer a quarter second rather than a
+ * playback stall.
+ */
+export const WAITER_SELF_TIMEOUT_SLACK_MS = 250;
+
+/** How many times a waiter's self-timer may re-arm because `fixProvisionalDeadlines` pushed its deadline out. That can happen at most once per waiter (`provisional` is cleared when it does), so this is slack over a bound that is already one. */
+const MAX_SELF_TIMER_REARMS = 3;
+
+/** Added to a hold's own budget to get `handleBlockingReload`'s last-resort `Promise.race` deadline. A full second past the longest a hold is ever meant to last, so this NEVER fires on a healthy request — see `hardTimeoutBudgetMs`. */
+export const HARD_TIMEOUT_SLACK_MS = 1_000;
+
+/**
+ * The hold budget `hardTimeoutBudgetMs` assumes for a rendition whose real
+ * `PART-TARGET` this isolate does not know yet.
+ *
+ * The last-resort guard's deadline is fixed before the hold starts, but a
+ * provisional waiter's deadline is NOT: `fixProvisionalDeadlines` pushes it
+ * out the moment a fetch reveals a `PART-TARGET` longer than
+ * `DEFAULT_PART_TARGET_SECONDS`. Deriving the guard from the default would
+ * then put it BEFORE the deadline it is supposed to be a backstop for, and
+ * the guard would cut a perfectly healthy hold short. So a cold rendition
+ * gets this flat floor instead: 4 s covers every part target up to ~1.3 s,
+ * which is already well outside what LL-HLS is for (`docs/plans/LL_HLS.md`
+ * pins ours at 500 ms), and it only ever applies to the FIRST request for a
+ * rendition in a given isolate.
+ */
+const COLD_HARD_TIMEOUT_MS = 4_000;
 
 /** How often the opportunistic idle sweep is allowed to run a full scan. Same shape as `index.ts`'s `REJECTION_LOG_SWEEP_INTERVAL_MS`. */
 const POLL_STATE_SWEEP_INTERVAL_MS = 10_000;
@@ -490,6 +659,10 @@ export function isMsnTooFarAhead(edge, requested) {
  *   signal?: AbortSignal,
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
+ *   setTimer?: (ms: number, cb: () => void) => () => void,
+ *   keepAlive?: (promise: Promise<unknown>) => void,
+ *   logEvent?: (event: string, fields?: Record<string, unknown>) => void,
+ *   rung?: string,
  * }} BlockingReloadDeps
  */
 
@@ -505,21 +678,53 @@ export function isMsnTooFarAhead(edge, requested) {
  */
 
 /**
+ * `polling` says a loop CLAIMS this rendition; `loopResumeBy` says by when
+ * that claim expires unless the loop renews it, and `loopGeneration` says
+ * which loop the claim belongs to. See the block comment above
+ * `LOOP_RESUME_SLACK_MS` for why a boolean was not enough.
+ *
  * @typedef {{
  *   waiters: Set<Waiter>,
  *   lastPlaylist: FetchedPlaylist | null,
  *   lastEdge: PlaylistLiveEdge | null,
  *   lastFetchedAt: number,
  *   polling: boolean,
+ *   pollLoopStartedAt: number,
+ *   loopResumeBy: number,
+ *   loopGeneration: number,
  * }} RenditionPollState
  */
 
 /** One entry per rendition (channel + session + rung) this isolate currently has a hold open for. */
 const pollStates = new Map();
 
+/**
+ * Every waiter self-timer this module currently has armed, so
+ * `resetBlockingReloadStateForTests` can cancel them: a `node --test` process
+ * will not exit while a `setTimeout` is pending, and a test that abandons a
+ * waiter would otherwise hold the whole suite open for a hold budget.
+ * @type {Set<() => void>}
+ */
+const pendingWaiterTimers = new Set();
+
 /** @param {number} ms @returns {Promise<void>} */
 function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The injectable timer every "bounded await" in this module is built on.
+ * Separate from `deps.sleep` on purpose: `sleep` is the loop's PACING (tests
+ * drive it with a fake clock that jumps forward on every call), while this is
+ * a real deadline that must NOT move the clock just by being armed.
+ *
+ * @param {number} ms
+ * @param {() => void} cb
+ * @returns {() => void} cancel
+ */
+function defaultSetTimer(ms, cb) {
+  const handle = setTimeout(cb, ms);
+  return () => clearTimeout(handle);
 }
 
 /**
@@ -537,6 +742,41 @@ function decodeText(fetched) {
 function currentPollIntervalMs(edge) {
   const seconds = edge?.partTargetSeconds ?? DEFAULT_PART_TARGET_SECONDS;
   return Math.max(MIN_POLL_INTERVAL_MS, Math.round(seconds * 1000));
+}
+
+/**
+ * The video rung's poll LOOP cadence (distinct from `currentPollIntervalMs`,
+ * which this wraps and which stays the plain PART-TARGET-derived value for
+ * every other rendition, and for a video hold's own first
+ * `VIDEO_RUNG_FAST_POLL_WINDOW_MS`). Farol's 2026-09-15 review of PR #634
+ * named this directly: extending the deadline to 6s while polling stayed at
+ * the plain ~500ms cadence the whole time meant a quiet/frozen video
+ * rendition got polled roughly 12 times before timing out instead of the old
+ * ~3, multiplying origin traffic for exactly the case (a genuinely quiet or
+ * frozen source) this fix exists to tolerate rather than time out on. So a
+ * video hold keeps the plain cadence only for its first
+ * `VIDEO_RUNG_FAST_POLL_WINDOW_MS` (1.5s -- deliberately the OLD budget, so
+ * a video rendition's polling is indistinguishable from every other
+ * rendition's for exactly as long as the old formula would already have
+ * given up) and backs off to `VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS` (1s) for
+ * the rest of its 6s budget. This governs the tick-to-tick PACING sleep in
+ * `runPollLoop` only -- it never changes `fetchWithDeadlineRace`'s own
+ * per-waiter deadline race, and the trailing
+ * `Math.min(intervalMs, soonestDeadline - now())` in `runPollLoop` still
+ * shortens the final wait so the loop lands on time at the 6s deadline
+ * either way.
+ *
+ * @param {PlaylistLiveEdge | null} edge
+ * @param {boolean} isVideoRung
+ * @param {number} loopElapsedMs - `now() - state.pollLoopStartedAt`: how long THIS run of the poll loop has been going, not any one waiter's own hold time.
+ * @returns {number}
+ */
+function pollIntervalForLoop(edge, isVideoRung, loopElapsedMs) {
+  const baseMs = currentPollIntervalMs(edge);
+  if (isVideoRung && loopElapsedMs >= VIDEO_RUNG_FAST_POLL_WINDOW_MS) {
+    return Math.max(baseMs, VIDEO_RUNG_BACKOFF_POLL_INTERVAL_MS);
+  }
+  return baseMs;
 }
 
 /**
@@ -571,16 +811,36 @@ function sweepIdlePollStates(nowMs) {
  * only runs when a request is about to (re)start a loop — the common case
  * (joining an already-running loop) never calls it.
  *
+ * Counts LIVE loops, not claimed ones: a zombie (a loop whose request
+ * context died, so its `finally` never ran and `state.polling` is stuck
+ * `true` — see the block comment above `LOOP_RESUME_SLACK_MS`) must not hold
+ * one of the 64 slots hostage. `loopIsLive` is the same test
+ * `awaitBlockingReload` uses to decide whether to revive.
+ *
+ * @param {number} nowMs
  * @returns {number}
  */
-function countActivePollLoops() {
+function countActivePollLoops(nowMs) {
   let count = 0;
   for (const state of pollStates.values()) {
-    if (state.polling) {
+    if (loopIsLive(state, nowMs)) {
       count += 1;
     }
   }
   return count;
+}
+
+/**
+ * Whether `state`'s claimed poll loop is actually still running: it says it
+ * is, AND it is not past the instant it promised to be back by. See the
+ * block comment above `LOOP_RESUME_SLACK_MS`.
+ *
+ * @param {RenditionPollState} state
+ * @param {number} nowMs
+ * @returns {boolean}
+ */
+function loopIsLive(state, nowMs) {
+  return state.polling && nowMs <= state.loopResumeBy;
 }
 
 /**
@@ -624,12 +884,15 @@ function insertPollState(key, state) {
 /**
  * Holds one request's Promise open until `renditionKey`'s playlist advances
  * to contain `requested`, the request turns out to be too far ahead of the
- * live edge, the caller's `signal` aborts, or `TIMEOUT_PART_MULTIPLIER` part
- * durations pass — whichever comes first. Never issues an origin fetch
- * itself; every fetch goes through `deps.fetchRendition`, which `index.ts`
- * wires to its existing single-flight `fetchRenditionCoalesced`, so this
- * function's only job is deciding WHEN to call that closure and WHO to wake
- * up with the result.
+ * live edge, the caller's `signal` aborts, or the hold's own deadline passes
+ * — whichever comes first. That deadline is `TIMEOUT_PART_MULTIPLIER` part
+ * durations for every rendition except `deps.rung === LL_VIDEO_RUNG`, which
+ * gets the flat `VIDEO_RUNG_HOLD_BUDGET_MS` instead — see the module doc
+ * comment, "THE VIDEO RUNG'S HOLD BUDGET IS NOT THE PLAIN 3x-PART-TARGET
+ * FORMULA". Never issues an origin fetch itself; every fetch goes through
+ * `deps.fetchRendition`, which `index.ts` wires to its existing
+ * single-flight `fetchRenditionCoalesced`, so this function's only job is
+ * deciding WHEN to call that closure and WHO to wake up with the result.
  *
  * @param {string} renditionKey
  * @param {BlockingReloadDirectives} requested
@@ -660,7 +923,16 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
   let state = pollStates.get(renditionKey);
   let insertedNewState = false;
   if (!state) {
-    const candidate = { waiters: new Set(), lastPlaylist: null, lastEdge: null, lastFetchedAt: 0, polling: false };
+    const candidate = {
+      waiters: new Set(),
+      lastPlaylist: null,
+      lastEdge: null,
+      lastFetchedAt: 0,
+      polling: false,
+      pollLoopStartedAt: 0,
+      loopResumeBy: 0,
+      loopGeneration: 0,
+    };
     if (!insertPollState(renditionKey, candidate)) {
       // The map is full and every entry is active -- see `insertPollState`
       // and the module doc comment on `MAX_POLL_STATE_ENTRIES`. Rather than
@@ -695,8 +967,17 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
   // Joining an ALREADY-running loop (the common case at party scale, many
   // viewers on the same rendition) never reaches this: `state.polling` is
   // true for it, so `needsNewLoop` is false and no cap applies.
-  const needsNewLoop = !state.polling;
-  if (needsNewLoop && countActivePollLoops() >= MAX_ACTIVE_POLL_LOOPS) {
+  //
+  // "Currently polling" is `loopIsLive`, not the bare `state.polling` flag:
+  // a rendition whose loop died with its owner's request context still says
+  // `polling === true` forever, and treating that as "somebody is on it" is
+  // precisely how thirteen requests were parked on nothing (see the block
+  // comment above `LOOP_RESUME_SLACK_MS`). An overdue loop needs a fresh
+  // one, so it counts as `needsNewLoop` and is subject to the cap like any
+  // other new loop.
+  const loopAlive = loopIsLive(state, nowMs);
+  const needsNewLoop = !loopAlive;
+  if (needsNewLoop && countActivePollLoops(nowMs) >= MAX_ACTIVE_POLL_LOOPS) {
     if (insertedNewState) {
       // Never actually going to be polled -- free the slot immediately
       // rather than leaving an idle placeholder (it would just sit there
@@ -718,15 +999,55 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
   // `partTargetSeconds`, unlike the rest of `lastEdge`, is trusted even when
   // stale -- see the module doc comment, "PROVISIONAL TIMEOUTS".
   const knownPartTargetSeconds = state.lastEdge?.partTargetSeconds ?? null;
-  const timeoutMs = currentPollIntervalMs(state.lastEdge) * TIMEOUT_PART_MULTIPLIER;
+  // The video rung gets a flat, larger budget instead of the plain formula
+  // -- see the module doc comment, "THE VIDEO RUNG'S HOLD BUDGET IS NOT THE
+  // PLAIN 3x-PART-TARGET FORMULA", and `VIDEO_RUNG_HOLD_BUDGET_MS`'s own doc
+  // comment. Every other rendition (including `ll-audio` and the
+  // conventional path) is unaffected: `deps.rung` is only ever
+  // `LL_VIDEO_RUNG` for a request `index.ts` already identified as the video
+  // rendition (`context.rung` in `handleBlockingReload`, forwarded here
+  // unchanged), and every existing caller that does not pass `rung` at all
+  // (tests, and any future caller) keeps today's formula exactly.
+  const isVideoRung = deps.rung === LL_VIDEO_RUNG;
+  const timeoutMs = isVideoRung
+    ? VIDEO_RUNG_HOLD_BUDGET_MS
+    : currentPollIntervalMs(state.lastEdge) * TIMEOUT_PART_MULTIPLIER;
+  // A LONGER budget does not mean an UNBOUNDED number of in-flight waiters
+  // on the video rung -- Farol 2026-09-15 (PR #634) asked this be cited
+  // explicitly: `MAX_WAITERS_PER_RENDITION` (2,000, above) already caps
+  // waiters on ANY single rendition, video included, and once hit a new
+  // waiter fails fast into `{ kind: "waiter-cap-fallback" }` (checked just
+  // above, before this point) rather than being added here -- it still gets
+  // served the current playlist through the plain non-blocking path, never
+  // an error. `MAX_ACTIVE_POLL_LOOPS` (64) and `MAX_POLL_STATE_ENTRIES`
+  // (500) are the other two ceilings in the same three-tier admission
+  // control, also unmodified and also rung-agnostic. Holding a video waiter
+  // 4x longer (6s vs. the old ~1.5s) does mean, at a fixed arrival rate,
+  // roughly 4x as many concurrent video waiters for a given rendition --
+  // which is exactly what makes MAX_WAITERS_PER_RENDITION's existing 2,000
+  // ceiling reachable sooner under sustained load on one rendition, by
+  // design: it still fails new waiters fast once reached.
+
+  const setTimer = deps.setTimer ?? defaultSetTimer;
+  const logEvent = deps.logEvent;
 
   return new Promise((resolve, reject) => {
     /** @type {Waiter} */
     let waiter;
+    /** @type {(() => void) | null} */
+    let cancelSelfTimer = null;
+    const clearSelfTimer = () => {
+      if (cancelSelfTimer) {
+        pendingWaiterTimers.delete(cancelSelfTimer);
+        cancelSelfTimer();
+        cancelSelfTimer = null;
+      }
+    };
     const cleanup = () => {
       if (signal) {
         signal.removeEventListener("abort", onAbort);
       }
+      clearSelfTimer();
     };
     const settle = (outcome) => {
       cleanup();
@@ -745,7 +1066,12 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
       requested,
       registeredAt: nowMs,
       deadlineAt: nowMs + timeoutMs,
-      provisional: knownPartTargetSeconds === null,
+      // The video rung's deadline never needs correcting -- it does not
+      // depend on `PART-TARGET` in the first place, unlike the plain
+      // formula's provisional guess (see "PROVISIONAL TIMEOUTS"). Marking it
+      // non-provisional keeps `fixProvisionalDeadlines` from ever touching
+      // it once a real `PART-TARGET` becomes known.
+      provisional: !isVideoRung && knownPartTargetSeconds === null,
       settle,
       fail,
     };
@@ -760,9 +1086,77 @@ export async function awaitBlockingReload(renditionKey, requested, deps) {
     }
 
     state.waiters.add(waiter);
-    if (!state.polling) {
+
+    // THE BELT (see the block comment above `LOOP_RESUME_SLACK_MS`, item 3).
+    // Armed in THIS request's own context, so the Workers runtime always
+    // sees pending I/O for it and can never declare it hung, and so this
+    // waiter settles within its own budget no matter what happens to the
+    // loop. Re-arms if `fixProvisionalDeadlines` pushes the deadline out
+    // (at most once in practice; `MAX_SELF_TIMER_REARMS` bounds it anyway).
+    let rearms = 0;
+    const armSelfTimer = () => {
+      const delayMs = Math.max(0, waiter.deadlineAt - now()) + WAITER_SELF_TIMEOUT_SLACK_MS;
+      const cancel = setTimer(delayMs, () => {
+        pendingWaiterTimers.delete(cancel);
+        cancelSelfTimer = null;
+        if (!state.waiters.has(waiter)) {
+          // The loop already served this waiter -- the healthy path.
+          return;
+        }
+        if (now() < waiter.deadlineAt && rearms < MAX_SELF_TIMER_REARMS) {
+          rearms += 1;
+          armSelfTimer();
+          return;
+        }
+        state.waiters.delete(waiter);
+        if (logEvent) {
+          logEvent("hlsEdge.blockingReloadWaiterSelfTimeout", {
+            rung: deps.rung ?? null,
+            hadPlaylist: state.lastPlaylist !== null,
+          });
+        }
+        waiter.settle(
+          state.lastPlaylist ? { kind: "timeout", playlist: state.lastPlaylist } : { kind: "cold-timeout" },
+        );
+      });
+      cancelSelfTimer = cancel;
+      pendingWaiterTimers.add(cancel);
+    };
+    armSelfTimer();
+
+    if (!loopAlive) {
+      // `state.polling` can still be TRUE here: that is the revival case, a
+      // loop that claimed this rendition and never came back (its request
+      // context died). Bumping the generation is what strips the zombie of
+      // its authority -- if it ever does resume, it sees a generation that
+      // is not its own and exits without settling this loop's waiters or
+      // clearing `polling` under it.
+      const revived = state.polling;
       state.polling = true;
-      void runPollLoop(renditionKey, state, deps, now, sleep);
+      state.loopGeneration += 1;
+      // Marks when THIS run of the loop started, not any one waiter's own
+      // `registeredAt` -- the video rung's poll backoff
+      // (`pollIntervalForLoop`) measures elapsed time against the loop, since
+      // it is the loop's own cadence that backs off, shared by every waiter
+      // currently joined to it.
+      state.pollLoopStartedAt = nowMs;
+      // Provisional until the loop's first `await` publishes its real bound;
+      // without it a second request arriving in the same millisecond would
+      // read `loopResumeBy` from the PREVIOUS loop and start a third.
+      state.loopResumeBy = nowMs + NO_WAITER_TICK_BUDGET_MS + LOOP_RESUME_SLACK_MS;
+      if (revived && logEvent) {
+        logEvent("hlsEdge.blockingReloadLoopRevived", { rung: deps.rung ?? null });
+      }
+      const loopDone = runPollLoop(renditionKey, state, deps, now, sleep, state.loopGeneration);
+      // `ctx.waitUntil` in production (wired through `index.ts`): the loop's
+      // timers and origin fetch belong to THIS request's context, and
+      // without extending it past this request's own response the loop dies
+      // the moment this waiter is served -- which is the zombie above.
+      if (deps.keepAlive) {
+        deps.keepAlive(loopDone);
+      } else {
+        void loopDone;
+      }
     }
   });
 }
@@ -877,33 +1271,57 @@ function settleDueWaiters(state, nowMs) {
  * later one -- see `settleDueWaiters` for what a deadline win means when
  * there is still no playlist to fall back to.
  *
+ * ALWAYS BOUNDED, including the "no waiters left" case. That branch used to
+ * return the bare fetch promise -- "a deadline of never is exactly await the
+ * fetch directly" -- which made it the one remaining `await` in this module
+ * with no timer behind it, and therefore the one remaining way for a poll
+ * tick to park on nothing at all (see the block comment above
+ * `LOOP_RESUME_SLACK_MS`). `NO_WAITER_TICK_BUDGET_MS` bounds it instead.
+ *
  * @param {BlockingReloadDeps} deps
- * @param {RenditionPollState} state
- * @param {() => number} now
+ * @param {number} waitMs - This tick's bound, computed by the caller (`raceBudgetFor`) so it can also publish it as `state.loopResumeBy` before awaiting.
  * @param {(ms: number) => Promise<void>} sleep
  * @returns {Promise<{ kind: "fetched", value: FetchedPlaylist } | { kind: "error", err: unknown } | { kind: "deadline" }>}
  */
-function fetchWithDeadlineRace(deps, state, now, sleep) {
+function fetchWithDeadlineRace(deps, waitMs, sleep) {
   const outcomePromise = deps.fetchRendition().then(
     (value) => ({ kind: "fetched", value }),
     (err) => ({ kind: "error", err }),
   );
-  let soonestDeadline = Infinity;
-  for (const waiter of state.waiters) {
-    if (waiter.deadlineAt < soonestDeadline) {
-      soonestDeadline = waiter.deadlineAt;
-    }
-  }
-  if (soonestDeadline === Infinity) {
-    // No waiters at all. `runPollLoop`'s own `while (state.waiters.size > 0)`
-    // guard means this tick was only ever started with at least one, so this
-    // is just a defensive fallback (a deadline of "never" is exactly "await
-    // the fetch directly"), not a path normal traffic takes.
-    return outcomePromise;
-  }
-  const waitMs = Math.max(0, soonestDeadline - now());
   const deadlinePromise = sleep(waitMs).then(() => ({ kind: "deadline" }));
   return Promise.race([outcomePromise, deadlinePromise]);
+}
+
+/**
+ * The soonest instant any current waiter is owed an answer, or `Infinity`
+ * when nobody is waiting.
+ *
+ * @param {RenditionPollState} state
+ * @returns {number}
+ */
+function soonestDeadlineOf(state) {
+  let soonest = Infinity;
+  for (const waiter of state.waiters) {
+    if (waiter.deadlineAt < soonest) {
+      soonest = waiter.deadlineAt;
+    }
+  }
+  return soonest;
+}
+
+/**
+ * How long this tick may wait before it must come back and settle somebody.
+ *
+ * @param {RenditionPollState} state
+ * @param {number} nowMs
+ * @returns {number}
+ */
+function raceBudgetFor(state, nowMs) {
+  const soonest = soonestDeadlineOf(state);
+  if (soonest === Infinity) {
+    return NO_WAITER_TICK_BUDGET_MS;
+  }
+  return Math.max(0, soonest - nowMs);
 }
 
 /**
@@ -913,17 +1331,37 @@ function fetchWithDeadlineRace(deps, state, now, sleep) {
  * by whichever iteration runs next — no second loop is ever started for the
  * same key (`state.polling` guards that in `awaitBlockingReload`).
  *
+ * TWO THINGS EVERY ITERATION NOW DOES, both from the block comment above
+ * `LOOP_RESUME_SLACK_MS`: it publishes `state.loopResumeBy` BEFORE each
+ * `await` (so a request arriving while this loop is parked can tell a live
+ * loop from one whose request context died), and it re-checks
+ * `state.loopGeneration` AFTER each `await` (so a loop that has since been
+ * superseded stops touching a rendition that is no longer its own).
+ *
  * @param {string} renditionKey
  * @param {RenditionPollState} state
  * @param {BlockingReloadDeps} deps
  * @param {() => number} now
  * @param {(ms: number) => Promise<void>} sleep
+ * @param {number} generation - `state.loopGeneration` at the moment this loop was started; this loop's authority over `state` lasts exactly as long as the two match.
  * @returns {Promise<void>}
  */
-async function runPollLoop(renditionKey, state, deps, now, sleep) {
+async function runPollLoop(renditionKey, state, deps, now, sleep, generation) {
+  // Same test as `awaitBlockingReload`'s own `isVideoRung`, recomputed here
+  // from `deps.rung` (this loop's own closure already has it) rather than
+  // threaded through as an extra parameter -- see `pollIntervalForLoop`.
+  const isVideoRung = deps.rung === LL_VIDEO_RUNG;
   try {
-    while (state.waiters.size > 0) {
-      const raced = await fetchWithDeadlineRace(deps, state, now, sleep);
+    while (state.waiters.size > 0 && state.loopGeneration === generation) {
+      const raceBudgetMs = raceBudgetFor(state, now());
+      state.loopResumeBy = now() + raceBudgetMs + LOOP_RESUME_SLACK_MS;
+      const raced = await fetchWithDeadlineRace(deps, raceBudgetMs, sleep);
+      if (state.loopGeneration !== generation) {
+        // Superseded while this tick was in flight: whatever it learned
+        // belongs to a rendition another loop now owns. Settling this
+        // tick's waiters would be settling THAT loop's waiters.
+        return;
+      }
 
       if (raced.kind === "deadline") {
         settleDueWaiters(state, now());
@@ -978,15 +1416,26 @@ async function runPollLoop(renditionKey, state, deps, now, sleep) {
         break;
       }
 
-      const intervalMs = currentPollIntervalMs(state.lastEdge);
-      let soonestDeadline = Infinity;
-      for (const waiter of state.waiters) {
-        if (waiter.deadlineAt < soonestDeadline) {
-          soonestDeadline = waiter.deadlineAt;
-        }
-      }
+      const intervalMs = pollIntervalForLoop(state.lastEdge, isVideoRung, now() - state.pollLoopStartedAt);
+      const soonestDeadline = soonestDeadlineOf(state);
       const waitMs = Math.max(0, Math.min(intervalMs, soonestDeadline - now()));
+      state.loopResumeBy = now() + waitMs + LOOP_RESUME_SLACK_MS;
       await sleep(waitMs);
+      if (state.loopGeneration !== generation) {
+        return;
+      }
+    }
+  } catch (err) {
+    // A throw from anywhere in the loop body used to leave every waiter
+    // parked on a loop that no longer exists (`void runPollLoop(...)` had no
+    // catch at all). Degrade the same way a deadline does -- the current
+    // playlist, or an honest cold timeout -- rather than turning a bug in
+    // this file into a 502 for a viewer.
+    if (state.loopGeneration === generation) {
+      if (deps.logEvent) {
+        deps.logEvent("hlsEdge.blockingReloadLoopError", { rung: deps.rung ?? null, error: String(err) });
+      }
+      settleDueWaiters(state, Infinity);
     }
   } finally {
     // Stop POLLING the instant nobody is left holding — a rendition nobody
@@ -997,7 +1446,14 @@ async function runPollLoop(renditionKey, state, deps, now, sleep) {
     // waiters this loop just resolved. It stops being useful, and gets
     // swept, once `FAST_PATH_FRESHNESS_MS` passes with nobody asking — see
     // `sweepIdlePollStates`.
-    state.polling = false;
+    //
+    // Guarded on the generation: a superseded loop finishing late must not
+    // clear the `polling` flag belonging to the loop that replaced it, which
+    // would let a THIRD loop start beside a perfectly healthy second one.
+    if (state.loopGeneration === generation) {
+      state.polling = false;
+      state.loopResumeBy = 0;
+    }
   }
 }
 
@@ -1007,10 +1463,98 @@ async function runPollLoop(renditionKey, state, deps, now, sleep) {
  */
 export function resetBlockingReloadStateForTests() {
   pollStates.clear();
+  for (const cancel of pendingWaiterTimers) {
+    cancel();
+  }
+  pendingWaiterTimers.clear();
   pollStatesLastSweptAt = 0;
   capacityFallbackLastLoggedAt = 0;
   waiterCapFallbackLastLoggedAt = 0;
   loopCapFallbackLastLoggedAt = 0;
+}
+
+/**
+ * The last successfully fetched playlist this isolate holds for
+ * `renditionKey`, at ANY age, or `null` when it has never fetched one.
+ *
+ * Deliberately NOT freshness-gated the way `awaitBlockingReload`'s fast path
+ * is: the one caller is `handleBlockingReload`'s last-resort hard timeout,
+ * where the alternative to a slightly stale playlist is a 500 from the
+ * Workers runtime. "Two seconds old" is a fine reason to decline to SKIP an
+ * origin fetch; it is not a reason to answer a viewer with nothing.
+ *
+ * @param {string} renditionKey
+ * @returns {FetchedPlaylist | null}
+ */
+export function peekRetainedPlaylist(renditionKey) {
+  return pollStates.get(renditionKey)?.lastPlaylist ?? null;
+}
+
+/**
+ * `handleBlockingReload`'s last-resort deadline: this rendition's own hold
+ * budget plus `HARD_TIMEOUT_SLACK_MS`. A full second past the longest a hold
+ * is ever meant to last, and past the waiter self-timer
+ * (`WAITER_SELF_TIMEOUT_SLACK_MS`, 250 ms) as well, so on a healthy request
+ * -- or one rescued by either of the two mechanisms below it -- this never
+ * fires. It exists for the race nobody has thought of yet.
+ *
+ * @param {string} renditionKey
+ * @param {string | undefined} rung
+ * @returns {number}
+ */
+export function hardTimeoutBudgetMs(renditionKey, rung) {
+  if (rung === LL_VIDEO_RUNG) {
+    return VIDEO_RUNG_HOLD_BUDGET_MS + HARD_TIMEOUT_SLACK_MS;
+  }
+  const edge = pollStates.get(renditionKey)?.lastEdge ?? null;
+  const budgetMs =
+    edge && edge.partTargetSeconds !== null
+      ? currentPollIntervalMs(edge) * TIMEOUT_PART_MULTIPLIER
+      : COLD_HARD_TIMEOUT_MS;
+  return budgetMs + HARD_TIMEOUT_SLACK_MS;
+}
+
+/**
+ * Awaits `promise`, but answers `{ kind: "hard-timeout" }` rather than
+ * waiting past `budgetMs` -- and keeps a handler attached either way, so a
+ * rejection arriving after the budget has already won is not an unhandled
+ * one.
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} budgetMs
+ * @param {(ms: number, cb: () => void) => () => void} setTimer
+ * @returns {Promise<T | { kind: "hard-timeout" }>}
+ */
+function raceHardTimeout(promise, budgetMs, setTimer) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const cancel = setTimer(budgetMs, () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      resolve({ kind: "hard-timeout" });
+    });
+    promise.then(
+      (value) => {
+        if (done) {
+          return;
+        }
+        done = true;
+        cancel();
+        resolve(value);
+      },
+      (err) => {
+        if (done) {
+          return;
+        }
+        done = true;
+        cancel();
+        reject(err);
+      },
+    );
+  });
 }
 
 /**
@@ -1036,18 +1580,97 @@ export function resetBlockingReloadStateForTests() {
  * @param {(event: string, fields?: Record<string, unknown>) => void} logEvent
  * @param {{ channelId: string, rung: string }} context
  * @param {AbortSignal} [signal] - The incoming request's signal, so a disconnected viewer's hold does not outlive the connection.
+ * @param {{ keepAlive?: (promise: Promise<unknown>) => void, setTimer?: (ms: number, cb: () => void) => () => void, now?: () => number, sleep?: (ms: number) => Promise<void> }} [deps] - `keepAlive` is `ctx.waitUntil` in production (see `awaitBlockingReload`); the rest are test seams.
  * @returns {Promise<Response | null>}
  */
-export async function handleBlockingReload(renditionKey, directives, fetchRendition, logEvent, context, signal) {
+export async function handleBlockingReload(renditionKey, directives, fetchRendition, logEvent, context, signal, deps = {}) {
+  const setTimer = deps.setTimer ?? defaultSetTimer;
+  const noteEvent = (event, fields) =>
+    logEvent(event, { channelId: context.channelId, rung: context.rung, ...fields });
+  const hardBudgetMs = hardTimeoutBudgetMs(renditionKey, context.rung);
+
+  // THE HOLD'S OWN CANCELLATION HANDLE. Giving up on a promise is not the
+  // same as cancelling the work behind it: without this, a hard timeout (or
+  // a 502) would return while the waiter it abandoned stayed in
+  // `state.waiters` -- keeping a rendition's loop polling on behalf of a
+  // request that is already answered, and holding waiter/loop capacity that
+  // nothing will ever release if the loop is the dead one that caused the
+  // timeout in the first place (Farol, PR #645). `awaitBlockingReload`
+  // already knows how to unregister a waiter on an abort, so this reuses
+  // that path rather than inventing a second one: the incoming request's
+  // signal is chained into it, and it is aborted unconditionally once the
+  // outcome is decided (a no-op for a waiter the loop already settled).
+  const hold = new AbortController();
+  const forwardAbort = () => hold.abort();
+  if (signal) {
+    if (signal.aborted) {
+      hold.abort();
+    } else {
+      signal.addEventListener("abort", forwardAbort, { once: true });
+    }
+  }
+
   let outcome;
   try {
-    outcome = await awaitBlockingReload(renditionKey, directives, { fetchRendition, signal });
+    // `context.rung` is what selects `VIDEO_RUNG_HOLD_BUDGET_MS` over the
+    // plain formula inside `awaitBlockingReload` -- see that function and
+    // the module doc comment, "THE VIDEO RUNG'S HOLD BUDGET IS NOT THE
+    // PLAIN 3x-PART-TARGET FORMULA".
+    //
+    // THE LAST-RESORT GUARD. Every await below this point is individually
+    // bounded (see the block comment above `LOOP_RESUME_SLACK_MS`), and this
+    // race is what makes that a claim the code enforces rather than one it
+    // merely intends: if some future change reintroduces an unbounded wait,
+    // the viewer gets a slightly stale playlist and
+    // `hlsEdge.blockingReloadHardTimeout` gets a count, instead of the
+    // Workers runtime answering 500 and nobody finding out for an afternoon.
+    outcome = await raceHardTimeout(
+      awaitBlockingReload(renditionKey, directives, {
+        fetchRendition,
+        signal: hold.signal,
+        rung: context.rung,
+        logEvent: noteEvent,
+        keepAlive: deps.keepAlive,
+        setTimer: deps.setTimer,
+        now: deps.now,
+        sleep: deps.sleep,
+      }),
+      hardBudgetMs,
+      setTimer,
+    );
   } catch {
     logEvent("hlsEdge.blockingReloadOriginError", { channelId: context.channelId, rung: context.rung });
     return new Response("Origin fetch failed", {
       status: 502,
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
+  } finally {
+    // The outcome is decided; nothing reads this hold any more. Aborting
+    // unregisters the waiter if one is still parked (the hard-timeout and
+    // 502 cases) and does nothing at all if the loop already settled it.
+    if (signal) {
+      signal.removeEventListener("abort", forwardAbort);
+    }
+    hold.abort();
+  }
+
+  if (outcome.kind === "hard-timeout") {
+    noteEvent("hlsEdge.blockingReloadHardTimeout", {
+      msn: directives.msn,
+      part: directives.part ?? null,
+      budgetMs: hardBudgetMs,
+    });
+    const retained = peekRetainedPlaylist(renditionKey);
+    if (!retained) {
+      // Nothing to serve from memory. `null` sends the caller down its own
+      // plain cache-or-forward path (`index.ts`), which is a real request
+      // with real I/O of its own -- strictly better than inventing a body.
+      return null;
+    }
+    const headers = new Headers(retained.headers);
+    headers.set("Cache-Control", "no-store");
+    headers.set("X-HLS-Edge-Cache", "BLOCKING-HARD-TIMEOUT");
+    return new Response(retained.body, { status: retained.status, headers });
   }
 
   if (outcome.kind === "capacity-fallback") {

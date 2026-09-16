@@ -55,7 +55,9 @@ import {
 import { isSampledForHlsTelemetry } from "@pqp/shared";
 import {
   applyHlsRecoveryStep,
+  applyLlLatencyCeiling,
   behindLiveThresholdSeconds,
+  canJumpToLiveEdge,
   buildMediaSessionMetadata,
   catchUpPlaybackRate,
   effectiveHlsMode,
@@ -66,7 +68,9 @@ import {
   isBehindLive,
   isInPlaceModeDemotion,
   isLlPartLoadErrorDetail,
+  isMissingFragmentError,
   isPipAvailable,
+  isPlaylistGoneError,
   liveSeekOffsetSeconds,
   liveSeekTarget,
   llHlsConfig,
@@ -75,6 +79,7 @@ import {
   secondsBehindCatchUpTarget,
   shouldPinToConventionalRung,
   validPartTargetMs,
+  type HlsLLPlayerConfig,
   type HlsMode,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
@@ -133,6 +138,57 @@ import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { cn } from "@/lib/utils";
 
 const STALL_TICK_MS = 1_000;
+
+/**
+ * The ladder's console line. THE CONTEXT IS THE POINT: the 2026-09-16
+ * capture had a loop of `[hls] stream stalled (fatal), start-load` and no
+ * way to tell which hls.js error was behind it, which cadence the thresholds
+ * had been derived from, or whether the buffer was starved or broken.
+ * `HlsStallWatch.describeContext()` answers all three and is empty on
+ * conventional, so that path's lines stay byte-for-byte what they were and
+ * `hls-watch-player-conventional-recovery.test.tsx` still reads them.
+ */
+function stallLogLine(
+  reason: string | null,
+  what: string,
+  context: string,
+): string {
+  const head = `[hls] stream stalled (${reason}), ${what}`;
+  return context ? `${head} | ${context}` : head;
+}
+
+/**
+ * What `HlsStallWatch.onError` is told about an hls.js `ERROR`. Everything
+ * the 2026-09-16 capture was missing: which error it was, not only that our
+ * own watchdog called it fatal. `data.error` is hls.js's own `Error`
+ * (`GapController` puts the stall's buffer numbers in its message).
+ */
+function hlsErrorPayload(
+  data: {
+    fatal?: boolean;
+    type?: string;
+    details?: string;
+    reason?: string;
+    error?: { message?: string };
+  },
+  fatal: boolean,
+): {
+  fatal: boolean;
+  type: string | null;
+  details: string | null;
+  reason: string | null;
+  message: string | null;
+  now: number;
+} {
+  return {
+    fatal,
+    type: data.type ?? null,
+    details: data.details ?? null,
+    reason: data.reason ?? null,
+    message: data.error?.message ?? null,
+    now: Date.now(),
+  };
+}
 
 /** Survives a teardown so the next instance does not reseed ABR at 500 kbit/s. */
 let lastHlsBandwidthEstimate = HLS_ABR_DEFAULT_ESTIMATE_BPS;
@@ -1116,6 +1172,8 @@ export function HlsWatchPlayer({
     let currentFrag: { programDateTimeMs: number; startSeconds: number } | null =
       null;
     let currentRung: string | null = null;
+    /** The manifest's own `PART-HOLD-BACK`, last time it changed (LL only). */
+    let lastPartHoldBack: number | null = null;
     let stallsSinceLastSample = 0;
     let startupMsPending: number | null = null;
     // Distinct from `startupMsPending` being null, which also means "already
@@ -1301,6 +1359,51 @@ export function HlsWatchPlayer({
       pinnedToConventionalRef.current,
     );
     watch.configureForMode(effectiveMode, partTargetMs);
+    // FELL BEHIND THE WINDOW: JUMP TO LIVE, DO NOT ANNOUNCE A DEATH.
+    //
+    // The recovery this attach may perform at most `LL_HLS_EDGE_JUMP_MAX`
+    // times (`canJumpToLiveEdge`), for the one error that means the player
+    // is asking for the wrong place rather than that the stream is gone: a
+    // 404/410 on a part or segment (`isMissingFragmentError`). hls.js cannot
+    // recover from it on its own -- it never retries a 4xx, and an LL master
+    // has no second level to fail over to -- so it goes fatal, and before
+    // this the fatal reached the watchdog and the watchdog eventually
+    // reached "A transmissão caiu" over a broadcast that was still running.
+    //
+    // Bounded on purpose. Past the budget, or with no live edge to jump to,
+    // this returns false and the error goes to the ladder exactly as it did
+    // before, which is what still gets a person a holding screen and a retry
+    // button when the session really has ended.
+    const edgeJumps: number[] = [];
+    const jumpToLiveEdgeAfterError = (what: string): boolean => {
+      const now = Date.now();
+      if (!canJumpToLiveEdge(edgeJumps, now)) {
+        console.warn(`[hls] ${what}, out of live-edge jumps, escalating`);
+        return false;
+      }
+      const hls = hlsRef.current;
+      // Computed BEFORE the loader is touched, for the reason the stall
+      // tick's own seek is: after `stopLoad`/`startLoad`, `liveSyncPosition`
+      // can drop back to a first-window value while the element still holds
+      // the old back-buffer.
+      const target = liveSeekTarget({
+        currentTime: video.currentTime,
+        liveSyncPosition: hls?.liveSyncPosition ?? null,
+        seekableEnd: mediaSeekableEnd(video),
+        segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
+      });
+      if (target === null) {
+        console.warn(`[hls] ${what}, no live edge to jump to, escalating`);
+        return false;
+      }
+      edgeJumps.push(now);
+      console.warn(
+        `[hls] ${what} is behind the playlist window, jumping to the live edge @${target.toFixed(3)}`,
+      );
+      applyHlsRecoveryStep(hls, "restart-load", target);
+      video.currentTime = target;
+      return true;
+    };
     // This attach's own starting point for the token-swap ref (B1.3, item
     // 3): a real re-attach (this effect re-running at all) always deserves
     // the freshest URL it was actually given, never a stale ref left over
@@ -1314,18 +1417,19 @@ export function HlsWatchPlayer({
       if (!cancelled) {
         setHasFrame(true);
         setPhase("playing");
-        setStallReason(null);
-        setAuthGraceActive(false);
-        clearAuthGraceTimerRef.current();
-        restarting = false;
-        setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
         watch.onPlaying();
+        // A stale `playing` from buffered media after a restart `stopLoad`
+        // must not clear the hold UI or cancel the reconnect poll (Farol,
+        // PR 654). Real recovery is a new attach or a playlist that advances.
+        if (!watch.isHoldingForRestart) {
+          setStallReason(null);
+          setAuthGraceActive(false);
+          clearAuthGraceTimerRef.current();
+          restarting = false;
+          setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+          clearPendingReconnect();
+        }
         reportSize();
-        // The stream recovered on its own (or one of the recovery ladder's
-        // in-place steps worked) before a jittered reconnect/rebuild from an
-        // earlier tick fired. That response is now stale -- cancel it rather
-        // than reloading a player that just came back (Farol review).
-        clearPendingReconnect();
         // First real frame of this attach: report it on the NEXT telemetry
         // sample and then forget it, rather than on every sample.
         if (!startupMsComputed) {
@@ -1378,7 +1482,9 @@ export function HlsWatchPlayer({
         }
         return;
       }
-      restarting = watch.lastReason === "sequence-stuck";
+      restarting =
+        watch.lastReason === "sequence-stuck" ||
+        watch.lastReason === "playlist-gone";
       setStallReason(watch.lastReason);
       if (!restarting) {
         setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
@@ -1388,6 +1494,18 @@ export function HlsWatchPlayer({
         // its jitter from an earlier tick would only fire into a dead player.
         clearPendingReconnect();
         setPhase("dead");
+        return;
+      }
+      if (decision === "hold") {
+        // Conventional restart dead window: stop the 1 Hz playlist /
+        // last-segment loop, keep the restarting overlay up, and let the
+        // next ticks' `"reconnect"` polls find a fresh master. No seek and
+        // no startLoad — those are what made the dead window look broken.
+        clearPendingReconnect();
+        console.warn(
+          `[hls] stream stalled (${watch.lastReason}), holding for restart`,
+        );
+        hlsRef.current?.stopLoad?.();
         return;
       }
       if (
@@ -1407,7 +1525,9 @@ export function HlsWatchPlayer({
         // Chrome jump.
         clearPendingReconnect();
         const hls = hlsRef.current;
-        console.warn(`[hls] stream stalled (${watch.lastReason}), ${decision}`);
+        console.warn(
+          stallLogLine(watch.lastReason, decision, watch.describeContext()),
+        );
         // Only the seek is VOD-specific -- a VOD manifest has no live edge
         // to seek back to: `liveSyncPosition` is null (hls.js never sets it
         // on a non-live playlist) and `mediaSeekableEnd` reads the replay's
@@ -1433,7 +1553,28 @@ export function HlsWatchPlayer({
               seekableEnd: mediaSeekableEnd(video),
               segmentSeconds: liveSeekOffsetSeconds(effectiveMode, partTargetMs),
             });
-        applyHlsRecoveryStep(hls, decision);
+        // AND ON LL THE LOADER RESTARTS THERE TOO, not at the frozen
+        // playhead. `startLoad(-1)` means "resume where you were" in hls.js,
+        // not "go live" (`recoveryStartPosition`), so on LL every recovery
+        // fired one request for a part that had left the ring minutes
+        // earlier, got a 404, and went fatal before this seek ever landed.
+        //
+        // LL ONLY, and that gate is the whole difference between this PR and
+        // PR 646. A conventional stream's window is sixty seconds and its
+        // playhead is inside it: `-1` has been right there for the life of
+        // this player, every viewer we have is on that path, and PR 646's
+        // revert was a reviewer unable to rule out that this line had
+        // started seeking conventional recoveries to the edge. It has not:
+        // `null` is exactly what `applyHlsRecoveryStep` received before, on
+        // conventional and on VOD alike, and
+        // `hls-watch-player-conventional-recovery.test.tsx` pins the
+        // resulting `startLoad(-1)` against the ladder recorded off
+        // post-revert `main`.
+        applyHlsRecoveryStep(
+          hls,
+          decision,
+          effectiveMode === "ll" ? target : null,
+        );
         if (target !== null) {
           video.currentTime = target;
         }
@@ -1455,9 +1596,13 @@ export function HlsWatchPlayer({
         return;
       }
       console.warn(
-        decision === "reconnect"
-          ? `[hls] stream stalled (${watch.lastReason}), checking for a fresher session`
-          : `[hls] stream stalled (${watch.lastReason}), rebuilding the player`,
+        stallLogLine(
+          watch.lastReason,
+          decision === "reconnect"
+            ? "checking for a fresher session"
+            : "rebuilding the player",
+          watch.describeContext(),
+        ),
       );
       reconnectJitterTimer = window.setTimeout(() => {
         reconnectJitterTimer = null;
@@ -1530,115 +1675,213 @@ export function HlsWatchPlayer({
       // deliberately leaves `liveSyncDurationCount`/`liveSyncDuration` OUT
       // so hls.js defers to the manifest's own `PART-HOLD-BACK`
       // (`docs/plans/LL_HLS.md` §4; see that function's own comment).
-      const llConfig =
-        effectiveMode === "ll" ? llHlsConfig(partTargetMs) : null;
-      const player = new Hls({
-        // `hlsLivePlayerConfig()`/`llConfig` are entirely live-sync tuning
-        // (`liveSyncDurationCount`, `liveMaxLatencyDurationCount`, buffer
-        // lengths sized to a live sliding window) -- hls.js already treats a
-        // playlist with `#EXT-X-ENDLIST` as VOD and picks its own sensible
-        // buffering for it, and `maxLiveSyncPlaybackRate` (the live catch-up
-        // speed-up) has nothing to turn off on a manifest that is not live.
-        ...(isVod ? {} : (llConfig ?? hlsLivePlayerConfig())),
-        enableWorker: true,
-        capLevelToPlayerSize: true,
-        ...(isVod
-          ? {}
-          : {
-              // Conventional (`llConfig` null): 1 = off, deliberately, and
-              // still. 1.5 sped playback up (and pitched music) whenever the
-              // playhead drifted past the sync point, which on the old 10 s
-              // window was most of the time. Catch-up now lives OUTSIDE
-              // hls.js entirely (`catchUpPlaybackRate`, the "Behind-live
-              // polling" effect below), keyed on actual distance from the
-              // target rather than a single flat multiplier hls.js applies
-              // whenever it judges itself behind; leaving this at 1 is what
-              // stops the two fighting over the same `video.playbackRate`.
-              // A viewer far enough behind that the gentle curve caps out
-              // still gets the "jump to live" affordance. Not applicable to
-              // a VOD manifest at all -- there is no live sync point to
-              // drift from -- so the whole key is skipped there rather than
-              // left at a value that means nothing.
-              //
-              // LL (`llConfig` set): the reverse choice. There is no 20 s
-              // cushion to protect and the manifest's hold-back IS the
-              // target, so hls.js's OWN built-in catch-up (verified against
-              // `hls.mjs`'s `LatencyController`) does the job; the
-              // "Behind-live polling" effect skips setting
-              // `video.playbackRate` on this path for exactly the same
-              // one-writer-only reason. See `LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE`.
-              maxLiveSyncPlaybackRate: llConfig
-                ? llConfig.maxLiveSyncPlaybackRate
-                : 1,
-            }),
-        startLevel: start.startLevel,
-        abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
-        // Playlist is written after the first 2 s segment. Retry the
-        // initial 404 instead of giving up while egress is still starting.
-        manifestLoadingMaxRetry: 12,
-        manifestLoadingRetryDelay: 1000,
-        manifestLoadingMaxRetryTimeout: 8000,
-        // Every segment/media URL hls.js loads is already an absolute,
-        // presigned bucket URL (the signed playlist proxy rewrites them
-        // that way) -- only the playlist request itself is our own API,
-        // and only that one could take a Bearer header. Attaching it to
-        // every request would leak the token to R2.
-        //
-        // NOT SENT WHEN THE URL ALREADY CARRIES `?t=`, and that is the fix
-        // for the stall rather than a tidy-up. The header was called belt and
-        // braces; it was the only strap that could break. `handleApi`
-        // resolves a Bearer ahead of the router, so a header that fails is a
-        // 401 before anything looks at the capability in the URL. This
-        // closure refreshes its Clerk JWT every 30 s without `forceRefresh`
-        // and a Clerk JWT lives about 60, so roughly once a minute a playlist
-        // request went out carrying a dead token and was rejected, and the
-        // player stalled and recovered, over and over, for every web viewer
-        // of every watch party. Proved on production: same URL and same valid
-        // `?t=`, token alone 200, token plus an expired Bearer 401.
-        //
-        // The server no longer lets a failed Bearer veto a good capability
-        // either. Both halves, because either alone fixes today and the pair
-        // is what stops it coming back.
-        //
-        // The header still goes on a playlist URL that has NO token: a
-        // deployment with no `LIVE_HLS_VIEWER_KEY` mints none, and there the
-        // Bearer is the only door. hls.js calls this synchronously per XHR,
-        // so the token has to be in hand already.
-        //
-        // B1.3, item 3: also the loader-level fix for a routine token
-        // restamp. `freshPlaylistUrlRef` holds the newest `?t=` seen for
-        // this SAME session, from either `reconnect()`'s own poll or a
-        // restamped `src` prop (`nextFreshPlaylistUrl`); every request
-        // against our own proxy is rewritten onto it here before anything
-        // else runs, so a stale token reaches hls.js through the URL it
-        // fetches rather than through a rebuilt instance. `xhr.open` is
-        // called again deliberately: hls.js already opened the request
-        // against the OLD url before this function ran, and re-opening
-        // (still before `send()`) is the only way to redirect it.
-        xhrSetup: (xhr, url) => {
-          let effectiveUrl = url;
-          if (isOwnHlsPlaylistProxyUrl(url)) {
-            const fresh = withFreshHlsToken(url, freshPlaylistUrlRef.current);
-            if (fresh !== url) {
-              xhr.open("GET", fresh, true);
-              effectiveUrl = fresh;
+      const llConfig = effectiveMode === "ll" ? llHlsConfig() : null;
+      // A FUNCTION ONLY SO THE REFUSAL PATH BELOW HAS A NAME FOR IT. hls.js
+      // validates the constructor config and refuses a bad combination by
+      // THROWING (`mergeConfig`). Inside this async `attach()` that is a
+      // rejected promise and nothing else: no source, no request, nothing in
+      // the UI but the stall overlay laid over a player that was never built.
+      // It shipped exactly that way (`applyLlLatencyCeiling`).
+      const buildPlayer = (ll: HlsLLPlayerConfig | null) =>
+        new Hls({
+          // `hlsLivePlayerConfig()`/`ll` are entirely live-sync tuning
+          // (`liveSyncDurationCount`, `liveMaxLatencyDurationCount`, buffer
+          // lengths sized to a live sliding window) -- hls.js already treats a
+          // playlist with `#EXT-X-ENDLIST` as VOD and picks its own sensible
+          // buffering for it, and `maxLiveSyncPlaybackRate` (the live catch-up
+          // speed-up) has nothing to turn off on a manifest that is not live.
+          ...(isVod ? {} : (ll ?? hlsLivePlayerConfig())),
+          enableWorker: true,
+          capLevelToPlayerSize: true,
+          ...(isVod
+            ? {}
+            : {
+                // Conventional (`ll` null): 1 = off, deliberately, and
+                // still. 1.5 sped playback up (and pitched music) whenever the
+                // playhead drifted past the sync point, which on the old 10 s
+                // window was most of the time. Catch-up now lives OUTSIDE
+                // hls.js entirely (`catchUpPlaybackRate`, the "Behind-live
+                // polling" effect below), keyed on actual distance from the
+                // target rather than a single flat multiplier hls.js applies
+                // whenever it judges itself behind; leaving this at 1 is what
+                // stops the two fighting over the same `video.playbackRate`.
+                // A viewer far enough behind that the gentle curve caps out
+                // still gets the "jump to live" affordance. Not applicable to
+                // a VOD manifest at all -- there is no live sync point to
+                // drift from -- so the whole key is skipped there rather than
+                // left at a value that means nothing.
+                //
+                // LL (`ll` set): the reverse choice. There is no 20 s
+                // cushion to protect and the manifest's hold-back IS the
+                // target, so hls.js's OWN built-in catch-up (verified against
+                // `hls.mjs`'s `LatencyController`) does the job; the
+                // "Behind-live polling" effect skips setting
+                // `video.playbackRate` on this path for exactly the same
+                // one-writer-only reason. See `LL_HLS_MAX_LIVE_SYNC_PLAYBACK_RATE`.
+                maxLiveSyncPlaybackRate: ll
+                  ? ll.maxLiveSyncPlaybackRate
+                  : 1,
+              }),
+          startLevel: start.startLevel,
+          abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
+          // Playlist is written after the first 2 s segment. Retry the
+          // initial 404 instead of giving up while egress is still starting.
+          manifestLoadingMaxRetry: 12,
+          manifestLoadingRetryDelay: 1000,
+          manifestLoadingMaxRetryTimeout: 8000,
+          // Every segment/media URL hls.js loads is already an absolute,
+          // presigned bucket URL (the signed playlist proxy rewrites them
+          // that way) -- only the playlist request itself is our own API,
+          // and only that one could take a Bearer header. Attaching it to
+          // every request would leak the token to R2.
+          //
+          // NOT SENT WHEN THE URL ALREADY CARRIES `?t=`, and that is the fix
+          // for the stall rather than a tidy-up. The header was called belt and
+          // braces; it was the only strap that could break. `handleApi`
+          // resolves a Bearer ahead of the router, so a header that fails is a
+          // 401 before anything looks at the capability in the URL. This
+          // closure refreshes its Clerk JWT every 30 s without `forceRefresh`
+          // and a Clerk JWT lives about 60, so roughly once a minute a playlist
+          // request went out carrying a dead token and was rejected, and the
+          // player stalled and recovered, over and over, for every web viewer
+          // of every watch party. Proved on production: same URL and same valid
+          // `?t=`, token alone 200, token plus an expired Bearer 401.
+          //
+          // The server no longer lets a failed Bearer veto a good capability
+          // either. Both halves, because either alone fixes today and the pair
+          // is what stops it coming back.
+          //
+          // The header still goes on a playlist URL that has NO token: a
+          // deployment with no `LIVE_HLS_VIEWER_KEY` mints none, and there the
+          // Bearer is the only door. hls.js calls this synchronously per XHR,
+          // so the token has to be in hand already.
+          //
+          // B1.3, item 3: also the loader-level fix for a routine token
+          // restamp. `freshPlaylistUrlRef` holds the newest `?t=` seen for
+          // this SAME session, from either `reconnect()`'s own poll or a
+          // restamped `src` prop (`nextFreshPlaylistUrl`); every request
+          // against our own proxy is rewritten onto it here before anything
+          // else runs, so a stale token reaches hls.js through the URL it
+          // fetches rather than through a rebuilt instance. `xhr.open` is
+          // called again deliberately: hls.js already opened the request
+          // against the OLD url before this function ran, and re-opening
+          // (still before `send()`) is the only way to redirect it.
+          xhrSetup: (xhr, url) => {
+            let effectiveUrl = url;
+            if (isOwnHlsPlaylistProxyUrl(url)) {
+              const fresh = withFreshHlsToken(url, freshPlaylistUrlRef.current);
+              if (fresh !== url) {
+                xhr.open("GET", fresh, true);
+                effectiveUrl = fresh;
+              }
             }
-          }
-          if (
-            isOwnHlsPlaylistProxyUrl(effectiveUrl) &&
-            authToken &&
-            !hasHlsViewerToken(effectiveUrl)
-          ) {
-            xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
-          }
-        },
-      });
+            if (
+              isOwnHlsPlaylistProxyUrl(effectiveUrl) &&
+              authToken &&
+              !hasHlsViewerToken(effectiveUrl)
+            ) {
+              xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+            }
+          },
+        });
+      let player: ReturnType<typeof buildPlayer>;
+      try {
+        player = buildPlayer(llConfig);
+      } catch (error) {
+        // Said out loud, always: an unhandled rejection in here is what made
+        // the original failure invisible for a whole party.
+        console.error("[hls] config error", error);
+        if (cancelled) {
+          return;
+        }
+        if (!llConfig || pinnedToConventionalRef.current) {
+          // Nothing left to drop. Let it reach the caller's `.catch`, which
+          // at least names it, rather than half-building a player.
+          throw error;
+        }
+        // DOWN THE SAME SEAM §4's PIN ALREADY USES, and not by quietly
+        // building a conventional engine here (a Farol finding on this PR):
+        // `effectiveMode` is computed at the top of this effect and every
+        // mode-dependent thing after it -- `watch.configureForMode`, the
+        // badge, `liveSeekOffsetSeconds`, the pin rule's own arming -- was
+        // already set up for `"ll"`. A second instance built inside this
+        // catch would run conventional live-sync under LL stall thresholds,
+        // which is a different wrong answer. Pinning and re-running the
+        // effect makes all of them agree. The pin is sticky for the session,
+        // so this can happen at most once and the branch above is the floor.
+        pinnedToConventionalRef.current = true;
+        setPinnedToConventional(true);
+        setAttempt((n) => n + 1);
+        return;
+      }
+      if (llConfig) {
+        // AFTER the constructor, never inside it: hls.js `mergeConfig`
+        // throws on `liveMaxLatencyDuration` in a config that does not also
+        // set `liveSyncDuration`, and setting that is exactly what would
+        // stop LL deferring to the manifest's own `PART-HOLD-BACK`. Passing
+        // it to `new Hls(...)` threw for every LL viewer in production and,
+        // because this is an async function invoked as `void attach()`, the
+        // rejection was silent and `loadSource` below was never reached.
+        // See `applyLlLatencyCeiling`.
+        applyLlLatencyCeiling(
+          player as unknown as { config: { liveMaxLatencyDuration?: number } },
+          partTargetMs,
+        );
+      }
       hls = player as unknown as HlsHandle;
       hlsRef.current = hls;
       player.on(Hls.Events.ERROR, (_event, data) => {
         // Fatal network/media errors: hls.js has given up on this source;
         // non-fatal ones it retries on its own and the watchdog only notes.
-        watch.onError({ fatal: Boolean(data.fatal) });
+        const fatal = Boolean(data.fatal);
+        // WHETHER THIS ATTACH HAS A LIVE-EDGE JUMP AT ALL. LL only, and
+        // never a replay. On every other path -- which is every watch party
+        // anybody has actually run -- the watchdog is told FIRST and the
+        // rest of this handler is what it always was, so there is nothing a
+        // conventional viewer can reach that PR 646 could have changed.
+        //
+        // On LL the watchdog is told LAST instead, because the jump below
+        // is a claim that this fatal is recoverable in place: handing the
+        // ladder the same error would run a second, competing response to
+        // it.
+        const canJumpOnThisAttach = effectiveMode === "ll" && !isVod;
+        // Conventional restart dead window (2026-09-15): a 404/410 on our
+        // own playlist/master means the previous session is gone, not that
+        // this player should walk the fatal start-load ladder. Intercept
+        // before `onError({ fatal })` — hls.js marks these fatal after its
+        // retry budget, and that ladder is exactly the 1 Hz / last-segment
+        // loop the hold exists to stop. LL and VOD keep the ordinary path
+        // (PR 650: do not reintroduce the broader PR 646 live-edge recovery).
+        if (
+          !cancelled &&
+          !isVod &&
+          effectiveMode === "conventional" &&
+          // Own proxy only — an external HLS 404 must keep the ordinary
+          // fatal path, not Farol's fetchChannelLive reconnect (Farol, PR 654).
+          isOwnHlsPlaylistProxyUrl(activeSrc) &&
+          isPlaylistGoneError({
+            details: typeof data.details === "string" ? data.details : null,
+            responseCode:
+              typeof data.response?.code === "number"
+                ? data.response.code
+                : null,
+          })
+        ) {
+          watch.onPlaylistGone();
+          // Stop the in-flight 404 storm immediately rather than waiting
+          // for the next stall tick to return `"hold"`.
+          player.stopLoad();
+          setStallReason("playlist-gone");
+          setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+          // Nothing else in this handler applies: the pin rule and the
+          // live-edge jump are both LL-only, a 404 is never the 401 the
+          // auth grace exists for, and telling the watchdog `onError` too
+          // would start the very ladder the hold replaces.
+          return;
+        }
+        if (!canJumpOnThisAttach) {
+          watch.onError(hlsErrorPayload(data, fatal));
+        }
         // Pitfall 16 (CLAUDE.md): a 401 on our own playlist proxy is almost
         // always a Clerk JWT that went stale a few seconds before its
         // refresh, not a real access failure — the `?t=` capability in the
@@ -1653,6 +1896,7 @@ export function HlsWatchPlayer({
         // "a viewer who cannot hold the edge should stop trying, not
         // oscillate". `effectiveMode` (not the raw `mode` prop) so a
         // session already pinned does not re-arm itself on its own errors.
+        let pinned = false;
         if (
           !cancelled &&
           effectiveMode === "ll" &&
@@ -1667,6 +1911,7 @@ export function HlsWatchPlayer({
             !pinnedToConventionalRef.current &&
             shouldPinToConventionalRung(timestamps)
           ) {
+            pinned = true;
             pinnedToConventionalRef.current = true;
             // The render-visible mirror (Farol review, this PR): without
             // this the live badge kept showing an LL latency reading after
@@ -1679,6 +1924,40 @@ export function HlsWatchPlayer({
             setAttempt((n) => n + 1);
           }
         }
+        if (!canJumpOnThisAttach) {
+          // Conventional and VOD are finished: the watchdog already has the
+          // error and its ladder is the only response there is, exactly as
+          // before PR 646.
+          return;
+        }
+        // A 404/410 on a part or segment: the player fell behind the ring,
+        // which a jump to live fixes and a holding screen does not. Skipped
+        // when the pin above already fired -- that rebuilds the instance
+        // from the live edge anyway, and two responses to one error is how
+        // a recovery ladder fights itself.
+        //
+        // Why this is LL-only rather than "live-only", which is what PR 646
+        // shipped: on a conventional stream a 404 on a segment is NOT a
+        // player that fell behind a twelve-second ring. The window is sixty
+        // seconds and hls.js's own retry budget is generous enough to sit
+        // inside it, so a 404 there means the object is genuinely not in the
+        // bucket -- an egress that stopped writing, a session that ended --
+        // and escalating to the ladder (and eventually to a holding screen
+        // that says so) is the correct answer, not jumping the audience
+        // forward over a hole.
+        if (
+          !cancelled &&
+          !pinned &&
+          isMissingFragmentError({
+            fatal,
+            details: data.details,
+            responseCode: data.response?.code ?? null,
+          }) &&
+          jumpToLiveEdgeAfterError(`${data.details} ${data.response?.code}`)
+        ) {
+          return;
+        }
+        watch.onError(hlsErrorPayload(data, fatal));
       });
       player.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         // What Auto actually settled on, so the button can say
@@ -1716,10 +1995,50 @@ export function HlsWatchPlayer({
         // rule tell "no new part yet" apart from "no new segment yet",
         // which is the normal, healthy state for several seconds at a time.
         if (effectiveMode === "ll") {
-          watch.onPartAdvance(
-            `${data.details.lastPartSn}.${data.details.lastPartIndex}`,
-            Date.now(),
-          );
+          // WHAT THE PLAYLIST SAYS ABOUT ITS OWN CADENCE, before anything is
+          // judged against it. `pqp-remux` closes a video segment on an IDR,
+          // so a real party advertises `EXT-X-TARGETDURATION` 7 where the
+          // client constant assumed 4, and the sequence backstop was firing
+          // on a healthy stream (production, 2026-09-16).
+          watch.onManifestTiming({
+            targetDurationSeconds: data.details.targetduration,
+            partTargetSeconds: data.details.partTarget,
+          });
+          // A PART IS ONLY PROGRESS IF THE PLAYLIST ACTUALLY LISTS ONE.
+          // `lastPartSn`/`lastPartIndex` are hls.js's own newest-part pair;
+          // on a playlist with no `partList` they are the segment's own
+          // numbers with a `-1` index, which never changes between parts and
+          // so must not be fed in as if it did.
+          const parts = data.details.partList;
+          if (parts && parts.length > 0) {
+            watch.onPartAdvance(
+              `${data.details.lastPartSn}.${data.details.lastPartIndex}`,
+              Date.now(),
+            );
+          }
+          // THE CEILING FOLLOWS THE MANIFEST, once the manifest exists.
+          // `applyLlLatencyCeiling` at the attach only has the part target
+          // to go on -- 4 s at a 500 ms part -- and the server is free to
+          // advertise a `PART-HOLD-BACK` anywhere under that. Raise the
+          // hold-back to 3 s (which the edge is doing, for its own half of
+          // the same evening's rebuffering) and the player is asked to hold
+          // a 3 s target under a 4 s force-seek line: one stumble and
+          // `synchronizeToLiveEdge` seeks, which empties a 6 s buffer,
+          // which is the next stumble. `llLatencyCeilingSeconds` keeps six
+          // parts of room above whatever the manifest says. Re-applied only
+          // when the value actually changes -- this event fires once per
+          // PART under the blocking reload.
+          const holdBack = data.details.partHoldBack;
+          if (holdBack !== lastPartHoldBack) {
+            lastPartHoldBack = holdBack;
+            applyLlLatencyCeiling(
+              player as unknown as {
+                config: { liveMaxLatencyDuration?: number };
+              },
+              partTargetMs,
+              holdBack,
+            );
+          }
         }
         // Conventional only. This is exactly the override §4 warns against
         // on an LL manifest: it fights `PART-HOLD-BACK` by giving
@@ -1798,7 +2117,30 @@ export function HlsWatchPlayer({
       });
     }
 
-    void attach();
+    // NOT a bare `void attach()`. This function constructs hls.js, and a
+    // throw in there (an hls.js config `mergeConfig` refuses, a dynamic
+    // import that fails) leaves the element with no source, no request ever
+    // issued, and nothing in the console but an unhandled rejection the
+    // stall overlay then covers with "reconectando". Pitfall 16's rule --
+    // something that refuses has to say why -- applied to our own attach.
+    void attach().catch((error) => {
+      console.error("[hls] attach failed", error);
+      if (cancelled) {
+        return;
+      }
+      // AND RECOVERED FROM, not merely logged (a Farol finding on this PR).
+      // An attach that threw leaves an element with no source, which is as
+      // fatal as hls.js declaring a source dead -- so it is handed to the one
+      // ladder that already owns that: the stall tick reads it on its next
+      // pass and escalates through reconnect / rebuild / "A transmissão
+      // caiu" exactly as it does for a source that died after attaching.
+      watch.onError({
+        fatal: true,
+        type: "attachError",
+        message: error instanceof Error ? error.message : String(error),
+        now: Date.now(),
+      });
+    });
     // `reconnect` lives on reconnectRef: listing it here re-created hls.js
     // on every restamp of the callback. `videoRef` is a parent object whose
     // identity must not tear the session down either; the element is always

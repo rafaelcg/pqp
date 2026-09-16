@@ -155,6 +155,12 @@ export const voiceParticipantSchema = z.object({
    * down", which is also everybody's state on join.
    */
   handRaisedAt: z.number().int().nonnegative().nullable().optional(),
+  /**
+   * Whether this seat's music player is on. Absent on an older client or
+   * server reads as on: a fresh player starts that way, and a build that
+   * predates the frame never turns it off.
+   */
+  listeningMusic: z.boolean().optional(),
 });
 
 export const welcomeMessageSchema = z.object({
@@ -813,6 +819,20 @@ export const setRaisedHandMessageSchema = z.object({
 export type SetRaisedHandMessage = z.infer<typeof setRaisedHandMessageSchema>;
 
 /**
+ * Client -> server: this machine is (or is not) playing the room's music.
+ * The roster carries `listeningMusic` so everyone can see who is listening,
+ * and `channel-music` carries the count.
+ */
+export const setMusicListeningMessageSchema = z.object({
+  type: z.literal("set-music-listening"),
+  listening: z.boolean(),
+});
+
+export type SetMusicListeningMessage = z.infer<
+  typeof setMusicListeningMessageSchema
+>;
+
+/**
  * `LIVE_HLS_VOICE_TRACK`'s "separada" declaration, from the presenter to the
  * server, the same shape `set-camera` already is for the camera.
  *
@@ -873,6 +893,7 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setVoiceTrackModeMessageSchema,
   // --- music queue ---
   setMusicMessageSchema,
+  setMusicListeningMessageSchema,
   // --- live reactions ---
   liveReactionMessageSchema,
   // --- live HLS watch mode (no seat) ---

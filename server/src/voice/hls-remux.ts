@@ -201,6 +201,27 @@ function logLookupFailure(
   });
 }
 
+/** The live party on a channel and what its "Ir ao vivo" asked for. */
+export interface LiveHlsRequest {
+  /** `channel_sessions.low_latency_requested` for the live party. */
+  requested: boolean;
+  /**
+   * WHICH party that is. The demotion memo is keyed by this and nothing
+   * else, so the answer has to travel with the request rather than being
+   * re-read on its own: two reads are two different moments, and a party
+   * that ended in between would pair one party's request with another
+   * party's identity.
+   */
+  partySessionId: string | null;
+  /**
+   * When it started. The one thing that tells a party apart from a demoted
+   * session whose own party is not yet known: a party live BEFORE that
+   * session began could be the one it belonged to, a party created after it
+   * emphatically could not. Same bound `attributeDemotion` uses.
+   */
+  partyCreatedAtMs: number | null;
+}
+
 /**
  * What a channel's most recent "go live" asked for — `channel_sessions.
  * low_latency_requested`, not process memory (a Farol finding on PR #580:
@@ -216,20 +237,33 @@ function logLookupFailure(
  * genuine "this party never asked" — and `resolveHlsMode` then resolves
  * `conventional`, so a transient database hiccup mid-party could silently
  * tear down a running LL session (a Farol finding on PR #580, fourth
- * round). The caller (`reconcileLiveHlsNow` in `hls-egress.ts`) treats
- * `null` as "cannot decide this time" and makes NO mode change at all,
- * leaving whatever is currently running exactly as it is until the next
- * reconcile can actually ask.
+ * round). The caller (`resolveHlsModeForChannel` below) treats `null` as
+ * "cannot decide this time" and makes NO mode change at all, leaving
+ * whatever is currently running exactly as it is until the next reconcile
+ * can actually ask.
  */
-export async function requestedHlsModeForChannel(channelId: string): Promise<boolean | null> {
+export async function liveHlsRequestForChannel(
+  channelId: string,
+): Promise<LiveHlsRequest | null> {
   try {
-    const result = await getPool().query<{ low_latency_requested: boolean }>(
-      `SELECT low_latency_requested FROM channel_sessions
-       WHERE channel_id = $1 AND status = 'live'
-       LIMIT 1`,
+    const result = await getPool().query<{
+      id: string;
+      low_latency_requested: boolean;
+      created_at_ms: string;
+    }>(
+      `SELECT id, low_latency_requested,
+              (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at_ms
+         FROM channel_sessions
+        WHERE channel_id = $1 AND status = 'live'
+        LIMIT 1`,
       [channelId],
     );
-    return result.rows[0]?.low_latency_requested === true;
+    const row = result.rows[0];
+    return {
+      requested: row?.low_latency_requested === true,
+      partySessionId: row?.id ?? null,
+      partyCreatedAtMs: row ? Number(row.created_at_ms) : null,
+    };
   } catch (error) {
     logLookupFailure(channelId, "requested-mode", error);
     return null;
@@ -242,22 +276,16 @@ export async function setRequestedHlsMode(
   requested: boolean,
 ): Promise<void> {
   try {
-    const result = await getPool().query<{ channel_id: string }>(
-      `UPDATE channel_sessions SET low_latency_requested = $1 WHERE id = $2
-       RETURNING channel_id`,
+    await getPool().query(
+      `UPDATE channel_sessions SET low_latency_requested = $1 WHERE id = $2`,
       [requested, watchPartySessionId],
     );
-    // A NEW PARTY IS NOT THE DEMOTED ONE. `noteLlDemotion` suppresses LL for
-    // five minutes by channel, and without this a party starting on the same
-    // channel inside that window would be forced onto the conventional ladder
-    // by a verdict about a session that has already ended (a Farol finding on
-    // PR #618). Pressing "Ir ao vivo" and asking for LL is the newest
-    // statement about this channel, so it clears the memo; the durable
-    // `low_latency_requested` it has just written is the only answer left.
-    const channelId = result.rows[0]?.channel_id;
-    if (requested && channelId) {
-      forgetLlDemotion(channelId);
-    }
+    // NOTHING TO FORGET. The demotion memo below is keyed by the party that
+    // was demoted, and a new party is a new `channel_sessions` row, so its
+    // id was never in the map: the newest statement about this channel wins
+    // by construction rather than by a cache invalidation that only the
+    // machine serving this HTTP request could perform (the 2026-09-15
+    // production failure — see `noteLlDemotion`).
   } catch (error) {
     logEvent("voice.hlsLlRequestedModeWriteFailed", {
       watchPartySessionId,
@@ -270,17 +298,17 @@ export async function setRequestedHlsMode(
  * THE SAME WINDOW THE BOX USES, on this side of the wire.
  * `DEMOTE_WINDOW_MS` in `internal/control/watchdog.go` is five minutes: a
  * second stall inside it demotes for good, a stall further apart is a fresh
- * episode. A demotion here means the same thing about the party, so a channel
+ * episode. A demotion here means the same thing about the party, so a party
  * demoted inside this window does not get LL re-selected however many times
  * the mode is re-resolved.
  */
 const LL_DEMOTION_MEMO_MS = 5 * 60_000;
 
-/** When this channel's LL session was last demoted, per channel. */
+/** When a party's LL session was demoted, keyed by `channel_sessions.id`. */
 const llDemotedAt = new Map<string, number>();
 
 /**
- * WHY BOTH A MEMO AND A COLUMN WRITE.
+ * WHY BOTH A MEMO AND A COLUMN WRITE, AND WHY THE MEMO IS KEYED BY PARTY.
  *
  * `low_latency_requested` is the durable half: cleared, every reconcile on
  * every machine resolves `conventional` for the rest of this party, and the
@@ -290,30 +318,390 @@ const llDemotedAt = new Map<string, number>();
  *
  * The memo is the belt. The write can fail, and the read it feeds is a
  * DIFFERENT query on a different tick — between the demotion and the clear
- * landing, `requestedHlsModeForChannel` would still answer `true` and
+ * landing, `liveHlsRequestForChannel` would still answer `true` and
  * `reconcileLiveHlsNow` would start a second LL session on top of the one
  * just given up on, which is the loop this whole fallback exists to end.
  * Process-local and five minutes long, it costs nothing and closes that gap
  * on the machine that did the demoting — the one that is about to reconcile.
+ *
+ * IT USED TO BE KEYED BY CHANNEL, AND ON TWO MACHINES THAT WAS WRONG.
+ * Channel `d5559e70`, 2026-09-15: instance A demoted a session at 15:23:14
+ * and memoed the channel. At 15:26:52 the host created a NEW party with the
+ * switch on; the HTTP request landed on instance B, which wrote
+ * `low_latency_requested = true` and cleared its own (empty) memo. The share
+ * a few seconds later reconciled on A, whose channel memo was still set, so
+ * the API silently started the conventional ladder for a party whose row
+ * said `true` — the same shape as #603/#605/#606/#618/#625, per-process
+ * state the other machine cannot see.
+ *
+ * Keyed by the demoted party's own id there is nothing to invalidate: a new
+ * party has a new id and no entry, so the memo can only ever veto the one
+ * party it is a verdict about, on the one machine that reached that verdict.
+ * Entries are pruned on write and expire with the window, so a party that
+ * ends takes its entry with it within five minutes either way.
  */
-export function noteLlDemotion(channelId: string, now = Date.now()): void {
+export function noteLlDemotion(partySessionId: string, now = Date.now()): void {
+  ensureMemoPruneTimer();
+  if (llDemotedAt.has(partySessionId)) {
+    // Re-noting the same party: refresh it and move it to the end, so
+    // insertion order stays write order for the eviction rule below.
+    llDemotedAt.delete(partySessionId);
+    llDemotedAt.set(partySessionId, now);
+    return;
+  }
+  if (llDemotedAt.size >= MAX_LL_DEMOTION_MEMOS) {
+    // THE CAP MAY ONLY TAKE AN EXPIRED ENTRY. Evicting the oldest outright
+    // discards a LIVE veto, and the party it is about is then free to be
+    // handed LL again inside the very window the memo exists to cover -- the
+    // database-failure window, which is exactly when a burst of demotions
+    // would fill this map in the first place (a Farol finding on this PR).
+    //
+    // One look answers it: insertion order is write order, so if the least
+    // recently written entry is not expired, nothing else is either.
+    const oldest = llDemotedAt.entries().next();
+    if (!oldest.done && now - oldest.value[1] > LL_DEMOTION_MEMO_MS) {
+      llDemotedAt.delete(oldest.value[0]);
+    } else {
+      // A thousand live demotions inside five minutes is a catastrophe, not
+      // a busy evening. Nothing is dropped and the answer for every party
+      // becomes "no LL until the sweep prunes this" -- fail closed, because
+      // the alternative is guessing which veto was safe to lose.
+      noteDemotionMemoFull(partySessionId, now);
+      return;
+    }
+  }
+  llDemotedAt.set(partySessionId, now);
+}
+
+/**
+ * The memo is full of vetoes that are all still live. Until the sweep can
+ * prune it, `llDemotedRecently` answers yes for every party: the one thing
+ * that must not happen is a demoted party being handed LL again because its
+ * entry lost a race for a slot.
+ */
+let memoSaturatedAt: number | null = null;
+const MEMO_FULL_LOG_WINDOW_MS = 60_000;
+let memoFullLoggedAt = 0;
+
+function noteDemotionMemoFull(partySessionId: string, now: number): void {
+  memoSaturatedAt = now;
+  if (now - memoFullLoggedAt < MEMO_FULL_LOG_WINDOW_MS) {
+    return;
+  }
+  memoFullLoggedAt = now;
+  logEvent("voice.hlsLlDemotionMemoFull", {
+    partySessionId,
+    entries: llDemotedAt.size,
+    cap: MAX_LL_DEMOTION_MEMOS,
+  });
+}
+
+function demotionMemoSaturated(now: number): boolean {
+  return (
+    memoSaturatedAt !== null && now - memoSaturatedAt < LL_DEMOTION_MEMO_MS
+  );
+}
+
+/**
+ * WHEN A MAP KEYED ON A CLOCK ACTUALLY SHRINKS.
+ *
+ * Both of these expire on time rather than on an event, and the first
+ * version swept them only when something was written to them: a burst of
+ * demotions followed by a quiet evening left every historical party id in
+ * memory until the next demotion happened to sweep it, and logging one
+ * channel's decision walked every other channel's entry, which is O(C^2)
+ * across a burst (two Farol findings on this PR).
+ *
+ * So they are swept from `sweepLlDemotions`, on the health monitor's
+ * ten-second tick, whether or not anything is demoted -- and BEFORE that
+ * function's own configuration check, because "LL is on but the remux
+ * control URL is missing" is a deployment that still resolves modes, still
+ * fills `lastModeResolved`, and used to get no pruning at all (a third).
+ *
+ * THE WRITE PATHS NEVER SCAN, NOT EVEN PAST A THRESHOLD. A first version
+ * swept from the write once a map was large, which is the same quadratic
+ * shape one threshold further out: with the map big, every demotion and
+ * every mode line walks every entry (a Farol finding on this PR). A write is
+ * `rememberBounded`, which is three constant-time Map operations and a
+ * single eviction of the least recently written key when the cap is hit --
+ * insertion order IS the eviction order, which is why a repeat write deletes
+ * before it sets. So memory is bounded whether or not anything ever sweeps,
+ * and nothing on the reconcile path is ever O(entries).
+ *
+ * A process with no monitor (the flag on, live HLS off, a test) gets a lazy
+ * unref'd timer on its first insert, so the maps still empty on a clock
+ * rather than merely staying under their cap.
+ */
+const MAX_LL_DEMOTION_MEMOS = 1024;
+const MAX_MODE_DECISION_MEMOS = 1024;
+const MEMO_PRUNE_INTERVAL_MS = 60_000;
+
+let memoPruneTimer: ReturnType<typeof setInterval> | null = null;
+/** Only a test reads it: what proves the write path does not walk the map. */
+let memoEntriesScanned = 0;
+
+function ensureMemoPruneTimer(): void {
+  if (memoPruneTimer) {
+    return;
+  }
+  memoPruneTimer = setInterval(() => {
+    pruneLlMemos(Date.now());
+  }, MEMO_PRUNE_INTERVAL_MS);
+  memoPruneTimer.unref?.();
+}
+
+/**
+ * Constant time, always. The delete before the set is not redundant: a Map
+ * keeps its original insertion position on an overwrite, so without it the
+ * eviction below would drop the key that has been written most often rather
+ * than the one written longest ago.
+ *
+ * ONLY FOR `lastModeResolved`, whose entries are a log rate limit: losing one
+ * costs an extra line and nothing else. `llDemotedAt` holds vetoes and refuses
+ * to drop a live one, so it has its own rule in `noteLlDemotion`.
+ */
+function rememberBounded<V>(
+  map: Map<string, V>,
+  key: string,
+  value: V,
+  cap: number,
+): void {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > cap) {
+    const oldest = map.keys().next();
+    if (!oldest.done) {
+      map.delete(oldest.value);
+    }
+  }
+  ensureMemoPruneTimer();
+}
+
+function pruneLlMemos(now: number): void {
+  memoEntriesScanned += llDemotedAt.size + lastModeResolved.size;
   for (const [id, at] of llDemotedAt) {
     if (now - at > LL_DEMOTION_MEMO_MS) {
       llDemotedAt.delete(id);
     }
   }
-  llDemotedAt.set(channelId, now);
+  // SATURATION IS A STATEMENT ABOUT CAPACITY, SO IT IS RE-READ FROM CAPACITY.
+  // A first version cleared it on every sweep, whether or not the sweep had
+  // freed anything: a memo of 1,024 vetoes that are ALL still live prunes to
+  // 1,024 vetoes, and clearing the flag there lifts the fail-closed answer
+  // while the condition that demanded it is exactly as true as it was (a
+  // Farol finding on PR #630, recorded as a known edge case at merge). The
+  // party that could not be recorded would then be handed LL again, which is
+  // the one outcome this whole memo exists to prevent.
+  if (llDemotedAt.size < MAX_LL_DEMOTION_MEMOS) {
+    memoSaturatedAt = null;
+  } else if (memoSaturatedAt !== null) {
+    // Still full, still saturated -- and re-stamped, so the flag's own
+    // five-minute expiry cannot lapse underneath a condition that has not
+    // ended. It ends when a sweep finds room, and not before.
+    memoSaturatedAt = now;
+  }
+  for (const [id, entry] of lastModeResolved) {
+    if (now - entry.at > MODE_RESOLVED_LOG_WINDOW_MS) {
+      lastModeResolved.delete(id);
+    }
+  }
 }
 
-/** A newer party asked for LL on this channel: the old verdict is spent. */
-export function forgetLlDemotion(channelId: string): void {
-  llDemotedAt.delete(channelId);
-}
-
-/** Read by `reconcileLiveHlsNow`'s mode branch: LL is off for this channel. */
-export function llDemotedRecently(channelId: string, now = Date.now()): boolean {
-  const at = llDemotedAt.get(channelId);
+/**
+ * Read by `resolveHlsModeForChannel`: LL is off for THIS party. A party we
+ * could not identify (`null`) is never vetoed — the memo is a statement
+ * about one party, and with no id to compare there is nothing it can say.
+ */
+export function llDemotedRecently(
+  partySessionId: string | null,
+  now = Date.now(),
+): boolean {
+  if (partySessionId === null) {
+    return false;
+  }
+  if (demotionMemoSaturated(now)) {
+    return true;
+  }
+  const at = llDemotedAt.get(partySessionId);
   return at !== undefined && now - at < LL_DEMOTION_MEMO_MS;
+}
+
+/**
+ * A DEMOTION ON THIS CHANNEL WHOSE PARTY WE DO NOT YET KNOW.
+ *
+ * `hls_sessions.watch_party_session_id` is NULL for two reasons a row cannot
+ * tell apart (see `attributeDemotion`), so a demotion can be queued with no
+ * party to key the memo by -- and with the memo keyed by party, that left the
+ * window between the demotion and the attribution landing completely
+ * unguarded: a reconcile in between reads `low_latency_requested = true` and
+ * starts LL straight back into the session the box has just given up on,
+ * which is the loop the memo exists to end (a Farol finding on this PR; the
+ * old channel-keyed memo covered it by covering everything).
+ *
+ * So while attribution is outstanding, a demotion vetoes the channel again --
+ * but only a party that could actually BE the demoted one. A party created
+ * after the demoted session started emphatically could not (the same bound
+ * `attributeDemotion` uses), so the newer-party downgrade this whole change
+ * exists to prevent stays prevented, on either machine.
+ *
+ * IT LASTS AS LONG AS THE DEMOTION DOES, not five minutes. A first version
+ * expired this with `LL_DEMOTION_MEMO_MS` while the entry could still be
+ * queued for retry for half an hour, so a prolonged attribution failure --
+ * the very thing that produces an unattributed demotion in the first place --
+ * reopened the window at the five minute mark and let LL restart into the
+ * session the box had given up on (a Farol finding on this PR). The honest
+ * rule is the one the entry itself states: while a demotion on this channel
+ * does not know whose party it was, a party that could be it is refused.
+ *
+ * Self-limiting even so: attribution resolves on the very next
+ * `runPendingDemotions`, which is the bottom of the same sweep, and fails
+ * closed onto the live party after three attempts, which sets
+ * `partySessionId` and ends this branch. The entry is dropped on completion
+ * and abandoned after `DEMOTION_RETRY_TTL_MS` regardless.
+ */
+export function llDemotionPendingAttribution(
+  channelId: string,
+  partyCreatedAtMs: number | null,
+): boolean {
+  const entry = pendingDemotions.get(channelId);
+  if (!entry || entry.partySessionId !== null || partyCreatedAtMs === null) {
+    return false;
+  }
+  return partyCreatedAtMs <= entry.startedAtMs;
+}
+
+/** What `resolveHlsModeForChannel` decided, and every input it decided on. */
+export interface ResolvedHlsMode {
+  mode: "conventional" | "ll";
+  /** The live party's `low_latency_requested`. */
+  requested: boolean;
+  /** The live party, or `null` when there is none. */
+  partySessionId: string | null;
+  /** That party's LL session was demoted on this machine inside the window. */
+  partyDemoted: boolean;
+  /**
+   * A demotion on this channel is still waiting to learn whose party it was,
+   * and this party is old enough to be it. Fails closed the same way
+   * `partyDemoted` does; see `llDemotionPendingAttribution`.
+   */
+  demotionUnattributed: boolean;
+  /** `LIVE_HLS_LL` on, a playlist front configured, and this server allowed. */
+  llAvailable: boolean;
+}
+
+/**
+ * THE WHOLE MODE DECISION, IN ONE PLACE, AND IT SAYS WHY.
+ *
+ * `reconcileLiveHlsNow` used to read the request, consult the memo and call
+ * `resolveHlsMode` itself, and log nothing: a conventional ladder starting
+ * for a party that asked for LL produced `voice.hlsStarted` and not one line
+ * saying which of the four inputs said no. That is how the 2026-09-15
+ * failure above went unexplained for an afternoon (pitfall 16's lesson: an
+ * endpoint that refuses somebody must say why).
+ *
+ * `null` is "could not ask" and NOT a mode: the caller must change nothing
+ * at all this reconcile. See `liveHlsRequestForChannel`.
+ */
+export async function resolveHlsModeForChannel(
+  channelId: string,
+  serverId: string | null | undefined,
+  options: { sharing: boolean } = { sharing: false },
+): Promise<ResolvedHlsMode | null> {
+  // With `LIVE_HLS_LL` unset there is nothing to ask the database: no LL
+  // session can exist, and a transient read failure must not be able to skip
+  // the conventional reconcile (a Farol finding on the rebased PR #580: the
+  // lookup ran, and failed closed, even with the flag off).
+  const request: LiveHlsRequest | null = isLiveHlsLLEnabled()
+    ? await liveHlsRequestForChannel(channelId)
+    : { requested: false, partySessionId: null, partyCreatedAtMs: null };
+  if (request === null) {
+    return null;
+  }
+  const partyDemoted = llDemotedRecently(request.partySessionId);
+  const demotionUnattributed = llDemotionPendingAttribution(
+    channelId,
+    request.partyCreatedAtMs,
+  );
+  const llAvailable = liveHlsLLAvailable(serverId);
+  const mode = resolveHlsMode({
+    serverId,
+    requestedMode: request.requested && !partyDemoted && !demotionUnattributed,
+  });
+  // ONLY WHILE THERE IS A CHOICE TO EXPLAIN. With `LIVE_HLS_LL` unset every
+  // decision is `conventional` for the one reason nobody needs telling, and
+  // this whole branch is meant to leave the flag-off deployment byte-for-byte
+  // what it was before L1.5 -- a log line a self-host cannot act on is not an
+  // exception to that. The allowlist case IS logged, because "the flag is on
+  // and this server still got conventional" is a real question.
+  if (isLiveHlsLLEnabled()) {
+    logHlsModeResolved({
+      channelId,
+      partySessionId: request.partySessionId,
+      requested: request.requested,
+      partyDemoted,
+      demotionUnattributed,
+      llAvailable,
+      mode,
+      sharing: options.sharing,
+    });
+  }
+  return {
+    mode,
+    requested: request.requested,
+    partySessionId: request.partySessionId,
+    partyDemoted,
+    demotionUnattributed,
+    llAvailable,
+  };
+}
+
+/**
+ * ONE LINE PER DECISION, NOT PER ROSTER EVENT. `reconcileLiveHlsNow` runs on
+ * every roster change, every `set-camera` frame and every relay push, so an
+ * unconditional log here would be several lines a second for a busy room and
+ * the useful one would be invisible. Logged when the decision CHANGES for a
+ * channel — which is what a share starting, a mode flipping or a demotion
+ * landing all are — and re-stated at most once per window otherwise, so a
+ * long party still leaves a trail rather than one line at the start.
+ */
+const MODE_RESOLVED_LOG_WINDOW_MS = 5 * 60_000;
+const lastModeResolved = new Map<string, { key: string; at: number }>();
+
+function logHlsModeResolved(fields: {
+  channelId: string;
+  partySessionId: string | null;
+  requested: boolean;
+  partyDemoted: boolean;
+  demotionUnattributed: boolean;
+  llAvailable: boolean;
+  mode: "conventional" | "ll";
+  sharing: boolean;
+}): void {
+  const now = Date.now();
+  const key = [
+    fields.partySessionId ?? "-",
+    fields.requested,
+    fields.partyDemoted,
+    fields.demotionUnattributed,
+    fields.llAvailable,
+    fields.mode,
+    fields.sharing,
+  ].join("|");
+  const last = lastModeResolved.get(fields.channelId);
+  if (last && last.key === key && now - last.at < MODE_RESOLVED_LOG_WINDOW_MS) {
+    return;
+  }
+  // No sweep here at ANY size: one channel's log line must never walk every
+  // other channel's entry (a Farol finding on this PR, twice). The cap in
+  // `rememberBounded` bounds the map in constant time; `pruneLlMemos` empties
+  // it on the health tick or the lazy timer.
+  rememberBounded(
+    lastModeResolved,
+    fields.channelId,
+    { key, at: now },
+    MAX_MODE_DECISION_MEMOS,
+  );
+  logEvent("voice.hlsModeResolved", fields);
 }
 
 /**
@@ -391,6 +779,24 @@ function demotionBackoffMs(attempts: number): number {
 /** For the dashboard and the tests: demotions whose cleanup is not finished. */
 export function pendingLlDemotionCount(): number {
   return pendingDemotions.size;
+}
+
+/**
+ * How much the two clock-expiry memos are actually holding. Only a test asks:
+ * "an expired entry is ignored" and "an expired entry is gone" read the same
+ * from every other seam, and it was the second one Farol was right about.
+ */
+export function llMemoSizesForTests(): {
+  demotedParties: number;
+  modeDecisions: number;
+  /** Entries any full sweep has walked since the last reset. */
+  entriesScanned: number;
+} {
+  return {
+    demotedParties: llDemotedAt.size,
+    modeDecisions: lastModeResolved.size,
+    entriesScanned: memoEntriesScanned,
+  };
 }
 
 function queueDemotion(entry: PendingDemotion): void {
@@ -504,6 +910,9 @@ async function attributeDemotion(entry: PendingDemotion): Promise<boolean> {
     const id = result.rows[0]?.id ?? null;
     if (id !== null) {
       entry.partySessionId = id;
+      // NOW the memo can name a party. Until this resolved there was nothing
+      // to key it by; see the memo note at the demotion site.
+      noteLlDemotion(id);
       logEvent("voice.hlsLlDemotionAttributed", {
         channelId: entry.channelId,
         partySessionId: id,
@@ -529,6 +938,10 @@ async function attributeDemotion(entry: PendingDemotion): Promise<boolean> {
     return true;
   }
   entry.partySessionId = live.id;
+  // Failing closed onto whatever is live is already a documented tradeoff
+  // (see above). The memo follows exactly the party the clear names, never
+  // the channel, so the blast radius stays one party either way.
+  noteLlDemotion(live.id);
   logEvent("voice.hlsLlRequestClearUnattributed", {
     channelId: entry.channelId,
     partySessionId: live.id,
@@ -926,9 +1339,36 @@ interface LlRoom {
   startedAt: number;
   presenterPeerId: string;
   stream: LiveHlsStream;
+  /**
+   * When THIS process first observed the box session producing no video at
+   * all (`partsWritten === 0`), or undefined once it has produced any part.
+   * The readiness backstop in `sweepLlDemotions` measures against it. Wall
+   * clock here, deliberately not the box's own `startedAtMs`, so neither
+   * clock skew nor a resumed session (same id, older box start) can false-trip
+   * it: it is "how long have WE seen this stuck", reset the moment a part
+   * appears.
+   */
+  noVideoSinceMs?: number;
 }
 
 const llRooms = new Map<string, LlRoom>();
+
+/**
+ * How long a live LL room may report zero video before the readiness backstop
+ * in `sweepLlDemotions` demotes it. Comfortably past both the observed
+ * first-part latency (~12s `playlistWaitMs` in production) and the box's own
+ * `FirstPartTimeoutMs` (60s), so this only ever fires when the box's own
+ * no-video rule already should have and did not. `LIVE_HLS_LL_READY_TIMEOUT_MS`
+ * overrides it; a non-positive or unparseable value keeps the default.
+ */
+function llReadyTimeoutMs(): number {
+  const raw = process.env.LIVE_HLS_LL_READY_TIMEOUT_MS;
+  if (raw) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 75_000;
+}
 let llStartFailures = 0;
 /** A `remuxStopSession` call failed, at either the normal-stop or retry path. Belongs at zero. */
 let llStopFailures = 0;
@@ -1565,6 +2005,13 @@ async function reconcileLlHlsNowLocked(
  * module and must never be imported back (see `llObjectPrefix`).
  */
 export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
+  // BEFORE THE CONFIGURATION CHECK, not after it. Both maps are filled by
+  // mode resolution, which runs on `LIVE_HLS_LL` alone; a deployment with
+  // the flag on and no remux control URL returns below without ever having
+  // demoted anything and would never sweep them (a Farol finding on this
+  // PR). In-memory work on a ten-second tick, so it costs nothing to do it
+  // unconditionally.
+  pruneLlMemos(now);
   if (!isLiveHlsLLEnabled() || !remuxControlUrl() || !remuxControlSecret()) {
     return [];
   }
@@ -1594,10 +2041,12 @@ export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
   for (const [channelId, room] of [...llRooms]) {
     const remote = remoteById.get(room.sessionId);
     if (!remote) {
+      room.noVideoSinceMs = undefined;
       demotions.push({ channelId, sessionId: room.sessionId, reason: "session-gone" });
       continue;
     }
     if (remote.demoted === true || remote.state === "demoted") {
+      room.noVideoSinceMs = undefined;
       demotions.push({
         channelId,
         sessionId: room.sessionId,
@@ -1606,6 +2055,32 @@ export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
         // `voice.hlsLlDemoted` and `pqp-remuxd`'s log has to see one reason.
         reason: remote.demotedReason ?? "demoted",
       });
+      continue;
+    }
+    // READINESS BACKSTOP. The box is supposed to demote a session that never
+    // produces a single part -- its own `FirstPartTimeoutMs` "no-video" rule
+    // (`internal/control/watchdog.go`). But a session that hangs BEFORE it
+    // ever subscribes to the presenter's track has been seen sit at
+    // `partsWritten === 0` for a whole party without the box ever flagging it:
+    // production channel `d5559e70`, 2026-09-16, an LL session ran 49 minutes
+    // at `subscribed=false`, zero parts, no `demoted`, no `session-gone`, and
+    // every viewer got nothing while the sweep left it alone every tick. This
+    // is the API-side backstop for exactly that: a session this process has
+    // watched produce NO video for longer than the readiness window is
+    // demoted to the conventional (loss-concealing, and here simply WORKING)
+    // ladder, so a stuck LL rung falls back in ~a minute instead of hanging
+    // for the length of the film. `partsWritten === 0` is the whole gate: a
+    // source that produced parts and then went quiet (a static tab) has
+    // `partsWritten > 0` and is the box's `sourceIdle` case, never demoted
+    // here.
+    if (remote.partsWritten === 0) {
+      room.noVideoSinceMs ??= now;
+      if (now - room.noVideoSinceMs > llReadyTimeoutMs()) {
+        demotions.push({ channelId, sessionId: room.sessionId, reason: "no-video-timeout" });
+        continue;
+      }
+    } else {
+      room.noVideoSinceMs = undefined;
     }
   }
 
@@ -1657,7 +2132,15 @@ export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
     // both re-resolve the mode, and a memo written after them would let the
     // very next reconcile start a second LL session for the party just given
     // up on. See `noteLlDemotion`.
-    noteLlDemotion(channelId);
+    //
+    // Keyed by the party the session recorded, so a party starting later on
+    // this channel is untouched by this verdict on ANY machine. A row with
+    // no recorded party is UNKNOWN rather than "none" (`attributeDemotion`),
+    // and the memo is written there the moment the attribution resolves --
+    // which is `runPendingDemotions` at the bottom of this same sweep.
+    if (row.watchPartySessionId !== null) {
+      noteLlDemotion(row.watchPartySessionId);
+    }
     // THE MAP IS RELEASED HERE, NOT WHEN THE BOX CONFIRMS. A session the box
     // has demoted is producing nothing either way, and holding it would keep
     // `llHasRoom` answering yes and keep the conventional path from starting.
@@ -2019,7 +2502,15 @@ export function resetHlsRemuxForTests(): void {
   llRooms.clear();
   llReconcileQueue.clear();
   lastLookupFailureLoggedAt.clear();
+  lastModeResolved.clear();
   llDemotedAt.clear();
+  if (memoPruneTimer) {
+    clearInterval(memoPruneTimer);
+    memoPruneTimer = null;
+  }
+  memoEntriesScanned = 0;
+  memoSaturatedAt = null;
+  memoFullLoggedAt = 0;
   pendingDemotions.clear();
   llStartFailures = 0;
   llStopFailures = 0;

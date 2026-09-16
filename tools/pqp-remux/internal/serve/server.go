@@ -123,7 +123,10 @@ func (s *Server) SetLlState(meta llstate.Meta) { s.llMeta.Store(&meta) }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
 
 func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
-	b, ok := s.ring.Init()
+	// /init.mp4 always serves the FIRST generation by that exact name,
+	// even after a later init-N.mp4 has been published. The newest is
+	// advertised as track.initUri in state.json and fetched by that name.
+	b, ok := s.ring.InitByURI(ring.DefaultInitURI)
 	if !ok {
 		http.Error(w, "init segment not ready yet", http.StatusServiceUnavailable)
 		return
@@ -240,6 +243,15 @@ func (s *Server) handleFragmentOrNotFound(w http.ResponseWriter, r *http.Request
 	}
 
 	switch {
+	case contentType == "video/mp4" && isVideoInitURI(path):
+		b, ok := s.ring.InitByURI(path)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Write(b)
+
 	case strings.HasPrefix(path, "part-") && strings.HasSuffix(path, ".m4s"):
 		seqStr := strings.TrimSuffix(strings.TrimPrefix(path, "part-"), ".m4s")
 		seq, err := strconv.ParseUint(seqStr, 10, 32)
@@ -273,4 +285,23 @@ func (s *Server) handleFragmentOrNotFound(w http.ResponseWriter, r *http.Request
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// isVideoInitURI reports whether path is a later-generation video init
+// name (init-2.mp4, init-3.mp4, …). init.mp4 itself is registered on the
+// mux as its own route; these numbered names land here.
+func isVideoInitURI(path string) bool {
+	if !strings.HasPrefix(path, "init-") || !strings.HasSuffix(path, ".mp4") {
+		return false
+	}
+	n := strings.TrimSuffix(strings.TrimPrefix(path, "init-"), ".mp4")
+	if n == "" {
+		return false
+	}
+	for _, c := range n {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

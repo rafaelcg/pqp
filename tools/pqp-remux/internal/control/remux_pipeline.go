@@ -273,6 +273,7 @@ func (p *remuxPipeline) Health() PipelineHealth {
 		R2InFlight:           st.R2InFlight,
 		R2LastLatencyMs:      st.R2LastLatencyMs,
 		R2MaxLatencyMs:       st.R2MaxLatencyMs,
+		DemoteReason:         p.sess.DemoteReason(),
 	}
 	started := p.sess.Started()
 	if p.sess.HasPart() {

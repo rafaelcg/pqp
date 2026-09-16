@@ -84,7 +84,15 @@ import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import { MusicDock } from "@/components/voice/music-dock";
-import { MusicBarButton } from "@/components/voice/music-bar-button";
+import {
+  insertMusicStageTile,
+  MUSIC_STAGE_TILE_ID,
+  MusicStageTile,
+} from "@/components/voice/music-stage-tile";
+import {
+  useMusicPlacement,
+  useMusicStagePresence,
+} from "@/lib/music-prefs";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
 import {
   chooseFullscreenStrategy,
@@ -96,6 +104,7 @@ import {
   videoSupportsNativeFullscreen,
   type StageFullscreenStrategy,
 } from "@/lib/fullscreen";
+import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -196,6 +205,7 @@ import {
   formatCallDuration,
   hasWatchableVideo,
   isCameraSoloId,
+  isMusicPictureOnlyStage,
   isStageCollapsed,
   markCallStarted,
   nearestCorner,
@@ -212,7 +222,8 @@ import {
  *
  * A picture owns the room; voice-only occupancy does not. The stage is a slim
  * bar until a camera or a screen share is on, then it expands unless the user
- * tucked it away for the session.
+ * tucked it away for the session. Music on the stage is a clip in that
+ * picture pane; it does not take the overlay bar or the listener strip.
  */
 
 /** How one person appears on the stage, whatever transport carried them. */
@@ -879,7 +890,22 @@ function ActiveCall({
     voiceState.status === "connected" &&
     voiceState.remotePeers.length === 0;
   const ringing = callingOut || (joining && ringWhenAlone);
-  const collapsed = !shouldShowExpandedStage(hasVideo, userCollapsed, ringing);
+  const musicPlacement = useMusicPlacement();
+  const musicPresence = useMusicStagePresence();
+  const musicOnStage = musicPlacement === "stage" && musicPresence.active;
+  // Cameras and shares take the overlay bar. Music on the stage is a clip.
+  const chromeExpanded = shouldShowExpandedStage(
+    hasVideo,
+    userCollapsed,
+    ringing,
+  );
+  const musicPictureOnly = isMusicPictureOnlyStage({
+    musicOnStage,
+    hasLiveVideo: hasVideo,
+    ringing,
+    watchPartyChrome,
+  });
+  const collapsed = !chromeExpanded && !musicPictureOnly;
   useEffect(() => {
     if (playOutgoingRingtone && callingOut) {
       startSoundLoop("outgoingCall");
@@ -1117,6 +1143,7 @@ function ActiveCall({
     tileLimit: wide ? STAGE_TILE_LIMIT_WIDE : STAGE_TILE_LIMIT_NARROW,
     speakingKeys: speaking,
   });
+  const staged = insertMusicStageTile(stage.tiles, stage.featured, musicOnStage);
   const overflowKeys = useMemo(
     () => new Set(stage.overflowKeys),
     // The array is rebuilt on every render; only its contents decide.
@@ -1129,18 +1156,20 @@ function ActiveCall({
     voiceState.peerId,
     overflowKeys,
   );
-  const gridColumns = stageGridColumns(stage.tiles.length, wide);
-  const clickFullscreens = tileClickFullscreens(stage.tiles.length);
-  const anyVideo = hasVideo;
+  const gridColumns = stageGridColumns(staged.tiles.length, wide);
+  const clickFullscreens = tileClickFullscreens(staged.tiles.length);
+  const anyVideo = hasVideo || musicOnStage;
   /**
    * The row exists only when somebody is in it, and only beside a stage.
    *
    * It reserves its own height AND the control bar's band below it, so an
    * empty row is not a blank strip: it is a hundred pixels taken off the
    * picture in a 1:1 call where nobody was ever going to be listed.
+   *
+   * Music-only skips it: those faces already sit on the call bar.
    */
   const showStrip =
-    listeners.length > 0 && stage.tiles.length > 0;
+    listeners.length > 0 && staged.tiles.length > 0 && !musicPictureOnly;
 
   // --- elapsed timer ------------------------------------------------------
   // Starts when the call genuinely has two ends, not while it is still
@@ -1166,7 +1195,7 @@ function ActiveCall({
   // Any large picture at all, which since the stage became a grid of
   // publishers is exactly "is anybody publishing". The iPhone native-player
   // path needs one <video> to hand over, and the first tile is it.
-  const hasPrimaryVideo = stage.tiles.length > 0 || (self?.stream ?? null) !== null;
+  const hasPrimaryVideo = staged.tiles.length > 0 || (self?.stream ?? null) !== null;
   const cameraSoloIds = allPeople
     .filter((person) => person.stream !== null)
     .map((person) => cameraSoloId(person.key));
@@ -1174,7 +1203,11 @@ function ActiveCall({
     stageRef,
     primaryVideoRef,
     hasPrimaryVideo,
-    [...voiceState.screenSharePeerIds, ...cameraSoloIds],
+    [
+      ...voiceState.screenSharePeerIds,
+      ...cameraSoloIds,
+      ...(musicOnStage ? [MUSIC_STAGE_TILE_ID] : []),
+    ],
   );
   // What the pane around us is looking at. Only an expanded stage has a size
   // worth dragging, and only the stage knows whether it is one: `collapsed`
@@ -1202,11 +1235,22 @@ function ActiveCall({
   // Phone held sideways with a share on: the shell's columns step aside.
   // Everything but the flag lives in the hook (`use-immersive-stage.ts`).
   const immersive = useImmersiveStage({
-    shareFocused: screenStream !== null && !collapsed,
+    shareFocused: screenStream !== null && chromeExpanded,
     fullscreen: fullscreen.isFullscreen,
   });
+  // Overlay chrome vs composer dock. Music-only is a picture with the
+  // dock kept; fullscreen still takes the overlay so hang-up is reachable
+  // with the composer gone.
+  const dockControls =
+    !chromeExpanded &&
+    !fullscreen.isFullscreen &&
+    !watchFullscreen.active;
+  const dockComposer = dockControls && dockPublish !== null;
+  const soloMusic = fullscreen.soloPeerId === MUSIC_STAGE_TILE_ID;
   const soloTile =
-    fullscreen.soloPeerId === null || isCameraSoloId(fullscreen.soloPeerId)
+    fullscreen.soloPeerId === null ||
+    isCameraSoloId(fullscreen.soloPeerId) ||
+    soloMusic
       ? null
       : (screenTiles.find((tile) => tile.peerId === fullscreen.soloPeerId) ??
         null);
@@ -1243,7 +1287,7 @@ function ActiveCall({
     isCameraOn: voiceState.isCameraOn,
     isSharingScreen: voiceState.isSharingScreen,
     hasIncomingVideo: receivingVideo(voiceState),
-    collapsed,
+    collapsed: collapsed || dockComposer,
   });
   // Cleared rather than merely ignored: a menu that was open when the camera
   // went off must not spring back open by itself when the camera returns.
@@ -1268,7 +1312,7 @@ function ActiveCall({
     voiceState.isTransmitting &&
     !voiceState.isMuted;
   const chrome = useIdleChrome(
-    anyVideo && !collapsed,
+    anyVideo && chromeExpanded,
     qualityMenuOpen || barHovered || barFocused || pushToTalkHeld,
   );
   const chromeClass = idleChromeClassName({
@@ -1382,7 +1426,7 @@ function ActiveCall({
   // The people on the slim bar: faces, names, hands and the music dock. Built
   // here rather than in the collapsed branch because the control bar lays it
   // out as the leading cell of its own row (see `CallControls`, collapsed).
-  const collapsedLeading = collapsed ? (
+  const collapsedLeading = collapsed || dockComposer ? (
     (() => {
       const people =
         roster.length > 0
@@ -1458,11 +1502,11 @@ function ActiveCall({
   const controls = (
     <CallControls
       voiceState={voiceState}
-      collapsed={collapsed}
+      collapsed={collapsed || dockComposer}
       leading={collapsedLeading}
       canExpand={hasVideo}
       userCollapsed={userCollapsed}
-      fullscreenAvailable={fullscreen.available && !collapsed}
+      fullscreenAvailable={fullscreen.available && chromeExpanded}
       isFullscreen={fullscreen.isFullscreen}
       onToggleFullscreen={fullscreen.toggle}
       onToggleMute={onToggleMute}
@@ -1544,47 +1588,46 @@ function ActiveCall({
     );
   }
 
+  // `@container`: the bar breaks on its OWN width, not the window's. Inside
+  // the composer it is as wide as the chat column, which at 1024px with the
+  // member list open is about 450px, far too narrow for one row even though
+  // the viewport is `lg`. The tiers are in `CallControls`.
+  const dockedBar = (
+    <div
+      data-testid="call-stage-collapsed"
+      className="@container flex flex-col gap-1.5"
+    >
+      {controls}
+      <PttFocusHint
+        show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
+        className="px-1"
+      />
+    </div>
+  );
+  const composerDock = dockPublish ? (
+    <CallDockPortal channelId={channelId} publish={dockPublish}>
+      {dockedBar}
+    </CallDockPortal>
+  ) : (
+    <div className="border-b border-border bg-surface-0 px-3 py-2">
+      <div className="rounded-[var(--radius-card)] border border-border-strong bg-surface-2 px-3 py-2.5">
+        {dockedBar}
+      </div>
+    </div>
+  );
+
   if (collapsed && watchPartyChrome) {
     return null;
   }
   if (collapsed) {
-    // `@container`: the bar breaks on its OWN width, not the window's. Inside
-    // the composer it is as wide as the chat column, which at 1024px with the
-    // member list open is about 450px, far too narrow for one row even though
-    // the viewport is `lg`. The tiers are in `CallControls`.
-    const bar = (
-      <div
-        data-testid="call-stage-collapsed"
-        className="@container flex flex-col gap-1.5"
-      >
-        {controls}
-        <PttFocusHint
-          show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
-          className="px-1"
-        />
-      </div>
-    );
-    if (dockPublish) {
-      return (
-        <CallDockPortal channelId={channelId} publish={dockPublish}>
-          {bar}
-        </CallDockPortal>
-      );
-    }
-    // No composer around us to dock into: the bar stays where the stage is.
-    return (
-      <div className="border-b border-border bg-surface-0 px-3 py-2">
-        <div className="rounded-[var(--radius-card)] border border-border-strong bg-surface-2 px-3 py-2.5">
-          {bar}
-        </div>
-      </div>
-    );
+    return composerDock;
   }
 
   return (
     <div
       ref={stageRef}
       data-testid="call-stage"
+      data-music-picture={musicPictureOnly ? "" : undefined}
       className={cn(
         "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
         fullscreen.isFullscreen
@@ -1644,6 +1687,16 @@ function ActiveCall({
               onPin={() => togglePin(cameraSoloId(soloPerson.key))}
               pinned={pinnedTileId === cameraSoloId(soloPerson.key)}
             />
+          ) : soloMusic ? (
+            <MusicStageTile
+              title={musicPresence.title}
+              addedByUserId={musicPresence.addedByUserId}
+              addedByName={musicPresence.addedByName}
+              voiceState={voiceState}
+              isFullscreen
+              onToggleFullscreen={() => fullscreen.toggleScreen(MUSIC_STAGE_TILE_ID)}
+              className="h-full w-full bg-surface-0"
+            />
           ) : soloTile && soloTile.isSelf && watchPartyChrome && presenterStage ? (
             presenterStage(soloTile.stream)
           ) : soloTile ? (
@@ -1678,7 +1731,7 @@ function ActiveCall({
             // is what a second share falls back to correctly.
             screenTiles.length === 1 ? (
             presenterStage(localShare.stream)
-          ) : stage.tiles.length > 0 ? (
+          ) : staged.tiles.length > 0 ? (
             <ul
               data-testid="stage-grid"
               data-columns={gridColumns}
@@ -1688,7 +1741,7 @@ function ActiveCall({
                 // share always has. Padding is what separates tiles from each
                 // other, so with nothing to separate it is only a border of
                 // wasted picture.
-                stage.tiles.length > 1 && "gap-2 p-2",
+                staged.tiles.length > 1 && "gap-2 p-2",
               )}
               style={{
                 gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
@@ -1696,16 +1749,40 @@ function ActiveCall({
                 // is watching) gets twice the height of the rows under it.
                 // Without it a share at the top of a three-row grid is a third
                 // of the stage, which is not "featured" in any useful sense.
-                gridTemplateRows: stage.featured ? "minmax(0, 2fr)" : undefined,
+                gridTemplateRows: staged.featured ? "minmax(0, 2fr)" : undefined,
                 // Equal rows for the rest. Without this they size to content,
                 // and a tile whose picture is absolutely positioned has none.
                 gridAutoRows: "minmax(0, 1fr)",
               }}
             >
-              {stage.tiles.map((tile, index) => {
-                const wideRow = stage.featured && index === 0 && gridColumns > 1;
+              {staged.tiles.map((tile, index) => {
+                const wideRow = staged.featured && index === 0 && gridColumns > 1;
                 const videoRef = index === 0 ? primaryVideoRef : undefined;
                 const pinned = pinnedTileId === tile.id;
+                if (tile.kind === "music") {
+                  return (
+                    <li
+                      key={tile.id}
+                      className={cn(
+                        "relative min-h-0 overflow-hidden bg-surface-0",
+                        staged.tiles.length > 1 && "rounded-xl",
+                        wideRow && "col-span-full",
+                      )}
+                    >
+                      <MusicStageTile
+                        title={musicPresence.title}
+                        addedByUserId={musicPresence.addedByUserId}
+                        addedByName={musicPresence.addedByName}
+                        voiceState={voiceState}
+                        clickToFullscreen={clickFullscreens}
+                        onToggleFullscreen={() =>
+                          fullscreen.toggleScreen(MUSIC_STAGE_TILE_ID)
+                        }
+                        className="h-full w-full"
+                      />
+                    </li>
+                  );
+                }
                 if (tile.kind === "screen") {
                   const screenTile = screenTiles.find(
                     (candidate) => candidate.peerId === tile.key,
@@ -1718,7 +1795,7 @@ function ActiveCall({
                       key={tile.id}
                       className={cn(
                         "relative min-h-0 overflow-hidden bg-black",
-                        stage.tiles.length > 1 && "rounded-xl",
+                        staged.tiles.length > 1 && "rounded-xl",
                         wideRow && "col-span-full",
                       )}
                     >
@@ -1726,7 +1803,7 @@ function ActiveCall({
                         tile={screenTile}
                         videoRef={videoRef}
                         isFullscreen={false}
-                        showName={stage.tiles.length > 1}
+                        showName={staged.tiles.length > 1}
                         clickToFullscreen={clickFullscreens}
                         onToggleFullscreen={() => {
                           // Keep the header's "X is presenting" line pointing
@@ -1735,7 +1812,7 @@ function ActiveCall({
                           fullscreen.toggleScreen(screenTile.peerId);
                         }}
                         onPin={
-                          stage.tiles.length > 1
+                          staged.tiles.length > 1
                             ? () => togglePin(tile.id)
                             : undefined
                         }
@@ -1763,11 +1840,11 @@ function ActiveCall({
                     videoRef={videoRef}
                     youLabel={t("voice.tile.you")}
                     wideRow={wideRow}
-                    rounded={stage.tiles.length > 1}
+                    rounded={staged.tiles.length > 1}
                     clickToFullscreen={clickFullscreens}
                     onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
                     onPin={
-                      stage.tiles.length > 1
+                      staged.tiles.length > 1
                         ? () => togglePin(tile.id)
                         : undefined
                     }
@@ -1793,7 +1870,7 @@ function ActiveCall({
             picture is alone on the stage (that is what "alone" means) and
             while nobody is publishing at all, because then the room view above
             is already showing these same faces, larger. */}
-        {showStrip && !soloPerson && !soloTile && (
+        {showStrip && !soloPerson && !soloTile && !soloMusic && (
           <>
           <ListenerStrip
             people={listeners.map((person) => ({
@@ -1942,6 +2019,10 @@ function ActiveCall({
         </p>
       )}
 
+      {dockComposer ? (
+        composerDock
+      ) : (
+        <>
       <div
         data-call-chrome="overlay"
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
@@ -2100,6 +2181,8 @@ function ActiveCall({
         <CinemaHint visible={screenStream !== null} />
         {watchPartyChrome ? null : controls}
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -2297,6 +2380,8 @@ export function CallControls({
   // does not come back either way.
   const callDockHintEnabled = useFeatureHintEnabled("callDock");
   const [dockControlUsed, setDockControlUsed] = useState(false);
+  const bringFriendsHintEnabled = useFeatureHintEnabled("bringFriends");
+  const musicHintEnabled = useFeatureHintEnabled("music");
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
     if (voiceState.isSharingScreen || voiceState.error) {
@@ -2373,9 +2458,23 @@ export function CallControls({
             />
           </div>
         )}
-        {/* Hint slot above the bar. feat/vem-pra-pqp adds BringFriendsHint
-            here when the person is sharing and the stage is expanded. */}
+        {bringFriendsHintEnabled && voiceState.isSharingScreen && !collapsed && (
+          <div className="pointer-events-auto mb-1">
+            <BringFriendsHint enabled />
+          </div>
+        )}
+        {musicHintEnabled && (
+          <div className="pointer-events-auto mb-1">
+            <FeatureHint
+              id="music"
+              enabled
+              title={t("featureHint.music.title")}
+              body={t("featureHint.music.body")}
+            />
+          </div>
+        )}
       </div>
+
       {/* The queue sits above the bar, where the room is, rather than in a
           panel somebody has to go and open. Hidden on the slim bar, which has
           no room for a list: the hands are still on every person's row in the
@@ -2566,7 +2665,6 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
-      <MusicBarButton size={size} iconSize={iconSize} />
       </CallControlGroup>
       <CallControlDivider
         container={collapsed}

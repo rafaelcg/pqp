@@ -2664,6 +2664,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       userId: self.userId,
       displayName: self.displayName,
       send: (music) => transport.sendVoice({ type: "set-music", state: music }),
+      sendListening: (listening) =>
+        transport.sendVoice({ type: "set-music-listening", listening }),
     });
   }
 

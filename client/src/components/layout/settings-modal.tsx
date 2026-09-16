@@ -35,6 +35,7 @@ import { SignOutButton } from "@/components/layout/sign-out-button";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { AvatarPicker } from "@/components/user/avatar-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
@@ -101,6 +102,7 @@ import {
 } from "../../lib/noise-suppression";
 import { desktopContext, getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { setMusicAutoJoin, useMusicAutoJoin } from "@/lib/music-prefs";
 import {
   isVoiceCleanSettingsSeen,
   markVoiceCleanSettingsSeen,
@@ -122,7 +124,9 @@ import {
   getIncomingRing,
   getSoundState,
   playCue,
+  previewPttBeeps,
   setIncomingRing,
+  setPttBeepEnabled,
   setSoundCueEnabled,
   setSoundEnabled,
   subscribeSounds,
@@ -194,6 +198,12 @@ export interface LocalSettings {
   vadThreshold: number;
   pushToTalkKey: KeyBinding;
   /**
+   * Short local tones when the PTT key opens and closes the mic. Device-local
+   * with the binding: it is a cue for this machine, and it is not a synced
+   * sound preference.
+   */
+  pttBeep: boolean;
+  /**
    * Remapped Discord-style shortcuts. Device-local for the same reason as
    * the PTT key: a `KeyboardEvent.code` is this keyboard. Absent keys keep
    * the platform default (Cmd on Apple, Ctrl elsewhere).
@@ -245,6 +255,7 @@ export const defaultLocalSettings: LocalSettings = {
   inputMode: "voice-activity",
   vadThreshold: SPEAKING_THRESHOLD,
   pushToTalkKey: defaultPushToTalkBinding,
+  pttBeep: true,
   shortcuts: {},
   micProcessing: defaultMicProcessing,
   // Auto, always. A default that pins a size would be a default that is wrong
@@ -291,6 +302,10 @@ export function loadLocalSettings(): LocalSettings {
       // push-to-talk bound to nothing and the user apparently mute.
       pushToTalkKey:
         parseBinding(parsed.pushToTalkKey) ?? defaultLocalSettings.pushToTalkKey,
+      pttBeep:
+        typeof parsed.pttBeep === "boolean"
+          ? parsed.pttBeep
+          : defaultLocalSettings.pttBeep,
       shortcuts: parseShortcutOverrides(parsed.shortcuts),
       micProcessing: {
         echoCancellation: parsed.micProcessing?.echoCancellation !== false,
@@ -896,6 +911,46 @@ const NOISE_SUPPRESSION_LABELS: Record<NoiseSuppressionMode, MessageKey> = {
   advanced: "settings.voice.processing.noise.advanced",
 };
 
+function PttBeepRow({
+  enabled,
+  soundsOn,
+  onEnabledChange,
+}: {
+  enabled: boolean;
+  soundsOn: boolean;
+  onEnabledChange: (next: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <label className="flex cursor-pointer items-start gap-3">
+      <input
+        type="checkbox"
+        className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
+        checked={enabled}
+        onChange={(e) => onEnabledChange(e.target.checked)}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm">{t("settings.voice.pttBeep")}</span>
+        <span className="block text-xs text-paper-muted">
+          {t("settings.voice.pttBeepHint")}
+        </span>
+      </span>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        disabled={!soundsOn || !enabled}
+        onClick={(event) => {
+          event.preventDefault();
+          previewPttBeeps();
+        }}
+      >
+        {t("settings.voice.pttBeepTest")}
+      </Button>
+    </label>
+  );
+}
+
 /**
  * Devices, levels, input mode and microphone processing.
  *
@@ -928,8 +983,10 @@ function VoiceSection({
   showVoiceCleanBadge: boolean;
 }) {
   const { t } = useTranslation();
+  const musicAutoJoin = useMusicAutoJoin();
   const canSelectOutput = supportsAudioOutputSelection();
   const checkConnection = () => requestConnectionCheck();
+  const sounds = useSyncExternalStore(subscribeSounds, getSoundState, getSoundState);
   // Probed once: whether this machine has a keyboard worth binding does not
   // change while the dialog is open, and re-evaluating it per render would run
   // a media query on every slider tick.
@@ -1059,6 +1116,14 @@ function VoiceSection({
               }}
               onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
             />
+            <PttBeepRow
+              enabled={draftLocal.pttBeep}
+              soundsOn={sounds.enabled}
+              onEnabledChange={(pttBeep) => {
+                setPttBeepEnabled(pttBeep);
+                patchLocal({ pttBeep });
+              }}
+            />
             {/* The honest limit, stated where the binding is set rather than
                 discovered later by talking to nobody. A web page cannot receive
                 a key pressed while another window has focus; there is no global
@@ -1070,9 +1135,19 @@ function VoiceSection({
             </p>
           </div>
         ) : (
-          <p className="text-xs text-paper-muted">
-            {t("settings.voice.pttNoKeyboard")}
-          </p>
+          <div className="space-y-1.5">
+            <p className="text-xs text-paper-muted">
+              {t("settings.voice.pttNoKeyboard")}
+            </p>
+            <PttBeepRow
+              enabled={draftLocal.pttBeep}
+              soundsOn={sounds.enabled}
+              onEnabledChange={(pttBeep) => {
+                setPttBeepEnabled(pttBeep);
+                patchLocal({ pttBeep });
+              }}
+            />
+          </div>
         ))}
 
       <fieldset className="space-y-2">
@@ -1280,6 +1355,13 @@ function VoiceSection({
         />
         <span className="text-sm">{t("settings.voice.compactPeers")}</span>
       </label>
+      <Switch
+        checked={musicAutoJoin}
+        onCheckedChange={setMusicAutoJoin}
+        label={t("settings.voice.musicAutoJoin")}
+        description={t("settings.voice.musicAutoJoinHint")}
+        className="px-0"
+      />
     </div>
   );
 }

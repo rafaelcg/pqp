@@ -14,6 +14,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -28,6 +29,7 @@ import (
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/cmaf"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/h264"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/keyframe"
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/nal"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/pipeline"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
@@ -97,7 +99,23 @@ type Session struct {
 	// guaranteed. Unused entirely when EnableAudio is never called.
 	epoch time.Time
 
-	initSet          atomic.Bool
+	initSet atomic.Bool
+	// initGeneration is how many video init segments this session has
+	// published (1 after the first SPS/PPS, 2 after the first real
+	// parameter-set change, …). Used only to name init-N.mp4.
+	initGeneration       atomic.Uint64
+	implausibleParamSets atomic.Uint64
+	droppingDamaged      atomic.Bool
+	damagedAUsDropped    atomic.Uint64
+	// initSPS/initPPS are the parameter sets the CURRENT init segment was
+	// built from. Compared byte-for-byte against every later in-band
+	// pair; a real change rebuilds the init. Protected by videoMu.
+	initSPS []byte
+	initPPS []byte
+	// demoteReason, when non-empty, asks the control-plane watchdog to
+	// demote this session off the LL rung (parameter-set change that
+	// could not be represented). Read without videoMu from Health.
+	demoteReason     atomic.Value // string
 	subscribed       atomic.Bool
 	partsWritten     atomic.Uint64
 	bytesWritten     atomic.Uint64
@@ -399,7 +417,7 @@ func (s *Session) EnableAudio(ctx context.Context, cfg AudioConfig) error {
 		enc.Close()
 		return fmt.Errorf("session: building the audio init segment: %w", err)
 	}
-	s.audioRing.SetInit(audioInit)
+	s.audioRing.SetNamedInit("audio-init.mp4", audioInit, false)
 	s.enqueueR2("audio-init.mp4", audioInit, "audio/mp4")
 
 	done := make(chan struct{})
@@ -510,6 +528,10 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	s.videoMu.Lock()
 	defer s.videoMu.Unlock()
 
+	if s.DemoteReason() != "" {
+		return
+	}
+
 	now := s.now()
 	s.videoPacketsSeen.Add(1)
 	s.lastVideoPacketAtNs.Store(now.UnixNano())
@@ -540,19 +562,29 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 		}
 	}
 
-	if !s.initSet.Load() && len(au.SPS) > 0 && len(au.PPS) > 0 {
-		initSeg, err := cmaf.BuildInitSegment(cmaf.InitParams{
-			Timescale: h264.ClockRate,
-			SPS:       au.SPS,
-			PPS:       au.PPS,
-		})
-		if err != nil {
-			log.Printf("pqp-remux: building init segment: %v", err)
-		} else {
-			s.ring.SetInit(initSeg)
-			s.initSet.Store(true)
-			s.enqueueR2("video-init.mp4", initSeg, "video/mp4")
+	if len(au.SPS) > 0 && len(au.PPS) > 0 {
+		if !s.initSet.Load() {
+			if !s.publishInit(au.SPS, au.PPS, ring.DefaultInitURI, false) {
+				// Build failed; keep waiting for a later pair.
+			}
+		} else if !bytes.Equal(au.SPS, s.initSPS) || !bytes.Equal(au.PPS, s.initPPS) {
+			if !s.handleParameterSetChange(au) {
+				return
+			}
+			if s.DemoteReason() != "" {
+				return
+			}
 		}
+	}
+	if s.droppingDamaged.Load() {
+		// A damaged parameter set poisoned this GOP: every frame until the
+		// next keyframe references pictures that never decoded. Drop them
+		// rather than hand the decoder slices it will reject (-12911 measured).
+		if !au.IsIDR {
+			s.damagedAUsDropped.Add(1)
+			return
+		}
+		s.droppingDamaged.Store(false)
 	}
 
 	frag, err := s.frag.Push(au)
@@ -563,6 +595,126 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 		return
 	}
 	s.publish(frag)
+}
+
+// publishInit builds and stores one video init segment. Returns false when
+// BuildInitSegment rejects the pair (caller keeps waiting / demotes).
+func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) bool {
+	initSeg, err := cmaf.BuildInitSegment(cmaf.InitParams{
+		Timescale: h264.ClockRate,
+		SPS:       sps,
+		PPS:       pps,
+	})
+	if err != nil {
+		log.Printf("pqp-remux: building init segment %s: %v", uri, err)
+		return false
+	}
+	s.ring.SetNamedInit(uri, initSeg, discontinuity)
+	s.initSPS = append([]byte(nil), sps...)
+	s.initPPS = append([]byte(nil), pps...)
+	s.initSet.Store(true)
+	gen := s.initGeneration.Add(1)
+	r2Name := "video-init.mp4"
+	if gen > 1 {
+		r2Name = fmt.Sprintf("video-init-%d.mp4", gen)
+	}
+	s.enqueueR2(r2Name, initSeg, "video/mp4")
+	return true
+}
+
+// handleParameterSetChange rebuilds the init segment when the publisher's
+// in-band SPS/PPS differ from the ones the current init was built from.
+// Production 2026-09-16: Chrome's screen-share encoder starts at 640x360
+// and ramps to 1280x720 a second or two later; the remuxer that captured
+// the 360p SPS into init.mp4 then delivered 720p frames against it, and
+// every viewer died with MEDIA_ERR_DECODE for the rest of the party.
+//
+// On a real change with an IDR: arm a forced segment boundary, publish a
+// new init-N.mp4, and mark the next segment discontinuous. Without an
+// IDR, or if the new init cannot be built, demote — shipping undecodable
+// media is worse than falling back to the conventional ladder.
+// handleParameterSetChange reports whether the access unit may continue into
+// the fragmenter. False means it carried a damaged parameter set and must be
+// dropped, along with the rest of its GOP.
+func (s *Session) handleParameterSetChange(au *h264.AccessUnit) bool {
+	oldW, oldH, oldProfile, oldLevel := spsSummary(s.initSPS)
+	newW, newH, newProfile, newLevel := spsSummary(au.SPS)
+	segIdx := s.frag.CurrentSegmentIndex()
+	partSeq := s.frag.CurrentSequence()
+
+	if !plausibleVideoDimensions(newW, newH) {
+		// A parameter set that parses to an absurd picture size is corruption
+		// (a truncated SPS at the tail of a stream, a packet-loss-damaged NAL),
+		// not a publisher decision. Measured 2026-09-16: the end of a test
+		// stream produced a 2x2 SPS plus a 160-byte "IDR"; rebuilding the init
+		// on it killed every viewer's decoder. Keep the init we have and skip
+		// this access unit's parameter sets; the next sane pair is honoured.
+		s.implausibleParamSets.Add(1)
+		s.droppingDamaged.Store(true)
+		log.Printf("pqp-remux: parameter-set change ignored, implausible dimensions: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); dropping this GOP",
+			oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq)
+		return false
+	}
+	if !au.IsIDR {
+		log.Printf("pqp-remux: parameter-set change without IDR: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); demoting",
+			oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq)
+		s.requestDemote("parameter-set-change-without-idr")
+		return true
+	}
+
+	nextGen := s.initGeneration.Load() + 1
+	uri := fmt.Sprintf("init-%d.mp4", nextGen)
+	s.frag.ForceSegmentBoundary()
+	if !s.publishInit(au.SPS, au.PPS, uri, true) {
+		log.Printf("pqp-remux: parameter-set change could not build init %s: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); demoting",
+			uri, oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq)
+		s.requestDemote("parameter-set-change-init-failed")
+		return true
+	}
+	log.Printf("pqp-remux: parameter-set change: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); published %s as a new init map",
+		oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq, uri)
+	return true
+}
+
+func (s *Session) requestDemote(reason string) {
+	if reason == "" {
+		return
+	}
+	// First writer wins: a later call must not erase the original cause.
+	if cur, _ := s.demoteReason.Load().(string); cur != "" {
+		return
+	}
+	s.demoteReason.Store(reason)
+}
+
+// DemoteReason is non-empty when this session has asked the control plane
+// to demote it off the LL rung. The watchdog reads it every tick.
+func (s *Session) DemoteReason() string {
+	if v, ok := s.demoteReason.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// spsSummary pulls the fields the parameter-set-change log line wants.
+// A malformed SPS still yields profile/level from the header bytes when
+// present; width/height stay zero.
+// plausibleVideoDimensions bounds what a real publisher can send. Below 64
+// lines is smaller than any screen share or camera this codebase publishes;
+// above 8192 is beyond every H.264 level. Either means the SPS is damaged.
+func plausibleVideoDimensions(width, height uint32) bool {
+	return width >= 64 && height >= 64 && width <= 8192 && height <= 8192
+}
+
+func spsSummary(sps []byte) (width, height, profile, level uint32) {
+	if len(sps) >= 4 {
+		profile = uint32(sps[1])
+		level = uint32(sps[3])
+	}
+	if info, err := nal.ParseSPS(sps); err == nil {
+		width, height = info.Width, info.Height
+	}
+	return
 }
 
 // Finish flushes any partial fragment still open in the fragmenter and
