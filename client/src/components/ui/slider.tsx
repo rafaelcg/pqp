@@ -25,7 +25,7 @@ const track = cva("relative w-full grow overflow-hidden", {
     variant: {
       scrub: "h-0.5 rounded-full bg-surface-3",
       volume: "h-1 rounded-full bg-surface-3",
-      edge: "h-0.5 rounded-none bg-border",
+      edge: "h-0.5 bg-border",
     },
   },
   defaultVariants: {

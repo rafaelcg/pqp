@@ -43,7 +43,7 @@ describe("Slider", () => {
       <Slider variant="edge" readOnly value={40} max={100} aria-label="Andamento" />,
     );
     expect(html).toContain("data-slider=\"edge\"");
-    expect(html).toContain("rounded-none");
     expect(html).toContain("bg-border");
+    expect(html).not.toContain("rounded-full");
   });
 });
