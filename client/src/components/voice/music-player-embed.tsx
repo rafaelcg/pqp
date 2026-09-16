@@ -12,6 +12,7 @@ import {
   onTrackEnded,
   reportPosition,
   setPositionProbe,
+  setSeekApply,
   type MusicSnapshot,
 } from "@/lib/music-store";
 import {
@@ -46,6 +47,54 @@ export function shouldReportUnknownDuration(args: {
       args.durationMs == null &&
       args.reportedTrackId !== args.trackId,
   );
+}
+
+/**
+ * Whether the embed should jump to the room's clock. A new snapshot
+ * (a seek, an echo) uses this for everyone, including the person who
+ * wrote it: they are the actor, and the 2 s tick otherwise leaves
+ * their player where it was.
+ */
+export function playerNeedsRoomSeek(
+  playerMs: number,
+  expectedMs: number,
+  driftMs = DRIFT_MS,
+): boolean {
+  return Math.abs(playerMs - expectedMs) > driftMs;
+}
+
+/**
+ * What the mounted embed should do when the room's current track changes.
+ * Stopping, not destroying, is how a second queue can start: tearing the
+ * iframe down at the end of the first one is why YouTube sometimes never
+ * calls onReady for the next player.
+ */
+export function musicEmbedCommand(
+  videoId: string | null,
+  status: "playing" | "paused",
+): "stop" | "load" | "cue" {
+  if (!videoId) {
+    return "stop";
+  }
+  return status === "playing" ? "load" : "cue";
+}
+
+/**
+ * Whether MiniPlayer should keep `MusicPlayer` in the tree. Once a track
+ * has mounted the iframe, an empty queue must not take it out: that
+ * destroy/recreate is the start-end-start miss. Leaving the call or
+ * "Parar de ouvir" still unmounts it.
+ */
+export function shouldKeepMusicEmbed(args: {
+  inCall: boolean;
+  listening: boolean;
+  hasCurrent: boolean;
+  previouslyHeld: boolean;
+}): boolean {
+  if (!args.inCall || !args.listening) {
+    return false;
+  }
+  return args.hasCurrent || args.previouslyHeld;
 }
 
 function readStored(key: string): string | null {
@@ -131,7 +180,12 @@ export function MusicPlayer({
               }
               playerRef.current = event.target;
               event.target.setVolume(readVolume());
+              event.target.unMute();
               setPositionProbe(() => event.target.getCurrentTime() * 1000);
+              setSeekApply((positionMs) => {
+                event.target.unMute();
+                event.target.seekTo(positionMs / 1000, true);
+              });
               setReady(true);
             },
             onStateChange: (event) => {
@@ -196,6 +250,7 @@ export function MusicPlayer({
       disposed = true;
       playerRef.current = null;
       setPositionProbe(null);
+      setSeekApply(null);
       try {
         player?.destroy();
       } catch {
@@ -206,18 +261,28 @@ export function MusicPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A new track: load it where the room is.
+  // A new track: load it where the room is. An empty queue stops this
+  // iframe rather than unmounting it (`musicEmbedCommand`).
   useEffect(() => {
     const player = playerRef.current;
-    if (!ready || !player || !videoId) {
+    if (!ready || !player) {
+      return;
+    }
+    const command = musicEmbedCommand(videoId, status);
+    if (command === "stop") {
+      try {
+        player.stopVideo();
+      } catch {
+        // empty player, already stopped
+      }
       return;
     }
     setFailed(false);
     const seconds = expectedPositionMs(musicRef.current) / 1000;
-    if (musicRef.current.state?.status === "playing") {
-      player.loadVideoById(videoId, seconds);
+    if (command === "load") {
+      player.loadVideoById(videoId!, seconds);
     } else {
-      player.cueVideoById(videoId, seconds);
+      player.cueVideoById(videoId!, seconds);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, videoId, trackId]);
@@ -228,16 +293,31 @@ export function MusicPlayer({
     if (!ready || !player) {
       return;
     }
-    if (status === "playing") {
+    if (status === "playing" && videoId) {
+      try {
+        if (player.getVolume() > 0 && player.isMuted()) {
+          player.unMute();
+        }
+      } catch {
+        // volume read is best-effort
+      }
       player.playVideo();
     } else {
-      player.pauseVideo();
-      const at = expectedPositionMs(musicRef.current) / 1000;
-      if (Math.abs(player.getCurrentTime() - at) > DRIFT_MS / 1000) {
-        player.seekTo(at, true);
+      try {
+        player.pauseVideo();
+      } catch {
+        // empty player after stopVideo
+      }
+      try {
+        const at = expectedPositionMs(musicRef.current);
+        if (playerNeedsRoomSeek(player.getCurrentTime() * 1000, at)) {
+          player.seekTo(at / 1000, true);
+        }
+      } catch {
+        // player not ready to seek
       }
     }
-    if (status !== "playing") {
+    if (status !== "playing" || !videoId) {
       return;
     }
     // Autoplay can be refused until the page has a gesture. The button in

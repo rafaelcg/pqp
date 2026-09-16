@@ -10,7 +10,9 @@ import {
   receiveMusic,
   readdFromHistory,
   resetMusicStoreForTests,
+  seekTo,
   setAutoplay,
+  setSeekApply,
   setListening,
   setMusicSession,
   setOpenControls,
@@ -51,8 +53,20 @@ describe("music store writes", () => {
     });
   });
 
+  it("moves the local player in the same tick as a seek write", () => {
+    addTrack({ ...resolved("a"), durationMs: 180_000 });
+    const applied: number[] = [];
+    setSeekApply((positionMs) => {
+      applied.push(positionMs);
+    });
+    seekTo(45_000);
+    expect(applied).toEqual([45_000]);
+    expect(getMusicSnapshot().state?.positionMs).toBe(45_000);
+  });
+
   it("starts the first track and queues the rest, in one write for a list", () => {
     expect(addTrack(resolved("a"))).toBe("playing");
+    expect(getMusicSnapshot().open).toBe(true);
     const outcome = addTracks([resolved("b"), resolved("c"), resolved("d")]);
     expect(outcome).toEqual({ added: 3, dropped: 0, startedPlaying: false });
     const state = getMusicSnapshot().state!;
@@ -94,6 +108,35 @@ describe("music store writes", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(addTrack(resolved("a"))).toBe("no-session");
     expect(getMusicSnapshot().state).toBeNull();
+  });
+
+  it("keeps the sheet closed when a room is already playing", () => {
+    expect(getMusicSnapshot().open).toBe(false);
+    receiveMusic(CHANNEL, {
+      current: {
+        id: "t1",
+        provider: "youtube",
+        videoId: "aaaaaaaaaaa",
+        title: "A",
+        sourceUrl: null,
+        thumbnailUrl: null,
+        durationMs: 1,
+        addedByUserId: "u1",
+        addedByName: "Ana",
+      },
+      queue: [],
+      status: "playing",
+      positionMs: 0,
+      atMs: 1,
+      rev: 1,
+      actorId: "peer-b",
+      openControls: false,
+      repeat: "off",
+      skipVotes: [],
+      history: [],
+    });
+    expect(getMusicSnapshot().open).toBe(false);
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("aaaaaaaaaaa");
   });
 
   it("votes to skip and advances when the room has enough votes", () => {

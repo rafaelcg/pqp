@@ -1,29 +1,25 @@
 import {
   ChevronDown,
   ListMusic,
-  MonitorPlay,
+  MoreHorizontal,
   Pause,
   Play,
   SkipForward,
-  Video,
-  VideoOff,
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MusicState, MusicTrack } from "@pqp/shared";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MarqueeText } from "@/components/ui/marquee-text";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Menu } from "@/components/ui/menu";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
 import {
   seekTo,
-  setListening,
   stopMusic,
   toggleMusicOpen,
   type MusicSnapshot,
@@ -32,9 +28,10 @@ import { cn } from "@/lib/utils";
 import {
   MusicHistoryList,
   MusicListeners,
-  MusicQueueOptions,
+  musicOverflowItems,
   MusicRepeatButton,
   MusicShuffleButton,
+  MusicStopListeningButton,
   MusicVoteSkipButton,
 } from "@/components/voice/music-extras";
 import {
@@ -200,21 +197,61 @@ export function MusicPanel({
   const history = music.state?.history ?? [];
   const seated = musicRoomPeople(voiceState);
   const durationKnown = progress.known;
+  const collapseLabel = t("music.close");
+  const overflowItems = useMemo(
+    () =>
+      musicOverflowItems({
+        t,
+        canManage,
+        ducking,
+        showVideo,
+        onStage,
+        openControls: music.state?.openControls === true,
+        autoplay: music.state?.autoplay === true,
+        onToggleDucking,
+        onToggleVideo,
+        onWatchOnStage,
+        onStopAll: canManage ? () => setConfirmStop(true) : undefined,
+      }),
+    [
+      t,
+      canManage,
+      ducking,
+      showVideo,
+      onStage,
+      music.state?.openControls,
+      music.state?.autoplay,
+      onToggleDucking,
+      onToggleVideo,
+      onWatchOnStage,
+    ],
+  );
 
   return (
-    <div data-music-panel="" className="flex max-h-[60vh] flex-col overflow-x-hidden">
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-2 px-2 pb-2">
-          <div className="flex items-center gap-2">
-            <span className="relative h-14 w-14 shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2">
+    <div data-music-panel="" className="flex min-w-0 max-h-[60vh] flex-col">
+      <div className="space-y-2 px-3 pt-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              className="relative h-14 w-14 shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2"
+              aria-expanded
+              aria-label={collapseLabel}
+              onClick={() => toggleMusicOpen()}
+            >
               {current.thumbnailUrl ? (
                 <img src={current.thumbnailUrl} alt="" className="h-full w-full object-cover" />
               ) : (
                 <ListMusic className="m-auto h-5 w-5 text-accent" aria-hidden="true" />
               )}
-            </span>
-            <div className="min-w-0 flex-1">
-              <MarqueeText text={current.title} className="text-[13px] font-medium text-text" />
+            </button>
+            <button
+              type="button"
+              className="min-w-0 flex-1 text-left"
+              aria-expanded
+              aria-label={collapseLabel}
+              onClick={() => toggleMusicOpen()}
+            >
+              <MarqueeText always text={current.title} className="text-[13px] font-medium text-text" />
               <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
                 {current.autoplayed ? (
                   <span
@@ -239,12 +276,25 @@ export function MusicPanel({
                   <MusicListeners participants={seated} />
                 </span>
               </div>
-            </div>
-            <Tooltip label={t("music.collapse")}>
+            </button>
+            <MusicStopListeningButton className="h-7 w-7" />
+            <Menu items={overflowItems} align="end" side="top">
               <button
                 type="button"
-                className={cn(ghostIconButton, "h-7 w-7")}
+                data-music-overflow=""
+                className={cn(ghostIconButton, "h-7 w-7 shrink-0")}
+                aria-label={t("music.overflow")}
+              >
+                <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </Menu>
+            <Tooltip label={collapseLabel}>
+              <button
+                type="button"
+                data-music-collapse=""
+                className={cn(ghostIconButton, "h-7 w-7 shrink-0 bg-surface-2 text-text")}
                 aria-expanded
+                aria-label={collapseLabel}
                 onClick={() => toggleMusicOpen()}
               >
                 <ChevronDown className="h-4 w-4" aria-hidden="true" />
@@ -264,7 +314,7 @@ export function MusicPanel({
               min={0}
               max={durationKnown ? duration : 1}
               step={250}
-              className="min-w-0 flex-1"
+              className="min-w-0 flex-1 px-1.5"
               aria-label={canManage && durationKnown ? t("music.seek") : t("music.progress")}
               onValueChange={(value) => {
                 if (canManage && durationKnown) {
@@ -366,51 +416,17 @@ export function MusicPanel({
               min={0}
               max={100}
               aria-label={t("music.volume")}
-              className="min-w-0 flex-1"
+              className="min-w-0 flex-1 px-1.5"
               onValueChange={onVolume}
             />
-            <Tooltip label={showVideo ? t("music.video.hide") : t("music.video.show")}>
-              <button
-                type="button"
-                className={cn(ghostIconButton, "h-7 w-7")}
-                aria-pressed={showVideo}
-                onClick={onToggleVideo}
-              >
-                {showVideo ? (
-                  <Video className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <VideoOff className="h-4 w-4" aria-hidden="true" />
-                )}
-              </button>
-            </Tooltip>
-            {onWatchOnStage && (
-              <Tooltip label={t("music.stage.watch")}>
-                <button
-                  type="button"
-                  className={cn(ghostIconButton, "h-7 w-7")}
-                  aria-pressed={onStage}
-                  aria-label={t("music.stage.watch")}
-                  onClick={onWatchOnStage}
-                >
-                  <MonitorPlay className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </Tooltip>
-            )}
           </div>
-
-          {onToggleDucking && (
-            <Switch
-              checked={ducking}
-              onCheckedChange={onToggleDucking}
-              label={t("music.duck")}
-              className="px-0"
-            />
-          )}
 
           <MusicSearchPicker compact canManage={canManage} />
 
           <MusicActivityLine voiceState={voiceState} state={music.state} />
+      </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
           {queue.length > 0 && (
             <div>
               <p className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-text-tertiary">
@@ -423,28 +439,6 @@ export function MusicPanel({
           )}
 
           <MusicHistoryList history={history} defaultOpen={queue.length === 0} />
-
-          {canManage ? <MusicQueueOptions /> : null}
-        </div>
-      </ScrollArea>
-
-      <div className="flex shrink-0 items-center justify-between gap-1 px-2 py-1.5 text-[11px]">
-        <button
-          type="button"
-          className="shrink-0 whitespace-nowrap rounded-[var(--radius-control)] px-1.5 py-1 text-text-tertiary hover:bg-surface-2 hover:text-text"
-          onClick={() => setListening(false)}
-        >
-          {t("music.dismiss")}
-        </button>
-        {canManage && (
-          <button
-            type="button"
-            className="shrink-0 whitespace-nowrap rounded-[var(--radius-control)] px-1.5 py-1 text-text-tertiary hover:bg-danger-soft hover:text-on-danger-soft"
-            onClick={() => setConfirmStop(true)}
-          >
-            {t("music.stopAll")}
-          </button>
-        )}
       </div>
 
       <ConfirmDialog

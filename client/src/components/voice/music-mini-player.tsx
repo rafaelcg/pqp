@@ -12,6 +12,7 @@ import {
 import {
   advance,
   setListening,
+  setMusicOpen,
   setPlaying,
   toggleMusicOpen,
   useMusic,
@@ -22,7 +23,7 @@ import {
   MusicNowPlaying,
 } from "@/components/voice/music-now-playing";
 import { MusicPanel } from "@/components/voice/music-panel";
-import { MusicPlayer } from "@/components/voice/music-player-embed";
+import { MusicPlayer, shouldKeepMusicEmbed } from "@/components/voice/music-player-embed";
 import { MusicSearchPicker } from "@/components/voice/music-search-picker";
 import { MusicEmbedOutlet, useMusicEmbedDock } from "@/components/voice/music-embed-host";
 import { cn } from "@/lib/utils";
@@ -31,10 +32,14 @@ import type { YTPlayer } from "@/lib/youtube-iframe";
 /**
  * THE PLAYER, AT THE BOTTOM OF THE SIDEBAR, ABOVE THE CALL CONTROLS.
  *
- * Nothing playing: the footer is empty. The note on the call bar opens this
- * panel with the add box focused. A track on, and "parar de ouvir", leaves
- * a one-line pill. The embed is mounted once and portalled between this
- * dock, the panel's video slot, and the call-stage tile.
+ * Nothing playing: a "Tocar música" row above the call status. That opens
+ * the add box (the sheet). A track on is the compact bar by default; adding
+ * a song or tapping art/title/chevron opens the sheet. "Parar de ouvir"
+ * leaves a one-line pill. The embed stays mounted after the queue is
+ * cleared (the iframe is stopped, not destroyed) and is portalled between
+ * this dock, the panel's video slot, and the call-stage tile. The dock is
+ * the first child of every listening branch, so React does not throw the
+ * player away when the idle row comes back.
  */
 
 const VOLUME_KEY = "pqp:music-volume";
@@ -87,39 +92,81 @@ export function MusicMiniPlayer({
   const playing = state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, state);
   const onStage = prefs.placement === "stage" && Boolean(current) && music.listening;
+  const embedHeldRef = useRef(false);
+  embedHeldRef.current = shouldKeepMusicEmbed({
+    inCall,
+    listening: music.listening,
+    hasCurrent: current !== null,
+    previouslyHeld: embedHeldRef.current,
+  });
 
   if (!inCall) {
     return null;
   }
 
-  const embed =
-    current && music.listening ? (
-      <MusicPlayer
-        music={music}
-        isActor={isActor}
-        volume={muted ? 0 : volume}
-        playerRef={playerRef}
-        onNeedsTap={setNeedsTap}
-        duckEnabled={prefs.ducking}
-        speakingPeerCount={voiceState.speakingPeerIds.length}
-        transmitting={voiceState.isTransmitting}
-        deafened={voiceState.isDeafened}
-      />
-    ) : null;
+  const keepEmbed = embedHeldRef.current;
+  const embed = keepEmbed ? (
+    <MusicPlayer
+      music={music}
+      isActor={isActor}
+      volume={muted ? 0 : volume}
+      playerRef={playerRef}
+      onNeedsTap={setNeedsTap}
+      duckEnabled={prefs.ducking}
+      speakingPeerCount={voiceState.speakingPeerIds.length}
+      transmitting={voiceState.isTransmitting}
+      deafened={voiceState.isDeafened}
+    />
+  ) : null;
+  const dock = (
+    <div ref={dockRef} data-music-embed-dock="" className="h-0 overflow-hidden">
+      {embed}
+    </div>
+  );
 
   if (!current) {
     if (!music.open) {
-      return compact ? (
-        <div data-music-mini-player="compact" className="h-0 overflow-hidden">
-          <div ref={dockRef} data-music-embed-dock="" />
+      if (compact) {
+        return (
+          <div
+            data-music-mini-player="idle"
+            className="flex flex-col items-center border-t border-border bg-surface-0 py-2"
+          >
+            {dock}
+            <button
+              type="button"
+              aria-label={t("music.bar.start")}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-text hover:bg-surface-2"
+              onClick={() => setMusicOpen(true)}
+            >
+              <Music className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        );
+      }
+      return (
+        <div
+          data-music-mini-player="idle"
+          className="border-t border-border bg-surface-0"
+        >
+          {dock}
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-surface-2"
+            onClick={() => setMusicOpen(true)}
+          >
+            <Music className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
+            {t("music.bar.start")}
+          </button>
         </div>
-      ) : null;
+      );
     }
     return (
       <div
         data-music-mini-player="start"
         className="border-t border-border bg-surface-0 px-3 py-2"
       >
+        {dock}
         <div className="mb-1.5 flex items-center justify-between gap-2">
           <p className="text-sm font-medium text-text">{t("music.empty.title")}</p>
           <button
@@ -140,8 +187,7 @@ export function MusicMiniPlayer({
   if (compact) {
     return (
       <div data-music-mini-player="compact" className="h-0 overflow-hidden">
-        <div ref={dockRef} data-music-embed-dock="" />
-        {embed}
+        {dock}
       </div>
     );
   }
@@ -186,9 +232,7 @@ export function MusicMiniPlayer({
       data-music-placement={prefs.placement}
       className="border-t border-border bg-surface-0 text-xs"
     >
-      <div ref={dockRef} data-music-embed-dock="" className="h-0 overflow-hidden">
-        {embed}
-      </div>
+      {dock}
       {showStagePlaceholder && (
         <p
           data-music-stage-placeholder=""

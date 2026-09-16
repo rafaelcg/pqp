@@ -10,6 +10,8 @@ const root = cva(
       variant: {
         scrub: "h-4",
         volume: "h-4",
+        /** Compact player: the fill sits on the panel's top border. */
+        edge: "h-3 items-start",
       },
     },
     defaultVariants: {
@@ -18,11 +20,12 @@ const root = cva(
   },
 );
 
-const track = cva("relative w-full grow overflow-hidden rounded-full bg-surface-3", {
+const track = cva("relative w-full grow overflow-hidden", {
   variants: {
     variant: {
-      scrub: "h-0.5",
-      volume: "h-1",
+      scrub: "h-0.5 rounded-full bg-surface-3",
+      volume: "h-1 rounded-full bg-surface-3",
+      edge: "h-0.5 rounded-none bg-border",
     },
   },
   defaultVariants: {
@@ -38,6 +41,8 @@ const thumb = cva(
         scrub:
           "h-3 w-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
         volume: "h-3 w-3",
+        edge:
+          "h-3 w-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
       },
     },
     defaultVariants: {
@@ -66,8 +71,9 @@ export interface SliderProps
 
 /**
  * One-dimensional value. `scrub` is a thin track whose thumb appears on
- * hover or focus. `volume` keeps the thumb visible. `readOnly` draws the
- * same fill without a thumb and does not seek.
+ * hover or focus. `volume` keeps the thumb visible. `edge` is the same
+ * fill sitting on a panel's top border. `readOnly` draws the fill without
+ * a thumb and does not seek.
  */
 export function Slider({
   className,

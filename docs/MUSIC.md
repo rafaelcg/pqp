@@ -201,48 +201,59 @@ smaller cap.
 
 `client/src/lib/music-store.ts` holds the state outside `VoiceState` so a
 position sample does not re-render the call stage; `use-voice.ts` feeds it
-and registers a sender on every `welcome`. `components/voice/music-bar-button.tsx`
-is the control on the call bar beside camera and screen share ("Tocar
-música", lit while something plays, with a small equaliser while the room
-is playing). `components/voice/music-dock.tsx` is the title line on the
-call strip; a click unfolds the player in the sidebar. The player itself
-is `components/voice/music-mini-player.tsx`, pinned at the bottom of the
-sidebar above the call controls. At rest it is one card: artwork, title
-(scrolls on hover), who added it (avatar and name, or "Tocando
-parecidas" when the room picked the track), a 2px progress bar,
-play/pause and skip. A member without manage rights sees vote skip
-(`1/3`) instead of a dimmed skip. It opens in place into a panel: a
-56px artwork row (title, who added it, and "N ouvindo"), an optional
-16:9 video capped at about 135px, a scrubber that stays up even before
-duration is known (managers seek; everyone else sees progress), a
-transport row with repeat and shuffle on the left for effective
-managers, play/pause in the centre and skip (or vote skip) on the
-right, volume with mute, an activity line ("Rafa pulou"), a search box
-that shows the top five results under the input, the queue with
-thumbnail, duration, who added it, drag reorder, play next, remove and
-"Abrir no YouTube" / "Abrir no Spotify", a "Tocadas" list (collapsed to
-the count when the queue has rows), "Opções da fila" for effective
-managers ("Todo mundo controla" and "Continuar com parecidas"), and two
-text actions: "Parar de ouvir", which unmounts this machine's embed and
-leaves a one-line pill with "Ouvir" as the way back while the room's
-queue carries on, and "Parar pra todos" behind a confirm, the
-room-wide stop. A pasted link still goes through `GET /api/music/resolve`.
+and registers a sender on every `welcome`. `components/voice/music-mini-player.tsx`
+is the player at the bottom of the sidebar, above the call status. Nothing
+playing is a "Tocar música" row that opens the add box. `components/voice/music-dock.tsx`
+is the title line on the call strip; a click unfolds the same player.
+The player itself is pinned at the bottom of the sidebar above the call
+controls. Two heights of one player, not two modes. At rest it is a bar:
+40px artwork, title (always marquee), who added it (avatar and name, or
+"Tocando parecidas" when the room picked the track), play/pause and skip.
+Progress is the top edge of that bar, a 2px fill on the divider, not a
+second row. A member without manage rights sees vote skip
+(`1/3`) instead of a dimmed skip. A click on the art, the title, or the
+chevron opens the sheet in place: a 56px artwork row (title, who added
+it, and "N ouvindo"), an optional 16:9 video capped at about 135px, a
+scrubber that stays up even before duration is known (managers seek;
+everyone else sees progress), a transport row with repeat and shuffle
+on the left for effective managers, play/pause in the centre and skip
+(or vote skip) on the right, volume with mute, an activity line ("Rafa
+pulou"), a search box that shows the top five results under the input,
+the queue with thumbnail, duration, who added it, drag reorder, play
+next, remove and "Abrir no YouTube" / "Abrir no Spotify", and a
+"Tocadas" list (collapsed to the count when the queue has rows). Room
+options live in the sheet's overflow (`...`): "Abaixar quando alguém
+fala", show/hide video, "Assistir na tela", "Todo mundo controla" and
+"Continuar com parecidas" for effective managers, and "Parar pra todos"
+behind a confirm, the room-wide stop. "Parar de ouvir" is an icon on
+the compact bar and on the sheet header, next to the overflow: it
+unmounts this machine's embed and leaves a one-line pill with "Ouvir"
+as the way back while the room's queue carries on. A room that is already
+playing shows the bar. Tocar música or adding a song opens the sheet,
+because that is where search lives. A pasted link still goes through
+`GET /api/music/resolve`.
 Typed text goes through `GET /api/music/search` and the person picks a
-row. The embed is mounted for the whole call whatever the reader is
-looking at, because unmounting it is what stops the sound; the video is
-folded to zero height by default and the choice is remembered. Rooms you
-are not in show a card under their occupants instead
-(`channel-music-card.tsx`, off `voiceState.channelMusic`): artwork, the
-title, "N ouvindo" when the count is present and above zero, and an
-"Ouvir" that joins the call.
+row. The embed is mounted for the whole call while this machine is
+listening, including after the queue is cleared: ending the room stops
+the iframe (`stopVideo`) and does not destroy it, because tearing it
+down is why a second queue sometimes never played. Unmounting is what
+stops the sound, so that only happens on "Parar de ouvir" or leaving
+the call. The video is folded to zero height by default and the choice
+is remembered. Rooms you are not in show a card under their occupants
+instead (`channel-music-card.tsx`, off `voiceState.channelMusic`):
+artwork, the title, "N ouvindo" when the count is present and above
+zero, and an "Ouvir" that joins the call.
 
 "Assistir na tela" moves that same embed onto the call stage as a 16:9
 tile, through the one-mount portal `watch-dock.tsx` already uses: a
 detached host is `appendChild`'d between the panel's video slot and
 `MusicStageTile`. The iframe never remounts, so the sound does not stop.
-The tile joins the stage grid (featured when nothing else is, in the
-grid otherwise), keeps a title overlay and "Voltar pra barra", and uses
-the existing fullscreen control. Navigating to a text channel rescues
+When nobody else is publishing, the clip owns the picture pane and the
+call controls stay on the call bar: no extra people strip, no overlay
+control row. A camera or a share still expands the usual stage
+chrome, with the music tile in the grid (featured when nothing else is).
+The tile keeps a title overlay and "Voltar pra barra", and uses the
+existing fullscreen control. Navigating to a text channel rescues
 the host back to the sidebar dock; the placement is remembered per
 browser in `client/src/lib/music-prefs.ts`.
 
@@ -252,9 +263,9 @@ machine's transmit gate) and back over 800 ms when they stop. The
 preference is "Abaixar quando alguém fala", on by default; a deafened
 listener is not ducked, because nobody is audible to them.
 
-Nothing playing means the footer is empty. The note on the call bar is
-the way in, and it focuses the add box. A room that starts music still
-opens the player by default. Settings > Voz has "Entrar na música da
+Nothing playing is a "Tocar música" row above the call status. That
+opens the add box (the sheet). A room that is already playing shows the
+bar, not the sheet. Settings > Voz has "Entrar na música da
 call automaticamente"; off means that transition shows the one-line
 pill instead, and "Ouvir" is how you join. "Parar de ouvir" keeps you
 out for the rest of that seat.

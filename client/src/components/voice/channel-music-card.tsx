@@ -44,7 +44,7 @@ export function ChannelMusicCard({
   return (
     <div
       data-channel-music={channelId}
-      className="ml-2 mt-0.5 flex items-center gap-1.5 rounded-[var(--radius-card)] bg-surface-2 py-1 pl-1.5 pr-1 text-[11px] text-text ring-1 ring-border"
+      className="group ml-2 mt-0.5 flex min-w-0 items-center gap-1.5 rounded-[var(--radius-card)] bg-surface-2 py-1 pl-1.5 pr-1 text-[11px] text-text ring-1 ring-border"
     >
       <span className="relative h-6 w-6 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-3">
         {track.thumbnailUrl ? (
@@ -59,7 +59,7 @@ export function ChannelMusicCard({
         aria-label={inCall ? t("music.open") : t("music.sidebar.join", { title: track.title })}
         onClick={onTitleClick}
       >
-        <MarqueeText text={track.title} />
+        <MarqueeText always text={track.title} className="w-full min-w-0 text-[11px] text-text" />
         {track.listeners != null && track.listeners > 0 ? (
           <span className="block truncate text-[10px] text-text-tertiary tabular-nums">
             {t("music.listening", { count: track.listeners })}

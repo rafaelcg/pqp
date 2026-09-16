@@ -6,23 +6,32 @@ import type { VoiceState } from "@/hooks/use-voice";
 import {
   addTrack,
   getMusicSnapshot,
+  receiveMusic,
   resetMusicStoreForTests,
   setListening,
   setMusicOpen,
   setMusicSession,
+  stopMusic,
 } from "@/lib/music-store";
 import { resetMusicPrefsForTests } from "@/lib/music-prefs";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
-import { MusicBarButton } from "@/components/voice/music-bar-button";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
-import { effectiveCanManageMusic } from "@/components/voice/music-extras";
+import { effectiveCanManageMusic, musicOverflowItems } from "@/components/voice/music-extras";
+import { translateMessage } from "@/lib/i18n";
 import { MusicPanel, musicActivityForViewer, musicActivityFromDiff } from "@/components/voice/music-panel";
 import {
   insertMusicStageTile,
   MUSIC_STAGE_TILE_ID,
 } from "@/components/voice/music-stage-tile";
 import { formatMusicClockOrUnknown, MusicNowPlaying } from "@/components/voice/music-now-playing";
-import { shouldReportUnknownDuration } from "@/components/voice/music-player-embed";
+import { MusicDock } from "@/components/voice/music-dock";
+import {
+  musicEmbedCommand,
+  playerNeedsRoomSeek,
+  shouldKeepMusicEmbed,
+  shouldReportUnknownDuration,
+} from "@/components/voice/music-player-embed";
+import { resetMusicEmbedHostForTests } from "@/components/voice/music-embed-host";
 import {
   queueResolvedNext,
   shouldResolveQuery,
@@ -214,6 +223,70 @@ describe("formatMusicClockOrUnknown", () => {
   });
 });
 
+describe("playerNeedsRoomSeek", () => {
+  it("jumps a playing embed after a seek, including the writer", () => {
+    expect(playerNeedsRoomSeek(10_000, 90_000)).toBe(true);
+    expect(playerNeedsRoomSeek(90_100, 90_000)).toBe(false);
+  });
+});
+
+describe("musicEmbedCommand", () => {
+  it("stops the iframe when the room has no current track", () => {
+    expect(musicEmbedCommand(null, "playing")).toBe("stop");
+    expect(musicEmbedCommand("", "paused")).toBe("stop");
+  });
+
+  it("loads a playing track and cues a paused one", () => {
+    expect(musicEmbedCommand("dQw4w9WgXcQ", "playing")).toBe("load");
+    expect(musicEmbedCommand("dQw4w9WgXcQ", "paused")).toBe("cue");
+  });
+});
+
+describe("shouldKeepMusicEmbed", () => {
+  it("holds the iframe after the queue is cleared, and drops it when listening stops", () => {
+    expect(
+      shouldKeepMusicEmbed({
+        inCall: true,
+        listening: true,
+        hasCurrent: false,
+        previouslyHeld: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldKeepMusicEmbed({
+        inCall: true,
+        listening: true,
+        hasCurrent: true,
+        previouslyHeld: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldKeepMusicEmbed({
+        inCall: true,
+        listening: true,
+        hasCurrent: false,
+        previouslyHeld: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldKeepMusicEmbed({
+        inCall: true,
+        listening: false,
+        hasCurrent: true,
+        previouslyHeld: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldKeepMusicEmbed({
+        inCall: false,
+        listening: true,
+        hasCurrent: true,
+        previouslyHeld: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("shouldReportUnknownDuration", () => {
   it("fires once per track for the actor while duration is empty", () => {
     expect(
@@ -248,6 +321,55 @@ describe("shouldReportUnknownDuration", () => {
         reportedTrackId: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("musicOverflowItems", () => {
+  const t = (key: Parameters<typeof translateMessage>[0]) => translateMessage(key);
+
+  it("puts duck, video, stage, room options and stop for everyone on a manager menu", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: true,
+      ducking: true,
+      showVideo: false,
+      onStage: false,
+      openControls: false,
+      autoplay: true,
+      onToggleDucking: () => {},
+      onToggleVideo: () => {},
+      onWatchOnStage: () => {},
+      onStopAll: () => {},
+    });
+    expect(items.map((item) => item.id)).toEqual([
+      "duck",
+      "video",
+      "stage",
+      "sep-room",
+      "open-controls",
+      "autoplay",
+      "sep-stop",
+      "stop-all",
+    ]);
+    expect(items.find((item) => item.id === "autoplay")?.checked).toBe(true);
+    expect(items.find((item) => item.id === "stop-all")?.danger).toBe(true);
+    expect(items.filter((item) => !item.separator).every((item) => item.icon)).toBe(true);
+  });
+
+  it("drops manage-only rows when the viewer cannot manage", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: false,
+      ducking: false,
+      showVideo: true,
+      onStage: false,
+      openControls: false,
+      autoplay: false,
+      onToggleDucking: () => {},
+      onToggleVideo: () => {},
+    });
+    expect(items.map((item) => item.id)).toEqual(["duck", "video"]);
+    expect(items.find((item) => item.id === "video")?.checked).toBe(true);
   });
 });
 
@@ -292,10 +414,14 @@ describe("MusicNowPlaying", () => {
     );
     expect(html).toContain("Ana");
     expect(html).toContain("data-music-now-playing");
+    expect(html).toContain("data-music-expand");
+    expect(html).not.toContain("data-music-expand-label");
     expect(html).toContain("data-music-vote-skip");
+    expect(html).toContain("data-music-stop-listening");
     expect(html).toContain("opacity-40");
     expect(html).toContain("role=\"progressbar\"");
-    expect(html.match(/aria-expanded/g)?.length).toBe(2);
+    expect(html).toContain("h-10 w-10");
+    expect(html.match(/aria-expanded/g)?.length).toBe(3);
   });
 
   it("says the room picked a similar track", () => {
@@ -323,6 +449,36 @@ describe("MusicNowPlaying", () => {
     );
     expect(html).toContain("data-music-autoplayed");
     expect(html).not.toContain("Ana");
+    expect(html).toContain("data-slider=\"edge\"");
+  });
+});
+
+describe("MusicDock", () => {
+  beforeEach(() => {
+    resetMusicStoreForTests();
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-me",
+      userId: "33333333-3333-4333-8333-333333333333",
+      displayName: "Eu",
+      send: () => {},
+    });
+  });
+
+  it("lets the compact title use leftover width instead of a 12rem cap", () => {
+    receiveMusic(
+      CHANNEL,
+      state({ current: track("now", { title: "Arctic Monkeys - Cornerstone" }) }),
+    );
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicDock compact voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toContain("data-music-dock=\"compact\"");
+    expect(html).toContain("Arctic Monkeys - Cornerstone");
+    expect(html).not.toContain("max-w-[12rem]");
+    expect(html).toContain("flex-1");
   });
 });
 
@@ -361,6 +517,11 @@ describe("MusicPanel", () => {
   it("keeps a compact artwork row and a scrubber while duration is unknown", () => {
     const html = renderPanel(null);
     expect(html).toContain("data-music-panel");
+    expect(html).toContain("data-music-collapse");
+    expect(html).toContain("data-music-overflow");
+    expect(html).toContain("data-music-stop-listening");
+    expect(html).not.toContain("data-music-collapse-label");
+    expect(html).not.toContain("grid-cols-2");
     expect(html).toContain("h-14 w-14");
     expect(html).not.toContain("aspect-square");
     expect(html).toContain("data-slider=\"scrub\"");
@@ -376,13 +537,14 @@ describe("MusicPanel", () => {
     expect(html).toMatch(/0:00[\s\S]*data-slider="scrub"[\s\S]*3:00/);
   });
 
-  it("puts repeat, shuffle and collapsed queue options on a manager panel", () => {
+  it("puts repeat, shuffle and an overflow trigger on a manager panel", () => {
     const html = renderPanel(180_000);
     expect(html).toContain("data-music-repeat");
     expect(html).toContain("data-music-shuffle");
-    expect(html).toContain("data-music-options");
-    expect(html).not.toContain("data-music-options-body");
+    expect(html).toContain("data-music-overflow");
+    expect(html).not.toContain("data-music-options");
     expect(html).toContain("data-music-listeners");
+    expect(html).toContain("data-slider=\"volume\"");
   });
 
   it("replaces skip with vote skip when the viewer cannot manage", () => {
@@ -408,11 +570,13 @@ describe("MusicPanel", () => {
       </TooltipProvider>,
     );
     expect(html).toContain("data-music-vote-skip");
+    expect(html).toContain("data-music-overflow");
     expect(html).not.toContain("data-music-options");
     expect(html).not.toContain("data-music-repeat");
+    expect(html).not.toContain("grid-cols-1");
   });
 
-  it("names the stage and ducking controls", () => {
+  it("keeps stage and ducking off the sheet body", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <MusicPanel
@@ -436,7 +600,8 @@ describe("MusicPanel", () => {
         />
       </TooltipProvider>,
     );
-    expect(html).toContain("role=\"switch\"");
+    expect(html).toContain("data-music-overflow");
+    expect(html).not.toContain("role=\"switch\"");
   });
 });
 
@@ -482,6 +647,7 @@ describe("MusicMiniPlayer", () => {
   beforeEach(() => {
     resetMusicStoreForTests();
     resetMusicPrefsForTests();
+    resetMusicEmbedHostForTests();
     setMusicSession({
       channelId: CHANNEL,
       peerId: "peer-me",
@@ -491,13 +657,15 @@ describe("MusicMiniPlayer", () => {
     });
   });
 
-  it("draws nothing in the footer when nothing is playing", () => {
+  it("offers Tocar música in the sidebar when nothing is playing", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <MusicMiniPlayer voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toBe("");
+    expect(html).toContain('data-music-mini-player="idle"');
+    expect(html).toContain("data-music-embed-dock");
+    expect(html).toMatch(/Play music|Tocar música|music\.bar\.start/);
   });
 
   it("opens the add box when the panel is open and nothing is on", () => {
@@ -509,6 +677,7 @@ describe("MusicMiniPlayer", () => {
     );
     expect(html).toContain('data-music-mini-player="start"');
     expect(html).toContain("data-music-search");
+    expect(html).toContain("data-music-embed-dock");
     expect(html).not.toContain('data-music-mini-player="empty"');
   });
 
@@ -521,6 +690,7 @@ describe("MusicMiniPlayer", () => {
     );
     expect(html).toContain('data-music-mini-player="start"');
     expect(html).toContain("data-music-search");
+    expect(html).toContain("data-music-embed-dock");
   });
 
   it("tidies the pill when the viewer is not listening", () => {
@@ -542,44 +712,58 @@ describe("MusicMiniPlayer", () => {
     expect(html).toContain("h-5 w-5");
     expect(html).toContain("Legião Urbana");
   });
-});
 
-describe("MusicBarButton", () => {
-  beforeEach(() => {
-    resetMusicStoreForTests();
-  });
-
-  it("renders the start control when nothing is on", () => {
+  it("shows the compact bar when a room is already playing", () => {
+    receiveMusic(CHANNEL, state({ current: track("now", { title: "Legião Urbana" }) }));
     const html = renderToStaticMarkup(
       <TooltipProvider>
-        <MusicBarButton size="h-9 w-9" iconSize="h-4 w-4" />
+        <MusicMiniPlayer voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-bar-button");
-    expect(html).not.toContain("data-music-eq");
+    expect(html).toContain("data-music-now-playing");
+    expect(html).toContain("data-music-expand");
+    expect(html).toContain("data-music-stop-listening");
+    expect(html).not.toContain("data-music-panel");
+    expect(html).not.toContain("data-music-expand-label");
   });
 
-  it("draws the equaliser while the room is playing", () => {
-    setMusicSession({
-      channelId: CHANNEL,
-      peerId: "peer-a",
-      userId: "u1",
-      displayName: "Ana",
-      send: () => {},
-    });
+  it("opens the sheet when this machine adds a song", () => {
     addTrack({
       provider: "youtube",
       videoId: "aaaaaaaaaaa",
-      title: "Now",
+      title: "Legião Urbana",
       sourceUrl: null,
-      thumbnailUrl: null,
+      thumbnailUrl: "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg",
       durationMs: 1,
     });
     const html = renderToStaticMarkup(
       <TooltipProvider>
-        <MusicBarButton size="h-9 w-9" iconSize="h-4 w-4" />
+        <MusicMiniPlayer voiceState={voiceState()} />
       </TooltipProvider>,
     );
-    expect(html).toContain("data-music-eq");
+    expect(html).toContain("data-music-panel");
+    expect(html).toContain("data-music-overflow");
+    expect(html).toContain("data-music-stop-listening");
+    expect(html).not.toContain("data-music-now-playing");
+  });
+
+  it("keeps the embed dock after the room stop so a second queue can play", () => {
+    addTrack({
+      provider: "youtube",
+      videoId: "aaaaaaaaaaa",
+      title: "Legião Urbana",
+      sourceUrl: null,
+      thumbnailUrl: "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg",
+      durationMs: 1,
+    });
+    stopMusic();
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <MusicMiniPlayer voiceState={voiceState()} />
+      </TooltipProvider>,
+    );
+    expect(html).toMatch(/data-music-mini-player="(idle|start)"/);
+    expect(html).toContain("data-music-embed-dock");
+    expect(html).not.toContain("data-music-now-playing");
   });
 });

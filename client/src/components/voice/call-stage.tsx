@@ -84,7 +84,6 @@ import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import { MusicDock } from "@/components/voice/music-dock";
-import { MusicBarButton } from "@/components/voice/music-bar-button";
 import {
   insertMusicStageTile,
   MUSIC_STAGE_TILE_ID,
@@ -193,6 +192,7 @@ import {
   formatCallDuration,
   hasWatchableVideo,
   isCameraSoloId,
+  isMusicPictureOnlyStage,
   isStageCollapsed,
   markCallStarted,
   nearestCorner,
@@ -209,7 +209,8 @@ import {
  *
  * A picture owns the room; voice-only occupancy does not. The stage is a slim
  * bar until a camera or a screen share is on, then it expands unless the user
- * tucked it away for the session.
+ * tucked it away for the session. Music on the stage is a clip in that
+ * picture pane; it does not take the overlay bar or the listener strip.
  */
 
 /** How one person appears on the stage, whatever transport carried them. */
@@ -691,18 +692,14 @@ export function CallStage({
     setUserCollapsed(isStageCollapsed(channelId));
   }, [channelId]);
 
-  const musicPlacement = useMusicPlacement();
-  const musicPresence = useMusicStagePresence();
-  const musicOnStage = musicPlacement === "stage" && musicPresence.active;
-  const hasVideo =
-    hasWatchableVideo({
-      localCameraOn:
-        voiceState.isCameraOn || voiceState.localCameraStream !== null,
-      remoteHasCamera: voiceState.remotePeers.some(
-        (peer) => peer.cameraStream !== null,
-      ),
-      screenShareCount: voiceState.screenSharePeerIds.length,
-    }) || musicOnStage;
+  const hasVideo = hasWatchableVideo({
+    localCameraOn:
+      voiceState.isCameraOn || voiceState.localCameraStream !== null,
+    remoteHasCamera: voiceState.remotePeers.some(
+      (peer) => peer.cameraStream !== null,
+    ),
+    screenShareCount: voiceState.screenSharePeerIds.length,
+  });
 
   return (
     <ActiveCall
@@ -877,7 +874,22 @@ function ActiveCall({
     voiceState.status === "connected" &&
     voiceState.remotePeers.length === 0;
   const ringing = callingOut || (joining && ringWhenAlone);
-  const collapsed = !shouldShowExpandedStage(hasVideo, userCollapsed, ringing);
+  const musicPlacement = useMusicPlacement();
+  const musicPresence = useMusicStagePresence();
+  const musicOnStage = musicPlacement === "stage" && musicPresence.active;
+  // Cameras and shares take the overlay bar. Music on the stage is a clip.
+  const chromeExpanded = shouldShowExpandedStage(
+    hasVideo,
+    userCollapsed,
+    ringing,
+  );
+  const musicPictureOnly = isMusicPictureOnlyStage({
+    musicOnStage,
+    hasLiveVideo: hasVideo,
+    ringing,
+    watchPartyChrome,
+  });
+  const collapsed = !chromeExpanded && !musicPictureOnly;
   useEffect(() => {
     if (playOutgoingRingtone && callingOut) {
       startSoundLoop("outgoingCall");
@@ -1115,9 +1127,6 @@ function ActiveCall({
     tileLimit: wide ? STAGE_TILE_LIMIT_WIDE : STAGE_TILE_LIMIT_NARROW,
     speakingKeys: speaking,
   });
-  const musicPlacement = useMusicPlacement();
-  const musicPresence = useMusicStagePresence();
-  const musicOnStage = musicPlacement === "stage" && musicPresence.active;
   const staged = insertMusicStageTile(stage.tiles, stage.featured, musicOnStage);
   const overflowKeys = useMemo(
     () => new Set(stage.overflowKeys),
@@ -1133,16 +1142,18 @@ function ActiveCall({
   );
   const gridColumns = stageGridColumns(staged.tiles.length, wide);
   const clickFullscreens = tileClickFullscreens(staged.tiles.length);
-  const anyVideo = hasVideo;
+  const anyVideo = hasVideo || musicOnStage;
   /**
    * The row exists only when somebody is in it, and only beside a stage.
    *
    * It reserves its own height AND the control bar's band below it, so an
    * empty row is not a blank strip: it is a hundred pixels taken off the
    * picture in a 1:1 call where nobody was ever going to be listed.
+   *
+   * Music-only skips it: those faces already sit on the call bar.
    */
   const showStrip =
-    listeners.length > 0 && staged.tiles.length > 0;
+    listeners.length > 0 && staged.tiles.length > 0 && !musicPictureOnly;
 
   // --- elapsed timer ------------------------------------------------------
   // Starts when the call genuinely has two ends, not while it is still
@@ -1554,6 +1565,7 @@ function ActiveCall({
     <div
       ref={stageRef}
       data-testid="call-stage"
+      data-music-picture={musicPictureOnly ? "" : undefined}
       className={cn(
         "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
         fullscreen.isFullscreen
@@ -2508,7 +2520,6 @@ export function CallControls({
           </button>
         </Tooltip>
       )}
-      <MusicBarButton size={size} iconSize={iconSize} />
       {!noVideo && (
       <Tooltip
         label={

@@ -37,4 +37,13 @@ describe("Slider", () => {
     expect(html).toContain("Volume");
     expect(html).not.toContain("data-readonly");
   });
+
+  it("draws the compact-player edge as a square top fill", () => {
+    const html = renderToStaticMarkup(
+      <Slider variant="edge" readOnly value={40} max={100} aria-label="Andamento" />,
+    );
+    expect(html).toContain("data-slider=\"edge\"");
+    expect(html).toContain("rounded-none");
+    expect(html).toContain("bg-border");
+  });
 });

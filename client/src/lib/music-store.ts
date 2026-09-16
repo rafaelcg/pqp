@@ -152,6 +152,7 @@ export function useMusic(): MusicSnapshot {
 export function resetMusicStoreForTests(): void {
   session = null;
   positionProbe = null;
+  seekApply = null;
   snapshot = { channelId: null, state: null, receivedAt: 0, open: false, listening: true };
   listeners.clear();
 }
@@ -182,6 +183,17 @@ let positionProbe: (() => number) | null = null;
 
 export function setPositionProbe(probe: (() => number) | null): void {
   positionProbe = probe;
+}
+
+/**
+ * The mounted embed. A scrub must move THIS machine's player in the same
+ * click as the write: a later effect `seekTo` is not a gesture, and YouTube
+ * answers that by playing muted or not at all.
+ */
+let seekApply: ((positionMs: number) => void) | null = null;
+
+export function setSeekApply(apply: ((positionMs: number) => void) | null): void {
+  seekApply = apply;
 }
 
 function livePositionMs(held: MusicState | null): number {
@@ -266,6 +278,7 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
   const room = MUSIC_QUEUE_LIMIT - held.queue.length;
   const fits = rest.slice(0, Math.max(0, room));
   const dropped = rest.length - fits.length;
+  const added = fits.length + (startedPlaying ? 1 : 0);
   write({
     ...held,
     current,
@@ -273,7 +286,10 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
     status: startedPlaying ? "playing" : held.status,
     positionMs: startedPlaying ? 0 : held.positionMs,
   });
-  return { added: fits.length + (startedPlaying ? 1 : 0), dropped, startedPlaying };
+  if (added > 0) {
+    setMusicOpen(true);
+  }
+  return { added, dropped, startedPlaying };
 }
 
 /** Add a resolved track: starts it when nothing is playing, queues otherwise. */
@@ -285,12 +301,14 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
   const held = base();
   if (held.current === null) {
     write({ ...held, current: track, queue: held.queue, status: "playing", positionMs: 0 });
+    setMusicOpen(true);
     return "playing";
   }
   if (held.queue.length >= MUSIC_QUEUE_LIMIT) {
     return "full";
   }
   write({ ...held, queue: [...held.queue, track] });
+  setMusicOpen(true);
   return "queued";
 }
 
@@ -312,7 +330,13 @@ export function seekTo(positionMs: number): void {
   if (held.current === null) {
     return;
   }
-  write({ ...held, positionMs: Math.max(0, Math.round(positionMs)) });
+  const at = Math.max(0, Math.round(positionMs));
+  try {
+    seekApply?.(at);
+  } catch {
+    // the write still has to land so the room can catch up
+  }
+  write({ ...held, positionMs: at });
 }
 
 /** Position-only sample while playing, so a late joiner lands close. */
