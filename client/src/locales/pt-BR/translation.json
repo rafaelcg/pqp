@@ -207,7 +207,7 @@
   "download.mac.intelShort": "Intel",
   "download.mac.whichChip": "Não sabe qual? Menu Apple → Sobre este Mac. Se aparecer Apple M1 ou mais novo, é Apple Silicon.",
   "download.windows": "Baixar pra Windows",
-  "download.windows.unsigned": "O build de Windows ainda não é assinado, então o SmartScreen avisa na primeira vez que você abrir.",
+  "download.windows.unsigned": "O Windows pode mostrar “O Windows protegeu o computador” na primeira vez que você abrir, porque esse build ainda não é assinado. Se confia nesse download, escolha Mais informações e depois Executar assim mesmo.",
   "download.windows.portable": "Se o instalador não abrir, tem uma versão portátil que roda sem instalar nada. Ela não se atualiza sozinha, então volta aqui pra pegar versão nova.",
   "download.windows.portable.link": "Baixar a versão portátil",
   "download.windows.portableShort": "Portátil",

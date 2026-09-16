@@ -614,26 +614,182 @@ that is why this went unnoticed for 48 hours across 48 failed runs.
 
 ## 4. Windows
 
-Builds are **unsigned**. SmartScreen shows "Windows protected your PC" on first
-run until the download builds reputation. Acceptable for launch; the app works.
+Historically builds were **unsigned**: SmartScreen showed "Windows protected
+your PC" on every first run, forever, because an unsigned binary never
+accrues reputation. Windows signing now runs through **SignPath Foundation's
+free code signing program for open source projects**: no certificate to buy,
+no card on file. It costs an application, an identity check, and a manual
+approval click on every release from here on.
 
-To fix it later, the workflow already reads `WIN_CSC_LINK` /
-`WIN_CSC_KEY_PASSWORD` (deliberately separate names — `CSC_LINK` is scoped to
-the mac job so an Apple .p12 can never reach the Windows signer). What it needs:
+Two other routes exist and were considered and rejected for this project. A
+paid cloud signing service (Azure Trusted Signing, ~$10/month) works and is
+simpler operationally (no per-release approval), but Rafael does not want a
+recurring paid subscription for a hobby project when a free program covers
+the same need. A traditional CA certificate is worse on both axes: OV
+(~$200-400/yr) does not clear SmartScreen any faster than a free cert would,
+and EV (~$400-700/yr) requires a legal entity and a cloud-HSM integration
+since June 2023. SignPath is free, and the org already qualifies (AGPL,
+public GitHub, an existing CI-built release history), so it is the only route
+implemented here.
 
-- An **OV** code-signing certificate (~$200–400/yr, DigiCert / Sectigo / SSL.com).
-  Cheapest path, but it does *not* clear SmartScreen immediately — reputation
-  still has to accrue.
-- Or an **EV** certificate (~$400–700/yr), which clears SmartScreen from the
-  first signed build. Since June 2023 the private key must live on hardware
-  (HSM/token) or in a cloud signing service, so it cannot simply be exported to
-  a `.p12` and pasted into a GitHub secret — CI signing needs the provider's
-  cloud service (e.g. DigiCert KeyLocker, SSL.com eSigner) and a different
-  electron-builder configuration (`win.sign` hook).
-- Either way the organisation must be verifiable — an EV certificate is issued
-  to a legal entity, not a person.
+### What SignPath signs, and what it does not
 
-Not a launch blocker. Revisit if Windows becomes a meaningful share of installs.
+SignPath's GitHub Action ([`SignPath/github-action-submit-signing-request`](https://github.com/SignPath/github-action-submit-signing-request))
+signs whatever files an **artifact configuration** points it at. electron-builder's
+NSIS installer is a self-extracting `.exe`, not one of SignPath's composite
+formats (MSI, APPX, MSIX, ZIP) that it can open, sign the contents of, and
+repackage, so SignPath cannot reach inside it.
+
+**Signed:** the two top-level files people actually download and run: the NSIS
+installer (`pqp-<version>-x64.exe`) and the portable build
+(`pqp-<version>-x64-portable.exe`).
+
+**Not signed:** `pqp.exe`, the Electron binary that ends up in Program Files
+after the installer runs, and any DLLs alongside it.
+
+This is fine for what this PR exists to fix. SmartScreen's "Windows protected
+your PC" prompt is driven by Windows checking the Mark-of-the-Web on a file
+that was just downloaded and is about to run for the first time, which is
+exactly the installer and the portable exe. A file written to disk by a local
+install never carries that mark and never triggers the same check. If a fully
+signed inner binary becomes a real need later (some antivirus heuristics do
+weight it), that needs electron-builder's own per-file `win.signtoolOptions.sign`
+hook calling out to a *synchronous* signer during packaging, which SignPath's
+asynchronous, human-approved signing requests are not built for; that would be
+a materially bigger integration than this one.
+
+### Eligibility (already met)
+
+From [SignPath Foundation's published conditions](https://signpath.org/terms.html):
+an OSI-approved license with no proprietary or dual-licensed component (AGPL-3.0,
+`electron/package.json`'s `license` field), a public source repository, an
+actively maintained project, and a release already published in the form that
+needs signing (pqp already ships tagged Windows builds via `electron.yml`).
+Every requirement is met today; no repo changes are needed to qualify.
+
+### Application steps (Rafael, one-time)
+
+1. **Apply** at [signpath.org/apply](https://signpath.org/apply.html). The
+   form asks for the public repo URL, the OSI license name (AGPL-3.0), a link
+   showing the app is downloadable for free (the GitHub Releases page, or
+   `pqp.gg/download`), and a short description of what pqp is and who signs
+   the releases.
+2. **Wait for review.** SignPath does not publish a fixed SLA; reported
+   turnarounds in the OSS community run from a few days to a few weeks. There
+   is nothing to do here except wait; nothing in this PR depends on the
+   review finishing before it can merge, since the whole Windows signing path
+   stays gated off until the secrets below exist.
+3. **On approval**, SignPath creates a project for pqp in its dashboard and
+   gives Rafael access. From there:
+   - **Create a signing policy** (e.g. slug `release-signing`) using the
+     Public Trust certificate SignPath Foundation issues. SignPath Foundation's
+     OSS terms require **manual approval on every signing request**, so this
+     policy will always pause for a click, not something to configure away.
+   - **Create an artifact configuration** that signs every `.exe` in the
+     uploaded zip, matched by extension rather than by exact filename since
+     the filename changes every release:
+     ```xml
+     <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+       <zip-file>
+         <pe-file-set>
+           <include path="*.exe" min-matches="1" max-matches="unbounded"/>
+           <for-each>
+             <authenticode-sign/>
+           </for-each>
+         </pe-file-set>
+       </zip-file>
+     </artifact-configuration>
+     ```
+   - **Publish the required "Code signing policy" statement** SignPath
+     Foundation's Code of Conduct asks every project to carry on its home or
+     download page: "Free code signing provided by SignPath.io, certificate
+     by SignPath Foundation", plus who the Authors/Reviewers/Approvers are
+     (for a solo project, Rafael is all three). This is a SignPath compliance
+     requirement, separate from the one-line SmartScreen note this PR adds to
+     the download page (§3 of the PR description); it is not implemented
+     here and is Rafael's to add once the project is approved.
+4. **Note four values** from the SignPath project: the **organization id**,
+   the **project slug**, the **signing policy slug** from step 3, and mint an
+   **API token** with submitter permissions (project settings, API tokens).
+5. **Set them on `rafaelcg/pqp`**: three as repository **variables**
+   (`Settings → Secrets and variables → Actions → Variables`, not secrets,
+   since none of them are sensitive) and one as a **secret**:
+
+| Name | Kind | Value |
+|---|---|---|
+| `SIGNPATH_ORGANIZATION_ID` | variable | organization id, step 4 |
+| `SIGNPATH_PROJECT_SLUG` | variable | project slug, step 4 |
+| `SIGNPATH_SIGNING_POLICY_SLUG` | variable | signing policy slug, step 3 |
+| `SIGNPATH_API_TOKEN` | secret | the API token, step 4 |
+
+All four are optional to the workflow. With any of them unset the Windows job
+still succeeds and produces an unsigned build (or falls back to
+`WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` if that pair happens to be set
+instead); a fork must not fail CI, same rule as macOS.
+
+### How this fits the tag-based release flow
+
+Cutting a release is unchanged through step 2 of "Cutting a release" (§5
+below): bump the version, tag, push. What changes is what happens on the
+Windows runner for that tag:
+
+1. electron-builder builds the NSIS installer and the portable exe
+   **unsigned** (SignPath needs unsigned input) and does **not** publish them.
+2. The two files are uploaded as a GitHub Actions artifact and submitted to
+   SignPath as one signing request.
+3. The job **blocks**, waiting for a SignPath project member (Rafael) to open
+   the signing request and click approve. The job timeout is set to 3 hours
+   to give real headroom for this; a quiet run where nobody needs to click
+   anything (WIN_CSC_LINK, or no Windows signing configured at all) finishes
+   in minutes as before.
+4. Once approved, the action downloads the signed files, the workflow patches
+   the auto-update feed's hash to match the now-signed bytes (see
+   `electron/scripts/fix-update-feed-hash.js`; skipping this would silently
+   break Windows auto-update the moment signing goes live), and publishes to
+   the GitHub release exactly like macOS's separate gated publish step does.
+
+**In practice:** after pushing a `v*` tag, check the SignPath dashboard (or
+the email it sends) and approve the request within the 3-hour window. Missing
+the window fails the Windows job; re-running the failed job from the Actions
+UI submits a fresh signing request and does not require redoing the whole
+release.
+
+### Verify a Windows release is signed
+
+**On Windows** (PowerShell):
+
+```powershell
+Get-AuthenticodeSignature .\pqp-0.1.8-x64.exe | Format-List *
+```
+
+Look for `Status : Valid`. `NotSigned` means a fallback path ran (WIN_CSC_LINK
+absent too, or the run predates this PR); `HashMismatch` or `UnknownError`
+means the binary or signature is corrupted, not merely unsigned.
+
+**On macOS/Linux** (no PowerShell available), use `osslsigncode`, which reads
+an Authenticode signature without needing Windows:
+
+```bash
+brew install osslsigncode   # or: apt install osslsigncode
+osslsigncode verify pqp-0.1.8-x64.exe
+```
+
+Look for `Signature verification: ok` and the certificate chain printed below
+it naming the publisher (SignPath Foundation). CI itself runs the equivalent
+PowerShell check as the **"Verify Windows signing"** step in
+`.github/workflows/electron.yml`, and it is a real gate: "Publish Windows
+release assets" only runs when it succeeds (a genuinely unsigned build still
+passes it, with a warning — that is a known state, not a broken one; an
+invalid signature or a signed-but-missing `.exe` fails the job outright).
+Windows no longer publishes from inside "Package Electron" the way it used to
+for the WIN_CSC_LINK fallback — every Windows path, SignPath included, waits
+for this step before anything reaches the release.
+
+One known gap: the update feed's `.blockmap` (used for differential/delta
+updates) still describes the unsigned bytes after signing, since only the
+`sha512`/`size` fields get patched. `electron-updater` falls back to a full
+download when a blockmap does not check out, so the effect of the first
+signed release is a bigger download for people updating, not a broken one.
 
 Linux builds are unsigned by convention; AppImage and `.deb` are shipped as-is.
 
@@ -719,6 +875,10 @@ download an Apple Silicon build.
       `::warning::` about unsigned macOS.
 - [ ] Notarization secrets set; `spctl -a -vvv` prints
       `source=Notarized Developer ID`.
+- [ ] SignPath secrets/variables set (§4); the SignPath signing request for
+      this tag was approved, a tagged build shows no `::warning::` about
+      unsigned Windows, and `Get-AuthenticodeSignature` / `osslsigncode
+      verify` on the `.exe` prints `Valid` / `Signature verification: ok`.
 - [ ] `electron/package.json` `version` bumped to match the tag.
 - [ ] Draft release contains the `latest*.yml` feed files.
 - [ ] Sign in on a signed build. Current shells open the system browser
