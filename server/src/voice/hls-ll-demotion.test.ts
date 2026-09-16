@@ -90,6 +90,8 @@ interface FakeSession {
   demoted?: boolean;
   demotedReason?: string | null;
   state?: string;
+  /** What the box reports for this session's `partsWritten` (default 0). */
+  partsWritten?: number;
 }
 
 describeDb("LL-HLS demotion and row ownership across two machines", () => {
@@ -192,7 +194,7 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
             lastPartAtMs: null,
             lastIdrAtMs: null,
             openSegmentMs: null,
-            partsWritten: 0,
+            partsWritten: session.partsWritten ?? 0,
             bytesServed: 0,
             state: session.state ?? (session.demoted ? "demoted" : "running"),
             demoted: session.demoted ?? false,
@@ -412,6 +414,50 @@ describeDb("LL-HLS demotion and row ownership across two machines", () => {
       channelId: channelA,
       reason: "session-gone",
     });
+  });
+
+  it("(1a-readiness) demotes a session that never produces a part once the readiness window passes -- the backstop for the box's own no-video watchdog failing to fire (production d5559e70, 2026-09-16)", async () => {
+    // The box reports the session present, subscribed, NOT demoted -- but
+    // partsWritten stays 0 forever (the fake box's default), which is exactly
+    // the production failure: an LL session that hangs before it ever attaches
+    // to the presenter's track sits at zero parts for the whole party while
+    // the box never flags it and the sweep leaves it alone every tick.
+    await reconcileLlHlsNow(channelA, "peer-1");
+    expect(llHasRoom(channelA)).toBe(true);
+
+    const t0 = Date.now();
+    // First observation: nothing demoted, the window has not passed.
+    expect(await sweepLlDemotions(t0)).toEqual([]);
+    expect(llHasRoom(channelA)).toBe(true);
+    // Still zero parts a little past the readiness window (default 75s): the
+    // backstop fires where the box's FirstPartTimeoutMs did not.
+    const fellBack = await sweepLlDemotions(t0 + 76_000);
+    expect(fellBack).toEqual([channelA]);
+    expect(llHasRoom(channelA)).toBe(false);
+    expect(logEvent).toHaveBeenCalledWith("voice.hlsLlDemoted", {
+      channelId: channelA,
+      reason: "no-video-timeout",
+    });
+  });
+
+  it("(1a-readiness-safe) never demotes a session that HAS produced video, however long it then runs -- a source that went quiet is the box's sourceIdle case, not this backstop's", async () => {
+    await reconcileLlHlsNow(channelA, "peer-1");
+    const sessionId = started[0]!;
+    // This session produced parts, then (say) went quiet: partsWritten > 0,
+    // lastPart old. The readiness backstop must never touch it.
+    boxSessions.set(sessionId, {
+      ...boxSessions.get(sessionId)!,
+      partsWritten: 3,
+    });
+
+    const t0 = Date.now();
+    expect(await sweepLlDemotions(t0)).toEqual([]);
+    expect(await sweepLlDemotions(t0 + 10 * 60_000)).toEqual([]);
+    expect(llHasRoom(channelA)).toBe(true);
+    expect(logEvent).not.toHaveBeenCalledWith(
+      "voice.hlsLlDemoted",
+      expect.objectContaining({ reason: "no-video-timeout" }),
+    );
   });
 
   it("(1a-fail-closed) changes nothing when the control API cannot be asked", async () => {

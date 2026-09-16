@@ -1339,9 +1339,36 @@ interface LlRoom {
   startedAt: number;
   presenterPeerId: string;
   stream: LiveHlsStream;
+  /**
+   * When THIS process first observed the box session producing no video at
+   * all (`partsWritten === 0`), or undefined once it has produced any part.
+   * The readiness backstop in `sweepLlDemotions` measures against it. Wall
+   * clock here, deliberately not the box's own `startedAtMs`, so neither
+   * clock skew nor a resumed session (same id, older box start) can false-trip
+   * it: it is "how long have WE seen this stuck", reset the moment a part
+   * appears.
+   */
+  noVideoSinceMs?: number;
 }
 
 const llRooms = new Map<string, LlRoom>();
+
+/**
+ * How long a live LL room may report zero video before the readiness backstop
+ * in `sweepLlDemotions` demotes it. Comfortably past both the observed
+ * first-part latency (~12s `playlistWaitMs` in production) and the box's own
+ * `FirstPartTimeoutMs` (60s), so this only ever fires when the box's own
+ * no-video rule already should have and did not. `LIVE_HLS_LL_READY_TIMEOUT_MS`
+ * overrides it; a non-positive or unparseable value keeps the default.
+ */
+function llReadyTimeoutMs(): number {
+  const raw = process.env.LIVE_HLS_LL_READY_TIMEOUT_MS;
+  if (raw) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 75_000;
+}
 let llStartFailures = 0;
 /** A `remuxStopSession` call failed, at either the normal-stop or retry path. Belongs at zero. */
 let llStopFailures = 0;
@@ -2014,10 +2041,12 @@ export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
   for (const [channelId, room] of [...llRooms]) {
     const remote = remoteById.get(room.sessionId);
     if (!remote) {
+      room.noVideoSinceMs = undefined;
       demotions.push({ channelId, sessionId: room.sessionId, reason: "session-gone" });
       continue;
     }
     if (remote.demoted === true || remote.state === "demoted") {
+      room.noVideoSinceMs = undefined;
       demotions.push({
         channelId,
         sessionId: room.sessionId,
@@ -2026,6 +2055,32 @@ export async function sweepLlDemotions(now = Date.now()): Promise<string[]> {
         // `voice.hlsLlDemoted` and `pqp-remuxd`'s log has to see one reason.
         reason: remote.demotedReason ?? "demoted",
       });
+      continue;
+    }
+    // READINESS BACKSTOP. The box is supposed to demote a session that never
+    // produces a single part -- its own `FirstPartTimeoutMs` "no-video" rule
+    // (`internal/control/watchdog.go`). But a session that hangs BEFORE it
+    // ever subscribes to the presenter's track has been seen sit at
+    // `partsWritten === 0` for a whole party without the box ever flagging it:
+    // production channel `d5559e70`, 2026-09-16, an LL session ran 49 minutes
+    // at `subscribed=false`, zero parts, no `demoted`, no `session-gone`, and
+    // every viewer got nothing while the sweep left it alone every tick. This
+    // is the API-side backstop for exactly that: a session this process has
+    // watched produce NO video for longer than the readiness window is
+    // demoted to the conventional (loss-concealing, and here simply WORKING)
+    // ladder, so a stuck LL rung falls back in ~a minute instead of hanging
+    // for the length of the film. `partsWritten === 0` is the whole gate: a
+    // source that produced parts and then went quiet (a static tab) has
+    // `partsWritten > 0` and is the box's `sourceIdle` case, never demoted
+    // here.
+    if (remote.partsWritten === 0) {
+      room.noVideoSinceMs ??= now;
+      if (now - room.noVideoSinceMs > llReadyTimeoutMs()) {
+        demotions.push({ channelId, sessionId: room.sessionId, reason: "no-video-timeout" });
+        continue;
+      }
+    } else {
+      room.noVideoSinceMs = undefined;
     }
   }
 
