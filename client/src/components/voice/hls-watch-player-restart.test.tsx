@@ -2,6 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { resolveHlsUrl } from "@/lib/hls-playback";
 import { HlsWatchPlayer } from "./hls-watch-player";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -76,9 +78,12 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
-const CONVENTIONAL_SRC =
-  "https://hls.pqp.gg/api/voice/hls-playlist/d5559e70-8b1c-4a0b-8ffc-b61c88004c73/1789496087461?t=tok";
-const LL_SRC = `${CONVENTIONAL_SRC}&mode=ll`;
+const CONVENTIONAL_SRC = resolveHlsUrl(
+  "/api/voice/hls-playlist/d5559e70-8b1c-4a0b-8ffc-b61c88004c73/1789496087461?t=tok",
+);
+const LL_SRC = resolveHlsUrl(
+  "/api/voice/hls-playlist/d5559e70-8b1c-4a0b-8ffc-b61c88004c73/1789496087461?mode=ll&t=tok",
+);
 
 describe("HlsWatchPlayer conventional restart hold", () => {
   let container: HTMLDivElement;
@@ -104,7 +109,11 @@ describe("HlsWatchPlayer conventional restart hold", () => {
 
   async function mount(props: PlayerProps) {
     await act(async () => {
-      root.render(<HlsWatchPlayer layout="cinema" {...props} />);
+      root.render(
+        <TooltipProvider>
+          <HlsWatchPlayer layout="cinema" {...props} />
+        </TooltipProvider>,
+      );
     });
     for (let i = 0; i < 200 && loadSource.mock.calls.length === 0; i += 1) {
       await act(async () => {
@@ -150,6 +159,38 @@ describe("HlsWatchPlayer conventional restart hold", () => {
       // call stopLoad for playlist-gone on LL.
       expect(stopLoad).not.toHaveBeenCalled();
       expect(container.querySelector('[data-testid="hls-restarting"]')).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not take the hold for an external (non-proxy) HLS 404 (Farol, PR 654)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await mount({
+        src: "https://cdn.example/live/party.m3u8",
+        mode: "live",
+      });
+      emitPlaylist404();
+      expect(stopLoad).not.toHaveBeenCalled();
+      expect(container.querySelector('[data-testid="hls-restarting"]')).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps the restarting hold across a stale playing after stopLoad (Farol, PR 654)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await mount({ src: CONVENTIONAL_SRC, mode: "live" });
+      emitPlaylist404();
+      expect(container.querySelector('[data-testid="hls-restarting"]')).not.toBeNull();
+      const video = container.querySelector("video");
+      expect(video).not.toBeNull();
+      await act(async () => {
+        video!.dispatchEvent(new Event("playing"));
+      });
+      expect(container.querySelector('[data-testid="hls-restarting"]')).not.toBeNull();
     } finally {
       warn.mockRestore();
     }

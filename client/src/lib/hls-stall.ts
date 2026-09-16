@@ -305,13 +305,29 @@ export class HlsStallWatch {
   /** The element started or resumed rendering: the current episode is over. */
   onPlaying(): void {
     this.waitingSince = null;
+    // A restart hold (`playlist-gone` or conventional sequence-stuck after
+    // `"hold"`): buffered media can still emit `playing` after `stopLoad`.
+    // That is not recovery — clearing here would drop reconnect polling and
+    // leave the player on a stale frame (Farol, PR 654). Clear only on a
+    // real re-attach (`onSourceChanged`) or when the playlist advances
+    // again (`onMediaSequence`).
+    if (this.playlistGone || this.heldForRestart) {
+      return;
+    }
     this.pendingFatal = false;
     this.pendingDecodeError = false;
-    this.playlistGone = false;
-    this.heldForRestart = false;
     this.ladderStep = 0;
     this.reconnectAttempts = 0;
     this.nextReconnectAt = null;
+  }
+
+  /**
+   * True while a conventional restart hold is active. The player's
+   * `playing` handler must not clear the restarting UI or cancel a
+   * pending reconnect while this is set.
+   */
+  get isHoldingForRestart(): boolean {
+    return this.playlistGone || this.heldForRestart;
   }
 
   onWaiting(now: number): void {
@@ -325,6 +341,19 @@ export class HlsStallWatch {
     if (sequence !== this.lastSequence) {
       this.lastSequence = sequence;
       this.sequenceSeenAt = now;
+      // A live playlist that advances again is real recovery from a
+      // conventional hold (same session came back). Clear the hold the
+      // way `onSourceChanged` does for a new session — `onPlaying` alone
+      // must not (Farol, PR 654).
+      if (this.playlistGone || this.heldForRestart) {
+        this.playlistGone = false;
+        this.heldForRestart = false;
+        this.pendingFatal = false;
+        this.pendingDecodeError = false;
+        this.ladderStep = 0;
+        this.reconnectAttempts = 0;
+        this.nextReconnectAt = null;
+      }
     }
   }
 
@@ -340,10 +369,16 @@ export class HlsStallWatch {
    * still pointed at is gone (restart dead window); the next `tick` holds
    * and reconnects rather than walking the fatal or sequence-stuck ladders
    * that would hammer the dead URL. Caller must only invoke this for
-   * conventional live — LL and VOD keep their own paths.
+   * conventional live on an own proxy URL — LL and VOD keep their own paths.
+   *
+   * Clears any pending fatal/decode: a 404 that arrives after a media error
+   * still means the session is gone, and the fatal ladder would only restart
+   * the dead-window loop (Farol, PR 654).
    */
   onPlaylistGone(): void {
     this.playlistGone = true;
+    this.pendingFatal = false;
+    this.pendingDecodeError = false;
   }
 
   /**
@@ -395,14 +430,16 @@ export class HlsStallWatch {
   lastReason: HlsStallReason = null;
 
   private currentReason(now: number): HlsStallReason {
-    if (this.pendingFatal || this.pendingDecodeError) {
-      return "fatal";
-    }
-    // Playlist-gone before the softer stall/sequence rules: a 404 on our
-    // own master is the restart signal itself, and waiting out
-    // sequenceStuckMs (or a waiting stall) would only prolong the 404 storm.
+    // Playlist-gone before fatal: a 404 on our own master is the restart
+    // signal itself. Preferring fatal here would walk recoverMediaError /
+    // startLoad after the player already stopLoad'd, reintroducing the
+    // dead-window loop (Farol, PR 654). Soft stall/sequence rules stay
+    // below so a gone session never waits them out either.
     if (this.playlistGone) {
       return "playlist-gone";
+    }
+    if (this.pendingFatal || this.pendingDecodeError) {
+      return "fatal";
     }
     if (
       this.waitingSince !== null &&

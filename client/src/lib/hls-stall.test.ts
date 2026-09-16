@@ -261,18 +261,55 @@ describe("HlsStallWatch", () => {
       expect(watch.tick(T1 + 20_100)).toBe("reconnect");
     });
 
-    it("playing after a playlist-gone hold clears it for a later episode", () => {
+    it("a stale playing during playlist-gone does not clear the hold (Farol, PR 654)", () => {
       const watch = new HlsStallWatch();
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.onPlaylistGone();
       expect(watch.tick(T0 + 100)).toBe("hold");
+      expect(watch.isHoldingForRestart).toBe(true);
+      // Buffered media after stopLoad.
       watch.onPlaying();
+      expect(watch.isHoldingForRestart).toBe(true);
+      expect(watch.tick(T0 + 200)).toBe("reconnect");
+    });
+
+    it("playlist-gone clears on a real re-attach, then a later episode can hold again", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onPlaylistGone();
+      expect(watch.tick(T0 + 100)).toBe("hold");
+      watch.onSourceChanged(T0 + 150);
+      watch.onPlaying();
+      expect(watch.isHoldingForRestart).toBe(false);
       expect(watch.tick(T0 + 200)).toBe("none");
-      // A later gone signal gets a fresh hold, not an inherited reconnect
-      // budget from the previous episode.
       watch.onPlaylistGone();
       expect(watch.tick(T0 + 300)).toBe("hold");
+    });
+
+    it("playlist-gone supersedes a pending fatal instead of walking the fatal ladder (Farol, PR 654)", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onError({ fatal: true });
+      watch.onPlaylistGone();
+      expect(watch.tick(T0 + 100)).toBe("hold");
+      expect(watch.lastReason).toBe("playlist-gone");
+      expect(watch.tick(T0 + 200)).toBe("reconnect");
+      expect(watch.tick(T0 + 300)).toBe("none");
+    });
+
+    it("a media-sequence advance clears a conventional hold without a re-attach", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onMediaSequence(40, T0);
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
+      expect(watch.isHoldingForRestart).toBe(true);
+      watch.onMediaSequence(41, T0 + 21_000);
+      expect(watch.isHoldingForRestart).toBe(false);
+      expect(watch.tick(T0 + 21_500)).toBe("none");
     });
   });
 

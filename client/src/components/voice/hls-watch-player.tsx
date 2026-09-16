@@ -1366,18 +1366,19 @@ export function HlsWatchPlayer({
       if (!cancelled) {
         setHasFrame(true);
         setPhase("playing");
-        setStallReason(null);
-        setAuthGraceActive(false);
-        clearAuthGraceTimerRef.current();
-        restarting = false;
-        setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
         watch.onPlaying();
+        // A stale `playing` from buffered media after a restart `stopLoad`
+        // must not clear the hold UI or cancel the reconnect poll (Farol,
+        // PR 654). Real recovery is a new attach or a playlist that advances.
+        if (!watch.isHoldingForRestart) {
+          setStallReason(null);
+          setAuthGraceActive(false);
+          clearAuthGraceTimerRef.current();
+          restarting = false;
+          setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+          clearPendingReconnect();
+        }
         reportSize();
-        // The stream recovered on its own (or one of the recovery ladder's
-        // in-place steps worked) before a jittered reconnect/rebuild from an
-        // earlier tick fired. That response is now stale -- cancel it rather
-        // than reloading a player that just came back (Farol review).
-        clearPendingReconnect();
         // First real frame of this attach: report it on the NEXT telemetry
         // sample and then forget it, rather than on every sample.
         if (!startupMsComputed) {
@@ -1798,6 +1799,9 @@ export function HlsWatchPlayer({
           !cancelled &&
           !isVod &&
           effectiveMode === "conventional" &&
+          // Own proxy only — an external HLS 404 must keep the ordinary
+          // fatal path, not Farol's fetchChannelLive reconnect (Farol, PR 654).
+          isOwnHlsPlaylistProxyUrl(activeSrc) &&
           isPlaylistGoneError({
             details: typeof data.details === "string" ? data.details : null,
             responseCode:
