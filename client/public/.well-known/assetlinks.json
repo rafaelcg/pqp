@@ -1,12 +1,15 @@
 [
   {
-    "relation": ["delegate_permission/common.handle_all_urls"],
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
     "target": {
       "namespace": "android_app",
       "package_name": "gg.pqp.app",
       "sha256_cert_fingerprints": [
         "EE:28:41:C9:89:FD:20:0D:27:8B:32:D4:30:A3:63:A1:E7:D2:2E:20:0F:86:19:E2:82:D6:F0:6B:DA:46:BB:F3",
-        "CD:D2:05:31:D3:64:CE:2D:A1:66:DD:21:51:1F:A9:57:89:F7:84:07:68:74:CF:A1:06:97:F4:62:25:96:E8:0A"
+        "CD:D2:05:31:D3:64:CE:2D:A1:66:DD:21:51:1F:A9:57:89:F7:84:07:68:74:CF:A1:06:97:F4:62:25:96:E8:0A",
+        "0B:FF:75:66:94:85:91:20:0B:57:5E:11:4B:23:96:CA:A8:08:F8:AF:73:1A:74:D2:EC:CB:5F:84:4E:6B:67:2D"
       ]
     }
   }
