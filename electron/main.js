@@ -1441,7 +1441,15 @@ if (!gotLock) {
    * lib/login-item.js); Linux answers false to both and changes nothing,
    * rather than a toggle that looks like it worked and does not.
    */
-  ipcMain.handle("pqp:get-start-at-login", () => {
+  // Same sender-origin check as the desktop-auth handlers above: this
+  // toggles an OS-level login item, a host-level persistence setting that
+  // an untrusted page navigated into a window retaining this preload (or a
+  // renderer XSS) must not be able to flip, unlike, say, pqp:set-theme
+  // (Farol review, PR 675).
+  ipcMain.handle("pqp:get-start-at-login", (event) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return false;
+    }
     if (!loginItemSupported(process.platform)) {
       return false;
     }
@@ -1453,18 +1461,30 @@ if (!gotLock) {
     }
   });
 
-  ipcMain.handle("pqp:set-start-at-login", (_event, value) => {
+  ipcMain.handle("pqp:set-start-at-login", (event, value) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return false;
+    }
     if (!loginItemSupported(process.platform)) {
       return false;
     }
+    const desired = value === true;
     try {
-      app.setLoginItemSettings({ openAtLogin: value === true });
-      // Read back rather than trust the input: the OS is the source of truth
-      // and this is what the renderer displays next.
-      return app.getLoginItemSettings().openAtLogin === true;
+      app.setLoginItemSettings({ openAtLogin: desired });
     } catch (err) {
       console.warn("[pqp] set start-at-login failed:", err?.message ?? err);
       return false;
+    }
+    // The write already succeeded at this point. Read back only to catch a
+    // genuine mismatch (the OS silently refusing) rather than letting a
+    // transient readback failure report a successful write as disabled
+    // (Farol review, PR 675) -- the renderer would overwrite its toggle to
+    // "off" while the app still launches at login.
+    try {
+      return app.getLoginItemSettings().openAtLogin === true;
+    } catch (err) {
+      console.warn("[pqp] read-back after set start-at-login failed:", err?.message ?? err);
+      return desired;
     }
   });
 

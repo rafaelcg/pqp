@@ -1949,11 +1949,23 @@ function DesktopStartupPicker() {
       return;
     }
     let cancelled = false;
-    void read().then((value) => {
-      if (!cancelled) {
-        setEnabled(value === true);
-      }
-    });
+    void read()
+      .then((value) => {
+        if (!cancelled) {
+          setEnabled(value === true);
+        }
+      })
+      // IPC can reject (main process gone, a handler missing on an older
+      // shell, mid-shutdown); left uncaught this was an unhandled promise
+      // rejection with the control silently never appearing (Farol review,
+      // PR 675). `enabled` stays null either way, which already hides the
+      // toggle below -- the catch only stops the rejection from going
+      // unhandled.
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          console.warn("[pqp] read start-at-login failed:", err);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -1971,6 +1983,14 @@ function DesktopStartupPicker() {
     setPending(true);
     void write(next)
       .then((applied) => setEnabled(applied === true))
+      // A rejected write left the toggle spinning until `finally` cleared
+      // `pending`, but the rejection itself went unhandled with no
+      // user-visible failure state (Farol review, PR 675). `enabled` is
+      // left untouched on failure, so the Switch reverts to whatever it
+      // showed before the tap.
+      .catch((err: unknown) => {
+        console.warn("[pqp] set start-at-login failed:", err);
+      })
       .finally(() => setPending(false));
   }
 
