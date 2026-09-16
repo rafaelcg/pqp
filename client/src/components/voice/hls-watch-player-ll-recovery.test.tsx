@@ -107,6 +107,37 @@ function fire(data: unknown) {
   }
 }
 
+/**
+ * A LEVEL_UPDATED as the live party actually produced it on 2026-09-16:
+ * `EXT-X-TARGETDURATION 7` (the remux closes a video segment only on an IDR,
+ * and the keyframe gate is a PLI every 4 s answered in about a second, so
+ * segments run 5 to 9 s), half-second parts, and a `partList` that is
+ * genuinely there.
+ */
+function levelUpdated(startSN: number, partSn: number, partIndex: number) {
+  return {
+    details: {
+      startSN,
+      endSN: startSN + 5,
+      targetduration: 7,
+      partTarget: 0.5,
+      partHoldBack: 1.5,
+      lastPartSn: partSn,
+      lastPartIndex: partIndex,
+      partList: [{}, {}],
+      totalduration: 42,
+      fragments: [],
+      live: true,
+    },
+  };
+}
+
+function fireLevelUpdated(data: unknown) {
+  for (const handler of handlers.get(Hls.Events.LEVEL_UPDATED) ?? []) {
+    handler(Hls.Events.LEVEL_UPDATED, data);
+  }
+}
+
 describe("an LL player that falls behind the part ring", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -319,10 +350,16 @@ describe("an LL player that falls behind the part ring", () => {
   it("restarts the loader at the live edge when the ladder does run", async () => {
     await mount();
     await act(async () => {
+      // A fatal NETWORK error, not a buffer one. `bufferStalledError` used
+      // to stand in here, and since 2026-09-16 it does not reach the fatal
+      // ladder at all on LL (hls.js raises it to fatal after its own nudge
+      // budget on a starved source, which is a statement about the buffer);
+      // see `hls-stall.test.ts` "LL error triage". The claim under test is
+      // unchanged: when the fatal ladder DOES run, it restarts at the edge.
       fire({
         fatal: true,
-        type: "mediaError",
-        details: "bufferStalledError",
+        type: "networkError",
+        details: "fragLoadTimeOut",
         response: undefined,
       });
     });
@@ -334,5 +371,69 @@ describe("an LL player that falls behind the part ring", () => {
     await tick();
     expect(calls).toContain("startLoad(1499.5)");
     expect(calls).not.toContain("startLoad(-1)");
+  });
+
+  /**
+   * THE 2026-09-16 LOOP, END TO END. Bundle `index-CFUMtvOT.js`, a session
+   * the server was serving perfectly -- remux at 2 parts/s, `timelineRatio`
+   * 1.00, 520 Worker requests all 200 -- and a viewer console repeating
+   * `stream stalled (sequence-stuck)`, then `(fatal)`, `start-load`,
+   * `reload-level`, `recover-media-error`, `rebuilding the player`. The
+   * media sequence only moves when a SEGMENT closes, which on this remux is
+   * every 5 to 9 s; parts moved every 0.5 s throughout.
+   */
+  it("never calls a part-advancing stream stuck, whatever the media sequence does", async () => {
+    await mount();
+    // Ninety seconds of parts arriving with `EXT-X-MEDIA-SEQUENCE` held
+    // still throughout -- the honest case, not a contrived one: `startSN`
+    // only moves when a closed segment leaves the playlist window, and a ring
+    // of six 5-to-9 s segments does not start sliding for the best part of a
+    // minute. The old rule fired at twelve seconds and then every cycle
+    // after it.
+    for (let second = 0; second < 90; second += 1) {
+      await act(async () => {
+        fireLevelUpdated(levelUpdated(100, 200 + second, second % 2));
+      });
+      await tick();
+    }
+    // Not one recovery step, and above all not a rebuild: the player was
+    // cancelling its own init and part downloads for this.
+    expect(calls).toEqual([]);
+    const warned = warn.mock.calls.map((args: unknown[]) => String(args[0]));
+    expect(warned.filter((line: string) => line.includes("stream stalled"))).toEqual([]);
+  });
+
+  /**
+   * `GapController._tryNudgeBuffer` raises `bufferStalledError` to
+   * `fatal: true` once it has spent `nudgeMaxRetry` nudges. The presenter's
+   * upload was starved that night (tiny parts, a shrinking buffer), and the
+   * fatal ladder answered a low buffer by rebuilding the player, which
+   * cancelled the part downloads that were filling it.
+   */
+  it("shows buffering for a starved source instead of rebuilding the player", async () => {
+    await mount();
+    await act(async () => {
+      fireLevelUpdated(levelUpdated(100, 200, 0));
+      fire({
+        fatal: true,
+        type: "mediaError",
+        details: "bufferStalledError",
+        error: { message: "Playback stalling at @12.3 due to low buffer" },
+      });
+    });
+    // The whole fatal ladder's worth of ticks, and nothing from it.
+    await tick(10);
+    expect(calls).not.toContain("recoverMediaError");
+    const warned = warn.mock.calls.map((args: unknown[]) => String(args[0]));
+    expect(warned.some((line: string) => line.includes("rebuilding the player"))).toBe(
+      false,
+    );
+    // And when the soft ladder does eventually speak, the line names the
+    // hls.js error and the cadence behind the thresholds.
+    const stalls = warned.filter((line: string) => line.includes("stream stalled"));
+    for (const line of stalls) {
+      expect(line).toContain("details=bufferStalledError");
+      expect(line).toContain("targetDuration=7s");
+    }
   });
 });

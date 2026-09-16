@@ -139,6 +139,57 @@ import { cn } from "@/lib/utils";
 
 const STALL_TICK_MS = 1_000;
 
+/**
+ * The ladder's console line. THE CONTEXT IS THE POINT: the 2026-09-16
+ * capture had a loop of `[hls] stream stalled (fatal), start-load` and no
+ * way to tell which hls.js error was behind it, which cadence the thresholds
+ * had been derived from, or whether the buffer was starved or broken.
+ * `HlsStallWatch.describeContext()` answers all three and is empty on
+ * conventional, so that path's lines stay byte-for-byte what they were and
+ * `hls-watch-player-conventional-recovery.test.tsx` still reads them.
+ */
+function stallLogLine(
+  reason: string | null,
+  what: string,
+  context: string,
+): string {
+  const head = `[hls] stream stalled (${reason}), ${what}`;
+  return context ? `${head} | ${context}` : head;
+}
+
+/**
+ * What `HlsStallWatch.onError` is told about an hls.js `ERROR`. Everything
+ * the 2026-09-16 capture was missing: which error it was, not only that our
+ * own watchdog called it fatal. `data.error` is hls.js's own `Error`
+ * (`GapController` puts the stall's buffer numbers in its message).
+ */
+function hlsErrorPayload(
+  data: {
+    fatal?: boolean;
+    type?: string;
+    details?: string;
+    reason?: string;
+    error?: { message?: string };
+  },
+  fatal: boolean,
+): {
+  fatal: boolean;
+  type: string | null;
+  details: string | null;
+  reason: string | null;
+  message: string | null;
+  now: number;
+} {
+  return {
+    fatal,
+    type: data.type ?? null,
+    details: data.details ?? null,
+    reason: data.reason ?? null,
+    message: data.error?.message ?? null,
+    now: Date.now(),
+  };
+}
+
 /** Survives a teardown so the next instance does not reseed ABR at 500 kbit/s. */
 let lastHlsBandwidthEstimate = HLS_ABR_DEFAULT_ESTIMATE_BPS;
 /** True once a stream in this tab has actually measured the link. */
@@ -1474,7 +1525,9 @@ export function HlsWatchPlayer({
         // Chrome jump.
         clearPendingReconnect();
         const hls = hlsRef.current;
-        console.warn(`[hls] stream stalled (${watch.lastReason}), ${decision}`);
+        console.warn(
+          stallLogLine(watch.lastReason, decision, watch.describeContext()),
+        );
         // Only the seek is VOD-specific -- a VOD manifest has no live edge
         // to seek back to: `liveSyncPosition` is null (hls.js never sets it
         // on a non-live playlist) and `mediaSeekableEnd` reads the replay's
@@ -1543,9 +1596,13 @@ export function HlsWatchPlayer({
         return;
       }
       console.warn(
-        decision === "reconnect"
-          ? `[hls] stream stalled (${watch.lastReason}), checking for a fresher session`
-          : `[hls] stream stalled (${watch.lastReason}), rebuilding the player`,
+        stallLogLine(
+          watch.lastReason,
+          decision === "reconnect"
+            ? "checking for a fresher session"
+            : "rebuilding the player",
+          watch.describeContext(),
+        ),
       );
       reconnectJitterTimer = window.setTimeout(() => {
         reconnectJitterTimer = null;
@@ -1823,7 +1880,7 @@ export function HlsWatchPlayer({
           return;
         }
         if (!canJumpOnThisAttach) {
-          watch.onError({ fatal });
+          watch.onError(hlsErrorPayload(data, fatal));
         }
         // Pitfall 16 (CLAUDE.md): a 401 on our own playlist proxy is almost
         // always a Clerk JWT that went stale a few seconds before its
@@ -1900,7 +1957,7 @@ export function HlsWatchPlayer({
         ) {
           return;
         }
-        watch.onError({ fatal });
+        watch.onError(hlsErrorPayload(data, fatal));
       });
       player.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         // What Auto actually settled on, so the button can say
@@ -1938,10 +1995,27 @@ export function HlsWatchPlayer({
         // rule tell "no new part yet" apart from "no new segment yet",
         // which is the normal, healthy state for several seconds at a time.
         if (effectiveMode === "ll") {
-          watch.onPartAdvance(
-            `${data.details.lastPartSn}.${data.details.lastPartIndex}`,
-            Date.now(),
-          );
+          // WHAT THE PLAYLIST SAYS ABOUT ITS OWN CADENCE, before anything is
+          // judged against it. `pqp-remux` closes a video segment on an IDR,
+          // so a real party advertises `EXT-X-TARGETDURATION` 7 where the
+          // client constant assumed 4, and the sequence backstop was firing
+          // on a healthy stream (production, 2026-09-16).
+          watch.onManifestTiming({
+            targetDurationSeconds: data.details.targetduration,
+            partTargetSeconds: data.details.partTarget,
+          });
+          // A PART IS ONLY PROGRESS IF THE PLAYLIST ACTUALLY LISTS ONE.
+          // `lastPartSn`/`lastPartIndex` are hls.js's own newest-part pair;
+          // on a playlist with no `partList` they are the segment's own
+          // numbers with a `-1` index, which never changes between parts and
+          // so must not be fed in as if it did.
+          const parts = data.details.partList;
+          if (parts && parts.length > 0) {
+            watch.onPartAdvance(
+              `${data.details.lastPartSn}.${data.details.lastPartIndex}`,
+              Date.now(),
+            );
+          }
           // THE CEILING FOLLOWS THE MANIFEST, once the manifest exists.
           // `applyLlLatencyCeiling` at the attach only has the part target
           // to go on -- 4 s at a 500 ms part -- and the server is free to
@@ -2060,7 +2134,12 @@ export function HlsWatchPlayer({
       // ladder that already owns that: the stall tick reads it on its next
       // pass and escalates through reconnect / rebuild / "A transmissão
       // caiu" exactly as it does for a source that died after attaching.
-      watch.onError({ fatal: true });
+      watch.onError({
+        fatal: true,
+        type: "attachError",
+        message: error instanceof Error ? error.message : String(error),
+        now: Date.now(),
+      });
     });
     // `reconnect` lives on reconnectRef: listing it here re-created hls.js
     // on every restamp of the callback. `videoRef` is a parent object whose

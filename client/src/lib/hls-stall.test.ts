@@ -174,9 +174,12 @@ describe("HlsStallWatch", () => {
       watch.onPlaying();
       watch.onMediaSequence(40, T0);
       watch.configureForMode("ll", 500);
-      // Keep parts flowing so the separate part-stuck rule does not fire
-      // first; the segment-based threshold on LL is 12 s.
-      watch.onPartAdvance("part-a", T0 + 11_000);
+      // NO part has ever advanced, which is what a genuinely dead LL feed
+      // looks like and is the only state the backstop speaks in since
+      // 2026-09-16: a part arriving is proof the stream is alive, so this
+      // rule stays quiet while they do (see `partsAdvancing`). The claim
+      // under test is unchanged -- LL keeps the in-place ladder rather than
+      // the conventional hold -- and the pre-manifest threshold is 12 s.
       expect(watch.tick(T0 + 11_999)).toBe("none");
       expect(watch.tick(T0 + 12_000)).toBe("start-load");
       expect(watch.lastReason).toBe("sequence-stuck");
@@ -477,35 +480,94 @@ describe("HlsStallWatch", () => {
       watch.onMediaSequence(1, T0);
       watch.onPlaying();
       watch.configureForMode("ll", 500);
-      // A part arrived recently, so the SEPARATE part-stuck rule (2000ms at
-      // a 500ms target) has not fired -- isolating the segment-based rule
-      // under test. A 500ms part target must NOT shrink the SEGMENT
-      // threshold to a part-scaled number (the bug this test guards
-      // against): it stays segment-paced.
-      watch.onPartAdvance("part-a", T0 + 11_000);
+      // No part has ever advanced, so the backstop is the only rule that can
+      // speak and its threshold is the one under test: a 500ms part target
+      // must NOT shrink the SEGMENT threshold to a part-scaled number (the
+      // bug this test guards against). It stays segment-paced at 12s until a
+      // manifest says otherwise.
       expect(watch.tick(T0 + 11_999)).toBe("none");
       expect(watch.tick(T0 + 12_000)).toBe("start-load");
     });
 
-    it("floors the segment-based threshold at 6s even for a tiny (hypothetical) segment target", () => {
-      // configureForMode itself does not take a segment target -- this pins
-      // that the floor exists as a constant, independent of partTargetMs.
+    /**
+     * PRODUCTION, 2026-09-16 00:50-00:56 UK. `pqp-remux` closes a video
+     * segment only on an IDR (a PLI every 4s, answered in about a second),
+     * so the live party's segments ran 5 to 9s under
+     * `EXT-X-TARGETDURATION 7` while parts advanced every 0.5s. The flat 12s
+     * this used to derive from `HLS_LIVE_SEGMENT_SECONDS` was under the
+     * stream's own honest cadence, and the ladder spent six minutes seeking,
+     * reloading, cancelling its own part downloads and rebuilding the
+     * player.
+     */
+    it("takes its threshold from the manifest's own TARGETDURATION", () => {
       const watch = new HlsStallWatch();
       watch.onSourceChanged(T0);
       watch.onMediaSequence(1, T0);
       watch.onPlaying();
-      watch.configureForMode("ll", 50);
-      // Keep parts flowing throughout (this tiny part target's own
-      // part-stuck threshold is only 200ms) so only the segment-based rule
-      // is under test.
-      for (let t = T0; t <= T0 + 6_000; t += 150) {
+      watch.configureForMode("ll", 500);
+      watch.onManifestTiming({ targetDurationSeconds: 7, partTargetSeconds: 0.5 });
+      // Three TARGETDURATIONs, not three of a constant that guessed 4s.
+      expect(watch.tick(T0 + 12_000)).toBe("none");
+      expect(watch.tick(T0 + 20_999)).toBe("none");
+      expect(watch.tick(T0 + 21_000)).toBe("start-load");
+    });
+
+    /**
+     * THE RULE ITSELF, and the reason the one above is only a backstop. A
+     * part arriving is proof the stream is alive; `EXT-X-MEDIA-SEQUENCE`
+     * moving is proof a SEGMENT closed, which on this remux is a different,
+     * much slower thing.
+     */
+    it("never calls a stream stuck while parts keep arriving (9s segments, parts every 0.5s)", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onManifestTiming({ targetDurationSeconds: 7, partTargetSeconds: 0.5 });
+      // Two minutes of the real cadence: a part every 500ms, a segment (and
+      // so a media-sequence bump) every 9s.
+      let sequence = 1;
+      watch.onMediaSequence(sequence, T0);
+      for (let t = T0; t <= T0 + 120_000; t += 500) {
         watch.onPartAdvance(`part-${t}`, t);
+        if ((t - T0) % 9_000 === 0 && t > T0) {
+          sequence += 1;
+          watch.onMediaSequence(sequence, t);
+        }
+        expect(watch.tick(t)).toBe("none");
       }
+    });
+
+    it("still speaks once the parts stop too -- it is a backstop, not a mute", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onManifestTiming({ targetDurationSeconds: 7, partTargetSeconds: 0.5 });
+      watch.onMediaSequence(1, T0);
+      // Past the LL startup grace, so the soft rules are allowed to speak.
+      watch.onPartAdvance("part-a", T0 + 7_000);
+      // The part-stuck nudge fires once on the way (2s at a 0.5s target),
+      // and then the segment backstop takes over at three TARGETDURATIONs.
+      expect(watch.tick(T0 + 9_000)).toBe("start-load");
+      expect(watch.lastReason).toBe("part-stuck");
+      expect(watch.tick(T0 + 20_999)).toBe("none");
+      expect(watch.tick(T0 + 21_000)).toBe("start-load");
+      expect(watch.lastReason).toBe("sequence-stuck");
+    });
+
+    it("floors the segment-based threshold at 6s even for an absurdly short manifest", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onMediaSequence(1, T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      // One second of TARGETDURATION would be three seconds of threshold.
+      // No part has ever advanced, so the backstop is the only rule in play.
+      watch.onManifestTiming({ targetDurationSeconds: 1 });
       expect(watch.tick(T0 + 5_999)).toBe("none");
-      expect(watch.tick(T0 + 6_000)).toBe("none");
-      // (The floor is 6s; the actual segment-derived value at the real 4s
-      // segment target is 12s, asserted above -- this only confirms the
-      // threshold never drops below 6s regardless of partTargetMs.)
+      expect(watch.tick(T0 + 6_000)).toBe("start-load");
+      expect(watch.lastReason).toBe("sequence-stuck");
     });
 
     it("restores the constructed default on conventional after an ll episode", () => {
@@ -525,9 +587,8 @@ describe("HlsStallWatch", () => {
       watch.onMediaSequence(1, T0);
       watch.onPlaying();
       watch.configureForMode("ll");
-      // Segment-paced regardless of the (defaulted) part target: 12s. A
-      // recent part keeps the separate part-stuck rule from firing first.
-      watch.onPartAdvance("part-a", T0 + 11_000);
+      // Segment-paced regardless of the (defaulted) part target: 12s until a
+      // manifest arrives.
       expect(watch.tick(T0 + 11_999)).toBe("none");
       expect(watch.tick(T0 + 12_000)).toBe("start-load");
     });
@@ -610,6 +671,129 @@ describe("HlsStallWatch", () => {
       // Still counts from the FIRST time "10.0" was seen, not the repeated
       // calls -- a duplicate playlist fetch is not a new part.
       expect(watch.tick(T0 + GRACE + 2_000)).toBe("start-load");
+    });
+
+    it("paces itself off the manifest's PART-TARGET, not the wire frame's", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      // The playlist says one-second parts; the frame said half a second.
+      // Four of the manifest's own is four seconds, not two.
+      watch.onManifestTiming({ targetDurationSeconds: 7, partTargetSeconds: 1 });
+      watch.onPartAdvance("10.0", T0 + GRACE);
+      expect(watch.tick(T0 + GRACE + 3_999)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 4_000)).toBe("start-load");
+      expect(watch.lastReason).toBe("part-stuck");
+      // Exactly once, then out of the way -- the backstop owns what follows.
+      expect(watch.tick(T0 + GRACE + 5_000)).toBe("none");
+    });
+  });
+
+  /**
+   * WHICH hls.js ERRORS THE LL LADDER MAY TREAT AS FATAL (production,
+   * 2026-09-16). `GapController._tryNudgeBuffer` raises `bufferStalledError`
+   * to `fatal: true` once it has spent `nudgeMaxRetry` nudges on a playhead
+   * that will not move. On a presenter whose upload is starved that is a
+   * statement about the BUFFER, and the fatal ladder answered it by
+   * rebuilding the player, which cancelled the part downloads that were
+   * slowly filling the buffer. Six `audio-init.mp4` fetches in a minute.
+   */
+  describe("LL error triage", () => {
+    it("never lets a buffer event into the fatal ladder, fatal flag and all", () => {
+      const watch = new HlsStallWatch({ stallMs: 15_000 });
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onError({
+        fatal: true,
+        type: "mediaError",
+        details: "bufferStalledError",
+        now: T0 + GRACE,
+      });
+      // Not a fatal episode: an ordinary buffering one, which says nothing
+      // at all until the stall timer is up.
+      expect(watch.tick(T0 + GRACE + 1_000)).toBe("none");
+      expect(watch.tick(T0 + GRACE + 15_000)).toBe("start-load");
+      expect(watch.lastReason).toBe("stall");
+      // And the soft ladder, which never runs `recoverMediaError` -- there
+      // is no media error to recover from.
+      expect(watch.tick(T0 + GRACE + 16_000)).toBe("reload-level");
+    });
+
+    it("the same event on conventional is byte-identical to before", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      // No `configureForMode` at all, the conventional case.
+      watch.onError({ fatal: true, details: "bufferStalledError" });
+      expect(watch.tick(T0 + 1_000)).toBe("recover-media-error");
+      expect(watch.lastReason).toBe("fatal");
+    });
+
+    it("gives a media-pipeline error one recovery and a bounded rebuild, then the holding screen", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onError({
+        fatal: true,
+        type: "mediaError",
+        details: "bufferAppendError",
+        now: T0,
+      });
+      expect(watch.tick(T0 + 1_000)).toBe("recover-media-error");
+      expect(watch.tick(T0 + 2_000)).toBe("rebuild");
+      expect(watch.tick(T0 + 3_000)).toBe("recover-media-error");
+      expect(watch.tick(T0 + 4_000)).toBe("rebuild");
+      expect(watch.tick(T0 + 5_000)).toBe("recover-media-error");
+      // Two rebuilds is the budget: a person gets "try again" rather than a
+      // player that tears itself down for the rest of the party.
+      expect(watch.tick(T0 + 6_000)).toBe("dead");
+    });
+
+    it("leaves a network error the ladder it always had", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.configureForMode("ll", 500);
+      watch.onError({
+        fatal: true,
+        type: "networkError",
+        details: "fragLoadTimeOut",
+        now: T0,
+      });
+      expect(watch.tick(T0 + 1_000)).toBe("recover-media-error");
+      expect(watch.tick(T0 + 2_000)).toBe("start-load");
+      expect(watch.tick(T0 + 3_000)).toBe("reload-level");
+    });
+
+    it("names the cause in the log context, which is the whole point", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onManifestTiming({ targetDurationSeconds: 7, partTargetSeconds: 0.5 });
+      watch.onError({
+        fatal: true,
+        type: "mediaError",
+        details: "bufferStalledError",
+        message: "Playback stalling at @12.3 due to low buffer",
+        now: T0,
+      });
+      const context = watch.describeContext();
+      expect(context).toContain("details=bufferStalledError");
+      expect(context).toContain("type=mediaError");
+      expect(context).toContain("targetDuration=7s");
+      expect(context).toContain("partTarget=0.500s");
+      expect(context).toContain("seqStuckMs=21000");
+      expect(context).toContain("partStuckMs=2000");
+    });
+
+    it("says nothing extra on conventional, so those log lines do not move", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onError({ fatal: true, details: "bufferAppendError" });
+      expect(watch.describeContext()).toBe("");
     });
   });
 
