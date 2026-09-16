@@ -113,6 +113,14 @@ enum RealtimeEvent: Sendable {
     /// roster, so sitting on a live microphone and a call screen is the same
     /// silent broken call a released seat produces.
     case voiceJoinRefused(voiceChannelId: String, reason: String?)
+    /// A moderator acted on THIS client's seat: muted, unmuted, disconnected,
+    /// or moved to another channel. `message` is the whole sentence, already
+    /// written server side — rendering it verbatim is correct (the same rule
+    /// as `sanctionNotice`). `movedToChannelId` is set only for `moved`; the
+    /// server has already dropped the peer by the time this arrives, so a
+    /// client holding live media for this room has to hang up rather than
+    /// wait for a roster update that will not single itself out.
+    case voiceModeration(voiceChannelId: String, action: String, movedToChannelId: String?, message: String)
     case voiceRoomFull(limit: Int)
     /// The call is already at the screen-share cap. Unicast to whoever tried.
     case voiceScreenShareDenied(voiceChannelId: String)
@@ -904,6 +912,26 @@ actor RealtimeClient {
         let message: String
     }
 
+    /// `voice-moderation` reuses `message` for a *string* the way
+    /// `sanction-notice` does, so it hits the same trap `SanctionFrame` exists
+    /// for: decoded through the shared `Envelope`, whose `message` is
+    /// `Message?` (a chat message object), the decode THROWS and `try?`
+    /// swallows the whole frame. Before this type existed, that meant a
+    /// moderator's disconnect ended the call with no reason on screen, and a
+    /// move dropped the target with nothing telling them where they went —
+    /// not a missing feature, a frame the client never even saw arrive.
+    ///
+    /// `reason` and `aloneMinutes` (the idle-disconnect case) are decoded for
+    /// completeness but unused today: the schema's own comment says a client
+    /// that renders nothing but `message` verbatim is a correct client, and
+    /// that is what this build does.
+    private struct VoiceModerationFrame: Decodable {
+        let action: String
+        let voiceChannelId: String
+        let movedToChannelId: String?
+        let message: String
+    }
+
     /**
      `presence-delta`, decoded on its own rather than through `Envelope`.
 
@@ -972,6 +1000,20 @@ actor RealtimeClient {
                 reason: frame.reason,
                 message: frame.message
             )))
+            return
+        }
+
+        // BEFORE `Envelope`, for the same reason as `sanction-notice` above:
+        // see `VoiceModerationFrame`.
+        if probe.type == "voice-moderation" {
+            guard let frame = try? Coding.decoder.decode(VoiceModerationFrame.self, from: data)
+            else { return }
+            continuation?.yield(.voiceModeration(
+                voiceChannelId: frame.voiceChannelId,
+                action: frame.action,
+                movedToChannelId: frame.movedToChannelId,
+                message: frame.message
+            ))
             return
         }
 

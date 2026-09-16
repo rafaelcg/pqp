@@ -1060,6 +1060,49 @@ final class VoiceModel {
             isCameraOn = false
             localCamera = nil
 
+        /**
+         A MODERATOR ACTED ON THIS SEAT.
+
+         `disconnectVoiceUser` on the server sends this notice and THEN drops
+         the peer, so by the time it arrives here the seat is already gone.
+         Nothing else says so: a mesh peer removal does not single the target
+         out with its own frame, so without this the local call screen and
+         microphone kept running against a room that no longer held us —
+         "ends the call with no reason given" for a disconnect, and for a
+         move, the person the moderator sent elsewhere never reappears
+         anywhere, because nothing here ever asked to go.
+
+         `message` is the whole sentence, server-written and already correct
+         (for `moved`, it names the destination channel) — rendered verbatim,
+         the same rule as `sanctionNotice`. `movedToChannelId` is not
+         followed automatically: doing that needs a `Channel` to hand `join`,
+         which this model has no way to resolve from an id alone, so the
+         person taps their way there themselves for now.
+
+         "muted" / "unmuted" fall through undone on purpose: the roster's
+         `serverMuted` flag is what enforces those (`RemoteAudioMixer` and
+         every frame that carries the participant), and this model has no
+         banner surface yet for the explanation the web shows alongside it.
+         */
+        case .voiceModeration(let voiceChannelId, let action, _, let message):
+            guard voiceChannelId == channelId, action == "disconnected" || action == "moved" else { return }
+            intendedChannel = nil
+            resumeClaim = nil
+            status = .failed(message)
+            Task {
+                await screenShare.disarm()
+                await voice.disconnectAll()
+                await sfu.disconnect()
+            }
+            sfuJoin?.cancel()
+            sfuJoin = nil
+            sfuIsConnected = false
+            peers = []
+            video = [:]
+            selfPeerId = nil
+            isCameraOn = false
+            localCamera = nil
+
         case .voiceTransportUnsupported(let voiceChannelId, let transport, let reason):
             guard voiceChannelId == channelId else { return }
             intendedChannel = nil
