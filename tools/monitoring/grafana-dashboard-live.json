@@ -1,0 +1,282 @@
+{
+  "_comment": [
+    "A standing 'pqp Live' dashboard: online users, voice (mesh vs livekit),",
+    "watch party and the infra basics, meant to be left up permanently (unlike",
+    "grafana-dashboard-event.json, which is scoped to one event window and",
+    "imported/removed per party). Standard Grafana dashboard JSON model:",
+    "Dashboards > New > Import, paste this file (or POST it to",
+    "/api/dashboards/db, see this directory's README).",
+    "Replace <PROMETHEUS_DATASOURCE_UID> and <LOKI_DATASOURCE_UID> with the",
+    "real UIDs from Administration > Data sources on import -- Grafana's own",
+    "import dialog also offers to remap them for you. On this stack today",
+    "those are the Grafana Cloud built-ins, uid `grafanacloud-prom` (Prometheus)",
+    "and `grafanacloud-logs` (Loki); same placeholder convention as",
+    "grafana-dashboard-event.json, not hardcoded here for the same reason that",
+    "file gives: nothing in this directory is provisioned from the repo, the",
+    "Grafana UI is the source of truth once imported, and this file is a",
+    "starting point, not a synced copy.",
+    "Every pqp_api_* panel needs tools/monitoring/pqp-api-metrics-exporter.py",
+    "installed and running on a box with a Prometheus textfile collector",
+    "(today: the self-hosted SFU box) -- without it those panels read 'No",
+    "data', which is the honest state, not a broken panel. As of this file's",
+    "authorship the exporter is NOT installed anywhere; see this directory's",
+    "README for the install command.",
+    "There is still no server-side count of concurrent HLS (watch party)",
+    "viewers anywhere in pqp -- same finding as grafana-dashboard-event.json's",
+    "'Watching' panel, carried over verbatim to the 'Watch party viewers' panel",
+    "below rather than inventing a number. The HLS panel that IS real graphs",
+    "sessions and rungs, which are transcode PROCESSES, not audience size.",
+    "'SFU box' (instance=\"sfu-pqp\") and 'Egress box' (instance=\"sfu-hls\") are",
+    "two different machines -- see the two-machine infra note in this",
+    "directory's README and CLAUDE.md's session-handover memory; do not merge",
+    "their panels, a saturated egress box says nothing about LiveKit and vice",
+    "versa.",
+    "Default range is 7 days with a 1 minute refresh, meant for a wall-mounted",
+    "or frequently-glanced-at view of product health, not an event war room",
+    "(that is grafana-dashboard-event.json's 3h/30s)."
+  ],
+  "title": "pqp Live",
+  "uid": "pqp-live",
+  "tags": ["pqp", "live"],
+  "timezone": "utc",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-7d", "to": "now" },
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Online users",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_users_online",
+          "legendFormat": "online (cluster.sockets)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_sockets",
+          "legendFormat": "sockets (this process)"
+        }
+      ],
+      "description": "pqp has no field that dedupes by user, so this is open WebSocket sessions cluster-wide (one person in two tabs counts twice). See the pqp_api_users_online HELP text in pqp-api-metrics-exporter.py for the full reasoning. On one machine (today) the two series are equal."
+    },
+    {
+      "id": 2,
+      "title": "In voice calls",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "custom": { "stacking": { "mode": "normal", "group": "backend" } } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "total (voice.participants)" },
+            "properties": [
+              { "id": "custom.stacking", "value": { "mode": "none", "group": "A" } },
+              { "id": "custom.lineWidth", "value": 3 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_participants",
+          "legendFormat": "total (voice.participants)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_participants_by_backend{backend=\"mesh\"}",
+          "legendFormat": "mesh"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_participants_by_backend{backend=\"livekit\"}",
+          "legendFormat": "livekit"
+        }
+      ],
+      "description": "mesh + livekit stack to the same total line drawn on top of them (voice.rooms[].participants summed by transport). mesh caps at MESH_VOICE_LIMIT (8) per room; a total that pulls away from mesh+livekit means a payload shape this exporter does not recognise, not a bug in the sum."
+    },
+    {
+      "id": 3,
+      "title": "Voice rooms by backend",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "custom": { "stacking": { "mode": "normal", "group": "rooms" } } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_rooms_by_backend{backend=\"mesh\"}",
+          "legendFormat": "mesh"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_rooms_by_backend{backend=\"livekit\"}",
+          "legendFormat": "livekit"
+        }
+      ],
+      "description": "Count of voice.rooms[] by transport. Communities and servers of 10+ members are pinned to livekit; DM calls and smaller servers are pinned to mesh (server/src/voice/transport-policy.ts)."
+    },
+    {
+      "id": 4,
+      "title": "Largest room now / peak today",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_largest_room_now",
+          "legendFormat": "largest room now"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_voice_peak_room_size_today",
+          "legendFormat": "peak today"
+        }
+      ],
+      "description": "voice.largestRoomNow and voice.peakRoomSizeToday. The peak resets on deploy and at Sao Paulo midnight, so a sawtooth at midnight is expected, not a drop in usage."
+    },
+    {
+      "id": 5,
+      "title": "Watch party: sessions / rungs",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_hls_sessions",
+          "legendFormat": "sessions"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_hls_rungs",
+          "legendFormat": "rungs (renditions)"
+        }
+      ],
+      "description": "liveHls.sessions / liveHls.rungs: watch-party TRANSCODE processes, not audience size -- see the 'Watch party viewers' panel for why there is no viewer count next to it."
+    },
+    {
+      "id": 6,
+      "title": "Watch party viewers",
+      "type": "text",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "options": {
+        "mode": "markdown",
+        "content": "**pqp does not count concurrent HLS viewers server-side.** The playlist proxy (`server/src/voice/hls-playlist-proxy.ts`) is a stateless, unauthenticated-per-request pull with no per-request access log, so there is no 'viewers' gauge to graph here without adding one (out of scope for a monitoring-only change; same finding as `grafana-dashboard-event.json`'s 'Watching' panel).\n\nFor a live party, read audience size off the stream itself (Twitch/YouTube viewer count). For a rehearsal, `tools/watch-party-load/src/hls-audience.ts`'s own progress output and final JSON summary are the closest thing pqp has to this number -- see `tools/watch-party-load/README.md`."
+      }
+    },
+    {
+      "id": 7,
+      "title": "SFU box CPU",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"sfu-pqp\",mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "CPU busy %"
+        }
+      ],
+      "description": "The LiveKit SFU box (tools/sfu-monitoring). Not the same machine as the egress/HLS box below -- see this panel's counterpart."
+    },
+    {
+      "id": 8,
+      "title": "Egress box CPU",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"sfu-hls\",mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "CPU busy %"
+        }
+      ],
+      "description": "The watch-party transcode (HLS egress) box. This is the number that actually costs a party: rungHealth restarts and stalls correlate with this saturating."
+    },
+    {
+      "id": 9,
+      "title": "DB pool / breaker",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 20, "color": "red" }] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_ready_pool_in_use",
+          "legendFormat": "pool in use"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_ready_pool_queued",
+          "legendFormat": "pool queued"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_db_breaker_open",
+          "legendFormat": "breaker open (1=not closed)"
+        }
+      ],
+      "description": "checks.pool from GET /ready plus runtime.db.breaker.state. A queue above zero is the earliest honest warning (docs/MONITORING.md); breaker open means every DB-dependent route is fast-failing with 503 (pitfall 17 in CLAUDE.md)."
+    },
+    {
+      "id": 10,
+      "title": "API scrape health",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "pqp_api_metrics_scrape_ok",
+          "legendFormat": "scrape ok (1/0)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "<PROMETHEUS_DATASOURCE_UID>" },
+          "expr": "time() - pqp_api_metrics_collected_seconds",
+          "legendFormat": "seconds since last scrape"
+        }
+      ],
+      "description": "Every other panel on this dashboard depends on the exporter itself being alive. scrape_ok at 0, or seconds-since-last-scrape climbing past ~120 (the timer runs every 20s), means every pqp_api_* panel here is showing stale or absent data, not a quiet product."
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+"""Unit tests for pqp-api-metrics-exporter.py's render() -- payload dict in,
+Prometheus text out, no network. render() was already a pure function (it
+takes the parsed JSON payload and returns a string), so no refactor was
+needed to make it testable; this file just exercises it directly.
+
+The module's filename has dashes, so it is not import-able as a normal
+package -- loaded by path with importlib instead, same trick the file itself
+would need if it ever wanted to import a sibling script.
+
+Run with: python3 -m unittest tools/monitoring/test_exporter.py
+       or (from this directory): python3 -m unittest test_exporter
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import unittest
+
+MODULE_PATH = os.path.join(os.path.dirname(__file__), "pqp-api-metrics-exporter.py")
+
+_spec = importlib.util.spec_from_file_location("pqp_api_metrics_exporter", MODULE_PATH)
+assert _spec is not None and _spec.loader is not None
+exporter = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(exporter)
+
+
+def _base_payload(**overrides) -> dict:
+    payload = {
+        "ready": {
+            "ok": True,
+            "checks": {
+                "postgres": {"ok": True, "ms": 5},
+                "pool": {"queued": 0, "inUse": 1, "max": 10},
+            },
+        },
+        "runtime": {
+            "sockets": 3,
+            "db": {"breaker": {"state": "closed", "opened": 0, "rejected": 0}},
+        },
+        "cluster": {"sockets": 3},
+        "voice": {
+            "activeRooms": 0,
+            "participants": 0,
+            "largestRoomNow": 0,
+            "peakRoomSizeToday": 4,
+            "rooms": [],
+        },
+        "liveHls": {"sessions": 0, "rungs": 0, "orphansStopped": 0},
+    }
+    payload.update(overrides)
+    return payload
+
+
+class RenderNewGaugesTests(unittest.TestCase):
+    def test_empty_voice_rooms_emits_both_backends_at_zero(self):
+        body = exporter.render(_base_payload())
+        self.assertIn('pqp_api_voice_participants_by_backend{backend="mesh"} 0', body)
+        self.assertIn('pqp_api_voice_participants_by_backend{backend="livekit"} 0', body)
+        self.assertIn('pqp_api_voice_rooms_by_backend{backend="mesh"} 0', body)
+        self.assertIn('pqp_api_voice_rooms_by_backend{backend="livekit"} 0', body)
+
+    def test_missing_rooms_key_also_defaults_to_zero(self):
+        payload = _base_payload()
+        del payload["voice"]["rooms"]
+        body = exporter.render(payload)
+        self.assertIn('pqp_api_voice_participants_by_backend{backend="mesh"} 0', body)
+        self.assertIn('pqp_api_voice_rooms_by_backend{backend="livekit"} 0', body)
+
+    def test_mixed_backend_rooms_sum_and_count_per_backend(self):
+        payload = _base_payload(
+            voice={
+                "activeRooms": 3,
+                "participants": 9,
+                "largestRoomNow": 5,
+                "peakRoomSizeToday": 12,
+                "rooms": [
+                    {"transport": "mesh", "participants": 2},
+                    {"transport": "mesh", "participants": 3},
+                    {"transport": "livekit", "participants": 4},
+                ],
+            }
+        )
+        body = exporter.render(payload)
+        self.assertIn('pqp_api_voice_participants_by_backend{backend="mesh"} 5', body)
+        self.assertIn('pqp_api_voice_participants_by_backend{backend="livekit"} 4', body)
+        self.assertIn('pqp_api_voice_rooms_by_backend{backend="mesh"} 2', body)
+        self.assertIn('pqp_api_voice_rooms_by_backend{backend="livekit"} 1', body)
+        self.assertIn("pqp_api_voice_largest_room_now 5", body)
+        self.assertIn("pqp_api_voice_peak_room_size_today 12", body)
+
+    def test_room_with_unrecognised_transport_is_skipped_not_guessed(self):
+        payload = _base_payload(
+            voice={
+                "activeRooms": 1,
+                "participants": 2,
+                "largestRoomNow": 2,
+                "peakRoomSizeToday": 2,
+                "rooms": [{"transport": "cloudflare-sfu", "participants": 2}],
+            }
+        )
+        body = exporter.render(payload)
+        self.assertIn('pqp_api_voice_participants_by_backend{backend="mesh"} 0', body)
+        self.assertIn('pqp_api_voice_participants_by_backend{backend="livekit"} 0', body)
+        self.assertIn('pqp_api_voice_rooms_by_backend{backend="mesh"} 0', body)
+        self.assertIn('pqp_api_voice_rooms_by_backend{backend="livekit"} 0', body)
+
+    def test_users_online_reads_cluster_sockets(self):
+        payload = _base_payload(cluster={"sockets": 42})
+        body = exporter.render(payload)
+        self.assertIn("pqp_api_users_online 42", body)
+
+    def test_db_breaker_open_reports_zero_when_closed(self):
+        body = exporter.render(_base_payload())
+        self.assertIn("pqp_api_db_breaker_open 0", body)
+
+    def test_db_breaker_open_reports_one_when_open_or_half_open(self):
+        for state in ("open", "half-open"):
+            payload = _base_payload(
+                runtime={"sockets": 1, "db": {"breaker": {"state": state, "opened": 1, "rejected": 3}}}
+            )
+            body = exporter.render(payload)
+            self.assertIn("pqp_api_db_breaker_open 1", body, msg=f"state={state}")
+
+    def test_db_breaker_missing_defaults_to_closed(self):
+        payload = _base_payload(runtime={"sockets": 1})
+        body = exporter.render(payload)
+        self.assertIn("pqp_api_db_breaker_open 0", body)
+
+    def test_no_hls_viewers_gauge_is_emitted(self):
+        # pqp has no server-side concurrent-viewer count; the exporter must
+        # not invent one. See the comment above the liveHls gauges in
+        # pqp-api-metrics-exporter.py and grafana-dashboard-event.json's
+        # "Watching" panel.
+        body = exporter.render(_base_payload())
+        self.assertNotIn("pqp_api_hls_viewers", body)
+
+    def test_no_hls_active_sessions_gauge_is_emitted(self):
+        # Would be identical to the existing pqp_api_hls_sessions.
+        body = exporter.render(_base_payload())
+        self.assertNotIn("pqp_api_hls_active_sessions", body)
+
+    def test_existing_gauges_still_present(self):
+        # Regression guard: the new gauges must not have displaced the old
+        # ones existing dashboards and alerts already depend on.
+        body = exporter.render(_base_payload())
+        for name in (
+            "pqp_api_sockets",
+            "pqp_api_voice_participants",
+            "pqp_api_voice_active_rooms",
+            "pqp_api_hls_sessions",
+            "pqp_api_hls_rungs",
+            "pqp_api_hls_orphans_stopped_total",
+            "pqp_api_ready_ok",
+            "pqp_api_ready_postgres_ok",
+            "pqp_api_ready_postgres_ms",
+            "pqp_api_ready_pool_queued",
+            "pqp_api_ready_pool_in_use",
+            "pqp_api_ready_pool_max",
+        ):
+            self.assertIn(name, body, msg=f"missing existing gauge {name}")
+
+
+class RenderFailureTests(unittest.TestCase):
+    def test_render_failure_marks_scrape_not_ok(self):
+        body = exporter.render_failure()
+        self.assertIn("pqp_api_metrics_scrape_ok 0", body)
+        # A failed scrape must not carry over any of the new gauges either.
+        self.assertNotIn("pqp_api_users_online", body)
+        self.assertNotIn("pqp_api_voice_participants_by_backend", body)
+        self.assertNotIn("pqp_api_db_breaker_open", body)
+
+
+if __name__ == "__main__":
+    unittest.main()
