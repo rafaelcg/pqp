@@ -381,3 +381,72 @@ seconds, and seat-churn's own join/leave failure rate stays under 1%. A
 failed `hls-audience.ts` run judges itself by its own existing
 window-miss/stuck-event numbers (see above); there is no combined verdict
 across all three processes, read each report on its own.
+
+## Full-stack party storm, presenter-free (`src/party-storm.ts`)
+
+A single, zero-npm-dependency orchestrator (Node 22+/24 global `WebSocket` +
+`fetch`, native TS stripping — run with `node src/party-storm.ts`) for the
+watch-party tiers that do **not** need a live SFU/egress. Built for the
+2026-09-12 post-mortem's A3 (DB reconnect storm) and CLAUDE.md pitfall 17 (the
+DB circuit breaker). Complements the media rig in `index.ts` (synthetic 720p30
+presenter + real SFU receivers) and the viewer poller in `hls-audience.ts`.
+
+**Target is fully configurable, with a hard isolation gate.** `PQP_LOAD_TARGET`
+(any non-empty string, e.g. `staging` / `shadow`), `PQP_LOAD_API_URL`,
+`PQP_LOAD_WS_URL`, `PQP_LOAD_HLS_BASE_URL`. The gate refuses `pqp.gg`,
+`*.pqp.gg` (so api./hls./www.) and any Postgres host, unconditionally, before
+any network call. It also requires `https://` / `wss://` for every target and
+refuses private-use, link-local and cloud-metadata addresses (an env var this
+harness's `LOAD_TEST_TOKEN` and `ADMIN_METRICS_TOKEN` should never reach),
+except loopback, which stays on plain `http:`/`ws:` for local dev; set
+`PQP_LOAD_ALLOW_PRIVATE_HOST=1` to opt a genuinely private shadow box back in.
+It speaks only HTTP/WS — never SQL — so the database it hits never sees more
+than the server's own pool no matter how hard this pushes. Point it at
+staging today or a Vultr shadow-prod box later (note: a shadow box running
+`NODE_ENV=production` and not named `-staging` on Fly will make
+`LOAD_TEST_TOKEN` inert — the identity path needs a `-staging` Fly app name or
+non-production `NODE_ENV`; see `server/src/auth/load-test.ts`).
+
+```bash
+set -a; . ~/.config/pqp/staging-load-test.env; set +a   # LOAD_TEST_TOKEN + ADMIN_METRICS_TOKEN
+export PQP_LOAD_TARGET=staging
+
+# 1. Provision a load server (HTTP only; pins the voice channel to LiveKit so a
+#    presence room can exceed MESH_VOICE_LIMIT=8):
+node src/party-storm.ts provision --out /tmp/manifest.json
+
+# 2. DB reconnect storm — distinct identities run the cold-browser bootstrap in
+#    a loop to saturate the Postgres pool. Samples runtime.db.breaker / pool /
+#    readCache + /health + /ready + a fresh-identity canary every second:
+node src/party-storm.ts db-storm --manifest /tmp/manifest.json \
+  --concurrency 100 --ramp-seconds 8 --seconds 45 --out /tmp/db.json
+
+# 3. WS presence storm + synchronized reconnect wave (the 09-12 failure mode):
+node src/party-storm.ts ws-storm --manifest /tmp/manifest.json \
+  --sockets 150 --ramp-seconds 40 --hold 25 --reconnect-at 15 --out /tmp/ws.json
+
+# 4. HLS viewer poll (needs a LIVE presenter+egress for real playlists; without
+#    --channel/--started it probes the path only). Point --hls base at the API
+#    origin proxy OR the hls.pqp.gg edge to compare origin coalescing:
+node src/party-storm.ts hls --channel <id> --started <ms> --tokens ./tokens.txt --viewers 500
+```
+
+What it proves without a presenter: the breaker (pitfall 17) opens under pool
+saturation and sheds DB-dependent routes with fast ~250ms 503s
+(`database_unavailable`) while `/health` stays 200 and `/ready` goes 503, then
+recovers within ~1–2s of load easing. Saturation edge on staging (`PG_POOL_MAX`
+10): healthy below ~12 concurrent bootstrappers, a brownout band ~12–18 (pool
+queues, p99 to multiple seconds, breaker flaps), clean shed at ≥~25–30. Scales
+~linearly with `PG_POOL_MAX`, so prod's 70 ≈ 7×.
+
+What still needs the live SFU/egress (coordinate separately): real HLS segments
+and playlists, hence any true end-to-end HLS viewer / segment-GET / edge-vs-
+origin coalescing measurement. Feed the egress with `index.ts`'s synthetic
+720p30 presenter (`shard --presenter-only`), then drive viewers here or with
+`hls-audience.ts`. The edge path also needs `LIVE_HLS_PLAYLIST_BASE_URL` set +
+a deployed edge Worker (empty on staging today).
+
+**Residue:** every identity is `load_test_user_{st,ws,canary,owner}_*`; the run
+also leaves a `Load <runId>` server unless deleted via `DELETE /api/servers/:id`
+with the owner token. Clean both with the one-liners in `docs/STAGING.md`
+§"Resetting the staging database".
