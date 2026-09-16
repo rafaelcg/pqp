@@ -4,6 +4,7 @@ import AVFoundation
 import CoreVideo
 import QuartzCore
 import WebRTC
+import CallKit
 
 /// Owns the one DM call this device can be in.
 ///
@@ -201,10 +202,18 @@ final class CallModel {
         ringOnWelcome = true
         wantsCamera = withVideo
         phase = .connecting
+        // Always false, regardless of `withVideo`: the provider configuration
+        // (`CXProviderConfiguration.pqp`) declares `supportsVideo = false` on
+        // purpose (CallKit's own chrome has no picture to back), and a
+        // CXStartCallAction claiming video against a provider that says it
+        // does not support video is a contract CallKit can reject or handle
+        // inconsistently (Farol review, PR 680). The in-app stage's camera is
+        // unaffected either way -- this only controls the system UI's own
+        // "video call" framing.
         callKit?.reportOutgoingCall(
             room: .conversation(conversation.channelId),
             displayName: conversation.title,
-            hasVideo: withVideo
+            hasVideo: false
         )
         await connect()
     }
@@ -239,9 +248,19 @@ final class CallModel {
 
     /// Refuse a ring. The caller stops waiting for us and our other devices stop
     /// ringing; the call itself continues for anyone else in it.
+    ///
+    /// The decline frame goes out BEFORE the CallKit ring is removed, not
+    /// after (Farol review, PR 680): unlike a live call's own hang-up, where
+    /// the peer connection itself tells the other side we left, a caller who
+    /// has not been answered yet has no OTHER signal that we declined until
+    /// their own ring timeout fires. `call-decline` has no ack in the
+    /// protocol to actually wait on, so this reorder closes the specific
+    /// window it can (removing the ring before the frame is even attempted),
+    /// not the (unfixable without a protocol change) case of the frame being
+    /// silently dropped in flight.
     func decline(_ call: IncomingCall) async {
-        callKit?.reportCallEnded(room: .conversation(call.conversationId), reason: .unanswered)
         await session?.realtime.declineCall(conversationId: call.conversationId)
+        callKit?.reportCallEnded(room: .conversation(call.conversationId), reason: .unanswered)
         dismiss(call.conversationId)
     }
 
@@ -251,12 +270,17 @@ final class CallModel {
         incoming.removeAll { $0.conversationId == conversationId }
     }
 
-    func hangUp(reason: String? = nil) async {
+    /// `cxEndReason` is CallKit's own call-log reason, distinct from `reason`
+    /// (the in-app "ended" sentence): `.remoteEnded` for an ordinary hang-up,
+    /// but `fail()` below passes `.failed` so a connection failure reads as
+    /// one in Recents rather than as "call ended by the other person" (Farol
+    /// review, PR 680).
+    func hangUp(reason: String? = nil, cxEndReason: CXCallEndedReason = .remoteEnded) async {
         guard let conversationId else { return }
         // Read before `clearCallState()` below wipes it. Not called for a
         // CallKit-initiated end: the CXEndCallAction handler already forgot
         // this room, so this finds nothing left to report.
-        callKit?.reportCallEnded(room: .conversation(conversationId), reason: .remoteEnded)
+        callKit?.reportCallEnded(room: .conversation(conversationId), reason: cxEndReason)
         ringTimeout?.cancel()
         ringTimeout = nil
         sfuJoin?.cancel()
@@ -624,10 +648,20 @@ final class CallModel {
                 room: .conversation(call.conversationId), callerName: call.callerName
             )
             // Belt to the server's own 45s timer: if the cancellation frame is
-            // lost to a reconnect, the banner must still go away.
+            // lost to a reconnect, the banner must still go away. The CallKit
+            // ring has to go with it -- the mirror of the same guard
+            // `.callRingCancelled` below uses -- or the lock-screen/CarPlay
+            // card outlives the in-app banner, the room stays reported as
+            // ringing, and a later real ring for the same conversation is
+            // deduplicated away before ever showing again (Farol review, PR
+            // 680).
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(callRingTimeout + 2))
-                self?.dismiss(call.conversationId)
+                guard let self else { return }
+                if self.conversationId != call.conversationId {
+                    self.callKit?.reportCallEnded(room: .conversation(call.conversationId), reason: .unanswered)
+                }
+                self.dismiss(call.conversationId)
             }
 
         case .callRingCancelled(let conversationId, _):
@@ -731,7 +765,14 @@ final class CallModel {
             } else {
                 phase = .active
                 startedAt = startedAt ?? Date()
-                callKit?.reportConnected(room: .conversation(voiceChannelId))
+                // `conversationId`, matching the room `reportOutgoingCall`
+                // registered this call under (and the sibling call at
+                // `.voicePeerJoined` below) -- not `voiceChannelId` directly.
+                // The two are provably equal at this point (the guard above
+                // already returned otherwise), but writing the variable this
+                // call was actually keyed on removes any need to trace that
+                // guard to see it (Farol review, PR 680).
+                callKit?.reportConnected(room: .conversation(conversationId ?? voiceChannelId))
             }
             let shouldRing = ringOnWelcome
             ringOnWelcome = false
@@ -1064,7 +1105,7 @@ final class CallModel {
 
     private func fail(_ message: String) {
         errorMessage = message
-        Task { await hangUp(reason: message) }
+        Task { await hangUp(reason: message, cxEndReason: .failed) }
     }
 
     /// Everything about the call itself. `incoming` is deliberately spared: a
