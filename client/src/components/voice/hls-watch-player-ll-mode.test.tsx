@@ -5,9 +5,10 @@ import { HlsWatchPlayer } from "./hls-watch-player";
 /**
  * THE WIRING for task L2.4 (`docs/plans/LL_HLS.md`), the same half a pure
  * module cannot prove that `hls-watch-player-camera.test.tsx` exists for:
- * `mode`/`partTargetMs` are threaded from `LiveHlsStream` through four
+ * `mode`/`partTargetMs` are threaded from `LiveHlsStream` through five
  * wrapper components (`watch-stage.tsx`, `cinema-stage.tsx`,
- * `screen-stage.tsx`, `call-stage.tsx`) into this player, and a prop that
+ * `screen-stage.tsx`, `call-stage.tsx`, and the host's "Público" monitor in
+ * `watch-party/presenter-stage.tsx`) into this player, and a prop that
  * reaches the component but crashes or changes nothing would pass every
  * pure-function test in `hls-live-edge.test.ts`/`hls-stall.test.ts` while
  * shipping a feature that does nothing.

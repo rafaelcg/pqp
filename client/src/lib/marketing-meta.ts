@@ -413,12 +413,6 @@ export const TELA_FAQ: Record<
 > = {
   "pt-BR": [
     {
-      question:
-        "Por que o compartilhamento de tela do Discord está suspenso no Brasil?",
-      answer:
-        "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord. Esta página é sobre o que dá pra usar agora, não conselho jurídico.",
-    },
-    {
       question: "Precisa baixar alguma coisa?",
       answer:
         "Não. O pqp roda no navegador, no desktop e no Android. Tem app de desktop se você quiser, e um beta de iOS pelo TestFlight, mas nenhum dos dois é obrigatório.",
@@ -448,13 +442,14 @@ export const TELA_FAQ: Record<
       answer:
         "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami) e uma tag de conversão do Google Ads que só conta cadastros. Sem remarketing e sem lista de público.",
     },
+    {
+      question:
+        "Por que o compartilhamento de tela do Discord está suspenso no Brasil?",
+      answer:
+        "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord. Esta página é sobre o que dá pra usar agora, não conselho jurídico.",
+    },
   ],
   en: [
-    {
-      question: "Why is Discord screen share suspended in Brazil?",
-      answer:
-        "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement. This page is about what you can use right now, not legal advice.",
-    },
     {
       question: "Do I need to download anything?",
       answer:
@@ -484,6 +479,11 @@ export const TELA_FAQ: Record<
       question: "What do you keep about me?",
       answer:
         "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami) and a Google Ads conversion tag that only counts sign-ups. No remarketing, no audience lists.",
+    },
+    {
+      question: "Why is Discord screen share suspended in Brazil?",
+      answer:
+        "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement. This page is about what you can use right now, not legal advice.",
     },
   ],
 };

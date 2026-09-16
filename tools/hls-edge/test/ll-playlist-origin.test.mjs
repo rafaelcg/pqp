@@ -69,7 +69,7 @@ function stateFixture({ withAudio = false } = {}) {
  * file's job is exercising `LlPlaylistOrigin`'s FETCH/CACHE behavior, not
  * re-proving the box parser.
  */
-function minimalInitSegmentBytes() {
+function minimalInitSegmentBytes({ profile = 0x64, compatibility = 0x00, level = 0x28, width = 1920, height = 1080 } = {}) {
   function u32(n) {
     return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
   }
@@ -83,12 +83,12 @@ function minimalInitSegmentBytes() {
     const body = [...ascii(type), ...payload];
     return [...u32(body.length + 4), ...body];
   }
-  const avcC = box("avcC", [1, 0x64, 0x00, 0x28, 0xff, 0xe1, ...u16(2), 0xaa, 0xbb, 1, ...u16(2), 0xcc, 0xdd]);
+  const avcC = box("avcC", [1, profile, compatibility, level, 0xff, 0xe1, ...u16(2), 0xaa, 0xbb, 1, ...u16(2), 0xcc, 0xdd]);
   const visualSampleEntryFixed = [
     ...new Array(8).fill(0),
     ...new Array(16).fill(0),
-    ...u16(1920),
-    ...u16(1080),
+    ...u16(width),
+    ...u16(height),
     ...u32(0x00480000),
     ...u32(0x00480000),
     ...u32(0),
@@ -140,6 +140,7 @@ function delay(ms, signal) {
 function installFetchStub({
   stateProvider,
   initBytes = minimalInitSegmentBytes(),
+  initBytesForUri,
   headersDelayMs = 0,
   bodyDelayMs = 0,
 } = {}) {
@@ -164,12 +165,12 @@ function installFetchStub({
         arrayBuffer: () => delay(bodyDelayMs, signal).then(() => body),
       };
     }
-    if (href.endsWith("/init.mp4")) {
+    if (/\/init(?:-\d+)?\.mp4$/.test(href)) {
       calls.init += 1;
       return {
         status: 200,
         ok: true,
-        arrayBuffer: () => delay(bodyDelayMs, signal).then(() => initBytes),
+        arrayBuffer: () => delay(bodyDelayMs, signal).then(() => initBytesForUri?.(href) ?? initBytes),
       };
     }
     calls.other += 1;
@@ -208,6 +209,36 @@ test("audio appears later: the master playlist grows an audio group on a LATER r
     // codec constant.
     assert.equal(stub.calls.init, 1, "video init segment should be fetched once and cached");
     assert.equal(stub.calls.state, 2, "state.json is fetched fresh on every master request");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a new video init refetches codec and geometry instead of using the previous init's cache", async () => {
+  let initUri = "init.mp4";
+  const stub = installFetchStub({
+    stateProvider: () => {
+      const state = stateFixture();
+      state.video.initUri = initUri;
+      state.video.segments[0].initUri = initUri;
+      return state;
+    },
+    initBytesForUri: (href) =>
+      href.endsWith("/init-2.mp4")
+        ? minimalInitSegmentBytes({ profile: 0x4d, level: 0x1f, width: 1280, height: 720 })
+        : minimalInitSegmentBytes(),
+  });
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    const first = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-1");
+    assert.equal(first.kind, "ready");
+    assert.match(await first.response.text(), /RESOLUTION=1920x1080,CODECS="avc1\.640028"/);
+
+    initUri = "init-2.mp4";
+    const second = await origin.fetchMultivariantPlaylist(CHANNEL_ID, STARTED_AT, "token-2");
+    assert.equal(second.kind, "ready");
+    assert.match(await second.response.text(), /RESOLUTION=1280x720,CODECS="avc1\.4d001f"/);
+    assert.equal(stub.calls.init, 2, "each distinct newest init URI must be fetched once");
   } finally {
     stub.restore();
   }

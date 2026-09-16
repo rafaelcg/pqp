@@ -35,11 +35,13 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { InvitePaste } from "@/components/layout/invite-paste";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   applyDiscordImport,
+  createInvite,
   createServer,
   previewDiscordImport,
 } from "@/lib/api";
@@ -113,7 +115,9 @@ export function CreateServerDialog({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<{
     serverName: string;
-    invite: Invite;
+    serverId: string;
+    invite: Invite | null;
+    fromImport: boolean;
   } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const copyTimer = useRef<number | null>(null);
@@ -163,12 +167,42 @@ export function CreateServerDialog({
     setError(null);
     try {
       const created = await createServer(trimmed);
-      await onCreated(created);
-      onClose();
+      const [invite] = await Promise.all([
+        createInvite(created.server.id, { expiresInHours: 168 })
+          .then((result) => result.invite)
+          .catch(() => null),
+        Promise.resolve()
+          .then(() => onCreated(created))
+          .catch(() => undefined),
+      ]);
+      setDone({
+        serverName: created.server.name,
+        serverId: created.server.id,
+        invite,
+        fromImport: false,
+      });
+      setStep("done");
     } catch (err) {
       setError(
         err instanceof Error ? err.message : t("importDiscord.error.createFailed"),
       );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function retryInvite() {
+    if (!done || busy) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const { invite } = await createInvite(done.serverId, {
+        expiresInHours: 168,
+      });
+      setDone({ ...done, invite });
+    } catch {
+      setDone({ ...done, invite: null });
     } finally {
       setBusy(false);
     }
@@ -202,7 +236,12 @@ export function CreateServerDialog({
     try {
       const created = await applyDiscordImport(source.trim());
       await onCreated({ server: created.server, channels: created.channels });
-      setDone({ serverName: created.server.name, invite: created.invite });
+      setDone({
+        serverName: created.server.name,
+        serverId: created.server.id,
+        invite: created.invite,
+        fromImport: true,
+      });
       setStep("done");
     } catch (err) {
       setError(
@@ -243,21 +282,26 @@ export function CreateServerDialog({
       : step === "preview"
         ? t("importDiscord.preview.subtitle", { name: plan?.serverName ?? "" })
         : step === "done"
-          ? t("importDiscord.done.body")
+          ? done?.fromImport
+            ? t("importDiscord.done.body")
+            : t("invite.done.body")
           : t("communities.create.body");
 
   const size = step === "preview" || step === "done" ? "lg" : "md";
   const eyebrow =
-    step === "paste" || step === "preview" || step === "done"
+    step === "paste" ||
+    step === "preview" ||
+    (step === "done" && done?.fromImport)
       ? t("importDiscord.eyebrow")
       : undefined;
-  const link = done ? inviteLink(done.invite.code) : "";
-  const pasteMessage = done
-    ? t("importDiscord.done.pasteMessage", {
-        server: done.serverName,
-        link,
-      })
-    : "";
+  const link = done?.invite ? inviteLink(done.invite.code) : "";
+  const pasteMessage =
+    done?.invite
+      ? t("importDiscord.done.pasteMessage", {
+          server: done.serverName,
+          link,
+        })
+      : "";
 
   return (
     <Dialog
@@ -408,26 +452,50 @@ export function CreateServerDialog({
 
         {step === "done" && done && (
           <div className="space-y-3">
-            <label className="block text-sm text-paper">
-              {t("importDiscord.done.invite")}
-              <div className="mt-1 flex gap-2">
-                <Input readOnly value={link} />
+            {done.invite ? (
+              <>
+                <label className="block text-sm text-paper">
+                  {t("importDiscord.done.invite")}
+                  <div className="mt-1 flex gap-2">
+                    <Input readOnly value={link} />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="min-w-[6.5rem] shrink-0"
+                      onClick={() => void copyText("invite", link)}
+                    >
+                      {copied === "invite" ? (
+                        <Check className="h-4 w-4" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                      {copied === "invite"
+                        ? t("importDiscord.done.copied")
+                        : t("importDiscord.done.copyInvite")}
+                    </Button>
+                  </div>
+                </label>
+                <InvitePaste
+                  code={done.invite.code}
+                  onCopyFailed={() => setError(t("importDiscord.error.copyFailed"))}
+                />
+              </>
+            ) : (
+              <div className="space-y-2 rounded-lg border border-border bg-surface-2/40 p-3">
+                <p className="text-sm text-text-secondary">
+                  {t("invite.done.inviteFailed")}
+                </p>
                 <Button
                   type="button"
                   variant="secondary"
-                  onClick={() => void copyText("invite", link)}
+                  disabled={busy}
+                  onClick={() => void retryInvite()}
                 >
-                  {copied === "invite" ? (
-                    <Check className="h-4 w-4" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                  {copied === "invite"
-                    ? t("importDiscord.done.copied")
-                    : t("importDiscord.done.copyInvite")}
+                  {t("invite.done.retryInvite")}
                 </Button>
               </div>
-            </label>
+            )}
+            {done.fromImport && (
             <label className="block text-sm text-paper">
               {t("importDiscord.done.pasteLabel")}
               <textarea
@@ -452,6 +520,7 @@ export function CreateServerDialog({
                   : t("importDiscord.done.copyMessage")}
               </Button>
             </label>
+            )}
           </div>
         )}
 

@@ -1,8 +1,30 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+
+/**
+ * Capture the props the "Público" monitor hands `HlsWatchPlayer`. A static
+ * render of the real player cannot see `mode`/`partTargetMs` (they only
+ * reach hls.js inside an effect), and omitting them is exactly the host LL
+ * preview bug: LL bytes from `?mode=ll` with conventional player config.
+ */
+const audienceMonitorProps: Array<Record<string, unknown>> = [];
+
+vi.mock("@/components/voice/hls-watch-player", () => ({
+  HlsWatchPlayer: (props: Record<string, unknown>) => {
+    audienceMonitorProps.push(props);
+    return (
+      <div
+        data-testid="mock-hls-watch-player"
+        data-mode={String(props.mode ?? "")}
+        data-part-target-ms={String(props.partTargetMs ?? "")}
+      />
+    );
+  },
+}));
+
 import { WatchPartyPresenterStage } from "./presenter-stage";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -42,7 +64,7 @@ describe("WatchPartyPresenterStage", () => {
     });
     expect(html).toContain("data-watch-party-audience-monitor");
     expect(html).toContain("See as the audience");
-    expect(html).not.toContain("hls-mini-chrome");
+    expect(html).not.toContain("mock-hls-watch-player");
   });
 
   it("offers the self monitor, on by default, once a stream exists", () => {
@@ -50,6 +72,93 @@ describe("WatchPartyPresenterStage", () => {
     expect(html).toContain("data-watch-party-self-monitor");
     expect(html).toContain("watch-party-presenter-preview");
     expect(html).toContain("Close");
+  });
+});
+
+/**
+ * THE WIRING for the host's LL "Público" preview. Audience paths already
+ * thread `mode`/`partTargetMs` (`watch-stage`, `cinema-stage`, `call-stage`);
+ * the presenter monitor was the one call site that only passed `src`, so an
+ * LL party handed the host LL playlist bytes with conventional hls.js
+ * tuning. That is the 2026-09-16 host-preview failure with healthy WebRTC
+ * and bursts of canceled `part-*.m4s` / `ll?_HLS_msn=` requests.
+ */
+describe("WatchPartyPresenterStage audience monitor LL mode", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    window.localStorage.clear();
+    audienceMonitorProps.length = 0;
+    // Opt the monitor on: the product defaults it off because it is a
+    // second decode on the presenter's machine.
+    window.localStorage.setItem("pqp:watch-party-audience-monitor", "1");
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  function renderWithStream(
+    liveStream: NonNullable<
+      Parameters<typeof WatchPartyPresenterStage>[0]["liveStream"]
+    >,
+  ) {
+    act(() => {
+      root.render(
+        <WatchPartyPresenterStage
+          stream={null}
+          liveStream={liveStream}
+          channelId="c1"
+          audienceCount={0}
+          hands={[]}
+        />,
+      );
+    });
+  }
+
+  it("forwards mode='ll' and partTargetMs into HlsWatchPlayer for an LL stream", () => {
+    renderWithStream({
+      hlsUrl: "https://hls.pqp.gg/live/c/1/index.m3u8?mode=ll&t=x",
+      startedAt: 1,
+      presenterPeerId: "p",
+      mode: "ll",
+      partTargetMs: 500,
+      delaySeconds: 3,
+    });
+
+    expect(container.querySelector('[data-testid="mock-hls-watch-player"]')).not.toBeNull();
+    expect(audienceMonitorProps).toHaveLength(1);
+    expect(audienceMonitorProps[0]).toMatchObject({
+      src: "https://hls.pqp.gg/live/c/1/index.m3u8?mode=ll&t=x",
+      mode: "ll",
+      partTargetMs: 500,
+      forceMuted: true,
+      layout: "mini",
+      delaySeconds: 3,
+    });
+  });
+
+  it("forwards mode='live' (conventional) when the stream omits mode", () => {
+    renderWithStream({
+      hlsUrl: "/api/x.m3u8",
+      startedAt: 1,
+      presenterPeerId: "p",
+    });
+
+    expect(audienceMonitorProps).toHaveLength(1);
+    expect(audienceMonitorProps[0]).toMatchObject({
+      mode: "live",
+      // Fallback mirrors LIVE_HLS_REMUX_PART_MS's default; inert for
+      // conventional because HlsWatchPlayer only reads it when mode='ll'.
+      partTargetMs: 500,
+    });
   });
 });
 

@@ -105,6 +105,7 @@ import {
   videoSupportsNativeFullscreen,
   type StageFullscreenStrategy,
 } from "@/lib/fullscreen";
+import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -2255,6 +2256,7 @@ export function CallControls({
   const joinLeaveAutoMute = useJoinLeaveAutoMuteEnabled();
   const cursorLiveControl = useMemo(() => canControlShareCursor(), []);
   const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
+  const bringFriendsHintEnabled = useFeatureHintEnabled("bringFriends");
   const musicHintEnabled = useFeatureHintEnabled("music");
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
@@ -2312,6 +2314,11 @@ export function CallControls({
             enabled
             body={t("featureHint.watchParty.body")}
           />
+        </div>
+      )}
+      {bringFriendsHintEnabled && voiceState.isSharingScreen && !collapsed && (
+        <div className="pointer-events-auto mb-1">
+          <BringFriendsHint enabled />
         </div>
       )}
       {musicHintEnabled && (

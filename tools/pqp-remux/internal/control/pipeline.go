@@ -57,6 +57,12 @@ type PipelineHealth struct {
 	VideoPartSeq uint32
 	AudioPartSeq uint32
 
+	// DemoteReason is non-empty when the pipeline itself has asked to be
+	// taken off the LL rung (today: an H.264 parameter-set change that
+	// could not be represented as a new init + discontinuity). The
+	// watchdog demotes on the next tick — see evaluateWatchdog.
+	DemoteReason string
+
 	// --- the source's own liveness, added 2026-09-15 ---
 	//
 	// WHY A WATCHDOG NEEDS THESE. Until now the only thing this struct

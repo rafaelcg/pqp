@@ -1,11 +1,13 @@
 import { Check, Copy, Link2, Share2, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Invite } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { useTranslation, type Translator } from "@/lib/i18n";
+import { InviteChoiceRow } from "@/components/layout/invite-choice-row";
+import { InvitePaste } from "@/components/layout/invite-paste";
+import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import {
   createInvite,
   deleteInvite,
@@ -38,6 +40,38 @@ interface InvitePanelProps {
 }
 
 const DEFAULT_EXPIRY_HOURS = 168;
+
+const EXPIRY_OPTIONS = [1, 24, 168, 720, null] as const;
+const USE_OPTIONS = [null, 1, 5, 10, 25, 50, 100] as const;
+
+type ExpiryHours = (typeof EXPIRY_OPTIONS)[number];
+type MaxUses = (typeof USE_OPTIONS)[number];
+
+const EXPIRY_OPTION_KEY: Record<
+  "1" | "24" | "168" | "720" | "never",
+  MessageKey
+> = {
+  "1": "invite.create.expiryOption.1h",
+  "24": "invite.create.expiryOption.1d",
+  "168": "invite.create.expiryOption.7d",
+  "720": "invite.create.expiryOption.30d",
+  never: "invite.create.expiryOption.never",
+};
+
+const EXPIRY_SUMMARY_KEY: Record<"1" | "24" | "168" | "720", MessageKey> = {
+  "1": "invite.create.summaryExpiry.1h",
+  "24": "invite.create.summaryExpiry.1d",
+  "168": "invite.create.summaryExpiry.7d",
+  "720": "invite.create.summaryExpiry.30d",
+};
+
+function expirySlot(hours: ExpiryHours): "1" | "24" | "168" | "720" | "never" {
+  if (hours === 1) return "1";
+  if (hours === 24) return "24";
+  if (hours === 168) return "168";
+  if (hours === 720) return "720";
+  return "never";
+}
 
 function inviteLink(code: string): string {
   return `${window.location.origin}/app/invite/${encodeURIComponent(code)}`;
@@ -100,6 +134,11 @@ export function InvitePanel({
   const [busy, setBusy] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [expiryHours, setExpiryHours] = useState<ExpiryHours>(
+    DEFAULT_EXPIRY_HOURS,
+  );
+  const [maxUses, setMaxUses] = useState<MaxUses>(null);
+  const [freshInviteId, setFreshInviteId] = useState<string | null>(null);
   const copyTimer = useRef<number | null>(null);
   const canCreate = canCreateInvite ?? canManage;
 
@@ -107,6 +146,11 @@ export function InvitePanel({
     if (open && mode === "join") {
       setCode(initialCode ?? "");
       setError(initialError);
+    }
+    if (open && mode === "create") {
+      setExpiryHours(DEFAULT_EXPIRY_HOURS);
+      setMaxUses(null);
+      setFreshInviteId(null);
     }
   }, [open, mode, initialCode, initialError]);
 
@@ -208,9 +252,11 @@ export function InvitePanel({
     setError(null);
     try {
       const { invite } = await createInvite(serverId, {
-        expiresInHours: DEFAULT_EXPIRY_HOURS,
+        expiresInHours: expiryHours,
+        maxUses,
       });
       setInvites((prev) => [invite, ...prev]);
+      setFreshInviteId(invite.id);
       await copyToClipboard(`link:${invite.id}`, inviteLink(invite.code));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("invite.create.failed"));
@@ -256,6 +302,37 @@ export function InvitePanel({
   }
 
   const isCreate = mode === "create";
+  const expiryOptions = useMemo(
+    () =>
+      EXPIRY_OPTIONS.map((hours) => ({
+        value: hours === null ? "never" : String(hours),
+        label: t(EXPIRY_OPTION_KEY[expirySlot(hours)]),
+      })),
+    [t],
+  );
+  const useOptions = useMemo(
+    () =>
+      USE_OPTIONS.map((uses) => ({
+        value: uses === null ? "none" : String(uses),
+        label:
+          uses === null ? t("invite.create.limit.none") : String(uses),
+      })),
+    [t],
+  );
+  const summaryUses =
+    maxUses === null
+      ? t("invite.create.summaryUses.unlimited")
+      : t("invite.create.summaryUses.capped", { count: maxUses });
+  const expirySlotNow = expirySlot(expiryHours);
+  const createSummary =
+    expirySlotNow === "never"
+      ? t("invite.create.summary.never", { uses: summaryUses })
+      : t("invite.create.summary.expiring", {
+          expiry: t(EXPIRY_SUMMARY_KEY[expirySlotNow]),
+          uses: summaryUses,
+        });
+  const newestInvite =
+    invites.find((invite) => invite.id === freshInviteId) ?? invites[0] ?? null;
 
   return (
     <Dialog
@@ -273,6 +350,7 @@ export function InvitePanel({
           ? t("invite.create.description")
           : t("invite.join.description")
       }
+      size={isCreate ? "lg" : "md"}
       onClose={onClose}
       footer={
         isCreate ? (
@@ -309,8 +387,30 @@ export function InvitePanel({
         )}
 
         {isCreate && canCreate && (
-          <section>
-            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+          <section className="space-y-3">
+            <InviteChoiceRow
+              label={t("invite.create.expiryLabel")}
+              value={expiryHours === null ? "never" : String(expiryHours)}
+              options={expiryOptions}
+              onChange={(next) =>
+                setExpiryHours(next === "never" ? null : (Number(next) as ExpiryHours))
+              }
+            />
+            <InviteChoiceRow
+              label={t("invite.create.limitLabel")}
+              value={maxUses === null ? "none" : String(maxUses)}
+              options={useOptions}
+              onChange={(next) =>
+                setMaxUses(next === "none" ? null : (Number(next) as MaxUses))
+              }
+            />
+            <p
+              className="text-sm text-text-secondary"
+              data-invite-summary=""
+            >
+              {createSummary}
+            </p>
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
               {t("invite.create.activeTitle")}
             </h3>
             {loadingInvites ? (
@@ -437,6 +537,13 @@ export function InvitePanel({
                       {" · "}
                       {formatExpiry(t, invite.expiresAt)}
                     </p>
+                    {newestInvite?.id === invite.id && (
+                      <InvitePaste
+                        code={invite.code}
+                        className="mt-3"
+                        onCopyFailed={() => setError(t("invite.create.copyFailed"))}
+                      />
+                    )}
                   </li>
                 ))}
               </ul>

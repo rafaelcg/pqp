@@ -73,8 +73,67 @@ import { LL_AUDIO_RUNG, LL_VIDEO_RUNG } from "./ll-state.js";
 /** RFC 8216bis's `EXT-X-PART`/`EXT-X-PRELOAD-HINT` need at least this. */
 export const LL_PLAYLIST_VERSION = 9;
 
-/** `PART-HOLD-BACK` is a multiple of the part target — `docs/plans/LL_HLS.md` §2's table, `hls-live-edge.ts`'s conventional counterpart. */
-export const PART_HOLD_BACK_MULTIPLIER = 3;
+/**
+ * `PART-HOLD-BACK` is a multiple of the part target -- `docs/plans/LL_HLS.md`
+ * §2's table, `hls-live-edge.ts`'s conventional counterpart -- and this is
+ * how many parts that multiple is by default.
+ *
+ * WHY SIX AND NOT THREE (2026-09-15). Three is the RFC's FLOOR, not its
+ * recommendation: RFC 8216bis 4.4.3.8 says PART-HOLD-BACK "MUST be at least
+ * three times PART-TARGET", which at this deployment's 500 ms part target is
+ * 1.5 s. A hold-back is the player's whole budget for a late part, and 1.5 s
+ * only works when the player is near the origin. Production is not: viewers
+ * in the UK, the remux box in São Paulo, ~200 ms of round trip, parts
+ * fetched by this Worker in ~170 ms and blocking reloads answered in ~400 ms.
+ * Three parts of budget against a 400 ms reload leaves nothing for a single
+ * retransmit, which is what "struggles until it settles" looks like at the
+ * start of playback: the player joins too close to the live edge, runs out of
+ * budget, rebuffers, and re-seeks until it finds a distance it can hold.
+ *
+ * Six parts is 3.0 s at a 500 ms part target -- still a fraction of the
+ * conventional ladder's 20 s hold-back, still well inside "low latency", and
+ * about 1.5 s further from the edge than before. The trade is stated in the
+ * PR: glass-to-glass goes up by that 1.5 s, and the start of playback stops
+ * fighting.
+ *
+ * TUNABLE WITHOUT A CODE CHANGE. `LL_PART_HOLD_BACK_PARTS` (`index.ts`,
+ * `wrangler.jsonc`) overrides it per deployment, because the right number is
+ * a property of where the viewers are, not of this repo.
+ */
+export const DEFAULT_PART_HOLD_BACK_PARTS = 6;
+
+/** RFC 8216bis 4.4.3.8: PART-HOLD-BACK MUST be at least three times PART-TARGET. A configured value is clamped UP to this, never honored below it. */
+export const MIN_PART_HOLD_BACK_PARTS = 3;
+
+/**
+ * `HOLD-BACK` (the whole-segment one, used by a player that ignores parts) is
+ * rendered explicitly at three times `TARGETDURATION` -- which is exactly the
+ * value RFC 8216bis 4.4.3.8 already gives it when the attribute is absent.
+ * Nothing changes for any player by writing it down; what it buys is that the
+ * two hold-backs are now visibly in the same tag, so a future change to
+ * PART-HOLD-BACK cannot quietly cross over the segment one.
+ */
+export const HOLD_BACK_TARGET_DURATIONS = 3;
+
+/**
+ * The rendered `PART-HOLD-BACK`, in seconds.
+ *
+ * Bounded on BOTH sides. Below, by the RFC's floor: a value under
+ * `3 x PART-TARGET` is not a shorter hold-back, it is an invalid playlist.
+ * Above, by `TARGETDURATION`: a PART-HOLD-BACK past one segment means the
+ * player should be using `HOLD-BACK` and reading whole segments instead, so
+ * a configured value that large is a misconfiguration, not a preference.
+ *
+ * @param {number} partTargetSecs
+ * @param {number} targetDurationSecs
+ * @param {number} parts
+ * @returns {number}
+ */
+export function partHoldBackSeconds(partTargetSecs, targetDurationSecs, parts) {
+  const floor = partTargetSecs * MIN_PART_HOLD_BACK_PARTS;
+  const wanted = partTargetSecs * Math.max(parts, MIN_PART_HOLD_BACK_PARTS);
+  return Math.max(floor, Math.min(wanted, targetDurationSecs));
+}
 
 /** How many of the newest COMPLETE segments keep their `#EXT-X-PART` lines — README.md "Blocking reload (L2.1)", "per spec guidance". */
 export const KEPT_PART_SEGMENTS = 3;
@@ -205,16 +264,21 @@ function formatPartLine(part, basePath, rung, token) {
  * @param {import("./ll-state.js").LlSessionState} state
  * @param {import("./ll-state.js").LlTrackState} track
  * @param {string} rung
- * @param {{ basePath: string }} opts
+ * @param {{ basePath: string, partHoldBackParts?: number }} opts
  * @returns {string}
  */
 export function buildLlRenditionPlaylist(state, track, rung, opts) {
   const { basePath } = opts;
   const token = LL_TOKEN_PLACEHOLDER;
   const partTargetSecs = state.partTargetMs / 1000;
-  const partHoldBackSecs = partTargetSecs * PART_HOLD_BACK_MULTIPLIER;
   const targetDuration = Math.max(1, Math.ceil(state.targetDurationSecs));
+  const partHoldBackSecs = partHoldBackSeconds(
+    partTargetSecs,
+    targetDuration,
+    opts.partHoldBackParts ?? DEFAULT_PART_HOLD_BACK_PARTS,
+  );
   const firstMsn = track.segments[0].msn;
+  const firstInitUri = track.segments[0].initUri ?? track.initUri;
   const completeCount = track.segments.reduce((count, s) => count + (s.complete ? 1 : 0), 0);
 
   const lines = [
@@ -223,13 +287,29 @@ export function buildLlRenditionPlaylist(state, track, rung, opts) {
     `#EXT-X-PQP-SESSION:${state.sessionId}`,
     `#EXT-X-TARGETDURATION:${targetDuration}`,
     `#EXT-X-PART-INF:PART-TARGET=${formatDuration(partTargetSecs)}`,
-    `#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=${formatDuration(partHoldBackSecs)}`,
+    `#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=${formatDuration(partHoldBackSecs)},HOLD-BACK=${formatDuration(targetDuration * HOLD_BACK_TARGET_DURATIONS)}`,
     `#EXT-X-MEDIA-SEQUENCE:${firstMsn}`,
-    `#EXT-X-MAP:URI="${renditionUri(basePath, rung, track.initUri, token)}"`,
+    `#EXT-X-MAP:URI="${renditionUri(basePath, rung, firstInitUri, token)}"`,
   ];
+  if (track.discontinuitySequence > 0) {
+    lines.splice(7, 0, `#EXT-X-DISCONTINUITY-SEQUENCE:${track.discontinuitySequence}`);
+  }
 
+  let activeInitUri = firstInitUri;
   let completeSeen = 0;
   for (const segment of track.segments) {
+    const initUri = segment.initUri ?? track.initUri;
+    if (segment.discontinuity) {
+      lines.push("#EXT-X-DISCONTINUITY");
+      lines.push(`#EXT-X-MAP:URI="${renditionUri(basePath, rung, initUri, token)}"`);
+      activeInitUri = initUri;
+    } else if (initUri !== activeInitUri) {
+      // A producer should pair an init change with a discontinuity. Keep the
+      // playlist playable if it does not, rather than serving old media with
+      // the wrong initialization segment.
+      lines.push(`#EXT-X-MAP:URI="${renditionUri(basePath, rung, initUri, token)}"`);
+      activeInitUri = initUri;
+    }
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${segment.programDateTime}`);
     if (segment.complete) {
       completeSeen += 1;

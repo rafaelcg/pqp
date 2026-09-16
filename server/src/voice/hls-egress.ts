@@ -1690,6 +1690,51 @@ export async function liveHlsStreamFromDb(
   };
 }
 
+/**
+ * IS THIS EXACT SESSION STILL OPEN? One row, addressed by the pair that
+ * identifies a session everywhere else in this codebase (channel and
+ * `startedAt`), answering nothing but "has it ended".
+ *
+ * Deliberately NOT `liveHlsStreamFromDb`, which is the other shape of the
+ * same question and the wrong one here. That one answers "what is the newest
+ * live session on this channel", which conflates a session that ended with a
+ * session that was replaced; and for a `mode = 'll'` row it refuses outright
+ * on an instance with no `LIVE_HLS_PLAYLIST_BASE_URL`, because it has to
+ * build a URL. This has no URL to build, so it gives the same answer on every
+ * machine whatever that machine is configured to serve.
+ *
+ * THREE-VALUED ON PURPOSE. `{ ok: false }` is "could not ask", and its one
+ * caller (`resolveChannelStream` in `ws/voice.ts`) treats it as "assume the
+ * session is fine": tearing a live party's playlist away from its audience
+ * because one query timed out is the failure this read exists to prevent,
+ * pointed the other way.
+ */
+export async function isHlsSessionOpen(
+  channelId: string,
+  startedAt: number,
+): Promise<{ ok: true; open: boolean } | { ok: false }> {
+  try {
+    const result = await getPool().query(
+      `SELECT 1
+         FROM hls_sessions
+        WHERE channel_id = $1
+          AND started_at = to_timestamp($2 / 1000.0)
+          AND ended_at IS NULL
+          AND cleaned_at IS NULL
+        LIMIT 1`,
+      [channelId, startedAt],
+    );
+    return { ok: true, open: result.rows.length > 0 };
+  } catch (error) {
+    logEvent("voice.hlsSessionOpenCheckFailed", {
+      channelId,
+      startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false };
+  }
+}
+
 /** Tests inject fakes; production leaves both null. */
 export function setLiveHlsTestHooks(hooks: {
   egress?: LiveHlsEgressApi | null;

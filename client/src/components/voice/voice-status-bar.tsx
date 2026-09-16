@@ -9,6 +9,7 @@ import {
   VideoOff,
   Volume2,
 } from "lucide-react";
+import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -80,6 +81,8 @@ interface VoiceStatusBarProps {
   onLeave: () => void;
   /** One-shot share / Watch party coachmark when the stage is not on screen. */
   shareHintEnabled?: boolean;
+  /** One-shot bring-friends coachmark when the stage is not on screen. */
+  bringFriendsHintEnabled?: boolean;
   /**
    * The sidebar is 72px of icons. Only the two things that cannot wait survive
    * the squeeze: the call you are in, and the way out of it. Camera and share
@@ -117,6 +120,7 @@ export function VoiceStatusBar({
   onOpen,
   onLeave,
   shareHintEnabled = false,
+  bringFriendsHintEnabled = false,
   compact = false,
 }: VoiceStatusBarProps) {
   const { t } = useTranslation();
@@ -221,6 +225,11 @@ export function VoiceStatusBar({
             enabled
             body={t("featureHint.watchParty.strip")}
           />
+        </div>
+      )}
+      {bringFriendsHintEnabled && (
+        <div className="mb-2">
+          <BringFriendsHint enabled />
         </div>
       )}
       <div className="flex items-center gap-1">
