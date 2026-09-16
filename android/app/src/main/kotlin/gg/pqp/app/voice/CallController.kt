@@ -47,6 +47,9 @@ class CallController(
     private val expiries = mutableMapOf<String, Job>()
     private var outgoingTimeout: Job? = null
 
+    /** See [CallTelecomHooks]. */
+    var telecomHooks: CallTelecomHooks? = null
+
     init {
         scope.launch {
             session.realtime.frames.collect { frame ->
@@ -102,6 +105,24 @@ class CallController(
         _state.value = transition.state
         transition.effects.forEach(::perform)
         reconcileClocks(before, transition.state)
+        notifyTelecom(before, transition)
+    }
+
+    /**
+     * Tell Telecom what just happened to `incoming`, in the same call stack
+     * that changed it. This runs before [CallEffect.JoinCall] has actually
+     * called `voice.join()` (`perform` runs first, above), which is exactly
+     * why the "answered" case is excluded by [telecomHookEvents] rather than
+     * inferred here from `voice.state`: that flow has not moved yet.
+     */
+    private fun notifyTelecom(before: CallState, transition: Transition) {
+        val hooks = telecomHooks ?: return
+        telecomHookEvents(before, transition).forEach { event ->
+            when (event) {
+                is TelecomHookEvent.Arrived -> hooks.onIncomingCallArrived(event.call)
+                is TelecomHookEvent.Ended -> hooks.onIncomingCallEnded(event.conversationId)
+            }
+        }
     }
 
     private fun perform(effect: CallEffect) {

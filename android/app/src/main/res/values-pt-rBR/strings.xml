@@ -174,6 +174,8 @@
     <string name="voice_notification_channel_description">Aparece enquanto você está em um canal de voz, e é o que mantém a chamada viva com o app em segundo plano.</string>
     <string name="voice_notification_title">Na chamada</string>
     <string name="voice_notification_hang_up">Desligar</string>
+    <string name="telecom_channel_calls">Chamadas recebidas</string>
+    <string name="telecom_channel_calls_description">O cartão em tela cheia mostrado para uma chamada recebida enquanto o pqp está aberto.</string>
     <string name="voice_transport_unsupported">Esta chamada usa um transporte que este app ainda não sabe usar.</string>
     <string name="voice_backend_unreachable">Não foi possível conectar ao servidor de voz desta chamada.</string>
     <string name="voice_join_refused">Você não pode entrar nesta call.</string>

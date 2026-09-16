@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
 import gg.pqp.app.MainActivity
 import gg.pqp.app.PqpApplication
@@ -46,6 +47,13 @@ class VoiceService : Service() {
 
         if (intent?.action == ACTION_HANG_UP) {
             voice.leave()
+            return START_NOT_STICKY
+        }
+
+        if (intent?.action == ACTION_TOGGLE_MUTE) {
+            voice.toggleMute()
+            ensureChannel()
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), foregroundTypes())
             return START_NOT_STICKY
         }
 
@@ -101,7 +109,14 @@ class VoiceService : Service() {
 
     private fun foregroundTypes(): Int {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return 0
-        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        // `phoneCall` alongside `microphone`: every join now also places or
+        // answers a Telecom self-managed call (see `voice.telecom`), and
+        // declaring the type is what the CallStyle notification below is
+        // meant to sit under. Safe to declare unconditionally — it only
+        // requires the (normal, always-granted) MANAGE_OWN_CALLS permission,
+        // not that Telecom actually accepted this particular call.
+        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
         if (projecting) {
             types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         }
@@ -116,6 +131,17 @@ class VoiceService : Service() {
             intent.getParcelableExtra(EXTRA_PROJECTION_PERMISSION)
         }
 
+    /**
+     * The ongoing-call notification. `CallStyle` on API 31+ (the system's own
+     * in-call look — a colored background, a large hang-up button, and what
+     * puts this call on Android Auto's call surface through Telecom); a plain
+     * `NotificationCompat.Builder` below that, unchanged from before this
+     * class grew Telecom awareness.
+     *
+     * Mute lives here rather than only on the call bar, for the same reason
+     * the hang-up action does: the notification is what is on screen once the
+     * app itself is backgrounded, on a lock screen, or on a watch.
+     */
     private fun buildNotification(): Notification {
         val open = PendingIntent.getActivity(
             this,
@@ -130,8 +156,15 @@ class VoiceService : Service() {
             Intent(this, VoiceService::class.java).setAction(ACTION_HANG_UP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val toggleMute = PendingIntent.getService(
+            this,
+            2,
+            Intent(this, VoiceService::class.java).setAction(ACTION_TOGGLE_MUTE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 
-        val channelName = (application as PqpApplication).voice.state.value.channelName
+        val voiceState = (application as PqpApplication).voice.state.value
+        val channelName = voiceState.channelName
 
         // Screen capture is stated in the notification as well as in the
         // system's own cast indicator. One of them is the platform telling
@@ -140,20 +173,37 @@ class VoiceService : Service() {
         val text = if (projecting) {
             getString(R.string.voice_notification_sharing)
         } else {
-            channelName
+            channelName ?: getString(R.string.voice_notification_title)
         }
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val muteAction = NotificationCompat.Action(
+            0,
+            getString(if (voiceState.muted) R.string.voice_unmute else R.string.voice_mute),
+            toggleMute,
+        )
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.voice_notification_title))
-            .setContentText(text)
             .setContentIntent(open)
-            .addAction(0, getString(R.string.voice_notification_hang_up), hangUp)
+            .addAction(muteAction)
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val person = Person.Builder().setName(text).build()
+            builder
+                .addPerson(person)
+                .setStyle(NotificationCompat.CallStyle.forOngoingCall(person, hangUp))
+        } else {
+            builder
+                .setContentTitle(getString(R.string.voice_notification_title))
+                .setContentText(text)
+                .addAction(0, getString(R.string.voice_notification_hang_up), hangUp)
+        }
+
+        return builder.build()
     }
 
     private fun ensureChannel() {
@@ -175,6 +225,7 @@ class VoiceService : Service() {
         private const val CHANNEL_ID = "voice"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_HANG_UP = "gg.pqp.app.HANG_UP"
+        private const val ACTION_TOGGLE_MUTE = "gg.pqp.app.TOGGLE_MUTE"
         private const val ACTION_START_PROJECTION = "gg.pqp.app.START_PROJECTION"
         private const val ACTION_STOP_PROJECTION = "gg.pqp.app.STOP_PROJECTION"
         private const val EXTRA_PROJECTION_PERMISSION = "gg.pqp.app.PROJECTION_PERMISSION"
