@@ -45,12 +45,15 @@ export function PttHoldControl({
       aria-pressed={isTransmitting}
       disabled={locked}
       className={cn(
-        "inline-flex h-9 select-none items-center justify-center gap-2 whitespace-nowrap rounded-full px-3 text-sm font-medium touch-none",
+        // Cap the used box. Flex items default to min-height: auto, so the
+        // label + keycap would otherwise grow past the tiles.
+        "inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap rounded-full px-3 text-sm font-medium leading-none touch-none",
+        inBar ? "h-9 max-h-9 min-h-9" : "h-10 max-h-10 min-h-10",
         "transition-[background,color,opacity] duration-[var(--duration-fast)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
         "disabled:pointer-events-none disabled:opacity-40",
         inBar &&
-          "w-full @min-[35rem]:w-auto @min-[35rem]:max-w-[22rem] @min-[35rem]:shrink-0 @min-[35rem]:grow",
+          "w-full @min-[35rem]:w-auto @min-[35rem]:max-w-[22rem] @min-[35rem]:grow",
         isTransmitting
           ? "bg-accent text-on-accent"
           : "border border-border bg-surface-3 text-text hover:bg-surface-2",
@@ -81,11 +84,11 @@ export function PttHoldControl({
       ) : (
         <MicOff className="h-4 w-4 shrink-0" aria-hidden="true" />
       )}
-      <span>{label}</span>
+      <span className="leading-none">{label}</span>
       {keyLabel ? (
         <kbd
           className={cn(
-            "rounded-md border px-1.5 py-px text-[11px] font-medium leading-4",
+            "rounded-md border px-1.5 py-0 text-[11px] font-medium leading-none",
             isTransmitting
               ? "border-on-accent/40 text-on-accent"
               : windowFocused

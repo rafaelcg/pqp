@@ -1470,10 +1470,10 @@ function ActiveCall({
         ),
       });
       return (
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex h-9 min-w-0 items-center gap-2">
           <OccupantFaces faces={people} />
           <p
-            className="min-w-0 flex-1 truncate text-sm text-text"
+            className="min-w-0 flex-1 truncate text-sm leading-none text-text"
             role="status"
           >
             {peopleLine}
@@ -2532,7 +2532,7 @@ export function CallControls({
         {collapsed && leading && (
           <div
             className={cn(
-              "min-w-0 self-stretch",
+              "flex h-9 min-w-0 items-center",
               // Sized to its content: what the row has spare goes to the
               // pill, and past the pill's cap to the gap before the tiles.
               pushToTalk
