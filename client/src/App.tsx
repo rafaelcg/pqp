@@ -2835,8 +2835,8 @@ function MainAppContent({
     let autoRetryCount = 0;
     // How many times a transient bootstrap failure self-retries before giving
     // up and showing the manual error screen. The two failure shapes are not
-    // the same problem and do not get the same budget (Farol review, PR
-    // #670): a 503 `database_unavailable` means the breaker is open and WILL
+    // the same problem and do not get the same budget (per Farol review): a
+    // 503 `database_unavailable` means the breaker is open and WILL
     // recover, so it is worth riding out — at the 1s-base, 30s-cap backoff,
     // 8 retries spans a couple of minutes, long enough for a recovery cycle.
     // Status 0 (network error / timeout) has no such guarantee — it is just
