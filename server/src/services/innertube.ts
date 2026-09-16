@@ -370,7 +370,7 @@ export async function innertubeRelated(
     const response = await call(client, "next", { videoId });
     const videos = collectVideos(response)
       .filter((video) => video.videoId !== videoId)
-      .slice(0, limit);
+      .slice(0, INNERTUBE_RELATED_LIMIT);
     if (videos.length === 0) {
       return null;
     }
@@ -380,5 +380,6 @@ export async function innertubeRelated(
     relatedInflight.delete(videoId);
   });
   relatedInflight.set(videoId, request);
-  return request;
+  const videos = await request;
+  return videos?.slice(0, limit) ?? null;
 }

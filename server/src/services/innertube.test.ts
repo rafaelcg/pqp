@@ -231,7 +231,30 @@ describe("innertubeRelated", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("coalesces concurrent related fetches for the same video id", async () => {
+  it("coalesces concurrent related fetches and keeps the full cap for a later caller", async () => {
+    const extra = Object.fromEntries(
+      Array.from({ length: 25 }, (_, i) => [
+        `r${i}`,
+        {
+          compactVideoRenderer: {
+            videoId: `relWeb${String(i).padStart(5, "0")}`,
+            title: { simpleText: `Related ${i}` },
+            lengthText: { simpleText: "3:00" },
+          },
+        },
+      ]),
+    );
+    const body = {
+      contents: {
+        seed: {
+          compactVideoRenderer: {
+            videoId: "dQw4w9WgXcQ",
+            title: { simpleText: "Seed" },
+          },
+        },
+        ...extra,
+      },
+    };
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -242,18 +265,20 @@ describe("innertubeRelated", () => {
         throw new Error(`unexpected fetch ${url}`);
       }
       await gate;
-      return { ok: true, status: 200, json: async () => compactNext };
+      return { ok: true, status: 200, json: async () => body };
     });
     vi.spyOn(globalThis, "fetch").mockImplementation(
       fetchMock as unknown as typeof fetch,
     );
     const first = innertubeRelated("dQw4w9WgXcQ", 5);
-    const second = innertubeRelated("dQw4w9WgXcQ", 5);
+    const second = innertubeRelated("dQw4w9WgXcQ", INNERTUBE_RELATED_LIMIT);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     release();
     const [a, b] = await Promise.all([first, second]);
-    expect(a?.[0]?.videoId).toBe("relWeb00001");
-    expect(b?.[0]?.videoId).toBe("relWeb00001");
+    expect(a).toHaveLength(5);
+    expect(b).toHaveLength(INNERTUBE_RELATED_LIMIT);
+    expect(a?.[0]?.videoId).toBe("relWeb00000");
+    expect(b?.[19]?.videoId).toBe("relWeb00019");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
