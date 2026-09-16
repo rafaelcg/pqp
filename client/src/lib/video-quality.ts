@@ -579,32 +579,42 @@ export function screenShareSimulcastEnabled(
 }
 
 /**
- * HLS ingest must not drop pixels. After PR 474 Chrome still
- * `maintain-framerate`s the one encoding 1080 → 540 → 360 → 180 while
- * bitrate stays hundreds of kbps; egress transcodes that 180p for
- * everyone. Viewers ABR via the HLS ladder, so fps/bitrate can still
- * drop — pixels must not.
+ * Always `maintain-framerate`, including for a live HLS source.
  *
- * Mesh DMs and ordinary SFU shares keep `maintain-framerate`.
+ * PR 475 pinned the HLS source to `maintain-resolution` (+ scaleResolutionDownBy
+ * 1) so the passthrough remux never saw a resolution change. Production proved
+ * that trade wrong: under any uplink dip the encoder held 720p and collapsed
+ * FRAMERATE to 1-3 fps instead (measured on a UK->BR ~193ms uplink: `height`
+ * stayed 720 while `fps` went null/1/3 and `targetKbps` fell to ~242). At 1-3
+ * fps the source barely produces frames, the media timeline stops advancing,
+ * and every viewer stalls "sequence-stuck" — on BOTH the LL and conventional
+ * paths, which is why it was seen on a non-LL stream too.
+ *
+ * A watch party is MOTION content: hold framerate, spend resolution. The
+ * conventional egress re-encodes whatever size arrives, so a resolution drop is
+ * invisible downstream; for LL a briefly lower resolution is far better than a
+ * frozen picture (and the remux is pinned to the top layer, PR 662). Mesh DMs
+ * and ordinary SFU shares already used `maintain-framerate`; now the HLS source
+ * matches them.
  */
 export function screenShareDegradationPreference(
-  hls: HlsSourceInput | null,
+  _hls: HlsSourceInput | null,
 ): "maintain-framerate" | "maintain-resolution" {
-  return screenShareSimulcastEnabled(hls)
-    ? "maintain-framerate"
-    : "maintain-resolution";
+  return "maintain-framerate";
 }
 
 /**
- * Pin the HLS encoding at capture size so GCC cannot invent 180p
- * (`scaleResolutionDownBy` is a divisor; 1 is "the capture as captured").
- * Ordinary SFU shares leave this unset so LiveKit can solve the simulcast
- * ladder.
+ * Never pin the divisor. Pinning pixels (`scaleResolutionDownBy` 1) was the
+ * other half of PR 475's resolution hold, and paired with `maintain-resolution`
+ * it is what froze framerate to 1-3 fps under an uplink dip (see
+ * `screenShareDegradationPreference`). With `maintain-framerate` the encoder
+ * must be free to drop resolution to keep motion, so leave this unset for the
+ * HLS source too — the same as an ordinary SFU share.
  */
 export function screenShareScaleResolutionDownBy(
-  hls: HlsSourceInput | null,
+  _hls: HlsSourceInput | null,
 ): 1 | undefined {
-  return screenShareSimulcastEnabled(hls) ? undefined : 1;
+  return undefined;
 }
 
 /**

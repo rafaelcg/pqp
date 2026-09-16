@@ -960,10 +960,11 @@ describe("the presenter as a live ladder's source", () => {
     const options = lastPublish(Track.Source.ScreenShare);
     expect(options?.simulcast).toBe(false);
     expect(options?.screenShareSimulcastLayers ?? []).toEqual([]);
-    // After #474 Chrome still maintain-framerate'd the one encoding
-    // 1080 → 180. Viewers ABR on the HLS ladder; pixels must not drop.
-    expect(options?.degradationPreference).toBe("maintain-resolution");
-    expect(options?.screenShareEncoding?.scaleResolutionDownBy).toBe(1);
+    // A watch party is motion content: hold framerate, spend resolution.
+    // maintain-resolution + scale-1 (PR 475) froze the encoder to 1-3 fps
+    // under an uplink dip and stalled every viewer.
+    expect(options?.degradationPreference).toBe("maintain-framerate");
+    expect(options?.screenShareEncoding?.scaleResolutionDownBy).toBeUndefined();
   });
 
   it("still publishes ordinary SFU screen share as simulcast", async () => {
@@ -978,10 +979,11 @@ describe("the presenter as a live ladder's source", () => {
     expect(options?.screenShareEncoding?.scaleResolutionDownBy).toBeUndefined();
   });
 
-  it("re-pins HLS ingest scale to 1 if GCC drifted the encoding", async () => {
-    // 14 min party: Chrome walked 1080 → 540 → 360 → 320×180 while bitrate
-    // stayed hundreds of kbps. Publish-time scale 1 is not enough if the
-    // next setHlsSource tick does not write it back.
+  it("does not re-pin HLS ingest scale; holds framerate instead", async () => {
+    // PR 475 forced the encoding back to scaleResolutionDownBy 1 on every
+    // setHlsSource tick. That resolution hold is exactly what froze framerate
+    // and stalled viewers, so the reconcile now leaves the encoder free
+    // (no divisor, maintain-framerate) rather than re-pinning it.
     const sfu = await session();
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
     await sfu.publishScreen(fakeStream("video", "screen", 1080));
@@ -1006,8 +1008,8 @@ describe("the presenter as a live ladder's source", () => {
       .filter((write) => write.source === Track.Source.ScreenShare)
       .at(-1);
     expect(pinned).toBeTruthy();
-    expect(pinned!.encodings.at(-1)?.scaleResolutionDownBy).toBe(1);
-    expect(pinned!.degradationPreference).toBe("maintain-resolution");
+    expect(pinned!.encodings.at(-1)?.scaleResolutionDownBy).toBeUndefined();
+    expect(pinned!.degradationPreference).toBe("maintain-framerate");
   });
 
   it("deactivates every sub-layer in place when HLS pins a 1080 publish", async () => {
@@ -1027,8 +1029,8 @@ describe("the presenter as a live ladder's source", () => {
     expect(last!.encodings[0]?.active).toBe(false);
     expect(last!.encodings[1]?.active).toBe(false);
     expect(last!.encodings[2]?.active).not.toBe(false);
-    expect(last!.encodings[2]?.scaleResolutionDownBy).toBe(1);
-    expect(last!.degradationPreference).toBe("maintain-resolution");
+    expect(last!.encodings[2]?.scaleResolutionDownBy).toBeUndefined();
+    expect(last!.degradationPreference).toBe("maintain-framerate");
   });
 
   it("restores every sub-layer when the ladder stops and the share continues", async () => {
