@@ -2834,10 +2834,18 @@ function MainAppContent({
     let bootstrapTimer: ReturnType<typeof setTimeout> | null = null;
     let autoRetryCount = 0;
     // How many times a transient bootstrap failure self-retries before giving
-    // up and showing the manual error screen. At the 1s-base, 30s-cap backoff
-    // below this spans a couple of minutes — long enough to ride out a breaker
-    // recovery cycle, bounded so a genuinely-down API still surfaces an error.
-    const MAX_BOOTSTRAP_AUTO_RETRIES = 8;
+    // up and showing the manual error screen. The two failure shapes are not
+    // the same problem and do not get the same budget (Farol review, PR
+    // #670): a 503 `database_unavailable` means the breaker is open and WILL
+    // recover, so it is worth riding out — at the 1s-base, 30s-cap backoff,
+    // 8 retries spans a couple of minutes, long enough for a recovery cycle.
+    // Status 0 (network error / timeout) has no such guarantee — it is just
+    // as likely a genuinely unreachable API or a dead connection, and paying
+    // the full 503 budget there left a truly offline user staring at the
+    // loading shell for 3-4 minutes before any error appeared. It gets a
+    // much shorter leash so that case surfaces quickly instead.
+    const MAX_BOOTSTRAP_AUTO_RETRIES_OVERLOAD = 8;
+    const MAX_BOOTSTRAP_AUTO_RETRIES_NETWORK = 3;
     // The reconnect handler's message refetch (onReady below) is jittered
     // and coalesced, PER CHANNEL: a shared "is anything pending" flag would
     // let a slow fetch for one channel silently swallow a needed refetch for
@@ -3596,10 +3604,13 @@ function MainAppContent({
         // carrying `Retry-After` backs off harder than a bare network drop:
         // `bootstrapRetryDelayMs` honors it as a floor. The loading shell stays
         // up meanwhile (bootstrapReady false, bootstrapError null).
-        const transient =
-          error instanceof ApiError &&
-          (error.status === 503 || error.status === 0);
-        if (transient && autoRetryCount < MAX_BOOTSTRAP_AUTO_RETRIES) {
+        const isOverload = error instanceof ApiError && error.status === 503;
+        const isNetworkError = error instanceof ApiError && error.status === 0;
+        const transient = isOverload || isNetworkError;
+        const retryBudget = isOverload
+          ? MAX_BOOTSTRAP_AUTO_RETRIES_OVERLOAD
+          : MAX_BOOTSTRAP_AUTO_RETRIES_NETWORK;
+        if (transient && autoRetryCount < retryBudget) {
           const retryAfterMs =
             error instanceof ApiError ? error.retryAfterMs : null;
           const delay = bootstrapRetryDelayMs(autoRetryCount, retryAfterMs);
