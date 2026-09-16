@@ -22,12 +22,20 @@ import {
  * - the `<video>` element's own `error` event, for the native engine and for
  *   an MSE decode failure that bubbles past hls.js (`onNativeMediaError`).
  * - `waiting` that lasts longer than `stallMs` (8 s) with no `playing`.
- * - the live playlist not advancing: `EXT-X-MEDIA-SEQUENCE` unchanged for
- *   `sequenceStuckMs` (20 s), which is what a dead egress looks like while
- *   the playlist itself still answers. Segments are 4 s
- *   (`LIVE_HLS_SEGMENT_SECONDS`) since 2026-09-12, so the media sequence
- *   legitimately advances only once every 4 s; 20 s is comfortably above
- *   two segments (8 s) of ordinary jitter, not a hair-trigger on it.
+ * - the live playlist not advancing: its NEWEST segment number (hls.js
+ *   `endSN`, see `livePlaylistProgress`) unchanged for `sequenceStuckMs`
+ *   (20 s), which is what a dead egress looks like while the playlist
+ *   itself still answers. Segments are 4 s (`LIVE_HLS_SEGMENT_SECONDS`)
+ *   since 2026-09-12, so the newest segment legitimately advances only once
+ *   every 4 s; 20 s is comfortably above two segments (8 s) of ordinary
+ *   jitter, not a hair-trigger on it. NOT `EXT-X-MEDIA-SEQUENCE` (`startSN`):
+ *   the API's playlist proxy widens the egress's five-segment window from
+ *   the segments each PROCESS has seen (`server/src/voice/hls-live-window.ts`),
+ *   so the first listed segment, and with it the media sequence, sits still
+ *   for the first 15 segments (60 s) of every session, and again after every
+ *   API restart. Keying on it froze every viewer with "holding for restart"
+ *   at the start of every party (live session 2026-09-16 19:12Z: the bucket
+ *   advanced every 4.0 s the whole time).
  *
  * THE LADDER (`BROADCAST_PIPELINE.md` B1.3). The old policy tried one soft
  * recovery and then tore hls.js down for everything else, including a dead
@@ -176,6 +184,21 @@ export type HlsStallReason =
  * ladder early. See that constant's comment for the full reasoning and the
  * 2026-09-14 watch party this was tuned against.
  */
+/**
+ * What counts as the live playlist moving, for `onMediaSequence`: the
+ * newest segment number. A dead egress stops appending segments, so this
+ * stops; a window that is still growing (the proxy's widened window after a
+ * session start or an API restart) keeps appending while its FIRST segment,
+ * `EXT-X-MEDIA-SEQUENCE` / `startSN`, sits still for a minute. Feeding the
+ * watchdog `startSN` called that growth a dead egress; see the class doc.
+ */
+export function livePlaylistProgress(details: {
+  startSN: number;
+  endSN: number;
+}): number {
+  return details.endSN;
+}
+
 export const HLS_WATCH_PLAYER_STALL_MS = 15_000;
 
 const FATAL_LADDER: readonly HlsStallDecision[] = [
