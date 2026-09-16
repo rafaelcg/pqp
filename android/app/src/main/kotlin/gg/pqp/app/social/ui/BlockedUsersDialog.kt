@@ -1,15 +1,15 @@
 package gg.pqp.app.social.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -70,31 +70,38 @@ fun BlockedUsersDialog(session: SessionStore, onDismiss: () -> Unit) {
         modifier = Modifier.testTag("you.blockedUsers"),
         title = { Text(stringResource(R.string.blocked_users_title)) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                val list = blocked
-                when {
-                    error != null -> Text(
-                        text = error.orEmpty(),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+            val list = blocked
+            when {
+                error != null -> Text(
+                    text = error.orEmpty(),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
 
-                    list == null -> Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(Spacing.md),
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    }
+                list == null -> Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(Spacing.md),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                }
 
-                    list.isEmpty() -> Text(
-                        text = stringResource(R.string.blocked_users_empty),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                list.isEmpty() -> Text(
+                    text = stringResource(R.string.blocked_users_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
-                    else -> list.forEach { person ->
+                // A bounded LazyColumn rather than Column+verticalScroll rendering
+                // every row up front: an account with hundreds or thousands of
+                // blocks would otherwise hold the full response and compose
+                // every avatar and row at once on open (Farol review, PR 676).
+                // Same height cap as the pinned-messages dialog's list
+                // (ChatScreen.kt).
+                else -> LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    items(list.size, key = { list[it].id }) { index ->
+                        val person = list[index]
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -122,6 +129,15 @@ fun BlockedUsersDialog(session: SessionStore, onDismiss: () -> Unit) {
                                         runCatching { session.api.unblockUser(person.id) }
                                             .onSuccess {
                                                 blocked = blocked?.filterNot { it.id == person.id }
+                                                // A PRIOR unblock's failure must not go on
+                                                // hiding the list behind its stale message
+                                                // once a later one succeeds against the
+                                                // server (Farol review, PR 676): the error
+                                                // branch above takes precedence over the
+                                                // list whenever `error` is non-null, and
+                                                // only a successful action ever cleared
+                                                // `blocked`, never `error`.
+                                                error = null
                                             }
                                             .onFailure { error = it.readable() }
                                         unblocking = null
