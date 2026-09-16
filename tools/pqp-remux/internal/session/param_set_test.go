@@ -2,7 +2,9 @@ package session
 
 import (
 	"testing"
+	"time"
 
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/keyframe"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/llstate"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/nal"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
@@ -331,5 +333,81 @@ func TestSession_ImplausibleParameterSetIsIgnored(t *testing.T) {
 	}
 	if r.CurrentInitURI() != ring.DefaultInitURI {
 		t.Fatalf("current init = %q after resuming, want %s", r.CurrentInitURI(), ring.DefaultInitURI)
+	}
+}
+
+// blockingSender's RequestKeyframe reports one call on `called` and then
+// blocks until `release` is closed, so a test can prove a caller does not
+// wait on it.
+type blockingSender struct {
+	called  chan struct{}
+	release chan struct{}
+}
+
+func newBlockingSender() *blockingSender {
+	return &blockingSender{called: make(chan struct{}, 1), release: make(chan struct{})}
+}
+
+func (b *blockingSender) RequestKeyframe() {
+	select {
+	case b.called <- struct{}{}:
+	default:
+	}
+	<-b.release
+}
+
+// TestSession_ForcedKeyframeDoesNotBlockVideoMu is the regression for the
+// Farol review on PR #659: ForcePLI's RTCP write (subscriber.Session.
+// RequestKeyframe -> WritePLI) used to run synchronously inside
+// HandleVideoPacket's s.videoMu critical section. A slow or backpressured
+// write there held videoMu for as long as the send took, stalling every
+// later video packet -- turning the exact loss/corruption event this PLI
+// exists to recover from into an additional, self-inflicted stall. A
+// damaged parameter set (the "damaged-gop-dropped" path, same as
+// TestSession_ImplausibleParameterSetIsIgnored above) triggers a forced
+// PLI; with a PLISender that blocks forever, HandleVideoPacket must still
+// return promptly, and a second packet must not queue behind the still
+// in-flight send.
+func TestSession_ForcedKeyframeDoesNotBlockVideoMu(t *testing.T) {
+	r := ring.New(6, 90000)
+	send := newBlockingSender()
+	defer close(send.release)
+	kr := keyframe.NewRequester(keyframe.Config{Policy: keyframe.PolicyPLI, PaceMs: 500}, send)
+	s := New(45000, 360000, r, kr)
+
+	sps720 := buildSPS(t, 1280, 720, 0x1F)
+	spsTiny := buildSPS(t, 16, 16, 0x1F)
+	pps := buildPPS()
+
+	feedAU(s, sps720, pps, true, 0)
+
+	first := make(chan struct{})
+	go func() {
+		// The implausible SPS triggers handleParameterSetChange's forced PLI.
+		feedAU(s, spsTiny, pps, true, frameStep)
+		close(first)
+	}()
+	select {
+	case <-first:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleVideoPacket blocked on a forced PLI's RTCP write; the send must run outside s.videoMu")
+	}
+	select {
+	case <-send.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("forced PLI was never sent")
+	}
+
+	// videoMu must actually be free: a second packet processes without
+	// waiting for the still-blocked send to finish.
+	second := make(chan struct{})
+	go func() {
+		feedAU(s, nil, nil, false, 2*frameStep)
+		close(second)
+	}()
+	select {
+	case <-second:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second packet blocked behind the in-flight forced PLI send")
 	}
 }

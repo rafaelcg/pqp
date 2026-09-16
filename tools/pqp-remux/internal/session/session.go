@@ -468,6 +468,21 @@ func (s *Session) MarkSubscribed() { s.subscribed.Store(true) }
 // after construction. Safe to call concurrently with HandleVideoPacket.
 func (s *Session) SetKeyframeRequester(r *keyframe.Requester) { s.keyReq.Store(r) }
 
+// forcePLIAsync asks kr for an out-of-band keyframe without blocking the
+// caller. Both HandleVideoPacket call sites run this from inside their
+// s.videoMu critical section, and ForcePLI ultimately does a synchronous
+// RTCP write (subscriber.Session.RequestKeyframe -> WritePLI): run
+// unmodified under videoMu, a backpressured or slow write there would hold
+// the lock and stall every subsequent video packet -- turning the very
+// loss/corruption event this exists to recover from into an additional,
+// self-inflicted stall (Farol review, PR #659). ForcePLI's own state
+// (pace gate, plisSinceIDR) is synchronized on the Requester's own mutex,
+// independent of videoMu, so handing the whole call to a goroutine is safe:
+// it neither needs nor blocks on anything s.videoMu protects.
+func (s *Session) forcePLIAsync(kr *keyframe.Requester, reason string) {
+	go kr.ForcePLI(reason)
+}
+
 // SetStartSegmentIndex overrides the index the video track's FIRST segment
 // will carry (0 by default). Call it, if at all, immediately after New and
 // before the first HandleVideoPacket call: L1.6's control-plane watchdog
@@ -543,7 +558,7 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 		// A discard leaves the GOP referencing a frame the decoder never got;
 		// ask for a fresh IDR now instead of waiting out the gate window.
 		if kr := s.keyReq.Load(); kr != nil {
-			kr.ForcePLI("depacketize-discard")
+			s.forcePLIAsync(kr, "depacketize-discard")
 		}
 	}
 	if au == nil {
@@ -657,7 +672,7 @@ func (s *Session) handleParameterSetChange(au *h264.AccessUnit) bool {
 		s.implausibleParamSets.Add(1)
 		s.droppingDamaged.Store(true)
 		if kr := s.keyReq.Load(); kr != nil {
-			kr.ForcePLI("damaged-gop-dropped")
+			s.forcePLIAsync(kr, "damaged-gop-dropped")
 		}
 		log.Printf("pqp-remux: parameter-set change ignored, implausible dimensions: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); dropping this GOP",
 			oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq)
