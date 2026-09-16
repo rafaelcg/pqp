@@ -34,6 +34,7 @@ export function MarqueeText({
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(clip);
+    observer.observe(inner);
     return () => observer.disconnect();
   }, [text]);
 

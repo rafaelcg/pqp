@@ -98,6 +98,7 @@ const VOICE_MESSAGE_TYPES = new Set([
   // --- music queue ---
   // Same reasoning: the queue is a thing said inside the room.
   "set-music",
+  "set-music-listening",
   // --- live reactions ---
   // Same reasoning as the line above: a reaction is something said inside a
   // voice room, over the share that room is watching.

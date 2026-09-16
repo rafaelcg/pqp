@@ -1002,7 +1002,7 @@ export function ChannelList({
     return (
       <div
         key={channel.id}
-        className="mb-0.5"
+        className="mb-0.5 min-w-0"
         data-channel-id={channel.id}
         data-channel-type={channel.type}
         onDragOver={(event) => handleRowDragOver(event, channel)}
@@ -1130,7 +1130,7 @@ export function ChannelList({
           onDragOverRow={(event) => handleRowDragOver(event, channel)}
           onDrop={() => handleRowDrop(channel)}
         />
-        {channelMusic[channel.id] && activeVoiceChannelId !== channel.id && (
+        {channelMusic[channel.id] && (
           <ChannelMusicCard
             channelId={channel.id}
             track={channelMusic[channel.id]!}

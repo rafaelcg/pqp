@@ -1,6 +1,11 @@
 import { parseMusicInput, type MusicResolved } from "@pqp/shared";
 import { createRateLimiter } from "../lib/rate-limit.js";
-import { innertubePlaylist, innertubeSearch, setInnerTubeGate } from "./innertube.js";
+import {
+  innertubePlaylist,
+  innertubeRelated,
+  innertubeSearch,
+  setInnerTubeGate,
+} from "./innertube.js";
 
 /**
  * Turn what a person pasted into a YouTube video the room can play.
@@ -612,4 +617,65 @@ export async function resolveMusic(raw: string): Promise<MusicResolution> {
     );
   }
   return { listName: null, tracks: [await searchYouTube(link.query)] };
+}
+
+/**
+ * Top search hits for the add box. InnerTube first (title, duration,
+ * thumbnail). When it answers nothing, fall through to `resolveMusic` so a
+ * pasted query still yields the same single track resolve already knew.
+ */
+export async function searchMusicCandidates(query: string): Promise<MusicResolved[]> {
+  try {
+    const videos = await innertubeSearch(query, 5);
+    if (videos && videos.length > 0) {
+      return videos.slice(0, 5).map((video) => ({
+        provider: "youtube" as const,
+        videoId: video.videoId,
+        title: video.title.trim().slice(0, 200) || video.videoId,
+        sourceUrl: null,
+        thumbnailUrl: video.thumbnailUrl,
+        durationMs: video.durationMs,
+      }));
+    }
+  } catch (error) {
+    if (error instanceof MusicResolveError) {
+      throw error;
+    }
+    console.warn(
+      "[music] innertube search failed, falling back to resolve:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  const { tracks } = await resolveMusic(query);
+  return tracks;
+}
+
+/** Related videos for autoplay, mapped to the room's resolve shape. */
+export async function relatedMusicTracks(
+  videoId: string,
+  limit = 5,
+): Promise<MusicResolved[]> {
+  let videos;
+  try {
+    videos = await innertubeRelated(videoId, limit);
+  } catch (error) {
+    if (error instanceof MusicResolveError) {
+      throw error;
+    }
+    throw new MusicResolveError(
+      "upstream",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  if (!videos || videos.length === 0) {
+    throw new MusicResolveError("not_found", "No related videos");
+  }
+  return videos.map((video) => ({
+    provider: "youtube" as const,
+    videoId: video.videoId,
+    title: video.title.trim().slice(0, 200) || video.videoId,
+    sourceUrl: null,
+    thumbnailUrl: video.thumbnailUrl,
+    durationMs: video.durationMs,
+  }));
 }

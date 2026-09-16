@@ -35,6 +35,7 @@ import { SignOutButton } from "@/components/layout/sign-out-button";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { AvatarPicker } from "@/components/user/avatar-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
@@ -101,6 +102,7 @@ import {
 } from "../../lib/noise-suppression";
 import { desktopContext, getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { setMusicAutoJoin, useMusicAutoJoin } from "@/lib/music-prefs";
 import {
   isVoiceCleanSettingsSeen,
   markVoiceCleanSettingsSeen,
@@ -981,6 +983,7 @@ function VoiceSection({
   showVoiceCleanBadge: boolean;
 }) {
   const { t } = useTranslation();
+  const musicAutoJoin = useMusicAutoJoin();
   const canSelectOutput = supportsAudioOutputSelection();
   const checkConnection = () => requestConnectionCheck();
   const sounds = useSyncExternalStore(subscribeSounds, getSoundState, getSoundState);
@@ -1352,6 +1355,13 @@ function VoiceSection({
         />
         <span className="text-sm">{t("settings.voice.compactPeers")}</span>
       </label>
+      <Switch
+        checked={musicAutoJoin}
+        onCheckedChange={setMusicAutoJoin}
+        label={t("settings.voice.musicAutoJoin")}
+        description={t("settings.voice.musicAutoJoinHint")}
+        className="px-0"
+      />
     </div>
   );
 }

@@ -183,7 +183,7 @@ import {
   getWatchPartyState,
   resetWatchPartyLimits,
 } from "./watch-party.js";
-import { musicWriteAllowed } from "@pqp/shared";
+import { completeMusicState, musicWriteAllowed } from "@pqp/shared";
 import {
   adoptMusicState,
   applyMusicWrite,
@@ -217,6 +217,12 @@ interface VoicePeer {
   avatarUrl: string | null;
   voiceChannelId: string;
   sharingScreen: boolean;
+  /**
+   * This seat's music player is on. Default true: a fresh player starts
+   * that way, and a client that predates `set-music-listening` never
+   * turns it off. Carried on the roster like `sharingScreen`.
+   */
+  listeningMusic: boolean;
   /** Sender-side camera MediaStream id, or null while the camera is off.
    *  See `voiceParticipantSchema.cameraStreamId` for why the id travels. */
   cameraStreamId: string | null;
@@ -577,6 +583,7 @@ function writePeerRow(peer: VoicePeer): void {
       muted: peer.muted,
       deafened: peer.deafened,
       sharingScreen: peer.sharingScreen,
+      listeningMusic: peer.listeningMusic,
       cameraStreamId: peer.cameraStreamId,
       screenAudioStreamId: peer.screenAudioStreamId,
       canSpeak: peer.canSpeak,
@@ -597,6 +604,7 @@ function rowToParticipant(row: VoiceRosterPeerRow): VoiceParticipant {
     displayName: row.displayName,
     avatarUrl: row.avatarUrl,
     sharingScreen: row.sharingScreen,
+    listeningMusic: row.listeningMusic,
     cameraStreamId: row.cameraStreamId,
     screenAudioStreamId: row.screenAudioStreamId,
     muted: row.muted,
@@ -1545,6 +1553,11 @@ export interface VoiceActivitySnapshot {
     musicRelayed: number;
     musicAdopted: number;
     /**
+     * `set-music-listening` writes this process accepted. With the registry
+     * on, each one is a row write the other machine can read (pitfall 12).
+     */
+    musicListeningWrites: number;
+    /**
      * `voice.hlsReconcile`: reconcile intents this instance published for a
      * channel whose transcode lives on the other machine, and intents it
      * acted on for a channel it owns. See `relayHlsReconcile`.
@@ -1835,6 +1848,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       framesReceived: clusterFrames.received,
       musicRelayed: musicCluster.relayed,
       musicAdopted: musicCluster.adopted,
+      musicListeningWrites: musicCluster.listeningWrites,
       hlsReconcileRelayed: hlsReconcileRelay.published,
       hlsReconcileApplied: hlsReconcileRelay.applied,
     },
@@ -1871,6 +1885,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     displayName: peer.displayName,
     avatarUrl: peer.avatarUrl,
     sharingScreen: peer.sharingScreen,
+    listeningMusic: peer.listeningMusic,
     cameraStreamId: peer.cameraStreamId,
     screenAudioStreamId: peer.screenAudioStreamId,
     muted: peer.muted,
@@ -2712,8 +2727,54 @@ async function channelLiveFrame(
   return channelLiveFrameWith(channelId, userId, stream, known);
 }
 
-function channelMusicFrame(channelId: string): VoiceSignalingMessage {
-  return { type: "channel-music", channelId, track: channelMusicTrack(channelId) };
+function countMusicListenersFromPeers(channelId: string): number {
+  return getRoomPeers(channelId).filter((peer) => peer.listeningMusic !== false)
+    .length;
+}
+
+async function countMusicListeners(channelId: string): Promise<number> {
+  if (registryOn()) {
+    await settledRowWrites(channelId);
+    try {
+      const rows = await listVoicePeersInRoom(channelId);
+      return rows.filter((row) => row.listeningMusic !== false).length;
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "musicListeners",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return countMusicListenersFromPeers(channelId);
+}
+
+async function musicRoomSize(channelId: string): Promise<number> {
+  if (registryOn()) {
+    await settledRowWrites(channelId);
+    try {
+      const room = await readClusterRoom(channelId);
+      if (room) {
+        return room.participants.length;
+      }
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "musicRoomSize",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return getRoomPeers(channelId).length;
+}
+
+async function channelMusicFrame(
+  channelId: string,
+): Promise<VoiceSignalingMessage> {
+  const listeners = await countMusicListeners(channelId);
+  return {
+    type: "channel-music",
+    channelId,
+    track: channelMusicTrack(channelId, listeners),
+  };
 }
 
 /**
@@ -2731,12 +2792,47 @@ async function broadcastChannelMusic(channelId: string): Promise<void> {
   if (!audience) {
     return;
   }
-  const frame = channelMusicFrame(channelId);
+  const frame = await channelMusicFrame(channelId);
   forEachAuthenticatedSocket((socket, user) => {
     if (audience.has(user.id)) {
       send(socket, frame);
     }
   });
+}
+
+const lastMusicListeners = new Map<string, number>();
+const musicListenerBroadcasts = new Map<string, ReturnType<typeof setTimeout>>();
+
+function noteMusicListenerCount(
+  channelId: string,
+  participants: readonly { listeningMusic?: boolean }[],
+): void {
+  if (!getMusicState(channelId)?.current) {
+    lastMusicListeners.delete(channelId);
+    return;
+  }
+  const listeners = participants.filter((peer) => peer.listeningMusic !== false)
+    .length;
+  if (lastMusicListeners.get(channelId) === listeners) {
+    return;
+  }
+  lastMusicListeners.set(channelId, listeners);
+  scheduleChannelMusicBroadcast(channelId);
+}
+
+/** Re-send channel-music when the listener count changes. Debounced. */
+function scheduleChannelMusicBroadcast(channelId: string): void {
+  const held = musicListenerBroadcasts.get(channelId);
+  if (held) {
+    clearTimeout(held);
+  }
+  musicListenerBroadcasts.set(
+    channelId,
+    setTimeout(() => {
+      musicListenerBroadcasts.delete(channelId);
+      void broadcastChannelMusic(channelId);
+    }, 80),
+  );
 }
 
 /**
@@ -3397,7 +3493,7 @@ const clusterFrames = { relayed: 0, received: 0 };
  * while `adopted` stays at zero on every instance is the shape of pitfall 12
  * in CLAUDE.md: a path that ships, publishes, and is never once applied.
  */
-const musicCluster = { relayed: 0, adopted: 0 };
+const musicCluster = { relayed: 0, adopted: 0, listeningWrites: 0 };
 
 function publishVoice(topic: string, frame: unknown): void {
   clusterFrames.relayed += 1;
@@ -3453,6 +3549,7 @@ export function resetRosterSequences(): void {
   clusterFrames.received = 0;
   musicCluster.relayed = 0;
   musicCluster.adopted = 0;
+  musicCluster.listeningWrites = 0;
 }
 
 /** The sequence a socket should adopt from a full roster of this channel. */
@@ -3670,6 +3767,7 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
     // --- one synchronous stretch: snapshot, queue, sequence ---------------
     const participants =
       room?.participants ?? getRoomPeers(voiceChannelId).map(toParticipant);
+    noteMusicListenerCount(voiceChannelId, participants);
     events = pendingRoomEvents.get(voiceChannelId) ?? [];
     pendingRoomEvents.delete(voiceChannelId);
     const transport = room?.transport ?? getRoomTransport(voiceChannelId);
@@ -4438,6 +4536,8 @@ const SELF_INITIATED_VOICE_FRAMES: ReadonlySet<string> = new Set([
   "set-camera",
   "set-raised-hand",
   "set-watch-party",
+  "set-music",
+  "set-music-listening",
   "live-reaction",
   "voice-still-here",
 ]);
@@ -5265,7 +5365,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   for (const channelId of musicChannels()) {
     const audience = await getChannelAudience(channelId).catch(() => null);
     if (audience?.has(user.id)) {
-      send(socket, channelMusicFrame(channelId));
+      send(socket, await channelMusicFrame(channelId));
     }
   }
 }
@@ -6367,6 +6467,7 @@ export async function handleVoiceMessage(
       avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
       sharingScreen: adopted?.sharingScreen ?? false,
+      listeningMusic: adopted?.listeningMusic ?? true,
       cameraStreamId: adopted?.cameraStreamId ?? null,
       screenAudioStreamId: adopted?.screenAudioStreamId ?? null,
       // Not muted until the client says so: the client re-declares its state
@@ -6795,17 +6896,23 @@ export async function handleVoiceMessage(
       return;
     }
     const before = channelMusicTrack(peer.voiceChannelId)?.videoId ?? null;
+    const roomSize = await musicRoomSize(peer.voiceChannelId);
+    const held = getMusicState(peer.voiceChannelId);
+    const incoming =
+      payload.state === null ? null : completeMusicState(held, payload.state);
     // A privileged write (one a plain member could not make) re-resolves
     // MANAGE_MUSIC before it is trusted: the cached bit is refreshed when
     // cargos change (`reevaluateVoiceSpeak`), and this is the belt to that
     // brace, so a member stripped of the bit a moment ago cannot skip on a
-    // stale seat. Ordinary adds never pay for it.
+    // stale seat. Ordinary adds never pay for it. `openControls` is read
+    // from the held state inside `musicWriteAllowed`, not computed here.
     if (
       peer.canManageMusic &&
-      !musicWriteAllowed(getMusicState(peer.voiceChannelId), payload.state, {
+      !musicWriteAllowed(held, incoming, {
         userId: user.id,
         canManage: false,
         canAdd: peer.canSpeak,
+        roomSize,
       })
     ) {
       try {
@@ -6816,10 +6923,11 @@ export async function handleVoiceMessage(
         console.error("[voice] music permission re-check failed:", error);
       }
     }
-    const write = applyMusicWrite(peer.voiceChannelId, payload.state, {
+    const write = applyMusicWrite(peer.voiceChannelId, incoming, {
       userId: user.id,
       canManage: peer.canManageMusic,
       canAdd: peer.canSpeak,
+      roomSize,
     });
     if (write.kind === "coalesced") {
       return;
@@ -6895,6 +7003,36 @@ export async function handleVoiceMessage(
         state: write.state,
       } satisfies VoiceMusicFrame);
     }
+    return;
+  }
+
+  if (payload.type === "set-music-listening") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    const listening = payload.listening;
+    if (peer.listeningMusic === listening) {
+      return;
+    }
+    peer.listeningMusic = listening;
+    writePeerRow(peer);
+    musicCluster.listeningWrites += 1;
+    logEvent("voice.musicListening", {
+      peerId: peer.id,
+      userId: peer.userId,
+      voiceChannelId: peer.voiceChannelId,
+      listening,
+      registry: registryOn(),
+    });
+    await broadcastRoster(peer.voiceChannelId, {
+      kind: "updated",
+      peer: toParticipant(peer),
+    });
+    scheduleChannelMusicBroadcast(peer.voiceChannelId);
     return;
   }
 
