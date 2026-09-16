@@ -128,31 +128,84 @@ describe("HlsStallWatch", () => {
   });
 
   describe("sequence-stuck (a dead egress, live playlist)", () => {
-    it("walks its own three-step in-place ladder, then asks to reconnect on a backoff", () => {
-      // Segments are 4 s, so the sequence legitimately advances only every
-      // 4 s; 20 s is comfortably above two segments of ordinary jitter.
+    it("conventional: holds once then reconnects — never the start-load ladder (restart dead window)", () => {
+      // 2026-09-15: during an egress restart the in-place start-load /
+      // restart-load / reload-level ladder hammered a dying playlist at
+      // ~1 Hz and re-downloaded the last segment into a 1–2 s loop. The
+      // server is already restarting; the client only needs to hold and
+      // poll for a fresh master. This must fail without the hold path.
       const watch = new HlsStallWatch();
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.onMediaSequence(40, T0);
       expect(watch.tick(T0 + 19_000)).toBe("none");
-      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
       expect(watch.lastReason).toBe("sequence-stuck");
-      expect(watch.tick(T0 + 21_000)).toBe("restart-load");
-      expect(watch.tick(T0 + 22_000)).toBe("reload-level");
-      // The in-place ladder is spent; a client rebuild cannot invent
-      // segments the server never wrote, so this asks to check the server
-      // instead of rebuilding blind on the same dead source.
-      expect(watch.tick(T0 + 23_000)).toBe("reconnect");
+      // Second tick: reconnect, not another in-place recovery step.
+      expect(watch.tick(T0 + 21_000)).toBe("reconnect");
       // Bounded (Farol review, PR 570): the very next tick does NOT ask
       // again -- it backs off (2 s the first time) rather than firing once
       // per tick for as long as the stall lasts.
-      expect(watch.tick(T0 + 24_000)).toBe("none");
-      expect(watch.tick(T0 + 24_999)).toBe("none");
-      expect(watch.tick(T0 + 25_000)).toBe("reconnect");
-      // The backoff doubles each time (4 s next), not a flat retry.
-      expect(watch.tick(T0 + 26_000)).toBe("none");
-      expect(watch.tick(T0 + 29_000)).toBe("reconnect");
+      expect(watch.tick(T0 + 22_000)).toBe("none");
+      expect(watch.tick(T0 + 22_999)).toBe("none");
+      expect(watch.tick(T0 + 23_000)).toBe("reconnect");
+      // Never walks the hammering ladder during a conventional hold.
+      const decisions: HlsStallDecision[] = [];
+      const storm = new HlsStallWatch();
+      storm.onSourceChanged(T0);
+      storm.onPlaying();
+      storm.onMediaSequence(40, T0);
+      for (let t = T0 + 20_000; t <= T0 + 40_000; t += 1_000) {
+        decisions.push(storm.tick(t));
+      }
+      expect(decisions).toContain("hold");
+      expect(decisions).toContain("reconnect");
+      expect(decisions).not.toContain("start-load");
+      expect(decisions).not.toContain("restart-load");
+      expect(decisions).not.toContain("reload-level");
+      expect(decisions).not.toContain("rebuild");
+    });
+
+    it("ll: still walks the three-step in-place ladder, then reconnects on a backoff", () => {
+      // PR 650: do not fold the conventional hold into LL. LL keeps the
+      // older ladder; only conventional skips it for the restart window.
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onMediaSequence(40, T0);
+      watch.configureForMode("ll", 500);
+      // Keep parts flowing so the separate part-stuck rule does not fire
+      // first; the segment-based threshold on LL is 12 s.
+      watch.onPartAdvance("part-a", T0 + 11_000);
+      expect(watch.tick(T0 + 11_999)).toBe("none");
+      expect(watch.tick(T0 + 12_000)).toBe("start-load");
+      expect(watch.lastReason).toBe("sequence-stuck");
+      expect(watch.tick(T0 + 13_000)).toBe("restart-load");
+      expect(watch.tick(T0 + 14_000)).toBe("reload-level");
+      expect(watch.tick(T0 + 15_000)).toBe("reconnect");
+      expect(watch.tick(T0 + 16_000)).toBe("none");
+    });
+
+    it("playlist-gone holds immediately without waiting out sequenceStuckMs", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onMediaSequence(40, T0);
+      // A 404 on the master arrives well before the 20 s sequence-stuck
+      // threshold — that is the restart dead window's leading edge.
+      watch.onPlaylistGone();
+      expect(watch.tick(T0 + 500)).toBe("hold");
+      expect(watch.lastReason).toBe("playlist-gone");
+      expect(watch.tick(T0 + 1_500)).toBe("reconnect");
+      // Still no hammering ladder.
+      expect(watch.tick(T0 + 2_500)).toBe("none");
+      const decisions: HlsStallDecision[] = [];
+      for (let t = T0 + 3_500; t <= T0 + 20_000; t += 1_000) {
+        decisions.push(watch.tick(t));
+      }
+      expect(decisions).not.toContain("start-load");
+      expect(decisions).not.toContain("restart-load");
+      expect(decisions).not.toContain("reload-level");
     });
 
     it("gives up and reports dead once the reconnect budget is spent", () => {
@@ -166,13 +219,11 @@ describe("HlsStallWatch", () => {
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.onMediaSequence(40, T0);
-      expect(watch.tick(T0 + 20_000)).toBe("start-load");
-      expect(watch.tick(T0 + 20_100)).toBe("restart-load");
-      expect(watch.tick(T0 + 20_200)).toBe("reload-level");
-      expect(watch.tick(T0 + 20_300)).toBe("reconnect"); // attempt 1, 1 s backoff
-      expect(watch.tick(T0 + 21_300)).toBe("reconnect"); // attempt 2, 2 s backoff (capped)
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
+      expect(watch.tick(T0 + 20_100)).toBe("reconnect"); // attempt 1, 1 s backoff
+      expect(watch.tick(T0 + 21_100)).toBe("reconnect"); // attempt 2, 2 s backoff (capped)
       expect(watch.tick(T0 + 22_000)).toBe("none"); // still waiting out attempt 2's backoff
-      expect(watch.tick(T0 + 23_300)).toBe("dead"); // budget spent, still stuck
+      expect(watch.tick(T0 + 23_100)).toBe("dead"); // budget spent, still stuck
       // A person's own "try again" is the only way out from here.
       expect(watch.tick(T0 + 90_000)).toBe("dead");
     });
@@ -182,7 +233,7 @@ describe("HlsStallWatch", () => {
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.onMediaSequence(40, T0);
-      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
       // The egress watchdog restarted things and the playlist moved on.
       watch.onMediaSequence(41, T0 + 21_000);
       expect(watch.tick(T0 + 21_500)).toBe("none");
@@ -196,11 +247,9 @@ describe("HlsStallWatch", () => {
       watch.onSourceChanged(T0);
       watch.onPlaying();
       watch.onMediaSequence(40, T0);
-      expect(watch.tick(T0 + 20_000)).toBe("start-load");
-      expect(watch.tick(T0 + 20_100)).toBe("restart-load");
-      expect(watch.tick(T0 + 20_200)).toBe("reload-level");
-      expect(watch.tick(T0 + 20_300)).toBe("reconnect"); // the one allowed attempt
-      expect(watch.tick(T0 + 21_300)).toBe("dead"); // budget of 1 spent
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
+      expect(watch.tick(T0 + 20_100)).toBe("reconnect"); // the one allowed attempt
+      expect(watch.tick(T0 + 21_100)).toBe("dead"); // budget of 1 spent
 
       // A new session actually showed up (the player adopted it): a fresh
       // episode gets a fresh budget rather than inheriting the exhausted one.
@@ -208,10 +257,59 @@ describe("HlsStallWatch", () => {
       watch.onSourceChanged(T1);
       watch.onPlaying();
       watch.onMediaSequence(50, T1);
-      expect(watch.tick(T1 + 20_000)).toBe("start-load");
-      expect(watch.tick(T1 + 20_100)).toBe("restart-load");
-      expect(watch.tick(T1 + 20_200)).toBe("reload-level");
-      expect(watch.tick(T1 + 20_300)).toBe("reconnect");
+      expect(watch.tick(T1 + 20_000)).toBe("hold");
+      expect(watch.tick(T1 + 20_100)).toBe("reconnect");
+    });
+
+    it("a stale playing during playlist-gone does not clear the hold (Farol, PR 654)", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onPlaylistGone();
+      expect(watch.tick(T0 + 100)).toBe("hold");
+      expect(watch.isHoldingForRestart).toBe(true);
+      // Buffered media after stopLoad.
+      watch.onPlaying();
+      expect(watch.isHoldingForRestart).toBe(true);
+      expect(watch.tick(T0 + 200)).toBe("reconnect");
+    });
+
+    it("playlist-gone clears on a real re-attach, then a later episode can hold again", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onPlaylistGone();
+      expect(watch.tick(T0 + 100)).toBe("hold");
+      watch.onSourceChanged(T0 + 150);
+      watch.onPlaying();
+      expect(watch.isHoldingForRestart).toBe(false);
+      expect(watch.tick(T0 + 200)).toBe("none");
+      watch.onPlaylistGone();
+      expect(watch.tick(T0 + 300)).toBe("hold");
+    });
+
+    it("playlist-gone supersedes a pending fatal instead of walking the fatal ladder (Farol, PR 654)", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onError({ fatal: true });
+      watch.onPlaylistGone();
+      expect(watch.tick(T0 + 100)).toBe("hold");
+      expect(watch.lastReason).toBe("playlist-gone");
+      expect(watch.tick(T0 + 200)).toBe("reconnect");
+      expect(watch.tick(T0 + 300)).toBe("none");
+    });
+
+    it("a media-sequence advance clears a conventional hold without a re-attach", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.onPlaying();
+      watch.onMediaSequence(40, T0);
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
+      expect(watch.isHoldingForRestart).toBe(true);
+      watch.onMediaSequence(41, T0 + 21_000);
+      expect(watch.isHoldingForRestart).toBe(false);
+      expect(watch.tick(T0 + 21_500)).toBe("none");
     });
   });
 
@@ -283,7 +381,8 @@ describe("HlsStallWatch", () => {
       // immediately; sequence-stuck never rebuilds at all, so that gate
       // does not apply to it -- but it is still bounded, by
       // `maxReconnects`/backoff instead (Farol review, PR 570), not left to
-      // repeat forever.
+      // repeat forever. Conventional path: hold then reconnect, never the
+      // in-place ladder.
       const watch = new HlsStallWatch({
         maxRebuilds: 1,
         windowMs: 10_000,
@@ -306,7 +405,9 @@ describe("HlsStallWatch", () => {
       // endless "reconnect"), and never "rebuild" -- a client rebuild
       // cannot invent segments the server never wrote.
       expect(decisions).toContain("dead");
+      expect(decisions).toContain("hold");
       expect(decisions).not.toContain("rebuild");
+      expect(decisions).not.toContain("start-load");
       expect(decision).toBe("dead");
     });
   });
@@ -358,15 +459,16 @@ describe("HlsStallWatch", () => {
   });
 
   describe("configureForMode (LL-HLS, docs/plans/LL_HLS.md §5)", () => {
-    it("leaves the constructed default untouched when never called -- byte-identical conventional behaviour", () => {
+    it("leaves the constructed default untouched when never called -- byte-identical conventional hold behaviour", () => {
       // 20s (the constructed default): a sequence stuck for 19s must NOT
-      // fire, and one stuck for 20s must.
+      // fire, and one stuck for 20s must. Conventional enters `"hold"`, not
+      // the older start-load ladder.
       const watch = new HlsStallWatch();
       watch.onSourceChanged(T0);
       watch.onMediaSequence(1, T0);
       watch.onPlaying();
       expect(watch.tick(T0 + 19_000)).toBe("none");
-      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
     });
 
     it("scales the SEGMENT-based sequence-stuck threshold to 3 segments (12s at a 4s target), never to parts (Farol review)", () => {
@@ -414,7 +516,7 @@ describe("HlsStallWatch", () => {
       watch.configureForMode("ll", 500);
       watch.configureForMode("conventional");
       expect(watch.tick(T0 + 12_000)).toBe("none");
-      expect(watch.tick(T0 + 20_000)).toBe("start-load");
+      expect(watch.tick(T0 + 20_000)).toBe("hold");
     });
 
     it("defaults the part target when omitted on ll", () => {
@@ -438,7 +540,7 @@ describe("HlsStallWatch", () => {
       watch.configureForMode("ll", 500);
       watch.configureForMode("conventional");
       expect(watch.tick(T0 + 8_999)).toBe("none");
-      expect(watch.tick(T0 + 9_000)).toBe("start-load");
+      expect(watch.tick(T0 + 9_000)).toBe("hold");
     });
   });
 

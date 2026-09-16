@@ -808,6 +808,37 @@ export function canJumpToLiveEdge(
 export const LL_HLS_STARTUP_GRACE_MS = 6_000;
 
 /**
+ * Own playlist/master (or a media-playlist level) answered 404/410.
+ *
+ * During a conventional egress restart the previous `startedAt` disappears
+ * and every viewer still pointed at it gets a 404 storm for ~10–15 s until
+ * they adopt the new master. That is a session that is GONE, not a
+ * transient network blip and not a missing fragment inside a still-live
+ * window (those stay `fragLoadError` and are not this). The watch player
+ * uses this to `stopLoad` and hold rather than walking the fatal /
+ * start-load ladder into a 1–2 s last-segment loop.
+ *
+ * Timeouts are deliberately excluded: a slow playlist is not "gone", and
+ * hls.js's own retry budget still applies.
+ */
+const PLAYLIST_GONE_DETAILS = new Set([
+  "manifestLoadError",
+  "levelLoadError",
+]);
+
+export function isPlaylistGoneError(input: {
+  details?: string | null;
+  responseCode?: number | null;
+}): boolean {
+  const code = input.responseCode;
+  if (code !== 404 && code !== 410) {
+    return false;
+  }
+  const details = input.details;
+  return typeof details === "string" && PLAYLIST_GONE_DETAILS.has(details);
+}
+
+/**
  * Where "jump to live" should land. Seeking onto the exact live edge
  * sits inside the newest segment and often `waiting` immediately.
  */

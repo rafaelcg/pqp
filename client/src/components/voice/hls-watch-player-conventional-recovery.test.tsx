@@ -318,14 +318,30 @@ describe("the conventional recovery ladder is what it was before #646", () => {
   /**
    * A FROZEN PLAYLIST -- the egress dead, the same media sequence answered
    * for as long as anyone polls -- IS NOT A SEEK LOOP, and was not one
-   * before #646 either. Twenty seconds of a stuck `EXT-X-MEDIA-SEQUENCE`
-   * opens the `sequence-stuck` ladder, which spends its three in-place steps
-   * (one seek each, all to the same point, because a frozen playlist's edge
-   * does not move) and then stops touching the element entirely: from there
-   * it is bounded, backed-off `reconnect` checks for a fresher session.
-   * Three seeks in thirty seconds, never a fourth.
+   * before PR 646 either.
+   *
+   * THE ONE RECORDED VALUE THIS FILE HAS EVER CHANGED, and PR 652 is why.
+   * Before it, twenty seconds of a stuck `EXT-X-MEDIA-SEQUENCE` opened the
+   * `sequence-stuck` ladder and spent three in-place steps -- one seek
+   * each, all to the same point, because a frozen playlist's edge does not
+   * move -- which read as:
+   *
+   *     startLoad(-1), seek(1496), stopLoad,
+   *     startLoad(-1), seek(1496), stopLoad,
+   *     startLoad(-1), seek(1496)
+   *
+   * Those three steps are what hammered a dying playlist at ~1 Hz and
+   * re-downloaded the last segment into a 1-2 s loop through an egress
+   * restart's ~10-15 s dead window. PR 652 replaces them on CONVENTIONAL
+   * with a single `"hold"`: one `stopLoad`, the restarting overlay, and no
+   * seek at all. Everything after the ladder is unchanged -- bounded,
+   * backed-off `reconnect` checks for a fresher session, and never a
+   * rebuild. LL still walks the three steps (`hls-stall.test.ts`).
+   *
+   * Zero seeks in thirty seconds now, where it used to be three; either
+   * way the claim of this case is the same one, that nothing repeats.
    */
-  it("does not loop on a frozen playlist: three in-place steps, then reconnect checks", async () => {
+  it("does not loop on a frozen playlist: one hold, then reconnect checks", async () => {
     await mount();
     for (let i = 0; i < 30; i += 1) {
       await act(async () => {
@@ -333,31 +349,21 @@ describe("the conventional recovery ladder is what it was before #646", () => {
       });
       await tick(1);
     }
-    expect(calls).toEqual([
-      "startLoad(-1)",
-      "seek(1496)",
-      "stopLoad",
-      "startLoad(-1)",
-      "seek(1496)",
-      "stopLoad",
-      "startLoad(-1)",
-      "seek(1496)",
-    ]);
+    expect(calls).toEqual(["stopLoad"]);
     const warned = warn.mock.calls.map((args: unknown[]) => String(args[0]));
-    // The in-place ladder, once through and in order.
-    expect(warned.slice(0, 3)).toEqual([
-      "[hls] stream stalled (sequence-stuck), start-load",
-      "[hls] stream stalled (sequence-stuck), restart-load",
-      "[hls] stream stalled (sequence-stuck), reload-level",
-    ]);
-    // And from there ONLY reconnect checks -- never a fourth in-place step,
-    // which is what "it does not loop" means. How MANY of them land in
-    // thirty seconds is not asserted: `gateReconnect` backs off against
-    // `Date.now()`, which under `shouldAdvanceTime` moves with real time
-    // too, so a loaded machine fits one more check into the same window.
-    // The count is the flaky part; the absence of a repeat is the claim.
-    expect(warned.length).toBeGreaterThan(3);
-    expect(new Set(warned.slice(3))).toEqual(
+    // The hold, once, in place of the old three-step ladder.
+    expect(warned[0]).toBe(
+      "[hls] stream stalled (sequence-stuck), holding for restart",
+    );
+    // And from there ONLY reconnect checks -- never a second hold and never
+    // an in-place step, which is what "it does not loop" means. How MANY of
+    // them land in thirty seconds is not asserted: `gateReconnect` backs off
+    // against `Date.now()`, which under `shouldAdvanceTime` moves with real
+    // time too, so a loaded machine fits one more check into the same
+    // window. The count is the flaky part; the absence of a repeat is the
+    // claim.
+    expect(warned.length).toBeGreaterThan(1);
+    expect(new Set(warned.slice(1))).toEqual(
       new Set(["[hls] stream stalled (sequence-stuck), checking for a fresher session"]),
     );
   });

@@ -70,6 +70,7 @@ import {
   isLlPartLoadErrorDetail,
   isMissingFragmentError,
   isPipAvailable,
+  isPlaylistGoneError,
   liveSeekOffsetSeconds,
   liveSeekTarget,
   llHlsConfig,
@@ -1365,18 +1366,19 @@ export function HlsWatchPlayer({
       if (!cancelled) {
         setHasFrame(true);
         setPhase("playing");
-        setStallReason(null);
-        setAuthGraceActive(false);
-        clearAuthGraceTimerRef.current();
-        restarting = false;
-        setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
         watch.onPlaying();
+        // A stale `playing` from buffered media after a restart `stopLoad`
+        // must not clear the hold UI or cancel the reconnect poll (Farol,
+        // PR 654). Real recovery is a new attach or a playlist that advances.
+        if (!watch.isHoldingForRestart) {
+          setStallReason(null);
+          setAuthGraceActive(false);
+          clearAuthGraceTimerRef.current();
+          restarting = false;
+          setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+          clearPendingReconnect();
+        }
         reportSize();
-        // The stream recovered on its own (or one of the recovery ladder's
-        // in-place steps worked) before a jittered reconnect/rebuild from an
-        // earlier tick fired. That response is now stale -- cancel it rather
-        // than reloading a player that just came back (Farol review).
-        clearPendingReconnect();
         // First real frame of this attach: report it on the NEXT telemetry
         // sample and then forget it, rather than on every sample.
         if (!startupMsComputed) {
@@ -1429,7 +1431,9 @@ export function HlsWatchPlayer({
         }
         return;
       }
-      restarting = watch.lastReason === "sequence-stuck";
+      restarting =
+        watch.lastReason === "sequence-stuck" ||
+        watch.lastReason === "playlist-gone";
       setStallReason(watch.lastReason);
       if (!restarting) {
         setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
@@ -1439,6 +1443,18 @@ export function HlsWatchPlayer({
         // its jitter from an earlier tick would only fire into a dead player.
         clearPendingReconnect();
         setPhase("dead");
+        return;
+      }
+      if (decision === "hold") {
+        // Conventional restart dead window: stop the 1 Hz playlist /
+        // last-segment loop, keep the restarting overlay up, and let the
+        // next ticks' `"reconnect"` polls find a fresh master. No seek and
+        // no startLoad — those are what made the dead window look broken.
+        clearPendingReconnect();
+        console.warn(
+          `[hls] stream stalled (${watch.lastReason}), holding for restart`,
+        );
+        hlsRef.current?.stopLoad?.();
         return;
       }
       if (
@@ -1772,6 +1788,40 @@ export function HlsWatchPlayer({
         // ladder the same error would run a second, competing response to
         // it.
         const canJumpOnThisAttach = effectiveMode === "ll" && !isVod;
+        // Conventional restart dead window (2026-09-15): a 404/410 on our
+        // own playlist/master means the previous session is gone, not that
+        // this player should walk the fatal start-load ladder. Intercept
+        // before `onError({ fatal })` — hls.js marks these fatal after its
+        // retry budget, and that ladder is exactly the 1 Hz / last-segment
+        // loop the hold exists to stop. LL and VOD keep the ordinary path
+        // (PR 650: do not reintroduce the broader PR 646 live-edge recovery).
+        if (
+          !cancelled &&
+          !isVod &&
+          effectiveMode === "conventional" &&
+          // Own proxy only — an external HLS 404 must keep the ordinary
+          // fatal path, not Farol's fetchChannelLive reconnect (Farol, PR 654).
+          isOwnHlsPlaylistProxyUrl(activeSrc) &&
+          isPlaylistGoneError({
+            details: typeof data.details === "string" ? data.details : null,
+            responseCode:
+              typeof data.response?.code === "number"
+                ? data.response.code
+                : null,
+          })
+        ) {
+          watch.onPlaylistGone();
+          // Stop the in-flight 404 storm immediately rather than waiting
+          // for the next stall tick to return `"hold"`.
+          player.stopLoad();
+          setStallReason("playlist-gone");
+          setRestartCountdown(RESTART_COUNTDOWN_SECONDS);
+          // Nothing else in this handler applies: the pin rule and the
+          // live-edge jump are both LL-only, a 404 is never the 401 the
+          // auth grace exists for, and telling the watchdog `onError` too
+          // would start the very ladder the hold replaces.
+          return;
+        }
         if (!canJumpOnThisAttach) {
           watch.onError({ fatal });
         }
