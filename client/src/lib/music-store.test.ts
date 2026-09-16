@@ -405,4 +405,59 @@ describe("music store writes", () => {
     expect(getMusicSnapshot().state?.autoplay).toBe(false);
     expect(getMusicSnapshot().state?.queue.every((track) => !track.autoplayed)).toBe(true);
   });
+
+  it("drops an in-flight fill when the seat moves to another room", async () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), durationMs: 90_000 });
+    setAutoplay(true);
+    let finish!: (tracks: MusicResolved[]) => void;
+    const fetchRelated = vi.fn(
+      () =>
+        new Promise<MusicResolved[]>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const filling = fillAutoplayBuffer(true, fetchRelated);
+    await vi.waitFor(() => expect(fetchRelated).toHaveBeenCalledTimes(1));
+    setMusicSession({
+      channelId: "22222222-2222-4222-8222-222222222222",
+      peerId: "peer-b",
+      userId: "u1",
+      displayName: "Ana",
+      send: (state) => {
+        sent.push(state);
+      },
+    });
+    addTrack({ ...resolved("zzzzzzzzzzz"), durationMs: 90_000 });
+    setAutoplay(true);
+    finish([
+      { ...resolved("bbbbbbbbbbb"), durationMs: 180_000 },
+      { ...resolved("ccccccccccc"), durationMs: 180_000 },
+      { ...resolved("ddddddddddd"), durationMs: 180_000 },
+    ]);
+    await filling;
+    expect(getMusicSnapshot().state?.current?.videoId).toBe("zzzzzzzzzzz");
+    expect(getMusicSnapshot().state?.queue).toEqual([]);
+  });
+
+  it("does not append related for a seed that is no longer last in the queue", async () => {
+    addTrack({ ...resolved("aaaaaaaaaaa"), durationMs: 90_000 });
+    setAutoplay(true);
+    let finish!: (tracks: MusicResolved[]) => void;
+    const fetchRelated = vi.fn(
+      () =>
+        new Promise<MusicResolved[]>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const filling = fillAutoplayBuffer(true, fetchRelated);
+    await vi.waitFor(() => expect(fetchRelated).toHaveBeenCalledWith("aaaaaaaaaaa"));
+    expect(addTrack(resolved("zzzzzzzzzzz"))).toBe("queued");
+    finish([
+      { ...resolved("bbbbbbbbbbb"), durationMs: 180_000 },
+      { ...resolved("ccccccccccc"), durationMs: 180_000 },
+      { ...resolved("ddddddddddd"), durationMs: 180_000 },
+    ]);
+    await filling;
+    expect(getMusicSnapshot().state?.queue.map((track) => track.videoId)).toEqual(["zzzzzzzzzzz"]);
+  });
 });

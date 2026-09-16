@@ -335,9 +335,12 @@ function rememberRelated(videoId: string, videos: InnerTubeVideo[]) {
   relatedCache.set(videoId, { at: Date.now(), videos });
 }
 
+const relatedInflight = new Map<string, Promise<InnerTubeVideo[] | null>>();
+
 /** Test hook. */
 export function resetInnerTubeRelatedCache(): void {
   relatedCache.clear();
+  relatedInflight.clear();
 }
 
 /** How many watch-next hits to keep after dropping the seed. */
@@ -347,7 +350,8 @@ export const INNERTUBE_RELATED_LIMIT = 20;
  * "Watch next" videos for a video id. WEB answers `compactVideoRenderer`
  * and sometimes `endScreenVideoRenderer`, TVHTML5 answers `lockupViewModel`;
  * `collectVideos` already reads those. The seed video is dropped.
- * Remembered for six hours, like search.
+ * Remembered for six hours, like search. In-flight reads for the same
+ * id share one upstream call, so a room of listeners cannot stampede YouTube.
  */
 export async function innertubeRelated(
   videoId: string,
@@ -357,7 +361,12 @@ export async function innertubeRelated(
   if (cached && Date.now() - cached.at < RELATED_CACHE_TTL_MS) {
     return cached.videos.slice(0, limit);
   }
-  return withClients(async (client) => {
+  const pending = relatedInflight.get(videoId);
+  if (pending) {
+    const videos = await pending;
+    return videos?.slice(0, limit) ?? null;
+  }
+  const request = withClients(async (client) => {
     const response = await call(client, "next", { videoId });
     const videos = collectVideos(response)
       .filter((video) => video.videoId !== videoId)
@@ -367,5 +376,9 @@ export async function innertubeRelated(
     }
     rememberRelated(videoId, videos);
     return videos;
+  }).finally(() => {
+    relatedInflight.delete(videoId);
   });
+  relatedInflight.set(videoId, request);
+  return request;
 }

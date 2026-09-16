@@ -149,7 +149,8 @@ the same walk-based `collectVideos`: WEB answers `compactVideoRenderer` and
 sometimes `endScreenVideoRenderer`, TVHTML5 answers `lockupViewModel`. The
 seed video is dropped. Up to 20 hits are kept (shorts and films are
 filtered on the client). Remembered for six hours, keyed by video id, like
-search. While "Continuar com parecidas" is on, the actor fills about three
+search. Concurrent related reads for the same id share one upstream call.
+While "Continuar com parecidas" is on, the actor fills about three
 upcoming related rows onto the queue *before* the current track ends, seeded
 from the last queued id (or the current one). `musicAutoplayCandidate` drops
 the finishing id, anything already in `history` or the queue, and anything

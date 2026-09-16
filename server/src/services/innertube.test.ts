@@ -230,4 +230,30 @@ describe("innertubeRelated", () => {
     await innertubeRelated("dQw4w9WgXcQ", 5);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("coalesces concurrent related fetches for the same video id", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (!url.includes("youtubei/v1/next")) {
+        throw new Error(`unexpected fetch ${url}`);
+      }
+      await gate;
+      return { ok: true, status: 200, json: async () => compactNext };
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      fetchMock as unknown as typeof fetch,
+    );
+    const first = innertubeRelated("dQw4w9WgXcQ", 5);
+    const second = innertubeRelated("dQw4w9WgXcQ", 5);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a?.[0]?.videoId).toBe("relWeb00001");
+    expect(b?.[0]?.videoId).toBe("relWeb00001");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

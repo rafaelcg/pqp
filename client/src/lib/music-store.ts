@@ -69,9 +69,19 @@ function emit() {
   }
 }
 
+function abandonAutoplayFill(): void {
+  fillGeneration += 1;
+}
+
 function set(state: MusicState | null, channelId: string | null) {
   if (localEndedTrackId && state?.current?.id !== localEndedTrackId) {
     localEndedTrackId = null;
+  }
+  // A fill started for another room or another current track must not
+  // land after this write. Queue-only edits keep the generation so one
+  // fill can append more than once.
+  if (snapshot.channelId !== channelId || snapshot.state?.current?.id !== state?.current?.id) {
+    abandonAutoplayFill();
   }
   snapshot = { ...snapshot, channelId, state, receivedAt: Date.now() };
   emit();
@@ -483,7 +493,7 @@ export function setAutoplay(on: boolean): void {
     write({ ...held, autoplay: true });
     return;
   }
-  fillGeneration += 1;
+  abandonAutoplayFill();
   write({
     ...held,
     autoplay: false,
@@ -581,8 +591,9 @@ export async function fillAutoplayBuffer(
     if (!held) {
       return;
     }
+    const channelId = session?.channelId ?? null;
     const seed = autoplayBufferSeed(held);
-    if (!seed) {
+    if (!seed || !channelId) {
       return;
     }
     fetches += 1;
@@ -592,14 +603,21 @@ export async function fillAutoplayBuffer(
     } catch {
       return;
     }
-    if (gen !== fillGeneration || !shouldFillAutoplayBuffer(snapshot.state) || !snapshot.state) {
+    const next = snapshot.state;
+    if (
+      gen !== fillGeneration ||
+      session?.channelId !== channelId ||
+      !next ||
+      autoplayBufferSeed(next) !== seed ||
+      !shouldFillAutoplayBuffer(next)
+    ) {
       return;
     }
     const needed = Math.min(
-      AUTOPLAY_BUFFER - snapshot.state.queue.filter((track) => track.autoplayed).length,
-      MUSIC_QUEUE_LIMIT - snapshot.state.queue.length,
+      AUTOPLAY_BUFFER - next.queue.filter((track) => track.autoplayed).length,
+      MUSIC_QUEUE_LIMIT - next.queue.length,
     );
-    const picks = musicAutoplayCandidates(related, snapshot.state, needed);
+    const picks = musicAutoplayCandidates(related, next, needed);
     if (picks.length === 0) {
       return;
     }
@@ -733,7 +751,7 @@ export function stopMusic(): void {
   if (!session) {
     return;
   }
-  fillGeneration += 1;
+  abandonAutoplayFill();
   localEndedTrackId = null;
   set(null, session.channelId);
   session.send(null);
