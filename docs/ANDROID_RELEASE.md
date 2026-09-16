@@ -564,6 +564,51 @@ scanned; answer from it rather than from optimism.
 
 ---
 
+## 9. What's new text, per release
+
+There is no `fastlane/metadata` directory in this repo, and
+`.github/workflows/android-release.yml` does not read one: its "Prepare
+release notes" step writes `whatsnew-en-US` / `whatsnew-pt-BR` straight from
+the `release_notes` input of a `workflow_dispatch` run (falling back to a
+generic "Melhorias e correções. / Improvements and fixes." line when that
+input is blank, which is what an ordinary `android-v*` tag push does — a tag
+push carries no input at all). So the text below is **not consumed
+automatically**. Paste it by hand into either:
+
+- the `release_notes` field of a manual `workflow_dispatch` run of "Android
+  release" (same text for both locales, that step trims to 500 chars and
+  writes it into both files), or
+- Play Console → Release → the release's "What's new" fields, once a build
+  from the internal track is being promoted to production, since Play asks
+  for one string per locale there regardless of what the upload carried.
+
+### 0.4.0 (`versionCode` 7)
+
+Since 0.3.1 (`versionCode` 6): Telecom `ConnectionService` integration (#678,
+calls ring and answer like a native phone call), a blocked-users list and
+nicer `@mention` rendering (#676), and a fix for long watch-party streams
+stalling after about an hour once their viewer token expired (#527).
+
+**pt-BR** (used first; this is the audience):
+
+```
+Chamadas de voz agora tocam e se comportam como ligação de verdade, com tela
+de chamada e botões de atender/recusar. Nova lista de usuários bloqueados nas
+configurações. Menções (@nome) ficam mais bonitas no chat. Corrigido: watch
+parties longas paravam de tocar depois de um tempo.
+```
+
+**en-US**:
+
+```
+Voice calls now ring and behave like a real phone call, with a call screen
+and answer/decline buttons. New blocked users list in settings. Mentions
+(@name) look better in chat. Fixed: long watch party streams could stop
+playing after a while.
+```
+
+---
+
 ## Why `compileSdk` is still 37
 
 `ANDROID_PLAN.md` A5 asked for 36, on the reasoning that 37 was newer than AGP
