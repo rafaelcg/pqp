@@ -1211,3 +1211,45 @@ describe("the setup card", () => {
     expect(tag).not.toContain("rounded-lg border");
   });
 });
+
+/**
+ * THE INCIDENT (2026-09-16). A presenter's screen publish dropped after an
+ * API-restart reconnect, but the server kept `party.state === "live"`, so the
+ * host's own bar carried a red "AO VIVO" over a dead broadcast for 35 minutes.
+ * `sharePublishRecovering` is the presenter's truthful signal; on their own bar
+ * it must replace the live badge and drop the viewer count. A viewer, who is
+ * not presenting, keeps the server-driven live badge either way.
+ */
+describe("the presenter's own publish dropping (recovering)", () => {
+  const bar = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      audienceCount: 3,
+      onToggleMute: () => {},
+      ...over,
+    });
+
+  it("shows the live badge and the viewer count while the publish is healthy", () => {
+    const html = bar({ isPresenting: true, sharePublishRecovering: false });
+    expect(html).toContain('data-watch-party-live-pill=""');
+    expect(html).toContain("watch-party-viewers");
+  });
+
+  it("flips the presenter's badge to reconnecting and drops the count when it drops", () => {
+    const html = bar({ isPresenting: true, sharePublishRecovering: true });
+    expect(html).toContain('data-watch-party-live-pill="recovering"');
+    expect(html).not.toContain('data-watch-party-live-pill=""');
+  });
+
+  it("never touches a viewer's badge (they are not the source)", () => {
+    // Even if the flag were somehow set, a non-presenting viewer keeps live.
+    const html = bar({
+      party: { ...PARTY, state: "live", viewerRole: "viewer" },
+      isPresenting: false,
+      sharePublishRecovering: true,
+    });
+    expect(html).toContain('data-watch-party-live-pill=""');
+    expect(html).not.toContain('data-watch-party-live-pill="recovering"');
+  });
+});

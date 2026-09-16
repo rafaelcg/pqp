@@ -77,6 +77,7 @@ const idle: VoiceState = {
   isSharingSystemAudio: false,
   isShareCursorVisible: false,
   screenShareAudioFailed: false,
+  sharePublishRecovering: false,
   incomingCalls: [],
   isCameraOn: false,
   localCameraStream: null,

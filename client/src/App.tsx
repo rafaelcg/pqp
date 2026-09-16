@@ -7005,6 +7005,10 @@ function MainAppContent({
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.isSharingScreen
             }
+            sharePublishRecovering={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.sharePublishRecovering
+            }
             someoneIsSharing={(
               voiceState.occupancy[selectedChannel.id] ?? []
             ).some((peer) => peer.sharingScreen)}
@@ -7199,6 +7203,10 @@ function MainAppContent({
             isPresenting={
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.isSharingScreen
+            }
+            sharePublishRecovering={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.sharePublishRecovering
             }
             someoneIsSharing={(
               voiceState.occupancy[selectedChannel.id] ?? []
@@ -7896,6 +7904,11 @@ function MainAppContent({
           onSelectChannel={(id) => void selectChannel(id)}
           onJoinVoice={handleJoinVoiceFromList}
           liveParties={watchParties.live}
+          recoveringChannelId={
+            voiceState.sharePublishRecovering
+              ? voiceState.voiceChannelId
+              : null
+          }
           pendingParty={
             Object.values(watchParties.byChannel).find(
               (party) =>

@@ -200,6 +200,13 @@ interface ChannelListProps {
    * `components/watch-party/live-party-block.tsx`.
    */
   liveParties?: readonly WatchParty[];
+  /**
+   * The `watch_party` channel whose live block should read "reconnecting"
+   * instead of "AO VIVO": the one where THIS viewer is the presenter and their
+   * own screen publish has dropped. Null for everyone else. See
+   * `LivePartyBlock.recoveringChannelId`.
+   */
+  recoveringChannelId?: string | null;
   /** See `LivePartyBlock.pending`. */
   pendingParty?: WatchParty | null;
   /** One click: select the channel, which is what starts watching. */
@@ -356,6 +363,7 @@ export function ChannelList({
   onSelectChannel,
   onJoinVoice,
   liveParties,
+  recoveringChannelId = null,
   pendingParty,
   onWatchLiveParty,
   canStartWatchParty,
@@ -1448,6 +1456,7 @@ export function ChannelList({
                 parties={liveParties ?? []}
                 pending={pendingParty ?? null}
                 selectedChannelId={selectedChannelId}
+                recoveringChannelId={recoveringChannelId}
                 audience={Object.fromEntries(
                   (liveParties ?? []).map((party) => [
                     party.channelId,

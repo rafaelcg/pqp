@@ -311,6 +311,16 @@ export interface LiveKitSession {
   disconnect(): Promise<void>;
   /** True while the LiveKit room is actually connected (not merely constructed). */
   isConnected(): boolean;
+  /**
+   * True while THIS participant's own screen share is actually on the wire: the
+   * room is connected and a ScreenShare publication exists whose track is live
+   * and unmuted. False the moment the publication is gone, muted or its track
+   * ended — which is what a WS-resume/reconnect can leave behind without any
+   * event the app was listening for (the 2026-09-16 watch-party incident). The
+   * presenter's truthful "AO VIVO" and the auto-republish both read this; it is
+   * a pure read and never touches the publication.
+   */
+  screenPublishLive(): boolean;
 }
 
 export interface LiveKitIdentity {
@@ -2429,6 +2439,22 @@ export async function connectLiveKit({
 
     isConnected() {
       return room.state === ConnectionState.Connected;
+    },
+
+    screenPublishLive() {
+      if (room.state !== ConnectionState.Connected) {
+        return false;
+      }
+      const publication = room.localParticipant.getTrackPublication(
+        Track.Source.ScreenShare,
+      );
+      const mediaStreamTrack = publication?.track?.mediaStreamTrack;
+      return Boolean(
+        publication &&
+          !publication.isMuted &&
+          mediaStreamTrack &&
+          mediaStreamTrack.readyState === "live",
+      );
     },
   };
 }
