@@ -241,6 +241,22 @@ interface MetricSample {
   canaryMs: number | null;
 }
 
+// Partial shapes of the two JSON bodies this sampler reads. Only the fields
+// used below; everything is optional because a breaker-open /ready or a
+// truncated metrics payload legitimately omits them.
+interface AdminMetricsBody {
+  runtime?: {
+    pool?: { busy?: number; waiting?: number; max?: number };
+    peakPoolWaiting?: number;
+    db?: { breaker?: { state?: string; opened?: number; rejected?: number } };
+    sockets?: number;
+  };
+  readCache?: { hits?: number; misses?: number; coalesced?: number; staleServed?: number };
+}
+interface ReadyBody {
+  checks?: { pool?: { queued?: number } };
+}
+
 async function sampleOnce(safe: Safe): Promise<MetricSample> {
   const at = Date.now();
   const [health, ready, metrics, canary] = await Promise.all([
@@ -257,12 +273,12 @@ async function sampleOnce(safe: Safe): Promise<MetricSample> {
     // open this should come back as a fast 503, not a 30s hang.
     api(safe.apiUrl, tokenFor(safe, `canary_${at % 100000}`), "GET", "/api/me"),
   ]);
-  const m = (metrics && (metrics as HttpResult).body) as Record<string, any> | null;
+  const m = ((metrics && (metrics as HttpResult).body) ?? null) as AdminMetricsBody | null;
   const runtime = m?.runtime ?? {};
   const pool = runtime.pool ?? {};
   const breaker = runtime.db?.breaker ?? {};
   const cache = m?.readCache ?? {};
-  const readyBody = (ready as { body?: any } | null)?.body ?? null;
+  const readyBody = (((ready as { body?: unknown } | null)?.body ?? null) as ReadyBody | null);
   return {
     atMs: at,
     health: health as number | null,
