@@ -564,8 +564,9 @@ function appendAutoplayed(picks: MusicResolved[], gen: number): void {
 
 /**
  * Keep a short buffer of related tracks on the queue so ENDED can
- * `advance()` instead of waiting on InnerTube. The actor fills immediately;
- * everyone else waits so they do not race the actor.
+ * `advance()` instead of waiting on InnerTube. The embed only starts
+ * this as the actor. The non-actor wait is for callers that still
+ * need a fallback, including tests.
  */
 export async function fillAutoplayBuffer(
   isActor: boolean,

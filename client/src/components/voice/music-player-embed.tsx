@@ -336,14 +336,16 @@ export function MusicPlayer({
   const repeatMode = music.state?.repeat ?? "off";
   const queueLength = music.state?.queue.length ?? 0;
   useEffect(() => {
-    if (!shouldFillAutoplayBuffer(musicRef.current.state)) {
+    // Only the actor prefetches. Non-actors waiting 1.5s would stampede
+    // InnerTube if the actor is slow or gone; ENDED still has that fallback.
+    if (!isActor || !shouldFillAutoplayBuffer(musicRef.current.state)) {
       return;
     }
-    void fillAutoplayBuffer(isActorRef.current, async (id) => {
+    void fillAutoplayBuffer(true, async (id) => {
       const { tracks } = await relatedMusic(id);
       return tracks;
     });
-  }, [autoplayOn, repeatMode, trackId, autoplayedQueued, queueLength]);
+  }, [isActor, autoplayOn, repeatMode, trackId, autoplayedQueued, queueLength]);
 
   // Play or pause, and the drift loop.
   useEffect(() => {

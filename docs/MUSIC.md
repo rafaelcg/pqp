@@ -285,13 +285,14 @@ edit never carries a stale one. A track ending advances the queue, guarded
 on the id so a straggler cannot skip the track the room already moved to.
 When `autoplay` is on and repeat is off, the actor keeps about three
 related tracks on the queue so ENDED can advance without waiting on
-InnerTube. If the actor has left, any member fills the same buffer after
-1.5 s. If the queue is still empty at ENDED, that member (or the actor)
-fetches `/api/music/related` and writes one related track with
-`autoplayed: true`. The play effect must not call `playVideo()` while
-YouTube is ENDED, except on repeat-one: that is what used to restart the
-finished song. A new add after this machine saw ENDED starts that pick
-now and drops pending autoplayed rows so it becomes the radio seed.
+InnerTube. Listeners do not prefetch: that used to mean every seat
+asked InnerTube for the same seed. If the queue is still empty at ENDED,
+the actor fetches `/api/music/related` at once, or any member does after
+1.5 s, and writes one related track with `autoplayed: true`. The play
+effect must not call `playVideo()` while YouTube is ENDED, except on
+repeat-one: that is what used to restart the finished song. A new add
+after this machine saw ENDED starts that pick now and drops pending
+autoplayed rows so it becomes the radio seed.
 
 Autoplay can be refused until the page has a gesture; the dock shows
 "Toque para tocar" when the player has not started two seconds after being
