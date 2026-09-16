@@ -16,6 +16,16 @@ it.
 > testers on it, so step 4 below is the critical path and everything after it can
 > happen while the clock runs.
 
+> **The app has been approved on Google Play.** Production access is open. This
+> file stays as the record of the manual path that got the first build there —
+> §1 through §7 are still accurate for the one-time account and listing
+> decisions. For every release *after* the first, use the automated pipeline
+> instead of repeating §2's manual upload: [`ANDROID.md` §"Shipping to Google
+> Play"](./ANDROID.md#shipping-to-google-play) covers the one-time secret setup
+> (reusing the same `pqp-upload.jks` created in §2 below) and the per-release
+> flow (`.github/workflows/android-release.yml`, triggered by an
+> `android-vX.Y.Z` tag).
+
 ---
 
 ## What is already done, and what is not
@@ -29,8 +39,9 @@ it.
 | `.github/workflows/android.yml` | **Done**: build, unit tests, lint, debug APK, unsigned release, sideload APK. `main` (and `workflow_dispatch`) publishes `pqp.apk` to the `android-beta` tag |
 | **In-app account deletion** | **Done and exercised on a device.** See §0 |
 | Data export in the app | **Done** (`GET /api/me/export`, saved through the system file picker) |
-| Play Console: FGS declaration, data safety, listing | **Not started.** §5, §6, §7. Note the manifest now needs **two** FGS declarations, not one |
-| Voice carrying actual audio | **Still unproven between two humans.** Join, mute, deafen, the foreground service and a clean teardown are all verified on a device; nobody has heard anybody. Decide §3 before uploading |
+| Play Console: FGS declaration, data safety, listing | **Done.** §5, §6, §7 were completed for the approved submission |
+| Voice carrying actual audio | **Still unproven between two humans** as of this build. Join, mute, deafen, the foreground service and a clean teardown are all verified on a device; nobody has heard anybody. See `ANDROID.md` "What is real" for the current state before shipping a voice-dependent release |
+| Automated production pipeline (`.github/workflows/android-release.yml`) | **Wired**, gated cleanly on five secrets that are not yet set (`PLAY_SERVICE_ACCOUNT_JSON` and the four `ANDROID_UPLOAD_KEY*`). See `ANDROID.md` §"Shipping to Google Play" |
 
 ---
 
