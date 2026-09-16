@@ -130,6 +130,15 @@ export interface WatchPartyPanelProps {
   /** True while this person is the one whose screen is on the stage. */
   isPresenting: boolean;
   /**
+   * This presenter's OWN screen-share publish to the SFU has dropped (a
+   * reconnect) and the client is re-establishing it. Drives the truthful
+   * "reconnecting" state in place of a live badge, timer and viewer count on
+   * every surface the presenter runs the show from. Only ever true for the
+   * presenter (`use-voice`'s `sharePublishRecovering`); false for a viewer, so
+   * it never changes what the audience sees.
+   */
+  sharePublishRecovering?: boolean;
+  /**
    * Anybody in the room has a screen up, this person or not.
    *
    * Separates the two states that used to share one sentence: a host who has
@@ -2072,6 +2081,7 @@ function LiveSurface(
       className="min-w-[12rem]"
       meta={t("watchParty.live.viewers", { count: props.audienceCount })}
       onRename={props.onRename}
+      recovering={props.isPresenting && props.sharePublishRecovering === true}
     />
   );
 
@@ -2561,6 +2571,7 @@ function LiveSurface(
       wentLiveAt={party.wentLiveAt}
       audienceCount={props.audienceCount}
       isPresenting={props.isPresenting}
+      recovering={props.isPresenting && props.sharePublishRecovering === true}
       quality={props.videoQuality ?? "auto"}
       roomViewers={props.roomViewers ?? 0}
       transport={props.transport ?? null}
@@ -2728,6 +2739,7 @@ function PartyIdentity({
   meta,
   className,
   onRename,
+  recovering = false,
 }: {
   party: WatchParty;
   compact?: boolean;
@@ -2735,9 +2747,17 @@ function PartyIdentity({
   meta?: string;
   className?: string;
   onRename?: (name: string) => Promise<void>;
+  /**
+   * The presenter's OWN screen-share publish has dropped and is being
+   * re-established. Only ever true on the presenter's own bar. It turns the
+   * red "AO VIVO" badge into an amber "Reconectando" one and drops the viewer
+   * count: the party is not actually reaching anyone until the picture is back,
+   * and a live badge over a dead stream is the exact lie this fixes.
+   */
+  recovering?: boolean;
 }) {
   const { t } = useTranslation();
-  const live = party.state === "live";
+  const live = party.state === "live" && !recovering;
   const canRename =
     onRename !== undefined &&
     canPerformWatchPartyAction({
@@ -2845,13 +2865,14 @@ function PartyIdentity({
             </span>
           )}
           {live && <LivePill />}
+          {recovering && <LivePill variant="recovering" />}
         </span>
         <span
           data-testid={meta ? "watch-party-viewers" : undefined}
           className="truncate text-[11px] text-paper-muted"
         >
           {t("watchParty.live.hostedBy", { name: party.hostDisplayName })}
-          {meta ? ` · ${meta}` : ""}
+          {meta && !recovering ? ` · ${meta}` : ""}
         </span>
       </span>
     </span>

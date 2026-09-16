@@ -149,6 +149,7 @@ export function WatchPartyTransmission({
   wentLiveAt,
   audienceCount,
   isPresenting,
+  recovering = false,
   quality,
   roomViewers,
   micInStream = false,
@@ -172,6 +173,13 @@ export function WatchPartyTransmission({
   audienceCount: number;
   /** This person's screen is the one on the stage. */
   isPresenting: boolean;
+  /**
+   * The presenter's own screen publish dropped and is being re-established.
+   * Overrides the stream-derived health with a truthful "reconnecting" and
+   * freezes the uptime, so the panel stops counting up over a dead broadcast
+   * long before the server tears the (now sourceless) HLS stream down.
+   */
+  recovering?: boolean;
   quality: VideoQuality;
   /** People in the room, for the outbound readout's room-vs-link reasoning. */
   roomViewers: number;
@@ -286,12 +294,16 @@ export function WatchPartyTransmission({
    */
   const audioState = streamAudioState(stream);
   const silent = audioState === "none";
-  const minutes = wentLiveAt
-    ? Math.max(
-        0,
-        Math.floor((now.getTime() - Date.parse(wentLiveAt)) / 60_000),
-      )
-    : 0;
+  // Freeze the uptime while our publish is down: it is not accruing broadcast
+  // time, and a timer ticking up over a dead stream is half of the incident's
+  // lie. It resumes from the server's `wentLiveAt` once the picture is back.
+  const minutes =
+    wentLiveAt && !recovering
+      ? Math.max(
+          0,
+          Math.floor((now.getTime() - Date.parse(wentLiveAt)) / 60_000),
+        )
+      : 0;
 
   const summary = !stream
     ? isPresenting
@@ -313,23 +325,27 @@ export function WatchPartyTransmission({
    * ranks (no audio track, ten seconds of silence, uplink strain). Grey is
    * "nothing is going out", which is not a fault.
    */
-  const health: "idle" | "ok" | "warn" | "bad" = !stream
-    ? "idle"
-    : silent || outputSilentWarning
-      ? "bad"
-      : strained
-        ? "warn"
-        : "ok";
-  const healthTitle =
-    health === "idle"
+  const health: "idle" | "ok" | "warn" | "bad" = recovering
+    ? "bad"
+    : !stream
+      ? "idle"
+      : silent || outputSilentWarning
+        ? "bad"
+        : strained
+          ? "warn"
+          : "ok";
+  const healthTitle = recovering
+    ? t("watchParty.tx.healthReconnecting")
+    : health === "idle"
       ? t("watchParty.tx.healthIdle")
       : health === "ok"
         ? t("watchParty.tx.healthOk")
         : health === "warn"
           ? t("watchParty.tx.healthWarn")
           : t("watchParty.tx.healthBad");
-  const statusLine =
-    detailsInDialog && stream && wentLiveAt
+  const statusLine = recovering
+    ? t("watchParty.tx.publishDropped")
+    : detailsInDialog && stream && wentLiveAt
       ? `${summary} · ${t("watchParty.tx.uptimeValue", { minutes })}`
       : summary;
 

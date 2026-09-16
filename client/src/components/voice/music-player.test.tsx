@@ -127,6 +127,7 @@ const voiceState = (overrides: Partial<VoiceState> = {}): VoiceState =>
     isSharingSystemAudio: false,
     isShareCursorVisible: false,
     screenShareAudioFailed: false,
+    sharePublishRecovering: false,
     incomingCalls: [],
     isCameraOn: false,
     localCameraStream: null,
