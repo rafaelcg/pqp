@@ -30,6 +30,13 @@ final class VoiceModel {
     }
     private(set) var channelId: String?
     private(set) var channelName: String?
+    /// Bumped once at the start of every `join()` attempt, retries included.
+    /// A cleanup `Task` spawned by a moderation/refusal event captures the
+    /// generation it belongs to and checks it back after its first `await`,
+    /// so a retry that already established a NEW session by the time the old
+    /// cleanup resumes is left alone instead of being torn down by a task
+    /// that no longer speaks for the current call (Farol review, PR 674).
+    private var callGeneration = 0
     /// The room this session is in or joining, for the stage that is presented
     /// from the app root. Nil once left. Distinct from `intendedChannel`, which
     /// is cleared on eviction while the screen is still up.
@@ -441,6 +448,7 @@ final class VoiceModel {
             if channelId == channel.id { return }
             await leave()
         }
+        callGeneration += 1
         self.session = session
         self.ratings = ratings
         configureScreenShare()
@@ -1048,6 +1056,64 @@ final class VoiceModel {
             ))
             Task {
                 await screenShare.disarm()
+                await voice.disconnectAll()
+                await sfu.disconnect()
+            }
+            sfuJoin?.cancel()
+            sfuJoin = nil
+            sfuIsConnected = false
+            peers = []
+            video = [:]
+            selfPeerId = nil
+            isCameraOn = false
+            localCamera = nil
+
+        /**
+         A MODERATOR ACTED ON THIS SEAT.
+
+         `disconnectVoiceUser` on the server sends this notice and THEN drops
+         the peer, so by the time it arrives here the seat is already gone.
+         Nothing else says so: a mesh peer removal does not single the target
+         out with its own frame, so without this the local call screen and
+         microphone kept running against a room that no longer held us —
+         "ends the call with no reason given" for a disconnect, and for a
+         move, the person the moderator sent elsewhere never reappears
+         anywhere, because nothing here ever asked to go.
+
+         `message` is the whole sentence, server-written and already correct
+         (for `moved`, it names the destination channel) — rendered verbatim,
+         the same rule as `sanctionNotice`. `movedToChannelId` is not
+         followed automatically: doing that needs a `Channel` to hand `join`,
+         which this model has no way to resolve from an id alone, so the
+         person taps their way there themselves for now.
+
+         "muted" / "unmuted" fall through undone on purpose: the roster's
+         `serverMuted` flag is what enforces those (`RemoteAudioMixer` and
+         every frame that carries the participant), and this model has no
+         banner surface yet for the explanation the web shows alongside it.
+         */
+        case .voiceModeration(let voiceChannelId, let action, _, let message):
+            // Matches both `channelId` and `intendedChannel?.id`, the same as
+            // `voiceJoinRefused` above: during a rejoin the channel this event
+            // is about can be sitting in `intendedChannel` rather than
+            // `channelId` yet, and without this a moderation frame that
+            // arrives in that window was silently dropped, leaving the call
+            // screen and microphone live against a room that already dropped
+            // the seat (Farol review, PR 674).
+            guard voiceChannelId == channelId || voiceChannelId == intendedChannel?.id,
+                  action == "disconnected" || action == "moved" else { return }
+            intendedChannel = nil
+            resumeClaim = nil
+            status = .failed(message)
+            let generation = callGeneration
+            Task {
+                await screenShare.disarm()
+                // A retry (`join()`) bumps `callGeneration`; if one has
+                // already started a new session by the time `disarm()`
+                // returns, this cleanup belongs to the OLD session and must
+                // not tear down the new one's mesh/SFU connection (Farol
+                // review, PR 674).
+                guard generation == callGeneration else { return }
                 await voice.disconnectAll()
                 await sfu.disconnect()
             }

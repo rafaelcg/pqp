@@ -41,6 +41,45 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertNil(notice.reason)
     }
 
+    /// `voice-moderation` reuses `message` for a string the same way
+    /// `sanction-notice` does, so it hits the same trap: routed through the
+    /// shared envelope (whose `message` is a chat `Message?`), the decode
+    /// throws and the whole frame vanishes. Before `VoiceModerationFrame`
+    /// existed this is exactly how a moderator's disconnect and move went
+    /// unseen by the target's own client.
+    func testVoiceModerationDisconnectedDecodesWithItsStringMessage() async throws {
+        let json = """
+        {"type":"voice-moderation","action":"disconnected",
+         "voiceChannelId":"22222222-2222-2222-2222-222222222222",
+         "message":"A moderator disconnected you from voice."}
+        """
+        let event = await firstEvent(from: json)
+        guard case .voiceModeration(let voiceChannelId, let action, let movedToChannelId, let message) = event else {
+            return XCTFail("Expected voiceModeration, got \(String(describing: event))")
+        }
+        XCTAssertEqual(voiceChannelId, "22222222-2222-2222-2222-222222222222")
+        XCTAssertEqual(action, "disconnected")
+        XCTAssertNil(movedToChannelId)
+        XCTAssertEqual(message, "A moderator disconnected you from voice.")
+    }
+
+    /// `moved` carries a destination on top of the same message shape.
+    func testVoiceModerationMovedCarriesTheDestinationChannel() async throws {
+        let json = """
+        {"type":"voice-moderation","action":"moved",
+         "voiceChannelId":"22222222-2222-2222-2222-222222222222",
+         "movedToChannelId":"33333333-3333-3333-3333-333333333333",
+         "message":"A moderator moved you to #general."}
+        """
+        let event = await firstEvent(from: json)
+        guard case .voiceModeration(_, let action, let movedToChannelId, let message) = event else {
+            return XCTFail("Expected voiceModeration, got \(String(describing: event))")
+        }
+        XCTAssertEqual(action, "moved")
+        XCTAssertEqual(movedToChannelId, "33333333-3333-3333-3333-333333333333")
+        XCTAssertTrue(message.contains("#general"))
+    }
+
     // MARK: - message-rejected
 
     /// The server's answer to a refused send. Before this case existed the
