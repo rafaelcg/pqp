@@ -7,12 +7,15 @@
   "mediaSequence": 41,
   "video": {
     "initUri": "init.mp4",
+    "discontinuitySequence": 0,
     "segments": [
       {
         "msn": 41,
         "complete": true,
         "durationSecs": 2,
         "uri": "seg-41.m4s",
+        "initUri": "init.mp4",
+        "discontinuity": false,
         "programDateTime": "2026-09-15T08:01:00.000Z",
         "parts": [
           {
@@ -46,6 +49,8 @@
         "complete": true,
         "durationSecs": 2,
         "uri": "seg-42.m4s",
+        "initUri": "init.mp4",
+        "discontinuity": false,
         "programDateTime": "2026-09-15T08:01:02.000Z",
         "parts": [
           {
@@ -77,6 +82,8 @@
       {
         "msn": 43,
         "complete": false,
+        "initUri": "init.mp4",
+        "discontinuity": false,
         "programDateTime": "2026-09-15T08:01:04.000Z",
         "parts": [
           {
@@ -102,12 +109,15 @@
   },
   "audio": {
     "initUri": "audio-init.mp4",
+    "discontinuitySequence": 0,
     "segments": [
       {
         "msn": 41,
         "complete": true,
         "durationSecs": 1,
         "uri": "audio-seg-41.m4s",
+        "initUri": "audio-init.mp4",
+        "discontinuity": false,
         "programDateTime": "2026-09-15T08:01:00.000Z",
         "parts": [
           {
@@ -129,6 +139,8 @@
         "complete": true,
         "durationSecs": 1,
         "uri": "audio-seg-42.m4s",
+        "initUri": "audio-init.mp4",
+        "discontinuity": false,
         "programDateTime": "2026-09-15T08:01:01.000Z",
         "parts": [
           {
@@ -148,6 +160,8 @@
       {
         "msn": 43,
         "complete": false,
+        "initUri": "audio-init.mp4",
+        "discontinuity": false,
         "programDateTime": "2026-09-15T08:01:02.000Z",
         "parts": [
           {
