@@ -98,7 +98,7 @@ func TestSession_ParameterSetChangeRebuildsInit(t *testing.T) {
 	r := ring.New(6, 90000)
 	s := New(45000, 360000, r, nil) // 500ms parts, 4s segments
 
-	sps360 := buildSPS(t, 640, 352, 0x1E) // level 3.0
+	sps360 := buildSPS(t, 640, 352, 0x1E)  // level 3.0
 	sps720 := buildSPS(t, 1280, 720, 0x1F) // level 3.1
 	pps := buildPPS()
 

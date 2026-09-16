@@ -99,7 +99,7 @@ type Session struct {
 	// guaranteed. Unused entirely when EnableAudio is never called.
 	epoch time.Time
 
-	initSet          atomic.Bool
+	initSet atomic.Bool
 	// initGeneration is how many video init segments this session has
 	// published (1 after the first SPS/PPS, 2 after the first real
 	// parameter-set change, …). Used only to name init-N.mp4.
@@ -112,7 +112,7 @@ type Session struct {
 	// demoteReason, when non-empty, asks the control-plane watchdog to
 	// demote this session off the LL rung (parameter-set change that
 	// could not be represented). Read without videoMu from Health.
-	demoteReason atomic.Value // string
+	demoteReason     atomic.Value // string
 	subscribed       atomic.Bool
 	partsWritten     atomic.Uint64
 	bytesWritten     atomic.Uint64
