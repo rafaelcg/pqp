@@ -108,7 +108,11 @@ import {
 } from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
-import { uniformJitterMs } from "@/lib/reconnect-jitter";
+import {
+  uniformJitterMs,
+  bootstrapJitterMs,
+  bootstrapRetryDelayMs,
+} from "@/lib/reconnect-jitter";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
@@ -2823,6 +2827,25 @@ function MainAppContent({
 
   useEffect(() => {
     let cancelled = false;
+    // Spreads the cold bootstrap: a synchronized wave of tabs (a watch-party
+    // F5 spike) must not fire its ~11 requests at the same instant, and a
+    // transient failure (the DB breaker's 503) must not have every tab retry
+    // in lockstep either. Both timers live here so the cleanup can clear them.
+    let bootstrapTimer: ReturnType<typeof setTimeout> | null = null;
+    let autoRetryCount = 0;
+    // How many times a transient bootstrap failure self-retries before giving
+    // up and showing the manual error screen. The two failure shapes are not
+    // the same problem and do not get the same budget (per Farol review): a
+    // 503 `database_unavailable` means the breaker is open and WILL
+    // recover, so it is worth riding out — at the 1s-base, 30s-cap backoff,
+    // 8 retries spans a couple of minutes, long enough for a recovery cycle.
+    // Status 0 (network error / timeout) has no such guarantee — it is just
+    // as likely a genuinely unreachable API or a dead connection, and paying
+    // the full 503 budget there left a truly offline user staring at the
+    // loading shell for 3-4 minutes before any error appeared. It gets a
+    // much shorter leash so that case surfaces quickly instead.
+    const MAX_BOOTSTRAP_AUTO_RETRIES_OVERLOAD = 8;
+    const MAX_BOOTSTRAP_AUTO_RETRIES_NETWORK = 3;
     // The reconnect handler's message refetch (onReady below) is jittered
     // and coalesced, PER CHANNEL: a shared "is anything pending" flag would
     // let a slow fetch for one channel silently swallow a needed refetch for
@@ -3574,6 +3597,32 @@ function MainAppContent({
         if (cancelled) {
           return;
         }
+        // A transient overload — the DB breaker's `503 database_unavailable`,
+        // or a network error / timeout (`ApiError` status 0) — self-retries
+        // with jittered backoff instead of dumping every tab onto the manual
+        // error screen at once (from which 300 people all click Retry). A 503
+        // carrying `Retry-After` backs off harder than a bare network drop:
+        // `bootstrapRetryDelayMs` honors it as a floor. The loading shell stays
+        // up meanwhile (bootstrapReady false, bootstrapError null).
+        const isOverload = error instanceof ApiError && error.status === 503;
+        const isNetworkError = error instanceof ApiError && error.status === 0;
+        const transient = isOverload || isNetworkError;
+        const retryBudget = isOverload
+          ? MAX_BOOTSTRAP_AUTO_RETRIES_OVERLOAD
+          : MAX_BOOTSTRAP_AUTO_RETRIES_NETWORK;
+        if (transient && autoRetryCount < retryBudget) {
+          const retryAfterMs =
+            error instanceof ApiError ? error.retryAfterMs : null;
+          const delay = bootstrapRetryDelayMs(autoRetryCount, retryAfterMs);
+          autoRetryCount += 1;
+          bootstrapTimer = setTimeout(() => {
+            bootstrapTimer = null;
+            if (!cancelled) {
+              void init();
+            }
+          }, delay);
+          return;
+        }
         setBootstrapError(
           error instanceof Error
             ? error.message
@@ -3585,10 +3634,26 @@ function MainAppContent({
       }
     }
 
-    void init();
+    // The automatic first load (bootstrapAttempt === 0) is spread across a few
+    // seconds so a synchronized F5 wave does not land its bootstrap requests in
+    // one instant. A deliberate user retry (bootstrapAttempt > 0, the error
+    // screen's button) is never delayed — it must feel instant.
+    if (bootstrapAttempt === 0) {
+      bootstrapTimer = setTimeout(() => {
+        bootstrapTimer = null;
+        if (!cancelled) {
+          void init();
+        }
+      }, bootstrapJitterMs());
+    } else {
+      void init();
+    }
 
     return () => {
       cancelled = true;
+      if (bootstrapTimer !== null) {
+        clearTimeout(bootstrapTimer);
+      }
       for (const state of reconnectMessagesRefetchState.values()) {
         if (state.timer !== null) {
           clearTimeout(state.timer);
