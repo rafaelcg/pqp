@@ -654,14 +654,28 @@ class VoiceController(
         )
     }
 
-    fun toggleMute() {
+    fun toggleMute() = setMuted(!_state.value.muted)
+
+    /**
+     * Set mute to a specific value rather than flip whatever this device
+     * currently has.
+     *
+     * `toggleMute` is what a tap on our own mic button means: a request to
+     * flip. [android.telecom.Connection.onCallAudioStateChanged] is not a
+     * request, it is a fact ("the Bluetooth headset's mute button was
+     * pressed, mute is now X") delivered on a schedule this client does not
+     * control, and can be re-delivered unchanged. Toggling on a re-delivery
+     * would desync the microphone from every other client's roster view of
+     * it with nothing on screen explaining why.
+     */
+    fun setMuted(muted: Boolean) {
         // Neither a moderator's mute nor a listen-only seat is ours to lift.
         // The server would refuse the frame anyway; refusing here keeps the
         // control honest and saves the round trip that would otherwise flicker
         // the microphone icon. `muteControlEnabled` is the one expression the
         // call bar draws from, so the two cannot disagree.
         if (!_state.value.muteControlEnabled) return
-        val muted = !_state.value.muted
+        if (_state.value.muted == muted) return
         _state.value = _state.value.copy(muted = muted)
         engine.setMuted(muted || _state.value.deafened)
         pushVoiceState()

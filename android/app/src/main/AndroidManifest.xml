@@ -15,7 +15,17 @@
          only way to say that is a foreground service with a notification. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Telecom: a self-managed ConnectionService (gg.pqp.app.voice.telecom).
+         `MANAGE_OWN_CALLS` is what lets pqp register its own PhoneAccount and
+         place/receive calls through Telecom rather than the system dialer;
+         it is a normal permission granted at install, with no runtime
+         prompt. `USE_FULL_SCREEN_INTENT` is what lets an incoming DM call's
+         notification wake the screen the way a phone call does. -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <!-- An incoming DM call buzzes the phone while the app is open. -->
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -100,7 +110,31 @@
         <service
             android:name=".voice.VoiceService"
             android:exported="false"
-            android:foregroundServiceType="microphone|mediaProjection" />
+            android:foregroundServiceType="microphone|mediaProjection|phoneCall" />
+
+        <!-- The self-managed ConnectionService that puts a pqp call on
+             Telecom: the lock screen, Bluetooth/car head units, Android
+             Auto, and the system's own notion of "a call is happening".
+             Bound by the system, never started directly (see
+             `PqpConnectionService`'s own comment). `exported="true"` is
+             required by the platform for anything protected by
+             `BIND_TELECOM_CONNECTION_SERVICE` — the permission is what
+             actually restricts who may bind, not the export flag. -->
+        <service
+            android:name=".voice.telecom.PqpConnectionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
+
+        <!-- Answer / Decline from the incoming-call notification
+             (`IncomingCallNotifier`). Reached only by this app's own
+             PendingIntents. -->
+        <receiver
+            android:name=".voice.telecom.CallActionReceiver"
+            android:exported="false" />
 
         <!-- Where FCM hands over a data message and a rotated token.
              `exported="false"`: Firebase's own manifest binds this through a
