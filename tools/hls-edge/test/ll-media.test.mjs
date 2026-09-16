@@ -556,6 +556,11 @@ test("a name outside the remux's own filename grammar never reaches the box", as
     // the audio ring, nor the other way round.
     [LL_VIDEO_RUNG, "audio-part-5.m4s"],
     [LL_AUDIO_RUNG, "part-5.m4s"],
+    // Numbered video inits are legal on the video rung only — never as a
+    // bare name on the audio rung, and never as an unprefixed name the
+    // audio rung could somehow fetch.
+    [LL_AUDIO_RUNG, "init-2.mp4"],
+    [LL_VIDEO_RUNG, "audio-init-2.mp4"],
   ]) {
     const response = await callMedia(
       mediaRequest(channelId, startedAt, rung, name, token),
@@ -569,6 +574,35 @@ test("a name outside the remux's own filename grammar never reaches the box", as
   }
 
   assert.equal(origin.calls, 0, "not one of those may become an origin fetch");
+});
+
+test("a numbered video init (init-2.mp4) is served on the video rung after a parameter-set change", async () => {
+  // Without this, a remux that correctly published init-2.mp4 and a
+  // playlist that correctly advertised it would still 404 every MAP
+  // fetch (PR #656 review): MEDIA_NAME_PATTERN used to allow only
+  // exactly `init.mp4`.
+  const channelId = "chan-part-init2";
+  const startedAt = "1726000100099";
+  const name = "init-2.mp4";
+  const origin = fakeMediaOrigin();
+  const cache = fakeCache();
+  const ctx = collectingCtx();
+  const token = tokenFor("viewer-a", channelId, startedAt);
+
+  const response = await callMedia(
+    mediaRequest(channelId, startedAt, LL_VIDEO_RUNG, name, token),
+    origin,
+    cache,
+    ctx,
+    baseEnv(),
+    { channelId, startedAt, rung: LL_VIDEO_RUNG, name },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Content-Type"), "video/mp4");
+  assert.deepEqual(origin.names, ["init-2.mp4"]);
+  await ctx.drain();
+  assert.equal(cache.size, 1);
 });
 
 test("a coalesced waiter is served the cached copy, and the entry is warm the moment the fetch settles", async () => {

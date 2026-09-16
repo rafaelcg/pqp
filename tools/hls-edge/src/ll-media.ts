@@ -148,8 +148,15 @@ import type { PartyPassRevocationGate } from "./party-pass-revocation.js";
  * legitimately name things differently; `test/ll-state-remux-golden.test.mjs`
  * pins the names the real one emits today, and `hlsEdge.llPartNameRefused`
  * is what a divergence would look like from the outside.
+ *
+ * `init(?:-\d+)?\.mp4` covers the first generation (`init.mp4`) and every
+ * later one published after an H.264 parameter-set change (`init-2.mp4`,
+ * …) — same grammar `pqp-remux`'s `isVideoInitURI` accepts. Without the
+ * numbered form, a playlist that correctly advertised `init-2.mp4` after
+ * a resolution ramp would 404 every MAP fetch and leave viewers with no
+ * video again (PR #656 review).
  */
-const MEDIA_NAME_PATTERN = /^(init\.mp4|seg-\d{1,12}\.m4s|part-\d{1,12}\.m4s)$/;
+const MEDIA_NAME_PATTERN = /^(init(?:-\d{1,12})?\.mp4|seg-\d{1,12}\.m4s|part-\d{1,12}\.m4s)$/;
 const AUDIO_NAME_PREFIX = "audio-";
 
 function nameBelongsToRung(name: string, rung: string): boolean {

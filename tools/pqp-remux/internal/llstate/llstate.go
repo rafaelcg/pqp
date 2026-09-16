@@ -339,9 +339,18 @@ func buildTrack(snap ring.Snapshot, n names, allIndependent bool) (*Track, int, 
 			// it is not.
 			return nil, 0, false
 		}
-		segInit := seg.InitURI
-		if segInit == "" {
-			segInit = initURI
+		segInit := initURI
+		// Audio never mid-session-rebuilds its init. The ring still stamps
+		// segments with whatever URI SetInit/SetNamedInit stored
+		// (historically DefaultInitURI "init.mp4" via SetInit's path, or
+		// "audio-init.mp4" after SetNamedInit). Advertising the ring's
+		// internal "init.mp4" on an audio segment makes the Worker emit
+		// EXT-X-MAP …/ll-audio/init.mp4, which nameBelongsToRung refuses
+		// (audio rung requires the audio- prefix) — a silent audio MAP
+		// 404 after an otherwise healthy state.json (Farol, PR #656).
+		// Prefixed tracks always publish n.initURI on every segment.
+		if n.prefix == "" && seg.InitURI != "" {
+			segInit = seg.InitURI
 		}
 		out := Segment{
 			MSN:             seg.Index,
