@@ -28,9 +28,14 @@
  * staging today, or a Vultr shadow-prod box later, via PQP_LOAD_API_URL /
  * PQP_LOAD_WS_URL / PQP_LOAD_HLS_BASE_URL. The gate REFUSES the real
  * production names (pqp.gg / api.pqp.gg / hls.pqp.gg / *.pqp.gg) and any
- * Postgres-looking host, full stop. It uses only HTTP + WebSocket; it never
- * opens a database connection, so the DB it hits never sees more than the
- * server's own pool of connections no matter how hard this pushes.
+ * Postgres-looking host, full stop. It also requires https:/wss: (this
+ * harness attaches LOAD_TEST_TOKEN and ADMIN_METRICS_TOKEN to every request)
+ * and refuses private-use/link-local/cloud-metadata addresses, both with a
+ * loopback exemption for local dev and an explicit
+ * PQP_LOAD_ALLOW_PRIVATE_HOST=1 opt-out for a genuinely private shadow box.
+ * It uses only HTTP + WebSocket; it never opens a database connection, so
+ * the DB it hits never sees more than the server's own pool of connections
+ * no matter how hard this pushes.
  *
  * Usage (tsx):
  *   PQP_LOAD_TARGET=staging LOAD_TEST_TOKEN=... ADMIN_METRICS_TOKEN=... \
@@ -71,14 +76,51 @@ interface Safe {
   machineIds?: string[];
 }
 
+/** Loopback hostnames, allowed to stay on a plain http:/ws: scheme for local dev. */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+/**
+ * Whether `host` is a private-use, link-local, or cloud-metadata address
+ * (RFC 1918, RFC 3927/4291, and the well-known 169.254.169.254 / *.internal
+ * metadata endpoints every cloud provider answers on). None of those are
+ * "staging" or "a shadow box" — they are exactly the addresses a
+ * misconfigured or attacker-controlled env var would use to redirect this
+ * harness's bearer/admin tokens off the intended target (Farol review, PR
+ * #663). Loopback is handled separately and is not private for this check.
+ */
+function isPrivateOrMetadataHost(host: string): boolean {
+  if (host === "metadata.google.internal" || host === "metadata") {
+    return true;
+  }
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (ipv4) {
+    const a = Number(ipv4[1]);
+    const b = Number(ipv4[2]);
+    if (a === 10) return true; // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+    if (a === 192 && b === 168) return true; // 192.168.0.0/16
+    if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
+    if (a === 127) return true; // loopback range beyond 127.0.0.1
+    if (a === 0) return true; // "this network"
+  }
+  if (host.startsWith("fd") || host.startsWith("fc") || host.startsWith("fe80:")) {
+    return true; // IPv6 unique-local / link-local
+  }
+  return false;
+}
+
 /** Hosts that must never be load-tested, whatever the flags say. */
 function assertNotProduction(u: string, label: string): void {
-  let host: string;
+  let parsed: URL;
   try {
-    host = new URL(u).hostname.toLowerCase();
+    parsed = new URL(u);
   } catch {
     throw new Error(`${label} is not a valid URL: ${u}`);
   }
+  // Canonicalize: lowercase, and strip a trailing dot (a bare hostname and
+  // its FQDN form with a trailing "." resolve identically but would
+  // otherwise dodge a plain string comparison below).
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
   // The production edge, API and apex, and anything under the real zone.
   if (host === "pqp.gg" || host.endsWith(".pqp.gg")) {
     throw new Error(
@@ -95,6 +137,26 @@ function assertNotProduction(u: string, label: string): void {
     u.startsWith("postgresql://")
   ) {
     throw new Error(`refusing a database host for ${label}: ${u}`);
+  }
+  const isLoopback = LOOPBACK_HOSTS.has(host);
+  // This harness attaches LOAD_TEST_TOKEN and ADMIN_METRICS_TOKEN to every
+  // request; a plain http:/ws: target puts both on the wire in the clear.
+  // Loopback is exempt so local dev against `pnpm dev` keeps working.
+  const scheme = parsed.protocol;
+  const isSecureScheme = scheme === "https:" || scheme === "wss:";
+  if (!isSecureScheme && !isLoopback) {
+    throw new Error(
+      `${label} must use https:// or wss:// (got ${scheme}) unless the host is loopback: ${u}`,
+    );
+  }
+  // Private/link-local/metadata addresses are refused by default: a real
+  // staging or shadow-prod target has a public DNS name and a real cert, not
+  // an internal address the harness's tokens should never reach. An operator
+  // who genuinely runs a shadow box on a private network can opt in.
+  if (!isLoopback && isPrivateOrMetadataHost(host) && process.env.PQP_LOAD_ALLOW_PRIVATE_HOST !== "1") {
+    throw new Error(
+      `refusing a private/link-local/metadata host for ${label}: ${host}. Set PQP_LOAD_ALLOW_PRIVATE_HOST=1 to override for an intentionally private shadow box.`,
+    );
   }
 }
 
@@ -193,11 +255,24 @@ async function api(
   }
 }
 
+/**
+ * Throws on a genuine setup failure (network error, timeout, auth failure,
+ * server error) instead of letting the caller silently open a WS seat that
+ * never actually passed the age gate (Farol review, PR #663) — a failure
+ * here must count as a join failure, not disappear into a later, unrelated-
+ * looking socket error.
+ */
 async function passAgeGate(base: string, token: string): Promise<void> {
   const me = await api(base, token, "GET", "/api/me");
+  if (me.status !== 200) {
+    throw new Error(`age-gate check failed: GET /api/me -> ${me.status}`);
+  }
   const ageGate = (me.body as { ageGate?: string } | undefined)?.ageGate;
-  if (me.status === 200 && ageGate !== "passed") {
-    await api(base, token, "POST", "/api/me/age-check", { dateOfBirth: "1990-01-01" });
+  if (ageGate !== "passed") {
+    const res = await api(base, token, "POST", "/api/me/age-check", { dateOfBirth: "1990-01-01" });
+    if (res.status !== 200 && res.status !== 201) {
+      throw new Error(`age-gate POST failed: ${res.status}`);
+    }
   }
 }
 
@@ -352,31 +427,54 @@ async function provision(safe: Safe): Promise<void> {
   const text = cb.channels.find((c) => c.type === "text");
   const voice = cb.channels.find((c) => c.type === "voice");
   if (!text || !voice) throw new Error("server did not come with a text and a voice channel");
-  // Pin the voice room to LiveKit: mesh caps at MESH_VOICE_LIMIT (8), so a
-  // presence room of hundreds must be an SFU room or every joiner past 8 is
-  // refused with voice-room-full.
-  const patched = await api(safe.apiUrl, owner, "PATCH", `/api/channels/${voice.id}`, {
-    voiceTransport: "livekit",
-  });
-  if (patched.status !== 200) {
-    console.warn(`[warn] could not pin voice channel to livekit (${patched.status}); big WS rooms may be refused`);
-  }
-  const invite = await api(safe.apiUrl, owner, "POST", `/api/servers/${cb.server.id}/invites`, {});
-  const code = (invite.body as { invite?: { code?: string } } | undefined)?.invite?.code;
-  if (!code) throw new Error(`create invite failed: ${invite.status} ${JSON.stringify(invite.body)}`);
-  const manifest: Manifest = {
-    version: 1,
-    runId: RUN_ID,
-    apiUrl: safe.apiUrl,
-    wsUrl: safe.wsUrl,
-    serverId: cb.server.id,
-    textChannelId: text.id,
-    voiceChannelId: voice.id,
-    inviteCode: code,
-    createdAt: new Date().toISOString(),
+  // Every step from here on operates on an already-created server. A
+  // transient failure in any of them used to leave that server behind on
+  // the target forever (Farol review, PR #663) — best-effort clean it up
+  // before rethrowing.
+  const rollback = async (cause: unknown): Promise<never> => {
+    console.warn(`[warn] provisioning failed after server ${cb.server.id} was created; deleting it`);
+    await api(safe.apiUrl, owner, "DELETE", `/api/servers/${cb.server.id}`).catch(() => {
+      /* best-effort: a failed cleanup must not mask the original error */
+    });
+    throw cause instanceof Error ? cause : new Error(String(cause));
   };
-  writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-  console.log(JSON.stringify({ provisioned: true, manifest: out, ...manifest }, null, 2));
+  try {
+    // Pin the voice room to LiveKit: mesh caps at MESH_VOICE_LIMIT (8), so a
+    // presence room of hundreds must be an SFU room or every joiner past 8
+    // is refused with voice-room-full. A failed pin makes the manifest
+    // describe a mesh room instead of the SFU room the run intended to
+    // measure, so this is a provisioning failure, not a warning: retry once,
+    // then give up.
+    let patched = await api(safe.apiUrl, owner, "PATCH", `/api/channels/${voice.id}`, {
+      voiceTransport: "livekit",
+    });
+    if (patched.status !== 200) {
+      patched = await api(safe.apiUrl, owner, "PATCH", `/api/channels/${voice.id}`, {
+        voiceTransport: "livekit",
+      });
+    }
+    if (patched.status !== 200) {
+      throw new Error(`pin voice channel to livekit failed: ${patched.status} ${JSON.stringify(patched.body)}`);
+    }
+    const invite = await api(safe.apiUrl, owner, "POST", `/api/servers/${cb.server.id}/invites`, {});
+    const code = (invite.body as { invite?: { code?: string } } | undefined)?.invite?.code;
+    if (!code) throw new Error(`create invite failed: ${invite.status} ${JSON.stringify(invite.body)}`);
+    const manifest: Manifest = {
+      version: 1,
+      runId: RUN_ID,
+      apiUrl: safe.apiUrl,
+      wsUrl: safe.wsUrl,
+      serverId: cb.server.id,
+      textChannelId: text.id,
+      voiceChannelId: voice.id,
+      inviteCode: code,
+      createdAt: new Date().toISOString(),
+    };
+    writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    console.log(JSON.stringify({ provisioned: true, manifest: out, ...manifest }, null, 2));
+  } catch (e) {
+    await rollback(e);
+  }
 }
 
 // ------------------------------------------------------------------ db-storm
@@ -586,11 +684,30 @@ async function wsStorm(safe: Safe): Promise<void> {
   const seats: (WsSeat | null)[] = new Array(sockets).fill(null);
   const result = { joined: 0, failed: 0, reconnected: 0, reconnectFailed: 0, closeCodes: {} as Record<string, number> };
 
+  function trackCloseCodes(seat: WsSeat): void {
+    seat.socket.addEventListener("close", (ev: CloseEvent) => {
+      result.closeCodes[String(ev.code)] = (result.closeCodes[String(ev.code)] ?? 0) + 1;
+    });
+  }
+
   let cursor = 0;
   const rampMs = rampSeconds * 1000;
+  const rampStart = Date.now();
   async function joinPump(): Promise<void> {
     while (cursor < sockets) {
       const idx = cursor++;
+      // Global schedule, not a per-pump sleep: seat `idx` is due at
+      // idx/sockets of the way through the ramp, wall-clock, no matter how
+      // many pumps are running. Sleeping rampMs/sockets AFTER every join,
+      // inside each of `joinConcurrency` pumps running in parallel, produced
+      // roughly `joinConcurrency` times the intended join rate — 300 sockets
+      // over a configured 30s ramp landed in under 2s with the default 20
+      // pumps (Farol review, PR #663).
+      const dueAt = rampStart + (idx / sockets) * rampMs;
+      const waitMs = dueAt - Date.now();
+      if (waitMs > 0) {
+        await sleep(waitMs);
+      }
       const token = tokenFor(safe, `ws_${RUN_ID}_${idx}`);
       const machineId = safe.machineIds ? safe.machineIds[idx % safe.machineIds.length] : undefined;
       const t0 = Date.now();
@@ -599,17 +716,13 @@ async function wsStorm(safe: Safe): Promise<void> {
         seats[idx] = seat;
         welcomeLatencies.push(Date.now() - t0);
         result.joined += 1;
-        seat.socket.addEventListener("close", (ev: CloseEvent) => {
-          result.closeCodes[String(ev.code)] = (result.closeCodes[String(ev.code)] ?? 0) + 1;
-        });
+        trackCloseCodes(seat);
       } catch (e) {
         result.failed += 1;
         const msg = e instanceof Error ? e.message : String(e);
         const key = msg.slice(0, 40);
         result.closeCodes[key] = (result.closeCodes[key] ?? 0) + 1;
       }
-      // Pace the ramp across rampMs.
-      await sleep(rampMs / sockets);
     }
   }
   await Promise.all(Array.from({ length: joinConcurrency }, () => joinPump()));
@@ -652,6 +765,11 @@ async function wsStorm(safe: Safe): Promise<void> {
         seats[idx] = seat;
         welcomeLatencies.push(Date.now() - t0);
         result.reconnected += 1;
+        // The initial join loop tracks close codes for every seat; a seat
+        // replaced here needs the same tracking, or a reconnected socket
+        // that the server later drops during hold silently reads as a
+        // still-successful recovery (Farol review, PR #663).
+        trackCloseCodes(seat);
       } catch {
         result.reconnectFailed += 1;
       }
@@ -660,7 +778,15 @@ async function wsStorm(safe: Safe): Promise<void> {
     console.log(`[ws-storm] reconnect: ok=${result.reconnected} failed=${result.reconnectFailed}`);
   }
 
-  await sleep(holdSeconds * 1000);
+  // `--hold` is the total time sockets stay up after the ramp, not extra time
+  // tacked on after a mid-hold reconnect: with `--reconnect-at` set, only the
+  // remaining hold (holdSeconds - reconnectAt) is left to sleep here, or a
+  // run configured for a 25s hold with a reconnect at 15s stayed up for 40s
+  // instead (Farol review, PR #663).
+  const remainingHoldMs = reconnectAt >= 0
+    ? Math.max(0, holdSeconds - reconnectAt) * 1000
+    : holdSeconds * 1000;
+  await sleep(remainingHoldMs);
   clearInterval(presenceTimer);
   for (const seat of seats) {
     try {

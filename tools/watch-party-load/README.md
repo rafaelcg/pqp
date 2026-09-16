@@ -395,10 +395,15 @@ presenter + real SFU receivers) and the viewer poller in `hls-audience.ts`.
 (any non-empty string, e.g. `staging` / `shadow`), `PQP_LOAD_API_URL`,
 `PQP_LOAD_WS_URL`, `PQP_LOAD_HLS_BASE_URL`. The gate refuses `pqp.gg`,
 `*.pqp.gg` (so api./hls./www.) and any Postgres host, unconditionally, before
-any network call. It speaks only HTTP/WS — never SQL — so the database it hits
-never sees more than the server's own pool no matter how hard this pushes.
-Point it at staging today or a Vultr shadow-prod box later (note: a shadow box
-running `NODE_ENV=production` and not named `-staging` on Fly will make
+any network call. It also requires `https://` / `wss://` for every target and
+refuses private-use, link-local and cloud-metadata addresses (an env var this
+harness's `LOAD_TEST_TOKEN` and `ADMIN_METRICS_TOKEN` should never reach),
+except loopback, which stays on plain `http:`/`ws:` for local dev; set
+`PQP_LOAD_ALLOW_PRIVATE_HOST=1` to opt a genuinely private shadow box back in.
+It speaks only HTTP/WS — never SQL — so the database it hits never sees more
+than the server's own pool no matter how hard this pushes. Point it at
+staging today or a Vultr shadow-prod box later (note: a shadow box running
+`NODE_ENV=production` and not named `-staging` on Fly will make
 `LOAD_TEST_TOKEN` inert — the identity path needs a `-staging` Fly app name or
 non-production `NODE_ENV`; see `server/src/auth/load-test.ts`).
 
