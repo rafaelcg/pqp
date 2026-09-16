@@ -48,13 +48,16 @@
  *   "targetDurationSecs": 6,          // ceil(max observed segment duration) — EXT-X-TARGETDURATION, section 3's elastic branch
  *   "mediaSequence": 41,              // MSN of the OLDEST segment in "video.segments" (both tracks share one MSN space per rendition)
  *   "video": {
- *     "initUri": "init.mp4",          // fetched from the SAME origin, path `/s/:sessionId/init.mp4`
+ *     "initUri": "init-2.mp4",        // NEWEST init; `init.mp4`, then `init-2.mp4`, ... (all safe file names)
+ *     "discontinuitySequence": 1,     // optional non-negative #EXT-X-DISCONTINUITY-SEQUENCE; defaults to 0
  *     "segments": [
  *       {
  *         "msn": 41,
  *         "complete": true,           // sealed — gets a full #EXTINF + URI line
  *         "durationSecs": 4.016,      // required when complete; null/absent otherwise
  *         "programDateTime": "2026-09-14T18:03:21.114Z",
+ *         "initUri": "init.mp4",      // optional safe URI; omitted inherits the track's newest initUri
+ *         "discontinuity": false,     // optional; defaults to false
  *         "uri": "seg-41.m4s",        // required when complete; omit/null otherwise
  *         "parts": [
  *           // `index` is the part's position within THIS segment; the URI is
@@ -213,7 +216,7 @@ function containsLineTerminator(value) {
  * pattern's charset makes that construction impossible, closing both the
  * playlist-injection and the origin-redirect readings of the same
  * underlying gap. Every legitimate name in `state.json`'s own contract
- * (`init.mp4`, `seg-41.m4s`, `part-164.m4s`, `audio-init.mp4`, ...) is well
+ * (`init.mp4`, `init-2.mp4`, `seg-41.m4s`, `part-164.m4s`, `audio-init.mp4`, ...) is well
  * inside it; 191 characters is generous headroom over anything the remux
  * actually writes.
  *
@@ -283,13 +286,15 @@ function parsePart(raw) {
  *   durationSecs: number | null,
  *   uri: string | null,
  *   programDateTime: string,
+ *   initUri: string,
+ *   discontinuity: boolean,
  *   parts: LlPart[],
  * }} LlSegment
  */
 
 /**
  * @param {unknown} raw
- * @returns {LlSegment | null}
+ * @returns {(Omit<LlSegment, "initUri"> & { initUri: string | null }) | null}
  */
 function parseSegment(raw) {
   if (!raw || typeof raw !== "object") {
@@ -319,6 +324,12 @@ function parseSegment(raw) {
   if (!Number.isFinite(Date.parse(value.programDateTime))) {
     return null;
   }
+  if (value.initUri !== undefined && !isSafeUriSegment(value.initUri)) {
+    return null;
+  }
+  if (value.discontinuity !== undefined && typeof value.discontinuity !== "boolean") {
+    return null;
+  }
   if (!Array.isArray(value.parts)) {
     return null;
   }
@@ -341,6 +352,8 @@ function parseSegment(raw) {
         : null,
     uri: value.complete ? /** @type {string} */ (value.uri) : null,
     programDateTime: value.programDateTime,
+    initUri: value.initUri === undefined ? null : value.initUri,
+    discontinuity: value.discontinuity === undefined ? false : value.discontinuity,
     parts,
   };
 }
@@ -368,7 +381,12 @@ function parsePreloadHint(raw) {
 }
 
 /**
- * @typedef {{ initUri: string, segments: LlSegment[], preloadHint: LlPreloadHint | null }} LlTrackState
+ * @typedef {{
+ *   initUri: string,
+ *   discontinuitySequence: number,
+ *   segments: LlSegment[],
+ *   preloadHint: LlPreloadHint | null,
+ * }} LlTrackState
  */
 
 /**
@@ -383,10 +401,13 @@ function parseTrack(raw) {
   if (!isSafeUriSegment(value.initUri)) {
     return null;
   }
+  if (value.discontinuitySequence !== undefined && !isNonNegInt(value.discontinuitySequence)) {
+    return null;
+  }
   if (!Array.isArray(value.segments) || value.segments.length === 0) {
     return null;
   }
-  /** @type {LlSegment[]} */
+  /** @type {(Omit<LlSegment, "initUri"> & { initUri: string | null })[]} */
   const segments = [];
   for (const rawSegment of value.segments) {
     const parsed = parseSegment(rawSegment);
@@ -394,6 +415,9 @@ function parseTrack(raw) {
       return null;
     }
     segments.push(parsed);
+  }
+  for (const segment of segments) {
+    segment.initUri ??= value.initUri;
   }
   // At most the LAST segment may be the one still being assembled.
   for (let i = 0; i < segments.length - 1; i += 1) {
@@ -438,7 +462,12 @@ function parseTrack(raw) {
       return null;
     }
   }
-  return { initUri: value.initUri, segments, preloadHint };
+  return {
+    initUri: value.initUri,
+    discontinuitySequence: value.discontinuitySequence ?? 0,
+    segments: /** @type {LlSegment[]} */ (segments),
+    preloadHint,
+  };
 }
 
 /**

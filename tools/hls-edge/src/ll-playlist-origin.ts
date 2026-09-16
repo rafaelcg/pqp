@@ -125,11 +125,11 @@ export type LlMultivariantResult =
 
 /**
  * Only the VIDEO half of a session's codec info is cached — it is read off
- * `avcC` in `init.mp4`, which cannot change for the session's lifetime once
- * written. The AUDIO codec is deliberately NOT part of this shape: see
+ * the state snapshot's newest init segment. The AUDIO codec is deliberately NOT part of this shape: see
  * `videoCodecFor`'s doc comment for why caching it too was a real bug.
  */
 interface CachedVideoCodec {
+  initUri: string;
   videoCodec: string;
   videoWidth: number;
   videoHeight: number;
@@ -487,10 +487,10 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
   }
 
   /**
-   * Only the VIDEO codec/geometry is memoized here, and only once
-   * successfully read — `avcC` in `init.mp4` cannot change for a session's
-   * lifetime, so every later master request for the same session reuses it
-   * with no origin fetch at all.
+   * Only the VIDEO codec/geometry is memoized here, and only for the init
+   * URI that supplied it. A remux can replace `init.mp4` with `init-2.mp4`
+   * mid-session after a codec or geometry change, so a later state snapshot
+   * naming a new newest init must refetch before building its master.
    *
    * A first version of this method cached the AUDIO codec alongside the
    * video one, computed from whatever `state.audio` happened to be on the
@@ -509,7 +509,7 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
    */
   private async videoCodecFor(sessionId: string, state: LlSessionState): Promise<CachedVideoCodec> {
     const cached = this.videoCodecCache.get(sessionId);
-    if (cached) {
+    if (cached?.initUri === state.video.initUri) {
       return cached;
     }
     const fetched = await this.fetchFromOrigin(originAssetPath(sessionId, state.video.initUri));
@@ -521,6 +521,7 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       throw new Error("video init segment did not yield an avcC box");
     }
     const result: CachedVideoCodec = {
+      initUri: state.video.initUri,
       videoCodec: videoInfo.codec,
       videoWidth: videoInfo.width,
       videoHeight: videoInfo.height,

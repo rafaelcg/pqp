@@ -288,11 +288,26 @@ export function buildLlRenditionPlaylist(state, track, rung, opts) {
     `#EXT-X-PART-INF:PART-TARGET=${formatDuration(partTargetSecs)}`,
     `#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=${formatDuration(partHoldBackSecs)},HOLD-BACK=${formatDuration(targetDuration * HOLD_BACK_TARGET_DURATIONS)}`,
     `#EXT-X-MEDIA-SEQUENCE:${firstMsn}`,
-    `#EXT-X-MAP:URI="${renditionUri(basePath, rung, track.initUri, token)}"`,
+    `#EXT-X-MAP:URI="${renditionUri(basePath, rung, track.segments[0].initUri, token)}"`,
   ];
+  if (track.discontinuitySequence > 0) {
+    lines.splice(7, 0, `#EXT-X-DISCONTINUITY-SEQUENCE:${track.discontinuitySequence}`);
+  }
 
+  let activeInitUri = track.segments[0].initUri;
   let completeSeen = 0;
   for (const segment of track.segments) {
+    if (segment.discontinuity) {
+      lines.push("#EXT-X-DISCONTINUITY");
+      lines.push(`#EXT-X-MAP:URI="${renditionUri(basePath, rung, segment.initUri, token)}"`);
+      activeInitUri = segment.initUri;
+    } else if (segment.initUri !== activeInitUri) {
+      // A producer should pair an init change with a discontinuity. Keep the
+      // playlist playable if it does not, rather than serving old media with
+      // the wrong initialization segment.
+      lines.push(`#EXT-X-MAP:URI="${renditionUri(basePath, rung, segment.initUri, token)}"`);
+      activeInitUri = segment.initUri;
+    }
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${segment.programDateTime}`);
     if (segment.complete) {
       completeSeen += 1;

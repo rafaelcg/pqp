@@ -88,6 +88,37 @@ test("golden LL media playlist: header tags", () => {
   );
 });
 
+test("a rendition changes maps at a discontinuity and starts from the first retained init", () => {
+  const state = fixtureState();
+  state.video.discontinuitySequence = 1;
+  state.video.segments = [
+    { ...segment(41, { offsetSecs: 0 }), initUri: "init.mp4", discontinuity: false },
+    { ...segment(42, { offsetSecs: 4 }), initUri: "init-2.mp4", discontinuity: true },
+    { ...segment(43, { offsetSecs: 8 }), initUri: "init-2.mp4", discontinuity: false },
+  ];
+  state.video.preloadHint = null;
+  const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
+
+  const initialMap = text.indexOf("/ll/init.mp4?");
+  const discontinuity = text.indexOf("#EXT-X-DISCONTINUITY\n");
+  const replacementMap = text.indexOf("/ll/init-2.mp4?");
+  const secondSegment = text.indexOf("seg-42.m4s?");
+  assert.ok(initialMap >= 0, "the first retained segment's init must be the initial map");
+  assert.ok(discontinuity > initialMap, "the discontinuity follows the first init");
+  assert.ok(replacementMap > discontinuity && replacementMap < secondSegment, "the replacement map precedes its segment");
+  assert.match(text, /#EXT-X-DISCONTINUITY-SEQUENCE:1/);
+
+  const agedOut = fixtureState();
+  agedOut.video.initUri = "init-2.mp4";
+  agedOut.video.discontinuitySequence = 1;
+  agedOut.video.segments = [{ ...segment(42, { offsetSecs: 4 }), initUri: "init-2.mp4", discontinuity: false }];
+  agedOut.video.preloadHint = null;
+  const agedOutText = buildLlRenditionPlaylist(agedOut, agedOut.video, LL_VIDEO_RUNG, { basePath: BASE_PATH });
+  assert.match(agedOutText, /#EXT-X-DISCONTINUITY-SEQUENCE:1/);
+  assert.match(agedOutText, /#EXT-X-MAP:URI="[^"]*\/ll\/init-2\.mp4\?/);
+  assert.doesNotMatch(agedOutText, /\/ll\/init\.mp4\?/);
+});
+
 test("golden LL media playlist: every URI carries the placeholder, never a real token, on the rendition's own rung path", () => {
   const state = fixtureState();
   const text = buildLlRenditionPlaylist(state, state.video, LL_VIDEO_RUNG, {
