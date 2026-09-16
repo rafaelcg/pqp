@@ -1,0 +1,60 @@
+<!doctype html><meta charset=utf-8><video id=v muted playsinline></video><script src="/hls.js"></script>
+<script>
+// Drives stock hls.js against /master.m3u8 (server.mjs's own origin) and
+// records every event run.mjs cares about onto window.__L, which run.mjs
+// reads back via page.evaluate() once the timed run is over. Verbatim
+// logic from the scratchpad repro session -- the interesting part of this
+// harness is reproducing the failure, not reinventing the viewer.
+const L = [];
+const push = (k, o) => { L.push({ t: Date.now(), k, o }); window.__L = L; };
+const cfgName = new URLSearchParams(location.search).get("cfg") || "default";
+const base = { lowLatencyMode: true, debug: false };
+const cfgs = {
+  default: {},
+  client: {
+    liveMaxLatencyDuration: 6.8,
+    backBufferLength: 30,
+    maxBufferLength: 12,
+    fragLoadPolicy: {
+      default: {
+        maxTimeToFirstByteMs: 2000,
+        maxLoadTimeMs: 5000,
+        timeoutRetry: { maxNumRetry: 1, retryDelayMs: 0, maxRetryDelayMs: 0 },
+        errorRetry: { maxNumRetry: 3, retryDelayMs: 200, maxRetryDelayMs: 1000 },
+      },
+    },
+  },
+};
+const hls = new Hls(Object.assign({}, base, cfgs[cfgName]));
+const V = document.getElementById("v");
+for (const [name, ev] of Object.entries(Hls.Events)) {
+  hls.on(ev, (e, d) => {
+    if (ev === Hls.Events.ERROR) {
+      push("ERROR", { type: d.type, details: d.details, fatal: d.fatal, reason: d.reason, err: d.err && d.err.message, frag: d.frag && d.frag.relurl, part: d.part && d.part.relurl, response: d.response && d.response.code, buffer: d.buffer, mediaErr: V.error ? V.error.code + ":" + V.error.message : null });
+      return;
+    }
+    if (ev === Hls.Events.LEVEL_UPDATED) push("LEVEL_UPDATED", { live: d.details.live, partTarget: d.details.partTarget, partHoldBack: d.details.partHoldBack, holdBack: d.details.holdBack, targetduration: d.details.targetduration, startSN: d.details.startSN, endSN: d.details.endSN, totalduration: d.details.totalduration, edge: d.details.edge, age: d.details.age, fragments: d.details.fragments.length, parts: (d.details.partList || []).length });
+    if (ev === Hls.Events.FRAG_BUFFERED) push("FRAG_BUFFERED", { sn: d.frag.sn, part: d.part && d.part.index, start: d.frag.start.toFixed(2) });
+    if (ev === Hls.Events.MANIFEST_PARSED) push("MANIFEST_PARSED", { levels: d.levels.length, audio: d.audioTracks && d.audioTracks.length });
+    if (ev === Hls.Events.BUFFER_CODECS) push("BUFFER_CODECS", Object.keys(d));
+  });
+}
+for (const e of ["stalled", "waiting", "playing", "error", "canplay", "seeking"]) {
+  V.addEventListener(e, () => push("video:" + e, { ct: V.currentTime.toFixed(2), buffered: V.buffered.length ? V.buffered.end(V.buffered.length - 1).toFixed(2) : null, err: V.error && V.error.code, msg: V.error && V.error.message }));
+}
+setInterval(() => {
+  const b = V.buffered;
+  push("tick", { ct: V.currentTime.toFixed(2), bufEnd: b.length ? b.end(b.length - 1).toFixed(2) : null, latency: hls.latency && hls.latency.toFixed(2), target: hls.targetLatency && hls.targetLatency.toFixed(2), maxLat: hls.maxLatency && hls.maxLatency.toFixed(2), drift: hls.drift, ready: V.readyState });
+}, 2000);
+let retries = 0;
+hls.on(Hls.Events.ERROR, (e, d) => {
+  if (d.fatal && d.type === "networkError" && retries < 60) {
+    retries++;
+    push("RETRY_MASTER", { n: retries });
+    setTimeout(() => hls.loadSource("/master.m3u8"), 1000);
+  }
+});
+hls.attachMedia(V);
+hls.loadSource("/master.m3u8");
+V.play().catch(() => {});
+</script>
