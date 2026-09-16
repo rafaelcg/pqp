@@ -1,0 +1,499 @@
+name: iOS
+
+# Its own workflow, deliberately, mirroring why android.yml is separate from
+# ci.yml: ci.yml guards the API and the web client, and must never wait on an
+# Xcode runner (billed at multiples of a Linux one) for a change that never
+# touches ios/. Before this file there was NO iOS CI at all: `main` was
+# broken for iOS for two days this week (a new English literal that never
+# reached Localizable.xcstrings; see the "Check localisation coverage"
+# postCompileScript in ios/project.yml) and nobody noticed, and every
+# TestFlight build has been cut by hand from docs/TESTFLIGHT.md.
+#
+# Paths filters do not apply to a tag push (GitHub does not compute a diff
+# for a ref with no prior state), so `ios-v*` below always runs regardless
+# of what the tagged commit touches. The `push` block's `paths` only gates
+# ordinary commits to `main`. `pull_request`'s `paths` is unambiguous: GitHub
+# always diffs a PR against its base.
+on:
+  pull_request:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  push:
+    branches: [main]
+    tags: ["ios-v*"]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  # A TestFlight upload in flight must not be cancelled mid-way: a cancelled
+  # xcodebuild -exportArchive can leave a half-written .ipa, and a cancelled
+  # App Store Connect upload is worse to reason about than a slow one.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/ios-v') }}
+
+permissions:
+  contents: read
+
+env:
+  # ios/project.yml pins SWIFT_VERSION 6.0 and a 17.0 deployment target.
+  # Xcode 16 is the first version whose default toolchain is Swift 6, so
+  # "latest-stable" is a floor this project needs, not a preference for
+  # whatever is newest, since an older default on the runner fails to compile
+  # before a single test runs. Bump this to a pinned version (e.g. "16.2")
+  # only if a specific Xcode build needs to be held back on purpose.
+  XCODE_VERSION: "latest-stable"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Job 1: build + unit test, no signing. Runs on every PR that touches
+  # ios/**, on every push to main that does the same, and, because job 2
+  # depends on it, before every TestFlight upload too, tag or dispatch.
+  # ---------------------------------------------------------------------
+  build-and-test:
+    name: Build and test
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install xcodegen
+
+      # The .xcodeproj is gitignored (ios/*.xcodeproj) and regenerated from
+      # ios/project.yml on every checkout; see that file's header comment.
+      # An agent has previously reported "BUILD SUCCEEDED" against a
+      # generated project that main could not actually produce; generating
+      # it here, the same way a contributor does locally, is what makes this
+      # workflow prove something about main rather than about one laptop.
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      # No committed Package.resolved to key on (the .xcodeproj it would
+      # live under is itself generated and gitignored), so this keys on
+      # project.yml, the one file that pins package versions. Clerk and
+      # WebRTC use floating "from:" constraints, so a cache hit can still
+      # resolve a newer compatible version than last time. That is SPM's
+      # normal behaviour, not a caching bug, and restore-keys below falls
+      # back to a same-OS cache even when project.yml has changed instead of
+      # resolving every package from empty.
+      - name: Cache SPM packages
+        uses: actions/cache@v4
+        with:
+          path: ios/DerivedData/SourcePackages
+          key: ios-spm-${{ runner.os }}-${{ hashFiles('ios/project.yml') }}
+          restore-keys: |
+            ios-spm-${{ runner.os }}-
+
+      # Picks whatever iPhone simulator the runner's own Xcode actually
+      # shipped, instead of hardcoding a model name that a future Xcode
+      # default (or an older one, if XCODE_VERSION is ever pinned back) may
+      # not carry. "Pro"/"Air" are excluded only to land on a plain, cheap
+      # device deterministically; any available iPhone runtime works.
+      - name: Resolve a simulator destination
+        id: sim
+        shell: bash
+        run: |
+          set -euo pipefail
+          name=$(python3 - <<'PY'
+          import json, re, subprocess, sys
+
+          out = subprocess.run(
+              ["xcrun", "simctl", "list", "devices", "available", "-j"],
+              capture_output=True, text=True, check=True,
+          ).stdout
+          data = json.loads(out)
+
+          def runtime_key(runtime):
+              m = re.search(r"iOS-(\d+)-(\d+)$", runtime)
+              return tuple(int(x) for x in m.groups()) if m else (0, 0)
+
+          best_runtime, best_device = None, None
+          for runtime, devices in data["devices"].items():
+              if "SimRuntime.iOS-" not in runtime:
+                  continue
+              iphones = [
+                  d for d in devices
+                  if d.get("isAvailable")
+                  and d["name"].startswith("iPhone")
+                  and "Pro" not in d["name"]
+                  and "Air" not in d["name"]
+              ]
+              if not iphones:
+                  continue
+              if best_runtime is None or runtime_key(runtime) > runtime_key(best_runtime):
+                  best_runtime = runtime
+                  best_device = sorted(iphones, key=lambda d: d["name"])[-1]
+
+          if not best_device:
+              sys.exit("No available iPhone simulator found on this runner.")
+          print(best_device["name"])
+          PY
+          )
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "Resolved destination: platform=iOS Simulator,name=${name},OS=latest"
+
+      # Split from the test step so a compile failure and a test failure
+      # read as two different, legible red steps instead of one xcodebuild
+      # invocation doing both. CODE_SIGNING_ALLOWED=NO: a PR build has none
+      # of the Distribution signing job 2 needs, and must not need it: the
+      # pqp target's Release config is the only place that ever signs.
+      #
+      # "Check localisation coverage" is a postCompileScript on the pqp
+      # target (ios/project.yml), so it runs as part of this build exactly
+      # the way it runs locally, and fails this step the same way it should
+      # have failed main two days ago.
+      - name: Build for testing
+        working-directory: ios
+        run: |
+          xcodebuild build-for-testing \
+            -project pqp.xcodeproj \
+            -scheme pqp \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }},OS=latest" \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+      # pqpUITests (ios/pqp/UITests) needs a running local API server with a
+      # seeded Postgres and a booted simulator app to tap through; see
+      # TestSeed.swift, which posts straight to http://localhost:3001. That
+      # is a manual/device suite, not something this runner can stand up,
+      # so the whole bundle is skipped here.
+      #
+      # AttachmentUploadTests (ios/pqp/Tests) is the one file in pqpTests
+      # that actually dials out: APIClient(backend: .local) and
+      # RealtimeClient(...).connect() against a real server with S3 storage
+      # configured (docker compose --profile storage up). Every other test
+      # file that constructs a `.local` client only feeds it bytes directly
+      # (see WireDecodingTests.ingest) and never opens a socket. Confirmed
+      # by grepping every Tests/*.swift for `.connect()` before writing this
+      # workflow; AttachmentUploadTests is the only match.
+      - name: Run unit tests
+        working-directory: ios
+        run: |
+          xcodebuild test-without-building \
+            -project pqp.xcodeproj \
+            -scheme pqp \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }},OS=latest" \
+            -derivedDataPath DerivedData \
+            -skip-testing:pqpUITests \
+            -skip-testing:pqpTests/AttachmentUploadTests
+
+      # 563 of the 566 tests in pqpTests run in well under a minute even on
+      # a cold simulator boot (measured locally: ~7s of test execution, ~25s
+      # including simulator startup), so no need for -only-testing shards or
+      # parallel-testing-enabled today. If the suite grows enough that this
+      # step becomes the long pole, `-parallel-testing-enabled YES` is the
+      # next lever, not a smaller destination matrix: iOS unit tests here
+      # carry no external dependency that a second simulator clone would
+      # trip over, unlike the UI suite this workflow does not run.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqp-ios-test-results
+          path: ios/DerivedData/Logs/Test/*.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ---------------------------------------------------------------------
+  # Job 2: archive, sign and upload to TestFlight. Only reachable from a
+  # ios-vX.Y.Z tag or a manual dispatch, and only after job 1 passes: the
+  # same test suite that gates a PR gates a release, every time.
+  # ---------------------------------------------------------------------
+  testflight:
+    name: TestFlight
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/ios-v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 45
+    # Configure this environment in Settings -> Environments to require a
+    # reviewer before this job runs, the same defense PR 679 put on
+    # play-production for the Android release pipeline. Optional: with no
+    # protection rules configured, referencing an environment that does not
+    # exist yet is a no-op and this job runs unattended, same as before.
+    environment: ios-testflight
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history: "Verify the tag is reachable from main" below
+          # walks it.
+          fetch-depth: 0
+
+      # A tag is not a reviewed commit. Creating one is not (by default)
+      # branch-protected the way a merge to main is, so anybody able to
+      # push a tag named ios-v* could point it at an unreviewed or modified
+      # commit and have this job archive and upload it with the production
+      # Distribution certificate. Same defense android-release.yml carries
+      # for android-v* (Farol review, PR 679). A code-level backstop, not a
+      # replacement for a repository ruleset restricting who may push
+      # ios-v* tags.
+      - name: Verify the tag is reachable from main
+        if: startsWith(github.ref, 'refs/tags/ios-v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::${{ github.ref }} (${{ github.sha }}) is not reachable from main. Refusing to archive and sign a release from a ref that did not go through the ordinary PR/review path. Push ios-v* tags only at a commit already on main."
+            exit 1
+          fi
+          echo "Tag commit is reachable from main."
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Cache SPM packages
+        uses: actions/cache@v4
+        with:
+          path: ios/DerivedData/SourcePackages
+          key: ios-spm-${{ runner.os }}-${{ hashFiles('ios/project.yml') }}
+          restore-keys: |
+            ios-spm-${{ runner.os }}-
+
+      # Everything past this point needs credentials job 1 never touches: a
+      # Distribution certificate + its .p12 password, and BOTH App Store
+      # provisioning profiles the pqp scheme's Release config already names
+      # (ios/project.yml PROVISIONING_PROFILE_SPECIFIER: one for the app,
+      # gg.pqp.app, one for the ReplayKit broadcast extension,
+      # gg.pqp.app.broadcast; a profile is scoped to exactly one bundle id,
+      # so uploading only one leaves the archive step unable to sign the
+      # other target). Missing any of them, or the three App Store Connect
+      # API key secrets Electron notarization already uses, skips the rest
+      # of this job cleanly rather than failing it red. See
+      # docs/TESTFLIGHT.md "CI builds" for the one-time setup.
+      - name: Check for TestFlight secrets
+        id: signing
+        shell: bash
+        env:
+          CERT_B64: ${{ secrets.IOS_DIST_CERT_P12_B64 }}
+          CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_B64 }}
+          BROADCAST_PROFILE_B64: ${{ secrets.IOS_BROADCAST_PROVISIONING_PROFILE_B64 }}
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -z "${CERT_B64}" ] && missing="${missing}- IOS_DIST_CERT_P12_B64"$'\n'
+          [ -z "${CERT_PASSWORD}" ] && missing="${missing}- IOS_DIST_CERT_PASSWORD"$'\n'
+          [ -z "${PROFILE_B64}" ] && missing="${missing}- IOS_PROVISIONING_PROFILE_B64"$'\n'
+          [ -z "${BROADCAST_PROFILE_B64}" ] && missing="${missing}- IOS_BROADCAST_PROVISIONING_PROFILE_B64"$'\n'
+          [ -z "${API_KEY_P8}" ] && missing="${missing}- APPLE_API_KEY_P8"$'\n'
+          [ -z "${API_KEY_ID}" ] && missing="${missing}- APPLE_API_KEY_ID"$'\n'
+          [ -z "${API_ISSUER}" ] && missing="${missing}- APPLE_API_ISSUER"$'\n'
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### TestFlight upload skipped"
+              echo
+              echo "Missing secrets:"
+              echo
+              echo "$missing"
+              echo "See docs/TESTFLIGHT.md \"CI builds\" for the one-time setup."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Missing TestFlight signing secrets; skipping archive/export/upload. See the job summary for which ones."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # github.run_number is monotonic per workflow file but starts at 1,
+      # far below the hand-cut builds already in App Store Connect (32 as of
+      # this writing per docs/TESTFLIGHT.md, and that document is explicit
+      # that ASC's own build list, not the repo, is the authoritative
+      # answer to "which number is next"). The offset only has to clear
+      # whatever is the highest build ASC has ever accepted; 100000 does
+      # that with room to spare for years of CI runs. Rafael: before the
+      # very first CI-cut upload, confirm 100000 is still comfortably above
+      # ASC's current highest build (GET /v1/builds?filter[app]=6799265799&sort=-version).
+      # See docs/TESTFLIGHT.md "CI builds".
+      - name: Compute build number
+        if: steps.signing.outputs.ready == 'true'
+        id: build_number
+        shell: bash
+        run: |
+          set -euo pipefail
+          number=$((100000 + ${{ github.run_number }}))
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+          echo "CFBundleVersion for this upload: ${number}"
+
+      # Both Info.plists must agree (docs/TESTFLIGHT.md "Bump both build
+      # numbers") or App Store Connect refuses the upload outright.
+      - name: Set build number
+        if: steps.signing.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.build_number.outputs.number }}" ios/pqp/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.build_number.outputs.number }}" ios/pqp/Broadcast/Info.plist
+
+      # A fresh, ephemeral keychain rather than the runner's login keychain:
+      # the runner is destroyed with the job either way, but a dedicated
+      # keychain keeps this step's `security` calls (partition list, default
+      # keychain) from touching anything else running on the same machine
+      # image, and makes exactly what this job added to the search list
+      # legible from the script alone.
+      - name: Import signing certificate
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        env:
+          CERT_B64: ${{ secrets.IOS_DIST_CERT_P12_B64 }}
+          CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain_path="$RUNNER_TEMP/ios-signing.keychain-db"
+          keychain_password=$(uuidgen)
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+
+          printf '%s' "$CERT_B64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$keychain_path" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
+          rm -f "$RUNNER_TEMP/dist.p12"
+
+          existing_keychains=$(security list-keychains -d user | sed 's/[[:space:]]*"\(.*\)"[[:space:]]*/\1/')
+          # security list-keychains -s takes each keychain as its own
+          # argument, so the existing search list is meant to word-split
+          # here rather than be quoted as one string.
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$keychain_path" $existing_keychains
+          security default-keychain -s "$keychain_path"
+
+      # Xcode matches a manual PROVISIONING_PROFILE_SPECIFIER by the name
+      # embedded in the profile, not by filename, so these can be named
+      # anything as long as they end in .mobileprovision and land in this
+      # directory.
+      - name: Install provisioning profiles
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        env:
+          PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_B64 }}
+          BROADCAST_PROFILE_B64: ${{ secrets.IOS_BROADCAST_PROVISIONING_PROFILE_B64 }}
+        run: |
+          set -euo pipefail
+          dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$dir"
+          printf '%s' "$PROFILE_B64" | base64 --decode > "$dir/pqp-appstore.mobileprovision"
+          printf '%s' "$BROADCAST_PROFILE_B64" | base64 --decode > "$dir/pqp-broadcast-appstore.mobileprovision"
+
+      # Manual signing (CODE_SIGN_STYLE, CODE_SIGN_IDENTITY, DEVELOPMENT_TEAM
+      # and PROVISIONING_PROFILE_SPECIFIER) is already the Release config in
+      # ios/project.yml for both the pqp and pqpBroadcast targets, so this
+      # step needs no signing flags of its own, only the certificate and
+      # profiles already on disk.
+      - name: Archive
+        if: steps.signing.outputs.ready == 'true'
+        working-directory: ios
+        run: |
+          xcodebuild archive \
+            -project pqp.xcodeproj \
+            -scheme pqp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/pqp.xcarchive"
+
+      # Export locally first (the committed ios/ExportOptions.plist already
+      # carries method app-store-connect, manual signing, uploadSymbols and
+      # destination: export) so the .ipa this workflow attaches as an
+      # artifact is the exact bytes reviewed below, independent of whatever
+      # the upload step's own export does.
+      - name: Export .ipa
+        if: steps.signing.outputs.ready == 'true'
+        working-directory: ios
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/pqp.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export"
+
+      - name: Upload .ipa artifact
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqp-ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+          retention-days: 90
+
+      # `xcrun altool --upload-app` is deprecated (docs/TESTFLIGHT.md still
+      # documents it for the by-hand flow, but Apple's own guidance since
+      # Xcode 13 is to stop). The replacement for App Store Connect uploads
+      # (not `xcrun notarytool`, which is the Developer ID / macOS
+      # notarization path Electron uses and does not apply to an iOS IPA at
+      # all) is exportArchive itself with `destination: upload` in the
+      # options plist, authenticated with the same App Store Connect API key
+      # docs/TESTFLIGHT.md already uses for the by-hand upload. Re-exporting
+      # from the same .xcarchive costs nothing (no recompilation, just
+      # repackaging) and keeps this step independent of whatever the local
+      # export above wrote.
+      - name: Upload to TestFlight
+        if: steps.signing.outputs.ready == 'true'
+        working-directory: ios
+        env:
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          key_path="$RUNNER_TEMP/private_keys/AuthKey_${API_KEY_ID}.p8"
+          printf '%s' "$API_KEY_P8" > "$key_path"
+
+          cp ExportOptions.plist "$RUNNER_TEMP/ExportOptions-upload.plist"
+          /usr/libexec/PlistBuddy -c "Set :destination upload" "$RUNNER_TEMP/ExportOptions-upload.plist"
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/pqp.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-upload.plist" \
+            -exportPath "$RUNNER_TEMP/upload" \
+            -authenticationKeyPath "$key_path" \
+            -authenticationKeyID "$API_KEY_ID" \
+            -authenticationKeyIssuerID "$API_ISSUER"
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### iOS TestFlight"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| build number | ${{ steps.build_number.outputs.number || 'n/a (skipped)' }} |"
+            echo "| uploaded | ${{ steps.signing.outputs.ready == 'true' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
