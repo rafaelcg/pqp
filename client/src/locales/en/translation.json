@@ -1702,6 +1702,8 @@
   "settings.appearance.languageHint": "The page reloads to switch language. Save your profile first if you were editing it.",
   "settings.appearance.language.en": "English",
   "settings.appearance.language.ptBR": "Português (Brasil)",
+  "settings.appearance.startAtLogin": "Start pqp when you log in",
+  "settings.appearance.startAtLoginHint": "Opens in the background, ready for voice and DMs before you click anything. macOS and Windows only for now.",
   "settings.appearance.chat": "Chat",
   "settings.appearance.chatHint": "How messages are drawn. The sample changes as you pick.",
   "settings.appearance.textSize": "Text size",

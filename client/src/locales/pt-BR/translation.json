@@ -1702,6 +1702,8 @@
   "settings.appearance.languageHint": "A página recarrega pra trocar de idioma. Salve seu perfil antes, se estava mexendo nele.",
   "settings.appearance.language.en": "English",
   "settings.appearance.language.ptBR": "Português (Brasil)",
+  "settings.appearance.startAtLogin": "Iniciar o pqp ao ligar o computador",
+  "settings.appearance.startAtLoginHint": "Abre em segundo plano, pronto pra voz e DM antes de você clicar em qualquer coisa. Só macOS e Windows por enquanto.",
   "settings.appearance.chat": "Chat",
   "settings.appearance.chatHint": "Como as mensagens aparecem. O exemplo muda conforme você escolhe.",
   "settings.appearance.textSize": "Tamanho do texto",

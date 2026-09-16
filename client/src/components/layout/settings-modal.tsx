@@ -1928,6 +1928,66 @@ function LanguagePicker() {
   );
 }
 
+/**
+ * Launch pqp when the desktop app's platform starts.
+ *
+ * Desktop-only, and only where the shell can keep the promise: `getDesktop()
+ * ?.platform` is a fact about the installed binary, and `loginItemSupported`
+ * in the main process already refuses Linux, so this mirrors that refusal
+ * here rather than showing a toggle that reports success and does nothing.
+ * Absent entirely on the web and in a shell built before the bridge existed.
+ */
+function DesktopStartupPicker() {
+  const { t } = useTranslation();
+  const desktop = getDesktop();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    const read = desktop?.getStartAtLogin;
+    if (typeof read !== "function") {
+      return;
+    }
+    let cancelled = false;
+    void read().then((value) => {
+      if (!cancelled) {
+        setEnabled(value === true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktop]);
+
+  if (!desktop || desktop.platform === "linux" || enabled === null) {
+    return null;
+  }
+
+  function toggle(next: boolean) {
+    const write = desktop?.setStartAtLogin;
+    if (typeof write !== "function") {
+      return;
+    }
+    setPending(true);
+    void write(next)
+      .then((applied) => setEnabled(applied === true))
+      .finally(() => setPending(false));
+  }
+
+  return (
+    <div className="border-t border-border pt-6">
+      <Switch
+        checked={enabled}
+        onCheckedChange={toggle}
+        disabled={pending}
+        label={t("settings.appearance.startAtLogin")}
+        description={t("settings.appearance.startAtLoginHint")}
+        className="px-0"
+      />
+    </div>
+  );
+}
+
 function AppearanceSection({
   showLinkEmbeds,
   onShowLinkEmbeds,
@@ -1952,6 +2012,7 @@ function AppearanceSection({
           onShowLinkEmbeds={onShowLinkEmbeds}
         />
       </div>
+      <DesktopStartupPicker />
     </div>
   );
 }

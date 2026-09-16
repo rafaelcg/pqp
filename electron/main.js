@@ -27,6 +27,7 @@ const {
   mayPromptForPasskey,
 } = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
+const { loginItemSupported } = require("./lib/login-item");
 const { createDesktopAuthController } = require("./lib/desktop-auth-session");
 const { senderMatchesAppOrigin } = require("./lib/ipc-origin");
 const {
@@ -1433,6 +1434,38 @@ if (!gotLock) {
     // the old language until the next state change.
     refreshTray();
     return next;
+  });
+
+  /**
+   * Launch at login. Supported on macOS and Windows only (see
+   * lib/login-item.js); Linux answers false to both and changes nothing,
+   * rather than a toggle that looks like it worked and does not.
+   */
+  ipcMain.handle("pqp:get-start-at-login", () => {
+    if (!loginItemSupported(process.platform)) {
+      return false;
+    }
+    try {
+      return app.getLoginItemSettings().openAtLogin === true;
+    } catch (err) {
+      console.warn("[pqp] read start-at-login failed:", err?.message ?? err);
+      return false;
+    }
+  });
+
+  ipcMain.handle("pqp:set-start-at-login", (_event, value) => {
+    if (!loginItemSupported(process.platform)) {
+      return false;
+    }
+    try {
+      app.setLoginItemSettings({ openAtLogin: value === true });
+      // Read back rather than trust the input: the OS is the source of truth
+      // and this is what the renderer displays next.
+      return app.getLoginItemSettings().openAtLogin === true;
+    } catch (err) {
+      console.warn("[pqp] set start-at-login failed:", err?.message ?? err);
+      return false;
+    }
   });
 
   ipcMain.on("pqp:set-badge", (_event, count) => {
