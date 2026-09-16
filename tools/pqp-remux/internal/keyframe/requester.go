@@ -135,6 +135,35 @@ func (r *Requester) OnIDR(t time.Time) {
 
 // resetPLILogThrottle clears the in-episode throttle so the next episode's
 // first PLI always logs. Called with mu held.
+// ForcePLI asks for a keyframe now, outside the gate window, when the caller
+// knows the decoder needs a fresh IDR immediately: a frame was discarded or a
+// damaged GOP was dropped, so every frame until the next IDR references a
+// picture the decoder never got. It is still paced at the gater's Pace() so a
+// burst of losses cannot flood the SFU with PLIs, and it is a no-op under
+// PolicyNatural. Reports whether a PLI was actually sent.
+func (r *Requester) ForcePLI(reason string) bool {
+	if r == nil || r.gater.cfg.Policy != PolicyPLI {
+		return false
+	}
+	now := r.now()
+	r.mu.Lock()
+	if !r.lastPLI.IsZero() && now.Sub(r.lastPLI) < r.gater.cfg.Pace() {
+		r.mu.Unlock()
+		return false
+	}
+	r.lastPLI = now
+	r.plisSinceIDR++
+	if r.firstPLISinceIDR.IsZero() {
+		r.firstPLISinceIDR = now
+	}
+	r.mu.Unlock()
+
+	r.plisSent.Add(1)
+	r.send.RequestKeyframe()
+	r.logf("pqp-remux: keyframe: PLI forced (%s)", reason)
+	return true
+}
+
 func (r *Requester) resetPLILogThrottle() { r.lastPLILoggedAt = time.Time{} }
 
 // tick evaluates the gate once at the current time and sends a PLI if due,

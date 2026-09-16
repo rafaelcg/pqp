@@ -540,6 +540,11 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	if err != nil {
 		s.videoDepacketizeErrs.Add(1)
 		s.logDepacketizeError(now, err)
+		// A discard leaves the GOP referencing a frame the decoder never got;
+		// ask for a fresh IDR now instead of waiting out the gate window.
+		if kr := s.keyReq.Load(); kr != nil {
+			kr.ForcePLI("depacketize-discard")
+		}
 	}
 	if au == nil {
 		return
@@ -651,6 +656,9 @@ func (s *Session) handleParameterSetChange(au *h264.AccessUnit) bool {
 		// this access unit's parameter sets; the next sane pair is honoured.
 		s.implausibleParamSets.Add(1)
 		s.droppingDamaged.Store(true)
+		if kr := s.keyReq.Load(); kr != nil {
+			kr.ForcePLI("damaged-gop-dropped")
+		}
 		log.Printf("pqp-remux: parameter-set change ignored, implausible dimensions: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); dropping this GOP",
 			oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq)
 		return false
