@@ -30,6 +30,29 @@ export function musicEmbedDock(): HTMLElement | null {
   return embedDock;
 }
 
+/** Live in the document, including a parent that React has not detached yet. */
+export function connectedMusicEmbedHome(
+  el: HTMLElement | null | undefined,
+): HTMLElement | null {
+  return el && el.isConnected ? el : null;
+}
+
+/**
+ * Park the singleton host in `dock` when it is homeless.
+ *
+ * `parentNode` stays set after the previous dock unmounts, so a hang-up
+ * (MusicMiniPlayer returns null) leaves the YouTube iframe on a disconnected
+ * node. The next seat's dock then skips the claim and the portal plays into
+ * a tree that is not on screen. `isConnected` is the live-document check;
+ * a host already in the stage outlet stays there.
+ */
+export function claimMusicEmbedHost(dock: HTMLElement): void {
+  const host = getMusicEmbedHost();
+  if (!host.isConnected) {
+    dock.appendChild(host);
+  }
+}
+
 export function useMusicEmbedDock(): RefObject<HTMLDivElement | null> {
   const dockRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -38,10 +61,7 @@ export function useMusicEmbedDock(): RefObject<HTMLDivElement | null> {
       return;
     }
     registerMusicEmbedDock(dock);
-    const host = getMusicEmbedHost();
-    if (!host.parentNode) {
-      dock.appendChild(host);
-    }
+    claimMusicEmbedHost(dock);
     // Do not clear the registration on cleanup: this effect re-runs whenever
     // the player redraws, and nulling it races the stage outlet's rescue.
   });
@@ -64,10 +84,12 @@ export function MusicEmbedOutlet({
     return () => {
       // Reading `home.current` at cleanup is the point: the dock that is
       // mounted now, not the one from setup. Same as WatchStageOutlet.
+      // Skip a disconnected dock (hang-up unmounts it in the same commit)
+      // so the host is not parked on a node that is about to leave the
+      // document. The next live dock reclaims via `claimMusicEmbedHost`.
       const fallback =
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- stale home is wrong
-        home?.current ??
-        musicEmbedDock() ??
+        connectedMusicEmbedHome(home?.current) ??
+        connectedMusicEmbedHome(musicEmbedDock()) ??
         document.querySelector<HTMLElement>("[data-music-embed-dock]");
       fallback?.appendChild(getMusicEmbedHost());
     };
