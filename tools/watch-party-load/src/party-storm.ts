@@ -86,7 +86,7 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
  * "staging" or "a shadow box" — they are exactly the addresses a
  * misconfigured or attacker-controlled env var would use to redirect this
  * harness's bearer/admin tokens off the intended target (Farol review, PR
- * #663). Loopback is handled separately and is not private for this check.
+ * 663). Loopback is handled separately and is not private for this check.
  */
 function isPrivateOrMetadataHost(host: string): boolean {
   if (host === "metadata.google.internal" || host === "metadata") {
@@ -117,10 +117,15 @@ function assertNotProduction(u: string, label: string): void {
   } catch {
     throw new Error(`${label} is not a valid URL: ${u}`);
   }
-  // Canonicalize: lowercase, and strip a trailing dot (a bare hostname and
-  // its FQDN form with a trailing "." resolve identically but would
-  // otherwise dodge a plain string comparison below).
-  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  // Canonicalize: lowercase, strip a trailing dot (a bare hostname and its
+  // FQDN form with a trailing "." resolve identically but would otherwise
+  // dodge a plain string comparison below), and strip the brackets the
+  // WHATWG URL parser keeps around an IPv6 literal's .hostname (new
+  // URL("http://[::1]:3001").hostname is "[::1]", not "::1") -- without
+  // this an IPv6 loopback or private-range target would fail the loopback
+  // membership check below and the private-range check further down would
+  // never see the bracket-free address it expects (Farol review round 2).
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "").replace(/^\[|\]$/g, "");
   // The production edge, API and apex, and anything under the real zone.
   if (host === "pqp.gg" || host.endsWith(".pqp.gg")) {
     throw new Error(
@@ -258,7 +263,7 @@ async function api(
 /**
  * Throws on a genuine setup failure (network error, timeout, auth failure,
  * server error) instead of letting the caller silently open a WS seat that
- * never actually passed the age gate (Farol review, PR #663) — a failure
+ * never actually passed the age gate (Farol review, PR 663) — a failure
  * here must count as a join failure, not disappear into a later, unrelated-
  * looking socket error.
  */
@@ -429,7 +434,7 @@ async function provision(safe: Safe): Promise<void> {
   if (!text || !voice) throw new Error("server did not come with a text and a voice channel");
   // Every step from here on operates on an already-created server. A
   // transient failure in any of them used to leave that server behind on
-  // the target forever (Farol review, PR #663) — best-effort clean it up
+  // the target forever (Farol review, PR 663) — best-effort clean it up
   // before rethrowing.
   const rollback = async (cause: unknown): Promise<never> => {
     console.warn(`[warn] provisioning failed after server ${cb.server.id} was created; deleting it`);
@@ -702,7 +707,7 @@ async function wsStorm(safe: Safe): Promise<void> {
       // inside each of `joinConcurrency` pumps running in parallel, produced
       // roughly `joinConcurrency` times the intended join rate — 300 sockets
       // over a configured 30s ramp landed in under 2s with the default 20
-      // pumps (Farol review, PR #663).
+      // pumps (Farol review, PR 663).
       const dueAt = rampStart + (idx / sockets) * rampMs;
       const waitMs = dueAt - Date.now();
       if (waitMs > 0) {
@@ -768,7 +773,7 @@ async function wsStorm(safe: Safe): Promise<void> {
         // The initial join loop tracks close codes for every seat; a seat
         // replaced here needs the same tracking, or a reconnected socket
         // that the server later drops during hold silently reads as a
-        // still-successful recovery (Farol review, PR #663).
+        // still-successful recovery (Farol review, PR 663).
         trackCloseCodes(seat);
       } catch {
         result.reconnectFailed += 1;
@@ -782,7 +787,7 @@ async function wsStorm(safe: Safe): Promise<void> {
   // tacked on after a mid-hold reconnect: with `--reconnect-at` set, only the
   // remaining hold (holdSeconds - reconnectAt) is left to sleep here, or a
   // run configured for a 25s hold with a reconnect at 15s stayed up for 40s
-  // instead (Farol review, PR #663).
+  // instead (Farol review, PR 663).
   const remainingHoldMs = reconnectAt >= 0
     ? Math.max(0, holdSeconds - reconnectAt) * 1000
     : holdSeconds * 1000;
