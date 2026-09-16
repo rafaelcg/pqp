@@ -71,7 +71,7 @@ describe("relatedMusicTracks", () => {
         durationMs: 180_000,
       },
     ]);
-    expect(spy).toHaveBeenCalledWith("dQw4w9WgXcQ", 5);
+    expect(spy).toHaveBeenCalledWith("dQw4w9WgXcQ", 20);
     spy.mockRestore();
   });
 

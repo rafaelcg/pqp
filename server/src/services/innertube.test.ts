@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectVideos,
   innertubeRelated,
+  INNERTUBE_RELATED_LIMIT,
   parseDurationLabel,
   resetInnerTubeRelatedCache,
 } from "./innertube.js";
@@ -81,6 +82,26 @@ describe("collectVideos", () => {
       },
     ]);
     expect(collectVideos(response, 0)).toEqual([]);
+  });
+
+  it("reads endScreenVideoRenderer the same way as compactVideoRenderer", () => {
+    const response = {
+      overlay: {
+        endScreenVideoRenderer: {
+          videoId: "endScreen01",
+          title: { simpleText: "Related end screen" },
+          lengthText: { simpleText: "3:21" },
+        },
+      },
+    };
+    expect(collectVideos(response)).toEqual([
+      {
+        videoId: "endScreen01",
+        title: "Related end screen",
+        durationMs: 201_000,
+        thumbnailUrl: "https://i.ytimg.com/vi/endScreen01/hqdefault.jpg",
+      },
+    ]);
   });
 });
 
@@ -171,6 +192,36 @@ describe("innertubeRelated", () => {
         thumbnailUrl: "https://i.ytimg.com/vi/relLock0001/hqdefault.jpg",
       },
     ]);
+  });
+
+  it("keeps twenty watch-next hits by default", async () => {
+    const extra = Object.fromEntries(
+      Array.from({ length: 25 }, (_, i) => [
+        `r${i}`,
+        {
+          compactVideoRenderer: {
+            videoId: `relWeb${String(i).padStart(5, "0")}`,
+            title: { simpleText: `Related ${i}` },
+            lengthText: { simpleText: "3:00" },
+          },
+        },
+      ]),
+    );
+    mockNext({
+      contents: {
+        seed: {
+          compactVideoRenderer: {
+            videoId: "dQw4w9WgXcQ",
+            title: { simpleText: "Seed" },
+          },
+        },
+        ...extra,
+      },
+    });
+    const videos = await innertubeRelated("dQw4w9WgXcQ");
+    expect(videos).toHaveLength(INNERTUBE_RELATED_LIMIT);
+    expect(videos?.[0]?.videoId).toBe("relWeb00000");
+    expect(videos?.[19]?.videoId).toBe("relWeb00019");
   });
 
   it("serves a later call from the six-hour cache", async () => {

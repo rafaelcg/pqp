@@ -243,7 +243,12 @@ export function collectVideos(response: unknown, limit = Infinity): InnerTubeVid
       return;
     }
     let video: InnerTubeVideo | null = null;
-    if (key === "videoRenderer" || key === "compactVideoRenderer" || key === "playlistVideoRenderer") {
+    if (
+      key === "videoRenderer" ||
+      key === "compactVideoRenderer" ||
+      key === "playlistVideoRenderer" ||
+      key === "endScreenVideoRenderer"
+    ) {
       video = fromRenderer(value);
     } else if (key === "lockupViewModel") {
       video = fromLockup(value);
@@ -335,14 +340,18 @@ export function resetInnerTubeRelatedCache(): void {
   relatedCache.clear();
 }
 
+/** How many watch-next hits to keep after dropping the seed. */
+export const INNERTUBE_RELATED_LIMIT = 20;
+
 /**
- * "Watch next" videos for a video id. WEB answers `compactVideoRenderer`,
- * TVHTML5 answers `lockupViewModel`; `collectVideos` already reads both.
- * The seed video is dropped. Remembered for six hours, like search.
+ * "Watch next" videos for a video id. WEB answers `compactVideoRenderer`
+ * and sometimes `endScreenVideoRenderer`, TVHTML5 answers `lockupViewModel`;
+ * `collectVideos` already reads those. The seed video is dropped.
+ * Remembered for six hours, like search.
  */
 export async function innertubeRelated(
   videoId: string,
-  limit = 5,
+  limit = INNERTUBE_RELATED_LIMIT,
 ): Promise<InnerTubeVideo[] | null> {
   const cached = relatedCache.get(videoId);
   if (cached && Date.now() - cached.at < RELATED_CACHE_TTL_MS) {

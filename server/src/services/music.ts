@@ -3,6 +3,7 @@ import { createRateLimiter } from "../lib/rate-limit.js";
 import {
   innertubePlaylist,
   innertubeRelated,
+  INNERTUBE_RELATED_LIMIT,
   innertubeSearch,
   setInnerTubeGate,
 } from "./innertube.js";
@@ -653,7 +654,7 @@ export async function searchMusicCandidates(query: string): Promise<MusicResolve
 /** Related videos for autoplay, mapped to the room's resolve shape. */
 export async function relatedMusicTracks(
   videoId: string,
-  limit = 5,
+  limit = INNERTUBE_RELATED_LIMIT,
 ): Promise<MusicResolved[]> {
   let videos;
   try {

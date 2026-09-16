@@ -145,14 +145,18 @@ URL is ever requested, which is the half of InnerTube that PO tokens guard.
 
 `GET /api/music/related?videoId=` asks InnerTube `next` (`youtubei/v1/next`
 with `{ videoId }`) for the watch-next list. Same two-client fallback and
-the same walk-based `collectVideos`: WEB answers `compactVideoRenderer`,
-TVHTML5 answers `lockupViewModel`. The seed video is dropped. Remembered
-for six hours, keyed by video id, like search. The client then runs
-`musicAutoplayCandidate`: drop the finishing id, anything already in
-`history` or the queue, and anything shorter than 60 s or longer than 12
-minutes when duration is known (a clip or a film, not a song). Unknown
-duration is kept. The first remaining is minted under the writer and
-written with `autoplayed: true`.
+the same walk-based `collectVideos`: WEB answers `compactVideoRenderer` and
+sometimes `endScreenVideoRenderer`, TVHTML5 answers `lockupViewModel`. The
+seed video is dropped. Up to 20 hits are kept (shorts and films are
+filtered on the client). Remembered for six hours, keyed by video id, like
+search. While "Continuar com parecidas" is on, the actor fills about three
+upcoming related rows onto the queue *before* the current track ends, seeded
+from the last queued id (or the current one). `musicAutoplayCandidate` drops
+the finishing id, anything already in `history` or the queue, and anything
+shorter than 60 s or longer than 12 minutes when duration is known (a clip
+or a film, not a song). Unknown duration is kept. Those rows carry
+`autoplayed: true`. ENDED then uses the ordinary `advance()`. A fetch at
+ENDED is only the fallback when the buffer is empty.
 
 Around it: a per-user limiter (20 burst, then one every two seconds), an
 upstream budget across everybody on the process (300 burst, 10 a second)
@@ -278,10 +282,15 @@ samples their position every 10 s so a joiner lands close, and nobody else
 writes unprompted. Every write samples the live player position, so a queue
 edit never carries a stale one. A track ending advances the queue, guarded
 on the id so a straggler cannot skip the track the room already moved to.
-When `autoplay` is on, the queue is empty and repeat is off, the actor
-fetches `/api/music/related` and writes a related track with
-`autoplayed: true`. If the actor has left, any member does the same after
-1.5 s.
+When `autoplay` is on and repeat is off, the actor keeps about three
+related tracks on the queue so ENDED can advance without waiting on
+InnerTube. If the actor has left, any member fills the same buffer after
+1.5 s. If the queue is still empty at ENDED, that member (or the actor)
+fetches `/api/music/related` and writes one related track with
+`autoplayed: true`. The play effect must not call `playVideo()` while
+YouTube is ENDED, except on repeat-one: that is what used to restart the
+finished song. A new add after this machine saw ENDED starts that pick
+now and drops pending autoplayed rows so it becomes the radio seed.
 
 Autoplay can be refused until the page has a gesture; the dock shows
 "Toque para tocar" when the player has not started two seconds after being

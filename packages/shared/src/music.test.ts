@@ -6,6 +6,7 @@ import {
   completeMusicState,
   musicAdvance,
   musicAutoplayCandidate,
+  musicAutoplayCandidates,
   musicSkipVotesNeeded,
   musicStateSchema,
   musicWriteAllowed,
@@ -488,5 +489,24 @@ describe("musicAutoplayCandidate", () => {
       ),
     ).toBeNull();
     expect(musicAutoplayCandidate([], held)).toBeNull();
+  });
+
+  it("returns several song-length picks in related order", () => {
+    const held = state({ current: { ...track("a"), videoId: "finish00001" } });
+    const related = [
+      resolved("finish00001"),
+      resolved("pick0000001", 180_000),
+      resolved("short000001", MUSIC_AUTOPLAY_MIN_MS - 1),
+      resolved("pick0000002", 200_000),
+      resolved("pick0000003", 90_000),
+    ];
+    expect(musicAutoplayCandidates(related, held, 3).map((video) => video.videoId)).toEqual([
+      "pick0000001",
+      "pick0000002",
+      "pick0000003",
+    ]);
+    expect(musicAutoplayCandidates(related, held, 1)).toEqual([
+      musicAutoplayCandidate(related, held),
+    ]);
   });
 });
