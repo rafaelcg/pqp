@@ -32,6 +32,14 @@ export interface PqpDesktop {
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
   setLocale?(locale: "en" | "pt-BR"): Promise<string | null>;
+  /**
+   * Launch at login. macOS and Windows only: Electron's login-item API has no
+   * Linux implementation, so a Linux shell answers `false` to both rather
+   * than a toggle that looks like it worked. Absent in shells built before
+   * this landed.
+   */
+  getStartAtLogin?(): Promise<boolean>;
+  setStartAtLogin?(value: boolean): Promise<boolean>;
   /** Dock / taskbar mention count. Older shells predate notifications. */
   setBadgeCount?(count: number): void;
   /**

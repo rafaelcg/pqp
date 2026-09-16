@@ -251,6 +251,6 @@ Packaged apps load the hosted app (see **Environment** above). `resources/client
 | Bundled client origin | Loopback static mode cannot satisfy a production CORS allowlist; the fix is a stable `app://` protocol |
 | Tray, minimize to tray during a call | Implemented (`lib/tray-icon.js`, `lib/tray-menu.js`, `lib/tray-state.js`) |
 | Global push-to-talk | Implemented (`lib/global-ptt.js`); release is inferred from auto-repeat, see above |
-| Start at login | Future |
+| Start at login | Implemented (`lib/login-item.js`, Settings → Appearance). macOS and Windows only, Electron has no Linux login-item API |
 | Native notifications deep-link | Future |
 | Deep-link → select server/channel state | Path navigates to `/app/...`; selection state still in-memory |

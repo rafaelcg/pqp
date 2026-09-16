@@ -43,18 +43,12 @@ jobs:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    # THE macOS JOB MUST NOT HOLD A RELEASE HOSTAGE. It has been red since early
-    # September over signing (the write-up is beside "Package Electron" below and
-    # in docs/DESKTOP.md 3.8), and Windows is where the desktop users are.
-    # `fail-fast: false` already keeps the other two runners going; this is the
-    # other half, so a `v*` tag whose mac job dies still finishes as a green
-    # workflow with the Windows and Linux artifacts published to the release
-    # rather than a red run nobody can ship from.
-    #
-    # It is a plaster and it is labelled as one. The step below annotates the run
-    # so a failure is still visible, and this line comes out the moment a mac
-    # build is green again: a permanently ignored job is a job nobody fixes.
-    continue-on-error: ${{ matrix.platform == 'mac' }}
+    # The macOS job used to carry `continue-on-error: true` while it was red
+    # over signing (docs/DESKTOP.md 3.8, fixed 2026-09-13). It has been green
+    # for three days and dozens of runs since (see "Package Electron" and
+    # "Verify macOS signing and notarization" below), so the plaster is off.
+    # `fail-fast: false` still keeps Windows and Linux building when mac fails
+    # for real, which is the part of that safety net worth keeping.
     strategy:
       fail-fast: false
       matrix:
@@ -202,12 +196,11 @@ jobs:
           # not. electron-builder's `--publish always` uploads as part of THIS
           # command, which runs before "Verify macOS signing and notarization"
           # below — so publishing here can hand a user an unsigned or
-          # notarization-stripped .dmg before anything has checked it, and the
-          # job-level `continue-on-error` above hides that from the run's
-          # status. macOS publishes for real in "Publish macOS release
-          # assets", gated on that verification step passing (an unsigned
-          # build still counts as passing — see that step). Windows and Linux
-          # have no such gate, so they keep the one-step build-and-publish.
+          # notarization-stripped .dmg before anything has checked it. macOS
+          # publishes for real in "Publish macOS release assets", gated on
+          # that verification step passing (an unsigned build still counts as
+          # passing — see that step). Windows and Linux have no such gate, so
+          # they keep the one-step build-and-publish.
           if [ "$IS_TAG" = "true" ] && [ "$PLATFORM" != "mac" ]; then
             args+=("--publish" "always")
           else
@@ -283,21 +276,11 @@ jobs:
 
           exit $status
 
-      # `continue-on-error` on this job hides the red X, so say it out loud here.
-      # A warning annotation still shows on the run summary and in the PR, which
-      # is the difference between "known and tolerated" and "silently broken".
-      - name: Say so when the macOS build failed
-        if: failure() && matrix.platform == 'mac'
-        shell: bash
-        run: |
-          echo "::warning::The macOS desktop build failed and the workflow was allowed to pass anyway (known signing issue, docs/DESKTOP.md 3.8). Windows and Linux artifacts are unaffected. Remove continue-on-error from .github/workflows/electron.yml once a mac build is green."
-
       # The other half of moving macOS's publish out of "Package Electron":
       # upload the artifacts it already built, but only now that Gatekeeper
       # has actually looked at them. `steps.verify-mac.outcome` reads the
-      # verification step's own result, not the job's — the job-level
-      # `continue-on-error` above only changes what the RUN reports, it does
-      # not change what this step sees, so a failed check still blocks this.
+      # verification step's own result, so a failed check still blocks this
+      # even though the job itself would already be red by then too.
       # An unsigned build (fork, or secrets not set yet) still publishes here:
       # the verify step exits 0 for that case on purpose, same as it always
       # has, and that was never what this gate is for.
