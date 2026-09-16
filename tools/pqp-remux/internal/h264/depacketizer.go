@@ -137,6 +137,9 @@ func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) (*
 
 	out, err := d.inner.Unmarshal(payload)
 	if err != nil {
+		// A malformed fragment can leave pion holding half a NAL; never let
+		// that tail leak into the next one.
+		d.resetReassembly()
 		// Keep the AU open: a single dropped/malformed packet should not
 		// discard everything already assembled for this frame.
 		if !marker {
@@ -183,6 +186,21 @@ func (d *Depacketizer) discardIncompleteAU() {
 	d.buf = nil
 	d.units = nil
 	d.auStarted = false
+	d.resetReassembly()
+}
+
+// resetReassembly drops any FU-A fragments pion is still holding. pion's
+// H264Packet appends every FU-A fragment to one buffer and only clears it
+// on the fragment that carries the end bit; a fragment with the START bit
+// does not reset it. So when an access unit is discarded mid-fragment (the
+// end fragment was lost, or the timestamp jumped), the next fragmented NAL
+// is glued onto the stale tail and reaches the decoder as a slice with
+// garbage inside it: libav says "mb_type ... in P slice too large", Chrome
+// on macOS says MEDIA_ERR_DECODE -12909 and the media element is dead for
+// good. Measured 2026-09-16 on a live party with ordinary packet loss. pion
+// exposes no reset, so a fresh packetizer is the only way to clear it.
+func (d *Depacketizer) resetReassembly() {
+	d.inner = codecs.H264Packet{IsAVC: true}
 }
 
 // firstErr returns the first non-nil error, so a caller sees the boundary
