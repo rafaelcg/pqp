@@ -198,6 +198,7 @@ import {
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
 import {
   callStartKey,
   callStartedAt,
@@ -2009,15 +2010,7 @@ function ActiveCall({
           )}
         </div>
       )}
-      {!voiceState.error && voiceState.notice && (
-        <p
-          role="status"
-          data-voice-notice
-          className="absolute inset-x-0 top-0 z-20 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
-        >
-          {voiceState.notice}
-        </p>
-      )}
+      {!voiceState.error && <VoiceNoticeBar notice={voiceState.notice} />}
 
       {dockComposer ? (
         composerDock
