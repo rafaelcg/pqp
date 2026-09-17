@@ -17,6 +17,134 @@ type SPSInfo struct {
 	ChromaFormatIDC      uint32
 	BitDepthLumaMinus8   uint32
 	BitDepthChromaMinus8 uint32
+
+	// The fields below are what internal/skipframe needs to WRITE a slice
+	// header the same decoder will accept, rather than what the init
+	// segment needs to describe one. They are all read on the same pass
+	// as the dimensions above; nothing else in this module looks at them.
+	ProfileIDC uint8
+	// Log2MaxFrameNum is log2_max_frame_num_minus4 + 4: the fixed WIDTH,
+	// in bits, of every slice header's frame_num field, and therefore
+	// what a rewrite of that field must preserve.
+	Log2MaxFrameNum uint32
+	// PicOrderCntType and Log2MaxPicOrderCntLsb say how a picture's
+	// output order is coded. Type 2 (decode order IS output order)
+	// derives POC from frame_num alone, which is what every Chrome
+	// screen share this pipeline has seen uses and the only type
+	// internal/skipframe synthesizes into.
+	PicOrderCntType       uint32
+	Log2MaxPicOrderCntLsb uint32
+	MaxNumRefFrames       uint32
+	GapsInFrameNumAllowed bool
+	FrameMbsOnly          bool
+	SeparateColourPlane   bool
+	// PicWidthInMbs and PicHeightInMapUnits are the CODED macroblock
+	// dimensions, before cropping: their product (times 2 for a
+	// field-coded stream) is PicSizeInMbs, the mb_skip_run a
+	// whole-picture skip slice carries.
+	PicWidthInMbs       uint32
+	PicHeightInMapUnits uint32
+}
+
+// PicSizeInMbs is the number of macroblocks in one coded picture — the
+// value a slice that skips the entire picture writes as mb_skip_run.
+func (s SPSInfo) PicSizeInMbs() uint32 {
+	h := s.PicHeightInMapUnits
+	if !s.FrameMbsOnly {
+		h *= 2
+	}
+	return s.PicWidthInMbs * h
+}
+
+// PPSInfo is the handful of picture parameter set fields a slice header
+// cannot be written (or re-read) without: which optional syntax elements
+// are present, and whether the slice data that follows is CAVLC or CABAC.
+type PPSInfo struct {
+	ID                             uint32
+	SPSID                          uint32
+	EntropyCodingMode              bool // true == CABAC
+	BottomFieldPicOrderPresent     bool
+	NumSliceGroups                 uint32
+	NumRefIdxL0DefaultActiveMinus1 uint32
+	WeightedPred                   bool
+	WeightedBipredIDC              uint32
+	DeblockingFilterControlPresent bool
+	RedundantPicCntPresent         bool
+}
+
+// ParsePPS reads a picture parameter set (NAL header byte included,
+// emulation prevention still in place) far enough to cover every field a
+// P-slice header before slice_qp_delta depends on (ITU-T H.264 §7.3.2.2).
+// The trailing High-profile extension (transform_8x8_mode_flag onwards) is
+// deliberately not read: nothing in a skip slice depends on it.
+func ParsePPS(payload []byte) (PPSInfo, error) {
+	if len(payload) < 2 {
+		return PPSInfo{}, errShortPPS
+	}
+	if Type(payload[0]&0x1F) != TypePPS {
+		return PPSInfo{}, errNotPPS
+	}
+	r := newBitReader(unescapeRBSP(payload[1:]))
+
+	var p PPSInfo
+	p.ID = r.ue()
+	p.SPSID = r.ue()
+	p.EntropyCodingMode = r.bit() == 1
+	p.BottomFieldPicOrderPresent = r.bit() == 1
+	numSliceGroupsMinus1 := r.ue()
+	p.NumSliceGroups = numSliceGroupsMinus1 + 1
+	if numSliceGroupsMinus1 > 0 {
+		// slice_group_map_type and its variable tail. A skip slice is
+		// refused outright for a multi-slice-group stream (see
+		// skipframe.New), so stop reading here rather than carry a
+		// parser for syntax no caller can use: every field after this
+		// point is reported as its zero value, which the caller must
+		// not act on once NumSliceGroups > 1.
+		return p, nil
+	}
+	p.NumRefIdxL0DefaultActiveMinus1 = r.ue()
+	_ = r.ue() // num_ref_idx_l1_default_active_minus1
+	p.WeightedPred = r.bit() == 1
+	p.WeightedBipredIDC = r.u(2)
+	_ = r.se() // pic_init_qp_minus26
+	_ = r.se() // pic_init_qs_minus26
+	_ = r.se() // chroma_qp_index_offset
+	p.DeblockingFilterControlPresent = r.bit() == 1
+	_ = r.bit1() // constrained_intra_pred_flag
+	p.RedundantPicCntPresent = r.bit() == 1
+	if r.err != nil {
+		return PPSInfo{}, r.err
+	}
+	return p, nil
+}
+
+// UnescapeRBSP and EscapeRBSP are the two halves of H.264's
+// emulation-prevention transform, exported for internal/skipframe: a
+// slice header field can only be read or rewritten in the unescaped
+// domain, and the result has to be escaped again before it goes back on
+// the wire.
+func UnescapeRBSP(b []byte) []byte { return unescapeRBSP(b) }
+
+// EscapeRBSP inserts an emulation_prevention_three_byte wherever the raw
+// RBSP would otherwise contain 0x000000, 0x000001, 0x000002 or 0x000003
+// (§7.4.1.1). It is the exact inverse of UnescapeRBSP for any validly
+// escaped input.
+func EscapeRBSP(b []byte) []byte {
+	out := make([]byte, 0, len(b)+len(b)/64+1)
+	zeros := 0
+	for _, c := range b {
+		if zeros >= 2 && c <= 0x03 {
+			out = append(out, 0x03)
+			zeros = 0
+		}
+		out = append(out, c)
+		if c == 0x00 {
+			zeros++
+		} else {
+			zeros = 0
+		}
+	}
+	return out
 }
 
 // ParseSPS reads a sequence parameter set (NAL header byte included, RBSP
@@ -73,11 +201,12 @@ func ParseSPS(payload []byte) (SPSInfo, error) {
 		}
 	}
 
-	_ = r.ue() // log2_max_frame_num_minus4
+	log2MaxFrameNum := r.ue() + 4
 	picOrderCntType := r.ue()
+	log2MaxPocLsb := uint32(0)
 	switch picOrderCntType {
 	case 0:
-		_ = r.ue() // log2_max_pic_order_cnt_lsb_minus4
+		log2MaxPocLsb = r.ue() + 4 // log2_max_pic_order_cnt_lsb_minus4
 	case 1:
 		_ = r.bit1()
 		_ = r.se()
@@ -88,8 +217,8 @@ func ParseSPS(payload []byte) (SPSInfo, error) {
 		}
 	}
 
-	_ = r.ue() // max_num_ref_frames
-	_ = r.bit1()
+	maxNumRefFrames := r.ue()
+	gapsAllowed := r.bit() == 1
 
 	picWidthInMbsMinus1 := r.ue()
 	picHeightInMapUnitsMinus1 := r.ue()
@@ -122,11 +251,21 @@ func ParseSPS(payload []byte) (SPSInfo, error) {
 	height := frameHeightInMbs*16 - subHeightC*(2-frameMbsOnly)*(cropTop+cropBottom)
 
 	return SPSInfo{
-		Width:                width,
-		Height:               height,
-		ChromaFormatIDC:      chromaFormatIdc,
-		BitDepthLumaMinus8:   bitDepthLumaMinus8,
-		BitDepthChromaMinus8: bitDepthChromaMinus8,
+		Width:                 width,
+		Height:                height,
+		ChromaFormatIDC:       chromaFormatIdc,
+		BitDepthLumaMinus8:    bitDepthLumaMinus8,
+		BitDepthChromaMinus8:  bitDepthChromaMinus8,
+		ProfileIDC:            profileIdc,
+		Log2MaxFrameNum:       log2MaxFrameNum,
+		PicOrderCntType:       picOrderCntType,
+		Log2MaxPicOrderCntLsb: log2MaxPocLsb,
+		MaxNumRefFrames:       maxNumRefFrames,
+		GapsInFrameNumAllowed: gapsAllowed,
+		FrameMbsOnly:          frameMbsOnly == 1,
+		SeparateColourPlane:   separateColourPlane,
+		PicWidthInMbs:         picWidthInMbsMinus1 + 1,
+		PicHeightInMapUnits:   picHeightInMapUnitsMinus1 + 1,
 	}, nil
 }
 
@@ -247,4 +386,6 @@ const (
 	errShortSPS   = spsError("nal: sps payload too short")
 	errNotSPS     = spsError("nal: payload is not a sequence parameter set")
 	errBitOverrun = spsError("nal: sps bitstream ended before parsing finished")
+	errShortPPS   = spsError("nal: pps payload too short")
+	errNotPPS     = spsError("nal: payload is not a picture parameter set")
 )

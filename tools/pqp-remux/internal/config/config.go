@@ -113,6 +113,22 @@ type Config struct {
 	// R2UploadQueueDepth/R2UploadMaxRetries tune internal/r2.Writer.
 	R2UploadQueueDepth int
 	R2UploadMaxRetries int
+
+	// ClockCutParts is CLOCK_CUT_PARTS: cut every part at exactly the
+	// part target and fill the rest of a long frame gap with synthesized
+	// frames that repeat the picture already on screen, instead of
+	// letting a part run as long as the frame it holds.
+	//
+	// DEFAULT OFF, AND DEPLOYING THE BINARY CHANGES NOTHING UNTIL IT IS
+	// SET. On, a presenter whose encoder pauses no longer produces a 2.25
+	// second part -- which Apple's player treats as a fatal playlist
+	// parse error ("Partial Segment duration exceeds PART-TARGET"), and
+	// which inflates hls.js's hold-back for everyone else. See
+	// pipeline.Fragmenter.SetRepeater and internal/skipframe. The
+	// synthesizer refuses streams it cannot write a correct slice for, so
+	// this is a request, not a promise; the stats line's repeats/cuts
+	// counters say whether it is doing anything.
+	ClockCutParts bool
 }
 
 // PartTicks/SegmentTicks convert PartMS/SegmentMS into the 90kHz RTP clock
@@ -197,6 +213,7 @@ func FromEnv() (Config, error) {
 	if c.PLIPaceMS, err = envIntOr("PLI_PACE_MS", 0); err != nil {
 		return Config{}, err
 	}
+	c.ClockCutParts = os.Getenv("CLOCK_CUT_PARTS") == "true"
 
 	if c.AACBitrateKbps, err = envIntOr("AAC_BITRATE_KBPS", DefaultAACBitrateKbps); err != nil {
 		return Config{}, err

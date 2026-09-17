@@ -98,6 +98,7 @@ Read by `internal/config`.
 | `KEYFRAME_POLICY` | `natural` | `natural` (never send a PLI) or `pli` (paced, gated requests). **`L0.2` has not chosen a branch yet** — this defaults to `natural` on purpose |
 | `PLI_GATE_FACTOR` | `1.0` | In `pli` mode, wait this many × `SEGMENT_MS` with no IDR before asking for one. A factor above 1 pushes the earliest possible segment boundary past `SEGMENT_MS`, because a segment closes on the first IDR at or after the target |
 | `PLI_PACE_MS` | `500` | Minimum spacing between repeated PLI requests while still waiting for an IDR. **Floored at 500ms** regardless of a lower value: `L0.1` found the SFU's own `rtc.pli_throttle` (Low tier) defaults to 500ms for a single-layer publish (our screen share always is), so asking faster only wastes RTCP, it does not get more keyframes |
+| `CLOCK_CUT_PARTS` | `false` | **Off by default; deploying the binary changes nothing until it is set.** Cut every part at exactly `PART_MS` instead of on whichever access unit arrives after the target has passed, filling the rest of a long frame gap with synthesized frames that repeat the picture already on screen (`internal/skipframe`). It exists because `PART-TARGET` is a promise: AVPlayer refuses a playlist outright, as a fatal parse error, when a partial segment runs longer than it, or when a non-terminal one is shorter than 85% of it — and a part is otherwise exactly as long as the frame it holds. Measured against the live stream on 2026-09-17: parts of 0.667s, 1.1s and 2.25s beside the usual 0.5s. The synthesizer refuses any stream it cannot write a correct slice for (CABAC, several slice groups, weighted prediction, field coding, `pic_order_cnt_type` other than 2, more than one reference frame), and such a session keeps today's behaviour exactly; the stats line's `repeats=`/`cuts=` counters say which way it went |
 | `AAC_BITRATE_KBPS` | `128` | Target AAC-LC bitrate `internal/aacenc` asks ffmpeg's native encoder for |
 | `FFMPEG_PATH` | `ffmpeg` (via `PATH`) | Override the ffmpeg binary `internal/aacenc` shells out to |
 | `CHANNEL_ID` | `ROOM`'s value | The R2 key layout's `channelId` segment. Defaults to `ROOM` because `server/src/voice/hls-egress.ts`'s own `roomName` **is** the channel id (one LiveKit room per voice channel) — this exists only to override that in a test or a future topology where that stops holding |
@@ -397,7 +398,8 @@ time tracks the wall clock, whatever the frame rate**:
   time.
 - **A quiet source's part waits for the frame that really ends the gap**
   and carries that frame's true duration, so **parts may run longer than
-  `PART_MS`** — about a second on a static tab. `state.json` reports the
+  `PART_MS`** — about a second on a static tab. (Unless `CLOCK_CUT_PARTS`
+  is on, which is exactly what it changes.) `state.json` reports the
   real figure in `partTargetMs` (the configured `PART_MS` raised to cover
   the longest listed part, and bounded by `SEGMENT_MS`), because
   `PART-TARGET` is a promise about the maximum and the edge Worker times
@@ -416,13 +418,25 @@ time tracks the wall clock, whatever the frame rate**:
 `timelineRatio` on the stats line is that property, measured: media
 published over wall clock passed, per track. It belongs at `1.00`.
 
-**The limit, stated plainly.** One part per quiet episode. Past that the
-video timeline is HELD at the last frame while the **audio** track — paced
-off the wall clock by `runAudioPacer`, so it never goes idle — keeps
-producing parts at `PART_MS`. Publishing more video than that would mean
-emitting a coded frame the publisher never sent twice, which is safe only
-for an IDR (a P-frame applied to its own output is not the picture it
-codes) and is not something this pipeline does. Under
+**The limit, stated plainly, with `CLOCK_CUT_PARTS` off.** One part per
+quiet episode. Past that the video timeline is HELD at the last frame
+while the **audio** track — paced off the wall clock by `runAudioPacer`,
+so it never goes idle — keeps producing parts at `PART_MS`. Publishing
+more video than that would mean emitting a coded frame the publisher
+never sent twice, which is safe only for an IDR (a P-frame applied to its
+own output is not the picture it codes) and is not something this
+pipeline did until `internal/skipframe` existed.
+
+**With `CLOCK_CUT_PARTS=true` that limit is gone**, because the thing it
+was waiting for now exists: a frame that says "the picture did not
+change" is neither a guess nor a re-send of a coded frame. A freeze then
+produces one part per `PART_MS` for as long as it lasts, every part
+exactly the target, and `partTargetMs` stops climbing with the worst gap
+the session ever had. What is published is a P slice whose every
+macroblock is `P_Skip`, which copies the previous picture with a zero
+motion vector and no residual — bit-exact, verified against ffmpeg with
+`-err_detect explode` and `framemd5` on a real capture
+(`internal/skipframe`'s bitstream test). Under
 `KEYFRAME_POLICY=pli` a quiet source is by definition past the gate
 window, so the requester is already asking for a keyframe throughout; if
 the browser answers, ordinary frames resume and the question does not
@@ -961,7 +975,26 @@ infrastructure rather than assumed-present. Notably:
   even past its target (elastic "Branch A"), and does close on the next
   real IDR, with the resulting fragment's first sample verified sync at the
   box level; the audio fragmenter's on-schedule (no IDR-wait) segment cuts
-  and monotonic sequence numbers.
+  and monotonic sequence numbers. With a repeater set (`CLOCK_CUT_PARTS`):
+  no part longer than the target and no non-terminal part under 85% of it
+  through a two-second stall and through a five-second freeze published by
+  the keep-alive, each part starting exactly where the previous one ended,
+  the timeline still tracking the wall clock at 0.2, 1.4 and 30 fps, the
+  resume after a freeze never rewinding, and a stream the synthesizer
+  refuses falling back to the long, honest part it always produced.
+- `internal/skipframe`: the synthesized repeat frame, read back field by
+  field (`first_mb_in_slice`, `slice_type`, `frame_num`, the marking and
+  reference-list flags, `mb_skip_run` covering every macroblock), the
+  `frame_num` renumbering of real slices around inserted frames including
+  a wrap at `MaxFrameNum`, every refusal in `New` provoked on its own, and
+  the two ways synthesis stops itself mid-session (the publisher's
+  parameter sets changing, a slice carrying reference marking commands).
+  **And the check no unit test can make**: a real capture and an
+  ffmpeg-encoded stream both decoded with `-err_detect explode` after
+  repeat frames are inserted into them, asserting zero decoder
+  diagnostics, every inserted frame's `framemd5` identical to the frame
+  before it, and every real frame's `framemd5` unchanged by the
+  insertion. It skips when ffmpeg is not on `PATH`.
 - `internal/r2`: the upload queue/retry/counter state machine against an
   in-memory fake (success, transient-then-succeeds, gives-up-after-max-
   retries, a full queue drops rather than blocks, concurrent `Enqueue`

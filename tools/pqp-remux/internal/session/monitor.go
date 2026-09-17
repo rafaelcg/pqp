@@ -223,19 +223,20 @@ func (s *Session) idleTick(now time.Time) bool {
 	// than this tick thinks and the flush would over-stretch it.
 	lastFrame = s.lastVideoFrameAtNs.Load()
 	held = now.Sub(time.Unix(0, lastFrame))
-	var frag *pipeline.Fragment
+	var frags []*pipeline.Fragment
 	if held >= s.videoIdleAfter() {
-		frag = s.frag.IdleFlush(durationToTicks(held))
+		frags = s.frag.IdleFlush(durationToTicks(held))
 	}
-	if frag != nil {
+	for _, frag := range frags {
 		s.publish(frag)
 	}
+	s.mirrorRepeatCounters()
 	s.videoMu.Unlock()
 
-	if frag == nil {
+	if len(frags) == 0 {
 		return false
 	}
-	s.keepAlivePartsWritten.Add(1)
+	s.keepAlivePartsWritten.Add(uint64(len(frags)))
 	return true
 }
 
@@ -295,7 +296,12 @@ type Stats struct {
 	BytesWritten         uint64
 	VideoSegmentsWritten uint64
 	KeepAlivePartsWrites uint64
-	VideoIdle            bool
+	// RepeatFrames and ClockCuts are zero for every session that is not
+	// cutting parts on the clock, which makes them the one-glance answer
+	// to "is CLOCK_CUT_PARTS doing anything on this stream".
+	RepeatFrames uint64
+	ClockCuts    uint64
+	VideoIdle    bool
 	// VideoMediaMs/AudioMediaMs and the anchors below are what
 	// `timelineRatio` is computed from: how much MEDIA each track has
 	// published against how much WALL clock has passed since that
@@ -359,6 +365,8 @@ func (s *Session) Stats() Stats {
 		BytesWritten:         s.bytesWritten.Load(),
 		VideoSegmentsWritten: s.videoSegmentsWritten.Load(),
 		KeepAlivePartsWrites: s.keepAlivePartsWritten.Load(),
+		RepeatFrames:         s.repeatFrames.Load(),
+		ClockCuts:            s.clockCuts.Load(),
 		VideoIdle:            s.videoIdle.Load(),
 		VideoMediaMs:         s.videoMediaMs.Load(),
 		AudioPacketsSeen:     s.audioPacketsSeen.Load(),
@@ -424,7 +432,7 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "pqp-remux: stats %s window=%s subscribed=%t", label, window.Round(100*time.Millisecond), cur.Subscribed)
-	fmt.Fprintf(&b, " | video pkts=+%d (%.1f/s) frames=+%d (%.1f/s) idr=+%d drops=+%d lost=+%d late=+%d held=+%d damage=+%d damagedDropped=+%d parts=+%d (%.1f/s) segs=+%d keepalive=+%d idle=%t",
+	fmt.Fprintf(&b, " | video pkts=+%d (%.1f/s) frames=+%d (%.1f/s) idr=+%d drops=+%d lost=+%d late=+%d held=+%d damage=+%d damagedDropped=+%d parts=+%d (%.1f/s) segs=+%d keepalive=+%d repeats=+%d cuts=+%d idle=%t",
 		cur.VideoPacketsSeen-prev.VideoPacketsSeen, rate(prev.VideoPacketsSeen, cur.VideoPacketsSeen),
 		cur.VideoFramesSeen-prev.VideoFramesSeen, rate(prev.VideoFramesSeen, cur.VideoFramesSeen),
 		cur.VideoKeyframesSeen-prev.VideoKeyframesSeen,
@@ -437,6 +445,8 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 		cur.PartsWritten-prev.PartsWritten, rate(prev.PartsWritten, cur.PartsWritten),
 		cur.VideoSegmentsWritten-prev.VideoSegmentsWritten,
 		cur.KeepAlivePartsWrites-prev.KeepAlivePartsWrites,
+		cur.RepeatFrames-prev.RepeatFrames,
+		cur.ClockCuts-prev.ClockCuts,
 		cur.VideoIdle)
 	fmt.Fprintf(&b, " lastPkt=%s lastFrame=%s lastIdr=%s lastPart=%s",
 		ago(cur.Now, cur.LastVideoPacket), ago(cur.Now, cur.LastVideoFrame),

@@ -100,6 +100,9 @@ func NewRemuxPipeline(parentCtx context.Context, cfg PipelineConfig) (Pipeline, 
 	partTicks := uint32(msToTicks(cfg.PartMs))
 	segmentTicks := uint32(msToTicks(cfg.SegmentMs))
 	sess := session.New(partTicks, segmentTicks, r, nil)
+	if global.ClockCutParts {
+		sess.EnableClockCutParts()
+	}
 	if cfg.StartVideoSegmentIndex > 0 {
 		sess.SetStartSegmentIndex(cfg.StartVideoSegmentIndex)
 	}

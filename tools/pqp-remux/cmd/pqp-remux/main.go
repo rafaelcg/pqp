@@ -108,6 +108,9 @@ func runServer(cfg config.Config) error {
 	}
 
 	sess := session.New(cfg.PartTicks(), cfg.SegmentTicks(), r, nil)
+	if cfg.ClockCutParts {
+		sess.EnableClockCutParts()
+	}
 	defer sess.Close()
 	defer cancel()
 

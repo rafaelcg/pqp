@@ -97,13 +97,13 @@ const (
 func TestFragmenter_DropsAccessUnitsBeforeFirstIDR(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, false)); err != ErrWaitingForIDR {
+	if _, err := pushOne(f, au(0, false)); err != ErrWaitingForIDR {
 		t.Fatalf("expected ErrWaitingForIDR, got %v", err)
 	}
-	if _, err := f.Push(au(frameStep, false)); err != ErrWaitingForIDR {
+	if _, err := pushOne(f, au(frameStep, false)); err != ErrWaitingForIDR {
 		t.Fatalf("expected ErrWaitingForIDR, got %v", err)
 	}
-	if frag, err := f.Push(au(2*frameStep, true)); err != nil || frag != nil {
+	if frag, err := pushOne(f, au(2*frameStep, true)); err != nil || frag != nil {
 		t.Fatalf("first IDR should be accepted with no fragment yet: frag=%v err=%v", frag, err)
 	}
 }
@@ -115,7 +115,7 @@ func TestFragmenter_CutsPartsAtTargetDuration(t *testing.T) {
 	// 15 frames per part (15*3000 = 45000 = partDuration exactly).
 	for i := int64(0); i < 45; i++ {
 		idr := i == 0
-		frag, err := f.Push(au(i*frameStep, idr))
+		frag, err := pushOne(f, au(i*frameStep, idr))
 		if err != nil {
 			t.Fatalf("frame %d: %v", i, err)
 		}
@@ -169,7 +169,7 @@ func TestFragmenter_SegmentClosesOnlyOnIDRAtOrAfterTarget(t *testing.T) {
 	const totalFrames = 145
 	for i := int64(0); i < totalFrames; i++ {
 		idr := i == 0 || i == 122
-		frag, err := f.Push(au(i*frameStep, idr))
+		frag, err := pushOne(f, au(i*frameStep, idr))
 		if err != nil {
 			t.Fatalf("frame %d: %v", i, err)
 		}
@@ -205,7 +205,7 @@ func TestFragmenter_TfdtNeverDecreasesAcrossFragments(t *testing.T) {
 	first := true
 	for i := int64(0); i < 200; i++ {
 		idr := i == 0 || i%137 == 0 // irregular IDR cadence, on purpose
-		frag, err := f.Push(au(i*frameStep, idr))
+		frag, err := pushOne(f, au(i*frameStep, idr))
 		if err != nil {
 			t.Fatalf("frame %d: %v", i, err)
 		}
@@ -224,7 +224,7 @@ func TestFragmenter_FlushClosesTrailingPart(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
 	for i := int64(0); i < 5; i++ {
-		if _, err := f.Push(au(i*frameStep, i == 0)); err != nil {
+		if _, err := pushOne(f, au(i*frameStep, i == 0)); err != nil {
 			t.Fatalf("frame %d: %v", i, err)
 		}
 	}
@@ -255,7 +255,7 @@ func TestFragmenter_SetStartSegmentIndexAppliesToFirstSegment(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 	f.SetStartSegmentIndex(7)
 
-	frag, err := f.Push(au(0, true))
+	frag, err := pushOne(f, au(0, true))
 	if err != nil {
 		t.Fatalf("first IDR should be accepted: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestFragmenter_SetStartSequenceResumesNumbering(t *testing.T) {
 
 	var seqs []uint32
 	for i := 0; i < 40; i++ {
-		frag, _ := f.Push(&h264.AccessUnit{PTS: int64(i) * 3000, IsIDR: true})
+		frag, _ := pushOne(f, &h264.AccessUnit{PTS: int64(i) * 3000, IsIDR: true})
 		if frag != nil {
 			seqs = append(seqs, frag.SequenceNumber)
 		}
@@ -322,11 +322,37 @@ func TestFragmenter_SetStartSequenceZeroIsANoop(t *testing.T) {
 	f.SetStartSequence(0)
 	var first uint32
 	for i := 0; i < 40 && first == 0; i++ {
-		if frag, _ := f.Push(&h264.AccessUnit{PTS: int64(i) * 3000, IsIDR: true}); frag != nil {
+		if frag, _ := pushOne(f, &h264.AccessUnit{PTS: int64(i) * 3000, IsIDR: true}); frag != nil {
 			first = frag.SequenceNumber
 		}
 	}
 	if first != 1 {
 		t.Fatalf("first part = %d, want 1", first)
+	}
+}
+
+// pushOne and flushOne are Push and IdleFlush as they read for a
+// fragmenter with NO repeater set: one access unit in, at most one
+// fragment out. Every test that predates clock cutting uses them, and
+// they panic rather than silently drop a fragment if a fragmenter ever
+// does cut more than one part in a call -- which only a test that sets a
+// repeater can provoke, and those tests take the slices directly.
+func pushOne(f *Fragmenter, au *h264.AccessUnit) (*Fragment, error) {
+	frags, err := f.Push(au)
+	return onlyFragment(frags), err
+}
+
+func flushOne(f *Fragmenter, heldTicks int64) *Fragment {
+	return onlyFragment(f.IdleFlush(heldTicks))
+}
+
+func onlyFragment(frags []*Fragment) *Fragment {
+	switch len(frags) {
+	case 0:
+		return nil
+	case 1:
+		return frags[0]
+	default:
+		panic("pipeline test: the fragmenter closed more than one part in a single call")
 	}
 }
