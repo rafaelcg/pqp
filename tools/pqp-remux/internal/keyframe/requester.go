@@ -64,8 +64,16 @@ type Requester struct {
 	// lastLossPLI paces OnLoss: a burst of gaps inside one damaged GOP
 	// must not become a PLI storm, one request per lossPLIMinInterval is
 	// plenty since the publisher answers in ~300ms.
-	lastLossPLI     time.Time
-	lossPLIs        uint64
+	lastLossPLI time.Time
+	lossPLIs    uint64
+	// awaitingIDR is set by OnLoss and cleared by OnIDR: while true, tick
+	// re-sends a PLI every lossRetryInterval instead of waiting for the
+	// periodic gate. Measured 2026-09-17: the SFU throttles PLIs to the
+	// publisher (LiveKit default 1 s per layer), so a loss PLI sent within
+	// a second of the previous keyframe was swallowed and nothing asked
+	// again for 4 s, long enough for the part-stuck watchdog to restart
+	// the session.
+	awaitingIDR     bool
 	lastPLILoggedAt time.Time
 	// logf is log.Printf in production; a test substitutes a collector.
 	logf func(format string, args ...any)
@@ -125,6 +133,7 @@ func (r *Requester) OnIDR(t time.Time) {
 	firstAsk := r.firstPLISinceIDR
 	r.lastIDR = t
 	r.lastPLI = time.Time{}
+	r.awaitingIDR = false
 	r.plisSinceIDR = 0
 	r.firstPLISinceIDR = time.Time{}
 	r.resetPLILogThrottle()
@@ -147,6 +156,10 @@ func (r *Requester) resetPLILogThrottle() { r.lastPLILoggedAt = time.Time{} }
 // lossPLIMinInterval paces the loss-triggered PLI below.
 const lossPLIMinInterval = 300 * time.Millisecond
 
+// lossRetryInterval is how often tick re-asks while awaitingIDR. Just over
+// the SFU's 1 s PLI throttle so the retry is never the one it drops.
+const lossRetryInterval = 1100 * time.Millisecond
+
 // OnLoss asks for a keyframe NOW because the session just threw media away
 // (an RTP sequence gap, a discarded access unit): every frame until the
 // next IDR is being dropped, so the picture is frozen until one arrives,
@@ -164,6 +177,7 @@ func (r *Requester) OnLoss(now time.Time) bool {
 	}
 	r.lastLossPLI = now
 	r.lastPLI = now
+	r.awaitingIDR = true
 	r.plisSinceIDR++
 	if r.firstPLISinceIDR.IsZero() {
 		r.firstPLISinceIDR = now
@@ -189,6 +203,11 @@ func (r *Requester) tick() {
 	r.mu.Lock()
 	lastIDR, lastPLI := r.lastIDR, r.lastPLI
 	due := r.gater.ShouldSendPLI(now, lastIDR, lastPLI)
+	lossRetry := false
+	if !due && r.awaitingIDR && !lastPLI.IsZero() && now.Sub(lastPLI) >= lossRetryInterval {
+		due = true
+		lossRetry = true
+	}
 	var episodeCount uint64
 	var shouldLog bool
 	if due {
@@ -203,12 +222,20 @@ func (r *Requester) tick() {
 			r.lastPLILoggedAt = now
 		}
 		r.plisSent.Add(1)
+		if lossRetry {
+			r.lossPLIs++
+		}
 	}
 	r.mu.Unlock()
 
 	if due {
 		r.send.RequestKeyframe()
-		if shouldLog {
+		if lossRetry {
+			// Always logged: each one is a keyframe request the SFU or the
+			// publisher swallowed, and the picture is frozen meanwhile.
+			r.logf("pqp-remux: keyframe: PLI re-sent after loss (no IDR for %s, %d in this episode, %d this session)",
+				now.Sub(lastIDR).Round(time.Millisecond), episodeCount, r.plisSent.Load())
+		} else if shouldLog {
 			gap := "never"
 			if !lastIDR.IsZero() {
 				gap = now.Sub(lastIDR).Round(time.Millisecond).String()

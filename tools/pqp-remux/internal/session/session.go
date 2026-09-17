@@ -113,6 +113,9 @@ type Session struct {
 	// counts late/duplicate RTP packets the depacketizer ignored.
 	damageEpisodes   atomic.Uint64
 	videoLatePackets atomic.Uint64
+	// reorder holds out-of-order video packets briefly so a retransmission
+	// fills a hole before it counts as loss. Guarded by videoMu.
+	reorder *reorderBuffer
 	// initSPS/initPPS are the parameter sets the CURRENT init segment was
 	// built from. Compared byte-for-byte against every later in-band
 	// pair; a real change rebuilds the init. Protected by videoMu.
@@ -288,7 +291,8 @@ type Session struct {
 // set later with SetKeyframeRequester.
 func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requester) *Session {
 	s := &Session{
-		dep: h264.NewDepacketizer(),
+		dep:     h264.NewDepacketizer(),
+		reorder: newReorderBuffer(),
 		frag: pipeline.NewFragmenter(pipeline.Config{
 			Timescale:       h264.ClockRate,
 			PartDuration:    partTicks,
@@ -542,6 +546,15 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	s.videoPacketsSeen.Add(1)
 	s.lastVideoPacketAtNs.Store(now.UnixNano())
 
+	for _, ordered := range s.reorder.push(pkt, now) {
+		s.handleOrderedVideoPacket(ordered, now)
+	}
+}
+
+// handleOrderedVideoPacket is HandleVideoPacket after the reorder buffer:
+// packets arrive here in sequence order, with any hole the buffer gave up
+// on left for the depacketizer's sequence check to catch.
+func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
 	au, err := s.dep.PushRTP(pkt.Payload, pkt.SequenceNumber, pkt.Timestamp, pkt.Marker)
 	if err != nil {
 		if errors.Is(err, h264.ErrLatePacket) {

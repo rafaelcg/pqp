@@ -2,6 +2,7 @@ package session
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pion/rtp"
 
@@ -42,12 +43,15 @@ func fuAFrames(nalType byte, rbsp []byte, n int) [][]byte {
 func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T) {
 	r := ring.New(6, 90000)
 	s := New(45000, 360000, r, nil)
+	clock := time.Unix(1_700_000_000, 0)
+	s.now = func() time.Time { return clock }
 	pli := &countingPLI{}
 	s.SetKeyframeRequester(keyframe.NewRequester(keyframe.Config{Policy: keyframe.PolicyPLI, SegmentTargetMs: 4000}, pli))
 
 	seq := uint16(1000)
 	send := func(payload []byte, ts uint32, marker bool) {
 		seq++
+		clock = clock.Add(3 * time.Millisecond)
 		s.HandleVideoPacket(&rtp.Packet{Header: rtp.Header{SequenceNumber: seq, Timestamp: ts, Marker: marker}, Payload: payload})
 	}
 	frame := int64(0)
@@ -66,11 +70,19 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 		t.Fatal("clean stream must not be flagged damaged")
 	}
 
-	// A fragmented P-frame with its middle fragment lost.
+	// A fragmented P-frame with its middle fragment lost for good: the
+	// reorder buffer holds the end fragment for reorderHoldMax, then the
+	// next frame's arrival gives the hole up.
 	frags := fuAFrames(1, make([]byte, 900), 3)
 	send(frags[0], ts(), false)
 	seq++ // frags[1] never arrives
 	send(frags[2], ts(), true)
+	frame++
+	if s.droppingDamaged.Load() {
+		t.Fatal("inside the reorder hold nothing is loss yet")
+	}
+	clock = clock.Add(reorderHoldMax)
+	send(singleNAL(1, []byte{0xDD, 0xFF}), ts(), true) // gives the hole up; itself dropped
 	frame++
 
 	if !s.droppingDamaged.Load() {
@@ -82,8 +94,10 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 	if s.damageEpisodes.Load() != 1 {
 		t.Fatalf("damageEpisodes = %d, want 1", s.damageEpisodes.Load())
 	}
-	if got := s.videoFramesSeen.Load(); got != framesBefore {
-		t.Fatalf("the damaged access unit was counted as a frame (%d -> %d)", framesBefore, got)
+	// The damaged access unit itself is not a frame; the P-frame that gave
+	// the hole up is one (seen, then dropped as damaged).
+	if got := s.videoFramesSeen.Load(); got != framesBefore+1 {
+		t.Fatalf("frames seen %d -> %d, want +1", framesBefore, got)
 	}
 
 	// P-frames that follow reference the lost one: dropped, and a second
@@ -92,8 +106,8 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 		send(singleNAL(1, []byte{0xDD, byte(i)}), ts(), true)
 		frame++
 	}
-	if got := s.damagedAUsDropped.Load(); got != 4 {
-		t.Fatalf("damagedAUsDropped = %d, want 4", got)
+	if got := s.damagedAUsDropped.Load(); got != 5 {
+		t.Fatalf("damagedAUsDropped = %d, want 5", got)
 	}
 	if pli.calls != 1 {
 		t.Fatalf("PLI calls = %d, want still 1 (paced)", pli.calls)
@@ -110,18 +124,18 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 		send(singleNAL(1, []byte{0xFF, byte(i)}), ts(), true)
 		frame++
 	}
-	if got := s.damagedAUsDropped.Load(); got != 4 {
+	if got := s.damagedAUsDropped.Load(); got != 5 {
 		t.Fatalf("frames after the IDR were dropped: damagedAUsDropped = %d", got)
 	}
 	if s.Stats().PartsWritten <= partsBefore {
 		t.Fatal("parts must resume after the IDR")
 	}
 	st := s.Stats()
-	if st.VideoPacketsLost != 1 || st.VideoDamageEpisodes != 1 || st.VideoDamagedDropped != 4 {
+	if st.VideoPacketsLost != 1 || st.VideoDamageEpisodes != 1 || st.VideoDamagedDropped != 5 {
 		t.Fatalf("stats lost=%d damage=%d damagedDropped=%d", st.VideoPacketsLost, st.VideoDamageEpisodes, st.VideoDamagedDropped)
 	}
 	line := formatStatsLine("s", Stats{}, st, 5e9)
-	for _, want := range []string{"lost=+1", "damage=+1", "damagedDropped=+4"} {
+	for _, want := range []string{"lost=+1", "damage=+1", "damagedDropped=+5"} {
 		if !contains(line, want) {
 			t.Fatalf("stats line lacks %q: %s", want, line)
 		}
@@ -133,11 +147,14 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 func TestSession_TailLossAlsoArmsDropUntilIDR(t *testing.T) {
 	r := ring.New(6, 90000)
 	s := New(45000, 360000, r, nil)
+	clock := time.Unix(1_700_000_000, 0)
+	s.now = func() time.Time { return clock }
 	pli := &countingPLI{}
 	s.SetKeyframeRequester(keyframe.NewRequester(keyframe.Config{Policy: keyframe.PolicyPLI, SegmentTargetMs: 4000}, pli))
 	seq := uint16(1)
 	send := func(payload []byte, ts uint32, marker bool) {
 		seq++
+		clock = clock.Add(3 * time.Millisecond)
 		s.HandleVideoPacket(&rtp.Packet{Header: rtp.Header{SequenceNumber: seq, Timestamp: ts, Marker: marker}, Payload: payload})
 	}
 	send(singleNAL(7, realishSPS()[1:]), 0, false)
@@ -148,6 +165,8 @@ func TestSession_TailLossAlsoArmsDropUntilIDR(t *testing.T) {
 	send(frags[1], frameStep, false)
 	seq++ // the end fragment (marker) is lost
 	send(singleNAL(1, []byte{0xBB}), 2*frameStep, true)
+	clock = clock.Add(reorderHoldMax)
+	send(singleNAL(1, []byte{0xCC}), 3*frameStep, true)
 	if !s.droppingDamaged.Load() {
 		t.Fatal("a lost marker packet must arm drop-until-IDR")
 	}
