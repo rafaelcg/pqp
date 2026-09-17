@@ -1,0 +1,24 @@
+pqp is an open source, Discord-like place to talk with your people: servers with text and voice channels, direct messages, and a public directory of communities to join.
+
+VOICE AND VIDEO
+Join a voice channel and talk with clear audio, on a peer-to-peer connection for small groups or a dedicated media server for bigger rooms, chosen automatically so you never have to think about it. Turn your camera on, watch someone else's shared screen, see who is speaking, mute or deafen yourself, and rate the call quality when you hang up. Ring a friend directly for a one-on-one call.
+
+TEXT CHAT
+Send messages with reactions, replies, threads, pinned messages and GIFs. Paste a link and get a preview. Search a server's history. Messages you send sync instantly to everyone else in the channel, on any platform.
+
+WATCH PARTIES
+Join a watch party already in progress and watch the shared stream alongside the room's chat, with the video picking up right where the group is.
+
+COMMUNITIES
+Browse a public directory of communities and join the ones that interest you with one tap. Every community has its own text and voice channels, just like a private server.
+
+FRIENDS AND PROFILES
+Add friends by their tag or their public handle, see who is online, and block anyone you would rather not hear from. Claim your own handle to get a shareable profile page.
+
+PRIVACY AND MODERATION
+Report a message, a person or a community in a couple of taps. Server owners get kick, ban, timeout and an audit log. Delete your account and export your data whenever you want.
+
+OPEN SOURCE
+pqp is free, has no ads, and its full source is public on GitHub (rafaelcg/pqp) under the AGPL license. Anyone can read the code, self-host their own instance, or contribute.
+
+This build is a beta. A few things are still catching up to the web app: group DMs, raising your hand in a voice call, and starting your own watch party are not on iOS yet, though they already work on pqp's website and desktop app. We ship improvements often, iOS included.

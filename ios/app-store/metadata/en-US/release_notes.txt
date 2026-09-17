@@ -1,0 +1,1 @@
+Fixed a build break and a voice moderation message (a mod muting, unmuting, moving or disconnecting you) that was being silently dropped instead of shown. Watch party streams now refresh their playback token before it expires, so a long stream does not stall partway through.

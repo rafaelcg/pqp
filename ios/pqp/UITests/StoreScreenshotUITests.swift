@@ -11,13 +11,34 @@ import XCTest
 final class StoreScreenshotUITests: XCTestCase {
     private let outDir = ProcessInfo.processInfo.environment["PQP_SHOT_DIR"]
         ?? "/tmp/asc/shots"
+    // "en" or "pt-BR". Drives both the simulator's system language (so the
+    // app itself renders in that language, the same override
+    // `LocalizationUITests` uses) and the handful of plain-text lookups below
+    // that cannot be identifier-based because the view never gave them one.
+    private let locale = ProcessInfo.processInfo.environment["PQP_SHOT_LOCALE"] ?? "en"
     private var ids: [String: String] = [:]
 
     override func setUp() {
         continueAfterFailure = true
         let data = FileManager.default.contents(atPath: "/tmp/asc/ids.json") ?? Data()
         ids = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] ?? [:]
-        print("SHOT-IDS: \(ids)")
+        print("SHOT-IDS: \(ids) locale=\(locale)")
+    }
+
+    /// One of the exact strings `Localizable.xcstrings` carries for `key`,
+    /// picked by `locale`. Only for the few lookups in this file that have no
+    /// accessibility identifier to match on instead.
+    private func t(_ key: String) -> String {
+        let table: [String: [String: String]] = [
+            "Settings": ["en": "Settings", "pt-BR": "Ajustes"],
+            "All": ["en": "All", "pt-BR": "Tudo"],
+            "Skip": ["en": "Skip", "pt-BR": "Pular"],
+        ]
+        return table[key]?[locale] ?? table[key]?["en"] ?? key
+    }
+
+    private var localeLaunchArguments: [String] {
+        locale == "en" ? [] : ["-AppleLanguages", "(\(locale))", "-AppleLocale", locale.replacingOccurrences(of: "-", with: "_")]
     }
 
     private func shoot(_ name: String) {
@@ -62,7 +83,7 @@ final class StoreScreenshotUITests: XCTestCase {
         // restores the screen you left, so without this the first capture is
         // whatever the previous run was looking at rather than the hub.
         app.launchArguments += ["-pqp.hasCompletedOnboarding", "YES",
-                               "-pqp.lastVisited", ""]
+                               "-pqp.lastVisited", ""] + localeLaunchArguments
         app.launch()
 
         // 1 — the hub: server rail plus direct messages.
@@ -85,12 +106,27 @@ final class StoreScreenshotUITests: XCTestCase {
                 back(app)
             } else { print("SHOT-SKIP: text channel not found") }
 
-            // 3 — a voice channel with people already in it.
+            // 3 — a voice channel with people already in it. Selecting the row
+            // only opens its thread (see the comment on `chat.joinVoice`); this
+            // app's own account has to actually join to see the call stage
+            // with the roster the seed script seated ahead of time.
             let voice = app.staticTexts[ids["voiceName"] ?? "bar-do-ze"]
             if voice.waitForExistence(timeout: 10) {
                 voice.tap()
-                Thread.sleep(forTimeInterval: 3.5)   // roster arrives over the socket
-                shoot("04-voice")
+                Thread.sleep(forTimeInterval: 1.5)
+                let join = app.buttons["chat.joinVoice"]
+                if join.waitForExistence(timeout: 5) {
+                    join.tap()
+                    Thread.sleep(forTimeInterval: 4.0)   // roster arrives over the socket
+                    shoot("04-voice")
+                    if app.buttons["voice.leave"].waitForExistence(timeout: 3) {
+                        app.buttons["voice.leave"].tap()
+                        Thread.sleep(forTimeInterval: 1.0)
+                    }
+                } else {
+                    print("SHOT-SKIP: chat.joinVoice button not found")
+                    shoot("04-voice")
+                }
             } else { print("SHOT-SKIP: voice channel not found") }
             back(app)
             back(app)
@@ -119,10 +155,10 @@ final class StoreScreenshotUITests: XCTestCase {
         if friends.waitForExistence(timeout: 10) {
             friends.tap()
             Thread.sleep(forTimeInterval: 2.0)
-            if app.buttons["All"].exists {
-                app.buttons["All"].tap()
-            } else if app.staticTexts["All"].exists {
-                app.staticTexts["All"].tap()
+            if app.buttons[t("All")].exists {
+                app.buttons[t("All")].tap()
+            } else if app.staticTexts[t("All")].exists {
+                app.staticTexts[t("All")].tap()
             }
             shoot("07-friends")
             back(app)
@@ -134,7 +170,7 @@ final class StoreScreenshotUITests: XCTestCase {
             profile.tap()
             Thread.sleep(forTimeInterval: 2.0)
             shoot("08-profile")
-            let settings = app.buttons["Settings"]
+            let settings = app.buttons[t("Settings")]
             if settings.waitForExistence(timeout: 5) {
                 settings.tap()
                 Thread.sleep(forTimeInterval: 2.0)
@@ -147,9 +183,9 @@ final class StoreScreenshotUITests: XCTestCase {
     func testCaptureOnboarding() {
         let app = XCUIApplication()
         app.launchArguments += ["-pqp.hasCompletedOnboarding", "NO",
-                               "-pqp.lastVisited", ""]
+                               "-pqp.lastVisited", ""] + localeLaunchArguments
         app.launch()
-        if app.buttons["Skip"].waitForExistence(timeout: 15) {
+        if app.buttons[t("Skip")].waitForExistence(timeout: 15) {
             shoot("00-onboarding")
         } else {
             print("SHOT-SKIP: onboarding did not appear")
