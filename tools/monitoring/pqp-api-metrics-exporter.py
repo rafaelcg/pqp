@@ -121,7 +121,7 @@ def fetch_admin_metrics() -> dict:
         raise RuntimeError("ADMIN_METRICS_TOKEN is not set")
     request = urllib.request.Request(
         f"{API_URL}/api/admin/metrics",
-        headers={"Authorization": f"Bearer {TOKEN}"},
+        headers={"User-Agent": "pqp-api-metrics-exporter/1 (+https://pqp.gg)", "Authorization": f"Bearer {TOKEN}"},
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         if response.status != 200:
