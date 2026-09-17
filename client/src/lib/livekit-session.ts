@@ -1144,9 +1144,20 @@ export async function connectLiveKit({
 
   /**
    * True when the live HLS encoding has drifted off the ingest pin
-   * (`maintain-resolution` + `scaleResolutionDownBy: 1`). Chrome's GCC
-   * walks 1080 → 180 under `maintain-framerate`; the 2 s `setHlsSource`
-   * tick writes the pin back without a new sid.
+   * (`maintain-resolution` + `scaleResolutionDownBy: 1`, and every sub-layer
+   * deactivated). Chrome's GCC walks 1080 → 180 under `maintain-framerate`;
+   * the 2 s `setHlsSource` tick writes the pin back without a new sid.
+   *
+   * THE SUB-LAYERS ARE PART OF THE PIN, because this session is not the only
+   * writer on those encodings. The room runs with `dynacast: true`, and
+   * livekit-client's `setPublishingLayersForSender` sets
+   * `encoding.active = subscribedQuality.enabled` off the SFU's
+   * `SubscribedQualityUpdate`, so the first seated participant to want the
+   * small copy of the share turns the 360p rung this session deactivated for
+   * the egress straight back on. `hlsLayersTrimmed` still says "trimmed", so
+   * without reading `active` here nothing ever noticed, and the rung stayed
+   * up for the rest of the party: pure waste, since the egress and the remux
+   * both subscribe to the top layer only.
    */
   function screenHlsEncoderUnpinned(): boolean {
     const publication = room.localParticipant.getTrackPublication(
@@ -1160,7 +1171,15 @@ export async function connectLiveKit({
       const params = sender.getParameters();
       const encodings = params.encodings ?? [];
       const top = encodings[encodings.length - 1];
+      const feedingHls =
+        hlsSource !== null && hlsSource.ladderTopHeight !== null;
+      const subLayerAwake =
+        feedingHls &&
+        encodings
+          .slice(0, -1)
+          .some((encoding) => encoding.active !== false);
       return (
+        subLayerAwake ||
         params.degradationPreference !==
           screenShareDegradationPreference(hlsSource) ||
         top?.scaleResolutionDownBy !==
