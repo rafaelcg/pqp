@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/session"
 )
 
 // WatchdogConfig controls the stall/demote ladder, docs/plans/LL_HLS.md §5.
@@ -20,6 +22,10 @@ type WatchdogConfig struct {
 	// PartStuckMs: a part HAS already arrived at least once, and then no
 	// new one for this long -> restart the session's pipeline once.
 	// Default DefaultPartStuckMs (3000ms, "six parts" per the plan).
+	//
+	// It is a FLOOR, not the whole answer: partStuckThreshold below is
+	// what the ladder actually uses, and it also has to clear the worst
+	// legitimate part gap, which depends on PartMs and ReorderHoldMs.
 	PartStuckMs int64
 	// DemoteWindowMs: a second stall within this many ms of the last
 	// restart demotes instead of restarting again. A stall further apart
@@ -51,6 +57,73 @@ type WatchdogConfig struct {
 	// is gone hits the new pipeline's own FirstPartTimeoutMs and demotes
 	// with "no-video".
 	VideoIdleMaxMs int64
+
+	// PartMs and ReorderHoldMs are not timers of this ladder at all: they
+	// are the two numbers the part-stuck threshold has to CLEAR, and they
+	// live here so partStuckThreshold can be a pure function of one
+	// struct. PartMs is the session's own part target (a per-session
+	// field of StartSessionRequest, copied in by newManagedSession);
+	// ReorderHoldMs is REORDER_HOLD_MS, this process's video reorder hold.
+	// Both zero means "not supplied", which reduces partStuckThreshold to
+	// PartStuckMs exactly as it behaved before they existed.
+	PartMs        int64
+	ReorderHoldMs int64
+}
+
+// reorderCheckSlackMs is internal/session's own monitor tick: how long a
+// packet that has gone overdue in the reorder buffer can sit before
+// anything looks at the buffer again on a source that has fallen silent.
+// It is the second term of internal/session's reorderDelayBound.
+//
+// Taken FROM that package rather than written here as a literal: this
+// number is only correct as long as it is the same number the monitor
+// actually ticks at, and a duplicated constant is a constant that drifts
+// (this package already depends on internal/session, see
+// remux_pipeline.go, so there is no new coupling in reading it).
+const reorderCheckSlackMs = int64(session.MonitorTick / time.Millisecond)
+
+// partStuckThreshold is how long without a NEW part this ladder waits
+// before it calls a session stalled.
+//
+// THE RELATIONSHIP, STATED. A part boundary is decided by the arrival of
+// the next access unit, so the longest a HEALTHY pipeline can go without
+// publishing one is: the part target itself (the part currently open),
+// plus whatever the video reorder buffer adds on top (at most
+// ReorderHoldMs plus one monitor tick -- internal/session's
+// reorderDelayBound). Firing below that sum does not detect a stall, it
+// manufactures one: on 2026-09-17 a 3000ms threshold met a reorder buffer
+// that could serialise its 300ms hold once per hole, part gaps reached
+// 3.1s at p90 in loss windows, and the watchdog restarted a perfectly
+// healthy session twice in an hour. A restart takes the session out of
+// pqp-remuxd's registry, and every viewer's playlist 404s at the edge
+// until the replacement registers.
+//
+// So the threshold is the configured PART_STUCK_MS or TWICE the worst
+// legitimate gap, whichever is LARGER:
+//
+//	worstLegitimateGap = PartMs + ReorderHoldMs + reorderCheckSlackMs
+//	threshold          = max(PartStuckMs, 2 x worstLegitimateGap)
+//
+// Twice, not once, so a stall has to be unambiguous before the ladder
+// runs. With the shipped defaults (PART_MS 500, REORDER_HOLD_MS 300) the
+// derived floor is 1800ms, comfortably under PART_STUCK_MS's own 3000ms
+// default, so this changes nothing about today's production behaviour. It
+// bites only when an operator lowers PART_STUCK_MS or raises
+// REORDER_HOLD_MS past the point where the two contradict each other --
+// which is the whole point: those two knobs can no longer be set to a
+// combination that restarts healthy sessions.
+func (c WatchdogConfig) partStuckThreshold() time.Duration {
+	if c.PartMs <= 0 && c.ReorderHoldMs <= 0 {
+		// Neither supplied: nothing is known about the pipeline's own
+		// worst gap, so there is no floor to derive and PART_STUCK_MS is
+		// the whole answer, exactly as it was before this function.
+		return msDuration(c.PartStuckMs)
+	}
+	derived := 2 * (c.PartMs + c.ReorderHoldMs + reorderCheckSlackMs)
+	if derived > c.PartStuckMs {
+		return msDuration(derived)
+	}
+	return msDuration(c.PartStuckMs)
 }
 
 // maxDurationMs is the largest millisecond count that still converts to a
@@ -230,7 +303,10 @@ func evaluateWatchdog(h PipelineHealth, segmentMs int, cfg WatchdogConfig, pipel
 		return watchdogResult{actionNone, "", ""}
 	}
 
-	stuckThreshold := msDuration(cfg.PartStuckMs)
+	// NOT msDuration(cfg.PartStuckMs) directly: the threshold also has to
+	// clear the worst gap a HEALTHY pipeline can produce, which the
+	// reorder buffer's hold is part of. See partStuckThreshold.
+	stuckThreshold := cfg.partStuckThreshold()
 
 	// PHASE 1.5, AND THE WHOLE POINT OF THIS BLOCK: a source that has
 	// gone quiet is not a stalled pipeline.

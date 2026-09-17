@@ -108,6 +108,7 @@ func runServer(cfg config.Config) error {
 	}
 
 	sess := session.New(cfg.PartTicks(), cfg.SegmentTicks(), r, nil)
+	sess.SetReorderHold(time.Duration(cfg.ReorderHoldMS) * time.Millisecond)
 	if cfg.ClockCutParts {
 		sess.EnableClockCutParts()
 	}

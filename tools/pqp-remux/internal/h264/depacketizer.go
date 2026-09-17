@@ -129,6 +129,35 @@ type Depacketizer struct {
 	dropUntilMarker bool
 	// lostPackets counts sequence numbers skipped over, for stats.
 	lostPackets uint64
+	// gapHistogram counts GAPS by size (see GapHistogram), and lastGap is
+	// the size of the most recent one.
+	gapHistogram [GapBucketCount]uint64
+	lastGap      uint64
+}
+
+// GapBucketCount is how many buckets GapHistogram reports. The bucket
+// bounds, in packets, are 1 / 2-4 / 5-16 / 17-64 / 65+ -- see
+// GapHistogram.
+const GapBucketCount = 5
+
+// GapBucketLabels names each bucket by its lower bound, for a log line
+// that has to render the histogram in one field. Index-aligned with
+// GapHistogram's return value.
+var GapBucketLabels = [GapBucketCount]int{1, 2, 5, 17, 65}
+
+func gapBucket(gap uint64) int {
+	switch {
+	case gap <= 1:
+		return 0
+	case gap <= 4:
+		return 1
+	case gap <= 16:
+		return 2
+	case gap <= 64:
+		return 3
+	default:
+		return 4
+	}
 }
 
 // NewDepacketizer returns a depacketizer configured to emit AVCC (length
@@ -235,7 +264,10 @@ func (d *Depacketizer) PushRTP(payload []byte, seq uint16, rtpTimestamp uint32, 
 			return nil, ErrLatePacket
 		}
 		if delta > 0 {
-			d.lostPackets += uint64(delta)
+			gap := uint64(delta)
+			d.lostPackets += gap
+			d.lastGap = gap
+			d.gapHistogram[gapBucket(gap)]++
 			d.lastSeq = seq
 			d.advanceClock(rtpTimestamp)
 			d.discardIncompleteAU()
@@ -260,6 +292,31 @@ func (d *Depacketizer) PushRTP(payload []byte, seq uint16, rtpTimestamp uint32, 
 
 // LostPackets is how many RTP sequence numbers PushRTP has skipped over.
 func (d *Depacketizer) LostPackets() uint64 { return d.lostPackets }
+
+// GapHistogram is how many sequence GAPS PushRTP has seen, by size in
+// packets: index 0 is a single packet, 1 is 2-4, 2 is 5-16, 3 is 17-64,
+// 4 is 65 or more (GapBucketLabels carries those lower bounds). Cumulative
+// for the session; internal/session's stats line prints window deltas.
+//
+// WHY A SHAPE AND NOT A TOTAL. Until 2026-09-17 the only thing recorded
+// about loss here was LostPackets, a running session total, and
+// Session.markDamaged printed it beside an episode counter that latches
+// until the next IDR. The diagnosis of that evening's stalls read the
+// differences between those printed totals as BURST LENGTHS ("77 to 107
+// consecutive packets") -- but the difference between two cumulative
+// totals sampled at two IDR-latched episodes is a sum over an unknown
+// number of holes, and calibrating the reorder buffer's counters against
+// known wire shapes said the loss was many small holes rather than few
+// long bursts. Those two call for opposite fixes, and nothing in the
+// system could tell them apart. This is the measurement that can: the
+// SHAPE of the loss, recorded where the loss is actually seen.
+func (d *Depacketizer) GapHistogram() [GapBucketCount]uint64 { return d.gapHistogram }
+
+// LastGap is the size, in packets, of the most recent sequence gap -- the
+// number Session.markDamaged prints for THIS damage episode, beside (and
+// no longer instead of) the cumulative LostPackets. Zero until a gap has
+// happened.
+func (d *Depacketizer) LastGap() uint64 { return d.lastGap }
 
 func (d *Depacketizer) discardIncompleteAU() {
 	d.buf = nil

@@ -56,6 +56,24 @@ const (
 	// review, PR #626).
 	DefaultVideoIdleMaxMs = 2 * 60 * 1000
 
+	// DefaultReorderHoldMs mirrors internal/session's own reorderHoldMax:
+	// how long a video RTP packet may wait for the one in front of it
+	// before the gap is handed to the depacketizer. 300ms is roughly one
+	// publisher-to-SFU round trip, which is when a NACKed retransmission
+	// lands. `0` turns holding off entirely, which is the rollback to the
+	// behaviour before the buffer existed.
+	//
+	// It is read HERE as well as in internal/config because the two
+	// binaries load their configuration from different places, and
+	// production runs pqp-remuxd -- a knob only internal/config read
+	// would be inert on the box that matters (repo pitfall 12).
+	DefaultReorderHoldMs = 300
+	// maxReorderHoldMs bounds it. Past a second the buffer is not
+	// smoothing reordering any more, it is a jitter buffer that will
+	// trip the part-stuck watchdog no matter how partStuckThreshold is
+	// derived from it.
+	maxReorderHoldMs = 1000
+
 	// maxWatchdogMs bounds every watchdog timer this file reads. 24 hours
 	// is already absurd for a stall detector whose defaults are measured
 	// in seconds, and refusing past it catches the operator error that
@@ -107,6 +125,12 @@ type GlobalConfig struct {
 	DemoteWindowMs     int64
 	VideoIdleMaxMs     int64
 
+	// ReorderHoldMs is REORDER_HOLD_MS: how long internal/session's video
+	// reorder buffer holds a packet waiting for the one in front of it.
+	// It is a watchdog input as much as a media one -- see
+	// WatchdogConfig.partStuckThreshold.
+	ReorderHoldMs int64
+
 	AACBitrateKbps int
 	FFmpegPath     string
 
@@ -145,14 +169,17 @@ func (c GlobalConfig) LiveHlsS3Configured() bool {
 		c.LiveHlsS3AccessKeyID != "" && c.LiveHlsS3SecretAccessKey != ""
 }
 
-// WatchdogConfig extracts just the two timers watchdog.go's evaluateWatchdog
-// needs, so that package need not import all of GlobalConfig.
+// WatchdogConfig extracts just the timers watchdog.go's evaluateWatchdog
+// needs, so that package need not import all of GlobalConfig. PartMs is
+// deliberately NOT set here -- it is per session, and newManagedSession
+// copies it in from the session's own StartSessionRequest.
 func (c GlobalConfig) WatchdogConfig() WatchdogConfig {
 	return WatchdogConfig{
 		FirstPartTimeoutMs: c.FirstPartTimeoutMs,
 		PartStuckMs:        c.PartStuckMs,
 		DemoteWindowMs:     c.DemoteWindowMs,
 		VideoIdleMaxMs:     c.VideoIdleMaxMs,
+		ReorderHoldMs:      c.ReorderHoldMs,
 	}
 }
 
@@ -201,6 +228,9 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	if c.VideoIdleMaxMs, err = envInt64Or("VIDEO_IDLE_MAX_MS", DefaultVideoIdleMaxMs); err != nil {
 		return GlobalConfig{}, err
 	}
+	if c.ReorderHoldMs, err = envInt64Or("REORDER_HOLD_MS", DefaultReorderHoldMs); err != nil {
+		return GlobalConfig{}, err
+	}
 	if v := os.Getenv("AAC_BITRATE_KBPS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
@@ -241,6 +271,13 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	// reading. Negative does not mean anything at all.
 	if c.VideoIdleMaxMs < 0 {
 		return GlobalConfig{}, fmt.Errorf("control: VIDEO_IDLE_MAX_MS must not be negative, got %d", c.VideoIdleMaxMs)
+	}
+	// Zero is meaningful here too ("hold nothing, hand every gap straight
+	// to the depacketizer") and is the documented rollback. Negative is
+	// not a shorter hold, it is nonsense, and a hold past maxReorderHoldMs
+	// is a jitter buffer wearing this knob's name.
+	if c.ReorderHoldMs < 0 || c.ReorderHoldMs > maxReorderHoldMs {
+		return GlobalConfig{}, fmt.Errorf("control: REORDER_HOLD_MS must be between 0 and %d, got %d", maxReorderHoldMs, c.ReorderHoldMs)
 	}
 	// And an upper bound on all four, for the reason maxWatchdogMs gives.
 	for _, t := range []struct {
