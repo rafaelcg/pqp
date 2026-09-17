@@ -29,8 +29,8 @@ export type ServerImageContentType = (typeof SERVER_IMAGE_MIME_ALLOWLIST)[number
 
 export const serverImageContentTypeSchema = z.enum(SERVER_IMAGE_MIME_ALLOWLIST);
 
-/** Which of a server's two pictures a request is about. */
-export const serverImageKindSchema = z.enum(["icon", "banner"]);
+/** Which of a server's pictures a request is about. Featured is the `/c/` 16:9. */
+export const serverImageKindSchema = z.enum(["icon", "banner", "featured"]);
 export type ServerImageKind = z.infer<typeof serverImageKindSchema>;
 
 /** Same ceiling an avatar gets, for the same reason: it is the same square. */
@@ -67,9 +67,13 @@ export const SERVER_ICON_SIZE = 512;
 export const SERVER_BANNER_WIDTH = 1024;
 export const SERVER_BANNER_HEIGHT = 480;
 
-/** Bytes allowed for one kind. The two callers that need it both have a kind. */
+/** 16:9 featured image on the public `/c/` poster. Not the channel-list banner. */
+export const COMMUNITY_FEATURED_IMAGE_WIDTH = 1280;
+export const COMMUNITY_FEATURED_IMAGE_HEIGHT = 720;
+
+/** Bytes allowed for one kind. Featured shares the banner's ceiling. */
 export function maxServerImageBytes(kind: ServerImageKind): number {
-  return kind === "banner" ? MAX_SERVER_BANNER_BYTES : MAX_SERVER_ICON_BYTES;
+  return kind === "icon" ? MAX_SERVER_ICON_BYTES : MAX_SERVER_BANNER_BYTES;
 }
 
 /** `POST /api/servers/:id/{icon,banner}` — ask for somewhere to put the bytes. */
@@ -129,6 +133,11 @@ export const serverImageConfigSchema = z.object({
     width: z.number().int().positive(),
     height: z.number().int().positive(),
   }),
+  featured: z.object({
+    maxBytes: z.number().int().positive(),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+  }).optional(),
 });
 
 export type ServerImageConfig = z.infer<typeof serverImageConfigSchema>;
@@ -150,12 +159,20 @@ export function serverBannerPath(serverId: string, version: string): string {
   return `/api/servers/${serverId}/banner?v=${version}`;
 }
 
+export function serverFeaturedPath(serverId: string, version: string): string {
+  return `/api/servers/${serverId}/featured?v=${version}`;
+}
+
 export function serverImagePath(
   kind: ServerImageKind,
   serverId: string,
   version: string,
 ): string {
-  return kind === "banner"
-    ? serverBannerPath(serverId, version)
-    : serverIconPath(serverId, version);
+  if (kind === "banner") {
+    return serverBannerPath(serverId, version);
+  }
+  if (kind === "featured") {
+    return serverFeaturedPath(serverId, version);
+  }
+  return serverIconPath(serverId, version);
 }

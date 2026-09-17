@@ -2018,6 +2018,45 @@ END $$;
 -- directory was a name and nothing else, and a card falls back to the name.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_tagline TEXT;
 
+-- The paragraph on `/c/<slug>` and the in-app Overview header. NULL is
+-- normal; tagline stays the joke. Cap is enforced in the API
+-- (`COMMUNITY_ABOUT_MAX_LENGTH`); the CHECK is the last line of defence.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_about TEXT;
+
+-- Official-link chips. Empty array, never null, so a reader never has to
+-- model "unset" as a fourth state. The API re-parses every URL on write.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_links JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- One featured 16:9 on the public poster: youtube / twitch / image.
+-- Embed URL for the first two; `community_featured_url` / `_key` for an
+-- uploaded image, same claim dance as the banner. All four go null together
+-- when the slot is cleared.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_featured_kind TEXT;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_featured_embed_url TEXT;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_featured_url TEXT;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_featured_key TEXT;
+
+DO $$
+BEGIN
+  ALTER TABLE servers DROP CONSTRAINT IF EXISTS servers_community_about_length;
+  ALTER TABLE servers
+    ADD CONSTRAINT servers_community_about_length
+    CHECK (community_about IS NULL OR char_length(community_about) <= 2000);
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE servers DROP CONSTRAINT IF EXISTS servers_community_featured_kind_check;
+  ALTER TABLE servers
+    ADD CONSTRAINT servers_community_featured_kind_check
+    CHECK (community_featured_kind IS NULL
+           OR community_featured_kind IN ('youtube', 'twitch', 'image'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
 -- A slug from COMMUNITY_CATEGORIES in @pqp/shared, defaulted rather than
 -- nullable so the directory's category filter never has to model "uncategorised"
 -- as a fourth state alongside "all", "this one" and "none of these".

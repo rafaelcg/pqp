@@ -8,7 +8,9 @@ import { PostCard } from "./community-home-feed";
  * The card's contract, rendered without the feed's network around it.
  *
  *  - a locked post leaks nothing: no body, no media URL, no comment words;
- *  - "free" is never a chip, and VIP is one only while the VIP flag is on;
+ *  - likes and the comment count still show when locked;
+ *  - "free" is never a chip; locked is a plate badge (or a date badge on
+ *    a text-only VIP post), never a VIP chip next to an author;
  *  - the two newest comments and nothing more are in the card's own DOM.
  */
 
@@ -44,6 +46,8 @@ function post(overrides: Partial<CommunityHomePost> = {}): CommunityHomePost {
     status: "published",
     commentsEnabled: true,
     media: null,
+    hasMedia: false,
+    posterUrl: null,
     locked: false,
     likeCount: 3,
     likedByMe: false,
@@ -69,12 +73,13 @@ describe("PostCard", () => {
       <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled />,
     );
     expect(html).toContain("o mapa do porão");
+    expect(html).not.toContain("Tues");
     expect(html).not.toContain("data-home-vip-chip");
     expect(html).not.toContain("Everyone");
     expect(html).toContain("data-home-like");
   });
 
-  it("a locked VIP post shows title and teaser only, and no comment words", () => {
+  it("a locked VIP clip shows the plate, teaser, counts, and no comment words", () => {
     const html = render(
       <PostCard
         post={post({
@@ -82,6 +87,7 @@ describe("PostCard", () => {
           body: null,
           teaser: "só o inner vê o clip",
           media: null,
+          hasMedia: true,
           locked: true,
           commentCount: 4,
           commentTeaser: [],
@@ -95,13 +101,69 @@ describe("PostCard", () => {
     expect(html).toContain("Sessão 11");
     expect(html).toContain("só o inner vê o clip");
     expect(html).toContain("data-home-locked-media");
+    expect(html).toContain("data-home-locked-badge");
+    expect(html).toContain("data-home-locked-blur");
     expect(html).toContain("data-home-unlock-cta");
-    expect(html).toContain("data-home-vip-chip");
+    expect(html).toContain("disabled");
+    expect(html).not.toContain("data-home-vip-chip");
+    expect(html).not.toContain("Tues");
     expect(html).not.toContain("data-home-comments");
-    expect(html).not.toContain("data-home-like");
+    expect(html).toContain("data-home-like");
+    expect(html).toContain("data-home-comment-count");
+    expect(html).toContain(">4<");
+    expect(html).not.toContain("data-home-locked-poster");
   });
 
-  it("with the VIP flag off, a members post renders no VIP chip", () => {
+  it("a locked YouTube post shows the public poster, never the player", () => {
+    const posterUrl = "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg";
+    const html = render(
+      <PostCard
+        post={post({
+          visibility: "members",
+          body: null,
+          teaser: "só o inner vê o clip",
+          media: null,
+          hasMedia: true,
+          posterUrl,
+          locked: true,
+        })}
+        me={me}
+        locked
+        canManageServer={false}
+        vipEnabled
+      />,
+    );
+    expect(html).toContain("data-home-locked-poster");
+    expect(html).toContain(posterUrl);
+    expect(html).not.toContain("youtube-nocookie.com");
+    expect(html).not.toContain("youtu.be/jNQXAC9IVRw");
+    expect(html).not.toContain("<iframe");
+  });
+
+  it("a locked text-only VIP post does not grow a fake video plate", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          visibility: "members",
+          body: null,
+          teaser: "texto pra quem não é VIP",
+          media: null,
+          hasMedia: false,
+          locked: true,
+        })}
+        me={me}
+        locked
+        canManageServer={false}
+        vipEnabled
+      />,
+    );
+    expect(html).toContain("data-home-locked-badge");
+    expect(html).not.toContain("data-home-locked-media");
+    expect(html).toContain("data-home-locked-blur");
+    expect(html).toContain("data-home-unlock-cta");
+  });
+
+  it("with the VIP flag off, a members post still has no VIP chip", () => {
     const html = render(
       <PostCard
         post={post({ visibility: "members" })}
@@ -131,7 +193,13 @@ describe("PostCard", () => {
     // The API nulls media for a locked viewer; the card must not invent it.
     const shut = render(
       <PostCard
-        post={post({ visibility: "members", media: null, body: null, locked: true })}
+        post={post({
+          visibility: "members",
+          media: null,
+          hasMedia: true,
+          body: null,
+          locked: true,
+        })}
         me={me}
         locked
         canManageServer={false}
@@ -402,6 +470,37 @@ describe("PostCard", () => {
       <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
     );
     expect(member).not.toContain("data-home-edit");
+  });
+
+  it("staff can lock and unlock from the overflow; members never see that", () => {
+    const staffFree = render(
+      <PostCard
+        post={post()}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled
+        onToggleLock={() => {}}
+      />,
+    );
+    expect(staffFree).toContain('data-home-lock="lock"');
+    expect(staffFree).toContain("Lock (VIP)");
+    const staffVip = render(
+      <PostCard
+        post={post({ visibility: "members" })}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled
+        onToggleLock={() => {}}
+      />,
+    );
+    expect(staffVip).toContain('data-home-lock="unlock"');
+    expect(staffVip).toContain("Unlock");
+    const member = render(
+      <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled />,
+    );
+    expect(member).not.toContain("data-home-lock");
   });
 
   it("a Twitch post embeds the player with the page host as parent", () => {

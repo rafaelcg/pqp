@@ -63,6 +63,7 @@ export function isServerImageUploadConfigured(): boolean {
 const COLUMNS: Record<ServerImageKind, { url: string; key: string }> = {
   icon: { url: "icon_url", key: "icon_key" },
   banner: { url: "banner_url", key: "banner_key" },
+  featured: { url: "community_featured_url", key: "community_featured_key" },
 };
 
 function serverImagePrefix(kind: ServerImageKind, serverId: string): string {
@@ -257,8 +258,16 @@ export async function setServerImage(
       return null;
     }
     const result = await client.query<DbServer>(
-      `UPDATE servers SET ${url} = $2, ${key} = $3 WHERE id = $1
-       RETURNING ${columns}`,
+      kind === "featured"
+        ? `UPDATE servers SET
+             community_featured_url = $2,
+             community_featured_key = $3,
+             community_featured_kind = CASE WHEN $3::text IS NULL THEN NULL ELSE 'image' END,
+             community_featured_embed_url = CASE WHEN $3::text IS NULL THEN NULL ELSE NULL END
+           WHERE id = $1
+           RETURNING ${columns}`
+        : `UPDATE servers SET ${url} = $2, ${key} = $3 WHERE id = $1
+           RETURNING ${columns}`,
       [serverId, next?.url ?? null, next?.key ?? null],
     );
     await client.query("COMMIT");

@@ -304,6 +304,15 @@
   --hero-tint-near: color-mix(in oklab, oklch(0.72 0.19 var(--hero-hue, 125)) var(--hero-tint-strength, 45%), var(--color-surface-2));
   --hero-tint-far: color-mix(in oklab, oklch(0.58 0.17 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 32%), var(--color-surface-0));
   /*
+   * The default community cover when nobody has uploaded a banner.
+   *
+   * Tile fill and wordmark both mix from `--color-text`, so light and dark
+   * keep the same contrast relationship without a second pair of literals.
+   * The mosaic component never names a colour.
+   */
+  --hero-mosaic-tile: color-mix(in oklab, var(--color-text) 16%, transparent);
+  --hero-mosaic-mark: color-mix(in oklab, var(--color-text) 46%, transparent);
+  /*
    * What the name sits on when the hero is somebody's uploaded photograph.
    *
    * Bottom-anchored and in the SURFACE colour rather than in black, so the
@@ -474,6 +483,8 @@
      this block has already inverted. */
   --hero-tint-near: color-mix(in oklab, oklch(0.62 0.16 var(--hero-hue, 125)) var(--hero-tint-strength, 30%), var(--color-surface-2));
   --hero-tint-far: color-mix(in oklab, oklch(0.55 0.14 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 22%), var(--color-surface-0));
+  --hero-mosaic-tile: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --hero-mosaic-mark: color-mix(in oklab, var(--color-text) 40%, transparent);
   --shadow-hero-avatar: 0 20px 44px -20px oklch(0.4 0.02 250 / 0.28);
   --shadow-testimonial: 0 10px 30px -18px oklch(0.4 0.02 250 / 0.22);
   --shadow-chance-card: inset 0 1px 0 oklch(1 0 0 / 0.35), 0 1px 2px oklch(0.4 0.02 250 / 0.08), 0 12px 28px -20px oklch(0.4 0.02 250 / 0.22);
@@ -1137,6 +1148,17 @@ h2,
 .font-display {
   font-family: var(--font-display);
   letter-spacing: -0.03em;
+}
+
+.hero-mosaic-tile {
+  fill: var(--hero-mosaic-tile);
+  rx: var(--radius-panel);
+}
+
+.hero-mosaic-mark {
+  fill: var(--hero-mosaic-mark);
+  font-family: var(--font-display);
+  font-weight: 800;
 }
 
 .font-handle {

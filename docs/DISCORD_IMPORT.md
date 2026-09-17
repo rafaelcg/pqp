@@ -143,14 +143,15 @@ Checked against Discord's Guild Template docs and
 | Overwrites (role targets) | VIEW / SEND / CONNECT. Category overwrites flatten onto children. |
 | `icon_hash` | Fetched from Discord CDN after create, stored as the server icon. |
 
-### In the template, not copied (pqp has no home, or we refused)
+### In the template, not copied
 
 These are on the snapshot. A later cut can copy them only if pqp grows the
-matching feature, or if we accept a lossy map.
+matching feature, or if we accept a lossy map. Communities now have an
+Overview (about + Baú), but import still does not fill it.
 
 | Discord field | Why it is dropped | Later? |
 |---|---|---|
-| Guild `description` | pqp `community_tagline` is for listed communities. Import does not opt the server into the directory (`COMMUNITIES_ENABLED` / `is_community`). | Prefill tagline without listing, if we want a poster later. |
+| Guild `description` | Prefills nothing today. Communities now have `community_about` (and a 140-char tagline), but import still does not opt the server into the directory. | Prefill about/tagline without listing. |
 | Role `icon` / `unicode_emoji` | pqp roles have no icon column. | After role icons exist. |
 | `nsfw` | The instance is already 18+. No per-channel NSFW flag. | Unlikely. |
 | `rate_limit_per_user` (slowmode) | Gap #20 in [`DISCORD_GAPS.md`](./DISCORD_GAPS.md). No `slowmode_seconds` column. | When slowmode ships. |

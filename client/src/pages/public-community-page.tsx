@@ -1,6 +1,6 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
-import { ArrowUpRight, Check, Copy, Users } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowUpRight, Check, Copy } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
   monthStampToDate,
@@ -9,6 +9,10 @@ import {
   COMMUNITY_SLUG_PATTERN,
   type PublicCommunity,
 } from "@pqp/shared";
+import { CommunityAboutText } from "@/components/communities/community-about-text";
+import { CommunityFeaturedMedia } from "@/components/communities/community-featured-media";
+import { HeroMosaic } from "@/components/communities/hero-mosaic";
+import { CommunityOfficialLinks } from "@/components/communities/community-official-links";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
@@ -18,6 +22,7 @@ import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { intentStorage, stashJoinIntent } from "@/lib/handle-intent";
 import { heroHue, heroTintStyle, initialsFor } from "@/lib/hero-tint";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -133,12 +138,14 @@ function CommunityShell({
   narrow?: boolean;
 }) {
   return (
-    <div className="flex min-h-full flex-col bg-ink text-paper">
+    <div className="min-h-full bg-ink text-paper">
       <MarketingNav />
       <main
         className={cn(
-          "relative flex flex-1 flex-col overflow-hidden px-4 pb-16 sm:px-6",
-          narrow ? "items-center justify-center py-16" : "pt-6 sm:pt-8",
+          "relative px-4 pb-16 sm:px-6",
+          narrow
+            ? "flex min-h-[70vh] flex-col items-center justify-center overflow-hidden py-16"
+            : "pt-6 sm:pt-8",
         )}
       >
         <div
@@ -181,6 +188,7 @@ const CATEGORY_GLYPHS: Record<string, string> = {
 function CommunityPoster({ community }: { community: PublicCommunity }) {
   const { t, locale } = useTranslation();
   const bypass = isDevAuthBypassEnabled();
+  const reduced = usePrefersReducedMotion();
   const url = publicCommunityDisplayUrl(community.slug);
   const [copied, setCopied] = useState(false);
 
@@ -234,18 +242,20 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
       locale === "pt-BR" ? "pt-BR" : "en-US",
     ),
   });
+  const countLabel = community.memberCount.toLocaleString(
+    locale === "pt-BR" ? "pt-BR" : "en-US",
+  );
+  const stagger = (index: number): CSSProperties | undefined =>
+    reduced ? undefined : ({ "--stagger": Math.min(index, 8) } as CSSProperties);
 
   return (
     <CommunityShell>
-      <article
-        className="animate-rise overflow-hidden rounded-3xl border border-ink-4 bg-ink-2/80 shadow-[var(--shadow-profile-card)] backdrop-blur-sm"
-        data-public-community={community.slug}
-      >
+      <article data-public-community={community.slug}>
         <div
-          className="relative h-36 w-full sm:h-52"
-          style={bannerUrl ? undefined : heroTintStyle(hue, 45)}
+          className={cn("relative h-44 w-full overflow-hidden rounded-3xl sm:h-64", !reduced && "animate-rise")}
+          style={stagger(0)}
         >
-          {bannerUrl && (
+          {bannerUrl ? (
             <img
               src={bannerUrl}
               alt=""
@@ -253,6 +263,8 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
               fetchPriority="high"
               decoding="async"
             />
+          ) : (
+            <HeroMosaic hue={hue} />
           )}
           <span
             aria-hidden
@@ -260,15 +272,14 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
           />
         </div>
 
-        <div className="px-5 pb-8 sm:px-8">
-          <div className="flex flex-col items-center text-center sm:flex-row sm:items-end sm:gap-5 sm:text-left">
-            {/* `relative` is load-bearing, not decoration: the hero above is
-                positioned, and a positioned box paints over a static sibling
-                whatever the source order says — without this the icon is sliced
-                in half by the banner it is supposed to overlap. */}
+        <div className="px-6 pb-12 sm:px-10">
+          <div
+            className={cn("flex flex-col sm:flex-row sm:items-end sm:gap-5", !reduced && "animate-rise")}
+            style={stagger(1)}
+          >
             <span
               aria-hidden
-              className="relative -mt-14 flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-3xl font-display text-2xl font-bold text-paper shadow-[var(--shadow-hero-avatar)] ring-4 ring-ink-2 sm:-mt-16 sm:h-28 sm:w-28"
+              className="relative -mt-14 flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-3xl font-display text-2xl font-bold text-paper shadow-[var(--shadow-hero-avatar)] ring-4 ring-ink sm:-mt-16 sm:h-28 sm:w-28"
               style={iconUrl ? undefined : heroTintStyle(hue, 60)}
             >
               {iconUrl ? (
@@ -282,7 +293,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
                 initialsFor(community.name)
               )}
             </span>
-            <div className="mt-3 min-w-0 flex-1 sm:mt-0 sm:pb-1">
+            <div className="mt-4 min-w-0 flex-1 sm:mt-0 sm:pb-1">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink/60 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
                 <span aria-hidden>
                   {CATEGORY_GLYPHS[community.category] ?? "🌎"}
@@ -293,51 +304,72 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
                 {community.name}
               </h1>
               <p className="mt-1 font-mono text-sm text-signal">{url}</p>
+              {community.tagline && (
+                <p className="mt-3 text-lg leading-snug text-paper-muted">
+                  {community.tagline}
+                </p>
+              )}
             </div>
           </div>
 
-          {community.tagline && (
-            // The joke, at reading size and not at caption size. It is the one
-            // thing on the page written by a person about this room, and
-            // shrinking it to a subtitle is how a directory of communities
-            // starts to look like a directory of database rows.
-            <p className="mt-5 text-lg leading-snug text-paper-muted">
-              {community.tagline}
-            </p>
+          {/* About and links fill the poster column, the same width the
+              featured 16:9 below them takes, and sit closer to each other
+              than to the identity above and the media below: they are the
+              pitch, read as one block. */}
+          {community.about && (
+            <div
+              className={cn("mt-8", !reduced && "animate-rise")}
+              style={stagger(2)}
+            >
+              <CommunityAboutText about={community.about} lines={8} />
+            </div>
           )}
 
-          {/* THE NUMBER, BIG. A stranger deciding whether to walk into a room
-              wants to know whether there is anybody in it, and every other fact
-              on this page is subordinate to that one. Tabular figures so it
-              does not shimmer if it re-renders. */}
-          <div className="mt-6 rounded-2xl bg-[radial-gradient(ellipse_at_0%_50%,var(--glow-accent-soft),transparent_70%)] py-1">
-            <p className="flex items-baseline gap-2">
-              <span className="font-display text-4xl font-extrabold tabular-nums text-paper sm:text-5xl">
-                {community.memberCount.toLocaleString(
-                  locale === "pt-BR" ? "pt-BR" : "en-US",
-                )}
-              </span>
-              <span className="flex items-center gap-1.5 text-sm text-paper-muted">
-                <Users aria-hidden className="h-4 w-4" />
-                {t("publicCommunity.membersLabel")}
-              </span>
-            </p>
-            {/* Its own line rather than a second column. At 390px the two sit
-                on one row only by wrapping into a ragged pair, and the tenure
-                line is a footnote to the count — putting it beside the count
-                makes it read as a second statistic of equal weight. */}
-            {sinceLabel && (
-              <p className="mt-1 text-xs text-paper-muted">
-                {t("publicCommunity.since", { date: sinceLabel })}
-              </p>
-            )}
-          </div>
+          {community.links.length > 0 && (
+            <div
+              className={cn("mt-6", !reduced && "animate-rise")}
+              style={stagger(3)}
+            >
+              <CommunityOfficialLinks links={community.links} />
+            </div>
+          )}
 
-          <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
+          {community.featured && (
+            <div
+              className={cn("mt-10", !reduced && "animate-rise")}
+              style={stagger(4)}
+            >
+              <CommunityFeaturedMedia featured={community.featured} />
+            </div>
+          )}
+
+          <p
+            className={cn(
+              "mt-10 text-sm text-paper-muted",
+              !reduced && "animate-rise",
+            )}
+            style={stagger(5)}
+          >
+            {sinceLabel
+              ? t("publicCommunity.membersFootnote", {
+                  count: community.memberCount,
+                  countLabel,
+                  date: sinceLabel,
+                })
+              : memberLabel}
+          </p>
+
+          <div
+            className={cn(
+              "mt-8 flex flex-col gap-2 sm:flex-row sm:items-center",
+              !reduced && "animate-rise",
+            )}
+            style={stagger(6)}
+          >
             {bypass ? (
               <Button
                 asChild
-                className="cta-lift h-11 flex-1 rounded-full text-base"
+                className="cta-lift h-12 w-full flex-1 rounded-full text-base sm:w-auto"
               >
                 <Link to={appHref}>{t("publicCommunity.cta.join")}</Link>
               </Button>
@@ -346,7 +378,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
                 <SignedOut>
                   <SignUpButton mode="modal" forceRedirectUrl={appHref}>
                     <Button
-                      className="cta-lift h-11 flex-1 rounded-full text-base"
+                      className="cta-lift h-12 w-full flex-1 rounded-full text-base sm:w-auto"
                       onClick={rememberIntent}
                     >
                       {t("publicCommunity.cta.join")}
@@ -357,7 +389,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
                 <SignedIn>
                   <Button
                     asChild
-                    className="cta-lift h-11 flex-1 rounded-full text-base"
+                    className="cta-lift h-12 w-full flex-1 rounded-full text-base sm:w-auto"
                   >
                     <Link to={appHref}>{t("publicCommunity.cta.join")}</Link>
                   </Button>
@@ -369,7 +401,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
               type="button"
               onClick={copy}
               className={cn(
-                "inline-flex h-11 items-center justify-center gap-1.5 rounded-full border border-ink-4 px-4 font-mono text-xs transition-colors",
+                "inline-flex h-12 items-center justify-center gap-1.5 rounded-full border border-ink-4 px-4 font-mono text-xs transition-colors duration-[var(--duration-fast)]",
                 copied
                   ? "border-success/50 text-success"
                   : "text-paper-muted hover:border-signal/50 hover:text-paper",
@@ -384,10 +416,10 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
             </button>
           </div>
 
-          {/* Whoever followed this link may never have heard of the product.
-              One paragraph, below the fold of the decision they came to make,
-              so it explains without getting in the way. */}
-          <section className="mt-8 rounded-2xl border border-ink-4/70 bg-ink/40 p-4">
+          <section
+            className={cn("mt-10", !reduced && "animate-rise")}
+            style={stagger(7)}
+          >
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.2em] text-paper-muted">
               {t("publicCommunity.whatIsPqp.title")}
             </h2>
@@ -399,7 +431,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
 
         <Link
           to="/"
-          className="flex items-center justify-center gap-1.5 border-t border-ink-4/70 bg-ink/60 px-6 py-3 text-xs font-medium uppercase tracking-[0.16em] text-paper-muted transition-colors hover:text-signal"
+          className="flex items-center justify-center gap-1.5 px-6 py-3 text-xs font-medium uppercase tracking-[0.16em] text-paper-muted transition-colors hover:text-signal"
         >
           {t("publicCommunity.footer.cta")}
           <ArrowUpRight aria-hidden className="h-3.5 w-3.5" />
@@ -409,13 +441,12 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
       <Seo
         title={t("publicCommunity.seo.title", { name: community.name })}
         description={
+          community.about ??
           community.tagline ??
           t("publicCommunity.seo.description", { name: community.name })
         }
         path={publicCommunityPath(community.slug)}
       />
-      {/* Not rendered as text anywhere; the member count is what the page shows
-          and this is only the accessible sentence for it. */}
       <span className="sr-only">{memberLabel}</span>
     </CommunityShell>
   );

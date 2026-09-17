@@ -1,23 +1,31 @@
 import {
+  COMMUNITY_ABOUT_MAX_LENGTH,
   COMMUNITY_CATEGORIES,
   COMMUNITY_LANGUAGES,
+  COMMUNITY_LINKS_MAX,
   COMMUNITY_SLUG_MAX_LENGTH,
   COMMUNITY_TAGLINE_MAX_LENGTH,
   DEFAULT_COMMUNITY_LANGUAGE,
+  parseCommunityFeaturedEmbed,
+  parseCommunityLink,
+  publicCommunityPath,
   slugifyCommunityName,
   type CommunityCategory,
   type CommunityLanguage,
   type CommunitySettings,
+  type Server,
 } from "@pqp/shared";
 import { Globe } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   ApiError,
   fetchCommunitySettings,
+  fetchServerImageConfig,
   updateCommunitySettings,
 } from "@/lib/api";
+import { uploadServerImage } from "@/lib/server-image-upload";
 import { useTranslation } from "@/lib/i18n";
 
 /**
@@ -64,14 +72,23 @@ import { useTranslation } from "@/lib/i18n";
 export function CommunitySettingsSection({
   serverId,
   canListPublicly,
+  onIdentitySaved,
 }: {
   serverId: string;
   /** True only for the server's owner. */
   canListPublicly: boolean;
+  onIdentitySaved?: (patch: Partial<Server>) => void;
 }) {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<CommunitySettings | null>(null);
   const [tagline, setTagline] = useState("");
+  const [about, setAbout] = useState("");
+  const [linkUrls, setLinkUrls] = useState<string[]>([]);
+  const [featuredUrl, setFeaturedUrl] = useState("");
+  const [featuredImage, setFeaturedImage] = useState(false);
+  const [uploadsOn, setUploadsOn] = useState(false);
+  const [featuredBusy, setFeaturedBusy] = useState(false);
+  const featuredFileRef = useRef<HTMLInputElement>(null);
   const [category, setCategory] = useState<CommunityCategory>("geral");
   const [slug, setSlug] = useState("");
   const [language, setLanguage] = useState<CommunityLanguage>(
@@ -91,16 +108,57 @@ export function CommunitySettingsSection({
    * A collision is not a failure of the form, it is a failure of one field, and
    * a sentence at the bottom of the panel about a box halfway up it is a
    * sentence people re-read three times. The server makes this possible by
-   * being explicit about it: on this route 400, 409 and 422 always mean the
-   * address and never anything else — see the note on the PATCH handler.
+   * being explicit about it: 409 and 422 always mean the address. A 400
+   * whose message is "address cannot be used" does too. About, links, and
+   * featured 400s stay on the form error, not this box.
    */
   const [slugError, setSlugError] = useState<string | null>(null);
   const addressToggleId = useId();
   const toggleId = useId();
   const taglineId = useId();
+  const aboutId = useId();
+  const linksId = useId();
+  const featuredId = useId();
   const categoryId = useId();
   const slugId = useId();
   const languageId = useId();
+
+  function applySettings(next: CommunitySettings) {
+    setSettings(next);
+    setAddressed(next.isCommunity);
+    setListed(next.isListed);
+    setTagline(next.tagline ?? "");
+    setAbout(next.about ?? "");
+    setLinkUrls(next.links.map((link) => link.url));
+    if (next.featured?.kind === "image") {
+      setFeaturedUrl("");
+      setFeaturedImage(true);
+    } else {
+      setFeaturedUrl(next.featured?.url ?? "");
+      setFeaturedImage(false);
+    }
+    setCategory(next.category);
+    setSlug(next.slug ?? "");
+    setLanguage(next.language);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchServerImageConfig()
+      .then((config) => {
+        if (!cancelled) {
+          setUploadsOn(config.enabled);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUploadsOn(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,13 +168,7 @@ export function CommunitySettingsSection({
         if (cancelled) {
           return;
         }
-        setSettings(res.community);
-        setAddressed(res.community.isCommunity);
-        setListed(res.community.isListed);
-        setTagline(res.community.tagline ?? "");
-        setCategory(res.community.category);
-        setSlug(res.community.slug ?? "");
-        setLanguage(res.community.language);
+        applySettings(res.community);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -141,45 +193,66 @@ export function CommunitySettingsSection({
     setSlugError(null);
     setSaved(false);
     const typedSlug = slug.trim();
+    const preparedLinks = linkUrls.map((url) => url.trim()).filter(Boolean);
+    if (preparedLinks.length > COMMUNITY_LINKS_MAX) {
+      setError(t("communities.settings.linksInvalid"));
+      setSaving(false);
+      return;
+    }
+    for (const url of preparedLinks) {
+      if (!parseCommunityLink(url)) {
+        setError(t("communities.settings.linksInvalid"));
+        setSaving(false);
+        return;
+      }
+    }
+    const trimmedFeatured = featuredUrl.trim();
+    let featured:
+      | { kind: "youtube" | "twitch"; url: string }
+      | null
+      | undefined;
+    if (trimmedFeatured) {
+      const parsed = parseCommunityFeaturedEmbed(trimmedFeatured);
+      if (!parsed) {
+        setError(t("communities.settings.featuredInvalid"));
+        setSaving(false);
+        return;
+      }
+      featured = parsed;
+    } else if (settings?.featured && settings.featured.kind !== "image") {
+      featured = null;
+    }
     try {
       const res = await updateCommunitySettings(serverId, {
         isCommunity: addressed,
-        // OMITTED ENTIRELY for a non-owner rather than sent unchanged. The
-        // server refuses only a real change, so sending the value back would
-        // work — but a form that cannot move a field has no business naming it,
-        // and this way an admin's save can never be the write that unlists a
-        // room in a race.
         ...(canListPublicly ? { isListed: listed } : {}),
-        // An emptied box means "clear it", which the API spells as explicit
-        // null — sending "" would store a blank line the card reserves space for.
         tagline: tagline.trim() === "" ? null : tagline.trim(),
+        about: about.trim() === "" ? null : about.trim(),
+        links: preparedLinks.map((url) => ({ url })),
+        ...(featured !== undefined ? { featured } : {}),
         category,
-        // ABSENT WHEN THE BOX IS EMPTY, which is what asks the server to derive
-        // one from the name on the first opt-in. Sending `""` would be a
-        // request to set an empty address, and the schema would refuse it —
-        // turning "I have not chosen one" into an error about a field the owner
-        // never touched.
         ...(typedSlug ? { slug: typedSlug } : {}),
         language,
       });
-      setSettings(res.community);
-      setAddressed(res.community.isCommunity);
-      setListed(res.community.isListed);
-      setTagline(res.community.tagline ?? "");
-      setCategory(res.community.category);
-      // The server may have DERIVED one; reading it back is what puts the
-      // address the owner now owns into the box they left empty.
-      setSlug(res.community.slug ?? "");
-      setLanguage(res.community.language);
+      applySettings(res.community);
+      onIdentitySaved?.({
+        isCommunity: res.community.isCommunity,
+        communityTagline: res.community.tagline,
+        communityAbout: res.community.about,
+        communityLinks: res.community.links,
+        communitySlug: res.community.slug,
+      });
       setSaved(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         setSlugError(t("communities.settings.slugTaken"));
       } else if (err instanceof ApiError && err.status === 422) {
         setSlugError(t("communities.settings.slugUnderivable"));
-      } else if (err instanceof ApiError && err.status === 400 && typedSlug) {
-        // 400 on this route with a slug in the body is the schema refusing the
-        // string's shape, and its message already says how.
+      } else if (
+        err instanceof ApiError &&
+        err.status === 400 &&
+        /address cannot be used/i.test(err.message)
+      ) {
         setSlugError(err.message);
       } else {
         setError(
@@ -193,18 +266,78 @@ export function CommunitySettingsSection({
     }
   }
 
+  async function uploadFeatured(file: File) {
+    setFeaturedBusy(true);
+    setError(null);
+    try {
+      await uploadServerImage(serverId, "featured", file);
+      const res = await fetchCommunitySettings(serverId);
+      applySettings(res.community);
+      onIdentitySaved?.({
+        isCommunity: res.community.isCommunity,
+        communityTagline: res.community.tagline,
+        communityAbout: res.community.about,
+        communityLinks: res.community.links,
+        communitySlug: res.community.slug,
+      });
+      setSaved(true);
+    } catch (err) {
+      setError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : t("communities.settings.failed"),
+      );
+    } finally {
+      setFeaturedBusy(false);
+    }
+  }
+
+  async function clearFeatured() {
+    setFeaturedBusy(true);
+    setError(null);
+    try {
+      const res = await updateCommunitySettings(serverId, { featured: null });
+      applySettings(res.community);
+      onIdentitySaved?.({
+        isCommunity: res.community.isCommunity,
+        communityTagline: res.community.tagline,
+        communityAbout: res.community.about,
+        communityLinks: res.community.links,
+        communitySlug: res.community.slug,
+      });
+      setSaved(true);
+    } catch (err) {
+      setError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : t("communities.settings.failed"),
+      );
+    } finally {
+      setFeaturedBusy(false);
+    }
+  }
+
   const remaining = COMMUNITY_TAGLINE_MAX_LENGTH - tagline.trim().length;
+  const aboutRemaining = COMMUNITY_ABOUT_MAX_LENGTH - about.trim().length;
   /**
    * The address cannot be turned off by a non-owner while the room is listed:
    * that write would take the listing down with it, and the server refuses it.
    * Disabled here rather than left to fail, with the reason in the line below.
    */
   const addressLocked = !canListPublicly && settings?.isListed === true;
+  const currentEmbed =
+    settings?.featured && settings.featured.kind !== "image"
+      ? settings.featured.url
+      : "";
   const dirty =
     settings !== null &&
     (addressed !== settings.isCommunity ||
       (canListPublicly && listed !== settings.isListed) ||
       (tagline.trim() || null) !== settings.tagline ||
+      (about.trim() || null) !== settings.about ||
+      JSON.stringify(linkUrls.map((url) => url.trim()).filter(Boolean)) !==
+        JSON.stringify(settings.links.map((link) => link.url)) ||
+      featuredUrl.trim() !== currentEmbed ||
       category !== settings.category ||
       (slug.trim() || null) !== settings.slug ||
       language !== settings.language);
@@ -344,6 +477,148 @@ export function CommunitySettingsSection({
           <div className="space-y-1">
             <label
               className="block text-xs font-semibold uppercase tracking-wide text-paper-muted"
+              htmlFor={aboutId}
+            >
+              {t("communities.settings.about")}
+            </label>
+            <textarea
+              id={aboutId}
+              value={about}
+              maxLength={COMMUNITY_ABOUT_MAX_LENGTH}
+              disabled={saving}
+              rows={5}
+              placeholder={t("communities.settings.aboutPlaceholder")}
+              onChange={(e) => {
+                setAbout(e.target.value);
+                setSaved(false);
+              }}
+              className="w-full rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+            />
+            <p className="text-xs tabular-nums text-paper-muted">
+              {t("communities.settings.aboutHint", { count: aboutRemaining })}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <p
+              className="text-xs font-semibold uppercase tracking-wide text-paper-muted"
+              id={linksId}
+            >
+              {t("communities.settings.links")}
+            </p>
+            <p className="text-xs text-paper-muted">
+              {t("communities.settings.linksHint")}
+            </p>
+            <ul className="space-y-2" aria-labelledby={linksId}>
+              {linkUrls.map((url, index) => (
+                <li key={index} className="flex gap-2">
+                  <Input
+                    value={url}
+                    disabled={saving}
+                    placeholder={t("communities.settings.linksPlaceholder")}
+                    onChange={(e) => {
+                      const next = [...linkUrls];
+                      next[index] = e.target.value;
+                      setLinkUrls(next);
+                      setSaved(false);
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={saving}
+                    onClick={() => {
+                      setLinkUrls(linkUrls.filter((_, i) => i !== index));
+                      setSaved(false);
+                    }}
+                  >
+                    {t("communities.settings.linksRemove")}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+            {linkUrls.length < COMMUNITY_LINKS_MAX && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={saving}
+                onClick={() => {
+                  setLinkUrls([...linkUrls, ""]);
+                  setSaved(false);
+                }}
+              >
+                {t("communities.settings.linksAdd")}
+              </Button>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <label
+              className="block text-xs font-semibold uppercase tracking-wide text-paper-muted"
+              htmlFor={featuredId}
+            >
+              {t("communities.settings.featured")}
+            </label>
+            <p className="text-xs text-paper-muted">
+              {t("communities.settings.featuredHint")}
+            </p>
+            <Input
+              id={featuredId}
+              value={featuredUrl}
+              disabled={saving || featuredBusy}
+              placeholder={t("communities.settings.featuredPlaceholder")}
+              onChange={(e) => {
+                setFeaturedUrl(e.target.value);
+                setSaved(false);
+              }}
+            />
+            <div className="flex flex-wrap gap-2">
+              {uploadsOn && (
+                <>
+                  <input
+                    ref={featuredFileRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (file) {
+                        void uploadFeatured(file);
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={saving || featuredBusy}
+                    onClick={() => featuredFileRef.current?.click()}
+                  >
+                    {t("communities.settings.featuredUpload")}
+                  </Button>
+                </>
+              )}
+              {(featuredImage || featuredUrl || settings?.featured) && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={saving || featuredBusy}
+                  onClick={() => void clearFeatured()}
+                >
+                  {t("communities.settings.featuredRemove")}
+                </Button>
+              )}
+            </div>
+            {featuredImage && (
+              <p className="text-xs text-paper-muted">
+                {t("communities.settings.featured")}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <label
+              className="block text-xs font-semibold uppercase tracking-wide text-paper-muted"
               htmlFor={categoryId}
             >
               {t("communities.settings.category")}
@@ -443,11 +718,24 @@ export function CommunitySettingsSection({
             </select>
           </div>
 
-          <Button disabled={saving || !dirty} onClick={() => void save()}>
-            {saving
-              ? t("communities.settings.saving")
-              : t("communities.settings.save")}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={saving || !dirty} onClick={() => void save()}>
+              {saving
+                ? t("communities.settings.saving")
+                : t("communities.settings.save")}
+            </Button>
+            {addressed && slug.trim() && (
+              <Button asChild variant="secondary">
+                <a
+                  href={publicCommunityPath(slug.trim())}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {t("communities.settings.preview")}
+                </a>
+              </Button>
+            )}
+          </div>
 
           <p role="status" aria-live="polite" className="text-xs text-paper-muted">
             {saved ? t("communities.settings.saved") : ""}

@@ -623,7 +623,7 @@ failure mode reproduced with better latency.
 | Affordance | Where |
 |---|---|
 | Every directory read requires auth | the router's own gate; there is no anonymous browsing, so the 18+ gate cannot be routed around |
-| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window**, and it exists for an addressed community whether or not it is listed | `publicCommunitySchema`: name, address, tagline, category, member **count**, the two pictures, a month. No member list, no messages, no channels, no owner, no id |
+| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window**, and it exists for an addressed community whether or not it is listed | `publicCommunitySchema`: name, address, tagline, about, official links, one featured clip or image, category, member **count**, the two pictures, a month. No member list, no messages, no Baú posts, no channels, no owner, no id |
 | A server you are banned from is **invisible**, not merely un-joinable | `LISTED_SQL` in `server/src/services/communities.ts` — grid, search and direct-id lookup alike |
 | Report a whole community from its card | `subjectType: "server"` on `POST /api/reports` |
 | Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |
@@ -801,6 +801,9 @@ it as one.
 | `is_community` | **The public address.** The room answers at `pqp.gg/c/<slug>` and admits whoever holds the link. Manage Server sets it. False for every server until somebody ticks the box. |
 | `is_community_listed` | **The directory**, and **only** the owner's. Requires `is_community` (CHECK), and goes down with it. Backfilled to `is_community` once, when the column was added, so every community listed before the split kept both halves. |
 | `community_tagline` | One line, ≤140 chars, written by anyone with Manage Server. Null is normal. |
+| `community_about` | The paragraph, ≤2,000 chars, `safeText`. Null is normal. Tagline stays the joke. |
+| `community_links` | JSONB array of `{ kind, url }`, max 8, https only, allowlisted hosts (YouTube, Twitch, Instagram, TikTok, X) or any other https site. |
+| `community_featured_kind` / `_embed_url` / `_url` / `_key` | One 16:9 on `/c/` only: youtube, twitch, or an uploaded image. Not on the in-app header. |
 | `community_category` | One of the ten slugs in `COMMUNITY_CATEGORIES`; `geral` is the default and the catch-all. |
 | `is_community_suspended` | **The operator's kill switch.** Set by SQL only — no route, no role, no setting writes it. Unlists without deleting anything. |
 | `member_count` | Maintained by a trigger on `server_members`. Decorative: it orders the directory and is authorised by nothing. |

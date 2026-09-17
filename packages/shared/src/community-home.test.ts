@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   communityHomeMediaSchema,
+  communityHomePostSchema,
   instagramCanonicalUrl,
   instagramEmbedSrc,
   parseCommunityHomeEmbed,
@@ -11,6 +12,7 @@ import {
   tiktokCanonicalUrl,
   tiktokEmbedSrc,
   twitchEmbedSrc,
+  youtubePosterUrl,
 } from "./community-home.js";
 
 describe("parseTwitchEmbed", () => {
@@ -295,5 +297,52 @@ describe("communityHomeMediaSchema", () => {
       ...youtube,
       twitchUrl: null,
     });
+  });
+});
+
+describe("communityHomePostSchema", () => {
+  it("defaults hasMedia to false so an older payload still parses", () => {
+    const parsed = communityHomePostSchema.parse({
+      id: "11111111-1111-4111-8111-111111111111",
+      serverId: "22222222-2222-4222-8222-222222222222",
+      author: {
+        id: "33333333-3333-4333-8333-333333333333",
+        displayName: "Rafa",
+        username: "rafa",
+        tag: "rafa#0001",
+        avatarUrl: null,
+      },
+      authorBadge: null,
+      title: "Mapa",
+      body: "texto",
+      teaser: null,
+      visibility: "free",
+      status: "published",
+      commentsEnabled: true,
+      media: null,
+      locked: false,
+      likeCount: 0,
+      likedByMe: false,
+      commentCount: 0,
+      commentTeaser: [],
+      pinned: false,
+      scheduledAt: null,
+      scheduleTimezone: null,
+      publishedAt: "2026-09-01T12:00:00.000Z",
+      createdAt: "2026-09-01T12:00:00.000Z",
+      updatedAt: "2026-09-01T12:00:00.000Z",
+    });
+    expect(parsed.hasMedia).toBe(false);
+    expect(parsed.posterUrl).toBeNull();
+  });
+});
+
+describe("youtubePosterUrl", () => {
+  it("returns the public hqdefault and nothing for a non-YouTube paste", () => {
+    expect(youtubePosterUrl("https://youtu.be/jNQXAC9IVRw")).toBe(
+      "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg",
+    );
+    expect(youtubePosterUrl("https://example.com/watch")).toBeNull();
+    expect(youtubePosterUrl(null)).toBeNull();
   });
 });

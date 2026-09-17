@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { safeTextSchema } from "./api.js";
+import { parseTwitchEmbed, parseYoutubeVideoId } from "./community-home.js";
 
 /**
  * Communities — the public, joinable half of a server.
@@ -110,6 +111,217 @@ export const communityTaglineSchema = z
     `Keep it to ${COMMUNITY_TAGLINE_MAX_LENGTH} characters.`,
   )
   .pipe(safeTextSchema);
+
+/**
+ * The paragraph. Tagline stays the joke; this is who the room is.
+ *
+ * Two thousand characters is a short About, not a CMS. Discord Discovery
+ * allows 2,400; we stop a little under that so a public poster cannot become
+ * a wall of text, and so the in-app header can clamp to three lines without
+ * hiding a novel behind "Ver mais".
+ */
+export const COMMUNITY_ABOUT_MAX_LENGTH = 2000;
+
+export const communityAboutSchema = z
+  .string()
+  .trim()
+  .max(
+    COMMUNITY_ABOUT_MAX_LENGTH,
+    `Keep it to ${COMMUNITY_ABOUT_MAX_LENGTH} characters.`,
+  )
+  .pipe(safeTextSchema);
+
+/** Official-link chips on the poster and the in-app header. Not a CMS. */
+export const COMMUNITY_LINK_KINDS = [
+  "youtube",
+  "twitch",
+  "instagram",
+  "tiktok",
+  "x",
+  "site",
+] as const;
+export type CommunityLinkKind = (typeof COMMUNITY_LINK_KINDS)[number];
+
+export const COMMUNITY_LINKS_MAX = 8;
+export const COMMUNITY_LINK_URL_MAX_LENGTH = 500;
+
+export const communityLinkKindSchema = z.enum(COMMUNITY_LINK_KINDS);
+
+export const communityLinkSchema = z.object({
+  kind: communityLinkKindSchema,
+  url: z.string().url().max(COMMUNITY_LINK_URL_MAX_LENGTH),
+});
+export type CommunityLink = z.infer<typeof communityLinkSchema>;
+
+function httpsUrl(raw: string): URL | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > COMMUNITY_LINK_URL_MAX_LENGTH) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "https:") {
+      return null;
+    }
+    if (url.username || url.password) {
+      return null;
+    }
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function hostWithoutWww(hostname: string): string {
+  return hostname.replace(/^www\./, "").toLowerCase();
+}
+
+function kindForOfficialLinkHost(host: string): CommunityLinkKind | null {
+  if (
+    host === "youtu.be" ||
+    host === "youtube.com" ||
+    host === "m.youtube.com" ||
+    host === "music.youtube.com"
+  ) {
+    return "youtube";
+  }
+  if (
+    host === "twitch.tv" ||
+    host === "m.twitch.tv" ||
+    host === "clips.twitch.tv" ||
+    host === "player.twitch.tv"
+  ) {
+    return "twitch";
+  }
+  if (host === "instagram.com") {
+    return "instagram";
+  }
+  // Short `vm.` / `vt.` TikTok links need a redirect we will not follow.
+  if (host === "tiktok.com" || host === "m.tiktok.com") {
+    return "tiktok";
+  }
+  if (host === "x.com" || host === "twitter.com" || host === "mobile.twitter.com") {
+    return "x";
+  }
+  if (host === "vm.tiktok.com" || host === "vt.tiktok.com") {
+    return null;
+  }
+  return "site";
+}
+
+/**
+ * Classify one official link. Kind is taken from the host, never from the
+ * client: a body that labels twitter.com as youtube is still X.
+ */
+export function parseCommunityLink(raw: string): CommunityLink | null {
+  const url = httpsUrl(raw);
+  if (!url) {
+    return null;
+  }
+  const kind = kindForOfficialLinkHost(hostWithoutWww(url.hostname));
+  if (!kind) {
+    return null;
+  }
+  return { kind, url: url.toString() };
+}
+
+/**
+ * Deduped, capped, re-classified. Empty input is a cleared list, not "leave
+ * it". A URL that does not parse is dropped rather than stored; the route
+ * refuses the whole patch when any entry is junk so the form can say why.
+ */
+export function normalizeCommunityLinks(
+  input: readonly { url: string }[],
+): CommunityLink[] | null {
+  const out: CommunityLink[] = [];
+  const seen = new Set<string>();
+  for (const item of input) {
+    const parsed = parseCommunityLink(item.url);
+    if (!parsed) {
+      return null;
+    }
+    if (seen.has(parsed.url)) {
+      continue;
+    }
+    seen.add(parsed.url);
+    out.push(parsed);
+    if (out.length > COMMUNITY_LINKS_MAX) {
+      return null;
+    }
+  }
+  return out;
+}
+
+export function parseStoredCommunityLinks(raw: unknown): CommunityLink[] {
+  const parsed = z.array(communityLinkSchema).safeParse(raw);
+  if (!parsed.success) {
+    return [];
+  }
+  return parsed.data.slice(0, COMMUNITY_LINKS_MAX);
+}
+
+/**
+ * One 16:9 moment on `/c/` only. YouTube video or Twitch (channel, video,
+ * clip). Profiles, shorts-as-channel, and short TikTok links stay refused
+ * because the featured frame is an embed, not a link chip.
+ */
+export type CommunityFeaturedEmbed = {
+  kind: "youtube" | "twitch";
+  url: string;
+};
+
+export type CommunityFeatured = CommunityFeaturedEmbed | {
+  kind: "image";
+  url: string;
+};
+
+export const communityFeaturedSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("youtube"),
+    url: z.string().min(1).max(COMMUNITY_LINK_URL_MAX_LENGTH),
+  }),
+  z.object({
+    kind: z.literal("twitch"),
+    url: z.string().min(1).max(COMMUNITY_LINK_URL_MAX_LENGTH),
+  }),
+  z.object({
+    kind: z.literal("image"),
+    url: z.string().min(1).max(COMMUNITY_LINK_URL_MAX_LENGTH),
+  }),
+]);
+
+export function parseCommunityFeaturedEmbed(
+  raw: string,
+): CommunityFeaturedEmbed | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > COMMUNITY_LINK_URL_MAX_LENGTH) {
+    return null;
+  }
+  if (parseYoutubeVideoId(trimmed)) {
+    return { kind: "youtube", url: trimmed };
+  }
+  if (parseTwitchEmbed(trimmed)) {
+    return { kind: "twitch", url: trimmed };
+  }
+  return null;
+}
+
+export function mapCommunityFeatured(row: {
+  kind: string | null;
+  embedUrl: string | null;
+  imageUrl: string | null;
+}): CommunityFeatured | null {
+  if (row.kind === "youtube" || row.kind === "twitch") {
+    if (!row.embedUrl) {
+      return null;
+    }
+    return { kind: row.kind, url: row.embedUrl };
+  }
+  if (row.kind === "image" && row.imageUrl) {
+    return { kind: "image", url: row.imageUrl };
+  }
+  return null;
+}
 
 // ------------------------------------------------------------------- slugs
 
@@ -415,6 +627,39 @@ export const updateCommunitySchema = z.object({
    * filter.
    */
   language: communityLanguageSchema.optional(),
+  /**
+   * The paragraph. Explicit `null` clears; absent leaves it. Payload guard
+   * only — `communityAboutSchema` in the route is the real cap, same split
+   * as the tagline, so a 400 here is a generic form error and never the
+   * address field.
+   */
+  about: z.string().max(8000).nullable().optional(),
+  /**
+   * Official links, replacing the whole list. Empty array clears. The route
+   * re-parses every URL and refuses the patch if any one is junk.
+   */
+  links: z
+    .array(
+      z.object({
+        kind: communityLinkKindSchema.optional(),
+        url: z.string().max(2000),
+      }),
+    )
+    .max(COMMUNITY_LINKS_MAX)
+    .optional(),
+  /**
+   * YouTube or Twitch for the `/c/` 16:9, or `null` to clear (image included).
+   * An uploaded image is a separate mint/claim, not this field.
+   */
+  featured: z
+    .union([
+      z.object({
+        kind: z.enum(["youtube", "twitch"]),
+        url: z.string().max(2000),
+      }),
+      z.null(),
+    ])
+    .optional(),
 });
 export type UpdateCommunityRequest = z.infer<typeof updateCommunitySchema>;
 
@@ -498,6 +743,9 @@ export const communitySettingsSchema = z.object({
   /** Null until the first successful opt-in derives or the owner picks one. */
   slug: z.string().nullable().default(null),
   tagline: z.string().nullable(),
+  about: z.string().nullable().default(null),
+  links: z.array(communityLinkSchema).max(COMMUNITY_LINKS_MAX).default([]),
+  featured: communityFeaturedSchema.nullable().default(null),
   category: communityCategorySchema,
   language: communityLanguageSchema.default(DEFAULT_COMMUNITY_LANGUAGE),
   /**
@@ -558,10 +806,12 @@ export const COMMUNITY_MEMBER_FLOOR = 2;
  * and it is held to `publicProfileSchema`'s bar: every field had to argue its
  * way in, and the argument is "a stranger deciding whether to sign up needs
  * this to decide". What that admits is the poster — name, address, tagline,
- * category, how many people are in there, the two pictures. What it refuses is
- * everything a member can see and a stranger cannot: NO MEMBER LIST (which is a
- * disclosure of who talks to whom, the single worst thing this page could do),
- * NO MESSAGES, no channel list, no owner, no id.
+ * about, official links, one featured clip or image, category, how many people
+ * are in there, the two pictures. What it refuses is everything a member can
+ * see and a stranger cannot: NO MEMBER LIST (which is a disclosure of who talks
+ * to whom, the single worst thing this page could do), NO MESSAGES, no channel
+ * list, no owner, no id, and no Baú posts — this is still a poster, not a
+ * window into the room.
  *
  * NO `joined` FIELD, unlike `communitySummarySchema`. There is no viewer to be
  * joined — the whole point of this shape is that it is identical for every
@@ -578,6 +828,9 @@ export const publicCommunitySchema = z.object({
   slug: z.string(),
   name: z.string(),
   tagline: z.string().nullable(),
+  about: z.string().nullable().default(null),
+  links: z.array(communityLinkSchema).max(COMMUNITY_LINKS_MAX).default([]),
+  featured: communityFeaturedSchema.nullable().default(null),
   category: communityCategorySchema,
   /** From the maintained counter column. Approximate, and nothing is authorised by it. */
   memberCount: z.number().int().nonnegative(),

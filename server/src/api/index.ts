@@ -46,6 +46,8 @@ import {
   MAX_SERVER_BANNER_BYTES,
   MAX_SERVER_ICON_BYTES,
   maxServerImageBytes,
+  COMMUNITY_FEATURED_IMAGE_HEIGHT,
+  COMMUNITY_FEATURED_IMAGE_WIDTH,
   SERVER_BANNER_HEIGHT,
   SERVER_BANNER_WIDTH,
   SERVER_ICON_SIZE,
@@ -81,6 +83,9 @@ import {
   USER_BANNER_HEIGHT,
   USER_BANNER_WIDTH,
   communityTaglineSchema,
+  communityAboutSchema,
+  normalizeCommunityLinks,
+  parseCommunityFeaturedEmbed,
   updateCommunitySchema,
   reportStatusSchema,
   resolveReportSchema,
@@ -3352,10 +3357,27 @@ router.get("/api/servers/images/config", async () => ({
     width: SERVER_BANNER_WIDTH,
     height: SERVER_BANNER_HEIGHT,
   },
+  featured: {
+    maxBytes: MAX_SERVER_BANNER_BYTES,
+    width: COMMUNITY_FEATURED_IMAGE_WIDTH,
+    height: COMMUNITY_FEATURED_IMAGE_HEIGHT,
+  },
 }));
 
+function serverImageAuditAction(
+  kind: ServerImageKind,
+): "server.icon_update" | "server.banner_update" | "server.community_update" {
+  if (kind === "banner") {
+    return "server.banner_update";
+  }
+  if (kind === "featured") {
+    return "server.community_update";
+  }
+  return "server.icon_update";
+}
+
 /**
- * Mint an upload for one of a server's two pictures.
+ * Mint an upload for one of a server's pictures.
  *
  * The per-kind cap is applied here rather than in `createServerImageUploadSchema`
  * because the schema does not know which kind it is parsing, and a banner's
@@ -3435,7 +3457,7 @@ async function claimServerImage(
   await logAudit({
     serverId,
     actorId: ctx.user.id,
-    action: kind === "banner" ? "server.banner_update" : "server.icon_update",
+    action: serverImageAuditAction(kind),
     targetType: "server",
     targetId: serverId,
     changes: [{ key: kind, old: null, new: "set" }],
@@ -3467,7 +3489,7 @@ async function clearServerImage(
   await logAudit({
     serverId,
     actorId: userId,
-    action: kind === "banner" ? "server.banner_update" : "server.icon_update",
+    action: serverImageAuditAction(kind),
     targetType: "server",
     targetId: serverId,
     changes: [{ key: kind, old: "set", new: null }],
@@ -3493,6 +3515,16 @@ router.post("/api/servers/:serverId/banner/claim", async (ctx, { serverId }) =>
 );
 router.delete("/api/servers/:serverId/banner", async ({ user }, { serverId }) =>
   clearServerImage("banner", user.id, serverId!),
+);
+
+router.post("/api/servers/:serverId/featured", async (ctx, { serverId }) =>
+  mintServerImage("featured", ctx, serverId!),
+);
+router.post("/api/servers/:serverId/featured/claim", async (ctx, { serverId }) =>
+  claimServerImage("featured", ctx, serverId!),
+);
+router.delete("/api/servers/:serverId/featured", async ({ user }, { serverId }) =>
+  clearServerImage("featured", user.id, serverId!),
 );
 
 // ---------------------------------------------------------- community home (Baú)
@@ -4260,13 +4292,10 @@ router.patch(
      * The address, validated here rather than in the schema for the tagline's
      * reason and one sharper one.
      *
-     * THE STATUS CODE IS THE FIELD NAME. This route can refuse for exactly one
-     * reason that is not "invalid request": the address. So 400, 409 and 422
-     * from here always mean the address and never anything else, and the
-     * settings form attaches all three to the address input rather than to the
-     * form as a whole. That is a contract worth stating out loud, because the
-     * day a second field can refuse, this stops being true and the form starts
-     * pointing at the wrong box.
+     * 409 and 422 from this route always mean the address. 400 on the slug
+     * still means the address when the message matches "cannot be used".
+     * About, links, and featured also 400, and those land on the form as a
+     * whole — never on the slug box.
      *
      * `communitySlugSchema` slugifies first, so an owner who types "Valorant
      * Brasil" is answered with `valorant-brasil` rather than told off for
@@ -4284,6 +4313,50 @@ router.patch(
       slug = parsed.data;
     }
 
+    let about: string | null | undefined;
+    if (body.about !== undefined) {
+      if (body.about === null || body.about.trim() === "") {
+        about = null;
+      } else {
+        const parsed = communityAboutSchema.safeParse(body.about);
+        if (!parsed.success) {
+          throw new HttpError(
+            400,
+            parsed.error.issues[0]?.message ?? "That about text is too long",
+          );
+        }
+        about = parsed.data;
+      }
+    }
+
+    let links: NonNullable<ReturnType<typeof normalizeCommunityLinks>> | undefined;
+    if (body.links !== undefined) {
+      const parsed = normalizeCommunityLinks(body.links);
+      if (parsed === null) {
+        throw new HttpError(
+          400,
+          "That link is not allowed. Use https, and only YouTube, Twitch, Instagram, TikTok, X, or a website.",
+        );
+      }
+      links = parsed;
+    }
+
+    let featured: ReturnType<typeof parseCommunityFeaturedEmbed> | null | undefined;
+    if (body.featured !== undefined) {
+      if (body.featured === null) {
+        featured = null;
+      } else {
+        const parsed = parseCommunityFeaturedEmbed(body.featured.url);
+        if (!parsed || parsed.kind !== body.featured.kind) {
+          throw new HttpError(
+            400,
+            "Featured media has to be a YouTube video or a Twitch link.",
+          );
+        }
+        featured = parsed;
+      }
+    }
+
     let updated;
     try {
       updated = await updateCommunitySettings(
@@ -4294,6 +4367,9 @@ router.patch(
             : {}),
           ...(body.isListed !== undefined ? { isListed: body.isListed } : {}),
           ...(tagline !== undefined ? { tagline } : {}),
+          ...(about !== undefined ? { about } : {}),
+          ...(links !== undefined ? { links } : {}),
+          ...(featured !== undefined ? { featured } : {}),
           ...(body.category !== undefined ? { category: body.category } : {}),
           ...(slug !== undefined ? { slug } : {}),
           ...(body.language !== undefined ? { language: body.language } : {}),
@@ -4338,6 +4414,10 @@ router.patch(
     }
     if (!updated) {
       throw new NotFound("Server not found");
+    }
+
+    if (updated.previousFeaturedKey) {
+      void discardServerImageObject(updated.previousFeaturedKey);
     }
 
     // One entry for the whole patch, carrying only what actually moved. Listing
@@ -4408,6 +4488,37 @@ router.patch(
               key: "communityLanguage",
               old: updated.previous.language,
               new: updated.settings.language,
+            },
+          ]
+        : []),
+      ...(about !== undefined && updated.previous.about !== updated.settings.about
+        ? [
+            {
+              key: "communityAbout",
+              old: updated.previous.about,
+              new: updated.settings.about,
+            },
+          ]
+        : []),
+      ...(links !== undefined &&
+      JSON.stringify(updated.previous.links) !==
+        JSON.stringify(updated.settings.links)
+        ? [
+            {
+              key: "communityLinks",
+              old: updated.previous.links,
+              new: updated.settings.links,
+            },
+          ]
+        : []),
+      ...(featured !== undefined &&
+      JSON.stringify(updated.previous.featured) !==
+        JSON.stringify(updated.settings.featured)
+        ? [
+            {
+              key: "communityFeatured",
+              old: updated.previous.featured,
+              new: updated.settings.featured,
             },
           ]
         : []),
@@ -8847,7 +8958,7 @@ async function serveUserBannerObject(
 }
 
 const SERVER_IMAGE_OBJECT_PATH =
-  /^\/api\/servers\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(icon|banner)$/;
+  /^\/api\/servers\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(icon|banner|featured)$/;
 
 /**
  * A server's icon or banner, as a redirect to the object store.

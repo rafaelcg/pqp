@@ -89,6 +89,8 @@ interface PostBody {
   visibility: "free" | "members";
   status: "draft" | "published" | "scheduled";
   media: { kind: string; youtubeUrl: string | null; twitchUrl: string | null } | null;
+  hasMedia: boolean;
+  posterUrl: string | null;
   locked: boolean;
   commentCount: number;
   commentTeaser: { body: string }[];
@@ -314,15 +316,21 @@ describeDb("community home (Baú)", () => {
     expect(locked.teaser).toBe("só o inner vê");
     expect(locked.body).toBeNull();
     expect(locked.media).toBeNull();
+    expect(locked.hasMedia).toBe(true);
+    expect(locked.posterUrl).toBe(
+      "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+    );
     expect(locked.commentCount).toBe(1);
     expect(locked.commentTeaser).toEqual([]);
     expect(JSON.stringify(asMember.body)).not.toContain("sessao-11");
+    expect(JSON.stringify(asMember.body)).not.toContain("youtu.be");
 
     for (const viewer of [owner, vip]) {
       const res = await call<{ posts: PostBody[] }>(viewer, "GET", `${base()}/posts`);
       const open = res.body.posts[0]!;
       expect(open.locked).toBe(false);
       expect(open.body).toContain("sessao-11-clip.webm");
+      expect(open.hasMedia).toBe(true);
       expect(open.media?.kind).toBe("youtube");
       expect(open.commentTeaser.map((c) => c.body)).toEqual(["esse clip é o sessao-11"]);
     }
@@ -333,6 +341,8 @@ describeDb("community home (Baú)", () => {
     const res = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
     expect(res.body.posts[0]!.locked).toBe(false);
     expect(res.body.posts[0]!.body).toBe("mapa-porao.png");
+    expect(res.body.posts[0]!.hasMedia).toBe(false);
+    expect(res.body.posts[0]!.posterUrl).toBeNull();
   });
 
   describe("with COMMUNITY_HOME_VIP_ENABLED unset", () => {

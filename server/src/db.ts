@@ -916,6 +916,12 @@ export interface DbServer {
   banner_key?: string | null;
   is_community?: boolean;
   community_home_enabled?: boolean;
+  community_tagline?: string | null;
+  community_about?: string | null;
+  community_links?: unknown;
+  community_slug?: string | null;
+  community_featured_url?: string | null;
+  community_featured_key?: string | null;
   /** Only present on reads that join the viewer's `server_members` row. */
   show_on_profile?: boolean;
   role?: "owner" | "admin" | "member";

@@ -156,6 +156,20 @@ export function youtubeEmbedSrc(youtubeUrl: string): string | null {
   return id ? `https://www.youtube-nocookie.com/embed/${id}` : null;
 }
 
+/**
+ * Public YouTube poster. Safe to show on a locked card: it is the same
+ * image youtube.com already serves. It does name the video id, so an
+ * unlisted clip in a VIP post is findable from the thumb. That is the
+ * Geowizard/Patreon trade: a poster, not the player.
+ */
+export function youtubePosterUrl(youtubeUrl: string | null | undefined): string | null {
+  if (!youtubeUrl) {
+    return null;
+  }
+  const id = parseYoutubeVideoId(youtubeUrl);
+  return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : null;
+}
+
 function parseHttpUrl(raw: string): URL | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -613,6 +627,18 @@ export const communityHomePostSchema = z.object({
   status: communityHomePostStatusSchema,
   commentsEnabled: z.boolean(),
   media: communityHomeMediaSchema.nullable(),
+  /**
+   * Whether this post has media, even when `media` is null for a locked
+   * viewer. Defaulted so a payload from an API that predates the field still
+   * parses; the lock plate then stays off rather than inventing a thumbnail.
+   */
+  hasMedia: z.boolean().default(false),
+  /**
+   * Public poster for a locked YouTube card. Null for uploads and other
+   * embeds: those pixels are the secret, and the API must not sign them
+   * for a locked viewer. Defaulted so an older payload still parses.
+   */
+  posterUrl: z.string().nullable().default(null),
   /** True when body/media were stripped for this viewer. */
   locked: z.boolean(),
   likeCount: z.number().int().nonnegative(),

@@ -1,5 +1,6 @@
 import {
   formatUserTag,
+  parseStoredCommunityLinks,
   type ChannelKind,
   type VoiceRoomTransport,
 } from "@pqp/shared";
@@ -60,7 +61,7 @@ export const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private,
  * NOT here — it lives on `server_members`, so only reads that join a
  * membership can select it.
  */
-export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community, community_home_enabled`;
+export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community, community_home_enabled, community_tagline, community_about, community_links, community_slug`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -1555,6 +1556,10 @@ export function mapServer(s: DbServer) {
     bannerUrl: s.banner_url ?? null,
     isCommunity: s.is_community ?? false,
     communityHomeEnabled: s.community_home_enabled ?? false,
+    communityTagline: s.community_tagline ?? null,
+    communityAbout: s.community_about ?? null,
+    communityLinks: parseStoredCommunityLinks(s.community_links ?? []),
+    communitySlug: s.community_slug ?? null,
     // Only `listServersForUser` joins a membership, so every other caller —
     // a create, a rename — has no row to read this from. TRUE is the column's
     // own default and the honest answer for a membership just created.

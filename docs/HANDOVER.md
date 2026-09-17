@@ -659,11 +659,18 @@ fold into a slug refuses with 422. Nothing is ever auto-suffixed — `valorant-2
 chose and nobody would share. Existing listings get a one-shot backfill in schema.sql; collisions
 there are left NULL (the card simply has no share button) rather than suffixed.
 
-**`/c/<slug>` is a poster, not a window.** Name, address, tagline, category pill, member count big,
-the two pictures, a month, and one button. **No member list** — who is in a room is a fact about
-those people — no messages, no channels, no owner, and **no id**: withholding the id is what forces
-the join intent to travel as a slug and be resolved behind auth. Suspended, unlisted, unknown and
-"communities are off on this deployment" are one byte-identical 404.
+**`/c/<slug>` is a poster, not a window.** Name, address, tagline, about,
+official-link chips, one featured YouTube/Twitch/image, category pill, member
+count as a footnote, the two pictures, a month, and one button. **No member
+list** — who is in a room is a fact about those people — no messages, no Baú
+posts, no channels, no owner, and **no id**: withholding the id is what forces
+the join intent to travel as a slug and be resolved behind auth. The in-app
+Overview is the same identity in a compact header, then the Baú feed on one
+scroll. Staff with Manage Server edit that header in place (cover, icon,
+tagline, about, official links). With no cover uploaded, Overview and `/c/`
+paint a tiled pqp.gg mosaic over the hashed hue wash rather than a flat
+gradient. Communities land there even if Baú is still off. Suspended, unlisted,
+unknown and "communities are off on this deployment" are one byte-identical 404.
 
 **The intent flow**, reusing `?add=<handle>`'s machinery exactly: the CTA is `/app?join=<slug>` for
 somebody signed in, and for somebody signed out the slug is stashed in `localStorage` *before* Clerk
@@ -678,7 +685,8 @@ separate head builder rather than a parameterised one because the cards genuinel
 image is a square avatar and gets `summary`, a community banner is 3:1 and gets
 `summary_large_image`. The directory card in-app grew a share button that copies `pqp.gg/c/<slug>`.
 
-**Tokens.** `--hero-tint-near` / `--hero-tint-far`, `--scrim-hero`, `--shadow-hero-avatar`,
+**Tokens.** `--hero-tint-near` / `--hero-tint-far`, `--hero-mosaic-tile` /
+`--hero-mosaic-mark`, `--scrim-hero`, `--shadow-hero-avatar`,
 `--shadow-testimonial`, `--glow-accent-soft`, with light-mode overrides. Every colour literal stays
 in the token layer; `client/src/lib/hero-tint.ts` emits custom properties and a gradient and never
 names a colour, which is what keeps `BENCH_MAX_LEAKS=0` at zero.

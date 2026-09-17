@@ -196,7 +196,8 @@ test.describe("Baú", () => {
     const feed = page.locator("[data-community-home-feed]");
     await expect(feed).toBeVisible({ timeout: 20_000 });
 
-    // Locked chrome: four-slot header (drawer · title · pen · overflow), no tabs/FAB.
+    // Staff compose and overflow, no tabs/FAB. On a community the tools sit
+    // on the cover, not in a Discord channel header.
     await expect(feed.locator("[data-home-staff-tabs]")).toHaveCount(0);
     await expect(feed.locator("[data-home-viewer-tabs]")).toHaveCount(0);
     await expect(feed.locator("[data-home-new-post-fab]")).toHaveCount(0);
@@ -266,11 +267,14 @@ test.describe("Baú", () => {
     await feed.locator("[data-home-intro-dismiss]").click();
     await expect(feed.locator("[data-home-intro]")).toHaveCount(0);
 
-    // Locked VIP post: title + teaser, nothing else, CTA disabled.
+    // Locked VIP post: teaser in the clear, counts, no body/URL/comments, CTA disabled.
     const locked = feed.locator('[data-home-post][data-home-post-locked="1"]');
     await expect(locked).toBeVisible();
     await expect(locked.getByText("só o inner vê o clip")).toBeVisible();
     await expect(locked.locator("[data-home-unlock-cta]")).toBeDisabled();
+    await expect(locked.locator("[data-home-like]")).toBeVisible();
+    await expect(locked.locator("[data-home-comment-count]")).toBeVisible();
+    await expect(locked.locator("[data-home-comments]")).toHaveCount(0);
     await expect(feed).not.toContainText("sessao-11-clip.webm");
 
     // Comments: 0–2 teasers on the card; rest on detail tap.

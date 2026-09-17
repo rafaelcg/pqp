@@ -19,6 +19,10 @@ const server: Server = {
   isCommunity: false,
   communityHomeEnabled: true,
   showOnProfile: true,
+  communityTagline: null,
+  communityAbout: null,
+  communityLinks: [],
+  communitySlug: null,
 };
 
 const channels: Channel[] = [
@@ -107,6 +111,17 @@ describe("ChannelList Community Home row", () => {
     expect(html).not.toContain("data-community-home-row");
   });
 
+  it("a community still gets the Baú row when this server has not opted in", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        server={{ ...server, isCommunity: true, communityHomeEnabled: false }}
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).toContain("data-community-home-row");
+  });
+
   it("flag on: pins Baú above TEXT on a private (non-community) server, without a Community badge", () => {
     expect(server.isCommunity).toBe(false);
     const html = renderList(
@@ -119,8 +134,25 @@ describe("ChannelList Community Home row", () => {
     );
     expect(html).toContain("data-community-home-row");
     expect(html).toContain("Baú");
+    expect(html).toContain('data-community-home-face="chest"');
+    expect(html).not.toContain("Not chat");
     // The badge is a fact about the server, not about the flag.
     expect(html).not.toContain(">Community<");
+  });
+
+  it("a community row uses the poster face, not a teaching subtitle", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        server={{ ...server, isCommunity: true, name: "Mesa da Tues" }}
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).toContain('data-community-home-face="poster"');
+    expect(html).toContain("MD");
+    expect(html).toContain("Baú");
+    expect(html).not.toContain("Not chat");
+    expect(html).not.toContain("Posts that stay");
   });
 
   it("canManage: each channel row has a settings cog", () => {

@@ -87,7 +87,7 @@ vi.mock("../lib/s3.js", () => ({
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
-const { MAX_SERVER_BANNER_BYTES, MAX_SERVER_ICON_BYTES } = await import(
+const { MAX_SERVER_BANNER_BYTES, MAX_SERVER_ICON_BYTES, COMMUNITY_FEATURED_IMAGE_WIDTH } = await import(
   "@pqp/shared"
 );
 
@@ -238,11 +238,13 @@ describeDb("server images", () => {
         enabled: boolean;
         icon: { maxBytes: number };
         banner: { maxBytes: number; width: number; height: number };
+        featured?: { maxBytes: number; width: number; height: number };
       }>(member, "GET", "/api/servers/images/config");
       expect(on.body.enabled).toBe(true);
       expect(on.body.icon.maxBytes).toBe(MAX_SERVER_ICON_BYTES);
       expect(on.body.banner.maxBytes).toBe(MAX_SERVER_BANNER_BYTES);
       expect(on.body.banner.width).toBeGreaterThan(on.body.banner.height);
+      expect(on.body.featured?.width).toBe(COMMUNITY_FEATURED_IMAGE_WIDTH);
 
       storage.configured = false;
       const off = await call<{ enabled: boolean; icon: { maxBytes: number } }>(
@@ -273,7 +275,7 @@ describeDb("server images", () => {
       expect(result.status).toBe(401);
     });
 
-    for (const kind of ["icon", "banner"] as const) {
+    for (const kind of ["icon", "banner", "featured"] as const) {
       it(`lets an admin mint a ${kind} (Manage Server)`, async () => {
         const result = await call(
           admin,

@@ -23,6 +23,13 @@ describe("pickServerLandingTarget", () => {
     });
   });
 
+  it("opens Overview for a community even when Baú is off", () => {
+    expect(pickServerLandingTarget(channels, false, true)).toEqual({
+      kind: "home",
+      id: COMMUNITY_HOME_CHANNEL_ID,
+    });
+  });
+
   it("falls back to any non-category channel, and to nothing at all", () => {
     expect(
       pickServerLandingTarget([{ id: "lobby", type: "voice" }], false),

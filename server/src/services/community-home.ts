@@ -8,6 +8,7 @@ import {
   isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   Permission,
+  youtubePosterUrl,
   type CommunityHomeAuthorBadge,
   type CommunityHomeComment,
   type CommunityHomeContentType,
@@ -409,6 +410,11 @@ function toPost(
     status: row.status,
     commentsEnabled: row.comments_enabled,
     media: buildMedia(row, !locked),
+    hasMedia: row.media_kind != null,
+    posterUrl:
+      row.media_kind === "youtube"
+        ? youtubePosterUrl(row.media_youtube_url)
+        : null,
     locked,
     likeCount: Number(row.like_count),
     likedByMe: row.liked_by_me,
