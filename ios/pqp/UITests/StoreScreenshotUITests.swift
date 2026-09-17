@@ -38,7 +38,13 @@ final class StoreScreenshotUITests: XCTestCase {
     }
 
     private var localeLaunchArguments: [String] {
-        locale == "en" ? [] : ["-AppleLanguages", "(\(locale))", "-AppleLocale", locale.replacingOccurrences(of: "-", with: "_")]
+        // Always pin the simulator's language explicitly, even for "en": a
+        // prior pt-BR run leaves the simulator itself set to pt-BR, and
+        // without this the English pass would render Portuguese strings
+        // while searching for English selectors like "Settings"/"All"/"Skip".
+        let apple = locale == "en" ? "en" : locale
+        let region = locale == "en" ? "en_US" : locale.replacingOccurrences(of: "-", with: "_")
+        return ["-AppleLanguages", "(\(apple))", "-AppleLocale", region]
     }
 
     private func shoot(_ name: String) {
@@ -119,13 +125,26 @@ final class StoreScreenshotUITests: XCTestCase {
                     join.tap()
                     Thread.sleep(forTimeInterval: 4.0)   // roster arrives over the socket
                     shoot("04-voice")
-                    if app.buttons["voice.leave"].waitForExistence(timeout: 3) {
+                    if app.buttons["voice.leave"].waitForExistence(timeout: 10) {
                         app.buttons["voice.leave"].tap()
                         Thread.sleep(forTimeInterval: 1.0)
+                    } else {
+                        // Cleanup could not be confirmed through the UI. Do not
+                        // carry a live mic/socket into the remaining captures —
+                        // terminate and relaunch, which tears down the call
+                        // along with the process, then keep going.
+                        print("SHOT-WARN: voice.leave not found, terminating app to force call teardown")
+                        app.terminate()
+                        app.launchArguments += ["-pqp.hasCompletedOnboarding", "YES",
+                                               "-pqp.lastVisited", ""] + localeLaunchArguments
+                        app.launch()
+                        Thread.sleep(forTimeInterval: 2.0)
                     }
                 } else {
-                    print("SHOT-SKIP: chat.joinVoice button not found")
-                    shoot("04-voice")
+                    // The call stage never appeared, so this is not a voice
+                    // screenshot: capturing here would save the channel-thread
+                    // screen under the "04-voice" name and hide the failure.
+                    print("SHOT-SKIP: chat.joinVoice button not found, no voice screenshot taken")
                 }
             } else { print("SHOT-SKIP: voice channel not found") }
             back(app)
