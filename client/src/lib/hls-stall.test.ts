@@ -869,10 +869,29 @@ describe("HlsStallWatch", () => {
       expect(watch.tick(T0 + GRACE)).toBe("start-load");
     });
 
-    it("holds the buffering stall too", () => {
+    it("holds the buffering stall too, then jumps rather than starts the ladder (this attach never played)", () => {
+      // Updated for the 2026-09-17 fix: this IS the shape of the incident --
+      // a viewer stuck buffering before the grace has even ended, having
+      // never painted a frame. Once the grace lifts, the first "stall" rung
+      // is now `"jump-live"` (`HlsStallDecision`'s own doc comment), not the
+      // old `"start-load"` that walked the ladder for ~40 s in production.
       const watch = new HlsStallWatch({ stallMs: 1_000 });
       watch.onSourceChanged(T0);
       watch.configureForMode("ll", 500);
+      watch.onWaiting(T0);
+      expect(watch.tick(T0 + 3_000)).toBe("none");
+      expect(watch.tick(T0 + GRACE)).toBe("jump-live");
+      expect(watch.lastReason).toBe("stall");
+    });
+
+    it("still walks the ordinary ladder once this attach has actually played", () => {
+      // Same shape, except a frame already painted before the stall (the
+      // starved-presenter case `classifyLlHlsError`'s own comment protects)
+      // -- `"jump-live"` must never fire for it.
+      const watch = new HlsStallWatch({ stallMs: 1_000 });
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onPlaying();
       watch.onWaiting(T0);
       expect(watch.tick(T0 + 3_000)).toBe("none");
       expect(watch.tick(T0 + GRACE)).toBe("start-load");
@@ -892,6 +911,122 @@ describe("HlsStallWatch", () => {
       watch.configureForMode("conventional");
       watch.onWaiting(T0);
       expect(watch.tick(T0 + 1_000)).toBe("start-load");
+    });
+  });
+
+  /**
+   * PRODUCTION, 2026-09-17: a web viewer opened a party page right as its LL
+   * session (re)started, hls.js requested `_HLS_msn=23` against a playlist
+   * whose real `EXT-X-MEDIA-SEQUENCE` was already 33-37, nothing usable ever
+   * got appended, and the "stall" reason's ordinary ladder
+   * (`start-load`/`reload-level`) spent ~40 s walking before a REBUILD
+   * happened to land the fresh instance on the live edge on its own.
+   * `"jump-live"` is the same one-shot live-edge jump a missing-fragment
+   * error already earns (`isMissingFragmentError`), offered on the FIRST
+   * rung of a "stall" episode instead, but only while this attach has never
+   * painted a frame -- see `HlsStallDecision`'s own doc comment for why that
+   * gate exists and cannot be widened without reopening PR 646/650.
+   */
+  describe('"jump-live" (production, 2026-09-17)', () => {
+    it("offers the jump on the very first stall rung of an attach that has never played", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onWaiting(T0 + GRACE);
+      expect(watch.tick(T0 + GRACE + HLS_WATCH_PLAYER_STALL_MS)).toBe(
+        "jump-live",
+      );
+      expect(watch.lastReason).toBe("stall");
+    });
+
+    it("falls back to the ordinary ladder from the SECOND rung on -- one jump, not a substitute ladder", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onWaiting(T0 + GRACE);
+      const first = T0 + GRACE + HLS_WATCH_PLAYER_STALL_MS;
+      expect(watch.tick(first)).toBe("jump-live");
+      // Still stuck a tick later (the player's own jump either was not
+      // acted on, or did not fix it): the ordinary ladder resumes at its
+      // SECOND rung, not a repeat of the jump and not the first rung again.
+      expect(watch.tick(first + 500)).toBe("reload-level");
+      expect(watch.tick(first + 1_000)).toBe("start-load");
+    });
+
+    it("never fires once this attach has painted a frame -- the starved-presenter case is untouched", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onPlaying();
+      watch.onWaiting(T0 + GRACE);
+      expect(watch.tick(T0 + GRACE + HLS_WATCH_PLAYER_STALL_MS)).toBe(
+        "start-load",
+      );
+    });
+
+    it("re-arms for a genuine rebuild -- a fresh instance has not played either", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onPlaying();
+      // A NEW attach (`onSourceChanged` again, the same call the player
+      // makes for a rebuild or a real re-attach): the rebuilt instance is
+      // genuinely as unplayed as a fresh one, so the rule re-arms.
+      const t1 = T0 + 60_000;
+      watch.onSourceChanged(t1);
+      watch.configureForMode("ll", 500);
+      watch.onWaiting(t1 + GRACE);
+      expect(watch.tick(t1 + GRACE + HLS_WATCH_PLAYER_STALL_MS)).toBe(
+        "jump-live",
+      );
+    });
+
+    it("never fires on conventional or for the fatal ladder", () => {
+      const conventional = new HlsStallWatch();
+      conventional.onSourceChanged(T0);
+      conventional.onWaiting(T0);
+      // No `configureForMode("ll", ...)` at all -- the conventional default.
+      expect(conventional.tick(T0 + HLS_WATCH_PLAYER_STALL_MS)).not.toBe(
+        "jump-live",
+      );
+
+      const fatal = new HlsStallWatch();
+      fatal.onSourceChanged(T0);
+      fatal.configureForMode("ll", 500);
+      fatal.onError({ fatal: true, type: "networkError", details: "fragLoadTimeOut" });
+      // A fatal ("other" class) error keeps its existing ladder, never the
+      // startup jump -- that gate is `reason === "stall"` only.
+      expect(fatal.tick(T0 + GRACE + 100)).toBe("recover-media-error");
+    });
+
+    /**
+     * THE REGRESSION THIS PR'S OWN COMPONENT TEST CAUGHT FIRST
+     * (`hls-watch-player-ll-recovery.test.tsx`): `gateRebuild` resets
+     * `ladderStep` to 0 every three cycles of the "stall" ladder, with no
+     * `onPlaying` required for it to do so. Gating the jump on
+     * `ladderStep === 1` alone re-satisfied that condition every ~6-7 ticks
+     * on a source that never recovers, producing a REPEATED `stopLoad` +
+     * `startLoad` pair instead of the promised single jump.
+     * `jumpOffered` is what actually bounds it to once per attach.
+     */
+    it("never repeats past a gateRebuild ladderStep reset, on a source that never recovers", () => {
+      const watch = new HlsStallWatch();
+      watch.onSourceChanged(T0);
+      watch.configureForMode("ll", 500);
+      watch.onWaiting(T0 + GRACE);
+      const decisions: HlsStallDecision[] = [];
+      let now = T0 + GRACE;
+      // Twenty ticks: well past the first jump, past a full three-cycle
+      // ladder (a `"rebuild"` decision, `ladderStep` reset to 0 by
+      // `gateRebuild`), and into a second cycle -- nothing here ever calls
+      // `onPlaying`/`onSourceChanged`, so this is exactly what a fake or
+      // genuinely dead source looks like from the watchdog's side.
+      for (let i = 0; i < 20; i += 1) {
+        now += 1_000;
+        decisions.push(watch.tick(now));
+      }
+      expect(decisions.filter((d) => d === "jump-live")).toHaveLength(1);
+      expect(decisions).toContain("rebuild");
     });
   });
 });

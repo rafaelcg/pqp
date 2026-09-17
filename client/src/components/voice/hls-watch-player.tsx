@@ -1474,7 +1474,21 @@ export function HlsWatchPlayer({
           ? measured
           : null,
       );
-      const decision = watch.tick(Date.now());
+      let decision = watch.tick(Date.now());
+      if (decision === "jump-live") {
+        // A "stall" episode's first rung, on an attach that has never
+        // painted a frame (`HlsStallDecision`'s own doc comment: production,
+        // 2026-09-17, a viewer landed ~60 s behind the live edge and spent
+        // ~40 s walking start-load / reload-level / a rebuild before the
+        // REBUILT instance happened to land on the edge). Try the SAME
+        // bounded live-edge jump a missing-fragment error already earns,
+        // silently -- no holding screen, no ladder log -- before falling
+        // back to the ordinary first rung a stall would have run anyway.
+        if (jumpToLiveEdgeAfterError("stalled before painting a frame")) {
+          return;
+        }
+        decision = "start-load";
+      }
       if (decision === "none") {
         // Still restarting: count the copy's countdown down rather than
         // freeze it at 10 forever.
