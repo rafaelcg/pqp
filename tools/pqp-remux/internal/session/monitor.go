@@ -332,9 +332,16 @@ type Stats struct {
 	// by internal/control's watchdog every tick and must not consume it.
 	// Zero everywhere else, which is the honest answer for a snapshot
 	// that is not the end of a window.
-	ReorderMaxDelayMs    int64
-	VideoDamageEpisodes  uint64
-	VideoDamagedDropped  uint64
+	ReorderMaxDelayMs   int64
+	VideoDamageEpisodes uint64
+	VideoDamagedDropped uint64
+	// VideoMarkerlessAUs is how many access units were closed by the next
+	// packet's RTP timestamp instead of by a marker packet, and DELIVERED.
+	// It sits beside damage= on the line on purpose: until 2026-09-17 these
+	// were counted as damage, discarded, and answered with a PLI, on a path
+	// with lost=0 in every window. A non-zero reading here with damage=+0 is
+	// the healthy shape, not a problem to chase.
+	VideoMarkerlessAUs   uint64
 	PartsWritten         uint64
 	BytesWritten         uint64
 	VideoSegmentsWritten uint64
@@ -405,6 +412,7 @@ func (s *Session) Stats() Stats {
 		VideoReorderResequenced: s.reorderResequenced(),
 		VideoDamageEpisodes:     s.damageEpisodes.Load(),
 		VideoDamagedDropped:     s.damagedAUsDropped.Load(),
+		VideoMarkerlessAUs:      s.videoMarkerlessAUs.Load(),
 		PartsWritten:            s.partsWritten.Load(),
 		BytesWritten:            s.bytesWritten.Load(),
 		VideoSegmentsWritten:    s.videoSegmentsWritten.Load(),
@@ -504,7 +512,7 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "pqp-remux: stats %s window=%s subscribed=%t", label, window.Round(100*time.Millisecond), cur.Subscribed)
-	fmt.Fprintf(&b, " | video pkts=+%d (%.1f/s) frames=+%d (%.1f/s) idr=+%d drops=+%d lost=+%d gaps=%s late=+%d heldDelayed=+%d resequenced=+%d reorderMaxDelayMs=%d damage=+%d damagedDropped=+%d parts=+%d (%.1f/s) segs=+%d keepalive=+%d repeats=+%d cuts=+%d idle=%t",
+	fmt.Fprintf(&b, " | video pkts=+%d (%.1f/s) frames=+%d (%.1f/s) idr=+%d drops=+%d lost=+%d gaps=%s late=+%d heldDelayed=+%d resequenced=+%d reorderMaxDelayMs=%d damage=+%d damagedDropped=+%d markerless=+%d parts=+%d (%.1f/s) segs=+%d keepalive=+%d repeats=+%d cuts=+%d idle=%t",
 		cur.VideoPacketsSeen-prev.VideoPacketsSeen, rate(prev.VideoPacketsSeen, cur.VideoPacketsSeen),
 		cur.VideoFramesSeen-prev.VideoFramesSeen, rate(prev.VideoFramesSeen, cur.VideoFramesSeen),
 		cur.VideoKeyframesSeen-prev.VideoKeyframesSeen,
@@ -517,6 +525,7 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 		cur.ReorderMaxDelayMs,
 		cur.VideoDamageEpisodes-prev.VideoDamageEpisodes,
 		cur.VideoDamagedDropped-prev.VideoDamagedDropped,
+		cur.VideoMarkerlessAUs-prev.VideoMarkerlessAUs,
 		cur.PartsWritten-prev.PartsWritten, rate(prev.PartsWritten, cur.PartsWritten),
 		cur.VideoSegmentsWritten-prev.VideoSegmentsWritten,
 		cur.KeepAlivePartsWrites-prev.KeepAlivePartsWrites,

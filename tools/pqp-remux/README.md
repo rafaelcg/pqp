@@ -467,7 +467,7 @@ signature on one line:
 ```
 pqp-remux: stats session=<id> window=5s subscribed=true
   | video pkts=+1200 (240.0/s) frames=+150 (30.0/s) idr=+2 drops=+7
-    parts=+10 (2.0/s) segs=+1 keepalive=+0 idle=false
+    markerless=+0 parts=+10 (2.0/s) segs=+1 keepalive=+0 idle=false
     lastPkt=8ms lastFrame=12ms lastIdr=1.9s lastPart=210ms openSeg=2100ms
     timelineRatio=1.00
   | audio pkts=+250 frames=+234 parts=+10 (2.0/s) segs=+1 timelineRatio=1.00
@@ -485,6 +485,15 @@ show (2026-09-15: 0.54 on video, 0.98 on audio, everything else healthy).
 `maxMs` is a high-water mark and deliberately never reset —
 "did this bucket ever go slow" is a different question from "is it slow
 now", which `lastMs` already answers.
+
+`markerless=` is the odd one out on that line: it is not a fault. It counts
+access units closed by the next packet's RTP timestamp instead of by a
+marker packet, and delivered. A reading above zero with `damage=+0` and
+`lost=+0` beside it is a healthy stream from a publisher that does not
+always set the marker bit, which is legal (RFC 6184 section 5.1) and which
+a real Chrome screen share did eight times in fifteen minutes on a clean
+London box on 2026-09-17. Those eight used to be counted as damage:
+discarded, and answered with a PLI. See `internal/h264`'s `Push`.
 
 Three state changes log immediately rather than waiting for the next
 window: the source going quiet and coming back (`video source idle` /
@@ -914,10 +923,12 @@ ffmpeg or `R2_TEST_MINIO_*` aren't available, matching this repo's
 infrastructure rather than assumed-present. Notably:
 
 - `internal/h264`: RTP → access-unit reassembly (single NAL, STAP-A, FU-A),
-  timestamp unwrap across a 32-bit wraparound, a lost marker packet
-  discarding the stale access unit rather than merging it into the next
-  one, and an access unit bounded at `maxAccessUnitBytes` rather than
-  growing forever when a marker never arrives.
+  timestamp unwrap across a 32-bit wraparound, a missing marker packet
+  closing the access unit on the timestamp change and DELIVERING it rather
+  than merging it into the next one (and, when that access unit ends
+  mid-NAL, discarding it instead and asking for a keyframe), and an access
+  unit bounded at `maxAccessUnitBytes` rather than growing forever when no
+  boundary ever arrives.
 - `internal/nal`: the Exp-Golomb SPS parser, round-tripped against a
   bit-writer built in the test file, for both baseline and a High-profile
   stream with an all-identity scaling matrix; `unescapeRBSP` directly,

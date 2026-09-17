@@ -18,7 +18,7 @@ func TestDepacketizer_GapHistogramBuckets(t *testing.T) {
 	var ts uint32 = 1000
 	push := func(s uint16) error {
 		ts += 3000
-		_, err := d.PushRTP(singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), s, ts, true)
+		_, err := pushRTPOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), s, ts, true)
 		return err
 	}
 	if err := push(seq); err != nil {
@@ -60,7 +60,7 @@ func TestDepacketizer_GapHistogramEmptyWithoutLoss(t *testing.T) {
 	var ts uint32 = 1000
 	for i := uint16(0); i < 20; i++ {
 		ts += 3000
-		if _, err := d.PushRTP(singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), 500+i, ts, true); err != nil {
+		if _, err := pushRTPOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), 500+i, ts, true); err != nil {
 			t.Fatalf("seq %d: %v", 500+i, err)
 		}
 	}

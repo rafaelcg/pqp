@@ -114,6 +114,15 @@ type Session struct {
 	// counts late/duplicate RTP packets the depacketizer ignored.
 	damageEpisodes   atomic.Uint64
 	videoLatePackets atomic.Uint64
+	// videoMarkerlessAUs counts access units the depacketizer closed on a
+	// timestamp change rather than on a marker packet. NOT damage and NOT
+	// a drop: the frame is delivered. It is here because a publisher that
+	// leans on the markerless boundary is worth being able to see, and
+	// because the eight of these in fifteen minutes on 2026-09-17 were
+	// being counted as damage and answered with a PLI. markerlessLogged
+	// keeps the first one to one log line per session.
+	videoMarkerlessAUs atomic.Uint64
+	markerlessLogged   atomic.Bool
 	// damageOpen is true from a discard until the next IDR: further
 	// discards inside the same wait are the same episode (one PLI).
 	damageOpen atomic.Bool
@@ -578,7 +587,7 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 // packets arrive here in sequence order, with any hole the buffer gave up
 // on left for the depacketizer's sequence check to catch.
 func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
-	au, err := s.dep.PushRTP(pkt.Payload, pkt.SequenceNumber, pkt.Timestamp, pkt.Marker)
+	aus, err := s.dep.PushRTP(pkt.Payload, pkt.SequenceNumber, pkt.Timestamp, pkt.Marker)
 	if err != nil {
 		if errors.Is(err, h264.ErrLatePacket) {
 			s.videoLatePackets.Add(1)
@@ -590,8 +599,33 @@ func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
 			s.markDamaged(now, err)
 		}
 	}
-	if au == nil {
-		return
+	// One packet can close two access units: the markerless AU in front of
+	// it plus its own, when it is a whole single-packet frame. Deliver them
+	// in the order the depacketizer returned, which is PTS order, because
+	// the fragmenter's timeline depends on it.
+	for _, au := range aus {
+		if au == nil {
+			continue
+		}
+		if !s.deliverAccessUnit(au, now) {
+			return
+		}
+	}
+}
+
+// deliverAccessUnit is the per-AU half of handleOrderedVideoPacket. It
+// returns false when the session must stop accepting access units at all
+// (it demoted itself off the LL rung); an AU that is merely skipped
+// returns true, because the ones behind it are still good.
+func (s *Session) deliverAccessUnit(au *h264.AccessUnit, now time.Time) bool {
+	if au.Markerless {
+		n := s.videoMarkerlessAUs.Add(1)
+		if s.markerlessLogged.CompareAndSwap(false, true) {
+			// Once per session: this publisher does not always set the
+			// marker bit, and that is legal. The running count is
+			// markerless= on the stats line.
+			log.Printf("pqp-remux: video: access unit closed by the RTP timestamp, no marker packet (delivered, not damage; %d so far)", n)
+		}
 	}
 
 	silence := s.idleFor(now)
@@ -619,10 +653,10 @@ func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
 			}
 		} else if !bytes.Equal(au.SPS, s.initSPS) || !bytes.Equal(au.PPS, s.initPPS) {
 			if !s.handleParameterSetChange(au) {
-				return
+				return s.DemoteReason() == ""
 			}
 			if s.DemoteReason() != "" {
-				return
+				return false
 			}
 		}
 	}
@@ -632,7 +666,7 @@ func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
 		// rather than hand the decoder slices it will reject (-12911 measured).
 		if !au.IsIDR {
 			s.damagedAUsDropped.Add(1)
-			return
+			return true
 		}
 		s.droppingDamaged.Store(false)
 	}
@@ -649,6 +683,7 @@ func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
 		s.publish(frag)
 	}
 	s.mirrorRepeatCounters()
+	return true
 }
 
 // mirrorRepeatCounters copies the fragmenter's repeat-frame counters into

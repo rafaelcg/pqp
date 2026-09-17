@@ -25,15 +25,15 @@ func fuAPkt(nalType byte, start, end bool, frag []byte) []byte {
 func TestDepacketizer_LostFragmentTailDoesNotLeakIntoNextNAL(t *testing.T) {
 	d := NewDepacketizer()
 	stale := bytes.Repeat([]byte{0xDE}, 40)
-	if au, err := d.Push(fuAPkt(1, true, false, stale), 1000, false); au != nil || err != nil {
+	if au, err := pushOne(d, fuAPkt(1, true, false, stale), 1000, false); au != nil || err != nil {
 		t.Fatalf("start fragment: au=%v err=%v", au, err)
 	}
 	fresh1 := bytes.Repeat([]byte{0x11}, 30)
 	fresh2 := bytes.Repeat([]byte{0x22}, 30)
-	if _, err := d.Push(fuAPkt(1, true, false, fresh1), 4000, false); err == nil {
+	if _, err := pushOne(d, fuAPkt(1, true, false, fresh1), 4000, false); err == nil {
 		t.Fatal("expected the timestamp-change discard to be reported")
 	}
-	au, err := d.Push(fuAPkt(1, false, true, fresh2), 4000, true)
+	au, err := pushOne(d, fuAPkt(1, false, true, fresh2), 4000, true)
 	if err != nil || au == nil {
 		t.Fatalf("end fragment: au=%v err=%v", au, err)
 	}
@@ -52,17 +52,17 @@ func TestDepacketizer_LostFragmentTailDoesNotLeakIntoNextNAL(t *testing.T) {
 func TestDepacketizer_MalformedPacketResetsReassembly(t *testing.T) {
 	d := NewDepacketizer()
 	stale := bytes.Repeat([]byte{0xDE}, 40)
-	if _, err := d.Push(fuAPkt(1, true, false, stale), 1000, false); err != nil {
+	if _, err := pushOne(d, fuAPkt(1, true, false, stale), 1000, false); err != nil {
 		t.Fatalf("start fragment: %v", err)
 	}
-	if _, err := d.Push([]byte{0x60 | 28}, 1000, false); err == nil {
+	if _, err := pushOne(d, []byte{0x60 | 28}, 1000, false); err == nil {
 		t.Fatal("expected a malformed-packet error for a one-byte FU-A")
 	}
 	fresh := bytes.Repeat([]byte{0x33}, 20)
-	if _, err := d.Push(fuAPkt(1, true, false, fresh), 1000, false); err != nil {
+	if _, err := pushOne(d, fuAPkt(1, true, false, fresh), 1000, false); err != nil {
 		t.Fatalf("fresh start: %v", err)
 	}
-	au, err := d.Push(fuAPkt(1, false, true, fresh), 1000, true)
+	au, err := pushOne(d, fuAPkt(1, false, true, fresh), 1000, true)
 	if err != nil || au == nil {
 		t.Fatalf("fresh end: au=%v err=%v", au, err)
 	}
