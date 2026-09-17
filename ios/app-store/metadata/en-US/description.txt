@@ -1,10 +1,12 @@
-pqp is an open source, Discord-like place to talk with your people: servers with text and voice channels, direct messages, and a public directory of communities to join.
+pqp is open source voice and text chat for your group, Discord-style: communities with servers, voice and text channels, direct messages, and a public directory to discover new ones.
+
+A watch party already drew over 100 people watching together in one room, in September 2026. Free, no ads, and the full source is public on GitHub.
 
 VOICE AND VIDEO
-Join a voice channel and talk with clear audio, on a peer-to-peer connection for small groups or a dedicated media server for bigger rooms, chosen automatically so you never have to think about it. Turn your camera on, watch someone else's shared screen, see who is speaking, mute or deafen yourself, and rate the call quality when you hang up. Ring a friend directly for a one-on-one call.
+Join a voice channel and talk with clear audio: a peer-to-peer connection for small groups, or a dedicated media server for bigger rooms, picked automatically by the app so you never have to think about it. Turn your camera on, watch someone else's shared screen, see who is speaking, mute or deafen yourself, and rate the call quality when you hang up. Ring a friend directly for a one-on-one call.
 
 TEXT CHAT
-Send messages with reactions, replies, threads, pinned messages and GIFs. Paste a link and get a preview. Search a server's history. Messages you send sync instantly to everyone else in the channel, on any platform.
+Send messages with reactions, replies, threads, pinned messages and GIFs. Paste a link and get a preview. Search a whole server's history. Messages you send sync instantly to everyone else in the channel, on any platform.
 
 WATCH PARTIES
 Join a watch party already in progress and watch the shared stream alongside the room's chat, with the video picking up right where the group is.

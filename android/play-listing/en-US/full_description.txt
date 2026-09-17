@@ -1,0 +1,29 @@
+pqp is an open source app to talk with your people, Discord-style: a server with text and voice channels, direct messages (including groups of up to 10), and a fast way into a community through an invite link.
+
+Free, no ads, no charge. The full source is public on GitHub.
+
+💬 TEXT CHAT
+Send messages with reactions, replies, GIFs and pinned messages. **Bold**, _italic_ and `code` formatting work right in the text. What you send reaches everyone in the channel instantly, on any platform: browser, desktop or another phone.
+
+🎙️ VOICE AND CALLS
+Join a voice channel and talk with clear audio. Ring a friend directly for a one-on-one call: it rings, and you can answer or decline like a real phone call, while the app is open. Mute your mic, flip on speakerphone, and see who is talking.
+
+🖥️ SCREEN SHARE
+Share your screen on a direct call or in a small room, sound included. Watching someone else's shared screen works in any room, big or small.
+
+👥 FRIENDS AND DMs
+Add friends by their tag, see who is online, and send direct messages, including groups of up to 10 people.
+
+📎 ATTACHMENTS
+Send any file, not just images: documents, audio, video. Open images, GIFs and video right in the chat.
+
+🔗 INVITES
+Create, list, copy and revoke an invite link for any server you manage. A pqp.gg/app/invite/... link opens straight into the app.
+
+🔒 PRIVACY
+Report a message or a person in a couple of taps. Delete your account or export your data whenever you want, right from the app.
+
+🌐 OPEN SOURCE
+AGPL license, public repository (rafaelcg/pqp). Anyone can read the code, self-host their own instance, or contribute.
+
+This is an open beta. The app ships improvements every week: camera, watch parties and the community directory are still catching up on Android, though they already work on pqp's website and desktop app.
