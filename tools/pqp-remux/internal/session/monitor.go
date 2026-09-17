@@ -286,6 +286,11 @@ type Stats struct {
 	VideoFramesSeen      uint64
 	VideoKeyframesSeen   uint64
 	VideoDepacketizeErrs uint64
+	VideoPacketsLost     uint64
+	VideoLatePackets     uint64
+	VideoReorderHeld     uint64
+	VideoDamageEpisodes  uint64
+	VideoDamagedDropped  uint64
 	PartsWritten         uint64
 	BytesWritten         uint64
 	VideoSegmentsWritten uint64
@@ -345,6 +350,11 @@ func (s *Session) Stats() Stats {
 		VideoFramesSeen:      s.videoFramesSeen.Load(),
 		VideoKeyframesSeen:   s.videoKeyframesSeen.Load(),
 		VideoDepacketizeErrs: s.videoDepacketizeErrs.Load(),
+		VideoPacketsLost:     s.dep.LostPackets(),
+		VideoLatePackets:     s.videoLatePackets.Load() + s.reorderLate(),
+		VideoReorderHeld:     s.reorderHeld(),
+		VideoDamageEpisodes:  s.damageEpisodes.Load(),
+		VideoDamagedDropped:  s.damagedAUsDropped.Load(),
 		PartsWritten:         s.partsWritten.Load(),
 		BytesWritten:         s.bytesWritten.Load(),
 		VideoSegmentsWritten: s.videoSegmentsWritten.Load(),
@@ -414,11 +424,16 @@ func formatStatsLine(label string, prev, cur Stats, window time.Duration) string
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "pqp-remux: stats %s window=%s subscribed=%t", label, window.Round(100*time.Millisecond), cur.Subscribed)
-	fmt.Fprintf(&b, " | video pkts=+%d (%.1f/s) frames=+%d (%.1f/s) idr=+%d drops=+%d parts=+%d (%.1f/s) segs=+%d keepalive=+%d idle=%t",
+	fmt.Fprintf(&b, " | video pkts=+%d (%.1f/s) frames=+%d (%.1f/s) idr=+%d drops=+%d lost=+%d late=+%d held=+%d damage=+%d damagedDropped=+%d parts=+%d (%.1f/s) segs=+%d keepalive=+%d idle=%t",
 		cur.VideoPacketsSeen-prev.VideoPacketsSeen, rate(prev.VideoPacketsSeen, cur.VideoPacketsSeen),
 		cur.VideoFramesSeen-prev.VideoFramesSeen, rate(prev.VideoFramesSeen, cur.VideoFramesSeen),
 		cur.VideoKeyframesSeen-prev.VideoKeyframesSeen,
 		cur.VideoDepacketizeErrs-prev.VideoDepacketizeErrs,
+		cur.VideoPacketsLost-prev.VideoPacketsLost,
+		cur.VideoLatePackets-prev.VideoLatePackets,
+		cur.VideoReorderHeld-prev.VideoReorderHeld,
+		cur.VideoDamageEpisodes-prev.VideoDamageEpisodes,
+		cur.VideoDamagedDropped-prev.VideoDamagedDropped,
 		cur.PartsWritten-prev.PartsWritten, rate(prev.PartsWritten, cur.PartsWritten),
 		cur.VideoSegmentsWritten-prev.VideoSegmentsWritten,
 		cur.KeepAlivePartsWrites-prev.KeepAlivePartsWrites,

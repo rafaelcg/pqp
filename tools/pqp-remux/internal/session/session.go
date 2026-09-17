@@ -16,6 +16,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -107,6 +108,17 @@ type Session struct {
 	implausibleParamSets atomic.Uint64
 	droppingDamaged      atomic.Bool
 	damagedAUsDropped    atomic.Uint64
+	// damageEpisodes counts the times droppingDamaged was armed by packet
+	// loss (a sequence gap or a discarded access unit); videoLatePackets
+	// counts late/duplicate RTP packets the depacketizer ignored.
+	damageEpisodes   atomic.Uint64
+	videoLatePackets atomic.Uint64
+	// damageOpen is true from a discard until the next IDR: further
+	// discards inside the same wait are the same episode (one PLI).
+	damageOpen atomic.Bool
+	// reorder holds out-of-order video packets briefly so a retransmission
+	// fills a hole before it counts as loss. Guarded by videoMu.
+	reorder *reorderBuffer
 	// initSPS/initPPS are the parameter sets the CURRENT init segment was
 	// built from. Compared byte-for-byte against every later in-band
 	// pair; a real change rebuilds the init. Protected by videoMu.
@@ -282,7 +294,8 @@ type Session struct {
 // set later with SetKeyframeRequester.
 func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requester) *Session {
 	s := &Session{
-		dep: h264.NewDepacketizer(),
+		dep:     h264.NewDepacketizer(),
+		reorder: newReorderBuffer(),
 		frag: pipeline.NewFragmenter(pipeline.Config{
 			Timescale:       h264.ClockRate,
 			PartDuration:    partTicks,
@@ -536,10 +549,26 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	s.videoPacketsSeen.Add(1)
 	s.lastVideoPacketAtNs.Store(now.UnixNano())
 
-	au, err := s.dep.Push(pkt.Payload, pkt.Timestamp, pkt.Marker)
+	for _, ordered := range s.reorder.push(pkt, now) {
+		s.handleOrderedVideoPacket(ordered, now)
+	}
+}
+
+// handleOrderedVideoPacket is HandleVideoPacket after the reorder buffer:
+// packets arrive here in sequence order, with any hole the buffer gave up
+// on left for the depacketizer's sequence check to catch.
+func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
+	au, err := s.dep.PushRTP(pkt.Payload, pkt.SequenceNumber, pkt.Timestamp, pkt.Marker)
 	if err != nil {
+		if errors.Is(err, h264.ErrLatePacket) {
+			s.videoLatePackets.Add(1)
+			return
+		}
 		s.videoDepacketizeErrs.Add(1)
 		s.logDepacketizeError(now, err)
+		if h264.IsDamage(err) {
+			s.markDamaged(now, err)
+		}
 	}
 	if au == nil {
 		return
@@ -554,6 +583,7 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	}
 
 	if au.IsIDR {
+		s.damageOpen.Store(false)
 		s.videoKeyframesSeen.Add(1)
 		s.lastIdrAtMs.Store(s.elapsedMs())
 		s.idrSeen.Store(true)
@@ -674,6 +704,35 @@ func (s *Session) handleParameterSetChange(au *h264.AccessUnit) bool {
 	log.Printf("pqp-remux: parameter-set change: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); published %s as a new init map",
 		oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq, uri)
 	return true
+}
+
+// markDamaged is the response to the depacketizer throwing media away: ask
+// the publisher for a keyframe at once (Requester.OnLoss, then a retry
+// every second while it is owed) instead of after the periodic gate. The
+// frames that follow may reference what was lost and are forwarded anyway:
+// a decoder conceals a missing reference for the ~300 ms until the IDR
+// lands, which every player survived for months, whereas holding those
+// frames back (tried 2026-09-17 20:04Z to 21:45Z) stretched one sample
+// across the whole wait, put PART-TARGET at seconds for the rest of the
+// session, and that is a playlist Apple refuses outright ("non-terminal
+// partial segment duration must be at least 85% of PART-TARGET") and
+// hls.js stalls on. The malformed access unit itself never goes out; that
+// is the depacketizer's job and the part that killed viewers.
+//
+// damagedEpisodes counts these; the drop-until-IDR path stays for the
+// implausible-parameter-set case only (handleParameterSetChange), where
+// the frames that follow are damaged themselves, not merely mis-referenced.
+func (s *Session) markDamaged(now time.Time, cause error) {
+	if !s.damageOpen.CompareAndSwap(false, true) {
+		return
+	}
+	s.damageEpisodes.Add(1)
+	pliSent := false
+	if kr := s.keyReq.Load(); kr != nil {
+		pliSent = kr.OnLoss(now)
+	}
+	log.Printf("pqp-remux: video damage: %v; keyframe requested (episode %d, lost=%d, pli=%t)",
+		cause, s.damageEpisodes.Load(), s.dep.LostPackets(), pliSent)
 }
 
 func (s *Session) requestDemote(reason string) {

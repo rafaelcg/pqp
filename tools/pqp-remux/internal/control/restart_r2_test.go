@@ -34,8 +34,15 @@ func singleNAL(naluType byte, rbsp []byte) []byte {
 	return append([]byte{naluType}, rbsp...)
 }
 
+// testVideoSeq hands every test packet the next RTP sequence number: the
+// depacketizer's continuity check (h264.Depacketizer.PushRTP) drops a
+// packet whose number is behind the newest one seen, which every packet
+// carrying the zero value would be.
+var testVideoSeq uint16
+
 func videoPacket(payload []byte, ts uint32, marker bool) *rtp.Packet {
-	return &rtp.Packet{Header: rtp.Header{Timestamp: ts, Marker: marker}, Payload: payload}
+	testVideoSeq++
+	return &rtp.Packet{Header: rtp.Header{SequenceNumber: testVideoSeq, Timestamp: ts, Marker: marker}, Payload: payload}
 }
 
 // realishSPS/realishPPS mirror internal/session's own test fixtures
