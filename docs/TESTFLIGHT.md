@@ -18,12 +18,102 @@ instead of a dead join URL.
 | Release API | `https://api.pqp.gg` + live Clerk publishable key in Release config |
 | Public App Store listing | Not yet |
 
-## Cutting a build
+## CI builds
 
-There is **no CI workflow for iOS**. `.github/workflows/` builds the web, the
-API, Electron and Android; the iOS build is produced on a Mac by hand, with the
-commands below. They are the ones that produced build 18, in order, and they
-work unattended.
+`.github/workflows/ios.yml` has two jobs. **build-and-test** runs on every PR
+and push to `main` that touches `ios/**`: it regenerates the Xcode project
+with `xcodegen generate` (same as a contributor's laptop, since the
+`.xcodeproj` is gitignored), builds `build-for-testing` against an iOS
+Simulator destination with `CODE_SIGNING_ALLOWED=NO`, and runs
+`test-without-building` on the `pqpTests` bundle, skipping `pqpUITests`
+(needs a running local server and a seeded Postgres, see
+`ios/pqp/UITests/TestSeed.swift`) and `AttachmentUploadTests` (the one file
+in `pqpTests` that actually opens a socket and calls a real server with S3
+storage; everything else that constructs a `.local` client only feeds it
+bytes directly). This is the check that would have caught the
+missing-localization break: the same `check-localization.py` script that
+broke `main` runs as a build phase, so a literal that never reached
+`Localizable.xcstrings` fails this job the same way it should have failed
+then.
+
+**testflight** runs on a push of a tag matching `ios-v*`, or a manual
+`workflow_dispatch`, and only after **build-and-test** passes, so the tests
+that gate a PR gate a release too. It skips cleanly with a job-summary note
+(not a red run) when its signing secrets are not set.
+
+### One-time setup (Rafael)
+
+Three secrets `testflight` needs beyond the App Store Connect API key trio
+that already exists (`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`,
+`APPLE_API_ISSUER`, the same ones Electron notarization uses):
+
+1. **Export the Apple Distribution certificate as a `.p12`.** Keychain
+   Access → My Certificates → find `Apple Distribution: Rafael Cammarano
+   Guglielmi (WXBFUF9WMA)` → expand it, select both the certificate and its
+   private key → right-click → Export 2 items… → File Format `.p12` → set a
+   password (this becomes `IOS_DIST_CERT_PASSWORD`, not the login keychain
+   password).
+2. **Download the two App Store provisioning profiles** from
+   [the developer portal](https://developer.apple.com/account/resources/profiles/list):
+   `pqp appstore` (app, `gg.pqp.app`) and `pqp broadcast appstore` (the
+   ReplayKit extension, `gg.pqp.app.broadcast`). Both are needed, since a
+   profile is scoped to one bundle id and the archive step signs both
+   targets.
+3. **Base64 everything and set the secrets** (`gh secret set NAME --repo
+   rafaelcg/pqp` reads from stdin, so nothing touches shell history):
+
+   ```bash
+   base64 -i DistributionCert.p12 | tr -d '\n' | gh secret set IOS_DIST_CERT_P12_B64 --repo rafaelcg/pqp
+   gh secret set IOS_DIST_CERT_PASSWORD --repo rafaelcg/pqp   # the password chosen in step 1
+   base64 -i "pqp appstore.mobileprovision" | tr -d '\n' | gh secret set IOS_PROVISIONING_PROFILE_B64 --repo rafaelcg/pqp
+   base64 -i "pqp broadcast appstore.mobileprovision" | tr -d '\n' | gh secret set IOS_BROADCAST_PROVISIONING_PROFILE_B64 --repo rafaelcg/pqp
+   ```
+
+Until all four are set, `testflight` skips the archive/export/upload steps
+entirely and says which secrets are missing in the job summary, rather than
+failing red or building something with the wrong identity.
+
+Optional: create a GitHub Environment named `ios-testflight` (Settings →
+Environments) with a required reviewer, the same protection PR 679 put on
+Android's `play-production` environment. With no environment configured, the
+job just runs unattended on a matching tag or dispatch, same as before.
+
+### Per-release flow
+
+```bash
+git tag ios-v1.1 && git push origin ios-v1.1
+```
+
+Watch the "iOS" workflow: build-and-test, then archive, export and upload to
+TestFlight (the internal `Team` group gets it automatically; the public
+`Beta` group still needs the manual Beta App Review and group-add steps under
+"Put it in front of testers" below, which CI does not do). The `.ipa` is
+also attached to the run as the `pqp-ios-ipa` artifact, in case it needs
+inspecting or uploading by hand.
+
+A `workflow_dispatch` run does the same thing without a tag, for a one-off
+build.
+
+### Build numbers
+
+CI computes `CFBundleVersion` as `100000 + <run number of the iOS workflow>`
+and writes it into both `ios/pqp/Info.plist` and
+`ios/pqp/Broadcast/Info.plist` before archiving; it does not read or bump the
+committed value, so the two numbers in git stay whatever they were last set
+to by hand. The offset exists so a CI-cut build number can never collide
+with a hand-cut one: this repo's `CFBundleVersion` is 32 as of this writing,
+and App Store Connect's own build list is the authoritative answer to "which
+number is highest" (`GET /v1/builds?filter[app]=6799265799&sort=-version`),
+not this file. Before the very first CI-cut upload, confirm 100000 is still
+comfortably above whatever ASC's highest build actually is. If a very long
+run of CI builds ever approaches six digits, raise the offset in `ios.yml`
+rather than letting it collide.
+
+## Cutting a build by hand
+
+The commands below are what produced build 18, in order, and they still work
+unattended if CI is ever unavailable, or for a build that needs a
+non-default option CI does not offer.
 
 ### 1. Bump both build numbers
 
