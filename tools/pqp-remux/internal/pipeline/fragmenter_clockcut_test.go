@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -34,6 +36,8 @@ type fakeRepeater struct {
 	// unavailable makes Repeat return nil, which is how skipframe
 	// reports a stream it cannot synthesize into.
 	unavailable bool
+	// mark is stamped into every frame this repeater writes.
+	mark byte
 }
 
 func (r *fakeRepeater) Observe(avcc []byte, isIDR bool) []byte {
@@ -46,7 +50,11 @@ func (r *fakeRepeater) Repeat() []byte {
 		return nil
 	}
 	r.frames++
-	return []byte{0, 0, 0, 4, 0x41, 0x9A, 0x00, byte(r.frames)}
+	// The mark byte stands in for everything a real repeat frame carries
+	// that is only valid for ONE parameter set (the picture's macroblock
+	// count, above all), so a test can tell which repeater wrote a
+	// sample the way a decoder tells which init it belongs to.
+	return []byte{0, 0, 0, 4, 0x41, 0x9A, r.mark, byte(r.frames)}
 }
 
 func clockCutFragmenter() (*Fragmenter, *fakeRepeater) {
@@ -147,8 +155,11 @@ func TestClockCut_AStalledSourceStillProducesBoundedParts(t *testing.T) {
 	if rep.frames == 0 {
 		t.Fatal("no repeat frame was synthesized, so the stall was published as one long part")
 	}
-	if got, want := tl.total, uint64(pts); got != want {
-		t.Fatalf("published %d ticks of media across a %d-tick span: the stall was not covered exactly", got, want)
+	// Every part starts exactly where the previous one ended (timelineCheck
+	// enforces that on each add), so the only media not yet published is
+	// whatever is in the part still open, which is less than one target.
+	if short := pts - int64(tl.total); short < 0 || short >= partDuration {
+		t.Fatalf("published %d ticks of media across a %d-tick span, %d short: the stall was not covered", tl.total, pts, short)
 	}
 }
 
@@ -429,4 +440,191 @@ func TestClockCut_AFreezeThatNeverEndsStopsFillingEventually(t *testing.T) {
 	if parts > limit+1 {
 		t.Fatalf("%d parts from a ten minute freeze; the cap is %d plus the single held-frame part", parts, limit)
 	}
+}
+
+// A SOURCE THAT IS SENDING FRAMES NEEDS NO SYNTHESIZED ONES. At 29 fps a
+// 500ms boundary almost never lands exactly on a frame, and the frame
+// 34ms earlier is a perfectly good place to cut: the part carries whole
+// frames, nothing is synthesized, and nothing downstream is renumbered.
+// London staging measured the opposite before this existed, on a source
+// with no loss at all: repeats=+6..10 against cuts=+9..10 every five
+// seconds, and 3343 real slices renumbered in two and a half minutes.
+func TestClockCut_AnOrdinaryFrameRateNeedsNoRepeatFrames(t *testing.T) {
+	for _, fps := range []float64{29, 29.97, 24, 15.1, 60} {
+		t.Run(fmt.Sprintf("%.2f fps", fps), func(t *testing.T) {
+			f, rep := clockCutFragmenter()
+			tl := &timelineCheck{t: t}
+			var frags []*Fragment
+			step := int64(float64(timescale) / fps)
+			for i := int64(0); i < int64(fps*20); i++ {
+				out, err := f.Push(au(i*step, i == 0))
+				if err != nil {
+					t.Fatalf("frame %d: %v", i, err)
+				}
+				for _, frag := range out {
+					tl.add(frag)
+					frags = append(frags, frag)
+				}
+			}
+			if rep.frames != 0 {
+				t.Fatalf("%d frames synthesized for a source sending %.2f frames a second: a real frame boundary was available every time", rep.frames, fps)
+			}
+			if len(frags) < 30 {
+				t.Fatalf("only %d parts in twenty seconds", len(frags))
+			}
+			checkPartBounds(t, frags)
+			for i, frag := range frags {
+				if frag.DurationTicks < uint32(f.partFloorTicks()) {
+					t.Fatalf("part %d lasts %d ticks, under the %d-tick floor this cut is allowed to use",
+						i, frag.DurationTicks, f.partFloorTicks())
+				}
+			}
+		})
+	}
+}
+
+// Below about 13 frames a second there is no real frame inside the
+// window, so the repeat is the only thing that can bound the part. That
+// is the case the whole synthesizer exists for and it must still fire.
+func TestClockCut_ASlowSourceStillNeedsRepeatFrames(t *testing.T) {
+	f, rep := clockCutFragmenter()
+	tl := &timelineCheck{t: t}
+	var frags []*Fragment
+	// 1.4 frames a second, the rate a static Chrome tab share sends: the
+	// gaps are LONGER than a part, so some parts contain no real frame at
+	// all and only a synthesized one can bound them. (A source at exactly
+	// two frames a second would land on every boundary and need none.)
+	const step = timescale * 10 / 14
+	for i := int64(0); i < 20; i++ {
+		out, err := f.Push(au(i*step, i == 0))
+		if err != nil {
+			t.Fatalf("frame %d: %v", i, err)
+		}
+		for _, frag := range out {
+			tl.add(frag)
+			frags = append(frags, frag)
+		}
+	}
+	if rep.frames == 0 {
+		t.Fatal("no frame synthesized for a two frames a second source: its parts can only be bounded by filling")
+	}
+	checkPartBounds(t, frags)
+}
+
+// THE 2026-09-17 STAGING BUG. Chrome moved a capture from 1280x720 to
+// 1282x720; the session built a synthesizer for the new parameter sets
+// and handed it over at once, and the last part of the OLD segment, the
+// one EXT-X-MAP still points at the old init for, was filled with a frame
+// written for the new picture. ffmpeg on that segment: "mb_skip_run 3645
+// is invalid", "error while decoding MB 0 0". A replacement repeater must
+// not write a single sample before the segment its init describes opens.
+func TestClockCut_ANewRepeaterWaitsForTheSegmentBoundary(t *testing.T) {
+	f, old := clockCutFragmenter()
+	old.mark = 0xA0
+	next := &fakeRepeater{mark: 0xB0}
+
+	segmentOf := map[uint32]int{}
+	marksIn := map[int]map[byte]bool{}
+	collect := func(frags []*Fragment) {
+		t.Helper()
+		for _, frag := range frags {
+			segmentOf[frag.SequenceNumber] = frag.SegmentIndex
+			if marksIn[frag.SegmentIndex] == nil {
+				marksIn[frag.SegmentIndex] = map[byte]bool{}
+			}
+			for _, m := range marksInFragment(t, frag) {
+				marksIn[frag.SegmentIndex][m] = true
+			}
+		}
+	}
+
+	// 1.4 frames a second, so gaps are longer than a part and every
+	// boundary needs a synthesized frame.
+	const step = timescale * 10 / 14
+	pts := int64(0)
+	out, err := f.Push(au(pts, true))
+	if err != nil {
+		t.Fatalf("first IDR: %v", err)
+	}
+	collect(out)
+	for i := 0; i < 6; i++ {
+		pts += step
+		out, err := f.Push(au(pts, false))
+		if err != nil {
+			t.Fatalf("frame at %d: %v", pts, err)
+		}
+		collect(out)
+	}
+
+	// The publisher's parameter sets change: the session arms the
+	// replacement and forces the next IDR to close the segment. Both
+	// happen BEFORE that IDR is pushed, exactly as session.go does it.
+	f.SetRepeaterAtNextSegment(next)
+	f.ForceSegmentBoundary()
+	openSegment := f.CurrentSegmentIndex()
+
+	pts += step
+	out, err = f.Push(au(pts, true))
+	if err != nil {
+		t.Fatalf("the IDR carrying the new parameter sets: %v", err)
+	}
+	collect(out)
+	for i := 0; i < 6; i++ {
+		pts += step
+		out, err := f.Push(au(pts, false))
+		if err != nil {
+			t.Fatalf("frame at %d: %v", pts, err)
+		}
+		collect(out)
+	}
+	if last, err := f.Flush(); err == nil && last != nil {
+		collect([]*Fragment{last})
+	}
+
+	if f.CurrentSegmentIndex() == openSegment {
+		t.Fatal("the forced segment boundary never happened, so this test proves nothing")
+	}
+	if next.frames == 0 {
+		t.Fatal("the replacement repeater never wrote a frame")
+	}
+	for seg, marks := range marksIn {
+		want := old.mark
+		if seg > openSegment {
+			want = next.mark
+		}
+		for m := range marks {
+			if m != want {
+				t.Fatalf("segment %d carries a frame from the %#x repeater, want %#x: that part is listed under the other init segment and will not decode",
+					seg, m, want)
+			}
+		}
+	}
+}
+
+// marksInFragment returns the mark byte of every synthesized sample in a
+// fragment, read back out of the mdat the way a decoder would find them.
+func marksInFragment(t *testing.T, frag *Fragment) []byte {
+	t.Helper()
+	var out []byte
+	for _, b := range parseBoxes(t, frag.Bytes) {
+		if b.Type != "mdat" {
+			continue
+		}
+		buf := b.Body
+		for len(buf) >= 4 {
+			n := binary.BigEndian.Uint32(buf[:4])
+			buf = buf[4:]
+			if uint64(n) > uint64(len(buf)) {
+				t.Fatalf("mdat sample runs past the box")
+			}
+			nal := buf[:n]
+			buf = buf[n:]
+			// The fake repeater writes 0x41 0x9A <mark> <n>; a real
+			// access unit in these tests is the 0x65 sample from au().
+			if len(nal) == 4 && nal[0] == 0x41 && nal[1] == 0x9A {
+				out = append(out, nal[2])
+			}
+		}
+	}
+	return out
 }

@@ -705,7 +705,10 @@ func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) b
 	s.initSPS = append([]byte(nil), sps...)
 	s.initPPS = append([]byte(nil), pps...)
 	s.initSet.Store(true)
-	s.refreshRepeater(sps, pps)
+	// discontinuity is exactly "these are new parameter sets, not the
+	// session's first", which is also exactly when the replacement
+	// synthesizer has to wait for the segment boundary.
+	s.refreshRepeater(sps, pps, discontinuity)
 	gen := s.initGeneration.Add(1)
 	r2Name := "video-init.mp4"
 	if gen > 1 {
@@ -727,22 +730,37 @@ func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) b
 // A stream the synthesizer refuses leaves the fragmenter with no
 // repeater, which is exactly its pre-clock-cut behaviour: parts close on
 // access units and may run long. That is a log line, never an error.
-func (s *Session) refreshRepeater(sps, pps []byte) {
+//
+// atNextSegment says the parameter sets CHANGED rather than arrived, in
+// which case the replacement must not take over until the segment that
+// the new init describes actually opens. Swapping any earlier writes
+// frames for the new picture size into the last part of the old segment,
+// which is undecodable against the init that part is listed under: it
+// happened on London staging on 2026-09-17 at 23:11:00Z, one part wide,
+// "mb_skip_run 3645 is invalid" from ffmpeg. See
+// pipeline.Fragmenter.SetRepeaterAtNextSegment.
+func (s *Session) refreshRepeater(sps, pps []byte, atNextSegment bool) {
 	if !s.clockCutParts {
 		return
 	}
+	arm := s.frag.SetRepeater
+	when := "now"
+	if atNextSegment {
+		arm = s.frag.SetRepeaterAtNextSegment
+		when = "at the next segment boundary"
+	}
 	synth, err := skipframe.New(sps, pps)
 	if err != nil {
-		log.Printf("pqp-remux: clock-cut parts unavailable for this stream: %v", err)
+		log.Printf("pqp-remux: clock-cut parts unavailable for this stream (%s): %v", when, err)
 		s.synth = nil
-		s.frag.SetRepeater(nil)
+		arm(nil)
 		return
 	}
 	synth.Inherit(s.synth)
 	s.synth = synth
-	s.frag.SetRepeater(synth)
-	log.Printf("pqp-remux: clock-cut parts armed: parts close on the clock, gaps filled with repeat frames (inserted=%d renumbered=%d)",
-		synth.Inserted(), synth.Rewritten())
+	arm(synth)
+	log.Printf("pqp-remux: clock-cut parts armed %s: parts close on the clock, gaps filled with repeat frames (inserted=%d renumbered=%d)",
+		when, synth.Inserted(), synth.Rewritten())
 }
 
 // handleParameterSetChange rebuilds the init segment when the publisher's

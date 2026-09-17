@@ -150,6 +150,29 @@ type Fragmenter struct {
 	// closes on an access unit, exactly as before clock cutting existed.
 	// See SetRepeater.
 	repeat Repeater
+	// nextRepeat is a repeater that takes over when the NEXT segment
+	// opens, rather than immediately. haveNextRepeat distinguishes "a nil
+	// repeater is armed" (the publisher's new parameter sets cannot be
+	// synthesized into) from "nothing is armed".
+	//
+	// WHY THE SWAP HAS TO WAIT. A repeat frame carries the picture's
+	// macroblock count, so it is only valid for the parameter sets it was
+	// written against, and a segment is described by exactly one init
+	// segment. The publisher's parameter sets change ON an IDR, which is
+	// also the IDR that opens the next segment, so swapping the moment
+	// the session hears about the change puts frames written for the NEW
+	// init into the part that closes the OLD segment.
+	//
+	// THAT IS NOT HYPOTHETICAL. London staging, 2026-09-17 23:11:00Z:
+	// Chrome moved a capture from 1280x720 to 1282x720, and the last part
+	// of segment 30 (which EXT-X-MAP still pointed at the 80x45 init)
+	// held one synthesized frame with mb_skip_run 3645, the macroblock
+	// count of the 81x45 picture that had not started yet. ffmpeg on that
+	// segment: "mb_skip_run 3645 is invalid", "error while decoding MB 0
+	// 0". One part, undecodable, at exactly the moment a viewer switches
+	// init segments.
+	nextRepeat     Repeater
+	haveNextRepeat bool
 	// anchorPTS is where the last REAL access unit sits on the
 	// publisher's clock, and the only thing IdleFlush extrapolates from.
 	// It deliberately does not move for a synthesized frame: heldTicks is
@@ -182,6 +205,22 @@ type Fragmenter struct {
 	consecutiveRepeats int
 	repeatFrames       uint64
 	clockCuts          uint64
+}
+
+// partFloorTicks is the shortest a non-terminal part is allowed to be:
+// the point past which cutting on a real frame instead of on the clock is
+// safe. The spec floor is 85% of PART-TARGET (RFC 8216bis 4.4.4.9), and
+// this deliberately keeps a margin above it, because PART-TARGET is NOT
+// this fragmenter's own part duration: llstate advertises the longest
+// part across BOTH renditions, and the audio rung batches whole AAC
+// frames, so its parts round UP to the next 21.3ms (512ms against a
+// 500ms PART_MS, about 5% above). A video part cut at exactly 85% of
+// PART_MS would be 81% of that advertised target and fatal to AVPlayer.
+// 90% of PART_MS covers the audio rounding and the playlist's own
+// three-decimal duration rendering with room to spare, and still lets
+// every source above about 13 frames a second cut on a real frame.
+func (f *Fragmenter) partFloorTicks() int64 {
+	return int64(f.cfg.PartDuration) * 90 / 100
 }
 
 // maxFillSeconds is how long a single gap may be filled with synthesized
@@ -291,6 +330,28 @@ func (f *Fragmenter) CurrentSequence() uint32 { return f.seq }
 // open part.
 func (f *Fragmenter) SetRepeater(r Repeater) { f.repeat = r }
 
+// SetRepeaterAtNextSegment arms a replacement repeater to take over when
+// the next segment opens, which is where the init segment describing
+// those parameter sets takes over too. Use it for every parameter-set
+// change; SetRepeater's immediate swap is only correct before any part
+// has been cut. Arming nil is meaningful: it says the new parameter sets
+// cannot be synthesized into, so cutting stops at the same boundary.
+func (f *Fragmenter) SetRepeaterAtNextSegment(r Repeater) {
+	f.nextRepeat, f.haveNextRepeat = r, true
+}
+
+// adoptNextRepeater applies whatever SetRepeaterAtNextSegment armed. It is
+// called at the three places a segment opens, always BEFORE the opening
+// access unit is held: that AU is the IDR carrying the new parameter
+// sets, so the new repeater is the one that must observe it.
+func (f *Fragmenter) adoptNextRepeater() {
+	if !f.haveNextRepeat {
+		return
+	}
+	f.repeat, f.nextRepeat, f.haveNextRepeat = f.nextRepeat, nil, false
+	f.consecutiveRepeats = 0
+}
+
 // clockCutting reports whether this Push may cut a part on the clock:
 // the flag is on, a repeater is set, and the part target is a real
 // duration. Whether the repeater can actually serve THIS stream is asked
@@ -320,6 +381,7 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) ([]*Fragment, error) {
 		f.haveFirstIDR = true
 		f.segmentStart = au.PTS
 		f.partStart = au.PTS
+		f.adoptNextRepeater()
 		f.setPending(au, au.PTS)
 		return nil, nil
 	}
@@ -362,6 +424,7 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) ([]*Fragment, error) {
 			f.segmentIndex++
 			f.segmentStart = f.resumePTS
 			f.nextIsSegmentStart = true
+			f.adoptNextRepeater()
 		}
 		f.setPending(au, f.resumePTS)
 		f.pendingTruePTS = au.PTS + f.ptsOffset
@@ -437,6 +500,9 @@ func (f *Fragmenter) Push(au *h264.AccessUnit) ([]*Fragment, error) {
 		f.segmentStart = pts
 		f.partStart = pts
 		f.nextIsSegmentStart = true
+		// The old segment is closed and every frame in it came from the
+		// repeater that matches its init; this AU opens the new one.
+		f.adoptNextRepeater()
 		f.setPending(au, pts)
 		return out, nil
 
@@ -483,6 +549,30 @@ func (f *Fragmenter) cutToBoundaries(target int64, fillAtTarget bool) ([]*Fragme
 	partDur := int64(f.cfg.PartDuration)
 	for target >= f.partStart+partDur {
 		boundary := f.partStart + partDur
+		// PREFER A REAL FRAME BOUNDARY. The held frame begins at
+		// pendingPTS, and if that instant is late enough in the part to
+		// satisfy the 85% floor, closing the part THERE costs nothing:
+		// the part carries only whole frames, the held frame opens the
+		// next part with its own full duration, and no frame has to be
+		// synthesized at all. Only when no real frame sits in the
+		// window -- a source slower than about 13 frames a second, or a
+		// stall -- is a repeat the only way to bound the part.
+		//
+		// Measured on a London staging box, 2026-09-17, before this
+		// existed: a 29 fps source with no loss at all produced
+		// repeats=+6..10 against cuts=+9..10 in every five second
+		// window, because at 29 fps a 500ms boundary almost never lands
+		// exactly on a frame. Every one of those parts ended on a
+		// synthesized frame and every real slice after it was
+		// renumbered (renumbered=3343 after two and a half minutes) for
+		// no reason: the frame 34ms earlier was a perfectly good place
+		// to cut.
+		if !fillAtTarget && f.pendingPTS > f.partStart && f.pendingPTS-f.partStart >= f.partFloorTicks() {
+			out = append(out, f.closePart(uint32(f.pendingPTS-f.partStart)))
+			f.clockCuts++
+			f.partStart = f.pendingPTS
+			continue
+		}
 		var rep []byte
 		if target > boundary || fillAtTarget {
 			if f.consecutiveRepeats >= f.maxConsecutiveRepeats() {
