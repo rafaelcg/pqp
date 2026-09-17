@@ -1033,6 +1033,43 @@ describe("the presenter as a live ladder's source", () => {
     expect(last!.degradationPreference).toBe("maintain-framerate");
   });
 
+  it("deactivates a sub-layer dynacast turned back on, on the next tick", async () => {
+    // DYNACAST IS A SECOND WRITER ON THE SAME ENCODINGS. The room is built
+    // with `dynacast: true`, and livekit-client's `setPublishingLayersForSender`
+    // sets `encoding.active = subscribedQuality.enabled` off the SFU's
+    // `SubscribedQualityUpdate`, so the moment any seated participant wants
+    // the small copy of the share, the 360p rung this session deactivated for
+    // the egress is switched back on underneath us.
+    //
+    // Nothing noticed: `hlsLayersTrimmed` still said trimmed, and the 2 s
+    // repair tick (`screenHlsEncoderUnpinned`) only compared
+    // `degradationPreference` and `scaleResolutionDownBy`. The pin has to
+    // include `active`, or the layer stays up for the rest of the party.
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const sender = publications.get(Track.Source.ScreenShare)!.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+    };
+    expect(sender.getParameters().encodings[0]?.active).toBe(false);
+
+    // Dynacast, writing straight onto the live parameters as the library does.
+    sender.getParameters().encodings[0]!.active = true;
+    const writesBefore = senderWrites.length;
+
+    // The next 2 s sample. Same ladder, same uplink: nothing else changed.
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+
+    const repair = senderWrites
+      .slice(writesBefore)
+      .filter((write) => write.source === Track.Source.ScreenShare)
+      .at(-1);
+    expect(repair).toBeTruthy();
+    expect(repair!.encodings[0]?.active).toBe(false);
+    expect(repair!.encodings[1]?.active).toBe(false);
+    expect(repair!.encodings[2]?.active).not.toBe(false);
+  });
+
   it("restores every sub-layer when the ladder stops and the share continues", async () => {
     const sfu = await session();
     await sfu.publishScreen(fakeStream("video", "screen", 1080));

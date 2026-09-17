@@ -1,6 +1,7 @@
 import type { VoiceSignalingMessage } from "@pqp/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
+import type { HlsSourceInput } from "@/lib/video-quality";
 
 /**
  * THE CAMERA IS HELD SMALL WHILE THIS MACHINE FEEDS THE WATCH PARTY, AND GIVEN
@@ -64,6 +65,8 @@ vi.mock("@/lib/peer-connection-manager", () => ({
 
 /** Every camera ceiling the SFU session was handed, in order. */
 const cameraCeilings: number[] = [];
+/** Every `setHlsSource` the SFU session was handed, in order. */
+const hlsSources: (HlsSourceInput | null)[] = [];
 let ladderReconciles = 0;
 /**
  * When set, `setCameraMaxBitrate` hangs on this promise before resolving —
@@ -99,7 +102,9 @@ vi.mock("@/lib/livekit-session", () => ({
     setScreenQuality: async () => {},
     setScreenHlsPublishHeight: () => {},
     setReceiveQuality: async () => {},
-    setHlsSource: async () => {},
+    setHlsSource: async (next: HlsSourceInput | null) => {
+      hlsSources.push(next);
+    },
     setAudioDelivery: () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
@@ -240,6 +245,27 @@ function voiceStream(topHeight: number | null): VoiceSignalingMessage {
   } as VoiceSignalingMessage;
 }
 
+/**
+ * The same frame an LL session sends. A remux session is a CMAF PASSTHROUGH,
+ * so it never transcodes a ladder and never states a `topHeight`
+ * (`server/src/voice/hls-remux.ts` builds the stream with `mode` and
+ * `partTargetMs` and nothing about size).
+ */
+function llVoiceStream(): VoiceSignalingMessage {
+  return {
+    type: "voice-stream",
+    channelId: CHANNEL,
+    stream: {
+      hlsUrl: `/api/voice/hls-playlist/${CHANNEL}/1?mode=ll`,
+      startedAt: 1,
+      presenterPeerId: PEER,
+      delaySeconds: 4,
+      mode: "ll",
+      partTargetMs: 500,
+    },
+  } as VoiceSignalingMessage;
+}
+
 function createTransport() {
   const sent: { type: string; [key: string]: unknown }[] = [];
   const transport: RealtimeTransport = {
@@ -293,6 +319,7 @@ const AUTO_BPS = 1_500_000;
 beforeEach(() => {
   installBrowserStubs();
   cameraCeilings.length = 0;
+  hlsSources.length = 0;
   cameraRequests.length = 0;
   appliedConstraints.length = 0;
   ladderReconciles = 0;
@@ -328,6 +355,28 @@ describe("the presenter's camera while a watch party is transcoding", () => {
     expect(appliedConstraints.at(-1)).toMatchObject({
       height: { ideal: 720 },
     });
+  });
+
+  it("treats a low-latency party as live even though it states no ladder top", async () => {
+    // MEASURED IN PRODUCTION, 2026-09-17. An LL presenter's screen share had
+    // TWO active outbound encodings for a whole 21 minute party (rid=q 640x360
+    // at 423 kbps beside rid=h 1280x720 at 3.2 Mbit/s), because this wiring
+    // read "no `topHeight`" as "no egress is running": the session was handed
+    // `setHlsSource(null)`, so the share was never pinned, its 360p rung was
+    // never deactivated, and the camera was never capped either. The remux
+    // subscribes to the top layer only, so that rung was pure waste on the
+    // presenter's home uplink, and a second stream of keyframes.
+    const { voice } = await presentingHost();
+    await voice.toggleCamera();
+    await settle();
+    expect(cameraCeilings.at(-1)).toBe(AUTO_BPS);
+
+    voice.handleSignaling(llVoiceStream());
+    await settle();
+
+    expect(hlsSources.at(-1)).not.toBeNull();
+    expect(hlsSources.at(-1)?.ladderTopHeight).toBeGreaterThan(0);
+    expect(cameraCeilings.at(-1)).toBe(CAP_BPS);
   });
 
   it("captures a camera opened mid-party small rather than shrinking it after", async () => {

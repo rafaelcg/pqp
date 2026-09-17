@@ -1287,6 +1287,10 @@ export function createVoiceController(transport: RealtimeTransport) {
   async function refreshHlsSource(): Promise<void> {
     const wanted = hlsSourceFor({
       streamTopHeight: state.liveStream?.topHeight,
+      // An LL session never states a top: the remux forwards the top layer
+      // rather than transcoding a ladder, so the mode is the only thing on
+      // the frame that says an egress is running at all.
+      streamMode: state.liveStream?.mode,
       isSharingScreen: state.isSharingScreen,
       usingSfu: state.usingSfu,
       uplinkBps: null,
