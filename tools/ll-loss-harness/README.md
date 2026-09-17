@@ -95,15 +95,64 @@ SPS/PPS or the first post-ramp IDR.
   Docker host with a Linux-kernel VM under it (Docker Desktop provides
   one) works, because `netem` is a Linux `tc` qdisc.
 
+## What this now asserts (since pqp-remux#700)
+
+This harness was built to *reproduce* the decode-death symptom, and it
+did: `./run.sh 30` reliably FAILed with the exact production
+`MEDIA_ERR_DECODE` / VideoToolbox `-12909` error (see "Verified results
+(2026-09-16)" below). `pqp-remux#700` (merged 2026-09-17, prompted by a
+live production repeat of the same symptom the next night) fixed the
+cause it reproduces: `h264.Depacketizer.PushRTP` now checks RTP sequence
+continuity, discards the access unit a gap lands in, and asks the
+publisher for a keyframe at once (`keyframe.Requester.OnLoss`) instead of
+waiting for the periodic no-IDR gate. So the harness's job changed from
+"prove the bug exists" to "prove the fix stays in place" — it is a
+regression loop now, not a one-shot repro.
+
+**Expected outcome today, at any `LOSS_PCT>0`:**
+
+- `./run.sh 0` — PASS, unchanged. Clean path, no loss, nothing to defend.
+- `./run.sh 15` / `./run.sh 30` — **PASS** (the player must stay alive: no
+  `MEDIA_ERR_DECODE`, live edge held through the tail of the watch
+  window), **and** the remuxd log must show the defense actually firing:
+  a `pqp-remux: video damage: ...` line (`markDamaged` in `session.go`,
+  once per loss episode) and nonzero `lost=+N` / `damage=+N` on the
+  periodic `pqp-remux: stats ...` line (`formatStatsLine`, added by
+  #700). `run.sh` checks both and prints "remux loss defense: observed"
+  or "NOT observed" in its summary.
+
+A `PASS` verdict from hls.js **alone** is not proof of anything at
+`LOSS_PCT>0` — `netem` is probabilistic, so a run where it happened not to
+drop a packet this time would also PASS, silently, whether or not the fix
+is still in the tree. That is why `run.sh` treats "hls.js PASS but no
+`video damage:` line and no nonzero lost/damage stat" as an overall FAIL
+even though the player never errored: it means this run proved nothing,
+which is functionally the same danger as the regression itself going
+uncaught. See `run.sh`'s own header comment and the "remux loss defense"
+line in its printed summary for exactly what it checked.
+
+**This is what makes it a regression loop**: remove or weaken the
+sequence check and one of two things happens, both of which flip `run.sh`
+back to a nonzero exit —
+
+1. The decode-death symptom comes back (the original failure mode this
+   harness was built to catch), or
+2. hls.js happens to survive this particular run's loss pattern anyway
+   (LL-HLS's own resilience, or luck), but the remuxd log shows no
+   defense fired, which `run.sh` now also treats as red.
+
 ## Running it
 
 ```bash
 cd tools/ll-loss-harness
-./run.sh          # LOSS_PCT=0 -- clean path
-./run.sh 15       # 15% loss
+./run.sh          # LOSS_PCT=0 -- clean path, unaffected by #700
+./run.sh 15       # 15% loss -- expect PASS + "remux loss defense: observed"
 ./run.sh 30       # 30% loss -- the measured production ceiling
-                  # (docs/plans/LL_HLS.md); FAILing here is expected and
-                  # informative, not a bug in the harness
+                  # (docs/plans/LL_HLS.md); expect PASS + "remux loss
+                  # defense: observed". A FAIL here (decode-death, or
+                  # PASS with no observed defense) means the #700
+                  # sequence check has regressed -- see "Forcing a red
+                  # run" below to confirm the loop can still catch that.
 ```
 
 Each run is self-contained: it clears any containers a previous run left
@@ -124,14 +173,21 @@ the allowlist above before use).
 ### What PASS/FAIL means
 
 Printed as `VERDICT: PASS (...)` or `VERDICT: FAIL (...)` by
-`harness/run.mjs`, and surfaced again in `run.sh`'s summary block; the
-process exit code is 0 for PASS, 1 for FAIL.
+`harness/run.mjs` itself (hls.js/player evidence only), and surfaced
+again in `run.sh`'s summary block. `run.sh`'s own **process exit code**
+is not always the same as that line: since #700, at `LOSS_PCT>0` it also
+requires the remuxd log to show the loss defense firing (see "What this
+now asserts" above) and overrides the exit code to 1 if hls.js PASSed but
+the remuxd log shows no `video damage:` line / no nonzero `lost=+`/
+`damage=+` stat — printed as "remux loss defense: NOT observed" plus an
+explicit `overall: FAIL` line, so reading only the top-level exit code
+never hides that half of the check.
 
-- **PASS** — no `MEDIA_ERR_DECODE` (video element error code 3) anywhere
-  in the run, AND the viewer reached "playing" AND held the live edge
-  through the tail of the watch window (`currentTime` still advancing,
-  `readyState >= 3`, in the last ~8s) — not just an initial buffer fill
-  that then froze.
+- **PASS** (`harness/run.mjs`'s own verdict) — no `MEDIA_ERR_DECODE`
+  (video element error code 3) anywhere in the run, AND the viewer
+  reached "playing" AND held the live edge through the tail of the watch
+  window (`currentTime` still advancing, `readyState >= 3`, in the last
+  ~8s) — not just an initial buffer fill that then froze.
 - **FAIL**, with a reason:
   - `decode-death` — the exact production symptom: a `video:error` with
     code 3, or an hls.js `ERROR` event carrying `mediaErr` starting `3:`.
@@ -144,9 +200,9 @@ Every run's artifacts land in `.data/runs/<run-id>/`: `build.log`,
 `hlsjs.log` (`run.mjs`'s full event dump — error summary, level/tick
 history, the 6s of events immediately before any `video:error`),
 `remuxd-full.log` and `remuxd-relevant.log` (grepped for parameter-set
-changes, discards, demotes, IDR/stall lines).
+changes, discards, demotes, IDR/stall/damage/loss lines).
 
-### Verified results (2026-09-16, this Mac)
+### Verified results (2026-09-16, this Mac — before pqp-remux#700)
 
 ```
 ./run.sh 0   -> VERDICT: PASS (reached-and-held-live-edge)
@@ -157,11 +213,13 @@ changes, discards, demotes, IDR/stall lines).
                remux discard mentions: 57 (vs. 1 at loss=0)
 ```
 
-`./run.sh 30`'s FAIL is the point, not a bug: it is the same VideoToolbox
-`-12909` decode death production shows, reproduced locally and
-deterministically, so a fix to the remux's parameter-set/discard handling
-(the PR #657/#658 family) can be re-run against this exact case and
-measured — PASS where it used to FAIL — without a live watch party.
+That `./run.sh 30` FAIL was the point at the time, not a bug: it was the
+same VideoToolbox `-12909` decode death production showed, reproduced
+locally and deterministically. `pqp-remux#700` is the fix this repro
+exists to measure against — see "What this now asserts" above for what
+`./run.sh 30` is expected to report today, and "Forcing a red run" below
+for how to get the pre-#700 FAIL back on demand to confirm the loop still
+catches it.
 
 ## Loss injection: exactly what it models
 
@@ -206,6 +264,49 @@ the next thing to reach for, not evidence the fix is wrong.
 | `harness/remux-ctl.mjs` | Signed control-API client (`packages/shared/src/hls-remux-control.ts`'s HMAC scheme) — start/stop/list sessions on the harness's `pqp-remuxd` |
 | `harness/server.mjs` | Stand-in for `tools/hls-edge`'s Worker: renders the real LL playlist logic over `pqp-remuxd`'s origin, with genuine RFC 8216bis blocking-reload semantics |
 | `harness/page.html` / `harness/run.mjs` | The Chrome viewer: stock hls.js, Playwright, the event/verdict logic |
+
+## Forcing a red run
+
+There is no runtime flag to turn the RTP sequence check off — it is not
+guarded by anything, on purpose, since #700 exists specifically to make
+loss-defense unconditional. To confirm the regression loop actually goes
+red (rather than just trusting that it would), build `remuxd` from the
+commit **before** #700 landed and point `docker compose` at that image
+instead of the one `run.sh` builds from this checkout:
+
+```bash
+# 81d33b74 is #700's parent -- the last commit without the sequence check.
+git -C ../.. worktree add /tmp/pqp-pre-700 81d33b74
+docker build \
+  -f remuxd/Dockerfile \
+  -t ll-loss-harness-remuxd:pre-700 \
+  /tmp/pqp-pre-700
+
+# Run everything else as normal, but stop docker-compose from rebuilding
+# remuxd over that tag, and use it instead:
+bash scripts/gen-keys.sh
+bash scripts/gen-ramp.sh
+docker compose build publisher
+docker tag ll-loss-harness-remuxd:pre-700 ll-loss-harness-remuxd
+docker compose up -d livekit
+docker run -d --name pre700-remuxd --network ll-loss-harness_harness \
+  --env-file ./.data/harness.env -e CONTROL_LISTEN=:8090 \
+  -e LIVEKIT_URL=ws://livekit:7880 -p 127.0.0.1:8090:8090 \
+  ll-loss-harness-remuxd:pre-700
+# then run the rest of run.sh's steps by hand (session start, playlist
+# server, publisher, harness/run.mjs) against that container -- or simply
+# diff run.sh's own steps and substitute the `docker run` above for its
+# `docker compose up -d livekit remuxd` line for one manual pass.
+
+git -C ../.. worktree remove /tmp/pqp-pre-700
+```
+
+Expect `./run.sh 30` against that image to reproduce the original
+2026-09-16 result: `VERDICT: FAIL (decode-death)`, no `video damage:`
+line in the remuxd log (the pre-#700 binary has no such log line at
+all — it predates `markDamaged`), and no `lost=`/`damage=` fields on the
+stats line (they were added by #700 too). That is the loop's own proof
+that it is still testing something, not just reporting green by default.
 
 ## Extending it
 
