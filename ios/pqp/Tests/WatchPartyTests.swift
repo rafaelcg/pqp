@@ -733,6 +733,113 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertTrue(source.contains("liveChannels.remove(channelId)"))
         XCTAssertTrue(source.contains("liveChannels.insert(channelId)"))
     }
+
+    // MARK: - The quieter theater
+
+    /**
+     THE FILM, NOT A CHANNEL SCREEN WITH A FILM PLAYING BEHIND IT.
+
+     A centred `#channel` title and a delay figure are transcript furniture:
+     correct on a normal screen, noise on a full screen of somebody else's
+     film. Both are gone from the overlay itself, and the title is blanked
+     (not merely left transparent) the moment the stage fills the screen.
+     */
+    func testTheTheaterHasNoChannelTitleAndNoDelayFigureOverTheFilm() throws {
+        let chrome = try String(
+            contentsOf: sources.appending(path: "Voice/WatchChrome.swift"), encoding: .utf8
+        )
+        XCTAssertFalse(
+            chrome.contains("delaySeconds"),
+            "the delay pill next to LIVE was the ask; the property should be gone with it"
+        )
+        XCTAssertFalse(
+            chrome.contains("s delay"),
+            "no delay text should render in the fullscreen chrome at all"
+        )
+        let chat = try String(
+            contentsOf: sources.appending(path: "Chat/ChatView.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            chat.contains(".navigationTitle(watchTheater ? \"\" : title)"),
+            "the title must blank in the theater, not just lose its background fill"
+        )
+    }
+
+    /**
+     THE PIN STAYS REACHABLE, JUST NOT ON TOP OF THE PICTURE.
+
+     `showingPins` is the only door to `PinnedMessagesView`, and it is not
+     removed: it is withheld while the theater has the screen, the same
+     channel's portrait toolbar being one turn of the phone away.
+     */
+    func testThePinButtonLeavesTheTheaterButStaysInPortrait() throws {
+        let chat = try String(
+            contentsOf: sources.appending(path: "Chat/ChatView.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            chat.contains("if !watchTheater {"),
+            "the pin button must be withheld only in the theater"
+        )
+        XCTAssertTrue(
+            chat.contains("Button { showingPins = true } label: { Image(systemName: \"pin\") }"),
+            "and the button itself, the only way to PinnedMessagesView, must still exist"
+        )
+    }
+
+    /**
+     THE BACK CHEVRON FOLLOWS THE SAME CLOCK AS EVERY OTHER CONTROL.
+
+     The system nav bar's own back button does not know about `chrome.visible`
+     at all, so it used to be the one thing left on screen once everything
+     else had faded. The system button is hidden in the theater and the
+     overlay draws its own, gated on `showTransport` exactly like the
+     quality menu and the AirPlay well.
+     */
+    func testTheBackChevronHidesAndReturnsWithTheRestOfTheChrome() throws {
+        let chrome = try String(
+            contentsOf: sources.appending(path: "Voice/WatchChrome.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            chrome.contains(
+                "if showTransport, let onBack {\n                WatchGlyphButton(systemName: \"chevron.left\""
+            ),
+            "the back chevron must be gated on showTransport, the same flag as the rest"
+        )
+        let chat = try String(
+            contentsOf: sources.appending(path: "Chat/ChatView.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            chat.contains(".navigationBarBackButtonHidden(watchTheater)"),
+            "the system chevron has to step aside for the overlay's own, or there are two"
+        )
+        XCTAssertTrue(
+            chat.contains("WatchStageView(channel: voiceChannel, onBack: { dismiss() })"),
+            "the overlay's chevron needs a real dismiss action to call"
+        )
+    }
+
+    /**
+     LIVE, QUIETER.
+
+     The bordered capsule became a dot and a lowercased word in the
+     secondary text colour, and it now hides with the rest of the chrome
+     rather than sitting on the picture permanently. The jump-back offer is
+     a different control (behindLive) and keeps its own visibility rule.
+     */
+    func testTheLiveIndicatorIsSubtleAndHidesWithTheChrome() throws {
+        let chrome = try String(
+            contentsOf: sources.appending(path: "Voice/WatchChrome.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            chrome.contains("} else if showTransport {\n            HStack(spacing: 5) {\n"
+                + "                liveDot\n                Text(\"live\")"),
+            "the passive live indicator must hide with the rest of the chrome"
+        )
+        XCTAssertFalse(
+            chrome.contains("Capsule().strokeBorder(Palette.danger"),
+            "the bordered pill is what got replaced"
+        )
+    }
 }
 
 private enum ChannelFixture {
