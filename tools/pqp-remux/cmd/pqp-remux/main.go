@@ -315,11 +315,14 @@ func newAccessUnitScanner(logger *idrlog.Logger) *accessUnitScanner {
 }
 
 func (a *accessUnitScanner) push(pkt *rtp.Packet) {
-	au, err := a.dep.Push(pkt.Payload, pkt.Timestamp, pkt.Marker)
+	aus, err := a.dep.Push(pkt.Payload, pkt.Timestamp, pkt.Marker)
 	if err != nil {
 		log.Printf("pqp-remux: idr-log depacketize: %v", err)
 	}
-	if au != nil && au.IsIDR {
+	for _, au := range aus {
+		if au == nil || !au.IsIDR {
+			continue
+		}
 		if werr := a.logger.OnIDR(au.PTS, au.Bytes(), time.Now()); werr != nil {
 			log.Printf("pqp-remux: idr-log: %v", werr)
 			a.firstErr.CompareAndSwap(nil, &werr)

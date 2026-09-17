@@ -18,7 +18,7 @@ func TestDepacketizer_PushRTP_MiddleFragmentLossDiscardsTheAccessUnit(t *testing
 	seq := uint16(100)
 	push := func(p []byte, ts uint32, marker bool) (*AccessUnit, error) {
 		seq++
-		return d.PushRTP(p, seq, ts, marker)
+		return pushRTPOne(d, p, seq, ts, marker)
 	}
 
 	if au, err := push(stapA(
@@ -71,7 +71,7 @@ func TestDepacketizer_PushRTP_GapMidAUSkipsTheRestOfThatAU(t *testing.T) {
 	seq := uint16(7)
 	push := func(p []byte, ts uint32, marker bool) (*AccessUnit, error) {
 		seq++
-		return d.PushRTP(p, seq, ts, marker)
+		return pushRTPOne(d, p, seq, ts, marker)
 	}
 	if au, err := push(singleNALPacket(nal.TypeIDR, 3, []byte{0x01}), 1000, true); err != nil || au == nil {
 		t.Fatalf("IDR: au=%v err=%v", au, err)
@@ -101,19 +101,19 @@ func TestDepacketizer_PushRTP_GapMidAUSkipsTheRestOfThatAU(t *testing.T) {
 
 func TestDepacketizer_PushRTP_LateAndDuplicatePacketsAreIgnored(t *testing.T) {
 	d := NewDepacketizer()
-	if au, err := d.PushRTP(singleNALPacket(nal.TypeIDR, 3, []byte{0x01}), 10, 1000, true); err != nil || au == nil {
+	if au, err := pushRTPOne(d, singleNALPacket(nal.TypeIDR, 3, []byte{0x01}), 10, 1000, true); err != nil || au == nil {
 		t.Fatalf("IDR: au=%v err=%v", au, err)
 	}
-	if _, err := d.PushRTP(singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), 10, 1000, true); !errors.Is(err, ErrLatePacket) {
+	if _, err := pushRTPOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), 10, 1000, true); !errors.Is(err, ErrLatePacket) {
 		t.Fatalf("duplicate: err=%v, want ErrLatePacket", err)
 	}
-	if _, err := d.PushRTP(singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), 9, 1000, true); !errors.Is(err, ErrLatePacket) {
+	if _, err := pushRTPOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), 9, 1000, true); !errors.Is(err, ErrLatePacket) {
 		t.Fatalf("late: err=%v, want ErrLatePacket", err)
 	}
 	if IsDamage(ErrLatePacket) {
 		t.Fatal("a late packet is not damage")
 	}
-	if au, err := d.PushRTP(singleNALPacket(nal.TypeSlice, 2, []byte{0x03}), 11, 4000, true); err != nil || au == nil {
+	if au, err := pushRTPOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x03}), 11, 4000, true); err != nil || au == nil {
 		t.Fatalf("next in order: au=%v err=%v", au, err)
 	}
 	if d.LostPackets() != 0 {
@@ -124,10 +124,10 @@ func TestDepacketizer_PushRTP_LateAndDuplicatePacketsAreIgnored(t *testing.T) {
 // Sequence numbers wrap at 65535; a wrap is not a gap.
 func TestDepacketizer_PushRTP_WrapIsNotAGap(t *testing.T) {
 	d := NewDepacketizer()
-	if _, err := d.PushRTP(singleNALPacket(nal.TypeIDR, 3, []byte{0x01}), 65535, 1000, true); err != nil {
+	if _, err := pushRTPOne(d, singleNALPacket(nal.TypeIDR, 3, []byte{0x01}), 65535, 1000, true); err != nil {
 		t.Fatal(err)
 	}
-	if au, err := d.PushRTP(singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), 0, 4000, true); err != nil || au == nil {
+	if au, err := pushRTPOne(d, singleNALPacket(nal.TypeSlice, 2, []byte{0x02}), 0, 4000, true); err != nil || au == nil {
 		t.Fatalf("wrap: au=%v err=%v", au, err)
 	}
 }

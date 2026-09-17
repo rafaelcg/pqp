@@ -154,8 +154,10 @@ func TestSession_StatsSeparatesPacketsFromFrames(t *testing.T) {
 	s.HandleVideoPacket(videoPacket(singleNAL(8, realishPPS()[1:]), 0, false))
 	s.HandleVideoPacket(videoPacket(singleNAL(5, []byte{0xAA, 0xBB}), 0, true))
 	// A packet whose timestamp jumps with no marker having closed the
-	// previous access unit: the lost-marker recovery path, which is the
-	// shape packet loss takes here.
+	// previous access unit, and no sequence gap anywhere: the markerless
+	// boundary RFC 6184 section 5.1 describes, which is what a real Chrome
+	// presenter produced eight times in fifteen minutes on a clean path on
+	// 2026-09-17. The frame is DELIVERED and nothing is a drop.
 	s.HandleVideoPacket(videoPacket(singleNAL(1, []byte{0xCC}), frameStep, false))
 	s.HandleVideoPacket(videoPacket(singleNAL(1, []byte{0xDD}), 2*frameStep, true))
 
@@ -163,14 +165,20 @@ func TestSession_StatsSeparatesPacketsFromFrames(t *testing.T) {
 	if st.VideoPacketsSeen != 5 {
 		t.Fatalf("VideoPacketsSeen = %d, want 5", st.VideoPacketsSeen)
 	}
-	if st.VideoFramesSeen != 2 {
-		t.Fatalf("VideoFramesSeen = %d, want 2 (the IDR and the recovered frame)", st.VideoFramesSeen)
+	if st.VideoFramesSeen != 3 {
+		t.Fatalf("VideoFramesSeen = %d, want 3 (the IDR, the markerless frame, the last frame)", st.VideoFramesSeen)
 	}
 	if st.VideoKeyframesSeen != 1 {
 		t.Fatalf("VideoKeyframesSeen = %d, want 1", st.VideoKeyframesSeen)
 	}
-	if st.VideoDepacketizeErrs == 0 {
-		t.Fatal("the lost-marker recovery was not counted as a depacketizer drop")
+	if st.VideoMarkerlessAUs != 1 {
+		t.Fatalf("VideoMarkerlessAUs = %d, want 1", st.VideoMarkerlessAUs)
+	}
+	if st.VideoDepacketizeErrs != 0 {
+		t.Fatalf("VideoDepacketizeErrs = %d on a stream with no loss in it", st.VideoDepacketizeErrs)
+	}
+	if st.VideoDamageEpisodes != 0 {
+		t.Fatal("a markerless boundary must never open a damage episode: that is the PLI")
 	}
 	if st.LastVideoPacket.IsZero() || st.LastVideoFrame.IsZero() || st.LastIdr.IsZero() {
 		t.Fatalf("a clock is unset: pkt=%v frame=%v idr=%v", st.LastVideoPacket, st.LastVideoFrame, st.LastIdr)
@@ -189,6 +197,7 @@ func TestFormatStatsLine_CarriesEveryDiagnosticField(t *testing.T) {
 		VideoFramesSeen:      150,
 		VideoKeyframesSeen:   2,
 		VideoDepacketizeErrs: 7,
+		VideoMarkerlessAUs:   9,
 		PartsWritten:         10,
 		VideoSegmentsWritten: 1,
 		KeepAlivePartsWrites: 3,
@@ -213,7 +222,7 @@ func TestFormatStatsLine_CarriesEveryDiagnosticField(t *testing.T) {
 
 	for _, want := range []string{
 		"session=abc", "window=5s", "subscribed=true",
-		"pkts=+1200", "frames=+150", "idr=+2", "drops=+7",
+		"pkts=+1200", "frames=+150", "idr=+2", "drops=+7", "markerless=+9",
 		"parts=+10", "segs=+1", "keepalive=+3", "idle=true",
 		"lastPkt=12s", "lastFrame=12s", "lastIdr=never", "lastPart=11.5s",
 		"openSeg=3200ms",

@@ -43,6 +43,13 @@ type AccessUnit struct {
 	// the last time this AU carried one, for building/refreshing avcC.
 	SPS []byte
 	PPS []byte
+	// Markerless is true when no marker packet closed this AU: the next
+	// packet's RTP timestamp did, which RFC 6184 section 5.1 names as the
+	// boundary a receiver falls back on. The AU is delivered exactly like
+	// any other; the flag exists so the session can count how often this
+	// publisher relies on the fallback. See Push's doc comment for why
+	// this is not damage.
+	Markerless bool
 }
 
 // Bytes returns the number of sample bytes (AVCC length prefixes included)
@@ -52,9 +59,14 @@ func (au *AccessUnit) Bytes() int { return len(au.AVCC) }
 var errNoPackets = errors.New("h264: Push called with an empty RTP payload")
 
 // errTimestampChangedMidAU is returned when a packet's RTP timestamp
-// differs from the access unit currently open: the previous AU's marker
-// packet was lost, so that AU is discarded (see Push's doc comment) rather
-// than having this packet's data merged into it.
+// differs from an access unit that is open AND known to be incomplete: the
+// last packet accepted into it left pion holding half a NAL, or failed to
+// parse at all. That AU is discarded (see Push's doc comment) rather than
+// having this packet's data merged into it.
+//
+// A timestamp change over an AU that ended on a whole NAL is NOT this: it
+// is the markerless boundary RFC 6184 section 5.1 describes, and the AU is
+// delivered. See Push.
 var errTimestampChangedMidAU = errors.New("h264: RTP timestamp changed before a marker packet closed the access unit; it was discarded")
 
 // errAccessUnitTooLarge is returned (and the offending AU discarded, never
@@ -113,6 +125,14 @@ type Depacketizer struct {
 	extended      int64
 	auExtended    int64
 	auStarted     bool
+	// auClosable is true while the access unit currently open could be
+	// closed by a timestamp change alone: every packet accepted into it
+	// parsed, and the last one ended a whole NAL (a single NAL, an
+	// aggregation packet, or an FU-A fragment carrying the End bit).
+	// False means pion is holding half a NAL or a packet was malformed,
+	// which is the one case where a missing marker really does mean the
+	// AU is torn. Reset to true when a new AU starts.
+	auClosable bool
 
 	pendingSPS []byte
 	pendingPPS []byte
@@ -169,40 +189,69 @@ func NewDepacketizer() *Depacketizer {
 }
 
 // Push feeds one RTP packet belonging to this track: its H.264 payload, its
-// RTP timestamp, and whether the RTP marker bit was set (RFC 6184 says the
-// marker bit closes an access unit). It returns the completed AccessUnit
-// when the packet finishes one, and nil while a frame is still assembling.
+// RTP timestamp, and whether the RTP marker bit was set. It returns the
+// access units the packet completed, in PTS order, and nothing while a
+// frame is still assembling.
+//
+// WHY A SLICE. One packet can close two access units: its new timestamp
+// closes the markerless AU in front of it (below), and the packet itself
+// may be a whole single-packet frame carrying the marker. Returning only
+// one of those would silently drop a frame, and the caller has no way to
+// ask for the other.
 //
 // A malformed packet (a truncated FU-A, an unsupported NAL type) returns an
 // error and drops only that packet's contribution; the depacketizer keeps
 // accumulating so one bad packet does not wedge the stream.
 //
-// Two recovery rules protect the AU boundary itself, both signaled by a
-// returned error with a nil AccessUnit (never by silently merging data
-// across a boundary that should not have been crossed):
+// THE ACCESS UNIT BOUNDARY. RFC 6184 section 5.1 sets the marker bit on the
+// last packet of an access unit "to allow an efficient playout buffer
+// handling", and every mainstream depacketizer (ffmpeg's rtpdec_h264,
+// GStreamer's rtph264depay, pion's own SampleBuilder) ALSO treats a change
+// of RTP timestamp as the frame boundary, because the timestamp is what
+// RFC 3550 says identifies the sampling instant. A publisher that leaves
+// the marker off a frame is therefore not damaged; it is relying on the
+// fallback. Measured on a clean London box on 2026-09-17 (lost=0 in every
+// window, presenter nackCount 0, zero reorder activity): eight access units
+// in fifteen minutes arrived with no marker packet and no sequence gap
+// anywhere near them. Discarding those cost a dropped frame and a forced
+// IDR every couple of minutes on a path with nothing wrong with it.
 //
-//   - If this packet's timestamp differs from the AU currently open, the
-//     previous AU's marker packet was lost. The incomplete AU is discarded
-//     (not flushed, and never merged with this packet's data) before this
-//     packet starts a new one — merging would produce one CMAF sample
-//     spanning two pictures, stamped with the first picture's PTS.
+// So a timestamp change CLOSES the open AU and DELIVERS it, flagged
+// Markerless, whenever that AU ends on a whole NAL. Three rules still
+// protect the boundary, each signaled by an error, never by silently
+// merging data across a boundary that should not have been crossed:
+//
+//   - A sequence gap is PushRTP's business and none of this touches it:
+//     real loss still discards the AU it lands in and still asks for a
+//     keyframe. That is the check that knows something is missing.
+//   - If the AU a timestamp change would close is KNOWN torn (the last
+//     packet accepted into it left pion holding half a NAL, or failed to
+//     parse at all), it is discarded instead. Half a NAL reaches the
+//     decoder as a slice with garbage inside it, which is the failure
+//     resetReassembly exists for.
 //   - If an AU's accumulated bytes exceed maxAccessUnitBytes with no
-//     marker ever arriving, it is discarded rather than grown forever.
-func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) (*AccessUnit, error) {
+//     boundary ever arriving, it is discarded rather than grown forever.
+func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) ([]*AccessUnit, error) {
 	if len(payload) == 0 {
 		return nil, errNoPackets
 	}
 
+	var aus []*AccessUnit
 	var timestampErr error
 	if d.auStarted && d.haveTimestamp && rtpTimestamp != d.lastRaw {
-		d.discardIncompleteAU()
-		timestampErr = errTimestampChangedMidAU
+		if len(d.buf) > 0 && d.auClosable {
+			aus = append(aus, d.flush(true))
+		} else {
+			d.discardIncompleteAU()
+			timestampErr = errTimestampChangedMidAU
+		}
 	}
 
 	d.advanceClock(rtpTimestamp)
 	if !d.auStarted {
 		d.auExtended = d.extended
 		d.auStarted = true
+		d.auClosable = true
 	}
 
 	out, err := d.inner.Unmarshal(payload)
@@ -210,43 +259,66 @@ func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) (*
 		// A malformed fragment can leave pion holding half a NAL; never let
 		// that tail leak into the next one.
 		d.resetReassembly()
+		// This AU is now missing a packet's worth of NAL whatever else it
+		// holds: only a marker may close it, never a timestamp change.
+		d.auClosable = false
 		// Keep the AU open: a single dropped/malformed packet should not
 		// discard everything already assembled for this frame.
 		if !marker {
-			return nil, firstErr(timestampErr, err)
+			return aus, firstErr(timestampErr, err)
 		}
 		// Fall through so a marker packet still closes and emits whatever
 		// was assembled before the bad packet, rather than wedging the
 		// depacketizer open forever.
-	} else if len(out) > 0 {
-		units, perr := nal.ParseAVCC(out)
-		if perr == nil {
-			for _, u := range units {
-				switch {
-				case u.IsSPS():
-					// Copy: the caller may hold this AU past the next Push,
-					// and out's backing array is reused by codecs.H264Packet.
-					d.setSPS(append([]byte(nil), u.Payload...))
-				case u.IsPPS():
-					d.setPPS(append([]byte(nil), u.Payload...))
+	} else {
+		d.auClosable = payloadEndsNAL(payload)
+		if len(out) > 0 {
+			units, perr := nal.ParseAVCC(out)
+			if perr == nil {
+				for _, u := range units {
+					switch {
+					case u.IsSPS():
+						// Copy: the caller may hold this AU past the next Push,
+						// and out's backing array is reused by codecs.H264Packet.
+						d.setSPS(append([]byte(nil), u.Payload...))
+					case u.IsPPS():
+						d.setPPS(append([]byte(nil), u.Payload...))
+					}
 				}
+				d.units = append(d.units, units...)
 			}
-			d.units = append(d.units, units...)
-		}
-		d.buf = append(d.buf, out...)
+			d.buf = append(d.buf, out...)
 
-		if len(d.buf) > maxAccessUnitBytes {
-			d.discardIncompleteAU()
-			return nil, firstErr(timestampErr, errAccessUnitTooLarge)
+			if len(d.buf) > maxAccessUnitBytes {
+				d.discardIncompleteAU()
+				return aus, firstErr(timestampErr, errAccessUnitTooLarge)
+			}
 		}
 	}
 
 	if !marker {
-		return nil, firstErr(timestampErr, err)
+		return aus, firstErr(timestampErr, err)
 	}
 
-	au := d.flush()
-	return au, firstErr(timestampErr, err)
+	return append(aus, d.flush(false)), firstErr(timestampErr, err)
+}
+
+// payloadEndsNAL reports whether an RFC 6184 payload leaves the reassembly
+// on a whole-NAL boundary: a single NAL packet and every aggregation packet
+// carry complete NALs, while a fragmentation unit only ends one when it
+// carries the End bit (0x40 of the FU header, the payload's second byte).
+// That is the whole of what Push needs to tell a markerless boundary from a
+// torn one: "no marker came" against "half a NAL is still in flight".
+func payloadEndsNAL(payload []byte) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	switch payload[0] & 0x1f {
+	case 28, 29: // FU-A, FU-B
+		return len(payload) >= 2 && payload[1]&0x40 != 0
+	default:
+		return true
+	}
 }
 
 // discardIncompleteAU drops whatever has been accumulated for the
@@ -256,7 +328,7 @@ func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) (*
 // the packet's RTP sequence number. A forward gap discards the access unit
 // it lands in and returns ErrPacketsLost; a packet behind the newest seen
 // returns ErrLatePacket and is ignored. Everything else behaves as Push.
-func (d *Depacketizer) PushRTP(payload []byte, seq uint16, rtpTimestamp uint32, marker bool) (*AccessUnit, error) {
+func (d *Depacketizer) PushRTP(payload []byte, seq uint16, rtpTimestamp uint32, marker bool) ([]*AccessUnit, error) {
 	if d.haveSeq {
 		// int16 of the difference is wrap-safe for any gap under 32768.
 		delta := int16(seq - (d.lastSeq + 1))
@@ -358,14 +430,18 @@ func firstErr(errs ...error) error {
 func (d *Depacketizer) setSPS(b []byte) { d.pendingSPS = b }
 func (d *Depacketizer) setPPS(b []byte) { d.pendingPPS = b }
 
-func (d *Depacketizer) flush() *AccessUnit {
+// flush closes the access unit currently open and returns it. markerless
+// says which boundary closed it: a marker packet (false) or the next
+// packet's RTP timestamp (true). Both are real boundaries; see Push.
+func (d *Depacketizer) flush(markerless bool) *AccessUnit {
 	au := &AccessUnit{
-		PTS:     d.auExtended,
-		Arrived: time.Now(),
-		AVCC:    d.buf,
-		Units:   d.units,
-		SPS:     d.pendingSPS,
-		PPS:     d.pendingPPS,
+		PTS:        d.auExtended,
+		Arrived:    time.Now(),
+		AVCC:       d.buf,
+		Units:      d.units,
+		SPS:        d.pendingSPS,
+		PPS:        d.pendingPPS,
+		Markerless: markerless,
 	}
 	for _, u := range au.Units {
 		if u.IsIDR() {
