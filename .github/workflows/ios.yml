@@ -510,7 +510,17 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/private_keys"
           key_path="$RUNNER_TEMP/private_keys/AuthKey_${API_KEY_ID}.p8"
-          printf '%s' "$API_KEY_P8" > "$key_path"
+          # APPLE_API_KEY_P8 is stored base64-encoded (electron.yml decodes it
+          # the same way before notarizing). Written raw, xcodebuild refused it
+          # with "Invalid authentication key credential ... invalidPEMDocument"
+          # on the first ios-v1.0 run. Accept either form: decode when the
+          # value is not already a PEM document.
+          if printf '%s' "$API_KEY_P8" | grep -q "BEGIN PRIVATE KEY"; then
+            printf '%s' "$API_KEY_P8" > "$key_path"
+          else
+            printf '%s' "$API_KEY_P8" | base64 --decode > "$key_path"
+          fi
+          grep -q "BEGIN PRIVATE KEY" "$key_path" || { echo "::error::APPLE_API_KEY_P8 is not a PEM private key, raw or base64"; exit 1; }
 
           cp ExportOptions.plist "$RUNNER_TEMP/ExportOptions-upload.plist"
           /usr/libexec/PlistBuddy -c "Set :destination upload" "$RUNNER_TEMP/ExportOptions-upload.plist"
