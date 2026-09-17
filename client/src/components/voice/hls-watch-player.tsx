@@ -198,6 +198,21 @@ let hlsBandwidthMeasured = false;
 
 type StreamPhase = "playing" | "reconnecting" | "dead";
 
+/**
+ * How often a player parked on "the session is over" asks again.
+ *
+ * Slow on purpose, and nothing like the stall ladder's backoff. There is no
+ * emergency here -- the show is over, or the presenter is away -- and the
+ * ordinary way a new session arrives is the `src` prop, pushed over `/ws` the
+ * moment the server starts one. This exists for the case that push does not
+ * land (a frame lost, a socket that reconnected in between), which is
+ * precisely the case that leaves a tab stuck until somebody reloads it. One
+ * request every twenty seconds, only while a player is showing an
+ * over/awaiting screen, is a rounding error beside a live viewer's own
+ * playlist polling.
+ */
+const SESSION_OVER_POLL_MS = 20_000;
+
 /** hls.js instance shape this file actually touches. */
 interface HlsHandle {
   destroy: () => void;
@@ -268,6 +283,7 @@ export function HlsWatchPlayer({
   dualDeviceWarning = false,
   mode = "live",
   partTargetMs: partTargetMsProp,
+  onSessionOver,
 }: {
   src: string;
   /**
@@ -376,6 +392,22 @@ export function HlsWatchPlayer({
    * `partTargetMs`, and only while `mode` is not `"vod"`.
    */
   mode?: "live" | "vod" | "ll";
+  /**
+   * The server was asked directly and answered that nothing is live on this
+   * channel: `"over"` (and no party either) or `"awaiting"` (the party is
+   * still on, the presenter is not sharing). Fired once per episode, when the
+   * player first learns it.
+   *
+   * WHY THE CALLER WANTS TO KNOW. A player left mounted on a session that has
+   * ended is the whole of the 2026-09-17 viewer symptom: the pane kept the
+   * film's slot, so the party panel underneath -- which owns "nothing is on
+   * air" and the button that starts the next one -- never got the space back.
+   * A caller that hands the pane back on this gets the right surface with no
+   * reload; a caller that ignores it keeps today's behaviour plus the honest
+   * holding screen. Never fired for a replay (`mode: "vod"`), which has no
+   * live channel to ask about.
+   */
+  onSessionOver?: (reason: "over" | "awaiting") => void;
 }) {
   const { t } = useTranslation();
   const isVod = mode === "vod";
@@ -435,6 +467,37 @@ export function HlsWatchPlayer({
   const [activeSrc, setActiveSrc] = useState(src);
   const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useState<StreamPhase>("playing");
+  /**
+   * THE SERVER'S OWN ANSWER, once it has been asked and has vouched for it:
+   * `"over"` (nothing live, no party) or `"awaiting"` (nothing live, party
+   * still on). Null until then, which is every ordinary moment of a healthy
+   * stream.
+   *
+   * WHY THIS EXISTS AT ALL. Every other input this player has is an inference
+   * from the outside: a playlist that stopped advancing, a 404, a fatal
+   * hls.js error. None of them can tell "the egress is restarting, hold on"
+   * from "the show ended twenty minutes ago", so the watchdog treats both as
+   * the first and polls, and polls, and eventually says "A transmissão caiu"
+   * with a retry button that cannot possibly help. That is exactly what
+   * Rafael's second tab did on 2026-09-17 while the party was over and the
+   * sidebar card next to it already said so.
+   *
+   * `reconnect()` already asks `GET /api/channels/:id/live` on every
+   * reconnect check, and the answer already carries the fact: `ended: true`
+   * is a null the server explicitly vouches for. This is simply that answer
+   * being BELIEVED instead of thrown away as "nothing fresher".
+   *
+   * Cleared by a genuinely new session arriving through either door (the
+   * `src` prop, or this player's own slow poll below), so recovery needs no
+   * reload and no press.
+   */
+  const [sessionOver, setSessionOver] = useState<"over" | "awaiting" | null>(
+    null,
+  );
+  // Read inside the attach effect's interval, which deliberately lists only
+  // `[activeSrc, attempt]` as dependencies.
+  const sessionOverRef = useRef(sessionOver);
+  sessionOverRef.current = sessionOver;
   const watchRef = useRef<HlsStallWatch>(
     new HlsStallWatch({ stallMs: HLS_WATCH_PLAYER_STALL_MS }),
   );
@@ -611,6 +674,11 @@ export function HlsWatchPlayer({
     sessionRef.current = hlsSessionKey(src);
     setActiveSrc(src);
     setPhase("playing");
+    // A DIFFERENT SESSION IS THE RECOVERY. Whatever the server last told this
+    // player about the channel is about to be wrong, and this is the door a
+    // new party normally comes through: the push lands, the prop changes, the
+    // over/awaiting screen goes away by itself. No reload, nothing pressed.
+    setSessionOver(null);
     watchRef.current.reset(Date.now());
   }, [src]);
 
@@ -702,11 +770,22 @@ export function HlsWatchPlayer({
       // no network round trip for them to race against.
       const channelId = channelIdFromHlsUrl(activeSrc);
       let next: string | null = null;
+      // What the server said about the channel itself, as opposed to about a
+      // URL. `undefined` is "it did not say" -- the request failed, or it
+      // answered a null it could not vouch for.
+      let told: "over" | "awaiting" | null | undefined;
       try {
         if (channelId) {
           try {
             const live = await fetchChannelLive(channelId);
             next = live.stream ? resolveHlsUrl(live.stream.hlsUrl) : null;
+            told = live.stream
+              ? null
+              : live.ended
+                ? live.partyLive
+                  ? "awaiting"
+                  : "over"
+                : undefined;
           } catch {
             // The API is the thing that is down, or we lost access. Nothing
             // to adopt; fall through to the "nothing new" branch below.
@@ -735,9 +814,34 @@ export function HlsWatchPlayer({
         // re-attach on top of this one. A new egress session is a new media
         // timeline, so a rebuild is correct here regardless of who asked
         // (B1.3, items 1/2: keep).
+        //
+        // THIS IS ALSO HOW A SESSION THAT WAS OVER COMES BACK. The slow poll
+        // below keeps calling this while `sessionOver` is set, so a party
+        // that goes live again is adopted here with nothing pressed and
+        // nothing reloaded -- the `src` prop saying the same thing a moment
+        // later is the belt, this is the braces.
+        setSessionOver(null);
         sessionRef.current = hlsSessionKey(next);
         setActiveSrc(next);
         return;
+      }
+      if (told !== undefined) {
+        // THE SERVER VOUCHED FOR IT: nothing is live on this channel, and it
+        // said which kind of nothing. Believe it rather than falling through
+        // to "nothing fresher, keep stalling" -- that fall-through is what
+        // left a viewer polling a dead session behind "reconnecting" until
+        // the watchdog's budget ran out and told them the stream had crashed.
+        //
+        // `told === null` is a stream the server HAS (the `next &&` branches
+        // above handled it); reaching here with it means the same session,
+        // which is ordinary and clears nothing.
+        if (told !== null) {
+          setSessionOver(told);
+          setPhase("reconnecting");
+          onSessionOver?.(told);
+          return;
+        }
+        setSessionOver(null);
       }
       if (options.forceRebuild) {
         // A person pressed "try again": always give them a visible restart,
@@ -766,7 +870,7 @@ export function HlsWatchPlayer({
       // if the condition persists.
       setPhase("reconnecting");
     },
-    [activeSrc],
+    [activeSrc, onSessionOver],
   );
 
   // Held in a ref so the attach effect does not list `reconnect` as a
@@ -774,6 +878,22 @@ export function HlsWatchPlayer({
   // changing identity tears hls.js down, drops the buffer, and is a stall.
   const reconnectRef = useRef(reconnect);
   reconnectRef.current = reconnect;
+
+  // THE WAY BACK, WITH NOTHING TO PRESS. While the holding screen is saying
+  // the session is over or the presenter is away, ask the server again every
+  // `SESSION_OVER_POLL_MS`. A new session adopts itself inside `reconnect`
+  // (`setSessionOver(null)` on the different-session branch), so the picture
+  // simply appears. Stops the moment `sessionOver` clears, and never runs for
+  // a replay, which has no live channel to ask about.
+  useEffect(() => {
+    if (sessionOver === null || isVod) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void reconnectRef.current();
+    }, SESSION_OVER_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [sessionOver, isVod]);
 
   const retryFromDead = useCallback(() => {
     watchRef.current.reset(Date.now());
@@ -1474,6 +1594,16 @@ export function HlsWatchPlayer({
           ? measured
           : null,
       );
+      // THE WATCHDOG HAS NOTHING LEFT TO DECIDE. The server has said there is
+      // no stream here, so every ladder step below is a recovery attempt on a
+      // session that will never answer: the polls are wasted, and the budget
+      // they spend ends in `"dead"` -- "A transmissão caiu", with a retry
+      // button -- for a party that simply finished. The slow poll under
+      // `sessionOver` is what watches for the next one, and any new session
+      // clears this and re-arms the ladder with it.
+      if (sessionOverRef.current !== null) {
+        return;
+      }
       const decision = watch.tick(Date.now());
       if (decision === "none") {
         // Still restarting: count the copy's countdown down rather than
@@ -2264,6 +2394,7 @@ export function HlsWatchPlayer({
     hasFrame,
     stallReason,
     authGraceActive,
+    sessionOver,
     // `resolveHoldingScreenReason` only ever distinguishes VOD from
     // everything else -- LL changes the engine's live-sync tuning, not the
     // holding-screen vocabulary, so it collapses onto "live" here the same
@@ -2425,7 +2556,32 @@ export function HlsWatchPlayer({
           </button>
         </div>
       ) : null}
-      {holdingReason === "dead" || holdingReason === "unavailable" ? (
+      {holdingReason === "over" || holdingReason === "awaiting" ? (
+        // THE TRUTH, AND NO SPINNER. The server has been asked and has
+        // answered: there is nothing live on this channel. A person looking
+        // at this needs to know which of the two silences it is and that
+        // nothing is being hidden from them, not a bubble animation that
+        // implies something is on its way. The player stays mounted and
+        // keeps a slow poll running, so a new session appears here on its
+        // own with nothing to press and nothing to reload.
+        <div
+          data-testid={
+            holdingReason === "over" ? "hls-session-over" : "hls-awaiting-presenter"
+          }
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 bg-black/70 px-6 text-center"
+        >
+          <span className="text-sm font-semibold text-paper">
+            {holdingReason === "over"
+              ? t("voice.hls.sessionOver")
+              : t("voice.hls.awaitingPresenter")}
+          </span>
+          <span className="text-xs text-paper-muted">
+            {holdingReason === "over"
+              ? t("voice.hls.sessionOverHint")
+              : t("voice.hls.awaitingPresenterHint")}
+          </span>
+        </div>
+      ) : holdingReason === "dead" || holdingReason === "unavailable" ? (
         <div
           data-testid={holdingReason === "unavailable" ? "hls-replay-dead" : "hls-dead"}
           className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper"

@@ -4793,12 +4793,31 @@ router.post(
 router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
   await requireChannelAccess(channelId!, user.id);
   const state = await getChannelLiveState(channelId!);
+  // WHICH OF THE TWO SILENCES THIS IS, and the client cannot work it out for
+  // itself. "No stream" covers a show that is over and a presenter who has
+  // stepped away from one that is still running, and the watch player's
+  // holding screen has to say something different in each ("a sessão acabou"
+  // against "esperando o apresentador voltar"). Only the party row knows.
+  //
+  // A BOOLEAN, NOT THE STATUS. A draft is somebody thinking and is invisible
+  // to a viewer by design (`watchPartySurface`); a party being LIVE is
+  // already broadcast to the whole server. So this answers the one bit that
+  // is public anyway and leaks nothing the sidebar does not already show.
+  // Cached per channel (`getActiveWatchPartyRow`), only asked on the answer
+  // that needs it, and a lookup that throws leaves the field false rather
+  // than failing a read the player depends on.
+  const party =
+    state.stream === null && state.known
+      ? await getActiveWatchPartyRow(channelId!).catch(() => null)
+      : null;
   return {
     stream: state.stream ? stampViewerStream(state.stream, user.id) : null,
     // Absent on a null the server could not vouch for (the session table was
     // unreachable), so the client holds what it has instead of reading one
     // failed query as the party being over. Same contract as `channel-live`.
-    ...(state.stream === null && state.known ? { ended: true } : {}),
+    ...(state.stream === null && state.known
+      ? { ended: true, partyLive: party?.status === "live" }
+      : {}),
     watching: state.watching,
     participants: state.participants,
   };
