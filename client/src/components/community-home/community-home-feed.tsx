@@ -219,11 +219,17 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function communityLinksOf(
+  server: Pick<Server, "communityLinks">,
+): Server["communityLinks"] {
+  return server.communityLinks ?? [];
+}
+
 function identityDraftFrom(server: Server): CommunityIdentityDraft {
   return {
     tagline: server.communityTagline ?? "",
     about: server.communityAbout ?? "",
-    linkUrls: server.communityLinks.map((link) => link.url),
+    linkUrls: communityLinksOf(server).map((link) => link.url),
   };
 }
 
@@ -233,10 +239,10 @@ function identityDraftDirty(
 ): boolean {
   const links = draft.linkUrls.map((url) => url.trim()).filter(Boolean);
   return (
-    (draft.tagline.trim() || null) !== server.communityTagline ||
-    (draft.about.trim() || null) !== server.communityAbout ||
+    (draft.tagline.trim() || null) !== (server.communityTagline ?? null) ||
+    (draft.about.trim() || null) !== (server.communityAbout ?? null) ||
     JSON.stringify(links) !==
-      JSON.stringify(server.communityLinks.map((link) => link.url))
+      JSON.stringify(communityLinksOf(server).map((link) => link.url))
   );
 }
 
@@ -2448,13 +2454,14 @@ export function CommunityHomeFeed({
 
               {server.isCommunity &&
                 !identityEditing &&
-                (server.communityAbout || server.communityLinks.length > 0) &&
+                (server.communityAbout ||
+                  communityLinksOf(server).length > 0) &&
                 posts &&
                 posts.length > 0 && (
                   <div className="lg:hidden" data-identity-about-mobile>
                     <CommunityIdentityRail
                       about={server.communityAbout}
-                      links={server.communityLinks}
+                      links={communityLinksOf(server)}
                       aboutLines={3}
                       showAboutLabel={false}
                     />
@@ -2467,7 +2474,8 @@ export function CommunityHomeFeed({
                     server.isCommunity &&
                     !identityEditing &&
                     Boolean(
-                      server.communityAbout || server.communityLinks.length > 0,
+                      server.communityAbout ||
+                        communityLinksOf(server).length > 0,
                     ) &&
                       "grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_17rem]",
                   )}
@@ -2515,14 +2523,14 @@ export function CommunityHomeFeed({
                   {server.isCommunity &&
                     !identityEditing &&
                     (server.communityAbout ||
-                      server.communityLinks.length > 0) && (
+                      communityLinksOf(server).length > 0) && (
                     <aside
                       className="hidden lg:sticky lg:top-4 lg:block"
                       data-identity-about-rail
                     >
                       <CommunityIdentityRail
                         about={server.communityAbout}
-                        links={server.communityLinks}
+                        links={communityLinksOf(server)}
                         aboutLines={8}
                       />
                     </aside>

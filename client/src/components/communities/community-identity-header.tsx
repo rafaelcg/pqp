@@ -117,6 +117,7 @@ export function CommunityIdentityHeader({
   const linksId = useId();
   const tagline = editing ? edit!.draft.tagline : (server.communityTagline ?? "");
   const about = editing ? edit!.draft.about : (server.communityAbout ?? "");
+  const links = server.communityLinks ?? [];
   const busy = Boolean(edit?.imageBusy || edit?.saving);
 
   return (
@@ -403,7 +404,7 @@ export function CommunityIdentityHeader({
           </div>
         ) : (
           poster &&
-          Boolean(server.communityAbout || server.communityLinks.length > 0) && (
+          Boolean(server.communityAbout || links.length > 0) && (
             <div className="mt-6 max-w-3xl" data-identity-band>
               {server.communityAbout && (
                 <CommunityAboutText
@@ -411,9 +412,9 @@ export function CommunityIdentityHeader({
                   lines={8}
                 />
               )}
-              {server.communityLinks.length > 0 && (
+              {links.length > 0 && (
                 <CommunityOfficialLinks
-                  links={server.communityLinks}
+                  links={links}
                   className={server.communityAbout ? "mt-5" : undefined}
                 />
               )}

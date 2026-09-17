@@ -1269,6 +1269,11 @@ export async function listCommunityHomeComments(
 ): Promise<CommunityHomeComment[]> {
   // Ensures the viewer may see the post (and that it exists).
   const post = await getCommunityHomePost(serverId, postId, viewerId);
+  // Locked members already get a stripped card. The comment list would
+  // still hand them every word (and a quote of the clip) if we fetched it.
+  if (post.locked) {
+    return [];
+  }
   if (!post.commentsEnabled && !(await resolveHomeViewerCaps(serverId, viewerId)).canManage) {
     return [];
   }
@@ -1299,6 +1304,9 @@ export async function addCommunityHomeComment(
   const post = await getCommunityHomePost(serverId, postId, authorId);
   if (post.status !== "published") {
     throw new CommunityHomeError("forbidden", "Comments only on published posts");
+  }
+  if (post.locked) {
+    throw new CommunityHomeError("forbidden", "Comments are locked on this post");
   }
   if (!post.commentsEnabled) {
     throw new CommunityHomeError("forbidden", "Comments are off on this post");

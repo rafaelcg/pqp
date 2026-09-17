@@ -325,6 +325,29 @@ describeDb("community home (Baú)", () => {
     expect(JSON.stringify(asMember.body)).not.toContain("sessao-11");
     expect(JSON.stringify(asMember.body)).not.toContain("youtu.be");
 
+    const memberComments = await call<{ comments: Array<{ body: string }> }>(
+      member,
+      "GET",
+      `${base()}/posts/${post.id}/comments`,
+    );
+    expect(memberComments.status).toBe(200);
+    expect(memberComments.body.comments).toEqual([]);
+    expect(JSON.stringify(memberComments.body)).not.toContain("sessao-11");
+
+    const staffComments = await call<{ comments: Array<{ body: string }> }>(
+      owner,
+      "GET",
+      `${base()}/posts/${post.id}/comments`,
+    );
+    expect(staffComments.body.comments.map((c) => c.body)).toEqual([
+      "esse clip é o sessao-11",
+    ]);
+
+    const sneak = await call(member, "POST", `${base()}/posts/${post.id}/comments`, {
+      body: "oq era o clip",
+    });
+    expect(sneak.status).toBe(403);
+
     for (const viewer of [owner, vip]) {
       const res = await call<{ posts: PostBody[] }>(viewer, "GET", `${base()}/posts`);
       const open = res.body.posts[0]!;
