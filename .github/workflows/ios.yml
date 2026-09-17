@@ -203,8 +203,13 @@ jobs:
       # next lever, not a smaller destination matrix: iOS unit tests here
       # carry no external dependency that a second simulator clone would
       # trip over, unlike the UI suite this workflow does not run.
+      # Diagnostic only: `testflight` needs this JOB to succeed, not this
+      # step. A GitHub artifact-service outage here must not fail an
+      # otherwise-green build-and-test and, with it, skip a release that
+      # actually passed (Farol review, PR 682).
       - name: Upload test results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: pqp-ios-test-results
@@ -244,21 +249,36 @@ jobs:
       # branch-protected the way a merge to main is, so anybody able to
       # push a tag named ios-v* could point it at an unreviewed or modified
       # commit and have this job archive and upload it with the production
-      # Distribution certificate. Same defense android-release.yml carries
-      # for android-v* (Farol review, PR 679). A code-level backstop, not a
+      # Distribution certificate. The same is true, and was previously
+      # UNCHECKED, for a manual workflow_dispatch: it can target any branch
+      # or commit, not just main, and reached signing/upload with no
+      # ancestry check at all (Farol review, PR 682). Both trigger shapes
+      # now run this check. Same defense android-release.yml carries for
+      # android-v* (Farol review, PR 679). A code-level backstop, not a
       # replacement for a repository ruleset restricting who may push
-      # ios-v* tags.
+      # ios-v* tags or dispatch this workflow.
+      #
+      # github.ref and github.sha are passed through env rather than
+      # interpolated into the script text: GitHub's own values here, but a
+      # ref name is still attacker-influenced (anyone who can create a tag
+      # names it), and `${{ }}` inside `run:` is substituted before bash
+      # ever parses the line -- a ref containing shell metacharacters
+      # (`ios-v$(...)`) would otherwise run as code with this step's
+      # checkout credentials still in .git/config (Farol review, PR 682).
       - name: Verify the tag is reachable from main
-        if: startsWith(github.ref, 'refs/tags/ios-v')
+        if: startsWith(github.ref, 'refs/tags/ios-v') || github.event_name == 'workflow_dispatch'
         shell: bash
+        env:
+          TARGET_REF: ${{ github.ref }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           git fetch origin main
-          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
-            echo "::error::${{ github.ref }} (${{ github.sha }}) is not reachable from main. Refusing to archive and sign a release from a ref that did not go through the ordinary PR/review path. Push ios-v* tags only at a commit already on main."
+          if ! git merge-base --is-ancestor "$TARGET_SHA" origin/main; then
+            echo "::error::${TARGET_REF} (${TARGET_SHA}) is not reachable from main. Refusing to archive and sign a release from a ref that did not go through the ordinary PR/review path. Push ios-v* tags, and dispatch this workflow, only from a commit already on main."
             exit 1
           fi
-          echo "Tag commit is reachable from main."
+          echo "Target commit is reachable from main."
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -340,13 +360,22 @@ jobs:
       # very first CI-cut upload, confirm 100000 is still comfortably above
       # ASC's current highest build (GET /v1/builds?filter[app]=6799265799&sort=-version).
       # See docs/TESTFLIGHT.md "CI builds".
+      #
+      # run_number alone is not enough: it does not change on a rerun of a
+      # failed job, so a rerun after -exportArchive uploaded successfully
+      # but then reported a nonzero exit (a flaky connection reporting the
+      # result, say) would recompute the SAME number and ASC would reject
+      # the retry as a duplicate version (Farol review, PR 682). run_attempt
+      # (1 on a first try, incrementing only on a manual rerun of that same
+      # run) is folded in too, so a rerun always gets a new, still strictly
+      # increasing number relative to the run before it.
       - name: Compute build number
         if: steps.signing.outputs.ready == 'true'
         id: build_number
         shell: bash
         run: |
           set -euo pipefail
-          number=$((100000 + ${{ github.run_number }}))
+          number=$((100000 + ${{ github.run_number }} * 100 + ${{ github.run_attempt }}))
           echo "number=${number}" >> "$GITHUB_OUTPUT"
           echo "CFBundleVersion for this upload: ${number}"
 
@@ -441,8 +470,16 @@ jobs:
             -exportOptionsPlist ExportOptions.plist \
             -exportPath "$RUNNER_TEMP/export"
 
+      # continue-on-error: this is a convenience copy of the .ipa for a human
+      # to grab, not the release itself -- "Upload to TestFlight" below is.
+      # A GitHub artifact-service outage here must not stop that step from
+      # running when the archive and export both already succeeded (Farol
+      # review, PR 682). A genuinely missing .ipa is still caught: Archive
+      # and Export .ipa above have no continue-on-error of their own, so
+      # this step is only reached with a real file on disk.
       - name: Upload .ipa artifact
         if: steps.signing.outputs.ready == 'true'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: pqp-ios-ipa
@@ -462,6 +499,7 @@ jobs:
       # repackaging) and keeps this step independent of whatever the local
       # export above wrote.
       - name: Upload to TestFlight
+        id: upload
         if: steps.signing.outputs.ready == 'true'
         working-directory: ios
         env:
@@ -495,5 +533,5 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| build number | ${{ steps.build_number.outputs.number || 'n/a (skipped)' }} |"
-            echo "| uploaded | ${{ steps.signing.outputs.ready == 'true' }} |"
+            echo "| uploaded | ${{ steps.upload.outcome == 'success' }} |"
           } >> "$GITHUB_STEP_SUMMARY"
