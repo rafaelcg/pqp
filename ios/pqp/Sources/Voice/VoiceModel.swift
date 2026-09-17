@@ -26,6 +26,7 @@ final class VoiceModel {
         didSet {
             guard status != oldValue else { return }
             if status == .connected { noteCallProgress() } else { endCallRating() }
+            reportCallKitTransition(from: oldValue, to: status)
         }
     }
     private(set) var channelId: String?
@@ -37,6 +38,11 @@ final class VoiceModel {
     /// cleanup resumes is left alone instead of being torn down by a task
     /// that no longer speaks for the current call (Farol review, PR 674).
     private var callGeneration = 0
+    /// The server this channel belongs to, for CallKit's display name
+    /// ("#general @ pqp HQ"), passed in by `join`'s caller (`ChatView`
+    /// already has the `Server` object) rather than looked up here, which
+    /// has no server list of its own to search.
+    private(set) var serverName: String?
     /// The room this session is in or joining, for the stage that is presented
     /// from the app root. Nil once left. Distinct from `intendedChannel`, which
     /// is cleared on eviction while the screen is still up.
@@ -225,6 +231,11 @@ final class VoiceModel {
     /// socket drop so the server reattaches our seat instead of minting a new one.
     private var resumeClaim: VoiceResumeClaim?
     private var session: SessionStore?
+    /// Reports this room to CallKit and carries out what CallKit asks back.
+    /// See `CallKitCoordinator` and `docs/IOS_CALLKIT.md`. Attached once, at
+    /// app start (`attachCallKit`), not per join: this model outlives any one
+    /// room.
+    private weak var callKit: CallKitCoordinator?
     private let handlerKey = "voice-" + UUID().uuidString
     /// Accumulates the shape of the call while it runs. Ignored by Observation
     /// on purpose: it changes on nearly every peer event and nothing should
@@ -440,7 +451,10 @@ final class VoiceModel {
         }
     }
 
-    func join(channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil) async {
+    func join(
+        channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil,
+        serverName: String? = nil
+    ) async {
         // One session per app, so a join from another room is a move, and the
         // room being left must hear about it before this one is entered. The
         // same room is a no-op: the stage was reopened, not rejoined.
@@ -455,6 +469,7 @@ final class VoiceModel {
         self.channel = channel
         channelId = channel.id
         channelName = channel.name
+        self.serverName = serverName
         intendedChannel = channel
         status = .joining
 
@@ -575,6 +590,7 @@ final class VoiceModel {
         isCollapsed = false
         channelId = nil
         channelName = nil
+        serverName = nil
         peers = []
         video = [:]
         roster = [:]
@@ -590,6 +606,51 @@ final class VoiceModel {
         canSpeak = true
         canStream = true
         transportNotice = nil
+    }
+
+    // MARK: - CallKit
+
+    /// Wires this model to the app's one `CallKitCoordinator`. Called once at
+    /// app start, unlike `CallModel.attach`'s per-session shape, because this
+    /// model is app-wide already and has no per-session state of its own to
+    /// reset.
+    func attachCallKit(_ callKit: CallKitCoordinator) {
+        self.callKit = callKit
+        callKit.channelDelegate = self
+    }
+
+    /// "#general @ pqp HQ", falls back gracefully when a caller has no
+    /// server name handy. No new copy: CallKit's call screen is system
+    /// chrome, not app UI, so this stays a plain value rather than a string
+    /// this build has to carry in pt-BR too.
+    private var callKitDisplayName: String {
+        guard let channelName else { return channelId ?? "" }
+        guard let serverName else { return "#\(channelName)" }
+        return "#\(channelName) @ \(serverName)"
+    }
+
+    /// Reports this room to CallKit at the same three moments `CallModel`
+    /// does, centralised here (rather than at each call site, the way
+    /// `CallModel` does it) because `status` only ever changes through this
+    /// one `didSet`. Unlike `CallModel.hangUp`, which clears `conversationId`
+    /// before its `phase` transition, `leave()` sets `status = .idle` BEFORE
+    /// it clears `channelId`, so reading it here for the "ended" report is
+    /// safe. See `leave()`.
+    private func reportCallKitTransition(from oldValue: VoiceStatus, to next: VoiceStatus) {
+        guard let channelId else { return }
+        let room = CallKitRoom.channel(channelId)
+        switch next {
+        case .joining where oldValue == .idle:
+            callKit?.reportOutgoingCall(room: room, displayName: callKitDisplayName)
+        case .connected:
+            callKit?.reportConnected(room: room)
+        case .idle:
+            callKit?.reportCallEnded(room: room, reason: .remoteEnded)
+        case .failed:
+            callKit?.reportCallEnded(room: room, reason: .failed)
+        case .joining:
+            break
+        }
     }
 
     /// Apply the server's SPEAK and STREAM rules to the local media.
@@ -1357,5 +1418,26 @@ final class VoiceModel {
             iceServers: iceServers
         )
         if isDeafened { await sfu.setDeafened(true) }
+    }
+}
+
+// MARK: - CallKitRoomHandling
+
+/// What CallKit asks this device to do to a voice channel, from the lock
+/// screen, CarPlay, Apple Watch or Siri. See `CallKitCoordinator`.
+extension VoiceModel: CallKitRoomHandling {
+    /// A voice channel is never rung (`reportOutgoingCall` is the only
+    /// report this model ever makes), so CallKit has no reason to ask this to
+    /// answer. Present only to satisfy the shared protocol.
+    func callKitAnswer(_ room: CallKitRoom) {}
+
+    func callKitEnd(_ room: CallKitRoom) {
+        guard case .channel(let id) = room, channelId == id else { return }
+        Task { await leave() }
+    }
+
+    func callKitSetMuted(_ room: CallKitRoom, muted: Bool) {
+        guard case .channel(let id) = room, channelId == id else { return }
+        isMuted = muted
     }
 }

@@ -195,6 +195,14 @@ actor VoiceClient {
     }
 
     /// Opens the mic and configures the audio session for a call.
+    ///
+    /// Never calls `setActive` itself once `CallKitCoordinator` exists in the
+    /// process: `useManualAudio` being on means CallKit alone decides when
+    /// the session actually goes live (`provider(_:didActivate:)`), and
+    /// activating it here too would be exactly the two-callers-fighting bug
+    /// `docs/IOS_CALLKIT.md` warns about. `useManualAudio` defaults to off, so
+    /// a build (or a test) with no coordinator wired up keeps behaving
+    /// exactly as before this file changed.
     func startAudio() throws {
         let session = RTCAudioSession.sharedInstance()
         session.lockForConfiguration()
@@ -202,10 +210,12 @@ actor VoiceClient {
         // `.voiceChat` is what enables echo cancellation and routes to the
         // earpiece/speaker sensibly; `.playAndRecord` alone does neither.
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
-        try session.setActive(true)
-        // Speaker by default: a group voice channel is nearly always a
-        // hands-free situation, unlike a one-to-one phone call.
-        try? session.overrideOutputAudioPort(.speaker)
+        if !session.useManualAudio {
+            try session.setActive(true)
+            // Speaker by default: a group voice channel is nearly always a
+            // hands-free situation, unlike a one-to-one phone call.
+            try? session.overrideOutputAudioPort(.speaker)
+        }
 
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let source = factory.audioSource(with: constraints)
