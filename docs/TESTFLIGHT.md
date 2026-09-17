@@ -380,10 +380,35 @@ iPad target) and listing text
 (`ios/app-store/metadata/<locale>/{name,subtitle,promotional_text,description,keywords,release_notes,privacy_url,support_url}.txt`)
 live in the repo, captured with the app's own
 `ios/pqp/UITests/StoreScreenshotUITests.swift` against a local dev server. See
-`ios/app-store/screenshots/README.md` for how to redo them. Nothing here
-uploads to App Store Connect automatically — paste the text fields in by hand
-and drag in the screenshots under **App Store** → **iOS App** → the version
-row → **App Store Connect** screenshots section for each localization.
+`ios/app-store/screenshots/README.md` for how to redo them. `ios/app-store/metadata/`
+also carries two non-localized files deliver expects at the top level:
+`copyright.txt` (`2026 Rafael Cammarano Guglielmi`) and `primary_category.txt`
+(`Social Networking`).
+
+### Store listing from CI
+
+`.github/workflows/ios-store-metadata.yml` uploads the metadata text and
+screenshots above to App Store Connect with fastlane `deliver`, so this no
+longer needs pasting 16 fields and dragging 16 screenshots in by hand. Manual
+dispatch only, it never touches a build (`--skip_binary_upload`), and it uses
+the same App Store Connect API key trio (`APPLE_API_KEY_P8`,
+`APPLE_API_KEY_ID`, `APPLE_API_ISSUER`) the `testflight` job above already
+needs, skipping cleanly with a job summary note if any of the three is
+missing.
+
+```bash
+gh workflow run ios-store-metadata.yml -f app_version=1.0
+```
+
+Inputs: `app_version` (defaults to `1.0`), `submit_for_review` (boolean,
+default false, leave it off until pricing and the age rating questionnaire
+are done), `skip_screenshots` (boolean, default false, for a text-only run).
+
+Still needs doing by hand in App Store Connect, none of it covered by this
+workflow: the age rating questionnaire, pricing, the App Privacy questions,
+review notes and the demo account (see "Sign-in information" above), picking
+which build a version ships, and pressing Submit for Review, unless
+`submit_for_review` was set true on the dispatch.
 
 ## Related
 

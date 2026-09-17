@@ -1,0 +1,201 @@
+name: iOS Store Metadata
+
+# Uploads the App Store listing (name, subtitle, description, keywords,
+# promotional text, release notes, support/privacy URLs, and the eight
+# screenshots per locale) to App Store Connect with fastlane `deliver`, so
+# Rafael does not have to paste 16 fields and drag 16 screenshots by hand
+# into App Store Connect's UI every time ios/app-store/ changes.
+#
+# Manual dispatch only. This never uploads a binary (--skip_binary_upload):
+# it only ever touches the listing text and screenshots for whatever
+# app_version already exists (or is being created) in App Store Connect.
+# TestFlight builds are a separate concern, cut by .github/workflows/ios.yml.
+#
+# What this workflow does NOT do, and still needs a human in App Store
+# Connect: the age rating questionnaire, pricing, App Privacy questions,
+# review notes / demo account, picking which build a version ships, and
+# pressing Submit unless submit_for_review is set true. See
+# docs/TESTFLIGHT.md "Store listing from CI".
+on:
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "Marketing version to write the listing for (CFBundleShortVersionString, e.g. 1.0)"
+        type: string
+        default: "1.0"
+        required: true
+      submit_for_review:
+        description: "Submit the version for App Review after uploading (usually left off; pricing and the age rating questionnaire still need doing by hand first)"
+        type: boolean
+        default: false
+      skip_screenshots:
+        description: "Skip uploading screenshots, metadata text only"
+        type: boolean
+        default: false
+
+concurrency:
+  # App Store Connect's own metadata edit is a single in-flight "edit
+  # version" per app; two overlapping deliver runs would race each other on
+  # the same version rather than doing anything useful in parallel.
+  group: ios-store-metadata
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  upload-metadata:
+    name: Upload listing to App Store Connect
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Same three secrets docs/TESTFLIGHT.md's "CI builds" section already
+      # documents for the testflight job in ios.yml (APPLE_API_KEY_P8,
+      # APPLE_API_KEY_ID, APPLE_API_ISSUER) -- this workflow needs no others,
+      # since it never signs or archives anything. Skips cleanly with a job
+      # summary note, same shape as ios.yml's "Check for TestFlight secrets".
+      - name: Check for App Store Connect API key
+        id: secrets
+        shell: bash
+        env:
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -z "${API_KEY_P8}" ] && missing="${missing}- APPLE_API_KEY_P8"$'\n'
+          [ -z "${API_KEY_ID}" ] && missing="${missing}- APPLE_API_KEY_ID"$'\n'
+          [ -z "${API_ISSUER}" ] && missing="${missing}- APPLE_API_ISSUER"$'\n'
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Store metadata upload skipped"
+              echo
+              echo "Missing secrets:"
+              echo
+              echo "$missing"
+              echo "Same App Store Connect API key trio the TestFlight job in ios.yml uses. See docs/TESTFLIGHT.md \"CI builds\" for the one-time setup."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Missing App Store Connect API key secrets; skipping the store metadata upload. See the job summary for which ones."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # fastlane's App Store Connect API key auth wants a single JSON file
+      # (key_id, issuer_id, key = the .p8's PEM content). APPLE_API_KEY_P8 is
+      # stored base64-encoded (electron.yml and ios.yml's TestFlight upload
+      # both decode it the same way) -- accept raw PEM too, in case it is
+      # ever rotated in unencoded form, rather than fail on the one shape
+      # that was never tested.
+      - name: Build App Store Connect API key file
+        if: steps.secrets.outputs.ready == 'true'
+        shell: bash
+        env:
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/AuthKey_${API_KEY_ID}.p8"
+          if printf '%s' "$API_KEY_P8" | grep -q "BEGIN PRIVATE KEY"; then
+            printf '%s' "$API_KEY_P8" > "$key_path"
+          else
+            printf '%s' "$API_KEY_P8" | base64 --decode > "$key_path"
+          fi
+          grep -q "BEGIN PRIVATE KEY" "$key_path" || { echo "::error::APPLE_API_KEY_P8 is not a PEM private key, raw or base64"; exit 1; }
+
+          jq -n \
+            --arg key_id "$API_KEY_ID" \
+            --arg issuer_id "$API_ISSUER" \
+            --rawfile key "$key_path" \
+            '{key_id: $key_id, issuer_id: $issuer_id, key: $key, in_house: false}' \
+            > "$RUNNER_TEMP/asc-api-key.json"
+
+      # deliver expects <screenshots_path>/<locale>/<file>.png and infers the
+      # device from each image's pixel size -- it has no concept of the
+      # "6.9-iphone" size subfolder ios/app-store/screenshots/ keeps things
+      # organised under (see ios/app-store/screenshots/README.md). Flatten
+      # into a scratch dir per run rather than restructuring the committed
+      # layout. Numeric prefixes are kept so ordering in App Store Connect
+      # matches the table in that README.
+      - name: Flatten screenshots for deliver
+        if: steps.secrets.outputs.ready == 'true' && inputs.skip_screenshots == false
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="ios/app-store/screenshots"
+          dest="$RUNNER_TEMP/deliver-screenshots"
+          rm -rf "$dest"
+          for locale_dir in "$src"/*/; do
+            locale=$(basename "$locale_dir")
+            mkdir -p "$dest/$locale"
+            find "$locale_dir" -type f -name "*.png" -exec cp {} "$dest/$locale/" \;
+          done
+          echo "Flattened screenshots:"
+          find "$dest" -type f | sort
+
+      # --skip_binary_upload: this workflow never ships a build, only the
+      # listing. --force skips deliver's interactive HTML-preview prompt
+      # (there is no terminal attached on a runner). --run_precheck_before_submit
+      # false and --precheck_include_in_app_purchases false: pqp has no
+      # in-app purchases, and precheck's content scan is a manual-review aid,
+      # not something that should block or slow down an unattended run.
+      # --automatic_release false: a submitted version should not go live the
+      # moment Apple approves it without a human deciding to release it.
+      #
+      # app_version, submit_for_review and skip_screenshots come from
+      # workflow_dispatch inputs and are passed through env rather than
+      # interpolated into the script text, the same defense ios.yml applies
+      # to ref names: `${{ }}` in `run:` is substituted before bash parses
+      # the line, so a free-text input (app_version has no format
+      # restriction) must never be spliced straight into a shell command.
+      - name: Upload store listing with fastlane deliver
+        if: steps.secrets.outputs.ready == 'true'
+        shell: bash
+        env:
+          CI: "true"
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_CHANGELOG: "true"
+          APP_VERSION: ${{ inputs.app_version }}
+          SUBMIT_FOR_REVIEW: ${{ inputs.submit_for_review }}
+          SKIP_SCREENSHOTS: ${{ inputs.skip_screenshots }}
+        run: |
+          set -euo pipefail
+          args=(
+            deliver
+            --api_key_path "$RUNNER_TEMP/asc-api-key.json"
+            --app_identifier gg.pqp.app
+            --app_version "$APP_VERSION"
+            --metadata_path ios/app-store/metadata
+            --skip_binary_upload
+            --force
+            --precheck_include_in_app_purchases false
+            --run_precheck_before_submit false
+            --submit_for_review "$SUBMIT_FOR_REVIEW"
+            --automatic_release false
+          )
+          if [ "$SKIP_SCREENSHOTS" = "true" ]; then
+            args+=(--skip_screenshots true)
+          else
+            args+=(--screenshots_path "$RUNNER_TEMP/deliver-screenshots" --overwrite_screenshots true)
+          fi
+          fastlane "${args[@]}"
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### iOS store metadata"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| app_version | ${{ inputs.app_version }} |"
+            echo "| submit_for_review | ${{ inputs.submit_for_review }} |"
+            echo "| skip_screenshots | ${{ inputs.skip_screenshots }} |"
+            echo "| ran | ${{ steps.secrets.outputs.ready == 'true' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
