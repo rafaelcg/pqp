@@ -63,9 +63,11 @@ struct WatchAirPlayButton: UIViewRepresentable {
     func updateUIView(_ view: AVRoutePickerView, context: Context) {}
 }
 
-/// The cinema overlay: LIVE (or jump back to it), delay, audience, play,
-/// quality, AirPlay, PiP. No scrubber, because a live window that offers to
-/// seek is a control that lies, and no fullscreen button either.
+/// The cinema overlay: live (or jump back to it), audience, play, quality,
+/// AirPlay, PiP. No scrubber, because a live window that offers to seek is
+/// a control that lies, and no fullscreen button either. No channel title
+/// and no delay figure either: both are the transcript's business, not the
+/// picture's, and the transcript is right there under it.
 ///
 /// FULLSCREEN IS THE PHONE, NOT A BUTTON. Turning it on its side fills the
 /// screen with the film and turning it back restores the transcript, which is
@@ -80,13 +82,17 @@ struct WatchOverlay<Quality: View>: View {
     let isPlaying: Bool
     let isTheater: Bool
     let behindLive: Bool
-    let delaySeconds: Int?
     let audienceCount: Int
     let audienceLabel: String
     let pipAvailable: Bool
     /// Device safe area, so theater chrome clears the island and the home
     /// indicator. Zero in the inline strip, which is already below the notch.
     var chromeInsets: EdgeInsets = .init()
+    /// Set only in the theater. `ChatView` hides the system nav bar's own
+    /// back chevron there via `WatchTheaterPreference` (it would otherwise
+    /// sit over the film, immune to the autohide every other control
+    /// follows) and this one takes its place, on the same clock as the rest.
+    let onBack: (() -> Void)?
     let onTogglePlay: () -> Void
     let onJumpToLive: () -> Void
     let onStartPip: () -> Void
@@ -143,16 +149,10 @@ struct WatchOverlay<Quality: View>: View {
 
     private var topBar: some View {
         HStack(alignment: .center, spacing: 8) {
-            liveBadge
-            if showTransport, let delay = delaySeconds, delay > 0 {
-                Text("~\(delay)s delay")
-                    .font(Typography.caption)
-                    .foregroundStyle(behindLive ? Palette.warning : Palette.paperSubtle)
-                    .monospacedDigit()
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.black.opacity(0.55)))
+            if showTransport, let onBack {
+                WatchGlyphButton(systemName: "chevron.left", label: "Back", action: onBack)
             }
+            liveBadge
             Spacer(minLength: 4).allowsHitTesting(false)
             if showTransport {
                 audienceChip
@@ -160,8 +160,12 @@ struct WatchOverlay<Quality: View>: View {
         }
     }
 
-    /// Always on the picture. Claiming AO VIVO a minute behind is the lie
-    /// the chat spoils; the lime stamp is the way back.
+    /// The jump-back offer stays on the picture regardless of the chrome
+    /// clock: claiming AO VIVO a minute behind is the lie the chat spoils,
+    /// and the way back must not itself be something a person has to tap
+    /// the film to summon. Plain "live" is decoration by comparison, so it
+    /// follows the same clock as everything else here: a dot and a word,
+    /// no pill, no border, gone with the rest of the chrome.
     @ViewBuilder
     private var liveBadge: some View {
         if behindLive {
@@ -178,20 +182,13 @@ struct WatchOverlay<Quality: View>: View {
                 .background(Capsule().fill(Palette.signal))
             }
             .buttonStyle(WatchControlStyle())
-        } else {
-            HStack(spacing: 6) {
+        } else if showTransport {
+            HStack(spacing: 5) {
                 liveDot
-                Text("LIVE")
-                    .font(Typography.label)
-                    .tracking(1.1)
-                    .foregroundStyle(Palette.paper)
+                Text("live")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperSubtle)
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(Capsule().fill(Color.black.opacity(0.55)))
-            .overlay(
-                Capsule().strokeBorder(Palette.danger.opacity(0.35), lineWidth: 1)
-            )
         }
     }
 
@@ -328,6 +325,19 @@ struct WatchControlStyle: ButtonStyle {
 /// Live picture is up, not minimised, no seat. ChatView hides the nav bar
 /// chrome so the film sits under the island rather than under a bar.
 struct WatchHeroPreference: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
+/// The phone is turned and the stage fills the screen. `WatchHeroPreference`
+/// only clears the nav bar's fill, so with just that the system title and
+/// the pinned-messages button still float, fully opaque, over the film.
+/// ChatView reads this one too, to blank the title, pull that button back
+/// for portrait only, and hand the back chevron to the overlay's own
+/// autohiding one.
+struct WatchTheaterPreference: PreferenceKey {
     nonisolated(unsafe) static var defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) {
         value = value || nextValue()

@@ -5910,6 +5910,26 @@
           }
         }
       }
+    },
+    "Back" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar"
+          }
+        }
+      }
+    },
+    "live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ao vivo"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

@@ -17,6 +17,10 @@ struct ChatView: View {
     @Environment(CallModel.self) private var call
     @Environment(VoiceModel.self) private var voice
     @Environment(CallRatingModel.self) private var ratings
+    /// Popping this screen from the watch-party theater's own back chevron,
+    /// which stands in for the system nav bar's while that bar's fill (and
+    /// its back button) is hidden under the film. See `watchTheater`.
+    @Environment(\.dismiss) private var dismiss
     let channelId: String
     let title: String
     /// Set only for a conversation (a channel with no server). Calls are a DM
@@ -79,6 +83,12 @@ struct ChatView: View {
     /// film sits under the island, and keep chat as the column below it
     /// until native fullscreen takes the screen.
     @State private var watchHero = false
+    /// The phone is turned and the stage fills the screen. `watchHero` alone
+    /// only clears the nav bar's fill; the title text and the pin button
+    /// would still float, fully opaque, over the film. This blanks the
+    /// title, pulls the pin button back to portrait, and hands the back
+    /// chevron to the overlay's own autohiding one.
+    @State private var watchTheater = false
 
     var body: some View {
         ZStack {
@@ -140,10 +150,18 @@ struct ChatView: View {
                     .zIndex(10)
             }
         }
-        .navigationTitle(title)
+        // The theater is a cinema, not a channel: the centred title has
+        // nothing to say over a full screen of film, so it is blanked
+        // rather than merely uncoloured underneath it.
+        .navigationTitle(watchTheater ? "" : title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(watchHero ? .hidden : .automatic, for: .navigationBar)
+        // The system chevron would float over the film, exempt from the
+        // autohide every other control follows; the overlay draws its own
+        // in its place and calls `dismiss()` through `onBack`.
+        .navigationBarBackButtonHidden(watchTheater)
         .onPreferenceChange(WatchHeroPreference.self) { watchHero = $0 }
+        .onPreferenceChange(WatchTheaterPreference.self) { watchTheater = $0 }
         .animation(Motion.standard, value: model.replyingTo?.id)
         .animation(Motion.standard, value: model.editing?.id)
         .animation(Motion.standard, value: model.error)
@@ -210,10 +228,16 @@ struct ChatView: View {
                     .disabled(call.phase.isLive)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingPins = true } label: { Image(systemName: "pin") }
-                    .tint(Palette.signal)
-                    .accessibilityLabel("Pinned messages")
+            // Not in the theater: a pin over the film is a control the
+            // picture never asked for, and this is the same channel's
+            // portrait toolbar, one turn of the phone away, so pinning
+            // stays reachable there.
+            if !watchTheater {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingPins = true } label: { Image(systemName: "pin") }
+                        .tint(Palette.signal)
+                        .accessibilityLabel("Pinned messages")
+                }
             }
         }
         // A collapsed call keeps a strip at the top of the thread it belongs to,
@@ -232,7 +256,7 @@ struct ChatView: View {
         // channel and on every text one.
         .safeAreaInset(edge: .top, spacing: 0) {
             if let voiceChannel {
-                WatchStageView(channel: voiceChannel)
+                WatchStageView(channel: voiceChannel, onBack: { dismiss() })
                     .ignoresSafeArea(edges: .horizontal)
             }
         }
