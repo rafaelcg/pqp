@@ -66,6 +66,34 @@ var errTimestampChangedMidAU = errors.New("h264: RTP timestamp changed before a 
 // forever — is unbounded memory growth from remote input.
 var errAccessUnitTooLarge = errors.New("h264: access unit exceeded the size bound with no marker packet; discarded")
 
+// ErrPacketsLost is returned by PushRTP when the RTP sequence number jumped
+// forward: at least one packet of the stream never arrived. Whatever was
+// being assembled is discarded, and so is the rest of the access unit the
+// gap landed in (up to and including its marker packet), because pion's
+// FU-A reassembly appends fragments in arrival order without checking that
+// they are consecutive. Production 2026-09-17: a presenter with a lossy
+// uplink produced P-slices with a hole in the middle; ffmpeg reports them as
+// "P sub_mb_type out of range / error while decoding MB", and Chrome's
+// hardware decoder (VideoToolbox, -12909 kVTVideoDecoderBadDataErr) refuses
+// the stream outright, which every web viewer saw as MEDIA_ERR_DECODE. The
+// caller is expected to drop frames until the next IDR and ask for one.
+var ErrPacketsLost = errors.New("h264: RTP sequence gap; the access unit it landed in was discarded")
+
+// ErrLatePacket is returned by PushRTP for a packet whose sequence number is
+// behind the newest one seen (a retransmission that arrived after the gap
+// was already acted on, or a duplicate). It is dropped without touching the
+// reassembly state.
+var ErrLatePacket = errors.New("h264: late or duplicate RTP packet dropped")
+
+// IsDamage reports whether err means the depacketizer threw media away:
+// the frames that follow may reference what was lost, so a caller that
+// forwards to a strict decoder should drop until the next IDR.
+func IsDamage(err error) bool {
+	return errors.Is(err, ErrPacketsLost) ||
+		errors.Is(err, errTimestampChangedMidAU) ||
+		errors.Is(err, errAccessUnitTooLarge)
+}
+
 // maxAccessUnitBytes bounds how much a single access unit may accumulate
 // before Push gives up on it. 8 MiB is generous: pqp's screen-share
 // pipeline runs well under 4K, and even a very large keyframe is a small
@@ -88,6 +116,19 @@ type Depacketizer struct {
 
 	pendingSPS []byte
 	pendingPPS []byte
+
+	// RTP sequence tracking, used by PushRTP only. haveSeq is false until
+	// the first packet; lastSeq is the newest sequence number accepted.
+	haveSeq bool
+	lastSeq uint16
+	// dropUntilMarker is set after a sequence gap landed inside an access
+	// unit: the remaining packets of that AU are not pushed into pion's
+	// reassembly (a fragment with no START bit would be glued onto
+	// nothing), only their timestamps are tracked, until the marker packet
+	// closes the damaged AU.
+	dropUntilMarker bool
+	// lostPackets counts sequence numbers skipped over, for stats.
+	lostPackets uint64
 }
 
 // NewDepacketizer returns a depacketizer configured to emit AVCC (length
@@ -182,6 +223,44 @@ func (d *Depacketizer) Push(payload []byte, rtpTimestamp uint32, marker bool) (*
 // discardIncompleteAU drops whatever has been accumulated for the
 // currently-open access unit without emitting it. pendingSPS/pendingPPS
 // are session-level state, not tied to one AU, and survive.
+// PushRTP is Push with RTP sequence-number continuity checking. seq must be
+// the packet's RTP sequence number. A forward gap discards the access unit
+// it lands in and returns ErrPacketsLost; a packet behind the newest seen
+// returns ErrLatePacket and is ignored. Everything else behaves as Push.
+func (d *Depacketizer) PushRTP(payload []byte, seq uint16, rtpTimestamp uint32, marker bool) (*AccessUnit, error) {
+	if d.haveSeq {
+		// int16 of the difference is wrap-safe for any gap under 32768.
+		delta := int16(seq - (d.lastSeq + 1))
+		if delta < 0 {
+			return nil, ErrLatePacket
+		}
+		if delta > 0 {
+			d.lostPackets += uint64(delta)
+			d.lastSeq = seq
+			d.advanceClock(rtpTimestamp)
+			d.discardIncompleteAU()
+			// This packet may be a mid-NAL fragment of the AU the gap fell
+			// in; a marker on it means that AU is already over.
+			d.dropUntilMarker = !marker
+			return nil, ErrPacketsLost
+		}
+	}
+	d.haveSeq = true
+	d.lastSeq = seq
+	if d.dropUntilMarker {
+		d.advanceClock(rtpTimestamp)
+		if marker {
+			d.dropUntilMarker = false
+			d.auStarted = false
+		}
+		return nil, nil
+	}
+	return d.Push(payload, rtpTimestamp, marker)
+}
+
+// LostPackets is how many RTP sequence numbers PushRTP has skipped over.
+func (d *Depacketizer) LostPackets() uint64 { return d.lostPackets }
+
 func (d *Depacketizer) discardIncompleteAU() {
 	d.buf = nil
 	d.units = nil

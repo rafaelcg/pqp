@@ -61,7 +61,12 @@ type Requester struct {
 	// OnIDR.
 	plisSinceIDR     uint64
 	firstPLISinceIDR time.Time
-	lastPLILoggedAt  time.Time
+	// lastLossPLI paces OnLoss: a burst of gaps inside one damaged GOP
+	// must not become a PLI storm, one request per lossPLIMinInterval is
+	// plenty since the publisher answers in ~300ms.
+	lastLossPLI     time.Time
+	lossPLIs        uint64
+	lastPLILoggedAt time.Time
 	// logf is log.Printf in production; a test substitutes a collector.
 	logf func(format string, args ...any)
 }
@@ -88,6 +93,7 @@ const pliLogInterval = 5 * time.Second
 // unanswered, and when the last one went out.
 type Stats struct {
 	PLIsSent     uint64
+	LossPLIs     uint64
 	PLIsSinceIDR uint64
 	LastPLIAt    time.Time
 	LastIDRAt    time.Time
@@ -103,6 +109,7 @@ func (r *Requester) Stats() Stats {
 	defer r.mu.Unlock()
 	return Stats{
 		PLIsSent:     r.plisSent.Load(),
+		LossPLIs:     r.lossPLIs,
 		PLIsSinceIDR: r.plisSinceIDR,
 		LastPLIAt:    r.lastPLI,
 		LastIDRAt:    r.lastIDR,
@@ -136,6 +143,37 @@ func (r *Requester) OnIDR(t time.Time) {
 // resetPLILogThrottle clears the in-episode throttle so the next episode's
 // first PLI always logs. Called with mu held.
 func (r *Requester) resetPLILogThrottle() { r.lastPLILoggedAt = time.Time{} }
+
+// lossPLIMinInterval paces the loss-triggered PLI below.
+const lossPLIMinInterval = 300 * time.Millisecond
+
+// OnLoss asks for a keyframe NOW because the session just threw media away
+// (an RTP sequence gap, a discarded access unit): every frame until the
+// next IDR is being dropped, so the picture is frozen until one arrives,
+// and the periodic gate (no IDR for a whole segment) is far too slow for
+// that. Paced to one PLI per lossPLIMinInterval. Reports whether a PLI
+// went out.
+func (r *Requester) OnLoss(now time.Time) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	if !r.lastLossPLI.IsZero() && now.Sub(r.lastLossPLI) < lossPLIMinInterval {
+		r.mu.Unlock()
+		return false
+	}
+	r.lastLossPLI = now
+	r.lastPLI = now
+	r.plisSinceIDR++
+	if r.firstPLISinceIDR.IsZero() {
+		r.firstPLISinceIDR = now
+	}
+	r.plisSent.Add(1)
+	r.lossPLIs++
+	r.mu.Unlock()
+	r.send.RequestKeyframe()
+	return true
+}
 
 // tick evaluates the gate once at the current time and sends a PLI if due,
 // recording it. Exported as a method for tests; Run calls it on a fixed

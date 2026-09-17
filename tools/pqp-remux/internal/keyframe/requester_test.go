@@ -105,3 +105,35 @@ func TestRequester_NaturalPolicyNeverSends(t *testing.T) {
 		t.Fatalf("PolicyNatural must never send a PLI, got %d calls", sender.calls)
 	}
 }
+
+func TestRequester_OnLossSendsImmediatelyAndIsPaced(t *testing.T) {
+	sender := &fakeSender{}
+	r := NewRequester(Config{Policy: PolicyPLI, SegmentTargetMs: 4000}, sender)
+	cur := at(0)
+	r.now = func() time.Time { return cur }
+	r.OnIDR(cur)
+
+	if !r.OnLoss(at(100)) || sender.calls != 1 {
+		t.Fatalf("first loss must send a PLI at once: calls=%d", sender.calls)
+	}
+	if r.OnLoss(at(200)) || sender.calls != 1 {
+		t.Fatalf("a second loss 100ms later must be paced: calls=%d", sender.calls)
+	}
+	if !r.OnLoss(at(500)) || sender.calls != 2 {
+		t.Fatalf("a loss past the pace must send again: calls=%d", sender.calls)
+	}
+	st := r.Stats()
+	if st.LossPLIs != 2 || st.PLIsSent != 2 || st.PLIsSinceIDR != 2 {
+		t.Fatalf("stats = %+v", st)
+	}
+	// The periodic gate paces off the loss PLI too: no burst right after.
+	cur = at(600)
+	r.tick()
+	if sender.calls != 2 {
+		t.Fatalf("periodic tick right after a loss PLI must not double up: calls=%d", sender.calls)
+	}
+	var nilReq *Requester
+	if nilReq.OnLoss(at(0)) {
+		t.Fatal("nil requester must be a no-op")
+	}
+}

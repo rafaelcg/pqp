@@ -16,6 +16,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -107,6 +108,11 @@ type Session struct {
 	implausibleParamSets atomic.Uint64
 	droppingDamaged      atomic.Bool
 	damagedAUsDropped    atomic.Uint64
+	// damageEpisodes counts the times droppingDamaged was armed by packet
+	// loss (a sequence gap or a discarded access unit); videoLatePackets
+	// counts late/duplicate RTP packets the depacketizer ignored.
+	damageEpisodes   atomic.Uint64
+	videoLatePackets atomic.Uint64
 	// initSPS/initPPS are the parameter sets the CURRENT init segment was
 	// built from. Compared byte-for-byte against every later in-band
 	// pair; a real change rebuilds the init. Protected by videoMu.
@@ -536,10 +542,17 @@ func (s *Session) HandleVideoPacket(pkt *rtp.Packet) {
 	s.videoPacketsSeen.Add(1)
 	s.lastVideoPacketAtNs.Store(now.UnixNano())
 
-	au, err := s.dep.Push(pkt.Payload, pkt.Timestamp, pkt.Marker)
+	au, err := s.dep.PushRTP(pkt.Payload, pkt.SequenceNumber, pkt.Timestamp, pkt.Marker)
 	if err != nil {
+		if errors.Is(err, h264.ErrLatePacket) {
+			s.videoLatePackets.Add(1)
+			return
+		}
 		s.videoDepacketizeErrs.Add(1)
 		s.logDepacketizeError(now, err)
+		if h264.IsDamage(err) {
+			s.markDamaged(now, err)
+		}
 	}
 	if au == nil {
 		return
@@ -674,6 +687,26 @@ func (s *Session) handleParameterSetChange(au *h264.AccessUnit) bool {
 	log.Printf("pqp-remux: parameter-set change: old=%dx%d profile=%d level=%d -> new=%dx%d profile=%d level=%d (seg=%d part=%d); published %s as a new init map",
 		oldW, oldH, oldProfile, oldLevel, newW, newH, newProfile, newLevel, segIdx, partSeq, uri)
 	return true
+}
+
+// markDamaged is the response to the depacketizer throwing media away: from
+// here until the next IDR every non-IDR access unit is dropped (they may
+// reference what was lost, and a P-slice built on a missing reference is
+// exactly what a strict hardware decoder refuses), and the publisher is
+// asked for that IDR immediately rather than after the periodic gate.
+// Measured 2026-09-17: without this, one lossy presenter uplink turned into
+// MEDIA_ERR_DECODE for every web viewer of the LL rung within a minute.
+func (s *Session) markDamaged(now time.Time, cause error) {
+	if !s.droppingDamaged.CompareAndSwap(false, true) {
+		return
+	}
+	s.damageEpisodes.Add(1)
+	pliSent := false
+	if kr := s.keyReq.Load(); kr != nil {
+		pliSent = kr.OnLoss(now)
+	}
+	log.Printf("pqp-remux: video damage: %v; dropping frames until the next IDR (episode %d, lost=%d, pli=%t)",
+		cause, s.damageEpisodes.Load(), s.dep.LostPackets(), pliSent)
 }
 
 func (s *Session) requestDemote(reason string) {
