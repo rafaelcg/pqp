@@ -250,6 +250,15 @@ echo "api-replicas=${REPLICA_COUNT}"
 # docs/deploy-vultr.md "Two replicas on one box" -> "Database connection
 # budget".
 TOTAL_API_PG_POOL_MAX="$(grep -m1 '^PG_POOL_MAX=' "$DEST/.env" 2>/dev/null | cut -d'=' -f2- || true)"
+# Compose accepts a quoted value (PG_POOL_MAX='45' or "45") and so must
+# this arithmetic: the 2026-09-17 cutover env was written quoted and the
+# deploy died on `(( '45' < 2 ))` before touching a container.
+TOTAL_API_PG_POOL_MAX="${TOTAL_API_PG_POOL_MAX%[\"\']}"
+TOTAL_API_PG_POOL_MAX="${TOTAL_API_PG_POOL_MAX#[\"\']}"
+if [[ -n "$TOTAL_API_PG_POOL_MAX" && ! "$TOTAL_API_PG_POOL_MAX" =~ ^[0-9]+$ ]]; then
+  echo "PG_POOL_MAX in .env is not a number: ${TOTAL_API_PG_POOL_MAX}" >&2
+  exit 1
+fi
 TOTAL_API_PG_POOL_MAX="${TOTAL_API_PG_POOL_MAX:-10}"
 # Fail closed rather than silently breaking the budget: flooring a
 # too-small division up to 1-per-replica would make the AGGREGATE exceed
