@@ -25,6 +25,16 @@ on:
           - production
         default: internal
         required: true
+      draft_only:
+        description: >-
+          Commit the upload without sending it for review (Play API
+          changesNotSentForReview). Use when Play rejects the commit with
+          "You must let us know whether your app uses ..." because a new
+          permission needs a console declaration first: the release lands
+          as a draft, the declaration form then shows the new permission,
+          and the release is sent for review from the console.
+        type: boolean
+        default: false
       release_notes:
         description: >-
           What's new, plain text. Optional. Used for both en-US and pt-BR
@@ -318,6 +328,7 @@ jobs:
           track: ${{ steps.params.outputs.track }}
           status: completed
           whatsNewDirectory: ${{ steps.notes.outputs.dir }}
+          changesNotSentForReview: ${{ github.event.inputs.draft_only == 'true' }}
 
       - name: Note why Play was skipped
         if: steps.signing.outputs.ready != 'true' || steps.play.outputs.ready != 'true'
