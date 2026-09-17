@@ -9,6 +9,7 @@ import {
   type PushLocale,
 } from "./push-copy.js";
 import { isInvisible, resolveStatus } from "../ws/status.js";
+import { logEvent } from "../lib/log.js";
 import {
   type ApnsConfig,
   isApnsEnabled,
@@ -904,6 +905,11 @@ async function deliverWebPush(
       config,
       delivery,
     );
+    // The only signal that this leg ever does anything: deliverApns/deliverWebPush
+    // previously logged failures only, which meant "nothing in the logs" was
+    // consistent with both "working perfectly" and "never attempted" — see
+    // CLAUDE.md pitfall 16 for the last time that ambiguity cost an afternoon.
+    logEvent("push.webSent", { userId: subscription.user_id, tag: payload.tag });
   } catch (error) {
     const statusCode = (error as { statusCode?: number }).statusCode;
     // 404/410 is the vendor saying this subscription no longer exists —
@@ -966,7 +972,11 @@ async function deliverApns(
       console.error(
         `[apns] send failed (${result.status} ${result.reason ?? "no reason"}) for user ${subscription.user_id}`,
       );
+      return;
     }
+    // Same reasoning as the web leg's success line above: a run of "no apns
+    // in the logs" must mean nothing was sent, not merely nothing failed.
+    logEvent("push.apnsSent", { userId: subscription.user_id, tag: payload.tag });
   } catch (error) {
     // A transport failure — dead session, timeout, TLS. Never fatal: this whole
     // module is fire-and-forget from the message fan-out's point of view.

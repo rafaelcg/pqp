@@ -7,6 +7,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 
 /**
@@ -1129,6 +1130,30 @@ describeDb("web push fan-out", () => {
     expect(body.aps.alert.body).toBe(sent[0]!.payload.body);
     expect(body.path).toBe(sent[0]!.payload.path);
     expect(body.aps["thread-id"]).toBe(channelId);
+  });
+
+  /**
+   * Both delivery legs used to log failures only, so "nothing in the logs"
+   * meant either "delivered perfectly" or "never attempted" — indistinguishable
+   * from the outside. A successful send now leaves its own line, the same
+   * `[pqp] event key=value` shape every other subsystem's does.
+   */
+  it("logs a successful send on both legs, not just a failed one", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await subscribe(bea.id);
+    await registerPhone(bea.id);
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    const lines = logSpy.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((line) => line.includes("push.webSent"))).toBe(true);
+    expect(lines.some((line) => line.includes("push.apnsSent"))).toBe(true);
+    expect(
+      lines.some(
+        (line) => line.includes("push.apnsSent") && line.includes(bea.id),
+      ),
+    ).toBe(true);
+    logSpy.mockRestore();
   });
 
   it("says nothing about a DM by default, exactly as the browser leg does", async () => {
