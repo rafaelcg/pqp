@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/session"
 )
 
 // WatchdogConfig controls the stall/demote ladder, docs/plans/LL_HLS.md §5.
@@ -68,14 +70,17 @@ type WatchdogConfig struct {
 	ReorderHoldMs int64
 }
 
-// reorderCheckSlackMs mirrors internal/session's monitorTick: how long a
+// reorderCheckSlackMs is internal/session's own monitor tick: how long a
 // packet that has gone overdue in the reorder buffer can sit before
 // anything looks at the buffer again on a source that has fallen silent.
-// It is the second term of internal/session's reorderDelayBound, repeated
-// here as a literal rather than imported so internal/control stays
-// independent of the session package's internals (the two are already
-// wired together only through the Pipeline interface).
-const reorderCheckSlackMs = 100
+// It is the second term of internal/session's reorderDelayBound.
+//
+// Taken FROM that package rather than written here as a literal: this
+// number is only correct as long as it is the same number the monitor
+// actually ticks at, and a duplicated constant is a constant that drifts
+// (this package already depends on internal/session, see
+// remux_pipeline.go, so there is no new coupling in reading it).
+const reorderCheckSlackMs = int64(session.MonitorTick / time.Millisecond)
 
 // partStuckThreshold is how long without a NEW part this ladder waits
 // before it calls a session stalled.

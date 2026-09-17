@@ -104,6 +104,77 @@ const NOT_READY_CACHE_MAX_ENTRIES = 500;
 class MasterProbeTimeoutError extends Error {}
 
 /**
+ * How often ONE (session, rung, reason) may write a
+ * `hlsEdge.llPlaylistNotFound` line. Same throttling shape as
+ * `hls-blocking-reload.js`'s `CAPACITY_FALLBACK_LOG_INTERVAL_MS`, and for
+ * the same reason, only sharper here: a 404 on this route means the remux
+ * session is gone, and every viewer keeps polling anyway. Hundreds of
+ * viewers at one poll a second is hundreds of identical log writes a
+ * second, at the exact moment the edge is handling a failure, which is how
+ * an outage becomes a log-throttling incident on top of an outage (Farol
+ * review, PR #706).
+ *
+ * Throttled, never dropped: the line that does get written carries
+ * `suppressed`, the count since the last one, so the aggregate is still
+ * readable. The FIRST 404 of an episode is always logged, which is the one
+ * an operator is looking for.
+ */
+const NOT_FOUND_LOG_INTERVAL_MS = 10_000;
+
+/** Same bounded-map reasoning as `notReadyCache`: a churn of distinct sessions must not grow this forever. */
+const NOT_FOUND_LOG_MAX_ENTRIES = 500;
+
+interface NotFoundLogState {
+  lastLoggedAt: number;
+  suppressed: number;
+}
+
+const notFoundLogState = new Map<string, NotFoundLogState>();
+
+/**
+ * Writes `hlsEdge.llPlaylistNotFound` at most once per
+ * `NOT_FOUND_LOG_INTERVAL_MS` per (session, rung, reason), carrying however
+ * many were suppressed since the last one.
+ */
+function logPlaylistNotFound(
+  reason: "no-state" | "rung-track-absent",
+  channelId: string,
+  startedAt: string,
+  rung: string | undefined,
+  now = Date.now(),
+): void {
+  const key = `${reason}|${channelId}|${startedAt}|${rung ?? ""}`;
+  const state = notFoundLogState.get(key);
+  if (state && now - state.lastLoggedAt < NOT_FOUND_LOG_INTERVAL_MS) {
+    state.suppressed += 1;
+    return;
+  }
+  const suppressed = state?.suppressed ?? 0;
+  // Re-insert so the entry moves to the end of the Map's insertion order,
+  // which is what makes the eviction below least-recently-LOGGED rather
+  // than arbitrary.
+  notFoundLogState.delete(key);
+  notFoundLogState.set(key, { lastLoggedAt: now, suppressed: 0 });
+  while (notFoundLogState.size > NOT_FOUND_LOG_MAX_ENTRIES) {
+    const oldest = notFoundLogState.keys().next();
+    if (oldest.done) break;
+    notFoundLogState.delete(oldest.value);
+  }
+  logEvent("hlsEdge.llPlaylistNotFound", {
+    reason,
+    channelId,
+    startedAt,
+    rung: rung ?? null,
+    suppressed,
+  });
+}
+
+/** Test seam: `notFoundLogState` is module state and one test's 404s must not throttle the next test's. */
+export function __resetLlPlaylistNotFoundLogForTests(): void {
+  notFoundLogState.clear();
+}
+
+/**
  * Why an LL master could not be built right now. Every one of these is
  * TEMPORARY by construction — an LL session whose state has not been written
  * yet, an origin that is slow or down, an init segment not fully flushed —
@@ -376,22 +447,25 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     const found = await this.fetchState(req.channelId, req.startedAt);
     if (!found) {
       // THE ONLY WAY A VIEWER'S PLAYLIST REQUEST 404s, AND IT NEVER SAID
-      // SO. `pqp-remuxd`'s registry answered 404 for this session id,
-      // which means it has never held it or has since stopped holding it
-      // (a watchdog restart, a demote, or a DELETE). On 2026-09-17 that
-      // happened twice inside an hour (a reorder-buffer stall crossed the
-      // part-stuck threshold, see `internal/session/reorder.go`), every
-      // viewer's `/ll` and `/ll-audio` 404ed together, and the first
-      // theory reached for was the sliding window, which this Worker
-      // cannot 404 for at all (an msn behind the edge is a 200, an msn
-      // too far ahead is a 400). Naming the reason is repo pitfall 16's
-      // rule: an endpoint that refuses somebody must say why.
-      logEvent("hlsEdge.llPlaylistNotFound", {
-        reason: "session-gone",
-        channelId: req.channelId,
-        startedAt: req.startedAt,
-        rung: req.rung ?? null,
-      });
+      // SO. `state.json` answered 404 at the remux origin. Deliberately
+      // reported with the SAME reason name the master path already uses
+      // (`LlMasterNotReadyReason`'s `no-state`), because this one 404 has
+      // two readings and this route cannot tell them apart: the registry
+      // has stopped holding the session (a watchdog restart, a demote, or
+      // a DELETE, all of which remove it outright), or the session is
+      // alive and has simply not written its first state yet. What
+      // separates them is age, not anything visible here, so claiming
+      // "session-gone" would be a guess dressed as a measurement.
+      //
+      // On 2026-09-17 the first reading was the real one twice inside an
+      // hour (a reorder-buffer stall crossed the part-stuck threshold, see
+      // `internal/session/reorder.go`): every viewer's `/ll` and
+      // `/ll-audio` 404ed together, and the first theory reached for was
+      // the sliding window, which this Worker cannot 404 for at all (an
+      // msn behind the edge is a 200, an msn too far ahead is a 400).
+      // Naming the reason at all is repo pitfall 16's rule: an endpoint
+      // that refuses somebody must say why.
+      logPlaylistNotFound("no-state", req.channelId, req.startedAt, req.rung);
       return new Response("Not found", { status: 404 });
     }
     const track = trackForRung(found.state, req.rung);
@@ -399,14 +473,9 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       // A real LL session that has not (yet, or ever, e.g. no stage audio)
       // enabled this specific track — 404 for THIS rung, which the
       // existing non-200 handling in `index.ts` already refuses to cache.
-      // Distinct from `session-gone` above: the session is alive and every
-      // other rung of it is being served.
-      logEvent("hlsEdge.llPlaylistNotFound", {
-        reason: "rung-track-absent",
-        channelId: req.channelId,
-        startedAt: req.startedAt,
-        rung: req.rung ?? null,
-      });
+      // Distinct from `no-state` above: the session is alive, its state
+      // parsed, and every other rung of it is being served.
+      logPlaylistNotFound("rung-track-absent", req.channelId, req.startedAt, req.rung);
       return new Response("Not found", { status: 404 });
     }
     const basePath = renditionBasePath(req.channelId, req.startedAt);

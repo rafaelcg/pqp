@@ -46,10 +46,23 @@ import (
 // formatted line per session per interval, no allocation per packet).
 const statsInterval = 5 * time.Second
 
-// monitorTick is how often RunMonitor wakes to consider a keep-alive
-// flush. Finer than a part target so the held frame is published close to
-// the moment the part boundary passes rather than up to a whole tick late.
-const monitorTick = 100 * time.Millisecond
+// MonitorTick is how often RunMonitor wakes to consider a keep-alive
+// flush and to release whatever the reorder buffer has held past its
+// deadline. Finer than a part target so the held frame is published close
+// to the moment the part boundary passes rather than up to a whole tick
+// late.
+//
+// EXPORTED BECAUSE internal/control DEPENDS ON ITS VALUE, not merely on
+// its existence: it is the second term of reorderDelayBound, so it is
+// part of the worst gap a healthy pipeline can produce, and
+// WatchdogConfig.partStuckThreshold has to sit above that. Kept as one
+// constant rather than two literals so lowering or raising the tick
+// cannot silently leave the watchdog sized for the old one.
+const MonitorTick = 100 * time.Millisecond
+
+// monitorTick is the unexported spelling this package's own code and
+// tests have always used.
+const monitorTick = MonitorTick
 
 // videoIdleAfter returns how long with no completed access unit counts as
 // "the source has gone quiet" -- both for this session's own logging and,

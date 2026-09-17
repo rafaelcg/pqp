@@ -13,7 +13,7 @@ import test from "node:test";
 // `index.ts`, untested directly in this package (see those files' absence
 // from any `*.test.mjs`), covered only by `tsc --noEmit` and the pure
 // modules underneath it.
-import { LlPlaylistOrigin } from "../dist/ll-playlist-origin.js";
+import { LlPlaylistOrigin, __resetLlPlaylistNotFoundLogForTests } from "../dist/ll-playlist-origin.js";
 import { LL_AUDIO_RUNG, LL_VIDEO_RUNG } from "../src/ll-state.js";
 
 const ORIGIN_BASE = "https://remux-box.test";
@@ -306,6 +306,7 @@ function captureLogEvents() {
 }
 
 test("a request for the ll-audio rung 404s cleanly once audio genuinely does not exist yet, with no crash", async () => {
+  __resetLlPlaylistNotFoundLogForTests();
   const stub = installFetchStub({ stateProvider: () => stateFixture({ withAudio: false }) });
   const logs = captureLogEvents();
   try {
@@ -332,7 +333,8 @@ test("a request for the ll-audio rung 404s cleanly once audio genuinely does not
 // playlist 404s with it, the only 404 path this Worker has. It used to
 // be silent, so the cause was guessed at (the sliding window, which
 // cannot 404 here at all) for an afternoon. Repo pitfall 16.
-test("a playlist 404 because the remux registry has no such session names the reason", async () => {
+test("a playlist 404 because the remux origin has no state for this session names the reason", async () => {
+  __resetLlPlaylistNotFoundLogForTests();
   const original = globalThis.fetch;
   globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
   const logs = captureLogEvents();
@@ -352,8 +354,63 @@ test("a playlist 404 because the remux registry has no such session names the re
   assert.equal(response.status, 404);
   const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
   assert.equal(notFound.length, 1);
-  assert.equal(notFound[0].reason, "session-gone");
+  assert.equal(notFound[0].reason, "no-state");
   assert.equal(notFound[0].channelId, CHANNEL_ID);
+  assert.equal(notFound[0].suppressed, 0, "the first 404 of an episode is never a suppressed batch");
+});
+
+// A session that has gone means EVERY viewer keeps polling into this
+// branch. One line per poll would turn an outage into a log-throttling
+// incident on top of the outage (Farol review, PR #706), so the line is
+// throttled per (session, rung, reason) and carries how many it stood in
+// for.
+test("repeated 404s for one session write one log line, carrying the suppressed count", async () => {
+  __resetLlPlaylistNotFoundLogForTests();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
+  const logs = captureLogEvents();
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    for (let i = 0; i < 25; i += 1) {
+      const response = await origin.fetchPlaylist({
+        channelId: CHANNEL_ID,
+        startedAt: STARTED_AT,
+        rung: LL_VIDEO_RUNG,
+        token: "ignored",
+      });
+      assert.equal(response.status, 404, "every viewer still gets a 404; only the logging is throttled");
+    }
+  } finally {
+    logs.restore();
+    globalThis.fetch = original;
+  }
+  const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
+  assert.equal(notFound.length, 1, "25 polls inside the window must write one line, not 25");
+  assert.equal(notFound[0].suppressed, 0);
+});
+
+// The throttle is per (session, rung, reason), so a second party 404ing at
+// the same moment is not silenced by the first one's line.
+test("the 404 log throttle is per session and rung, not global", async () => {
+  __resetLlPlaylistNotFoundLogForTests();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
+  const logs = captureLogEvents();
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    for (const [channelId, rung] of [
+      [CHANNEL_ID, LL_VIDEO_RUNG],
+      [CHANNEL_ID, LL_AUDIO_RUNG],
+      ["chan_other", LL_VIDEO_RUNG],
+    ]) {
+      await origin.fetchPlaylist({ channelId, startedAt: STARTED_AT, rung, token: "ignored" });
+    }
+  } finally {
+    logs.restore();
+    globalThis.fetch = original;
+  }
+  const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
+  assert.equal(notFound.length, 3);
 });
 
 test("a session whose state.json is not written YET answers `not-ready: no-state`, never a conventional fallback", async () => {

@@ -223,7 +223,7 @@ func TestReorderBuffer_PathologicalLossBoundsDelay(t *testing.T) {
 		rate      = 30 // packets per second actually arriving
 		seconds   = 3
 		interval  = time.Second / rate
-		checkTick = 100 * time.Millisecond // internal/session's monitorTick
+		checkTick = MonitorTick // what RunMonitor actually ticks at
 	)
 	// The ceiling the whole design is sized against: the hold, plus the
 	// longest a packet that has gone overdue can sit before anything
