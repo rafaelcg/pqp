@@ -372,6 +372,19 @@ Client-only. No API restart. After this build is on a phone:
 Simulator: `cd ios && xcodegen generate`, then the pqp scheme. Needs a live
 playlist; there is no physical iPhone in CI.
 
+## App Store assets
+
+Screenshots (`ios/app-store/screenshots/<locale>/6.9-iphone/`, pt-BR then
+en-US, dark-only since the app has no light theme, one size since iOS has no
+iPad target) and listing text
+(`ios/app-store/metadata/<locale>/{name,subtitle,promotional_text,description,keywords,release_notes,privacy_url,support_url}.txt`)
+live in the repo, captured with the app's own
+`ios/pqp/UITests/StoreScreenshotUITests.swift` against a local dev server. See
+`ios/app-store/screenshots/README.md` for how to redo them. Nothing here
+uploads to App Store Connect automatically — paste the text fields in by hand
+and drag in the screenshots under **App Store** → **iOS App** → the version
+row → **App Store Connect** screenshots section for each localization.
+
 ## Related
 
 - `docs/IOS.md` — run the app, APNs, universal links

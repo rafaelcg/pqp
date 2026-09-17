@@ -1,0 +1,24 @@
+pqp é um app de código aberto para conversar com a sua turma, no estilo Discord: servidores com canais de texto e voz, mensagens diretas e um diretório público de comunidades pra entrar.
+
+VOZ E VÍDEO
+Entre num canal de voz e converse com áudio limpo, numa conexão direta entre os participantes pra grupos pequenos ou num servidor de mídia dedicado pra salas maiores, escolhido automaticamente sem você precisar pensar nisso. Ligue a câmera, assista a tela que alguém compartilhou, veja quem está falando, silencie o microfone ou o áudio, e avalie a qualidade da chamada ao desligar. Ligue direto pra um amigo pra uma chamada só entre vocês dois.
+
+CHAT DE TEXTO
+Mande mensagens com reações, respostas, tópicos, mensagens fixadas e GIFs. Cole um link e veja a prévia. Busque no histórico de um servidor. As mensagens que você manda chegam na hora pra todo mundo no canal, em qualquer plataforma.
+
+WATCH PARTY
+Entre num watch party que já está rolando e assista a transmissão compartilhada junto com o chat da sala, com o vídeo já começando no ponto em que o grupo está.
+
+COMUNIDADES
+Explore um diretório público de comunidades e entre nas que te interessam com um toque. Cada comunidade tem seus próprios canais de texto e voz, igual um servidor privado.
+
+AMIGOS E PERFIS
+Adicione amigos pela tag ou pelo @ público deles, veja quem está online, e bloqueie quem você preferir não ouvir. Reivindique seu próprio @ pra ter uma página de perfil que dá pra compartilhar.
+
+PRIVACIDADE E MODERAÇÃO
+Denuncie uma mensagem, uma pessoa ou uma comunidade em poucos toques. Donos de servidor têm expulsão, banimento, timeout e um registro de auditoria. Apague sua conta ou exporte seus dados quando quiser.
+
+CÓDIGO ABERTO
+O pqp é de graça, não tem anúncio, e o código inteiro é público no GitHub (rafaelcg/pqp) sob licença AGPL. Qualquer pessoa pode ler o código, hospedar a própria instância ou contribuir.
+
+Essa versão é uma beta. Algumas coisas ainda estão chegando no iOS: DM em grupo, levantar a mão numa chamada de voz e iniciar seu próprio watch party ainda não estão por aqui, embora já funcionem no site e no app de desktop do pqp. A gente lança melhorias com frequência, iOS incluso.
