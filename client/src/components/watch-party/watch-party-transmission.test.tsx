@@ -220,3 +220,38 @@ describe("the presenter's own publish dropping (recovering)", () => {
     expect(detailed(false)).toContain("20 min");
   });
 });
+
+/**
+ * THE LOW-LATENCY PATH NEVER REACHES THE LIVE WORDING (staging, 2026-09-18).
+ * The summary's live branch is gated on `stream.topHeight`, the tallest rung
+ * the LiveKit egress ladder actually started -- but `mode: "ll"` sessions
+ * (`pqp-remux`, no transcode) have no ladder and never set `topHeight`, so
+ * the header reads "Preparing the broadcast" for the whole party even though
+ * the room is live, viewers are watching and the sidebar's AO VIVO pill
+ * already agrees. Same shape as pitfall 9/12: a signal that only ever meant
+ * one delivery mode was read as if it covered both.
+ */
+describe("the low-latency path (mode: \"ll\") reaching the live wording", () => {
+  it("says how many are watching instead of freezing on 'preparing'", () => {
+    const html = markup({ mode: "ll", topHeight: undefined });
+    expect(html).toContain("137 watching");
+    expect(html).not.toContain("Preparing the broadcast");
+  });
+
+  it("still says nobody is watching yet, without freezing on 'preparing'", () => {
+    const html = renderToStaticMarkup(
+      <WatchPartyTransmission
+        stream={stream({ mode: "ll", topHeight: undefined })}
+        wentLiveAt="2026-09-09T12:00:00.000Z"
+        audienceCount={0}
+        isPresenting
+        quality="auto"
+        roomViewers={4}
+        transport="livekit"
+        now={new Date("2026-09-09T12:20:00.000Z")}
+      />,
+    );
+    expect(html).toContain("nobody watching yet");
+    expect(html).not.toContain("Preparing the broadcast");
+  });
+});

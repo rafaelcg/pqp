@@ -305,18 +305,37 @@ export function WatchPartyTransmission({
         )
       : 0;
 
+  /**
+   * `height` NEVER ARRIVES ON THE LL PATH, AND THAT IS NOT "STILL PREPARING".
+   * `topHeight` is the tallest rung the LiveKit egress ladder actually
+   * started (PR 376); a `mode: "ll"` session (`pqp-remux`, no transcode, no
+   * ladder) never sets it, on a live party or a dead one alike, and the
+   * summary below used to read `height === null` as "the ladder has not
+   * produced its first rung yet" -- true for the conventional path, and a
+   * permanent state for this one. A staging LL party stuck on "Preparing
+   * the broadcast" for its whole runtime while the sidebar's AO VIVO pill
+   * (which reads `party.state`, not this stream) correctly said live
+   * (2026-09-18). `startLlSession` broadcasts `voice-stream` only once the
+   * remux session is confirmed started (`server/src/voice/hls-remux.ts`),
+   * with no rung wait behind it, so `stream` existing with `mode: "ll"` is
+   * already the live fact -- the same "how many are watching" wording the
+   * conventional ladder reaches once its own rungs are up.
+   */
+  const llMode = stream?.mode === "ll";
   const summary = !stream
     ? isPresenting
       ? t("watchParty.tx.collapsedPreparing")
       : t("watchParty.tx.collapsedIdle")
-    : height === null
-      ? t("watchParty.tx.collapsedPreparing")
-      : audienceCount > 0
-        ? t("watchParty.tx.collapsedRung", {
-            height,
-            count: audienceCount,
-          })
-        : t("watchParty.tx.collapsedRungZero", { height });
+    : llMode
+      ? t("watchParty.live.viewers", { count: audienceCount })
+      : height === null
+        ? t("watchParty.tx.collapsedPreparing")
+        : audienceCount > 0
+          ? t("watchParty.tx.collapsedRung", {
+              height,
+              count: audienceCount,
+            })
+          : t("watchParty.tx.collapsedRungZero", { height });
 
   /**
    * ONE COLOUR FOR THE WHOLE BROADCAST, the way Twitch's Stream Health and
