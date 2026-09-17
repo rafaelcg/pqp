@@ -500,13 +500,29 @@ export function escapeHtml(value: string): string {
 /**
  * The structured data a page can honestly claim.
  *
- * Every page carries the WebSite node. The landing adds SoftwareApplication —
- * the page is the product — mirroring what the shipped `index.html` says
- * (`applicationCategory`, a zero-price Offer) and, since the redesign, its
- * own FAQPage. `/vs-discord` adds FAQPage too, whose questions are the FAQ
- * section actually rendered on the page — schema for copy a visitor can
- * read, never schema alone. `/tela` does the same with its own seven.
+ * Every page carries the WebSite node, and now an Organization node beside
+ * it: one stable identity for the publisher, independent of which page a
+ * crawler landed on first, with `sameAs` pointing at the two other places the
+ * same product answers for itself — the source repository and the Play Store
+ * listing. Both are checked-in facts, not guesses: the repo is the one this
+ * codebase lives in, and the Play listing is the one `docs/ANDROID_RELEASE.md`
+ * records production access as open for. The App Store is deliberately absent
+ * — TestFlight is a beta enrollment, not a public listing, and `sameAs` is for
+ * pages anyone can already land on.
+ *
+ * The landing adds SoftwareApplication — the page is the product — mirroring
+ * what the shipped `index.html` says (`applicationCategory`, a zero-price
+ * Offer) and, since the redesign, its own FAQPage, plus the same Play Store
+ * link on `sameAs` for the one app-store URL that is public today. `/vs-discord`
+ * adds FAQPage too, whose questions are the FAQ section actually rendered on
+ * the page — schema for copy a visitor can read, never schema alone. `/tela`
+ * does the same with its own seven.
  */
+const ORGANIZATION_SAME_AS = [
+  "https://github.com/rafaelcg/pqp",
+  "https://play.google.com/store/apps/details?id=gg.pqp.app",
+];
+
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
     {
@@ -515,16 +531,24 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
       url: `${CANONICAL_ORIGIN}/`,
       inLanguage: ["pt-BR", "en"],
     },
+    {
+      "@type": "Organization",
+      name: "pqp",
+      url: `${CANONICAL_ORIGIN}/`,
+      logo: `${CANONICAL_ORIGIN}/icons/icon-512.png`,
+      sameAs: ORGANIZATION_SAME_AS,
+    },
   ];
   if (page === "/") {
     graph.push({
       "@type": "SoftwareApplication",
       name: "pqp",
       applicationCategory: "CommunicationApplication",
-      operatingSystem: "Web",
+      operatingSystem: "Web, Windows, macOS, Linux, Android",
       url: `${CANONICAL_ORIGIN}/`,
       description: PAGE_COPY["/"].description[locale],
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+      sameAs: ORGANIZATION_SAME_AS,
     });
   }
   const faq =

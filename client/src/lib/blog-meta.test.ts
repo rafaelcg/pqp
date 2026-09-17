@@ -9,6 +9,7 @@ import {
   injectBlogHead,
   renderBlogHead,
 } from "./blog-meta";
+import { ARTICLES, articleFaq, articleTitle } from "./blog/articles";
 import { POSTS } from "./blog/posts";
 import { loadPostBody } from "./blog/bodies";
 import en from "../locales/en/translation.json";
@@ -35,6 +36,15 @@ describe("blogTargetFromMetaPath", () => {
       expect(blogTargetFromMetaPath(`/blog/${post.slug}`)).toEqual({
         kind: "post",
         post,
+      });
+    }
+  });
+
+  it("recognises every published guide", () => {
+    for (const article of ARTICLES) {
+      expect(blogTargetFromMetaPath(`/blog/${article.slug}`)).toEqual({
+        kind: "article",
+        article,
       });
     }
   });
@@ -78,6 +88,25 @@ describe("renderBlogHead", () => {
     );
   });
 
+  it("writes an article card with published and modified times for a guide", () => {
+    const article = ARTICLES[0]!;
+    const head = renderBlogHead({ kind: "article", article }, "pt-BR");
+    expect(head).toContain(
+      `<title>${articleTitle(article, "pt-BR")} · pqp</title>`,
+    );
+    expect(head).toContain(
+      `<link rel="canonical" href="https://pqp.gg/blog/${article.slug}" />`,
+    );
+    expect(head).toContain('<meta property="og:type" content="article" />');
+    expect(head).toContain(
+      `<meta property="article:published_time" content="${article.date}" />`,
+    );
+    expect(head).toContain(
+      `<meta property="article:modified_time" content="${article.updated}" />`,
+    );
+    expect(head).toContain('<meta name="robots" content="index, follow" />');
+  });
+
   it("writes a website card with no article tags for the index", () => {
     const head = renderBlogHead({ kind: "index" }, "en");
     expect(head).toContain('<meta property="og:type" content="website" />');
@@ -96,13 +125,39 @@ describe("renderBlogHead", () => {
 
     const index = read(renderBlogHead({ kind: "index" }, "pt-BR"));
     expect(index["@type"]).toBe("Blog");
-    expect((index.blogPost as unknown[]).length).toBe(POSTS.length);
+    expect((index.blogPost as unknown[]).length).toBe(
+      POSTS.length + ARTICLES.length,
+    );
 
     const post = read(
       renderBlogHead({ kind: "post", post: POSTS[0]! }, "pt-BR"),
     );
     expect(post["@type"]).toBe("BlogPosting");
     expect(post.datePublished).toBe(POSTS[0]!.date);
+
+    const article = ARTICLES[0]!;
+    const articleHead = read(
+      renderBlogHead({ kind: "article", article }, "pt-BR"),
+    );
+    expect(articleHead["@context"]).toBe("https://schema.org");
+    const graph = articleHead["@graph"] as Record<string, unknown>[];
+    const types = graph.map((node) => node["@type"]);
+    expect(types).toContain("Article");
+    expect(types).toContain("BreadcrumbList");
+    // Only when the article actually has FAQ items, which today is always,
+    // but the node is conditional so an article with none does not claim
+    // structured data for a section that renders nothing.
+    if (article.faq.length > 0) {
+      expect(types).toContain("FAQPage");
+      const faqNode = graph.find((node) => node["@type"] === "FAQPage")!;
+      const mainEntity = faqNode.mainEntity as Record<string, unknown>[];
+      expect(mainEntity.length).toBe(article.faq.length);
+      const rendered = articleFaq(article, "pt-BR");
+      expect((mainEntity[0]!.name as string)).toBe(rendered[0]!.question);
+    }
+    const articleNode = graph.find((node) => node["@type"] === "Article")!;
+    expect(articleNode.datePublished).toBe(article.date);
+    expect(articleNode.dateModified).toBe(article.updated);
   });
 
   it("escapes copy rather than trusting it", () => {
@@ -120,6 +175,18 @@ describe("renderBlogHead", () => {
     );
     expect(head).not.toContain("<script>a");
     expect(head).toContain("&lt;script&gt;");
+  });
+
+  it("keeps a guide's FAQ JSON-LD unable to close its own script block", () => {
+    const head = renderBlogHead(
+      { kind: "article", article: ARTICLES[0]! },
+      "pt-BR",
+    );
+    const jsonLd = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(
+      head,
+    )![1]!;
+    expect(jsonLd).not.toContain("</");
+    expect(() => JSON.parse(jsonLd)).not.toThrow();
   });
 });
 
@@ -184,9 +251,12 @@ describe("the edge import graph", () => {
   it("keeps markdown out of what the middleware imports", async () => {
     const posts = await import("./blog/posts?raw").then((m) => m.default);
     expect(posts).not.toContain(".md?raw");
+    const articles = await import("./blog/articles?raw").then((m) => m.default);
+    expect(articles).not.toContain(".md?raw");
     const meta = await import("./blog-meta?raw").then((m) => m.default);
     expect(meta).not.toContain(".md?raw");
     expect(meta).not.toContain("blog/bodies");
+    expect(meta).not.toContain("blog/article-bodies");
   });
 });
 

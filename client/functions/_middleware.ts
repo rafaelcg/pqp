@@ -1,3 +1,4 @@
+import { isNoIndexAppPath } from "../src/lib/app-robots";
 import {
   blogTargetFromMetaPath,
   injectBlogHead,
@@ -272,6 +273,31 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       });
     }
     return response;
+  }
+
+  // `/app/*`, minus the invite door: per-account, behind a login, nothing an
+  // index can use. `robots.txt` no longer disallows it (see `app-robots.ts`
+  // for why a `Disallow` a crawler never fetches cannot keep it out of the
+  // index either), so this is what actually keeps it out: let the crawl
+  // through, stamp the response `noindex, nofollow` from a header a crawler
+  // reads before it parses the body. Cheap on purpose — no `response.text()`,
+  // the body streams through untouched.
+  if (
+    context.request.method === "GET" &&
+    isNoIndexAppPath(url.pathname)
+  ) {
+    const response = await context.next();
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!response.ok || !contentType.includes("text/html")) {
+      return response;
+    }
+    const headers = new Headers(response.headers);
+    headers.set("x-robots-tag", "noindex, nofollow");
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   }
 
   // `Accept: text/markdown` on a page that has a written markdown twin. This

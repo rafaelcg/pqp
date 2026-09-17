@@ -9,15 +9,27 @@ import { Seo } from "@/components/marketing/seo";
 import { formatPostDate } from "@/lib/blog/format";
 import { loadPostBody } from "@/lib/blog/bodies";
 import { postBySlug, type BlogLocale } from "@/lib/blog/posts";
+import { loadArticleBody } from "@/lib/blog/article-bodies";
+import {
+  articleBySlug,
+  articleFaq,
+  articleSummary,
+  articleTitle,
+} from "@/lib/blog/articles";
 import { useTranslation } from "@/lib/i18n";
 
 /**
- * `/blog/<slug>`: one release note.
+ * `/blog/<slug>`: one release note, or one guide.
  *
- * THE BODY IS FETCHED, NOT BUNDLED. Posts accumulate forever and the landing
- * page's download budget does not, so each one is a dynamic import resolved
- * when its route mounts. That is also why the head still comes from the edge:
- * the crawler that matters never waits for this fetch.
+ * THE BODY IS FETCHED, NOT BUNDLED. Posts and guides accumulate forever and
+ * the landing page's download budget does not, so each one is a dynamic
+ * import resolved when its route mounts. That is also why the head still
+ * comes from the edge: the crawler that matters never waits for this fetch.
+ *
+ * A SLUG NAMES EITHER A POST OR A GUIDE, NEVER BOTH — `articles.test.ts` pins
+ * that the two lists never share one. Release notes are looked up first, same
+ * order `blogTargetFromMetaPath` uses at the edge, so the two halves of this
+ * feature can never disagree about what a slug means.
  *
  * The prose is authored markdown from this repository, not user input, so
  * unlike `message-list` it does not run behind an element allowlist. What it
@@ -52,15 +64,19 @@ export function BlogPostPage() {
   const { t, locale } = useTranslation();
   const blogLocale: BlogLocale = locale === "pt-BR" ? "pt-BR" : "en";
   const post = slug ? postBySlug(slug) : null;
+  const article = !post && slug ? articleBySlug(slug) : null;
   const [body, setBody] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!post) {
+    if (!post && !article) {
       return;
     }
     let live = true;
     setBody(null);
-    void loadPostBody(post.slug, blogLocale).then((text) => {
+    const load = post
+      ? loadPostBody(post.slug, blogLocale)
+      : loadArticleBody(article!.slug, blogLocale);
+    void load.then((text) => {
       if (live) {
         setBody(text);
       }
@@ -70,9 +86,9 @@ export function BlogPostPage() {
     return () => {
       live = false;
     };
-  }, [post, blogLocale]);
+  }, [post, article, blogLocale]);
 
-  if (!post) {
+  if (!post && !article) {
     return (
       <div className="flex min-h-full flex-col bg-ink text-paper">
         <Seo
@@ -103,12 +119,16 @@ export function BlogPostPage() {
     );
   }
 
+  const title = post ? post.title[blogLocale] : articleTitle(article!, blogLocale);
+  const summary = post ? post.summary[blogLocale] : articleSummary(article!, blogLocale);
+  const faq = article ? articleFaq(article, blogLocale) : [];
+
   return (
     <div className="flex min-h-full flex-col bg-ink text-paper">
       <Seo
-        title={`${post.title[blogLocale]} — pqp`}
-        description={post.summary[blogLocale]}
-        path={`/blog/${post.slug}`}
+        title={`${title} · pqp`}
+        description={summary}
+        path={`/blog/${post ? post.slug : article!.slug}`}
       />
       <MarketingNav />
 
@@ -122,14 +142,25 @@ export function BlogPostPage() {
           </Link>
 
           <h1 className="mt-6 text-balance font-display text-3xl font-bold leading-[1.15] tracking-tight sm:text-4xl">
-            {post.title[blogLocale]}
+            {title}
           </h1>
-          <time
-            dateTime={post.date}
-            className="mt-4 block text-sm text-paper-muted/80"
-          >
-            {formatPostDate(post.date, blogLocale)}
-          </time>
+          {post ? (
+            <time
+              dateTime={post.date}
+              className="mt-4 block text-sm text-paper-muted/80"
+            >
+              {formatPostDate(post.date, blogLocale)}
+            </time>
+          ) : (
+            <time
+              dateTime={article!.updated}
+              className="mt-4 block text-sm text-paper-muted/80"
+            >
+              {t("blog.article.updated", {
+                date: formatPostDate(article!.updated, blogLocale),
+              })}
+            </time>
+          )}
 
           <div className="blog-prose mt-10">
             {body === null ? (
@@ -150,6 +181,31 @@ export function BlogPostPage() {
               </ReactMarkdown>
             )}
           </div>
+
+          {faq.length > 0 && (
+            // Rendered, not just schema: `blog/articles.ts` requires every
+            // JSON-LD question to appear here, asked the same way, so this is
+            // the copy that FAQPage structured data describes rather than a
+            // second, drifting source of truth.
+            <section className="mt-14" aria-labelledby="blog-article-faq">
+              <h2
+                id="blog-article-faq"
+                className="font-display text-xl font-semibold sm:text-2xl"
+              >
+                {t("blog.article.faqHeading")}
+              </h2>
+              <dl className="mt-6 flex flex-col gap-6">
+                {faq.map((item) => (
+                  <div key={item.question}>
+                    <dt className="font-medium text-paper">{item.question}</dt>
+                    <dd className="mt-2 leading-relaxed text-paper-muted">
+                      {item.answer}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          )}
         </article>
       </main>
 
