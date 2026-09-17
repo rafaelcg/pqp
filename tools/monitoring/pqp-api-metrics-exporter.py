@@ -129,8 +129,27 @@ def fetch_admin_metrics() -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def render(payload: dict) -> str:
-    ready = payload.get("ready", {})
+def fetch_ready() -> dict:
+    """GET /ready on its own, unauthenticated.
+
+    The admin payload also carries a `ready` block, but it is sampled while
+    that same request runs the dashboard's query burst on a cold cache, so
+    its Postgres round trip read 40-65 ms every other scrape on a box whose
+    real probe is 1 ms (2026-09-17, first day behind Cloudflare). /ready is
+    the number an external monitor would see, so it is the one to graph and
+    alert on. Falls back to the admin block if /ready itself fails, so a
+    transient error here does not blank the gauges.
+    """
+    request = urllib.request.Request(
+        f"{API_URL}/ready",
+        headers={"User-Agent": "pqp-api-metrics-exporter/1 (+https://pqp.gg)"},
+    )
+    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def render(payload: dict, ready_payload: dict | None = None) -> str:
+    ready = ready_payload if ready_payload else payload.get("ready", {})
     checks = ready.get("checks", {})
     postgres = checks.get("postgres", {})
     pool = checks.get("pool", {})
@@ -317,7 +336,12 @@ def main() -> int:
     # keep reading a confident, wrong, green number through an outage.
     try:
         payload = fetch_admin_metrics()
-        body = render(payload)
+        try:
+            ready_payload = fetch_ready()
+        except Exception as exc:  # noqa: BLE001
+            print(f"pqp-api-metrics-exporter: /ready fetch failed, using admin block: {exc}", file=sys.stderr)
+            ready_payload = None
+        body = render(payload, ready_payload)
     except (
         urllib.error.URLError,
         RuntimeError,
