@@ -663,10 +663,11 @@ there are left NULL (the card simply has no share button) rather than suffixed.
 official-link chips, one featured YouTube/Twitch/image, category pill, member
 count as a footnote, the two pictures, a month, and one button. **No member
 list** — who is in a room is a fact about those people — no messages, no Baú
-posts, no channels, no owner, and **no id**: withholding the id is what forces
-the join intent to travel as a slug and be resolved behind auth. The in-app
-Overview is the same identity in a compact header, then the Baú feed on one
-scroll. Staff with Manage Server edit that header in place (cover, icon,
+posts, no channels, no owner, and **no id field**: the join intent travels as a
+slug and is resolved behind auth. Uploaded pictures are still served at
+`/api/servers/<id>/{icon,banner,featured}`, so those URLs name the server. The
+in-app Overview is the same identity in a compact header, then the Baú feed on
+one scroll. Staff with Manage Server edit that header in place (cover, icon,
 tagline, about, official links). With no cover uploaded, Overview and `/c/`
 paint a tiled pqp.gg mosaic over the hashed hue wash rather than a flat
 gradient. Communities land there even if Baú is still off. Suspended, unlisted,

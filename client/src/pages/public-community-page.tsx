@@ -339,7 +339,10 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
               className={cn("mt-10", !reduced && "animate-rise")}
               style={stagger(4)}
             >
-              <CommunityFeaturedMedia featured={community.featured} />
+              <CommunityFeaturedMedia
+                featured={community.featured}
+                clickToPlay
+              />
             </div>
           )}
 

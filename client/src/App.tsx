@@ -8260,6 +8260,7 @@ function MainAppContent({
             serverName={selectedServer.name}
             server={selectedServer}
             feedAvailable={communityHomeFeedLive}
+            homeFeatureOn={communityHomeFeatureOn}
             me={{
               id: user.id,
               displayName: user.displayName,
@@ -8519,7 +8520,7 @@ function MainAppContent({
             !server.isCommunity &&
             isCommunityHomeChannelId(selectedChannelId)
           ) {
-            const fallback = pickServerLandingTarget(channels, false);
+            const fallback = pickServerLandingTarget(channels, false, false);
             if (fallback) {
               void selectChannel(fallback.id, server.id);
             }

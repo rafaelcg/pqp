@@ -115,7 +115,8 @@ async function serverAttachmentKeys(serverId: string): Promise<string[]> {
 }
 
 /**
- * The server's own icon and banner objects, if it uploaded either.
+ * The server's own icon, banner and community featured objects, if it uploaded
+ * any of them.
  *
  * Separate from `serverAttachmentKeys` because they hang off the `servers` row
  * itself rather than off a message, and because a server with no pictures — the
@@ -129,9 +130,13 @@ async function serverImageKeys(serverId: string): Promise<string[]> {
   const result = await getPool().query<{
     icon_key: string | null;
     banner_key: string | null;
-  }>(`SELECT icon_key, banner_key FROM servers WHERE id = $1`, [serverId]);
+    community_featured_key: string | null;
+  }>(
+    `SELECT icon_key, banner_key, community_featured_key FROM servers WHERE id = $1`,
+    [serverId],
+  );
   const row = result.rows[0];
-  return [row?.icon_key, row?.banner_key].filter(
+  return [row?.icon_key, row?.banner_key, row?.community_featured_key].filter(
     (key): key is string => typeof key === "string" && key.length > 0,
   );
 }

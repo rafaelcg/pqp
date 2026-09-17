@@ -172,16 +172,17 @@ async function openAs(
 }
 
 test.describe("Baú", () => {
-  test("forced off: no Baú row on a community server, lands on text", async ({
+  test("forced off: community still lands on Overview, feed stays empty", async ({
     page,
   }) => {
     const serverId = await seedCommunity(`Home Off ${Date.now()}`);
     await openAs(page, OWNER, serverId, { communityHome: "0" });
-    await expect(page.locator("[data-community-home-row]")).toHaveCount(0);
-    await expect(page.locator("[data-community-home-feed]")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
+    await expect(page.locator("[data-community-identity-header]")).toBeVisible({
       timeout: 20_000,
     });
+    await expect(page.locator("[data-community-home-feed]")).toBeVisible();
+    await expect(page.locator("[data-home-compose]")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Send" })).toHaveCount(0);
   });
 
   test("owner: community lands on Baú, empty guide, write + preview + publish", async ({

@@ -122,6 +122,7 @@ export function CommunitySettingsSection({
   const categoryId = useId();
   const slugId = useId();
   const languageId = useId();
+  const formBusy = saving || featuredBusy;
 
   function applySettings(next: CommunitySettings) {
     setSettings(next);
@@ -271,16 +272,22 @@ export function CommunitySettingsSection({
     setError(null);
     try {
       await uploadServerImage(serverId, "featured", file);
-      const res = await fetchCommunitySettings(serverId);
-      applySettings(res.community);
-      onIdentitySaved?.({
-        isCommunity: res.community.isCommunity,
-        communityTagline: res.community.tagline,
-        communityAbout: res.community.about,
-        communityLinks: res.community.links,
-        communitySlug: res.community.slug,
-      });
+      setFeaturedImage(true);
+      setFeaturedUrl("");
       setSaved(true);
+      try {
+        const res = await fetchCommunitySettings(serverId);
+        applySettings(res.community);
+        onIdentitySaved?.({
+          isCommunity: res.community.isCommunity,
+          communityTagline: res.community.tagline,
+          communityAbout: res.community.about,
+          communityLinks: res.community.links,
+          communitySlug: res.community.slug,
+        });
+      } catch {
+        setError(t("communities.settings.featuredRefreshFailed"));
+      }
     } catch (err) {
       setError(
         err instanceof ApiError || err instanceof Error
@@ -388,7 +395,7 @@ export function CommunitySettingsSection({
                 id={addressToggleId}
                 type="checkbox"
                 checked={addressed}
-                disabled={saving || addressLocked}
+                disabled={formBusy || addressLocked}
                 className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
                 onChange={(e) => {
                   setAddressed(e.target.checked);
@@ -426,7 +433,7 @@ export function CommunitySettingsSection({
                 id={toggleId}
                 type="checkbox"
                 checked={listed}
-                disabled={saving || !canListPublicly || !addressed}
+                disabled={formBusy || !canListPublicly || !addressed}
                 className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
                 onChange={(e) => {
                   setListed(e.target.checked);
@@ -462,7 +469,7 @@ export function CommunitySettingsSection({
               id={taglineId}
               value={tagline}
               maxLength={COMMUNITY_TAGLINE_MAX_LENGTH}
-              disabled={saving}
+              disabled={formBusy}
               placeholder={t("communities.settings.taglinePlaceholder")}
               onChange={(e) => {
                 setTagline(e.target.value);
@@ -485,7 +492,7 @@ export function CommunitySettingsSection({
               id={aboutId}
               value={about}
               maxLength={COMMUNITY_ABOUT_MAX_LENGTH}
-              disabled={saving}
+              disabled={formBusy}
               rows={5}
               placeholder={t("communities.settings.aboutPlaceholder")}
               onChange={(e) => {
@@ -514,7 +521,7 @@ export function CommunitySettingsSection({
                 <li key={index} className="flex gap-2">
                   <Input
                     value={url}
-                    disabled={saving}
+                    disabled={formBusy}
                     placeholder={t("communities.settings.linksPlaceholder")}
                     onChange={(e) => {
                       const next = [...linkUrls];
@@ -526,7 +533,7 @@ export function CommunitySettingsSection({
                   <Button
                     type="button"
                     variant="secondary"
-                    disabled={saving}
+                    disabled={formBusy}
                     onClick={() => {
                       setLinkUrls(linkUrls.filter((_, i) => i !== index));
                       setSaved(false);
@@ -541,7 +548,7 @@ export function CommunitySettingsSection({
               <Button
                 type="button"
                 variant="secondary"
-                disabled={saving}
+                disabled={formBusy}
                 onClick={() => {
                   setLinkUrls([...linkUrls, ""]);
                   setSaved(false);
@@ -565,7 +572,7 @@ export function CommunitySettingsSection({
             <Input
               id={featuredId}
               value={featuredUrl}
-              disabled={saving || featuredBusy}
+              disabled={formBusy}
               placeholder={t("communities.settings.featuredPlaceholder")}
               onChange={(e) => {
                 setFeaturedUrl(e.target.value);
@@ -591,7 +598,7 @@ export function CommunitySettingsSection({
                   <Button
                     type="button"
                     variant="secondary"
-                    disabled={saving || featuredBusy}
+                    disabled={formBusy}
                     onClick={() => featuredFileRef.current?.click()}
                   >
                     {t("communities.settings.featuredUpload")}
@@ -602,7 +609,7 @@ export function CommunitySettingsSection({
                 <Button
                   type="button"
                   variant="secondary"
-                  disabled={saving || featuredBusy}
+                  disabled={formBusy}
                   onClick={() => void clearFeatured()}
                 >
                   {t("communities.settings.featuredRemove")}
@@ -611,7 +618,7 @@ export function CommunitySettingsSection({
             </div>
             {featuredImage && (
               <p className="text-xs text-paper-muted">
-                {t("communities.settings.featured")}
+                {t("communities.settings.featuredImageSet")}
               </p>
             )}
           </div>
@@ -626,7 +633,7 @@ export function CommunitySettingsSection({
             <select
               id={categoryId}
               value={category}
-              disabled={saving}
+              disabled={formBusy}
               className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
               onChange={(e) => {
                 setCategory(e.target.value as CommunityCategory);
@@ -664,7 +671,7 @@ export function CommunitySettingsSection({
                 autoComplete="off"
                 autoCapitalize="none"
                 spellCheck={false}
-                disabled={saving}
+                disabled={formBusy}
                 placeholder={t("communities.settings.slugPlaceholder")}
                 // Slugified on every keystroke rather than validated on blur.
                 // The server slugifies the body anyway, so a field that let
@@ -703,7 +710,7 @@ export function CommunitySettingsSection({
             <select
               id={languageId}
               value={language}
-              disabled={saving}
+              disabled={formBusy}
               className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
               onChange={(e) => {
                 setLanguage(e.target.value as CommunityLanguage);
@@ -719,7 +726,7 @@ export function CommunitySettingsSection({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Button disabled={saving || !dirty} onClick={() => void save()}>
+            <Button disabled={formBusy || !dirty} onClick={() => void save()}>
               {saving
                 ? t("communities.settings.saving")
                 : t("communities.settings.save")}

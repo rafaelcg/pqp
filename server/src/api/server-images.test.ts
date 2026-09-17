@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -275,7 +276,7 @@ describeDb("server images", () => {
       expect(result.status).toBe(401);
     });
 
-    for (const kind of ["icon", "banner", "featured"] as const) {
+    for (const kind of ["icon", "banner"] as const) {
       it(`lets an admin mint a ${kind} (Manage Server)`, async () => {
         const result = await call(
           admin,
@@ -711,6 +712,122 @@ describeDb("server images", () => {
       storage.configured = false;
       const response = await fetchImage(`/api/servers/${serverId}/icon`);
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe("featured pictures", () => {
+    beforeEach(() => {
+      process.env.COMMUNITIES_ENABLED = "true";
+    });
+
+    afterEach(() => {
+      delete process.env.COMMUNITIES_ENABLED;
+    });
+
+    async function setFeatured(): Promise<string> {
+      const mint = await call<{ key: string }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/featured`,
+        { contentType: "image/jpeg", byteSize: 40_000 },
+      );
+      expect(mint.status).toBe(201);
+      storage.objects.set(mint.body.key, {
+        contentLength: 40_000,
+        contentType: "image/jpeg",
+      });
+      const claimed = await call(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/featured/claim`,
+        { key: mint.body.key },
+      );
+      expect(claimed.status).toBe(200);
+      return mint.body.key;
+    }
+
+    it("404s mint when communities are off", async () => {
+      delete process.env.COMMUNITIES_ENABLED;
+      const result = await call(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/featured`,
+        { contentType: "image/jpeg", byteSize: 1000 },
+      );
+      expect(result.status).toBe(404);
+    });
+
+    it("lets an admin mint (Manage Server)", async () => {
+      const result = await call(
+        admin,
+        "POST",
+        `/api/servers/${serverId}/featured`,
+        { contentType: "image/jpeg", byteSize: 1000 },
+      );
+      expect(result.status).toBe(201);
+    });
+
+    it("a claim sets kind to image and clears an embed", async () => {
+      await getPool().query(
+        `UPDATE servers SET
+           community_featured_kind = 'youtube',
+           community_featured_embed_url = 'https://youtu.be/jNQXAC9IVRw'
+         WHERE id = $1`,
+        [serverId],
+      );
+      await setFeatured();
+      const row = await getPool().query<{
+        community_featured_kind: string | null;
+        community_featured_embed_url: string | null;
+      }>(
+        `SELECT community_featured_kind, community_featured_embed_url
+         FROM servers WHERE id = $1`,
+        [serverId],
+      );
+      expect(row.rows[0]!.community_featured_kind).toBe("image");
+      expect(row.rows[0]!.community_featured_embed_url).toBeNull();
+    });
+
+    it("serves the featured object, not the icon", async () => {
+      await setImage("icon");
+      const featuredKey = await setFeatured();
+      const response = await fetchImage(`/api/servers/${serverId}/featured`);
+      expect(response.status).toBe(302);
+      const location = response.headers.get("location") ?? "";
+      expect(location).toContain(featuredKey);
+      expect(location).not.toContain(`/${serverId}/icon/`);
+    });
+
+    it("DELETE does not wipe a YouTube featured embed", async () => {
+      await getPool().query(
+        `UPDATE servers SET
+           community_featured_kind = 'youtube',
+           community_featured_embed_url = 'https://youtu.be/jNQXAC9IVRw'
+         WHERE id = $1`,
+        [serverId],
+      );
+      const cleared = await call(owner, "DELETE", `/api/servers/${serverId}/featured`);
+      expect(cleared.status).toBe(200);
+      const row = await getPool().query<{
+        community_featured_kind: string | null;
+        community_featured_embed_url: string | null;
+      }>(
+        `SELECT community_featured_kind, community_featured_embed_url
+         FROM servers WHERE id = $1`,
+        [serverId],
+      );
+      expect(row.rows[0]!.community_featured_kind).toBe("youtube");
+      expect(row.rows[0]!.community_featured_embed_url).toBe(
+        "https://youtu.be/jNQXAC9IVRw",
+      );
+    });
+
+    it("orphans the featured object when the server is deleted", async () => {
+      const featuredKey = await setFeatured();
+      const deleted = await call(owner, "DELETE", `/api/servers/${serverId}`);
+      expect(deleted.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(storage.deletedKeys).toContain(featuredKey);
     });
   });
 });

@@ -810,19 +810,21 @@ export const COMMUNITY_MEMBER_FLOOR = 2;
  * are in there, the two pictures. What it refuses is everything a member can
  * see and a stranger cannot: NO MEMBER LIST (which is a disclosure of who talks
  * to whom, the single worst thing this page could do), NO MESSAGES, no channel
- * list, no owner, no id, and no Baú posts — this is still a poster, not a
- * window into the room.
+ * list, no owner, no server-id field, and no Baú posts — this is still a poster,
+ * not a window into the room. Uploaded pictures are served at
+ * `/api/servers/<id>/{icon,banner,featured}`, so an uploaded image URL names
+ * the server; the JSON itself still has no `id`.
  *
  * NO `joined` FIELD, unlike `communitySummarySchema`. There is no viewer to be
  * joined — the whole point of this shape is that it is identical for every
  * caller, which is also what makes it cacheable at the edge for a minute the
  * way the public profile is.
  *
- * THE ID IS ABSENT ON PURPOSE and the omission has teeth: the join CTA carries
- * the SLUG through sign-up (`?join=<slug>`) and the app resolves it behind
- * auth. A stranger never learns an id they could feed to another endpoint, and
- * the one endpoint that would take it is behind the same flag and the same
- * gate as everything else in this feature.
+ * THE ID FIELD IS ABSENT ON PURPOSE and the omission has teeth: the join CTA
+ * carries the SLUG through sign-up (`?join=<slug>`) and the app resolves it
+ * behind auth. The JSON does not include a server id. Picture URLs still
+ * contain one when a cover, icon or featured image was uploaded; every other
+ * route that would take that id stays behind auth and the same flag.
  */
 export const publicCommunitySchema = z.object({
   slug: z.string(),

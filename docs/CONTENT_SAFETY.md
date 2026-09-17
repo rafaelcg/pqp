@@ -623,7 +623,7 @@ failure mode reproduced with better latency.
 | Affordance | Where |
 |---|---|
 | Every directory read requires auth | the router's own gate; there is no anonymous browsing, so the 18+ gate cannot be routed around |
-| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window**, and it exists for an addressed community whether or not it is listed | `publicCommunitySchema`: name, address, tagline, about, official links, one featured clip or image, category, member **count**, the two pictures, a month. No member list, no messages, no Baú posts, no channels, no owner, no id |
+| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window**, and it exists for an addressed community whether or not it is listed | `publicCommunitySchema`: name, address, tagline, about, official links, one featured clip or image, category, member **count**, the two pictures, a month. No member list, no messages, no Baú posts, no channels, no owner, no id **field**. Uploaded picture URLs are `/api/servers/<id>/{icon,banner,featured}` |
 | A server you are banned from is **invisible**, not merely un-joinable | `LISTED_SQL` in `server/src/services/communities.ts` — grid, search and direct-id lookup alike |
 | Report a whole community from its card | `subjectType: "server"` on `POST /api/reports` |
 | Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |

@@ -69,6 +69,7 @@ export function CommunityIdentityHeader({
   server,
   layout = "poster",
   feedAvailable = true,
+  homeFeatureOn = false,
   canManageServer = false,
   onOpenServerSettings,
   onStartEdit,
@@ -88,6 +89,8 @@ export function CommunityIdentityHeader({
   >;
   layout?: "poster" | "compact";
   feedAvailable?: boolean;
+  /** Instance `COMMUNITY_HOME_ENABLED`. The per-server switch is `feedAvailable`. */
+  homeFeatureOn?: boolean;
   canManageServer?: boolean;
   onOpenServerSettings?: () => void;
   onStartEdit?: () => void;
@@ -108,6 +111,7 @@ export function CommunityIdentityHeader({
     : null;
   const showTurnOn =
     canManageServer &&
+    homeFeatureOn &&
     !feedAvailable &&
     !editing &&
     Boolean(onOpenServerSettings);

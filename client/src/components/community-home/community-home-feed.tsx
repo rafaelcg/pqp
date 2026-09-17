@@ -43,6 +43,7 @@ import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { GifAttachment } from "@/components/chat/message-list";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Menu } from "@/components/ui/menu";
 import {
   ApiError,
@@ -137,6 +138,8 @@ type Props = {
   introDismissed: boolean;
   onDismissIntro: () => void;
   onOpenNav?: () => void;
+  /** Instance `COMMUNITY_HOME_ENABLED`. Hides the dead "Turn Baú on" path. */
+  homeFeatureOn: boolean;
   /** Opens community settings so staff can turn Baú on from the poster. */
   onOpenServerSettings?: () => void;
   /** Cover, icon, tagline, about, links: keep the rail in sync after a save. */
@@ -1828,6 +1831,7 @@ export function CommunityHomeFeed({
   serverName,
   server,
   feedAvailable,
+  homeFeatureOn,
   me,
   canManageServer,
   isOwner,
@@ -1858,6 +1862,7 @@ export function CommunityHomeFeed({
   );
   const [identitySaving, setIdentitySaving] = useState(false);
   const [identityError, setIdentityError] = useState<string | null>(null);
+  const [identityDiscardOpen, setIdentityDiscardOpen] = useState(false);
   const [identityImageBusy, setIdentityImageBusy] = useState<
     "icon" | "banner" | "remove-icon" | "remove-banner" | null
   >(null);
@@ -1934,15 +1939,31 @@ export function CommunityHomeFeed({
       return;
     }
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape" && !identitySaving && !identityImageBusy) {
-        setIdentityEditing(false);
-        setIdentityDraft(identityDraftFrom(server));
-        setIdentityError(null);
+      if (event.key !== "Escape" || identitySaving || identityImageBusy) {
+        return;
       }
+      if (identityDiscardOpen) {
+        return;
+      }
+      if (identityDraftDirty(server, identityDraft)) {
+        event.preventDefault();
+        setIdentityDiscardOpen(true);
+        return;
+      }
+      setIdentityEditing(false);
+      setIdentityDraft(identityDraftFrom(server));
+      setIdentityError(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [identityEditing, identitySaving, identityImageBusy, server]);
+  }, [
+    identityDiscardOpen,
+    identityDraft,
+    identityEditing,
+    identityImageBusy,
+    identitySaving,
+    server,
+  ]);
 
   function startIdentityEdit() {
     setIdentityDraft(identityDraftFrom(server));
@@ -1955,9 +1976,21 @@ export function CommunityHomeFeed({
     if (identitySaving || identityImageBusy) {
       return;
     }
+    setIdentityDiscardOpen(false);
     setIdentityEditing(false);
     setIdentityDraft(identityDraftFrom(server));
     setIdentityError(null);
+  }
+
+  function requestCancelIdentityEdit() {
+    if (identitySaving || identityImageBusy) {
+      return;
+    }
+    if (identityDraftDirty(server, identityDraft)) {
+      setIdentityDiscardOpen(true);
+      return;
+    }
+    cancelIdentityEdit();
   }
 
   async function saveIdentity() {
@@ -2241,7 +2274,7 @@ export function CommunityHomeFeed({
                 type="button"
                 variant="ghost"
                 disabled={identitySaving || Boolean(identityImageBusy)}
-                onClick={cancelIdentityEdit}
+                onClick={requestCancelIdentityEdit}
                 data-identity-edit-cancel
               >
                 {t("communityHome.identity.cancel")}
@@ -2290,6 +2323,7 @@ export function CommunityHomeFeed({
                 : "compact"
             }
             feedAvailable={feedAvailable}
+            homeFeatureOn={homeFeatureOn}
             canManageServer={canManageServer}
             onOpenServerSettings={onOpenServerSettings}
             onStartEdit={
@@ -2434,7 +2468,11 @@ export function CommunityHomeFeed({
                       className="text-sm text-text-tertiary"
                       data-home-empty
                     >
-                      {t("communityHome.identity.feedOff")}
+                      {t(
+                        homeFeatureOn
+                          ? "communityHome.identity.feedOff"
+                          : "communityHome.identity.feedOffInstance",
+                      )}
                     </p>
                   )
                 ) : canManageServer ? (
@@ -2542,6 +2580,14 @@ export function CommunityHomeFeed({
         </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={identityDiscardOpen}
+        title={t("communityHome.identity.discardTitle")}
+        description={t("communityHome.identity.discardBody")}
+        confirmLabel={t("communityHome.identity.discardConfirm")}
+        onConfirm={cancelIdentityEdit}
+        onClose={() => setIdentityDiscardOpen(false)}
+      />
     </div>
   );
 }

@@ -13,14 +13,15 @@ Staging is the proving ground. Production has the flags unset.
 
 | Name | Default | What it does |
 |---|---|---|
-| `COMMUNITY_HOME_ENABLED` | off | The surface exists. Off: every `/home/*` route 404s, the schedule sweep idles, the client hides the row. |
+| `COMMUNITY_HOME_ENABLED` | off | The feed exists. Off: every `/home/*` route 404s, the schedule sweep idles, the client hides the row on a private hall. A community still lands on Overview (identity poster, empty feed). |
 | `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. |
 
 **Plus one per-server switch.** With the instance flag on, each server still
 starts with Baú off. An owner turns it on in Server settings (the Baú section,
 `PATCH /api/servers/:id/home/config`, column `servers.community_home_enabled`).
-The row, the landing and the feed need both; the routes need only the instance
-flag, so the setting itself can be flipped through the API. Until the row is
+The row, the landing and the feed need both on a private hall. A community
+always lands on Overview (identity), even with Baú still off; the feed stays
+empty until staff turn it on, and only if the instance flag is on. Until the row is
 opened once on a server it carries a small "New" chip (`localStorage`, per
 server, `client/src/lib/community-home/new-badges.ts`).
 

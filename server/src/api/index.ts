@@ -300,9 +300,9 @@ import {
 } from "../services/avatars.js";
 import {
   createServerImageUpload,
-  discardServerImageObject,
   isServerImageUploadConfigured,
   presignServerImageRead,
+  scheduleDiscardServerImageObject,
   serverImageUrlForKey,
   setServerImage,
   verifyServerImageObject,
@@ -3390,6 +3390,9 @@ async function mintServerImage(
   ctx: { req: IncomingMessage; res: ServerResponse; user: { id: string } },
   serverId: string,
 ) {
+  if (kind === "featured") {
+    requireCommunities();
+  }
   if (!isServerImageUploadConfigured()) {
     throw new HttpError(503, "Image uploads are not configured on this server");
   }
@@ -3431,6 +3434,9 @@ async function claimServerImage(
   ctx: { req: IncomingMessage; user: { id: string } },
   serverId: string,
 ) {
+  if (kind === "featured") {
+    requireCommunities();
+  }
   if (!isServerImageUploadConfigured()) {
     throw new HttpError(503, "Image uploads are not configured on this server");
   }
@@ -3452,7 +3458,7 @@ async function claimServerImage(
     throw new NotFound("Server not found");
   }
   if (updated.previousKey && updated.previousKey !== body.key) {
-    void discardServerImageObject(updated.previousKey);
+    scheduleDiscardServerImageObject(updated.previousKey);
   }
   await logAudit({
     serverId,
@@ -3478,13 +3484,16 @@ async function clearServerImage(
   userId: string,
   serverId: string,
 ) {
+  if (kind === "featured") {
+    requireCommunities();
+  }
   await requirePermission(serverId, userId, Permission.MANAGE_SERVER);
   const updated = await setServerImage(kind, serverId, null, SERVER_COLUMNS);
   if (!updated) {
     throw new NotFound("Server not found");
   }
   if (updated.previousKey) {
-    void discardServerImageObject(updated.previousKey);
+    scheduleDiscardServerImageObject(updated.previousKey);
   }
   await logAudit({
     serverId,
@@ -4417,7 +4426,7 @@ router.patch(
     }
 
     if (updated.previousFeaturedKey) {
-      void discardServerImageObject(updated.previousFeaturedKey);
+      scheduleDiscardServerImageObject(updated.previousFeaturedKey);
     }
 
     // One entry for the whole patch, carrying only what actually moved. Listing
@@ -8961,15 +8970,18 @@ const SERVER_IMAGE_OBJECT_PATH =
   /^\/api\/servers\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(icon|banner|featured)$/;
 
 /**
- * A server's icon or banner, as a redirect to the object store.
+ * A server's icon, banner, or community featured image, as a redirect to the
+ * object store.
  *
  * DELIBERATELY UNAUTHENTICATED, the fourth route in this file that is, and for
  * the same reason as `serveAvatarObject`: a browser cannot attach a Bearer
- * token to an `<img src>`. What it discloses is one image about a server whose
- * id the caller already has — and for a listed community, the directory hands
- * that id to strangers by design. For an unlisted server, the id is the secret
- * (as it is for every other id in this schema), and a picture is strictly less
- * than the name and member count an invite already reveals.
+ * token to an `<img src>`. Featured reads `community_featured_key`, not the
+ * icon or banner columns — the kind in the path is the lookup. What it
+ * discloses is one image about a server whose id the caller already has — and
+ * for a listed community, the directory hands that id to strangers by design.
+ * For an unlisted server, the id is the secret (as it is for every other id in
+ * this schema), and a picture is strictly less than the name and member count
+ * an invite already reveals.
  *
  * A redirect rather than a proxy, exactly as avatars are: the bytes are in our
  * own bucket and streaming a banner per viewer per render is the egress bill
@@ -8986,6 +8998,10 @@ async function serveServerImageObject(
   serverId: string,
   kind: ServerImageKind,
 ): Promise<void> {
+  if (kind !== "icon" && kind !== "banner" && kind !== "featured") {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
   let url: string | null;
   try {
     url = await presignServerImageRead(kind, serverId);

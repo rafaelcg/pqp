@@ -173,4 +173,31 @@ describe("CommunityIdentityHeader", () => {
     expect(aboutAt).toBeGreaterThan(-1);
     expect(linksAt).toBeGreaterThan(aboutAt);
   });
+
+  it("does not offer Turn Baú on when the instance flag is off", () => {
+    const html = render(
+      <CommunityIdentityHeader
+        server={server}
+        canManageServer
+        feedAvailable={false}
+        homeFeatureOn={false}
+        onOpenServerSettings={() => {}}
+      />,
+    );
+    expect(html).not.toContain("data-identity-turn-on");
+  });
+
+  it("offers Turn Baú on when the instance flag is on and the feed is off", () => {
+    const html = render(
+      <CommunityIdentityHeader
+        server={server}
+        canManageServer
+        feedAvailable={false}
+        homeFeatureOn
+        onOpenServerSettings={() => {}}
+      />,
+    );
+    expect(html).toContain("data-identity-turn-on");
+    expect(html).toContain("Turn Baú on");
+  });
 });

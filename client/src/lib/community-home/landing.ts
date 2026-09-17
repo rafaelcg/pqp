@@ -12,7 +12,7 @@ import { COMMUNITY_HOME_CHANNEL_ID } from "./id";
 export function pickServerLandingTarget(
   channels: readonly Pick<Channel, "id" | "type">[],
   communityHomeEnabled: boolean,
-  isCommunity = false,
+  isCommunity: boolean,
 ): { kind: "home"; id: typeof COMMUNITY_HOME_CHANNEL_ID } | { kind: "channel"; id: string } | null {
   if (isCommunity || communityHomeEnabled) {
     return { kind: "home", id: COMMUNITY_HOME_CHANNEL_ID };

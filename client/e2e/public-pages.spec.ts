@@ -312,9 +312,7 @@ test.describe("the public community page", () => {
       page.getByRole("heading", { name: "Eu Odeio Acordar Cedo" }),
     ).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("quem acorda cedo é herói")).toBeVisible();
-    // The member count, big, is the one fact a stranger deciding whether to
-    // walk in actually needs.
-    await expect(page.getByText("people in here")).toBeVisible();
+    await expect(page.getByText(/members · here since/)).toBeVisible();
     await expect(page.getByText("Humour")).toBeVisible();
     await expect(page.getByText(`pqp.gg/c/${community.slug}`)).toBeVisible();
     // The poster and nothing behind the door.
@@ -433,10 +431,13 @@ test.describe("the public community page", () => {
     expect(response.headers.get("cache-control")).toBe("public, max-age=60");
     const body = await response.json();
     expect(Object.keys(body.community).sort()).toEqual([
+      "about",
       "bannerUrl",
       "category",
       "createdMonth",
+      "featured",
       "iconUrl",
+      "links",
       "memberCount",
       "name",
       "slug",

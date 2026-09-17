@@ -211,19 +211,33 @@ export function serverImageUrlForKey(
  * Drop an object nothing points at any more. Best effort, always — a failure
  * costs storage, and surfacing it would cost the owner the change they asked
  * for on a request whose real work has already committed.
+ *
+ * Returns false when the delete threw, so the caller can retry once.
  */
-export async function discardServerImageObject(key: string): Promise<void> {
+export async function discardServerImageObject(key: string): Promise<boolean> {
   if (!isStorageConfigured()) {
-    return;
+    return true;
   }
   try {
     await deleteObject(key);
+    return true;
   } catch (error) {
     console.error(
       `[server-images] could not delete ${key}:`,
       error instanceof Error ? error.message : error,
     );
+    return false;
   }
+}
+
+/** Fire-and-forget delete with one retry, so a dropped promise is not a leak. */
+export function scheduleDiscardServerImageObject(key: string): void {
+  void (async () => {
+    if (await discardServerImageObject(key)) {
+      return;
+    }
+    await discardServerImageObject(key);
+  })();
 }
 
 /**
@@ -262,8 +276,16 @@ export async function setServerImage(
         ? `UPDATE servers SET
              community_featured_url = $2,
              community_featured_key = $3,
-             community_featured_kind = CASE WHEN $3::text IS NULL THEN NULL ELSE 'image' END,
-             community_featured_embed_url = CASE WHEN $3::text IS NULL THEN NULL ELSE NULL END
+             community_featured_kind = CASE
+               WHEN $3::text IS NOT NULL THEN 'image'
+               WHEN community_featured_kind = 'image' THEN NULL
+               ELSE community_featured_kind
+             END,
+             community_featured_embed_url = CASE
+               WHEN $3::text IS NOT NULL THEN NULL
+               WHEN community_featured_kind = 'image' THEN NULL
+               ELSE community_featured_embed_url
+             END
            WHERE id = $1
            RETURNING ${columns}`
         : `UPDATE servers SET ${url} = $2, ${key} = $3 WHERE id = $1
