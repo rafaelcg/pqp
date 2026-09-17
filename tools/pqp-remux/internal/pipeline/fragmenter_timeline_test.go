@@ -86,7 +86,7 @@ func runTimeline(t *testing.T, fps float64, wallSpan time.Duration, idrEvery tim
 		// Every frame whose capture instant has arrived.
 		for nextFrameAt <= wall {
 			idr := !started || nextFrameAt-lastIDRAt >= idrEvery
-			frag, err := f.Push(au(int64(nextFrameAt)*timescale/int64(time.Second), idr))
+			frag, err := pushOne(f, au(int64(nextFrameAt)*timescale/int64(time.Second), idr))
 			if err != nil && err != ErrWaitingForIDR {
 				t.Fatalf("push at %s: %v", nextFrameAt, err)
 			}
@@ -110,7 +110,7 @@ func runTimeline(t *testing.T, fps float64, wallSpan time.Duration, idrEvery tim
 		// The monitor tick: publish the held frame only once it has
 		// outlived a whole idle allowance.
 		if held := wall - lastFrameAt; held >= allowance && f.HasPending() {
-			if frag := f.IdleFlush(int64(held) * timescale / int64(time.Second)); frag != nil {
+			if frag := flushOne(f, int64(held)*timescale/int64(time.Second)); frag != nil {
 				run.mediaTicks += int64(frag.DurationTicks)
 				run.lastPublishAt = wall
 				run.keepAlives++
@@ -221,24 +221,24 @@ func TestFragmenter_VideoAndAudioPublishTheSameMediaTime(t *testing.T) {
 func TestFragmenter_ResumeAfterAKeepAlivePaysBackTheWholeGap(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, true)); err != nil {
+	if _, err := pushOne(f, au(0, true)); err != nil {
 		t.Fatalf("first IDR: %v", err)
 	}
 	// Held for a second; the frame that ends the quiet spell is three
 	// seconds after the one before it.
 	const held = int64(timescale)        // 1s
 	const trueGap = int64(3 * timescale) // 3s
-	flushed := f.IdleFlush(held)
+	flushed := flushOne(f, held)
 	if flushed == nil {
 		t.Fatal("IdleFlush produced no part")
 	}
 	total := int64(flushed.DurationTicks)
 
-	if frag, err := f.Push(au(trueGap, false)); err != nil || frag != nil {
+	if frag, err := pushOne(f, au(trueGap, false)); err != nil || frag != nil {
 		t.Fatalf("resume frame: frag=%v err=%v", frag, err)
 	}
 	// The frame after it closes the resumed part.
-	next, err := f.Push(au(trueGap+partDuration, false))
+	next, err := pushOne(f, au(trueGap+partDuration, false))
 	if err != nil {
 		t.Fatalf("frame after the resume: %v", err)
 	}
@@ -266,25 +266,25 @@ func TestFragmenter_ResumeAfterAKeepAlivePaysBackTheWholeGap(t *testing.T) {
 func TestFragmenter_ConsecutiveKeepAlivesDoNotCompound(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, true)); err != nil {
+	if _, err := pushOne(f, au(0, true)); err != nil {
 		t.Fatalf("first IDR: %v", err)
 	}
 	const held = int64(timescale)         // flush after 1s of holding
 	const frameGap = int64(2 * timescale) // a frame every 2s
 
 	var total int64
-	if frag := f.IdleFlush(held); frag != nil {
+	if frag := flushOne(f, held); frag != nil {
 		total += int64(frag.DurationTicks)
 	} else {
 		t.Fatal("the first IdleFlush produced no part")
 	}
 	for i := int64(1); i <= 5; i++ {
-		if frag, err := f.Push(au(i*frameGap, false)); err != nil {
+		if frag, err := pushOne(f, au(i*frameGap, false)); err != nil {
 			t.Fatalf("frame %d: %v", i, err)
 		} else if frag != nil {
 			total += int64(frag.DurationTicks)
 		}
-		if frag := f.IdleFlush(held); frag != nil {
+		if frag := flushOne(f, held); frag != nil {
 			total += int64(frag.DurationTicks)
 		} else {
 			t.Fatalf("no keep-alive after frame %d", i)

@@ -35,6 +35,7 @@ import (
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/r2"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/ring"
 	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/serve"
+	"github.com/rafaelcg/pqp/tools/pqp-remux/internal/skipframe"
 )
 
 // Session owns the one video track's whole pipeline: depacketize, mux,
@@ -124,6 +125,18 @@ type Session struct {
 	// pair; a real change rebuilds the init. Protected by videoMu.
 	initSPS []byte
 	initPPS []byte
+	// clockCutParts is the CLOCK_CUT_PARTS switch: build a repeat-frame
+	// synthesizer for each init segment and hand it to the fragmenter, so
+	// parts close on the clock instead of on an access unit. Off by
+	// default; see pipeline.Fragmenter.SetRepeater for what it buys and
+	// what it costs. Set once, before the session starts receiving, by
+	// EnableClockCutParts.
+	clockCutParts bool
+	// synth is the current repeat-frame synthesizer, rebuilt with every
+	// init segment (its frames are only valid for the parameter sets they
+	// were written against) and nil while the publisher's stream is one
+	// skipframe refuses. Touched only under videoMu.
+	synth *skipframe.Synth
 	// demoteReason, when non-empty, asks the control-plane watchdog to
 	// demote this session off the LL rung (parameter-set change that
 	// could not be represented). Read without videoMu from Health.
@@ -156,6 +169,13 @@ type Session struct {
 	audioFramesSeen       atomic.Uint64
 	audioSegmentsWritten  atomic.Uint64
 	keepAlivePartsWritten atomic.Uint64
+	// repeatFrames/clockCuts mirror the fragmenter's own counters,
+	// copied under videoMu on the paths that move them so Stats can read
+	// them from the monitor goroutine without racing the muxer. Both stay
+	// at zero unless EnableClockCutParts was called AND the stream turned
+	// out to be one internal/skipframe can synthesize into.
+	repeatFrames atomic.Uint64
+	clockCuts    atomic.Uint64
 	// videoMediaMs/audioMediaMs are the total MEDIA time each track has
 	// published (the sum of every part's own duration), and
 	// videoTimelineAnchorNs/audioTimelineAnchorNs are the wall-clock
@@ -617,15 +637,43 @@ func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
 		s.droppingDamaged.Store(false)
 	}
 
-	frag, err := s.frag.Push(au)
+	frags, err := s.frag.Push(au)
 	if err != nil && err != pipeline.ErrWaitingForIDR {
 		log.Printf("pqp-remux: fragmenter: %v", err)
 	}
-	if frag == nil {
-		return
+	// One access unit closes at most one part in the ordinary case, and
+	// several when clock cutting fills a long frame gap with repeat
+	// frames (pipeline.Fragmenter.SetRepeater). Publish them in order: the
+	// ring's own sequence numbering depends on it.
+	for _, frag := range frags {
+		s.publish(frag)
 	}
-	s.publish(frag)
+	s.mirrorRepeatCounters()
 }
+
+// mirrorRepeatCounters copies the fragmenter's repeat-frame counters into
+// atomics Stats can read. Called on the two paths that move them, both
+// already holding videoMu.
+func (s *Session) mirrorRepeatCounters() {
+	s.repeatFrames.Store(s.frag.RepeatFrames())
+	s.clockCuts.Store(s.frag.ClockCuts())
+}
+
+// EnableClockCutParts turns on clock-cut parts for this session: every
+// part closes at exactly the part target, with the remainder of a long
+// frame gap filled by synthesized frames that repeat the picture already
+// on screen (internal/skipframe). Call it immediately after New, before
+// the session receives anything.
+//
+// It is a REQUEST, not a guarantee. The synthesizer refuses any stream
+// whose parameter sets it cannot write a correct slice for (CABAC,
+// multiple slice groups, weighted prediction, field coding,
+// pic_order_cnt_type other than 2, more than one reference frame), and a
+// session on such a stream behaves exactly as it does with this off:
+// parts close on access units and may run longer than the target. What
+// the publisher actually sends decides, and the stats line's repeats/cuts
+// counters are what say which way it went.
+func (s *Session) EnableClockCutParts() { s.clockCutParts = true }
 
 // publishInit builds and stores one video init segment. Returns false when
 // BuildInitSegment rejects the pair (caller keeps waiting / demotes).
@@ -643,6 +691,7 @@ func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) b
 	s.initSPS = append([]byte(nil), sps...)
 	s.initPPS = append([]byte(nil), pps...)
 	s.initSet.Store(true)
+	s.refreshRepeater(sps, pps)
 	gen := s.initGeneration.Add(1)
 	r2Name := "video-init.mp4"
 	if gen > 1 {
@@ -650,6 +699,36 @@ func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) b
 	}
 	s.enqueueR2(r2Name, initSeg, "video/mp4")
 	return true
+}
+
+// refreshRepeater rebuilds the repeat-frame synthesizer for the parameter
+// sets the init segment was just built from, and hands it to the
+// fragmenter. Called from publishInit, under videoMu, for the same reason
+// it exists: a synthesized frame carries the picture's macroblock count,
+// so one written against the previous SPS decodes to a DIFFERENT picture
+// after Chrome's screen-share encoder ramps from 640x360 to 1280x720 --
+// which is not hypothetical, it is what the first run of skipframe's
+// bitstream test against a real capture caught.
+//
+// A stream the synthesizer refuses leaves the fragmenter with no
+// repeater, which is exactly its pre-clock-cut behaviour: parts close on
+// access units and may run long. That is a log line, never an error.
+func (s *Session) refreshRepeater(sps, pps []byte) {
+	if !s.clockCutParts {
+		return
+	}
+	synth, err := skipframe.New(sps, pps)
+	if err != nil {
+		log.Printf("pqp-remux: clock-cut parts unavailable for this stream: %v", err)
+		s.synth = nil
+		s.frag.SetRepeater(nil)
+		return
+	}
+	synth.Inherit(s.synth)
+	s.synth = synth
+	s.frag.SetRepeater(synth)
+	log.Printf("pqp-remux: clock-cut parts armed: parts close on the clock, gaps filled with repeat frames (inserted=%d renumbered=%d)",
+		synth.Inserted(), synth.Rewritten())
 }
 
 // handleParameterSetChange rebuilds the init segment when the publisher's

@@ -119,6 +119,22 @@ type GlobalConfig struct {
 
 	R2UploadQueueDepth int
 	R2UploadMaxRetries int
+
+	// ClockCutParts is CLOCK_CUT_PARTS: cut every part at exactly the
+	// part target and fill the rest of a long frame gap with synthesized
+	// frames that repeat the picture already on screen, instead of
+	// letting a part run as long as the frame it holds.
+	//
+	// DEFAULT OFF, AND DEPLOYING THE BINARY CHANGES NOTHING UNTIL IT IS
+	// SET. On, a presenter whose encoder pauses no longer produces a 2.25
+	// second part -- which Apple's player treats as a fatal playlist
+	// parse error ("Partial Segment duration exceeds PART-TARGET"), and
+	// which inflates hls.js's hold-back for everyone else. See
+	// pipeline.Fragmenter.SetRepeater and internal/skipframe. The
+	// synthesizer refuses streams it cannot write a correct slice for, so
+	// this is a request, not a promise; the stats line's repeats/cuts
+	// counters say whether it is doing anything.
+	ClockCutParts bool
 }
 
 // LiveHlsS3Configured mirrors internal/config.Config.LiveHlsS3Configured
@@ -168,6 +184,8 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 		LiveHlsS3AccessKeyID:     os.Getenv("LIVE_HLS_S3_ACCESS_KEY_ID"),
 		LiveHlsS3SecretAccessKey: os.Getenv("LIVE_HLS_S3_SECRET_ACCESS_KEY"),
 		LiveHlsS3ForcePathStyle:  os.Getenv("LIVE_HLS_S3_FORCE_PATH_STYLE") == "true",
+
+		ClockCutParts: os.Getenv("CLOCK_CUT_PARTS") == "true",
 	}
 
 	var err error

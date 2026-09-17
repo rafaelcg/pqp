@@ -10,18 +10,18 @@ import "testing"
 func TestFragmenter_IdleFlushPublishesTheHeldAccessUnit(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, true)); err != nil {
+	if _, err := pushOne(f, au(0, true)); err != nil {
 		t.Fatalf("first IDR: %v", err)
 	}
 	// Two more frames, still inside the first part.
 	for i := int64(1); i <= 2; i++ {
-		if frag, err := f.Push(au(i*frameStep, false)); err != nil || frag != nil {
+		if frag, err := pushOne(f, au(i*frameStep, false)); err != nil || frag != nil {
 			t.Fatalf("frame %d: frag=%v err=%v", i, frag, err)
 		}
 	}
 
 	// Nothing has arrived since. Not yet a part's worth of silence.
-	if frag := f.IdleFlush(partDuration / 2); frag != nil {
+	if frag := flushOne(f, partDuration/2); frag != nil {
 		t.Fatalf("IdleFlush closed a part before the part target elapsed: %+v", frag)
 	}
 	if !f.HasPending() {
@@ -30,7 +30,7 @@ func TestFragmenter_IdleFlushPublishesTheHeldAccessUnit(t *testing.T) {
 
 	// A full part's worth of silence: publish what we have.
 	held := int64(partDuration)
-	frag := f.IdleFlush(held)
+	frag := flushOne(f, held)
 	if frag == nil {
 		t.Fatal("IdleFlush produced no part after a full part target of silence")
 	}
@@ -49,7 +49,7 @@ func TestFragmenter_IdleFlushPublishesTheHeldAccessUnit(t *testing.T) {
 
 	// A second tick with nothing new must not invent a second part: one
 	// access unit is published exactly once.
-	if again := f.IdleFlush(held); again != nil {
+	if again := flushOne(f, held); again != nil {
 		t.Fatalf("a second IdleFlush with nothing new published another part: %+v", again)
 	}
 }
@@ -60,11 +60,11 @@ func TestFragmenter_IdleFlushPublishesTheHeldAccessUnit(t *testing.T) {
 func TestFragmenter_ResumeAfterIdleFlushIsContinuous(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, true)); err != nil {
+	if _, err := pushOne(f, au(0, true)); err != nil {
 		t.Fatalf("first IDR: %v", err)
 	}
 	const held = int64(partDuration + 7000) // a little past the target, as a real tick would be
-	flushed := f.IdleFlush(held)
+	flushed := flushOne(f, held)
 	if flushed == nil {
 		t.Fatal("IdleFlush produced no part")
 	}
@@ -74,13 +74,13 @@ func TestFragmenter_ResumeAfterIdleFlushIsContinuous(t *testing.T) {
 	// different from our wall-clock estimate (it always will be); the
 	// fragmenter must absorb that, not propagate it.
 	resumePTS := held - 900 // 10ms of estimate error, in the "we guessed long" direction
-	if frag, err := f.Push(au(resumePTS, false)); err != nil || frag != nil {
+	if frag, err := pushOne(f, au(resumePTS, false)); err != nil || frag != nil {
 		t.Fatalf("resume frame: frag=%v err=%v", frag, err)
 	}
 	// Fill the next part.
 	var next *Fragment
 	for i := int64(1); next == nil && i < 100; i++ {
-		frag, err := f.Push(au(resumePTS+i*frameStep, false))
+		frag, err := pushOne(f, au(resumePTS+i*frameStep, false))
 		if err != nil {
 			t.Fatalf("frame %d after resume: %v", i, err)
 		}
@@ -102,23 +102,23 @@ func TestFragmenter_ResumeAfterIdleFlushIsContinuous(t *testing.T) {
 func TestFragmenter_ResumeEarlierThanEstimatedDoesNotRewind(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, true)); err != nil {
+	if _, err := pushOne(f, au(0, true)); err != nil {
 		t.Fatalf("first IDR: %v", err)
 	}
 	const held = int64(2 * partDuration)
-	flushed := f.IdleFlush(held)
+	flushed := flushOne(f, held)
 	if flushed == nil {
 		t.Fatal("IdleFlush produced no part")
 	}
 	flushedEnd := baseMediaDecodeTime(t, flushed.Bytes) + uint64(flushed.DurationTicks)
 
 	// The publisher's own clock says only a third of that elapsed.
-	if _, err := f.Push(au(held/3, false)); err != nil {
+	if _, err := pushOne(f, au(held/3, false)); err != nil {
 		t.Fatalf("resume frame: %v", err)
 	}
 	var next *Fragment
 	for i := int64(1); next == nil && i < 100; i++ {
-		frag, err := f.Push(au(held/3+i*frameStep, false))
+		frag, err := pushOne(f, au(held/3+i*frameStep, false))
 		if err != nil {
 			t.Fatalf("frame %d after resume: %v", i, err)
 		}
@@ -138,10 +138,10 @@ func TestFragmenter_ResumeEarlierThanEstimatedDoesNotRewind(t *testing.T) {
 func TestFragmenter_IdleFlushBeforeFirstIDRIsInert(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, false)); err != ErrWaitingForIDR {
+	if _, err := pushOne(f, au(0, false)); err != ErrWaitingForIDR {
 		t.Fatal("expected ErrWaitingForIDR")
 	}
-	if frag := f.IdleFlush(10 * partDuration); frag != nil {
+	if frag := flushOne(f, 10*partDuration); frag != nil {
 		t.Fatalf("IdleFlush published a part before the first IDR: %+v", frag)
 	}
 	if f.HasPending() {
@@ -155,11 +155,11 @@ func TestFragmenter_IdleFlushBeforeFirstIDRIsInert(t *testing.T) {
 func TestFragmenter_IdleFlushNeverClosesASegment(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, true)); err != nil {
+	if _, err := pushOne(f, au(0, true)); err != nil {
 		t.Fatalf("first IDR: %v", err)
 	}
 	// Idle for well past a whole segment.
-	frag := f.IdleFlush(2 * segmentDuration)
+	frag := flushOne(f, 2*segmentDuration)
 	if frag == nil {
 		t.Fatal("IdleFlush produced no part")
 	}
@@ -172,10 +172,10 @@ func TestFragmenter_IdleFlushNeverClosesASegment(t *testing.T) {
 
 	// The next IDR, past the segment target, is what closes segment 0.
 	resume := int64(2 * segmentDuration)
-	if _, err := f.Push(au(resume, false)); err != nil {
+	if _, err := pushOne(f, au(resume, false)); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	next, err := f.Push(au(resume+segmentDuration, true))
+	next, err := pushOne(f, au(resume+segmentDuration, true))
 	if err != nil {
 		t.Fatalf("IDR past the segment target: %v", err)
 	}
@@ -195,11 +195,11 @@ func TestFragmenter_IdleFlushNeverClosesASegment(t *testing.T) {
 func TestFragmenter_IdrEndingALongFreezeStartsTheNextSegment(t *testing.T) {
 	f := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
 
-	if _, err := f.Push(au(0, true)); err != nil {
+	if _, err := pushOne(f, au(0, true)); err != nil {
 		t.Fatalf("first IDR: %v", err)
 	}
 	// Frozen for longer than a whole segment.
-	if frag := f.IdleFlush(segmentDuration + partDuration); frag == nil {
+	if frag := flushOne(f, segmentDuration+partDuration); frag == nil {
 		t.Fatal("IdleFlush produced no part")
 	}
 	if f.CurrentSegmentIndex() != 0 {
@@ -208,7 +208,7 @@ func TestFragmenter_IdrEndingALongFreezeStartsTheNextSegment(t *testing.T) {
 
 	// The source comes back with a keyframe.
 	resume := int64(segmentDuration + partDuration)
-	if _, err := f.Push(au(resume, true)); err != nil {
+	if _, err := pushOne(f, au(resume, true)); err != nil {
 		t.Fatalf("resume IDR: %v", err)
 	}
 	if f.CurrentSegmentIndex() != 1 {
@@ -217,7 +217,7 @@ func TestFragmenter_IdrEndingALongFreezeStartsTheNextSegment(t *testing.T) {
 
 	var next *Fragment
 	for i := int64(1); next == nil && i < 100; i++ {
-		frag, err := f.Push(au(resume+i*frameStep, false))
+		frag, err := pushOne(f, au(resume+i*frameStep, false))
 		if err != nil {
 			t.Fatalf("frame %d after resume: %v", i, err)
 		}
@@ -239,13 +239,13 @@ func TestFragmenter_IdrEndingALongFreezeStartsTheNextSegment(t *testing.T) {
 	// A freeze that does NOT reach the segment target leaves the segment
 	// where it is, even when an IDR ends it.
 	short := NewFragmenter(Config{Timescale: timescale, PartDuration: partDuration, SegmentDuration: segmentDuration})
-	if _, err := short.Push(au(0, true)); err != nil {
+	if _, err := pushOne(short, au(0, true)); err != nil {
 		t.Fatalf("first IDR: %v", err)
 	}
-	if frag := short.IdleFlush(partDuration); frag == nil {
+	if frag := flushOne(short, partDuration); frag == nil {
 		t.Fatal("IdleFlush produced no part")
 	}
-	if _, err := short.Push(au(partDuration, true)); err != nil {
+	if _, err := pushOne(short, au(partDuration, true)); err != nil {
 		t.Fatalf("resume IDR: %v", err)
 	}
 	if short.CurrentSegmentIndex() != 0 {
