@@ -60,6 +60,7 @@ export {
   twitchEmbedSrc,
   uploadHomeMedia,
   youtubeEmbedSrc,
+  youtubePosterUrl,
   type CommunityHomeMedia,
   type CommunityHomeMediaKind,
   type UploadedHomeMedia,

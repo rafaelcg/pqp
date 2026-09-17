@@ -19,6 +19,10 @@ const server: Server = {
   isCommunity: false,
   communityHomeEnabled: false,
   showOnProfile: true,
+  communityTagline: null,
+  communityAbout: null,
+  communityLinks: [],
+  communitySlug: null,
 };
 
 const CATEGORY = "55555555-5555-4555-8555-555555555555";

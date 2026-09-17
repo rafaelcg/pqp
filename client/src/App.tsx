@@ -3104,6 +3104,7 @@ function MainAppContent({
               : pickServerLandingTarget(
                   channelList,
                   communityHomeOn() && first.communityHomeEnabled === true,
+                  first.isCommunity === true,
                 );
             initialChannelId = land?.id ?? null;
             void loadUnread(first.id);
@@ -3918,6 +3919,7 @@ function MainAppContent({
         const land = pickServerLandingTarget(
           list,
           communityHomeOn() && server?.communityHomeEnabled === true,
+          server?.isCommunity === true,
         );
         if (land) {
           await selectChannel(land.id, serverId);
@@ -5385,6 +5387,7 @@ function MainAppContent({
           const land = pickServerLandingTarget(
             list,
             communityHomeOn() && targetServer?.communityHomeEnabled === true,
+            targetServer?.isCommunity === true,
           );
           if (land) {
             await selectChannel(land.id, targetServerId);
@@ -5462,23 +5465,26 @@ function MainAppContent({
     });
   }, []);
 
-  // Two switches gate the Baú row + feed: the instance flag (config probe,
-  // dev override) and this server's own opt-in from Server settings. Opening
-  // the server lands on the feed whenever both are on.
+  // Two switches gate the live Baú feed: the instance flag and this
+  // server's own opt-in. A community still opens Overview without them
+  // (identity header, empty feed). A private hall still needs both.
   // Computed here, above every early return, because the "New" chip below is
   // a hook.
   const communityHomeFeatureOn = isCommunityHomeEnabled({
     config: communityHomeConfig,
     allowLocalOverride: isDevAuthBypassEnabled(),
   });
-  const communityHomeEnabled =
+  const communityHomeFeedLive =
     communityHomeFeatureOn &&
     servers.find((s) => s.id === selectedServerId)?.communityHomeEnabled ===
       true;
+  const selectedIsCommunity =
+    servers.find((s) => s.id === selectedServerId)?.isCommunity === true;
+  const communityHomeEnabled = communityHomeFeedLive;
   const communityHomeOpen =
     selection.kind === "server" &&
     isCommunityHomeChannelId(selectedChannelId) &&
-    communityHomeEnabled;
+    (communityHomeFeedLive || selectedIsCommunity);
   useEffect(() => {
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeRowNew(false);
@@ -8252,6 +8258,9 @@ function MainAppContent({
           <CommunityHomeFeed
             serverId={selectedServer.id}
             serverName={selectedServer.name}
+            server={selectedServer}
+            feedAvailable={communityHomeFeedLive}
+            homeFeatureOn={communityHomeFeatureOn}
             me={{
               id: user.id,
               displayName: user.displayName,
@@ -8270,6 +8279,21 @@ function MainAppContent({
             )}
             onDismissIntro={settleCommunityHomeIntro}
             onOpenNav={() => setMobileNavOpen(true)}
+            onOpenServerSettings={() => setServerSettingsOpen(true)}
+            onServerUpdated={(server) => {
+              setServers((prev) =>
+                prev.map((current) =>
+                  current.id === server.id
+                    ? {
+                        ...current,
+                        ...server,
+                        role: current.role,
+                        showOnProfile: current.showOnProfile,
+                      }
+                    : current,
+                ),
+              );
+            }}
             refreshSignal={communityHomeUpdateNudge}
           />
         )}
@@ -8487,13 +8511,16 @@ function MainAppContent({
                 : current,
             ),
           );
-          // Baú turned off while it was open: step back to a real channel.
+          // Baú turned off while it was open: stay on Overview for a
+          // community (the identity header is the homepage). A private hall
+          // steps back to a real channel.
           if (
             server.id === selectedServerId &&
             !server.communityHomeEnabled &&
+            !server.isCommunity &&
             isCommunityHomeChannelId(selectedChannelId)
           ) {
-            const fallback = pickServerLandingTarget(channels, false);
+            const fallback = pickServerLandingTarget(channels, false, false);
             if (fallback) {
               void selectChannel(fallback.id, server.id);
             }
@@ -8521,6 +8548,7 @@ function MainAppContent({
           const land = pickServerLandingTarget(
             newChannels,
             communityHomeOn() && server.communityHomeEnabled === true,
+            server.isCommunity === true,
           );
           if (land) {
             await selectChannel(land.id, server.id);

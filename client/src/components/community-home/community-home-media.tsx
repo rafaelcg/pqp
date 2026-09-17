@@ -8,6 +8,7 @@ import {
   youtubeEmbedSrc,
 } from "@/lib/community-home/media";
 import { useTranslation } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 function twitchPlayerParent(): string {
   if (typeof window !== "undefined" && window.location.hostname) {
@@ -28,19 +29,29 @@ function MediaCaption({ media }: { media: CommunityHomeMedia }) {
 /**
  * The player / file / image a published card shows. Composer live preview
  * reuses this so a paste looks like the feed, not a second embed.
+ *
+ * `flush` is for a Patreon-style card: the media is the top of the card,
+ * edge to edge, no inner radius or border of its own.
  */
-export function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
+export function UnlockedMedia({
+  media,
+  flush = false,
+}: {
+  media: CommunityHomeMedia;
+  flush?: boolean;
+}) {
   const { t } = useTranslation();
+  const frame = cn(
+    "overflow-hidden bg-surface-0",
+    flush ? "rounded-none" : "rounded-lg border border-border",
+  );
   if (media.kind === "youtube") {
     const src = media.youtubeUrl ? youtubeEmbedSrc(media.youtubeUrl) : null;
     if (!src) {
       return null;
     }
     return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="youtube"
-      >
+      <div className={frame} data-home-media="youtube">
         <iframe
           title={media.name}
           src={src}
@@ -61,10 +72,7 @@ export function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
       return null;
     }
     return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="twitch"
-      >
+      <div className={frame} data-home-media="twitch">
         <iframe
           title={media.name}
           src={src}
@@ -83,10 +91,7 @@ export function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
       return null;
     }
     return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="tiktok"
-      >
+      <div className={frame} data-home-media="tiktok">
         <iframe
           title={t("communityHome.media.openTikTok")}
           src={src}
@@ -105,10 +110,7 @@ export function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
       return null;
     }
     return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="instagram"
-      >
+      <div className={frame} data-home-media="instagram">
         <iframe
           title={t("communityHome.media.openInstagram")}
           src={src}
@@ -124,7 +126,10 @@ export function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
   if (media.kind === "file") {
     return (
       <div
-        className="flex items-center gap-3 rounded-lg border border-ink-4 bg-ink px-3 py-2.5 text-sm"
+        className={cn(
+          "flex items-center gap-3 px-3 py-2.5 text-sm",
+          flush ? "border-t border-border" : "rounded-lg border border-border bg-surface-0",
+        )}
         data-home-media="file"
       >
         <span className="rounded bg-signal/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-signal">
@@ -155,10 +160,7 @@ export function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
 
   if (media.kind === "video") {
     return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="video"
-      >
+      <div className={frame} data-home-media="video">
         {media.url ? (
           <video
             className="max-h-96 w-full bg-ink"
@@ -180,10 +182,7 @@ export function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
   }
 
   return (
-    <div
-      className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-      data-home-media="image"
-    >
+    <div className={frame} data-home-media="image">
       {media.url ? (
         <img
           src={media.url}

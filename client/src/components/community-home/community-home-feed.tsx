@@ -1,15 +1,22 @@
-import type { Gif, PublicUser } from "@pqp/shared";
+import {
+  parseCommunityLink,
+  type Gif,
+  type PublicUser,
+  type Server,
+} from "@pqp/shared";
 import {
   CalendarClock,
   Eye,
   Heart,
   Lock,
-  Menu,
+  LockOpen,
+  Menu as MenuIcon,
   MessageCircle,
   MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
+  Plus,
   RotateCcw,
   Send,
   Smile,
@@ -26,11 +33,18 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import {
+  CommunityIdentityHeader,
+  CommunityIdentityRail,
+  type CommunityIdentityDraft,
+} from "@/components/communities/community-identity-header";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { GifAttachment } from "@/components/chat/message-list";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Menu } from "@/components/ui/menu";
 import {
   ApiError,
   createCommunityHomeComment,
@@ -40,13 +54,16 @@ import {
   fetchCommunityHomeComments,
   fetchCommunityHomeDrafts,
   fetchCommunityHomePosts,
+  deleteServerImage,
   pinCommunityHomePost,
   publishCommunityHomePost,
   scheduleCommunityHomePost,
   toggleCommunityHomeLike,
   unpublishCommunityHomePost,
   updateCommunityHomePost,
+  updateCommunitySettings,
 } from "@/lib/api";
+import { uploadServerImage } from "@/lib/server-image-upload";
 import {
   COMMUNITY_HOME_BODY_MAX,
   COMMUNITY_HOME_COMMENT_MAX,
@@ -66,6 +83,7 @@ import {
   resolveComposeEmbedUrl,
   saveCommunityHomeViewerMode,
   uploadHomeMedia,
+  youtubePosterUrl,
   type CommunityHomeComment,
   type CommunityHomeMedia,
   type CommunityHomePost,
@@ -74,7 +92,7 @@ import {
   type UploadedHomeMedia,
 } from "@/lib/community-home";
 import { gifMessageMedia } from "@/lib/gif-media";
-import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
 import { UnlockedMedia } from "./community-home-media";
@@ -90,8 +108,12 @@ import {
  * what is in flight.
  *
  * Shape of the pane (chrome lock):
- *   header   drawer · title (Home/Baú) · staff pen · staff overflow
- *   body     intro · posts · empty states; compose/drafts via pen/overflow
+ *   community  cover is the top of the pane; staff Novo post / overflow /
+ *              Edit page sit on it. No Discord channel header. Save/cancel
+ *              is a mode bar only while editing the page.
+ *   private    slim Baú header · staff Novo post · overflow
+ *   never      Feed|Compose|Drafts tabs, a viewer row, or a FAB
+ *   body       intro · posts · empty states; compose/drafts via pen/overflow
  *
  * Comments are deliberately not chat. A card shows 0–2 teasers (owner reply
  * else oldest, 2-line clamp); the rest opens on detail tap.
@@ -100,6 +122,8 @@ import {
 type Props = {
   serverId: string;
   serverName: string;
+  server: Server;
+  feedAvailable: boolean;
   /** The signed-in person, for the composer preview and optimistic comments. */
   me: PublicUser;
   /** Real manage-server bit. VIP cargo alone cannot publish. */
@@ -114,6 +138,12 @@ type Props = {
   introDismissed: boolean;
   onDismissIntro: () => void;
   onOpenNav?: () => void;
+  /** Instance `COMMUNITY_HOME_ENABLED`. Hides the dead "Turn Baú on" path. */
+  homeFeatureOn: boolean;
+  /** Opens community settings so staff can turn Baú on from the poster. */
+  onOpenServerSettings?: () => void;
+  /** Cover, icon, tagline, about, links: keep the rail in sync after a save. */
+  onServerUpdated?: (server: Server) => void;
   /** Bumped by App on `community-home-update` for this server. */
   refreshSignal?: number;
 };
@@ -124,19 +154,32 @@ type StaffTab = "feed" | "compose" | "drafts";
 
 function relativeDayLabel(
   iso: string,
-  t: (key: "time.today" | "time.yesterday") => string,
+  t: (key: MessageKey, vars?: MessageVars) => string,
 ): string {
-  const then = new Date(iso).getTime();
-  const startToday = new Date();
-  startToday.setHours(0, 0, 0, 0);
-  if (then >= startToday.getTime()) {
+  const posted = new Date(iso);
+  if (Number.isNaN(posted.getTime())) {
+    return "";
+  }
+  const startPosted = new Date(
+    posted.getFullYear(),
+    posted.getMonth(),
+    posted.getDate(),
+  );
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayDiff = Math.round(
+    (startToday.getTime() - startPosted.getTime()) / (24 * 60 * 60 * 1000),
+  );
+  if (dayDiff <= 0) {
     return t("time.today");
   }
-  const startYesterday = startToday.getTime() - 24 * 60 * 60 * 1000;
-  if (then >= startYesterday) {
+  if (dayDiff === 1) {
     return t("time.yesterday");
   }
-  return new Date(iso).toLocaleDateString();
+  if (dayDiff <= 7) {
+    return t("communityHome.postedDays", { count: dayDiff });
+  }
+  return posted.toLocaleDateString();
 }
 
 function scheduledLabel(iso: string, timezone: string | null): string {
@@ -171,12 +214,39 @@ function insertAtCaret(
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
-    return error.message || fallback;
+    return error.message;
   }
   if (error instanceof Error && error.message) {
     return error.message;
   }
   return fallback;
+}
+
+function communityLinksOf(
+  server: Pick<Server, "communityLinks">,
+): Server["communityLinks"] {
+  return server.communityLinks ?? [];
+}
+
+function identityDraftFrom(server: Server): CommunityIdentityDraft {
+  return {
+    tagline: server.communityTagline ?? "",
+    about: server.communityAbout ?? "",
+    linkUrls: communityLinksOf(server).map((link) => link.url),
+  };
+}
+
+function identityDraftDirty(
+  server: Server,
+  draft: CommunityIdentityDraft,
+): boolean {
+  const links = draft.linkUrls.map((url) => url.trim()).filter(Boolean);
+  return (
+    (draft.tagline.trim() || null) !== (server.communityTagline ?? null) ||
+    (draft.about.trim() || null) !== (server.communityAbout ?? null) ||
+    JSON.stringify(links) !==
+      JSON.stringify(communityLinksOf(server).map((link) => link.url))
+  );
 }
 
 function browserTimezone(): string {
@@ -201,23 +271,43 @@ function defaultScheduleValue(): string {
 
 // -------------------------------------------------------------------- media
 
-function LockedMedia({ title, teaser }: { title: string; teaser: string }) {
+function LockedMedia({ posterUrl }: { posterUrl: string | null }) {
+  const { t } = useTranslation();
   return (
     <div
-      className="relative overflow-hidden rounded-lg border border-ink-4 bg-ink"
+      className="relative aspect-video overflow-hidden bg-surface-0"
       data-home-locked-media
     >
       <div
-        className="flex h-40 items-center justify-center bg-[repeating-linear-gradient(135deg,var(--color-surface-3)_0_8px,var(--color-surface-0)_8px_16px)] blur-[1px]"
+        className="absolute inset-0 bg-[repeating-linear-gradient(135deg,var(--color-surface-3)_0_10px,transparent_10px_20px)] opacity-80"
         aria-hidden
       />
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-ink/70 px-4 text-center">
-        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-signal/15 text-signal">
-          <Lock className="h-4 w-4" aria-hidden />
-        </span>
-        <p className="font-display text-sm font-semibold text-signal">{title}</p>
-        <p className="max-w-xs text-xs text-paper-muted">{teaser}</p>
-      </div>
+      {posterUrl ? (
+        <img
+          src={posterUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          data-home-locked-poster
+        />
+      ) : null}
+      <div className="absolute inset-0 bg-ink/45" aria-hidden />
+      <span
+        className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-ink/85 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper"
+        data-home-locked-badge
+      >
+        <Lock className="h-3 w-3" aria-hidden />
+        {t("communityHome.lockedBadge")}
+      </span>
+    </div>
+  );
+}
+
+function LockedBodyBlur() {
+  return (
+    <div className="mt-4 space-y-2" data-home-locked-blur aria-hidden>
+      <div className="h-3 w-full rounded bg-surface-3/90 blur-[2px]" />
+      <div className="h-3 w-5/6 rounded bg-surface-3/80 blur-[2px]" />
+      <div className="h-3 w-2/3 rounded bg-surface-3/70 blur-[2px]" />
     </div>
   );
 }
@@ -562,16 +652,19 @@ type PostCardProps = {
   onPublishNow?: (post: CommunityHomePost) => void;
   onUnpublish?: (post: CommunityHomePost) => void;
   onTogglePin?: (post: CommunityHomePost) => void;
+  onToggleLock?: (post: CommunityHomePost) => void;
 };
 
 /**
  * One post. Exported for the unit test, which renders it without the feed's
  * network around it.
  *
- * NO "FREE" CHIP. Free is the default state of a post and needs no label;
- * the only tier chip is VIP on a members-only post, and only while the VIP
- * flag is on. Tagging every post "free" is what makes a feed look like a
- * paywall before there is anything to pay for.
+ * Media (or a 16:9 lock plate) sits flush at the top, then a display title,
+ * a quiet date, the body or a public teaser, then likes and the comment
+ * count. The page is the creator, so there is no member-facing author row.
+ * NO "FREE" CHIP. Free is the default and needs no label. Locked is a badge
+ * on the plate (or by the date on a text-only VIP post), never a paywall
+ * rail.
  */
 export function PostCard({
   post,
@@ -586,13 +679,33 @@ export function PostCard({
   onPublishNow,
   onUnpublish,
   onTogglePin,
+  onToggleLock,
 }: PostCardProps) {
   const { t } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [liking, setLiking] = useState(false);
   const summary = lockedPostSummary(post);
   const isPreview = mode === "preview";
   const interactive = mode === "feed" && post.status === "published";
+  const showLockPlate = locked && post.hasMedia;
+  const showMedia = !locked && post.media;
+  const posterUrl =
+    post.posterUrl ??
+    (post.media?.kind === "youtube"
+      ? youtubePosterUrl(post.media.youtubeUrl)
+      : null);
+  const showStaffMenu =
+    canManageServer &&
+    !isPreview &&
+    Boolean(
+      onEdit ||
+        onDelete ||
+        onTogglePin ||
+        onPublishNow ||
+        onUnpublish ||
+        onToggleLock,
+    );
 
   useEffect(() => {
     if (!confirmDelete) {
@@ -625,108 +738,68 @@ export function PostCard({
   return (
     <article
       className={cn(
-        "rounded-xl border border-ink-4/80 bg-ink-3/40 p-4",
-        isPreview && "border-dashed border-signal/40",
+        "relative overflow-hidden rounded-2xl border border-border bg-surface-1",
+        isPreview && "border-dashed border-accent/40",
       )}
       data-home-post
       data-home-post-visibility={post.visibility}
       data-home-post-status={post.status}
       data-home-post-locked={locked ? "1" : "0"}
     >
-      <header className="mb-3 flex items-start gap-3">
-        <UserAvatar
-          name={post.author.displayName}
-          avatarUrl={post.author.avatarUrl}
-          className="h-9 w-9"
-          fallbackClassName="bg-ink-4 text-xs text-paper"
-          rounded="lg"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="truncate font-semibold">
-              {post.author.displayName}
-            </span>
-            {post.authorBadge && (
-              <span className="rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
-                {post.authorBadge === "owner"
-                  ? t("communityHome.badge.owner")
-                  : t("communityHome.badge.staff")}
-              </span>
+      {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
+      {showMedia && post.media ? <UnlockedMedia media={post.media} flush /> : null}
+      {showStaffMenu && (
+        <div className="absolute right-3 top-3 z-10">
+          <button
+            type="button"
+            className={cn(
+              "inline-flex h-8 w-8 items-center justify-center rounded-md",
+              showLockPlate || showMedia
+                ? "bg-ink/65 text-paper hover:bg-ink/85"
+                : "text-paper-muted hover:bg-ink-4 hover:text-paper",
             )}
-            {vipEnabled && post.visibility === "members" && (
-              <span
-                className="inline-flex items-center gap-1 rounded border border-signal/40 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal"
-                data-home-vip-chip
-              >
-                <Lock className="h-2.5 w-2.5" aria-hidden />
-                {t("communityHome.visibility.members")}
-              </span>
+            aria-label={t("communityHome.cardMenu")}
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+            data-home-card-menu
+          >
+            <MoreHorizontal className="h-4 w-4" aria-hidden />
+          </button>
+          <div
+            className={cn(
+              "absolute right-0 z-20 mt-1 w-48 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-xl",
+              !menuOpen && "hidden",
             )}
-            {post.pinned && (
-              <span
-                className="inline-flex items-center gap-1 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal"
-                data-home-pinned-chip
-              >
-                <Pin className="h-2.5 w-2.5" aria-hidden />
-                {t("communityHome.pinned")}
-              </span>
-            )}
-            {post.status === "draft" && (
-              <span className="rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
-                {t("communityHome.status.draft")}
-              </span>
-            )}
-            {post.status === "scheduled" && post.scheduledAt && (
-              <span className="inline-flex items-center gap-1 rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
-                <CalendarClock className="h-2.5 w-2.5" aria-hidden />
-                {t("communityHome.status.scheduledFor", {
-                  when: scheduledLabel(post.scheduledAt, post.scheduleTimezone),
-                })}
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-paper-muted">
-            {isPreview
-              ? t("communityHome.compose.previewNow")
-              : relativeDayLabel(post.publishedAt ?? post.createdAt, t)}
-          </p>
-        </div>
-        {canManageServer && !isPreview && (
-          <div className="flex shrink-0 items-center gap-0.5">
+            data-home-card-menu-panel
+          >
             {mode === "drafts" && post.status === "draft" && onPublishNow && (
-              <Button
+              <button
                 type="button"
-                size="sm"
+                className="w-full rounded-md px-2 py-1.5 text-left text-xs text-paper hover:bg-ink-3"
                 onClick={() => onPublishNow(post)}
                 data-home-publish-now
               >
                 {t("communityHome.drafts.publishNow")}
-              </Button>
+              </button>
             )}
             {mode === "drafts" && post.status === "scheduled" && onUnpublish && (
-              <Button
+              <button
                 type="button"
-                size="sm"
-                variant="secondary"
+                className="w-full rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
                 onClick={() => onUnpublish(post)}
                 title={t("communityHome.drafts.unscheduleHint")}
               >
                 {t("communityHome.drafts.unschedule")}
-              </Button>
+              </button>
             )}
             {onTogglePin && post.status === "published" && (
               <button
                 type="button"
                 className={cn(
-                  "rounded-md p-1.5 hover:bg-ink-4",
-                  post.pinned
-                    ? "text-signal"
-                    : "text-paper-muted hover:text-paper",
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-ink-3",
+                  post.pinned ? "text-signal" : "text-paper-muted hover:text-paper",
                 )}
                 aria-label={t(
-                  post.pinned ? "communityHome.unpin" : "communityHome.pin",
-                )}
-                title={t(
                   post.pinned ? "communityHome.unpin" : "communityHome.pin",
                 )}
                 onClick={() => onTogglePin(post)}
@@ -737,25 +810,55 @@ export function PostCard({
                 ) : (
                   <Pin className="h-3.5 w-3.5" aria-hidden />
                 )}
+                {t(post.pinned ? "communityHome.unpin" : "communityHome.pin")}
+              </button>
+            )}
+            {vipEnabled && onToggleLock && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                aria-label={t(
+                  post.visibility === "members"
+                    ? "communityHome.unlockPost"
+                    : "communityHome.lockPost",
+                )}
+                onClick={() => {
+                  setMenuOpen(false);
+                  onToggleLock(post);
+                }}
+                data-home-lock={
+                  post.visibility === "members" ? "unlock" : "lock"
+                }
+              >
+                {post.visibility === "members" ? (
+                  <LockOpen className="h-3.5 w-3.5" aria-hidden />
+                ) : (
+                  <Lock className="h-3.5 w-3.5" aria-hidden />
+                )}
+                {t(
+                  post.visibility === "members"
+                    ? "communityHome.unlockPost"
+                    : "communityHome.lockPost",
+                )}
               </button>
             )}
             {onEdit && (
               <button
                 type="button"
-                className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
                 aria-label={t("communityHome.compose.edit")}
-                title={t("communityHome.compose.edit")}
                 onClick={() => onEdit(post)}
                 data-home-edit
               >
                 <Pencil className="h-3.5 w-3.5" aria-hidden />
+                {t("communityHome.compose.edit")}
               </button>
             )}
             {onDelete &&
               (confirmDelete ? (
                 <button
                   type="button"
-                  className="rounded-md bg-danger/20 px-2 py-1 text-xs font-semibold text-danger"
+                  className="w-full rounded-md bg-danger/20 px-2 py-1.5 text-left text-xs font-semibold text-danger"
                   onClick={() => onDelete(post)}
                   data-home-delete-confirm
                 >
@@ -764,104 +867,143 @@ export function PostCard({
               ) : (
                 <button
                   type="button"
-                  className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-danger"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-danger"
                   aria-label={t("communityHome.compose.delete")}
-                  title={t("communityHome.compose.delete")}
                   onClick={() => setConfirmDelete(true)}
                   data-home-delete
                 >
                   <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                  {t("communityHome.compose.delete")}
                 </button>
               ))}
           </div>
+        </div>
+      )}
+
+      <div className={cn("p-5", showStaffMenu && "pr-12")}>
+        {post.title && (
+          <h2 className="font-display text-2xl font-bold leading-snug tracking-tight text-text">
+            {post.title}
+          </h2>
         )}
-      </header>
-
-      {post.title && (
-        <h2 className="mb-1 font-display text-base font-semibold leading-snug">
-          {post.title}
-        </h2>
-      )}
-
-      {locked ? (
-        <>
-          {summary && summary !== post.title?.trim() && (
-            <p className="mb-3 text-sm leading-relaxed text-paper-muted">
-              {summary}
-            </p>
-          )}
-          <LockedMedia
-            title={t("communityHome.lockedTitle")}
-            teaser={t("communityHome.lockedBody")}
-          />
-          <div className="mt-3">
-            <Button
-              type="button"
-              variant="secondary"
-              className="gap-1.5"
-              disabled
-              data-home-unlock-cta
-            >
-              <Lock className="h-3.5 w-3.5" aria-hidden />
-              {t("communityHome.unlockCta")}
-            </Button>
-          </div>
-        </>
-      ) : (
-        <>
-          {post.body &&
-            (gifMessageMedia(post.body) ? (
-              <div className="mb-3">
-                <GifAttachment media={gifMessageMedia(post.body)!} />
-              </div>
-            ) : (
-              <p className="mb-3 whitespace-pre-wrap break-words text-sm leading-relaxed">
-                {post.body}
-              </p>
-            ))}
-          {post.media && <UnlockedMedia media={post.media} />}
-        </>
-      )}
-
-      {(interactive || isPreview) && !locked && (
-        <footer className="mt-3 flex flex-wrap items-center gap-3 text-xs text-paper-muted">
-          <button
-            type="button"
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper",
-              post.likedByMe && "text-signal",
-            )}
-            onClick={() => void like()}
-            disabled={isPreview || liking}
-            aria-pressed={post.likedByMe}
-            aria-label={
-              post.likedByMe
-                ? t("communityHome.likes.unlike")
-                : t("communityHome.likes.like")
-            }
-            data-home-like
-          >
-            <Heart
-              className={cn("h-4 w-4", post.likedByMe && "fill-current")}
-              aria-hidden
-            />
-            <span className="tabular-nums">{post.likeCount}</span>
-          </button>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1">
-            <MessageCircle className="h-4 w-4" aria-hidden />
-            <span className="tabular-nums">{post.commentCount}</span>
+        <p className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-text-tertiary">
+          <span>
+            {isPreview
+              ? t("communityHome.compose.previewNow")
+              : relativeDayLabel(post.publishedAt ?? post.createdAt, t)}
           </span>
-        </footer>
-      )}
+          {locked && !showLockPlate && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-ink/70 px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-paper"
+              data-home-locked-badge
+            >
+              <Lock className="h-2.5 w-2.5" aria-hidden />
+              {t("communityHome.lockedBadge")}
+            </span>
+          )}
+          {post.pinned && (
+            <span
+              className="inline-flex items-center gap-1 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal"
+              data-home-pinned-chip
+            >
+              <Pin className="h-2.5 w-2.5" aria-hidden />
+              {t("communityHome.pinned")}
+            </span>
+          )}
+          {post.status === "draft" && (
+            <span className="rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
+              {t("communityHome.status.draft")}
+            </span>
+          )}
+          {post.status === "scheduled" && post.scheduledAt && (
+            <span className="inline-flex items-center gap-1 rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
+              <CalendarClock className="h-2.5 w-2.5" aria-hidden />
+              {t("communityHome.status.scheduledFor", {
+                when: scheduledLabel(post.scheduledAt, post.scheduleTimezone),
+              })}
+            </span>
+          )}
+        </p>
 
-      {interactive && !locked && onPatch && (
-        <CommentsBlock
-          post={post}
-          me={me}
-          canManageServer={canManageServer}
-          onPatch={onPatch}
-        />
-      )}
+        {locked ? (
+          <>
+            {summary && summary !== post.title?.trim() && (
+              <p className="mt-3 text-sm leading-relaxed text-text">
+                {summary}
+              </p>
+            )}
+            <LockedBodyBlur />
+            <div className="mt-4">
+              <Button
+                type="button"
+                variant="secondary"
+                className="gap-1.5"
+                disabled
+                data-home-unlock-cta
+              >
+                <Lock className="h-3.5 w-3.5" aria-hidden />
+                {t("communityHome.unlockCta")}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {post.body &&
+              (gifMessageMedia(post.body) ? (
+                <div className="mt-3">
+                  <GifAttachment media={gifMessageMedia(post.body)!} />
+                </div>
+              ) : (
+                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-text">
+                  {post.body}
+                </p>
+              ))}
+          </>
+        )}
+
+        {(interactive || isPreview) && (
+          <footer className="mt-4 flex flex-wrap items-center gap-3 text-xs text-paper-muted">
+            <button
+              type="button"
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper",
+                post.likedByMe && "text-signal",
+              )}
+              onClick={() => void like()}
+              disabled={isPreview || liking}
+              aria-pressed={post.likedByMe}
+              aria-label={
+                post.likedByMe
+                  ? t("communityHome.likes.unlike")
+                  : t("communityHome.likes.like")
+              }
+              data-home-like
+            >
+              <Heart
+                className={cn("h-4 w-4", post.likedByMe && "fill-current")}
+                aria-hidden
+              />
+              <span className="tabular-nums">{post.likeCount}</span>
+            </button>
+            <span
+              className="inline-flex items-center gap-1.5 px-2 py-1"
+              data-home-comment-count
+            >
+              <MessageCircle className="h-4 w-4" aria-hidden />
+              <span className="tabular-nums">{post.commentCount}</span>
+            </span>
+          </footer>
+        )}
+
+        {interactive && !locked && onPatch && (
+          <CommentsBlock
+            post={post}
+            me={me}
+            canManageServer={canManageServer}
+            onPatch={onPatch}
+          />
+        )}
+      </div>
     </article>
   );
 }
@@ -968,6 +1110,9 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
     status: "published",
     commentsEnabled: state.commentsEnabled,
     media,
+    hasMedia: media != null,
+    posterUrl:
+      media?.kind === "youtube" ? youtubePosterUrl(media.youtubeUrl) : null,
     locked: false,
     likeCount: 0,
     likedByMe: false,
@@ -1555,11 +1700,138 @@ function ComposeCard({
   );
 }
 
+function HomeDrawerButton({
+  onOpenNav,
+}: {
+  onOpenNav: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      size="icon"
+      className="h-9 w-9 rounded-full md:hidden"
+      aria-label={t("empty.openNav")}
+      onClick={onOpenNav}
+      data-home-drawer-mark
+    >
+      <MenuIcon className="h-4 w-4" aria-hidden />
+    </Button>
+  );
+}
+
+function StaffHomeTools({
+  inspector,
+  draftsCount,
+  onCompose,
+  onDrafts,
+  onInspector,
+  onEditPage,
+  showCompose,
+}: {
+  inspector: CommunityHomeViewerMode;
+  draftsCount: number;
+  onCompose: () => void;
+  onDrafts: () => void;
+  onInspector: (mode: CommunityHomeViewerMode) => void;
+  onEditPage?: () => void;
+  showCompose: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {showCompose && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="rounded-full"
+          onClick={onCompose}
+          data-home-staff-pen
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden />
+          {t("communityHome.compose.title")}
+        </Button>
+      )}
+      {onEditPage && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="rounded-full"
+          onClick={onEditPage}
+          data-identity-edit-start
+        >
+          <Pencil className="h-3.5 w-3.5" aria-hidden />
+          {t("communityHome.identity.edit")}
+        </Button>
+      )}
+      {showCompose && (
+        <Menu
+          align="end"
+          topContent={
+            <>
+              <p className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+                {t("communityHome.inspector.title")}
+              </p>
+              <div className="my-1 h-px bg-border" />
+            </>
+          }
+          items={[
+            {
+              id: "inspector-auto",
+              label: t("communityHome.viewer.auto"),
+              checked: inspector === "auto",
+              onSelect: () => onInspector("auto"),
+            },
+            {
+              id: "inspector-owner",
+              label: t("communityHome.viewer.owner"),
+              checked: inspector === "owner",
+              onSelect: () => onInspector("owner"),
+            },
+            {
+              id: "inspector-members",
+              label: t("communityHome.viewer.members"),
+              checked: inspector === "members",
+              onSelect: () => onInspector("members"),
+            },
+            { id: "sep-drafts", label: "", separator: true },
+            {
+              id: "drafts",
+              label:
+                draftsCount > 0
+                  ? `${t("communityHome.tabs.drafts")} ${draftsCount}`
+                  : t("communityHome.tabs.drafts"),
+              onSelect: onDrafts,
+            },
+          ]}
+        >
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className="h-9 w-9 rounded-full"
+            aria-label={t("chat.more")}
+            data-home-staff-overflow
+          >
+            <MoreHorizontal className="h-4 w-4" aria-hidden />
+          </Button>
+        </Menu>
+      )}
+    </>
+  );
+}
+
 // -------------------------------------------------------------------- feed
 
 export function CommunityHomeFeed({
   serverId,
   serverName,
+  server,
+  feedAvailable,
+  homeFeatureOn,
   me,
   canManageServer,
   isOwner,
@@ -1569,6 +1841,8 @@ export function CommunityHomeFeed({
   introDismissed,
   onDismissIntro,
   onOpenNav,
+  onOpenServerSettings,
+  onServerUpdated,
   refreshSignal = 0,
 }: Props) {
   const { t } = useTranslation();
@@ -1582,9 +1856,25 @@ export function CommunityHomeFeed({
     loadCommunityHomeViewerMode(),
   );
   const [notice, setNotice] = useState<MessageKey | null>(null);
+  const [identityEditing, setIdentityEditing] = useState(false);
+  const [identityDraft, setIdentityDraft] = useState<CommunityIdentityDraft>(
+    () => identityDraftFrom(server),
+  );
+  const [identitySaving, setIdentitySaving] = useState(false);
+  const [identityError, setIdentityError] = useState<string | null>(null);
+  const [identityDiscardOpen, setIdentityDiscardOpen] = useState(false);
+  const [identityImageBusy, setIdentityImageBusy] = useState<
+    "icon" | "banner" | "remove-icon" | "remove-banner" | null
+  >(null);
 
   const load = useCallback(
     async (silent: boolean) => {
+      if (!feedAvailable) {
+        setPosts([]);
+        setDrafts([]);
+        setLoadError(null);
+        return;
+      }
       if (!silent) {
         setLoadError(null);
       }
@@ -1598,12 +1888,18 @@ export function CommunityHomeFeed({
         setPosts(feed.posts);
         setDrafts(staff.posts);
       } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          setPosts([]);
+          setDrafts([]);
+          setLoadError(null);
+          return;
+        }
         if (!silent) {
           setLoadError(errorMessage(error, t("communityHome.error.load")));
         }
       }
     },
-    [serverId, canManageServer, t],
+    [serverId, canManageServer, feedAvailable, t],
   );
 
   useEffect(() => {
@@ -1628,6 +1924,144 @@ export function CommunityHomeFeed({
     const timer = setTimeout(() => setNotice(null), 4000);
     return () => clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    setIdentityEditing(false);
+    setIdentityDraft(identityDraftFrom(server));
+    setIdentityError(null);
+    setIdentityImageBusy(null);
+    // Identity belongs to this server. A switch must not carry a draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- serverId is the switch
+  }, [serverId]);
+
+  useEffect(() => {
+    if (!identityEditing) {
+      return;
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape" || identitySaving || identityImageBusy) {
+        return;
+      }
+      if (identityDiscardOpen) {
+        return;
+      }
+      if (identityDraftDirty(server, identityDraft)) {
+        event.preventDefault();
+        setIdentityDiscardOpen(true);
+        return;
+      }
+      setIdentityEditing(false);
+      setIdentityDraft(identityDraftFrom(server));
+      setIdentityError(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    identityDiscardOpen,
+    identityDraft,
+    identityEditing,
+    identityImageBusy,
+    identitySaving,
+    server,
+  ]);
+
+  function startIdentityEdit() {
+    setIdentityDraft(identityDraftFrom(server));
+    setIdentityError(null);
+    setIdentityEditing(true);
+    setStaffTab("feed");
+  }
+
+  function cancelIdentityEdit() {
+    if (identitySaving || identityImageBusy) {
+      return;
+    }
+    setIdentityDiscardOpen(false);
+    setIdentityEditing(false);
+    setIdentityDraft(identityDraftFrom(server));
+    setIdentityError(null);
+  }
+
+  function requestCancelIdentityEdit() {
+    if (identitySaving || identityImageBusy) {
+      return;
+    }
+    if (identityDraftDirty(server, identityDraft)) {
+      setIdentityDiscardOpen(true);
+      return;
+    }
+    cancelIdentityEdit();
+  }
+
+  async function saveIdentity() {
+    const preparedLinks = identityDraft.linkUrls
+      .map((url) => url.trim())
+      .filter(Boolean);
+    for (const url of preparedLinks) {
+      if (!parseCommunityLink(url)) {
+        setIdentityError(t("communities.settings.linksInvalid"));
+        return;
+      }
+    }
+    setIdentitySaving(true);
+    setIdentityError(null);
+    try {
+      const res = await updateCommunitySettings(serverId, {
+        tagline:
+          identityDraft.tagline.trim() === ""
+            ? null
+            : identityDraft.tagline.trim(),
+        about:
+          identityDraft.about.trim() === "" ? null : identityDraft.about.trim(),
+        links: preparedLinks.map((url) => ({ url })),
+      });
+      onServerUpdated?.({
+        ...server,
+        isCommunity: res.community.isCommunity,
+        communityTagline: res.community.tagline,
+        communityAbout: res.community.about,
+        communityLinks: res.community.links,
+        communitySlug: res.community.slug,
+      });
+      setIdentityEditing(false);
+      setNotice("communityHome.identity.saved");
+    } catch (error) {
+      setIdentityError(
+        errorMessage(error, t("communities.settings.failed")),
+      );
+    } finally {
+      setIdentitySaving(false);
+    }
+  }
+
+  async function pickIdentityImage(kind: "icon" | "banner", file: File) {
+    setIdentityImageBusy(kind);
+    setIdentityError(null);
+    try {
+      onServerUpdated?.(await uploadServerImage(serverId, kind, file));
+    } catch (error) {
+      setIdentityError(
+        errorMessage(error, t("serverSettings.identity.failed")),
+      );
+    } finally {
+      setIdentityImageBusy(null);
+    }
+  }
+
+  async function removeIdentityImage(kind: "icon" | "banner") {
+    setIdentityImageBusy(kind === "icon" ? "remove-icon" : "remove-banner");
+    setIdentityError(null);
+    try {
+      const res = await deleteServerImage(serverId, kind);
+      onServerUpdated?.(res.server);
+    } catch (error) {
+      setIdentityError(
+        errorMessage(error, t("serverSettings.identity.removeFailed")),
+      );
+    } finally {
+      setIdentityImageBusy(null);
+    }
+  }
 
   // The inspector exists only for staff on a VIP-enabled instance; anybody
   // else always sees `post.locked` as the API computed it for them.
@@ -1718,6 +2152,27 @@ export function CommunityHomeFeed({
     );
   }
 
+  async function toggleLock(post: CommunityHomePost) {
+    const visibility = post.visibility === "members" ? "free" : "members";
+    const result = await withAction(() =>
+      updateCommunityHomePost(serverId, post.id, { visibility }),
+    );
+    if (!result) {
+      return;
+    }
+    patchPost(result.post.id, result.post);
+    setDrafts((previous) =>
+      previous.map((item) =>
+        item.id === result.post.id ? result.post : item,
+      ),
+    );
+    setNotice(
+      result.post.visibility === "members"
+        ? "communityHome.notice.locked"
+        : "communityHome.notice.unlocked",
+    );
+  }
+
   async function unschedule(post: CommunityHomePost) {
     const result = await withAction(() =>
       unpublishCommunityHomePost(serverId, post.id),
@@ -1759,126 +2214,154 @@ export function CommunityHomeFeed({
     }
   }
 
-  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
-
   const feedEmpty = posts !== null && posts.length === 0;
   const showIntro = !introDismissed && !canManageServer;
 
   function openCompose() {
-    setHeaderMenuOpen(false);
     setStaffTab("compose");
   }
 
   function openDrafts() {
-    setHeaderMenuOpen(false);
     setStaffTab("drafts");
   }
 
+  function setViewer(mode: CommunityHomeViewerMode) {
+    setInspector(mode);
+    saveCommunityHomeViewerMode(mode);
+  }
+
+  const overlayOnCover = server.isCommunity && !identityEditing;
+  const showPaneHeader = identityEditing || !server.isCommunity;
+  const showStaffTools = canManageServer && feedAvailable;
+
+  const staffTools =
+    overlayOnCover && canManageServer ? (
+      <StaffHomeTools
+        inspector={inspector}
+        draftsCount={drafts.length}
+        onCompose={openCompose}
+        onDrafts={openDrafts}
+        onInspector={setViewer}
+        onEditPage={startIdentityEdit}
+        showCompose={Boolean(feedAvailable)}
+      />
+    ) : showStaffTools ? (
+      <StaffHomeTools
+        inspector={inspector}
+        draftsCount={drafts.length}
+        onCompose={openCompose}
+        onDrafts={openDrafts}
+        onInspector={setViewer}
+        showCompose
+      />
+    ) : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-community-home-feed>
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-ink-4/60 px-4">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center">
+      {showPaneHeader && (
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
           {onOpenNav && (
-            <button
-              type="button"
-              className="inline-flex h-11 w-11 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper md:hidden"
-              aria-label={t("empty.openNav")}
-              onClick={onOpenNav}
-              data-home-drawer-mark
-            >
-              <Menu className="h-5 w-5" aria-hidden />
-            </button>
+            <HomeDrawerButton onOpenNav={onOpenNav} />
           )}
-        </div>
-        <h1 className="min-w-0 flex-1 font-display text-base font-bold text-paper">
-          {t("communityHome.title")}
-        </h1>
-        {canManageServer ? (
-          <>
-            <button
-              type="button"
-              className="inline-flex h-11 w-11 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper"
-              aria-label={t("communityHome.compose.title")}
-              onClick={openCompose}
-              data-home-staff-pen
-            >
-              <Pencil className="h-4 w-4" aria-hidden />
-            </button>
-            <div className="relative">
-              <button
+          <h1 className="min-w-0 flex-1 font-display text-base font-bold text-text">
+            {identityEditing
+              ? t("communityHome.identity.editing")
+              : t("communityHome.title")}
+          </h1>
+          {identityEditing ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
                 type="button"
-                className="inline-flex h-11 w-11 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper"
-                aria-label={t("chat.more")}
-                aria-expanded={headerMenuOpen}
-                onClick={() => setHeaderMenuOpen((open) => !open)}
-                data-home-staff-overflow
+                variant="ghost"
+                disabled={identitySaving || Boolean(identityImageBusy)}
+                onClick={requestCancelIdentityEdit}
+                data-identity-edit-cancel
               >
-                <MoreHorizontal className="h-4 w-4" aria-hidden />
-              </button>
-              {headerMenuOpen && (
-                <div
-                  className="absolute right-0 z-30 mt-1 w-52 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-xl"
-                  data-home-staff-overflow-menu
-                >
-                  <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
-                    {t("communityHome.inspector.title")}
-                  </p>
-                  {(
-                    [
-                      ["auto", "communityHome.viewer.auto"],
-                      ["owner", "communityHome.viewer.owner"],
-                      ["members", "communityHome.viewer.members"],
-                    ] as const
-                  ).map(([mode, key]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={cn(
-                        "w-full rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper",
-                        inspector === mode && "bg-ink-3 font-semibold text-paper",
-                      )}
-                      onClick={() => {
-                        setInspector(mode);
-                        saveCommunityHomeViewerMode(mode);
-                        setHeaderMenuOpen(false);
-                      }}
-                      data-home-inspector-mode={mode}
-                    >
-                      {t(key)}
-                    </button>
-                  ))}
-                  <div className="my-1 border-t border-ink-4" />
-                  <button
-                    type="button"
-                    className="w-full rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
-                    onClick={openDrafts}
-                    data-home-open-drafts
-                  >
-                    {t("communityHome.tabs.drafts")}
-                    {drafts.length > 0 ? (
-                      <span className="ml-1 tabular-nums opacity-70">
-                        {drafts.length}
-                      </span>
-                    ) : null}
-                  </button>
-                </div>
-              )}
+                {t("communityHome.identity.cancel")}
+              </Button>
+              <Button
+                type="button"
+                disabled={identitySaving || Boolean(identityImageBusy)}
+                onClick={() => {
+                  if (identityDraftDirty(server, identityDraft)) {
+                    void saveIdentity();
+                    return;
+                  }
+                  cancelIdentityEdit();
+                }}
+                data-identity-edit-save
+              >
+                {identitySaving
+                  ? t("communityHome.identity.saving")
+                  : identityDraftDirty(server, identityDraft)
+                    ? t("communityHome.identity.save")
+                    : t("communityHome.identity.done")}
+              </Button>
             </div>
-          </>
-        ) : (
-          <div className="h-11 w-11 shrink-0" aria-hidden />
-        )}
-      </header>
+          ) : (
+            staffTools
+          )}
+        </header>
+      )}
+      {identityEditing && identityError && (
+        <p
+          role="alert"
+          className="shrink-0 border-b border-danger/40 bg-danger/10 px-4 py-2 text-xs text-danger"
+          data-identity-edit-error
+        >
+          {identityError}
+        </p>
+      )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {server.isCommunity && (
+          <CommunityIdentityHeader
+            server={server}
+            layout={
+              identityEditing || !(feedAvailable && !feedEmpty)
+                ? "poster"
+                : "compact"
+            }
+            feedAvailable={feedAvailable}
+            homeFeatureOn={homeFeatureOn}
+            canManageServer={canManageServer}
+            onOpenServerSettings={onOpenServerSettings}
+            onStartEdit={
+              overlayOnCover ? undefined : canManageServer ? startIdentityEdit : undefined
+            }
+            bannerStart={
+              overlayOnCover && onOpenNav ? (
+                <HomeDrawerButton onOpenNav={onOpenNav} />
+              ) : undefined
+            }
+            bannerEnd={overlayOnCover ? staffTools : undefined}
+            edit={
+              identityEditing
+                ? {
+                    draft: identityDraft,
+                    saving: identitySaving,
+                    uploadsEnabled: mediaEnabled,
+                    imageBusy: identityImageBusy,
+                    onChange: (patch) =>
+                      setIdentityDraft((current) => ({ ...current, ...patch })),
+                    onPickImage: (kind, file) =>
+                      void pickIdentityImage(kind, file),
+                    onRemoveImage: (kind) => void removeIdentityImage(kind),
+                    onError: setIdentityError,
+                  }
+                : undefined
+            }
+          />
+        )}
+        <div
+          className={cn(
+            server.isCommunity ? "px-5 pb-10 pt-2 sm:px-8" : "px-3 py-4 sm:px-4",
+          )}
+        >
         <div
           className={cn(
             "mx-auto flex flex-col gap-4",
-            // The empty-state pitch is a two-column layout; the feed itself
-            // stays a reading column.
-            feedEmpty && canManageServer && staffTab === "feed"
-              ? "max-w-5xl"
-              : "max-w-2xl",
+            server.isCommunity ? "max-w-5xl" : "max-w-2xl",
           )}
         >
           {notice && (
@@ -1938,6 +2421,9 @@ export function CommunityHomeFeed({
                     onDelete={(target) => void removePost(target)}
                     onPublishNow={(target) => void publishNow(target)}
                     onUnpublish={(target) => void unschedule(target)}
+                    onToggleLock={
+                      vipEnabled ? (target) => void toggleLock(target) : undefined
+                    }
                   />
                 ))
               )}
@@ -1976,7 +2462,20 @@ export function CommunityHomeFeed({
               )}
 
               {feedEmpty &&
-                (canManageServer ? (
+                (!feedAvailable ? (
+                  canManageServer ? null : (
+                    <p
+                      className="text-sm text-text-tertiary"
+                      data-home-empty
+                    >
+                      {t(
+                        homeFeatureOn
+                          ? "communityHome.identity.feedOff"
+                          : "communityHome.identity.feedOffInstance",
+                      )}
+                    </p>
+                  )
+                ) : canManageServer ? (
                   <CommunityHomeStaffGuide
                     variant="empty"
                     vipEnabled={vipEnabled}
@@ -1984,14 +2483,49 @@ export function CommunityHomeFeed({
                   />
                 ) : (
                   <p
-                    className="rounded-xl border border-dashed border-ink-4 px-4 py-8 text-center text-sm text-paper-muted"
+                    className="text-sm text-text-tertiary"
                     data-home-empty
                   >
                     {t("communityHome.empty.member", { name: serverName })}
                   </p>
                 ))}
 
-              {posts?.map((post) => (
+              {server.isCommunity &&
+                !identityEditing &&
+                (server.communityAbout ||
+                  communityLinksOf(server).length > 0) &&
+                posts &&
+                posts.length > 0 && (
+                  <div className="lg:hidden" data-identity-about-mobile>
+                    <CommunityIdentityRail
+                      about={server.communityAbout}
+                      links={communityLinksOf(server)}
+                      aboutLines={3}
+                      showAboutLabel={false}
+                    />
+                  </div>
+                )}
+
+              {posts && posts.length > 0 && (
+                <div
+                  className={cn(
+                    server.isCommunity &&
+                    !identityEditing &&
+                    Boolean(
+                      server.communityAbout ||
+                        communityLinksOf(server).length > 0,
+                    ) &&
+                      "grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_17rem]",
+                  )}
+                  data-home-posts
+                >
+                  <div className="flex flex-col gap-6">
+                    {server.isCommunity && (
+                      <h3 className="font-display text-lg font-bold text-text">
+                        {t("communityHome.feed.heading")}
+                      </h3>
+                    )}
+                    {posts.map((post) => (
                 <PostCard
                   key={post.id}
                   post={post}
@@ -2011,19 +2545,49 @@ export function CommunityHomeFeed({
                   onTogglePin={
                     canManageServer ? (target) => void togglePin(target) : undefined
                   }
+                  onToggleLock={
+                    canManageServer && vipEnabled
+                      ? (target) => void toggleLock(target)
+                      : undefined
+                  }
                 />
-              ))}
-
-              {/* A member who is VIP sees everything; say so once, quietly. */}
-              {vipEnabled && isVip && !canManageServer && posts && posts.length > 0 && (
-                <p className="text-center text-[11px] text-paper-muted">
-                  {t("communityHome.vipMemberNote")}
-                </p>
+                    ))}
+                    {vipEnabled && isVip && !canManageServer && (
+                      <p className="text-center text-[11px] text-paper-muted">
+                        {t("communityHome.vipMemberNote")}
+                      </p>
+                    )}
+                  </div>
+                  {server.isCommunity &&
+                    !identityEditing &&
+                    (server.communityAbout ||
+                      communityLinksOf(server).length > 0) && (
+                    <aside
+                      className="hidden lg:sticky lg:top-4 lg:block"
+                      data-identity-about-rail
+                    >
+                      <CommunityIdentityRail
+                        about={server.communityAbout}
+                        links={communityLinksOf(server)}
+                        aboutLines={8}
+                      />
+                    </aside>
+                  )}
+                </div>
               )}
             </>
           )}
         </div>
+        </div>
       </div>
+      <ConfirmDialog
+        open={identityDiscardOpen}
+        title={t("communityHome.identity.discardTitle")}
+        description={t("communityHome.identity.discardBody")}
+        confirmLabel={t("communityHome.identity.discardConfirm")}
+        onConfirm={cancelIdentityEdit}
+        onClose={() => setIdentityDiscardOpen(false)}
+      />
     </div>
   );
 }

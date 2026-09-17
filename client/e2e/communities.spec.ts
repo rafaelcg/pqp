@@ -227,12 +227,12 @@ test.describe("Communities", () => {
       .getByRole("button", { name: "Join", exact: true })
       .click();
 
-    // The whole round trip: the app switches to that server, its channels load,
-    // and the composer — which only exists inside a text channel — comes back.
+    // The whole round trip: the app switches to that server and lands on
+    // Overview (identity poster), not a text channel.
     await expect(page).toHaveURL(new RegExp(`/app/server/${serverId}`), {
       timeout: 20_000,
     });
-    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
+    await expect(page.locator("[data-community-identity-header]")).toBeVisible({
       timeout: 20_000,
     });
 
@@ -259,7 +259,7 @@ test.describe("Communities", () => {
     });
     await join.dblclick();
 
-    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
+    await expect(page.locator("[data-community-identity-header]")).toBeVisible({
       timeout: 20_000,
     });
     await reopenDirectory(page);
@@ -356,7 +356,7 @@ test.describe("Communities", () => {
     await card(page, "Já entrei")
       .getByRole("button", { name: "Join", exact: true })
       .click();
-    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
+    await expect(page.locator("[data-community-identity-header]")).toBeVisible({
       timeout: 20_000,
     });
 

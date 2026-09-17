@@ -1,5 +1,6 @@
 import {
   formatUserTag,
+  parseStoredCommunityLinks,
   type ChannelKind,
   type VoiceRoomTransport,
 } from "@pqp/shared";
@@ -60,7 +61,7 @@ export const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private,
  * NOT here — it lives on `server_members`, so only reads that join a
  * membership can select it.
  */
-export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community, community_home_enabled`;
+export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community, community_home_enabled, community_tagline, community_about, community_links, community_slug`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -114,7 +115,8 @@ async function serverAttachmentKeys(serverId: string): Promise<string[]> {
 }
 
 /**
- * The server's own icon and banner objects, if it uploaded either.
+ * The server's own icon, banner and community featured objects, if it uploaded
+ * any of them.
  *
  * Separate from `serverAttachmentKeys` because they hang off the `servers` row
  * itself rather than off a message, and because a server with no pictures — the
@@ -128,9 +130,13 @@ async function serverImageKeys(serverId: string): Promise<string[]> {
   const result = await getPool().query<{
     icon_key: string | null;
     banner_key: string | null;
-  }>(`SELECT icon_key, banner_key FROM servers WHERE id = $1`, [serverId]);
+    community_featured_key: string | null;
+  }>(
+    `SELECT icon_key, banner_key, community_featured_key FROM servers WHERE id = $1`,
+    [serverId],
+  );
   const row = result.rows[0];
-  return [row?.icon_key, row?.banner_key].filter(
+  return [row?.icon_key, row?.banner_key, row?.community_featured_key].filter(
     (key): key is string => typeof key === "string" && key.length > 0,
   );
 }
@@ -1555,6 +1561,10 @@ export function mapServer(s: DbServer) {
     bannerUrl: s.banner_url ?? null,
     isCommunity: s.is_community ?? false,
     communityHomeEnabled: s.community_home_enabled ?? false,
+    communityTagline: s.community_tagline ?? null,
+    communityAbout: s.community_about ?? null,
+    communityLinks: parseStoredCommunityLinks(s.community_links ?? []),
+    communitySlug: s.community_slug ?? null,
     // Only `listServersForUser` joins a membership, so every other caller —
     // a create, a rename — has no row to read this from. TRUE is the column's
     // own default and the honest answer for a membership just created.

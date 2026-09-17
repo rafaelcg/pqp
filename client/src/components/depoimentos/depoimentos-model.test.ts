@@ -23,6 +23,10 @@ const SERVER: Server = {
   isCommunity: true,
   communityHomeEnabled: false,
   showOnProfile: true,
+  communityTagline: null,
+  communityAbout: null,
+  communityLinks: [],
+  communitySlug: null,
 };
 
 describe("canWriteDepoimento", () => {
