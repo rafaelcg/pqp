@@ -113,6 +113,9 @@ type Session struct {
 	// counts late/duplicate RTP packets the depacketizer ignored.
 	damageEpisodes   atomic.Uint64
 	videoLatePackets atomic.Uint64
+	// damageOpen is true from a discard until the next IDR: further
+	// discards inside the same wait are the same episode (one PLI).
+	damageOpen atomic.Bool
 	// reorder holds out-of-order video packets briefly so a retransmission
 	// fills a hole before it counts as loss. Guarded by videoMu.
 	reorder *reorderBuffer
@@ -580,6 +583,7 @@ func (s *Session) handleOrderedVideoPacket(pkt *rtp.Packet, now time.Time) {
 	}
 
 	if au.IsIDR {
+		s.damageOpen.Store(false)
 		s.videoKeyframesSeen.Add(1)
 		s.lastIdrAtMs.Store(s.elapsedMs())
 		s.idrSeen.Store(true)
@@ -702,15 +706,24 @@ func (s *Session) handleParameterSetChange(au *h264.AccessUnit) bool {
 	return true
 }
 
-// markDamaged is the response to the depacketizer throwing media away: from
-// here until the next IDR every non-IDR access unit is dropped (they may
-// reference what was lost, and a P-slice built on a missing reference is
-// exactly what a strict hardware decoder refuses), and the publisher is
-// asked for that IDR immediately rather than after the periodic gate.
-// Measured 2026-09-17: without this, one lossy presenter uplink turned into
-// MEDIA_ERR_DECODE for every web viewer of the LL rung within a minute.
+// markDamaged is the response to the depacketizer throwing media away: ask
+// the publisher for a keyframe at once (Requester.OnLoss, then a retry
+// every second while it is owed) instead of after the periodic gate. The
+// frames that follow may reference what was lost and are forwarded anyway:
+// a decoder conceals a missing reference for the ~300 ms until the IDR
+// lands, which every player survived for months, whereas holding those
+// frames back (tried 2026-09-17 20:04Z to 21:45Z) stretched one sample
+// across the whole wait, put PART-TARGET at seconds for the rest of the
+// session, and that is a playlist Apple refuses outright ("non-terminal
+// partial segment duration must be at least 85% of PART-TARGET") and
+// hls.js stalls on. The malformed access unit itself never goes out; that
+// is the depacketizer's job and the part that killed viewers.
+//
+// damagedEpisodes counts these; the drop-until-IDR path stays for the
+// implausible-parameter-set case only (handleParameterSetChange), where
+// the frames that follow are damaged themselves, not merely mis-referenced.
 func (s *Session) markDamaged(now time.Time, cause error) {
-	if !s.droppingDamaged.CompareAndSwap(false, true) {
+	if !s.damageOpen.CompareAndSwap(false, true) {
 		return
 	}
 	s.damageEpisodes.Add(1)
@@ -718,7 +731,7 @@ func (s *Session) markDamaged(now time.Time, cause error) {
 	if kr := s.keyReq.Load(); kr != nil {
 		pliSent = kr.OnLoss(now)
 	}
-	log.Printf("pqp-remux: video damage: %v; dropping frames until the next IDR (episode %d, lost=%d, pli=%t)",
+	log.Printf("pqp-remux: video damage: %v; keyframe requested (episode %d, lost=%d, pli=%t)",
 		cause, s.damageEpisodes.Load(), s.dep.LostPackets(), pliSent)
 }
 

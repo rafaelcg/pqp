@@ -161,7 +161,7 @@ func TestSession_RetransmissionInsideHoldIsNotLoss(t *testing.T) {
 	at(4, frags[0], frameStep, false, 33*time.Millisecond)
 	at(6, frags[2], frameStep, true, 2*time.Millisecond)   // arrives before the middle one
 	at(5, frags[1], frameStep, false, 40*time.Millisecond) // the retransmission
-	if s.droppingDamaged.Load() {
+	if s.damageOpen.Load() {
 		t.Fatal("a hole filled inside the hold must not count as damage")
 	}
 	if pli.calls != 0 {
@@ -180,7 +180,7 @@ func TestSession_RetransmissionInsideHoldIsNotLoss(t *testing.T) {
 	at(7, singleNAL(1, []byte{0xBB}), 2*frameStep, true, 33*time.Millisecond)
 	at(9, singleNAL(1, []byte{0xCC}), 3*frameStep, true, 33*time.Millisecond)
 	at(10, singleNAL(1, []byte{0xDD}), 4*frameStep, true, reorderHoldMax)
-	if !s.droppingDamaged.Load() || pli.calls != 1 {
-		t.Fatalf("a hole past the hold must be loss: damaged=%t pli=%d", s.droppingDamaged.Load(), pli.calls)
+	if !s.damageOpen.Load() || pli.calls != 1 {
+		t.Fatalf("a hole past the hold must be loss: damaged=%t pli=%d", s.damageOpen.Load(), pli.calls)
 	}
 }

@@ -38,9 +38,11 @@ func fuAFrames(nalType byte, rbsp []byte, n int) [][]byte {
 // Production 2026-09-17: one lossy presenter uplink, a P-slice missing its
 // middle fragment, and every web viewer of the LL rung died with
 // MEDIA_ERR_DECODE. The session must (1) never forward the damaged access
-// unit, (2) drop every non-IDR frame after it until an IDR arrives, since
-// they reference what was lost, and (3) ask for that IDR immediately.
-func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T) {
+// unit, (2) ask for an IDR immediately, once per episode, and (3) keep
+// forwarding the frames that follow: holding them back stretched one
+// sample across the wait and inflated PART-TARGET, which Apple's player
+// refuses (see markDamaged).
+func TestSession_PacketLossDiscardsTheFrameAndAsksForAnIDR(t *testing.T) {
 	r := ring.New(6, 90000)
 	s := New(45000, 360000, r, nil)
 	clock := time.Unix(1_700_000_000, 0)
@@ -66,7 +68,7 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 		frame++
 	}
 	framesBefore := s.videoFramesSeen.Load()
-	if s.droppingDamaged.Load() {
+	if s.damageOpen.Load() {
 		t.Fatal("clean stream must not be flagged damaged")
 	}
 
@@ -78,15 +80,16 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 	seq++ // frags[1] never arrives
 	send(frags[2], ts(), true)
 	frame++
-	if s.droppingDamaged.Load() {
+	if s.damageOpen.Load() {
 		t.Fatal("inside the reorder hold nothing is loss yet")
 	}
+	partsAtLoss := s.Stats().PartsWritten
 	clock = clock.Add(reorderHoldMax)
-	send(singleNAL(1, []byte{0xDD, 0xFF}), ts(), true) // gives the hole up; itself dropped
+	send(singleNAL(1, []byte{0xDD, 0xFF}), ts(), true) // gives the hole up; forwarded
 	frame++
 
-	if !s.droppingDamaged.Load() {
-		t.Fatal("a sequence gap inside an access unit must arm drop-until-IDR")
+	if !s.damageOpen.Load() {
+		t.Fatal("a sequence gap inside an access unit must open a damage episode")
 	}
 	if pli.calls != 1 {
 		t.Fatalf("PLI calls = %d, want 1 immediately on loss", pli.calls)
@@ -95,47 +98,49 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 		t.Fatalf("damageEpisodes = %d, want 1", s.damageEpisodes.Load())
 	}
 	// The damaged access unit itself is not a frame; the P-frame that gave
-	// the hole up is one (seen, then dropped as damaged).
+	// the hole up is one, and it goes out.
 	if got := s.videoFramesSeen.Load(); got != framesBefore+1 {
 		t.Fatalf("frames seen %d -> %d, want +1", framesBefore, got)
 	}
 
-	// P-frames that follow reference the lost one: dropped, and a second
-	// gap inside the same episode does not fire another PLI.
-	for i := 0; i < 4; i++ {
+	// P-frames that follow keep flowing (parts keep being written), and
+	// a second gap inside the same episode does not fire another PLI.
+	for i := 0; i < 20; i++ {
 		send(singleNAL(1, []byte{0xDD, byte(i)}), ts(), true)
 		frame++
 	}
-	if got := s.damagedAUsDropped.Load(); got != 5 {
-		t.Fatalf("damagedAUsDropped = %d, want 5", got)
+	if got := s.damagedAUsDropped.Load(); got != 0 {
+		t.Fatalf("damagedAUsDropped = %d, want 0: frames after a loss are forwarded", got)
+	}
+	if s.Stats().PartsWritten <= partsAtLoss {
+		t.Fatal("parts must keep being written while the IDR is owed")
 	}
 	if pli.calls != 1 {
-		t.Fatalf("PLI calls = %d, want still 1 (paced)", pli.calls)
+		t.Fatalf("PLI calls = %d, want still 1 (one per episode)", pli.calls)
 	}
-	partsBefore := s.Stats().PartsWritten
 
-	// The IDR the PLI asked for: the stream resumes on it.
+	// The IDR the PLI asked for closes the episode; a later loss opens a new one.
 	send(singleNAL(5, []byte{0xEE}), ts(), true)
 	frame++
-	if s.droppingDamaged.Load() {
-		t.Fatal("an IDR must clear drop-until-IDR")
+	if s.damageOpen.Load() {
+		t.Fatal("an IDR must close the damage episode")
 	}
-	for i := 0; i < 20; i++ {
-		send(singleNAL(1, []byte{0xFF, byte(i)}), ts(), true)
-		frame++
-	}
-	if got := s.damagedAUsDropped.Load(); got != 5 {
-		t.Fatalf("frames after the IDR were dropped: damagedAUsDropped = %d", got)
-	}
-	if s.Stats().PartsWritten <= partsBefore {
-		t.Fatal("parts must resume after the IDR")
+	frags2 := fuAFrames(1, make([]byte, 900), 3)
+	send(frags2[0], ts(), false)
+	seq++ // lost again
+	send(frags2[2], ts(), true)
+	clock = clock.Add(reorderHoldMax)
+	send(singleNAL(1, []byte{0xEF}), ts(), true)
+	frame++
+	if pli.calls != 2 || s.damageEpisodes.Load() != 2 {
+		t.Fatalf("second loss after the IDR: pli=%d episodes=%d, want 2 and 2", pli.calls, s.damageEpisodes.Load())
 	}
 	st := s.Stats()
-	if st.VideoPacketsLost != 1 || st.VideoDamageEpisodes != 1 || st.VideoDamagedDropped != 5 {
+	if st.VideoPacketsLost != 2 || st.VideoDamageEpisodes != 2 || st.VideoDamagedDropped != 0 {
 		t.Fatalf("stats lost=%d damage=%d damagedDropped=%d", st.VideoPacketsLost, st.VideoDamageEpisodes, st.VideoDamagedDropped)
 	}
 	line := formatStatsLine("s", Stats{}, st, 5e9)
-	for _, want := range []string{"lost=+1", "damage=+1", "damagedDropped=+5"} {
+	for _, want := range []string{"lost=+2", "damage=+2", "damagedDropped=+0"} {
 		if !contains(line, want) {
 			t.Fatalf("stats line lacks %q: %s", want, line)
 		}
@@ -143,8 +148,8 @@ func TestSession_PacketLossDropsFramesUntilTheNextIDRAndAsksForOne(t *testing.T)
 }
 
 // A tail loss (the marker packet of an AU never arrives) already discarded
-// the AU via the timestamp rule; it must ALSO arm drop-until-IDR now.
-func TestSession_TailLossAlsoArmsDropUntilIDR(t *testing.T) {
+// the AU via the timestamp rule; it must ALSO ask for an IDR now.
+func TestSession_TailLossAlsoAsksForAnIDR(t *testing.T) {
 	r := ring.New(6, 90000)
 	s := New(45000, 360000, r, nil)
 	clock := time.Unix(1_700_000_000, 0)
@@ -167,8 +172,8 @@ func TestSession_TailLossAlsoArmsDropUntilIDR(t *testing.T) {
 	send(singleNAL(1, []byte{0xBB}), 2*frameStep, true)
 	clock = clock.Add(reorderHoldMax)
 	send(singleNAL(1, []byte{0xCC}), 3*frameStep, true)
-	if !s.droppingDamaged.Load() {
-		t.Fatal("a lost marker packet must arm drop-until-IDR")
+	if !s.damageOpen.Load() {
+		t.Fatal("a lost marker packet must open a damage episode")
 	}
 	if pli.calls != 1 {
 		t.Fatalf("PLI calls = %d, want 1", pli.calls)
