@@ -375,6 +375,23 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
     }
     const found = await this.fetchState(req.channelId, req.startedAt);
     if (!found) {
+      // THE ONLY WAY A VIEWER'S PLAYLIST REQUEST 404s, AND IT NEVER SAID
+      // SO. `pqp-remuxd`'s registry answered 404 for this session id,
+      // which means it has never held it or has since stopped holding it
+      // (a watchdog restart, a demote, or a DELETE). On 2026-09-17 that
+      // happened twice inside an hour (a reorder-buffer stall crossed the
+      // part-stuck threshold, see `internal/session/reorder.go`), every
+      // viewer's `/ll` and `/ll-audio` 404ed together, and the first
+      // theory reached for was the sliding window, which this Worker
+      // cannot 404 for at all (an msn behind the edge is a 200, an msn
+      // too far ahead is a 400). Naming the reason is repo pitfall 16's
+      // rule: an endpoint that refuses somebody must say why.
+      logEvent("hlsEdge.llPlaylistNotFound", {
+        reason: "session-gone",
+        channelId: req.channelId,
+        startedAt: req.startedAt,
+        rung: req.rung ?? null,
+      });
       return new Response("Not found", { status: 404 });
     }
     const track = trackForRung(found.state, req.rung);
@@ -382,6 +399,14 @@ export class LlPlaylistOrigin implements PlaylistOrigin {
       // A real LL session that has not (yet, or ever, e.g. no stage audio)
       // enabled this specific track — 404 for THIS rung, which the
       // existing non-200 handling in `index.ts` already refuses to cache.
+      // Distinct from `session-gone` above: the session is alive and every
+      // other rung of it is being served.
+      logEvent("hlsEdge.llPlaylistNotFound", {
+        reason: "rung-track-absent",
+        channelId: req.channelId,
+        startedAt: req.startedAt,
+        rung: req.rung ?? null,
+      });
       return new Response("Not found", { status: 404 });
     }
     const basePath = renditionBasePath(req.channelId, req.startedAt);

@@ -291,8 +291,23 @@ test("N concurrent rendition requests for the same session produce exactly one s
   }
 });
 
+/** Captures `logEvent`'s structured lines (it writes JSON to `console.log`) for the duration of one test. */
+function captureLogEvents() {
+  const original = console.log;
+  const lines = [];
+  console.log = (text) => {
+    try {
+      lines.push(JSON.parse(text));
+    } catch {
+      // Not one of ours; drop it rather than fail the test on noise.
+    }
+  };
+  return { lines, restore: () => (console.log = original) };
+}
+
 test("a request for the ll-audio rung 404s cleanly once audio genuinely does not exist yet, with no crash", async () => {
   const stub = installFetchStub({ stateProvider: () => stateFixture({ withAudio: false }) });
+  const logs = captureLogEvents();
   try {
     const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
     const response = await origin.fetchPlaylist({
@@ -303,8 +318,42 @@ test("a request for the ll-audio rung 404s cleanly once audio genuinely does not
     });
     assert.equal(response.status, 404);
   } finally {
+    logs.restore();
     stub.restore();
   }
+  const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
+  assert.equal(notFound.length, 1, "a 404 must say why");
+  assert.equal(notFound[0].reason, "rung-track-absent");
+  assert.equal(notFound[0].rung, LL_AUDIO_RUNG);
+});
+
+// THE 2026-09-17 OUTAGE, PINNED. A watchdog restart takes the session out
+// of `pqp-remuxd`'s registry, `state.json` 404s, and every viewer's
+// playlist 404s with it, the only 404 path this Worker has. It used to
+// be silent, so the cause was guessed at (the sliding window, which
+// cannot 404 here at all) for an afternoon. Repo pitfall 16.
+test("a playlist 404 because the remux registry has no such session names the reason", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 404, ok: false, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) });
+  const logs = captureLogEvents();
+  let response;
+  try {
+    const origin = new LlPlaylistOrigin(ORIGIN_BASE, 5000);
+    response = await origin.fetchPlaylist({
+      channelId: CHANNEL_ID,
+      startedAt: STARTED_AT,
+      rung: LL_VIDEO_RUNG,
+      token: "ignored",
+    });
+  } finally {
+    logs.restore();
+    globalThis.fetch = original;
+  }
+  assert.equal(response.status, 404);
+  const notFound = logs.lines.filter((l) => l.event === "hlsEdge.llPlaylistNotFound");
+  assert.equal(notFound.length, 1);
+  assert.equal(notFound[0].reason, "session-gone");
+  assert.equal(notFound[0].channelId, CHANNEL_ID);
 });
 
 test("a session whose state.json is not written YET answers `not-ready: no-state`, never a conventional fallback", async () => {

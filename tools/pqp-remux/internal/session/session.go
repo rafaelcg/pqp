@@ -315,7 +315,7 @@ type Session struct {
 func New(partTicks, segmentTicks uint32, r *ring.Ring, keyReq *keyframe.Requester) *Session {
 	s := &Session{
 		dep:     h264.NewDepacketizer(),
-		reorder: newReorderBuffer(),
+		reorder: newReorderBuffer(reorderHoldMax),
 		frag: pipeline.NewFragmenter(pipeline.Config{
 			Timescale:       h264.ClockRate,
 			PartDuration:    partTicks,
@@ -675,6 +675,20 @@ func (s *Session) mirrorRepeatCounters() {
 // counters are what say which way it went.
 func (s *Session) EnableClockCutParts() { s.clockCutParts = true }
 
+// SetReorderHold sets how long this session's video reorder buffer holds
+// a packet waiting for the one in front of it (REORDER_HOLD_MS). Zero
+// turns holding off entirely: every gap goes straight to the depacketizer,
+// which is the behaviour before the buffer existed and the rollback if the
+// hold ever costs more than it buys.
+//
+// Call it immediately after New, before the session receives anything --
+// it REPLACES the buffer, so anything already pending would be dropped.
+func (s *Session) SetReorderHold(d time.Duration) {
+	s.videoMu.Lock()
+	defer s.videoMu.Unlock()
+	s.reorder = newReorderBuffer(d)
+}
+
 // publishInit builds and stores one video init segment. Returns false when
 // BuildInitSegment rejects the pair (caller keeps waiting / demotes).
 func (s *Session) publishInit(sps, pps []byte, uri string, discontinuity bool) bool {
@@ -810,8 +824,16 @@ func (s *Session) markDamaged(now time.Time, cause error) {
 	if kr := s.keyReq.Load(); kr != nil {
 		pliSent = kr.OnLoss(now)
 	}
-	log.Printf("pqp-remux: video damage: %v; keyframe requested (episode %d, lost=%d, pli=%t)",
-		cause, s.damageEpisodes.Load(), s.dep.LostPackets(), pliSent)
+	// gap= is THIS episode's gap, lostTotal= the session's running total.
+	// They used to be one field called `lost=`, which was the cumulative
+	// total: an analysis of the 2026-09-17 stalls read the differences
+	// between successive episodes' `lost=` as burst lengths, and since an
+	// episode latches until the next IDR (the CAS above) each of those
+	// differences was a sum over an unknown number of holes. Two numbers,
+	// each named for what it is. See h264.Depacketizer.GapHistogram for
+	// the shape across the whole session.
+	log.Printf("pqp-remux: video damage: %v; keyframe requested (episode %d, gap=%d, lostTotal=%d, pli=%t)",
+		cause, s.damageEpisodes.Load(), s.dep.LastGap(), s.dep.LostPackets(), pliSent)
 }
 
 func (s *Session) requestDemote(reason string) {

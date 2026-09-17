@@ -80,6 +80,11 @@ func newManagedSession(ctx context.Context, req StartSessionRequest, startedAtMs
 		Global:         global,
 	}
 
+	// The part target is per session, so the part-stuck threshold cannot
+	// be derived from GlobalConfig alone -- see
+	// WatchdogConfig.partStuckThreshold for what it is derived FOR.
+	watchdogCfg.PartMs = int64(req.PartMs)
+
 	p, err := factory(ctx, cfg)
 	if err != nil {
 		return nil, err

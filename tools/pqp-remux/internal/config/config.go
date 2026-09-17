@@ -51,6 +51,14 @@ const (
 	// leaf-package reason as DefaultAACBitrateKbps above.
 	DefaultR2QueueDepth = 64
 	DefaultR2MaxRetries = 3
+
+	// DefaultReorderHoldMS / MaxReorderHoldMS mirror
+	// internal/control.DefaultReorderHoldMs / maxReorderHoldMs and
+	// internal/session's own reorderHoldMax. Repeated as literals rather
+	// than imported for the same leaf-package reason as
+	// DefaultAACBitrateKbps above.
+	DefaultReorderHoldMS = 300
+	MaxReorderHoldMS     = 1000
 )
 
 // Config is everything the binary needs, already validated.
@@ -129,6 +137,18 @@ type Config struct {
 	// this is a request, not a promise; the stats line's repeats/cuts
 	// counters say whether it is doing anything.
 	ClockCutParts bool
+
+	// ReorderHoldMS is REORDER_HOLD_MS: how long internal/session's video
+	// reorder buffer holds a packet waiting for the one in front of it
+	// before the gap is handed to the depacketizer. DefaultReorderHoldMS
+	// (300) is roughly one publisher-to-SFU round trip, which is when a
+	// NACKed retransmission lands; 0 turns holding off entirely, which is
+	// the rollback to the behaviour before the buffer existed.
+	//
+	// internal/control.GlobalConfig reads the SAME name for pqp-remuxd.
+	// Production runs that binary, so a knob only this package read would
+	// be inert on the box that matters (repo pitfall 12).
+	ReorderHoldMS int
 }
 
 // PartTicks/SegmentTicks convert PartMS/SegmentMS into the 90kHz RTP clock
@@ -214,6 +234,9 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	c.ClockCutParts = os.Getenv("CLOCK_CUT_PARTS") == "true"
+	if c.ReorderHoldMS, err = envIntOr("REORDER_HOLD_MS", DefaultReorderHoldMS); err != nil {
+		return Config{}, err
+	}
 
 	if c.AACBitrateKbps, err = envIntOr("AAC_BITRATE_KBPS", DefaultAACBitrateKbps); err != nil {
 		return Config{}, err
@@ -289,6 +312,12 @@ func (c Config) Validate() error {
 	}
 	if c.R2UploadMaxRetries < 0 {
 		return fmt.Errorf("config: R2_UPLOAD_MAX_RETRIES must not be negative, got %d", c.R2UploadMaxRetries)
+	}
+	// Zero is meaningful ("hold nothing") and is the documented rollback.
+	// Negative is not a shorter hold, and a hold past MaxReorderHoldMS is
+	// a jitter buffer wearing this knob's name.
+	if c.ReorderHoldMS < 0 || c.ReorderHoldMS > MaxReorderHoldMS {
+		return fmt.Errorf("config: REORDER_HOLD_MS must be between 0 and %d, got %d", MaxReorderHoldMS, c.ReorderHoldMS)
 	}
 	return nil
 }
