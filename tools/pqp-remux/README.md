@@ -430,9 +430,14 @@ pipeline did until `internal/skipframe` existed.
 **With `CLOCK_CUT_PARTS=true` that limit is gone**, because the thing it
 was waiting for now exists: a frame that says "the picture did not
 change" is neither a guess nor a re-send of a coded frame. A freeze then
-produces one part per `PART_MS` for as long as it lasts, every part
+produces one part per `PART_MS` for **up to a minute**, every part
 exactly the target, and `partTargetMs` stops climbing with the worst gap
-the session ever had. What is published is a P slice whose every
+the session ever had. The minute is a cap, not a cadence: a segment
+closes only on an IDR and a frozen source sends neither frames nor IDRs,
+so filling forever would mean an open segment collecting two parts a
+second, every one of them listed in every playlist the edge serves. Past
+it the old behaviour returns — the timeline holds, one long part is
+published, and the frame that ends the freeze pays the time back. What is published is a P slice whose every
 macroblock is `P_Skip`, which copies the previous picture with a zero
 motion vector and no residual — bit-exact, verified against ffmpeg with
 `-err_detect explode` and `framemd5` on a real capture

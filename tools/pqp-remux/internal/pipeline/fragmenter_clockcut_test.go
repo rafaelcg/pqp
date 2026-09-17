@@ -396,3 +396,37 @@ func TestClockCut_OffByDefault(t *testing.T) {
 var _ Repeater = (*fakeRepeater)(nil)
 
 var _ = h264.AccessUnit{}
+
+// A source that freezes for MINUTES is the one case filling cannot serve:
+// a segment closes only on an IDR, and a frozen source sends neither
+// frames nor IDRs, so every filled part lands in an open segment that
+// never closes and is listed in every playlist the edge serves. Past the
+// cap the fragmenter holds the timeline, exactly as it did before clock
+// cutting existed: bounded growth rather than a playlist that grows for
+// as long as the freeze lasts.
+func TestClockCut_AFreezeThatNeverEndsStopsFillingEventually(t *testing.T) {
+	f, rep := clockCutFragmenter()
+	if _, err := f.Push(au(0, true)); err != nil {
+		t.Fatalf("first IDR: %v", err)
+	}
+	parts := 0
+	// Ten minutes of nothing at all.
+	for wall := 100 * time.Millisecond; wall <= 10*time.Minute; wall += 100 * time.Millisecond {
+		if wall < idleAllowance(partDuration) {
+			continue
+		}
+		parts += len(f.IdleFlush(int64(wall) * timescale / int64(time.Second)))
+	}
+	limit := f.maxConsecutiveRepeats()
+	if rep.frames > limit {
+		t.Fatalf("%d repeat frames synthesized for one freeze; the cap is %d", rep.frames, limit)
+	}
+	if rep.frames < limit {
+		t.Fatalf("only %d repeat frames before filling stopped; a minute of freeze should be filled (cap %d)", rep.frames, limit)
+	}
+	// One more part after the cap: the pre-clock-cut keep-alive publishing
+	// the held frame once, after which the timeline holds.
+	if parts > limit+1 {
+		t.Fatalf("%d parts from a ten minute freeze; the cap is %d plus the single held-frame part", parts, limit)
+	}
+}

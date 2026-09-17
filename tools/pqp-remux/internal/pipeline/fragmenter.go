@@ -166,8 +166,46 @@ type Fragmenter struct {
 	// the pre-clock-cut keep-alive.
 	synthAhead bool
 
-	repeatFrames uint64
-	clockCuts    uint64
+	// consecutiveRepeats is how many frames in a row have been
+	// synthesized with no real access unit between them, and it is capped
+	// (see maxConsecutiveRepeats). WHY A CAP EXISTS AT ALL: a segment
+	// closes only on an IDR, and a source that has genuinely frozen sends
+	// no frames AND no IDR, so the open segment would go on collecting
+	// two parts a second for as long as the freeze lasts -- every one of
+	// them listed in every playlist the edge serves, and
+	// EXT-X-TARGETDURATION climbing with the segment. Past the cap this
+	// fragmenter does exactly what it did before clock cutting existed:
+	// holds the timeline, publishes one long part, and pays the time back
+	// on the frame that ends the freeze. Bounded growth beats an
+	// unbounded playlist, and a freeze that long is already a frozen
+	// picture for every viewer either way.
+	consecutiveRepeats int
+	repeatFrames       uint64
+	clockCuts          uint64
+}
+
+// maxFillSeconds is how long a single gap may be filled with synthesized
+// frames before this fragmenter gives up and lets the timeline hold. It
+// is deliberately far longer than any gap a working source produces --
+// the 2026-09-17 measurements topped out at 2.25s, and a slide deck that
+// repaints every five seconds is an ORDINARY source this must cover
+// completely -- and far shorter than a freeze that has clearly ended the
+// stream. A minute of filling is 120 parts at the default target, which
+// is a playlist of a few kilobytes; ten minutes would be 1200.
+const maxFillSeconds = 60
+
+// maxConsecutiveRepeats is how many frames may be synthesized in a row
+// before the timeline is allowed to hold. Floored at eight so a
+// pathological configuration still covers a few ordinary gaps.
+func (f *Fragmenter) maxConsecutiveRepeats() int {
+	if f.cfg.PartDuration == 0 {
+		return 8
+	}
+	n := int(maxFillSeconds * int64(f.cfg.Timescale) / int64(f.cfg.PartDuration))
+	if n < 8 {
+		return 8
+	}
+	return n
 }
 
 // minSampleTicks is the shortest duration a sample may carry. A sample of
@@ -447,6 +485,9 @@ func (f *Fragmenter) cutToBoundaries(target int64, fillAtTarget bool) ([]*Fragme
 		boundary := f.partStart + partDur
 		var rep []byte
 		if target > boundary || fillAtTarget {
+			if f.consecutiveRepeats >= f.maxConsecutiveRepeats() {
+				return out, false
+			}
 			if rep = f.repeat.Repeat(); rep == nil {
 				return out, false
 			}
@@ -462,6 +503,7 @@ func (f *Fragmenter) cutToBoundaries(target int64, fillAtTarget bool) ([]*Fragme
 		f.pendingPTS = boundary
 		f.pendingTruePTS = boundary
 		f.repeatFrames++
+		f.consecutiveRepeats++
 	}
 	return out, false
 }
@@ -483,6 +525,7 @@ func (f *Fragmenter) setPending(au *h264.AccessUnit, pts int64) {
 	f.pendingPTS = pts
 	f.pendingTruePTS = pts
 	f.anchorPTS = pts
+	f.consecutiveRepeats = 0
 }
 
 // HasPending reports whether an access unit is currently held, waiting for
