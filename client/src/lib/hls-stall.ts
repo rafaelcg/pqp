@@ -160,7 +160,31 @@ export type HlsStallDecision =
   | "hold"
   | "reconnect"
   | "rebuild"
-  | "dead";
+  | "dead"
+  /**
+   * LL only, and only for a "stall" episode's FIRST rung on an attach that
+   * has never painted a frame -- production, 2026-09-17: a viewer who
+   * opened a party right as its LL session (re)started requested
+   * `_HLS_msn=23` while the real playlist was already at 33-37, hls.js
+   * appended nothing usable, `bufferSeekOverHole`/`bufferStalledError`
+   * followed, and the watchdog spent ~40 s walking `start-load` /
+   * `reload-level` / a full rebuild before the REBUILT instance happened to
+   * land on the live edge on its own. hls.js's own `synchronizeToLiveEdge`
+   * is supposed to force exactly this seek once `liveSyncPosition` and
+   * `config.liveMaxLatencyDuration` disagree with the playhead, but only
+   * once `media.readyState` is past `HAVE_NOTHING` -- a player that never
+   * got a usable append never reaches that branch and sits stuck instead.
+   * `HlsWatchPlayer`'s stall tick answers this decision with the SAME
+   * bounded live-edge jump `isMissingFragmentError` already uses
+   * (`canJumpToLiveEdge`'s shared budget), and only falls back to the
+   * ordinary `"start-load"` rung when that budget or a live edge is not
+   * there to jump to. Never fires for conventional or VOD (`configureForMode`
+   * gates the whole rule on `mode === "ll"`), and never more than once per
+   * attach (`hasPlayed`/`jumpOffered`) -- a stall discovered after real
+   * playback started is the starved-presenter case
+   * `classifyLlHlsError`'s "buffer" family already protects, untouched here.
+   */
+  | "jump-live";
 
 /** Why the watchdog last asked for something, for the console and the holding screen. */
 export type HlsStallReason =
@@ -231,6 +255,29 @@ export class HlsStallWatch {
   private waitingSince: number | null = null;
   private lastSequence: number | null = null;
   private sequenceSeenAt: number | null = null;
+  /**
+   * Whether `onPlaying` has fired at all since the last `onSourceChanged`
+   * (a real attach, LL or not -- reset there and nowhere else, including a
+   * ladder-triggered same-URL rebuild, which is a fresh hls.js instance
+   * that has genuinely not painted anything yet either). Read only by
+   * `"jump-live"`'s gate below: a stall discovered before the FIRST frame
+   * is "this attach may have landed behind the live edge", the one the
+   * 2026-09-17 incident was; the identical error after a frame has already
+   * painted is an ordinary mid-party stall and must not trip this rule.
+   */
+  private hasPlayed = false;
+  /**
+   * Whether `"jump-live"` has already been offered once for the CURRENT
+   * `hasPlayed === false` stretch. Deliberately separate from `ladderStep`:
+   * `gateRebuild` resets `ladderStep` to 0 on every full ladder cycle
+   * (three cycles of the "stall" ladder, still with no `onPlaying` in
+   * between on a fake/never-recovering source), which put `ladderStep` back
+   * at 1 -- and re-offered the jump -- every ~6-7 ticks instead of once per
+   * attach (caught by this PR's own component test:
+   * `hls-watch-player-ll-recovery.test.tsx` saw repeated `stopLoad` /
+   * `startLoad` pairs instead of one). Reset only where `hasPlayed` is.
+   */
+  private jumpOffered = false;
   /**
    * LL only: `null` disables the part-stuck rule entirely (the constructed
    * default, and every conventional session). Set by `configureForMode`.
@@ -450,6 +497,7 @@ export class HlsStallWatch {
 
   /** The element started or resumed rendering: the current episode is over. */
   onPlaying(): void {
+    this.hasPlayed = true;
     this.waitingSince = null;
     // A restart hold (`playlist-gone` or conventional sequence-stuck after
     // `"hold"`): buffered media can still emit `playing` after `stopLoad`.
@@ -604,6 +652,8 @@ export class HlsStallWatch {
   /** A new source was attached: forget the old playlist's timeline. */
   onSourceChanged(now: number): void {
     this.attachedAt = now;
+    this.hasPlayed = false;
+    this.jumpOffered = false;
     this.waitingSince = null;
     this.lastSequence = null;
     this.sequenceSeenAt = now;
@@ -770,6 +820,24 @@ export class HlsStallWatch {
       // the same dead source -- but bounded, not on every tick.
       this.ladderStep = SEQUENCE_STUCK_LADDER.length;
       return this.gateReconnect(now);
+    }
+
+    // "jump-live": see that decision's own doc comment. Offered ONCE per
+    // attach (`jumpOffered`, not `ladderStep` -- `gateRebuild` resets the
+    // latter every three cycles even with no real recovery, which without
+    // this re-offered the jump every ~6-7 ticks instead of once), only LL,
+    // only before this attach has ever painted a frame -- a stall
+    // discovered after real playback started is the starved-presenter case
+    // `classifyLlHlsError` already protects, and must keep walking the
+    // ordinary ladder below exactly as it always has.
+    if (
+      reason === "stall" &&
+      this.mode === "ll" &&
+      !this.hasPlayed &&
+      !this.jumpOffered
+    ) {
+      this.jumpOffered = true;
+      return "jump-live";
     }
 
     const ladder = reason === "fatal" ? FATAL_LADDER : STALL_LADDER;
