@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Users } from "lucide-react";
 import { WATCH_PARTY_MAX_GUESTS, type WatchParty } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
-import type { CohostCandidate } from "@/components/watch-party/watch-party-cohosts";
 import { GuestRequestButton } from "./guest-request-button";
 import { GuestInviteDialog } from "./guest-invite-dialog";
 import { GuestOnAirStrip } from "./guest-on-air-strip";
-import { GuestPanel } from "./guest-panel";
 import { GuestHeaderAvatars } from "./guest-header-avatars";
 
 export type GuestAction =
@@ -34,7 +33,6 @@ export type GuestAction =
 export function WatchPartyGuestsOverlay({
   party,
   currentUserId,
-  cohostCandidates,
   inRoom,
   micOn,
   cameraOn,
@@ -43,11 +41,12 @@ export function WatchPartyGuestsOverlay({
   onGuestAction,
   onGoOnAir,
   onGoOffAir,
+  onOpenPeople,
   className,
+  barSlot = null,
 }: {
   party: WatchParty | null;
   currentUserId: string | null;
-  cohostCandidates: readonly CohostCandidate[];
   /** Whether this browser currently holds a seat in this channel's room. */
   inRoom: boolean;
   micOn: boolean;
@@ -66,9 +65,19 @@ export function WatchPartyGuestsOverlay({
   /** `leave`: confirm, then leave the room and resume the player. */
   onGoOffAir: () => Promise<void>;
   className?: string;
+  /**
+   * THE BAR (2026-09-18, `docs/plans/WATCH_PARTY_UI.md` pass 2). The on-air
+   * strip, the request button and the host's "No ar" button are portalled
+   * into this element, the party's one control bar (`WatchPartyBarSlot`),
+   * instead of floating at the top right of the stage. The invite dialog
+   * (modal) and the header avatars stay where they are. `null` draws them
+   * in place, which is what the tests and a party with no bar yet see.
+   */
+  barSlot?: HTMLElement | null;
+  /** Show the Pessoas tab of the side panel (pass 4): the "No ar" button's target. */
+  onOpenPeople?: () => void;
 }) {
   const { t } = useTranslation();
-  const [panelOpen, setPanelOpen] = useState(false);
   const [accepting, setAccepting] = useState(false);
 
   const guests = party?.guests ?? null;
@@ -94,14 +103,6 @@ export function WatchPartyGuestsOverlay({
   if (!party || party.state !== "live" || guests === null) {
     return null;
   }
-
-  const candidates = cohostCandidates.filter(
-    (c) =>
-      c.userId !== party.hostUserId &&
-      !party.cohosts.some((cohost) => cohost.userId === c.userId) &&
-      !guests.onAir.some((p) => p.userId === c.userId) &&
-      !guests.invited.some((p) => p.userId === c.userId),
-  );
 
   async function accept() {
     setAccepting(true);
@@ -151,6 +152,61 @@ export function WatchPartyGuestsOverlay({
     );
   }
 
+  /* THE BAR ITEMS: everything here that is a control rather than a modal
+     or a badge. Portalled into the party's one bar when there is one (pass
+     2 of `docs/plans/WATCH_PARTY_UI.md`); drawn in place otherwise. The
+     `order-2` group sits between the panel's mic/share group (order-1) and
+     its mixer group (order-3) whatever order the two owners mounted in. */
+  const barItems = (
+    <span
+      data-watch-party-bar-people
+      className="order-2 flex min-w-0 flex-wrap items-center gap-1.5"
+    >
+      {isOnAir && inRoom && (
+        <GuestOnAirStrip
+          micOn={micOn}
+          cameraOn={cameraOn}
+          onToggleMic={onToggleMic}
+          onToggleCamera={onToggleCamera}
+          onLeave={() =>
+            onGoOffAir().catch((err) =>
+              console.warn("[watch-party] go-off-air failed", err),
+            )
+          }
+        />
+      )}
+
+      {!runsTheParty && !isOnAir && party.options.guests === "request" && (
+        <GuestRequestButton
+          requested={guests.requested}
+          position={guests.position}
+          cooldownMinutesLeft={null}
+          onRequest={() => fireGuestAction({ action: "request" })}
+          onWithdraw={() => fireGuestAction({ action: "withdraw" })}
+        />
+      )}
+
+      {runsTheParty && party.options.guests !== "off" && (
+        /* "NO AR" OPENS PESSOAS (pass 4). The dialog this used to open is
+           now a tab of the side panel (`WatchPartyPeoplePanel`), so the
+           host reads the room in the same column as the chat. */
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={onOpenPeople}
+          data-watch-party-guests-dock
+        >
+          <Users className="h-3.5 w-3.5" aria-hidden="true" />
+          {t("watchParty.guests.panelOnAir", {
+            count: guests.onAir.length,
+            max: WATCH_PARTY_MAX_GUESTS,
+          })}
+        </Button>
+      )}
+    </span>
+  );
+
   return (
     <div
       data-watch-party-guests-overlay
@@ -166,65 +222,11 @@ export function WatchPartyGuestsOverlay({
         />
       )}
 
-      {isOnAir && inRoom && (
-        <GuestOnAirStrip
-          micOn={micOn}
-          cameraOn={cameraOn}
-          onToggleMic={onToggleMic}
-          onToggleCamera={onToggleCamera}
-          onLeave={() =>
-            onGoOffAir().catch((err) =>
-              console.warn("[watch-party] go-off-air failed", err),
-            )
-          }
-        />
-      )}
-
       {!runsTheParty && !isOnAir && !isInvited && guests.onAir.length > 0 && (
         <GuestHeaderAvatars onAir={guests.onAir} className="mb-1" />
       )}
 
-      {!runsTheParty && !isOnAir && party.options.guests === "request" && (
-        <GuestRequestButton
-          requested={guests.requested}
-          position={guests.position}
-          cooldownMinutesLeft={null}
-          onRequest={() => fireGuestAction({ action: "request" })}
-          onWithdraw={() => fireGuestAction({ action: "withdraw" })}
-        />
-      )}
-
-      {runsTheParty && party.options.guests !== "off" && (
-        <>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => setPanelOpen(true)}
-            data-watch-party-guests-dock
-          >
-            <Users className="h-3.5 w-3.5" aria-hidden="true" />
-            {t("watchParty.guests.panelOnAir", {
-              count: guests.onAir.length,
-              max: WATCH_PARTY_MAX_GUESTS,
-            })}
-          </Button>
-          <GuestPanel
-            open={panelOpen}
-            onClose={() => setPanelOpen(false)}
-            guestsMode={party.options.guests}
-            max={WATCH_PARTY_MAX_GUESTS}
-            onAir={guests.onAir}
-            requests={guests.requests}
-            requestCount={guests.requestCount}
-            candidates={candidates}
-            onAccept={(userId) => fireGuestAction({ action: "accept", userId })}
-            onDecline={(userId) => fireGuestAction({ action: "decline", userId })}
-            onRemove={(userId) => fireGuestAction({ action: "remove", userId })}
-            onInvite={(userId) => fireGuestAction({ action: "invite", userId })}
-          />
-        </>
-      )}
+      {barSlot ? createPortal(barItems, barSlot) : barItems}
     </div>
   );
 }

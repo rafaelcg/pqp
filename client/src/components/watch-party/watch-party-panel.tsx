@@ -6,11 +6,14 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Bell,
   BellOff,
   CalendarClock,
   Check,
+  Camera,
+  CameraOff,
   Clapperboard,
   Lock,
   Crown,
@@ -65,7 +68,7 @@ import {
 } from "@/components/watch-party/watch-party-transmission";
 import { VoiceTrackModeToggle } from "@/components/watch-party/voice-track-mode-toggle";
 import type { VoiceTrackMode } from "@/lib/voice-track-mode";
-import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
+import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
 import {
   browserTimezone,
   formatSessionRelativeTime,
@@ -121,6 +124,35 @@ export interface WatchPartyPanelProps {
   party: WatchParty | null;
   channelId: string;
   channelName: string;
+  /**
+   * THE LIVE BAR IS THE CHANNEL HEADER (2026-09-18,
+   * `docs/plans/WATCH_PARTY_UI.md` pass 1). While a party is live the app
+   * draws no channel header of its own above this panel; the bar takes its
+   * row and its height. These two slots carry what the header owned that
+   * the party has no words for: the phone's nav button on the left, and a
+   * `...` menu (pins, past broadcasts, channel settings, members) on the
+   * right. Both optional, both rendered on the presenter and the audience
+   * bar alike.
+   */
+  headerLeading?: ReactNode;
+  headerTrailing?: ReactNode;
+  /**
+   * THE ONE BAR (2026-09-18, pass 2 of `docs/plans/WATCH_PARTY_UI.md`).
+   * The element the live surface portals its controls into: the mic pill
+   * and meter, the seat controls, share / Trocar / Parar, the mixer, the
+   * legacy raise and the seat's exit. `App` hands over either the slot it
+   * draws over the bottom of the stage pane or, for a seatless viewer with
+   * a picture, the span in the player's own bottom bar. `null` (tests, a
+   * party with no stage yet) draws the same row inline above the split, the
+   * way the dock used to.
+   */
+  barSlot?: HTMLElement | null;
+  /**
+   * Where the host's transmission status goes (pass 3): the slot `App`
+   * draws over the top edge of the stage pane. `null` draws it as the row
+   * above the split it used to be.
+   */
+  statusSlot?: HTMLElement | null;
   /** START_WATCH_PARTY on this channel: may create one, may take the stage. */
   canStart: boolean;
   /** True while this person holds a seat in this channel's voice room. */
@@ -275,6 +307,14 @@ export interface WatchPartyPanelProps {
   hlsMaxFrameRate?: 30 | 60;
   /** This person's camera, for the go-live checklist's "camera off" row. */
   cameraOn?: boolean;
+  /**
+   * CÂMERA ON THE BAR (2026-09-18). The host had no way to turn their
+   * camera on in a party: the call strip's camera button is hidden under
+   * the party chrome (PR 538, when the stream never carried a camera), and
+   * the stream has carried one since `LIVE_HLS_CAMERA` (a second 360p
+   * egress the viewer's player draws in a corner). This is that door.
+   */
+  onToggleCamera?: () => void;
   onShapeChange?: (shape: "expanded" | "none") => void;
   /**
    * WHICH HALF OF THE PANEL TO DRAW, and it is rendered twice.
@@ -573,13 +613,11 @@ function WatchPartyOptionsDialog({
   party,
   open,
   onClose,
-  stage,
 }: {
   props: WatchPartyPanelProps;
   party: WatchParty;
   open: boolean;
   onClose: () => void;
-  stage: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -632,123 +670,9 @@ function WatchPartyOptionsDialog({
             when the party's floor is closed, so somebody brought in to help
             can actually talk to the room. */}
         {cohostSection(props, party, "border-t border-border pt-4")}
-        {/* The queue is a moderation surface and only the people running the
-            party see it: an audience that can watch who asked and was passed
-            over is an audience having a worse time. It is also nonsense in a
-            party with no voice, where nobody is asking for anything, so it
-            follows the Voz control rather than the stored stage mode.
-            NO LONGER RESTRICTED TO `invited` (2026-09-13): the bar's "Pedir
-            para falar" is offered on every stage mode now the audience never
-            joins a call outright, so a request can land while the party is
-            `hosts_only` or `everyone` too, and the host needs somewhere to
-            see and grant it. */}
-        {stage && party.options.voiceEnabled && (
-            <div className="border-t border-border pt-4">
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                {t("watchParty.stage.hands")}
-              </p>
-              {party.stage.hands.length === 0 ? (
-                <p className="text-[11px] text-paper-muted">
-                  {t("watchParty.stage.noHands")}
-                </p>
-              ) : (
-                <>
-                  {/* CAPPED, NOT VIRTUALISED (2026-09-13). `visibleRaisedHands`
-                      keeps the first `MAX_VISIBLE_HANDS` — the people waiting
-                      longest, exactly who a host should see first — and
-                      everybody past that shows only as a count instead of a
-                      DOM row and an avatar fetch each. A hall running
-                      voice-on with a real audience could otherwise put
-                      hundreds of rows and image loads into this dialog on
-                      every open. */}
-                  {(() => {
-                    const { visible, hiddenCount } = visibleRaisedHands(
-                      party.stage.hands,
-                    );
-                    return (
-                      <>
-                        <ul className="flex flex-col gap-1">
-                          {visible.map((person) => (
-                            <li
-                              key={person.userId}
-                              className="flex items-center gap-2"
-                              data-watch-party-hand
-                            >
-                              <UserAvatar
-                                name={person.displayName}
-                                avatarUrl={person.avatarUrl}
-                                rounded="full"
-                                className="h-6 w-6 shrink-0"
-                              />
-                              <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                                {person.displayName}
-                              </span>
-                              <Button
-                                type="button"
-                                size="sm"
-                                onClick={() =>
-                                  void props.onStageAction?.(
-                                    "invite",
-                                    person.userId,
-                                  )
-                                }
-                                data-watch-party-invite
-                              >
-                                {t("watchParty.stage.invite")}
-                              </Button>
-                            </li>
-                          ))}
-                        </ul>
-                        {hiddenCount > 0 && (
-                          <p
-                            className="mt-1 text-[11px] text-paper-muted"
-                            data-watch-party-hands-more
-                          >
-                            {t("watchParty.stage.handsMore", {
-                              count: hiddenCount,
-                            })}
-                          </p>
-                        )}
-                      </>
-                    );
-                  })()}
-                </>
-              )}
-              {party.stage.invited.length > 0 && (
-                <>
-                  <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                    {t("watchParty.stage.title")}
-                  </p>
-                  <ul className="flex flex-col gap-1">
-                    {party.stage.invited.map((person) => (
-                      <li key={person.userId} className="flex items-center gap-2">
-                        <UserAvatar
-                          name={person.displayName}
-                          avatarUrl={person.avatarUrl}
-                          rounded="full"
-                          className="h-6 w-6 shrink-0"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                          {person.displayName}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            void props.onStageAction?.("remove", person.userId)
-                          }
-                          data-watch-party-stage-remove
-                        >
-                          {t("watchParty.stage.remove")}
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-          )}
+        {/* THE QUEUE LEFT THIS DIALOG (pass 4 of `docs/plans/WATCH_PARTY_UI.md`):
+            "Pedindo pra falar" and "No palco" are drawn once, in the Pessoas
+            tab of the side panel, beside the guests system's own lists. */}
       </DialogBody>
     </Dialog>
   );
@@ -2066,7 +1990,11 @@ function LiveSurface(
        reach. The actions drop to a second row instead of overflowing, and
        the identity keeps `min-w-0` so the party's name truncates rather
        than pushing them off. */
-    "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink-2 px-3 py-2";
+    /* AND IT IS THE HEADER NOW (2026-09-18, pass 1 of
+       `docs/plans/WATCH_PARTY_UI.md`): same minimum height, same ground
+       and same gutters as the channel header it replaces, so the row does
+       not read as a second header under an empty one. */
+    "flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink px-3 py-2 sm:px-4";
 
   const identity = (
     /* A REAL MINIMUM, so the wrap happens instead of the name vanishing.
@@ -2096,29 +2024,47 @@ function LiveSurface(
         const mic = props.micState;
 
         const inCall = mic !== "off";
+        // THE WARNING IS THE PILL (2026-09-18, pass 1 of
+        // `docs/plans/WATCH_PARTY_UI.md`). "Mic mudo: ninguém te ouve" used
+        // to be a sentence with an "Ativar mic" link at the end of the
+        // status row, one row below the pill that already said "Mic
+        // mutado" and already unmuted on press: the same fact and the same
+        // action twice, a row apart. Now the pill goes amber, says the
+        // sentence, and is the fix. Same rule behind it
+        // (`presenterMicWarning`), same test ids, one control.
         const label =
           mic === "everyone"
             ? t("watchParty.live.micEveryone")
             : mic === "room"
               ? t("watchParty.live.micRoom")
               : mic === "muted"
-                ? t("watchParty.live.micMuted")
+                ? micMutedWarning
+                  ? t("watchParty.live.micMutedShort")
+                  : t("watchParty.live.micMuted")
                 : t("watchParty.live.micOff");
         const hint =
           mic === "everyone"
             ? t("watchParty.live.micEveryoneHint")
             : mic === "room"
               ? t("watchParty.live.micRoomHint")
-              : undefined;
+              : micMutedWarning
+                ? t("watchParty.live.activateMic")
+                : undefined;
         const className = cn(
           "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors",
           mic === "everyone"
             ? "border-success/40 bg-success/15 text-success"
-            : mic === "room"
+            : mic === "room" || micMutedWarning
               ? "border-warning/40 bg-warning/10 text-warning"
               : "border-border bg-surface-0 font-normal text-text-tertiary",
           inCall && props.onToggleMute && "hover:bg-surface-2",
         );
+        const warningAttrs = micMutedWarning
+          ? {
+              "data-testid": "watch-party-mic-muted-warning",
+              "data-watch-party-activate-mic": "",
+            }
+          : {};
         const icon =
           mic === "everyone" || mic === "room" ? (
             <Mic className="h-3 w-3" aria-hidden />
@@ -2132,6 +2078,7 @@ function LiveSurface(
           <button
             type="button"
             data-watch-party-mic={mic}
+            {...warningAttrs}
             aria-pressed={mic === "muted"}
             aria-label={
               mic === "muted"
@@ -2146,7 +2093,12 @@ function LiveSurface(
             {label}
           </button>
         ) : (
-          <span data-watch-party-mic={mic} title={hint} className={className}>
+          <span
+            data-watch-party-mic={mic}
+            {...warningAttrs}
+            title={hint}
+            className={className}
+          >
             {icon}
             {label}
           </span>
@@ -2330,6 +2282,24 @@ function LiveSurface(
             {t("watchParty.live.stopShare")}
           </Button>
         )}
+        {runsTheShow && props.onToggleCamera && (
+          <Button
+            type="button"
+            variant={props.cameraOn ? "default" : "ghost"}
+            size="sm"
+            aria-pressed={props.cameraOn ?? false}
+            title={t("watchParty.live.cameraHint")}
+            onClick={props.onToggleCamera}
+            data-watch-party-bar-camera
+          >
+            {props.cameraOn ? (
+              <Camera className="mr-1.5 h-3 w-3" aria-hidden />
+            ) : (
+              <CameraOff className="mr-1.5 h-3 w-3" aria-hidden />
+            )}
+            {t("watchParty.guests.camera")}
+          </Button>
+        )}
         {/* THE STREAM'S AUDIO, ONE PRESS AWAY (2026-09-13). The mixer, the
             two sliders that set how loud the host's voice and the film are
             in the ONE audio track the audience hears, used to live inside
@@ -2395,6 +2365,7 @@ function LiveSurface(
       data-watch-party-bar="presenter"
       className={barClassName}
     >
+      {props.headerLeading}
       {identity}
       <span className="ml-auto flex flex-wrap items-center justify-end gap-1">
         <WatchPartyShareButton party={party} iconOnly />
@@ -2433,6 +2404,7 @@ function LiveSurface(
             {t("watchParty.live.end")}
           </Button>
         )}
+        {props.headerTrailing}
       </span>
       <ConfirmDialog
         open={confirmEnd}
@@ -2455,20 +2427,50 @@ function LiveSurface(
    * bottom of the chrome column, directly above the split, because the
    * picture itself belongs to the call stage and not to this panel.
    */
-  const presenterDock = runsTheShow && (
+  /**
+   * THE BAR, FOR EVERYBODY WITH SOMETHING TO PRESS (2026-09-18, pass 2 of
+   * `docs/plans/WATCH_PARTY_UI.md`). The dock above the split (host only)
+   * and the audience bar's own seat controls were two rows saying the same
+   * kind of thing to two kinds of person. Now there is one row, at the
+   * bottom of the picture, and every role gets its own subset of it: the
+   * host and co-hosts their mic, share and mixer; a seated guest their mic,
+   * Falar and Sair do palco; a plain viewer the raise and, when invited,
+   * Entrar no palco. The guests overlay portals its own group into the same
+   * element between these two (`data-watch-party-bar-people`, order-2).
+   *
+   * Nobody with nothing to press gets a row: a seatless viewer of a party
+   * with hands off sees no bar at all, which is the seatless promise.
+   */
+  const hasBarContent =
+    runsTheShow || props.inCall || showRequestToSpeak || showEnterPalco;
+  const barControls = hasBarContent && (
     <div
-      data-testid="watch-party-dock"
-      className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ink-4/60 bg-ink px-3 py-1.5"
+      data-testid="watch-party-bar-controls"
+      className={
+        props.barSlot
+          ? "contents"
+          : // Inline fallback: no slot to portal into, so draw the row itself
+            // above the split, the way the dock used to.
+            "flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ink-4/60 bg-ink px-3 py-1.5"
+      }
     >
-      {micPill}
-      {micLevelDb && <DockMicLevel micLevelDb={micLevelDb} />}
-      {seatControls}
-      {audienceActions}
-      <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+      <span className="order-1 flex min-w-0 flex-wrap items-center gap-1.5">
+        {micPill}
+        {micLevelDb && <DockMicLevel micLevelDb={micLevelDb} />}
+        {seatControls}
+        {audienceActions}
+        {leaveSeat}
+      </span>
+      <span className="order-3 ml-auto flex flex-wrap items-center justify-end gap-1.5">
         {presenterActions}
       </span>
     </div>
   );
+  const presenterDock = barControls
+    ? props.barSlot
+      ? createPortal(barControls, props.barSlot)
+      : barControls
+    : null;
 
   /* `canClaim` is the one presenter action an audience member can hold: a
      co-host is `runsTheShow`, but a viewer with the right to take over a
@@ -2479,12 +2481,9 @@ function LiveSurface(
       data-watch-party-bar="audience"
       className={barClassName}
     >
+      {props.headerLeading}
       {identity}
-      {micPill}
       <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-        {seatControls}
-        {audienceActions}
-        {leaveSeat}
         <WatchPartyShareButton party={party} />
         {canClaim && (
           <Button
@@ -2497,6 +2496,7 @@ function LiveSurface(
             {t("watchParty.live.claim")}
           </Button>
         )}
+        {props.headerTrailing}
       </span>
     </div>
   );
@@ -2534,31 +2534,9 @@ function LiveSurface(
    * and every change lands immediately for the people already watching (the
    * server re-reconciles the channel on every edit).
    */
-  // "SEU MIC ESTÁ MUDO", ON THE STATUS LINE (2026-09-13). It used to be a
-  // full-width red strip of its own between the header and the dock, one of
-  // five stacked rows. It is the amber end of the status row now, with the
-  // fix beside it, so the muted state reads with the health dot rather than
-  // as an alarm above everything. Still exists only in the state a recording
-  // was lost to (`presenterMicWarning`).
-  const micMutedInline = micMutedWarning ? (
-    <span
-      data-testid="watch-party-mic-muted-warning"
-      className="flex shrink-0 items-center gap-1.5 text-[11px] text-warning"
-    >
-      <MicOff className="h-3 w-3 shrink-0" aria-hidden />
-      <span className="hidden sm:inline">{t("watchParty.live.micMutedShort")}</span>
-      {props.onToggleMute && (
-        <button
-          type="button"
-          className="rounded-sm font-semibold text-warning underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
-          onClick={props.onToggleMute}
-          data-watch-party-activate-mic
-        >
-          {t("watchParty.live.activateMic")}
-        </button>
-      )}
-    </span>
-  ) : null;
+  // "SEU MIC ESTÁ MUDO" moved twice: a red strip of its own (2026-09-12),
+  // the amber end of the status row (2026-09-13), and now the mic pill
+  // itself (2026-09-18, `micPill` above), which was already the fix.
 
   /* HOST SIDE ONLY, and `runsTheShow` is the gate rather than `canStart`: a
      co-host running the show wants this too, and a moderator who merely holds
@@ -2585,9 +2563,13 @@ function LiveSurface(
       onStreamQualityChange={setLiveQuality}
       onOpenMixer={() => setMixerOpen(true)}
       detailsInDialog
-      trailing={micMutedInline}
+      overlay={Boolean(props.statusSlot)}
     />
   );
+  const transmissionMounted =
+    transmission && props.statusSlot
+      ? createPortal(transmission, props.statusSlot)
+      : transmission;
 
   /**
    * THE OPTIONS ARE A DIALOG NOW, NOT A DRAWER IN THE COLUMN.
@@ -2613,7 +2595,6 @@ function LiveSurface(
       party={party}
       open={optionsOpen}
       onClose={() => setOptionsOpen(false)}
-      stage
     />
   );
 
@@ -2635,7 +2616,7 @@ function LiveSurface(
     return (
       <div className="relative shrink-0">
         {bar}
-        {transmission}
+        {transmissionMounted}
         {presenterDock}
         {/* Portalled by `Dialog`, so it takes no room in this column and the
             split below it never moves. */}
@@ -2647,9 +2628,12 @@ function LiveSurface(
     );
   }
 
-  // Nothing on screen yet, and the person is not in the call: say so instead
-  // of rendering nothing. Which "nothing" it is matters: see
-  // `someoneIsSharing` above.
+  // Nothing on screen yet, and the person is not in the call: the stage's
+  // own holding or preparing state (pass 3 of `docs/plans/WATCH_PARTY_UI.md`)
+  // instead of rendering nothing. Which "nothing" it is matters: see
+  // `someoneIsSharing` above. The checklist that used to repeat here lives
+  // in the green room only; its one blocking rule (Firefox) is the share
+  // button's disabled tooltip on the bar.
   if (!props.hasStream && !props.inCall) {
     const preparing = props.someoneIsSharing === true;
     const hostSide = runningTheShow && props.canStart;
@@ -2660,58 +2644,11 @@ function LiveSurface(
           surfaceHeight(props.fill, "h-[68svh] min-h-[280px]"),
         )}
       >
-        <div
-          data-testid="watch-party-waiting"
-          data-watch-party-waiting={preparing ? "preparing" : "idle"}
-          className="relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden bg-black"
-        >
-          <StreamStartingSoon
-            caption={
-              preparing
-                ? t("watchParty.live.preparing")
-                : t("watchParty.live.waiting")
-            }
-          >
-            <div className="flex flex-col items-center gap-2 px-6 text-center">
-              <Radio
-                className={cn(
-                  "h-5 w-5 text-danger",
-                  preparing && "motion-safe:animate-pulse",
-                )}
-                aria-hidden
-              />
-              {/* The specific sentence, kept even though the headline and the
-                  caption above it already say "hang in there": a viewer who
-                  landed here after a reload has no idea yet whether anyone is
-                  even sharing, and the host needs their own line telling
-                  them what to do about it. Neither is the fun copy's job. */}
-              <p className="max-w-sm text-xs text-paper-muted">
-                {preparing
-                  ? hostSide
-                    ? t("watchParty.live.preparingHost")
-                    : t("watchParty.live.preparingBody", {
-                        name: party.hostDisplayName,
-                      })
-                  : hostSide
-                    ? t("watchParty.live.waitingHost")
-                    : t("watchParty.live.waitingBody", {
-                        name: party.hostDisplayName,
-                      })}
-              </p>
-              {/* THE CHECKLIST STAYS, THE BUTTON WENT (2026-09-13): the
-                  dock's Compartilhar tela is the same action one row up,
-                  and a second copy here was gap 2 of the presenter-UI
-                  plan. The Firefox block moved with it: `presenterActions`
-                  disables the dock's share on the same rule. */}
-              {hostSide && !preparing && props.onShareScreen && (
-                <GoLiveChecklist
-                  items={liveChecklistItems}
-                  className="mt-2 max-w-sm text-left"
-                />
-              )}
-            </div>
-          </StreamStartingSoon>
-        </div>
+        <WatchPartyStage
+          state={preparing ? "preparing" : "holding"}
+          hostSide={hostSide}
+          hostName={party.hostDisplayName}
+        />
       </div>
     );
   }

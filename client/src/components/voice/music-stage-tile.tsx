@@ -5,6 +5,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import { setMusicPlacement } from "@/lib/music-prefs";
 import { cn } from "@/lib/utils";
+import { STAGE_LAYER } from "@/lib/stage-layers";
 import { MusicEmbedOutlet } from "@/components/voice/music-embed-host";
 import { lookupAddedBy } from "@/components/voice/music-now-playing";
 import type { VoiceState } from "@/hooks/use-voice";
@@ -80,11 +81,11 @@ export function MusicStageTile({
             type="button"
             data-testid="tile-click-target"
             aria-label={fullscreenLabel}
-            className="absolute inset-0 z-[1] cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+            className={cn("absolute inset-0 cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring", STAGE_LAYER.tileTarget)}
             onClick={onToggleFullscreen}
           />
         ) : null}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex items-end justify-between gap-2 bg-gradient-to-t from-surface-0/90 to-transparent p-2">
+        <div className={cn("pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-surface-0/90 to-transparent p-2", STAGE_LAYER.labels)}>
           <div className="min-w-0">
             <p className="truncate text-[13px] font-medium text-text">{title}</p>
             <p className="truncate text-[11px] text-text-secondary">
