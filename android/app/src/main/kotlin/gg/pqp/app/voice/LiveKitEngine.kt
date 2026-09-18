@@ -109,8 +109,12 @@ class LiveKitEngine(
     /** Mints a session for a peer the server has already accepted. */
     private val session: suspend (peerId: String) -> VoiceSessionResponse,
     private val onPeerState: (String, PeerMediaState) -> Unit,
-    /** The media leg is gone. The caller leaves the call and says why. */
-    private val onFailed: (String) -> Unit,
+    /**
+     * The media leg is gone. The caller leaves the call and says which of the
+     * four things in [SfuFailureKind] happened, rather than one sentence for
+     * all of them.
+     */
+    private val onFailed: (SfuFailure) -> Unit,
     /** Connected and publishing. The caller re-declares mute and deafen. */
     private val onConnected: () -> Unit,
     /** A participant's screen arrived or went away. Null means "gone". */
@@ -240,6 +244,37 @@ class LiveKitEngine(
     /** The `/api/ice-servers` list of the current join; read once, at connect. */
     private var ice: List<IceServer> = emptyList()
 
+    /** The LiveKit room name (the voice channel id), for the log line. */
+    @Volatile private var roomName: String? = null
+
+    /**
+     * How many join attempts are in the middle of a handshake.
+     *
+     * ## THE FAILURE THIS ENDS, AND IT ATE EVERY LIVEKIT ERROR THIS CLIENT
+     * HAS EVER PRODUCED
+     *
+     * A failing connect reports itself **twice**. `RTCEngine.onError` calls
+     * `Room.onFailToConnect` for any error raised while the connection state is
+     * CONNECTING, which emits [RoomEvent.FailedToConnect] onto `room.events`;
+     * and `Room.connect` then throws the same failure, with more in it
+     * (verified by reading the 2.28.1 bytecode). Both landed in [fail], and
+     * [fail] is one-shot: whichever arrived first cleared [localPeerId] and
+     * silenced the other. The collector usually won, so what reached logcat and
+     * the person was `event.error.message` from an event, while the
+     * `RoomException.ConnectException` that says whether the signalling socket,
+     * TLS or ICE was the problem was thrown into a `catch` that could no longer
+     * do anything with it.
+     *
+     * It also made a retry impossible: the controller had already left the call
+     * by the time the connect coroutine knew it had failed.
+     *
+     * So while a handshake is in flight the connect coroutine owns the outcome
+     * and the collector only logs. A counter rather than a flag because
+     * [connectWithRetries] can overlap with a teardown that starts the next
+     * one, and a flag cleared by the loser would unguard a live handshake.
+     */
+    private val handshakesInFlight = java.util.concurrent.atomic.AtomicInteger(0)
+
     /**
      * [ice] is the list `GET /api/ice-servers` gave this join, the same one the
      * mesh path configures its peer connections with. It used to be ignored
@@ -255,17 +290,58 @@ class LiveKitEngine(
 
         joinJob = scope.launch {
             try {
-                withTimeout(JOIN_TIMEOUT_MS) { connect(localPeerId) }
+                // ONE deadline over the whole sequence, retries included, so
+                // the worst case is still the 45 s the web and iOS allow.
+                withTimeout(JOIN_TIMEOUT_MS) { connectWithRetries(localPeerId) }
             } catch (timeout: TimeoutCancellationException) {
-                Log.w(TAG, "SFU join timed out after ${JOIN_TIMEOUT_MS}ms", timeout)
-                fail("join timed out")
+                report(classifySfuFailure(timeout), timeout, SFU_CONNECT_ATTEMPTS)
             } catch (error: kotlinx.coroutines.CancellationException) {
                 // The call was left while we were joining. Not a failure, and
                 // reporting one here would raise an error over a hang-up.
                 throw error
             } catch (error: Throwable) {
-                Log.w(TAG, "SFU join failed", error)
-                fail(error.message ?: error::class.java.simpleName)
+                report(classifySfuFailure(error), error, SFU_CONNECT_ATTEMPTS)
+            }
+        }
+    }
+
+    /** The one place a classified failure is logged and handed upward. */
+    private fun report(failure: SfuFailure, error: Throwable, attempt: Int) {
+        Log.w(TAG, failure.logLine(roomName, localPeerId, attempt), error)
+        fail(failure)
+    }
+
+    /**
+     * Attempt the media leg, up to [SFU_CONNECT_ATTEMPTS] times.
+     *
+     * Bounded twice, by that count and by the single [JOIN_TIMEOUT_MS] the
+     * caller wraps this in, so no schedule in [sfuRetryDelayMs] can make a
+     * failing join outlast the deadline a person is already waiting through.
+     *
+     * Only [SfuFailure.retryable] is tried again. A refusal is not: the server
+     * has answered, the answer will be the same in eight hundred milliseconds,
+     * and a phone retrying a refusal is a phone showing "Conectando" for the
+     * whole budget instead of saying what happened.
+     */
+    private suspend fun connectWithRetries(peerId: String) {
+        var attempt = 1
+        while (true) {
+            try {
+                connectOnce(peerId, attempt)
+                return
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val failure = classifySfuFailure(error)
+                val wait = if (failure.retryable) sfuRetryDelayMs(attempt) else 0L
+                if (wait == 0L) throw error
+                Log.w(
+                    TAG,
+                    "${failure.logLine(roomName, peerId, attempt)} retrying in ${wait}ms",
+                    error,
+                )
+                delay(wait)
+                attempt += 1
             }
         }
     }
@@ -303,9 +379,42 @@ class LiveKitEngine(
         )
     }
 
-    private suspend fun connect(peerId: String) {
+    /**
+     * One attempt: mint the token, build a room, connect, publish.
+     *
+     * Everything it builds it also releases when it throws, because
+     * [connectWithRetries] may be about to build another one. Two live rooms
+     * mean two `AudioDeviceModule`s with an open `AudioRecord` contending for
+     * one microphone, which is the failure [VoiceTransport.dispose] exists to
+     * prevent and which presents as a call with no sound and nothing logged.
+     */
+    private suspend fun connectOnce(peerId: String, attempt: Int) {
+        // Held from the token mint to the moment `connect` returns, and not one
+        // line further: see `handshakesInFlight`. Released in a `finally` as
+        // well, because every exit from here is an exit from the handshake.
+        var owned = true
+        fun releaseHandshake() {
+            if (owned) {
+                owned = false
+                handshakesInFlight.decrementAndGet()
+            }
+        }
+        handshakesInFlight.incrementAndGet()
+        try {
+            connectInside(peerId, attempt, ::releaseHandshake)
+        } finally {
+            releaseHandshake()
+        }
+    }
+
+    private suspend fun connectInside(
+        peerId: String,
+        attempt: Int,
+        connected: () -> Unit,
+    ) {
         val credentials = session(peerId)
         if (this.localPeerId != peerId) return
+        roomName = credentials.room
 
         val created = LiveKit.create(
             context.applicationContext,
@@ -367,13 +476,36 @@ class LiveKitEngine(
         // publish with the whole screen already taken.
         tokenGrantsScreen = credentials.stream
 
-        eventsJob = scope.launch { listen(created) }
+        val events = scope.launch { listen(created) }
+        eventsJob = events
 
-        created.connect(
-            credentials.url,
-            credentials.token,
-            connectOptionsFor(sfuIceServers(ice)),
-        )
+        try {
+            created.connect(
+                credentials.url,
+                credentials.token,
+                connectOptionsFor(sfuIceServers(ice)),
+            )
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            // `stop` already owns this room: it read `room` before cancelling
+            // us and is disconnecting and releasing it. Touching it here would
+            // be a second teardown of the same object.
+            throw cancelled
+        } catch (error: Throwable) {
+            events.cancel()
+            if (eventsJob === events) eventsJob = null
+            if (room === created) room = null
+            runCatching { created.disconnect() }
+            runCatching { created.release() }
+            throw error
+        }
+
+        // The room is up. Anything that drops it from here on is a real
+        // disconnect and belongs to the collector again, so the guard comes off
+        // BEFORE the publish below rather than when this function returns: an
+        // SFU that kicks us while the microphone is going up would otherwise be
+        // swallowed and leave a call reading Connected with no media in it.
+        connected()
+
         if (this.localPeerId != peerId) {
             // Left while the socket was coming up.
             runCatching { created.disconnect() }
@@ -383,7 +515,10 @@ class LiveKitEngine(
         seedParticipants(created)
         if (canPublishAudio) publishMicrophone(created)
         onConnected()
-        Log.i(TAG, "SFU connected as $peerId in room ${credentials.room}")
+        Log.i(
+            TAG,
+            "sfu-join-ok peer=$peerId room=${credentials.room} attempt=$attempt url=${credentials.url}",
+        )
     }
 
     /**
@@ -518,14 +653,26 @@ class LiveKitEngine(
                     // `localPeerId` before disconnecting for exactly this test.
                     if (localPeerId != null) {
                         val reason = event.error?.message ?: event.reason.name
-                        Log.w(TAG, "SFU disconnected: $reason")
-                        fail(reason)
+                        if (handshakesInFlight.get() > 0) {
+                            // The attempt owns its own outcome; see
+                            // `handshakesInFlight`. Reporting here as well is
+                            // what used to swallow the connect exception.
+                            Log.w(TAG, "sfu-handshake-disconnected reason=$reason")
+                        } else {
+                            Log.w(TAG, "sfu-disconnected reason=$reason room=$roomName")
+                            fail(SfuFailure(SfuFailureKind.Unreachable, "disconnected: $reason"))
+                        }
                     }
                 }
 
                 is RoomEvent.FailedToConnect -> {
-                    Log.w(TAG, "SFU failed to connect", event.error)
-                    fail(event.error.message ?: "failed to connect")
+                    if (handshakesInFlight.get() > 0) {
+                        Log.w(TAG, "sfu-handshake-error (the attempt will report it)", event.error)
+                    } else {
+                        val failure = classifySfuFailure(event.error)
+                        Log.w(TAG, failure.logLine(roomName, localPeerId, 0), event.error)
+                        fail(failure)
+                    }
                 }
 
                 else -> Unit
@@ -904,10 +1051,10 @@ class LiveKitEngine(
         onPeerState(peerId, synchronized(peerLock) { peers.stateFor(peerId) })
     }
 
-    private fun fail(reason: String) {
+    private fun fail(failure: SfuFailure) {
         if (localPeerId == null) return
         localPeerId = null
-        onFailed(reason)
+        onFailed(failure)
     }
 
     override fun setMuted(muted: Boolean) {
@@ -1230,6 +1377,7 @@ class LiveKitEngine(
         screenJob = null
         val screen = screenTrack
         room = null
+        roomName = null
         micTrack = null
         screenTrack = null
         tokenGrantsScreen = false
