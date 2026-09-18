@@ -7,7 +7,12 @@
  *
  *   - WS tier      : N concurrent app sockets, each auth + join-channel +
  *                    join-voice-room (LiveKit-pinned room, presence/roster
- *                    only, no media), plus a reconnect-storm wave.
+ *                    only, no media), plus a reconnect-storm wave. `--no-voice`
+ *                    switches every seat to the viewer shape instead: auth +
+ *                    join-channel only, no voice-room seat at all — modeling
+ *                    the hundreds of HLS-only watch-party viewers
+ *                    (`server/src/ws/hls-audience.ts`) rather than the
+ *                    heavier voice-registry write path.
  *   - DB tier      : a reconnect storm of cold-browser bootstraps from many
  *                    distinct load-test identities, to saturate the Postgres
  *                    pool and prove the circuit breaker (pitfall 17) sheds
@@ -44,7 +49,7 @@
  * Commands:
  *   provision  --out <manifest.json>            create server+channels+invite
  *   db-storm   [--manifest f] --concurrency N --seconds S   pool/breaker storm
- *   ws-storm   --manifest f --sockets N --hold S [--reconnect-at S]
+ *   ws-storm   --manifest f --sockets N --hold S [--reconnect-at S] [--no-voice]
  *   hls        --manifest f --channel <id> --started <ms> --tokens f --viewers N
  *   full       --manifest f --sockets N --db-concurrency N --seconds S
  */
@@ -625,8 +630,21 @@ async function dbStorm(safe: Safe): Promise<void> {
 interface WsSeat {
   socket: WebSocket;
   peerId: string;
+  voice: boolean;
 }
-async function joinSeat(safe: Safe, manifest: Manifest, token: string, _machineId?: string): Promise<WsSeat> {
+/**
+ * Joins one app socket. `voice` (default true) picks the shape:
+ *  - voice seat  : auth -> ready -> join-channel + join-voice-room -> resolves
+ *                  on `welcome` (a real voice-registry seat, LiveKit-pinned).
+ *  - viewer seat : auth -> ready -> join-channel only -> resolves right after
+ *                  `ready`. No join-voice-room, no welcome wait, no seat in
+ *                  the voice room at all — this is the shape a watch-party
+ *                  HLS audience actually holds (`server/src/ws/
+ *                  hls-audience.ts`: "WITHOUT a seat in its voice room"), and
+ *                  it is the one that matters for a reconnect wave sized like
+ *                  a real audience rather than a mesh room.
+ */
+async function joinSeat(safe: Safe, manifest: Manifest, token: string, voice = true, _machineId?: string): Promise<WsSeat> {
   await passAgeGate(safe.apiUrl, token);
   await api(safe.apiUrl, token, "POST", `/api/invites/${manifest.inviteCode}/join`);
   return await new Promise<WsSeat>((resolve, reject) => {
@@ -643,7 +661,10 @@ async function joinSeat(safe: Safe, manifest: Manifest, token: string, _machineI
       }
       reject(e);
     };
-    const timer = setTimeout(() => fail(new Error("no welcome within timeout")), WELCOME_TIMEOUT_MS + HTTP_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => fail(new Error(voice ? "no welcome within timeout" : "no ready within timeout")),
+      WELCOME_TIMEOUT_MS + HTTP_TIMEOUT_MS,
+    );
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({ type: "auth", token, caps: ["voice-roster-delta", "presence-delta"] }));
     });
@@ -656,6 +677,16 @@ async function joinSeat(safe: Safe, manifest: Manifest, token: string, _machineI
       }
       if (frame.type === "ready") {
         socket.send(JSON.stringify({ type: "join-channel", channelId: manifest.textChannelId }));
+        if (!voice) {
+          // Viewer shape: no voice-room seat, so there is no `welcome` frame
+          // coming back for this socket. It is fully joined the moment the
+          // channel join is sent — resolve now instead of waiting on a frame
+          // that will never arrive.
+          settled = true;
+          clearTimeout(timer);
+          resolve({ socket, peerId: "", voice: false });
+          return;
+        }
         socket.send(
           JSON.stringify({ type: "join-voice-room", voiceChannelId: manifest.voiceChannelId, transports: ["livekit"], resume: false }),
         );
@@ -663,7 +694,7 @@ async function joinSeat(safe: Safe, manifest: Manifest, token: string, _machineI
         if (!frame.peerId) return fail(new Error("welcome missing peer id"));
         settled = true;
         clearTimeout(timer);
-        resolve({ socket, peerId: frame.peerId });
+        resolve({ socket, peerId: frame.peerId, voice: true });
       } else if (["voice-join-refused", "voice-room-full", "voice-transport-unsupported"].includes(frame.type ?? "")) {
         fail(new Error(frame.type));
       }
@@ -681,8 +712,16 @@ async function wsStorm(safe: Safe): Promise<void> {
   const reconnectAt = numArg("--reconnect-at", -1); // seconds into hold to drop+rejoin all
   const joinConcurrency = numArg("--join-concurrency", 20);
   const presenceEveryMs = numArg("--presence-every-ms", 45_000);
+  // Viewer shape: auth + join-channel only, no voice-room seat, no welcome
+  // wait, no presence ticks — models an HLS-only watch-party audience
+  // (server/src/ws/hls-audience.ts) instead of a room full of voice seats.
+  const noVoice = process.argv.includes("--no-voice");
+  const voice = !noVoice;
   const out = arg("--out", `./party-storm-ws-${RUN_ID}.json`);
-  console.log(`[ws-storm] ${sockets} sockets, ramp ${rampSeconds}s, hold ${holdSeconds}s, reconnect-at ${reconnectAt}s`);
+  console.log(
+    `[ws-storm] mode=${noVoice ? "no-voice (viewer-shaped)" : "voice"} ${sockets} sockets, ` +
+      `ramp ${rampSeconds}s, hold ${holdSeconds}s, reconnect-at ${reconnectAt}s`,
+  );
   const sampler = startSampler(safe, 1000);
 
   const welcomeLatencies: number[] = [];
@@ -717,7 +756,7 @@ async function wsStorm(safe: Safe): Promise<void> {
       const machineId = safe.machineIds ? safe.machineIds[idx % safe.machineIds.length] : undefined;
       const t0 = Date.now();
       try {
-        const seat = await joinSeat(safe, manifest, token, machineId);
+        const seat = await joinSeat(safe, manifest, token, voice, machineId);
         seats[idx] = seat;
         welcomeLatencies.push(Date.now() - t0);
         result.joined += 1;
@@ -733,19 +772,23 @@ async function wsStorm(safe: Safe): Promise<void> {
   await Promise.all(Array.from({ length: joinConcurrency }, () => joinPump()));
   console.log(`[ws-storm] ramp complete: joined=${result.joined} failed=${result.failed}`);
 
-  // Presence churn during hold.
-  const presenceTimer = setInterval(() => {
-    for (const seat of seats) {
-      if (seat && seat.socket.readyState === WebSocket.OPEN) {
-        const muted = Math.random() < 0.5;
-        try {
-          seat.socket.send(JSON.stringify({ type: "set-voice-state", muted, deafened: false }));
-        } catch {
-          /* ignore */
+  // Presence churn during hold. Voice-shaped seats only: a viewer seat holds
+  // no voice-room seat, so `set-voice-state` has nothing to say and the task
+  // is explicit that a no-voice run sends no presence ticks at all.
+  const presenceTimer = voice
+    ? setInterval(() => {
+        for (const seat of seats) {
+          if (seat && seat.socket.readyState === WebSocket.OPEN) {
+            const muted = Math.random() < 0.5;
+            try {
+              seat.socket.send(JSON.stringify({ type: "set-voice-state", muted, deafened: false }));
+            } catch {
+              /* ignore */
+            }
+          }
         }
-      }
-    }
-  }, presenceEveryMs);
+      }, presenceEveryMs)
+    : null;
 
   // Optional reconnect storm: drop every socket at once, then rejoin — the
   // 2026-09-12 failure mode where each recovery re-triggered the collapse.
@@ -766,7 +809,7 @@ async function wsStorm(safe: Safe): Promise<void> {
       const machineId = safe.machineIds ? safe.machineIds[idx % safe.machineIds.length] : undefined;
       const t0 = Date.now();
       try {
-        const seat = await joinSeat(safe, manifest, token, machineId);
+        const seat = await joinSeat(safe, manifest, token, voice, machineId);
         seats[idx] = seat;
         welcomeLatencies.push(Date.now() - t0);
         result.reconnected += 1;
@@ -792,10 +835,10 @@ async function wsStorm(safe: Safe): Promise<void> {
     ? Math.max(0, holdSeconds - reconnectAt) * 1000
     : holdSeconds * 1000;
   await sleep(remainingHoldMs);
-  clearInterval(presenceTimer);
+  if (presenceTimer) clearInterval(presenceTimer);
   for (const seat of seats) {
     try {
-      seat?.socket.send(JSON.stringify({ type: "leave-voice-room" }));
+      if (voice) seat?.socket.send(JSON.stringify({ type: "leave-voice-room" }));
       seat?.socket.close();
     } catch {
       /* ignore */
@@ -807,6 +850,7 @@ async function wsStorm(safe: Safe): Promise<void> {
     kind: "ws-storm",
     target: safe.wsUrl,
     sockets,
+    voice,
     ...result,
     welcomeLatencyMs: { p50: pct(sortedW, 50), p90: pct(sortedW, 90), p99: pct(sortedW, 99), max: sortedW.at(-1) ?? 0 },
     peakSockets: Math.max(0, ...samples.map((s) => s.sockets ?? 0)),
@@ -928,7 +972,7 @@ async function main(): Promise<void> {
     default:
       console.log(
         "commands: provision --out <f> | db-storm [--manifest f] --concurrency N --seconds S | " +
-          "ws-storm --manifest f --sockets N --hold S [--reconnect-at S] | hls --channel <id> --started <ms> [--tokens f]",
+          "ws-storm --manifest f --sockets N --hold S [--reconnect-at S] [--no-voice] | hls --channel <id> --started <ms> [--tokens f]",
       );
       process.exit(1);
   }

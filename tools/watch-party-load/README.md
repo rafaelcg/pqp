@@ -448,6 +448,20 @@ node src/party-storm.ts db-storm --manifest /tmp/manifest.json \
 node src/party-storm.ts ws-storm --manifest /tmp/manifest.json \
   --sockets 150 --ramp-seconds 40 --hold 25 --reconnect-at 15 --out /tmp/ws.json
 
+# 3b. Same reconnect wave, viewer-shaped: `ws-storm` normally seats every
+#     socket in the voice room (join-channel AND join-voice-room, the
+#     heaviest write path, voice-registry rows). A real watch-party audience
+#     is not that: hundreds of viewers hold an app socket, join the text
+#     channel, and watch the HLS stream with NO voice seat at all
+#     (server/src/ws/hls-audience.ts). `--no-voice` models exactly that: auth
+#     + join-channel only, no join-voice-room, no `welcome` wait, no
+#     `set-voice-state` presence ticks. A reconnect wave of 500 viewers is
+#     the real Saturday risk shape, and it stresses a different path than a
+#     mesh-sized voice room does:
+node src/party-storm.ts ws-storm --manifest /tmp/manifest.json \
+  --sockets 500 --ramp-seconds 60 --hold 300 --reconnect-at 120 --no-voice \
+  --out /tmp/ws-viewers.json
+
 # 4. HLS viewer poll (needs a LIVE presenter+egress for real playlists; without
 #    --channel/--started it probes the path only). Point --hls base at the API
 #    origin proxy OR the hls.pqp.gg edge to compare origin coalescing:
