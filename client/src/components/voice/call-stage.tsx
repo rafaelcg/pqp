@@ -197,6 +197,7 @@ import {
   requestSettingsSection,
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
+import { STAGE_LAYER } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
 import {
@@ -1638,7 +1639,7 @@ function ActiveCall({
               // height unit because on an iPhone those overshoot the visible
               // area and hide the exit control under Safari's toolbar, which
               // is how somebody gets stuck in a fullscreen they cannot leave.
-              "fixed inset-0 z-50 h-auto max-h-none"
+              `fixed inset-0 ${STAGE_LAYER.fullscreen} h-auto max-h-none`
           : fill
             ? // The divider owns the number now. `min-h-0` rather than a
               // floor, because the floor is enforced in `clampSplit` against
@@ -1670,7 +1671,7 @@ function ActiveCall({
           is what the SFU's delivery rule reads (`remote-video-delivery.ts`).
       */}
       {showMeshWarning && (
-        <p className="absolute inset-x-0 top-0 z-30 bg-warning/10 px-3 py-1 text-center text-xs text-warning">
+        <p className={cn("absolute inset-x-0 top-0 bg-warning/10 px-3 py-1 text-center text-xs text-warning", STAGE_LAYER.badges)}>
           {t("voice.meshWarning")}
         </p>
       )}
@@ -1897,7 +1898,7 @@ function ActiveCall({
                while faded (`use-idle-chrome.ts`), and its gradient reaches up
                over this row. Without this a chip is drawn and cannot be
                pressed, which is the worst of both. */
-            className="z-30"
+            className={STAGE_LAYER.menus}
           />
           {/* The bar's own territory. The strip stops here so the hang-up
               button is never under a chip, and the chips are never under the
@@ -1921,7 +1922,8 @@ function ActiveCall({
           role="group"
           aria-label={t("call.stage.selfPreview")}
           className={cn(
-            "absolute z-10 touch-none overflow-hidden rounded-lg bg-ink-3 shadow-lg ring-1 ring-ink-4/80",
+            "absolute touch-none overflow-hidden rounded-lg bg-ink-3 shadow-lg ring-1 ring-ink-4/80",
+            STAGE_LAYER.tileControls,
             compactPeers ? "w-24 sm:w-32" : "w-28 sm:w-40",
             pipDrag ? "cursor-grabbing" : "cursor-grab",
             !pipDrag &&
@@ -1969,7 +1971,7 @@ function ActiveCall({
         <div
           role="alert"
           data-voice-error
-          className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger"
+          className={cn("absolute inset-x-0 top-0 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger", STAGE_LAYER.state)}
         >
           <span>{voiceState.error}</span>
           {/* Every microphone error is fixed by picking another microphone,
@@ -2020,7 +2022,8 @@ function ActiveCall({
         data-call-chrome="overlay"
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
+          STAGE_LAYER.chrome,
+          "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
           (voiceState.error || voiceState.notice) && "mt-7",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
@@ -2142,7 +2145,13 @@ function ActiveCall({
         data-testid="call-controls-bar"
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
-          "absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-ink/80 to-transparent pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
+          STAGE_LAYER.chrome,
+          // THE BAR KEEPS THE POINTER ON ITS WHOLE BOX, gradient included:
+          // resting the pointer anywhere on it pins it open, which
+          // `dm-call-screen-share.spec.ts` pins on purpose (a hand parked
+          // at the bottom of the screen is how people watch). The player's
+          // bars went inert on their gradients in pass 5; this one did not.
+          "absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 bg-gradient-to-t from-ink/80 to-transparent pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
           chromeClass,
         )}
         onPointerEnter={(event) => {
@@ -3169,7 +3178,8 @@ function TileOverlay({
     <div
       ref={menu.rootRef}
       className={cn(
-        "absolute left-2 top-2 z-20 flex items-center gap-1",
+        "absolute left-2 top-2 flex items-center gap-1",
+        STAGE_LAYER.tileControls,
         // An open panel keeps its own chrome visible; otherwise the row
         // follows the tile's hover, and stays put on a touch screen.
         menu.open
@@ -3258,7 +3268,7 @@ function TileRetry({
 }) {
   const { t } = useTranslation();
   return (
-    <div className={cn("absolute z-20", className)}>
+    <div className={cn("absolute", STAGE_LAYER.tileControls, className)}>
       <Button
         variant="secondary"
         size="sm"
@@ -3337,7 +3347,7 @@ function PrimaryTile({
       {!person.isSelf && (
         <VoiceQualityMeter
           quality={person.quality ?? null}
-          className="absolute right-2 top-2 z-20"
+          className={cn("absolute right-2 top-2", STAGE_LAYER.tileControls)}
         />
       )}
       {person.failed && person.onRetry && (
@@ -3439,7 +3449,7 @@ export function CameraTile({
         <VoiceQualityMeter
           quality={person.quality ?? null}
           compact
-          className="absolute right-1.5 top-1.5 z-20"
+          className={cn("absolute right-1.5 top-1.5", STAGE_LAYER.tileControls)}
         />
       )}
       {person.failed && person.onRetry && (
@@ -3456,8 +3466,11 @@ export function CameraTile({
  * A real `<button>`, not an `onClick` on the tile: it has to be reachable from
  * a keyboard, it has to say what it does, and `tapIsOnStage` has to be able to
  * tell it apart from the picture so a thumb landing here is not also counted
- * as the tap that toggles the control chrome. It sits under the tile's own
- * controls (`z-20`) so the fullscreen and pin buttons still get their clicks.
+ * as the tap that toggles the control chrome. It sits at the very bottom of
+ * the tile's stack (`STAGE_LAYER.tileTarget`, `z-0`, and rendered before the
+ * overlays) so every control drawn after it gets its clicks whether or not
+ * it sets a z of its own; a control at the default z used to sit under this
+ * and take none.
  */
 function TileClickTarget({
   enabled,
@@ -3476,7 +3489,7 @@ function TileClickTarget({
       type="button"
       data-testid="tile-click-target"
       aria-label={label}
-      className="absolute inset-0 z-[1] cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-signal"
+      className={cn("absolute inset-0 cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-signal", STAGE_LAYER.tileTarget)}
       onClick={onClick}
     />
   );
@@ -3681,7 +3694,8 @@ function TileBadge({
   return (
     <span
       className={cn(
-        "absolute bottom-0 left-0 z-10 flex max-w-full items-center gap-1 truncate rounded-tr-md bg-ink/70 text-paper",
+        "absolute bottom-0 left-0 flex max-w-full items-center gap-1 truncate rounded-tr-md bg-ink/70 text-paper",
+        STAGE_LAYER.labels,
         prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
       )}
     >
@@ -3943,7 +3957,8 @@ export function ScreenTileFrame({
       <div
         ref={menu.rootRef}
         className={cn(
-          "absolute left-2 top-2 z-20 flex max-w-[80%] items-center gap-1.5",
+          "absolute left-2 top-2 flex max-w-[80%] items-center gap-1.5",
+          STAGE_LAYER.tileControls,
           menu.open || hideSelfPreview
             ? "opacity-100"
             : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
@@ -4069,7 +4084,7 @@ export function ScreenTileFrame({
           is the overlay's sentence and saying it twice is how the two ended up
           stacked on each other. */}
       {showName && (
-        <span className="pointer-events-none absolute bottom-0 left-0 z-10 flex max-w-full items-center gap-1 truncate rounded-tr-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper">
+        <span className={cn("pointer-events-none absolute bottom-0 left-0 flex max-w-full items-center gap-1 truncate rounded-tr-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper", STAGE_LAYER.labels)}>
           {tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
         </span>
       )}

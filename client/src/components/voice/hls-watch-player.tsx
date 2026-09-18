@@ -137,6 +137,7 @@ import { WatchCameraPip } from "@/components/voice/watch-camera-pip";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
 import { cn } from "@/lib/utils";
+import { STAGE_LAYER } from "@/lib/stage-layers";
 
 const STALL_TICK_MS = 1_000;
 
@@ -2412,14 +2413,14 @@ export function HlsWatchPlayer({
       ) : null}
       {/* THE CONTROLS SIT OVER WHICHEVER PICTURE IS IN THE CORNER, which is
           why there is one of them rather than one per player: the corner is a
-          box, and what is in it changes. `z-30` is above the pictures (z-20)
-          and below the chrome (z-50), so the control bar is never behind a
+          box, and what is in it changes. `tileControls` in `lib/stage-layers.ts`
+          is above the pictures and below the chrome, so the control bar is never behind
           webcam. */}
       {boxes.corner ? (
         <div
           data-testid="watch-camera-pip-controls"
           data-camera-on-stage={cameraPip.onStage ? "" : undefined}
-          className={cn(boxes.corner, "group/pip z-30")}
+          className={cn(boxes.corner, "group/pip", STAGE_LAYER.tileControls)}
         >
           <button
             type="button"
@@ -2451,7 +2452,7 @@ export function HlsWatchPlayer({
       {holdingReason === "dead" || holdingReason === "unavailable" ? (
         <div
           data-testid={holdingReason === "unavailable" ? "hls-replay-dead" : "hls-dead"}
-          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper"
+          className={cn("absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper", STAGE_LAYER.state)}
         >
           <span>
             {holdingReason === "unavailable"
@@ -2480,7 +2481,7 @@ export function HlsWatchPlayer({
         // finished broadcast simply buffering its next segment.
         <div
           data-testid="hls-vod-loading"
-          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/40"
+          className={cn("pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40", STAGE_LAYER.state)}
         >
           <Loader2
             className="h-8 w-8 animate-spin text-paper/80"
@@ -2496,7 +2497,7 @@ export function HlsWatchPlayer({
                 ? "hls-reconnecting"
                 : "hls-buffering"
           }
-          className="pointer-events-none absolute inset-0 z-10"
+          className={cn("pointer-events-none absolute inset-0", STAGE_LAYER.state)}
         >
           <StreamStartingSoon caption={holdingCaption} />
         </div>
@@ -2509,7 +2510,7 @@ export function HlsWatchPlayer({
         // `voice.hls.live` below: "how far behind" used to be printed as a
         // constant read off the wire config rather than the stream's actual
         // distance from live, which was worse than saying nothing.
-        <div className="pointer-events-none absolute left-2 top-2 z-40 flex flex-col items-start gap-1">
+        <div className={cn("pointer-events-none absolute left-2 top-2 flex flex-col items-start gap-1", STAGE_LAYER.badges)}>
           <span
             data-testid="hls-delay-badge"
             className="pointer-events-auto flex items-center gap-1 rounded-full bg-black/70 px-2 py-1 text-[11px] font-semibold text-paper"
@@ -2527,17 +2528,23 @@ export function HlsWatchPlayer({
         data-watch-chrome=""
         data-call-chrome=""
         className={cn(
-          // z-50 beats the chat overlay's z-index: 40 on the pane
-          // (`index.css`). z-20 sat under it, so Leave fullscreen could not
-          // be clicked once chat was open.
-          "pointer-events-none absolute inset-0 z-50 flex flex-col justify-between",
+          // `chrome` beats the fullscreen chat overlay (45, `index.css`);
+          // the bar once sat at 20 under it, so Leave fullscreen could not
+          // be clicked once chat was open. See `lib/stage-layers.ts`.
+          STAGE_LAYER.chrome,
+          "pointer-events-none absolute inset-0 flex flex-col justify-between",
           chromeClass,
         )}
         onFocusCapture={() => setBarFocused(true)}
         onBlurCapture={onBarBlur}
       >
         <div
-          className="pointer-events-auto flex items-start justify-end gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 pb-8 pt-3"
+          // THE GRADIENT DOES NOT TAKE THE POINTER (pass 5 of
+          // `docs/plans/WATCH_PARTY_UI.md` §10.3): only the content row inside
+          // does, so a press on the picture under the fade reaches the picture
+          // (and wakes the chrome through the stage's own handler) instead of
+          // being swallowed by an invisible band.
+          className="pointer-events-none flex items-start justify-end gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 pb-8 pt-3"
           onPointerDown={swallowPressWhileHidden}
           onPointerEnter={() => setBarHovered(true)}
           onPointerLeave={() => setBarHovered(false)}
@@ -2558,7 +2565,7 @@ export function HlsWatchPlayer({
               else in this bar reads top-RIGHT so the two never sit on top of
               each other, at any width. Narrower than `sm` stacks the pill
               above the actions instead of squeezing both into one row. */}
-          <div className="flex min-w-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center">
+          <div className="pointer-events-auto flex min-w-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center">
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
               {meta}
             </div>
@@ -2569,12 +2576,12 @@ export function HlsWatchPlayer({
         </div>
         <div
           data-testid="watch-player-bar"
-          className="pointer-events-auto flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 via-black/50 to-transparent px-3 pb-3 pt-10"
+          className="pointer-events-none flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 via-black/50 to-transparent px-3 pb-3 pt-10"
           onPointerDown={swallowPressWhileHidden}
           onPointerEnter={() => setBarHovered(true)}
           onPointerLeave={() => setBarHovered(false)}
         >
-          <div className="flex min-w-0 items-center gap-1.5">
+          <div className="pointer-events-auto flex min-w-0 items-center gap-1.5">
             <button
               type="button"
               data-testid="hls-play"
@@ -2685,7 +2692,7 @@ export function HlsWatchPlayer({
               </span>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-0.5">
+          <div className="pointer-events-auto flex shrink-0 items-center gap-0.5">
             {hasFrame ? (
               <Tooltip
                 label={whole ? t("call.fit.fill") : t("call.fit.whole")}
@@ -2854,7 +2861,7 @@ export function HlsWatchPlayer({
            another channel actually reaches for. */
         <div
           data-testid="hls-mini-chrome"
-          className="pointer-events-none absolute inset-0 z-30 flex flex-col justify-between p-1.5"
+          className={cn("pointer-events-none absolute inset-0 flex flex-col justify-between p-1.5", STAGE_LAYER.chrome)}
         >
           <div className="pointer-events-auto flex items-start justify-end gap-1">
             {actions}
@@ -3064,7 +3071,8 @@ export function HlsWatchPlayer({
         <button
           type="button"
           className={cn(
-            "absolute left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1.5 text-sm font-medium text-paper hover:bg-black/90",
+            "absolute left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1.5 text-sm font-medium text-paper hover:bg-black/90",
+            STAGE_LAYER.tileControls,
             cinema ? "bottom-16" : "bottom-3",
           )}
           onClick={restoreSound}
@@ -3076,7 +3084,8 @@ export function HlsWatchPlayer({
         <div
           data-testid="hls-dual-device-warning"
           className={cn(
-            "pointer-events-auto absolute left-1/2 z-40 flex max-w-[92%] -translate-x-1/2 items-center gap-2 rounded-[var(--radius-control)] bg-black/80 px-2.5 py-1.5 text-[11px] text-paper sm:max-w-[75%]",
+            "pointer-events-auto absolute left-1/2 flex max-w-[92%] -translate-x-1/2 items-center gap-2 rounded-[var(--radius-control)] bg-black/80 px-2.5 py-1.5 text-[11px] text-paper sm:max-w-[75%]",
+            STAGE_LAYER.badges,
             cinema ? "bottom-24" : "bottom-14",
           )}
         >

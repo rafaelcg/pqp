@@ -1900,7 +1900,9 @@ html[data-immersive-stage] [data-immersive-hide] {
    * fullscreen / volume is not. The chrome wrapper is pointer-events-none
    * with auto on the bars, so the transcript still gets clicks in between.
    */
-  z-index: 40;
+  /* Under the player's chrome (50) and over its badges (40): see
+     client/src/lib/stage-layers.ts. */
+  z-index: 45;
   width: min(22rem, 80vw);
   min-width: 0;
   background: color-mix(in oklab, var(--color-surface-0) 92%, transparent);

@@ -12,6 +12,7 @@ import {
 } from "@/lib/hls-live-edge";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { STAGE_LAYER } from "@/lib/stage-layers";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { isSeatedOnAnotherDevice } from "@/lib/dual-device-watch";
 import { WATCH_DOCK_BOX } from "@/components/voice/watch-dock";
@@ -277,7 +278,7 @@ export function WatchStage({
           aria-hidden="true"
           tabIndex={-1}
           data-testid="watch-mini-picture"
-          className="absolute inset-0 z-20 cursor-pointer"
+          className={cn("absolute inset-0 cursor-pointer", STAGE_LAYER.tileTarget)}
           onClick={onReturn}
         />
       ) : null}
@@ -568,7 +569,12 @@ export function WatchChannelStage({
           voiceState.occupancy[channelId],
         )}
         ended={ended}
-        onJoin={docked ? undefined : onJoin}
+        /* A VIEWER CANNOT JOIN A WATCH PARTY (pass 5 of
+           `docs/plans/WATCH_PARTY_UI.md`): the party bar owns every way in,
+           and this mount refuses the offer for a watch party channel even
+           when a caller passes one, so the third join button cannot grow
+           back by accident. A plain voice channel's bare share keeps it. */
+        onJoin={docked || isWatchParty ? undefined : onJoin}
         onLeaveParty={docked ? undefined : onLeaveParty}
         onBarSlot={docked ? undefined : onBarSlot}
         docked={docked}

@@ -1,6 +1,6 @@
 # Watch party: one stage, one bar, one panel
 
-Status: proposal, 2026-09-18. Pass 1 built 2026-09-18 on this branch. Scope: the web client, every role (host,
+Status: built 2026-09-18, passes 1 to 5 on this branch, one commit each. What each pass did not do is recorded in its section. Scope: the web client, every role (host,
 co-host, guest, seatless viewer, seated audience), every state (draft,
 scheduled, live, host reconnecting, host gone, ended). No schema change, no
 server change. Every option, permission and wire frame stays as it is; this
@@ -580,27 +580,49 @@ party bar is a row under the picture, not an overlay (pass 2, revised).
 
 ### 10.3 What pass 5 does about it
 
-- **One chrome component, `StageChrome`**, used by the player, the seated
-  stage and the host stage: a top row (badges left, meta right) and a
-  bottom row (the bar), one `useIdleChrome`, one pinned set. Gradients are
-  the rows' own boxes and no taller.
-- **One z scale**, exported from one module and imported everywhere:
-  `picture 0 < state cards 10 < reactions 20 < tile controls 30 < badges 40
-  < chrome 50 < menus 60`. The chat overlay is 45. Nothing in a stage file
-  writes a `z-*` literal.
-- **No full-tile click target above z 0.** Zoom is a control on the tile's
-  chrome, or the tile's own `onDoubleClick`, never an invisible button
-  covering the controls.
-- **Faded means gone.** Hidden chrome gets `pointer-events-none` as well
-  as `opacity-0`, so a press on a faded bar reaches the picture and wakes
-  the chrome through the stage's own pointer handler, not through a button
-  the person cannot see. The wake still costs the first press nothing
-  visible changes on, which is the accepted cost of a bar that fades.
-- **Every overlay declares its pointer rule** in the component that draws
-  it, and a Playwright check walks every `button` inside the stage in the
-  idle, hovered and fullscreen states and asserts `elementFromPoint` at its
-  centre is the button itself. That is the test that would have caught the
-  reported bug and the two collisions the comments record.
+Built 2026-09-18, with two of the five rules below changed by what the
+code and its tests turned out to already decide.
+
+- **One z scale**, `client/src/lib/stage-layers.ts`, imported by the
+  player, the seated stage, the host stage, the mini player, the music tile,
+  the reactions overlay and the party bar: `tileTarget 0 < labels/state 10
+  < reactions 20 < tileControls 30 < badges 40 < chrome 50 < menus 60`, the
+  fullscreen chat overlay at 45 in `index.css`. No stage file writes a
+  `z-*` literal now.
+- **The full-tile click target sits at the bottom.** It stays (the camera
+  tile tests pin click-to-zoom, and the target is a real button for the
+  keyboard), but at `z-0` and rendered before the tile's overlays, so every
+  later control paints above it whether or not it sets a z of its own.
+  Before, a control at the default z sat under the target's `z-[1]` and
+  took no clicks; that is the most likely shape of the reported bug.
+- **The player's gradients do not take the pointer.** Its top row and
+  bottom bar are `pointer-events-none`; only the button groups inside are
+  interactive, so a press on the picture under a gradient's reach lands on
+  the picture. The seated stage's control bar keeps the pointer on its
+  whole box: `dm-call-screen-share.spec.ts` pins that resting the pointer
+  on the bar, padding included, holds it open, and the participant chips
+  above it sit above the chrome for that reason.
+- **Faded chrome keeps taking the pointer.** NOT changed, on purpose:
+  `use-idle-chrome.test.ts` pins it ("a hit-target check that precedes
+  the pointer move must still find the bar; the bar swallows the press
+  itself while hidden"), and the reason is a thumb on the picture right
+  where the hang-up button is. The plan's "faded means gone" is withdrawn.
+- **The clickability check exists**: the last test in
+  `client/e2e/watch-party.spec.ts` walks every awake button on the stage,
+  the party header and the chat header for the host and for a seatless
+  viewer with a picture, and asserts `elementFromPoint` at its centre is
+  the button. Its first run caught the player bar's right-hand group
+  (fullscreen, Parar de assistir) losing its pointer to the video.
+- **`StageChrome` is not built.** One shared component for the three
+  chrome sets would be a rewrite of two files of four thousand lines each
+  for the same rules the ladder and the pointer rule already impose. Left
+  for a pass of its own if the rules prove insufficient.
+- **Reactions stay where they are.** There are no seatless reactions to
+  move; the seated reactions bar lives inside the call stage's screen
+  stage and was not moved into the party bar.
+- **A seatless viewer is never offered a seat** on a watch party channel:
+  `WatchChannelStage` refuses `onJoin` for one even when a caller passes
+  it, so the third join button cannot grow back.
 
 ## 11. Open questions for Rafael
 
