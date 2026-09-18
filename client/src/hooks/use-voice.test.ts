@@ -573,6 +573,45 @@ describe("screen share audio", () => {
     });
   });
 
+  it("publishes a tab share's audio even when restrictOwnAudio came back false", async () => {
+    // THE MACOS TAB, end to end. The constraint is a Windows-shaped thing and
+    // a Mac reports it false; on a monitor that reading is a strip, and the
+    // question asked of this commit on 2026-09-18 was whether it could
+    // therefore silence the one share every watch party actually uses. It
+    // cannot: the surface is read off the VIDEO track and gates everything
+    // after it, so a `"browser"` capture never reaches the restrict reading
+    // at all. There is no gain on this path either, so the only two outcomes
+    // it can produce are "published whole" and "removed whole".
+    displayMedia = async () =>
+      fakeCapture("cap-tab", true, "browser", { restrictOwnAudio: false });
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+    expect(voice.getState().isSharingSystemAudio).toBe(false);
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      sharing: true,
+      audioStreamId: "cap-tab",
+    });
+    // No mixer-strip banner either: nothing was taken, so there is nothing to
+    // tell the presenter about.
+    expect(voice.getState().notice).toBeFalsy();
+  });
+
+  it("publishes a tab share's audio when its capabilities cannot include true", async () => {
+    displayMedia = async () =>
+      fakeCapture("cap-tab2", true, "browser", {
+        restrictOwnAudio: false,
+        caps: [false],
+      });
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+    expect(sent.at(-1)).toMatchObject({ audioStreamId: "cap-tab2" });
+  });
+
   it("still offers computer sound in a browser the OS probe says is not Win11", async () => {
     // REGRESSION, 2026-09-18. The probe is a UA hint about the OS; the strip
     // above ("strips a monitor share whose restrictOwnAudio came back false")

@@ -12,6 +12,7 @@ import {
   screenCaptureOptions,
   setOsCanExcludeCallAudioForTests,
   shouldStripLeakedSystemAudio,
+  stripLeakedSystemAudioTracks,
   shareStreamHasAudio,
   shellCarriesScreenAudio,
   steersAtBrowserTab,
@@ -645,6 +646,122 @@ describe("shouldStripLeakedSystemAudio", () => {
         restrictOwnAudio: false,
       }),
     ).toBe(false);
+  });
+});
+
+/**
+ * THE TAB SHARE IS UNTOUCHABLE, AND THIS IS WHERE THAT IS PROVED.
+ *
+ * `shouldStripLeakedSystemAudio` above is the predicate; this is the function
+ * that actually reaches into the stream and calls `removeTrack` + `stop`, and
+ * until now it had no test of its own. On the night of 2026-09-18 a watch
+ * party's sound went quiet and the question asked of this commit was whether
+ * it could be this: a Chrome TAB share on macOS, where `restrictOwnAudio` is
+ * a Windows-shaped constraint and `getSettings()` may report it false or omit
+ * it entirely.
+ *
+ * It cannot. The surface is read from the VIDEO track and gates everything
+ * else: `"browser"` is not a mixer tap, so no reading of `restrictOwnAudio`
+ * on the audio track is ever consulted. The cases below are every shape a Mac
+ * can hand back, and the answer is the same in all of them. There is also no
+ * gain anywhere on this path, so "attenuated" is not a state it can produce:
+ * a track is either removed whole or left exactly as the picker gave it.
+ */
+describe("stripLeakedSystemAudioTracks on a tab share", () => {
+  function fakeStream(
+    surface: string | undefined,
+    audioSettings: { restrictOwnAudio?: boolean } | "throws",
+    caps?: boolean[],
+  ) {
+    const audio = {
+      kind: "audio",
+      stopped: false,
+      stop() {
+        this.stopped = true;
+      },
+      getSettings: () => {
+        if (audioSettings === "throws") {
+          throw new Error("no getSettings here");
+        }
+        return audioSettings;
+      },
+      getCapabilities: () =>
+        caps === undefined ? {} : { restrictOwnAudio: caps },
+    };
+    const video = {
+      kind: "video",
+      stop() {},
+      getSettings: () => ({ displaySurface: surface }),
+    };
+    const removed: unknown[] = [];
+    const stream = {
+      getVideoTracks: () => [video],
+      getAudioTracks: () => [audio],
+      removeTrack: (track: unknown) => {
+        removed.push(track);
+      },
+    };
+    return { stream: stream as unknown as MediaStream, audio, removed };
+  }
+
+  it("keeps the audio when the tab reports restrictOwnAudio false", () => {
+    // The exact macOS shape: the constraint is known to the engine (so we
+    // asked for it), the platform has nothing to exclude, and it comes back
+    // false. On a monitor that is a strip; on a tab it is nothing at all.
+    const { stream, audio, removed } = fakeStream("browser", {
+      restrictOwnAudio: false,
+    });
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("keeps the audio when the tab omits restrictOwnAudio entirely", () => {
+    const { stream, audio, removed } = fakeStream("browser", {});
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("keeps the audio when the tab's capabilities cannot include true", () => {
+    const { stream, audio, removed } = fakeStream(
+      "browser",
+      { restrictOwnAudio: false },
+      [false],
+    );
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("keeps the audio when the audio track's getSettings throws", () => {
+    const { stream, audio, removed } = fakeStream("browser", "throws");
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("keeps the audio when the surface is unknown", () => {
+    // An engine that omits `displaySurface` is one with no system-audio
+    // capture to begin with. Unknown reads as "not a mixer tap", which is the
+    // same rule `capturesSystemAudio` follows.
+    const { stream, audio, removed } = fakeStream(undefined, {
+      restrictOwnAudio: false,
+    });
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("does strip the monitor tap this exists for", () => {
+    // The control. Without it the five cases above would also pass against a
+    // function that never strips anything.
+    const { stream, audio, removed } = fakeStream("monitor", {
+      restrictOwnAudio: false,
+    });
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(true);
+    expect(removed).toEqual([audio]);
+    expect(audio.stopped).toBe(true);
   });
 });
 
