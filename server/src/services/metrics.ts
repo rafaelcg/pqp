@@ -327,6 +327,8 @@ export interface AdminMetrics {
         flushMsP95: number;
         flushFailures: number;
         staleDropped: number;
+        pending: number;
+        maxPending: number;
       } | null;
     };
     /**

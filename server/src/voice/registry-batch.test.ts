@@ -170,10 +170,11 @@ describeDb("voice registry write coalescer", () => {
     const batched = registryStatements();
 
     expect(await countPeers(channel)).toBe(0);
-    // Two flushes, each BEGIN + at most three statements + COMMIT. Twenty is
-    // slack for the harness draining more eagerly than a 50 ms window would.
-    expect(batched).toBeLessThan(20);
-    expect(batched * 50).toBeLessThan(unbatched);
+    // Four flushes, each BEGIN + SET LOCAL statement_timeout + at most three
+    // statements + COMMIT. Thirty is slack for the harness draining more
+    // eagerly than a 50 ms window would.
+    expect(batched).toBeLessThan(30);
+    expect(batched * 30).toBeLessThan(unbatched);
 
     const metrics = voiceRegistryBatchMetrics();
     expect(metrics.rowsCoalesced).toBe(1_000);

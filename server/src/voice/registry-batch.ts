@@ -83,6 +83,14 @@ export function isVoiceRegistryBatchEnabled(): boolean {
 export const DEFAULT_BATCH_MS = 50;
 export const DEFAULT_BATCH_MAX = 200;
 
+/**
+ * How long one flush may spend inside its transaction. Measured p95 is three
+ * milliseconds; five seconds is a ceiling, not a budget, and the only thing
+ * it exists to stop is a flush that never returns holding the queue open
+ * behind it.
+ */
+export const FLUSH_STATEMENT_TIMEOUT_MS = 5_000;
+
 function batchMs(): number {
   const raw = Number(process.env.VOICE_REGISTRY_BATCH_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_BATCH_MS;
@@ -178,6 +186,7 @@ let rowsCoalesced = 0;
 let maxBatch = 0;
 let flushFailures = 0;
 let staleDropped = 0;
+let maxPending = 0;
 
 /** The last 256 flush durations, for the percentile. A ring, so it never grows. */
 const FLUSH_SAMPLES = 256;
@@ -211,6 +220,18 @@ export interface VoiceRegistryBatchMetrics {
    * number is the guard working rather than a leak.
    */
   staleDropped: number;
+  /** Rows waiting for a flush right now. */
+  pending: number;
+  /**
+   * The deepest the queue has ever been. THE NUMBER THAT SAYS A FLUSH IS
+   * STUCK: one flush runs at a time, so while one is blocked the row cap
+   * stops bounding anything and the queue is the only place the backlog
+   * shows. `FLUSH_STATEMENT_TIMEOUT_MS` bounds how long that can last;
+   * this says whether it ever happened. Sitting near `VOICE_REGISTRY_BATCH_MAX`
+   * is healthy (that is the cap doing its job); far above it, repeatedly, is a
+   * database that cannot keep up with the room.
+   */
+  maxPending: number;
 }
 
 export function voiceRegistryBatchMetrics(): VoiceRegistryBatchMetrics {
@@ -226,6 +247,8 @@ export function voiceRegistryBatchMetrics(): VoiceRegistryBatchMetrics {
     flushMsP95: Math.round(p95 ?? 0),
     flushFailures,
     staleDropped,
+    pending: queued(),
+    maxPending,
   };
 }
 
@@ -245,6 +268,7 @@ export function resetVoiceRegistryBatch(): void {
   maxBatch = 0;
   flushFailures = 0;
   staleDropped = 0;
+  maxPending = 0;
   flushMs.length = 0;
 }
 
@@ -385,7 +409,11 @@ const realSetTimeout = setTimeout;
 const realClearTimeout = clearTimeout;
 
 function kickIfFull(): void {
-  if (queued() >= batchMax()) {
+  const depth = queued();
+  if (depth > maxPending) {
+    maxPending = depth;
+  }
+  if (depth >= batchMax()) {
     void kick();
     return;
   }
@@ -666,9 +694,22 @@ async function writeBatch(batch: Queue): Promise<void> {
   const client = await getPool().connect();
   try {
     // BEGIN and COMMIT are counted too: a flush's real cost to the database
-    // is four round trips for two rows of work, and a statement budget that
-    // hides its own transaction overhead is not a budget.
+    // is a handful of round trips for a batch of work, and a statement budget
+    // that hides its own transaction overhead is not a budget.
     await countedQuery(client, "registry.batchTx", "BEGIN");
+    // THE FLUSH IS BOUNDED, because one flush runs at a time and a stuck one
+    // would otherwise hold the queue open for as long as the database took to
+    // answer. `pool.connect()` already has `connectionTimeoutMillis` (10 s);
+    // this covers the other half, a statement that is accepted and never
+    // returns (a lock wait, a stalled replica). Past the bound the flush fails
+    // like any other failure: retried once, then replayed row by row. Costs
+    // one round trip per flush, which is the cheapest place to buy a hard
+    // ceiling on the one code path in this file that is allowed to block.
+    await countedQuery(
+      client,
+      "registry.batchTx",
+      `SET LOCAL statement_timeout = ${FLUSH_STATEMENT_TIMEOUT_MS}`,
+    );
     await runPlan(client, plan);
     await countedQuery(client, "registry.batchTx", "COMMIT");
   } catch (error) {
@@ -723,14 +764,24 @@ async function runPlan(client: PoolClient, plan: Plan): Promise<void> {
       plan.retires,
     ]);
   }
-  if (plan.roomTidies.size > 0) {
+  // A channel this flush seated somebody into is not empty, so neither tidy
+  // can match it. Dropping those ids is free, and for the watch party it is
+  // also a belt: the tidy clears a party from a room with no peers, and the
+  // one way that could erase a party somebody just started is if the joiner's
+  // row were not visible when it ran. Inside a flush it always is (the
+  // upserts are statements above this one), and this makes it unconditional
+  // rather than a consequence of statement order.
+  const seated = new Set(plan.upserts.map((peer) => peer.channelId));
+  const roomTidies = [...plan.roomTidies].filter((id) => !seated.has(id));
+  const watchTidies = plan.watchTidies.filter((id) => !seated.has(id));
+  if (roomTidies.length > 0) {
     await countedQuery(client, "registry.batchRoomTidy", ROOM_TIDY_SQL, [
-      [...plan.roomTidies],
+      roomTidies,
     ]);
   }
-  if (plan.watchTidies.length > 0) {
+  if (watchTidies.length > 0) {
     await countedQuery(client, "registry.batchWatchTidy", WATCH_TIDY_SQL, [
-      plan.watchTidies,
+      watchTidies,
     ]);
   }
 }

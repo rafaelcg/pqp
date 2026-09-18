@@ -107,7 +107,7 @@ instance are queued and flushed every `VOICE_REGISTRY_BATCH_MS` (default 50) or 
 inside **one transaction on one pooled connection**, with at most one flush in flight. The queue
 absorbs the burst so the pool sees one checkout instead of hundreds. Measured in
 `server/src/voice/registry-batch.test.ts` against a real Postgres: 500 joins then 500 leaves cost
-**2,000 statements with the flag off and 16 with it on**, four flushes, 300 rows in the largest,
+**2,000 statements with the flag off and 20 with it on**, four flushes, 300 rows in the largest,
 p95 flush 3 ms.
 
 **Ordering is preserved, and that is a correctness rule, not a nicety** (CLAUDE.md pitfall 13).
