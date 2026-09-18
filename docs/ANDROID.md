@@ -895,7 +895,11 @@ Each has its own string in both languages, so the toast is now a first
 diagnosis rather than a shrug. The retry is bounded twice, by
 `SFU_CONNECT_ATTEMPTS` (3) and by the single 45 s deadline over the whole
 sequence, and only `Unreachable` and 429 are tried again: a phone that retries
-a refusal cannot be told to stop.
+a refusal cannot be told to stop. The waits are **jittered**, half to one and a
+half times the schedule, for the same reason `reconnect-jitter.ts` exists on
+the web: the retry is most useful exactly when the SFU has started failing,
+which is when every phone in every room is retrying at once, and a fixed
+schedule would put all of them on the same two instants.
 
 **The log line.** Fixed field order, fixed field count, `-` for anything
 absent, because for a TLS or ICE failure this is the *only* record that exists

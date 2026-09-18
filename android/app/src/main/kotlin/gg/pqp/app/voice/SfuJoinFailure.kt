@@ -2,6 +2,7 @@ package gg.pqp.app.voice
 
 import gg.pqp.app.core.ApiException
 import java.io.IOException
+import kotlin.random.Random
 import kotlinx.coroutines.TimeoutCancellationException
 
 /**
@@ -177,20 +178,31 @@ const val SFU_CONNECT_ATTEMPTS = 3
  * How long to wait before attempt `attempt + 1`, or 0 when there is no next
  * attempt.
  *
- * Deterministic rather than jittered, unlike `reconnect-jitter.ts` on the web.
- * That jitter exists to stop a room full of browsers stampeding a media box
- * that has just come back; this is one phone answering one person's tap, so
- * there is no herd, and a fixed schedule is a schedule a test can pin.
+ * **Jittered, and for the reason `reconnect-jitter.ts` exists on the web.** The
+ * failure this retry is most useful against is an SFU or a token endpoint that
+ * has just started failing, which is exactly the moment every phone in every
+ * room is retrying at once. A fixed 800 ms and 2400 ms would put all of them on
+ * the same two instants and roughly triple the load on something already
+ * unhealthy, which is how a retry prolongs an outage instead of surviving one.
+ * Half to one and a half times the schedule spreads them across a second and a
+ * half without changing the ceiling that matters.
+ *
+ * [jitter] is a parameter rather than a call to [Random] inside, so the two
+ * ends of the range can be pinned by a test; nothing but a test passes it.
  */
-fun sfuRetryDelayMs(attempt: Int): Long {
+fun sfuRetryDelayMs(attempt: Int, jitter: Double = Random.nextDouble()): Long {
     if (attempt < 1 || attempt >= SFU_CONNECT_ATTEMPTS) return 0L
     var delay = SFU_RETRY_BASE_MS
     repeat(attempt - 1) { delay *= SFU_RETRY_FACTOR }
-    return delay
+    val spread = SFU_RETRY_JITTER_FLOOR + jitter.coerceIn(0.0, 1.0)
+    return (delay * spread).toLong()
 }
 
 private const val SFU_RETRY_BASE_MS = 800L
 private const val SFU_RETRY_FACTOR = 3L
+
+/** Half the scheduled wait is the floor; the jitter adds up to one more. */
+private const val SFU_RETRY_JITTER_FLOOR = 0.5
 
 /**
  * Which sentence the person sees, per failure class.

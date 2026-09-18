@@ -136,7 +136,14 @@ class LiveKitEngine(
     private val onScreenShareEnded: () -> Unit = {},
 ) : VoiceTransport {
 
-    private var room: Room? = null
+    /**
+     * `@Volatile` because [listen] reads it on LiveKit's own event thread to
+     * decide whether an event still belongs to the live call, while the connect
+     * coroutine and [stop] write it from elsewhere. It was already read from the
+     * UI thread by [remoteScreenFor]; the identity check made the visibility
+     * load-bearing rather than merely tidy.
+     */
+    @Volatile private var room: Room? = null
     private var joinJob: Job? = null
 
     /**
@@ -479,42 +486,58 @@ class LiveKitEngine(
         val events = scope.launch { listen(created) }
         eventsJob = events
 
+        // EVERY line from here to the end is inside the cleanup, not just the
+        // `connect` call. `seedParticipants`, `publishMicrophone` and
+        // `onConnected` all run against a room that is already up, and a throw
+        // in any of them is retried by [connectWithRetries]: leaving the
+        // connected room alive would put a ghost participant on everybody
+        // else's roster and give the phone a second `AudioDeviceModule` to
+        // contend with, while the next attempt's `room = created` made the
+        // first one unreachable for the teardown that would have released it.
         try {
             created.connect(
                 credentials.url,
                 credentials.token,
                 connectOptionsFor(sfuIceServers(ice)),
             )
+
+            // The room is up. Anything that drops it from here on is a real
+            // disconnect and belongs to the collector again, so the guard comes
+            // off BEFORE the publish below rather than when this function
+            // returns: an SFU that kicks us while the microphone is going up
+            // would otherwise be swallowed and leave a call reading Connected
+            // with no media in it.
+            connected()
+
+            if (this.localPeerId != peerId) {
+                // Left while the socket was coming up.
+                runCatching { created.disconnect() }
+                return
+            }
+
+            seedParticipants(created)
+            if (canPublishAudio) publishMicrophone(created)
+            onConnected()
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             // `stop` already owns this room: it read `room` before cancelling
             // us and is disconnecting and releasing it. Touching it here would
             // be a second teardown of the same object.
             throw cancelled
         } catch (error: Throwable) {
+            // `room` is cleared FIRST and the collector cancelled after, in
+            // that order: cancelling a flow collector is not synchronous, and
+            // `listen` reads `room` to decide whether an event still belongs to
+            // the live call. Clearing it first is what makes a late
+            // `Disconnected` from this dying room harmless to the attempt that
+            // replaces it.
+            if (room === created) room = null
             events.cancel()
             if (eventsJob === events) eventsJob = null
-            if (room === created) room = null
             runCatching { created.disconnect() }
             runCatching { created.release() }
             throw error
         }
 
-        // The room is up. Anything that drops it from here on is a real
-        // disconnect and belongs to the collector again, so the guard comes off
-        // BEFORE the publish below rather than when this function returns: an
-        // SFU that kicks us while the microphone is going up would otherwise be
-        // swallowed and leave a call reading Connected with no media in it.
-        connected()
-
-        if (this.localPeerId != peerId) {
-            // Left while the socket was coming up.
-            runCatching { created.disconnect() }
-            return
-        }
-
-        seedParticipants(created)
-        if (canPublishAudio) publishMicrophone(created)
-        onConnected()
         Log.i(
             TAG,
             "sfu-join-ok peer=$peerId room=${credentials.room} attempt=$attempt url=${credentials.url}",
@@ -602,8 +625,22 @@ class LiveKitEngine(
         applyMuteToPublication()
     }
 
-    private suspend fun listen(room: Room) {
-        room.events.collect { event ->
+    /**
+     * [source] is the room this collector belongs to, and every event is
+     * checked against the room the engine currently holds before it is acted
+     * on.
+     *
+     * Cancelling a flow collector is not synchronous: an event already being
+     * delivered runs its `when` body to the end, because nothing in that body
+     * suspends. So a retry that replaced a failed attempt's room could be torn
+     * down by that attempt's last `Disconnected`, arriving after the guard in
+     * `handshakesInFlight` had already come off. Every path that abandons a
+     * room clears the field *before* cancelling the collector, which makes this
+     * one identity check the whole rule.
+     */
+    private suspend fun listen(source: Room) {
+        source.events.collect { event ->
+            if (room !== source) return@collect
             when (event) {
                 is RoomEvent.TrackSubscribed -> onTrackSubscribed(event)
                 is RoomEvent.TrackUnsubscribed -> onTrackUnsubscribed(event)
@@ -639,7 +676,7 @@ class LiveKitEngine(
                 // them should be flowing and at what layer.
                 is RoomEvent.Reconnected -> {
                     Log.i(TAG, "SFU reconnected; re-asking for the media we had")
-                    seedParticipants(room)
+                    seedParticipants(source)
                     reapplyVideoDelivery()
                 }
 
@@ -1363,11 +1400,15 @@ class LiveKitEngine(
         // from one that happened to us, and the room's own `Disconnected` event
         // is on its way as soon as the line below runs.
         localPeerId = null
+        // And the room before the collector, in that order and for a second
+        // reason: cancelling a collector is not synchronous, and `listen`
+        // checks the event's room against this field before acting on it.
+        val leaving = room
+        room = null
         joinJob?.cancel()
         joinJob = null
         eventsJob?.cancel()
         eventsJob = null
-        val leaving = room
         val mic = micTrack
         // Everything in flight is stale before anything is torn down, so a
         // publish that is mid-await cannot land in a room being disconnected.
@@ -1376,7 +1417,6 @@ class LiveKitEngine(
         screenJob?.cancel()
         screenJob = null
         val screen = screenTrack
-        room = null
         roomName = null
         micTrack = null
         screenTrack = null

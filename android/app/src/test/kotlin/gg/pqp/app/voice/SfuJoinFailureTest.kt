@@ -171,14 +171,31 @@ class SfuJoinFailureTest {
      */
     @Test
     fun `the backoff grows and then stops`() {
-        assertEquals(800L, sfuRetryDelayMs(1))
-        assertEquals(2_400L, sfuRetryDelayMs(2))
-        assertEquals(0L, sfuRetryDelayMs(SFU_CONNECT_ATTEMPTS))
-        assertEquals(0L, sfuRetryDelayMs(99))
-        assertEquals(0L, sfuRetryDelayMs(0))
+        assertEquals(400L, sfuRetryDelayMs(1, jitter = 0.0))
+        assertEquals(1_200L, sfuRetryDelayMs(1, jitter = 1.0))
+        assertEquals(1_200L, sfuRetryDelayMs(2, jitter = 0.0))
+        assertEquals(3_600L, sfuRetryDelayMs(2, jitter = 1.0))
+        assertEquals(0L, sfuRetryDelayMs(SFU_CONNECT_ATTEMPTS, jitter = 1.0))
+        assertEquals(0L, sfuRetryDelayMs(99, jitter = 1.0))
+        assertEquals(0L, sfuRetryDelayMs(0, jitter = 1.0))
 
-        val total = (1 until SFU_CONNECT_ATTEMPTS).sumOf { sfuRetryDelayMs(it) }
-        assertTrue("the waits alone must not eat the join deadline", total < 5_000L)
+        val worst = (1 until SFU_CONNECT_ATTEMPTS).sumOf { sfuRetryDelayMs(it, jitter = 1.0) }
+        assertTrue("the waits alone must not eat the join deadline", worst < 5_000L)
+    }
+
+    /**
+     * The retry is most useful exactly when the SFU or the token endpoint has
+     * just started failing, which is when every phone in every room is retrying
+     * at once. A fixed schedule would put all of them on the same two instants
+     * and roughly triple the load on something already unhealthy.
+     */
+    @Test
+    fun `the backoff is spread, not synchronised`() {
+        val draws = (0..20).map { sfuRetryDelayMs(1, jitter = it / 20.0) }
+        assertTrue("every wait is inside half to one and a half", draws.all { it in 400L..1_200L })
+        assertTrue("a fixed schedule would herd every phone onto one instant", draws.toSet().size > 10)
+        // The default draws its own jitter, and must still land in the band.
+        repeat(20) { assertTrue(sfuRetryDelayMs(1) in 400L..1_200L) }
     }
 
     @Test
