@@ -1336,6 +1336,35 @@ export function watchPartyHostGoneMinutes(): number {
   );
 }
 
+/**
+ * HOW LONG A LIVE PARTY MAY RUN WITH NO PICTURE ON IT, in minutes.
+ *
+ * FIFTEEN, AND DELIBERATELY GENEROUS. This is the bound that replaced
+ * "stopping the share ends the party", which is what shipped by accident and
+ * cost a live show on 2026-09-18. Every reason a host stops sharing is a
+ * reason they are about to start again: switching to another window, swapping
+ * the film, restarting a capture that glitched, handing the screen to a
+ * co-host who has to find their own window first. None of those is an
+ * ending, and the cost of guessing wrong in the strict direction is the whole
+ * room losing the show, while the cost of guessing wrong in this direction is
+ * a stale card in a sidebar for a quarter of an hour.
+ *
+ * It is not the only bound. A host who closes the laptop is caught in five
+ * minutes by `sweepWatchPartyHosts`, which is the usual way an abandoned
+ * party ends; this one only covers the host who stays at the keyboard with
+ * nothing on screen.
+ *
+ * `0` disables it, which leaves Encerrar and the host-gone sweep.
+ */
+export const WATCH_PARTY_NO_SHARE_MINUTES_DEFAULT = 15;
+
+export function watchPartyNoShareMinutes(): number {
+  return minutesFromEnv(
+    "WATCH_PARTY_NO_SHARE_MINUTES",
+    WATCH_PARTY_NO_SHARE_MINUTES_DEFAULT,
+  );
+}
+
 // ------------------------------------------------- what the sweeps have done
 
 /**
@@ -1348,6 +1377,7 @@ const sweepCounters = {
   sweptDrafts: 0,
   supersededDrafts: 0,
   sweptHostGone: 0,
+  sweptNoShare: 0,
   heldByLiveStream: 0,
   streamCheckFailures: 0,
 };
@@ -1356,6 +1386,7 @@ export function watchPartySweepCounters(): {
   sweptDrafts: number;
   supersededDrafts: number;
   sweptHostGone: number;
+  sweptNoShare: number;
   heldByLiveStream: number;
   streamCheckFailures: number;
 } {
@@ -1366,6 +1397,7 @@ export function resetWatchPartySweepCountersForTests(): void {
   sweepCounters.sweptDrafts = 0;
   sweepCounters.supersededDrafts = 0;
   sweepCounters.sweptHostGone = 0;
+  sweepCounters.sweptNoShare = 0;
   sweepCounters.heldByLiveStream = 0;
   sweepCounters.streamCheckFailures = 0;
 }
@@ -1610,6 +1642,105 @@ export async function sweepWatchPartyHosts(
       // A host who reconnected between the SELECT and the UPDATE, or a
       // co-host who claimed it, both land here as a conflict. Neither is an
       // error: the party is in better hands than the sweep's.
+      if (!(error instanceof WatchPartyError)) {
+        throw error;
+      }
+    }
+  }
+  return { ended, heldByLiveStream };
+}
+
+/**
+ * END A LIVE PARTY THAT HAS HAD NO PICTURE ON IT FOR A LONG TIME.
+ *
+ * THE POINT OF THIS FUNCTION IS HOW LATE IT IS. Stopping a screen share used
+ * to end the party in the same millisecond, which is the bug this replaces:
+ * a host switching windows ended the show. `no_share_since` is stamped when
+ * the last share in the room stops and cleared the moment anybody shares
+ * again, so the only parties that reach the window are the ones nobody ever
+ * put a picture back on.
+ *
+ * SAME SAFETY RULE AS THE HOST-GONE SWEEP, and for the same reason: the
+ * stamp is written by the process that held the room, and a stamp can be
+ * stale (a share that started on the OTHER machine never cleared it, an
+ * adopted session inherited across a deploy). `hls_sessions` is the one
+ * answer that is true on every machine, it is written by both drivers, and
+ * an unreadable answer holds the party rather than ending it. A party with
+ * something playing on it is never swept, whatever the column says.
+ *
+ * `applyWatchPartyOptions` runs on the way out exactly as Encerrar does, so
+ * the channel gets its slow mode and its floor back; `jobs.ts` broadcasts.
+ */
+export async function sweepWatchPartiesWithoutShare(
+  now: number = Date.now(),
+  graceMs?: number,
+  options: {
+    /** Injected for the tests; production asks `hls_sessions`. */
+    hasLiveStream?: (channelId: string) => Promise<boolean>;
+  } = {},
+): Promise<WatchPartySweepResult> {
+  const window = graceMs ?? watchPartyNoShareMinutes() * 60_000;
+  const ended: { sessionId: string; channelId: string }[] = [];
+  const heldByLiveStream: { sessionId: string; channelId: string }[] = [];
+  // Same rule as the host sweep: `0` from the environment disables this, an
+  // explicit `0` from a caller means "no grace, decide now".
+  if (graceMs === undefined && window <= 0) {
+    return { ended, heldByLiveStream };
+  }
+  const hasLiveStream = options.hasLiveStream ?? channelHasLiveStream;
+  const candidates = await getPool().query<{
+    id: string;
+    channel_id: string;
+    no_share_since: Date;
+  }>(
+    `SELECT id, channel_id, no_share_since
+       FROM channel_sessions
+      WHERE status = 'live' AND no_share_since IS NOT NULL`,
+  );
+  for (const row of candidates.rows) {
+    if (now - row.no_share_since.getTime() < window) {
+      continue;
+    }
+    const streaming = await hasLiveStream(row.channel_id).catch((error) => {
+      sweepCounters.streamCheckFailures += 1;
+      logEvent("watchParty.streamCheckFailed", {
+        channelId: row.channel_id,
+        error: String(error),
+      });
+      return true;
+    });
+    if (streaming) {
+      sweepCounters.heldByLiveStream += 1;
+      heldByLiveStream.push({ sessionId: row.id, channelId: row.channel_id });
+      logEvent("watchParty.noShareHeld", {
+        sessionId: row.id,
+        channelId: row.channel_id,
+        reason: "stream-live",
+      });
+      continue;
+    }
+    try {
+      const moved = await transitionWatchParty(row.id, "ended", "live");
+      try {
+        await applyWatchPartyOptions(moved, "ended");
+      } catch (restoreError) {
+        logEvent("voice.watchPartyRestoreFailed", {
+          sessionId: row.id,
+          error: String(restoreError),
+        });
+      }
+      sweepCounters.sweptNoShare += 1;
+      logEvent("watchParty.sweptNoShare", {
+        sessionId: row.id,
+        channelId: row.channel_id,
+        quietMinutes: Math.round(
+          (now - row.no_share_since.getTime()) / 60_000,
+        ),
+      });
+      ended.push({ sessionId: row.id, channelId: row.channel_id });
+    } catch (error) {
+      // Somebody ended it, or a share landed and the row moved, between the
+      // SELECT and the UPDATE. Both are the right answer.
       if (!(error instanceof WatchPartyError)) {
         throw error;
       }

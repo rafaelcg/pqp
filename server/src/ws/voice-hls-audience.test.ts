@@ -58,7 +58,8 @@ vi.mock("../services/users.js", () => ({
 // concern and this suite runs without a database.
 vi.mock("../services/channel-sessions.js", () => ({
   markChannelSessionLive: async () => {},
-  markChannelSessionEnded: async () => {},
+  markChannelShareStopped: async () => {},
+  markChannelShareStarted: async () => {},
 }));
 
 vi.mock("../services/sanctions.js", () => ({

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
-  markChannelSessionEnded,
+  markChannelShareStarted,
+  markChannelShareStopped,
   markChannelSessionLive,
 } from "../services/channel-sessions.js";
 import { z } from "zod";
@@ -1272,79 +1273,31 @@ function getRoomPeers(voiceChannelId: string): VoicePeer[] {
 }
 
 /**
- * THE LAST SCREEN SHARE IN THE ROOM STOPPED, SO THE SESSION IS OVER, and
- * everybody has to be told, which is the half that was missing.
+ * THE LAST SCREEN SHARE IN THE ROOM STOPPED. THE PARTY IS NOT OVER.
  *
- * `markChannelSessionEnded` flips a LIVE WATCH PARTY to `ended`. It is the
- * same row `POST /api/watch-parties/:id/state` moves and the same row the
- * sidebar, the header bar and the Encerrar button all read. Before
- * 2026-09-18 this call was fire-and-forget and nothing followed it, so:
+ * This used to be `endSessionsOnChannel`, and it ended the live watch party
+ * on the spot. PR #720 gave that end its missing fan-out (broadcast the
+ * `watch-party-update`, put the channel's slow mode and floor back), which
+ * turned a silent bug into a loud one within hours: on 2026-09-18 a host
+ * stopped sharing to pick another window and the whole party ended under
+ * everybody watching.
  *
- *  - every open tab kept its AO VIVO pill and its header bar for a party
- *    that no longer existed, indefinitely, because the only thing that
- *    clears them is a `watch-party-update`;
- *  - the channel kept the slow mode and the closed floor `applyGoLiveOptions`
- *    set when the party went live, permanently, over a show that was over;
- *  - and pressing Encerrar on the ghost answered 403, because the server
- *    knew perfectly well the party had ended and the tab did not.
+ * Stopping the share is not a statement about the party. `pushLiveHls` runs
+ * on the very next line of the caller and tears the egress down, so the
+ * STREAM ends exactly as it should; the audience lands on the `holding`
+ * stage the party panel already draws for a live party with no picture, and
+ * the host can share again and be back on air. The party ends when a host
+ * presses Encerrar, when `sweepWatchPartyHosts` decides the host is gone for
+ * good, or when `sweepWatchPartiesWithoutShare` runs out of patience
+ * (`WATCH_PARTY_NO_SHARE_MINUTES`, default 15, and generous on purpose).
  *
- * Rafael, that evening: "the parties are easily becoming ghost parties".
- * This is the ghost. Every other end path already went through
- * `broadcastWatchParty` and `applyWatchPartyOptions`; this one is now the
- * same shape as the rest.
- *
- * IMPORTED AT THE CALL SITE for the same reason `services/watch-parties.ts`
- * imports back into this file lazily: the two modules already reference each
- * other at runtime and a static edge here would close the cycle.
- *
- * BEST EFFORT THROUGHOUT. A share stopping must never fail because a fan-out
- * did, so every step logs and moves on.
+ * BEST EFFORT. A share stopping must never fail because a stamp did.
  */
-async function endSessionsOnChannel(voiceChannelId: string): Promise<void> {
-  let endedIds: string[];
+async function noteShareStopped(voiceChannelId: string): Promise<void> {
   try {
-    endedIds = await markChannelSessionEnded(voiceChannelId);
+    await markChannelShareStopped(voiceChannelId);
   } catch (error) {
-    console.error("[channel-sessions] markEnded failed:", error);
-    return;
-  }
-  // A stubbed `markChannelSessionEnded` (several voice suites replace the
-  // whole module) answers `undefined`, and a share stopping must never
-  // become an unhandled rejection because of what a test injected.
-  if (!Array.isArray(endedIds) || endedIds.length === 0) {
-    return;
-  }
-  let broadcastWatchParty: (sessionId: string) => Promise<unknown>;
-  let applyWatchPartyOptions: (row: never, to: "ended") => Promise<void>;
-  let getWatchPartyRow: (sessionId: string) => Promise<unknown>;
-  try {
-    const [events, service] = await Promise.all([
-      import("./watch-party-events.js"),
-      import("../services/watch-parties.js"),
-    ]);
-    broadcastWatchParty = events.broadcastWatchParty;
-    applyWatchPartyOptions = service.applyWatchPartyOptions as never;
-    getWatchPartyRow = service.getWatchPartyRow as never;
-  } catch (error) {
-    console.error("[watch-party] end fan-out unavailable:", error);
-    return;
-  }
-  for (const sessionId of endedIds) {
-    try {
-      const row = await getWatchPartyRow(sessionId);
-      if (row) {
-        // PUT THE ROOM BACK, exactly as Encerrar does. Idempotent, and it
-        // writes nothing for a party that never closed a floor.
-        await applyWatchPartyOptions(row as never, "ended");
-      }
-    } catch (error) {
-      console.error("[watch-party] restore after stream end failed:", error);
-    }
-    try {
-      await broadcastWatchParty(sessionId);
-    } catch (error) {
-      console.error("[watch-party] broadcast after stream end failed:", error);
-    }
+    console.error("[channel-sessions] share-stopped stamp failed:", error);
   }
 }
 
@@ -6830,17 +6783,21 @@ export async function handleVoiceMessage(
       : null;
     writePeerRow(peer);
     // Watch party scheduling seam: a scheduled session on this channel flips
-    // live the moment anyone starts sharing here, and ends when the last
-    // screen-share in the room stops. Fire-and-forget: a missed flip costs a
-    // stale card, never a broken stream.
+    // live the moment anyone starts sharing here. The last share STOPPING
+    // only stamps when the picture went away (see `noteShareStopped`); it
+    // does not end the party. Fire-and-forget: a missed stamp costs a party
+    // a later bound, never a broken stream.
     if (payload.sharing) {
       void markChannelSessionLive(peer.voiceChannelId).catch((error) => {
         console.error("[channel-sessions] markLive failed:", error);
       });
+      void markChannelShareStarted(peer.voiceChannelId).catch((error) => {
+        console.error("[channel-sessions] share-started stamp failed:", error);
+      });
     } else if (
       !getRoomPeers(peer.voiceChannelId).some((p) => p.sharingScreen)
     ) {
-      void endSessionsOnChannel(peer.voiceChannelId);
+      void noteShareStopped(peer.voiceChannelId);
     }
     await broadcastRoster(peer.voiceChannelId, {
       kind: "updated",
