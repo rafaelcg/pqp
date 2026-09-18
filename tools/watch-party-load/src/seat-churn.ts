@@ -187,6 +187,8 @@ type Manifest = {
   serverId: string;
   textChannelId: string;
   voiceChannelId: string;
+  /** Set only when `index.ts prepare --watch-party` made a `watch_party` channel beside the plain voice one. */
+  watchPartyChannelId?: string;
   inviteCode: string;
 };
 function readManifest(safe: Safe): Manifest {
@@ -200,6 +202,17 @@ function readManifest(safe: Safe): Manifest {
   // manifest `index.ts prepare` produced for this TEST_RUN_ID/api/ws is
   // valid here regardless of the --participants it was prepared with.
   return parsed;
+}
+/**
+ * The room seats actually join: the manifest's `watch_party` channel when
+ * `index.ts prepare --watch-party` made one, the plain voice channel
+ * otherwise. A seated population in the same room a presenter is sharing
+ * into is exactly the DB-load shape this script exists to rehearse
+ * (docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md A3), and that room is the
+ * watch-party channel whenever one exists for this run.
+ */
+function seatRoomId(manifest: Manifest): string {
+  return manifest.watchPartyChannelId ?? manifest.voiceChannelId;
 }
 
 // ------------------------------------------------------------------- ready
@@ -301,7 +314,7 @@ async function joinSeat(safe: Safe, manifest: Manifest, token: string, machineId
         socket.send(
           JSON.stringify({
             type: "join-voice-room",
-            voiceChannelId: manifest.voiceChannelId,
+            voiceChannelId: seatRoomId(manifest),
             transports: ["livekit"],
             resume: false,
           }),
@@ -354,7 +367,7 @@ function setVoiceState(session: AppSession, muted: boolean, deafened: boolean): 
 
 type Session = { url: string; token: string; room: string };
 async function mint(apiUrl: string, token: string, manifest: Manifest, peerId: string, expectedSfuHost: string): Promise<Session> {
-  const result = await api<Session>(apiUrl, token, "POST", "/api/voice/token", { voiceChannelId: manifest.voiceChannelId, peerId });
+  const result = await api<Session>(apiUrl, token, "POST", "/api/voice/token", { voiceChannelId: seatRoomId(manifest), peerId });
   const host = new URL(result.url).hostname.toLowerCase();
   if (host !== expectedSfuHost || PROD_HOSTS.has(host) || host.endsWith(".pqp.gg")) throw new Error("token returned a non-isolated or unexpected SFU host");
   return result;
@@ -455,7 +468,7 @@ async function run(): Promise<void> {
     JSON.stringify({
       event: "start",
       runId: safe.runId,
-      voiceChannelId: manifest.voiceChannelId,
+      voiceChannelId: seatRoomId(manifest),
       seats: plan.seats,
       churnPerMinute: plan.churnPerMinute,
       durationSeconds: plan.durationMs / 1000,
@@ -705,7 +718,7 @@ async function run(): Promise<void> {
   if (failureRate > 0.01) verdict.push(`seat join/leave failure rate ${(failureRate * 100).toFixed(2)}%, budget 1%`);
 
   const summary = {
-    config: { runId: safe.runId, voiceChannelId: manifest.voiceChannelId, ...plan },
+    config: { runId: safe.runId, voiceChannelId: seatRoomId(manifest), ...plan },
     startedAt: new Date(startedAt).toISOString(),
     endedAt: new Date(endedAt).toISOString(),
     durationMs: endedAt - startedAt,
