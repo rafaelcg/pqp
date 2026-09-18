@@ -66,6 +66,13 @@ export {
   type UploadedHomeMedia,
 } from "./media";
 export {
+  OVERVIEW_START_HERE_MAX,
+  foldChannelName,
+  isOverviewStartHereChannel,
+  pickDefaultOverviewStartHereChannels,
+  resolveOverviewStartHereChannels,
+} from "./overview-start-here";
+export {
   COMPOSE_EMBED_DEBOUNCE_MS,
   communityHomeEmbedMedia,
   composeSubmitEmbedUrl,
