@@ -50,8 +50,13 @@ import {
   rollUpAndPruneVoiceOccupancy,
 } from "./services/voice-occupancy.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
-import { sweepWatchPartyHosts } from "./services/watch-parties.js";
+import {
+  sweepStaleWatchPartyDrafts,
+  sweepWatchPartyHosts,
+} from "./services/watch-parties.js";
 import { broadcastWatchParty } from "./ws/watch-party-events.js";
+import { userHasAuthenticatedSocket } from "./ws/sockets.js";
+import { hasClusterSocket } from "./ws/status.js";
 import { sweepHlsSessions } from "./voice/hls-cleanup.js";
 
 /**
@@ -218,7 +223,16 @@ export function startColdJobs(): ColdJobs {
     every(
       CHANNEL_SESSION_REMINDER_INTERVAL_MS,
       "channel-sessions",
-      sendDueChannelSessionReminders,
+      async () => {
+        // THE NO-SHOW SWEEP ENDS WATCH PARTIES TOO, and until 2026-09-18 it
+        // did it without telling anyone: the row went `ended`, the card
+        // stayed on every sidebar in the server until a reload. Same fan-out
+        // as every other ending now.
+        const noShows = await sendDueChannelSessionReminders();
+        for (const sessionId of noShows) {
+          await broadcastWatchParty(sessionId);
+        }
+      },
     ),
     every(HLS_SESSION_SWEEP_INTERVAL_MS, "hls-sessions", sweepHlsSessions),
     // Voice occupancy: the one job here that reads live state rather than
@@ -245,6 +259,28 @@ export function startColdJobs(): ColdJobs {
       for (const party of ended) {
         console.log(
           `[watch-party] ended ${party.sessionId}: the host never came back`,
+        );
+        await broadcastWatchParty(party.sessionId);
+      }
+      // A DRAFT NOBODY CAME BACK FOR BLOCKS ITS CHANNEL, which is what
+      // 2026-09-18 cost: a co-host's abandoned setup sheet made every
+      // subsequent "Criar watch party" in that channel answer 409, and the
+      // server's owner could not see the party doing it. Same minute tick as
+      // the host sweep because it is the same kind of fact.
+      //
+      // PRESENCE IS READ FROM WHEREVER THIS RUNS. In the single-process
+      // deployment that is exact. Split across `pqp-api` and `pqp-worker`
+      // the worker holds no sockets, so this answers "gone" for everybody
+      // and the thirty-minute TTL alone decides, which for a draft is the
+      // conservative direction. `hasClusterSocket` closes the gap wherever
+      // `CLUSTER_BUS` is on.
+      const { cancelled } = await sweepStaleWatchPartyDrafts({
+        isConnected: (userId) =>
+          userHasAuthenticatedSocket(userId) || hasClusterSocket(userId),
+      });
+      for (const party of cancelled) {
+        console.log(
+          `[watch-party] cancelled draft ${party.sessionId}: nobody came back for it`,
         );
         await broadcastWatchParty(party.sessionId);
       }

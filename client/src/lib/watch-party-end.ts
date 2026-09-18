@@ -19,7 +19,8 @@ import { ApiError } from "./api";
  *  1. Success: unchanged from before. Apply the answer, stop a running share,
  *     leave the room — the "End + leave" coupling this codebase already
  *     relies on, kept ONLY here.
- *  2. 404 or 409 (already ended, or a stale id this tab was holding): the
+ *  2. 403, 404 or 409 (refused because it has already ended, or a stale id
+ *     this tab was holding): the
  *     party is not what this client thinks it is. `deps.fetchCurrentParty`
  *     asks the channel directly what is actually true rather than guessing
  *     — a party that already replaced this one in the same channel exists
@@ -74,7 +75,7 @@ export async function endWatchParty(
   try {
     answer = await deps.setEnded(party.id);
   } catch (error) {
-    if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
+    if (error instanceof ApiError && isStaleEndStatus(error.status)) {
       // Already ended, or a stale id: ask the channel directly what is
       // actually true rather than assuming this client's own guess
       // (clearing the card, or leaving it as is) is the right one. A
@@ -129,6 +130,31 @@ export async function endWatchParty(
   // case above); the network-failure branch returns before this so a failed
   // or ambiguous end never ejects anyone as a side effect.
   endLocalPresence(party, deps);
+}
+
+/**
+ * THE THREE ANSWERS THAT MEAN "THIS TAB IS OUT OF DATE, GO AND LOOK".
+ *
+ * 404 and 409 were always here: a stale id, or a party that moved on.
+ *
+ * 403 JOINED THEM ON 2026-09-18, and it is the one that hurt. The server
+ * ended a live party by itself (the last screen share stopped), the tab was
+ * never told, and Encerrar answered 403 "A host may not end a ended watch
+ * party", which fell straight through to the generic branch below and put a
+ * refusal on screen for a host whose party had, in fact, already ended. The
+ * server is idempotent about this now and answers 200, so a current client
+ * never reaches here at all. This is for the ones already loaded: an API
+ * deploy reconnects open tabs without reloading them (pitfall 11), so on the
+ * day this ships every browser in every live party is on the old bundle and
+ * the old bundle is the one that needs the recovery.
+ *
+ * Every one of the three lands in the SAME branch, which asks the channel
+ * what is actually true rather than guessing, so a 403 from a party that is
+ * genuinely still live and genuinely not this person's to end still ends
+ * nothing and still says so.
+ */
+function isStaleEndStatus(status: number): boolean {
+  return status === 403 || status === 404 || status === 409;
 }
 
 /** Stop presenting and leave the room — the "End + leave" coupling. */

@@ -15,6 +15,11 @@ import {
 } from "../ws/voice.js";
 import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
 import {
+  watchPartyDraftTtlMinutes,
+  watchPartyHostGoneMinutes,
+  watchPartySweepCounters,
+} from "./watch-parties.js";
+import {
   isLiveHlsEnabled,
   liveHlsActivity,
   liveHlsConfig,
@@ -445,6 +450,30 @@ export interface AdminMetrics {
    * number to trust for `uncleaned` is still true and shared, because it is a
    * database count rather than a process counter.
    */
+  /**
+   * THE PARTY SESSION'S OWN SWEEPS, which are not the stream's.
+   * `liveHls.*` below is about transcodes; this is about `channel_sessions`
+   * rows, and the two go wrong independently (that is the first paragraph of
+   * `docs/WATCH_PARTY_LIFECYCLE.md`).
+   *
+   * `sweptDrafts` climbing is the abandoned-setup-sheet case being cleaned
+   * up rather than blocking a channel. `sweptHostGone` is a party that
+   * outlived its host. `heldByLiveStream` is the safety guard REFUSING to
+   * end a party because something is still playing on it: a number that
+   * climbs while `sweptHostGone` stays flat is the guard working, and one
+   * that climbs forever with no parties on air is a leaked `hls_sessions`
+   * row. `streamCheckFailures` above zero means the guard has been failing
+   * safe, which holds parties open.
+   */
+  watchParty: {
+    sweptDrafts: number;
+    sweptHostGone: number;
+    heldByLiveStream: number;
+    streamCheckFailures: number;
+    /** The live values of the two knobs. `0` means that sweep is off. */
+    draftTtlMinutes: number;
+    hostGoneMinutes: number;
+  };
   liveHls: {
     enabled: boolean;
     configured: boolean;
@@ -1194,6 +1223,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           openedAt: room.openedAt,
         };
       }),
+    },
+    watchParty: {
+      ...watchPartySweepCounters(),
+      draftTtlMinutes: watchPartyDraftTtlMinutes(),
+      hostGoneMinutes: watchPartyHostGoneMinutes(),
     },
     liveHls: {
       enabled: hlsFlag.enabled,

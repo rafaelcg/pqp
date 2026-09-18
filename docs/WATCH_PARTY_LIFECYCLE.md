@@ -167,3 +167,126 @@ Two older ones this map exists to keep visible:
 7. **Both drivers are drivers.** Anything that reads "what is playing on this
    channel" reads the conventional map AND the LL map, or an LL party's
    teardown is invisible (2026-09-15).
+
+---
+
+## 4. Who may end what, and what ends a party by itself
+
+Added 2026-09-18, after an evening in which one production channel produced
+seven parties, two abandoned drafts that blocked every subsequent create, a
+live party that stayed live on every screen after the server had ended it, and
+an Encerrar that answered `403 A host may not end a ended watch party`.
+
+### The table
+
+| Who | draft | scheduled | live |
+|---|---|---|---|
+| Host | cancel | cancel | end |
+| Co-host | cancel | cancel | end |
+| MANAGE_CHANNELS, or START_WATCH_PARTY, on the channel | cancel (**override**) | cancel (**override**) | end (**override**) |
+| Anyone else who can see the channel | nothing | nothing | nothing |
+| Not a member | 404, always | 404, always | 404, always |
+
+**The override is a second door, not a wider first one.** The role table in
+`packages/shared/src/watch-party-session.ts` still says `end` and `cancel`
+belong to the host and the co-hosts, and the CLIENT draws Encerrar from that
+table, so no admin is ever handed a stray button. 2026-09-12 (an uninvolved
+admin ending a host's live show with one click) was a button, not a
+permission, and the button has not moved. The override is
+`canStaffOverrideWatchParty`, asked for by name, on one route.
+
+**It is checked before the visibility gate,** which is the part that fixes the
+draft case: a draft is invisible to a manager by design, so `authoriseWatchParty`
+answered `not_found` and the server's own owner could not name the party
+blocking their channel. Staff can now cancel a draft they still cannot see in
+any list, on any sidebar, in any broadcast. Stopping the thing that refused
+you is the only thing the override buys.
+
+**A refusal names the states properly now.** `watchPartyRefusalMessage`
+produces "a live watch party" and "a watch party that has already ended",
+never "a ended watch party".
+
+### Terminal is idempotent
+
+`POST /api/watch-parties/:id/state` with `ended` or `cancelled`, on a party
+that is already ended or cancelled, answers **200 with the party**. Two of the
+host's own tabs, a sweep that got there a second early, and a party the server
+ended behind the host's back all produce that request, and every one of them
+is somebody asking for the state the party is already in.
+
+Only the two terminal words. Asking a dead party to go `live` again, or an
+ended one to become `scheduled`, is a request for a move and is still refused.
+
+### Nothing silently blocks a create any more
+
+A `draft` that is in the way of `POST /api/channels/:id/watch-parties` is
+**superseded**: cancelled for real, through the transition table, broadcast
+like every other ending, and the new party takes the channel. Three ways to
+qualify, and each is a different kind of "nobody is setting this up":
+
+1. the requester is its own host (the F5 case, and the "closed the tab and
+   came back" case: your own abandoned draft never locks you out);
+2. its host has no socket anywhere;
+3. it has not changed for `WATCH_PARTY_DRAFT_STALE_MINUTES` (default 10).
+
+A `scheduled` or `live` party is never superseded: one was announced to the
+room and the other has an audience. Those still answer 409, now with
+`blockingParty: { sessionId, state, name }` in the body so the caller has
+something to act on.
+
+### The two sweeps
+
+Both on the same minute tick as the reminders, in `jobs.ts`.
+
+| Sweep | What it does | Knob | Log | Metric |
+|---|---|---|---|---|
+| Stale draft | Cancels a `draft` older than the TTL whose host has no socket | `WATCH_PARTY_DRAFT_TTL_MINUTES` (30, `0` off) | `watchParty.sweptDraft` | `watchParty.sweptDrafts` |
+| Host gone | Ends a `live` party whose host has been disconnected past the window **and which has no stream** | `WATCH_PARTY_HOST_GONE_MINUTES` (5, `0` off) | `watchParty.sweptHostGone` | `watchParty.sweptHostGone` |
+
+**The host-gone sweep can never end a party with a picture on it.** That is
+the safety property, and it rests entirely on `channelHasLiveStream`, which
+asks `hls_sessions` for a row on this channel with `ended_at IS NULL` started
+in the last twelve hours. Three deliberate choices in that one query:
+
+- **The row, not `pickHlsSharer`.** The in-memory authority answers only for
+  the process holding the room, and this sweep runs from `jobs.ts`, which in
+  the `WORKER_MODE=worker` deployment holds no voice state at all: it would
+  see no stream anywhere and end every party it looked at. Pitfall 12.
+- **Both drivers write `hls_sessions`**, the conventional ladder
+  (`hls-egress.ts`) and the LL remux (`hls-remux.ts`), so one query covers
+  both. Invariant 7 above.
+- **Twelve hours bounds a leak.** A row nothing ever closed would otherwise
+  make its party immortal, which is pitfall 13 with a different table.
+
+It fails safe: an unreadable answer holds the party, counted as
+`watchParty.streamCheckFailures`. The cost of being wrong that way is a party
+that ends a minute later; the cost of being wrong the other way is a room of
+people losing the film. `watchParty.heldByLiveStream` climbing while
+`sweptHostGone` stays flat is the guard working.
+
+**Why the host-gone default is 5 and not 10.** It is the number that already
+shipped, and it is the same number `claimHost` uses: a co-host may take over
+only while `WATCH_PARTY_HOST_GRACE_MS` is open, so a sweep window longer than
+the grace would create a stretch in which nobody may claim the party and
+nothing will end it. That is the ghost party this section exists to kill.
+Raise both or neither.
+
+### Every ending is broadcast
+
+The rule: **a party's state never changes without `broadcastWatchParty`**,
+which is what clears the sidebar pill, the header bar and the Encerrar
+control (a terminal party is fanned out as `null`, see §2 of this file and
+`ws/watch-party-events.ts`).
+
+Two paths were missing it until 2026-09-18, and both are the same bug:
+
+- **`markChannelSessionEnded`** (`ws/voice.ts`, the last screen share in the
+  room stopping). It flips a LIVE WATCH PARTY to `ended` and did so in total
+  silence: every tab kept its AO VIVO pill indefinitely, the channel kept the
+  slow mode and the closed floor the party had set, and Encerrar on the ghost
+  answered 403. This is the ghost party.
+- **`noShowSweep`** (`services/channel-sessions.ts`, a scheduled party an hour
+  past its time). Same shape, quieter symptom: the countdown card stayed on
+  every sidebar in the server until a reload.
+
+Both return the ids they ended now, and their callers fan them out.

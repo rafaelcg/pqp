@@ -97,7 +97,13 @@ describe("endWatchParty", () => {
     expect(calls.leaveVoice).toBe(0);
   });
 
-  for (const status of [404, 409]) {
+  // 403 JOINED THE LIST ON 2026-09-18. The server ended a live party by
+  // itself (the last screen share stopped), never told this tab, and then
+  // refused the Encerrar click with "A host may not end a ended watch
+  // party". The server answers 200 for that now, so a current client never
+  // sees it; this covers the builds already loaded in a browser somewhere,
+  // which an API deploy reconnects without reloading (pitfall 11).
+  for (const status of [403, 404, 409]) {
     it(`confirms the channel is empty and cleans up on a ${status} (this end already landed)`, async () => {
       const { deps, calls } = fakeDeps({
         setEnded: async () => {

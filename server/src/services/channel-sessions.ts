@@ -316,17 +316,34 @@ export async function markChannelSessionLive(
   return result.rows[0]?.id ?? null;
 }
 
-/** The seam a stream stop calls. */
+/**
+ * The seam a stream stop calls.
+ *
+ * IT RETURNS THE IDS NOW, AND THAT IS THE WHOLE POINT. This UPDATE ends a
+ * WATCH PARTY, the same `channel_sessions` row `POST /api/watch-parties/:id/state`
+ * moves, and until 2026-09-18 it did so in total silence: no
+ * `broadcastWatchParty`, so every open tab kept its AO VIVO pill and its
+ * header bar for a show the server had already ended, and no
+ * `applyWatchPartyOptions`, so the channel kept the slow mode and the closed
+ * floor that going live had set. Pressing Encerrar on that ghost then
+ * answered 403. Three symptoms, one missing fan-out.
+ *
+ * The caller broadcasts rather than this function, because this module must
+ * stay importable without the socket layer (the reminder tick runs on
+ * `pqp-worker`, which has no `/ws` at all).
+ */
 export async function markChannelSessionEnded(
   channelId: string,
-): Promise<void> {
-  await getPool().query(
+): Promise<string[]> {
+  const result = await getPool().query<{ id: string }>(
     `UPDATE channel_sessions
         SET status = 'ended', ended_at = NOW(),
             host_disconnected_at = NULL, updated_at = NOW()
-      WHERE channel_id = $1 AND status = 'live'`,
+      WHERE channel_id = $1 AND status = 'live'
+      RETURNING id`,
     [channelId],
   );
+  return result.rows.map((r) => r.id);
 }
 
 // ------------------------------------------------------------ the minute tick
@@ -343,19 +360,29 @@ export async function markChannelSessionEnded(
  *     stamped and pushed, once, per subscriber, ever, not once per tick
  *     while the session stays live.
  */
-export async function sendDueChannelSessionReminders(): Promise<void> {
-  await noShowSweep();
+export async function sendDueChannelSessionReminders(): Promise<string[]> {
+  const noShows = await noShowSweep();
   await fireReminders("before");
   await fireReminders("live");
+  return noShows;
 }
 
-async function noShowSweep(): Promise<void> {
-  await getPool().query(
-    `UPDATE channel_sessions SET status = 'ended', updated_at = NOW()
+/**
+ * Returns the sessions it ended so `jobs.ts` can fan them out. Same omission
+ * as `markChannelSessionEnded` above: a scheduled watch party that nobody
+ * ever started is a party, its card is on every sidebar in the server, and
+ * ending the row without telling anybody leaves that card there until the
+ * next reload.
+ */
+async function noShowSweep(): Promise<string[]> {
+  const result = await getPool().query<{ id: string }>(
+    `UPDATE channel_sessions SET status = 'ended', ended_at = NOW(), updated_at = NOW()
       WHERE status = 'scheduled'
-        AND starts_at < NOW() - ($1 || ' minutes')::interval`,
+        AND starts_at < NOW() - ($1 || ' minutes')::interval
+      RETURNING id`,
     [String(CHANNEL_SESSION_NO_SHOW_MINUTES)],
   );
+  return result.rows.map((r) => r.id);
 }
 
 async function fireReminders(kind: "before" | "live"): Promise<void> {

@@ -287,6 +287,114 @@ export function canPerformWatchPartyAction(
   return true;
 }
 
+// ---------------------------------------------------------- the staff override
+
+/**
+ * ENDING SOMEBODY ELSE'S PARTY, BECAUSE IT IS IN YOUR WAY.
+ *
+ * The role table above is deliberately narrow: `end` and `cancel` belong to
+ * the host and the co-hosts, because 2026-09-12 showed what happens when an
+ * admin who was only watching gets the same button. Nothing here changes
+ * that. This is a second, separate door, and the difference is the reason it
+ * exists rather than a widening of the first.
+ *
+ * WHAT IT IS FOR, from 2026-09-18 in production. A co-host opened a draft in
+ * a channel, never went live, and closed the tab. The partial unique index on
+ * `channel_sessions` then refused every `POST .../watch-parties` in that
+ * channel with "This channel already has a watch party being set up,
+ * scheduled, or live", and the server's OWNER got 404 from the state route,
+ * because a draft is invisible to a manager BY DESIGN and `authoriseWatchParty`
+ * answers `not_found` rather than announcing it. The channel was unblocked
+ * with a manual UPDATE against production Postgres. That is not a workflow.
+ *
+ * WHY THESE TWO PERMISSIONS. `START_WATCH_PARTY` is exactly the bit the create
+ * route asks for, so whoever is being refused is by definition whoever holds
+ * it; `MANAGE_CHANNELS` is the moderator who has to clear a channel they own.
+ * Nobody else, and no other action: a staff member may STOP a party and may
+ * not rename it, take it over, touch its guests, or press Ir ao vivo on it.
+ *
+ * WHY IT IS NOT A ROLE. A fifth `WatchPartyRole` would flow straight into
+ * `canPerformWatchPartyAction`, which is what the CLIENT calls to decide
+ * whether to draw "Encerrar", and drawing that button for every admin in the
+ * room is precisely the accident of 2026-09-12. This predicate is asked for
+ * by name, on the server, on one route. The button does not move.
+ */
+export const WATCH_PARTY_STAFF_OVERRIDE_ACTIONS: readonly WatchPartyAction[] =
+  Object.freeze(["end", "cancel"]);
+
+/** Whether these permissions are staff for the purposes of the override. */
+export function hasWatchPartyStaffPermission(permissions: bigint): boolean {
+  return (
+    hasPermission(permissions, Permission.MANAGE_CHANNELS) ||
+    hasPermission(permissions, Permission.START_WATCH_PARTY)
+  );
+}
+
+export function canStaffOverrideWatchParty(input: {
+  action: WatchPartyAction;
+  state: WatchPartyPhase;
+  /** The actor's effective permissions on the party's channel. */
+  permissions: bigint;
+}): boolean {
+  if (!WATCH_PARTY_STAFF_OVERRIDE_ACTIONS.includes(input.action)) {
+    return false;
+  }
+  // The state table still applies: a staff member may not "end" a draft any
+  // more than its host may. They cancel it, which is the move that exists.
+  if (!ACTION_STATES[input.action].includes(input.state)) {
+    return false;
+  }
+  return hasWatchPartyStaffPermission(input.permissions);
+}
+
+// ------------------------------------------------------------- the refusal
+
+/**
+ * THE SENTENCE A REFUSAL PRODUCES, and it is here because the old one was
+ * assembled from the enum values and read "A host may not end a ended watch
+ * party", which Rafael saw in production on 2026-09-18, on a party the
+ * server itself had already ended behind his back.
+ *
+ * Two independent problems in one string. The grammar ("a ended") was the
+ * visible one. The one that mattered is that it named the state as an
+ * adjective at all: `ended` and `cancelled` are not what a party IS, they are
+ * where it STOPPED, and a message built for `draft`/`scheduled`/`live` cannot
+ * say that. Terminal states get their own clause.
+ */
+const ACTION_VERBS: Readonly<Record<WatchPartyAction, string>> = Object.freeze({
+  view: "see",
+  edit: "edit",
+  schedule: "schedule",
+  goLive: "start",
+  end: "end",
+  cancel: "cancel",
+  promoteCohost: "promote a co-host on",
+  demoteCohost: "demote a co-host on",
+  transferHost: "hand over",
+  claimHost: "take over",
+  manageGuests: "manage the guests of",
+});
+
+const ROLE_NAMES: Readonly<Record<WatchPartyRole, string>> = Object.freeze({
+  host: "host",
+  cohost: "co-host",
+  manager: "manager",
+  viewer: "viewer",
+});
+
+export function watchPartyRefusalMessage(input: {
+  action: WatchPartyAction;
+  role: WatchPartyRole;
+  state: WatchPartyPhase;
+}): string {
+  const who = ROLE_NAMES[input.role];
+  const verb = ACTION_VERBS[input.action];
+  if (isWatchPartyTerminal(input.state)) {
+    return `A ${who} may not ${verb} a watch party that has already ${input.state}`;
+  }
+  return `A ${who} may not ${verb} a ${input.state} watch party`;
+}
+
 // ------------------------------------------------------- the host disconnect
 
 /**
