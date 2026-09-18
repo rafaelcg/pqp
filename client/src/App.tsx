@@ -7222,6 +7222,7 @@ function MainAppContent({
             }
             transport={voiceState.roomTransport}
             cameraOn={voiceState.isCameraOn}
+            onToggleCamera={() => void voice.toggleCamera()}
             slot="chrome"
             barSlot={watchPartyBarSlot}
             statusSlot={statusSlotEl}
@@ -7538,6 +7539,7 @@ function MainAppContent({
             }
             transport={voiceState.roomTransport}
             cameraOn={voiceState.isCameraOn}
+            onToggleCamera={() => void voice.toggleCamera()}
             slot="surface"
             /* The pane owns this surface's height, exactly as it owns
                `WatchChannelStage`'s and `VoiceChannelStage`'s below. This

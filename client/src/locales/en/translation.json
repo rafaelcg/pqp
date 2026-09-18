@@ -3389,6 +3389,7 @@
   "watchParty.panel.nobodyInRoom": "Nobody in the room yet.",
   "watchParty.panel.host": "Host",
   "watchParty.panel.onAir": "On air",
+  "watchParty.live.cameraHint": "Your camera shows in a corner of the stream; viewers pick which corner.",
   "watchParty.guests.title": "Guests",
   "watchParty.guests.body": "Who can speak and appear in the stream with you.",
   "watchParty.guests.off": "Nobody, they just watch",

@@ -418,6 +418,7 @@ handlers stay).
 | Trocar | merge into share menu — pass 2 |
 | Parar de compartilhar | merge into share menu (and the button's primary while sharing) — pass 2 |
 | Áudio (mixer dialog: Padrão, output meter, mic slider, tab slider) | move to bar; dialog unchanged — pass 2 |
+| Câmera (new, 2026-09-18: the host had no camera control at all under the party chrome, while `LIVE_HLS_CAMERA` already sends it to the audience) | added to bar |
 
 ### Options dialog
 
@@ -647,7 +648,7 @@ The complete set, one row per element, after that change:
 | Self-monitor toggle ("Mostrar prévia" / "Fechar") | top right | in stage | no |
 | Own capture, picture-in-picture | bottom left, above the bar | in stage | no |
 | "Preparando a transmissão" line | bottom centre, above the bar | in stage | no |
-| The bar (mic, seat, share / Trocar / Parar, Áudio, No ar, guests) | bottom, stage slot | chrome | no |
+| The bar (mic, seat, share / Trocar / Parar, Câmera, Áudio, No ar, guests) | bottom, stage slot | chrome | no |
 | Audience view player | the picture | picture | draws nothing |
 | Call stage's own bar (empty under the party chrome) | bottom | chrome | inert: no gradient, no pointer, only its notices |
 
@@ -673,6 +674,18 @@ The complete set, one row per element, after that change:
 | Call chrome (top status, control bar) | hidden under `watchPartyChrome`; the bar's box stays for its notices but paints nothing and takes no pointer | | |
 
 Anything not in these three tables is a bug against §10.4.
+
+### 10.5 The camera's corner and size
+
+André asked (2026-09-18) for the host to choose which corner the camera
+sits in and how big it is. Today both are the VIEWER's: the player draws
+the camera egress as a picture-in-picture and `lib/watch-camera-pip.ts`
+keeps the corner per browser, with a swap and a corner control on the
+box. A host-chosen corner and size would have to travel with the stream
+(a field on `LiveHlsStream`, set from the party options, honoured by web,
+iOS and Android players as the default a viewer can still override).
+That is a protocol change and `restarts-api`, so it is not in this PR;
+the toggle is.
 
 ## 11. Open questions for Rafael
 

@@ -12,6 +12,8 @@ import {
   BellOff,
   CalendarClock,
   Check,
+  Camera,
+  CameraOff,
   Clapperboard,
   Lock,
   Crown,
@@ -305,6 +307,14 @@ export interface WatchPartyPanelProps {
   hlsMaxFrameRate?: 30 | 60;
   /** This person's camera, for the go-live checklist's "camera off" row. */
   cameraOn?: boolean;
+  /**
+   * CÂMERA ON THE BAR (2026-09-18). The host had no way to turn their
+   * camera on in a party: the call strip's camera button is hidden under
+   * the party chrome (#538, when the stream never carried a camera), and
+   * the stream has carried one since `LIVE_HLS_CAMERA` (a second 360p
+   * egress the viewer's player draws in a corner). This is that door.
+   */
+  onToggleCamera?: () => void;
   onShapeChange?: (shape: "expanded" | "none") => void;
   /**
    * WHICH HALF OF THE PANEL TO DRAW, and it is rendered twice.
@@ -2270,6 +2280,24 @@ function LiveSurface(
           >
             <Square className="mr-1.5 h-3 w-3" aria-hidden />
             {t("watchParty.live.stopShare")}
+          </Button>
+        )}
+        {runsTheShow && props.onToggleCamera && (
+          <Button
+            type="button"
+            variant={props.cameraOn ? "default" : "ghost"}
+            size="sm"
+            aria-pressed={props.cameraOn ?? false}
+            title={t("watchParty.live.cameraHint")}
+            onClick={props.onToggleCamera}
+            data-watch-party-bar-camera
+          >
+            {props.cameraOn ? (
+              <Camera className="mr-1.5 h-3 w-3" aria-hidden />
+            ) : (
+              <CameraOff className="mr-1.5 h-3 w-3" aria-hidden />
+            )}
+            {t("watchParty.guests.camera")}
           </Button>
         )}
         {/* THE STREAM'S AUDIO, ONE PRESS AWAY (2026-09-13). The mixer, the
