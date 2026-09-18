@@ -1,4 +1,5 @@
-import { Hand, Users } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ChevronRight, Hand, Users } from "lucide-react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
@@ -13,41 +14,79 @@ import {
  * THE ROOM'S ACTIVITY, for the people running the show: hands with a Chamar
  * beside them, the audience count moving, reaction bursts. It used to be the
  * bottom half of the presenter's two-monitor layout (`presenter-stage.tsx`,
- * retired in pass 3 of `docs/plans/WATCH_PARTY_UI.md`). It now sits as a
- * short strip under the host's stage, until pass 4 folds it into the chat
- * as system lines and this file goes with it.
+ * retired in pass 3 of `docs/plans/WATCH_PARTY_UI.md`). Since pass 4 it is
+ * a strip in the chat column, above the composer, that folds to one line.
  */
 export function WatchPartyActivityFeed({
   channelId,
   audienceCount,
   hands,
   onInvite,
+  collapsible = false,
   className,
 }: {
   channelId: string;
   audienceCount: number;
   hands: readonly ActivityPerson[];
   onInvite?: (userId: string) => void;
+  /**
+   * IN THE CHAT COLUMN (pass 4): a strip above the composer that opens
+   * and closes on its header, remembered per browser. Closed, it is one
+   * line with the count of what happened since; open, the last events.
+   */
+  collapsible?: boolean;
   className?: string;
 }) {
   const { t } = useTranslation();
   const events = useWatchPartyActivity({ channelId, audienceCount, hands });
+  const [open, setOpen] = useState(() => readActivityOpen());
+  const expanded = !collapsible || open;
 
   return (
     <section
       data-testid="watch-party-activity"
+      data-watch-party-activity-open={expanded ? "" : undefined}
       className={cn(
         "flex min-h-0 flex-col border-t border-ink-4/60 bg-ink-2",
+        collapsible && expanded && "max-h-40",
         className,
       )}
     >
       <h3 className="flex items-center gap-2 border-b border-ink-4/60 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-        {t("watchParty.presenter.activity")}
+        {collapsible ? (
+          <button
+            type="button"
+            aria-expanded={open}
+            className="flex items-center gap-1 rounded-sm hover:text-paper"
+            onClick={() =>
+              setOpen((was) => {
+                writeActivityOpen(!was);
+                return !was;
+              })
+            }
+            data-watch-party-activity-toggle
+          >
+            {open ? (
+              <ChevronDown className="h-3 w-3" aria-hidden />
+            ) : (
+              <ChevronRight className="h-3 w-3" aria-hidden />
+            )}
+            {t("watchParty.presenter.activity")}
+            {!open && events.length > 0 && (
+              <span className="ml-1 rounded-full bg-signal/20 px-1.5 font-normal normal-case tracking-normal text-signal">
+                {events.length}
+              </span>
+            )}
+          </button>
+        ) : (
+          t("watchParty.presenter.activity")
+        )}
         <span className="ml-auto flex items-center gap-1 font-normal normal-case tracking-normal text-paper-muted">
           <Users className="h-3 w-3" aria-hidden />
           {audienceCount}
         </span>
       </h3>
+      {expanded && (
       <ol className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-1.5 text-xs">
         {events.length === 0 && (
           <li className="px-1 py-2 text-paper-muted">
@@ -58,8 +97,25 @@ export function WatchPartyActivityFeed({
           <ActivityRow key={event.id} event={event} onInvite={onInvite} />
         ))}
       </ol>
+      )}
     </section>
   );
+}
+
+const ACTIVITY_OPEN_KEY = "pqp:watch-party-activity-open";
+function readActivityOpen(): boolean {
+  try {
+    return localStorage.getItem(ACTIVITY_OPEN_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+function writeActivityOpen(on: boolean): void {
+  try {
+    localStorage.setItem(ACTIVITY_OPEN_KEY, on ? "1" : "0");
+  } catch {
+    // ignore
+  }
 }
 
 function ActivityRow({

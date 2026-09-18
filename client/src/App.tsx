@@ -24,6 +24,7 @@ import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
+  WATCH_PARTY_MAX_GUESTS,
   connectionProviderFromPath,
   joinIntentFromSearch,
   normalizeHandle,
@@ -476,6 +477,7 @@ import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
 import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
 import { WatchPartyActivityFeed } from "@/components/watch-party/watch-party-activity-feed";
+import { WatchPartyPeoplePanel } from "@/components/watch-party/watch-party-people-panel";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
 
 export type TokenResolver = (options?: {
@@ -1286,6 +1288,11 @@ function MainAppContent({
   const watchPartyBarSlot = playerBarEl ?? stageBarEl;
   /** The host's status line over the top edge of the stage (pass 3). */
   const [statusSlotEl, setStatusSlotEl] = useState<HTMLDivElement | null>(null);
+  /**
+   * ONE PANEL WITH TABS (pass 4): which body the chat column shows while a
+   * party is live, Chat or Pessoas. Back to Chat on every channel change.
+   */
+  const [watchPanelTab, setWatchPanelTab] = useState<"chat" | "people">("chat");
   const handleSplitState = useCallback((next: CallSplitState) => {
     setSplitState((previous) =>
       previous.active === next.active &&
@@ -7311,7 +7318,6 @@ function MainAppContent({
           <WatchPartyGuestsOverlay
             party={watchParties.byChannel[selectedChannel.id] ?? null}
             currentUserId={user.id}
-            cohostCandidates={cohostCandidates}
             inRoom={
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.status === "connected"
@@ -7333,6 +7339,7 @@ function MainAppContent({
             onGoOnAir={() => handleWatchPartyGuestGoOnAir(selectedChannel.id)}
             onGoOffAir={() => handleWatchPartyGuestGoOffAir(selectedChannel.id)}
             barSlot={watchPartyBarSlot}
+            onOpenPeople={() => setWatchPanelTab("people")}
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
@@ -7351,6 +7358,25 @@ function MainAppContent({
         // no stage above the transcript then.
         chatHeader={callDockOnScreen ? undefined : {
           title: t("chat.paneTitle"),
+          tabs: partyOwnsHeader
+            ? {
+                items: [
+                  { id: "chat", label: t("chat.paneTitle") },
+                  {
+                    id: "people",
+                    label: t("watchParty.panel.people"),
+                    count:
+                      (watchParties.byChannel[selectedChannel.id]?.guests
+                        ?.requestCount ?? 0) +
+                      (watchParties.byChannel[selectedChannel.id]?.stage.hands
+                        .length ?? 0),
+                  },
+                ],
+                active: watchPanelTab,
+                onSelect: (id) =>
+                  setWatchPanelTab(id === "people" ? "people" : "chat"),
+              }
+            : undefined,
           meta:
             splitKind === "watch"
               ? t("watchParty.live.viewers", {
@@ -7550,8 +7576,7 @@ function MainAppContent({
               /* ONE STAGE (pass 3 of `docs/plans/WATCH_PARTY_UI.md`): what
                  the audience sees once the transcode is up, the host's own
                  capture until then, the reconnecting pill over either. The
-                 activity strip under it is on loan until pass 4 folds it
-                 into the chat. */
+                 room's activity is in the chat column (pass 4). */
               <div className="flex h-full min-h-0 w-full flex-col">
                 <WatchPartyStage
                   state={
@@ -7570,20 +7595,6 @@ function MainAppContent({
                     voiceState.channelLive[selectedChannel.id]?.stream ?? null
                   }
                   className="min-h-0 flex-1"
-                />
-                <WatchPartyActivityFeed
-                  className="h-36 shrink-0"
-                  channelId={selectedChannel.id}
-                  audienceCount={watchAudienceCount(
-                    voiceState.channelLive[selectedChannel.id],
-                    voiceState.occupancy[selectedChannel.id],
-                  )}
-                  hands={
-                    watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []
-                  }
-                  onInvite={(userId) =>
-                    void handleWatchPartyStage("invite", userId)
-                  }
                 />
               </div>
             )}
@@ -7674,6 +7685,52 @@ function MainAppContent({
           </>
         }
       >
+      {/* PESSOAS (pass 4): the same column, a different body. The composer
+          below stays on every tab. */}
+      {partyOwnsHeader &&
+      watchPanelTab === "people" &&
+      watchParties.byChannel[selectedChannel.id] &&
+      user ? (
+        <WatchPartyPeoplePanel
+          party={watchParties.byChannel[selectedChannel.id]!}
+          runsTheParty={
+            watchParties.byChannel[selectedChannel.id]!.viewerRole === "host" ||
+            watchParties.byChannel[selectedChannel.id]!.viewerRole === "cohost"
+          }
+          roster={voiceState.occupancy[selectedChannel.id] ?? []}
+          audienceCount={watchAudienceCount(
+            voiceState.channelLive[selectedChannel.id],
+            voiceState.occupancy[selectedChannel.id],
+          )}
+          max={WATCH_PARTY_MAX_GUESTS}
+          candidates={cohostCandidates}
+          onAccept={(userId) =>
+            void handleWatchPartyGuestAction(
+              { action: "accept", userId },
+              selectedChannel.id,
+            )
+          }
+          onDecline={(userId) =>
+            void handleWatchPartyGuestAction(
+              { action: "decline", userId },
+              selectedChannel.id,
+            )
+          }
+          onRemove={(userId) =>
+            void handleWatchPartyGuestAction(
+              { action: "remove", userId },
+              selectedChannel.id,
+            )
+          }
+          onInvite={(userId) =>
+            void handleWatchPartyGuestAction(
+              { action: "invite", userId },
+              selectedChannel.id,
+            )
+          }
+          onStageAction={handleWatchPartyStage}
+        />
+      ) : (
       <MessageList
         messages={chat.getMessages()}
         currentUserId={user?.id ?? null}
@@ -7748,6 +7805,27 @@ function MainAppContent({
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
       />
+      )}
+      {/* THE ROOM'S ACTIVITY, IN THE CHAT COLUMN (pass 4): joins, hands with
+          a Chamar beside them, reaction bursts, as a strip above the
+          composer that folds to one line. Host and co-hosts only; it is a
+          moderation surface. */}
+      {partyOwnsHeader &&
+        watchPanelTab === "chat" &&
+        (watchParties.byChannel[selectedChannel.id]?.viewerRole === "host" ||
+          watchParties.byChannel[selectedChannel.id]?.viewerRole === "cohost") && (
+          <WatchPartyActivityFeed
+            collapsible
+            className="shrink-0"
+            channelId={selectedChannel.id}
+            audienceCount={watchAudienceCount(
+              voiceState.channelLive[selectedChannel.id],
+              voiceState.occupancy[selectedChannel.id],
+            )}
+            hands={watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []}
+            onInvite={(userId) => void handleWatchPartyStage("invite", userId)}
+          />
+        )}
       {/* Against the composer it explains, not floating in a corner: the frame
           names the channel the refused action happened in, so a notice from
           another room would be answering a question nobody asked here. */}

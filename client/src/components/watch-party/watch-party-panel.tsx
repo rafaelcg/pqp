@@ -603,13 +603,11 @@ function WatchPartyOptionsDialog({
   party,
   open,
   onClose,
-  stage,
 }: {
   props: WatchPartyPanelProps;
   party: WatchParty;
   open: boolean;
   onClose: () => void;
-  stage: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -662,123 +660,9 @@ function WatchPartyOptionsDialog({
             when the party's floor is closed, so somebody brought in to help
             can actually talk to the room. */}
         {cohostSection(props, party, "border-t border-border pt-4")}
-        {/* The queue is a moderation surface and only the people running the
-            party see it: an audience that can watch who asked and was passed
-            over is an audience having a worse time. It is also nonsense in a
-            party with no voice, where nobody is asking for anything, so it
-            follows the Voz control rather than the stored stage mode.
-            NO LONGER RESTRICTED TO `invited` (2026-09-13): the bar's "Pedir
-            para falar" is offered on every stage mode now the audience never
-            joins a call outright, so a request can land while the party is
-            `hosts_only` or `everyone` too, and the host needs somewhere to
-            see and grant it. */}
-        {stage && party.options.voiceEnabled && (
-            <div className="border-t border-border pt-4">
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                {t("watchParty.stage.hands")}
-              </p>
-              {party.stage.hands.length === 0 ? (
-                <p className="text-[11px] text-paper-muted">
-                  {t("watchParty.stage.noHands")}
-                </p>
-              ) : (
-                <>
-                  {/* CAPPED, NOT VIRTUALISED (2026-09-13). `visibleRaisedHands`
-                      keeps the first `MAX_VISIBLE_HANDS` — the people waiting
-                      longest, exactly who a host should see first — and
-                      everybody past that shows only as a count instead of a
-                      DOM row and an avatar fetch each. A hall running
-                      voice-on with a real audience could otherwise put
-                      hundreds of rows and image loads into this dialog on
-                      every open. */}
-                  {(() => {
-                    const { visible, hiddenCount } = visibleRaisedHands(
-                      party.stage.hands,
-                    );
-                    return (
-                      <>
-                        <ul className="flex flex-col gap-1">
-                          {visible.map((person) => (
-                            <li
-                              key={person.userId}
-                              className="flex items-center gap-2"
-                              data-watch-party-hand
-                            >
-                              <UserAvatar
-                                name={person.displayName}
-                                avatarUrl={person.avatarUrl}
-                                rounded="full"
-                                className="h-6 w-6 shrink-0"
-                              />
-                              <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                                {person.displayName}
-                              </span>
-                              <Button
-                                type="button"
-                                size="sm"
-                                onClick={() =>
-                                  void props.onStageAction?.(
-                                    "invite",
-                                    person.userId,
-                                  )
-                                }
-                                data-watch-party-invite
-                              >
-                                {t("watchParty.stage.invite")}
-                              </Button>
-                            </li>
-                          ))}
-                        </ul>
-                        {hiddenCount > 0 && (
-                          <p
-                            className="mt-1 text-[11px] text-paper-muted"
-                            data-watch-party-hands-more
-                          >
-                            {t("watchParty.stage.handsMore", {
-                              count: hiddenCount,
-                            })}
-                          </p>
-                        )}
-                      </>
-                    );
-                  })()}
-                </>
-              )}
-              {party.stage.invited.length > 0 && (
-                <>
-                  <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                    {t("watchParty.stage.title")}
-                  </p>
-                  <ul className="flex flex-col gap-1">
-                    {party.stage.invited.map((person) => (
-                      <li key={person.userId} className="flex items-center gap-2">
-                        <UserAvatar
-                          name={person.displayName}
-                          avatarUrl={person.avatarUrl}
-                          rounded="full"
-                          className="h-6 w-6 shrink-0"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                          {person.displayName}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            void props.onStageAction?.("remove", person.userId)
-                          }
-                          data-watch-party-stage-remove
-                        >
-                          {t("watchParty.stage.remove")}
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-          )}
+        {/* THE QUEUE LEFT THIS DIALOG (pass 4 of `docs/plans/WATCH_PARTY_UI.md`):
+            "Pedindo pra falar" and "No palco" are drawn once, in the Pessoas
+            tab of the side panel, beside the guests system's own lists. */}
       </DialogBody>
     </Dialog>
   );
@@ -2683,7 +2567,6 @@ function LiveSurface(
       party={party}
       open={optionsOpen}
       onClose={() => setOptionsOpen(false)}
-      stage
     />
   );
 

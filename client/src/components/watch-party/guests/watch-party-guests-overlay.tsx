@@ -4,11 +4,9 @@ import { Users } from "lucide-react";
 import { WATCH_PARTY_MAX_GUESTS, type WatchParty } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
-import type { CohostCandidate } from "@/components/watch-party/watch-party-cohosts";
 import { GuestRequestButton } from "./guest-request-button";
 import { GuestInviteDialog } from "./guest-invite-dialog";
 import { GuestOnAirStrip } from "./guest-on-air-strip";
-import { GuestPanel } from "./guest-panel";
 import { GuestHeaderAvatars } from "./guest-header-avatars";
 
 export type GuestAction =
@@ -35,7 +33,6 @@ export type GuestAction =
 export function WatchPartyGuestsOverlay({
   party,
   currentUserId,
-  cohostCandidates,
   inRoom,
   micOn,
   cameraOn,
@@ -44,12 +41,12 @@ export function WatchPartyGuestsOverlay({
   onGuestAction,
   onGoOnAir,
   onGoOffAir,
+  onOpenPeople,
   className,
   barSlot = null,
 }: {
   party: WatchParty | null;
   currentUserId: string | null;
-  cohostCandidates: readonly CohostCandidate[];
   /** Whether this browser currently holds a seat in this channel's room. */
   inRoom: boolean;
   micOn: boolean;
@@ -77,9 +74,10 @@ export function WatchPartyGuestsOverlay({
    * in place, which is what the tests and a party with no bar yet see.
    */
   barSlot?: HTMLElement | null;
+  /** Show the Pessoas tab of the side panel (pass 4): the "No ar" button's target. */
+  onOpenPeople?: () => void;
 }) {
   const { t } = useTranslation();
-  const [panelOpen, setPanelOpen] = useState(false);
   const [accepting, setAccepting] = useState(false);
 
   const guests = party?.guests ?? null;
@@ -105,14 +103,6 @@ export function WatchPartyGuestsOverlay({
   if (!party || party.state !== "live" || guests === null) {
     return null;
   }
-
-  const candidates = cohostCandidates.filter(
-    (c) =>
-      c.userId !== party.hostUserId &&
-      !party.cohosts.some((cohost) => cohost.userId === c.userId) &&
-      !guests.onAir.some((p) => p.userId === c.userId) &&
-      !guests.invited.some((p) => p.userId === c.userId),
-  );
 
   async function accept() {
     setAccepting(true);
@@ -197,35 +187,22 @@ export function WatchPartyGuestsOverlay({
       )}
 
       {runsTheParty && party.options.guests !== "off" && (
-        <>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => setPanelOpen(true)}
-            data-watch-party-guests-dock
-          >
-            <Users className="h-3.5 w-3.5" aria-hidden="true" />
-            {t("watchParty.guests.panelOnAir", {
-              count: guests.onAir.length,
-              max: WATCH_PARTY_MAX_GUESTS,
-            })}
-          </Button>
-          <GuestPanel
-            open={panelOpen}
-            onClose={() => setPanelOpen(false)}
-            guestsMode={party.options.guests}
-            max={WATCH_PARTY_MAX_GUESTS}
-            onAir={guests.onAir}
-            requests={guests.requests}
-            requestCount={guests.requestCount}
-            candidates={candidates}
-            onAccept={(userId) => fireGuestAction({ action: "accept", userId })}
-            onDecline={(userId) => fireGuestAction({ action: "decline", userId })}
-            onRemove={(userId) => fireGuestAction({ action: "remove", userId })}
-            onInvite={(userId) => fireGuestAction({ action: "invite", userId })}
-          />
-        </>
+        /* "NO AR" OPENS PESSOAS (pass 4). The dialog this used to open is
+           now a tab of the side panel (`WatchPartyPeoplePanel`), so the
+           host reads the room in the same column as the chat. */
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={onOpenPeople}
+          data-watch-party-guests-dock
+        >
+          <Users className="h-3.5 w-3.5" aria-hidden="true" />
+          {t("watchParty.guests.panelOnAir", {
+            count: guests.onAir.length,
+            max: WATCH_PARTY_MAX_GUESTS,
+          })}
+        </Button>
       )}
     </span>
   );
