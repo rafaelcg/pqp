@@ -1993,6 +1993,41 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
+   * Give a seat that has no microphone one, by leaving and rejoining.
+   *
+   * IT LEAVES AND REJOINS, AND THAT IS DELIBERATE. Adding a microphone to a
+   * seat that has none is not a `replaceTrack`: mesh needs an `addTrack` and
+   * a fresh offer to every peer, and the SFU needs a publish. The join path
+   * already does both, correctly, on both transports, and has done since
+   * before any of this existed. Rebuilding that here as a third negotiation
+   * path is how the mesh and the SFU drift apart. The cost is about a second
+   * of reconnect at the moment somebody pressed a button asking to speak,
+   * which is a moment they already expect to take a beat.
+   *
+   * Three callers, one behaviour: "Falar" on the watch party bar, going on
+   * air as an invited guest, and pressing unmute on a seat that never opened
+   * a microphone.
+   */
+  async function retakeSeatWithMicrophone(
+    channelId: string,
+    options?: VoiceAudioOptions,
+  ): Promise<void> {
+    audienceSeat = false;
+    state.isAudienceSeat = false;
+    leaveCall();
+    await controller.join(channelId, {
+      ...audioOptions,
+      ...(options ?? {}),
+      inputMode: options?.inputMode ?? state.inputMode,
+      // Arriving on the stage unmuted is the point: they pressed a button
+      // that asks to speak. Mute-on-join is about a room you walked into,
+      // not a stage you asked to be on.
+      startMuted: options?.startMuted ?? false,
+      audienceOnly: false,
+    });
+  }
+
+  /**
    * Apply the room's SPEAK rule to this client.
    *
    * `false` mutes, stops any share or camera, and says so once. On the SFU
@@ -4909,6 +4944,31 @@ export function createVoiceController(transport: RealtimeTransport) {
         (switchingRooms || state.voiceChannelId === voiceChannelId) &&
         state.status !== "idle"
       ) {
+        // THE IDEMPOTENCY GUARD IS NOT ALLOWED TO SWALLOW A MICROPHONE.
+        //
+        // This early return exists so a double click, a Strict Mode double
+        // render or a second click on the channel you are already in does
+        // not tear the call down and rebuild it. A seat with NO microphone
+        // is the one case where "you are already here" is false: the caller
+        // is asking for something this seat does not have.
+        //
+        // That is exactly the watch party guest flow. A viewer takes an
+        // audience seat (`audienceOnly`: no prompt, no device, no pipeline),
+        // the host calls them up, they press "Entrar no ar", and
+        // `handleWatchPartyGuestGoOnAir` asks for the room WITH a
+        // microphone. The server accepts them, the on-air strip appears --
+        // and this return sent the whole join to the floor, so the seat
+        // still had no microphone and the strip's mic button (which is
+        // `toggleMute`, and no-ops without a pipeline) could never unmute
+        // them. Seen live on 2026-09-18.
+        //
+        // `audienceOnly` is the opposite request and keeps the old
+        // behaviour: somebody already seated who asks to watch is already
+        // watching.
+        if (pipeline || options?.audienceOnly) {
+          return;
+        }
+        await retakeSeatWithMicrophone(voiceChannelId, options);
         return;
       }
       const fromIdle = state.status === "idle";
@@ -5165,17 +5225,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
-      audienceSeat = false;
-      state.isAudienceSeat = false;
-      leaveCall();
-      await controller.join(channelId, {
-        ...audioOptions,
-        inputMode: state.inputMode,
-        // Arriving on the stage unmuted is the point: they pressed a button
-        // that says Falar. Mute-on-join is about a room you walked into, not
-        // a stage you asked to be on.
-        startMuted: false,
-      });
+      await retakeSeatWithMicrophone(channelId);
     },
 
     /** WS connection lost mid-call: keep media, reattach on the next welcome. */
@@ -5438,6 +5488,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
     setMuted(muted: boolean) {
       if (!pipeline) {
+        // Same rule as `toggleMute`: only an explicit unmute asks for a
+        // device, and only for a seat the room already lets speak.
+        if (!muted && audienceSeat && state.canSpeak && state.voiceChannelId) {
+          void retakeSeatWithMicrophone(state.voiceChannelId);
+        }
         return;
       }
       preservedSelfVoice = null;
@@ -5455,6 +5510,15 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     toggleMute() {
       if (!pipeline) {
+        // THE BUTTON THAT SAYS UNMUTE HAS TO UNMUTE. A seat with no
+        // microphone (an audience seat, or a join whose device could not be
+        // opened) used to swallow this silently, which is what an invited
+        // guest pressing the on-air strip's mic button experienced: a
+        // control that did nothing, for ever. The room already says they may
+        // speak, so ask for the device.
+        if (audienceSeat && state.canSpeak && state.voiceChannelId) {
+          void retakeSeatWithMicrophone(state.voiceChannelId);
+        }
         return;
       }
       preservedSelfVoice = null;
