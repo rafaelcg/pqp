@@ -858,6 +858,13 @@ export function getPool(): pg.Pool {
       throw new Error("DATABASE_URL is required");
     }
     const max = Number(process.env.PG_POOL_MAX ?? 10);
+    // Resolved ONCE, here, and reused for the diagnostic below rather than
+    // read again on every sweep: the pool's own bound is fixed at creation, so
+    // a threshold that could drift away from it would describe a timeout this
+    // process is not actually applying, and `processRole` logs on an
+    // unrecognised `WORKER_MODE`, which, read every five seconds, would be a
+    // warning per tick forever.
+    const timeouts = pgTimeoutConfig();
     const created = new pg.Pool({
       connectionString,
       max,
@@ -866,7 +873,7 @@ export function getPool(): pg.Pool {
       // See the three comment blocks above: a bound on waiting for a reply,
       // Postgres's own bound a second earlier, and a kernel-level backstop for
       // a peer that has gone away entirely.
-      ...pgTimeoutConfig(),
+      ...timeouts,
       keepAlive: true,
       keepAliveInitialDelayMillis: PG_KEEPALIVE_INITIAL_DELAY_MS,
       ...pgSslConfig(),
@@ -923,13 +930,12 @@ export function getPool(): pg.Pool {
     created.on("release", (_err, client) => noteRelease(client));
     created.on("remove", (client) => noteRelease(client));
     registerPoolCheckoutStats(() => poolCheckoutStats());
-    // The threshold is read per tick rather than captured, so it follows the
-    // environment in a process that reloads it. When the timeout is disabled
-    // the diagnostic keeps the default threshold: a rollback switch that
-    // removes the bound should not also remove the warning that it is needed.
-    startStuckCheckoutSweeper(
-      () => resolvePgQueryTimeoutMs() || DEFAULT_PG_QUERY_TIMEOUT_MS,
-    );
+    // When the timeout is disabled the diagnostic keeps the default
+    // threshold: a rollback switch that removes the bound should not also
+    // remove the warning that it is needed.
+    const stuckThresholdMs =
+      timeouts.statement_timeout ?? DEFAULT_PG_QUERY_TIMEOUT_MS;
+    startStuckCheckoutSweeper(() => stuckThresholdMs);
 
     // Saturation, for the operator dashboard's `runtime` block. All four are
     // plain property reads, so exposing them costs nothing and adds no query;
@@ -981,7 +987,7 @@ export async function closePool(): Promise<void> {
  * connection; `query_timeout` is a client-side timer pg reads per query, so it
  * is overridden per statement (`0` there is falsy and would fall back to the
  * pool's value), hence a large number rather than none, which is also a better
- * answer than "wait forever" if boot really is wedged).
+ * answer than "wait forever" if boot really is wedged.
  *
  * The connection is ALWAYS destroyed rather than released, success or failure:
  * a session-level `SET` must never ride back into the pool on a reused client
