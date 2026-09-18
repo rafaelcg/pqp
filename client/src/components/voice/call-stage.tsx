@@ -197,7 +197,7 @@ import {
   requestSettingsSection,
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
-import { STAGE_LAYER } from "@/lib/stage-layers";
+import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
 import {
@@ -2145,7 +2145,11 @@ function ActiveCall({
         data-testid="call-controls-bar"
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
-          STAGE_LAYER.chrome,
+          // ON A WATCH PARTY CHANNEL THIS BAR STANDS DOWN A RUNG, so the
+          // party's controls win any overlap whatever `watchPartyChrome`
+          // believes. Keyed on the channel's own TYPE, which never lags the
+          // party store. The whole account is on `callControlsLayer`.
+          callControlsLayer(isWatchPartyChannel),
           // THE BAR KEEPS THE POINTER ON ITS WHOLE BOX, gradient included:
           // resting the pointer anywhere on it pins it open, which
           // `dm-call-screen-share.spec.ts` pins on purpose (a hand parked

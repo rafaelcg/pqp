@@ -182,6 +182,7 @@ import {
   isWatchPartyChannelType,
   isWatchPartyChannelsEnabled,
 } from "@/lib/watch-party-channels";
+import { partyOwnsChannelChrome } from "@/lib/watch-party-chrome";
 import {
   AUDIENCE_SEAT_GRACE_MS,
   audienceSeatAgeMs,
@@ -6415,6 +6416,11 @@ function MainAppContent({
    * the bar through `headerLeading` / `headerTrailing`. Same condition as
    * `watchPartySurface`'s "live" branch, so the two can never both be up
    * or both be missing.
+   *
+   * `partyOwnsChannelChrome` is that condition, asked once: `CallStage`'s
+   * `watchPartyChrome` below reads the same answer, because a second copy of
+   * this question is what left an opaque call control bar — red hang-up and
+   * all — painted over the party bar on 2026-09-18. See the module doc.
    */
   const partyOwnsHeader = (() => {
     if (
@@ -6426,15 +6432,10 @@ function MainAppContent({
     ) {
       return false;
     }
-    const party = watchParties.byChannel[selectedChannel.id];
-    if (!party) {
-      return false;
-    }
-    const hasStream =
-      voiceState.channelLive[selectedChannel.id]?.stream != null;
-    return (
-      party.state === "live" || (party.state === "scheduled" && hasStream)
-    );
+    return partyOwnsChannelChrome({
+      state: watchParties.byChannel[selectedChannel.id]?.state ?? null,
+      hasStream: voiceState.channelLive[selectedChannel.id]?.stream != null,
+    });
   })();
   // Baú gating is computed above the early returns (it owns a hook); see
   // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
@@ -7580,10 +7581,13 @@ function MainAppContent({
             // hand, Sair do palco, the share and Encerrar all live there in
             // the party's words; the strip's camera and cursor do not apply
             // to a stream that never carries them.
-            watchPartyChrome={
-              splitKind === "watch" &&
-              watchParties.byChannel[selectedChannel.id]?.state === "live"
-            }
+            //
+            // THE SAME ANSWER `partyOwnsHeader` GOT, not a second reading of
+            // the store. Asking `state === "live"` here while the bar was
+            // drawn for `live` OR `scheduled && hasStream` left both bars up
+            // at once, the call one on top, and a host pressed its hang-up
+            // by aiming at the party's controls (`lib/watch-party-chrome.ts`).
+            watchPartyChrome={splitKind === "watch" && partyOwnsHeader}
             // The channel's own type, not `watchParties.byChannel[...]?.state`:
             // that store's own fetch/socket can still be catching up the
             // instant a seat lands, and `VoiceChannelStage` never mounts
