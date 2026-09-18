@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Maximize2, Phone, X } from "lucide-react";
 import { liveStateFromStream, type LiveHlsStream } from "@pqp/shared";
 import type { ChannelLive, VoiceState } from "@/hooks/use-voice";
@@ -59,6 +59,7 @@ export function WatchStage({
   onReturn,
   onDismiss,
   dualDeviceWarning = false,
+  onSessionOver,
 }: {
   /** Playable playlist URL; null while nothing is live. */
   hlsUrl: string | null;
@@ -147,6 +148,12 @@ export function WatchStage({
    * device or tab (`lib/dual-device-watch.ts`). See `HlsWatchPlayer`.
    */
   dualDeviceWarning?: boolean;
+  /**
+   * The player asked the server and was told there is nothing live on this
+   * channel. Passed straight through from `HlsWatchPlayer`; see its own
+   * comment for why a caller wants to know.
+   */
+  onSessionOver?: (reason: "over" | "awaiting") => void;
 }) {
   const { t } = useTranslation();
   const live = hlsUrl !== null;
@@ -259,6 +266,7 @@ export function WatchStage({
             )
           }
           dualDeviceWarning={dualDeviceWarning}
+          onSessionOver={onSessionOver}
         />
       ) : (
         <EndedWatchStage
@@ -423,8 +431,29 @@ export function WatchChannelStage({
   // some later frame happened along.
   const known =
     live !== undefined && (live.stream !== null || live.streamEnded === true);
-  const stream = inThisCall ? null : (live?.stream ?? null);
+  const held = inThisCall ? null : (live?.stream ?? null);
+  /**
+   * A SESSION THIS PANE IS STILL HOLDING THAT THE SERVER SAYS IS OVER.
+   *
+   * The `channel-live` frame is the ordinary way a stream goes away and it is
+   * what this pane normally follows. On 2026-09-17 it did not arrive -- or
+   * arrived for a session the tab had already moved past -- and the pane kept
+   * a dead playlist's slot for minutes: the party panel underneath, which
+   * owns "nothing is on air" and the button that starts the next show, never
+   * got the space back, and the person was left looking at a holding screen
+   * that could not recover.
+   *
+   * So the player's own answer from the server counts too. Keyed on the exact
+   * session (`channel:startedAt`), which is what makes this self-clearing: a
+   * new session is a different key, so nothing has to remember to forget.
+   */
+  const [deadSession, setDeadSession] = useState<string | null>(null);
+  const streamKey = held ? `${channelId}:${held.startedAt}` : null;
+  const stream = streamKey !== null && deadSession === streamKey ? null : held;
   const hasStream = stream !== null;
+  const onSessionOver = useCallback(() => {
+    setDeadSession(streamKey);
+  }, [streamKey]);
   const dualDeviceWarning = isSeatedOnAnotherDevice(
     voiceState.occupancy[channelId],
     meUserId,
@@ -594,6 +623,7 @@ export function WatchChannelStage({
         communityName={serverName}
         coverUrl={serverIconUrl}
         dualDeviceWarning={dualDeviceWarning}
+        onSessionOver={onSessionOver}
       />
     </div>
   );

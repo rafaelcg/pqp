@@ -655,6 +655,14 @@ export const fetchChannelLive = (channelId: string) =>
      * query as the party being over. Same contract as `channel-live`.
      */
     ended?: boolean;
+    /**
+     * Only alongside `ended`: whether a watch party is still LIVE in this
+     * channel with no stream, which is the difference between "the show is
+     * over" and "the presenter stepped away". The watch player says a
+     * different thing for each (`watch-holding-screen.ts`). Absent from an
+     * older API, which reads as `false` and gives the plainer of the two.
+     */
+    partyLive?: boolean;
     watching: number;
     participants: number;
   }>(`/api/channels/${channelId}/live`);

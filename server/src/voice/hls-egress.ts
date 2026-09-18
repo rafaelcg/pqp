@@ -362,6 +362,39 @@ export type LiveHlsTrackFinder = (
  */
 export type LiveHlsSfuLoadReader = () => Promise<number>;
 
+/**
+ * IS THIS PRESENTER STILL PRESENTING, ASKED AT THE MOMENT IT MATTERS.
+ *
+ * Every decision that reaches this file was made somewhere else and some time
+ * ago. `pushLiveHls` reads `watchPartyKnownOver` and `pickHlsSharer` at the
+ * top of a function that then awaits a server-id lookup, a mode resolve and
+ * the whole of this channel's reconcile queue before a rung is ever asked
+ * for. On 2026-09-17 two pushes for channel `d5559e70` raced across exactly
+ * that gap: the first saw the party end and tore the session down, the second
+ * still held "over: false, sharing: peer f408cf6a" from before the end, waited
+ * its turn in the queue, and started a fresh two-rung ladder 200 ms before
+ * that presenter's `voice.leave`. Its egresses died 34 s later on `track ...
+ * not found`, which scheduled a restart, which produced a `voice.hlsStarted`
+ * with `playlistReady=false` for a room nobody was in.
+ *
+ * So the answer is asked again HERE, where the core is about to be spent,
+ * rather than trusted from there. `ws/voice.ts` registers the check
+ * (`watchPartyKnownOver` plus `pickHlsSharer`, the same two authorities the
+ * push uses) and this file calls it at each point a start would otherwise
+ * commit.
+ *
+ * FAILS OPEN, exactly like `watchPartyKnownOver` itself: with no check
+ * registered (every test that does not care, and any embedding that never
+ * wires one) the answer is "yes", so behaviour is what it always was. The
+ * failure it must never have is refusing to transcode a real party; the
+ * failure it accepts is missing one of these races and stopping it on the
+ * next push.
+ */
+export type LiveHlsPresenterCheck = (
+  channelId: string,
+  presenterPeerId: string,
+) => boolean;
+
 /** One rendition of a live session: its own egress, its own playlist. */
 interface RunningRung {
   rung: LadderRung;
@@ -432,6 +465,29 @@ interface RoomHls {
     | null;
   /** Wall clock when the session was requested. */
   startedAtMs: number;
+  /**
+   * HAS THIS SESSION EVER PRODUCED A LIVE PLAYLIST? Until it has, nobody is
+   * told about it.
+   *
+   * `startRoom` publishes the room into `rooms` BEFORE the readiness probe,
+   * deliberately: the monitor, the reap and the restart path all have to be
+   * able to find a session that is still warming up, and putting a network
+   * wait in front of `rooms.set` would make a start unreachable for as long
+   * as it takes. The cost of that, until now, was that the room's `stream`
+   * was readable by everything else the moment the rungs were asked for --
+   * `liveHlsStreamFor`, `getChannelLiveState`, and the same-presenter branch
+   * of `reconcileLiveHlsNow` -- so a concurrent push could hand every viewer a
+   * playlist URL for a session whose playlist did not exist and, on 2026-09-17,
+   * never would (`playlistReady=false playlistWaitMs=52752`). A viewer who
+   * takes that URL polls a 404 behind the holding screen's "reconnecting"
+   * for as long as they are willing to look at it.
+   *
+   * So the room is VISIBLE to this file and INVISIBLE to the audience until
+   * the primary rung's live playlist has actually been read once. Adoption
+   * sets it true: an adopted session was live on the media box before this
+   * process ever heard of it.
+   */
+  announced: boolean;
   /**
    * The host's voice, recorded to its own file beside the segments. Null
    * until the presenter's `mic-archive` publication shows up (or forever,
@@ -656,6 +712,7 @@ function clearCameraProbeRetry(channelId: string): void {
 }
 let changeListener: LiveHlsChangeListener | null = null;
 let sfuLoadReader: LiveHlsSfuLoadReader | null = null;
+let presenterCheck: LiveHlsPresenterCheck | null = null;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
 
 let injectedEgress: LiveHlsEgressApi | null = null;
@@ -1480,8 +1537,26 @@ export function liveHlsRunningChannelIds(): string[] {
   return [...rooms.keys()];
 }
 
+/**
+ * The stream this process is prepared to tell an audience about.
+ *
+ * `announced` is the whole of the difference from a bare `rooms.get`: a
+ * session still inside its readiness probe is a real room to the monitor, the
+ * reap and the restart path, and nothing at all to a viewer. See `RoomHls`.
+ */
 export function liveHlsStreamFor(channelId: string): LiveHlsStream | null {
-  return rooms.get(channelId)?.stream ?? null;
+  return announcedStreamOf(rooms.get(channelId));
+}
+
+/**
+ * The same rule for a room the caller already holds: a session still inside
+ * its readiness probe is nothing an audience may be handed. Every reconcile
+ * branch that hands a caller's own `current` back goes through this, so
+ * `startRoom`'s wait cannot leak a not-yet-playable URL out sideways through
+ * a concurrent push.
+ */
+function announcedStreamOf(room: RoomHls | undefined): LiveHlsStream | null {
+  return room && room.announced ? room.stream : null;
 }
 
 /**
@@ -1784,6 +1859,7 @@ export function resetLiveHlsForTests(): void {
   resumeDecisionCache.clear();
   changeListener = null;
   sfuLoadReader = null;
+  presenterCheck = null;
   stopLiveHlsMonitor();
   warnedLadder = null;
   injectedEgress = null;
@@ -1803,6 +1879,68 @@ export function setLiveHlsSfuLoadReader(
   reader: LiveHlsSfuLoadReader | null,
 ): void {
   sfuLoadReader = reader;
+}
+
+/** `ws/voice.ts` registers the room's own answer; see `LiveHlsPresenterCheck`. */
+export function setLiveHlsPresenterCheck(
+  check: LiveHlsPresenterCheck | null,
+): void {
+  presenterCheck = check;
+}
+
+/**
+ * The presenter this work was decided for is no longer the one presenting:
+ * they left, they stopped sharing, they lost the stage bit, or the party
+ * itself is over.
+ *
+ * `false` with no check registered, and `false` on a check that throws: see
+ * `LiveHlsPresenterCheck`'s fail-open note. A throw is a bug in the room, not
+ * a verdict about the party, and a verdict is the only thing that may stop a
+ * transcode.
+ */
+function presenterGone(channelId: string, presenterPeerId: string): boolean {
+  const check = presenterCheck;
+  if (!check) {
+    return false;
+  }
+  try {
+    return !check(channelId, presenterPeerId);
+  } catch (error) {
+    logEvent("voice.hlsPresenterCheckFailed", {
+      channelId,
+      presenterPeerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * LiveKit's way of saying "there is nothing left to stop".
+ *
+ * `StopEgress` on an egress that has already finished answers `egress with
+ * status EGRESS_COMPLETE cannot be stopped`, and production logged three of
+ * those as `voice.hlsStopFailed` on 2026-09-17 for one ordinary teardown.
+ * They are not failures: the outcome asked for is the outcome that already
+ * holds. Treating them as errors costs twice -- an operator greps a clean
+ * teardown and finds three red lines, and `stopEgressById` puts the id into
+ * the orphan backoff and asks again, for an hour, about something that ended
+ * before the first ask.
+ *
+ * ONLY ON THE STOP PATHS. "not found" is also what a START says about a track
+ * that has gone away (`track TR_... not found`), which is a real failure and
+ * a different decision; nothing here is reachable from that path.
+ */
+export function egressAlreadyStopped(error: unknown): boolean {
+  const message = (
+    error instanceof Error ? error.message : String(error)
+  ).toLowerCase();
+  return (
+    message.includes("cannot be stopped") ||
+    message.includes("egress does not exist") ||
+    message.includes("does not exist") ||
+    message.includes("not found")
+  );
 }
 
 /**
@@ -2344,12 +2482,42 @@ function recentRestarts(channelId: string, now: number): number[] {
  * marked failed for `FAILED_COOLDOWN_MS` (or until the share stops) and the
  * listener is asked once more so viewers get `stream: null` instead of a
  * frozen last frame.
+ *
+ * AND NOT AT ALL WHEN THERE IS NOBODY TO RESTART FOR. A restart exists to
+ * bring a LIVE share's audience a new session; for a presenter who has left
+ * the room or a party that is over it is a second ladder on the media box and
+ * one more `voice.hlsStarted` in a log that is already hard to read. On
+ * 2026-09-17 the restart scheduled at 19:21:21 was for a presenter who had
+ * left at 19:20:47 and a party that had ended in the same second. The budget
+ * is not spent either: a cancellation is not a failure, so a presenter who
+ * comes back gets their full three.
  */
 function scheduleRestart(
   channelId: string,
   reason: string,
   now = Date.now(),
-): "scheduled" | "failed" {
+  /**
+   * Whose session this restart would be for. Passed explicitly because the
+   * one caller that matters most (`checkLiveHlsHealth`'s dead primary) has
+   * already deleted the room by the time it asks, so `rooms` cannot answer.
+   */
+  presenter?: string | null,
+): "scheduled" | "failed" | "cancelled" {
+  const presenterPeerId =
+    presenter ?? rooms.get(channelId)?.stream.presenterPeerId ?? null;
+  if (presenterPeerId !== null && presenterGone(channelId, presenterPeerId)) {
+    logEvent("voice.hlsRestartSkipped", {
+      channelId,
+      reason,
+      presenterPeerId,
+      cause: "presenter-gone",
+    });
+    // The audience is still holding whatever they were last told. Say the
+    // stream is gone rather than leaving them on a playlist nobody is
+    // writing: the same seam the cap uses, for the same reason.
+    notifyChanged(channelId, "presenter-gone");
+    return "cancelled";
+  }
   const history = recentRestarts(channelId, now);
   if (history.length >= HLS_MAX_RESTARTS) {
     failedUntil.set(channelId, now + FAILED_COOLDOWN_MS);
@@ -2785,7 +2953,9 @@ export function deferredHlsStopCount(): number {
 
 export async function checkLiveHlsHealth(
   now = Date.now(),
-): Promise<{ channelId: string; outcome: "scheduled" | "failed" }[]> {
+): Promise<
+  { channelId: string; outcome: "scheduled" | "failed" | "cancelled" }[]
+> {
   // FIRST, AND WHETHER OR NOT THERE IS AN EGRESS TO TALK TO: both of these are
   // repairs of writes that did not land, and neither depends on this process
   // still presenting anything.
@@ -2806,8 +2976,10 @@ export async function checkLiveHlsHealth(
     return [];
   }
   await retryDeferredStops();
-  const outcomes: { channelId: string; outcome: "scheduled" | "failed" }[] =
-    [];
+  const outcomes: {
+    channelId: string;
+    outcome: "scheduled" | "failed" | "cancelled";
+  }[] = [];
   for (const [channelId, room] of [...rooms.entries()]) {
     if (now - room.startedAtMs < HEALTH_GRACE_MS) {
       continue;
@@ -2971,7 +3143,15 @@ export async function checkLiveHlsHealth(
     });
     outcomes.push({
       channelId,
-      outcome: scheduleRestart(channelId, "egress-ended", now),
+      outcome: scheduleRestart(
+        channelId,
+        "egress-ended",
+        now,
+        // The room is already out of `rooms` (above), so the presenter has to
+        // travel with the call: without it a restart for a presenter who has
+        // left reads as a restart for nobody in particular and is scheduled.
+        room.stream.presenterPeerId,
+      ),
     });
   }
   return outcomes;
@@ -3112,6 +3292,18 @@ export async function stopEgressById(
     orphanStopBackoff.delete(egressId);
     return true;
   } catch (error) {
+    if (egressAlreadyStopped(error)) {
+      // The outcome asked for is the outcome that holds. Clearing the backoff
+      // is the point: an EGRESS_COMPLETE id kept in it is retried for an hour
+      // about something that finished before the first ask.
+      orphanStopBackoff.delete(egressId);
+      logEvent("voice.hlsStopNoop", {
+        channelId: channelId ?? null,
+        egressId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return true;
+    }
     const { failures, waitMs } = rememberOrphanStopFailure(egressId, now);
     logEvent("voice.hlsStopFailed", {
       channelId: channelId ?? null,
@@ -3224,6 +3416,9 @@ export function adoptLiveHlsSession(input: {
     // is gone, and starting a second one mid-film would write a second file
     // that begins nowhere and that nobody asked for.
     micArchiveUntil: 0,
+    // An adopted session was serving a playlist on the media box before this
+    // process knew it existed: there is nothing to wait for.
+    announced: true,
   });
   logEvent("voice.hlsSessionAdopted", {
     channelId: input.channelId,
@@ -4398,12 +4593,17 @@ async function stopMicArchive(
       try {
         await egress.stopEgress(archive.egressId);
       } catch (error) {
-        logEvent("voice.hlsStopFailed", {
-          channelId,
-          egressId: archive.egressId,
-          rung: MIC_ARCHIVE_RUNG,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        logEvent(
+          egressAlreadyStopped(error)
+            ? "voice.hlsStopNoop"
+            : "voice.hlsStopFailed",
+          {
+            channelId,
+            egressId: archive.egressId,
+            rung: MIC_ARCHIVE_RUNG,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
       }
     }
   }
@@ -4555,13 +4755,21 @@ async function stopRungs(
     try {
       await egress.stopEgress(entry.egressId);
     } catch (error) {
-      logEvent("voice.hlsStopFailed", {
-        channelId,
-        egressId: entry.egressId,
-        sessionId: entry.sessionId,
-        rung: entry.rung.name,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // An egress LiveKit says has already finished is not a failed stop: see
+      // `egressAlreadyStopped`. Three of these on one ordinary teardown is
+      // what 2026-09-17's log opened with, and every one of them was fine.
+      logEvent(
+        egressAlreadyStopped(error)
+          ? "voice.hlsStopNoop"
+          : "voice.hlsStopFailed",
+        {
+          channelId,
+          egressId: entry.egressId,
+          sessionId: entry.sessionId,
+          rung: entry.rung.name,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
   }
 }
@@ -5016,6 +5224,17 @@ async function startRoom(
     logEvent("voice.hlsStartSuppressed", { channelId, presenterPeerId });
     return { stream: null };
   }
+  // IS THIS STILL TRUE? The caller decided it was, some awaits ago. See
+  // `LiveHlsPresenterCheck` for the 2026-09-17 race this closes: the cheapest
+  // possible place to notice, before a track probe and before a core.
+  if (presenterGone(channelId, presenterPeerId)) {
+    logEvent("voice.hlsStartCancelled", {
+      channelId,
+      presenterPeerId,
+      stage: "before-probe",
+    });
+    return { stream: null };
+  }
   // The concurrency guard, and it comes BEFORE the track probe on purpose:
   // `findScreenTracks` polls LiveKit up to sixteen times over six seconds,
   // and spending that on a session that is going to be refused is the wrong
@@ -5044,6 +5263,19 @@ async function startRoom(
   const tracks = knownTracks ?? (await findScreenTracks(channelId, presenterPeerId));
   if (!tracks) {
     logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
+    return { stream: null };
+  }
+  // AND AGAIN AFTER THE PROBE, which is up to six seconds of polling LiveKit
+  // (`TRACK_FIND_ATTEMPTS`). A presenter who hangs up during it leaves a track
+  // the SFU has not forgotten yet, so the probe succeeds and the rungs would
+  // start against media that is already going away -- which is exactly the
+  // `track TR_... not found` those two egresses died of 34 s later.
+  if (presenterGone(channelId, presenterPeerId)) {
+    logEvent("voice.hlsStartCancelled", {
+      channelId,
+      presenterPeerId,
+      stage: "after-probe",
+    });
     return { stream: null };
   }
   // WHAT THIS START IS ENTITLED TO SUPERSEDE, decided once and used twice:
@@ -5156,6 +5388,9 @@ async function startRoom(
     // call, so an operator who turns it on thirty seconds into a party gets
     // the archive rather than having to restart the share.
     micArchiveUntil: startedAt + MIC_ARCHIVE_WAIT_MS,
+    // Not until the readiness probe below says there is a playlist to watch.
+    // See `RoomHls.announced`.
+    announced: false,
   };
   rooms.set(channelId, room);
   // The rows AFTER the room is published, not before. They are what the
@@ -5233,7 +5468,30 @@ async function startRoom(
       .map((decision) => `${decision.rung.name}:${decision.refusal}`),
     egressIds: running.map((entry) => entry.egressId),
     sessionIds: running.map((entry) => entry.sessionId),
+    // WHETHER ANYBODY IS GOING TO BE TOLD ABOUT THIS. `voice.hlsStarted` is
+    // the line an operator greps to answer "did the party start", and until
+    // now it said the same thing for a session that went on air and for one
+    // that was torn down two lines later. Both remaining falses -- the probe
+    // timing out, and the presenter having left during it -- are right here.
+    announced: ready && !presenterGone(channelId, presenterPeerId),
   });
+  // THE PRESENTER LEFT WHILE WE WERE WAITING FOR THEIR PLAYLIST. Up to
+  // forty-five seconds pass inside `waitForLivePlaylist`, and on 2026-09-17
+  // fifty-two of them did, for a presenter who had already left the room. A
+  // ready playlist for a share that is over is a rung still transcoding and
+  // an audience about to be handed a URL that stops moving; stop it here,
+  // where the session is still ours, rather than leaving it to whichever push
+  // eventually notices.
+  if (rooms.get(channelId) === room && presenterGone(channelId, presenterPeerId)) {
+    logEvent("voice.hlsStartCancelled", {
+      channelId,
+      presenterPeerId,
+      stage: "after-playlist-wait",
+      playlistReady: ready,
+    });
+    await stopRoom(channelId, "presenter-gone");
+    return { stream: null };
+  }
   if (!ready) {
     // Twenty seconds and no live playlist: this egress is not going to
     // produce one. Handing the URL out anyway parks every viewer on
@@ -5241,10 +5499,14 @@ async function startRoom(
     // down and let the restart path try again, under the same cap.
     if (rooms.get(channelId) === room) {
       await stopRoom(channelId, "playlist-not-ready");
-      scheduleRestart(channelId, "playlist-not-ready");
+      scheduleRestart(channelId, "playlist-not-ready", Date.now(), presenterPeerId);
     }
     return { stream: null };
   }
+  // THE SESSION IS NOW REAL TO EVERYBODY ELSE. Set before the return, because
+  // the return is what a push turns into `voice-stream` frames, and read by
+  // `liveHlsStreamFor` for every OTHER reader of this channel's stream.
+  room.announced = true;
   // AFTER the film is proven, but NOT DONE HERE. This function hands the film
   // back the moment it is ready — a camera-specific LiveKit RPC, box-budget
   // probe or session-row write stalling must never hold up or abort the
@@ -5347,7 +5609,12 @@ async function reconcileLiveHlsNow(
     // reconcile: hand back whatever is already running, untouched, and let
     // the next reconcile (the next roster event) ask again.
     const existing = rooms.get(channelId);
-    return { stream: existing ? existing.stream : llStreamFor(channelId) };
+    return {
+      stream:
+        existing && existing.announced
+          ? existing.stream
+          : llStreamFor(channelId),
+    };
   }
   const { mode } = resolved;
   if (mode === "ll") {
@@ -5393,7 +5660,7 @@ async function reconcileLiveHlsNow(
       // turned their camera on stuck with no PiP until some unrelated roster
       // event happens to try again — see `scheduleCameraProbeRetry`.
       scheduleCameraProbeRetry(channelId);
-      return { stream: current.stream };
+      return { stream: announcedStreamOf(current) };
     }
     clearCameraProbeRetry(channelId);
     if (tracks.videoTrackId === current.videoTrackId) {
@@ -5403,7 +5670,7 @@ async function reconcileLiveHlsNow(
       // transcode. It reuses the `listParticipants` call above, so it costs
       // no extra RPC. The camera itself is reconciled by the caller, as the
       // next link of the queue — never here.
-      return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
+      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
     }
     logEvent("voice.hlsTrackReplaced", {
       channelId,
@@ -5438,7 +5705,7 @@ async function reconcileLiveHlsNow(
       // The reconnect republished their camera on a fresh sid, so the running
       // camera egress is bound to a dead track. Same reasoning as the share's
       // `videoTrackId` comparison directly above; reconciled by the caller.
-      return { stream: current.stream, cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
+      return { stream: announcedStreamOf(current), cameraTrackId: tracks.cameraTrackId ?? null, voiceTrackId: tracks.voiceTrackId ?? null };
     }
     await stopRoom(channelId, "presenter-changed");
   } else {

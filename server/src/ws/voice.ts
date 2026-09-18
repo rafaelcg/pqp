@@ -99,6 +99,7 @@ import {
   liveHlsStreamFromDb,
   reconcileLiveHls,
   setLiveHlsChangeListener,
+  setLiveHlsPresenterCheck,
   setLiveHlsSfuLoadReader,
   setVoiceTrackSeparated,
 } from "../voice/hls-egress.js";
@@ -2268,6 +2269,30 @@ setLiveHlsChangeListener((channelId, reason) => {
 setLiveHlsSfuLoadReader(async () =>
   estimateSfuLoadMbps(await readRoomLoads()),
 );
+
+/**
+ * IS THIS PERSON STILL THE PRESENTER, asked by the media path at the moment
+ * it is about to spend a core on them (`LiveHlsPresenterCheck`).
+ *
+ * The same two authorities `pushLiveHls` reads, and deliberately no others:
+ * a party this process saw end, and the room's current `pickHlsSharer`. What
+ * makes it worth asking twice is WHEN: the push reads them before a server-id
+ * lookup, a mode resolve and this channel's whole reconcile queue, and on
+ * 2026-09-17 a start that had been decided before a party ended ran after it,
+ * for a presenter who left 200 ms later.
+ *
+ * A peer id that is no longer in the room, or is in it without the three bits
+ * `pickHlsSharer` needs, is "gone". That is the conservative answer on
+ * purpose: the cost of it being briefly wrong is a start the very next push
+ * makes anyway (every one of those bits changing is itself a `pushLiveHls`),
+ * and the cost of the other answer is a transcode nobody is watching.
+ */
+setLiveHlsPresenterCheck((channelId, presenterPeerId) => {
+  if (watchPartyKnownOver(channelId)) {
+    return false;
+  }
+  return pickHlsSharer(getRoomPeers(channelId))?.id === presenterPeerId;
+});
 
 /**
  * The stream a `channel-live` frame carries for this channel, from THIS

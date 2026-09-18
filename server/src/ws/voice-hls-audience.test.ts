@@ -117,6 +117,7 @@ const egress = vi.hoisted(() => ({
 vi.mock("../voice/hls-egress.js", () => ({
   setLiveHlsChangeListener: () => {},
   setLiveHlsSfuLoadReader: () => {},
+  setLiveHlsPresenterCheck: () => {},
   isLiveHlsEnabled: () => true,
   isLiveHlsEnabledForServer: () => true,
   // `stampViewerStream` (hls-viewer-token.ts) reads this to decide whether
