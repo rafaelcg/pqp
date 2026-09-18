@@ -234,17 +234,48 @@ room and the other has an audience. Those still answer 409, now with
 `blockingParty: { sessionId, state, name }` in the body so the caller has
 something to act on.
 
-### The two sweeps
+### Stopping the share does not end the party
 
-Both on the same minute tick as the reminders, in `jobs.ts`.
+A party is `live` because somebody pressed **Ir ao vivo**. A picture exists
+because somebody is sharing. Two facts, and the audience sees both: a `live`
+party with nothing on it is the stage's `holding` state, "Segura que já já
+começa", and the host can put a picture back up and be on air again.
+
+Until 2026-09-18 the last screen share in the room stopping ran
+`markChannelSessionEnded` and flipped the party to `ended` on the spot. PR
+#720 gave that flip the fan-out it had always been missing, and within hours a
+host clicked away to pick another window and ended a live show under everybody
+watching. Every reason a host stops sharing is a reason they are about to
+start again: switching windows, swapping the film, restarting a capture that
+glitched, handing the screen to a co-host who has to find their own window
+first.
+
+So the share-stop path now only stamps `channel_sessions.no_share_since`
+(`markChannelShareStopped`), and the next share clears it
+(`markChannelShareStarted`). The stream still ends: `pushLiveHls` runs on the
+next line of the same handler and tears the egress down, which is what it has
+always done. Only the party survives.
+
+### The three sweeps
+
+All on the same minute tick as the reminders, in `jobs.ts`.
 
 | Sweep | What it does | Knob | Log | Metric |
 |---|---|---|---|---|
 | Stale draft | Cancels a `draft` older than the TTL whose host has no socket | `WATCH_PARTY_DRAFT_TTL_MINUTES` (30, `0` off) | `watchParty.sweptDraft` | `watchParty.sweptDrafts` |
 | Host gone | Ends a `live` party whose host has been disconnected past the window **and which has no stream** | `WATCH_PARTY_HOST_GONE_MINUTES` (5, `0` off) | `watchParty.sweptHostGone` | `watchParty.sweptHostGone` |
+| No share | Ends a `live` party whose `no_share_since` is past the window **and which has no stream** | `WATCH_PARTY_NO_SHARE_MINUTES` (15, `0` off) | `watchParty.sweptNoShare` | `watchParty.sweptNoShare` |
 
-**The host-gone sweep can never end a party with a picture on it.** That is
-the safety property, and it rests entirely on `channelHasLiveStream`, which
+The no-share window is generous on purpose. Fifteen minutes of nothing is an
+abandoned room; fifteen seconds of nothing is a host looking for the right
+window, and the difference between those two is the whole point. A host who
+closes the laptop is caught in five minutes by the host-gone sweep instead;
+this one only covers the host who stays at the keyboard with a blank screen.
+It runs the same `applyWatchPartyOptions(row, "ended")` restore Encerrar does,
+so the channel gets its slow mode and its floor back.
+
+**Neither ending sweep can end a party with a picture on it.** That is the
+safety property, and it rests entirely on `channelHasLiveStream`, which
 asks `hls_sessions` for a row on this channel with `ended_at IS NULL` started
 in the last twelve hours. Three deliberate choices in that one query:
 
@@ -262,7 +293,12 @@ It fails safe: an unreadable answer holds the party, counted as
 `watchParty.streamCheckFailures`. The cost of being wrong that way is a party
 that ends a minute later; the cost of being wrong the other way is a room of
 people losing the film. `watchParty.heldByLiveStream` climbing while
-`sweptHostGone` stays flat is the guard working.
+`sweptHostGone` and `sweptNoShare` stay flat is the guard working.
+
+For the no-share sweep the same check is doing a second job: the stamp is
+written by whichever process held the room, so it can be stale (a share that
+started on the other machine, a session adopted across a deploy). A party with
+a stream on it is never swept, whatever the column says.
 
 **Why the host-gone default is 5 and not 10.** It is the number that already
 shipped, and it is the same number `claimHost` uses: a co-host may take over
@@ -281,10 +317,12 @@ control (a terminal party is fanned out as `null`, see §2 of this file and
 Two paths were missing it until 2026-09-18, and both are the same bug:
 
 - **`markChannelSessionEnded`** (`ws/voice.ts`, the last screen share in the
-  room stopping). It flips a LIVE WATCH PARTY to `ended` and did so in total
+  room stopping). It flipped a LIVE WATCH PARTY to `ended` and did so in total
   silence: every tab kept its AO VIVO pill indefinitely, the channel kept the
   slow mode and the closed floor the party had set, and Encerrar on the ghost
-  answered 403. This is the ghost party.
+  answered 403. This is the ghost party. (That path is gone now: giving it the
+  fan-out made the underlying rule visible, and the rule was wrong. See
+  "Stopping the share does not end the party" above.)
 - **`noShowSweep`** (`services/channel-sessions.ts`, a scheduled party an hour
   past its time). Same shape, quieter symptom: the countdown card stayed on
   every sidebar in the server until a reload.

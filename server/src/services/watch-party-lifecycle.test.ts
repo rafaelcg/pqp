@@ -62,9 +62,13 @@ const {
   markWatchPartyHostGone,
   resetWatchPartySweepCountersForTests,
   sweepStaleWatchPartyDrafts,
+  sweepWatchPartiesWithoutShare,
   sweepWatchPartyHosts,
   watchPartySweepCounters,
 } = await import("./watch-parties.js");
+const { markChannelShareStarted, markChannelShareStopped } = await import(
+  "./channel-sessions.js"
+);
 
 let httpServer: Server;
 let baseUrl: string;
@@ -520,6 +524,164 @@ describeDb("watch party lifecycle", () => {
       },
     });
     expect(swept.ended).toEqual([]);
+    expect(await statusOf(party.id)).toBe("live");
+  });
+
+  /** What `set-sharing-screen` stamps when the last share in the room stops. */
+  const noShareSince = async (sessionId: string) => {
+    const result = await getPool().query<{ no_share_since: Date | null }>(
+      `SELECT no_share_since FROM channel_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    return result.rows[0]?.no_share_since ?? null;
+  };
+
+  /** What `pushLiveHls` does to the egress row the moment nobody is sharing. */
+  const endFakeStream = () =>
+    getPool().query(
+      `UPDATE hls_sessions SET ended_at = NOW()
+        WHERE channel_id = $1 AND ended_at IS NULL`,
+      [channelId],
+    );
+
+  const openStreams = async () => {
+    const result = await getPool().query(
+      `SELECT 1 FROM hls_sessions WHERE channel_id = $1 AND ended_at IS NULL`,
+      [channelId],
+    );
+    return result.rowCount ?? 0;
+  };
+
+  const backdateNoShare = (sessionId: string, minutes: number) =>
+    getPool().query(
+      `UPDATE channel_sessions
+          SET no_share_since = NOW() - ($2 || ' minutes')::interval
+        WHERE id = $1`,
+      [sessionId, String(minutes)],
+    );
+
+  // ------------------------------------------- E. stopping the share
+
+  it("keeps the party live when the host stops sharing", async () => {
+    // THE BUG, on 2026-09-18, in production, in front of everybody: the host
+    // clicked away from one window to pick another and the whole party
+    // ended. Stopping the share ends the STREAM. It says nothing at all
+    // about the party.
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    await startFakeStream();
+
+    // What the share-stop path does now, and the egress teardown that runs
+    // on the next line of the same handler.
+    await markChannelShareStopped(channelId);
+    await endFakeStream();
+
+    expect(await statusOf(party.id)).toBe("live");
+    expect(await openStreams()).toBe(0);
+    expect(await noShareSince(party.id)).not.toBeNull();
+
+    // And the party is still there a tick later: nothing in the minute tick
+    // ends a party that only just lost its picture.
+    const swept = await sweepWatchPartiesWithoutShare();
+    expect(swept.ended).toEqual([]);
+    expect(await statusOf(party.id)).toBe("live");
+  });
+
+  it("puts the host back on air without a new party", async () => {
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    await markChannelShareStopped(channelId);
+    expect(await noShareSince(party.id)).not.toBeNull();
+
+    await markChannelShareStarted(channelId);
+    expect(await noShareSince(party.id)).toBeNull();
+    expect(await statusOf(party.id)).toBe("live");
+
+    // Even with no patience at all, an on-air party is never a candidate.
+    const swept = await sweepWatchPartiesWithoutShare(Date.now(), 0);
+    expect(swept.ended).toEqual([]);
+  });
+
+  it("does not push the clock forward when a second share stops", async () => {
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    await markChannelShareStopped(channelId);
+    await backdateNoShare(party.id, 30);
+    const stamped = await noShareSince(party.id);
+
+    // A co-host's share ending a minute after the host's must not buy the
+    // abandoned room another fifteen minutes.
+    await markChannelShareStopped(channelId);
+    expect((await noShareSince(party.id))?.getTime()).toBe(stamped?.getTime());
+  });
+
+  it("ends a party nobody ever put a picture back on", async () => {
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    await markChannelShareStopped(channelId);
+    await backdateNoShare(party.id, 30);
+
+    const swept = await sweepWatchPartiesWithoutShare();
+    expect(swept.ended.map((e) => e.sessionId)).toEqual([party.id]);
+    expect(await statusOf(party.id)).toBe("ended");
+    expect(watchPartySweepCounters().sweptNoShare).toBe(1);
+  });
+
+  it("waits out the whole window before it does", async () => {
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    await markChannelShareStopped(channelId);
+    await backdateNoShare(party.id, 5);
+
+    // Five minutes of a host looking for the right window is not an ended
+    // party. Fifteen is the default bound.
+    expect((await sweepWatchPartiesWithoutShare()).ended).toEqual([]);
+    expect(await statusOf(party.id)).toBe("live");
+  });
+
+  it("never sweeps a quiet party that still has a stream on it", async () => {
+    // The stamp is written by the process that held the room and can be
+    // stale; `hls_sessions` is true on every machine. Same safety rule as
+    // the host-gone sweep, and it wins.
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    await markChannelShareStopped(channelId);
+    await backdateNoShare(party.id, 30);
+    await startFakeStream();
+
+    const swept = await sweepWatchPartiesWithoutShare();
+    expect(swept.ended).toEqual([]);
+    expect(swept.heldByLiveStream.map((h) => h.sessionId)).toEqual([party.id]);
+    expect(await statusOf(party.id)).toBe("live");
+  });
+
+  it("holds a quiet party when the stream check cannot answer", async () => {
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    await markChannelShareStopped(channelId);
+    await backdateNoShare(party.id, 30);
+
+    const swept = await sweepWatchPartiesWithoutShare(Date.now(), undefined, {
+      hasLiveStream: async () => {
+        throw new Error("postgres blinked");
+      },
+    });
+    expect(swept.ended).toEqual([]);
+    expect(await statusOf(party.id)).toBe("live");
+  });
+
+  it("does nothing at all when the no-share bound is zero", async () => {
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    await markChannelShareStopped(channelId);
+    await backdateNoShare(party.id, 600);
+
+    process.env.WATCH_PARTY_NO_SHARE_MINUTES = "0";
+    try {
+      expect((await sweepWatchPartiesWithoutShare()).ended).toEqual([]);
+    } finally {
+      delete process.env.WATCH_PARTY_NO_SHARE_MINUTES;
+    }
     expect(await statusOf(party.id)).toBe("live");
   });
 });

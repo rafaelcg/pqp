@@ -27,9 +27,12 @@ import {
  * LIVE/ENDED ARE DRIVEN BY THE STREAM, NOT THE CLOCK. `markChannelSessionLive`
  * is the seam an actual stream start calls (today: `set-sharing-screen` in
  * ws/voice.ts; the LiveKit/HLS path other work adds can call the same
- * function). `markChannelSessionEnded` is called both when that stream stops
- * and, from the same tick as the reminders, for a `scheduled` session an hour
- * past `starts_at` that never went live at all, a no-show, not a bug.
+ * function). A stream STOPPING does not end anything any more: it stamps
+ * `no_share_since` (`markChannelShareStopped`) and the party keeps running
+ * until Encerrar, the host-gone sweep, or the no-share bound in
+ * `services/watch-parties.ts`. The one thing this tick still ends by itself
+ * is a `scheduled` session an hour past `starts_at` that never went live at
+ * all, a no-show, not a bug.
  */
 
 interface ChannelSessionRow {
@@ -317,33 +320,56 @@ export async function markChannelSessionLive(
 }
 
 /**
- * The seam a stream stop calls.
+ * THE SEAM A STREAM STOP CALLS, AND IT NO LONGER ENDS ANYTHING.
  *
- * IT RETURNS THE IDS NOW, AND THAT IS THE WHOLE POINT. This UPDATE ends a
- * WATCH PARTY, the same `channel_sessions` row `POST /api/watch-parties/:id/state`
- * moves, and until 2026-09-18 it did so in total silence: no
- * `broadcastWatchParty`, so every open tab kept its AO VIVO pill and its
- * header bar for a show the server had already ended, and no
- * `applyWatchPartyOptions`, so the channel kept the slow mode and the closed
- * floor that going live had set. Pressing Encerrar on that ghost then
- * answered 403. Three symptoms, one missing fan-out.
+ * Until 2026-09-18 this function was `markChannelSessionEnded`: the last
+ * screen share in the room stopping flipped the LIVE WATCH PARTY to `ended`.
+ * PR #720 gave that flip its missing fan-out, which made a behaviour nobody
+ * had ever seen suddenly very visible: the host stopped sharing to switch
+ * windows and the whole party ended under two hundred people.
  *
- * The caller broadcasts rather than this function, because this module must
- * stay importable without the socket layer (the reminder tick runs on
- * `pqp-worker`, which has no `/ws` at all).
+ * A PARTY IS LIVE BECAUSE SOMEBODY PRESSED IR AO VIVO. A PICTURE EXISTS
+ * BECAUSE SOMEBODY IS SHARING. `services/watch-parties.ts` says exactly that
+ * at the top of the file and the client already draws it: a live party with
+ * no picture is the `holding` stage, "Segura que já já começa", not an
+ * ending. Stopping the share ends the STREAM (the egress tears itself down
+ * on the very next `pushLiveHls`) and nothing else. The party ends when the
+ * host presses Encerrar, when the host-gone sweep decides, or when the
+ * generous no-share bound below runs out.
+ *
+ * So all this does is stamp when the picture went away. `no_share_since` is
+ * what `sweepWatchPartiesWithoutShare` reads. Only a `live` row, and only
+ * when it is not already stamped: a second share stopping a minute after the
+ * first must not push the clock forward.
  */
-export async function markChannelSessionEnded(
+export async function markChannelShareStopped(
   channelId: string,
-): Promise<string[]> {
-  const result = await getPool().query<{ id: string }>(
+): Promise<void> {
+  await getPool().query(
     `UPDATE channel_sessions
-        SET status = 'ended', ended_at = NOW(),
-            host_disconnected_at = NULL, updated_at = NOW()
-      WHERE channel_id = $1 AND status = 'live'
-      RETURNING id`,
+        SET no_share_since = NOW()
+      WHERE channel_id = $1 AND status = 'live' AND no_share_since IS NULL`,
     [channelId],
   );
-  return result.rows.map((r) => r.id);
+}
+
+/**
+ * The mirror: somebody put a picture up, so the no-share clock is off.
+ *
+ * Called beside `markChannelSessionLive` on every share start. That one only
+ * moves a `scheduled` row; this one only touches a `live` one, so between
+ * them every share start leaves the party unstamped whichever way it got
+ * live.
+ */
+export async function markChannelShareStarted(
+  channelId: string,
+): Promise<void> {
+  await getPool().query(
+    `UPDATE channel_sessions
+        SET no_share_since = NULL
+      WHERE channel_id = $1 AND status = 'live' AND no_share_since IS NOT NULL`,
+    [channelId],
+  );
 }
 
 // ------------------------------------------------------------ the minute tick
@@ -368,8 +394,8 @@ export async function sendDueChannelSessionReminders(): Promise<string[]> {
 }
 
 /**
- * Returns the sessions it ended so `jobs.ts` can fan them out. Same omission
- * as `markChannelSessionEnded` above: a scheduled watch party that nobody
+ * Returns the sessions it ended so `jobs.ts` can fan them out: a scheduled
+ * watch party that nobody
  * ever started is a party, its card is on every sidebar in the server, and
  * ending the row without telling anybody leaves that card there until the
  * next reload.

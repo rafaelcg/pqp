@@ -52,7 +52,9 @@ import {
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import {
   sweepStaleWatchPartyDrafts,
+  sweepWatchPartiesWithoutShare,
   sweepWatchPartyHosts,
+  watchPartyNoShareMinutes,
 } from "./services/watch-parties.js";
 import { broadcastWatchParty } from "./ws/watch-party-events.js";
 import { userHasAuthenticatedSocket } from "./ws/sockets.js";
@@ -281,6 +283,21 @@ export function startColdJobs(): ColdJobs {
       for (const party of cancelled) {
         console.log(
           `[watch-party] cancelled draft ${party.sessionId}: nobody came back for it`,
+        );
+        await broadcastWatchParty(party.sessionId);
+      }
+      // A LIVE PARTY WITH NO PICTURE ON IT FOR A QUARTER OF AN HOUR. This is
+      // the generous bound that replaced "stopping the share ends the
+      // party", which is what ended a live show on 2026-09-18 the moment the
+      // host clicked away to pick another window. Fifteen minutes of nothing
+      // is an abandoned room; fifteen seconds of nothing is a host switching
+      // windows, and the difference between those two is the whole fix.
+      const quiet = await sweepWatchPartiesWithoutShare();
+      for (const party of quiet.ended) {
+        console.log(
+          `[watch-party] ended ${party.sessionId}: nothing was shared for ${
+            watchPartyNoShareMinutes()
+          } minutes`,
         );
         await broadcastWatchParty(party.sessionId);
       }

@@ -3736,8 +3736,9 @@ ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT 
 
 -- Watch party scheduling: an admin/mod announces the next session on a
 -- channel ("Cinemoon, sexta 21h, filme X"), members opt into a reminder, and
--- the session flips live/ended on its own (see markChannelSessionLive /
--- markChannelSessionEnded in services/channel-sessions.ts). Attached to any
+-- the session flips live on its own when somebody starts sharing (see
+-- markChannelSessionLive in services/channel-sessions.ts; stopping the share
+-- does NOT end it, only the sweeps and Encerrar do). Attached to any
 -- channel id, not only a future `watch_party` channel kind, so scheduling
 -- ships independently of that channel-type work.
 CREATE TABLE IF NOT EXISTS channel_sessions (
@@ -4165,6 +4166,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_sessions_one_active_per_channel
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_host_disconnected
   ON channel_sessions (host_disconnected_at)
   WHERE status = 'live' AND host_disconnected_at IS NOT NULL;
+
+-- WHEN THE PICTURE WENT AWAY, and nothing else.
+--
+-- Stamped when the last screen share in the room stops, cleared the moment
+-- anybody shares again. It is NOT the end of the party: a host who stops
+-- sharing to switch windows, swap to a different film or hand the screen to
+-- a co-host is still hosting, and until 2026-09-18 that click ended the show
+-- for everybody (`markChannelSessionEnded` used to run straight off the
+-- share-stop path). A party is live because somebody pressed Ir ao vivo; a
+-- picture exists because somebody is sharing. Two facts, two columns.
+--
+-- The only thing that reads it is `sweepWatchPartiesWithoutShare`, the
+-- generous bound that ends a party nobody ever put a picture back on
+-- (`WATCH_PARTY_NO_SHARE_MINUTES`, default 15).
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS no_share_since TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_no_share
+  ON channel_sessions (no_share_since)
+  WHERE status = 'live' AND no_share_since IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_host
   ON channel_sessions (host_user_id, status);

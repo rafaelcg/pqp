@@ -69,6 +69,7 @@ export const CHANNEL_SESSION_REMINDER_LEAD_MINUTES = 10;
 
 /**
  * A session flips to `ended` on its own an hour after `starts_at` if it never
- * went live (nobody started streaming). See `markChannelSessionEnded`.
+ * went live (nobody started streaming). See `noShowSweep` in
+ * server/src/services/channel-sessions.ts.
  */
 export const CHANNEL_SESSION_NO_SHOW_MINUTES = 60;
