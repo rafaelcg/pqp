@@ -47,10 +47,66 @@ const {
   DatabaseUnavailableError,
   resolvePgQueryTimeoutMs,
   pgTimeoutConfig,
+  isPoisoningQueryError,
   DEFAULT_PG_QUERY_TIMEOUT_MS,
   DEFAULT_PG_WORKER_QUERY_TIMEOUT_MS,
 } = await import("./db.js");
 const { runtimeSnapshot } = await import("./lib/runtime.js");
+
+/**
+ * Which errors mean "never hand this connection to anybody else".
+ *
+ * The exclusion is the interesting half and the reason this is its own test:
+ * `57014` arrives as an ErrorResponse followed by a ReadyForQuery, so the
+ * connection resynchronised and is genuinely fine. `query_timeout` is a
+ * client-side timer that cancels nothing, so the response may still be in
+ * flight toward a socket somebody else will be using. Treating the two the
+ * same in either direction is a bug: one way churns the pool on every slow
+ * query, the other is the 2026-09-17 failure.
+ */
+describe("isPoisoningQueryError", () => {
+  it("poisons on pg's client-side read timeout", () => {
+    expect(isPoisoningQueryError(new Error("Query read timeout"))).toBe(
+      "query-read-timeout",
+    );
+  });
+
+  it("poisons on a lost or terminated connection", () => {
+    expect(isPoisoningQueryError(new Error("Connection terminated"))).toBe(
+      "connection-lost",
+    );
+    expect(
+      isPoisoningQueryError(
+        Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+      ),
+    ).toBe("connection-lost");
+    expect(
+      isPoisoningQueryError(
+        Object.assign(new Error("terminating connection"), { code: "57P01" }),
+      ),
+    ).toBe("connection-lost");
+  });
+
+  it("does NOT poison on a statement Postgres cancelled cleanly, or on ordinary SQL errors", () => {
+    expect(
+      isPoisoningQueryError(
+        Object.assign(
+          new Error("canceling statement due to statement timeout"),
+          { code: "57014" },
+        ),
+      ),
+    ).toBeNull();
+    expect(
+      isPoisoningQueryError(
+        Object.assign(new Error('relation "nope" does not exist'), {
+          code: "42P01",
+        }),
+      ),
+    ).toBeNull();
+    expect(isPoisoningQueryError(undefined)).toBeNull();
+    expect(isPoisoningQueryError("not an error")).toBeNull();
+  });
+});
 
 describe("resolvePgQueryTimeoutMs", () => {
   it("defaults to 15s for a process that serves traffic", () => {
@@ -176,6 +232,71 @@ describeDb("the main pool's timeouts and keepalive", () => {
     expect(pool.idleCount).toBeGreaterThan(0);
     expect(pool.totalCount).toBe(totalBefore);
     await expect(pool.query("SELECT 1")).resolves.toBeDefined();
+  });
+
+  /**
+   * THE LOST REPLY, on the path that actually stranded the pool.
+   *
+   * `pool.query()` survives this by accident: pg-pool calls
+   * `client.release(err)` itself and a truthy `err` destroys the client. Every
+   * transaction in this codebase instead does `getPool().connect()` and
+   * `finally { client.release() }` with NO argument, because the caller cannot
+   * know the connection is compromised. Before the fix, pg-pool put that
+   * client back in the idle list still waiting on a response that was never
+   * coming, and handed it to the next request, which queued behind that
+   * missing response and timed out too. The pool reported the slot as free
+   * while it was as dead as it was on staging.
+   *
+   * `statement_timeout` is turned off on this one connection so Postgres
+   * cannot cancel the statement and resynchronise the protocol: only the
+   * client-side timer fires, which is exactly the shape of a reply lost in
+   * transit, and the shape no test had.
+   */
+  it("destroys a client whose reply never arrived, even when its borrower releases it cleanly", async () => {
+    const pool = getPool();
+    // Warm the pool so `totalCount` is a real count, not a first open.
+    const warm = await pool.connect();
+    warm.release();
+
+    const client = await pool.connect();
+    const totalBefore = pool.totalCount;
+    expect(totalBefore).toBeGreaterThan(0);
+
+    // Postgres must NOT cancel this one; only pg's own read timer may fire.
+    await client.query("SET statement_timeout = 0");
+    await expect(
+      client.query({
+        text: "SELECT pg_sleep(30)",
+        query_timeout: 300,
+      } as never),
+    ).rejects.toThrow(/query read timeout/i);
+
+    // The caller's ordinary cleanup, with no error, because it has none to
+    // pass. This line is the whole bug.
+    client.release();
+
+    // Destroyed, not idled: the slot is genuinely free again.
+    expect(pool.totalCount).toBe(totalBefore - 1);
+    // And nothing is left counted as checked out.
+    expect(runtimeSnapshot().pool.longestCheckoutMs).toBe(0);
+
+    // The next caller gets a healthy connection promptly, rather than queueing
+    // behind a response that is never coming.
+    const started = Date.now();
+    const fresh = await pool.connect();
+    try {
+      expect(fresh).not.toBe(client);
+      await expect(fresh.query("SELECT 1")).resolves.toBeDefined();
+      // Also proves `SET statement_timeout = 0` did not ride back into the
+      // pool on a reused connection.
+      const shown = await fresh.query<{ statement_timeout: string }>(
+        "SHOW statement_timeout",
+      );
+      expect(shown.rows[0]?.statement_timeout).toBe("1s");
+    } finally {
+      fresh.release();
+    }
+    expect(Date.now() - started).toBeLessThan(POOL_TIMEOUT_MS);
   });
 
   it("exposes checkout ages on the runtime block, and they come back down", async () => {

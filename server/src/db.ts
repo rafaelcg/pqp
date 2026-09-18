@@ -552,8 +552,94 @@ function isThenable(value: unknown): value is Promise<unknown> {
 
 /** Clients with a `BEGIN` that has not yet been closed by a `COMMIT`/`ROLLBACK`. */
 const openTransactionClients = new WeakSet<object>();
-/** Clients a rejected query poisoned mid-transaction — must be destroyed, never reused. */
-const poisonedClients = new WeakSet<object>();
+/**
+ * Clients that must be destroyed on release rather than returned to the idle
+ * list, mapped to WHY, so the line the destruction logs names the cause
+ * instead of asserting the only one this map originally had.
+ */
+const poisonedClients = new WeakMap<object, string>();
+
+function poisonClient(client: object, reason: string): void {
+  if (!poisonedClients.has(client)) {
+    poisonedClients.set(client, reason);
+  }
+}
+
+/**
+ * Whether an error means this connection can never be trusted again, and if
+ * so, which kind.
+ *
+ * THE DISTINCTION THIS FILE TURNS ON. A Postgres error that arrived as an
+ * ErrorResponse followed by a ReadyForQuery is a connection that RESYNCHRONISED:
+ * the server and this client agree about where they are in the protocol, and
+ * the connection is immediately reusable. `57014 canceling statement due to
+ * statement timeout` is exactly that, which is why it is deliberately NOT in
+ * the list below: destroying a connection Postgres cleanly cancelled would
+ * churn the whole pool during a slow-query storm and buy nothing, since there
+ * is nothing wrong with it.
+ *
+ * `query_timeout` is the opposite case and the reason this function exists. It
+ * is a client-side timer, not a cancellation: pg has no query cancellation
+ * this version can use, so when it fires, the statement may still be running
+ * server-side and the response it is waiting for may still arrive later, out
+ * of band, onto a socket somebody else is by then using. The client's protocol
+ * state is unknown. That is precisely the staging failure (a reply lost in a
+ * proxy), and a client in that state that a caller's ordinary
+ * `finally { client.release() }` hands back as idle is a pool slot as dead as
+ * it was before this change, now with the pool believing it is free.
+ *
+ * Connection-level errors are here for the same reason: the socket is gone or
+ * the backend was terminated, so whatever the driver thinks about the
+ * connection is no longer true.
+ */
+export function isPoisoningQueryError(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const message =
+    typeof (error as { message?: unknown }).message === "string"
+      ? (error as { message: string }).message
+      : "";
+  // pg's own read-timeout error carries no `code`; the message is the only
+  // handle it gives (`Query read timeout`, client.js). Matched loosely so a
+  // wording change upstream degrades to "not poisoned" rather than to a
+  // crash, and pinned by `isPoisoningQueryError`'s own test.
+  if (/query read timeout/i.test(message)) {
+    return "query-read-timeout";
+  }
+  if (
+    /connection terminated|client has encountered a connection error|client was closed|terminating connection|server closed the connection/i.test(
+      message,
+    )
+  ) {
+    return "connection-lost";
+  }
+  const code = (error as { code?: unknown }).code;
+  if (
+    typeof code === "string" &&
+    // Socket-level (Node) and connection-level (Postgres class 08, plus the
+    // 57P0x "your backend is going away" family).
+    [
+      "ECONNRESET",
+      "EPIPE",
+      "ETIMEDOUT",
+      "ECONNREFUSED",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENOTCONN",
+      "08000",
+      "08003",
+      "08006",
+      "08P01",
+      "57P01",
+      "57P02",
+      "57P03",
+    ].includes(code)
+  ) {
+    return "connection-lost";
+  }
+  return null;
+}
 
 function guardQueryMethod(
   target: { query: (...args: unknown[]) => unknown },
@@ -570,7 +656,7 @@ function guardQueryMethod(
     if (kind === null && shouldRejectDbCall()) {
       dbBreaker.noteRejected();
       if (openTransactionClients.has(target)) {
-        poisonedClients.add(target);
+        poisonClient(target, "breaker-rejected-mid-transaction");
       }
       return Promise.reject(new DatabaseUnavailableError());
     }
@@ -601,7 +687,7 @@ function guardQueryMethod(
           // The transaction's fate is now unknown — Postgres refused or
           // never heard the statement meant to resolve it one way or the
           // other. Never hand this connection back out as if it were clean.
-          poisonedClients.add(target);
+          poisonClient(target, "transaction-end-failed");
           throw error;
         },
       );
@@ -637,14 +723,20 @@ function guardClientRelease(client: pg.PoolClient): void {
   (client as unknown as { release: (err?: Error | boolean) => void }).release = (
     err?: Error | boolean,
   ) => {
-    if (poisonedClients.has(client)) {
+    const reason = poisonedClients.get(client);
+    if (reason !== undefined) {
       poisonedClients.delete(client);
       openTransactionClients.delete(client);
+      // One line per destroyed connection. Bounded by `PG_POOL_MAX` per
+      // outage burst, and during an incident it is the difference between
+      // "the pool is churning" and knowing which of the three causes is
+      // doing it. `db.pool.clientDestroyed` belongs at zero.
+      logEvent("db.pool.clientDestroyed", { reason });
       originalRelease(
         err instanceof Error
           ? err
           : new Error(
-              "A DB-breaker rejection landed mid-transaction on this client; destroying it instead of returning a possibly-dirty connection to the pool.",
+              `This client is not safe to reuse (${reason}); destroying it instead of returning a possibly-dirty connection to the pool.`,
             ),
       );
       return;
@@ -817,11 +909,29 @@ export function pgTimeoutConfig(
 }
 
 /**
- * Records, per checked-out client, the statement it is currently running, so
- * `db.pool.stuckClient` can say WHICH query is sitting on a pool slot rather
- * than only that one is. Observation only: it forwards every call unchanged
- * and rejects nothing, which is `guardQueryMethod`'s job, and that guard wraps
- * around this one.
+ * Watches every query a checked-out client runs, for two things.
+ *
+ *  1. The statement text, so `db.pool.stuckClient` can say WHICH query is
+ *     sitting on a pool slot rather than only that one is.
+ *  2. Whether the query ended in a way that makes this connection unsafe to
+ *     reuse (`isPoisoningQueryError`), in which case the client is poisoned
+ *     and `guardClientRelease` destroys it however cleanly its borrower
+ *     releases it.
+ *
+ * THE SECOND ONE IS THE POINT, and a first version of this change shipped
+ * without it. `query_timeout` rejecting a promise does not cancel the
+ * statement and does not make the `PoolClient` unusable in pg's eyes. On the
+ * `pool.query()` path that is survivable by accident, because pg-pool calls
+ * `client.release(err)` itself on any error and a truthy `err` makes it
+ * destroy the client. The EXPLICIT checkout path has no such accident: every
+ * transaction in `server/src/services/*.ts` does `getPool().connect()` and
+ * `finally { client.release() }` with no argument, because the caller has no
+ * way to know the connection is compromised. pg-pool then puts a client that
+ * is still waiting on a response that will never come back into the idle list
+ * and hands it to the next request, which queues behind that missing response
+ * and times out too. That is the staging failure reproducing itself through
+ * the very pool this change was meant to protect, and it is the path that
+ * stranded the pool on 2026-09-17.
  *
  * Installed from the pool's own `acquire` event rather than from
  * `guardedConnect`, and this is the part that is easy to get wrong.
@@ -836,18 +946,33 @@ export function pgTimeoutConfig(
  * pg-pool hands the same `PoolClient` back out on every checkout, so a wrapper
  * installed per checkout would nest one layer deeper each time, forever.
  */
-const queryTextTrackedClients = new WeakSet<object>();
+const observedClients = new WeakSet<object>();
 
-function trackClientQueryText(client: object): void {
+function observeClientQueries(client: object): void {
   const target = client as { query?: (...args: unknown[]) => unknown };
-  if (typeof target.query !== "function" || queryTextTrackedClients.has(client)) {
+  if (typeof target.query !== "function" || observedClients.has(client)) {
     return;
   }
-  queryTextTrackedClients.add(client);
+  observedClients.add(client);
   const original = target.query.bind(target) as (...args: unknown[]) => unknown;
   target.query = (...args: unknown[]) => {
     noteCheckoutQuery(client, queryTextOf(args));
-    return original(...args);
+    const result = original(...args);
+    // pg's callback overload returns a `Query`, not a promise, and `pool.query`
+    // uses exactly that form. Nothing to observe there, and nothing that needs
+    // observing: pg-pool passes the error to `release` itself on that path.
+    if (!isThenable(result)) {
+      return result;
+    }
+    return result.then(undefined, (error: unknown) => {
+      const reason = isPoisoningQueryError(error);
+      if (reason) {
+        poisonClient(client, reason);
+      }
+      // Rethrown unchanged: the caller's own error handling is none of this
+      // wrapper's business, and it must see the same error it always saw.
+      throw error;
+    });
   };
 }
 
@@ -922,10 +1047,10 @@ export function getPool(): pg.Pool {
     // client pg-pool destroys (`release(err)`, `maxUses`, the idle timeout,
     // `end()`). `acquire` fires inside `_acquireClient` BEFORE the client
     // reaches either `pool.query`'s internal callback or `connect()`'s
-    // promise, which is why the query-text wrapper goes on here too.
+    // promise, which is why `observeClientQueries` goes on here too.
     created.on("acquire", (client) => {
       noteCheckout(client);
-      trackClientQueryText(client);
+      observeClientQueries(client);
     });
     created.on("release", (_err, client) => noteRelease(client));
     created.on("remove", (client) => noteRelease(client));
