@@ -35,7 +35,7 @@ export interface StreamMixLevels {
  * `DynamicsCompressorNode` at this threshold with a 12:1 ratio, so a boosted
  * mic (or five guests at once) cannot clip the destination.
  *
- * `DynamicsCompressorNode` applies NO makeup gain of its own. From #513
+ * `DynamicsCompressorNode` applies NO makeup gain of its own. From PR 513
  * (2026-09-12), which introduced the limiter, nothing a watch party published
  * could reach within 6 dB of full scale again: before it, the display
  * capture's own audio went to the destination untouched, at unity. The
