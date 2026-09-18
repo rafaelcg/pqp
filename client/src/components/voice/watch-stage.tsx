@@ -367,6 +367,7 @@ export function WatchChannelStage({
   onReturn,
   onDismiss,
   isWatchParty = false,
+  partyOwnsPane = false,
   meUserId = null,
 }: {
   channelId: string;
@@ -420,6 +421,23 @@ export function WatchChannelStage({
    * pane to the panel; the live picture above is unaffected.
    */
   isWatchParty?: boolean;
+  /**
+   * The party's own surface is filling this channel's pane, so this one
+   * stands down (`watchPartyPanelOwnsPane` in `lib/watch-party-pane.ts`).
+   *
+   * THE PANE HAS ONE OWNER. This mount asks a question that knows nothing
+   * about the party — "is there a playlist and am I out of the call" — and
+   * `WatchPartyPanel` asks a different one about the same slot. Both could
+   * answer yes, and when they did the audience picture went over the top of
+   * whatever the panel was drawing: a host who pressed Criar watch party on
+   * a channel whose previous egress had not finished got the viewer's screen
+   * instead of their own setup surface. The panel's surface wins, because it
+   * is the one that knows whose party this is.
+   *
+   * IGNORED WHILE DOCKED. The mini player is in some other channel's pane by
+   * definition, so nothing there is competing with it.
+   */
+  partyOwnsPane?: boolean;
 }) {
   const inThisCall =
     voiceState.voiceChannelId === channelId && voiceState.status !== "idle";
@@ -519,7 +537,13 @@ export function WatchChannelStage({
   // watch party channel it also does not belong here: `WatchPartyPanel`'s own
   // surface already owns "nothing is on air" the moment the stream drops
   // (see `isWatchParty` above), so drawing this too doubled up the pane.
-  const visible = !inThisCall && (hasStream || (ended && !docked && !isWatchParty));
+  // The party's own surface owns the pane while it has something to draw
+  // (`partyOwnsPane`); the mini player is never in that pane at all.
+  const standsDown = partyOwnsPane && !docked;
+  const visible =
+    !inThisCall &&
+    !standsDown &&
+    (hasStream || (ended && !docked && !isWatchParty));
   const stageRef = useRef<HTMLDivElement>(null);
   const fullscreen = useWatchFullscreen(stageRef);
   // A stage that goes away must not leave the pane pinned to the window: the

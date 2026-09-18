@@ -90,6 +90,20 @@ describe("a live party with nothing on screen", () => {
     expect(html).toContain("Share a window or a tab");
   });
 
+  it("speaks to a co-host as somebody running the show, permission bit or not", () => {
+    // `hostSide` used to also require START_WATCH_PARTY on this channel. A
+    // co-host is any member the host promoted and need not hold it, so the
+    // person running the party was told, about themselves, to hang in there
+    // while Alice set it up.
+    const html = render({
+      someoneIsSharing: false,
+      canStart: false,
+      party: { ...PARTY, viewerRole: "cohost" },
+    });
+    expect(html).toContain("Share a window or a tab");
+    expect(html).not.toContain("has not put anything on screen yet");
+  });
+
   it("reassures instead, once somebody is actually sharing", () => {
     const html = render({ someoneIsSharing: true });
     expect(html).toContain('data-watch-party-waiting="preparing"');

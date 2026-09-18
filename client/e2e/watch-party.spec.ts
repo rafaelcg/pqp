@@ -489,7 +489,12 @@ test("a host creates a watch party from the sidebar, names it, and goes live", a
   // live BEFORE the picture reaches anyone, which is the documented order.
   const goLive = page.locator("[data-watch-party-go-live]");
   await expect(goLive).toBeDisabled();
-  await setup.getByRole("button", { name: "Pick what to share" }).click();
+  await setup
+    .getByRole("button", { name: "Pick what to share" })
+    // Bounded on purpose: on the broken build this click never lands (the
+    // picture is over the button) and the useful failure is "intercepted",
+    // not "the test ran out of time two minutes later".
+    .click({ timeout: 20_000 });
   await expect(page.getByTestId("watch-party-preview")).toBeVisible({
     timeout: 20_000,
   });
@@ -512,6 +517,100 @@ test("a host creates a watch party from the sidebar, names it, and goes live", a
   await expect(block).toBeVisible({ timeout: 20_000 });
   await expect(block.getByText("Cinemoon")).toBeVisible();
   await expect(page.locator("[data-live-party-create]")).toBeHidden();
+});
+
+/**
+ * THE HOST'S OWN SURFACE IS NEVER COVERED BY THE AUDIENCE'S.
+ *
+ * Reported from production on 2026-09-18: "sometimes when starting a party it
+ * shows the host the viewer UI". A watch party channel mounts two stages into
+ * one slot and they used to ask disjoint questions — `WatchPartyPanel` asked
+ * what this party IS to this person, `WatchChannelStage` asked only whether a
+ * playlist exists and whether this person is out of the call — so on a channel
+ * that still had a stream going out, both said yes. The host pressed Criar
+ * watch party, the draft opened underneath, and the audience player was drawn
+ * over it: the setup surface was in the document and not on the screen, and
+ * "Pick what to share" could not be clicked at all.
+ *
+ * The server keeps ONE hidden room per server, so the second party of a night
+ * lands in the same channel as the first. That is the everyday route into it,
+ * and it is what this sets up: a party, ended, with a stream still on the
+ * channel, and then the real create flow on top.
+ */
+test("a host setting a party up is never handed the audience picture", async ({
+  page,
+}) => {
+  const shared = await seedServer("wp-pane-owner");
+  // The first party is only here to name the server's hidden room, which is
+  // where the one this test actually drives will land too.
+  const first = await createParty("wp-pane-owner", shared.serverId, "First");
+  await setPartyState("wp-pane-owner", first.partyId, "live");
+  await setPartyState("wp-pane-owner", first.partyId, "ended");
+  // A stream the channel has not finished letting go of. In production this
+  // is the previous egress still tearing down, a share that outlived its
+  // party, or a co-host still presenting.
+  await withFakeLiveStream(page, first.channelId);
+
+  await openAs(
+    page,
+    `/app/server/${shared.serverId}/channel/${shared.textChannelId}`,
+    "wp-pane-owner",
+  );
+
+  const create = page.locator("[data-live-party-create]");
+  await expect(create).toBeVisible({ timeout: 20_000 });
+  // Armed BEFORE the click that opens the room: the client asks this once per
+  // channel it has not been told about, and the answer is what puts the
+  // stream in `channelLive`. Waiting for it is what stops the assertion below
+  // passing on a client that simply had not heard about the picture yet.
+  const seeded = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/api/channels/${first.channelId}/live`),
+    { timeout: 20_000 },
+  );
+  await create.click();
+  await page.locator("[data-create-watch-party-name]").fill("Second");
+  await page.locator("[data-create-watch-party-submit]").click();
+
+  const setup = page.getByTestId("watch-party-setup");
+  await expect(setup).toBeVisible({ timeout: 20_000 });
+  await seeded;
+  // The assertion that failed: the audience stage drew itself over the host's
+  // draft. Both were in the document; only one was on the screen.
+  //
+  // HELD, NOT SAMPLED ONCE. `toHaveCount(0)` is satisfied by an element that
+  // has not been rendered YET, and the picture lands a render or two after
+  // the seed answers — so one sample would pass on the very build this test
+  // exists to fail on. Five seconds is several times the gap measured on the
+  // broken build, and the loop stops at the first render that draws it.
+  for (let sample = 0; sample < 10; sample += 1) {
+    await expect(page.getByTestId("watch-channel-stage")).toHaveCount(0);
+    await page.waitForTimeout(500);
+  }
+
+  const ack = page.getByRole("dialog").filter({ hasText: "Before you go live" });
+  await expect(ack).toBeVisible({ timeout: 20_000 });
+  await ack.getByRole("button", { name: "Got it", exact: true }).click();
+  await expect(ack).toBeHidden({ timeout: 20_000 });
+
+  // And the surface is not merely present, it is USABLE: this click is what
+  // timed out before, because the picture was on top of the button.
+  await setup.getByRole("button", { name: "Pick what to share" }).click();
+  await expect(page.getByTestId("watch-party-preview")).toBeVisible({
+    timeout: 20_000,
+  });
+
+  await page.locator("[data-watch-party-go-live]").click();
+
+  // Live, and it is the HOST's stage that holds the pane: their own bar, and
+  // the one stage component the host side draws. Never the seatless player.
+  const bar = page.getByTestId("watch-party-bar");
+  await expect(bar).toBeVisible({ timeout: 20_000 });
+  await expect(bar).toHaveAttribute("data-watch-party-bar", "presenter");
+  await expect(page.getByTestId("watch-party-stage")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId("watch-channel-stage")).toHaveCount(0);
 });
 
 test("the create control is gated on the permission, and the block is not", async ({

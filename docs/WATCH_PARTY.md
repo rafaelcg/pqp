@@ -789,6 +789,41 @@ host's LiveKit publish is an invisible pipe while the show is live. Encerrar
 leaves that pipe so leave-voice chrome does not linger. Friends who want to
 talk use a normal voice channel.
 
+### One surface owns the pane
+
+A watch party channel mounts three stages into the same slot: `WatchPartyPanel`'s
+own surface, the seatless `WatchChannelStage`, and `VoiceChannelStage`. Two of
+them used to ask disjoint questions about that slot. The panel asked
+`watchPartySurface` ("what is this party, to this person"). The stage asked only
+"is there a playlist on this channel and am I out of the call", which knows
+nothing about the party and nothing about who is looking. On a channel that
+still had a stream going out, both answered yes.
+
+Reported from production on 2026-09-18, and it reads exactly like a permissions
+bug rather than a layout one: *"sometimes when starting a party it shows the
+host the viewer UI"*. The server keeps one hidden room per server, so the second
+party of a night lands in the same channel as the first. Press Criar watch
+party while the previous egress is still finishing, or while a co-host is
+presenting, or on a share that outlived the party it belonged to, and the draft
+opened underneath the audience picture: the host's private setup surface was in
+the document and not on the screen, and "Escolher o que compartilhar" could not
+be clicked at all.
+
+`watchPartyPanelOwnsPane` (`client/src/lib/watch-party-pane.ts`) is the one
+answer both stages now read. It is derived from `watchPartySurface` rather than
+restating its rules, and it adds the one thing the panel knew privately: which
+of those surfaces actually *fills* the pane, as opposed to drawing a bar. A
+draft, a scheduled card, the empty stage and a live party with nothing on screen
+yet all fill it, so the audience stage stands down for them. A live party with a
+picture does not, so the pane is the audience stage's exactly as before. The
+mini player is exempt: it is in some other channel's pane by definition.
+
+One rule beside it, same shape: the holding screen's host-side copy asked for
+`viewerRole` **and** START_WATCH_PARTY on the channel. A co-host is any member
+the host promoted and need not hold the bit, so the person running the party was
+told, about themselves, to hang in there while the host set it up. It asks the
+role alone now.
+
 ### The layout
 
 The watch stage uses the SAME split machinery as a call: `lib/call-split.ts`

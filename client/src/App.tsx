@@ -488,6 +488,7 @@ import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
 import { WatchPartyActivityFeed } from "@/components/watch-party/watch-party-activity-feed";
 import { WatchPartyPeoplePanel } from "@/components/watch-party/watch-party-people-panel";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
+import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -6562,6 +6563,35 @@ function MainAppContent({
       hasStream: voiceState.channelLive[selectedChannel.id]?.stream != null,
     });
   })();
+  /**
+   * THE PANE HAS ONE OWNER (2026-09-18). `WatchPartyPanel`'s own surface and
+   * the seatless `WatchChannelStage` both mount into the stage slot, and they
+   * used to ask disjoint questions: the panel asked what this party IS to
+   * this person, the stage asked only whether a playlist exists and whether
+   * this person is out of the call. On a channel that still had a stream
+   * going out, both said yes — so a host who pressed Criar watch party got
+   * the audience picture drawn over their own private setup surface. This is
+   * the one answer both of them now read; see `lib/watch-party-pane.ts`.
+   */
+  const watchPartyOwnsPane = (() => {
+    if (
+      !selectedChannel ||
+      selectedChannel.kind !== "server" ||
+      !isWatchPartyChannelType(selectedChannel.type) ||
+      !isWatchPartyChannelsEnabled() ||
+      !user
+    ) {
+      return false;
+    }
+    return watchPartyPanelOwnsPane({
+      state: watchParties.byChannel[selectedChannel.id]?.state ?? null,
+      hasStream: voiceState.channelLive[selectedChannel.id]?.stream != null,
+      inCall:
+        voiceState.voiceChannelId === selectedChannel.id &&
+        voiceState.status !== "idle",
+      canStart: perms.can(Permission.START_WATCH_PARTY, selectedChannel.id),
+    });
+  })();
   // Baú gating is computed above the early returns (it owns a hook); see
   // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
   const meMember = serverMembers.find((member) => member.id === user?.id);
@@ -9291,6 +9321,14 @@ function MainAppContent({
               serverIconUrl={watchDock.session.serverIconUrl}
               voiceState={voiceState}
               isWatchParty={watchDock.session.isWatchParty}
+              /* The party's own surface is filling this pane: stand down
+                 rather than draw the audience picture over it. Only ever
+                 true for the SELECTED channel, which is the only one this
+                 mount is ever in a pane for. */
+              partyOwnsPane={
+                watchDock.session.channelId === selectedChannelId &&
+                watchPartyOwnsPane
+              }
               meUserId={user?.id ?? null}
               /* The party bar owns the join in a watch party room; a plain
                  voice channel with a share going out has no bar, so there
