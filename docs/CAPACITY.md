@@ -20,8 +20,12 @@ and deliberately not done.
 
 Runs to date: control A, A1, A2, A2 repeat and ladder F, all on 2026-09-07;
 the API-only morning runs whose method is in
-[`docs/STAGING.md`](./STAGING.md); and the two interactive-shape ladders of
-2026-09-09 (section 3a). Results for all of them: the operator's copy.
+[`docs/STAGING.md`](./STAGING.md); the two interactive-shape ladders of
+2026-09-09 (section 3a); and the audio-only fan-out ladder of 2026-09-18
+(section 1b), whose result table is public because it is a stream-count
+ceiling on a box that matches production's configuration, not a viewer count
+on production itself, and the section says so explicitly. Results for the
+rest: the operator's copy.
 
 For the dedicated egress box's encoder headroom (the B3.1 upgrade-only-on-a-reading
 question in `docs/plans/BROADCAST_PIPELINE.md` section 5), see
@@ -148,6 +152,93 @@ before 2026-09-08 07:17Z and is still the right explanation of *that* failure.
 **Efficiency improves as the box fills**, by roughly 40 % between a lightly
 loaded box and a full one, so a coefficient fitted on a small run understates
 capacity. Fit at the load you care about.
+
+## 1b. Audio fan-out ceiling, measured directly (2026-09-18)
+
+Section 1a's finding was that cost tracks forwarded packets, with audio the
+majority term once a room is talking. This ladder tests that directly:
+audio-only, ramped up to the point it starves, on hardware built to the same
+plan and config as production's SFU.
+
+**Instrument:** LiveKit's own load tester, `lk load-test`, LiveKit CLI
+2.18.7, run from an 8-core Fly machine in London against a LiveKit box
+identical in plan and config to production's SFU (Vultr `vhp-4c-8gb-amd`,
+LiveKit v1.13.6, four UDP mux ports 7882 to 7885, `limit.num_tracks: -1`, the
+raised receive buffers from section 2). Audio only, no video, 3 minutes per
+rung, 20 testers a second ramp, `--simulate-speakers` (every publisher talks
+continuously, no `dtx`, the worst case), `speaker` layout so each subscriber
+hears 6 speakers at once regardless of room size. Forwarded audio streams is
+`subscribers x 6`.
+
+| subscribers | audio publishers | forwarded audio streams (6 per subscriber) | total bitrate | packet loss at subscribers | SFU cpu idle during the rung |
+|---|---|---|---|---|---|
+| 100 | 20 | 600 | 11.6 Mbps (116 kbps per subscriber) | 0% | about 75% |
+| 200 | 30 | 1,200 | 22.7 Mbps (114 kbps) | 0% | about 55 to 65% |
+| 400 | 40 | 2,400 | 41.2 Mbps (103 kbps) | 0% | about 20 to 27% |
+| 600 | 40 | 3,600 | 40.4 Mbps (67 kbps: starved) | 0.13% | about 18 to 25% |
+| 800 | 40 | 4,800 | 36.3 Mbps (45 kbps: starved) | 1.13% | about 25% |
+
+**What it says, plainly:**
+
+- **The SFU's audio cost is forwarded streams, not seats.** Forwarded
+  streams = listeners x simultaneously audible speakers. A room's seat count
+  only matters through however many of those seats are speaking and audible
+  to each listener at once, which is exactly the packet-cost shape section 1a
+  found, now with a ceiling attached.
+- **Zero packet loss up to about 2,400 forwarded audio streams on 4 vCPU**,
+  about 600 per core.
+- **A falling average bitrate per subscriber is the first sign of
+  starvation, and it shows before loss does.** Per-subscriber bitrate holds
+  103 to 116 kbps through 2,400 streams, then drops to 67 kbps at 3,600 and
+  45 kbps at 4,800, while loss is still under 0.2% at 3,600. Watch the
+  per-subscriber average, not only the loss counter.
+- **Starvation from about 3,600 forwarded streams.**
+- The generator itself was under load at the 600 and 800 rungs (see "how to
+  rerun" below), so the true knee sits somewhere between 2,400 and 3,600 and
+  this run did not pin it more precisely. **The honest number to plan with
+  is 2,400.**
+
+**Worked examples**, at the 2,400-stream ceiling:
+
+- 200 seated with 10 open mics: 200 x 10 = 2,000 forwarded audio streams.
+  Fine.
+- 400 seated with 10 open mics: 400 x 10 = 4,000. Over.
+- A room where everybody is unmuted saturates much earlier: the open-mic
+  count becomes the seat count, and the product is quadratic in room size,
+  the same shape section 1a found.
+
+**Watch-party audiences do not count against this.** An HLS viewer holds no
+SFU seat at all (section 3); this ceiling is about the SFU's own
+subscribers, the people actually seated in the voice room.
+
+**The lever is more vCPU or a second LiveKit node.** Redis is already
+running on the SFU box (section 2), which is the prerequisite for LiveKit
+multi-node; a room still has to fit on one node, rooms are not bridged
+across nodes (section 6, lever 5).
+
+### How to rerun
+
+```
+lk load-test --url wss://<sfu> --api-key <key> --api-secret <secret> \
+  --subscribers <N> --audio-publishers <K> --duration 3m \
+  --num-per-second 20 --simulate-speakers -y
+```
+
+Read the `Total` row for bitrate and loss. From a second shell, sample
+`curl 127.0.0.1:6789/metrics` and `/proc/loadavg` on the box while a rung
+runs; that is where the CPU-idle figures above came from.
+
+**`tools/watch-party-load/src/index.ts` is the wrong tool for this
+ceiling.** Its receivers are `@livekit/rtc-node` and decode every stream for
+real, so its cost is bounded by decode, not by SFU forwarding: about 16
+participants per generator core, and a 100-participant shard exceeds Node's
+default 2 GB heap. Shards of 40 with `NODE_OPTIONS=--max-old-space-size=3072`
+run, but the generators saturate long before the SFU does, which is exactly
+why this measurement used `lk load-test` instead.
+
+**`turnc ERROR: Fail to refresh permissions: transaction closed` at the 600
+and 800 rungs is the load tester's own TURN client, not the SFU.** Do not
+read it as an SFU-side error.
 
 ## 2. Production topology and the recommended configuration
 
@@ -479,9 +570,11 @@ measurement before its own plan.
 5. **A second SFU node** (LiveKit multi-node with Redis) is the last one; it
    splits rooms across boxes, not one room, unless the room is bridged.
 6. **Capping forwarded audio in a large room.** New with section 1a and
-   unmeasured as a lever, but it is the only one that attacks the term that
-   actually dominates an interactive box. Nothing in pqp or in LiveKit 1.13.6
-   limits audio fan-out: `autoSubscribe` defaults to true, the access token sets
+   unmeasured as a lever (though the ceiling it would be capping against is
+   now measured directly: section 1b puts it at about 2,400 forwarded audio
+   streams on today's 4 vCPU box), but it is the only one that attacks the
+   term that actually dominates an interactive box. Nothing in pqp or in
+   LiveKit 1.13.6 limits audio fan-out: `autoSubscribe` defaults to true, the access token sets
    `canSubscribe: true` for everybody (`server/src/voice/backends.ts`), and
    `remoteAudioPlan()` in `client/src/lib/remote-audio-delivery.ts` is a deny
    list that pauses a stream only for deafen, a zeroed slider, a server mute or
