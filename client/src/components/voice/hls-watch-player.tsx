@@ -341,7 +341,15 @@ export function HlsWatchPlayer({
    * the caller's own `actions` in one corner, mute in the other, and none of
    * the badges, fit, quality or picture-in-picture chrome a tile offers.
    */
-  layout?: "cinema" | "tile" | "mini";
+  layout?: "cinema" | "tile" | "mini" | "monitor";
+  /*
+   * `monitor` (pass 5b of `docs/plans/WATCH_PARTY_UI.md`, §10.4): the
+   * picture and nothing else. For a player embedded in a stage that draws
+   * its own chrome, the host's audience view above all: `tile` put a live
+   * badge, a volume slider, fit, quality and picture-in-picture under the
+   * party bar, a second set of controls the host could see and not reach.
+   * The stage that embeds this owns every control; this draws none.
+   */
   /**
    * Always silent, whatever the shared volume preference says, and no
    * mute button. For the presenter's audience monitor (2026-09-13): the
@@ -2279,6 +2287,7 @@ export function HlsWatchPlayer({
 
   const cinema = layout === "cinema";
   const mini = layout === "mini";
+  const monitor = layout === "monitor";
 
   // C3 (post-mortem item, `lib/watch-holding-screen.ts`): what the overlay
   // over the picture says, mapped from `phase` and the stall watchdog's own
@@ -2853,7 +2862,7 @@ export function HlsWatchPlayer({
           </div>
         </div>
       </div>
-      ) : mini ? (
+      ) : monitor ? null : mini ? (
         /* The docked player. Everything a 240px box cannot afford is gone:
            the live badge, the delay badge, the fit toggle, the quality menu
            and picture-in-picture all live on the stage this came from, one
@@ -3067,7 +3076,7 @@ export function HlsWatchPlayer({
           ) : null}
         </>
       )}
-      {hasFrame && needsUnmute ? (
+      {hasFrame && needsUnmute && !monitor ? (
         <button
           type="button"
           className={cn(
@@ -3080,7 +3089,7 @@ export function HlsWatchPlayer({
           {t("voice.hls.unmute")}
         </button>
       ) : null}
-      {dualDeviceWarning && !mini ? (
+      {dualDeviceWarning && !mini && !monitor ? (
         <div
           data-testid="hls-dual-device-warning"
           className={cn(

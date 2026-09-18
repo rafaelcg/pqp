@@ -624,6 +624,55 @@ code and its tests turned out to already decide.
   `WatchChannelStage` refuses `onJoin` for one even when a caller passes
   it, so the third join button cannot grow back.
 
+### 10.4 What is drawn over the picture now, per role
+
+Mapped again on staging (2026-09-18, after passes 1 to 5) from André's
+screenshot of the host stage: "there's still 2 sets of controls when you
+hover over the stream". The host's audience view was the HLS player in
+its `tile` layout, and a tile draws its own chrome (live badge, a volume
+slider, fit, quality, picture-in-picture) under the party bar, reachable
+by nobody. The rule that closes this class: **a stage draws one chrome,
+and a player embedded in a stage draws none.** `HlsWatchPlayer` has a
+`monitor` layout for that, the picture and nothing else, and the host
+stage uses it.
+
+The complete set, one row per element, after that change:
+
+**Host and co-host** (`WatchPartyStage` inside the call stage, seated):
+
+| Element | Where | Layer | Fades |
+|---|---|---|---|
+| Transmission status pill (dot, sentence folds while green) | top left, status slot | chrome | no |
+| Reconnecting pill | top left, under the status | chrome | no |
+| Self-monitor toggle ("Mostrar prévia" / "Fechar") | top right | in stage | no |
+| Own capture, picture-in-picture | bottom left, above the bar | in stage | no |
+| "Preparando a transmissão" line | bottom centre, above the bar | in stage | no |
+| The bar (mic, seat, share / Trocar / Parar, Áudio, No ar, guests) | bottom, stage slot | chrome | no |
+| Audience view player | the picture | picture | draws nothing |
+
+**Seatless viewer** (`WatchChannelStage`, the player in `cinema` layout):
+
+| Element | Where | Layer | Fades |
+|---|---|---|---|
+| Delay / live badge | top left | badges | no |
+| Slow-start notice, dual-device warning | top left / bottom centre | badges | no |
+| Top row: audience count | top right | chrome | yes |
+| Bottom bar: play, volume, live, fit, PiP, quality, fullscreen, then the party slot (request, Parar de assistir) | bottom | chrome | yes |
+| Camera PiP corner | a corner | tileControls | no |
+| Reactions bursts | over the picture | reactions | no |
+
+**Seated guest or audience seat** (the call stage under `watchPartyChrome`):
+
+| Element | Where | Layer | Fades |
+|---|---|---|---|
+| Presenter's share tile with its own hover controls (fullscreen, pin, audio menu) | the grid | tileControls | hover |
+| Zoom target | whole tile, bottom of the stack | tileTarget | no |
+| Participant chips | above the bar | above chrome | with the bar |
+| The bar (mic, Falar, Sair do palco, on-air strip) | bottom, stage slot | chrome | no |
+| Call chrome (top status, control bar) | hidden under `watchPartyChrome` | | |
+
+Anything not in these three tables is a bug against §10.4.
+
 ## 11. Open questions for Rafael
 
 1. The status line "absent while green": does he want a permanent green

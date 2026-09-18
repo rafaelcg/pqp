@@ -147,7 +147,8 @@ export function WatchPartyStage({
           // path threads.
           <HlsWatchPlayer
             src={liveStream.hlsUrl}
-            layout="tile"
+            /* The picture only (§10.4): this stage draws the chrome. */
+            layout="monitor"
             forceMuted
             delaySeconds={liveStream.delaySeconds}
             mode={watchPlayerMode(hlsModeOf(liveStream))}
