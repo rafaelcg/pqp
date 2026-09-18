@@ -474,7 +474,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
-import { WatchPartyPresenterStage } from "@/components/watch-party/presenter-stage";
+import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
+import { WatchPartyActivityFeed } from "@/components/watch-party/watch-party-activity-feed";
 import { slowModeKey } from "@/components/watch-party/watch-party-options";
 
 export type TokenResolver = (options?: {
@@ -1283,6 +1284,8 @@ function MainAppContent({
   const [stageBarEl, setStageBarEl] = useState<HTMLDivElement | null>(null);
   const [playerBarEl, setPlayerBarEl] = useState<HTMLDivElement | null>(null);
   const watchPartyBarSlot = playerBarEl ?? stageBarEl;
+  /** The host's status line over the top edge of the stage (pass 3). */
+  const [statusSlotEl, setStatusSlotEl] = useState<HTMLDivElement | null>(null);
   const handleSplitState = useCallback((next: CallSplitState) => {
     setSplitState((previous) =>
       previous.active === next.active &&
@@ -7211,6 +7214,7 @@ function MainAppContent({
             cameraOn={voiceState.isCameraOn}
             slot="chrome"
             barSlot={watchPartyBarSlot}
+            statusSlot={statusSlotEl}
             headerLeading={
               partyOwnsHeader ? (
                 <button
@@ -7506,9 +7510,13 @@ function MainAppContent({
       {/* THE BAR'S HOME ON THE STAGE PANE, while a party is live. The
           party panel (chrome slot, above the split) and the guests overlay
           portal their controls here. Empty, it draws nothing. */}
-      {partyOwnsHeader && (
-        <WatchPartyBarSlot placement="stage" onElement={setStageBarEl} />
-      )}
+      {partyOwnsHeader &&
+        (stageShape === "expanded" || stageShape === "fullscreen") && (
+          <>
+            <WatchPartyBarSlot placement="status" onElement={setStatusSlotEl} />
+            <WatchPartyBarSlot placement="stage" onElement={setStageBarEl} />
+          </>
+        )}
       {/* THE STAGE IS NOT MOUNTED HERE ANY MORE, only addressed. The watch
           surface lives at the root of this component so that clicking another
           channel cannot unmount it (and destroy hls.js with it); this is the
@@ -7539,23 +7547,45 @@ function MainAppContent({
             // `CallStage` before the seat does. See `CallStage.isWatchPartyChannel`.
             isWatchPartyChannel={isWatchPartySplit}
             presenterStage={(stream) => (
-              <WatchPartyPresenterStage
-                stream={stream}
-                liveStream={
-                  voiceState.channelLive[selectedChannel.id]?.stream ?? null
-                }
-                channelId={selectedChannel.id}
-                audienceCount={watchAudienceCount(
-                  voiceState.channelLive[selectedChannel.id],
-                  voiceState.occupancy[selectedChannel.id],
-                )}
-                hands={
-                  watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []
-                }
-                onInvite={(userId) =>
-                  void handleWatchPartyStage("invite", userId)
-                }
-              />
+              /* ONE STAGE (pass 3 of `docs/plans/WATCH_PARTY_UI.md`): what
+                 the audience sees once the transcode is up, the host's own
+                 capture until then, the reconnecting pill over either. The
+                 activity strip under it is on loan until pass 4 folds it
+                 into the chat. */
+              <div className="flex h-full min-h-0 w-full flex-col">
+                <WatchPartyStage
+                  state={
+                    voiceState.voiceChannelId === selectedChannel.id &&
+                    voiceState.sharePublishRecovering
+                      ? "reconnecting"
+                      : voiceState.channelLive[selectedChannel.id]?.stream
+                        ? "live"
+                        : stream
+                          ? "preparing"
+                          : "holding"
+                  }
+                  hostSide
+                  captureStream={stream}
+                  liveStream={
+                    voiceState.channelLive[selectedChannel.id]?.stream ?? null
+                  }
+                  className="min-h-0 flex-1"
+                />
+                <WatchPartyActivityFeed
+                  className="h-36 shrink-0"
+                  channelId={selectedChannel.id}
+                  audienceCount={watchAudienceCount(
+                    voiceState.channelLive[selectedChannel.id],
+                    voiceState.occupancy[selectedChannel.id],
+                  )}
+                  hands={
+                    watchParties.byChannel[selectedChannel.id]?.stage.hands ?? []
+                  }
+                  onInvite={(userId) =>
+                    void handleWatchPartyStage("invite", userId)
+                  }
+                />
+              </div>
             )}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}

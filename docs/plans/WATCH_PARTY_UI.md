@@ -183,6 +183,10 @@ Build the bottom bar and move regions 4 and 8's duplicates into it.
 
 - New component `WatchPartyBar` positioned at the bottom of the stage,
   overlapping the picture, same height and baseline as the composer.
+  (Built 2026-09-18 as `WatchPartyBarSlot`: a row in the flow under the
+  picture rather than an overlay, after the overlay version climbed over
+  the header whenever the stage pane was empty. The overlay returns in
+  pass 5 as part of `StageChrome`, where the fade rules live.)
 - Host group: mic (pill + meter, today's `data-watch-party-mic`), share
   button with menu (Compartilhar tela / Trocar / Parar de compartilhar),
   camera (only when `LIVE_HLS_CAMERA` config says yes), Áudio (mixer
@@ -278,8 +282,12 @@ Risk: medium. Chat is shared with every channel type; the system lines
 need a message kind the chat list already understands, or a local overlay
 of non-message rows. Prefer the overlay: no protocol change.
 
-### Pass 5: viewer polish and phones
+### Pass 5: viewer polish, the chrome, and phones
 
+- The layers over the picture, per §10: one `StageChrome`, one z scale,
+  no full-tile click targets, faded means `pointer-events-none`, and the
+  clickability check in Playwright.
+- Fullscreen and volume move from the player's own bar into the bar.
 - Reactions in the bar with the same burst rendering on the stage.
 - Fullscreen: bar fades, chat overlay toggle stays in the bar.
 - Phone layout per §3.5.
@@ -496,7 +504,105 @@ handlers stay).
 |---|---|
 | `FeatureHint watchPartyViewer` | keep, anchored to the bar — pass 2 |
 
-## 10. Open questions for Rafael
+## 10. The layers over the picture
+
+Added 2026-09-18 after André's note: "some buttons were not clickable
+because of the overlay that appears when you hover over the stream". Mapped
+from the code, not from a screenshot, because the failure is in the stacking
+and the pointer rules rather than in what is visible.
+
+### 10.1 What is drawn over a picture today
+
+Three surfaces draw a picture, and each has its own set of layers.
+
+**The seatless viewer's player** (`hls-watch-player.tsx`, `layout="cinema"`):
+
+| Layer | z | Pointer | Fades | What |
+|---|---|---|---|---|
+| holding / dead / VOD loading | 10 | none, except the dead card | no | full-bleed state cards |
+| camera PiP corner box | 30 | auto, own hover-only swap and corner buttons | no | the presenter's face |
+| delay badge + LL badge | 40 | none on the box, auto on the badge | no | top left |
+| slow-start notice | 40 | none | no | top left, under the badge |
+| chrome: top gradient row (meta, Parar de assistir before pass 2) | 50 | container none, row auto | yes | gradient `pb-8` reaches well under the buttons |
+| chrome: bottom bar (play, volume, live, fit, PiP, quality, fullscreen, and since pass 2 the party bar slot) | 50 | container none, row auto | yes | gradient `pt-10` reaches well above the buttons |
+| quality menu | inside 50 | auto | pinned open | anchored `bottom-10 right-0` |
+| chat overlay in fullscreen | 40 (CSS) | auto | no | right column; was 20 once and Leave fullscreen sat under it |
+| reactions burst | 20 | none | no | `live-reactions-overlay.tsx` |
+
+**The seated stage** (`call-stage.tsx`, host and guests):
+
+| Layer | z | Pointer | Fades | What |
+|---|---|---|---|---|
+| top status overlay (presenter name, warnings) | 10 | container none, buttons auto | yes | hidden for the local presenter under `watchPartyChrome` |
+| warning strips (mic fallback, danger) | 20 / 30 | auto | no | full-width, top |
+| control bar (hidden under `watchPartyChrome`; the party bar replaces it) | 20 | container none, groups auto | yes | bottom |
+| per-tile hover labels and menus (`ScreenTileFrame`, camera tiles) | 20 | auto | hover-only on pointer devices | `opacity-0` until `group-hover` |
+| tile zoom target (`cursor-zoom-in`, full tile) | 1 | auto | no | **covers the whole tile**; anything in the tile below z-20 is unreachable |
+| drag-to-move self tile | 10 | auto | no | |
+| fullscreen container | 50 (fixed) | | | in-page fullscreen |
+
+**The host's new stage** (`watch-party-stage.tsx`, pass 3): status pill top
+left (portalled, z-30 slot), reconnecting pill top left, PiP bottom left,
+self-monitor toggle top right, preparing line bottom centre. None fade. The
+party bar is a row under the picture, not an overlay (pass 2, revised).
+
+### 10.2 The rules that exist, and where they disagree
+
+1. **Two fade systems.** `useIdleChrome` runs once in the player and once in
+   the call stage, each with its own `barHovered` / `barFocused` /
+   menu-open pinned set. A control that belongs to neither (a portalled
+   party control, a badge) either never fades or fades with whichever
+   container it landed in.
+2. **Hidden chrome swallows the first press.** `swallowPressWhileHidden`
+   on both bars: a press on a faded bar wakes it and is otherwise dropped.
+   Correct on purpose, and exactly what "the button did not work" feels
+   like from the other side, because the bar is at `opacity-0` but still
+   laid out, so the pointer is on a button it cannot see.
+3. **`pointer-events-none` containers with `pointer-events-auto` rows.** The
+   pattern is right, but it is applied per element by hand in six places,
+   and a child that forgets `pointer-events-auto` is a dead button, while a
+   container that forgets `pointer-events-none` blocks the picture
+   underneath (double-click, tap to toggle).
+4. **Gradients wider than their buttons.** The top row pads `pb-8` and the
+   bottom bar `pt-10`, both `pointer-events-auto`. Together they own about
+   a third of a 16:9 picture, and a press there wakes or swallows instead
+   of reaching the tile, the badge or the reaction under it.
+5. **Full-tile click targets.** The seated stage's zoom target is an
+   `absolute inset-0 z-[1]` button over every share tile. Every control
+   inside the tile has to out-rank it, and the ones that do are at z-20 by
+   convention, not by rule. This is the most likely cause of the report:
+   a control drawn into a tile at the default z sits under the zoom target
+   and takes no clicks.
+6. **The z scale is folklore.** 1, 10, 20, 30, 40, 50 are chosen per file
+   with comments explaining the last collision (`z-30 is above the pictures
+   (z-20) and below the chrome (z-50)`; `z-20 sat under it, so Leave
+   fullscreen could not be clicked`). Each fix is local.
+
+### 10.3 What pass 5 does about it
+
+- **One chrome component, `StageChrome`**, used by the player, the seated
+  stage and the host stage: a top row (badges left, meta right) and a
+  bottom row (the bar), one `useIdleChrome`, one pinned set. Gradients are
+  the rows' own boxes and no taller.
+- **One z scale**, exported from one module and imported everywhere:
+  `picture 0 < state cards 10 < reactions 20 < tile controls 30 < badges 40
+  < chrome 50 < menus 60`. The chat overlay is 45. Nothing in a stage file
+  writes a `z-*` literal.
+- **No full-tile click target above z 0.** Zoom is a control on the tile's
+  chrome, or the tile's own `onDoubleClick`, never an invisible button
+  covering the controls.
+- **Faded means gone.** Hidden chrome gets `pointer-events-none` as well
+  as `opacity-0`, so a press on a faded bar reaches the picture and wakes
+  the chrome through the stage's own pointer handler, not through a button
+  the person cannot see. The wake still costs the first press nothing
+  visible changes on, which is the accepted cost of a bar that fades.
+- **Every overlay declares its pointer rule** in the component that draws
+  it, and a Playwright check walks every `button` inside the stage in the
+  idle, hovered and fullscreen states and asserts `elementFromPoint` at its
+  centre is the button itself. That is the test that would have caught the
+  reported bug and the two collisions the comments record.
+
+## 11. Open questions for Rafael
 
 1. The status line "absent while green": does he want a permanent green
    dot as reassurance, YouTube-style? Default in this plan: absent.

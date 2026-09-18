@@ -66,7 +66,7 @@ import {
 } from "@/components/watch-party/watch-party-transmission";
 import { VoiceTrackModeToggle } from "@/components/watch-party/voice-track-mode-toggle";
 import type { VoiceTrackMode } from "@/lib/voice-track-mode";
-import { StreamStartingSoon } from "@/components/voice/stream-starting-soon";
+import { WatchPartyStage } from "@/components/watch-party/watch-party-stage";
 import {
   browserTimezone,
   formatSessionRelativeTime,
@@ -145,6 +145,12 @@ export interface WatchPartyPanelProps {
    * way the dock used to.
    */
   barSlot?: HTMLElement | null;
+  /**
+   * Where the host's transmission status goes (pass 3): the slot `App`
+   * draws over the top edge of the stage pane. `null` draws it as the row
+   * above the split it used to be.
+   */
+  statusSlot?: HTMLElement | null;
   /** START_WATCH_PARTY on this channel: may create one, may take the stage. */
   canStart: boolean;
   /** True while this person holds a seat in this channel's voice room. */
@@ -2645,8 +2651,13 @@ function LiveSurface(
       onStreamQualityChange={setLiveQuality}
       onOpenMixer={() => setMixerOpen(true)}
       detailsInDialog
+      overlay={Boolean(props.statusSlot)}
     />
   );
+  const transmissionMounted =
+    transmission && props.statusSlot
+      ? createPortal(transmission, props.statusSlot)
+      : transmission;
 
   /**
    * THE OPTIONS ARE A DIALOG NOW, NOT A DRAWER IN THE COLUMN.
@@ -2694,7 +2705,7 @@ function LiveSurface(
     return (
       <div className="relative shrink-0">
         {bar}
-        {transmission}
+        {transmissionMounted}
         {presenterDock}
         {/* Portalled by `Dialog`, so it takes no room in this column and the
             split below it never moves. */}
@@ -2706,9 +2717,12 @@ function LiveSurface(
     );
   }
 
-  // Nothing on screen yet, and the person is not in the call: say so instead
-  // of rendering nothing. Which "nothing" it is matters: see
-  // `someoneIsSharing` above.
+  // Nothing on screen yet, and the person is not in the call: the stage's
+  // own holding or preparing state (pass 3 of `docs/plans/WATCH_PARTY_UI.md`)
+  // instead of rendering nothing. Which "nothing" it is matters: see
+  // `someoneIsSharing` above. The checklist that used to repeat here lives
+  // in the green room only; its one blocking rule (Firefox) is the share
+  // button's disabled tooltip on the bar.
   if (!props.hasStream && !props.inCall) {
     const preparing = props.someoneIsSharing === true;
     const hostSide = runningTheShow && props.canStart;
@@ -2719,58 +2733,11 @@ function LiveSurface(
           surfaceHeight(props.fill, "h-[68svh] min-h-[280px]"),
         )}
       >
-        <div
-          data-testid="watch-party-waiting"
-          data-watch-party-waiting={preparing ? "preparing" : "idle"}
-          className="relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden bg-black"
-        >
-          <StreamStartingSoon
-            caption={
-              preparing
-                ? t("watchParty.live.preparing")
-                : t("watchParty.live.waiting")
-            }
-          >
-            <div className="flex flex-col items-center gap-2 px-6 text-center">
-              <Radio
-                className={cn(
-                  "h-5 w-5 text-danger",
-                  preparing && "motion-safe:animate-pulse",
-                )}
-                aria-hidden
-              />
-              {/* The specific sentence, kept even though the headline and the
-                  caption above it already say "hang in there": a viewer who
-                  landed here after a reload has no idea yet whether anyone is
-                  even sharing, and the host needs their own line telling
-                  them what to do about it. Neither is the fun copy's job. */}
-              <p className="max-w-sm text-xs text-paper-muted">
-                {preparing
-                  ? hostSide
-                    ? t("watchParty.live.preparingHost")
-                    : t("watchParty.live.preparingBody", {
-                        name: party.hostDisplayName,
-                      })
-                  : hostSide
-                    ? t("watchParty.live.waitingHost")
-                    : t("watchParty.live.waitingBody", {
-                        name: party.hostDisplayName,
-                      })}
-              </p>
-              {/* THE CHECKLIST STAYS, THE BUTTON WENT (2026-09-13): the
-                  dock's Compartilhar tela is the same action one row up,
-                  and a second copy here was gap 2 of the presenter-UI
-                  plan. The Firefox block moved with it: `presenterActions`
-                  disables the dock's share on the same rule. */}
-              {hostSide && !preparing && props.onShareScreen && (
-                <GoLiveChecklist
-                  items={liveChecklistItems}
-                  className="mt-2 max-w-sm text-left"
-                />
-              )}
-            </div>
-          </StreamStartingSoon>
-        </div>
+        <WatchPartyStage
+          state={preparing ? "preparing" : "holding"}
+          hostSide={hostSide}
+          hostName={party.hostDisplayName}
+        />
       </div>
     );
   }

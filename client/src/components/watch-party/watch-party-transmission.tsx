@@ -165,6 +165,7 @@ export function WatchPartyTransmission({
   onStreamQualityChange,
   onOpenMixer,
   detailsInDialog = false,
+  overlay = false,
 }: {
   /** The channel's live stream, or null while nothing is being transcoded. */
   stream: LiveHlsStream | null;
@@ -252,6 +253,14 @@ export function WatchPartyTransmission({
    * the row unfolds inline exactly as it did, which is what the tests pin.
    */
   detailsInDialog?: boolean;
+  /**
+   * Drawn over the picture (pass 3 of `docs/plans/WATCH_PARTY_UI.md`): a
+   * pill at the top edge of the stage instead of a strip above the split.
+   * While the health is `ok` the sentence folds away and the dot alone
+   * stays, still the button that opens the details; there is nothing to
+   * say, and the picture is the point.
+   */
+  overlay?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -523,9 +532,11 @@ export function WatchPartyTransmission({
       data-tx-open={open ? "" : undefined}
       data-tx-health={health}
       className={cn(
-        detailsInDialog
-          ? "shrink-0 border-b border-ink-4/60 bg-ink-2 px-3 py-1"
-          : "shrink-0 border-b border-ink-4/60 bg-ink-2/60 px-3 py-1.5",
+        overlay
+          ? "max-w-full rounded-full bg-black/60 px-2.5 py-1"
+          : detailsInDialog
+            ? "shrink-0 border-b border-ink-4/60 bg-ink-2 px-3 py-1"
+            : "shrink-0 border-b border-ink-4/60 bg-ink-2/60 px-3 py-1.5",
         className,
       )}
     >
@@ -566,7 +577,10 @@ export function WatchPartyTransmission({
             {t("watchParty.tx.title")}
           </span>
         )}
-        <span data-testid="watch-party-tx-summary" className="truncate">
+        <span
+          data-testid="watch-party-tx-summary"
+          className={cn("truncate", overlay && health === "ok" && "sr-only")}
+        >
           {statusLine}
         </span>
         {/* IN THE COLLAPSED ROW, because the panel is collapsed by default and
