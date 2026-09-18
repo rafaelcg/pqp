@@ -1,5 +1,6 @@
 import {
   parseCommunityLink,
+  type Channel,
   type Gif,
   type PublicUser,
   type Server,
@@ -100,6 +101,7 @@ import {
   CommunityHomeIntroCard,
   CommunityHomeStaffGuide,
 } from "./community-home-onboarding";
+import { OverviewStartHere } from "./overview-start-here";
 
 /**
  * Baú: the durable media feed of a server. Posts, likes, flat comments,
@@ -140,6 +142,10 @@ type Props = {
   onOpenNav?: () => void;
   /** Instance `COMMUNITY_HOME_ENABLED`. Hides the dead "Turn Baú on" path. */
   homeFeatureOn: boolean;
+  /** Visible channels of this server. Start here picks from them. */
+  channels?: readonly Channel[];
+  /** Opens a Start here destination. Same path as the channel list. */
+  onOpenChannel?: (channelId: string) => void;
   /** Opens community settings so staff can turn Baú on from the poster. */
   onOpenServerSettings?: () => void;
   /** Cover, icon, tagline, about, links: keep the rail in sync after a save. */
@@ -1844,6 +1850,8 @@ export function CommunityHomeFeed({
   onOpenServerSettings,
   onServerUpdated,
   refreshSignal = 0,
+  channels = [],
+  onOpenChannel,
 }: Props) {
   const { t } = useTranslation();
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
@@ -2355,7 +2363,7 @@ export function CommunityHomeFeed({
         )}
         <div
           className={cn(
-            server.isCommunity ? "px-5 pb-10 pt-2 sm:px-8" : "px-3 py-4 sm:px-4",
+            server.isCommunity ? "px-5 pb-10 pt-6 sm:px-8" : "px-3 py-4 sm:px-4",
           )}
         >
         <div
@@ -2432,6 +2440,15 @@ export function CommunityHomeFeed({
 
           {(!canManageServer || staffTab === "feed") && (
             <>
+              {server.isCommunity && onOpenChannel && (
+                <OverviewStartHere
+                  serverId={serverId}
+                  channels={channels}
+                  editing={identityEditing}
+                  canManageServer={canManageServer}
+                  onOpenChannel={onOpenChannel}
+                />
+              )}
               {showIntro && (
                 <CommunityHomeIntroCard
                   serverName={serverName}

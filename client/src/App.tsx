@@ -8560,6 +8560,8 @@ function MainAppContent({
               );
             }}
             refreshSignal={communityHomeUpdateNudge}
+            channels={channels}
+            onOpenChannel={(channelId) => void openChannel(channelId)}
           />
         )}
 
