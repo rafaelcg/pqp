@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
+  ensureOsCanExcludeCallAudio,
+  liveScreenCaptureEnvironment,
   needsShareAudioPrompt,
   offersBrowserSystemAudio,
   offersShellSystemAudio,
-  liveScreenCaptureEnvironment,
+  osCanExcludeCallAudioFromCapabilities,
+  osCanExcludeCallFromUa,
+  resetOsCanExcludeCallAudioForTests,
   screenCaptureOptions,
+  setOsCanExcludeCallAudioForTests,
+  shouldStripLeakedSystemAudio,
+  stripLeakedSystemAudioTracks,
   shareStreamHasAudio,
   shellCarriesScreenAudio,
   steersAtBrowserTab,
@@ -16,6 +23,7 @@ const browser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
   shellPlatform: null,
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: true,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -24,6 +32,17 @@ const oldBrowser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
   shellPlatform: null,
   supportsRestrictOwnAudio: false,
+  osCanExcludeCallAudio: false,
+  sharePickerOffersAudio: false,
+  shellSystemAudio: null,
+  shellRestrictOwnAudio: null,
+};
+/** Chrome on Windows 10: the constraint flag is on, exclude cannot run. */
+const win10Browser: ScreenCaptureEnvironment = {
+  isDesktopShell: false,
+  shellPlatform: null,
+  supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: false,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -33,6 +52,7 @@ const shell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: false,
+  osCanExcludeCallAudio: false,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -41,6 +61,7 @@ const newShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: true,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -49,6 +70,7 @@ const pickerShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: true,
   sharePickerOffersAudio: true,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -58,6 +80,7 @@ const capableShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: true,
   sharePickerOffersAudio: true,
   shellSystemAudio: "loopback",
   shellRestrictOwnAudio: true,
@@ -67,6 +90,7 @@ const capableMacShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "darwin",
   supportsRestrictOwnAudio: true,
+  osCanExcludeCallAudio: false,
   sharePickerOffersAudio: false,
   shellSystemAudio: "none",
   shellRestrictOwnAudio: true,
@@ -76,6 +100,7 @@ const macShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "darwin",
   supportsRestrictOwnAudio: false,
+  osCanExcludeCallAudio: false,
   sharePickerOffersAudio: false,
   shellSystemAudio: null,
   shellRestrictOwnAudio: null,
@@ -93,6 +118,78 @@ describe("screenCaptureOptions", () => {
 
   it("keeps the machine's mixer off on a browser that cannot strip the call", () => {
     expect(screenCaptureOptions(true, oldBrowser).systemAudio).toBe("exclude");
+  });
+
+  it("still offers computer sound off Windows 11, because the strip is the backstop", () => {
+    // REGRESSION, 2026-09-18. The UA-Client-Hints version probe used to gate
+    // this as a third door, and it shut the machine's sound off on every host
+    // that is not Windows 11: a whole-screen or window watch party went out
+    // with no film on it, and the audience heard the presenter's mic branch
+    // alone. The browser path is belt and braces without the guess — we ask
+    // with `restrictOwnAudio: true`, and `stripLeakedSystemAudioTracks` reads
+    // back what the engine applied and drops the track when exclude did not
+    // take. `osCanExcludeCallAudio` is the SHELL's gate, where it is a
+    // capability the binary states rather than an OS version we infer.
+    expect(screenCaptureOptions(false, win10Browser).systemAudio).toBe(
+      "include",
+    );
+    expect(offersBrowserSystemAudio(win10Browser)).toBe(true);
+    expect(screenCaptureOptions(false, win10Browser).audio).toMatchObject({
+      restrictOwnAudio: true,
+    });
+  });
+
+  it("asks a restrictOwnAudio browser for per-app window audio, not the mixer", () => {
+    // `"window"` is that window's own sound and cannot carry the call, so it
+    // is asked for wherever the engine knows the constraint — not only on
+    // Windows 11, and not withheld from a watch party, which is the share
+    // that loses the most when the window pane goes silent.
+    expect(screenCaptureOptions(false, browser).windowAudio).toBe("window");
+    expect(screenCaptureOptions(false, win10Browser).windowAudio).toBe(
+      "window",
+    );
+    expect(
+      screenCaptureOptions(false, browser, { watchParty: true }).windowAudio,
+    ).toBe("window");
+    // An engine that never heard of the constraint keeps Chrome's mixer out
+    // the only way it can.
+    expect(screenCaptureOptions(false, oldBrowser).windowAudio).toBe("exclude");
+  });
+
+  it("asks for every sound a web watch-party host can carry", () => {
+    // THE WHOLE REQUEST, in one place, for the one capture whose audio an
+    // audience listens to. Each member is here because losing it has cost a
+    // party its sound: `audio` is a dictionary and not `false` (the tab's own
+    // sound), `restrictOwnAudio` keeps the call out of a mixer tap,
+    // `systemAudio: "include"` is what a whole-screen share carries, and
+    // `windowAudio: "window"` is what a window share carries. The three
+    // processing flags stay off because a film is not a phone call.
+    const options = screenCaptureOptions(false, win10Browser, {
+      watchParty: true,
+    });
+    expect(options.audio).toMatchObject({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      restrictOwnAudio: true,
+    });
+    expect(options.systemAudio).toBe("include");
+    expect(options.windowAudio).toBe("window");
+  });
+
+  it("keeps the window pane out of a tab-steered share", () => {
+    // A tab share's clean path is the tab's own sound; the window pane is not
+    // in play and asking for it would only widen the picker.
+    expect(
+      screenCaptureOptions(false, browser, { preferBrowserTab: true })
+        .windowAudio,
+    ).toBe("exclude");
+  });
+
+  it("never sends windowAudio in the desktop shell", () => {
+    expect(screenCaptureOptions(false, capableShell)).not.toHaveProperty(
+      "windowAudio",
+    );
   });
 
   it("still includes when the caller also opted in", () => {
@@ -226,6 +323,7 @@ describe("screenCaptureOptions", () => {
       preferBrowserTab: true,
     });
     expect(options.systemAudio).toBe("exclude");
+    expect(options.windowAudio).toBe("exclude");
     expect(options.preferCurrentTab).toBeUndefined();
     expect(options.monitorTypeSurfaces).toBe("exclude");
     expect(options.selfBrowserSurface).toBe("exclude");
@@ -429,10 +527,12 @@ describe("capturesSystemAudio", () => {
     ).toBe(false);
   });
 
-  it("is false for a window share with sound", () => {
+  it("is true for a window share that carries sound", () => {
+    // Chrome's default windowAudio is the mixer. Electron attaches loopback
+    // to windows. This is the Pocket Bard path, and it can echo.
     expect(
       capturesSystemAudio({ displaySurface: "window", hasAudio: true }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("is false when the browser hides which surface was picked", () => {
@@ -474,6 +574,197 @@ describe("shareStreamHasAudio", () => {
   });
 });
 
+describe("osCanExcludeCallFromUa", () => {
+  it("treats UA-CH major 13+ as Windows 11", () => {
+    expect(osCanExcludeCallFromUa("Windows", "13.0.0")).toBe(true);
+    expect(osCanExcludeCallFromUa("Windows", "15.0.0")).toBe(true);
+  });
+
+  it("treats NT build 22000+ as Windows 11 if a browser thaws the version", () => {
+    expect(osCanExcludeCallFromUa("Windows", "10.0.22000")).toBe(true);
+    expect(osCanExcludeCallFromUa("Windows", "10.0.22631")).toBe(true);
+  });
+
+  it("refuses Windows 10 and Server 2022", () => {
+    expect(osCanExcludeCallFromUa("Windows", "10.0.0")).toBe(false);
+    expect(osCanExcludeCallFromUa("Windows", "10.0.19045")).toBe(false);
+    expect(osCanExcludeCallFromUa("Windows", "10.0.20348")).toBe(false);
+  });
+
+  it("refuses a missing hint, macOS, and ChromeOS", () => {
+    expect(osCanExcludeCallFromUa("Windows", undefined)).toBe(false);
+    expect(osCanExcludeCallFromUa("macOS", "13.0.0")).toBe(false);
+    expect(osCanExcludeCallFromUa("Chrome OS", "15.0.0")).toBe(false);
+  });
+});
+
+describe("shouldStripLeakedSystemAudio", () => {
+  it("strips a monitor tap when restrictOwnAudio came back false", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "monitor",
+        hasAudio: true,
+        restrictOwnAudio: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("strips a window tap the same way", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "window",
+        hasAudio: true,
+        restrictOwnAudio: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not strip when settings omit restrictOwnAudio", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "monitor",
+        hasAudio: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("strips when capabilities cannot include true", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "monitor",
+        hasAudio: true,
+        restrictOwnAudioCaps: [false],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not strip a tab share", () => {
+    expect(
+      shouldStripLeakedSystemAudio({
+        displaySurface: "browser",
+        hasAudio: true,
+        restrictOwnAudio: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+/**
+ * THE TAB SHARE IS UNTOUCHABLE, AND THIS IS WHERE THAT IS PROVED.
+ *
+ * `shouldStripLeakedSystemAudio` above is the predicate; this is the function
+ * that actually reaches into the stream and calls `removeTrack` + `stop`, and
+ * until now it had no test of its own. On the night of 2026-09-18 a watch
+ * party's sound went quiet and the question asked of this commit was whether
+ * it could be this: a Chrome TAB share on macOS, where `restrictOwnAudio` is
+ * a Windows-shaped constraint and `getSettings()` may report it false or omit
+ * it entirely.
+ *
+ * It cannot. The surface is read from the VIDEO track and gates everything
+ * else: `"browser"` is not a mixer tap, so no reading of `restrictOwnAudio`
+ * on the audio track is ever consulted. The cases below are every shape a Mac
+ * can hand back, and the answer is the same in all of them. There is also no
+ * gain anywhere on this path, so "attenuated" is not a state it can produce:
+ * a track is either removed whole or left exactly as the picker gave it.
+ */
+describe("stripLeakedSystemAudioTracks on a tab share", () => {
+  function fakeStream(
+    surface: string | undefined,
+    audioSettings: { restrictOwnAudio?: boolean } | "throws",
+    caps?: boolean[],
+  ) {
+    const audio = {
+      kind: "audio",
+      stopped: false,
+      stop() {
+        this.stopped = true;
+      },
+      getSettings: () => {
+        if (audioSettings === "throws") {
+          throw new Error("no getSettings here");
+        }
+        return audioSettings;
+      },
+      getCapabilities: () =>
+        caps === undefined ? {} : { restrictOwnAudio: caps },
+    };
+    const video = {
+      kind: "video",
+      stop() {},
+      getSettings: () => ({ displaySurface: surface }),
+    };
+    const removed: unknown[] = [];
+    const stream = {
+      getVideoTracks: () => [video],
+      getAudioTracks: () => [audio],
+      removeTrack: (track: unknown) => {
+        removed.push(track);
+      },
+    };
+    return { stream: stream as unknown as MediaStream, audio, removed };
+  }
+
+  it("keeps the audio when the tab reports restrictOwnAudio false", () => {
+    // The exact macOS shape: the constraint is known to the engine (so we
+    // asked for it), the platform has nothing to exclude, and it comes back
+    // false. On a monitor that is a strip; on a tab it is nothing at all.
+    const { stream, audio, removed } = fakeStream("browser", {
+      restrictOwnAudio: false,
+    });
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("keeps the audio when the tab omits restrictOwnAudio entirely", () => {
+    const { stream, audio, removed } = fakeStream("browser", {});
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("keeps the audio when the tab's capabilities cannot include true", () => {
+    const { stream, audio, removed } = fakeStream(
+      "browser",
+      { restrictOwnAudio: false },
+      [false],
+    );
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("keeps the audio when the audio track's getSettings throws", () => {
+    const { stream, audio, removed } = fakeStream("browser", "throws");
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("keeps the audio when the surface is unknown", () => {
+    // An engine that omits `displaySurface` is one with no system-audio
+    // capture to begin with. Unknown reads as "not a mixer tap", which is the
+    // same rule `capturesSystemAudio` follows.
+    const { stream, audio, removed } = fakeStream(undefined, {
+      restrictOwnAudio: false,
+    });
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(false);
+    expect(removed).toEqual([]);
+    expect(audio.stopped).toBe(false);
+  });
+
+  it("does strip the monitor tap this exists for", () => {
+    // The control. Without it the five cases above would also pass against a
+    // function that never strips anything.
+    const { stream, audio, removed } = fakeStream("monitor", {
+      restrictOwnAudio: false,
+    });
+    expect(stripLeakedSystemAudioTracks(stream)).toBe(true);
+    expect(removed).toEqual([audio]);
+    expect(audio.stopped).toBe(true);
+  });
+});
+
 /**
  * THE READER, AND THE BUG THAT MADE IT ONE FUNCTION.
  *
@@ -483,9 +774,34 @@ describe("shareStreamHasAudio", () => {
  * picker was ready to offer the box. A capability the page forgets to pass is a
  * capability the shell does not have, so there is one reader now and this is it.
  */
+describe("osCanExcludeCallAudioFromCapabilities", () => {
+  it("is true only when the shell offers loopback and restrictOwnAudio", () => {
+    expect(
+      osCanExcludeCallAudioFromCapabilities({
+        systemAudio: "loopback",
+        restrictOwnAudio: true,
+      }),
+    ).toBe(true);
+    expect(
+      osCanExcludeCallAudioFromCapabilities({
+        systemAudio: "none",
+        restrictOwnAudio: true,
+      }),
+    ).toBe(false);
+    expect(
+      osCanExcludeCallAudioFromCapabilities({
+        systemAudio: "loopback",
+        restrictOwnAudio: false,
+      }),
+    ).toBe(false);
+    expect(osCanExcludeCallAudioFromCapabilities(null)).toBeUndefined();
+  });
+});
+
 describe("liveScreenCaptureEnvironment", () => {
   afterEach(() => {
     delete (globalThis as { window?: unknown }).window;
+    resetOsCanExcludeCallAudioForTests();
   });
 
   function setShell(shell: unknown): void {
@@ -513,9 +829,13 @@ describe("liveScreenCaptureEnvironment", () => {
     expect(env.sharePickerOffersAudio).toBe(true);
     // And the whole point of reading it: a watch party there is offered the
     // machine's sound, because there is no tab to take it from.
-    expect(offersShellSystemAudio({ ...env, supportsRestrictOwnAudio: true })).toBe(
-      true,
-    );
+    expect(
+      offersShellSystemAudio({
+        ...env,
+        supportsRestrictOwnAudio: true,
+        osCanExcludeCallAudio: true,
+      }),
+    ).toBe(true);
   });
 
   it("falls back to the flags a 0.1.5 shell publishes", () => {
@@ -541,5 +861,81 @@ describe("liveScreenCaptureEnvironment", () => {
     expect(env.shellPlatform).toBeNull();
     expect(env.shellSystemAudio).toBeNull();
     expect(steersAtBrowserTab(env, { preferBrowserTab: true })).toBe(true);
+  });
+
+  it("takes Win11 exclude from the shell, not the UA-CH cache", () => {
+    resetOsCanExcludeCallAudioForTests();
+    setShell({
+      isElectron: true,
+      platform: "win32",
+      capabilities: {
+        displayMedia: true,
+        systemAudio: "loopback",
+        restrictOwnAudio: true,
+        pickerOffersAudio: true,
+        version: "0.1.6",
+      },
+    });
+    expect(liveScreenCaptureEnvironment().osCanExcludeCallAudio).toBe(true);
+  });
+
+  it("refuses computer sound when the shell says loopback is off", () => {
+    setOsCanExcludeCallAudioForTests(true);
+    setShell({
+      isElectron: true,
+      platform: "win32",
+      capabilities: {
+        displayMedia: true,
+        systemAudio: "none",
+        restrictOwnAudio: false,
+        pickerOffersAudio: false,
+        version: "0.1.6",
+      },
+    });
+    expect(liveScreenCaptureEnvironment().osCanExcludeCallAudio).toBe(false);
+  });
+
+  it("keeps the UA-CH cache in a browser", async () => {
+    setShell(undefined);
+    setOsCanExcludeCallAudioForTests(true);
+    expect(liveScreenCaptureEnvironment().osCanExcludeCallAudio).toBe(true);
+    expect(await ensureOsCanExcludeCallAudio()).toBe(true);
+  });
+});
+
+describe("ensureOsCanExcludeCallAudio", () => {
+  afterEach(() => {
+    resetOsCanExcludeCallAudioForTests();
+  });
+
+  it("retries after a thrown UA-CH probe instead of caching false", async () => {
+    let calls = 0;
+    const previous = globalThis.navigator;
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        mediaDevices: previous?.mediaDevices,
+        userAgentData: {
+          platform: "Windows",
+          getHighEntropyValues: async () => {
+            calls += 1;
+            if (calls === 1) {
+              throw new Error("transient");
+            }
+            return { platformVersion: "13.0.0" };
+          },
+        },
+      },
+    });
+    try {
+      expect(await ensureOsCanExcludeCallAudio()).toBe(false);
+      expect(await ensureOsCanExcludeCallAudio()).toBe(true);
+      expect(calls).toBe(2);
+    } finally {
+      Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        value: previous,
+      });
+    }
   });
 });

@@ -30,18 +30,22 @@ describe("the share capabilities the preload publishes", () => {
     assert.match(preload, /displayMedia:\s*true/);
   });
 
-  it("promises loopback audio on Windows only", () => {
+  it("promises loopback audio on Windows only when this OS can exclude us", () => {
     // Chromium's loopback device is WASAPI. Promising it anywhere else is not a
     // silent share, it is a rejected capture: an audio request the embedder
-    // cannot satisfy takes the video with it (3 Sep 2026).
+    // cannot satisfy takes the video with it (3 Sep 2026). On Windows 10 the
+    // exclude cannot run, so loopback is `"none"` there too.
     assert.match(
       preload,
-      /systemAudio:\s*process\.platform === "win32" \? "loopback" : "none"/,
+      /systemAudio:\s*\n\s*process\.platform === "win32" && canExcludeOwnAudio \? "loopback" : "none"/,
     );
   });
 
-  it("promises the picker asks about audio only where there is audio to ask about", () => {
-    assert.match(preload, /pickerOffersAudio:\s*process\.platform === "win32"/);
+  it("promises the picker asks about audio only where exclude can run", () => {
+    assert.match(
+      preload,
+      /pickerOffersAudio:\s*process\.platform === "win32" && canExcludeOwnAudio/,
+    );
   });
 
   it("only claims restrictOwnAudio while Electron is new enough to honour it", () => {
@@ -50,14 +54,22 @@ describe("the share capabilities the preload publishes", () => {
     // keeping the call itself out of the tap (the 23 Aug 2026 echo), and the
     // client offers computer audio BECAUSE of this claim. A downgrade below
     // 43.4 has to fail here rather than in somebody's call.
-    const claimed = /restrictOwnAudio:\s*true/.test(preload);
+    const claimed = /restrictOwnAudio:\s*process\.platform !== "win32" \|\| canExcludeOwnAudio/.test(
+      preload,
+    );
     const pinned = pkg.devDependencies?.electron ?? "";
     const [major, minor = "0"] = pinned.replace(/^[^\d]*/, "").split(".");
     const version = Number(major) + Number(minor) / 1000;
     assert.ok(
-      !claimed || version >= 43.004,
+      claimed && version >= 43.004,
       `preload claims restrictOwnAudio while package.json pins electron ${pinned}`,
     );
+  });
+
+  it("takes the Windows 11 gate from main, not by guessing in the sandbox", () => {
+    assert.match(preload, /--pqp-can-exclude-own-audio=/);
+    assert.match(main, /windowsBuildAllowsOwnAudioExclude\(os\.release\(\)\)/);
+    assert.match(main, /--pqp-can-exclude-own-audio=/);
   });
 
   it("never asks for loopbackWithMute", () => {
@@ -113,7 +125,7 @@ describe("who answers a display-media request", () => {
   it("hands the shell's version to the preload", () => {
     // A sandboxed preload cannot call `app.getVersion()`; without this argument
     // `capabilities.version` is null and every diagnosis loses the build number.
-    assert.match(main, /additionalArguments:\s*\[`--pqp-shell-version=\$\{app\.getVersion\(\)\}`\]/);
+    assert.match(main, /--pqp-shell-version=\$\{app\.getVersion\(\)\}/);
     assert.match(preload, /--pqp-shell-version=/);
   });
 });
