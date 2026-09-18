@@ -14,6 +14,7 @@ const {
   Tray,
 } = require("electron");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { loadWindowState, trackWindowState, DEFAULTS } = require("./lib/window-state");
 const { loadTheme, saveTheme, BACKGROUNDS } = require("./lib/theme-state");
@@ -38,6 +39,7 @@ const {
   pickAutomatically,
   screenPermission,
   captureResponse,
+  windowsBuildAllowsOwnAudioExclude,
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
 const {
@@ -77,6 +79,22 @@ const DEFAULT_DEV_URL = "http://localhost:5173/app";
  */
 const DEFAULT_PROD_URL = "https://pqp.gg/app";
 const APP_PATH = "/app";
+
+/**
+ * Windows 11 (NT build ≥ 22000) can exclude this app from loopback.
+ * `os.release()` on Windows 11 is still `10.0.22631`. Other platforms have
+ * no mixer tap; the page must not ask for one.
+ */
+function canExcludeOwnAudioOnThisOs() {
+  return (
+    process.platform !== "win32" ||
+    windowsBuildAllowsOwnAudioExclude(os.release())
+  );
+}
+
+function windowsLoopbackAllowed() {
+  return process.platform === "win32" && canExcludeOwnAudioOnThisOs();
+}
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -738,7 +756,7 @@ function showSourcePicker(labeled) {
         ? {
             sources: labeled,
             dark,
-            offersAudio: process.platform === "win32",
+            offersAudio: windowsLoopbackAllowed(),
             strings: {
               title: t("share.title"),
               subtitle: t("share.subtitle"),
@@ -914,6 +932,7 @@ async function chooseDisplaySource(audioRequested) {
     source,
     platform,
     audioRequested && choice.shareAudio === true,
+    os.release(),
   );
 }
 
@@ -1073,7 +1092,10 @@ function createWindow(appUrl, allowedOrigin) {
       // is the documented way to hand it a build-time fact. Read back in
       // preload.js, which treats a missing one as "unknown" rather than
       // guessing.
-      additionalArguments: [`--pqp-shell-version=${app.getVersion()}`],
+      additionalArguments: [
+        `--pqp-shell-version=${app.getVersion()}`,
+        `--pqp-can-exclude-own-audio=${canExcludeOwnAudioOnThisOs() ? "1" : "0"}`,
+      ],
     },
   });
 

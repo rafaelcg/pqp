@@ -32,10 +32,13 @@ import {
 } from "@/lib/desktop";
 import {
   capturesSystemAudio,
+  ensureOsCanExcludeCallAudio,
   liveScreenCaptureEnvironment,
   screenCaptureOptions,
+  stripLeakedSystemAudioTracks,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
   canControlShareCursor,
   cursorConstraintFor,
@@ -3199,6 +3202,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (!screenCaptureStream) {
       return;
     }
+    rememberShareAudioTrack(null);
     for (const track of screenCaptureStream.getTracks()) {
       track.stop();
     }
@@ -5635,6 +5639,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // store rather than passed down four components (it is remembered per
       // person: `lib/screen-capture-cursor.ts`). An explicit `hideCursor` on
       // the intent still wins, so a caller can override it for one share.
+      await ensureOsCanExcludeCallAudio();
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const options = screenCaptureOptions(
         shareSystemAudio,
@@ -5699,6 +5704,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
+      // Fail closed before anyone else hears the mixer. Strip only when
+      // exclude is known not to have applied; undefined settings stay.
+      if (stripLeakedSystemAudioTracks(stream)) {
+        state.notice = translateMessage("voice.notice.systemAudioStripped");
+      }
+      rememberShareAudioTrack(stream.getAudioTracks()[0] ?? null);
       // The single most effective line in this feature. A capture track carries
       // no content hint by default and the encoder then optimises a screen for
       // sharpness, holding resolution and dropping frames the moment bandwidth

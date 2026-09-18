@@ -51,18 +51,25 @@ possível deste sistema.
 
 ## som do compartilhamento de tela
 
-- O som só vai junto no Chrome e no Edge, compartilhando **uma guia**, com a
-  caixinha "Também compartilhar áudio da guia" marcada.
-- Compartilhar a tela inteira ou uma janela no macOS sai mudo.
+- Som de uma **guia**: Chrome ou Edge, marca a caixinha "Também compartilhar
+  áudio da guia". A call em outra guia não vai.
+- Som do **computador** (jogo, Pocket Bard, o que estiver tocando no Windows):
+  só no **Windows 11**, no Chrome ou no app. No Windows 10 a gente não manda,
+  porque a call iria junto.
+- Compartilhar a tela inteira ou uma janela no macOS sai mudo (exceto guia
+  no Chrome).
 - Safari e Firefox saem mudos sempre.
-- Isso é limite do navegador, não é bug do pqp e não tem contorno do nosso lado.
+- Se você está no app e no Chrome ao mesmo tempo, compartilhe pelo mesmo que
+  está na call. O Chrome não consegue tirar o som do app.
 
 ## app de desktop
 
 - Tem app de desktop pra Windows, Mac e Linux. O link pra baixar é pqp.gg/download.
-- A versão atual é 0.1.3.
+- A versão atual é 0.1.6.
 - No Windows o SmartScreen avisa na primeira vez porque o build ainda não é assinado. Mac é assinado.
-- Compartilhar tela no app de desktop funciona a partir da 0.1.3.
+- Compartilhar tela no app de desktop funciona a partir da 0.1.3. Som do
+  computador no app, sem a call, precisa do Windows 11 e de um app novo
+  (0.1.6+). O app carrega o site, mas o loopback mora no binário.
 - O app carrega o mesmo site do navegador, então a interface fica sempre atualizada. O app em si não se atualiza sozinho: recursos que dependem do app (como compartilhar tela) pedem baixar a versão nova em pqp.gg/download.
 
 ## iPhone e app
