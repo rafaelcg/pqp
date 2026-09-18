@@ -3237,6 +3237,8 @@
   "watchParty.create.whenLabel": "When ({timezone})",
   "watchParty.create.scheduleHint": "Without a time it stays private until you go live. With one, everyone sees it and can ask to be reminded.",
   "watchParty.create.whenLabelShort": "When",
+  "watchParty.create.busy": "Someone here is already setting one up. Wait for that one to finish or ask them to close it.",
+  "watchParty.create.busyNamed": "\"{name}\" is already being set up here. Wait for it to finish, or ask whoever is running it to close it.",
   "watchParty.create.error": "Could not create it. Try again.",
   "watchParty.history.eyebrow": "Watch party",
   "watchParty.history.title": "Past broadcasts",

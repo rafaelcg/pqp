@@ -199,6 +199,7 @@ import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createServerWatchParty as apiCreateServerWatchParty,
   fetchChannelWatchParty as apiFetchChannelWatchParty,
+  fetchServerWatchParties as apiFetchServerWatchParties,
   setWatchPartyCohost as apiSetWatchPartyCohost,
   setWatchPartyGuestAction,
   setWatchPartyStage,
@@ -210,6 +211,11 @@ import {
   type GuestAction,
 } from "@/components/watch-party/guests/watch-party-guests-overlay";
 import { endWatchParty } from "@/lib/watch-party-end";
+import {
+  abandonWatchPartyDraft,
+  decideDraftAbandon,
+  startWatchParty,
+} from "@/lib/watch-party-draft";
 import { decideGoLiveMicPrompt } from "@/lib/watch-party-go-live";
 import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
 import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
@@ -1501,6 +1507,19 @@ function MainAppContent({
     selection.kind === "server" ? selectionServerId(selection) : null,
   );
   const [createWatchPartyOpen, setCreateWatchPartyOpen] = useState(false);
+  /**
+   * The draft THIS TAB opened and has not published yet, plus whether its
+   * setup surface was ever actually on screen. See `watch-party-draft.ts`:
+   * a draft this tab created and walked away from is an abandoned lock on the
+   * whole server, and a draft it merely adopted (after F5, or from the
+   * sidebar's pending card) is a party the host is deliberately holding open.
+   * `seen` exists so the create's own await window, in which the draft is
+   * already in the store and the channel is not selected yet, cannot read as
+   * walking away from it.
+   */
+  const sessionDraftRef = useRef<{ partyId: string; seen: boolean } | null>(
+    null,
+  );
   // The socket handler is installed once; without a ref it would keep calling
   // the first render's `apply` and never update anything after a server
   // switch. Same pattern as `permsRef` above.
@@ -4519,6 +4538,48 @@ function MainAppContent({
   ]);
 
   /**
+   * A DRAFT THIS TAB MADE AND WALKED AWAY FROM IS CANCELLED (2026-09-18).
+   *
+   * A draft is visible only to its host and the create endpoint refuses
+   * EVERYBODY while one is open, so an abandoned one is a server-wide lock
+   * that nobody can see, open or end. Leaving its channel is the moment the
+   * host stopped setting it up, and that is what this cancels.
+   *
+   * IT NEVER TOUCHES A DRAFT THIS TAB ONLY ADOPTED. `sessionDraftRef` is
+   * armed by `handleCreateWatchParty` alone, so the party a host reloaded
+   * into, or came back to from the sidebar's pending card, is theirs to hold
+   * open for as long as they like — clicking through the server while a party
+   * waits is the normal thing to do with one. `seen` is what keeps the
+   * create's own await window from reading as walking away. Everything else
+   * (scheduled, live, somebody else's) is refused by
+   * `shouldAbandonWatchPartyDraft`; see `lib/watch-party-draft.ts`.
+   */
+  useEffect(() => {
+    const watched = sessionDraftRef.current;
+    const decision = decideDraftAbandon({
+      watched,
+      parties: Object.values(watchParties.byChannel),
+      selectedChannelId,
+    });
+    if (decision.action === "wait") {
+      return;
+    }
+    if (decision.action === "seen") {
+      if (watched) {
+        watched.seen = true;
+      }
+      return;
+    }
+    sessionDraftRef.current = null;
+    if (decision.action === "abandon") {
+      void abandonWatchPartyDraft(decision.party, {
+        cancel: (partyId) => apiSetWatchPartyState(partyId, "cancelled"),
+        forget: (channelId) => watchParties.apply(channelId, null),
+      });
+    }
+  }, [selectedChannelId, watchParties.apply, watchParties.byChannel]);
+
+  /**
    * A function rather than a `const` because these handlers are declared
    * above `selectedChannel`, and every one of them reads the party at the
    * moment it runs rather than at the moment it was defined.
@@ -4537,6 +4598,16 @@ function MainAppContent({
    * that room so the host lands straight on the setup surface. That is the
    * whole journey the old "make a watch_party channel, then find it in a
    * section, then press create" flow was hiding.
+   *
+   * CREATE AT MOST ONE, AND NEVER A SECOND OF THE HOST'S OWN (2026-09-18).
+   * This used to POST unconditionally, which is how one channel collected six
+   * `channel_sessions` rows in seventy minutes: a host who reloaded, opened a
+   * second tab, or pressed the button again because the first click looked
+   * inert asked for another party, and the one they already had is invisible
+   * to everybody else while it locks the server's only party slot. The
+   * decision now lives in `startWatchParty` (`lib/watch-party-draft.ts`) so it
+   * is testable without mounting this component, the same split
+   * `endWatchParty` uses; this is only the wiring.
    */
   async function handleCreateWatchParty(input: {
     name: string;
@@ -4546,10 +4617,26 @@ function MainAppContent({
     if (!serverId) {
       return;
     }
-    const { party, channel } = await apiCreateServerWatchParty(serverId, {
-      name: input.name,
-      startsAt: input.startsAt,
-    });
+    const result = await startWatchParty(
+      { name: input.name, startsAt: input.startsAt },
+      {
+        serverId,
+        known: Object.values(watchParties.byChannel),
+        create: (id, body) => apiCreateServerWatchParty(id, body),
+        reload: (id) =>
+          apiFetchServerWatchParties(id).then((answer) => answer.parties),
+        busyMessage: t("watchParty.create.busy"),
+        busyNamedMessage: (name) => t("watchParty.create.busyNamed", { name }),
+      },
+    );
+    if (result.kind === "attached") {
+      // Their own draft or scheduled party. Nothing was created; put it back
+      // in the store in case the 409 recovery is what found it, and open it.
+      watchParties.put(result.party);
+      await selectChannel(result.party.channelId);
+      return;
+    }
+    const { party, channel } = result;
     if (party) {
       // The broadcast is on its way, but a draft reaches only the host and
       // co-hosts and this client is the host: applying the answer now is what
@@ -4571,6 +4658,9 @@ function MainAppContent({
       );
     }
     await selectChannel(channel.id);
+    if (party && party.state === "draft") {
+      sessionDraftRef.current = { partyId: party.id, seen: false };
+    }
   }
 
   /**
@@ -4817,13 +4907,23 @@ function MainAppContent({
     });
   }
 
+  /**
+   * The host calling it off by hand. Same path the abandon effect takes, and
+   * for the same reason it swallows the failure: every way a cancel can fail
+   * (a sweep got there first, it already moved, the tab is offline) has the
+   * one right answer, which is to stop showing a party the host has already
+   * finished with. It used to throw straight out of the click handler.
+   */
   async function handleWatchPartyDiscard() {
     const party = currentWatchParty();
     if (!party) {
       return;
     }
-    await apiSetWatchPartyState(party.id, "cancelled");
-    watchParties.apply(party.channelId, null);
+    sessionDraftRef.current = null;
+    await abandonWatchPartyDraft(party, {
+      cancel: (partyId) => apiSetWatchPartyState(partyId, "cancelled"),
+      forget: (channelId) => watchParties.apply(channelId, null),
+    });
   }
 
   async function handleWatchPartyOptions(options: Partial<WatchPartyOptions>) {

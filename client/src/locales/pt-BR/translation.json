@@ -3237,6 +3237,8 @@
   "watchParty.create.whenLabel": "Quando ({timezone})",
   "watchParty.create.scheduleHint": "Sem hora, ela fica privada até você ir ao vivo. Com hora, todo mundo vê e pode pedir pra ser avisado.",
   "watchParty.create.whenLabelShort": "Quando",
+  "watchParty.create.busy": "Já tem alguém montando uma aqui. Espera essa acabar ou pede pra pessoa fechar.",
+  "watchParty.create.busyNamed": "Já tem \"{name}\" sendo montada aqui. Espera acabar ou pede pra quem tá montando fechar.",
   "watchParty.create.error": "Não rolou criar. Tenta de novo.",
   "watchParty.history.eyebrow": "Watch party",
   "watchParty.history.title": "Transmissões anteriores",
