@@ -568,8 +568,8 @@ The capture is requested with `audio` plus **`systemAudio: "exclude"`**, and mos
 | Browser / OS | Sound in a screen share? |
 |---|---|
 | Chrome or Edge, any OS, sharing a **tab** | Yes, when the user ticks "share tab audio" |
-| Chrome or Edge on **Windows 11**, sharing the **whole screen** or a **window** | Computer sound is offered only after a UA-CH Win11 check (`platformVersion` major ≥ 13). `restrictOwnAudio` strips this document. A window share asks `windowAudio: "window"` (that app only). Windows 10 reports the constraint and cannot exclude us, so we send `systemAudio: "exclude"` and `windowAudio: "exclude"` |
-| Chrome on **macOS, Linux, or ChromeOS**, sharing a screen or a window | No mixer. Missing Win11 hint is exclude |
+| Chrome or Edge on **Windows or ChromeOS**, sharing the **whole screen** | Only after the user arms "send this computer's sound" in the call controls, and then ticks "share system audio" |
+| Chrome on **macOS or Linux**, sharing a screen or a window | No. The OS does not hand the browser its own output |
 | **Safari**, anything | No display audio at all |
 | **Firefox**, anything | No display audio at all |
 
@@ -591,11 +591,11 @@ A 3-star call rating on 23 Aug 2026: *"Quando alguém transmite, ele repete a Ca
 
 What is done instead, in `client/src/lib/screen-capture-audio.ts`:
 
-1. **`systemAudio: "exclude"` unless this OS can strip the call.** The spec scopes that member to monitor surfaces, so a tab share still carries its own sound. `getSupportedConstraints().restrictOwnAudio` is true on Windows 10; Chromium only honours exclude on Windows 11 (build ≥ 22000). The page offers computer sound only after a UA-CH Win11 check. Missing hint is exclude.
-2. **`windowAudio: "window"` on Windows 11 Chrome**, `"exclude"` everywhere else and always for a watch party. Chrome's default is `system`, so a window share can carry the mixer. A window-plus-audio capture is treated as system audio (`capturesSystemAudio`).
-3. **`restrictOwnAudio: true`** whenever the browser knows the constraint. After the picker, if a monitor or window track still has audio and `getSettings().restrictOwnAudio` is **false** (or capabilities cannot include true), the track is stripped before publish. Undefined settings are not stripped.
-4. **Electron loopback only on Windows 11.** `os.release()` is `10.0.BUILD`. Loopback only if BUILD ≥ 22000. The handler still returns `"loopback"`; Electron 43.4+ remaps it when `restrictOwnAudio` is on the page request. Passing `"loopbackWithoutChrome"` fails the whole capture on Windows 10.
-5. **A warning while it is live**, when the capture came back as `displaySurface: "monitor"` or `"window"` with an audio track. Dual process (app in the call, Chrome sharing) cannot exclude Electron's speakers. One client.
+1. **`systemAudio: "exclude"` by default.** The spec scopes that member to monitor surfaces, so a whole-screen share can no longer carry the machine's output and a **tab** share still carries its own sound. Measured on Chrome 151: a tab capture under `"exclude"` still hands over a `Tab audio` track. Tab share stays the recommended route because it is the only one that cannot echo.
+2. **An explicit opt-in**, next to the share button in both the channel panel and the conversation stage, session-scoped and off on every reload. Arming it says out loud that the call's audio goes with it.
+3. **`restrictOwnAudio: true`** whenever the browser knows the constraint (Chrome desktop 141+, Electron 43.4+, feature-detected). The spec: *"the user agent MUST attempt to remove any audio from the audio being captured that was produced by the document that performed getDisplayMedia()."* Our document is the one playing everybody's voices. Heard working on Windows Chrome (30 Aug 2026). The desktop app needs Electron 43.4.0 or newer, where `setDisplayMediaRequestHandler` started honouring the constraint and remapping `"loopback"` to `loopbackWithoutChrome`.
+4. **`audio: false` in the Electron shell** unless the user opted in. The shell answers `setDisplayMediaRequestHandler` with `{ video, audio: "loopback" }` on Windows (`electron/lib/display-sources.js`). That string stays `"loopback"`; Electron 43.4+ remaps it when `restrictOwnAudio` is on the page request. Electron 34 (v0.1.3) ignores the constraint, so a new desktop binary is the remaining fix. The page not asking is still the off switch for installs that have not updated, and it costs nothing: the picker lists screens and windows, never tabs.
+5. **A warning while it is live**, when the capture came back as `displaySurface: "monitor"` with an audio track and somebody else is in the room. The presenter is the one person who cannot hear the echo they are causing. Keep this until a 0.1.4 install has been heard clean; the copy still describes the old shell.
 
 Neither native mobile client shares the defect: iOS drops every non-video `RPSampleBufferType` in `ios/pqp/Broadcast/SampleHandler.swift`, and the Android client never builds an `AudioPlaybackCaptureConfiguration`.
 

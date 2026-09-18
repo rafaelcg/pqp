@@ -39,9 +39,12 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  *
  * - the options the shipped code really hands `getDisplayMedia`, recorded from
  *   the page rather than asserted against a unit-level stub;
- * - that a fake monitor whose restrictOwnAudio is not honoured is stripped
- *   before publish, so the viewer does not get a second inbound audio stream,
- *   and the presenter is told the computer sound was left out.
+ * - that a capture carrying audio still publishes it and it still arrives at
+ *   the other person's inbound RTP, so the fix did not silence screen audio on
+ *   the way through;
+ * - that a capture which comes back as a monitor carrying sound makes the app
+ *   say so, out loud, to the one person who cannot hear the echo they would be
+ *   causing.
  */
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
@@ -260,7 +263,7 @@ async function wakeControls(page: Page): Promise<void> {
   ).toBeVisible({ timeout: 10_000 });
 }
 
-test("a share excludes the mixer, and strips monitor audio the OS cannot exclude", async ({
+test("a share does not ask for the machine's audio, and says so when a whole screen carries it", async ({
   page,
   browser,
 }) => {
@@ -305,12 +308,10 @@ test("a share excludes the mixer, and strips monitor audio the OS cannot exclude
       .toBe(1);
     const first = (await captureRequests(page))[0]!;
 
-    // Computer sound is Windows 11 only. CI is macOS or Linux, so the request
-    // must exclude the mixer. Audio is still REQUESTED: dropping that would
-    // silence a tab share's own sound. restrictOwnAudio stays on the request
-    // so a Win11 box that later honours it still strips this document.
-    expect(first.systemAudio).toBe("exclude");
-    expect(first.windowAudio).toBe("exclude");
+    // Chrome 141+ can strip this document from the tap, so `include` is how
+    // its picker shows one "Share system audio" box. The echo was `include`
+    // *without* `restrictOwnAudio`.
+    expect(first.systemAudio).toBe("include");
     expect(first.audio).toMatchObject({ restrictOwnAudio: true });
     // Audio is still REQUESTED. Dropping the constraint would silence a tab
     // share's own sound, which is the path that never needed this opt-in.
@@ -323,16 +324,27 @@ test("a share excludes the mixer, and strips monitor audio the OS cannot exclude
       watcher.page.getByText(`${pair.callerName} is presenting`),
     ).toBeVisible({ timeout: 30_000 });
 
-    // CI Chromium's fake capture is a monitor with "Fake audio". That track
-    // reports restrictOwnAudio false (or capabilities that cannot include
-    // true), which is the leak we strip before publish. The strip notice
-    // is the product signal; inbound staying at the mic count is the
-    // wire signal. Tab-share sound is a different surface and is pinned
-    // in screen-capture-audio.test.ts.
+    // ---- and the share's own sound still reaches the other person ---------
+    // The fix must not cost the working case. A second inbound audio stream,
+    // carrying bytes, is the share's audio and nothing else: the microphone
+    // was already counted above. This is what would break if "do not ask for
+    // system audio" had been implemented as "do not ask for audio".
+    await expect
+      .poll(async () => (await inboundAudio(watcher.page)).withBytes, {
+        timeout: 45_000,
+        intervals: [1_000],
+      })
+      .toBeGreaterThan(micOnly.withBytes);
+
+    // ---- and the presenter is told, while it is happening -----------------
+    // The capture came back as a monitor with an audio track, which is the one
+    // shape that can put the room's own voices back into the room. The
+    // presenter's machine is playing what they shared, so they are the only
+    // person who cannot hear it, and a sentence at the picker they have
+    // already dismissed would be a sentence nobody reads.
     await expect(
-      page.getByText("Computer sound was left out of this share."),
+      page.getByText("You are sending this computer's audio."),
     ).toBeVisible({ timeout: 20_000 });
-    expect((await inboundAudio(watcher.page)).withBytes).toBe(micOnly.withBytes);
   } finally {
     await watcher.context.close();
   }

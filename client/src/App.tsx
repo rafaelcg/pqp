@@ -464,7 +464,6 @@ import {
 import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
 import { ShareAudioPrompt } from "@/components/voice/share-audio-prompt";
 import {
-  ensureOsCanExcludeCallAudio,
   liveScreenCaptureEnvironment,
   needsShareAudioPrompt,
   offersShellSystemAudio,
@@ -480,7 +479,6 @@ import {
   gateScreenShareStart,
   type ScreenShareStart,
 } from "@/lib/screen-share-gate";
-import { createShareRequestGuard } from "@/lib/share-request-guard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { effectiveRoleIds } from "@/lib/member-groups";
@@ -1914,15 +1912,6 @@ function MainAppContent({
     });
   }
 
-  const shareRequestGuardRef = useRef(createShareRequestGuard());
-  useEffect(() => {
-    const guard = shareRequestGuardRef.current;
-    guard.invalidate();
-    return () => {
-      guard.invalidate();
-    };
-  }, [voiceState.voiceChannelId]);
-
   const startScreenShareGated = useCallback(
     (audio: boolean, intent?: ScreenCaptureIntent): Promise<boolean> => {
       const withFps = {
@@ -1963,34 +1952,20 @@ function MainAppContent({
    */
   const requestScreenShare = useCallback(
     (intent?: ScreenCaptureIntent) => {
-      const token = shareRequestGuardRef.current.tryBegin();
-      if (token === null) {
+      const env = liveScreenCaptureEnvironment();
+      // "Wants a tab" is only true where tabs exist. In the desktop shell a
+      // watch party is a window or a screen, and the machine's sound (minus
+      // this app's own output) is the only sound it can carry, so the audio
+      // question has to be asked there as it is for any other share.
+      const tabSteer = steersAtBrowserTab(env, intent ?? {});
+      if (needsShareAudioPrompt(env) && !tabSteer && !intent?.stream) {
+        setShareAudioPrompt({ intent });
         return;
       }
-      void (async () => {
-        try {
-          await ensureOsCanExcludeCallAudio();
-          if (!shareRequestGuardRef.current.isCurrent(token)) {
-            return;
-          }
-          const env = liveScreenCaptureEnvironment();
-          // "Wants a tab" is only true where tabs exist. In the desktop shell a
-          // watch party is a window or a screen, and the machine's sound (minus
-          // this app's own output) is the only sound it can carry, so the audio
-          // question has to be asked there as it is for any other share.
-          const tabSteer = steersAtBrowserTab(env, intent ?? {});
-          if (needsShareAudioPrompt(env) && !tabSteer && !intent?.stream) {
-            setShareAudioPrompt({ intent });
-            return;
-          }
-          const audio = tabSteer
-            ? false
-            : env.sharePickerOffersAudio && offersShellSystemAudio(env);
-          startScreenShareGated(audio, intent);
-        } finally {
-          shareRequestGuardRef.current.end(token);
-        }
-      })();
+      const audio = tabSteer
+        ? false
+        : env.sharePickerOffersAudio && offersShellSystemAudio(env);
+      startScreenShareGated(audio, intent);
     },
     [startScreenShareGated],
   );

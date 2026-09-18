@@ -11,27 +11,6 @@
  * is logic nothing ever runs until a user runs it.
  */
 
-/**
- * Windows NT build from `os.release()` / `process.getSystemVersion()`.
- *
- * Windows 11 is `10.0.22000` and up. `os.release()` on Windows 11 is still
- * `10.0.22631`. Never treat major === 11.
- */
-const WINDOWS_11_NT_BUILD = 22000;
-
-function windowsNtBuild(release) {
-  if (typeof release !== "string") {
-    return 0;
-  }
-  const parts = release.split(".");
-  const build = Number.parseInt(parts[2] ?? "", 10);
-  return Number.isFinite(build) ? build : 0;
-}
-
-function windowsBuildAllowsOwnAudioExclude(release) {
-  return windowsNtBuild(release) >= WINDOWS_11_NT_BUILD;
-}
-
 /** Thumbnail size asked of `desktopCapturer`. */
 const THUMBNAIL_SIZE = { width: 320, height: 200 };
 
@@ -225,10 +204,8 @@ function screenPermission(platform, status) {
  * when the page asked `getDisplayMedia({ audio: { restrictOwnAudio: true } })`.
  * That device is WASAPI process-loopback excluding this app's tree, which is
  * the 23 Aug 2026 report (the call playing in this window, sent back into the
- * call). Passing `"loopbackWithoutChrome"` here fails the whole capture on
- * Windows 10. Chromium only honours the exclude on Windows 11 (NT build ≥
- * 22000). `windowsRelease` is `os.release()`, which is still `10.0.BUILD` on
- * Windows 11. Missing or below 22000 is video-only.
+ * call). Passing `"loopbackWithoutChrome"` here is not a supported callback
+ * value.
  *
  * The renderer still sends `audio: false` unless the user opted in
  * (`client/src/lib/screen-capture-audio.ts`). A shell that never asked for
@@ -250,15 +227,11 @@ function screenPermission(platform, status) {
  * this function will ever get. Keep macOS and Linux video-only: loopback
  * there still fails the whole request.
  */
-function captureResponse(source, platform, audioRequested, windowsRelease) {
+function captureResponse(source, platform, audioRequested) {
   if (!source) {
     return null;
   }
-  if (
-    platform === "win32" &&
-    audioRequested &&
-    windowsBuildAllowsOwnAudioExclude(windowsRelease)
-  ) {
+  if (platform === "win32" && audioRequested) {
     return { video: source, audio: "loopback" };
   }
   return { video: source };
@@ -267,9 +240,6 @@ function captureResponse(source, platform, audioRequested, windowsRelease) {
 module.exports = {
   THUMBNAIL_SIZE,
   MAC_SCREEN_SETTINGS_URL,
-  WINDOWS_11_NT_BUILD,
-  windowsNtBuild,
-  windowsBuildAllowsOwnAudioExclude,
   kindOf,
   toDataUrl,
   normalizeSources,
