@@ -99,6 +99,7 @@ import {
   micIsInaudible,
   presenterMicWarning,
 } from "@/lib/watch-party-mic-warning";
+import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
 import { cn } from "@/lib/utils";
 
 /**
@@ -389,15 +390,21 @@ export function WatchPartyPanel(props: WatchPartyPanelProps) {
   // furniture above whatever `WatchChannelStage` is doing and must not fight
   // it for the split, the same rule `WatchChannelStage` follows about
   // `CallStage`.
+  //
+  // WHICH SURFACES THOSE ARE IS NOT SPELLED OUT HERE ANY MORE. It is
+  // `watchPartyPanelOwnsPane`, because `WatchChannelStage` has to know the
+  // same answer: it used to draw the audience picture over a host's private
+  // setup surface whenever the channel still had a playlist going out. See
+  // that function's note.
   const slot = props.slot ?? "surface";
   const fills =
     slot === "surface" &&
-    (surface === "setup" ||
-      surface === "scheduled" ||
-      surface === "empty" ||
-      ((surface === "live" || surface === "liveUntitled") &&
-        !props.hasStream &&
-        !props.inCall));
+    watchPartyPanelOwnsPane({
+      state: party?.state ?? null,
+      hasStream: props.hasStream,
+      inCall: props.inCall,
+      canStart: props.canStart,
+    });
   const wasFilling = useRef(false);
   const { onShapeChange } = props;
   useEffect(() => {
@@ -2636,7 +2643,14 @@ function LiveSurface(
   // button's disabled tooltip on the bar.
   if (!props.hasStream && !props.inCall) {
     const preparing = props.someoneIsSharing === true;
-    const hostSide = runningTheShow && props.canStart;
+    // WHO IS RUNNING THE SHOW, AND NOTHING ELSE. This used to also require
+    // `props.canStart`, which is START_WATCH_PARTY on this channel — a
+    // permission a co-host need not hold (the host promotes any member they
+    // like), and one the client can answer `false` for while a freshly
+    // created room's overwrites are still on their way. Either way the
+    // person running the party was handed the viewer's words about
+    // themselves: "hang in there, <host> is setting it up", to the host.
+    const hostSide = runningTheShow;
     return (
       <div
         className={cn(

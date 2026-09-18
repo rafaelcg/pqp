@@ -192,6 +192,87 @@ describe("a watch party channel gets no onJoin from App, in any state", () => {
   });
 });
 
+/**
+ * THE PANE HAS ONE OWNER (2026-09-18).
+ *
+ * This mount asks "is there a playlist and am I out of the call", which knows
+ * nothing about the party or about who is looking. `WatchPartyPanel` asks a
+ * different question about the same slot. On a channel that still had a
+ * stream going out — the second party of the night while the previous egress
+ * finished, a share that outlived its party, a co-host presenting — both
+ * answered yes, and the host who had just pressed Criar watch party got the
+ * audience picture over the top of their own private setup surface. The
+ * panel's answer (`watchPartyPanelOwnsPane`) now reaches this mount too.
+ */
+describe("WatchChannelStage stands down when the party owns the pane", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function liveVoiceState(): VoiceState {
+    return {
+      voiceChannelId: null,
+      status: "idle",
+      channelLive: {
+        c1: {
+          stream: {
+            hlsUrl: "https://api.example.test/api/voice/hls-playlist/c1/1?t=tok",
+            startedAt: 0,
+            presenterPeerId: "peer-1",
+          },
+          watching: 1,
+        },
+      },
+      occupancy: { c1: [] },
+    } as unknown as VoiceState;
+  }
+
+  function render(props: { partyOwnsPane: boolean; docked?: boolean }) {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root.render(
+        <WatchChannelStage
+          channelId="c1"
+          channelName="cinema"
+          voiceState={liveVoiceState()}
+          isWatchParty
+          partyOwnsPane={props.partyOwnsPane}
+          docked={props.docked ?? false}
+          onSetWatchingLive={() => {}}
+          onSeedChannelLive={() => {}}
+        />,
+      );
+    });
+  }
+
+  it("draws nothing over a surface the party is already filling", () => {
+    render({ partyOwnsPane: true });
+    expect(
+      container.querySelector('[data-testid="watch-channel-stage"]'),
+    ).toBeNull();
+  });
+
+  it("still draws the picture when the party is not claiming the pane", () => {
+    render({ partyOwnsPane: false });
+    expect(
+      container.querySelector('[data-testid="watch-channel-stage"]'),
+    ).not.toBeNull();
+  });
+
+  it("keeps the mini player, which is never in that pane to begin with", () => {
+    render({ partyOwnsPane: true, docked: true });
+    expect(
+      container.querySelector('[data-testid="watch-channel-stage"]'),
+    ).not.toBeNull();
+  });
+});
+
 describe("watchAudienceCount", () => {
   const stream = {
     hlsUrl: "/api/voice/hls-playlist/c1/1?t=tok",
