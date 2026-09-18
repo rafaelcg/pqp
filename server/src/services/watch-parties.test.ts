@@ -334,23 +334,27 @@ describeDb("watch party ownership", () => {
     expect((await readChannelParty(member)).body.party?.state).toBe("scheduled");
   });
 
-  it("refuses a manager and a plain member who try to end a live party", async () => {
+  it("refuses a plain member who tries to end a live party", async () => {
     // 2026-09-12 incident: a server admin (MANAGE_CHANNELS, not the host or
     // a co-host) ended a live party while only watching it. `end`/`cancel`
-    // came out of the manager's row in the role table for exactly this;
-    // `edit` stays, so a manager can still rename or retime the party.
+    // came out of the manager's row in the role table for exactly this, and
+    // they are still out of it: the CLIENT draws Encerrar from
+    // `canPerformWatchPartyAction`, so no admin is ever handed that button
+    // by accident, which is what the incident actually was.
+    //
+    // What changed on 2026-09-18 is a separate, server-only door for staff
+    // (`canStaffOverrideWatchParty`), covered in
+    // `watch-party-lifecycle.test.ts`. A plain member, who has neither
+    // MANAGE_CHANNELS nor START_WATCH_PARTY, is refused here exactly as
+    // before, which is the half of this test that was ever about safety.
     const first = await draft();
     await setState(host, first.id, "live");
-
-    const byManager = await setState(manager, first.id, "ended");
-    expect(byManager.status).toBe(403);
-    expect((await readChannelParty(member)).body.party?.state).toBe("live");
 
     const byMember = await setState(member, first.id, "ended");
     expect(byMember.status).toBe(403);
     expect((await readChannelParty(member)).body.party?.state).toBe("live");
 
-    // The host still can, unaffected by the manager's refusal above.
+    // The host still can, unaffected by the member's refusal above.
     const endedByHost = await setState(host, first.id, "ended");
     expect(endedByHost.status).toBe(200);
     expect(endedByHost.body.party.state).toBe("ended");
@@ -358,12 +362,12 @@ describeDb("watch party ownership", () => {
     expect((await readChannelParty(member)).body.party).toBeNull();
   });
 
-  it("lets a co-host end a live party the manager may not touch", async () => {
+  it("lets a co-host end a live party a plain member may not touch", async () => {
     const party = await draft();
     expect((await setCohost(host, party.id, second.id, true)).status).toBe(200);
     await setState(host, party.id, "live");
 
-    expect((await setState(manager, party.id, "ended")).status).toBe(403);
+    expect((await setState(member, party.id, "ended")).status).toBe(403);
     const endedByCohost = await setState(second, party.id, "ended");
     expect(endedByCohost.status).toBe(200);
     expect(endedByCohost.body.party.state).toBe("ended");
@@ -590,12 +594,20 @@ describeDb("watch party ownership", () => {
   it("allows one active party per channel", async () => {
     const party = await draft();
 
-    // A draft occupies the channel: two people setting one up in the same
-    // room at once is a conflict, not a crash.
+    // A DRAFT NO LONGER OCCUPIES THE CHANNEL FOREVER (2026-09-18). It used
+    // to answer 409 to the next create, which is how one abandoned setup
+    // sheet blocked a production channel for an evening. An abandoned draft
+    // is now superseded: cancelled for real, through the transition table,
+    // and the new party takes the room. See
+    // `watch-party-lifecycle.test.ts` for the three ways a draft qualifies
+    // and for the cases that are still refused.
     const whileDraft = await create(host);
-    expect(whileDraft.status).toBe(409);
+    expect(whileDraft.status).toBe(200);
+    expect(whileDraft.body.party.id).not.toBe(party.id);
 
-    await setState(host, party.id, "live");
+    // A LIVE party is never superseded: it has an audience.
+    const live = whileDraft.body.party;
+    await setState(host, live.id, "live");
     const whileLive = await create(host);
     expect(whileLive.status).toBe(409);
 
@@ -605,7 +617,7 @@ describeDb("watch party ownership", () => {
     expect(elsewhere.status).toBe(200);
 
     // And the channel frees up once the party is over.
-    await setState(host, party.id, "ended");
+    await setState(host, live.id, "ended");
     const afterEnd = await create(host);
     expect(afterEnd.status).toBe(200);
   });
@@ -817,11 +829,27 @@ describeDb("watch party ownership", () => {
       expect(rooms.rowCount).toBe(1);
     });
 
-    it("refuses a second party while one is already running in that room", async () => {
-      expect((await startOnServer(host)).status).toBe(200);
+    it("refuses a second party while one is already LIVE in that room", async () => {
+      const first = await startOnServer(host);
+      expect(first.status).toBe(200);
+      expect(
+        (await setState(host, first.body.party.id, "live")).status,
+      ).toBe(200);
       // One room per server plus one active party per room is one live party
       // per server, which is the cardinality the sidebar block assumes.
       expect((await startOnServer(host)).status).toBe(409);
+    });
+
+    it("supersedes its own abandoned draft rather than refusing the host", async () => {
+      // The 2026-09-18 loop: press the sidebar control, wander off, press it
+      // again, get 409 from a draft only you can see. Pressing it again now
+      // cancels the old one and opens a new party in the same room.
+      const first = await startOnServer(host);
+      expect(first.status).toBe(200);
+      const second = await startOnServer(host);
+      expect(second.status).toBe(200);
+      expect(second.body.party.id).not.toBe(first.body.party.id);
+      expect(second.body.channel.id).toBe(first.body.channel.id);
     });
   });
 });

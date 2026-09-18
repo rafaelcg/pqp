@@ -3,8 +3,11 @@ import {
   parsePermissions,
   Permission,
   canPerformWatchPartyAction,
+  canStaffOverrideWatchParty,
   canTransitionWatchParty,
   resolveWatchPartyHost,
+  watchPartyRefusalMessage,
+  WATCH_PARTY_HOST_GRACE_MS,
   watchPartyFloorIsClosed,
   watchPartyOptionsSchema,
   watchPartyRole,
@@ -711,12 +714,26 @@ export async function authoriseWatchParty(
     cohostUserIds: cohostIds,
     permissions: actor.permissions,
   });
+  // THE STAFF OVERRIDE IS CHECKED BEFORE THE VISIBILITY GATE, and that order
+  // is the whole fix for 2026-09-18. A stranded DRAFT is invisible to a
+  // manager by design, so the visibility gate answered `not_found` and the
+  // server's owner could not even name the party that was blocking their own
+  // channel. `canStaffOverrideWatchParty` is `end`/`cancel` only, so the
+  // draft stays invisible in every LIST, every BROADCAST and every other
+  // route: the only thing staff can do with an id they were refused is stop
+  // the thing that refused them. See the predicate's own note in
+  // `packages/shared/src/watch-party-session.ts` for why it is not a role.
+  const staffOverride = canStaffOverrideWatchParty({
+    action,
+    state: row.status,
+    permissions: actor.permissions,
+  });
   const canSee = canPerformWatchPartyAction({
     action: "view",
     role,
     state: row.status,
   });
-  if (!canSee) {
+  if (!canSee && !staffOverride) {
     throw new WatchPartyError("not_found", "Watch party not found");
   }
   const allowed = canPerformWatchPartyAction({
@@ -728,13 +745,163 @@ export async function authoriseWatchParty(
       : null,
     now: Date.now(),
   });
-  if (!allowed) {
+  if (!allowed && !staffOverride) {
     throw new WatchPartyError(
       "forbidden",
-      `A ${role} may not ${action} a ${row.status} watch party`,
+      watchPartyRefusalMessage({ action, role, state: row.status }),
     );
   }
+  if (!allowed && staffOverride) {
+    logEvent("watchParty.staffOverride", {
+      sessionId: row.id,
+      channelId: row.channel_id,
+      action,
+      state: row.status,
+      role,
+    });
+  }
   return { role, cohostIds };
+}
+
+/**
+ * THE PARTY THAT IS BLOCKING THIS CHANNEL, named.
+ *
+ * `channel_sessions` carries a partial unique index over the three active
+ * states, so a second create in the same channel fails with 23505 and the
+ * caller was told, in prose, that "a watch party" existed, never WHICH one,
+ * never what state it was in, and never its id. On 2026-09-18 the blocking
+ * row was a co-host's abandoned draft, which is the one case where the person
+ * being refused cannot see it in any list either. They had nothing to act on.
+ *
+ * So the 409 now carries the id and the state. It is not a leak: the caller
+ * already holds START_WATCH_PARTY on this channel (the create route checked
+ * before this point), which is exactly the permission the staff override
+ * keys on, so anything they learn here is something they may already act on.
+ */
+/**
+ * HOW LONG A DRAFT MAY BLOCK SOMEBODY ELSE'S CREATE.
+ *
+ * Ten minutes, and deliberately much shorter than the thirty-minute TTL
+ * above, because the two answer different questions. The TTL asks "is this
+ * draft ever going to happen"; this asks "is it reasonable for this draft to
+ * be the reason somebody else cannot start a party right now". The second
+ * bar is lower: nobody is waiting on the first, and somebody is, by
+ * construction, waiting on the second.
+ */
+export const WATCH_PARTY_DRAFT_STALE_MINUTES_DEFAULT = 10;
+
+export function watchPartyDraftStaleMinutes(): number {
+  return minutesFromEnv(
+    "WATCH_PARTY_DRAFT_STALE_MINUTES",
+    WATCH_PARTY_DRAFT_STALE_MINUTES_DEFAULT,
+  );
+}
+
+/**
+ * A STALE DRAFT MUST NOT BE THE REASON A CHANNEL CANNOT HAVE A PARTY.
+ *
+ * What production did on 2026-09-18, in one channel, in eighty minutes: seven
+ * parties, two of which ended as drafts nobody could move, each of which then
+ * 409'd every create in that channel until somebody ran an UPDATE against
+ * production Postgres. The index that refuses the second party is right; what
+ * was wrong is that the thing it was protecting had been abandoned.
+ *
+ * SUPERSEDING IS NOT THE SAME AS IGNORING. The old draft is `cancelled`, for
+ * real, through the same transition table as every other move, and the person
+ * who abandoned it is told by the same `watch-party-update` everyone else
+ * gets. What is new is only that somebody else's create is the thing that
+ * triggers it, rather than a sweep a quarter of an hour later.
+ *
+ * THREE WAYS TO BE SUPERSEDABLE, and each is a different kind of "nobody is
+ * setting this up":
+ *
+ *  1. THE REQUESTER IS ITS OWN HOST. Their own abandoned draft is never
+ *     allowed to lock them out of starting again. This is the F5 case and
+ *     the "closed the tab and came back" case, and it needs no clock at all.
+ *  2. ITS HOST HAS NO SOCKET ANYWHERE. Nobody is looking at the setup sheet,
+ *     so nothing is being set up.
+ *  3. IT HAS NOT CHANGED FOR `WATCH_PARTY_DRAFT_STALE_MINUTES`. The backstop
+ *     for a host who is connected but has long since moved on, and the only
+ *     one of the three that a present, active host can trip.
+ *
+ * ONLY A DRAFT. A `scheduled` party was announced to the room and people set
+ * reminders on it; a `live` one has an audience. Neither is ever superseded
+ * by somebody pressing a button, however senior they are. Those still answer
+ * 409, now with the id in the body.
+ */
+export async function supersedeStaleWatchPartyDraft(input: {
+  channelId: string;
+  requesterId: string;
+  staleMinutes?: number;
+  /** Whether this user has a socket anywhere. Defaults to "cannot tell". */
+  isConnected?: (userId: string) => boolean;
+}): Promise<{ sessionId: string; channelId: string } | null> {
+  const blocking = await getPool().query<{
+    id: string;
+    host_user_id: string;
+    stale: boolean;
+  }>(
+    `SELECT id, host_user_id,
+            updated_at < NOW() - ($2 || ' minutes')::interval AS stale
+       FROM channel_sessions
+      WHERE channel_id = $1 AND status = 'draft'
+      ORDER BY created_at ASC LIMIT 1`,
+    [input.channelId, String(input.staleMinutes ?? watchPartyDraftStaleMinutes())],
+  );
+  const row = blocking.rows[0];
+  if (!row) {
+    return null;
+  }
+  const connected = input.isConnected?.(row.host_user_id) ?? false;
+  const supersedable =
+    row.host_user_id === input.requesterId || !connected || row.stale;
+  if (!supersedable) {
+    return null;
+  }
+  try {
+    const moved = await transitionWatchParty(row.id, "cancelled", "draft");
+    await applyWatchPartyOptions(moved, "cancelled").catch((error) => {
+      logEvent("voice.watchPartyRestoreFailed", {
+        sessionId: row.id,
+        error: String(error),
+      });
+    });
+  } catch (error) {
+    // Somebody published or cancelled it in the meantime. Nothing was
+    // superseded, so the caller falls back to its 409.
+    if (!(error instanceof WatchPartyError)) {
+      throw error;
+    }
+    return null;
+  }
+  sweepCounters.supersededDrafts += 1;
+  logEvent("watchParty.supersededDraft", {
+    sessionId: row.id,
+    channelId: input.channelId,
+    ownDraft: row.host_user_id === input.requesterId,
+    hostConnected: connected,
+    stale: row.stale,
+  });
+  return { sessionId: row.id, channelId: input.channelId };
+}
+
+export async function getBlockingWatchParty(
+  channelId: string,
+): Promise<{ sessionId: string; state: WatchPartyPhase; name: string } | null> {
+  const result = await getPool().query<{
+    id: string;
+    status: WatchPartyPhase;
+    title: string;
+  }>(
+    `SELECT id, status, title FROM channel_sessions
+      WHERE channel_id = $1 AND status IN ${ACTIVE_STATES}
+      ORDER BY created_at ASC LIMIT 1`,
+    [channelId],
+  );
+  const row = result.rows[0];
+  return row
+    ? { sessionId: row.id, state: row.status, name: row.title }
+    : null;
 }
 
 // -------------------------------------------------------------------- moving
@@ -1093,6 +1260,247 @@ export async function markWatchPartyHostBack(
 export interface WatchPartySweepResult {
   /** Parties ended because the host never came back. */
   ended: { sessionId: string; channelId: string }[];
+  /**
+   * Parties whose host is long gone and which were LEFT ALONE because
+   * something is still playing on the channel. Counted rather than silent:
+   * a number that climbs while `ended` stays flat is the guard doing its job,
+   * and a number that climbs forever is a leaked `hls_sessions` row.
+   */
+  heldByLiveStream: { sessionId: string; channelId: string }[];
+}
+
+export interface WatchPartyDraftSweepResult {
+  /** Drafts cancelled because nobody was ever going to publish them. */
+  cancelled: { sessionId: string; channelId: string }[];
+}
+
+// ------------------------------------------------------------ the two knobs
+
+/**
+ * HOW LONG A DRAFT MAY SIT ON A CHANNEL IT IS BLOCKING.
+ *
+ * Thirty minutes, and the number is chosen against what a draft costs rather
+ * than what it is. A draft is free to its own author, who can come back to it
+ * whenever they like; it is NOT free to the channel, because the partial
+ * unique index means it is the only party that channel may have. Half an hour
+ * is long enough to pick a film, argue about it and make coffee, and short
+ * enough that nobody waits on a colleague's closed tab for an evening.
+ *
+ * `0` disables the sweep entirely, for an instance that would rather clean up
+ * by hand than have a draft vanish under somebody.
+ */
+export const WATCH_PARTY_DRAFT_TTL_MINUTES_DEFAULT = 30;
+
+/**
+ * HOW LONG A LIVE PARTY MAY OUTLIVE ITS HOST'S SOCKET, in minutes, as an
+ * operator knob over `WATCH_PARTY_HOST_GRACE_MS`.
+ *
+ * THE DEFAULT IS THE FIVE MINUTES THAT ALREADY SHIPPED, and deliberately not
+ * a longer one. It is the same number `claimHost` uses: a co-host may take
+ * over only while the grace window is open, so a sweep window LONGER than the
+ * grace would create a stretch in which nobody may claim the party and
+ * nothing will end it, which is the ghost party this whole change exists to
+ * kill. Raise both or neither.
+ *
+ * `0` disables the host-gone sweep.
+ */
+export const WATCH_PARTY_HOST_GONE_MINUTES_DEFAULT =
+  WATCH_PARTY_HOST_GRACE_MS / 60_000;
+
+function minutesFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  // A nonsense value is the operator's mistake and must not silently become
+  // "sweep everything immediately": fall back, loudly enough to grep.
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    console.warn(`[watch-party] ignoring ${name}=${raw}`);
+    return fallback;
+  }
+  return parsed;
+}
+
+export function watchPartyDraftTtlMinutes(): number {
+  return minutesFromEnv(
+    "WATCH_PARTY_DRAFT_TTL_MINUTES",
+    WATCH_PARTY_DRAFT_TTL_MINUTES_DEFAULT,
+  );
+}
+
+export function watchPartyHostGoneMinutes(): number {
+  return minutesFromEnv(
+    "WATCH_PARTY_HOST_GONE_MINUTES",
+    WATCH_PARTY_HOST_GONE_MINUTES_DEFAULT,
+  );
+}
+
+// ------------------------------------------------- what the sweeps have done
+
+/**
+ * Cumulative since boot, for `GET /api/admin/metrics` under `watchParty.*`.
+ * Pitfall 12's lesson, applied before the fact: a sweep that has never once
+ * run in production looks exactly like a sweep with nothing to do, and the
+ * only thing that tells them apart is a counter somebody can read.
+ */
+const sweepCounters = {
+  sweptDrafts: 0,
+  supersededDrafts: 0,
+  sweptHostGone: 0,
+  heldByLiveStream: 0,
+  streamCheckFailures: 0,
+};
+
+export function watchPartySweepCounters(): {
+  sweptDrafts: number;
+  supersededDrafts: number;
+  sweptHostGone: number;
+  heldByLiveStream: number;
+  streamCheckFailures: number;
+} {
+  return { ...sweepCounters };
+}
+
+export function resetWatchPartySweepCountersForTests(): void {
+  sweepCounters.sweptDrafts = 0;
+  sweepCounters.supersededDrafts = 0;
+  sweepCounters.sweptHostGone = 0;
+  sweepCounters.heldByLiveStream = 0;
+  sweepCounters.streamCheckFailures = 0;
+}
+
+/**
+ * IS ANYTHING ACTUALLY PLAYING ON THIS CHANNEL, asked of the database and not
+ * of this process's memory.
+ *
+ * THE SAFETY ARGUMENT FOR THE HOST-GONE SWEEP RESTS ENTIRELY ON THIS. The
+ * sweep's job is to end a party nobody is running; a party with a picture on
+ * it is being run by somebody, whether or not that somebody is the host. A
+ * co-host presenting while the host's laptop sleeps is an ordinary evening,
+ * and the version of this sweep that shipped before today would have cut them
+ * off mid-film after five minutes.
+ *
+ * WHY THE ROW AND NOT `pickHlsSharer`. The in-memory authority answers only
+ * for the process that holds the room, and this sweep runs from `jobs.ts`,
+ * which in the `WORKER_MODE=worker` deployment is a process with no voice
+ * state at all: it would see no stream anywhere and end every party it looked
+ * at. `hls_sessions` is written by BOTH drivers, the conventional ladder
+ * (`hls-egress.ts`) and the LL remux (`hls-remux.ts`), and it is the same row
+ * the boot-time adoption reads to inherit a session across a deploy, so it is
+ * the one answer that is true on every machine. (Pitfall 12: test the path
+ * production actually takes.)
+ *
+ * IT FAILS SAFE, IN THE DIRECTION OF NOT ENDING THINGS. An unreadable answer
+ * is `true`: the sweep holds. The cost of being wrong that way is a party
+ * that ends a minute later, on the next tick; the cost of being wrong the
+ * other way is a room of people losing the film.
+ *
+ * THE TWELVE-HOUR BOUND is the one thing keeping a leaked row from making a
+ * party immortal. It is the mirror of pitfall 13, where a seat nothing would
+ * release outlived everyone in it. Nothing this product does runs a single
+ * unbroken transcode for half a day.
+ */
+const LIVE_STREAM_ROW_MAX_AGE_HOURS = 12;
+
+export async function channelHasLiveStream(channelId: string): Promise<boolean> {
+  try {
+    const result = await getPool().query(
+      `SELECT 1 FROM hls_sessions
+        WHERE channel_id = $1
+          AND ended_at IS NULL
+          AND started_at > NOW() - ($2 || ' hours')::interval
+        LIMIT 1`,
+      [channelId, String(LIVE_STREAM_ROW_MAX_AGE_HOURS)],
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    sweepCounters.streamCheckFailures += 1;
+    logEvent("watchParty.streamCheckFailed", {
+      channelId,
+      error: String(error),
+    });
+    return true;
+  }
+}
+
+/**
+ * CANCEL A DRAFT NOBODY IS COMING BACK FOR.
+ *
+ * Two conditions, both required, and the second is the one that makes this
+ * safe rather than merely tidy:
+ *
+ *  1. The draft is older than `WATCH_PARTY_DRAFT_TTL_MINUTES`.
+ *  2. Its host has no socket anywhere this process can see.
+ *
+ * A host who is sitting in the tab with the sheet open, picking a source,
+ * is never touched however long they take. A host whose tab is closed is not
+ * setting anything up; they are an index entry blocking a channel.
+ *
+ * `cancelled`, NEVER `ended`. The transition table refuses `draft -> ended`
+ * on purpose: `ended` is what the sidebar and the reminders treat as "it
+ * happened", and a draft nobody ever saw did not happen.
+ *
+ * ON A SOCKET-LESS PROCESS (`WORKER_MODE=worker`) the presence half answers
+ * "nobody is connected" for everybody, so the TTL alone decides. That is the
+ * conservative direction for a thirty-minute-old draft and is stated here
+ * rather than discovered later.
+ */
+export async function sweepStaleWatchPartyDrafts(input: {
+  ttlMinutes?: number;
+  /** Whether this user has a socket anywhere. Injected so the sweep is testable. */
+  isConnected: (userId: string) => boolean;
+} ): Promise<WatchPartyDraftSweepResult> {
+  const ttl = input.ttlMinutes ?? watchPartyDraftTtlMinutes();
+  if (ttl <= 0) {
+    return { cancelled: [] };
+  }
+  const candidates = await getPool().query<{
+    id: string;
+    channel_id: string;
+    host_user_id: string;
+  }>(
+    `SELECT id, channel_id, host_user_id
+       FROM channel_sessions
+      WHERE status = 'draft'
+        AND created_at < NOW() - ($1 || ' minutes')::interval`,
+    [String(ttl)],
+  );
+  const cancelled: { sessionId: string; channelId: string }[] = [];
+  for (const row of candidates.rows) {
+    if (input.isConnected(row.host_user_id)) {
+      continue;
+    }
+    try {
+      const moved = await transitionWatchParty(row.id, "cancelled", "draft");
+      // A draft never closed a floor or set a slow mode (`applyGoLiveOptions`
+      // runs at go-live and nowhere else), so there is nothing to restore.
+      // Calling it anyway is the cheap way to never have to remember that:
+      // it is idempotent and a call that changes nothing writes nothing.
+      try {
+        await applyWatchPartyOptions(moved, "cancelled");
+      } catch (restoreError) {
+        logEvent("voice.watchPartyRestoreFailed", {
+          sessionId: row.id,
+          error: String(restoreError),
+        });
+      }
+      sweepCounters.sweptDrafts += 1;
+      logEvent("watchParty.sweptDraft", {
+        sessionId: row.id,
+        channelId: row.channel_id,
+        ttlMinutes: ttl,
+      });
+      cancelled.push({ sessionId: row.id, channelId: row.channel_id });
+    } catch (error) {
+      // The host came back and published it between the SELECT and the
+      // UPDATE. The transition refuses, and that is the right answer.
+      if (!(error instanceof WatchPartyError)) {
+        throw error;
+      }
+    }
+  }
+  return { cancelled };
 }
 
 /**
@@ -1107,7 +1515,21 @@ export interface WatchPartySweepResult {
 export async function sweepWatchPartyHosts(
   now: number = Date.now(),
   graceMs?: number,
+  options: {
+    /** Injected for the tests; production asks `hls_sessions`. */
+    hasLiveStream?: (channelId: string) => Promise<boolean>;
+  } = {},
 ): Promise<WatchPartySweepResult> {
+  const window = graceMs ?? watchPartyHostGoneMinutes() * 60_000;
+  const ended: { sessionId: string; channelId: string }[] = [];
+  const heldByLiveStream: { sessionId: string; channelId: string }[] = [];
+  // `0` DISABLES THE SWEEP ONLY WHEN IT CAME FROM THE ENVIRONMENT. An
+  // explicit `graceMs` of 0 is a caller (the tests, and only the tests)
+  // saying "no grace, decide now", which is the opposite instruction.
+  if (graceMs === undefined && window <= 0) {
+    return { ended, heldByLiveStream };
+  }
+  const hasLiveStream = options.hasLiveStream ?? channelHasLiveStream;
   const candidates = await getPool().query<{
     id: string;
     channel_id: string;
@@ -1118,15 +1540,42 @@ export async function sweepWatchPartyHosts(
        FROM channel_sessions
       WHERE status = 'live' AND host_disconnected_at IS NOT NULL`,
   );
-  const ended: { sessionId: string; channelId: string }[] = [];
   for (const row of candidates.rows) {
     const outcome = resolveWatchPartyHost({
       state: row.status,
       hostDisconnectedAt: row.host_disconnected_at.getTime(),
       now,
-      graceMs,
+      graceMs: window,
     });
     if (outcome !== "end") {
+      continue;
+    }
+    // THE ONE THING THIS SWEEP MAY NEVER DO IS CUT OFF A FILM THAT IS
+    // PLAYING. The host's socket and the channel's picture are different
+    // facts (the lifecycle doc's whole first paragraph), and this sweep only
+    // knows about the first. A co-host presenting while the host's laptop
+    // sleeps is an ordinary evening, and until today five minutes of that
+    // ended the show for everybody watching. Asked per candidate rather than
+    // once, because the answer is per channel and the candidate list is
+    // almost always empty.
+    // The injected check may throw where the default one catches; failing
+    // safe is the same answer either way.
+    const streaming = await hasLiveStream(row.channel_id).catch((error) => {
+      sweepCounters.streamCheckFailures += 1;
+      logEvent("watchParty.streamCheckFailed", {
+        channelId: row.channel_id,
+        error: String(error),
+      });
+      return true;
+    });
+    if (streaming) {
+      sweepCounters.heldByLiveStream += 1;
+      heldByLiveStream.push({ sessionId: row.id, channelId: row.channel_id });
+      logEvent("watchParty.hostGoneHeld", {
+        sessionId: row.id,
+        channelId: row.channel_id,
+        reason: "stream-live",
+      });
       continue;
     }
     try {
@@ -1150,6 +1599,12 @@ export async function sweepWatchPartyHosts(
           error: String(restoreError),
         });
       }
+      sweepCounters.sweptHostGone += 1;
+      logEvent("watchParty.sweptHostGone", {
+        sessionId: row.id,
+        channelId: row.channel_id,
+        goneMinutes: Math.round((now - row.host_disconnected_at.getTime()) / 60_000),
+      });
       ended.push({ sessionId: row.id, channelId: row.channel_id });
     } catch (error) {
       // A host who reconnected between the SELECT and the UPDATE, or a
@@ -1160,7 +1615,7 @@ export async function sweepWatchPartyHosts(
       }
     }
   }
-  return { ended };
+  return { ended, heldByLiveStream };
 }
 
 // -------------------------------------------------- the options, applied

@@ -12,6 +12,10 @@ import {
   watchPartyHostRequestSchema,
   watchPartyGuestsRequestSchema,
   watchPartyStateRequestSchema,
+  hasWatchPartyStaffPermission,
+  isWatchPartyTerminal,
+  watchPartyRefusalMessage,
+  watchPartyRole,
   type WatchPartyAction,
   updateChannelSessionSchema,
   AUDIT_LOG_PAGE_MAX,
@@ -348,7 +352,10 @@ import {
   createWatchParty,
   findOrCreateWatchPartyRoom,
   getActiveWatchPartyRow,
+  getBlockingWatchParty,
   getWatchPartyRow,
+  supersedeStaleWatchPartyDraft,
+  listCohostIds,
   listActiveWatchPartiesForServer,
   presentWatchParty,
   acceptWatchPartyGuestRequest,
@@ -372,6 +379,8 @@ import {
   WatchPartyGuestsError,
 } from "../services/watch-parties.js";
 import { broadcastWatchParty } from "../ws/watch-party-events.js";
+import { userHasAuthenticatedSocket } from "../ws/sockets.js";
+import { hasClusterSocket } from "../ws/status.js";
 import { buildServerExport } from "../services/export.js";
 import {
   CommunityListingForbiddenError,
@@ -5177,6 +5186,78 @@ function mapWatchPartyError(error: unknown): never {
   throw error;
 }
 
+/**
+ * The create routes' 409, with the blocking party named.
+ *
+ * "This channel already has a watch party being set up, scheduled, or live"
+ * was, on 2026-09-18, the entire answer a server owner got while a co-host's
+ * abandoned draft held their channel, and a draft is the one thing they
+ * could not then find in any list, because a draft is invisible to everyone
+ * but its host. The id and the state go in the body so the caller has
+ * something to act on, which with the staff override above is a `cancel`
+ * they are now allowed to make.
+ */
+async function watchPartyCreateConflict(
+  error: unknown,
+  channelId: string,
+): Promise<never> {
+  if (error instanceof WatchPartyError && error.code === "conflict") {
+    const blocking = await getBlockingWatchParty(channelId).catch(() => null);
+    if (blocking) {
+      throw new HttpErrorWithDetail(409, error.message, {
+        blockingParty: blocking,
+      });
+    }
+  }
+  mapWatchPartyError(error);
+}
+
+/**
+ * CREATE A PARTY, AND DO NOT LET AN ABANDONED DRAFT STOP IT.
+ *
+ * Both create routes go through here. The first attempt is exactly what it
+ * always was. Only a `conflict` (the partial unique index, which is the
+ * ONLY thing that can make two creates in one channel fail) reaches the
+ * second half, which asks whether the thing in the way is an abandoned draft
+ * and, if it is, cancels it properly and tries once more.
+ *
+ * EXACTLY ONE RETRY. A second conflict after a successful supersede means
+ * somebody else created a party in the gap, which is a real conflict about a
+ * real party and should be reported as one. Looping here would turn a busy
+ * channel into a race nobody wins.
+ *
+ * The presence half is read from THIS process, which is where the host's
+ * socket would be if they were on the setup sheet. `hasClusterSocket` covers
+ * the other machine wherever `CLUSTER_BUS` is on; without it a connected
+ * host on the other machine reads as gone, and their draft is superseded a
+ * little sooner than it might have been. That is the direction to be wrong
+ * in: the alternative is the 409 that cost an evening.
+ */
+async function createWatchPartyUnblocking(
+  input: Parameters<typeof createWatchParty>[0],
+): Promise<Awaited<ReturnType<typeof createWatchParty>>> {
+  try {
+    return await createWatchParty(input);
+  } catch (error) {
+    if (!(error instanceof WatchPartyError) || error.code !== "conflict") {
+      throw error;
+    }
+    const superseded = await supersedeStaleWatchPartyDraft({
+      channelId: input.channelId,
+      requesterId: input.hostUserId,
+      isConnected: (userId) =>
+        userHasAuthenticatedSocket(userId) || hasClusterSocket(userId),
+    });
+    if (!superseded) {
+      throw error;
+    }
+    // The person who abandoned it is told it is gone, same as every other
+    // ending. Fire-and-forget: the create must not wait on a fan-out.
+    void broadcastWatchParty(superseded.sessionId);
+    return await createWatchParty(input);
+  }
+}
+
 /** The actor's effective permissions on the party's channel. */
 async function watchPartyActor(
   channel: { server_id: string; id: string },
@@ -5202,6 +5283,27 @@ async function requireWatchParty(
   userId: string,
   action: WatchPartyAction,
 ) {
+  const loaded = await loadWatchPartyForActor(sessionId, userId);
+  try {
+    const { role } = await authoriseWatchParty(loaded.row, loaded.actor, action);
+    return { ...loaded, role };
+  } catch (error) {
+    mapWatchPartyError(error);
+  }
+}
+
+/**
+ * The half of `requireWatchParty` that is about EXISTENCE rather than
+ * authority: the party is real and this person can reach the channel it is
+ * in. Split out because the state route has to answer one question before it
+ * asks what the actor may do (is this party already over?) before asking what
+ * they may do to it. Asking the
+ * action first is what produced "A host may not end a ended watch party" for
+ * a host pressing Encerrar on a party the SERVER had ended behind them.
+ *
+ * The 404 for a non-member is unchanged and stays in one place.
+ */
+async function loadWatchPartyForActor(sessionId: string, userId: string) {
   const row = await getWatchPartyRow(sessionId);
   if (!row) {
     throw new NotFound("Watch party not found");
@@ -5211,12 +5313,7 @@ async function requireWatchParty(
     throw new NotFound("Watch party not found");
   }
   const actor = await watchPartyActor(channel, userId);
-  try {
-    const { role } = await authoriseWatchParty(row, actor, action);
-    return { row, channel, actor, role };
-  } catch (error) {
-    mapWatchPartyError(error);
-  }
+  return { row, channel, actor };
 }
 
 /**
@@ -5251,7 +5348,7 @@ router.post(
     // "Escolha um canal" pane on the very click that starts the party.
     const room = mapChannel(channel);
     try {
-      const row = await createWatchParty({
+      const row = await createWatchPartyUnblocking({
         channelId,
         serverId: channel.server_id,
         name: body.name,
@@ -5265,7 +5362,7 @@ router.post(
       void broadcastWatchParty(row.id);
       return { party, channel: room };
     } catch (error) {
-      mapWatchPartyError(error);
+      await watchPartyCreateConflict(error, channelId);
     }
   },
 );
@@ -5285,7 +5382,7 @@ router.post(
       throw new HttpError(400, "startsAt must be in the future");
     }
     try {
-      const row = await createWatchParty({
+      const row = await createWatchPartyUnblocking({
         channelId: channelId!,
         serverId: channel.server_id,
         name: body.name,
@@ -5302,7 +5399,7 @@ router.post(
       void broadcastWatchParty(row.id);
       return { party };
     } catch (error) {
-      mapWatchPartyError(error);
+      await watchPartyCreateConflict(error, channelId!);
     }
   },
 );
@@ -5432,6 +5529,52 @@ router.post(
           : body.state === "cancelled"
             ? "cancel"
             : "schedule";
+    // ENDING SOMETHING THAT HAS ALREADY ENDED IS A SUCCESS, NOT A REFUSAL.
+    //
+    // Rafael, 2026-09-18: the server itself ended a live party (the sharer
+    // vanished), the tab never heard about it, and pressing Encerrar answered
+    // 403 "A host may not end a ended watch party". Every word of that is
+    // technically true and the whole sentence is wrong: the host asked for a
+    // state the party is already in, and got told off for it. The same
+    // happens whenever two of the host's own tabs are open, or the sweep gets
+    // there a second before the click.
+    //
+    // A terminal transition is therefore IDEMPOTENT: the answer is the party,
+    // in the state the caller wanted, with 200. Only for the two terminal
+    // states. Asking a live party to go `live` again, or an ended one to go
+    // `scheduled`, is still a conflict, because those are requests for a move
+    // rather than a restatement of where the thing already is.
+    //
+    // The authority check is still real. It just asks "may this person stop
+    // parties here", not "may this person stop THIS party, in THIS state",
+    // because the second question has no good answer for a party that is over.
+    const loaded = await loadWatchPartyForActor(sessionId!, user.id);
+    if (
+      isWatchPartyTerminal(loaded.row.status) &&
+      (body.state === "ended" || body.state === "cancelled")
+    ) {
+      const cohostIds = await listCohostIds(loaded.row.id);
+      const mayStop =
+        user.id === loaded.row.host_user_id ||
+        cohostIds.includes(user.id) ||
+        hasWatchPartyStaffPermission(loaded.actor.permissions);
+      if (!mayStop) {
+        throw new HttpError(
+          403,
+          watchPartyRefusalMessage({
+            action,
+            role: watchPartyRole({
+              userId: user.id,
+              hostUserId: loaded.row.host_user_id,
+              cohostUserIds: cohostIds,
+              permissions: loaded.actor.permissions,
+            }),
+            state: loaded.row.status,
+          }),
+        );
+      }
+      return { party: await presentWatchParty(loaded.row, loaded.actor) };
+    }
     const { row, actor } = await requireWatchParty(sessionId!, user.id, action);
     try {
       const moved = await transitionWatchParty(
