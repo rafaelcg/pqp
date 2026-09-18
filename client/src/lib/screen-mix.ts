@@ -26,6 +26,14 @@
  * actually talking (RMS above -40 dBFS), and lets it back up 600ms after they
  * stop — a talking host should be heard over the film, not fighting it.
  *
+ * THE MAKEUP GAIN (2026-09-19). A `DynamicsCompressorNode` adds none of its
+ * own, so for a week everything this bus published carried a hard ceiling 6
+ * dB under the source, with the display branch's -3 dB (and -6 more while
+ * ducked) on top of it. The audience heard the film AND the mic quietly, and
+ * no meter on either side could show it, because the meter below reports the
+ * bus against itself. `MIX_MAKEUP_GAIN` in `stream-mix-levels.ts` restores
+ * exactly what the limiter's threshold takes, after the limiter.
+ *
  * The AudioContext is injectable so the mix is testable in Node.
  *
  * THE OUTPUT METER (2026-09-13, postmortem B2). Three silent stretches on
@@ -42,7 +50,9 @@
 
 import {
   DISPLAY_GAIN_RANGE,
+  LIMITER_THRESHOLD_DBFS,
   MIC_GAIN_RANGE,
+  MIX_MAKEUP_GAIN,
   readStreamMixLevels,
 } from "./stream-mix-levels";
 
@@ -96,6 +106,7 @@ const DUCK_RELEASE_HOLD_MS = 600;
 const DUCK_POLL_MS = 50;
 /** How often the output meter samples the bus, in ms. Same cadence as ducking. */
 const OUTPUT_LEVEL_POLL_MS = 50;
+
 
 function clamp(value: number, range: { min: number; max: number }): number {
   return Math.min(range.max, Math.max(range.min, value));
@@ -161,7 +172,7 @@ export function createScreenMix(
 
   // The bus: both branches feed a limiter so the boosted mic cannot clip.
   const compressor = context.createDynamicsCompressor();
-  compressor.threshold.value = -6;
+  compressor.threshold.value = LIMITER_THRESHOLD_DBFS;
   compressor.knee.value = 6;
   compressor.ratio.value = 12;
   compressor.attack.value = 0.003;
@@ -179,19 +190,11 @@ export function createScreenMix(
   let outputInterval: ReturnType<typeof setInterval> | null = null;
   // The interval itself is started at the very bottom of this function, once
   // every remaining node is wired without throwing — see `startOutputMeter`
-  // below. Wiring the analyser into the graph happens here, alongside the
-  // compressor, because the connection order matters (Farol, 2026-09-13: an
-  // earlier version started polling right here, before the mic branch, the
-  // ducking analyser and `setMic` had run; a later throw during any of that
-  // left the timer running forever with no `ScreenMix` for anyone to call
-  // `close()` on).
-  const outputAnalyser = context.createAnalyser?.();
-  if (outputAnalyser) {
-    compressor.connect(outputAnalyser);
-    outputAnalyser.connect(destination);
-  } else {
-    compressor.connect(destination);
-  }
+  // below, and the analyser it reads, which is built with the makeup gain a
+  // few lines down (Farol, 2026-09-13: an earlier version started polling
+  // right here, before the mic branch, the ducking analyser and `setMic` had
+  // run; a later throw during any of that left the timer running forever
+  // with no `ScreenMix` for anyone to call `close()` on).
   const startOutputMeter = () => {
     if (!outputAnalyser) {
       return;
@@ -222,6 +225,20 @@ export function createScreenMix(
 
   const micGainNode = context.createGain();
   micGainNode.gain.value = clamp(initialLevels.micGain, MIC_GAIN_RANGE);
+
+  // THE MAKEUP GAIN SITS BETWEEN THE LIMITER AND EVERYTHING DOWNSTREAM, so
+  // the output meter below reads what actually leaves rather than the
+  // limiter's own squashed copy of it. See `MIX_MAKEUP_GAIN`.
+  const makeupGainNode = context.createGain();
+  makeupGainNode.gain.value = MIX_MAKEUP_GAIN;
+  compressor.connect(makeupGainNode);
+  const outputAnalyser = context.createAnalyser?.();
+  if (outputAnalyser) {
+    makeupGainNode.connect(outputAnalyser);
+    outputAnalyser.connect(destination);
+  } else {
+    makeupGainNode.connect(destination);
+  }
   // Wired to the compressor below, either directly or through the analyser
   // (see the ducking setup) — never left both connected, which would sum
   // the mic branch onto the bus twice.
@@ -392,6 +409,7 @@ export function createScreenMix(
       }
       micGainNode.disconnect();
       displayGainNode.disconnect();
+      makeupGainNode.disconnect();
       compressor.disconnect();
       analyser?.disconnect();
       outputAnalyser?.disconnect();

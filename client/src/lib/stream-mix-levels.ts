@@ -27,6 +27,33 @@ export interface StreamMixLevels {
   displayGain: number;
 }
 
+/**
+ * THE BUS LIMITER, and the makeup gain that was missing from it.
+ *
+ * Both mixes a presenter's browser builds — `screen-mix.ts`'s film bus and
+ * `stage-mix.ts`'s voice bus — sum their branches into a
+ * `DynamicsCompressorNode` at this threshold with a 12:1 ratio, so a boosted
+ * mic (or five guests at once) cannot clip the destination.
+ *
+ * `DynamicsCompressorNode` applies NO makeup gain of its own. From #513
+ * (2026-09-12), which introduced the limiter, nothing a watch party published
+ * could reach within 6 dB of full scale again: before it, the display
+ * capture's own audio went to the destination untouched, at unity. The
+ * audience's report on 2026-09-18 was "the sound from the shared tab AND the
+ * mic are very low", which is the shape of a ceiling on the whole bus rather
+ * than one branch set wrong — the display branch's own -3 dB default and the
+ * further -6 dB while ducked sit on top of it.
+ *
+ * `MIX_MAKEUP_GAIN` is exactly what the ceiling takes back: +6 dB. It is
+ * applied AFTER the limiter, which is what makes it safe — the loudest thing
+ * that can reach it is the ceiling itself, so the result lands at roughly
+ * full scale rather than over it, and a quiet passage that never reached the
+ * knee simply comes back up by the same 6 dB. Applied BEFORE the limiter it
+ * would only drive the limiter harder and change nothing at all.
+ */
+export const LIMITER_THRESHOLD_DBFS = -6;
+export const MIX_MAKEUP_GAIN = 10 ** (-LIMITER_THRESHOLD_DBFS / 20);
+
 export const MIC_GAIN_RANGE = { min: 0.5, max: 4 } as const;
 export const DISPLAY_GAIN_RANGE = { min: 0.25, max: 1 } as const;
 

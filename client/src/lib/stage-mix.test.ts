@@ -5,7 +5,15 @@ import {
   stageMixInputUserIds,
   STAGE_MIX_TRACK_NAME,
 } from "./stage-mix";
-import type { AudioContextLike, AudioNodeLike, GainNodeLike } from "./screen-mix";
+import type {
+  AudioContextLike,
+  AudioNodeLike,
+  GainNodeLike,
+} from "./screen-mix";
+import {
+  LIMITER_THRESHOLD_DBFS,
+  MIX_MAKEUP_GAIN,
+} from "./stream-mix-levels";
 
 // Same shape as `screen-mix.test.ts`'s fakes, kept independent rather than
 // imported: the two mixes are deliberately separate buses (see this file's
@@ -28,13 +36,23 @@ class FakeStream {
 }
 vi.stubGlobal("MediaStream", FakeStream);
 
-function fakeContext(): { context: AudioContextLike; connections: string[] } {
+function fakeContext(): {
+  context: AudioContextLike;
+  connections: string[];
+  edges: string[];
+  gains: (GainNodeLike & { name: string })[];
+} {
   const connections: string[] = [];
+  const edges: string[] = [];
+  const gains: (GainNodeLike & { name: string })[] = [];
   let counter = 0;
   const node = (name: string): AudioNodeLike & { name: string } => ({
     name,
-    connect: () => {
+    connect: (target: AudioNodeLike) => {
       connections.push(name);
+      edges.push(
+        `${name}->${(target as { name?: string }).name ?? "unknown"}`,
+      );
     },
     disconnect: () => {
       const idx = connections.lastIndexOf(name);
@@ -52,13 +70,19 @@ function fakeContext(): { context: AudioContextLike; connections: string[] } {
   const mixed = new FakeTrack("audio");
   return {
     connections,
+    edges,
+    gains,
     context: {
       createMediaStreamSource: () => node(`src${counter++}`),
       createMediaStreamDestination: () => ({
         ...node("dest"),
         stream: new FakeStream([mixed]) as unknown as MediaStream,
       }),
-      createGain: (): GainNodeLike => ({ ...node(`gain${counter++}`), gain: audioParam(1) }),
+      createGain: (): GainNodeLike => {
+        const g = { ...node(`gain${counter++}`), gain: audioParam(1) };
+        gains.push(g);
+        return g;
+      },
       createDynamicsCompressor: () => ({
         ...node("compressor"),
         threshold: audioParam(),
@@ -74,6 +98,25 @@ function fakeContext(): { context: AudioContextLike; connections: string[] } {
 }
 
 describe("createStageMix", () => {
+  /**
+   * Same regression as `screen-mix.test.ts`'s, on the bus that carries the
+   * voice whenever the party is in "separada" or has guests on stage: a -6
+   * dBFS / 12:1 limiter with no makeup gain published the presenter and
+   * every guest 6 dB under everything else the audience hears.
+   */
+  it("makes the limiter's ceiling back up before the destination", () => {
+    const f = fakeContext();
+    const mic = new FakeStream([new FakeTrack("audio")]) as unknown as MediaStream;
+    const mix = createStageMix(mic, () => f.context);
+    const makeup = f.gains.find((g) => g.gain.value === MIX_MAKEUP_GAIN);
+    expect(makeup, "no makeup gain on the stage bus").toBeDefined();
+    expect(MIX_MAKEUP_GAIN).toBeCloseTo(10 ** (-LIMITER_THRESHOLD_DBFS / 20), 6);
+    expect(f.edges).toContain(`compressor->${makeup!.name}`);
+    expect(f.edges).toContain(`${makeup!.name}->dest`);
+    expect(f.edges).not.toContain("compressor->dest");
+    mix.close();
+  });
+
   it("starts with the presenter's own mic and no guests", () => {
     const { context } = fakeContext();
     const mic = new FakeStream([new FakeTrack("audio")]) as unknown as MediaStream;
