@@ -1293,6 +1293,9 @@ function MainAppContent({
    * party is live, Chat or Pessoas. Back to Chat on every channel change.
    */
   const [watchPanelTab, setWatchPanelTab] = useState<"chat" | "people">("chat");
+  useEffect(() => {
+    setWatchPanelTab("chat");
+  }, [selectedChannelId]);
   const handleSplitState = useCallback((next: CallSplitState) => {
     setSplitState((previous) =>
       previous.active === next.active &&
@@ -7365,11 +7368,23 @@ function MainAppContent({
                   {
                     id: "people",
                     label: t("watchParty.panel.people"),
-                    count:
-                      (watchParties.byChannel[selectedChannel.id]?.guests
-                        ?.requestCount ?? 0) +
-                      (watchParties.byChannel[selectedChannel.id]?.stage.hands
-                        .length ?? 0),
+                    // One person can be in both queues (a legacy hand and
+                    // a guests request); the panel lists them once, so the
+                    // badge counts them once too.
+                    count: (() => {
+                      const party = watchParties.byChannel[selectedChannel.id];
+                      if (!party) return 0;
+                      const requests = party.guests?.requests ?? [];
+                      const ids = new Set(requests.map((p) => p.userId));
+                      const extraHands = party.stage.hands.filter(
+                        (p) => !ids.has(p.userId),
+                      ).length;
+                      const hiddenRequests = Math.max(
+                        0,
+                        (party.guests?.requestCount ?? 0) - requests.length,
+                      );
+                      return requests.length + extraHands + hiddenRequests;
+                    })(),
                   },
                 ],
                 active: watchPanelTab,
